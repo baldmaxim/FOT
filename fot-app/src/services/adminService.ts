@@ -114,6 +114,8 @@ export interface ITimesheetModeEmployee {
   /** null — объекта нет; false — объект стал неактивным, настройку нужно заменить. */
   effective_object_is_active: boolean | null;
   source: TimesheetModeSource;
+  /** Есть ли право ЗАПИСИ режима этому сотруднику (только при includeCanEdit). */
+  can_edit?: boolean;
 }
 
 export interface ITimesheetModes {
@@ -135,7 +137,21 @@ export interface ITimesheetModeDepartment {
   /** Что действует фактически, даже когда mode = null (legacy по назначениям объектов). */
   effective_mode: TimesheetExportMode;
   source: 'department_explicit' | 'legacy_department' | 'legacy_default';
+  /** Активные прямые члены подразделения. */
+  employees_count: number;
+  /** Из них с личным режимом — режим подразделения их не затронет. */
+  personal_mode_count: number;
 }
+
+/** Предел id на один запрос режимов — совпадает с MODE_BATCH_LIMIT на сервере. */
+export const TIMESHEET_MODE_BATCH_LIMIT = 500;
+
+/** Режем список на пакеты: чтение режимов на сервере принимает не больше 500 id. */
+export const chunkIds = <T,>(ids: readonly T[], size: number = TIMESHEET_MODE_BATCH_LIMIT): T[][] => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < ids.length; index += size) chunks.push(ids.slice(index, index + size));
+  return chunks;
+};
 
 
 // ─── Чёрный список (миграция 273) ───────────────────────────────────────────
@@ -548,12 +564,17 @@ export const adminService = {
    * Режимы либо по отделу (нужен для массовой модалки), либо по списку сотрудников —
    * на «Управлении кадрами» людей ищут по ФИО без выбора отдела.
    */
-  async getTimesheetModes(params: { departmentId?: string; employeeIds?: number[] }): Promise<ITimesheetModes> {
+  async getTimesheetModes(params: {
+    departmentId?: string;
+    employeeIds?: number[];
+    includeCanEdit?: boolean;
+  }): Promise<ITimesheetModes> {
     const search = new URLSearchParams();
     if (params.departmentId) search.set('department_id', params.departmentId);
     if (params.employeeIds && params.employeeIds.length > 0) {
       search.set('employee_ids', params.employeeIds.join(','));
     }
+    if (params.includeCanEdit) search.set('include_can_edit', '1');
     // no-store: сервер держит private, max-age=30 на всех GET /api/*, и после сохранения
     // режима бейджи приезжали бы старыми даже при инвалидации React Query.
     const response = await apiClient.get<ApiResponse<ITimesheetModes>>(
@@ -563,13 +584,37 @@ export const adminService = {
     return response.data;
   },
 
-  /** mode: null — сбросить явный режим (вернуться к отделу / legacy). */
-  async updateEmployeeTimesheetMode(
-    employeeId: number,
+  /**
+   * Режимы произвольного набора сотрудников: пакетами по 500 (лимит сервера), ответы
+   * склеиваются. Порядок строк не важен — потребитель раскладывает их по id.
+   */
+  async getTimesheetModesForEmployees(
+    employeeIds: number[],
+    options: { includeCanEdit?: boolean } = {},
+  ): Promise<ITimesheetModeEmployee[]> {
+    const ids = [...new Set(employeeIds)];
+    if (ids.length === 0) return [];
+    const parts = await Promise.all(chunkIds(ids).map(chunk => adminService.getTimesheetModes({
+      employeeIds: chunk,
+      includeCanEdit: options.includeCanEdit,
+    })));
+    return parts.flatMap(part => part?.employees ?? []);
+  },
+
+  /**
+   * Массовая установка личного режима сотрудникам: одна транзакция на сервере, отказ
+   * целиком. mode: null — сбросить личный режим (вернуться к режиму отдела).
+   */
+  async bulkUpdateEmployeeTimesheetModes(
+    employeeIds: number[],
     mode: TimesheetExportMode | null,
     objectId: string | null,
-  ): Promise<void> {
-    await apiClient.put(`/admin/timesheet-modes/employees/${employeeId}`, { mode, object_id: objectId });
+  ): Promise<{ affected: number }> {
+    const response = await apiClient.put<ApiResponse<{ affected: number }>>(
+      '/admin/timesheet-modes/employees',
+      { employee_ids: employeeIds, mode, object_id: objectId },
+    );
+    return response.data ?? { affected: 0 };
   },
 
   /** Отделы и бригады с их режимом — для массовой настройки. */

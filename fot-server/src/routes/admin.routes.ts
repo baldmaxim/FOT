@@ -165,6 +165,7 @@ router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users/a
 router.get('/timesheet-modes', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.list);
 router.get('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.listDepartments);
 router.put('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartmentsBulk);
+router.put('/timesheet-modes/employees', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployeesBulk);
 router.put('/timesheet-modes/employees/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployee);
 router.put('/timesheet-modes/departments/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartment);
 

@@ -1,442 +1,285 @@
-import { useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import {
   adminService,
-  type TimesheetExportMode,
+  TIMESHEET_MODE_BATCH_LIMIT,
+  type ITimesheetModeDepartment,
   type ITimesheetModeEmployee,
-  type IObjectAssignments,
+  type TimesheetExportMode,
 } from '../../services/adminService';
-import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import {
-  CURRENT_ACTIVITY_LABEL,
-  groupObjects,
-  groupSelectionState,
-  objectGroupLabelsForIds,
-  type IObjectGroup,
-} from '../../utils/objectGroups';
-import type { Employee } from '../../types';
+import type { OrgDepartmentNode } from '../../types/organization';
+import type { IFlatDepartmentOption } from '../../utils/departmentUtils';
+import { TimesheetModeDepartmentsList } from './TimesheetModeDepartmentsList';
+import { TimesheetModeEmployeesList, type ISelectedEmployee } from './TimesheetModeEmployeesList';
+import { TimesheetModeOptionsColumn } from './TimesheetModeOptionsColumn';
+import type { ITimesheetModeCurrent, TimesheetModeTab } from './timesheetModeLabels';
 
 interface IProps {
-  employee: Employee;
-  row: ITimesheetModeEmployee | undefined;
-  /** Блок «Объекты для доступа табельщицы» — только админу: это управление доступом, не выгрузкой. */
-  canManageObjects: boolean;
+  /** Плоское дерево из StaffControlPage — уже с учётом скоупа пользователя. */
+  departments: IFlatDepartmentOption[];
+  /** Дерево для фильтра отдела во вкладке «Сотрудники». */
+  deptTree: OrgDepartmentNode[];
+  /** Отдел, выбранный на странице, — начальный фильтр вкладки «Сотрудники». */
+  initialDepartmentId: string;
   onClose: () => void;
-  onSaved?: () => void;
 }
 
-/** Безобъектные варианты. «Объект» отдельным пунктом не нужен — им становится выбор объекта ниже. */
-const PLAIN_MODE_OPTIONS: Array<{ value: TimesheetExportMode; label: string; hint: string }> = [
-  {
-    value: 'current_activity',
-    label: 'Текущая деятельность',
-    hint: 'Одна строка, в колонке «Адрес объекта» — «Текущая деятельность».',
-  },
-  {
-    value: 'skud',
-    label: 'По СКУД',
-    hint: 'Разбивка по фактическим проходам: сколько объектов посетил — столько строк.',
-  },
+const TABS: ReadonlyArray<[TimesheetModeTab, string]> = [
+  ['department', 'Отделы'],
+  ['brigade', 'Бригады'],
+  ['employee', 'Сотрудники'],
 ];
 
-const MODE_LABELS: Record<TimesheetExportMode, string> = {
-  current_activity: 'Текущая деятельность',
-  object: 'Объект',
-  skud: 'По СКУД',
-};
-
-const SOURCE_HINTS: Record<string, string> = {
-  employee_explicit: 'задан лично',
-  department_explicit: 'унаследован от отдела',
-  legacy_department: 'выведен из назначения объекта отделу',
-  legacy_default: 'по умолчанию',
-};
+const EMPTY_EMPLOYEE_IDS: number[] = [];
 
 /**
- * Блок «Объекты сотрудника для доступа табельщицы» временно скрыт: это управление
- * доступом, а не выгрузкой, и ему нужен отдельный экран. Существующие назначения
- * продолжают действовать — скрыт только редактор. Вернуть = поставить true.
- */
-const SHOW_EMPLOYEE_OBJECT_ASSIGNMENT = false;
-
-const normalize = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').trim();
-
-const isCurrentActivityAddress = (altName: string | null | undefined): boolean =>
-  normalize(altName ?? '') === normalize(CURRENT_ACTIVITY_LABEL);
-
-const arraysEqual = (a: string[], b: string[]): boolean => {
-  if (a.length !== b.length) return false;
-  const x = [...a].sort();
-  const y = [...b].sort();
-  return x.every((v, i) => v === y[i]);
-};
-
-const setIndeterminate = (el: HTMLInputElement | null, value: boolean): void => {
-  if (el) el.indeterminate = value;
-};
-
-/**
- * Персональная модалка колонки «Объект».
+ * Окно «Режим табелирования» (миграция 249): режим отделам, бригадам и отдельным
+ * сотрудникам. Правая колонка и кнопки общие; смена вкладки сбрасывает выбор.
  *
- * Блока два, и они про разное — отсюда раздельные кнопки сохранения: общая создавала бы
- * иллюзию атомарной операции над двумя независимыми API.
- *   1. Режим табелирования 1С (employees.timesheet_export_mode) — влияет только на колонку
- *      «Адрес объекта» в выгрузке «Единый файл для 1С». Правит и HR.
- *   2. Объекты сотрудника (employee_object_assignment) — управление доступом: от них зависит
- *      скоуп табельщицы «сотрудники моих объектов». Только админ, и сейчас СКРЫТ —
- *      см. SHOW_EMPLOYEE_OBJECT_ASSIGNMENT.
+ * Личный режим сотрудника важнее режима отдела; массовая запись отделам личные режимы
+ * не трогает. Права записи проверяет сервер целиком по пакету.
  */
-export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageObjects, onClose, onSaved }) => {
+export const StaffTimesheetModeModal: FC<IProps> = ({ departments, deptTree, initialDepartmentId, onClose }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const dismiss = useOverlayDismiss(onClose);
-  const showObjects = canManageObjects && SHOW_EMPLOYEE_OBJECT_ASSIGNMENT;
 
-  // ─────────────────────────── режим табелирования ───────────────────────────
+  const [tab, setTab] = useState<TimesheetModeTab>('department');
+  const [selectedDepts, setSelectedDepts] = useState<Set<string>>(new Set());
+  const [selectedEmployees, setSelectedEmployees] = useState<Map<number, ISelectedEmployee>>(new Map());
+  const [visibleEmployeeIds, setVisibleEmployeeIds] = useState<number[]>(EMPTY_EMPLOYEE_IDS);
+  // undefined — вариант справа не выбран: «Назначить» заблокирована, иначе одно случайное
+  // нажатие применило бы режим без явного выбора.
+  const [mode, setMode] = useState<TimesheetExportMode | undefined>(undefined);
+  const [objectId, setObjectId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [modeSearch, setModeSearch] = useState('');
+  const isEmployeeTab = tab === 'employee';
 
-  // Строка режима могла не приехать в таблицу (запрос ещё шёл или упал). Тогда модалка
-  // дозагружает её сама: инициализировать состояние как «наследовать», не зная реального
-  // режима, нельзя — сохранение молча снесло бы существующую настройку.
-  const selfQuery = useQuery({
-    queryKey: ['admin-timesheet-modes', 'self', employee.id],
-    queryFn: () => adminService.getTimesheetModes({ employeeIds: [employee.id] }),
-    enabled: !row,
+  const modesQuery = useQuery({
+    queryKey: ['admin-timesheet-mode-departments'],
+    queryFn: () => adminService.listTimesheetModeDepartments(),
     staleTime: 30_000,
   });
-  const loadedRow = row ?? selfQuery.data?.employees.find(e => e.employee_id === employee.id);
-  const rowReady = Boolean(row) || selfQuery.isSuccess;
+  const deptModeById = useMemo(() => {
+    const map = new Map<string, ITimesheetModeDepartment>();
+    for (const row of modesQuery.data ?? []) map.set(row.id, row);
+    return map;
+  }, [modesQuery.data]);
 
-  // null = «как у отдела»: явный режим снимается, работает режим отдела или legacy-фолбэк.
-  const [mode, setMode] = useState<TimesheetExportMode | null>(row?.explicit_mode ?? null);
-  const [objectId, setObjectId] = useState<string | null>(row?.explicit_object_id ?? null);
-  // Подхватываем дозагруженное состояние ровно один раз.
-  const [hydrated, setHydrated] = useState(Boolean(row));
-  useEffect(() => {
-    if (hydrated || !loadedRow) return;
-    setMode(loadedRow.explicit_mode ?? null);
-    setObjectId(loadedRow.explicit_object_id ?? null);
-    setHydrated(true);
-  }, [hydrated, loadedRow]);
+  // В allDepts есть служебные узлы kind: 'object' и контейнеры-предки с inScope: false — их
+  // нельзя ни показывать, ни выбирать. Плюс пересечение с серверным списком.
+  const selectableDepts = useMemo(
+    () => (isEmployeeTab ? [] : departments.filter(d => {
+      if (!d.inScope || d.kind !== tab) return false;
+      const row = deptModeById.get(d.id);
+      if (!row) return false;
+      // Подрядные организации ведут не кадры — во вкладке «Отделы» они только мешают.
+      return !(tab === 'department' && row.is_contractor);
+    })),
+    [departments, deptModeById, tab, isEmployeeTab],
+  );
 
-  const modeObjectsQuery = useQuery({
-    queryKey: ['work-object-options'],
-    queryFn: () => employeeService.listWorkObjectOptions(),
-    staleTime: 5 * 60_000,
+  // Режимы сотрудников: видимые на странице ∪ выбранные (выбранный может быть на другой
+  // странице — отметка «сейчас» у него должна работать). Пакетами по 500.
+  const employeeModeIds = useMemo(() => {
+    const ids = new Set<number>(visibleEmployeeIds);
+    for (const id of selectedEmployees.keys()) ids.add(id);
+    return [...ids].sort((a, b) => a - b);
+  }, [visibleEmployeeIds, selectedEmployees]);
+  const employeeModesQuery = useQuery({
+    queryKey: ['admin-timesheet-modes', 'modal', employeeModeIds],
+    queryFn: () => adminService.getTimesheetModesForEmployees(employeeModeIds, { includeCanEdit: true }),
+    enabled: isEmployeeTab && employeeModeIds.length > 0,
+    placeholderData: previous => previous,
+    staleTime: 30_000,
   });
+  const employeeModeById = useMemo(() => {
+    const map = new Map<number, ITimesheetModeEmployee>();
+    for (const row of employeeModesQuery.data ?? []) map.set(row.employee_id, row);
+    return map;
+  }, [employeeModesQuery.data]);
 
-  /**
-   * Объекты для выбора режима. Записи с адресом «Текущая деятельность» отфильтрованы: им
-   * соответствует отдельный режим current_activity, объект которому не нужен, а режим object
-   * требует РОВНО один UUID (инвариант миграции 249).
-   */
-  const selectableObjects = useMemo(() => {
-    const q = normalize(modeSearch);
-    return (modeObjectsQuery.data ?? [])
-      .filter(o => !isCurrentActivityAddress(o.alt_name))
-      .filter(o => !q || normalize(o.name).includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  }, [modeObjectsQuery.data, modeSearch]);
+  const selectedCount = isEmployeeTab ? selectedEmployees.size : selectedDepts.size;
 
-  const dirty = mode !== (loadedRow?.explicit_mode ?? null) || objectId !== (loadedRow?.explicit_object_id ?? null);
-  const objectRequired = mode === 'object';
-  const canSaveMode = rowReady && dirty && !saving && (!objectRequired || Boolean(objectId));
-
-  const handleSaveMode = async (): Promise<void> => {
-    setSaving(true);
-    try {
-      await adminService.updateEmployeeTimesheetMode(employee.id, mode, objectRequired ? objectId : null);
-      // Режим влияет на выгрузку 1С — сбрасываем и режимы, и кэш табеля.
-      await queryClient.invalidateQueries({ queryKey: ['admin-timesheet-modes'] });
-      await queryClient.invalidateQueries({ queryKey: ['timesheet'] });
-      toast.success('Режим табелирования сохранён');
-      onSaved?.();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить режим');
-    } finally {
-      setSaving(false);
+  const current: ITimesheetModeCurrent | null = useMemo(() => {
+    if (selectedCount !== 1) return null;
+    if (isEmployeeTab) {
+      const [id] = selectedEmployees.keys();
+      const row = employeeModeById.get(id);
+      return row ? { mode: row.effective_mode, objectId: row.effective_object_id } : null;
     }
+    const [id] = selectedDepts;
+    const row = deptModeById.get(id);
+    return row ? { mode: row.effective_mode, objectId: row.object_id } : null;
+  }, [selectedCount, isEmployeeTab, selectedEmployees, employeeModeById, selectedDepts, deptModeById]);
+
+  const personalInSelectedDepts = useMemo(() => {
+    let count = 0;
+    for (const id of selectedDepts) count += deptModeById.get(id)?.personal_mode_count ?? 0;
+    return count;
+  }, [selectedDepts, deptModeById]);
+
+  const changeTab = (next: TimesheetModeTab): void => {
+    if (next === tab) return;
+    setTab(next);
+    setSelectedDepts(new Set());
+    setSelectedEmployees(new Map());
   };
 
-  const effectiveHint = loadedRow
-    ? `Сейчас: ${MODE_LABELS[loadedRow.effective_mode] ?? loadedRow.effective_mode}`
-      + (loadedRow.effective_mode === 'object' && loadedRow.effective_object_name
-        ? ` (${loadedRow.effective_object_name})`
-        : '')
-      + ` — ${SOURCE_HINTS[loadedRow.source] ?? loadedRow.source}`
-    : '';
-
-  // ───────────────────── объекты сотрудника (доступ табельщицы) ─────────────────────
-
-  const departmentId = employee.org_department_id ?? null;
-  const [objSaving, setObjSaving] = useState(false);
-  const [draft, setDraft] = useState<string[] | null>(null);
-  const [objSearch, setObjSearch] = useState('');
-
-  const assignObjectsQuery = useQuery({
-    queryKey: ['admin-skud-objects'],
-    queryFn: () => adminService.listSkudObjectsForAssignment(),
-    staleTime: 5 * 60_000,
-    enabled: showObjects,
-  });
-  const assignmentsQuery = useQuery({
-    queryKey: ['admin-object-assignments'],
-    queryFn: () => adminService.getObjectAssignments(),
-    staleTime: 30_000,
-    enabled: showObjects,
-  });
-
-  const assignObjects = useMemo(() => assignObjectsQuery.data ?? [], [assignObjectsQuery.data]);
-  const groups = useMemo(() => groupObjects(assignObjects), [assignObjects]);
-
-  const empObjectIds = useMemo(
-    () => assignmentsQuery.data?.employee_objects?.[String(employee.id)] ?? [],
-    [assignmentsQuery.data, employee.id],
-  );
-  const deptObjectIds = useMemo(
-    () => (departmentId ? assignmentsQuery.data?.department_objects?.[departmentId] ?? [] : []),
-    [assignmentsQuery.data, departmentId],
-  );
-
-  // Сброс черновика при прилёте свежих данных.
-  useEffect(() => { setDraft(null); }, [empObjectIds]);
-
-  const current = draft ?? empObjectIds;
-  const currentSet = useMemo(() => new Set(current), [current]);
-  const objDirty = !arraysEqual(current, empObjectIds);
-
-  const toggleGroup = (group: IObjectGroup): void => {
-    const state = groupSelectionState(group, currentSet);
-    setDraft(() => {
-      const set = new Set(current);
-      if (state === 'all') group.objectIds.forEach(id => set.delete(id));
-      else group.objectIds.forEach(id => set.add(id));
-      return [...set];
+  // Выбор построчный: в плоском списке связь «родитель — потомки» не видна.
+  const toggleDept = (id: string): void => {
+    setSelectedDepts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
     });
   };
 
-  const filteredGroups = useMemo(() => {
-    const q = normalize(objSearch);
-    if (!q) return groups;
-    return groups.filter(g => normalize(g.label).includes(q));
-  }, [groups, objSearch]);
+  const toggleEmployee = (id: number, employee: ISelectedEmployee): void => {
+    if (!selectedEmployees.has(id) && selectedEmployees.size >= TIMESHEET_MODE_BATCH_LIMIT) {
+      toast.error(`Максимум ${TIMESHEET_MODE_BATCH_LIMIT} за раз`);
+      return;
+    }
+    setSelectedEmployees(prev => {
+      const next = new Map(prev);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < TIMESHEET_MODE_BATCH_LIMIT) next.set(id, employee);
+      return next;
+    });
+  };
 
-  const assignedGroups = filteredGroups.filter(g => groupSelectionState(g, currentSet) !== 'none');
-  const availableGroups = filteredGroups.filter(g => groupSelectionState(g, currentSet) === 'none');
+  const handleVisibleIdsChange = useCallback((ids: number[]) => setVisibleEmployeeIds(ids), []);
 
-  const inheritedLabels = useMemo(
-    () => objectGroupLabelsForIds(assignObjects, deptObjectIds),
-    [assignObjects, deptObjectIds],
-  );
+  const canApply = selectedCount > 0
+    && selectedCount <= TIMESHEET_MODE_BATCH_LIMIT
+    && mode !== undefined
+    && !busy
+    && (mode !== 'object' || Boolean(objectId));
 
-  const handleSaveObjects = async (): Promise<void> => {
-    setObjSaving(true);
+  /** nextMode: null — сброс явного режима; выбор справа при этом не учитывается. */
+  const applyMode = async (nextMode: TimesheetExportMode | null): Promise<void> => {
+    if (selectedCount > TIMESHEET_MODE_BATCH_LIMIT) {
+      toast.error(`Выбрано ${selectedCount} — максимум ${TIMESHEET_MODE_BATCH_LIMIT} за раз`);
+      return;
+    }
+    const nextObjectId = nextMode === 'object' ? objectId : null;
+    setBusy(true);
     try {
-      const saved = [...current];
-      await adminService.updateEmployeeObjectAssignment(employee.id, saved);
-      // Оптимистично обновляем кэш назначений (глобально refetchOnMount:false, поэтому
-      // не полагаемся только на invalidate).
-      queryClient.setQueryData<IObjectAssignments>(['admin-object-assignments'], old => (
-        old ? { ...old, employee_objects: { ...old.employee_objects, [String(employee.id)]: saved } } : old
-      ));
-      void queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
-      // Кэш табеля не трогаем: с миграции 253 назначения объектов на режим выгрузки
-      // не влияют, это только доступ табельщицы.
-      toast.success('Персональные объекты обновлены');
-      setDraft(null);
-      onSaved?.();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Ошибка сохранения');
+      let affected: number;
+      if (isEmployeeTab) {
+        const ids = [...selectedEmployees.keys()];
+        if (ids.length === 0) return;
+        ({ affected } = await adminService.bulkUpdateEmployeeTimesheetModes(ids, nextMode, nextObjectId));
+      } else {
+        // Страховка: только строки текущей вкладки. Скрытые поиском применяются — выбраны осознанно.
+        const allowed = new Set(selectableDepts.map(d => d.id));
+        const ids = [...selectedDepts].filter(id => allowed.has(id));
+        if (ids.length === 0) {
+          toast.error('Нет выбранных подразделений в текущей вкладке');
+          return;
+        }
+        ({ affected } = await adminService.bulkUpdateDepartmentTimesheetModes(ids, nextMode, nextObjectId));
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-timesheet-mode-departments'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-timesheet-modes'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet'] }),
+      ]);
+      const what = isEmployeeTab ? 'сотрудников' : 'подразделений';
+      toast.success(nextMode === null ? `Явный режим сброшен: ${what} ${affected}` : `Режим применён: ${what} ${affected}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось применить режим');
     } finally {
-      setObjSaving(false);
+      setBusy(false);
     }
   };
 
-  const objLoading = assignObjectsQuery.isLoading || assignmentsQuery.isLoading;
-
-  const renderGroup = (group: IObjectGroup) => {
-    const state = groupSelectionState(group, currentSet);
-    return (
-      <label key={group.key} className={`sc-obj-item ${state !== 'none' ? 'sc-obj-item--on' : ''}`}>
-        <input
-          type="checkbox"
-          checked={state === 'all'}
-          ref={el => setIndeterminate(el, state === 'partial')}
-          onChange={() => toggleGroup(group)}
-        />
-        <span>
-          {group.label}
-          {group.objectIds.length > 1 && <span className="sc-obj-count">{group.objectIds.length}</span>}
-        </span>
-      </label>
-    );
+  const handleReset = (): void => {
+    const message = isEmployeeTab
+      ? `Сбросить личный режим у выбранных сотрудников (${selectedCount})?\nОни вернутся к режиму своего отдела.`
+      : `Сбросить явный режим у выбранных подразделений (${selectedCount})?\nОни вернутся к режиму по умолчанию — тому, что даёт назначение объектов.`;
+    if (window.confirm(message)) void applyMode(null);
   };
+
+  const hint = isEmployeeTab
+    ? 'Личный режим важнее режима отдела. «Сбросить явный режим» вернёт сотрудника к режиму его отдела.'
+    : personalInSelectedDepts > 0
+      ? `Режим получат сотрудники подразделения без личного режима. У ${personalInSelectedDepts} из выбранных личный режим — он останется.`
+      : 'Режим получат сотрудники подразделения без личного режима.';
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal sc-modal--full sc-modal--pick" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
-          <h3>Режим табелирования — {employee.full_name}</h3>
+          <h3>Режим табелирования</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div className={`sc-modal-body sc-mode-body ${showObjects ? 'sc-mode-body--pick3' : 'sc-mode-body--pick'}`}>
+
+        <div className="sc-modal-body sc-mode-body">
           <div className="sc-obj-col">
-            <div className="sc-obj-col-label">Сотрудник</div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>{employee.full_name}</div>
-            <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary, #64748b)' }}>
-              <div>Отдел — {employee.department || '—'}</div>
-              <div>Должность — {employee.position_name || '—'}</div>
-              <div>Таб. номер — {employee.tab_number || '—'}</div>
+            <div className="sc-mode-kind-filter" role="tablist" aria-label="Кому задать режим">
+              {TABS.map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === value}
+                  className={`sc-btn ${tab === value ? 'apply' : 'cancel'}`}
+                  onClick={() => changeTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-
-            <div style={{ fontSize: 13 }}>
-              {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
-            </div>
-
-            {objectRequired && loadedRow?.effective_object_is_active === false
-              && objectId === loadedRow.explicit_object_id && (
-              <div className="sc-obj-empty" style={{ fontSize: 12 }}>
-                Текущий объект неактивен — выберите другой.
-              </div>
+            {isEmployeeTab ? (
+              <TimesheetModeEmployeesList
+                deptTree={deptTree}
+                initialDepartmentId={initialDepartmentId}
+                selected={selectedEmployees}
+                onToggle={toggleEmployee}
+                modeById={employeeModeById}
+                modesLoading={employeeModesQuery.isFetching && !employeeModesQuery.data}
+                onVisibleIdsChange={handleVisibleIdsChange}
+              />
+            ) : (
+              <TimesheetModeDepartmentsList
+                key={tab}
+                kind={tab}
+                selectable={selectableDepts}
+                modeById={deptModeById}
+                loading={modesQuery.isLoading}
+                selected={selectedDepts}
+                onToggle={toggleDept}
+              />
             )}
           </div>
 
-          <div className="sc-obj-col">
-            <div className="sc-obj-col-label">Вариант табелирования</div>
-            <input
-              type="text"
-              className="sc-obj-search"
-              value={modeSearch}
-              onChange={e => setModeSearch(e.target.value)}
-              placeholder="Поиск объекта…"
-            />
-
-            <div className="sc-obj-list">
-              <div className="sc-obj-group-label">Режим</div>
-              <label className={`sc-obj-item ${mode === null ? 'sc-obj-item--on' : ''}`}>
-                <input
-                  type="radio"
-                  name="employee-timesheet-mode"
-                  checked={mode === null}
-                  onChange={() => { setMode(null); setObjectId(null); }}
-                />
-                <span>
-                  Как у отдела
-                  <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>
-                    Личная настройка снимается — действует режим отдела.
-                  </span>
-                </span>
-              </label>
-
-              {PLAIN_MODE_OPTIONS.map(option => (
-                <label key={option.value} className={`sc-obj-item ${mode === option.value ? 'sc-obj-item--on' : ''}`}>
-                  <input
-                    type="radio"
-                    name="employee-timesheet-mode"
-                    checked={mode === option.value}
-                    onChange={() => { setMode(option.value); setObjectId(null); }}
-                  />
-                  <span>
-                    {option.label}
-                    <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>{option.hint}</span>
-                  </span>
-                </label>
-              ))}
-
-              <div className="sc-obj-group-label">Объекты</div>
-              {modeObjectsQuery.isLoading ? (
-                <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
-              ) : selectableObjects.length === 0 ? (
-                <div className="sc-obj-empty">— объекты не найдены —</div>
-              ) : selectableObjects.map(o => (
-                <label
-                  key={o.id}
-                  className={`sc-obj-item ${mode === 'object' && objectId === o.id ? 'sc-obj-item--on' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="employee-timesheet-mode"
-                    checked={mode === 'object' && objectId === o.id}
-                    onChange={() => { setMode('object'); setObjectId(o.id); }}
-                  />
-                  <span>{o.name}</span>
-                </label>
-              ))}
-            </div>
-
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary, #64748b)' }}>
-              Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С».
-              На сам табель, СКУД и права не влияет.
-            </p>
-          </div>
-
-          {showObjects && (
-            <div className="sc-obj-col">
-              <div className="sc-obj-col-label">Объекты сотрудника для доступа табельщицы</div>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-                Отдельная от режима настройка: от неё зависит, каких сотрудников видит табельщица.
-                Переопределяет объекты бригады. На выгрузку 1С напрямую не влияет.
-              </p>
-
-              {inheritedLabels.length > 0 && (
-                <div className="sc-field" style={{ fontSize: 13 }}>
-                  <label>Наследуется от бригады</label>
-                  <div style={{ color: 'var(--text-secondary, #64748b)' }}>{inheritedLabels.join(', ')}</div>
-                </div>
-              )}
-
-              {assignObjects.length > 8 && (
-                <input
-                  type="text"
-                  className="sc-obj-search"
-                  value={objSearch}
-                  onChange={e => setObjSearch(e.target.value)}
-                  placeholder="Поиск по адресу…"
-                />
-              )}
-
-              {objLoading ? (
-                <div style={{ fontSize: 14 }}>Загрузка…</div>
-              ) : groups.length === 0 ? (
-                <div style={{ fontSize: 14 }}>Объекты не настроены</div>
-              ) : (
-                <div className="sc-obj-list">
-                  <div className="sc-obj-group-label">
-                    Назначенные{assignedGroups.length > 0 ? ` (${assignedGroups.length})` : ''}
-                  </div>
-                  {assignedGroups.length > 0
-                    ? assignedGroups.map(renderGroup)
-                    : <div className="sc-obj-empty">— нет персональных объектов —</div>}
-                  <div className="sc-obj-group-label">Доступные</div>
-                  {availableGroups.length > 0
-                    ? availableGroups.map(renderGroup)
-                    : <div className="sc-obj-empty">— все объекты назначены —</div>}
-                </div>
-              )}
-
-              <div className="sc-modal-footer" style={{ padding: '10px 0 0', border: 0 }}>
-                <button
-                  className="sc-btn apply"
-                  onClick={() => void handleSaveObjects()}
-                  disabled={!objDirty || objSaving}
-                >
-                  <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-                  {objSaving ? 'Сохранение…' : 'Сохранить объекты'}
-                </button>
-              </div>
-            </div>
-          )}
+          <TimesheetModeOptionsColumn
+            mode={mode}
+            objectId={objectId}
+            onSelect={(nextMode, nextObjectId) => { setMode(nextMode); setObjectId(nextObjectId); }}
+            current={current}
+            hint={hint}
+          />
         </div>
+
         <div className="sc-modal-footer">
-          <button className="sc-btn cancel" onClick={onClose} disabled={saving || objSaving}>Закрыть</button>
-          <button className="sc-btn apply" onClick={() => void handleSaveMode()} disabled={!canSaveMode}>
-            <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-            {saving ? 'Сохранение…' : 'Сохранить вариант'}
+          <button className="sc-btn cancel" onClick={onClose} disabled={busy}>Закрыть</button>
+          <button
+            className="sc-btn secondary"
+            onClick={handleReset}
+            disabled={busy || selectedCount === 0}
+            title={isEmployeeTab ? 'Вернуть выбранных сотрудников к режиму отдела' : 'Вернуть выбранные подразделения к режиму по умолчанию'}
+          >
+            Сбросить явный режим
+          </button>
+          <button className="sc-btn apply" onClick={() => void applyMode(mode ?? null)} disabled={!canApply}>
+            <Check size={15} className="sc-mode-apply-icon" />
+            {busy ? 'Применение…' : `Назначить (${selectedCount})`}
           </button>
         </div>
       </div>

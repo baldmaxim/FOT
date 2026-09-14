@@ -22,6 +22,11 @@ const scope = vi.hoisted(() => ({
 
 vi.mock('../services/data-scope.service.js', () => scope);
 
+const readScope = vi.hoisted(() => ({
+  filterEmployeeIdsByReadScope: vi.fn(async (_req: unknown, ids: readonly number[]) => [...ids]),
+}));
+vi.mock('../services/employee-scope-filter.service.js', () => readScope);
+
 const { contractorRootMock } = vi.hoisted(() => ({ contractorRootMock: vi.fn() }));
 vi.mock('../config/contractor.js', () => ({ getContractorRootId: contractorRootMock }));
 
@@ -90,6 +95,8 @@ beforeEach(() => {
   scope.canAccessEmployeeInScope.mockReset().mockResolvedValue(true);
   scope.resolveAccessibleDepartmentIds.mockReset().mockResolvedValue('all');
   contractorRootMock.mockReset().mockResolvedValue(CONTRACTOR_ROOT);
+  readScope.filterEmployeeIdsByReadScope.mockReset()
+    .mockImplementation(async (_req: unknown, ids: readonly number[]) => [...ids]);
 });
 
 describe('timesheetModeController.list — скоуп', () => {
@@ -131,8 +138,8 @@ describe('timesheetModeController.list — скоуп', () => {
     expect(payload.employees[0].source).toBe('employee_explicit');
   });
 
-  it('выборка по employee_ids отсекает сотрудников вне скоупа', async () => {
-    scope.resolveAccessibleDepartmentIds.mockResolvedValue([DEPT]);
+  it('выборка по employee_ids отсекает сотрудников вне скоупа чтения', async () => {
+    readScope.filterEmployeeIdsByReadScope.mockResolvedValue([7]);
     pgQuery.mockResolvedValueOnce([
       {
         employee_id: 7, full_name: 'Свой', org_department_id: DEPT,
@@ -151,6 +158,55 @@ describe('timesheetModeController.list — скоуп', () => {
 
     const payload = (res.payload as { data: { employees: Array<{ full_name: string }> } }).data;
     expect(payload.employees.map(e => e.full_name)).toEqual(['Свой']);
+  });
+
+  it('прямой подчинённый из чужого отдела получает строку режима (скоуп чтения списка)', async () => {
+    // Поддерево записи его не содержит, но список «Управления кадрами» его показывает.
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue([DEPT]);
+    readScope.filterEmployeeIdsByReadScope.mockResolvedValue([9]);
+    pgQuery.mockResolvedValueOnce([
+      {
+        employee_id: 9, full_name: 'Подчинённый', org_department_id: 'other-dept',
+        emp_mode: 'skud', emp_object_id: null, dept_mode: null, dept_object_id: null,
+        dept_current_activity: false,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: { employee_ids: '9' } }), res);
+
+    const payload = (res.payload as { data: { employees: Array<{ full_name: string }> } }).data;
+    expect(payload.employees.map(e => e.full_name)).toEqual(['Подчинённый']);
+  });
+
+  it('can_edit считается по праву записи и только по запросу', async () => {
+    const rows = [
+      {
+        employee_id: 7, full_name: 'Можно', org_department_id: DEPT,
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null, dept_current_activity: false,
+      },
+      {
+        employee_id: 8, full_name: 'Нельзя', org_department_id: DEPT,
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null, dept_current_activity: false,
+      },
+    ];
+    scope.canAccessEmployeeInScope.mockImplementation(async (_req: unknown, id: number) => id === 7);
+
+    pgQuery.mockResolvedValueOnce(rows);
+    const plain = makeRes();
+    await timesheetModeController.list(makeReq({ query: { employee_ids: '7,8' } }), plain);
+    const plainRows = (plain.payload as { data: { employees: Array<Record<string, unknown>> } }).data.employees;
+    expect(plainRows[0]).not.toHaveProperty('can_edit');
+    expect(scope.canAccessEmployeeInScope).not.toHaveBeenCalled();
+
+    pgQuery.mockResolvedValueOnce(rows);
+    const withEdit = makeRes();
+    await timesheetModeController.list(
+      makeReq({ query: { employee_ids: '7,8', include_can_edit: '1' } }), withEdit,
+    );
+    const editRows = (withEdit.payload as { data: { employees: Array<{ full_name: string; can_edit: boolean }> } })
+      .data.employees;
+    expect(editRows.map(r => [r.full_name, r.can_edit])).toEqual([['Можно', true], ['Нельзя', false]]);
   });
 
   it('сотрудники вне доступного поддерева отфильтровываются', async () => {
@@ -337,6 +393,37 @@ describe('timesheetModeController — массовая настройка под
     expect(payload.departments[0].source).toBe('legacy_department');
   });
 
+  it('listDepartments отдаёт число прямых членов и людей с личным режимом', async () => {
+    pgQuery.mockResolvedValueOnce([
+      {
+        id: DEPT, name: 'Гарантийный отдел', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: true, is_contractor: false, employees_count: '43', personal_mode_count: 33,
+      },
+      {
+        id: DEPT2, name: 'Пустая бригада', kind: 'brigade',
+        mode: 'skud', object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: false, is_contractor: false, employees_count: null, personal_mode_count: null,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.listDepartments(makeReq({}), res);
+
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    // Уволенные и архивные в счётчики не входят.
+    expect(sql).toContain('e.is_archived = false');
+    expect(sql).toContain(`e.employment_status <> 'fired'`);
+    expect(sql).toContain('timesheet_export_mode IS NOT NULL');
+    const departments = (res.payload as {
+      data: { departments: Array<{ name: string; employees_count: number; personal_mode_count: number }> };
+    }).data.departments;
+    expect(departments.map(d => [d.name, d.employees_count, d.personal_mode_count])).toEqual([
+      ['Гарантийный отдел', 43, 33],
+      ['Пустая бригада', 0, 0],
+    ]);
+  });
+
   it('listDepartments размечает ветку подрядчиков и раскрывает поддерево в SQL', async () => {
     pgQuery.mockResolvedValueOnce([
       {
@@ -482,6 +569,130 @@ describe('timesheetModeController — массовая настройка под
     expect(auditArgs.details.affected_departments).toHaveLength(2);
     // И ни одного касания привязок объектов: это отдельная сущность (скоуп табельщицы).
     expect(calls.some(sql => sql.includes('object_assignment'))).toBe(false);
+  });
+
+  /** Сотрудники — массовая запись личного режима. */
+  describe('updateEmployeesBulk', () => {
+    const existingRows = (ids: number[], archived: number[] = []) =>
+      ids.map(id => ({ id, is_archived: archived.includes(id) }));
+    const lockedRows = (ids: number[]) =>
+      ids.map(id => ({
+        id, full_name: `Сотрудник ${id}`, is_archived: false,
+        timesheet_export_mode: id === 1 ? 'skud' : null, timesheet_export_object_id: null,
+      }));
+    const bulk = async (body: unknown) => {
+      const res = makeRes();
+      await timesheetModeController.updateEmployeesBulk(makeReq({ body }), res);
+      return res;
+    };
+    const updateWasCalled = (calls: string[]) => calls.some(sql => sql.includes('UPDATE employees'));
+
+    it('пустой список, дробный id и пакет больше лимита — 400 без запросов', async () => {
+      expect((await bulk({ employee_ids: [], mode: 'skud' })).statusCode).toBe(400);
+      expect((await bulk({ employee_ids: [1.5], mode: 'skud' })).statusCode).toBe(400);
+      const many = Array.from({ length: 501 }, (_, i) => i + 1);
+      expect((await bulk({ employee_ids: many, mode: 'skud' })).statusCode).toBe(400);
+      expect(pgQuery).not.toHaveBeenCalled();
+      expect(pgTx).not.toHaveBeenCalled();
+    });
+
+    it('режим object без объекта — 400', async () => {
+      const res = await bulk({ employee_ids: [1], mode: 'object', object_id: null });
+      expect(res.statusCode).toBe(400);
+      expect(pgTx).not.toHaveBeenCalled();
+    });
+
+    it('несуществующий id — 400 (а не 403), права даже не проверяются', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1]));
+      scope.canAccessEmployeeInScope.mockResolvedValue(false);
+
+      const res = await bulk({ employee_ids: [1, 999], mode: 'skud' });
+
+      expect(res.statusCode).toBe(400);
+      expect((res.payload as { details: number[] }).details).toEqual([999]);
+      expect(scope.canAccessEmployeeInScope).not.toHaveBeenCalled();
+      expect(pgTx).not.toHaveBeenCalled();
+    });
+
+    it('архивный сотрудник — 400 без записи', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1, 2], [2]));
+      const res = await bulk({ employee_ids: [1, 2], mode: 'skud' });
+      expect(res.statusCode).toBe(400);
+      expect((res.payload as { details: number[] }).details).toEqual([2]);
+      expect(pgTx).not.toHaveBeenCalled();
+    });
+
+    it('хоть один чужой по праву записи — 403 целиком', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1, 2]));
+      scope.canAccessEmployeeInScope.mockImplementation(async (_req: unknown, id: number) => id === 1);
+
+      const res = await bulk({ employee_ids: [1, 2], mode: 'skud' });
+
+      expect(res.statusCode).toBe(403);
+      expect((res.payload as { details: number[] }).details).toEqual([2]);
+      expect(pgTx).not.toHaveBeenCalled();
+      // Скоуп чтения (view_all_departments) к записи не подмешивается.
+      expect(readScope.filterEmployeeIdsByReadScope).not.toHaveBeenCalled();
+    });
+
+    it('строка пропала между проверкой и FOR UPDATE — 409, UPDATE не выполняется', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1, 2]));
+      const { client, calls } = makeTxClient([{ rows: lockedRows([1]), rowCount: 1 }]);
+      pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+      const res = await bulk({ employee_ids: [1, 2], mode: 'skud' });
+
+      expect(res.statusCode).toBe(409);
+      expect(updateWasCalled(calls)).toBe(false);
+      expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
+    });
+
+    it('ошибка аудита пробрасывается из транзакции — 500 (запись откатывается)', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1]));
+      const { client } = makeTxClient([{ rows: lockedRows([1]), rowCount: 1 }, { rows: [], rowCount: 1 }]);
+      let transactionError: unknown = null;
+      pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => {
+        try {
+          return await fn(client);
+        } catch (error) {
+          transactionError = error;
+          throw error;
+        }
+      });
+      audit.logFromRequestWithClient.mockRejectedValueOnce(new Error('audit down'));
+
+      const res = await bulk({ employee_ids: [1], mode: 'skud' });
+
+      expect(res.statusCode).toBe(500);
+      // withTransaction получил исключение — значит выполнит ROLLBACK.
+      expect(transactionError).toBeInstanceOf(Error);
+    });
+
+    it('успех: блокировка, один UPDATE, аудит со старыми значениями; null сбрасывает режим', async () => {
+      pgQuery.mockResolvedValueOnce(existingRows([1, 2]));
+      const { client, calls } = makeTxClient([{ rows: lockedRows([1, 2]), rowCount: 2 }, { rows: [], rowCount: 2 }]);
+      pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+      const res = await bulk({ employee_ids: [1, 2, 2], mode: null });
+
+      expect(res.statusCode).toBe(200);
+      expect((res.payload as { data: { affected: number; mode: string | null } }).data)
+        .toMatchObject({ affected: 2, mode: null });
+      expect(calls[0]).toContain('pg_advisory_xact_lock');
+      expect(calls[1]).toContain('FOR UPDATE');
+      expect(calls.filter(sql => sql.includes('UPDATE employees'))).toHaveLength(1);
+      // Режимы подразделений и назначения объектов не трогаются.
+      expect(calls.some(sql => sql.includes('UPDATE org_departments'))).toBe(false);
+      expect(calls.some(sql => sql.includes('object_assignment'))).toBe(false);
+      const auditArgs = audit.logFromRequestWithClient.mock.calls[0][4] as {
+        details: { new_mode: string | null; affected_employees: Array<{ id: number; old_mode: string | null }> };
+      };
+      expect(auditArgs.details.new_mode).toBeNull();
+      expect(auditArgs.details.affected_employees).toEqual([
+        { id: 1, name: 'Сотрудник 1', old_mode: 'skud', old_object_id: null },
+        { id: 2, name: 'Сотрудник 2', old_mode: null, old_object_id: null },
+      ]);
+    });
   });
 
   /**

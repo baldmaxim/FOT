@@ -87,7 +87,11 @@ vi.mock('../services/department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: h.listExplicitDepartmentIdsForUser,
 }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: h.listDirectSubordinates }));
-vi.mock('../services/skud-shared.service.js', () => ({ collectDeptIds: vi.fn(async (id: string) => [id]) }));
+const deptTree = vi.hoisted(() => ({ rows: [] as Array<{ id: string; parent_id: string | null; name: string }> }));
+vi.mock('../services/skud-shared.service.js', () => ({
+  collectDeptIds: vi.fn(async (id: string) => [id]),
+  getAllDepartmentsTree: vi.fn(async () => deptTree.rows),
+}));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({
   getEmployeeOwnerAndSupervisor: vi.fn().mockResolvedValue([]),
@@ -230,6 +234,52 @@ describe('чтение — поля оклада не покидают БД', ()
         expect(sql).not.toContain(column);
       }
     }
+  });
+
+  it('view=staff отдаёт даты строками и признак Работает/Уволен/Декрет по дереву отделов', async () => {
+    deptTree.rows = [
+      { id: 'su10', parent_id: null, name: '(СУ-10) ООО СУ-10' },
+      { id: 'decret', parent_id: 'su10', name: 'Декрет' },
+      { id: 'vent', parent_id: 'su10', name: 'Отдел вентиляции' },
+    ];
+    h.query.mockImplementation(async (sql: string) => {
+      if (!String(sql).includes('FROM employees')) return [];
+      return [
+        { id: 1, full_name: 'Декретная', org_department_id: 'decret', employment_status: 'active', hire_date: '2024-01-15', birth_date: '1990-03-05', dismissal_date: null, total_count: 3 },
+        { id: 2, full_name: 'Работник', org_department_id: 'vent', employment_status: 'active', hire_date: '2025-02-01', birth_date: null, dismissal_date: '2026-10-01', total_count: 3 },
+        { id: 3, full_name: 'Уволенная', org_department_id: 'decret', employment_status: 'fired', hire_date: null, birth_date: null, dismissal_date: '2026-09-01', total_count: 3 },
+      ];
+    });
+    const res = makeRes();
+
+    await employeesController.getAll(makeReq({ query: { page: '1', view: 'staff' } }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const select = allSql().find(sql => sql.includes('FROM employees'));
+    expect(select).toContain('hire_date, birth_date, dismissal_date');
+    const rows = (res.body as { data: Array<Record<string, unknown>> }).data;
+    expect(rows.map(r => [r.full_name, r.sign, r.birth_date, r.hire_date, r.dismissal_date])).toEqual([
+      ['Декретная', 'Декрет', '1990-03-05', '2024-01-15', null],
+      ['Работник', 'Работает', null, '2025-02-01', '2026-10-01'],
+      // Маппер в этом наборе замокан тождеством — hire_date доходит как есть.
+      ['Уволенная', 'Уволен', null, null, '2026-09-01'],
+    ]);
+    deptTree.rows = [];
+  });
+
+  it('обычный список (view=list) признак и даты не считает', async () => {
+    h.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FROM employees')
+        ? [{ id: 1, full_name: 'Иванов', org_department_id: null, employment_status: 'active', total_count: 1 }]
+        : []
+    ));
+    const res = makeRes();
+
+    await employeesController.getAll(makeReq({ query: { page: '1', view: 'list' } }), res as never);
+
+    const select = allSql().find(sql => sql.includes('FROM employees'));
+    expect(select).not.toContain('birth_date');
+    expect((res.body as { data: Array<Record<string, unknown>> }).data[0]).not.toHaveProperty('sign');
   });
 
   it('карточка сотрудника (промах кэша) не выбирает колонки оклада', async () => {

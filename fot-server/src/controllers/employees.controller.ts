@@ -36,12 +36,13 @@ import {
   normalizeUuidParam,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
-  resolveRequestDataScopeWithDirectReports,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
+import { resolveEmployeeListReadScope } from '../services/employee-scope-filter.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
-import { collectDeptIds } from '../services/skud-shared.service.js';
+import { collectDeptIds, getAllDepartmentsTree } from '../services/skud-shared.service.js';
+import { buildSignDepartmentIndex, resolveEmployeeSign } from '../utils/employee-sign.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
@@ -129,23 +130,6 @@ async function resolveDepartmentFilterIds(departmentId: string | undefined | nul
   return ids.length > 0 ? ids : [departmentId];
 }
 
-/**
- * Скоуп ЧТЕНИЯ списка сотрудников. Флаг роли view_all_departments («Просмотр всех
- * табелей и проходов») открывает всю организацию на чтение — только здесь, а не в
- * resolveAccessibleDepartmentIds: тот скоуп решает и запись (canAccessEmployeeInScope
- * в увольнении, правке карточки, документах). globalRead=true — фильтр отдела берётся
- * из запроса как есть, без сужения до назначенных отделов.
- */
-async function resolveEmployeeListReadScope(
-  req: AuthenticatedRequest,
-): Promise<{ scope: Awaited<ReturnType<typeof resolveRequestDataScopeWithDirectReports>>; globalRead: boolean }> {
-  const scope = await resolveRequestDataScopeWithDirectReports(req);
-  if (scope !== 'all' && await hasGlobalDepartmentReadScope(req)) {
-    return { scope: 'all', globalRead: true };
-  }
-  return { scope, globalRead: false };
-}
-
 export const employeesController = {
   /**
    * GET /api/employees/work-object-options
@@ -223,7 +207,9 @@ export const employeesController = {
       const isListView = req.query.view === 'list';
       const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
       // Оклады в списке «Управления кадрами» не отдаются: они под ключом /salary/terms.
-      const staffColumns = listColumns;
+      // Даты — для столбцов «Трудоустр.»/«Рожд.»; dismissal_date нужен кнопке отмены
+      // запланированного увольнения (раньше не выбирался, и кнопка его не видела).
+      const staffColumns = `${listColumns}, hire_date, birth_date, dismissal_date`;
 
       // --- Paginated mode ---
       const pageParam = req.query.page as string | undefined;
@@ -384,7 +370,21 @@ export const employeesController = {
         }
 
         const structureCache = await loadStructureCache();
-        const employees = data.map(emp => decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache));
+        const isStaffView = req.query.view === 'staff';
+        const signIndex = isStaffView ? buildSignDepartmentIndex(await getAllDepartmentsTree()) : null;
+        const employees = data.map(emp => {
+          const mapped = decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache);
+          if (!signIndex) return mapped;
+          return {
+            ...mapped,
+            birth_date: typeof emp.birth_date === 'string' ? emp.birth_date : null,
+            sign: resolveEmployeeSign({
+              employmentStatus: mapped.employment_status,
+              departmentId: mapped.org_department_id,
+              deptById: signIndex,
+            }),
+          };
+        });
         const total = data.length > 0 ? Number(data[0].total_count) : 0;
 
         auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {

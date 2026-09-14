@@ -16,6 +16,7 @@ import {
   canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds,
 } from '../services/data-scope.service.js';
+import { filterEmployeeIdsByReadScope } from '../services/employee-scope-filter.service.js';
 import {
   resolveRow,
   TIMESHEET_MODE_LOCK_KEY,
@@ -28,6 +29,13 @@ const MODE_BATCH_LIMIT = 500;
 
 const bulkDepartmentsSchema = z.object({
   department_ids: z.array(z.string().uuid()).min(1),
+  mode: z.enum(['current_activity', 'object', 'skud']).nullable(),
+  object_id: z.string().uuid().nullable().optional(),
+});
+
+const bulkEmployeesSchema = z.object({
+  employee_ids: z.array(z.number().int().positive()).min(1),
+  // null = сбросить личный режим: сотрудник вернётся к режиму отдела.
   mode: z.enum(['current_activity', 'object', 'skud']).nullable(),
   object_id: z.string().uuid().nullable().optional(),
 });
@@ -51,6 +59,8 @@ interface IModeApiRow {
   effective_object_address: string | null;
   effective_object_is_active: boolean | null;
   source: string;
+  /** Только при include_can_edit=1. */
+  can_edit?: boolean;
 }
 
 /**
@@ -104,8 +114,13 @@ export const timesheetModeController = {
         return;
       }
 
-      // Скоуп применяется в обоих режимах: строки чужих отделов отсекаются ниже.
-      const accessible = await resolveAccessibleDepartmentIds(req);
+      // Выборка по списку сотрудников идёт от «Управления кадрами» — там охват ЧТЕНИЯ
+      // (view_all_departments, прямые подчинённые из чужих отделов). Сверяем с тем же
+      // скоупом, иначе у человека из списка не было бы строки режима. Выборка по отделу
+      // остаётся на прежнем фильтре поддерева ниже.
+      const byEmployees = employeeIds.length > 0;
+      const readableIds = byEmployees ? new Set(await filterEmployeeIdsByReadScope(req, employeeIds)) : null;
+      const accessible = byEmployees ? 'all' : await resolveAccessibleDepartmentIds(req);
       const rows = await query<{
         employee_id: number | string;
         full_name: string;
@@ -151,9 +166,22 @@ export const timesheetModeController = {
       );
 
       // Дополнительная страховка: сотрудник мог оказаться вне доступного поддерева.
-      const scoped = accessible === 'all'
-        ? rows
-        : rows.filter(r => r.org_department_id && accessible.includes(r.org_department_id));
+      const scoped = readableIds
+        ? rows.filter(r => readableIds.has(Number(r.employee_id)))
+        : accessible === 'all'
+          ? rows
+          : rows.filter(r => r.org_department_id && accessible.includes(r.org_department_id));
+
+      // can_edit — только по запросу окна режима: право ЗАПИСИ решает canAccessEmployeeInScope
+      // (как одиночный и массовый PUT), флаг просмотра всех отделов его не расширяет.
+      const includeCanEdit = req.query.include_can_edit === '1';
+      const canEditById = new Map<number, boolean>();
+      if (includeCanEdit) {
+        for (const row of scoped) {
+          const id = Number(row.employee_id);
+          canEditById.set(id, await canAccessEmployeeInScope(req, id));
+        }
+      }
 
       const objectIds = new Set<string>();
       for (const row of scoped) {
@@ -183,6 +211,7 @@ export const timesheetModeController = {
           effective_object_address: obj ? (obj.alt_name?.trim() || obj.name) : null,
           effective_object_is_active: obj ? obj.is_active : null,
           source: resolved.source,
+          ...(includeCanEdit ? { can_edit: canEditById.get(Number(row.employee_id)) === true } : {}),
         };
       });
 
@@ -236,6 +265,8 @@ export const timesheetModeController = {
         object_is_active: boolean | null;
         dept_current_activity: boolean;
         is_contractor: boolean;
+        employees_count: number | string | null;
+        personal_mode_count: number | string | null;
       }>(
         `WITH ca AS (
            SELECT id FROM skud_objects
@@ -243,6 +274,18 @@ export const timesheetModeController = {
          ),
          contractor AS (
            SELECT id FROM public.get_descendant_department_ids($2::uuid[])
+         ),
+         -- Прямые члены подразделения (не поддерево): режим отдела получают именно они.
+         -- Личный режим перекрывает режим отдела — такие люди считаются отдельно.
+         members AS (
+           SELECT e.org_department_id,
+                  count(*)::int                                                  AS employees_count,
+                  count(*) FILTER (WHERE e.timesheet_export_mode IS NOT NULL)::int AS personal_mode_count
+             FROM employees e
+            WHERE e.is_archived = false
+              AND e.employment_status <> 'fired'
+              AND e.org_department_id IS NOT NULL
+            GROUP BY e.org_department_id
          )
          SELECT d.id::text,
                 d.name,
@@ -257,9 +300,12 @@ export const timesheetModeController = {
                      AND doa.is_active = true
                      AND doa.skud_object_id IN (SELECT id FROM ca)
                 )                                  AS dept_current_activity,
-                (d.id IN (SELECT id FROM contractor)) AS is_contractor
+                (d.id IN (SELECT id FROM contractor)) AS is_contractor,
+                COALESCE(m.employees_count, 0)     AS employees_count,
+                COALESCE(m.personal_mode_count, 0) AS personal_mode_count
            FROM org_departments d
            LEFT JOIN skud_objects o ON o.id = d.timesheet_export_object_id
+           LEFT JOIN members m ON m.org_department_id = d.id
           WHERE d.is_active = true AND d.kind IN ('department', 'brigade')
           ORDER BY d.name`,
         [CURRENT_ACTIVITY_ADDRESS, contractorRootId ? [contractorRootId] : []],
@@ -285,6 +331,8 @@ export const timesheetModeController = {
             source: row.mode
               ? 'department_explicit'
               : (row.dept_current_activity ? 'legacy_department' : 'legacy_default'),
+            employees_count: Number(row.employees_count ?? 0),
+            personal_mode_count: Number(row.personal_mode_count ?? 0),
           })),
         },
       });
@@ -386,6 +434,121 @@ export const timesheetModeController = {
     } catch (error) {
       console.error('timesheetModeController.updateDepartmentsBulk error:', error);
       res.status(500).json({ error: 'Не удалось сохранить режимы подразделений' });
+    }
+  },
+
+  /**
+   * PUT /api/admin/timesheet-modes/employees
+   * Массовая установка личного режима сотрудникам. Отказ всегда целиком — ни одной
+   * записанной строки. Порядок проверок: форма → объект → существование (400) → права
+   * записи (403, canAccessEmployeeInScope, как у одиночного PUT) → повторная сверка
+   * под FOR UPDATE (409 при гонке) → UPDATE + аудит в одной транзакции.
+   */
+  async updateEmployeesBulk(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = bulkEmployeesSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Некорректные данные', details: parsed.error.issues });
+        return;
+      }
+      const employeeIds = [...new Set(parsed.data.employee_ids)];
+      if (employeeIds.length > MODE_BATCH_LIMIT) {
+        res.status(400).json({ error: `Слишком много сотрудников (максимум ${MODE_BATCH_LIMIT})` });
+        return;
+      }
+      const normalized = await normalizeModePayload(parsed.data.mode, parsed.data.object_id);
+      if ('error' in normalized) {
+        res.status(400).json({ error: normalized.error });
+        return;
+      }
+
+      // Существование — до прав: несуществующий id даёт понятную 400, а не 403.
+      const existing = await query<{ id: number | string; is_archived: boolean }>(
+        'SELECT id, is_archived FROM employees WHERE id = ANY($1::int[])',
+        [employeeIds],
+      );
+      const existingById = new Map(existing.map(row => [Number(row.id), row]));
+      const missing = employeeIds.filter(id => !existingById.has(id));
+      if (missing.length > 0) {
+        res.status(400).json({ error: 'Сотрудники не найдены', details: missing });
+        return;
+      }
+      const archived = employeeIds.filter(id => existingById.get(id)?.is_archived === true);
+      if (archived.length > 0) {
+        res.status(400).json({ error: 'Архивным сотрудникам режим не задаётся', details: archived });
+        return;
+      }
+
+      // Права ЗАПИСИ: та же функция, что у одиночного PUT. Скоуп чтения
+      // (view_all_departments) сюда намеренно не подмешивается.
+      const denied: number[] = [];
+      for (const id of employeeIds) {
+        if (!(await canAccessEmployeeInScope(req, id))) denied.push(id);
+      }
+      if (denied.length > 0) {
+        res.status(403).json({ error: 'В списке есть сотрудники вне вашего доступа', details: denied });
+        return;
+      }
+
+      const outcome = await withTransaction(async client => {
+        await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
+        const before = await client.query<{
+          id: number | string;
+          full_name: string;
+          is_archived: boolean;
+          timesheet_export_mode: TimesheetExportMode | null;
+          timesheet_export_object_id: string | null;
+        }>(
+          `SELECT id, full_name, is_archived, timesheet_export_mode, timesheet_export_object_id::text
+             FROM employees WHERE id = ANY($1::int[]) FOR UPDATE`,
+          [employeeIds],
+        );
+        // Между проверкой и блокировкой строку могли удалить или заархивировать.
+        if (before.rows.length !== employeeIds.length || before.rows.some(row => row.is_archived)) {
+          return { conflict: true as const };
+        }
+
+        await client.query(
+          `UPDATE employees
+              SET timesheet_export_mode = $1,
+                  timesheet_export_object_id = $2::uuid,
+                  updated_at = now()
+            WHERE id = ANY($3::int[])`,
+          [normalized.mode, normalized.objectId, employeeIds],
+        );
+
+        // Ошибка аудита пробрасывается и откатывает UPDATE: запись без следа недопустима.
+        await auditService.logFromRequestWithClient(
+          client, req, req.user.id, AUDIT_ACTIONS.TIMESHEET_MODE_BULK_UPDATED,
+          {
+            entityType: 'employee',
+            entityId: `bulk:${employeeIds.length}`,
+            details: {
+              new_mode: normalized.mode,
+              new_object_id: normalized.objectId,
+              affected_employees: before.rows.map(row => ({
+                id: Number(row.id),
+                name: row.full_name,
+                old_mode: row.timesheet_export_mode,
+                old_object_id: row.timesheet_export_object_id,
+              })),
+            },
+          },
+        );
+        return { conflict: false as const, affected: before.rows.length };
+      });
+
+      if (outcome.conflict) {
+        res.status(409).json({ error: 'Список сотрудников изменился, обновите окно' });
+        return;
+      }
+      res.json({
+        success: true,
+        data: { affected: outcome.affected, mode: normalized.mode, object_id: normalized.objectId },
+      });
+    } catch (error) {
+      console.error('timesheetModeController.updateEmployeesBulk error:', error);
+      res.status(500).json({ error: 'Не удалось сохранить режимы сотрудников' });
     }
   },
 

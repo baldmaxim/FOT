@@ -388,12 +388,300 @@
 
 .sc-col-check    { width: 44px; }
 .sc-col-num      { width: 48px; }
-.sc-col-name     { width: auto; }
-.sc-col-dept     { width: 200px; }
-.sc-col-position { width: 200px; }
-.sc-col-schedule { width: 200px; }
-.sc-col-object   { width: 200px; }
+.sc-col-name     { width: auto; min-width: 220px; }
+.sc-col-dept     { width: 180px; }
+.sc-col-position { width: 170px; }
+.sc-col-hire     { width: 96px; }
+.sc-col-birth    { width: 96px; }
+.sc-col-schedule { width: 150px; }
+.sc-col-main-object { width: 180px; }
+.sc-col-sign     { width: 100px; }
+/* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
+
+/* ── «Управление кадрами»: 10 колонок, горизонтальная прокрутка внутри таблицы ── */
+
+.sc-table-wrap {
+  overscroll-behavior-x: contain;
+}
+
+.sc-table--staff {
+  /* ≈1400 px фиксированных колонок + ФИО. Уже — скроллится таблица, не страница. */
+  min-width: 1640px;
+  --sc-sticky-num-left: 0px;
+  --sc-sticky-name-left: 48px;
+}
+
+.sc-table--staff.sc-table--selecting {
+  --sc-sticky-num-left: 44px;
+  --sc-sticky-name-left: 92px;
+}
+
+/* Цвет строки дублируется переменной: закреплённые ячейки рисуют его поверх непрозрачной
+   подложки — иначе под ними просвечивал бы скроллящийся контент, а постоянный фон
+   ломал бы чередование, hover и выделение. Значения — те же, что у самих строк ниже. */
+.sc-table--staff tbody tr { --sc-row-overlay: transparent; }
+.sc-table--staff tbody tr:nth-child(even) { --sc-row-overlay: rgba(255, 255, 255, 0.02); }
+.sc-table--staff tbody tr:hover,
+.sc-table--staff tbody tr:nth-child(even):hover { --sc-row-overlay: var(--bg-secondary); }
+.sc-table--staff tbody tr.sc-row--selected,
+.sc-table--staff tbody tr.sc-row--selected:hover,
+.sc-table--staff tbody tr.sc-row--selected:nth-child(even),
+.sc-table--staff tbody tr.sc-row--selected:nth-child(even):hover { --sc-row-overlay: rgba(var(--primary-rgb, 59, 130, 246), 0.12); }
+
+.sc-table--staff .sc-th-check,
+.sc-table--staff .sc-td-check,
+.sc-table--staff .sc-th-num,
+.sc-table--staff .sc-td-num,
+.sc-table--staff .sc-th-name,
+.sc-table--staff .sc-td-name,
+.sc-table--staff .sc-th-hist,
+.sc-table--staff .sc-td-hist {
+  position: sticky;
+}
+
+.sc-table--staff .sc-th-check,
+.sc-table--staff .sc-td-check { left: 0; }
+.sc-table--staff .sc-th-num,
+.sc-table--staff .sc-td-num { left: var(--sc-sticky-num-left); }
+.sc-table--staff .sc-th-name,
+.sc-table--staff .sc-td-name {
+  left: var(--sc-sticky-name-left);
+  box-shadow: inset -1px 0 0 var(--border);
+}
+.sc-table--staff .sc-th-hist,
+.sc-table--staff .sc-td-hist {
+  right: 0;
+  box-shadow: inset 1px 0 0 var(--border);
+}
+
+.sc-table--staff .sc-td-check,
+.sc-table--staff .sc-td-num,
+.sc-table--staff .sc-td-name,
+.sc-table--staff .sc-td-hist {
+  z-index: 1;
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--sc-row-overlay), var(--sc-row-overlay));
+}
+
+.sc-table--staff .sc-th-check,
+.sc-table--staff .sc-th-num,
+.sc-table--staff .sc-th-name,
+.sc-table--staff .sc-th-hist {
+  z-index: 3;
+}
+
+.sc-td-date {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-td-main-object,
+.sc-td-sign {
+  white-space: nowrap;
+}
+
+.sc-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-muted {
+  color: var(--text-muted);
+}
+
+/* Скелетон на время догрузки: высота строки текста, строки не прыгают. */
+.sc-skeleton {
+  display: inline-block;
+  width: 70%;
+  height: 1em;
+  vertical-align: middle;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
+.sc-skeleton--short {
+  width: 56px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sc-skeleton {
+    animation: sc-skeleton-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes sc-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* «Признак» — Работает / Уволен / Декрет. */
+.sc-sign {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.sc-card-name .sc-sign {
+  margin-left: 8px;
+}
+
+.sc-sign--working {
+  color: var(--success);
+  background: var(--success-muted);
+}
+
+.sc-sign--fired {
+  color: var(--error);
+  background: var(--error-muted);
+}
+
+.sc-sign--maternity {
+  color: var(--warning);
+  background: var(--warning-muted);
+}
+
+/* ── Окно «Режим табелирования» ── */
+
+.sc-mode-row {
+  align-items: flex-start;
+}
+
+.sc-mode-row input {
+  margin-top: 2px;
+}
+
+.sc-mode-row--locked {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.sc-mode-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sc-mode-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sc-mode-row-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sc-mode-row-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sc-mode-row-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sc-mode-source {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sc-mode-source--explicit {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-muted, rgba(59, 130, 246, 0.14));
+}
+
+.sc-mode-inactive {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--error);
+}
+
+.sc-mode-current {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--success);
+  background: var(--success-muted);
+}
+
+.sc-mode-option-hint {
+  display: block;
+  font-size: 12px;
+}
+
+.sc-mode-hint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sc-mode-apply-icon {
+  vertical-align: text-bottom;
+  margin-right: 4px;
+}
+
+.sc-mode-employee-filters {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.sc-mode-employee-filters .sc-obj-search {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
+.sc-mode-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sc-link-btn {
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .sc-mode-employee-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 
 /* Столбец «Объект» — назначение объектов входа отделам/бригадам и персонально. */
 .sc-obj-names {

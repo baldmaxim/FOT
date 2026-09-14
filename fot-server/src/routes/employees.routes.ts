@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
 import { employeesExportController } from '../controllers/employees-export.controller.js';
+import { employeesMainObjectsController } from '../controllers/employees-main-objects.controller.js';
 import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -141,6 +142,15 @@ router.get(
   requirePageAccess('/staff-control', 'view'),
   noStore,
   employeesExportController.exportEmployees
+);
+
+// GET /api/employees/main-objects?ids=… — столбец «Объект» (где больше всего часов за
+// 30 дней). Статический путь до '/:id'; noStore — данные меняются вместе с часами.
+router.get(
+  '/main-objects',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesMainObjectsController.getMainObjects
 );
 
 // Вводный инструктаж (вкладка «Управление кадрами → Вводный инструктаж»).

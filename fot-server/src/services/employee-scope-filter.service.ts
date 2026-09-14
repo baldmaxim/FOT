@@ -8,7 +8,9 @@
  * ВАЖНО: getAll пока продолжает использовать собственную копию логики —
  * переключение его на этот сервис запланировано отдельным шагом.
  */
+import { query } from '../config/postgres.js';
 import {
+  hasGlobalDepartmentReadScope,
   resolveManagedDepartmentIds,
   resolveRequestDataScopeWithDirectReports,
   resolveScopedDepartmentId,
@@ -93,4 +95,64 @@ export async function resolveEmployeeListScopeFilter(
   }
 
   return { mode: 'all', departmentIds: [], directEmployeeIds: [], selfEmployeeId: null };
+}
+
+/**
+ * Скоуп ЧТЕНИЯ списка сотрудников. Флаг роли view_all_departments («Просмотр всех
+ * табелей и проходов») открывает всю организацию на чтение — только здесь, а не в
+ * resolveAccessibleDepartmentIds: тот скоуп решает и запись (canAccessEmployeeInScope
+ * в увольнении, правке карточки, документах). globalRead=true — фильтр отдела берётся
+ * из запроса как есть, без сужения до назначенных отделов.
+ */
+export async function resolveEmployeeListReadScope(
+  req: AuthenticatedRequest,
+): Promise<{ scope: Awaited<ReturnType<typeof resolveRequestDataScopeWithDirectReports>>; globalRead: boolean }> {
+  const scope = await resolveRequestDataScopeWithDirectReports(req);
+  if (scope !== 'all' && await hasGlobalDepartmentReadScope(req)) {
+    return { scope: 'all', globalRead: true };
+  }
+  return { scope, globalRead: false };
+}
+
+/**
+ * Какие из переданных сотрудников пользователь ВИДИТ в «Управлении кадрами».
+ * Тот же охват, что у списка (getAll): глобальное чтение по view_all_departments,
+ * иначе отделы скоупа + прямые подчинённые. Несуществующие id не возвращаются.
+ *
+ * ТОЛЬКО для чтения. Права на запись решает canAccessEmployeeInScope — флаг
+ * view_all_departments запись не расширяет.
+ */
+export async function filterEmployeeIdsByReadScope(
+  req: AuthenticatedRequest,
+  employeeIds: readonly number[],
+): Promise<number[]> {
+  const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) return [];
+
+  const { globalRead } = await resolveEmployeeListReadScope(req);
+  const filter: IEmployeeScopeFilter = globalRead
+    ? { mode: 'all', departmentIds: [], directEmployeeIds: [], selfEmployeeId: null }
+    : await resolveEmployeeListScopeFilter(req);
+  if (filter.mode === 'none') return [];
+
+  const params: unknown[] = [ids];
+  let condition = 'TRUE';
+  if (filter.mode === 'self') {
+    params.push(filter.selfEmployeeId);
+    condition = `id = $${params.length}::int`;
+  } else if (filter.mode === 'departments') {
+    params.push(filter.departmentIds);
+    const deptIdx = params.length;
+    params.push(filter.directEmployeeIds);
+    condition = `(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`;
+  } else if (filter.mode === 'employees') {
+    params.push(filter.directEmployeeIds);
+    condition = `id = ANY($${params.length}::int[])`;
+  }
+
+  const rows = await query<{ id: number | string }>(
+    `SELECT id FROM employees WHERE id = ANY($1::int[]) AND (${condition})`,
+    params,
+  );
+  return rows.map(row => Number(row.id)).filter(id => Number.isInteger(id));
 }

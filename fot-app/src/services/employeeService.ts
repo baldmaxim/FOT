@@ -25,6 +25,13 @@ export interface PaginatedMeta {
   totalPages: number;
 }
 
+/** Столбец «Объект»: где больше всего часов за период (тот же расчёт, что в Excel). */
+export interface IEmployeeMainObjects {
+  period: { start: string; end: string };
+  /** employee_id → название объекта; сотрудника нет в карте — объекта нет. */
+  objects: Record<string, string>;
+}
+
 export interface EmployeeCounts {
   byDepartment: Record<string, number>;
   byStatus: { active: number; fired: number };
@@ -123,6 +130,15 @@ export const employeeService = {
    * фильтры экрана (отдел, поиск, график, статус) на файл не влияют.
    * Таймаут увеличен: основной объект считается по часам СКУД за месяц на всю выборку.
    */
+  async getMainObjects(employeeIds: number[]): Promise<IEmployeeMainObjects> {
+    // no-store: сервер ставит max-age=30 на GET /api/* — ячейки отставали бы сверх минуты.
+    const response = await apiClient.get<ApiResponse<IEmployeeMainObjects>>(
+      `/employees/main-objects?ids=${employeeIds.join(',')}`,
+      { cache: 'no-store' },
+    );
+    return response.data;
+  },
+
   async exportEmployees(): Promise<{ blob: Blob; filename: string }> {
     return apiClient.download('/employees/export', 'Сотрудники.xlsx', { timeoutMs: 120_000 });
   },

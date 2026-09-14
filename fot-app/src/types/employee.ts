@@ -43,7 +43,11 @@ export interface Employee {
   schedule_override_effective_from?: string | null;
   site_name?: string | null;
   site_manager_full_name?: string | null;
+  /** «Признак» в «Управлении кадрами» (только список view=staff). */
+  sign?: EmployeeSign;
 }
+
+export type EmployeeSign = 'Работает' | 'Уволен' | 'Декрет';
 
 // Типы для обогащения сотрудников из Excel
 export interface EnrichPreviewItem {

@@ -7,6 +7,7 @@
  */
 import { query } from '../config/postgres.js';
 import { CONTRACTOR_ROOT_NAME } from '../config/contractor.js';
+import { isInMaternityDepartment, normalizeDepartmentName } from '../utils/employee-sign.js';
 import type { IEmployeeScopeFilter } from './employee-scope-filter.service.js';
 
 /** Предел строк: защита от случайной выгрузки на сотни тысяч человек. */
@@ -16,7 +17,6 @@ export const MAX_EXPORT_EMPLOYEES = 50000;
 const SM_ROOT_ID = '6c4a3726-4ba9-4550-9978-c5ff50e4f77b';
 const SU10_ROOT_ID = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
 const BRIGADES_ROOT_NAME = 'бригады';
-const MATERNITY_DEPARTMENT_NAME = 'декрет';
 
 export interface IExportPeriod {
   /** YYYY-MM-DD, включительно. */
@@ -176,7 +176,7 @@ export async function loadExportDepartments(): Promise<IExportDepartmentRow[]> {
 
 const collator = new Intl.Collator('ru');
 
-const normalizeName = (name: string | null | undefined): string => (name ?? '').trim().toLowerCase();
+const normalizeName = normalizeDepartmentName;
 
 /** Синтетический корень структуры («Объект»), под которым лежат компании. */
 const isTechnicalRoot = (dept: IExportDepartmentRow): boolean =>
@@ -254,7 +254,7 @@ export function buildExportSections({
       .reverse()
       .map(dept => dept.name || '(без названия)')
       .join(' / ');
-    const isMaternity = chain.some(dept => normalizeName(dept.name) === MATERNITY_DEPARTMENT_NAME);
+    const isMaternity = isInMaternityDepartment(deptId, byId);
 
     const placement = { section, path, isMaternity };
     placementCache.set(deptId, placement);
