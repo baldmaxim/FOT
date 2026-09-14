@@ -3,6 +3,7 @@ import { X, LogIn, LogOut, Timer, Pencil, Trash2, Check, XCircle } from 'lucide-
 import type { TimesheetEntry, TimesheetObjectEntry, TimesheetStatus, SkudEvent, SkudEventFailure } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
+import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import { skudService } from '../../services/skudService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
@@ -227,12 +228,13 @@ const EventsTab: FC<{
   allowAccessPointMap?: boolean;
   timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked' | 'display_hours_worked'> | null;
 }> = ({ employeeId, workDate, allowAccessPointMap = false, timesheetEntry }) => {
-  const { canViewPage, showActualHours } = useAuth();
+  const { showActualHours } = useAuth();
+  const canViewSkudDirectory = useCanViewSkudDirectory();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
     accessPointMapModal,
-  } = useAccessPointMapViewer(allowAccessPointMap && canViewPage('/skud-settings'));
+  } = useAccessPointMapViewer(allowAccessPointMap && canViewSkudDirectory);
   const [events, setEvents] = useState<SkudEvent[]>([]);
   const [failures, setFailures] = useState<SkudEventFailure[]>([]);
   const [loading, setLoading] = useState(true);

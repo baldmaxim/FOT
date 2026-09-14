@@ -1,8 +1,8 @@
 import { useMemo, type FC } from 'react';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Check/XCircle используются в JSX (статус-маркер), но react-compiler-плагин не видит usage
 import { Check, Clock, LogIn, LogOut, XCircle } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
+import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import type { Employee, EmployeeInput, SkudEvent, SkudEventFailure } from '../../types';
 import type { IWorkObjectOption } from '../../services/employeeService';
 import type { IDayAttendance } from '../../utils/attendanceCalc';
@@ -85,12 +85,12 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   onSave,
   onCancel,
 }) => {
-  const { canViewPage } = useAuth();
+  const canViewSkudDirectory = useCanViewSkudDirectory();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
     accessPointMapModal,
-  } = useAccessPointMapViewer(canViewPage('/skud-settings'));
+  } = useAccessPointMapViewer(canViewSkudDirectory);
 
   const { items, firstEntry, lastExit, breakSec } = useMemo(() => {
     const sortedEvents = [...showEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));

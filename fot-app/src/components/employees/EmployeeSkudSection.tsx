@@ -3,8 +3,8 @@ import {
   LogIn, LogOut, ChevronDown, ChevronRight, ChevronLeft,
   Clock, Timer, Download, Check, XCircle,
 } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
+import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { DateInput } from '../ui/DateInput';
@@ -227,12 +227,12 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
   employeeId, focusDate, focusKey, externalViewMode,
   externalRangeStart, externalRangeEnd, externalViewDate,
 }) => {
-  const { canViewPage } = useAuth();
+  const canViewSkudDirectory = useCanViewSkudDirectory();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
     accessPointMapModal,
-  } = useAccessPointMapViewer(canViewPage('/skud-settings'));
+  } = useAccessPointMapViewer(canViewSkudDirectory);
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

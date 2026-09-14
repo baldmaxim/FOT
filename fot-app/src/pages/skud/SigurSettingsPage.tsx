@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, type ComponentType } from 'react';
 import { Settings, MapPin, Filter, Database, AlertCircle, HardDrive } from 'lucide-react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { sigurService } from '../../services/sigurService';
@@ -38,16 +38,32 @@ const SETTINGS_TABS: SettingsTab[] = [
   'skud-db',
 ];
 
-const resolveSettingsTab = (value: string | null): SettingsTab => (
-  value && SETTINGS_TABS.includes(value as SettingsTab)
+// Ключ /skud-settings/directory: только эти вкладки и только на чтение. Подключение,
+// синхронизация, лимит и ошибочные события остаются за полным ключом /skud-settings.
+const DIRECTORY_TABS: SettingsTab[] = ['access-points', 'objects', 'skud-db'];
+
+const TAB_BUTTONS: Array<{ tab: SettingsTab; label: string; Icon: ComponentType<{ size?: number }> }> = [
+  { tab: 'settings', label: 'Настройки', Icon: Settings },
+  { tab: 'sync-filter', label: 'Синхронизация', Icon: Filter },
+  { tab: 'access-points', label: 'Точки доступа', Icon: MapPin },
+  { tab: 'objects', label: 'Объекты', Icon: Database },
+  { tab: 'travel-config', label: 'Лимит передвижения', Icon: MapPin },
+  { tab: 'failures', label: 'Ошибочные события', Icon: AlertCircle },
+  { tab: 'skud-db', label: 'База', Icon: HardDrive },
+];
+
+const resolveSettingsTab = (value: string | null, allowed: SettingsTab[]): SettingsTab => (
+  value && allowed.includes(value as SettingsTab)
     ? value as SettingsTab
-    : 'settings'
+    : allowed[0]
 );
 
 export const SigurSettingsPage = () => {
-  const { canEditPage } = useAuth();
+  const { canEditPage, canViewPage } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const canEdit = canEditPage('/skud-settings');
+  const hasFullSettings = canViewPage('/skud-settings');
+  const visibleTabs = hasFullSettings ? SETTINGS_TABS : DIRECTORY_TABS;
 
   const legacyTab = searchParams.get('tab');
   const legacyRedirect = legacyTab === 'employees'
@@ -56,7 +72,7 @@ export const SigurSettingsPage = () => {
       ? `/sigur?view=settings${searchParams.get('sub') ? `&sub=${searchParams.get('sub')}` : ''}`
       : null;
 
-  const [activeTab, setActiveTabState] = useState<SettingsTab>(() => resolveSettingsTab(searchParams.get('tab')));
+  const [activeTab, setActiveTabState] = useState<SettingsTab>(() => resolveSettingsTab(searchParams.get('tab'), visibleTabs));
 
   // Подключение
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -67,11 +83,13 @@ export const SigurSettingsPage = () => {
   // Фильтр синхронизации
   const [syncFilterCount, setSyncFilterCount] = useState<number | null>(null);
 
+  // Фильтр и статус подключения нужны только вкладкам полного раздела.
   useEffect(() => {
+    if (!hasFullSettings) return;
     sigurService.getSyncFilter()
       .then(filter => setSyncFilterCount(filter.length))
       .catch(() => setSyncFilterCount(null));
-  }, []);
+  }, [hasFullSettings]);
 
   const loadConnectionStatus = useCallback(async (): Promise<void> => {
     setChecking(true);
@@ -107,24 +125,25 @@ export const SigurSettingsPage = () => {
   }, []);
 
   useEffect(() => {
+    if (!hasFullSettings) return;
     void loadConnectionStatus();
-  }, [loadConnectionStatus]);
+  }, [hasFullSettings, loadConnectionStatus]);
 
   useEffect(() => {
-    const tabFromQuery = resolveSettingsTab(searchParams.get('tab'));
+    const tabFromQuery = resolveSettingsTab(searchParams.get('tab'), visibleTabs);
     setActiveTabState(prev => (prev === tabFromQuery ? prev : tabFromQuery));
-  }, [searchParams]);
+  }, [searchParams, visibleTabs]);
 
   const setActiveTab = useCallback((tab: SettingsTab) => {
     setActiveTabState(tab);
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
-      if (tab === 'settings') next.delete('tab');
+      if (tab === visibleTabs[0]) next.delete('tab');
       else next.set('tab', tab);
       next.delete('sub');
       return next;
     }, { replace: true });
-  }, [setSearchParams]);
+  }, [setSearchParams, visibleTabs]);
 
   if (legacyRedirect) {
     return <Navigate to={legacyRedirect} replace />;
@@ -145,55 +164,16 @@ export const SigurSettingsPage = () => {
   return (
     <div className="sigur-page">
       <div className="sigur-tabs">
-        <button
-          className={`sigur-tab ${activeTab === 'settings' ? 'active' : ''}`}
-          onClick={() => setActiveTab('settings')}
-        >
-          <Settings size={14} />
-          Настройки
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'sync-filter' ? 'active' : ''}`}
-          onClick={() => setActiveTab('sync-filter')}
-        >
-          <Filter size={14} />
-          Синхронизация
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'access-points' ? 'active' : ''}`}
-          onClick={() => setActiveTab('access-points')}
-        >
-          <MapPin size={14} />
-          Точки доступа
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'objects' ? 'active' : ''}`}
-          onClick={() => setActiveTab('objects')}
-        >
-          <Database size={14} />
-          Объекты
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'travel-config' ? 'active' : ''}`}
-          onClick={() => setActiveTab('travel-config')}
-        >
-          <MapPin size={14} />
-          Лимит передвижения
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'failures' ? 'active' : ''}`}
-          onClick={() => setActiveTab('failures')}
-        >
-          <AlertCircle size={14} />
-          Ошибочные события
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'skud-db' ? 'active' : ''}`}
-          onClick={() => setActiveTab('skud-db')}
-        >
-          <HardDrive size={14} />
-          База
-        </button>
+        {TAB_BUTTONS.filter(({ tab }) => visibleTabs.includes(tab)).map(({ tab, label, Icon }) => (
+          <button
+            key={tab}
+            className={`sigur-tab ${activeTab === tab ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab)}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
       </div>
 
       {error && (

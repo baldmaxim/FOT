@@ -364,7 +364,8 @@ router.get('/employees', requirePageAccess('/skud-settings', 'view'), sigurContr
 router.get('/departments', requirePageAccess('/skud-settings', 'view'), sigurController.getDepartments);
 
 // GET /api/sigur/access-points — точки доступа
-router.get('/access-points', requirePageAccess('/skud-settings', 'view'), sigurController.getAccessPoints);
+// /skud-settings/directory — вкладки «Точки доступа» и «Объекты» раздела СКУД на чтение.
+router.get('/access-points', requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'), sigurController.getAccessPoints);
 
 // GET /api/sigur/events — события (query: startTime, endTime)
 router.get('/events', requirePageAccess('/skud-settings', 'view'), sigurController.getEvents);

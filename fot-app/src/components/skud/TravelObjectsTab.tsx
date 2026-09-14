@@ -260,7 +260,9 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
         <div>
           <h3 className="sigur-section-title">Объекты и точки доступа</h3>
           <div className="travel-config-hint">
-            В списке показываются нераспределённые точки доступа. Для выбранного объекта также видны уже привязанные к нему точки.
+            {canEdit
+              ? 'В списке показываются нераспределённые точки доступа. Для выбранного объекта также видны уже привязанные к нему точки.'
+              : 'Режим просмотра: объекты, привязанные к ним точки доступа и карты.'}
           </div>
         </div>
         <button className="sigur-btn" onClick={() => void loadData()} disabled={loading || saving}>
@@ -268,28 +270,31 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
         </button>
       </div>
 
-      <div className="travel-config-create">
-        <input
-          type="text"
-          className="travel-config-input"
-          placeholder="Новый объект"
-          value={newObjectName}
-          onChange={event => setNewObjectName(event.target.value)}
-          onKeyDown={handleCreateObjectKeyDown}
-          disabled={!canEdit || saving}
-        />
-        <button className="sigur-btn sigur-btn-primary" onClick={handleCreateObject} disabled={!canEdit || saving || !newObjectName.trim()}>
-          <Plus size={14} />
-          Добавить объект
-        </button>
-      </div>
-      <div className="travel-config-hint" style={{ marginTop: '-0.25rem', marginBottom: '0.75rem' }}>
-        {!canEdit
-          ? 'Для создания объектов нужны права на редактирование страницы настроек СКУД.'
-          : !newObjectName.trim()
-            ? 'Введите название объекта, и кнопка станет активной.'
-            : 'Нажмите "Добавить объект" или Enter.'}
-      </div>
+      {/* Без права на изменение инструменты редактирования не показываем вовсе, а не disabled. */}
+      {canEdit && (
+        <>
+          <div className="travel-config-create">
+            <input
+              type="text"
+              className="travel-config-input"
+              placeholder="Новый объект"
+              value={newObjectName}
+              onChange={event => setNewObjectName(event.target.value)}
+              onKeyDown={handleCreateObjectKeyDown}
+              disabled={saving}
+            />
+            <button className="sigur-btn sigur-btn-primary" onClick={handleCreateObject} disabled={saving || !newObjectName.trim()}>
+              <Plus size={14} />
+              Добавить объект
+            </button>
+          </div>
+          <div className="travel-config-hint" style={{ marginTop: '-0.25rem', marginBottom: '0.75rem' }}>
+            {!newObjectName.trim()
+              ? 'Введите название объекта, и кнопка станет активной.'
+              : 'Нажмите "Добавить объект" или Enter.'}
+          </div>
+        </>
+      )}
 
       {loading ? (
         <div className="travel-config-empty">Загрузка объектов...</div>
@@ -316,7 +321,38 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
 
           <div className="travel-config-main">
             {!selectedObject ? (
-              <div className="travel-config-empty">Выберите объект слева или создайте новый</div>
+              <div className="travel-config-empty">
+                {canEdit ? 'Выберите объект слева или создайте новый' : 'Выберите объект слева'}
+              </div>
+            ) : !canEdit ? (
+              <>
+                <h4 className="sigur-section-title">{selectedObject.name}</h4>
+                {selectedObject.alt_name && (
+                  <div className="travel-config-hint">Альтернативное обозначение: {selectedObject.alt_name}</div>
+                )}
+                <div className="travel-config-sidebar-title">
+                  Точки доступа объекта: {selectedObject.access_points.length}
+                </div>
+                <div className="travel-config-points">
+                  {selectedObject.access_points.map(point => (
+                    <div key={point} className="travel-config-point selected">
+                      <span className="travel-config-point-name">{accessPointLabelsByName.get(point) ?? point}</span>
+                    </div>
+                  ))}
+                  {selectedObject.access_points.length === 0 && (
+                    <div className="travel-config-empty">К объекту не привязаны точки доступа</div>
+                  )}
+                </div>
+                <TravelObjectMapSection
+                  object={selectedObject}
+                  canEdit={false}
+                  busy={false}
+                  accessPointsDirty={false}
+                  accessPointLabels={accessPointLabelsByName}
+                  setError={setError}
+                  reloadObjects={loadData}
+                />
+              </>
             ) : (
               <>
                 <div className="travel-config-hint" style={{ marginBottom: '0.75rem' }}>

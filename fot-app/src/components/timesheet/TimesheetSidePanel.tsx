@@ -5,6 +5,7 @@ import type { TimesheetEntry, TimesheetEmployee, SkudEvent, SkudEventFailure, IP
 import type { IResolvedSchedule } from '../../types/schedule';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
+import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
@@ -104,11 +105,12 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 }) => {
   const { canViewPage, showActualHours } = useAuth();
   const canViewSkud = canViewPage('/timesheet/events');
+  const canViewSkudDirectory = useCanViewSkudDirectory();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
     accessPointMapModal,
-  } = useAccessPointMapViewer(canViewPage('/skud-settings'));
+  } = useAccessPointMapViewer(canViewSkudDirectory);
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set());
   const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
   const [loadingSkud, setLoadingSkud] = useState(false);

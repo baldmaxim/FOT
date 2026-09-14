@@ -13,6 +13,7 @@ import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService, uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
+import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useDepartmentSupervisor } from '../../hooks/useDepartmentSupervisor';
@@ -112,6 +113,7 @@ const DIRECT_REPORTS_DEPT = '__direct_reports__';
 
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile, canEditPage, canViewPage, canManageAsHrAdmin, showActualHours } = useAuth();
+  const canViewSkudDirectory = useCanViewSkudDirectory();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2782,7 +2784,7 @@ export const TimesheetPage: FC = () => {
             employeeId={modalEmployee?.id}
             workDate={modalWorkDate}
             showTravelTab={(modalEntry?.travel_problematic_segments || 0) > 0 || (modalEntry?.travel_delay_minutes || 0) > 0}
-            allowAccessPointMap={canViewPage('/skud-settings')}
+            allowAccessPointMap={canViewSkudDirectory}
             hideSkudTab={!canViewPage('/timesheet/events')}
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
             timesheetEntry={modalEntry}

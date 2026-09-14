@@ -122,9 +122,10 @@ router.get(
 
 // GET /api/skud/daily-summary - дневные сводки (admin+)
 // Доступ под /skud-settings: вкладка «База» живёт на этой странице.
+// /skud-settings/directory — «База» на чтение без остальных вкладок СКУД.
 router.get(
   '/daily-summary',
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getDailySummary
 );
 
@@ -153,7 +154,7 @@ router.get(
 // Доступ под /skud-settings: вкладка «База» живёт на этой странице.
 router.get(
   '/events',
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getEvents
 );
 
@@ -168,7 +169,7 @@ router.get(
 // GET /api/skud/access-points - точки доступа (header+)
 router.get(
   '/access-points',
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getAccessPoints
 );
 
@@ -176,7 +177,7 @@ router.get(
 // '/timesheet' — только вместе с '/timesheet/events' (AND-проверка в контроллере).
 router.get(
   '/access-point-settings',
-  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings', '/timesheet'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings', '/skud-settings/directory', '/timesheet'], 'view'),
   skudController.getAccessPointSettings
 );
 
@@ -197,7 +198,7 @@ router.put(
 // GET /api/skud/travel-objects - объекты для группировки точек доступа (header+)
 router.get(
   '/travel-objects',
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getTravelObjects
 );
 
@@ -220,7 +221,7 @@ router.put(
 router.get(
   '/travel-objects/:id/map',
   noStore,
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getTravelObjectMap
 );
 
@@ -264,7 +265,7 @@ router.delete(
 router.get(
   '/access-point-map',
   noStore,
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/skud-settings', '/skud-settings/directory'], 'view'),
   skudController.getAccessPointMap
 );
 

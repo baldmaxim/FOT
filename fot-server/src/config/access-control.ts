@@ -91,6 +91,7 @@ export const PAGE_PATHS = {
   TIMESHEET_EVENTS: '/timesheet/events',
   TIMESHEET_LOCK_TOGGLE: '/timesheet/lock-toggle',
   SKUD_SETTINGS: '/skud-settings',
+  SKUD_SETTINGS_DIRECTORY: '/skud-settings/directory',
   SIGUR: '/sigur',
   SIGUR_ACCESS_POINTS: '/sigur/access-points',
   SKUD_CARD_READER: '/skud-card-reader',
@@ -176,6 +177,9 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/patent-receipts',      label: 'Чеки за патент',                       group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 210, is_active: true },
   { key: '/admin/timesheet-transfers',  label: 'Переводы и исключения',                group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 220, is_active: true },
   { key: '/skud-settings',              label: 'СКУД',                                 group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 230, is_active: true },
+  // Только чтение трёх вкладок СКУД без подключения, синхронизации и сырых данных Sigur.
+  // «База» отдаёт события без фильтра по отделам — поэтому охват указан прямо в названии.
+  { key: '/skud-settings/directory',    label: 'СКУД — просмотр: точки доступа, объекты, база (события всей организации)', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'technical', supports_edit: false, sort_order: 233, is_active: true },
   { key: '/sigur',                      label: 'SIGUR — сотрудники и пропуска',        group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 231, is_active: true },
   // Точки и режимы доступа сотрудника — без технических настроек СКУД (/skud-settings).
   { key: '/sigur/access-points',        label: 'SIGUR — точки и режимы доступа сотрудников', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'technical', supports_edit: true, sort_order: 232, is_active: true },

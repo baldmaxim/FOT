@@ -1108,7 +1108,8 @@ const skudReadController = {
       // открыло бы endpoint всем пользователям табеля.
       const viaLegacyPage = await resolveEffectivePageAccess(req, '/employee', 'view')
         || await resolveEffectivePageAccess(req, '/staff-control', 'view')
-        || await resolveEffectivePageAccess(req, '/skud-settings', 'view');
+        || await resolveEffectivePageAccess(req, '/skud-settings', 'view')
+        || await resolveEffectivePageAccess(req, '/skud-settings/directory', 'view');
       if (!viaLegacyPage) {
         const viaTimesheet = await resolveEffectivePageAccess(req, '/timesheet', 'view')
           && await resolveEffectivePageAccess(req, '/timesheet/events', 'view');

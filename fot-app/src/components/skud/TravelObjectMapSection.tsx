@@ -226,43 +226,47 @@ export const TravelObjectMapSection: FC<ITravelObjectMapSectionProps> = ({
         <div>
           <div className="travel-config-sidebar-title">Карта объекта</div>
           <div className="travel-config-hint">
-            Один скриншот карты на объект. После загрузки отметьте на изображении точки доступа,
-            чтобы потом открывать карту по клику в детализации событий.
+            {canEdit
+              ? 'Один скриншот карты на объект. После загрузки отметьте на изображении точки доступа, чтобы потом открывать карту по клику в детализации событий.'
+              : 'Карта объекта с отмеченными точками доступа.'}
           </div>
         </div>
-        <div className="travel-map-toolbar">
-          <button
-            type="button"
-            className="sigur-btn"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!canEdit || busy || uploading || deleting}
-          >
-            <Upload size={14} />
-            {objectMap ? 'Заменить карту' : 'Загрузить карту'}
-          </button>
-          {objectMap && (
-            <>
-              <button
-                type="button"
-                className="sigur-btn"
-                onClick={() => setEditorOpen(prev => !prev)}
-                disabled={loading}
-              >
-                <MapPin size={14} />
-                {editorOpen ? 'Скрыть разметку' : 'Редактировать точки'}
-              </button>
-              <button
-                type="button"
-                className="sigur-btn"
-                onClick={handleDeleteMap}
-                disabled={!canEdit || busy || uploading || deleting}
-              >
-                <Trash2 size={14} />
-                Удалить карту
-              </button>
-            </>
-          )}
-        </div>
+        {/* Режим просмотра: карта с маркерами (travel-map-preview) видна, инструменты — нет. */}
+        {canEdit && (
+          <div className="travel-map-toolbar">
+            <button
+              type="button"
+              className="sigur-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading || deleting}
+            >
+              <Upload size={14} />
+              {objectMap ? 'Заменить карту' : 'Загрузить карту'}
+            </button>
+            {objectMap && (
+              <>
+                <button
+                  type="button"
+                  className="sigur-btn"
+                  onClick={() => setEditorOpen(prev => !prev)}
+                  disabled={loading}
+                >
+                  <MapPin size={14} />
+                  {editorOpen ? 'Скрыть разметку' : 'Редактировать точки'}
+                </button>
+                <button
+                  type="button"
+                  className="sigur-btn"
+                  onClick={handleDeleteMap}
+                  disabled={busy || uploading || deleting}
+                >
+                  <Trash2 size={14} />
+                  Удалить карту
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <input
@@ -315,7 +319,7 @@ export const TravelObjectMapSection: FC<ITravelObjectMapSectionProps> = ({
             </div>
           </div>
 
-          {editorOpen && (
+          {canEdit && editorOpen && (
             <>
               {accessPointsDirty && (
                 <div className="travel-map-warning">

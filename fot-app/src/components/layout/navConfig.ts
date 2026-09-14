@@ -93,7 +93,7 @@ export const navGroups: INavGroup[] = [
       { id: 'salary', path: '/salary', label: 'Зарплата', icon: DollarIcon, requiredPage: ['/salary/payments', '/salary/terms', '/salary/sick-leaves', '/salary/vacations', '/salary/deductions'] },
       { id: 'patent-receipts', path: '/admin/patent-receipts', label: 'Чеки за патент', icon: FileTextIcon, requiredPage: '/admin/patent-receipts' },
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
-      { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
+      { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: ['/skud-settings', '/skud-settings/directory'] },
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/sigur' },
       { id: 'card-reader', path: '/skud-card-reader', label: 'Пропуск', icon: KeyIcon, requiredPage: '/skud-card-reader' },
       { id: 'contractor-approvals', path: '/admin/contractor-approvals', label: 'Подрядчики', icon: ClipboardCheckIcon, requiredPage: ['/admin/contractor-approvals', '/admin/contractor-approvals/submissions', '/admin/contractor-approvals/otitb'] },

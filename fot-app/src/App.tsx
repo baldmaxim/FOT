@@ -501,7 +501,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
+        <Route element={<ProtectedRoute requiredPage={['/skud-settings', '/skud-settings/directory']} />}>
           <Route
             path="/skud-settings"
             element={
