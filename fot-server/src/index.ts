@@ -15,6 +15,7 @@ import { startStructureSyncScheduler, stopStructureSyncScheduler } from './servi
 import { startStructureWatch, stopStructureWatch } from './services/sigur-structure-watch.service.js';
 import { startSigurEventsDailyScheduler, stopSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
 import { startSkudSummaryReconcileScheduler, stopSkudSummaryReconcileScheduler } from './services/skud-summary-reconcile.service.js';
+import { startMainObjectSnapshotScheduler, stopMainObjectSnapshotScheduler } from './services/employee-main-object-snapshot.scheduler.js';
 import { startTimesheetReminderScheduler, stopTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler, stopPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startObjectKpiPlanFreezer, stopObjectKpiPlanFreezer } from './services/object-kpi-plan-freezer.service.js';
@@ -144,6 +145,9 @@ httpServer.listen(PORT, HOST, () => {
   void startStructureWatch();
   void startSigurEventsDailyScheduler();
   startSkudSummaryReconcileScheduler();
+  // Ночной снимок «основного объекта» (миграция 277): Excel-выгрузка и столбец «Объект»
+  // в «Управлении кадрами» читают готовое вместо расчёта по СКУД на лету.
+  startMainObjectSnapshotScheduler();
   // Прогрев тяжёлых кэшей откладываем: сразу после deploy/restart браузеры
   // массово переподключаются, и холодный полный обход Sigur конкурировал с ними.
   const warmupTimer = setTimeout(() => {
@@ -230,7 +234,7 @@ const gracefulShutdown = (signal: string): void => {
 
   const stoppers = [
     stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler, stopStructureWatch,
-    stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler,
+    stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler, stopMainObjectSnapshotScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopDismissalScheduler,

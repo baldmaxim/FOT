@@ -140,8 +140,6 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] });
       queryClient.invalidateQueries({ queryKey: ['timesheet'] });
-      // Столбец «Объект» в «Управлении кадрами» считается по тем же часам.
-      queryClient.invalidateQueries({ queryKey: ['employee-main-objects'] });
     },
     onError: (error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');

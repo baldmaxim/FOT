@@ -11,7 +11,13 @@ vi.mock('./timesheet-object.service.js', () => ({
   buildObjectAttendanceData: buildObjectDataMock,
 }));
 
-const { pickMainObject, loadMainObjectByEmployee, EMPLOYEE_CHUNK_SIZE } = await import('./employees-export-objects.service.js');
+const {
+  pickMainObject,
+  pickMainObjectDetailed,
+  loadMainObjectByEmployee,
+  loadMainObjectDetailedByEmployee,
+  EMPLOYEE_CHUNK_SIZE,
+} = await import('./employees-export-objects.service.js');
 
 const entry = (
   employee_id: number,
@@ -83,7 +89,37 @@ describe('pickMainObject', () => {
   });
 });
 
+describe('pickMainObjectDetailed', () => {
+  it('отдаёт id объекта и сумму часов, округлённую до центичасов', () => {
+    const result = pickMainObjectDetailed([
+      entry(1, 'o1', 'ЖК Север', 8.333), entry(1, 'o1', 'ЖК Север', 4.334), entry(1, 'o2', 'ЖК Юг', -1),
+    ]);
+    expect(result.get(1)).toEqual({ objectId: 'o1', objectName: 'ЖК Север', hours: 12.67 });
+  });
+
+  it('совпадает с pickMainObject по выбору объекта', () => {
+    const entries = [
+      entry(1, 'o2', 'Бета', 8), entry(1, 'o1', 'Альфа', 8),
+      entry(2, 'o3', 'Склад', 3), entry(2, 'o3', 'Склад', -5),
+    ];
+    const names = [...pickMainObjectDetailed(entries)].map(([id, main]) => [id, main.objectName]);
+    expect(names).toEqual([...pickMainObject(entries)]);
+  });
+});
+
 describe('loadMainObjectByEmployee', () => {
+  it('детальная и краткая загрузка дают один результат', async () => {
+    loadAdjustmentsMock.mockResolvedValue([]);
+    buildObjectDataMock.mockResolvedValue({ objectEntries: [entry(5, 'o1', 'ЖК Север', 8)] });
+    const period = { start: '2026-08-15', end: '2026-09-13' };
+
+    const detailed = await loadMainObjectDetailedByEmployee([5], period);
+    const names = await loadMainObjectByEmployee([5], period);
+
+    expect(detailed.get(5)).toEqual({ objectId: 'o1', objectName: 'ЖК Север', hours: 8 });
+    expect(names.get(5)).toBe('ЖК Север');
+  });
+
   it('передаёт период в загрузку правок и расчёт объектов, todayStr = конец периода', async () => {
     loadAdjustmentsMock.mockResolvedValue([{ id: 1 }]);
     buildObjectDataMock.mockResolvedValue({ objectEntries: [entry(5, 'o1', 'ЖК Север', 8)] });

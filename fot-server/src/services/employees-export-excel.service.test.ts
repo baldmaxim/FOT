@@ -103,7 +103,19 @@ describe('buildEmployeesExportWorkbook', () => {
     expect(ws.getCell(1, 1).value).toBe('Сотрудники: СУ-10');
     const meta = String(ws.getCell(2, 1).value);
     expect(meta).toContain('Всего: 2');
-    expect(meta).toContain('16.08.2026–14.09.2026');
+    expect(meta).toContain('уволенные — за 16.08.2026–14.09.2026');
+    // Без отдельного периода объекта — тот же период.
+    expect(meta).toContain('объект — где больше всего часов за 16.08.2026–14.09.2026');
+  });
+
+  it('период объекта из ночного снимка выводится отдельно', () => {
+    const ws = buildEmployeesExportWorkbook(SECTIONS, {
+      ...META,
+      objectPeriod: { start: '2026-08-15', end: '2026-09-13' },
+    }).getWorksheet('СМ')!;
+    const meta = String(ws.getCell(2, 1).value);
+    expect(meta).toContain('уволенные — за 16.08.2026–14.09.2026');
+    expect(meta).toContain('объект — где больше всего часов за 15.08.2026–13.09.2026');
   });
 
   it('round-trip: умные таблицы с фиксированными именами, заголовками и кнопками фильтра', async () => {

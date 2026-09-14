@@ -1335,7 +1335,7 @@ export const StaffControlPage: FC = () => {
   const mainObjects = mainObjectsQuery.data?.objects;
   const mainObjectPeriod = mainObjectsQuery.data?.period;
   const mainObjectTitle = mainObjectPeriod
-    ? `Где больше всего часов по СКУД и корректировкам за ${formatDate(mainObjectPeriod.start)}–${formatDate(mainObjectPeriod.end)}. Обновляется раз в минуту.`
+    ? `Где больше всего часов по СКУД и корректировкам за ${formatDate(mainObjectPeriod.start)}–${formatDate(mainObjectPeriod.end)}. Пересчитывается ночью.`
     : 'Где больше всего часов по СКУД и корректировкам за последние 30 дней';
   const scheduleTemplatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],

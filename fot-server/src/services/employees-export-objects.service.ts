@@ -25,12 +25,26 @@ type IObjectHoursEntry = Pick<
   'employee_id' | 'object_key' | 'object_id' | 'object_name' | 'display_hours_worked'
 >;
 
+export interface IMainObject {
+  objectId: string;
+  objectName: string;
+  /** Сумма часов на объекте за период, округлена до центичасов, > 0. */
+  hours: number;
+}
+
+/** Только названия — для потребителей, которым id и часы не нужны. */
+export function pickMainObject(entries: IObjectHoursEntry[]): Map<number, string> {
+  const result = new Map<number, string>();
+  for (const [employeeId, main] of pickMainObjectDetailed(entries)) result.set(employeeId, main.objectName);
+  return result;
+}
+
 /**
  * Сначала суммирует часы по (сотрудник, объект) — отрицательные правки входят
  * в сумму, — затем выбирает объект с максимальным итогом > 0. При равенстве —
  * по названию, затем по object_id, чтобы результат не зависел от порядка записей.
  */
-export function pickMainObject(entries: IObjectHoursEntry[]): Map<number, string> {
+export function pickMainObjectDetailed(entries: IObjectHoursEntry[]): Map<number, IMainObject> {
   const totals = new Map<number, Map<string, { name: string; hours: number }>>();
 
   for (const entry of entries) {
@@ -48,7 +62,7 @@ export function pickMainObject(entries: IObjectHoursEntry[]): Map<number, string
     else byObject.set(entry.object_id, { name: entry.object_name, hours });
   }
 
-  const result = new Map<number, string>();
+  const result = new Map<number, IMainObject>();
   for (const [employeeId, byObject] of totals) {
     let best: { id: string; name: string; hours: number } | null = null;
     for (const [objectId, total] of byObject) {
@@ -67,7 +81,7 @@ export function pickMainObject(entries: IObjectHoursEntry[]): Map<number, string
         best = candidate;
       }
     }
-    if (best) result.set(employeeId, best.name);
+    if (best) result.set(employeeId, { objectId: best.id, objectName: best.name, hours: best.hours });
   }
   return result;
 }
@@ -77,6 +91,17 @@ export async function loadMainObjectByEmployee(
   period: IExportPeriod,
 ): Promise<Map<number, string>> {
   const result = new Map<number, string>();
+  for (const [employeeId, main] of await loadMainObjectDetailedByEmployee(employeeIds, period)) {
+    result.set(employeeId, main.objectName);
+  }
+  return result;
+}
+
+export async function loadMainObjectDetailedByEmployee(
+  employeeIds: number[],
+  period: IExportPeriod,
+): Promise<Map<number, IMainObject>> {
+  const result = new Map<number, IMainObject>();
 
   for (let index = 0; index < employeeIds.length; index += EMPLOYEE_CHUNK_SIZE) {
     const chunk = employeeIds.slice(index, index + EMPLOYEE_CHUNK_SIZE);
@@ -88,8 +113,8 @@ export async function loadMainObjectByEmployee(
       todayStr: period.end,
       adjustments,
     });
-    for (const [employeeId, objectName] of pickMainObject(data.objectEntries)) {
-      result.set(employeeId, objectName);
+    for (const [employeeId, main] of pickMainObjectDetailed(data.objectEntries)) {
+      result.set(employeeId, main);
     }
     await yieldToEventLoop();
   }

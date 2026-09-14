@@ -391,8 +391,9 @@
 .sc-col-name     { width: auto; min-width: 220px; }
 .sc-col-dept     { width: 180px; }
 .sc-col-position { width: 170px; }
-.sc-col-hire     { width: 96px; }
-.sc-col-birth    { width: 96px; }
+/* dd.mm.yyyy при 13px ≈ 72px + паддинги 24px — 96px обрезали год. */
+.sc-col-hire     { width: 108px; }
+.sc-col-birth    { width: 108px; }
 .sc-col-schedule { width: 150px; }
 .sc-col-main-object { width: 180px; }
 .sc-col-sign     { width: 100px; }
@@ -407,7 +408,7 @@
 
 .sc-table--staff {
   /* ≈1400 px фиксированных колонок + ФИО. Уже — скроллится таблица, не страница. */
-  min-width: 1640px;
+  min-width: 1664px;
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 48px;
 }

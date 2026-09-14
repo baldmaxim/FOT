@@ -17,7 +17,7 @@ import {
   loadExportEmployees,
   type IExportPeriod,
 } from '../services/employees-export.service.js';
-import { loadMainObjectByEmployee } from '../services/employees-export-objects.service.js';
+import { loadMainObjects } from '../services/employee-main-object-snapshot.service.js';
 import { buildEmployeesExportWorkbook } from '../services/employees-export-excel.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -55,15 +55,19 @@ export const employeesExportController = {
         return;
       }
 
-      const [departments, mainObjectByEmployee] = await Promise.all([
+      const [departments, mainObjects] = await Promise.all([
         loadExportDepartments(),
-        loadMainObjectByEmployee(employees.map(employee => employee.id), period),
+        loadMainObjects(employees.map(employee => employee.id), period),
       ]);
-      const sections = buildExportSections({ employees, departments, mainObjectByEmployee });
+      const sections = buildExportSections({ employees, departments, mainObjectByEmployee: mainObjects.objects });
       const total = countSectionRows(sections);
 
       const generatedAt = new Date();
-      const workbook = buildEmployeesExportWorkbook(sections, { period, generatedAt });
+      const workbook = buildEmployeesExportWorkbook(sections, {
+        period,
+        objectPeriod: mainObjects.period,
+        generatedAt,
+      });
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       const fileName = sanitizeExportFileName(`Сотрудники_${formatFileStamp(generatedAt)}.xlsx`);
 
@@ -81,6 +85,8 @@ export const employeesExportController = {
               count: total,
               sections: Object.fromEntries(sections.map(section => [section.key, section.rows.length])),
               period,
+              object_period: mainObjects.period,
+              object_source: mainObjects.source,
               scope: scope.mode,
             },
           },

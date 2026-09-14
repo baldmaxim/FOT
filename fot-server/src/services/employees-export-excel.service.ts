@@ -27,7 +27,10 @@ const BIRTH_DATE_COL = 5;
 const HIRE_DATE_COL = 6;
 
 export interface IEmployeesExportMeta {
+  /** Период отбора уволенных. */
   period: IExportPeriod;
+  /** Период расчёта объекта (ночной снимок — по вчерашний день). По умолчанию = period. */
+  objectPeriod?: IExportPeriod;
   generatedAt: Date;
 }
 
@@ -73,10 +76,11 @@ export function buildEmployeesExportWorkbook(
     titleCell.font = { bold: true, size: 13 };
 
     const metaCell = ws.getCell(2, 1);
+    const objectPeriod = meta.objectPeriod ?? meta.period;
     metaCell.value = defangCsvCell(
       `Всего: ${section.rows.length} · сформировано ${formatStamp(meta.generatedAt)}`
-      + ` · уволенные и объект — за ${formatIsoDay(meta.period.start)}–${formatIsoDay(meta.period.end)}`
-      + ' · объект — где больше всего часов за период',
+      + ` · уволенные — за ${formatIsoDay(meta.period.start)}–${formatIsoDay(meta.period.end)}`
+      + ` · объект — где больше всего часов за ${formatIsoDay(objectPeriod.start)}–${formatIsoDay(objectPeriod.end)}`,
     );
     metaCell.font = { italic: true, size: 10, color: { argb: 'FF64748B' } };
 

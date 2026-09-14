@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { employeeService, type IEmployeeMainObjects } from '../services/employeeService';
 
-const REFRESH_MS = 60_000;
+const DATE_CHECK_MS = 60_000;
+/** Снимок пересчитывается ночью — чаще перезапрашивать незачем. */
+const STALE_MS = 10 * 60_000;
 
 const moscowDate = (): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
@@ -14,7 +16,7 @@ const useMoscowDate = (): string => {
     const timer = window.setInterval(() => {
       const next = moscowDate();
       setDate(prev => (prev === next ? prev : next));
-    }, REFRESH_MS);
+    }, DATE_CHECK_MS);
     return () => window.clearInterval(timer);
   }, []);
   return date;
@@ -23,8 +25,9 @@ const useMoscowDate = (): string => {
 export const STAFF_MAIN_OBJECTS_QUERY_KEY = 'employee-main-objects';
 
 /**
- * Столбец «Объект» для сотрудников текущей страницы. Тот же алгоритм, что в Excel;
- * при успешном обновлении таблица может отставать до 60 секунд.
+ * Столбец «Объект» для сотрудников текущей страницы — из ночного снимка сервера (тот же
+ * источник, что у Excel-выгрузки). Обновляется при возврате во вкладку и раз в 10 минут
+ * при следующем обращении; после московской полуночи ключ меняется и данные грузятся заново.
  */
 export const useStaffMainObjects = (employeeIds: number[]) => {
   const mskDate = useMoscowDate();
@@ -35,9 +38,7 @@ export const useStaffMainObjects = (employeeIds: number[]) => {
     // Прежние значения остаются на экране, пока идёт перезапрос: ячейки не мигают,
     // высота строк и прокрутка не меняются.
     placeholderData: previous => previous,
-    staleTime: REFRESH_MS,
-    refetchInterval: REFRESH_MS,
-    refetchIntervalInBackground: false,
+    staleTime: STALE_MS,
     refetchOnWindowFocus: true,
   });
 };
