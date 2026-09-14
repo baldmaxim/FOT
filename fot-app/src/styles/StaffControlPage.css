@@ -470,12 +470,10 @@
 .sc-table--staff .sc-th-name,
 .sc-table--staff .sc-td-name {
   left: var(--sc-sticky-name-left);
-  box-shadow: inset -1px 0 0 var(--border);
 }
 .sc-table--staff .sc-th-hist,
 .sc-table--staff .sc-td-hist {
   right: 0;
-  box-shadow: inset 1px 0 0 var(--border);
 }
 
 .sc-table--staff .sc-td-check,
