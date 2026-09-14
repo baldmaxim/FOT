@@ -1,9 +1,9 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
-import { useDeleteForwarding, useMyForwarding, useSetForwarding } from '../../../hooks/useMySim';
-import { mySimService, type ForwardingType } from '../../../services/mySimService';
+import { useDeleteForwarding, useForwardingOperation, useMyForwarding, useSetForwarding } from '../../../hooks/useMySim';
+import { mySimService, type ForwardingType, type IForwardingOperation } from '../../../services/mySimService';
 import type { IForwardingResult } from '../../../services/mtsBusinessSubscriberService';
 import { fmtPhone, mtsErrText } from '../../mts-business/mtsBusinessFormat';
 import {
@@ -23,12 +23,21 @@ interface IProps {
   onClose: () => void;
 }
 
+/** Текст в блоке состояния, пока операция включения не завершена. */
+const operationStateText = (op: IForwardingOperation): string =>
+  op.state === 'unconfirmed'
+    ? 'МТС пока не подтвердил результат. Повторять не нужно — проверим автоматически.'
+    : `Подключаем переадресацию на ••${op.targetTail}. Это займёт несколько минут.`;
+
 /**
  * Модалка управления переадресацией своего номера: текущее правило (из ночного
- * снапшота МТС) + форма включения/изменения и кнопка отключения. Исход зависит
- * от контура МТС: queued — поллим статус по eventId до «completed»; applied —
- * правило уже применено, сразу перечитываем; unknown — исход не подтверждён,
- * форму запираем, чтобы сотрудник не отправил мутацию повторно.
+ * снапшота МТС) + форма включения/изменения и кнопка отключения.
+ * Включение — серверная операция: при необходимости портал сам подключает
+ * услугу «Переадресация вызова», ставит правило и подтверждает его. Пока она
+ * идёт, форма заперта (повторная отправка недопустима), статус опрашивается;
+ * окно можно закрыть — операция доводится на сервере.
+ * Отключение: queued — поллим статус по eventId; applied — сразу перечитываем;
+ * unknown — форму запираем.
  * Без права edit на /employee/sim — только просмотр текущего правила.
  */
 export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
@@ -37,8 +46,10 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
   const canEdit = canEditPage('/employee/sim');
 
   const { data, isLoading, refetch } = useMyForwarding();
+  const { data: operation } = useForwardingOperation(msisdn);
   const setMutation = useSetForwarding();
   const deleteMutation = useDeleteForwarding();
+  const activeOperation = operation && !operation.final ? operation : null;
 
   const entry = useMemo(() => data?.find(n => n.msisdn === msisdn) ?? null, [data, msisdn]);
   const rule = useMemo(() => pickForwardingRule(entry?.rules ?? []), [entry]);
@@ -52,13 +63,39 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
 
   const overlayHandlers = useOverlayDismiss(onClose);
 
-  // Форма стартует с текущего правила номера.
+  // Форма стартует с текущего правила номера; пока идёт операция — с её параметрами
+  // с сервера (номер назначения известен только хвостом).
   useEffect(() => {
+    if (activeOperation) {
+      setType(activeOperation.type);
+      setTarget(`••${activeOperation.targetTail}`);
+      setTimer(activeOperation.timer ?? DEFAULT_NO_REPLY_TIMER);
+      return;
+    }
     const current = pickForwardingRule(entry?.rules ?? []);
     setType(isForwardingType(current?.forwardingType) ? current.forwardingType : 'CFU');
     setTarget(current?.forwardingAddress ? fmtPhone(current.forwardingAddress) : '');
     setTimer(current?.noReplyTimer ?? DEFAULT_NO_REPLY_TIMER);
-  }, [entry]);
+  }, [entry, activeOperation]);
+
+  // Итог операции, которую эта модалка видела незавершённой: успех — перечитать
+  // правило и сообщить; отказ — показать причину. Старый итог при открытии не озвучиваем.
+  const seenActiveRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!operation) return;
+    if (!operation.final) {
+      seenActiveRef.current = operation.id;
+      return;
+    }
+    if (seenActiveRef.current !== operation.id) return;
+    seenActiveRef.current = null;
+    if (operation.state === 'done') {
+      void refetch();
+      toast.success('Переадресация включена');
+    } else {
+      toast.error(operation.errorMessage || 'Не удалось включить переадресацию');
+    }
+  }, [operation, refetch, toast]);
 
   // Поллинг статуса заявки: МТС применяет правило асинхронно.
   useEffect(() => {
@@ -99,7 +136,7 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
     };
   }, [pendingEventId, refetch, toast]);
 
-  const busy = Boolean(pendingEventId) || locked || setMutation.isPending || deleteMutation.isPending;
+  const busy = Boolean(pendingEventId) || Boolean(activeOperation) || locked || setMutation.isPending || deleteMutation.isPending;
   const targetDigits = target.replace(/\D/g, '');
 
   /** Общая развилка исходов: заявка / уже применено / не подтверждено. */
@@ -125,7 +162,11 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
         target: targetDigits,
         timer: type === 'CFNRY' ? timer : undefined,
       });
-      await handleResult(result, 'Переадресация включена');
+      // operation_pending — операция на сервере, итог озвучит эффект по её статусу.
+      if (result.outcome === 'applied') {
+        await refetch();
+        toast.success('Переадресация включена');
+      }
     } catch (error) {
       toast.error(mtsErrText(error, 'Не удалось включить переадресацию'));
     }
@@ -155,7 +196,9 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
           ) : (
             <>
               <div className={styles.fwdState} data-on={rule ? 'yes' : 'no'}>
-                {pendingEventId ? (
+                {activeOperation ? (
+                  <span>{operationStateText(activeOperation)}</span>
+                ) : pendingEventId ? (
                   <span>Заявка отправлена в МТС, применяется…</span>
                 ) : rule ? (
                   <span>

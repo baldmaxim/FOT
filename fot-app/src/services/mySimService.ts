@@ -69,6 +69,33 @@ export interface IMyForwardingNumber {
 
 export type ForwardingStatus = 'completed' | 'in_progress' | 'faulted' | 'unknown';
 
+/**
+ * Серверная операция включения переадресации: при необходимости портал сам
+ * подключает услугу «Переадресация вызова», ставит правило и подтверждает его.
+ */
+export type ForwardingOperationState =
+  | 'service_reserved' | 'service_sending' | 'service_accepted' | 'service_unknown'
+  | 'rule_ready' | 'rule_sending' | 'rule_verifying' | 'rule_confirmed'
+  | 'unconfirmed' | 'done' | 'failed' | 'cancelled' | 'expired';
+
+export interface IForwardingOperation {
+  id: string;
+  state: ForwardingOperationState;
+  final: boolean;
+  type: ForwardingType;
+  targetTail: string;
+  timer: number | null;
+  errorMessage: string | null;
+  updatedAt: string;
+}
+
+export interface IMyForwardingSetResult {
+  outcome: 'applied' | 'operation_pending' | 'operation_failed';
+  operationId: string;
+  state: ForwardingOperationState;
+  operation: IForwardingOperation;
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -104,9 +131,17 @@ export const mySimService = {
     return res.data.numbers;
   },
 
-  /** Включить/изменить переадресацию. Исход см. IForwardingResult. */
-  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<IForwardingResult> => {
-    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/my-sim/forwarding', input);
+  /** Включить/изменить переадресацию: applied — включено; operation_pending — доводится на сервере. */
+  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<IMyForwardingSetResult> => {
+    const res = await apiClient.post<ApiResponse<IMyForwardingSetResult>>('/my-sim/forwarding', input);
+    return res.data;
+  },
+
+  /** Операция включения по номеру: незавершённая или последняя за сутки. */
+  getForwardingOperation: async (msisdn: string): Promise<IForwardingOperation | null> => {
+    const res = await apiClient.get<ApiResponse<IForwardingOperation | null>>(
+      `/my-sim/forwarding/operation?msisdn=${encodeURIComponent(msisdn)}`,
+    );
     return res.data;
   },
 

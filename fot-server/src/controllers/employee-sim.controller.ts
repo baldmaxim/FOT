@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -18,6 +19,20 @@ import {
   resolveNoReplyTimer,
 } from '../services/mts-forwarding.shared.js';
 import { persistForwardingResult, sendForwardingResult, failForwardingUpstream } from '../services/mts-forwarding-persist.service.js';
+import { mtsForwardingOperationsService as forwardingOps } from '../services/mts-forwarding-operations.service.js';
+import {
+  hasForwardingService,
+  sendRule,
+  sendServiceRequest,
+  verifyRule,
+  RULE_STAGE_DEADLINE_SECONDS,
+  SERVICE_STAGE_DEADLINE_SECONDS,
+} from '../services/mts-forwarding-operations.runner.js';
+import {
+  sendOperationConflictOrPending,
+  sendOperationResult,
+  toOperationDto,
+} from '../services/mts-forwarding-operations.response.js';
 
 // ЛК сотрудника: «Моя SIM» + «Телефонная книга». Номер резолвится ТОЛЬКО из
 // req.user.employee_id (msisdn в параметрах не принимается) — сотрудник видит
@@ -225,7 +240,12 @@ export const employeeSimController = {
     }
   },
 
-  /** Включить/изменить переадресацию своего номера (write-вызов МТС, асинхронный — вернём eventId). */
+  /**
+   * Включить/изменить переадресацию своего номера через серверную операцию
+   * (mts-forwarding-operations.*): при отсутствии услуги PE0250 портал сам её
+   * подключает, затем ставит правило и подтверждает его чтением. Первый шаг
+   * выполняется здесь, остальное доводит воркер — окно можно закрыть.
+   */
   async setMyForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const parsed = setForwardingSchema.safeParse(req.body);
@@ -235,6 +255,11 @@ export const employeeSimController = {
       }
       const msisdn = await resolveOwnMsisdn(req, res, parsed.data.msisdn);
       if (!msisdn) return;
+      const employeeId = req.user.employee_id;
+      if (!employeeId) {
+        res.status(400).json({ success: false, error: 'За вами не закреплён корпоративный номер' });
+        return;
+      }
 
       const target = validateForwardingTarget(parsed.data.target, msisdn);
       if (!target.ok) {
@@ -242,31 +267,65 @@ export const employeeSimController = {
         return;
       }
       const type = parsed.data.type;
-      const timer = resolveNoReplyTimer(type, parsed.data.timer);
+      const timer = resolveNoReplyTimer(type, parsed.data.timer) ?? null;
+      const intent = { forwardingType: type, target: target.value, noReplyTimer: timer };
 
       const accountId = (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
-      if (!accountId) {
+      const hash = msisdnHash(msisdn);
+      if (!accountId || !hash) {
         res.status(400).json({ success: false, error: 'Не удалось определить лицевой счёт номера' });
         return;
       }
 
-      const result = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
-        forwardingType: type,
-        forwardingAddress: target.value,
-        noReplyTimer: timer,
+      // Незавершённая операция по номеру — новых внешних вызовов нет.
+      const existing = await forwardingOps.getActive(accountId, hash);
+      if (existing) {
+        sendOperationConflictOrPending(res, existing, intent);
+        return;
+      }
+
+      let services;
+      try {
+        services = await mtsBusinessCatalogService.getProductInfo(accountId, msisdn);
+      } catch (error) {
+        console.warn(`[employee-sim] услуги номера не прочитаны: ${error instanceof MtsBusinessApiError ? error.status : 'unknown'}`);
+        res.status(503).json({ success: false, error: 'Не удалось проверить услуги номера в МТС. Попробуйте через несколько минут' });
+        return;
+      }
+      const serviceActive = hasForwardingService(services);
+
+      const { operation, created } = await forwardingOps.reserve({
+        accountId, msisdn, employeeId, requestedBy: req.user.id, ...intent,
+        initialState: serviceActive ? 'rule_ready' : 'service_reserved',
+        deadlineSeconds: serviceActive ? RULE_STAGE_DEADLINE_SECONDS : SERVICE_STAGE_DEADLINE_SECONDS,
       });
-      const { tracking } = await persistForwardingResult({
-        result, accountId, msisdn, actionType: 'forwarding_set',
-        payload: { type, target: target.value, timer }, requestedBy: req.user.id,
-        // В аудит номера не пишем целиком — только тип правила и хвост номера.
-        audit: () => auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
-          details: { accountId, type, timer, targetTail: target.value.slice(-4), outcome: result.outcome },
-        }),
-      });
-      sendForwardingResult(res, result, tracking);
+      if (!created) {
+        sendOperationConflictOrPending(res, operation, intent);
+        return;
+      }
+
+      const owner = `http:${randomUUID()}`;
+      let op = serviceActive
+        ? await sendRule(operation, owner, msisdn)
+        : await sendServiceRequest(operation, owner, msisdn);
+      // Правило принято — короткая синхронная сверка (0/3/8 с), чтобы сразу ответить «включено».
+      if (op.state === 'rule_verifying') op = await verifyRule(op, undefined, msisdn, true);
+      sendOperationResult(res, op);
     } catch (error) {
-      if (failForwardingUpstream(res, error, 'Не удалось включить переадресацию')) return;
       fail(res, error, 'Ошибка включения переадресации');
+    }
+  },
+
+  /** Операция переадресации своего номера (незавершённая или последняя за сутки) — для модалки. */
+  async getMyForwardingOperation(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const requested = typeof req.query.msisdn === 'string' ? req.query.msisdn : undefined;
+      const msisdn = await resolveOwnMsisdn(req, res, requested);
+      if (!msisdn) return;
+      const op = await forwardingOps.getActiveOrRecent(msisdn);
+      res.json({ success: true, data: op ? toOperationDto(op) : null });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения статуса переадресации');
     }
   },
 
@@ -280,6 +339,12 @@ export const employeeSimController = {
       }
       const msisdn = await resolveOwnMsisdn(req, res, parsed.data.msisdn);
       if (!msisdn) return;
+
+      // Пока операция включения не завершена, снятие правила могло бы гоняться с воркером.
+      if (await forwardingOps.getActiveByMsisdn(msisdn)) {
+        res.status(409).json({ success: false, error: 'Дождитесь завершения подключения переадресации' });
+        return;
+      }
 
       const accountId = (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
       if (!accountId) {
@@ -299,7 +364,7 @@ export const employeeSimController = {
       });
       sendForwardingResult(res, result, tracking);
     } catch (error) {
-      if (failForwardingUpstream(res, error, 'Не удалось отключить переадресацию')) return;
+      if (failForwardingUpstream(res, error, 'Не удалось отключить переадресацию', 'Попробуйте через несколько минут.')) return;
       fail(res, error, 'Ошибка отключения переадресации');
     }
   },

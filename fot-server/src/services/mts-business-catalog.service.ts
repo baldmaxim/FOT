@@ -498,8 +498,8 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
 
   /**
    * Включить (create) или снять (delete) правило переадресации по номеру —
-   * POST /Product/ChangeCallForwarding (док §5.6). retryOn500=false — мутация,
-   * исход первой попытки неизвестен.
+   * POST /Product/ChangeCallForwarding (док §5.6). retryPolicy mutation —
+   * повтор только 429, исход первой попытки иначе неизвестен.
    *
    * Три исхода (см. ForwardingChangeResult):
    *  - queued  — пришёл eventID, дальше следит статус-поллер;
@@ -522,6 +522,31 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     action: 'create' | 'delete',
     opts: { forwardingType: ForwardingType; forwardingAddress?: string; noReplyTimer?: number },
   ): Promise<ForwardingChangeResult> {
+    const { eventId, resp } = await this.postCallForwarding(accountId, msisdn, action, opts);
+    if (eventId) return { outcome: 'queued', eventId };
+
+    // eventID нет — узнать исход можно только перечитав правила. Ошибка чтения
+    // здесь — не ошибка мутации: POST уже принят, наверх идёт unknown, иначе
+    // пользователь повторил бы применённую мутацию.
+    const rules = await this.verifyCallForwarding(accountId, msisdn, action, opts);
+    if (rules) {
+      reportForwardingEnvelope('applied', action, resp);
+      return { outcome: 'applied', eventId: null, rules };
+    }
+    reportForwardingEnvelope('unknown', action, resp);
+    return { outcome: 'unknown', eventId: null };
+  }
+
+  /**
+   * Только отправка ChangeCallForwarding — без проверки. Повторов при неизвестном
+   * исходе нет (retryPolicy mutation); error-конверт в 2xx — отказ (MtsBusinessApiError).
+   */
+  async postCallForwarding(
+    accountId: string,
+    msisdn: string,
+    action: 'create' | 'delete',
+    opts: { forwardingType: ForwardingType; forwardingAddress?: string; noReplyTimer?: number },
+  ): Promise<{ eventId: string | null; resp: unknown }> {
     const productCharacteristic: Array<{ name: string; value: string }> = [
       { name: 'ForwardingType', value: opts.forwardingType },
     ];
@@ -535,7 +560,7 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
 
     const resp = await this.request<unknown>('post', '/Product/ChangeCallForwarding', {
       accountId,
-      retryOn500: false,
+      retryPolicy: 'mutation',
       data: {
         characteristic: [{ name: 'MSISDN', value: msisdn }],
         item: [{
@@ -552,21 +577,31 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     if (envelopeError) {
       throw new MtsBusinessApiError(envelopeError.message, 200, envelopeError.code);
     }
+    return { eventId: asString(firstValue(resp, ['eventID', 'eventId'])) ?? null, resp };
+  }
 
-    const eventId = asString(firstValue(resp, ['eventID', 'eventId']));
-    if (eventId) return { outcome: 'queued', eventId };
-
-    // eventID нет — узнать исход можно только перечитав правила.
+  /**
+   * Перечитать правила (паузы 0/3/8 с) и сверить с намерением, включая таймер CFNRY.
+   * Совпало — фактические правила; нет или чтение упало — null. Никаких мутаций.
+   */
+  async verifyCallForwarding(
+    accountId: string,
+    msisdn: string,
+    action: 'create' | 'delete',
+    opts: { forwardingType: ForwardingType; forwardingAddress?: string; noReplyTimer?: number },
+  ): Promise<IMtsForwardingRule[] | null> {
     for (const delayMs of FORWARDING_VERIFY_DELAYS_MS) {
       if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
-      const rules = await this.getCallForwarding(accountId, msisdn);
-      if (matchesForwardingIntent(rules, action, opts.forwardingType, opts.forwardingAddress)) {
-        reportForwardingEnvelope('applied', action, resp);
-        return { outcome: 'applied', eventId: null, rules };
+      try {
+        const rules = await this.getCallForwarding(accountId, msisdn);
+        if (matchesForwardingIntent(rules, action, opts.forwardingType, opts.forwardingAddress, opts.noReplyTimer)) {
+          return rules;
+        }
+      } catch (error) {
+        console.warn(`[mts-forwarding] проверка правил не удалась: ${error instanceof Error ? error.message : 'unknown'}`);
       }
     }
-    reportForwardingEnvelope('unknown', action, resp);
-    return { outcome: 'unknown', eventId: null };
+    return null;
   }
 
   /** Текущая локация/роуминг абонента. */
@@ -637,13 +672,14 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
    * привязать запрос к абоненту и отвечал 401 (Sentry FOT-SERVER-4D), т.е.
    * управление услугами не работало никогда. Тот же контракт — в changeBillPlan
    * и в probe-mts-number-all.ts --check-manage.
-   * retryOn500=false — мутация, исход первой попытки неизвестен.
+   * retryPolicy mutation — повтор только 429, исход первой попытки иначе неизвестен.
+   * Ответ без eventID — MtsBusinessApiError(status 0): МТС мог принять запрос.
    */
   async modifyProduct(accountId: string, msisdn: string, action: 'create' | 'delete', externalID: string): Promise<{ eventId: string }> {
     const resp = await this.request<unknown>('post', '/Product/ModifyProduct', {
       accountId,
       params: { msisdn },
-      retryOn500: false,
+      retryPolicy: 'mutation',
       data: {
         characteristic: [{ name: 'MobileConnectivity' }],
         item: [{
@@ -655,6 +691,10 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
         }],
       },
     });
+    const envelopeError = errorEnvelope(resp);
+    if (envelopeError) {
+      throw new MtsBusinessApiError(envelopeError.message, 200, envelopeError.code);
+    }
     const r = (resp ?? {}) as Record<string, unknown>;
     const eventId = asString(r.eventID) ?? asString(r.eventId);
     if (!eventId) throw new Error('МТС Бизнес: ответ ModifyProduct без eventID');
@@ -671,6 +711,7 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     const resp = await this.request<unknown>('post', '/Product/ChangeBillPlan', {
       accountId,
       params: { msisdn },
+      retryPolicy: 'mutation',
       data: {
         item: [{
           product: {

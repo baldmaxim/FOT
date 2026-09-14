@@ -39,15 +39,34 @@ export const useMyForwarding = (enabled = true) => useQuery({
   enabled,
 });
 
-// Мутации возвращают IForwardingResult: модалка сама решает, ждать заявку
-// (queued), обновиться сразу (applied) или предупредить о неподтверждённом
-// исходе (unknown).
+export const getForwardingOperationKey = (msisdn: string) => ['my-sim', 'forwarding-operation', msisdn] as const;
+
+const OPERATION_POLL_MS = 15_000;
+
+// Операция включения переадресации: пока не завершена — опрашиваем сервер
+// (МТС подключает услугу и применяет правило за несколько минут).
+export const useForwardingOperation = (msisdn: string, enabled = true) => useQuery({
+  queryKey: getForwardingOperationKey(msisdn),
+  queryFn: () => mySimService.getForwardingOperation(msisdn),
+  enabled: enabled && Boolean(msisdn),
+  staleTime: 0,
+  refetchInterval: query => (query.state.data && !query.state.data.final ? OPERATION_POLL_MS : false),
+});
+
+// Включение возвращает IMyForwardingSetResult: applied — включено сразу,
+// operation_pending — сервер доводит операцию (модалка следит за её статусом).
 export const useSetForwarding = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }) =>
       mySimService.setForwarding(input),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'] }); },
+    onSuccess: (result, input) => {
+      qc.setQueryData(getForwardingOperationKey(input.msisdn), result.operation);
+      void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'], exact: true });
+    },
+    onError: (_error, input) => {
+      void qc.invalidateQueries({ queryKey: getForwardingOperationKey(input.msisdn) });
+    },
   });
 };
 

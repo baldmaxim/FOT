@@ -42,8 +42,30 @@ vi.mock('../services/mts-business-metrics-store.service.js', () => ({
 vi.mock('../services/mts-business-catalog.service.js', () => ({
   mtsBusinessCatalogService: {
     changeCallForwarding: vi.fn(async () => ({ outcome: 'queued', eventId: 'EV-1' })),
+    getProductInfo: vi.fn(async () => []),
   },
 }));
+vi.mock('../services/mts-forwarding-operations.service.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../services/mts-forwarding-operations.service.js')>();
+  return {
+    ...orig,
+    mtsForwardingOperationsService: {
+      reserve: vi.fn(),
+      getActive: vi.fn(async () => null),
+      getActiveByMsisdn: vi.fn(async () => null),
+      getActiveOrRecent: vi.fn(async () => null),
+    },
+  };
+});
+vi.mock('../services/mts-forwarding-operations.runner.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../services/mts-forwarding-operations.runner.js')>();
+  return {
+    ...orig,
+    sendServiceRequest: vi.fn(),
+    sendRule: vi.fn(),
+    verifyRule: vi.fn(),
+  };
+});
 vi.mock('../services/mts-business-actions.service.js', () => ({
   mtsBusinessActionsService: {
     create: vi.fn(async () => undefined),
@@ -68,6 +90,8 @@ import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics
 import { auditService } from '../services/audit.service.js';
 import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
 import { msisdnHash } from '../services/mts-business-cdr.service.js';
+import { mtsForwardingOperationsService } from '../services/mts-forwarding-operations.service.js';
+import * as forwardingRunner from '../services/mts-forwarding-operations.runner.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const mapping = vi.mocked(mtsBusinessMappingService);
@@ -77,6 +101,8 @@ const catalog = vi.mocked(mtsBusinessCatalogService);
 const actions = vi.mocked(mtsBusinessActionsService);
 const metrics = vi.mocked(mtsBusinessMetricsStoreService);
 const audit = vi.mocked(auditService);
+const opsMock = vi.mocked(mtsForwardingOperationsService);
+const runner = vi.mocked(forwardingRunner);
 
 const mockReq = (employeeId: number | null, query: Record<string, string> = {}): AuthenticatedRequest =>
   ({ user: { id: 'u-1', employee_id: employeeId }, query, params: {} } as unknown as AuthenticatedRequest);
@@ -331,89 +357,152 @@ describe('employeeSimController — переадресация', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('setMyForwarding: happy-path — вызов МТС, заявка и аудит; CFNRY без таймера → дефолт 20 сек', async () => {
+  const intentBody = { msisdn: OWN, type: 'CFNRY', target: '+7 (916) 123-45-67' };
+  const op = (over: Record<string, unknown> = {}) => ({
+    id: 'op-1', accountId: 'acc-1', msisdnHash: msisdnHash(OWN), employeeId: 42, requestedBy: 'u-1',
+    forwardingType: 'CFNRY', target: '79161234567', noReplyTimer: 20, state: 'service_reserved',
+    serviceEventId: null, ruleEventId: null, ruleAttempts: 0, sendStartedAt: null, leaseOwner: null, leaseUntil: null,
+    deadlineAt: '2026-09-14T12:00:00Z', nextCheckAt: '2026-09-14T11:00:00Z', confirmedRules: null,
+    lastErrorCode: null, lastErrorMessage: null, createdAt: '2026-09-14T11:00:00Z', updatedAt: '2026-09-14T11:00:00Z',
+    finishedAt: null, ...over,
+  }) as never;
+  const withNumber = () => {
     mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
     mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    const res = mockRes();
-    await employeeSimController.setMyForwarding(
-      mockReqBody(42, { msisdn: OWN, type: 'CFNRY', target: '+7 (916) 123-45-67' }), res,
-    );
+  };
 
-    expect(catalog.changeCallForwarding).toHaveBeenCalledWith('acc-1', OWN, 'create', {
-      forwardingType: 'CFNRY', forwardingAddress: '79161234567', noReplyTimer: 20,
-    });
-    expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({
-      eventId: 'EV-1', actionType: 'forwarding_set', scope: 'msisdn', msisdn: OWN, requestedBy: 'u-1',
+  it('setMyForwarding: PE0250 нет → резерв service_reserved и одно подключение услуги, правило не шлём; 202', async () => {
+    withNumber();
+    catalog.getProductInfo.mockResolvedValueOnce([{ code: 'PE0005', status: 'ACTIVE' }] as never);
+    opsMock.reserve.mockResolvedValueOnce({ operation: op(), created: true });
+    runner.sendServiceRequest.mockResolvedValueOnce(op({ state: 'service_accepted', serviceEventId: 'EV-S' }));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
+
+    expect(opsMock.reserve).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'acc-1', msisdn: OWN, employeeId: 42, requestedBy: 'u-1',
+      forwardingType: 'CFNRY', target: '79161234567', noReplyTimer: 20, initialState: 'service_reserved',
     }));
-    expect(audit.logFromRequest).toHaveBeenCalled();
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-1', tracking: true } });
+    expect(runner.sendServiceRequest).toHaveBeenCalledTimes(1);
+    expect(runner.sendRule).not.toHaveBeenCalled();
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.json.mock.calls[0][0]).toMatchObject({ success: true, data: { outcome: 'operation_pending', operationId: 'op-1' } });
   });
 
-  it('setMyForwarding: applied — заявки нет, снапшот из прочитанных правил', async () => {
-    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
-    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    const rules = [{ forwardingType: 'CFU', forwardingAddress: '79161234567', noReplyTimer: null, numType: 'Regular', status: null }];
-    catalog.changeCallForwarding.mockResolvedValueOnce({ outcome: 'applied', eventId: null, rules });
+  it('setMyForwarding: PE0250 активна → та же операция с rule_ready; правило подтверждено → 200 applied', async () => {
+    withNumber();
+    catalog.getProductInfo.mockResolvedValueOnce([{ code: 'PE0250', status: 'ACTIVE' }] as never);
+    opsMock.reserve.mockResolvedValueOnce({ operation: op({ state: 'rule_ready' }), created: true });
+    runner.sendRule.mockResolvedValueOnce(op({ state: 'rule_verifying' }));
+    runner.verifyRule.mockResolvedValueOnce(op({ state: 'done' }));
     const res = mockRes();
 
-    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
 
-    expect(actions.create).not.toHaveBeenCalled();
-    expect(metrics.upsertSnapshot).toHaveBeenCalledWith({
-      accountId: 'acc-1', scope: 'msisdn', msisdn: OWN, metric: 'forwarding', payload: rules,
-    });
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'applied', eventId: null, tracking: true } });
+    expect(opsMock.reserve).toHaveBeenCalledWith(expect.objectContaining({ initialState: 'rule_ready' }));
+    expect(runner.sendServiceRequest).not.toHaveBeenCalled();
+    expect(runner.verifyRule).toHaveBeenCalledWith(expect.anything(), undefined, OWN, true);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json.mock.calls[0][0]).toMatchObject({ data: { outcome: 'applied' } });
   });
 
-  it('setMyForwarding: падение аудита не отменяет успех МТС (tracking:false, не 500)', async () => {
-    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
-    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    audit.logFromRequest.mockRejectedValueOnce(new Error('audit down'));
+  it('setMyForwarding: правило не подтвердилось быстро (например, другой таймер) → 202, не «включено»', async () => {
+    withNumber();
+    catalog.getProductInfo.mockResolvedValueOnce([{ code: 'PE0250', status: 'ACTIVE' }] as never);
+    opsMock.reserve.mockResolvedValueOnce({ operation: op({ state: 'rule_ready' }), created: true });
+    runner.sendRule.mockResolvedValueOnce(op({ state: 'rule_verifying' }));
+    runner.verifyRule.mockResolvedValueOnce(op({ state: 'rule_verifying' }));
     const res = mockRes();
 
-    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
-
-    expect(res.status).not.toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-1', tracking: false } });
-  });
-
-  it('setMyForwarding: unknown → 202, ничего локально не пишем', async () => {
-    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
-    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    catalog.changeCallForwarding.mockResolvedValueOnce({ outcome: 'unknown', eventId: null });
-    const res = mockRes();
-
-    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
 
     expect(res.status).toHaveBeenCalledWith(202);
-    expect(actions.create).not.toHaveBeenCalled();
-    expect(metrics.upsertSnapshot).not.toHaveBeenCalled();
   });
 
-  it('setMyForwarding: 421/3003 (Foris) → 503 с подсказкой про услугу «Переадресация вызова»', async () => {
-    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
-    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    catalog.changeCallForwarding.mockRejectedValueOnce(new MtsBusinessApiError('Сервис Foris временно недоступен', 421, '3003'));
+  it('setMyForwarding: у номера уже идёт операция с теми же параметрами → её статус, внешних вызовов нет', async () => {
+    withNumber();
+    opsMock.getActive.mockResolvedValueOnce(op({ state: 'unconfirmed' }));
     const res = mockRes();
 
-    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
+
+    expect(catalog.getProductInfo).not.toHaveBeenCalled();
+    expect(opsMock.reserve).not.toHaveBeenCalled();
+    expect(runner.sendServiceRequest).not.toHaveBeenCalled();
+    expect(runner.sendRule).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('setMyForwarding: идёт операция с другими параметрами → 409', async () => {
+    withNumber();
+    opsMock.getActive.mockResolvedValueOnce(op({ target: '79169999999' }));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(runner.sendServiceRequest).not.toHaveBeenCalled();
+  });
+
+  it('setMyForwarding: гонка — reserve вернул чужую строку (created=false) → отправки нет', async () => {
+    withNumber();
+    catalog.getProductInfo.mockResolvedValueOnce([] as never);
+    opsMock.reserve.mockResolvedValueOnce({ operation: op({ state: 'service_sending' }), created: false });
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
+
+    expect(runner.sendServiceRequest).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('setMyForwarding: услуги не прочитались → 503, операцию не создаём', async () => {
+    withNumber();
+    catalog.getProductInfo.mockRejectedValueOnce(new MtsBusinessApiError('bad gateway', 502));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
 
     expect(res.status).toHaveBeenCalledWith(503);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      mtsMessage: expect.stringContaining('Переадресация вызова'),
-    }));
+    expect(opsMock.reserve).not.toHaveBeenCalled();
   });
 
-  it('setMyForwarding: ошибка МТС отдаётся сотруднику текстом оператора (502 + mtsMessage)', async () => {
-    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
-    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
-    catalog.changeCallForwarding.mockRejectedValueOnce(new MtsBusinessApiError('Переадресация недоступна на тарифе', 400, '2005'));
+  it('setMyForwarding: МТС отклонил подключение → 422 с причиной оператора', async () => {
+    withNumber();
+    catalog.getProductInfo.mockResolvedValueOnce([] as never);
+    opsMock.reserve.mockResolvedValueOnce({ operation: op(), created: true });
+    runner.sendServiceRequest.mockResolvedValueOnce(op({ state: 'failed', lastErrorMessage: 'Услуга недоступна на тарифе' }));
     const res = mockRes();
 
-    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+    await employeeSimController.setMyForwarding(mockReqBody(42, intentBody), res);
 
-    expect(res.status).toHaveBeenCalledWith(502);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ mtsMessage: 'Переадресация недоступна на тарифе' }));
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ mtsMessage: 'Услуга недоступна на тарифе' }));
+  });
+
+  it('deleteMyForwarding: при незавершённой операции включения → 409, в МТС не ходим', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    opsMock.getActiveByMsisdn.mockResolvedValueOnce(op({ state: 'rule_verifying' }));
+    const res = mockRes();
+
+    await employeeSimController.deleteMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+  });
+
+  it('getMyForwardingOperation: номер назначения наружу только хвостом', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    opsMock.getActiveOrRecent.mockResolvedValueOnce(op({ state: 'service_accepted' }));
+    const res = mockRes();
+
+    await employeeSimController.getMyForwardingOperation(mockReq(42), res);
+
+    const payload = res.json.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(payload.data).toMatchObject({ id: 'op-1', state: 'service_accepted', final: false, targetTail: '4567', timer: 20 });
+    expect(JSON.stringify(payload)).not.toContain('79161234567');
   });
 
   it('deleteMyForwarding: снимает правило действием delete', async () => {

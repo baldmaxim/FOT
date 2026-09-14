@@ -27,6 +27,7 @@ import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newd
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor, stopMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { startMtsBusinessStatusPoller, stopMtsBusinessStatusPoller } from './services/mts-business-status-poller.service.js';
+import { startMtsForwardingOperationsWorker, stopMtsForwardingOperationsWorker } from './services/mts-forwarding-operations.worker.js';
 import { startMtsBusinessMailIngest, stopMtsBusinessMailIngest } from './services/mts-business-mail-ingest.service.js';
 import { startMtsBusinessCdrDailyScheduler, stopMtsBusinessCdrDailyScheduler } from './services/mts-business-cdr-daily-scheduler.service.js';
 import { startMtsBusinessMetricsDailyScheduler, stopMtsBusinessMetricsDailyScheduler } from './services/mts-business-metrics-daily-scheduler.service.js';
@@ -167,6 +168,8 @@ httpServer.listen(PORT, HOST, () => {
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
   startMtsBusinessStatusPoller();
+  // «Моя SIM»: фоновое доведение переадресации (подключение PE0250 → правило → подтверждение).
+  startMtsForwardingOperationsWorker();
   startMtsBusinessMailIngest();
   void startMtsBusinessCdrDailyScheduler();
   void startMtsBusinessMetricsDailyScheduler();
@@ -233,7 +236,7 @@ const gracefulShutdown = (signal: string): void => {
     stopDismissalScheduler,
     stopContractorPassSyncScheduler, stopBlacklistSigurScheduler, stopObjectKpiPlanFreezer,
     stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
-    stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
+    stopMtsBusinessStatusPoller, stopMtsForwardingOperationsWorker, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
     stopMtsBusinessStatementRollingWorker,
     stopHrOcrWorker, stopHrMaintenance,

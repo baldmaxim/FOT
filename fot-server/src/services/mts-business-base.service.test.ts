@@ -19,6 +19,7 @@ import {
   isRetryableMtsAxiosError,
   mtsBusinessApiErrorFromAxios,
   mtsErrorBucket,
+  mtsMutationSendOutcome,
   mtsPermanentErrorKind,
   mtsRetryDelayMs,
   formatMtsErrorBreakdown,
@@ -65,24 +66,39 @@ describe('МТС Бизнес: разбор ошибок апстрима', () =
 });
 
 describe('МТС Бизнес: решение о ретрае', () => {
-  it('500 ретраится только при retryOn500 (read-only вызовы)', () => {
-    const err = axiosErrorWithStatus(500);
-    expect(isRetryableMtsAxiosError(err, true)).toBe(true);
-    expect(isRetryableMtsAxiosError(err, false)).toBe(false);
+  it('чтения: 500/429/502/503/504 и сетевые обрывы ретраятся', () => {
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(500), 'read')).toBe(true);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(429), 'read')).toBe(true);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(503), 'read')).toBe(true);
+    expect(isRetryableMtsAxiosError(new AxiosError('timeout', 'ECONNABORTED'), 'read')).toBe(true);
   });
 
-  it('429/502/503/504 и сетевые обрывы ретраятся независимо от retryOn500', () => {
-    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(429), false)).toBe(true);
-    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(503), false)).toBe(true);
-    const netErr = new AxiosError('timeout', 'ECONNABORTED');
-    expect(isRetryableMtsAxiosError(netErr, false)).toBe(true);
-  });
-
-  it('421/3003 (Foris) ретраится, 400 и не-Axios — нет', () => {
+  it('чтения: 421/3003 (Foris) ретраится, 400 и не-Axios — нет', () => {
     const foris = axiosErrorWithStatus(421, {}, { errorCode: '3003' });
-    expect(isRetryableMtsAxiosError(foris, false)).toBe(true);
-    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(400), true)).toBe(false);
-    expect(isRetryableMtsAxiosError(new Error('обычная ошибка'), true)).toBe(false);
+    expect(isRetryableMtsAxiosError(foris, 'read')).toBe(true);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(400), 'read')).toBe(false);
+    expect(isRetryableMtsAxiosError(new Error('обычная ошибка'), 'read')).toBe(false);
+  });
+
+  it('мутации: повторяется только 429 — тайм-аут, 5xx и 421 нет', () => {
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(429), 'mutation')).toBe(true);
+    for (const status of [500, 502, 503, 504]) {
+      expect(isRetryableMtsAxiosError(axiosErrorWithStatus(status), 'mutation')).toBe(false);
+    }
+    expect(isRetryableMtsAxiosError(new AxiosError('timeout', 'ECONNABORTED'), 'mutation')).toBe(false);
+    expect(isRetryableMtsAxiosError(new AxiosError('reset', 'ECONNRESET'), 'mutation')).toBe(false);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(421, {}, { errorCode: '3003' }), 'mutation')).toBe(false);
+  });
+
+  it('исход мутации: 4xx и неотправленный запрос — rejected, сеть/5xx — unknown', () => {
+    expect(mtsMutationSendOutcome(new MtsBusinessApiError('Foris', 421, '3003'))).toBe('rejected');
+    expect(mtsMutationSendOutcome(new MtsBusinessApiError('конверт', 200, 'X'))).toBe('rejected');
+    expect(mtsMutationSendOutcome(new MtsBusinessApiError('bad gateway', 502))).toBe('unknown');
+    expect(mtsMutationSendOutcome(new MtsBusinessApiError('timeout', 0))).toBe('unknown');
+    const notSent = new MtsBusinessApiError('нет токена', 0);
+    notSent.notSent = true;
+    expect(mtsMutationSendOutcome(notSent)).toBe('rejected');
+    expect(mtsMutationSendOutcome(new Error('ошибка'))).toBe('unknown');
   });
 });
 

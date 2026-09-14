@@ -32,6 +32,8 @@ export class MtsBusinessApiError extends Error {
   status: number;
   code?: string;
   description?: string;
+  /** true — запрос гарантированно не ушёл в МТС (сбой до отправки / нет соединения). */
+  notSent?: boolean;
 
   constructor(message: string, status: number, code?: string, description?: string) {
     super(message);
@@ -53,6 +55,27 @@ export const isFeatureUnavailable = (error: unknown): boolean =>
 // не «не в тарифе» и не баг портала. Ретраим; в sync считаем transient, не failed.
 export const isTransientMtsError = (error: unknown): boolean =>
   error instanceof MtsBusinessApiError && error.status === 421 && error.code === '3003';
+
+/**
+ * Исход неудачной внешней мутации: rejected — МТС ответил отказом (HTTP 4xx или
+ * error-конверт в 2xx), мутация не применена и её можно отправить снова;
+ * unknown — ответа нет (сеть/тайм-аут) или 5xx: МТС мог принять запрос, повторять нельзя.
+ */
+export const mtsMutationSendOutcome = (error: unknown): 'rejected' | 'unknown' => {
+  if (!(error instanceof MtsBusinessApiError)) return 'unknown';
+  if (error.notSent) return 'rejected';
+  return error.status > 0 && error.status < 500 ? 'rejected' : 'unknown';
+};
+
+const markNotSent = (error: MtsBusinessApiError): MtsBusinessApiError => {
+  error.notSent = true;
+  return error;
+};
+
+// Соединение не установлено — тело запроса до МТС не дошло.
+const MTS_BIZ_UNDELIVERED_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND']);
+const isUndeliveredAxiosError = (error: unknown): boolean =>
+  error instanceof AxiosError && !error.response && error.code != null && MTS_BIZ_UNDELIVERED_CODES.has(error.code);
 
 /**
  * Постоянные «ошибки» = свойства номера, а не сбой прогона (по логам ночного
@@ -156,17 +179,24 @@ export const mtsBusinessApiErrorFromAxios = (error: unknown, suppressBodyLog = f
 };
 
 /**
- * Ретраить ли вызов. Всегда: 429/502/503/504, сетевые обрывы, 421/3003 «Foris
- * временно недоступен». 500 — только для read-only вызовов (retryOn500):
- * в ночные регламентные работы МТС отдаёт голые 500 «EJB Exception» на чтениях
- * (см. BillPlanInfo в catalog-сервисе); мутации ChangePersonalData на 500 не
- * повторяем — исход первой попытки неизвестен. Экспорт для тестов.
+ * Политика повторов вызова:
+ *  - read — чтения: 429/500/502/503/504, сетевые обрывы, 421/3003 «Foris
+ *    временно недоступен» (в ночные регламентные работы МТС отдаёт голые 500
+ *    «EJB Exception» на чтениях, см. BillPlanInfo в catalog-сервисе);
+ *  - mutation — внешние мутации (ModifyProduct, ChangeCallForwarding,
+ *    ChangeBillPlan, ChangePersonalData): повторяем ТОЛЬКО 429 — запрос
+ *    гарантированно не обработан. Тайм-аут, обрыв, 5xx, 421 — исход первой
+ *    попытки неизвестен или это отказ; повтор мог бы применить мутацию дважды.
  */
-export const isRetryableMtsAxiosError = (error: unknown, retryOn500: boolean): boolean => {
+export type MtsRetryPolicy = 'read' | 'mutation';
+
+/** Ретраить ли вызов при данной политике. Экспорт для тестов. */
+export const isRetryableMtsAxiosError = (error: unknown, policy: MtsRetryPolicy): boolean => {
   if (!(error instanceof AxiosError)) return false;
   const status = error.response?.status;
+  if (policy === 'mutation') return status === 429;
   if (status && MTS_BIZ_RETRY_STATUSES.has(status)) return true;
-  if (status === 500 && retryOn500) return true;
+  if (status === 500) return true;
   if (error.code && MTS_BIZ_RETRY_CODES.has(error.code)) return true;
   const body = parseMtsErrorBody(error.response?.data);
   const errCode = body?.errorCode ?? body?.code;
@@ -328,8 +358,8 @@ export class MtsBusinessServiceBase {
       // Доп. заголовки per-запрос (PersonalData/ChangePersonalData требует
       // x-soap-action и X-MTS-MSISDN). Authorization всегда подставляется поверх.
       headers?: Record<string, string>;
-      /** false — не ретраить HTTP 500 (мутации: исход первой попытки неизвестен). */
-      retryOn500?: boolean;
+      /** mutation — повтор только 429 (исход первой попытки иначе неизвестен). По умолчанию read. */
+      retryPolicy?: MtsRetryPolicy;
     },
   ): Promise<T> {
     const { accountId } = options;
@@ -339,15 +369,25 @@ export class MtsBusinessServiceBase {
     console.log(`[mts-biz] → ${m} ${endpoint} account=${accountId}`);
     const tStart = Date.now();
     try {
-      const { client, rateLimitPerMin } = await this.getClient(accountId);
+      let resolved: { client: AxiosInstance; rateLimitPerMin: number };
+      try {
+        resolved = await this.getClient(accountId);
+      } catch (error) {
+        throw markNotSent(this.toApiError(error, options.suppressErrorBodyLog));
+      }
+      const { client, rateLimitPerMin } = resolved;
       let attempt = 0;
       let reauthTried = false;
       let lastError: unknown;
 
       while (attempt <= MTS_BIZ_RETRY_ATTEMPTS) {
+        // Дошёл ли запрос до сети в этой попытке: ошибка токена/гейта до отправки —
+        // мутация гарантированно не ушла в МТС.
+        let dispatched = false;
         try {
           await rateGate.acquire(accountId, rateLimitPerMin);
           const token = await mtsBusinessAuthService.getAccessToken(accountId);
+          dispatched = true;
           const response = await client.request<T>({
             method,
             url: endpoint,
@@ -375,8 +415,9 @@ export class MtsBusinessServiceBase {
             console.warn(`[mts-biz] 401/403 ${m} ${endpoint} — переобмен токена account=${accountId}`);
             continue;
           }
-          if (attempt >= MTS_BIZ_RETRY_ATTEMPTS || !isRetryableMtsAxiosError(error, options.retryOn500 !== false)) {
+          if (attempt >= MTS_BIZ_RETRY_ATTEMPTS || !isRetryableMtsAxiosError(error, options.retryPolicy ?? 'read')) {
             const apiErr = this.toApiError(error, options.suppressErrorBodyLog);
+            if (!dispatched || isUndeliveredAxiosError(error)) markNotSent(apiErr);
             console.error(
               `[mts-biz] ✗ ${m} ${endpoint} ${Date.now() - tStart}ms http=${apiErr.status} code=${apiErr.code ?? '-'}`,
             );

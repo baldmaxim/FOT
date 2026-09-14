@@ -43,6 +43,7 @@ const isForwardingType = (v: unknown): v is ForwardingType =>
 type ForwardingRuleLike = {
   forwardingType?: string | null;
   forwardingAddress?: string | null;
+  noReplyTimer?: number | null;
 };
 
 const sameType = (a: string | null | undefined, b: string): boolean =>
@@ -56,13 +57,16 @@ const sameType = (a: string | null | undefined, b: string): boolean =>
  *  - delete: нет АКТИВНОГО правила этого типа. Именно активного: МТС отдаёт
  *    пустые правила-заглушки (см. pickActiveForwardingType), поэтому «строки
  *    нет вообще» проверять нельзя — удаление так никогда не подтвердится.
- * Тип сравниваем без учёта регистра, адрес — после normalizeMsisdn.
+ * Тип сравниваем без учёта регистра, адрес — после normalizeMsisdn. Для CFNRY
+ * при переданном timer требуем и совпадения таймера — иначе старое правило с
+ * другим таймером подтвердило бы новый запрос.
  */
 export const matchesForwardingIntent = (
   rules: ReadonlyArray<ForwardingRuleLike> | null | undefined,
   action: 'create' | 'delete',
   type: ForwardingType,
   target?: string,
+  timer?: number,
 ): boolean => {
   const list = Array.isArray(rules) ? rules : [];
   if (action === 'delete') {
@@ -70,7 +74,11 @@ export const matchesForwardingIntent = (
   }
   const wanted = normalizeMsisdn(target ?? '');
   if (!wanted) return false;
-  return list.some(r => sameType(r.forwardingType, type) && normalizeMsisdn(r.forwardingAddress ?? '') === wanted);
+  const checkTimer = type === 'CFNRY' && timer != null;
+  return list.some(r =>
+    sameType(r.forwardingType, type)
+    && normalizeMsisdn(r.forwardingAddress ?? '') === wanted
+    && (!checkTimer || Number(r.noReplyTimer) === timer));
 };
 
 /**

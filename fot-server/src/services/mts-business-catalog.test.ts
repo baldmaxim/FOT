@@ -58,7 +58,7 @@ interface IRequestOptions {
   accountId: string;
   params?: Record<string, unknown>;
   data?: unknown;
-  retryOn500?: boolean;
+  retryPolicy?: 'read' | 'mutation';
 }
 type CatalogInternals = {
   request: (method: string, endpoint: string, options: IRequestOptions) => Promise<unknown>;
@@ -83,7 +83,7 @@ describe('МТС Бизнес: modifyProduct (подключение/отклю�
     expect(method).toBe('post');
     expect(endpoint).toBe('/Product/ModifyProduct');
     expect(options.params).toEqual({ msisdn: MSISDN });
-    expect(options.retryOn500).toBe(false); // мутация: исход первой попытки неизвестен
+    expect(options.retryPolicy).toBe('mutation'); // мутация: повтор только 429
     expect(options.data).toEqual({
       characteristic: [{ name: 'MobileConnectivity' }],
       item: [{
@@ -192,7 +192,7 @@ describe('МТС Бизнес: changeCallForwarding (три исхода)', () =
     const chars = body.item[0].product.productCharacteristic;
     expect(chars).toContainEqual({ name: 'NumType', value: 'Regular' });
     expect(chars).toContainEqual({ name: 'NoReplyTimer', value: '20' });
-    expect(spy.mock.calls[0][2].retryOn500).toBe(false);
+    expect(spy.mock.calls[0][2].retryPolicy).toBe('mutation');
   });
 
   it('без eventID, но правило появилось — applied с прочитанными правилами', async () => {
@@ -239,6 +239,32 @@ describe('МТС Бизнес: changeCallForwarding (три исхода)', () =
     await expect(mtsBusinessCatalogService.changeCallForwarding(ACCOUNT, MSISDN, 'create', {
       forwardingType: 'CFU', forwardingAddress: TARGET,
     })).rejects.toThrow(/Не найдена связка региона/);
+  });
+
+  it('POST принят, проверочный GET падает 421 — unknown, повторного POST нет', async () => {
+    const spy = vi.spyOn(internals, 'request');
+    spy.mockResolvedValueOnce({ status: 'ok' });
+    spy.mockRejectedValue(new MtsBusinessApiError('Сервис Foris временно недоступен', 421, '3003'));
+
+    const out = await mtsBusinessCatalogService.changeCallForwarding(ACCOUNT, MSISDN, 'create', {
+      forwardingType: 'CFU', forwardingAddress: TARGET,
+    });
+
+    expect(out).toEqual({ outcome: 'unknown', eventId: null });
+    const posts = spy.mock.calls.filter(c => c[0] === 'post');
+    expect(posts).toHaveLength(1);
+  });
+
+  it('CFNRY с другим таймером не подтверждает запрос', async () => {
+    const spy = vi.spyOn(internals, 'request');
+    spy.mockResolvedValueOnce({ status: 'ok' });
+    spy.mockResolvedValue([rule({ forwardingType: 'CFNRY', noReplyTimer: 30 })]);
+
+    const out = await mtsBusinessCatalogService.changeCallForwarding(ACCOUNT, MSISDN, 'create', {
+      forwardingType: 'CFNRY', forwardingAddress: TARGET, noReplyTimer: 20,
+    });
+
+    expect(out.outcome).toBe('unknown');
   });
 
   it('requestID за eventId не принимаем — контракт CheckRequestStatus не подтверждён', async () => {

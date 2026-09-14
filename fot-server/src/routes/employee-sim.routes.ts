@@ -21,6 +21,7 @@ router.get('/usage', requirePageAccess('/employee/sim', 'view'), employeeSimCont
 // (право edit = рубильник самообслуживания) + лимит 5/час на пользователя.
 router.get('/forwarding', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwarding);
 router.get('/forwarding/status', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwardingStatus);
+router.get('/forwarding/operation', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwardingOperation);
 router.post('/forwarding', requirePageAccess('/employee/sim', 'edit'), forwardingLimiter, employeeSimController.setMyForwarding);
 router.post('/forwarding/delete', requirePageAccess('/employee/sim', 'edit'), forwardingLimiter, employeeSimController.deleteMyForwarding);
 

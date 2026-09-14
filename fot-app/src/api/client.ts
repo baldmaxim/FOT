@@ -140,6 +140,7 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // читаться с сервера. Иначе кэш 30 сек отдавал старое правило, юзер считал,
     // что операция не прошла, и повторял внешнюю мутацию в МТС.
     || path === '/my-sim/forwarding'
+    || path === '/my-sim/forwarding/operation'
     || path === '/mts-business/subscribers'
     || /^\/mts-business\/subscribers\/[^/]+\/details$/.test(path)
     // API-ключи (админ-вкладка «API-доступ»): после отзыва/удаления список должен

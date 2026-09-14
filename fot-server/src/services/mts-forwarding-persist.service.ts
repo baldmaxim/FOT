@@ -72,10 +72,10 @@ const NOT_CONNECTED_HINT = 'Проверьте, подключена ли на �
  * Ответ на «не наши» отказы МТС по переадресации: показываем причину и не шумим
  * в Sentry (это не баг портала). Возвращает true, если ответ уже отправлен.
  */
-export const failForwardingUpstream = (res: Response, error: unknown, fallback: string): boolean => {
+export const failForwardingUpstream = (res: Response, error: unknown, fallback: string, hint = NOT_CONNECTED_HINT): boolean => {
   if (isFeatureUnavailable(error)) {
     console.warn('[mts-forwarding] 403/1010 — функция не входит в подписку МТС');
-    res.status(409).json({ success: false, error: fallback, mtsHttp: 403, mtsMessage: NOT_CONNECTED_HINT });
+    res.status(409).json({ success: false, error: fallback, mtsHttp: 403, mtsMessage: hint });
     return true;
   }
   if (isTransientMtsError(error)) {
@@ -85,7 +85,7 @@ export const failForwardingUpstream = (res: Response, error: unknown, fallback: 
       success: false,
       error: fallback,
       mtsHttp: e.status,
-      mtsMessage: `${e.message}. ${NOT_CONNECTED_HINT}`,
+      mtsMessage: `${e.message}. ${hint}`,
     });
     return true;
   }
