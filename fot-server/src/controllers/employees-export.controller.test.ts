@@ -54,6 +54,11 @@ vi.mock('../services/employee-main-object-snapshot.service.js', () => ({
   loadMainObjects: mainObjectMock,
 }));
 
+const costItemsMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/employee-cost-item.service.js', () => ({
+  loadCostItems: costItemsMock,
+}));
+
 const SNAPSHOT_PERIOD = { start: '2026-08-15', end: '2026-09-13' };
 
 const { employeesExportController, resolveExportPeriod } = await import('./employees-export.controller.js');
@@ -118,8 +123,10 @@ beforeEach(() => {
   mainObjectMock.mockResolvedValue({
     period: SNAPSHOT_PERIOD,
     objects: new Map([[1, 'ЖК Север']]),
+    objectNamesByEmployee: new Map([[1, ['ЖК Север', 'ЖК Юг']]]),
     source: 'snapshot',
   });
+  costItemsMock.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, 'СКУД (ЖК Север, ЖК Юг)'])));
   withTransactionMock.mockImplementation(async (fn: (client: unknown) => Promise<void>) => fn({}));
 });
 
@@ -171,6 +178,19 @@ describe('employeesExportController.exportEmployees', () => {
     const meta = String(workbook.worksheets[0].getCell(2, 1).value);
     expect(meta).toContain('объект — где больше всего часов за 15.08.2026–13.09.2026');
     expect(meta).toMatch(/уволенные — за \d{2}\.\d{2}\.\d{4}–\d{2}\.\d{2}\.\d{4}/);
+  });
+
+  it('«Статья затрат» — из loadCostItems по тем же id и спискам объектов, что у таблицы', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const res = makeRes();
+    await employeesExportController.exportEmployees(req(), res);
+
+    expect(costItemsMock).toHaveBeenCalledWith([1], new Map([[1, ['ЖК Север', 'ЖК Юг']]]));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.sent as ArrayBuffer);
+    const sheet = workbook.worksheets[0];
+    expect(sheet.getCell(3, 9).value).toBe('Статья затрат');
+    expect(sheet.getCell(4, 9).value).toBe('СКУД (ЖК Север, ЖК Юг)');
   });
 
   it('scope=department — отделы и подчинённые в одних скобках после фильтра статуса', async () => {

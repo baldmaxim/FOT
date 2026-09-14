@@ -12,6 +12,9 @@ vi.mock('./timesheet-object.service.js', () => ({
 }));
 
 const {
+  compareObjectHours,
+  loadObjectHoursByEmployee,
+  sumObjectHoursByEmployee,
   pickMainObject,
   pickMainObjectDetailed,
   loadMainObjectByEmployee,
@@ -157,5 +160,54 @@ describe('loadMainObjectByEmployee', () => {
     const result = await loadMainObjectByEmployee([], { start: '2026-08-16', end: '2026-09-14' });
     expect(result.size).toBe(0);
     expect(buildObjectDataMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('sumObjectHoursByEmployee', () => {
+  it('все объекты с итогом > 0, отсортированы: часы ↓, название, id; первый = pickMainObjectDetailed', () => {
+    const entries = [
+      entry(1, 'o9', 'Склад', 5), entry(1, 'o3', 'Склад', 5),
+      entry(1, 'o1', 'Альфа', 2.5), entry(1, 'o1', 'Альфа', 2.5),
+      entry(1, 'o7', 'Бета', 12), entry(1, 'o7', 'Бета', -12),
+      entry(1, null, 'Не определён', 100),
+      entry(1, 'o5', 'Гамма', 0.1), entry(1, 'o5', 'Гамма', 0.2),
+    ];
+    const lists = sumObjectHoursByEmployee(entries);
+    expect(lists.get(1)!.map(item => [item.objectId, item.hours])).toEqual([
+      ['o1', 5], ['o3', 5], ['o9', 5], ['o5', 0.3],
+    ]);
+    expect(pickMainObjectDetailed(entries).get(1)).toEqual(lists.get(1)![0]);
+  });
+
+  it('равенство после округления до центичасов решается названием, а не хвостом float', () => {
+    const lists = sumObjectHoursByEmployee([
+      entry(1, 'o2', 'Бета', 0.1), entry(1, 'o2', 'Бета', 0.2),
+      entry(1, 'o1', 'Альфа', 0.3),
+    ]);
+    expect(lists.get(1)!.map(item => item.objectName)).toEqual(['Альфа', 'Бета']);
+    expect(lists.get(1)!.every(item => item.hours === 0.3)).toBe(true);
+  });
+
+  it('сотрудник без положительных итогов в карту не попадает', () => {
+    expect(sumObjectHoursByEmployee([entry(1, 'o1', 'Альфа', 3), entry(1, 'o1', 'Альфа', -3)]).has(1)).toBe(false);
+  });
+
+  it('compareObjectHours детерминирован и не зависит от исходного порядка', () => {
+    const items = [
+      { objectId: 'b', objectName: 'Склад', hours: 5 },
+      { objectId: 'a', objectName: 'Склад', hours: 5 },
+      { objectId: 'c', objectName: 'Альфа', hours: 7 },
+    ];
+    const forward = [...items].sort(compareObjectHours).map(item => item.objectId);
+    const backward = [...items].reverse().sort(compareObjectHours).map(item => item.objectId);
+    expect(forward).toEqual(['c', 'a', 'b']);
+    expect(backward).toEqual(forward);
+  });
+
+  it('loadObjectHoursByEmployee отдаёт полный список', async () => {
+    loadAdjustmentsMock.mockResolvedValue([]);
+    buildObjectDataMock.mockResolvedValue({ objectEntries: [entry(5, 'o1', 'ЖК Север', 8), entry(5, 'o2', 'ЖК Юг', 3)] });
+    const result = await loadObjectHoursByEmployee([5], { start: '2026-08-15', end: '2026-09-13' });
+    expect(result.get(5)!.map(item => item.objectName)).toEqual(['ЖК Север', 'ЖК Юг']);
   });
 });

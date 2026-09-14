@@ -1,5 +1,5 @@
 /**
- * Ручной пересчёт снимка «основного объекта» сотрудников (миграция 277).
+ * Ручной пересчёт снимка «основного объекта» и часов по объектам (миграции 277/279).
  *
  * Обычно не нужен: планировщик сам заполняет снимок через ~2 минуты после старта
  * бэкенда и дальше пересчитывает раз в сутки после 03:00 МСК. Скрипт — для первого
@@ -20,7 +20,13 @@ const main = async (): Promise<void> => {
     `${dryRun ? '[dry-run] ' : ''}период ${result.period.start}..${result.period.end}: `
     + `сотрудников ${result.employees}, с объектом ${result.withObject}, ${result.durationMs} мс`,
   );
-  if (dryRun) console.log('В БД ничего не записано.');
+  if (dryRun) {
+    console.log('В БД ничего не записано.');
+  } else if (!result.published) {
+    console.log('Снимок НЕ опубликован: уже активно более свежее поколение (superseded).');
+  } else {
+    console.log('Опубликован. Проверка: npx tsx scripts/check-main-object-snapshot.ts');
+  }
 };
 
 main()

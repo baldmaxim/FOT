@@ -1,14 +1,15 @@
 /**
- * «Управление кадрами» → столбец «Объект»: объект, где сотрудник набрал больше
- * всего часов за 30 полных дней.
+ * «Управление кадрами» → столбцы «Объект» (где больше всего часов за 30 полных дней)
+ * и «Статья затрат» (по режиму табелирования).
  *
- * GET /api/employees/main-objects?ids=1,2,3 — данные ночного снимка (миграция 277),
- * тот же источник, что у Excel-выгрузки. Пока снимка нет — расчёт на лету за
- * сегодня и 29 дней до (resolveExportPeriod), страница списка ≤ 200 человек.
+ * GET /api/employees/main-objects?ids=1,2,3 — данные опубликованного ночного снимка
+ * (миграции 277/279), тот же источник, что у Excel-выгрузки. Пока снимка нет — расчёт на
+ * лету за сегодня и 29 дней до (resolveExportPeriod), страница списка ≤ 200 человек.
  */
 import { Response } from 'express';
 import { filterEmployeeIdsByReadScope } from '../services/employee-scope-filter.service.js';
 import { loadMainObjects } from '../services/employee-main-object-snapshot.service.js';
+import { loadCostItems } from '../services/employee-cost-item.service.js';
 import { resolveExportPeriod } from './employees-export.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -47,11 +48,17 @@ export const employeesMainObjectsController = {
       // расхождение возможно только при подмене запроса.
       const visibleIds = await filterEmployeeIdsByReadScope(req, ids);
       const result = await loadMainObjects(visibleIds, resolveExportPeriod());
+      const costItems = await loadCostItems(visibleIds, result.objectNamesByEmployee);
 
       const objects: Record<string, string> = {};
       for (const [employeeId, objectName] of result.objects) objects[String(employeeId)] = objectName;
+      const costItemsJson: Record<string, string> = {};
+      for (const [employeeId, label] of costItems) costItemsJson[String(employeeId)] = label;
 
-      res.json({ success: true, data: { period: result.period, objects, source: result.source } });
+      res.json({
+        success: true,
+        data: { period: result.period, objects, cost_items: costItemsJson, source: result.source },
+      });
     } catch (error) {
       console.error('Get employee main objects error:', error);
       res.status(500).json({ success: false, error: 'Не удалось рассчитать объекты сотрудников' });

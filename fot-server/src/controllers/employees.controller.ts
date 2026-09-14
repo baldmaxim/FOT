@@ -39,6 +39,11 @@ import {
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { resolveEmployeeListReadScope } from '../services/employee-scope-filter.service.js';
+import {
+  buildSectionConditionSql,
+  parseSectionParam,
+  resolveSectionFilterContext,
+} from '../services/employee-section-filter.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds, getAllDepartmentsTree } from '../services/skud-shared.service.js';
@@ -164,6 +169,14 @@ export const employeesController = {
         return;
       }
       const showArchived = req.query.archived === 'true';
+      const sectionParam = parseSectionParam(req.query.section);
+      if (!sectionParam.ok) {
+        res.status(400).json({ success: false, error: 'Некорректный раздел', code: 'INVALID_SECTION' });
+        return;
+      }
+      const sectionContext = sectionParam.section
+        ? await resolveSectionFilterContext(req, sectionParam.section, globalRead)
+        : null;
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
       const departmentId = globalRead
         ? normalizeUuidParam(requestedDepartmentId)
@@ -271,6 +284,9 @@ export const employeesController = {
           params.push(`%${escapeLike(search)}%`);
           whereParts.push(`full_name ILIKE $${params.length}`);
         }
+        if (sectionContext) {
+          whereParts.push(buildSectionConditionSql(sectionContext, 'employees', params));
+        }
         if (status === 'fired') {
           whereParts.push(`employment_status = 'fired'`);
         } else if (status === 'excluded') {
@@ -361,8 +377,18 @@ export const employeesController = {
                       LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
 
         let data: Array<Record<string, unknown> & { total_count: number }>;
+        let emptyPageTotal: number | null = null;
         try {
           data = await query<Record<string, unknown> & { total_count: number }>(sql, params);
+          // Страница за пределами результата: строк нет, оконного count(*) OVER () тоже.
+          // Считаем отдельно тем же WHERE и теми же параметрами (без LIMIT/OFFSET).
+          if (data.length === 0 && offset > 0) {
+            const countRow = await queryOne<{ total: number | string }>(
+              `SELECT count(*)::int AS total FROM employees WHERE ${whereParts.join(' AND ')}`,
+              params.slice(0, limitIdx - 1),
+            );
+            emptyPageTotal = countRow ? Number(countRow.total) : 0;
+          }
         } catch (err) {
           console.error('Get employees paginated error:', err);
           res.status(500).json({ success: false, error: 'Failed to fetch employees' });
@@ -385,7 +411,7 @@ export const employeesController = {
             }),
           };
         });
-        const total = data.length > 0 ? Number(data[0].total_count) : 0;
+        const total = data.length > 0 ? Number(data[0].total_count) : (emptyPageTotal ?? 0);
 
         auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
           details: { count: employees.length, page, archived: showArchived },
@@ -436,6 +462,9 @@ export const employeesController = {
         } else if (scope === 'department') {
           // department-scope без отделов и без назначений — не отдаём всю таблицу.
           break;
+        }
+        if (sectionContext) {
+          whereParts.push(buildSectionConditionSql(sectionContext, 'employees', params));
         }
 
         params.push(INTERNAL_PAGE);

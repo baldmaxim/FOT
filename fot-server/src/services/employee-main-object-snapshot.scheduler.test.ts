@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const snapshot = vi.hoisted(() => ({
-  loadLatestSnapshotRun: vi.fn(),
+  loadActiveSnapshotRun: vi.fn(),
   rebuildMainObjectSnapshot: vi.fn(),
 }));
 vi.mock('./employee-main-object-snapshot.service.js', async importOriginal => {
@@ -21,7 +21,7 @@ const msk = (iso: string): Date => new Date(`${iso}+03:00`);
 const run = (end: string) => ({ id: 1, period: { start: '2026-08-15', end }, finishedAt: null });
 
 beforeEach(() => {
-  snapshot.loadLatestSnapshotRun.mockReset();
+  snapshot.loadActiveSnapshotRun.mockReset();
   snapshot.rebuildMainObjectSnapshot.mockReset().mockResolvedValue({
     period: { start: '2026-08-15', end: '2026-09-13' }, employees: 10, withObject: 5, durationMs: 1, dryRun: false,
   });
@@ -52,20 +52,20 @@ describe('shouldRebuildSnapshot', () => {
 
 describe('runMainObjectSnapshotTick', () => {
   it('свежий снимок — пересчёт не запускается', async () => {
-    snapshot.loadLatestSnapshotRun.mockResolvedValue(run('2026-09-13'));
+    snapshot.loadActiveSnapshotRun.mockResolvedValue(run('2026-09-13'));
     await runMainObjectSnapshotTick(msk('2026-09-14T04:00:00'));
     expect(snapshot.rebuildMainObjectSnapshot).not.toHaveBeenCalled();
   });
 
   it('устаревший снимок ночью — пересчёт с тем же now', async () => {
     const now = msk('2026-09-14T04:00:00');
-    snapshot.loadLatestSnapshotRun.mockResolvedValue(run('2026-09-12'));
+    snapshot.loadActiveSnapshotRun.mockResolvedValue(run('2026-09-12'));
     await runMainObjectSnapshotTick(now);
     expect(snapshot.rebuildMainObjectSnapshot).toHaveBeenCalledWith({ now });
   });
 
   it('параллельные тики не запускают второй пересчёт', async () => {
-    snapshot.loadLatestSnapshotRun.mockResolvedValue(null);
+    snapshot.loadActiveSnapshotRun.mockResolvedValue(null);
     let release: () => void = () => {};
     snapshot.rebuildMainObjectSnapshot.mockImplementation(() => new Promise(resolve => {
       release = () => resolve({ period: { start: 'a', end: 'b' }, employees: 0, withObject: 0, durationMs: 0, dryRun: false });
@@ -82,7 +82,7 @@ describe('runMainObjectSnapshotTick', () => {
   });
 
   it('после сбоя повтор не раньше чем через час', async () => {
-    snapshot.loadLatestSnapshotRun.mockResolvedValue(run('2026-09-12'));
+    snapshot.loadActiveSnapshotRun.mockResolvedValue(run('2026-09-12'));
     snapshot.rebuildMainObjectSnapshot.mockRejectedValueOnce(new Error('boom'));
     const failedAt = msk('2026-09-14T04:00:00');
 
@@ -95,18 +95,18 @@ describe('runMainObjectSnapshotTick', () => {
   });
 
   it('флаг «идёт расчёт» не залипает: после пропущенных тиков следующий работает', async () => {
-    snapshot.loadLatestSnapshotRun.mockResolvedValueOnce(run('2026-09-13')); // свежий — пропуск
+    snapshot.loadActiveSnapshotRun.mockResolvedValueOnce(run('2026-09-13')); // свежий — пропуск
     await runMainObjectSnapshotTick(msk('2026-09-14T04:00:00'));
-    snapshot.loadLatestSnapshotRun.mockResolvedValueOnce(run('2026-09-13'));
+    snapshot.loadActiveSnapshotRun.mockResolvedValueOnce(run('2026-09-13'));
     await runMainObjectSnapshotTick(msk('2026-09-14T04:15:00'));
-    snapshot.loadLatestSnapshotRun.mockResolvedValueOnce(run('2026-09-13'));
+    snapshot.loadActiveSnapshotRun.mockResolvedValueOnce(run('2026-09-13'));
     await runMainObjectSnapshotTick(msk('2026-09-15T04:00:00')); // уже устарел
-    expect(snapshot.loadLatestSnapshotRun).toHaveBeenCalledTimes(3);
+    expect(snapshot.loadActiveSnapshotRun).toHaveBeenCalledTimes(3);
     expect(snapshot.rebuildMainObjectSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('сбой чтения журнала не роняет тик', async () => {
-    snapshot.loadLatestSnapshotRun.mockRejectedValue(new Error('db down'));
+    snapshot.loadActiveSnapshotRun.mockRejectedValue(new Error('db down'));
     await expect(runMainObjectSnapshotTick(msk('2026-09-14T04:00:00'))).resolves.toBeUndefined();
     expect(snapshot.rebuildMainObjectSnapshot).not.toHaveBeenCalled();
   });

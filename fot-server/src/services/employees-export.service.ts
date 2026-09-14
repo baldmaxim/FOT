@@ -63,6 +63,7 @@ export interface IExportFlatRow {
   hireDate: string | null;
   objectName: string;
   sign: ExportSign;
+  costItem: string;
 }
 
 export interface IExportSection {
@@ -88,6 +89,75 @@ export class EmployeesExportError extends Error {
 }
 
 /**
+ * Отдел сотрудника для раздела: уволенный — отдел из последнего неотменённого события
+ * увольнения, где он заполнен, иначе текущий. employeeAlias — алиас таблицы employees.
+ */
+export const effectiveDepartmentSql = (employeeAlias: string): string =>
+  `(CASE WHEN ${employeeAlias}.employment_status = 'fired'
+         THEN COALESCE((
+           SELECT d.from_department_id
+             FROM employee_dismissal_events d
+            WHERE d.employee_id = ${employeeAlias}.id
+              AND d.from_department_id IS NOT NULL
+              AND d.cancelled IS NOT TRUE
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT 1
+         ), ${employeeAlias}.org_department_id)
+         ELSE ${employeeAlias}.org_department_id
+    END)`;
+
+/**
+ * Только признак «попал через отдел скоупа» (без условия отбора): режим departments —
+ * отдел в скоупе, иначе TRUE, none — FALSE. Параметры — лишь те, что попали в SQL
+ * (неиспользуемый $n PostgreSQL не принимает).
+ */
+export function buildInDepartmentScopeOnlySql(
+  scope: IEmployeeScopeFilter,
+  effectiveDepartmentExpr: string,
+  params: unknown[],
+): string {
+  if (scope.mode === 'none') return 'FALSE';
+  if (scope.mode !== 'departments') return 'TRUE';
+  params.push(scope.departmentIds);
+  return `(${effectiveDepartmentExpr} IS NOT NULL AND ${effectiveDepartmentExpr} = ANY($${params.length}::uuid[]))`;
+}
+
+/**
+ * SQL скоупа выгрузки. scopeCondition — кто попадает в выборку; inDepartmentScope — попал
+ * ли через отдел скоупа (иначе раздел «Прочие», см. buildExportSections). Режим departments:
+ * отдел скоупа или прямой подчинённый; прочие режимы — все, кто прошёл скоуп, «в отделе».
+ * Параметры дописываются в params.
+ */
+export function buildInDepartmentScopeSql(
+  scope: IEmployeeScopeFilter,
+  exprs: { effectiveDepartmentExpr: string; employeeIdExpr: string },
+  params: unknown[],
+): { scopeCondition: string; inDepartmentScope: string } {
+  const { effectiveDepartmentExpr: dept, employeeIdExpr: empId } = exprs;
+  if (scope.mode === 'none') return { scopeCondition: 'FALSE', inDepartmentScope: 'FALSE' };
+  if (scope.mode === 'self') {
+    params.push(scope.selfEmployeeId);
+    return { scopeCondition: `(${empId} = $${params.length})`, inDepartmentScope: 'TRUE' };
+  }
+  if (scope.mode === 'departments') {
+    const inDepartmentScope = buildInDepartmentScopeOnlySql(scope, dept, params);
+    if (scope.directEmployeeIds.length > 0) {
+      params.push(scope.directEmployeeIds);
+      return {
+        scopeCondition: `(${inDepartmentScope} OR ${empId} = ANY($${params.length}::int[]))`,
+        inDepartmentScope,
+      };
+    }
+    return { scopeCondition: `(${inDepartmentScope})`, inDepartmentScope };
+  }
+  if (scope.mode === 'employees') {
+    params.push(scope.directEmployeeIds);
+    return { scopeCondition: `(${empId} = ANY($${params.length}::int[]))`, inDepartmentScope: 'TRUE' };
+  }
+  return { scopeCondition: 'TRUE', inDepartmentScope: 'TRUE' };
+}
+
+/**
  * Сотрудники по скоупу за период. mode='none' — запрос не выполняется вовсе.
  * Условие скоупа целиком в скобках и стоит через AND после фильтра статуса,
  * поэтому уволенные вне периода не проходят ни через одну ветку скоупа.
@@ -99,26 +169,11 @@ export async function loadExportEmployees(
   if (scope.mode === 'none') return [];
 
   const params: unknown[] = [period.start, period.end];
-  let scopeCondition = 'TRUE';
-  let inDepartmentScope = 'TRUE';
-
-  if (scope.mode === 'self') {
-    params.push(scope.selfEmployeeId);
-    scopeCondition = `(b.id = $${params.length})`;
-  } else if (scope.mode === 'departments') {
-    params.push(scope.departmentIds);
-    const deptIdx = params.length;
-    inDepartmentScope = `(b.effective_department_id IS NOT NULL AND b.effective_department_id = ANY($${deptIdx}::uuid[]))`;
-    if (scope.directEmployeeIds.length > 0) {
-      params.push(scope.directEmployeeIds);
-      scopeCondition = `(${inDepartmentScope} OR b.id = ANY($${params.length}::int[]))`;
-    } else {
-      scopeCondition = `(${inDepartmentScope})`;
-    }
-  } else if (scope.mode === 'employees') {
-    params.push(scope.directEmployeeIds);
-    scopeCondition = `(b.id = ANY($${params.length}::int[]))`;
-  }
+  const { scopeCondition, inDepartmentScope } = buildInDepartmentScopeSql(
+    scope,
+    { effectiveDepartmentExpr: 'b.effective_department_id', employeeIdExpr: 'b.id' },
+    params,
+  );
 
   params.push(MAX_EXPORT_EMPLOYEES + 1);
   const rows = await query<IExportEmployeeRow>(
@@ -129,21 +184,9 @@ export async function loadExportEmployees(
               to_char(e.birth_date, 'YYYY-MM-DD') AS birth_date,
               to_char(e.hire_date, 'YYYY-MM-DD') AS hire_date,
               p.name AS position_name,
-              CASE WHEN e.employment_status = 'fired'
-                   THEN COALESCE(ev.from_department_id, e.org_department_id)
-                   ELSE e.org_department_id
-              END AS effective_department_id
+              ${effectiveDepartmentSql('e')} AS effective_department_id
          FROM employees e
          LEFT JOIN positions p ON p.id = e.position_id
-         LEFT JOIN LATERAL (
-           SELECT d.from_department_id
-             FROM employee_dismissal_events d
-            WHERE d.employee_id = e.id
-              AND d.from_department_id IS NOT NULL
-              AND d.cancelled IS NOT TRUE
-            ORDER BY d.created_at DESC, d.id DESC
-            LIMIT 1
-         ) ev ON e.employment_status = 'fired'
         WHERE e.is_archived = false
           AND (
             e.employment_status = 'active'
@@ -196,23 +239,30 @@ export interface IBuildSectionsParams {
   departments: IExportDepartmentRow[];
   /** employee_id → название основного объекта за период. */
   mainObjectByEmployee: Map<number, string>;
+  /** employee_id → статья затрат. */
+  costItemByEmployee?: Map<number, string>;
 }
 
-interface IDeptPlacement {
+export interface IDeptPlacement {
   section: ExportSectionKey;
   path: string;
   isMaternity: boolean;
 }
 
+/** Разделы, которые можно выбрать фильтром «Управления кадрами» («Прочие» — только во «Все»). */
+export const FILTERABLE_SECTION_KEYS: readonly ExportSectionKey[] = ['sm', 'su10', 'brigades', 'contractors'];
+
+export const isFilterableSectionKey = (value: unknown): value is ExportSectionKey =>
+  typeof value === 'string' && (FILTERABLE_SECTION_KEYS as readonly string[]).includes(value);
+
 /**
- * Раскладывает сотрудников по разделам. Раздел — по верхнему узлу цепочки
- * предков (ребёнок корня «Объект»). Пустые разделы не возвращаются.
+ * Раздел и путь отдела. Раздел — по верхнему узлу цепочки предков (ребёнок корня «Объект»),
+ * бригады внутри СМ/СУ-10 — отдельный раздел. Результат кэшируется по отделу.
  */
-export function buildExportSections({
-  employees,
-  departments,
-  mainObjectByEmployee,
-}: IBuildSectionsParams): IExportSection[] {
+export function createDepartmentPlacer(departments: IExportDepartmentRow[]): {
+  byId: Map<string, IExportDepartmentRow>;
+  place: (deptId: string) => IDeptPlacement;
+} {
   const byId = new Map<string, IExportDepartmentRow>();
   for (const dept of departments) byId.set(dept.id, dept);
 
@@ -261,19 +311,51 @@ export function buildExportSections({
     return placement;
   };
 
+  return { byId, place: placeDepartment };
+}
+
+/**
+ * Итоговое размещение сотрудника: неизвестный/пустой отдел — «Прочие»; прямой подчинённый
+ * из отдела вне скоупа — «Прочие» без пути (ветку его отдела не раскрываем).
+ */
+export function placeEmployee(
+  placer: ReturnType<typeof createDepartmentPlacer>,
+  effectiveDepartmentId: string | null,
+  inDepartmentScope: boolean,
+): IDeptPlacement {
+  const known = effectiveDepartmentId !== null && placer.byId.has(effectiveDepartmentId);
+  const placement: IDeptPlacement = known
+    ? placer.place(effectiveDepartmentId)
+    : { section: 'other', path: '', isMaternity: false };
+  return inDepartmentScope
+    ? placement
+    : { section: 'other', path: '', isMaternity: placement.isMaternity };
+}
+
+/** Отделы (включая неактивные), чей раздел — section. */
+export function listSectionDepartmentIds(
+  departments: IExportDepartmentRow[],
+  section: ExportSectionKey,
+): string[] {
+  const placer = createDepartmentPlacer(departments);
+  return departments.filter(dept => placer.place(dept.id).section === section).map(dept => dept.id);
+}
+
+/**
+ * Раскладывает сотрудников по разделам (createDepartmentPlacer + placeEmployee).
+ * Пустые разделы не возвращаются.
+ */
+export function buildExportSections({
+  employees,
+  departments,
+  mainObjectByEmployee,
+  costItemByEmployee,
+}: IBuildSectionsParams): IExportSection[] {
+  const placer = createDepartmentPlacer(departments);
   const rowsBySection = new Map<ExportSectionKey, IExportFlatRow[]>();
 
   for (const employee of employees) {
-    const deptId = employee.effective_department_id;
-    const known = deptId !== null && byId.has(deptId);
-    const placement: IDeptPlacement = known
-      ? placeDepartment(deptId)
-      : { section: 'other', path: '', isMaternity: false };
-
-    // Прямой подчинённый из отдела вне скоупа: ветку его отдела не раскрываем.
-    const visible = employee.in_department_scope
-      ? placement
-      : { section: 'other' as const, path: '', isMaternity: placement.isMaternity };
+    const visible = placeEmployee(placer, employee.effective_department_id, employee.in_department_scope);
 
     const sign: ExportSign = employee.employment_status === 'fired'
       ? 'Уволен'
@@ -288,6 +370,7 @@ export function buildExportSections({
       hireDate: employee.hire_date,
       objectName: mainObjectByEmployee.get(employee.id) ?? '',
       sign,
+      costItem: costItemByEmployee?.get(employee.id) ?? '',
     };
 
     const bucket = rowsBySection.get(visible.section);

@@ -19,11 +19,15 @@ interface IUseStaffDataParams {
   search?: string;
   departmentId?: string;
   scheduleId?: string;
+  /** Раздел (su10 | sm | brigades | contractors | all). */
+  section?: string;
   status?: 'active' | 'fired' | 'excluded';
+  /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
+  enabled?: boolean;
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { page, pageSize = 100, search, departmentId, scheduleId, status = 'active' } = params;
+  const { page, pageSize = 100, search, departmentId, scheduleId, section, status = 'active', enabled = true } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const employeesParams = {
@@ -32,11 +36,12 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     search: search || undefined,
     departmentId: departmentId || undefined,
     scheduleId: scheduleId || undefined,
+    section: section || undefined,
     status,
     view: 'staff' as const,
   };
   const employeesQueryKey = paginatedEmployeesQueryKey(employeesParams);
-  const employeesQuery = usePaginatedEmployeesQuery(employeesParams);
+  const employeesQuery = usePaginatedEmployeesQuery(employeesParams, enabled);
   const countsQuery = useEmployeeCountsQuery(false);
 
   const employeesResponse = employeesQuery.data || EMPTY_PAGINATED_RESPONSE;
@@ -67,7 +72,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     employees: employeesResponse.data,
     departments,
     countsByDepartment: counts.byDepartment,
-    loading: employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
+    loading: !enabled || employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
     meta,
     totalActive: counts.byStatus.active,
     refresh,

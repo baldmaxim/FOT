@@ -101,6 +101,17 @@
  * .sc-filters / .sc-schedule-filter / .sc-filter-search — в общем styles/FilterBar.css
  * (используются и вкладкой «Вводный инструктаж»). Здесь — только ростерные элементы. */
 
+/* Раздел (СУ-10 / СМ / Бригады / Подрядчики / Все): короткие подписи — уже фильтра графиков. */
+.sc-schedule-filter.sc-section-filter {
+  min-width: 130px;
+}
+
+@media (max-width: 768px) {
+  .sc-schedule-filter.sc-section-filter {
+    min-width: 0;
+  }
+}
+
 /* Segmented status switch */
 .sc-segmented {
   display: inline-flex;
@@ -396,28 +407,29 @@
 .sc-col-hire     { width: 150px; }
 .sc-col-birth    { width: 130px; }
 .sc-col-schedule { width: 180px; }
-/* Единственная гибкая колонка: остаток ширины уходит длинным названиям объектов. */
+/* Гибкие колонки: остаток ширины делят «Объект» и «Статья затрат» (список объектов СКУД длиннее). */
 .sc-col-main-object { width: auto; }
+.sc-col-cost-item { width: auto; }
 /* Бейдж «Работает» ≈ 76px + паддинги ячейки 24px. */
 .sc-col-sign     { width: 120px; }
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
 
-/* ── «Управление кадрами»: 10 колонок, горизонтальная прокрутка внутри таблицы ── */
+/* ── «Управление кадрами»: 11 колонок, горизонтальная прокрутка внутри таблицы ── */
 
 .sc-table-wrap {
   overscroll-behavior-x: contain;
 }
 
 .sc-table--staff {
-  /* Сумма колонок: 1348 фиксированных + 160 минимум «Объекта». Уже — скроллится таблица, не страница. */
-  min-width: 1508px;
+  /* Сумма колонок: 1348 фиксированных + по 160 минимум «Объекту» и «Статье затрат». Уже — скроллится таблица, не страница. */
+  min-width: 1668px;
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 48px;
 }
 
 .sc-table--staff.sc-table--selecting {
-  min-width: 1552px;
+  min-width: 1712px;
   --sc-sticky-num-left: 44px;
   --sc-sticky-name-left: 92px;
 }
@@ -498,6 +510,7 @@
 }
 
 .sc-td-main-object,
+.sc-td-cost-item,
 .sc-td-sign {
   white-space: nowrap;
 }

@@ -18,6 +18,7 @@ import {
   type IExportPeriod,
 } from '../services/employees-export.service.js';
 import { loadMainObjects } from '../services/employee-main-object-snapshot.service.js';
+import { loadCostItems } from '../services/employee-cost-item.service.js';
 import { buildEmployeesExportWorkbook } from '../services/employees-export-excel.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -55,11 +56,19 @@ export const employeesExportController = {
         return;
       }
 
+      const employeeIds = employees.map(employee => employee.id);
       const [departments, mainObjects] = await Promise.all([
         loadExportDepartments(),
-        loadMainObjects(employees.map(employee => employee.id), period),
+        loadMainObjects(employeeIds, period),
       ]);
-      const sections = buildExportSections({ employees, departments, mainObjectByEmployee: mainObjects.objects });
+      // Та же функция и тот же источник объектов, что у столбца «Статья затрат» в таблице.
+      const costItems = await loadCostItems(employeeIds, mainObjects.objectNamesByEmployee);
+      const sections = buildExportSections({
+        employees,
+        departments,
+        mainObjectByEmployee: mainObjects.objects,
+        costItemByEmployee: costItems,
+      });
       const total = countSectionRows(sections);
 
       const generatedAt = new Date();

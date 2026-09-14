@@ -20,7 +20,7 @@ const COLUMNS: ReadonlyArray<{ name: string; width: number }> = [
   { name: 'Дата трудоустройства', width: 15 },
   { name: 'Объект', width: 32 },
   { name: 'Признак', width: 12 },
-  { name: 'Статья затрат', width: 22 },
+  { name: 'Статья затрат', width: 40 },
 ];
 
 const BIRTH_DATE_COL = 5;
@@ -93,7 +93,7 @@ export function buildEmployeesExportWorkbook(
       isoDateToExcelDate(row.hireDate),
       defangCsvCell(row.objectName),
       row.sign,
-      '',
+      defangCsvCell(row.costItem),
     ]);
 
     ws.addTable({

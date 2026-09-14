@@ -14,6 +14,8 @@ export interface PaginatedParams {
   departmentId?: string;
   /** UUID шаблона графика или '__default__' (без персонального override) */
   scheduleId?: string;
+  /** Раздел «Управления кадрами» (sm | su10 | brigades | contractors); не задан или all — все. */
+  section?: string;
   archived?: boolean;
   view?: 'list' | 'staff';
 }
@@ -30,6 +32,8 @@ export interface IEmployeeMainObjects {
   period: { start: string; end: string };
   /** employee_id → название объекта; сотрудника нет в карте — объекта нет. */
   objects: Record<string, string>;
+  /** employee_id → «Статья затрат» (по режиму табелирования); есть у каждого видимого id. */
+  cost_items: Record<string, string>;
 }
 
 export interface EmployeeCounts {
@@ -92,6 +96,7 @@ export const employeeService = {
     if (params.status) qs.set('status', params.status);
     if (params.departmentId) qs.set('department_id', params.departmentId);
     if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
+    if (params.section && params.section !== 'all') qs.set('section', params.section);
     if (params.archived) qs.set('archived', 'true');
     const response = await apiClient.get<{ data: Employee[]; meta: PaginatedMeta }>(`/employees?${qs}`);
     return { data: response.data || [], meta: response.meta || { page: 1, pageSize: 50, total: 0, totalPages: 0 } };

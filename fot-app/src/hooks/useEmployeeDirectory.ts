@@ -26,6 +26,7 @@ export const paginatedEmployeesQueryKey = (params: PaginatedParams) =>
     params.status || 'active',
     params.departmentId || null,
     params.scheduleId || null,
+    params.section && params.section !== 'all' ? params.section : 'all',
     params.search || '',
     params.archived ? 'archived' : 'live',
     params.page,
@@ -43,11 +44,12 @@ export const useEmployeeCountsQuery = (archived = false) => {
   });
 };
 
-export const usePaginatedEmployeesQuery = (params: PaginatedParams) => {
+export const usePaginatedEmployeesQuery = (params: PaginatedParams, enabled = true) => {
   return useQuery({
     queryKey: paginatedEmployeesQueryKey(params),
     queryFn: () => employeeService.getPaginated(params),
     placeholderData: previousData => previousData,
+    enabled,
   });
 };
 

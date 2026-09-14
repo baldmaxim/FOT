@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 import {
-  loadLatestSnapshotRun,
+  loadActiveSnapshotRun,
   rebuildMainObjectSnapshot,
   resolveSnapshotPeriod,
   type ISnapshotRun,
@@ -53,7 +53,9 @@ export async function runMainObjectSnapshotTick(now: Date = new Date()): Promise
 
   const current: Promise<void> = (async () => {
     try {
-      const latest = await loadLatestSnapshotRun();
+      // Опубликованное поколение (279), а не последняя запись журнала: запуски 277 без
+      // списков объектов не считаются снимком — после деплоя он пересоберётся сразу.
+      const latest = await loadActiveSnapshotRun();
       if (!shouldRebuildSnapshot(latest, now)) return;
 
       await runWithCronMonitor(
@@ -64,7 +66,8 @@ export async function runMainObjectSnapshotTick(now: Date = new Date()): Promise
             lastFailureAt = 0;
             console.log(
               `[main-object-snapshot] ${result.period.start}..${result.period.end}: `
-              + `сотрудников ${result.employees}, с объектом ${result.withObject}, ${result.durationMs} мс`,
+              + `сотрудников ${result.employees}, с объектом ${result.withObject}, ${result.durationMs} мс`
+              + (result.published ? '' : ' — не опубликован (superseded)'),
             );
             return 'ok';
           } catch (error) {

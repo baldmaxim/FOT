@@ -12,6 +12,11 @@ vi.mock('../services/employee-main-object-snapshot.service.js', () => ({
   loadMainObjects: mainObjectsMock,
 }));
 
+const costItemsMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/employee-cost-item.service.js', () => ({
+  loadCostItems: costItemsMock,
+}));
+
 const LIVE_PERIOD = { start: '2026-08-16', end: '2026-09-14' };
 const SNAPSHOT_PERIOD = { start: '2026-08-15', end: '2026-09-13' };
 
@@ -44,7 +49,8 @@ const call = async (ids: unknown) => {
 
 beforeEach(() => {
   readScopeMock.mockReset().mockImplementation(async (_req: unknown, ids: number[]) => ids);
-  mainObjectsMock.mockReset().mockResolvedValue({ period: SNAPSHOT_PERIOD, objects: new Map(), source: 'snapshot' });
+  mainObjectsMock.mockReset().mockResolvedValue({ period: SNAPSHOT_PERIOD, objects: new Map(), objectNamesByEmployee: new Map(), source: 'snapshot' });
+  costItemsMock.mockReset().mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, 'СКУД'])));
 });
 
 describe('parseEmployeeIdsParam', () => {
@@ -67,20 +73,38 @@ describe('GET /employees/main-objects', () => {
 
   it('читает объекты только по id из скоупа чтения, отдаёт период снимка', async () => {
     readScopeMock.mockResolvedValue([1]);
-    mainObjectsMock.mockResolvedValue({ period: SNAPSHOT_PERIOD, objects: new Map([[1, 'ЖК Ситибэй']]), source: 'snapshot' });
+    const names = new Map([[1, ['ЖК Ситибэй', 'ЖК Wave']]]);
+    mainObjectsMock.mockResolvedValue({ period: SNAPSHOT_PERIOD, objects: new Map([[1, 'ЖК Ситибэй']]), objectNamesByEmployee: names, source: 'snapshot' });
+    costItemsMock.mockResolvedValue(new Map([[1, 'СКУД (ЖК Ситибэй, ЖК Wave)']]));
 
     const res = await call('1,2');
 
     expect(res.statusCode).toBe(200);
     expect(mainObjectsMock).toHaveBeenCalledWith([1], LIVE_PERIOD);
+    expect(costItemsMock).toHaveBeenCalledWith([1], names);
     expect(res.payload).toEqual({
       success: true,
-      data: { period: SNAPSHOT_PERIOD, objects: { 1: 'ЖК Ситибэй' }, source: 'snapshot' },
+      data: {
+        period: SNAPSHOT_PERIOD,
+        objects: { 1: 'ЖК Ситибэй' },
+        cost_items: { 1: 'СКУД (ЖК Ситибэй, ЖК Wave)' },
+        source: 'snapshot',
+      },
     });
   });
 
+  it('cost_items — для каждого видимого id, даже без объекта в снимке', async () => {
+    readScopeMock.mockResolvedValue([1, 2]);
+    mainObjectsMock.mockResolvedValue({ period: SNAPSHOT_PERIOD, objects: new Map(), objectNamesByEmployee: new Map(), source: 'snapshot' });
+    costItemsMock.mockResolvedValue(new Map([[1, 'Текущая деятельность'], [2, 'СКУД']]));
+
+    const res = await call('1,2');
+
+    expect((res.payload as { data: { cost_items: object } }).data.cost_items).toEqual({ 1: 'Текущая деятельность', 2: 'СКУД' });
+  });
+
   it('снимка нет — ответ с периодом расчёта на лету', async () => {
-    mainObjectsMock.mockResolvedValue({ period: LIVE_PERIOD, objects: new Map([[1, 'ЖК Wave']]), source: 'live' });
+    mainObjectsMock.mockResolvedValue({ period: LIVE_PERIOD, objects: new Map([[1, 'ЖК Wave']]), objectNamesByEmployee: new Map([[1, ['ЖК Wave']]]), source: 'live' });
     const res = await call('1');
     expect((res.payload as { data: { period: object; source: string } }).data).toMatchObject({ period: LIVE_PERIOD, source: 'live' });
   });

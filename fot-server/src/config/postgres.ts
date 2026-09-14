@@ -184,6 +184,29 @@ export const withTransaction = async <T>(fn: (client: PoolClient) => Promise<T>)
   }
 };
 
+/**
+ * Только чтение из одного снимка БД (REPEATABLE READ): несколько SELECT видят одно
+ * состояние, даже если между ними закоммитилась чужая запись.
+ */
+export const withReadOnlySnapshot = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ROLLBACK на уже-сломанном коннекте — игнорируем
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 /** Проверка живости коннекта. Возвращает true/false без бросания. */
 export const checkDbConnection = async (): Promise<boolean> => {
   try {

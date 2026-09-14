@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildExportSections,
+  buildInDepartmentScopeOnlySql,
+  buildInDepartmentScopeSql,
   countSectionRows,
+  createDepartmentPlacer,
+  effectiveDepartmentSql,
+  listSectionDepartmentIds,
+  placeEmployee,
   type IExportDepartmentRow,
   type IExportEmployeeRow,
   type IExportSection,
@@ -178,11 +184,11 @@ describe('buildExportSections', () => {
     expect(sections[0].rows).toEqual([
       {
         employeeId: 1, fullName: 'Первый П.', departmentPath: 'Отдел вентиляции', positionName: 'Монтажник',
-        birthDate: '1990-03-05', hireDate: '2024-01-15', objectName: 'ЖК Север', sign: 'Работает',
+        birthDate: '1990-03-05', hireDate: '2024-01-15', objectName: 'ЖК Север', sign: 'Работает', costItem: '',
       },
       {
         employeeId: 2, fullName: 'Юрьев Ю.', departmentPath: 'Отдел вентиляции', positionName: '',
-        birthDate: null, hireDate: null, objectName: '', sign: 'Работает',
+        birthDate: null, hireDate: null, objectName: '', sign: 'Работает', costItem: '',
       },
     ]);
   });
@@ -217,5 +223,91 @@ describe('buildExportSections', () => {
 
   it('пустой список — пустой результат', () => {
     expect(build([])).toEqual([]);
+  });
+});
+
+describe('статья затрат в строках выгрузки', () => {
+  it('подставляется из costItemByEmployee, нет записи — пустая строка', () => {
+    const sections = buildExportSections({
+      employees: [emp(1, 'Первый П.', 'su-vent'), emp(2, 'Второй В.', 'su-vent')],
+      departments: DEPARTMENTS,
+      mainObjectByEmployee: new Map(),
+      costItemByEmployee: new Map([[1, 'СКУД (ЖК Север)']]),
+    });
+    const byId = Object.fromEntries(sections[0].rows.map(row => [row.employeeId, row.costItem]));
+    expect(byId).toEqual({ 1: 'СКУД (ЖК Север)', 2: '' });
+  });
+});
+
+describe('listSectionDepartmentIds / placeEmployee — те же правила, что у листов', () => {
+  const WITH_SUPPORT = [
+    ...DEPARTMENTS,
+    dept('su-contractor-support', 'Отдел по сопровождению подрядчиков', SU10_ROOT_ID),
+    dept('su-closed', 'Закрытый отдел', SU10_ROOT_ID),
+  ];
+
+  it('su10 без бригад; бригады СУ-10 — в brigades; подрядчики — только по верхнему узлу', () => {
+    const su10 = listSectionDepartmentIds(WITH_SUPPORT, 'su10');
+    expect(su10).toEqual(expect.arrayContaining([SU10_ROOT_ID, 'su-vent', 'su-vent-site', 'su-decret', 'su-site', 'su-contractor-support', 'su-closed']));
+    expect(su10).not.toContain('brigades');
+    expect(su10).not.toContain('br-ivanov');
+    expect(su10).not.toContain('br-petrov');
+
+    expect(listSectionDepartmentIds(WITH_SUPPORT, 'brigades').sort()).toEqual(['br-ivanov', 'br-petrov', 'brigades'].sort());
+    expect(listSectionDepartmentIds(WITH_SUPPORT, 'contractors').sort()).toEqual(['contractors', 'ctr-alfa', 'ctr-brigade'].sort());
+    expect(listSectionDepartmentIds(WITH_SUPPORT, 'sm').sort()).toEqual([SM_ROOT_ID, 'sm-auto'].sort());
+  });
+
+  it('разделы фильтра и листы выгрузки совпадают для каждого отдела', () => {
+    const employees = WITH_SUPPORT.map((item, index) => emp(index + 1, `Сотрудник ${index}`, item.id));
+    const sections = buildExportSections({ employees, departments: WITH_SUPPORT, mainObjectByEmployee: new Map() });
+    for (const key of ['sm', 'su10', 'brigades', 'contractors'] as const) {
+      const fromSheets = (section(sections, key)?.rows ?? []).map(row => employees[row.employeeId - 1].effective_department_id).sort();
+      expect(listSectionDepartmentIds(WITH_SUPPORT, key).sort()).toEqual(fromSheets);
+    }
+  });
+
+  it('прямой подчинённый вне скоупа и неизвестный отдел — other', () => {
+    const placer = createDepartmentPlacer(WITH_SUPPORT);
+    expect(placeEmployee(placer, 'su-vent', true).section).toBe('su10');
+    expect(placeEmployee(placer, 'su-vent', false).section).toBe('other');
+    expect(placeEmployee(placer, 'deleted', true).section).toBe('other');
+    expect(placeEmployee(placer, null, true).section).toBe('other');
+  });
+});
+
+describe('SQL скоупа и отдела для раздела', () => {
+  it('effectiveDepartmentSql: последнее неотменённое событие с заполненным отделом, иначе текущий', () => {
+    const sql = effectiveDepartmentSql('e');
+    expect(sql).toContain(`e.employment_status = 'fired'`);
+    expect(sql).toContain('d.from_department_id IS NOT NULL');
+    expect(sql).toContain('d.cancelled IS NOT TRUE');
+    expect(sql).toContain('ORDER BY d.created_at DESC, d.id DESC');
+    expect(sql).toContain('e.org_department_id)');
+  });
+
+  it('buildInDepartmentScopeOnlySql не добавляет неиспользуемых параметров', () => {
+    const params: unknown[] = [];
+    const scope = { mode: 'departments' as const, departmentIds: ['d1'], directEmployeeIds: [5], selfEmployeeId: null };
+    expect(buildInDepartmentScopeOnlySql(scope, 'X', params)).toBe('(X IS NOT NULL AND X = ANY($1::uuid[]))');
+    expect(params).toEqual([['d1']]);
+
+    const none: unknown[] = [];
+    expect(buildInDepartmentScopeOnlySql({ ...scope, mode: 'all' }, 'X', none)).toBe('TRUE');
+    expect(buildInDepartmentScopeOnlySql({ ...scope, mode: 'employees' }, 'X', none)).toBe('TRUE');
+    expect(buildInDepartmentScopeOnlySql({ ...scope, mode: 'none' }, 'X', none)).toBe('FALSE');
+    expect(none).toEqual([]);
+  });
+
+  it('buildInDepartmentScopeSql: отделы скоупа или прямые подчинённые', () => {
+    const params: unknown[] = ['p1'];
+    const result = buildInDepartmentScopeSql(
+      { mode: 'departments', departmentIds: ['d1'], directEmployeeIds: [5], selfEmployeeId: null },
+      { effectiveDepartmentExpr: 'b.dept', employeeIdExpr: 'b.id' },
+      params,
+    );
+    expect(result.inDepartmentScope).toBe('(b.dept IS NOT NULL AND b.dept = ANY($2::uuid[]))');
+    expect(result.scopeCondition).toBe('((b.dept IS NOT NULL AND b.dept = ANY($2::uuid[])) OR b.id = ANY($3::int[]))');
+    expect(params).toEqual(['p1', ['d1'], [5]]);
   });
 });
