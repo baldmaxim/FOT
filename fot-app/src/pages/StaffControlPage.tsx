@@ -896,8 +896,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th className="sc-th-name">ФИО</th>
             <th>Отдел</th>
             <th>Должность</th>
-            <th title="Дата трудоустройства">Трудоустр.</th>
-            <th title="Дата рождения">Рожд.</th>
+            <th className="sc-th-date">Дата трудоустройства</th>
+            <th className="sc-th-date">Дата рождения</th>
             <th>График</th>
             <th title={mainObjectTitle}>Объект</th>
             <th>Признак</th>
@@ -1049,11 +1049,11 @@ const MobileCard: FC<{
         <span>{emp.position_name || '—'}</span>
       </div>
       <div className="sc-card-row">
-        <span className="sc-card-label">Трудоустр.</span>
+        <span className="sc-card-label">Дата трудоустройства</span>
         <span>{formatDate(emp.hire_date)}</span>
       </div>
       <div className="sc-card-row">
-        <span className="sc-card-label">Рожд.</span>
+        <span className="sc-card-label">Дата рождения</span>
         <span>{formatDate(emp.birth_date)}</span>
       </div>
       <div className="sc-card-row">

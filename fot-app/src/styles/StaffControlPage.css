@@ -388,15 +388,18 @@
 
 .sc-col-check    { width: 44px; }
 .sc-col-num      { width: 48px; }
-.sc-col-name     { width: auto; min-width: 220px; }
-.sc-col-dept     { width: 180px; }
+/* ФИО фиксированной ширины: гибкой колонкой был бы «пустой» простор справа от имени. */
+.sc-col-name     { width: 240px; }
+.sc-col-dept     { width: 170px; }
 .sc-col-position { width: 170px; }
-/* dd.mm.yyyy при 13px ≈ 72px + паддинги 24px — 96px обрезали год. */
-.sc-col-hire     { width: 108px; }
-.sc-col-birth    { width: 108px; }
-.sc-col-schedule { width: 150px; }
-.sc-col-main-object { width: 180px; }
-.sc-col-sign     { width: 100px; }
+/* Заголовки полные («Дата трудоустройства» в две строки), дата dd.mm.yyyy помещается с запасом. */
+.sc-col-hire     { width: 150px; }
+.sc-col-birth    { width: 130px; }
+.sc-col-schedule { width: 180px; }
+/* Единственная гибкая колонка: остаток ширины уходит длинным названиям объектов. */
+.sc-col-main-object { width: auto; }
+/* Бейдж «Работает» ≈ 76px + паддинги ячейки 24px. */
+.sc-col-sign     { width: 120px; }
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
 
@@ -407,15 +410,34 @@
 }
 
 .sc-table--staff {
-  /* ≈1400 px фиксированных колонок + ФИО. Уже — скроллится таблица, не страница. */
-  min-width: 1664px;
+  /* Сумма колонок: 1348 фиксированных + 160 минимум «Объекта». Уже — скроллится таблица, не страница. */
+  min-width: 1508px;
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 48px;
 }
 
 .sc-table--staff.sc-table--selecting {
+  min-width: 1552px;
   --sc-sticky-num-left: 44px;
   --sc-sticky-name-left: 92px;
+}
+
+/* Полные заголовки дат переносятся на две строки вместо обрезки. */
+.sc-table th.sc-th-date {
+  white-space: normal;
+  line-height: 1.25;
+}
+
+/* Ячейки с кнопкой редактирования сжимаются под ширину колонки — длинный график с многоточием. */
+.sc-table--staff td .sc-cell-with-btn {
+  display: flex;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.sc-table--staff td .sc-schedule-cell {
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Цвет строки дублируется переменной: закреплённые ячейки рисуют его поверх непрозрачной
