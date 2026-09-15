@@ -16,6 +16,7 @@ export interface IHiringRequest {
   author_user_id: string;
   author_employee_id: number | null;
   department_id: string | null;
+  department_name: string | null;
   stage: HiringStage;
   is_urgent: boolean;
   rework_reason: string | null;

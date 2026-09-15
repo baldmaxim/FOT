@@ -1,15 +1,12 @@
 import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, Users2 } from 'lucide-react';
-import {
-  hiringRequestService, FUNNEL_KEYS, stageMeta,
-  type IHiringRequest, type HiringStage,
-} from '../../../services/hiringRequestService';
+import { hiringRequestService, stageMeta, type HiringStage } from '../../../services/hiringRequestService';
 import { HiringRequestCreateModal } from './HiringRequestCreateModal';
 import { HiringRequestPanel } from './HiringRequestPanel';
 import { RecruiterPoolModal } from './RecruiterPoolModal';
 import { HiringAnalytics } from './HiringAnalytics';
-import { Avatar, pluralDays, fmtDate } from './hiringUi';
+import { HiringDepartmentGroups } from './HiringDepartmentGroups';
 import styles from './hiring.module.css';
 
 export const HIRING_QK = ['hiring-requests'];
@@ -120,13 +117,11 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
       ) : cards.length === 0 ? (
         <div className={styles.empty}>Нет заявок в этом фильтре.</div>
       ) : (
-        <div className={styles.grid}>
-          {cards.map(r => <RequestCard key={r.id} r={r} onOpen={() => setOpenId(r.id)} />)}
-        </div>
+        <HiringDepartmentGroups requests={cards} onOpen={setOpenId} />
       )}
 
       <div className={styles.legend}>
-        Клик по карточке — рабочая панель: воронка кандидатов, ссылки HH, файлы, комментарии, переключатель этапа.
+        Клик по строке — рабочая панель: воронка кандидатов, ссылки HH, файлы, комментарии, переключатель этапа.
       </div>
 
       {createOpen && <HiringRequestCreateModal onClose={() => setCreateOpen(false)} />}
@@ -139,52 +134,5 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
         />
       )}
     </div>
-  );
-};
-
-const RequestCard: FC<{ r: IHiringRequest; onOpen: () => void }> = ({ r, onOpen }) => {
-  const m = stageMeta(r.stage);
-  const isFunnel = FUNNEL_KEYS.includes(r.stage);
-  const pct = m.idx ? Math.round((m.idx / 5) * 100) : (r.stage === 'rework' ? 8 : 0);
-  const hcDone = r.headcount > 0 && r.approved_count >= r.headcount;
-  const primary = r.assignees.find(a => a.is_primary) ?? r.assignees[0] ?? null;
-
-  return (
-    <button className={`${styles.card} ${r.is_urgent ? styles.cardUrgent : ''}`} onClick={onOpen}>
-      <div className={styles.cardTop}>
-        <div className={styles.cardPos}>{r.position_title}</div>
-        <span className={`${styles.hc} ${hcDone ? styles.hcDone : ''}`}>
-          {hcDone ? `✓ ${r.approved_count}/${r.headcount}` : `👤 ${r.headcount > 1 ? `${r.approved_count}/${r.headcount}` : r.headcount}`}
-        </span>
-      </div>
-      <div className={styles.cust}>Заказчик: {r.customer_name || '—'}</div>
-
-      <div className={styles.statRow}>
-        {r.is_urgent && <span className={styles.urgentTag}>● Срочная</span>}
-        {r.stage === 'rework'
-          ? <span className={`${styles.stat} ${styles.statWarn}`}>⏱ ждёт заявителя</span>
-          : r.stage === 'closed'
-            ? <span className={styles.stat}>⏱ закрыта за {r.days_in_work} дн</span>
-            : <span className={`${styles.stat} ${r.days_in_work > 14 ? styles.statWarn : ''}`}>⏱ {r.days_in_work} {pluralDays(r.days_in_work)} в работе</span>}
-        {r.candidate_count > 0 && <span className={styles.stat}>👤 {r.candidate_count} канд.</span>}
-      </div>
-
-      {r.stage === 'rework' && r.rework_reason && (
-        <div className={styles.reworkNote}>↩ Возвращена: {r.rework_reason.slice(0, 80)}{r.rework_reason.length > 80 ? '…' : ''}</div>
-      )}
-
-      <div className={styles.stageLine}>
-        <span className={styles.stageName} style={{ color: m.color }}>{m.label}</span>
-        <span className={styles.stagePct}>{isFunnel ? `этап ${m.idx}/5` : ''}</span>
-      </div>
-      <div className={styles.prog}><span style={{ width: `${pct}%`, background: m.color }} /></div>
-
-      <div className={styles.cardFoot}>
-        {primary
-          ? <span className={styles.assignee}><Avatar name={primary.full_name} id={primary.employee_id} /> {primary.full_name}{r.assignees.length > 1 ? ` +${r.assignees.length - 1}` : ''}</span>
-          : <span className={styles.assignee}><Avatar name={null} unassigned /> <span style={{ color: 'var(--text-tertiary)' }}>Не назначен</span></span>}
-        <span className={styles.date}>{r.deadline ? `до ${fmtDate(r.deadline)}` : ''}</span>
-      </div>
-    </button>
   );
 };

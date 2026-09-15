@@ -72,6 +72,37 @@ beforeEach(() => {
   pgQuery.mockResolvedValue([]); pgQueryOne.mockResolvedValue(null); pgExecute.mockResolvedValue(1);
 });
 
+describe('list', () => {
+  it('отдаёт department_name через LEFT JOIN, сохраняет порядок и подтягивает ответственных', async () => {
+    mgr.mockResolvedValue(true);
+    pgQuery
+      .mockResolvedValueOnce([{ id: 1, department_id: 'd1', department_name: 'Тендерный отдел', stage: 'new' }])
+      .mockResolvedValueOnce([{ request_id: 1, employee_id: 7, full_name: 'Круглова А.А.', is_primary: true }]);
+    const res = makeRes();
+    await c.list(makeReq(), res);
+    const sql = pgQuery.mock.calls[0][0] as string;
+    expect(sql).toContain('LEFT JOIN org_departments d ON d.id = r.department_id');
+    expect(sql).toContain('d.name AS department_name');
+    expect(sql).toContain('ORDER BY r.is_urgent DESC, r.created_at DESC');
+    expect(res._json).toMatchObject({
+      success: true,
+      data: [{ id: 1, department_name: 'Тендерный отдел', assignees: [{ employee_id: 7, full_name: 'Круглова А.А.', is_primary: true }] }],
+    });
+  });
+});
+
+describe('getById', () => {
+  it('отдаёт department_name через LEFT JOIN', async () => {
+    mgr.mockResolvedValue(true);
+    pgQueryOne.mockResolvedValueOnce({ id: 1, department_id: 'd1', department_name: 'Тендерный отдел', author_employee_id: 99 });
+    const res = makeRes();
+    await c.getById(makeReq({ params: { id: '1' } }), res);
+    const sql = pgQueryOne.mock.calls[0][0] as string;
+    expect(sql).toContain('LEFT JOIN org_departments d ON d.id = r.department_id');
+    expect(res._json).toMatchObject({ success: true, data: { id: 1, department_name: 'Тендерный отдел' } });
+  });
+});
+
 describe('create', () => {
   it('403 если нет права создания', async () => {
     const res = makeRes();

@@ -115,10 +115,12 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
   const rows = await query<Record<string, unknown>>(
     `SELECT r.*,
+            d.name AS department_name,
             EXTRACT(DAY FROM (COALESCE(r.closed_at, NOW()) - COALESCE(r.reactivated_at, r.created_at)))::int AS days_in_work,
             (SELECT COUNT(*) FROM hiring_candidates c WHERE c.request_id = r.id)::int AS candidate_count,
             (SELECT COUNT(*) FROM hiring_candidates c WHERE c.request_id = r.id AND c.applicant_approved)::int AS approved_count
        FROM hiring_requests r
+       LEFT JOIN org_departments d ON d.id = r.department_id
        ${where}
       ORDER BY r.is_urgent DESC, r.created_at DESC`,
     params,
@@ -137,8 +139,11 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
   const request = await queryOne<Record<string, unknown>>(
     `SELECT r.*,
+            d.name AS department_name,
             EXTRACT(DAY FROM (COALESCE(r.closed_at, NOW()) - COALESCE(r.reactivated_at, r.created_at)))::int AS days_in_work
-       FROM hiring_requests r WHERE r.id = $1`,
+       FROM hiring_requests r
+       LEFT JOIN org_departments d ON d.id = r.department_id
+      WHERE r.id = $1`,
     [id],
   );
   if (!request) { res.status(404).json({ success: false, error: 'Заявка не найдена' }); return; }
