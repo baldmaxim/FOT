@@ -5,6 +5,8 @@ import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
+import { useDashboardStructureTree } from '../hooks/useStructure';
+import { useAuth } from '../contexts/AuthContext';
 import { useTimesheetMonthAccess } from '../hooks/useTimesheetMonthAccess';
 import type { DashboardPeriod } from '../types';
 import { filterDepartmentTreeByIds, findDepartmentName } from '../utils/departmentUtils';
@@ -44,12 +46,19 @@ const DashboardSectionFallback = () => (
 );
 
 export const DashboardPage: React.FC = () => {
+  const { canViewPage } = useAuth();
+  // Право «Обзор — все отделы»: любой отдел только на этой странице (у админа canViewPage и так true,
+  // но у него isDepartmentScope=false — поведение не меняется).
+  const canViewAllDepartments = canViewPage('/dashboard/all-departments');
   const {
-    isDepartmentScope,
+    isDepartmentScope: isManagerScope,
     managedDepartmentIds,
     primaryDepartmentId,
-    structureQuery,
-  } = useManagedDepartments();
+    structureQuery: managedStructureQuery,
+  } = useManagedDepartments({ enabled: !canViewAllDepartments });
+  const dashboardStructureQuery = useDashboardStructureTree(canViewAllDepartments);
+  const isDepartmentScope = isManagerScope && !canViewAllDepartments;
+  const structureQuery = canViewAllDepartments ? dashboardStructureQuery : managedStructureQuery;
   const { isWindowEnforced, minDate, maxDate } = useTimesheetMonthAccess({ enforceWhen: isDepartmentScope });
   const isSingleManagedDept = isDepartmentScope && managedDepartmentIds.length === 1;
   const noDepartmentsAssigned = isDepartmentScope && managedDepartmentIds.length === 0;

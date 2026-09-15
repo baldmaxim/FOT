@@ -17,6 +17,15 @@ router.use((req, res, next) => {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         invalidateCaches('roles:labels', 'roles:list', 'roles:catalog');
+        // Точечные права на чтение экранов («Сотрудники на объектах — все объекты»,
+        // «Обзор — все отделы») меняют скоуп per-user ответов: без сброса после
+        // включения/снятия права кеш отдавал бы данные прежнего скоупа.
+        invalidateCaches(
+          'skud-presence-by-object',
+          'skud-dashboard-presence',
+          'skud-dashboard',
+          'structure:dashboard-tree',
+        );
       }
     });
   }

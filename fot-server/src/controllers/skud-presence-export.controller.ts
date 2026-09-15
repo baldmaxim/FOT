@@ -9,6 +9,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
+import { hasPresenceAllObjectsGrant } from '../services/read-scope-grants.service.js';
 import { resolveAccessibleEmployeeIds, hasObjectViewScope } from '../services/data-scope.service.js';
 import {
   assertExportSize,
@@ -40,11 +41,13 @@ const exportBodySchema = z.object({
 /** Скоуп страницы — union из четырёх режимов, а не пересечение (см. getPresenceByObject). */
 async function resolveVisibility(req: AuthenticatedRequest): Promise<IPresenceExportVisibility> {
   const scope = await resolveAccessibleObjectIdsForRequest(req);
+  // «Сотрудники на объектах — все объекты»: фильтры и Excel видят то же, что экран.
+  const isUnrestricted = scope.is_unrestricted || await hasPresenceAllObjectsGrant(req);
   const allowedEmployeeIds = await resolveAccessibleEmployeeIds(req);
-  const viewScope = scope.is_unrestricted ? false : await hasObjectViewScope(req);
+  const viewScope = isUnrestricted ? false : await hasObjectViewScope(req);
   return {
-    isUnrestricted: scope.is_unrestricted,
-    assignedObjectIds: new Set(scope.object_ids),
+    isUnrestricted,
+    assignedObjectIds: new Set(isUnrestricted && !scope.is_unrestricted ? [] : scope.object_ids),
     allowedEmployeeIds,
     hasObjectViewScope: viewScope,
   };

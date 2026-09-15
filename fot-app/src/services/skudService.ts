@@ -375,6 +375,14 @@ export const skudService = {
     return response.data || [];
   },
 
+  /** Присутствие отдела для «Обзора» (отдельный эндпоинт от «Управления кадрами»). */
+  async getDashboardPresence(departmentId: string): Promise<IEmployeePresence[]> {
+    const response = await apiClient.get<ApiResponse<IEmployeePresence[]>>(
+      `/skud/dashboard/presence?department_id=${encodeURIComponent(departmentId)}`,
+    );
+    return response.data || [];
+  },
+
   async getPresenceByObject(signal?: AbortSignal): Promise<IPresenceByObjectResponse> {
     const response = await apiClient.get<ApiResponse<IPresenceByObjectResponse>>(
       '/skud/presence-by-object',

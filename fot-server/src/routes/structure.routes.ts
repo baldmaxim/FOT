@@ -29,6 +29,17 @@ const structureTreeCache = registerCache(
   },
 );
 const structurePositionsCache = registerCache('structure:positions', () => 'structure:positions', 15 * 60_000);
+// Дерево селектора «Обзора» (право «Обзор — все отделы»). Per-user, как structure:tree;
+// сбрасывается вместе с ним при правке структуры и при сохранении ролей.
+const structureDashboardTreeCache = registerCache(
+  'structure:dashboard-tree',
+  (req: Request) => `structure:dashboard-tree:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
+  15 * 60_000,
+  {
+    staleMs: 60 * 60_000,
+    refresh: (req: Request) => structureController.loadDashboardTreeForCache(req as AuthenticatedRequest),
+  },
+);
 
 // Заголовок ставим ДО кэш-middleware: на HIT/STALE оно отвечает само, контроллер не
 // вызывается, и в ответе оставался бы глобальный `private, max-age=30` из app.ts —
@@ -48,7 +59,7 @@ router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        invalidateCaches('structure:tree', 'structure:positions');
+        invalidateCaches('structure:tree', 'structure:dashboard-tree', 'structure:positions');
         invalidateStructureCache();
         invalidateAccessibleScopeCache();
       }
@@ -66,6 +77,15 @@ router.get(
   noBrowserCache,
   structureTreeCache,
   structureController.getTree
+);
+
+// GET /api/structure/dashboard-tree - дерево для селектора «Обзора» (с правом «Обзор — все отделы» — полное)
+router.get(
+  '/dashboard-tree',
+  requirePageAccess('/dashboard', 'view'),
+  noBrowserCache,
+  structureDashboardTreeCache,
+  structureController.getDashboardTree
 );
 
 // GET /api/structure/positions - список должностей (worker+, кэш 15мин)

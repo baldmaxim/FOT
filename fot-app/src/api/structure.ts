@@ -13,8 +13,17 @@ interface ApiResponse<T> {
 
 export const structureApi = {
   async getTree(): Promise<ApiResponse<OrgStructureResponse>> {
+    return this.fetchTree('/structure');
+  },
+
+  /** Дерево для селектора «Обзора»: с правом «Обзор — все отделы» — полное. */
+  async getDashboardTree(): Promise<ApiResponse<OrgStructureResponse>> {
+    return this.fetchTree('/structure/dashboard-tree');
+  },
+
+  async fetchTree(path: string): Promise<ApiResponse<OrgStructureResponse>> {
     try {
-      const res = await apiClient.get<ApiResponse<OrgStructureResponse>>('/structure');
+      const res = await apiClient.get<ApiResponse<OrgStructureResponse>>(path);
       return { data: res.data, message: res.message || 'ok' };
     } catch (error) {
       return {

@@ -17,13 +17,26 @@ const isTransientNetworkError = (e: unknown): boolean => {
   return TRANSIENT_ERROR_RE.test(msg);
 };
 
-export const useStructureTree = (enabled = true) => {
+// Под префиксом ['structure'] — realtime-инвалидация структуры сбрасывает и его.
+export const DASHBOARD_STRUCTURE_QUERY_KEY = ['structure', 'dashboard-tree'] as const;
+
+export const useStructureTree = (enabled = true) => useTreeQuery(STRUCTURE_QUERY_KEY, () => structureApi.getTree(), enabled);
+
+/** Дерево селектора «Обзора» (право «Обзор — все отделы» расширяет только его). */
+export const useDashboardStructureTree = (enabled = true) =>
+  useTreeQuery(DASHBOARD_STRUCTURE_QUERY_KEY, () => structureApi.getDashboardTree(), enabled);
+
+const useTreeQuery = (
+  queryKey: readonly string[],
+  fetchTree: () => ReturnType<typeof structureApi.getTree>,
+  enabled: boolean,
+) => {
   return useQuery({
-    queryKey: STRUCTURE_QUERY_KEY,
+    queryKey,
     queryFn: async () => {
       const t0 = performance.now();
       try {
-        const res = await structureApi.getTree();
+        const res = await fetchTree();
         if (res.error) throw new Error(res.error);
         const data = res.data as OrgStructureResponse;
         const dt = performance.now() - t0;

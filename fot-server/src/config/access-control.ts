@@ -70,6 +70,7 @@ export const PAGE_PATHS = {
   FEEDBACK_REVIEW: '/feedback-review',
   TESTING_REVIEW: '/testing-review',
   DASHBOARD: '/dashboard',
+  DASHBOARD_ALL_DEPARTMENTS: '/dashboard/all-departments',
   TIMESHEET: '/timesheet',
   TIMESHEET_HR: '/timesheet-hr',
   LEAVE_REQUESTS: '/leave-requests',
@@ -98,6 +99,7 @@ export const PAGE_PATHS = {
   MTS: '/mts',
   MTS_BUSINESS: '/mts-business',
   SKUD_PRESENCE: '/skud-presence',
+  SKUD_PRESENCE_ALL_OBJECTS: '/skud-presence/all-objects',
   CONTRACTOR: '/contractor',
   ADMIN_CONTRACTOR_APPROVALS: '/admin/contractor-approvals',
   ADMIN_CONTRACTOR_APPROVALS_SUBMISSIONS: '/admin/contractor-approvals/submissions',
@@ -147,11 +149,17 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/employee/objects',           label: 'Мои объекты (KPI)',                    group_code: 'lk',    group_label: 'Личный кабинет',       area: 'personal', surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
   // ── Админка: обзор и заявления ──
   { key: '/dashboard',                  label: 'Обзор',                                group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
+  // Выбор любого отдела на «Обзоре» (присутствие и статистика). Действует только вместе с /dashboard;
+  // «Звонки», табели, заявления и общий скоуп отделов не расширяет.
+  { key: '/dashboard/all-departments',  label: 'Обзор — все отделы (только просмотр, без «Звонков»)', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin', surface: 'technical', supports_edit: false, sort_order: 21, is_active: true },
   { key: '/leave-requests',             label: 'Заявления',                            group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 30,  is_active: true },
   { key: '/salary-raise-review',        label: 'Заявления — Проверка повышений оклада', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',   surface: 'page',      supports_edit: true,  sort_order: 31,  is_active: true },
   { key: '/leave-vacations',            label: 'Заявления — Отпуска (отдел кадров)',   group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 32,  is_active: true },
   { key: '/leave-dismissals',           label: 'Заявления — Увольнения (отдел кадров)', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',   surface: 'page',      supports_edit: true,  sort_order: 33,  is_active: true },
   { key: '/skud-presence',              label: 'Сотрудники на объектах',               group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
+  // Все объекты на «Сотрудниках на объектах» и в их выгрузке. Действует только вместе с /skud-presence;
+  // назначения объектов сотрудникам и общий скоуп объектов не меняет.
+  { key: '/skud-presence/all-objects',  label: 'Сотрудники на объектах — все объекты (только просмотр)', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin', surface: 'technical', supports_edit: false, sort_order: 41, is_active: true },
   // ── Админка: управление ──
   { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
   { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },

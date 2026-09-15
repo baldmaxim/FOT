@@ -41,8 +41,10 @@ import {
   resolveRequestDataScope,
   resolveScopedDepartmentId,
   hasObjectViewScope,
+  normalizeUuidParam,
 } from '../services/data-scope.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { hasDashboardAllDepartmentsGrant, hasPresenceAllObjectsGrant } from '../services/read-scope-grants.service.js';
 import {
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
   isDepartmentMonthAllowed,
@@ -652,7 +654,10 @@ const skudReadController = {
       const { period, month, force } = parsed.data;
 
       const requestedDepartmentId = parsed.data.department_id ?? null;
-      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      // «Обзор — все отделы»: любой отдел только для этого экрана, общий скоуп не трогаем.
+      const departmentId = await hasDashboardAllDepartmentsGrant(req)
+        ? normalizeUuidParam(requestedDepartmentId)
+        : await resolveScopedDepartmentId(req, requestedDepartmentId);
 
       if (requestedDepartmentId && !departmentId) {
         res.status(403).json({
@@ -1355,6 +1360,42 @@ const skudReadController = {
   },
 
   /**
+   * GET /api/skud/dashboard/presence — присутствие для «Обзора».
+   * Отдельно от /presence (его читают и «Управление кадрами»), чтобы право
+   * «Обзор — все отделы» расширяло только этот экран. Без права — как /presence.
+   */
+  async getDashboardPresence(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const allDepartments = await hasDashboardAllDepartmentsGrant(req);
+      if (allDepartments) {
+        // Право даёт выбор отдела, а не выгрузку всей организации одним запросом.
+        const departmentId = normalizeUuidParam(requestedDepartmentId);
+        if (!departmentId) {
+          res.status(400).json({ success: false, error: 'department_id обязателен' });
+          return;
+        }
+        res.json({ success: true, data: await getPresence({ departmentId }) });
+        return;
+      }
+
+      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      if (requestedDepartmentId && !departmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
+      res.json({ success: true, data: await getPresence({ departmentId }) });
+    } catch (error) {
+      console.error('Get dashboard presence error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения статусов' });
+    }
+  },
+
+  /**
    * GET /api/skud/presence-by-object
    * Агрегированное присутствие по физическим объектам (travel_objects) и компаниям.
    * Режимы выдачи:
@@ -1367,11 +1408,14 @@ const skudReadController = {
   async getPresenceByObject(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const scope = await resolveAccessibleObjectIdsForRequest(req);
+      // «Сотрудники на объектах — все объекты»: полная картина только для этого экрана.
+      // Общий резолвер объектов не меняем — он решает табель и назначения.
+      const allObjectsGrant = !scope.is_unrestricted && await hasPresenceAllObjectsGrant(req);
 
       let data: Awaited<ReturnType<typeof getPresenceByObject>>;
       let scopeMode: 'all' | 'object' | 'employee' | 'object_employee';
 
-      if (scope.is_unrestricted) {
+      if (scope.is_unrestricted || allObjectsGrant) {
         data = await getPresenceByObject({ allowedObjectIds: 'all' });
         scopeMode = 'all';
       } else if (scope.object_ids.length > 0) {
@@ -1418,8 +1462,8 @@ const skudReadController = {
         data: {
           ...data,
           scope_mode: scopeMode,
-          is_unrestricted: scope.is_unrestricted,
-          assigned_object_ids: scope.object_ids,
+          is_unrestricted: scope.is_unrestricted || allObjectsGrant,
+          assigned_object_ids: allObjectsGrant ? [] : scope.object_ids,
         },
       });
     } catch (error) {

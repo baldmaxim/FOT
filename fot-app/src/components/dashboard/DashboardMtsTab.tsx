@@ -1,5 +1,6 @@
 import { useMemo, useState, type FC, type ReactElement } from 'react';
 import { Phone, Wifi, MessageSquare, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ApiError } from '../../api/client';
 import { useDashboardMtsUsage } from '../../hooks/useDashboardMtsUsage';
 import type { IMtsDeptEmployee, IMtsUsageGroup, MtsUsageGroupKey } from '../../services/dashboardMtsService';
 import { fmtDur, fmtLast, MONTH_NAMES } from '../../pages/mts-business/mtsBusinessFormat';
@@ -157,7 +158,10 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
   }
 
   if (isError) {
-    const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику МТС';
+    // Право «Обзор — все отделы» не распространяется на «Звонки»: чужой отдел → 403.
+    const message = error instanceof ApiError && error.code === 'DEPARTMENT_ACCESS_DENIED'
+      ? 'Звонки доступны только по вашим отделам'
+      : error instanceof Error ? error.message : 'Не удалось загрузить статистику МТС';
     return <div className={styles.state}>{message}</div>;
   }
 

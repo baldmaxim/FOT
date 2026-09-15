@@ -19,6 +19,7 @@ export interface ISkudRealtimeNotification {
 
 const SKUD_REALTIME_CACHE_NAMES = [
   'skud-presence',
+  'skud-dashboard-presence',
   'skud-presence-by-object',
   'skud-dashboard',
   'timesheet',

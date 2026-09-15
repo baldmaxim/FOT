@@ -104,6 +104,22 @@ export const usePresenceQuery = (
   });
 };
 
+/** Присутствие «Обзора»: под префиксом ['presence'], чтобы общие инвалидации его задевали. */
+export const dashboardPresenceQueryKey = (departmentId: string | null) =>
+  ['presence', 'dashboard', departmentId || 'none'] as const;
+
+export const useDashboardPresenceQuery = (
+  departmentId: string | null,
+  options?: IUsePresenceQueryOptions,
+) => useQuery<IEmployeePresence[]>({
+  queryKey: dashboardPresenceQueryKey(departmentId),
+  queryFn: () => skudService.getDashboardPresence(departmentId as string),
+  enabled: (options?.enabled ?? true) && !!departmentId,
+  refetchInterval: options?.refetchInterval ?? false,
+  refetchIntervalInBackground: false,
+  staleTime: 30_000,
+});
+
 export const presenceByObjectQueryKey = () => ['presence-by-object'] as const;
 
 interface IUsePresenceByObjectQueryOptions {

@@ -100,6 +100,37 @@ describe.each(['security', 'hr_admin'])('матрица роли %s: ключ п
   });
 });
 
+describe.each(['security', 'hr_admin'])('матрица роли %s: права «все объекты» и «все отделы»', (code) => {
+  const PROFILE = {
+    '/skud-presence': 'view',
+    '/skud-presence/all-objects': 'view',
+    '/dashboard': 'view',
+    '/dashboard/all-departments': 'view',
+  };
+
+  /** Профили всех вызовов replace_role_access_profile по порядку. */
+  const savedProfiles = (): Array<Array<{ key: string; mode: string }>> => pgExecute.mock.calls
+    .filter(([sql]) => String(sql).includes('replace_role_access_profile'))
+    .map(call => JSON.parse(String((call[1] as unknown[])[2])));
+
+  it('повторное сохранение даёт тот же набор: по одной записи на ключ', async () => {
+    await rolesController.updateAccessProfile(makeReq(code, PROFILE), makeRes());
+    await rolesController.updateAccessProfile(makeReq(code, PROFILE), makeRes());
+    const [first, second] = savedProfiles();
+    expect(second).toEqual(first);
+    for (const key of Object.keys(PROFILE)) {
+      expect(second.filter(entry => entry.key === key)).toEqual([{ key, mode: 'view' }]);
+    }
+  });
+
+  it('«Изменение» для прав только на просмотр → 400', async () => {
+    const res = makeRes();
+    await rolesController.updateAccessProfile(makeReq(code, { '/dashboard/all-departments': 'edit' }), res);
+    expect(res.statusCode).toBe(400);
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+});
+
 describe('роль без «Доступа в админку»', () => {
   it('ключ админки не сохраняется, даже если прислан', async () => {
     pgQueryOne.mockImplementation(async (_sql: string, params: unknown[] = []) => ({

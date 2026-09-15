@@ -74,6 +74,7 @@ async function runStructureSyncCycle(): Promise<void> {
           // и sync filter не отдавали стейл данные.
           invalidateOrgStructureCaches();
           invalidateCache('structure:tree');  // очистить HTTP-кэш дерева для всех пользователей
+          invalidateCache('structure:dashboard-tree');
           // Должности синкнуты только сейчас — раньше сбрасывать нельзя, иначе
           // старый ответ закэшировался бы заново на 15 мин.
           invalidateCache('structure:positions');

@@ -74,6 +74,7 @@ function settleWaiters(finishedGeneration: number, result: IMirrorRefreshResult)
 export function invalidateStructureTreeAndNotify(source: SigurStructureSource): void {
   invalidateOrgStructureCaches();
   invalidateCache('structure:tree');
+  invalidateCache('structure:dashboard-tree');
   invalidateAccessibleScopeCache();
   notifySigurStructureChanged({ source, scope: 'departments' });
 }

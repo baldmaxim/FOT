@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { usePresenceQuery } from './useEmployeeDirectory';
+import { useDashboardPresenceQuery } from './useEmployeeDirectory';
 import { useDocumentVisibility } from './useDocumentVisibility';
 
 interface IUsePresenceReturn {
@@ -10,9 +10,10 @@ interface IUsePresenceReturn {
   refresh: () => void;
 }
 
+/** Присутствие отдела для «Обзора» (единственный потребитель — DashboardPage). */
 export const usePresence = (departmentId: string | null): IUsePresenceReturn => {
   const isVisible = useDocumentVisibility();
-  const { data, isLoading, error, dataUpdatedAt, refetch } = usePresenceQuery(departmentId, {
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboardPresenceQuery(departmentId, {
     enabled: !!departmentId,
     refetchInterval: isVisible ? 60_000 : false,
   });

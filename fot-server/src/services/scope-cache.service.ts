@@ -19,6 +19,7 @@ import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 export function invalidateDepartmentScopeCaches(): void {
   invalidateCaches(
     'structure:tree',
+    'structure:dashboard-tree',
     'structure:positions',
     'timesheet',
     'timesheet:today',
@@ -41,6 +42,11 @@ export function invalidateDepartmentScopeCaches(): void {
 export function invalidateGlobalReadScopeCaches(): void {
   invalidateCaches(
     'structure:tree',
+    'structure:dashboard-tree',
+    // Экраны с точечными правами на чтение: при смене роли пользователя скоуп меняется.
+    'skud-presence-by-object',
+    'skud-dashboard-presence',
+    'skud-dashboard',
     'timesheet',
     'timesheet:today',
     'timesheet:overview',

@@ -21,6 +21,14 @@ const presenceCache = registerCache(
   5_000,
 );
 
+// Присутствие «Обзора»: отдельный кеш от /presence — у пользователя с правом
+// «Обзор — все отделы» здесь шире скоуп, чем в «Управлении кадрами».
+const dashboardPresenceCache = registerCache(
+  'skud-dashboard-presence',
+  (req) => `dashboard-presence:${req.user.id}:${req.query.department_id || 'all'}`,
+  5_000,
+);
+
 const presenceByObjectCache = registerCache(
   'skud-presence-by-object',
   (req) => `presence-by-object:${req.user.id}`,
@@ -74,7 +82,7 @@ router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && !READ_ONLY_POST_PATHS.has(req.path)) {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        invalidateCaches('skud-presence', 'skud-presence-by-object', 'skud-dashboard');
+        invalidateCaches('skud-presence', 'skud-dashboard-presence', 'skud-presence-by-object', 'skud-dashboard');
         invalidatePresenceCache();
         invalidatePresenceByObjectCache();
         invalidateDashboardCache();
@@ -355,6 +363,17 @@ router.get(
   serverTiming('skud_presence'),
   presenceCache,
   skudController.getPresence
+);
+
+// GET /api/skud/dashboard/presence - присутствие отдела для «Обзора» (право «Обзор — все отделы»
+// расширяет выбор отдела только здесь; /presence для «Управления кадрами» не меняется)
+router.get(
+  '/dashboard/presence',
+  requirePageAccess('/dashboard', 'view'),
+  noStore,
+  serverTiming('skud_dashboard_presence'),
+  dashboardPresenceCache,
+  skudController.getDashboardPresence
 );
 
 // GET /api/skud/presence-by-object - агрегация присутствия по объектам и компаниям

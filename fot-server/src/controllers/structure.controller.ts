@@ -6,6 +6,7 @@ import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../serv
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
+import { hasDashboardAllDepartmentsGrant } from '../services/read-scope-grants.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -329,8 +330,41 @@ async function loadTreeForCache(req: AuthenticatedRequest): Promise<object> {
   };
 }
 
+/**
+ * Дерево для селектора «Обзора». С правом «Обзор — все отделы» — полное дерево
+ * (только навигация: id, названия, иерархия); без права — ровно то же, что /api/structure.
+ * Общее дерево и loadReadableDeptSet не трогаем: их читают селекторы табеля и кадров.
+ */
+async function loadDashboardTreeForCache(req: AuthenticatedRequest): Promise<object> {
+  if (!(await hasDashboardAllDepartmentsGrant(req))) return loadTreeForCache(req);
+  const [departments, archiveDepartment] = await Promise.all([
+    loadAllActiveDepartments(),
+    getKnownArchiveDepartment(),
+  ]);
+  return {
+    success: true,
+    data: {
+      departments: filterTreeByScope(buildDepartmentTree(departments, null), 'all'),
+      stats: {
+        departments: departments.length,
+        archive_department_id: archiveDepartment?.id || null,
+      },
+    },
+  };
+}
+
 export const structureController = {
   loadTreeForCache,
+  loadDashboardTreeForCache,
+
+  async getDashboardTree(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json(await loadDashboardTreeForCache(req));
+    } catch (error) {
+      console.error('Get dashboard structure error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения структуры' });
+    }
+  },
 
   async getTree(req: AuthenticatedRequest, res: Response): Promise<void> {
     const tStart = Date.now();
