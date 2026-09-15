@@ -32,6 +32,7 @@ export const paginatedEmployeesQueryKey = (params: PaginatedParams) =>
     params.archived ? 'archived' : 'live',
     params.page,
     params.pageSize || 50,
+    params.period || null,
   ] as const;
 
 export type InfiniteEmployeesParams = Omit<PaginatedParams, 'page' | 'cursor'>;
@@ -49,6 +50,8 @@ export const infiniteEmployeesQueryKey = (params: InfiniteEmployeesParams) =>
     params.search || '',
     params.archived ? 'archived' : 'live',
     params.pageSize || 50,
+    params.sort ? `${params.sort}:${params.dir ?? 'asc'}` : 'default',
+    params.period || null,
   ] as const;
 
 /**

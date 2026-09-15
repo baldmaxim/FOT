@@ -4,6 +4,7 @@ import { employeesController } from '../controllers/employees.controller.js';
 import { employeesExportController } from '../controllers/employees-export.controller.js';
 import { employeesMainObjectsController } from '../controllers/employees-main-objects.controller.js';
 import { employeesSectionDepartmentsController } from '../controllers/employees-section-departments.controller.js';
+import { employeesStaffController } from '../controllers/employees-staff.controller.js';
 import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -159,6 +160,31 @@ router.post(
   requirePageAccess('/staff-control', 'view'),
   noStore,
   employeesMainObjectsController.postMainObjects
+);
+
+// GET /api/employees/export-view — xlsx текущей таблицы «Текущих сотрудников» (фильтры,
+// статус, период, сортировка). Статический путь до '/:id'; noStore — файл всегда свежий.
+router.get(
+  '/export-view',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesStaffController.exportView
+);
+
+// GET /api/employees/month-movement — устроены/уволены с 1-го числа по текущим фильтрам.
+// noStore: после приёма/увольнения чипы обязаны обновиться сразу.
+router.get(
+  '/month-movement',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesStaffController.getMonthMovement
+);
+
+// PUT /api/employees/:id/staff-comment — комментарий HR (оптимистичная блокировка, аудит).
+router.put(
+  '/:id/staff-comment',
+  requirePageAccess('/staff-control', 'edit'),
+  employeesStaffController.updateStaffComment
 );
 
 // GET /api/employees/section-departments — отделы разделов (СУ-10 / СМ / Бригады /

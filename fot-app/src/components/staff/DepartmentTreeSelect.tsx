@@ -36,6 +36,11 @@ interface IDepartmentTreeSelectProps {
    * даже посмотреть.
    */
   disableUnassignable?: boolean;
+  /**
+   * Единственный корень-компания не показывается: сразу виден список её отделов и бригад
+   * (фильтр по выбранной компании). Дети корня по-прежнему выбираются как отделы.
+   */
+  flattenSingleRoot?: boolean;
 }
 
 const ALL_LABEL = 'Все отделы';
@@ -66,6 +71,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   showAllOption = true,
   emptyLabel = ALL_LABEL,
   disableUnassignable = false,
+  flattenSingleRoot = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -76,7 +82,14 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
 
   const debounced = useDebouncedValue(query, 200).trim();
 
-  const roots = useMemo(() => getVisibleRootNodes(departments), [departments]);
+  const visibleRoots = useMemo(() => getVisibleRootNodes(departments), [departments]);
+  // Корень скрыт — его дети идут первым уровнем, но глубина для выбора считается от корня (1).
+  const skipRoot = flattenSingleRoot && visibleRoots.length === 1 && (visibleRoots[0].children?.length ?? 0) > 0;
+  const rootDepth = skipRoot ? 1 : 0;
+  const roots = useMemo(
+    () => (skipRoot ? visibleRoots[0].children : visibleRoots),
+    [skipRoot, visibleRoots],
+  );
   const visibleTree = useMemo(() => filterDepartmentTree(roots, debounced), [roots, debounced]);
   const selectedName = useMemo(
     () => (value ? findDepartmentName(departments, value) : null),
@@ -95,9 +108,9 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
       if (isSelectableNode(node, depth, disableUnassignable)) selectable += 1;
       node.children?.forEach(child => walk(child, depth + 1, node.id));
     };
-    roots.forEach(node => walk(node, 0, null));
+    roots.forEach(node => walk(node, rootDepth, null));
     return { parentMap: pMap, allNodeIds: ids, selectableCount: selectable };
-  }, [roots, disableUnassignable]);
+  }, [roots, rootDepth, disableUnassignable]);
 
   const computeBaseExpansion = useCallback((): Set<string> => {
     // Узкий скоуп (мало узлов) — раскрыть всё: руководитель видит отделы сразу.
@@ -212,7 +225,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
       <div key={node.id}>
         <div
           className={`${styles.row} ${isActive ? styles.rowActive : ''} ${isHeader ? styles.rowHeader : ''}`}
-          style={{ paddingLeft: 12 + depth * 16 }}
+          style={{ paddingLeft: 12 + (depth - rootDepth) * 16 }}
           onClick={onRowClick}
           title={notAssignable ? 'Отдел вне синхронизации с Sigur — назначение недоступно' : undefined}
         >
@@ -292,7 +305,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
                   {ALL_LABEL}
                 </div>
               )}
-              {visibleTree.map(node => renderNode(node, 0))}
+              {visibleTree.map(node => renderNode(node, rootDepth))}
               {showLoadingState && (
                 <div className={styles.empty}>Загрузка отделов...</div>
               )}

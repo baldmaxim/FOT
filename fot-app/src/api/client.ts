@@ -174,6 +174,8 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // ['employees']. Карточка `/employees/:id` сюда не попадает (свой ETag/304).
     || path === '/employees'
     || path === '/employees/counts'
+    // Чипы «Устроены/Уволены с начала месяца»: после приёма/увольнения — сразу.
+    || path === '/employees/month-movement'
     // Live-админка Sigur (дерево отделов, сотрудники, счётчики, профиль): после
     // переименования/переноса отдела refetch должен идти на сервер. Иначе max-age=30
     // отдавал старое дерево, имя «не менялось», и его сохраняли по 3–4 раза подряд.

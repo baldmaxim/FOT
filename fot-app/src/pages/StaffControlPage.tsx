@@ -33,11 +33,17 @@ import {
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import { StaffMainObjectCell } from '../components/staff/StaffMainObjectCell';
-import { StaffCostItemCell } from '../components/staff/StaffCostItemCell';
+import { StaffCommentCell } from '../components/staff/StaffCommentCell';
 import { StaffSignBadge } from '../components/staff/StaffSignBadge';
 import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
+import { StaffSortHeader } from '../components/staff/StaffSortHeader';
+import { STAFF_SORT_OPTIONS, isStaffSortKey } from '../components/staff/staffSort';
+import { StaffMonthMovement } from '../components/staff/StaffMonthMovement';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY, useStaffMainObjects } from '../hooks/useStaffMainObjects';
+import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
+import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
+import { affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
 import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
 import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
 import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
@@ -54,7 +60,7 @@ import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const StaffTimesheetModeModal = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
-const StaffCostItemModal = lazy(() => import('../components/staff/StaffCostItemModal').then(m => ({ default: m.StaffCostItemModal })));
+const StaffCommentModal = lazy(() => import('../components/staff/StaffCommentModal').then(m => ({ default: m.StaffCommentModal })));
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
@@ -83,11 +89,10 @@ interface IStaffSideData {
   scheduleViews: Map<number, IEmployeeScheduleView>;
   scheduleReadiness: IChunkReadiness;
   mainObjects: Record<string, string>;
-  costItems: Record<string, string>;
   mainReadiness: IChunkReadiness;
 }
 
-/** Значение «Объект»/«Статья затрат» для ячейки: undefined — грузится. */
+/** Значение «Объект» для ячейки: undefined — грузится. */
 const sideValue = (map: Record<string, string>, id: number, state: ChunkCellState): string | null | undefined =>
   (state === 'ready' ? (map[String(id)] ?? null) : undefined);
 
@@ -125,10 +130,10 @@ interface IStaffRowProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-  onEditCostItem?: (emp: Employee) => void;
+  onEditComment?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
@@ -167,7 +172,8 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, s
       )}
       <td className="sc-td-num">{index + 1}</td>
       <td className="sc-td-name" title={emp.full_name}>
-        {emp.full_name}
+        {/* ФИО — до двух строк; clamp на внутреннем элементе, ячейка остаётся табличной (sticky). */}
+        <span className="sc-name-text" aria-label={emp.full_name}>{emp.full_name}</span>
         {/* Бейдж = employees.excluded_from_timesheet. Независим от employment_status='fired'. */}
         {emp.excluded_from_timesheet && (
           <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
@@ -212,13 +218,8 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, s
       <td className="sc-td-main-object">
         <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
       </td>
-      <td className="sc-td-cost-item" onClick={onEditCostItem ? e => e.stopPropagation() : undefined}>
-        <StaffCostItemCell
-          employee={emp}
-          name={sideValue(sideData.costItems, emp.id, mainState)}
-          failed={mainState === 'error'}
-          onEdit={onEditCostItem}
-        />
+      <td className="sc-td-comment" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
+        <StaffCommentCell employee={emp} onEdit={onEditComment} />
       </td>
       <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} /></td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
@@ -878,13 +879,14 @@ interface IVirtualTableProps extends IVirtualListLoadProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-  onEditCostItem?: (emp: Employee) => void;
+  onEditComment?: (emp: Employee) => void;
+  sort: StaffSortKey;
+  dir: StaffSortDir;
+  onSort: (key: StaffSortKey) => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36 px, частые переносы отдела/должности — выше. */
 const ROW_ESTIMATE = 44;
-
-const COST_ITEM_TITLE = 'По режиму табелирования: «Текущая деятельность», закреплённый объект или «СКУД» с объектами за 30 дней';
 
 /**
  * Догрузка у конца списка и сброс прокрутки при смене фильтров — общие для таблицы и карточек.
@@ -927,9 +929,12 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onFire,
   onCancelDismissal,
   onReturn,
-  onEditCostItem,
+  onEditComment,
+  sort,
+  dir,
+  onSort,
 }) => {
-  // №, ФИО, Отдел, Должность, Трудоустр., Рожд., График, Объект, Статья затрат, Признак, действия.
+  // №, ФИО, Отдел, Должность, Трудоустр., Рожд., График, Объект, Комментарий, Признак, действия.
   const totalCols = 11 + (selectionMode ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -958,7 +963,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
           <col className="sc-col-birth" />
           <col className="sc-col-schedule" />
           <col className="sc-col-main-object" />
-          <col className="sc-col-cost-item" />
+          <col className="sc-col-comment" />
           <col className="sc-col-sign" />
           <col className="sc-col-actions" />
         </colgroup>
@@ -976,15 +981,15 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
               </th>
             )}
             <th className="sc-th-num">№</th>
-            <th className="sc-th-name">ФИО</th>
-            <th>Отдел</th>
-            <th>Должность</th>
-            <th className="sc-th-date">Дата трудоустройства</th>
-            <th className="sc-th-date">Дата рождения</th>
-            <th>График</th>
-            <th title={mainObjectTitle}>Объект</th>
-            <th title={COST_ITEM_TITLE}>Статья затрат</th>
-            <th>Признак</th>
+            <StaffSortHeader sortKey="name" label="ФИО" className="sc-th-name" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="department" label="Отдел" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="position" label="Должность" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="hire_date" label="Дата трудоустройства" className="sc-th-date" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="birth_date" label="Дата рождения" className="sc-th-date" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="schedule" label="График" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="main_object" label="Объект" title={mainObjectTitle} activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="comment" label="Комментарий" activeKey={sort} dir={dir} onSort={onSort} />
+            <StaffSortHeader sortKey="sign" label="Признак" activeKey={sort} dir={dir} onSort={onSort} />
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
@@ -1021,7 +1026,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onFire={onFire}
                     onCancelDismissal={onCancelDismissal}
                     onReturn={onReturn}
-                    onEditCostItem={onEditCostItem}
+                    onEditComment={onEditComment}
                   />
                 );
               })}
@@ -1059,7 +1064,7 @@ interface IVirtualCardsProps extends IVirtualListLoadProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-  onEditCostItem?: (emp: Employee) => void;
+  onEditComment?: (emp: Employee) => void;
 }
 
 const CARD_ESTIMATE = 250;
@@ -1082,8 +1087,8 @@ const MobileCard: FC<{
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-  onEditCostItem?: (emp: Employee) => void;
-}> = memo(({ emp, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+  onEditComment?: (emp: Employee) => void;
+}> = memo(({ emp, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
@@ -1150,14 +1155,9 @@ const MobileCard: FC<{
         <span className="sc-card-label">Объект</span>
         <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
       </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Статья затрат</span>
-        <StaffCostItemCell
-          employee={emp}
-          name={sideValue(sideData.costItems, emp.id, mainState)}
-          failed={mainState === 'error'}
-          onEdit={onEditCostItem}
-        />
+      <div className="sc-card-row" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
+        <span className="sc-card-label">Комментарий</span>
+        <StaffCommentCell employee={emp} onEdit={onEditComment} variant="card" />
       </div>
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
@@ -1221,7 +1221,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1265,7 +1265,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selecte
                 onFire={onFire}
                 onCancelDismissal={onCancelDismissal}
                 onReturn={onReturn}
-                onEditCostItem={onEditCostItem}
+                onEditComment={onEditComment}
               />
             </div>
           );
@@ -1369,7 +1369,20 @@ export const StaffControlPage: FC = () => {
     const fromUrl = urlParams.get('section');
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
-  const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>('active');
+  const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => (urlParams.get('status') === 'fired' ? 'fired' : 'active'));
+  const [sortKey, setSortKey] = useState<StaffSortKey>(() => {
+    const fromUrl = urlParams.get('sort');
+    return isStaffSortKey(fromUrl) ? fromUrl : 'name';
+  });
+  const [sortDir, setSortDir] = useState<StaffSortDir>(() => (urlParams.get('dir') === 'desc' ? 'desc' : 'asc'));
+  // Период из URL допустим только со своим статусом (устроены — действующие, уволены — уволенные).
+  const [period, setPeriod] = useState<StaffPeriod | null>(() => {
+    const fromUrl = urlParams.get('period');
+    const status = urlParams.get('status') === 'fired' ? 'fired' : 'active';
+    if (fromUrl === 'hired_month' && status === 'active') return fromUrl;
+    if (fromUrl === 'fired_month' && status === 'fired') return fromUrl;
+    return null;
+  });
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -1418,6 +1431,7 @@ export const StaffControlPage: FC = () => {
     countsByDepartment,
     loading,
     isFirstPageError,
+    firstPageError,
     retryFirstPage,
     hasNextPage,
     isFetchingNextPage,
@@ -1426,6 +1440,7 @@ export const StaffControlPage: FC = () => {
     retryNextPage,
     totalActive,
     refresh,
+    reloadFromStart,
     patchEmployee,
   } = useStaffData({
     search: debouncedSearch || undefined,
@@ -1433,7 +1448,52 @@ export const StaffControlPage: FC = () => {
     scheduleId: scheduleFilter || undefined,
     section,
     status: statusFilter,
+    sort: sortKey,
+    dir: sortDir,
+    period: period ?? undefined,
     enabled: sectionChoice !== null || scopeKnown,
+  });
+
+  // Сортировка по объекту без ночного снимка недоступна (409): возвращаемся к ФИО.
+  const sortUnavailable = firstPageError instanceof ApiError && firstPageError.code === 'SORT_UNAVAILABLE';
+  useEffect(() => {
+    if (!sortUnavailable) return;
+    toast.info(firstPageError instanceof ApiError ? firstPageError.message : 'Сортировка недоступна');
+    setSortKey('name');
+    setSortDir('asc');
+  }, [sortUnavailable, firstPageError, toast]);
+
+  const handleSort = useCallback((key: StaffSortKey) => {
+    if (key === sortKey) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDir('asc');
+  }, [sortKey]);
+
+  const handleStatusChange = useCallback((next: StaffStatusFilter) => {
+    setStatusFilter(next);
+    // Ручное переключение вкладки снимает фильтр «с начала месяца».
+    setPeriod(null);
+  }, []);
+
+  const handlePeriodToggle = useCallback((next: StaffPeriod) => {
+    if (period === next) {
+      // Повторный клик снимает только период, вкладка остаётся.
+      setPeriod(null);
+      return;
+    }
+    setStatusFilter(next === 'hired_month' ? 'active' : 'fired');
+    setPeriod(next);
+  }, [period]);
+
+  const monthMovement = useStaffMonthMovement({
+    section,
+    departmentId: deptId,
+    search: debouncedSearch,
+    scheduleId: scheduleFilter,
+    enabled: (sectionChoice !== null || scopeKnown) && canManageStaff,
   });
 
 
@@ -1520,18 +1580,24 @@ export const StaffControlPage: FC = () => {
     scheduleViews,
     scheduleReadiness,
     mainObjects: mainObjectsData.objects,
-    costItems: mainObjectsData.costItems,
     mainReadiness: { readyIds: mainObjectsData.readyIds, errorIds: mainObjectsData.errorIds },
-  }), [scheduleViews, scheduleReadiness, mainObjectsData.objects, mainObjectsData.costItems, mainObjectsData.readyIds, mainObjectsData.errorIds]);
+  }), [scheduleViews, scheduleReadiness, mainObjectsData.objects, mainObjectsData.readyIds, mainObjectsData.errorIds]);
 
+  // URL пишется целиком из состояния: смена одного фильтра не стирает сортировку и период.
   useEffect(() => {
     const p = new URLSearchParams();
     if (deptId) p.set('dept', deptId);
     if (debouncedSearch) p.set('q', debouncedSearch);
     if (scheduleFilter) p.set('schedule', scheduleFilter);
     if (sectionChoice) p.set('section', sectionChoice);
+    if (statusFilter !== 'active') p.set('status', statusFilter);
+    if (sortKey !== 'name' || sortDir !== 'asc') {
+      p.set('sort', sortKey);
+      p.set('dir', sortDir);
+    }
+    if (period) p.set('period', period);
     setUrlParams(p, { replace: true });
-  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, setUrlParams]);
+  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, statusFilter, sortKey, sortDir, period, setUrlParams]);
 
   // history panel
   const [panelEmp, setPanelEmp] = useState<Employee | null>(null);
@@ -1738,9 +1804,10 @@ export const StaffControlPage: FC = () => {
     if (debouncedSearch) {
       parts.push(`Поиск: "${debouncedSearch}"`);
     }
+    if (period === 'hired_month') parts.push('Устроены с начала месяца');
     if (parts.length === 0) return 'Все действующие сотрудники';
     return parts.join(' • ');
-  }, [section, deptId, scheduleFilter, debouncedSearch, allDepts, scheduleTemplates]);
+  }, [section, deptId, scheduleFilter, debouncedSearch, period, allDepts, scheduleTemplates]);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
@@ -1750,13 +1817,35 @@ export const StaffControlPage: FC = () => {
     setDeptId(value);
   }, []);
 
-  // Прокрутка к началу — только при смене фактических фильтров, не при догрузке порций.
-  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}`;
+  // Прокрутка к началу — только при смене фактических фильтров и сортировки, не при догрузке порций.
+  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}`;
 
-  // «Статья затрат» = личный режим табелирования: правка только в «Действующих» и с правом режима.
-  const [costItemEmp, setCostItemEmp] = useState<Employee | null>(null);
-  const closeCostItemModal = useCallback(() => setCostItemEmp(null), []);
-  const costItemEditHandler = canEditTimesheetMode && statusFilter === 'active' ? setCostItemEmp : undefined;
+  // «Уволенные» доступны только с правом управления кадрами: ?status=fired из чужой ссылки — сброс.
+  useEffect(() => {
+    if (!profile || canManageStaff || statusFilter === 'active') return;
+    setStatusFilter('active');
+    setPeriod(null);
+  }, [profile, canManageStaff, statusFilter]);
+
+  // Комментарий HR: правят те, у кого edit «Управления кадрами» (скоуп проверяет сервер).
+  const canEditStaffComment = isAdmin || canEditPage('/staff-control');
+  const [commentEmp, setCommentEmp] = useState<Employee | null>(null);
+  const closeCommentModal = useCallback(() => setCommentEmp(null), []);
+  const commentEditHandler = canEditStaffComment ? setCommentEmp : undefined;
+
+  /** Правка строки: активный столбец сортировки затронут — перечитать список, иначе поправить на месте. */
+  const applyRowChange = useCallback((empId: number, patch: Partial<Employee>, changes: readonly StaffRowChange[]) => {
+    patchEmployee(empId, patch);
+    if (affectsActiveSort(changes, sortKey)) reloadFromStart();
+  }, [patchEmployee, reloadFromStart, sortKey]);
+
+  const handleCommentSaved = useCallback((emp: Employee, saved: IStaffCommentSaved) => {
+    applyRowChange(emp.id, {
+      staff_comment: saved.comment,
+      staff_comment_updated_at: saved.updated_at,
+      staff_comment_updated_by_name: saved.updated_by_name,
+    }, saved.changed ? ['comment'] : []);
+  }, [applyRowChange]);
 
   const handleSectionChange = useCallback((value: StaffSection) => {
     setSectionChoice(value);
@@ -1830,8 +1919,8 @@ export const StaffControlPage: FC = () => {
   const handleSavePosition = useCallback(async (empId: number, val: string, reason?: string, date?: string) => {
     await employeeService.changePosition(empId, val, reason, date);
     closeModal();
-    patchEmployee(empId, { position_name: val });
-  }, [closeModal, patchEmployee]);
+    applyRowChange(empId, { position_name: val }, ['position']);
+  }, [closeModal, applyRowChange]);
 
   const handleSaveDepartment = useCallback(async (empId: number, newDeptId: string, effectiveDate?: string, reason?: string) => {
     try {
@@ -1848,11 +1937,11 @@ export const StaffControlPage: FC = () => {
       }
       closeModal();
       const deptName = allDepts.find(d => d.id === newDeptId)?.name;
-      patchEmployee(empId, {
+      applyRowChange(empId, {
         org_department_id: newDeptId,
         department: deptName,
         ...(isReturn ? { excluded_from_timesheet: false, excluded_from_timesheet_at: null } : {}),
-      });
+      }, ['department']);
       if (isReturn) toast.success('Сотрудник возвращён в табель');
       // Отдел в строке обновлён сразу, а «Признак» (перенос в «Декрет» и обратно) считает
       // сервер — фоновым перезапросом страницы, без «Загрузка…» и сброса прокрутки.
@@ -1862,7 +1951,7 @@ export const StaffControlPage: FC = () => {
       toast.error(msg);
       throw e;
     }
-  }, [closeModal, patchEmployee, allDepts, toast, employees, refresh]);
+  }, [closeModal, applyRowChange, allDepts, toast, employees, refresh]);
 
   const handleReturnToTimesheet = useCallback((emp: Employee) => {
     openModal(emp, 'department');
@@ -1918,8 +2007,8 @@ export const StaffControlPage: FC = () => {
     await Promise.all(tasks);
   }, [queryClient]);
 
-  // Состав списка при фильтре по графику зависит от назначений.
-  const scheduleChangeAffectsList = Boolean(scheduleFilter);
+  // Состав списка при фильтре по графику и порядок при сортировке по графику зависят от назначений.
+  const scheduleChangeAffectsList = Boolean(scheduleFilter) || affectsActiveSort(['schedule'], sortKey);
 
   // Смена графика влияет на табель (норма/покраска/согласования считаются из
   // расписания). Сбрасываем кэш табеля, иначе пользователь видит старое.
@@ -2112,6 +2201,8 @@ export const StaffControlPage: FC = () => {
       departmentId: deptId || undefined,
       section,
       status: 'active',
+      // Как в таблице: при чипе «Устроены» — только принятые с начала месяца.
+      period: period === 'hired_month' ? period : undefined,
       view: 'list',
     });
     const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
@@ -2124,7 +2215,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, period, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (
     departmentIds: string[],
@@ -2403,6 +2494,30 @@ export const StaffControlPage: FC = () => {
     }
   }, [isExporting, toast]);
 
+  // «Экспорт» — ровно текущая таблица: те же фильтры, вкладка, период и сортировка.
+  const [isExportingView, setIsExportingView] = useState(false);
+  const handleExportView = useCallback(async () => {
+    if (isExportingView) return;
+    setIsExportingView(true);
+    try {
+      const { blob, filename } = await employeeService.exportStaffView({
+        search: debouncedSearch || undefined,
+        departmentId: deptId || undefined,
+        scheduleId: scheduleFilter || undefined,
+        section,
+        status: statusFilter,
+        period: period ?? undefined,
+        sort: sortKey,
+        dir: sortDir,
+      });
+      triggerBlobDownload(blob, filename);
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Не удалось выгрузить таблицу');
+    } finally {
+      setIsExportingView(false);
+    }
+  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, toast]);
+
   const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
     const items: IOverflowMenuItem[] = [];
     if (canManageStaff && statusFilter === 'active') {
@@ -2472,6 +2587,7 @@ export const StaffControlPage: FC = () => {
             departments={filterDeptTree}
             value={deptId}
             onChange={handleDeptChange}
+            flattenSingleRoot={section !== 'all'}
             isLoading={structureTree.isPending || (headerDeptPending && sectionDepartmentsQuery.isPending)}
             isError={structureTree.isError || (headerDeptPending && sectionDepartmentsQuery.isError)}
             onRetry={() => {
@@ -2499,7 +2615,7 @@ export const StaffControlPage: FC = () => {
             role="tab"
             aria-selected={statusFilter === 'active'}
             className={`sc-seg-btn${statusFilter === 'active' ? ' is-active' : ''}`}
-            onClick={() => setStatusFilter('active')}
+            onClick={() => handleStatusChange('active')}
           >
             Действующие
           </button>
@@ -2508,11 +2624,54 @@ export const StaffControlPage: FC = () => {
             role="tab"
             aria-selected={statusFilter === 'fired'}
             className={`sc-seg-btn${statusFilter === 'fired' ? ' is-active' : ''}`}
-            onClick={() => setStatusFilter('fired')}
+            onClick={() => handleStatusChange('fired')}
           >
             Уволенные
           </button>
         </div>
+      )}
+      {(canManageStaff || canExportEmployees) && (
+        <div className="sc-view-tools">
+          {canManageStaff && (
+            <StaffMonthMovement
+              data={monthMovement.data}
+              isError={monthMovement.isError}
+              period={period}
+              onToggle={handlePeriodToggle}
+            />
+          )}
+          {canExportEmployees && (
+            <button
+              type="button"
+              className="sc-btn secondary sc-export-view-btn"
+              onClick={() => { void handleExportView(); }}
+              disabled={isExportingView || total === 0}
+              title="Скачать xlsx с текущей таблицей: фильтры, вкладка и сортировка"
+            >
+              <Download size={14} aria-hidden="true" />
+              <span>{isExportingView ? 'Готовим…' : 'Экспорт'}</span>
+            </button>
+          )}
+        </div>
+      )}
+      {isMobile && (
+        <select
+          className="sc-schedule-filter sc-sort-select"
+          value={`${sortKey}:${sortDir}`}
+          onChange={e => {
+            const [key, dir] = e.target.value.split(':');
+            if (isStaffSortKey(key)) {
+              setSortKey(key);
+              setSortDir(dir === 'desc' ? 'desc' : 'asc');
+            }
+          }}
+          aria-label="Сортировка"
+        >
+          {STAFF_SORT_OPTIONS.flatMap(option => [
+            <option key={`${option.key}:asc`} value={`${option.key}:asc`}>{option.label} ↑</option>,
+            <option key={`${option.key}:desc`} value={`${option.key}:desc`}>{option.label} ↓</option>,
+          ])}
+        </select>
       )}
       {(canManageStaff || overflowItems.length > 0) && (
         <div className="sc-page-actions">
@@ -2605,7 +2764,7 @@ export const StaffControlPage: FC = () => {
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
-          onEditCostItem={costItemEditHandler}
+          onEditComment={commentEditHandler}
         />
       ) : (
         <VirtualTable
@@ -2631,7 +2790,10 @@ export const StaffControlPage: FC = () => {
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
-          onEditCostItem={costItemEditHandler}
+          onEditComment={commentEditHandler}
+          sort={sortKey}
+          dir={sortDir}
+          onSort={handleSort}
         />
       )}
 
@@ -2699,15 +2861,15 @@ export const StaffControlPage: FC = () => {
             initialDepartmentId={deptId || ''}
             onClose={() => {
               setBulkTsModeOpen(false);
-              // «Статья затрат» зависит от режима — после правок в окне перечитываем сразу.
+              // Порции объектов несут и режим табелирования — после правок в окне перечитываем сразу.
               void queryClient.invalidateQueries({ queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY] });
             }}
           />
         </Suspense>
       )}
-      {costItemEmp && (
+      {commentEmp && (
         <Suspense fallback={null}>
-          <StaffCostItemModal employee={costItemEmp} onClose={closeCostItemModal} />
+          <StaffCommentModal employee={commentEmp} onClose={closeCommentModal} onSaved={handleCommentSaved} />
         </Suspense>
       )}
       <BulkScheduleModal

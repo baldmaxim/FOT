@@ -65,6 +65,9 @@ export async function mapEmployeeRows(
     return {
       ...mapped,
       birth_date: typeof emp.birth_date === 'string' ? emp.birth_date : null,
+      staff_comment: typeof emp.staff_comment === 'string' ? emp.staff_comment : null,
+      staff_comment_updated_at: typeof emp.staff_comment_updated_at === 'string' ? emp.staff_comment_updated_at : null,
+      staff_comment_updated_by_name: typeof emp.staff_comment_updated_by_name === 'string' ? emp.staff_comment_updated_by_name : null,
       sign: resolveEmployeeSign({
         employmentStatus: mapped.employment_status,
         departmentId: mapped.org_department_id,

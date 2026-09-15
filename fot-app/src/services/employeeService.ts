@@ -14,22 +14,78 @@ export interface PaginatedParams {
   departmentId?: string;
   /** UUID шаблона графика или '__default__' (без персонального override) */
   scheduleId?: string;
-  /** Раздел «Управления кадрами» (sm | su10 | brigades | contractors); не задан или all — все. */
+  /** Раздел «Управления кадрами» (sm | su10 | contractors); не задан или all — все. */
   section?: string;
   archived?: boolean;
   view?: 'list' | 'staff';
   /**
-   * Курсорная подгрузка (keyset=1): порция после (ФИО, id). null — первая порция.
+   * Курсорная подгрузка (keyset=1): порция после последней строки. null — первая порция.
    * Не задан — обычная страница по page (OFFSET).
    */
   cursor?: IEmployeeListCursor | null;
+  /** Сортировка по столбцу (только с курсором). */
+  sort?: StaffSortKey;
+  dir?: StaffSortDir;
+  /** Устроенные / уволенные с начала месяца. */
+  period?: StaffPeriod;
 }
 
-/** Позиция курсора списка: последняя строка предыдущей порции. */
+export type StaffSortKey =
+  | 'name' | 'department' | 'position' | 'hire_date' | 'birth_date' | 'schedule' | 'main_object' | 'comment' | 'sign';
+export type StaffSortDir = 'asc' | 'desc';
+export type StaffPeriod = 'hired_month' | 'fired_month';
+
+/** Позиция курсора списка: последняя строка предыдущей порции. key/isNull — в режиме сортировки. */
 export interface IEmployeeListCursor {
   name: string;
   id: number;
+  key?: string | null;
+  isNull?: boolean;
 }
+
+/** Параметры экрана «Текущие сотрудники» для счётчиков месяца и выгрузки. */
+export interface IStaffViewParams {
+  search?: string;
+  departmentId?: string;
+  scheduleId?: string;
+  section?: string;
+  status?: 'active' | 'fired' | 'excluded';
+  period?: StaffPeriod;
+  sort?: StaffSortKey;
+  dir?: StaffSortDir;
+}
+
+export interface IStaffMonthMovement {
+  month_start: string;
+  today: string;
+  hired: number;
+  fired: number;
+}
+
+export interface IStaffCommentSaved {
+  changed: boolean;
+  comment: string | null;
+  updated_at: string | null;
+  updated_by_name: string | null;
+}
+
+/** Актуальный комментарий из ответа 409 (null — комментария уже нет). */
+export interface IStaffCommentCurrent {
+  comment: string;
+  updated_at: string;
+  updated_by_name: string | null;
+}
+
+const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewParams): void => {
+  if (params.search) qs.set('search', params.search);
+  if (params.departmentId) qs.set('department_id', params.departmentId);
+  if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
+  if (params.section && params.section !== 'all') qs.set('section', params.section);
+  if (params.status) qs.set('status', params.status);
+  if (params.period) qs.set('period', params.period);
+  if (params.sort) qs.set('sort', params.sort);
+  if (params.dir) qs.set('dir', params.dir);
+};
 
 export interface PaginatedMeta {
   page: number;
@@ -119,9 +175,20 @@ export const employeeService = {
     if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
     if (params.section && params.section !== 'all') qs.set('section', params.section);
     if (params.archived) qs.set('archived', 'true');
+    if (params.period) qs.set('period', params.period);
+    if (params.sort && params.cursor !== undefined) {
+      qs.set('sort', params.sort);
+      qs.set('dir', params.dir ?? 'asc');
+    }
     if (params.cursor !== undefined) {
       qs.set('keyset', '1');
-      if (params.cursor) {
+      if (params.cursor && params.sort) {
+        // Курсор сортировки: ключ последней строки (или признак пустого ключа) и id.
+        const isNull = params.cursor.isNull ?? params.cursor.key == null;
+        qs.set('after_null', isNull ? '1' : '0');
+        if (!isNull) qs.set('after_key', params.cursor.key ?? '');
+        qs.set('after_id', String(params.cursor.id));
+      } else if (params.cursor) {
         qs.set('after_name', params.cursor.name);
         qs.set('after_id', String(params.cursor.id));
       }
@@ -182,6 +249,33 @@ export const employeeService = {
 
   async exportEmployees(): Promise<{ blob: Blob; filename: string }> {
     return apiClient.download('/employees/export', 'Сотрудники.xlsx', { timeoutMs: 120_000 });
+  },
+
+  /** xlsx ровно текущей таблицы: фильтры, статус, период и сортировка экрана. */
+  async exportStaffView(params: IStaffViewParams): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams();
+    appendStaffViewParams(qs, params);
+    return apiClient.download(`/employees/export-view?${qs}`, 'Сотрудники.xlsx', { timeoutMs: 120_000 });
+  },
+
+  /** Устроены / уволены с 1-го числа месяца по фильтрам экрана (статус и период не передаются). */
+  async getMonthMovement(
+    params: Omit<IStaffViewParams, 'status' | 'period' | 'sort' | 'dir'>,
+    signal?: AbortSignal,
+  ): Promise<IStaffMonthMovement> {
+    const qs = new URLSearchParams();
+    appendStaffViewParams(qs, params);
+    const response = await apiClient.get<ApiResponse<IStaffMonthMovement>>(`/employees/month-movement?${qs}`, { signal });
+    return response.data;
+  },
+
+  /** Комментарий HR: expected_updated_at — версия, которую видел пользователь (null — не было). */
+  async saveStaffComment(employeeId: number, comment: string, expectedUpdatedAt: string | null): Promise<IStaffCommentSaved> {
+    const response = await apiClient.put<ApiResponse<IStaffCommentSaved>>(
+      `/employees/${employeeId}/staff-comment`,
+      { comment, expected_updated_at: expectedUpdatedAt },
+    );
+    return response.data;
   },
 
   /** Счётчики сотрудников — дешёвый отдельный эндпоинт, серверный кэш 60с */

@@ -10,8 +10,10 @@
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   buildInDepartmentScopeOnlySql,
+  COMPANY_WITH_BRIGADES_KEYS,
   effectiveDepartmentSql,
   isFilterableSectionKey,
+  listCompanyDepartmentIds,
   listSectionDepartmentIds,
   loadExportDepartments,
   type ExportSectionKey,
@@ -48,7 +50,11 @@ export async function resolveSectionFilterContext(
     loadExportDepartments(),
     globalRead ? Promise.resolve(GLOBAL_SCOPE) : resolveEmployeeListScopeFilter(req),
   ]);
-  return { departmentIds: listSectionDepartmentIds(departments, section), scope };
+  // СУ-10 и СМ — вместе со своими бригадами; «brigades» остаётся для старых клиентов.
+  const departmentIds = COMPANY_WITH_BRIGADES_KEYS.includes(section)
+    ? listCompanyDepartmentIds(departments, section)
+    : listSectionDepartmentIds(departments, section);
+  return { departmentIds, scope };
 }
 
 /**

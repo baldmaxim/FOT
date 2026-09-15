@@ -49,7 +49,20 @@ describe('resolveSectionFilterContext', () => {
     const context = await resolveSectionFilterContext(req, 'su10', true);
     expect(context.scope.mode).toBe('all');
     expect(scopeFilterMock).not.toHaveBeenCalled();
-    expect(context.departmentIds.sort()).toEqual([SU10_ROOT_ID, 'su-site', 'su-vent'].sort());
+    // СУ-10 — вместе со своими бригадами.
+    expect(context.departmentIds.sort()).toEqual([SU10_ROOT_ID, 'br-1', 'brigades', 'su-site', 'su-vent'].sort());
+  });
+
+  it('СМ — вместе со своими бригадами, без отделов СУ-10', async () => {
+    const SM_ROOT_ID = '6c4a3726-4ba9-4550-9978-c5ff50e4f77b';
+    queryMock.mockResolvedValue([
+      ...DEPARTMENTS,
+      { id: SM_ROOT_ID, parent_id: 'root', name: 'СМ', kind: 'department' },
+      { id: 'sm-brigades', parent_id: SM_ROOT_ID, name: 'Бригады', kind: 'department' },
+      { id: 'sm-br-1', parent_id: 'sm-brigades', name: 'бр.Петров', kind: 'brigade' },
+    ]);
+    const context = await resolveSectionFilterContext(req, 'sm', true);
+    expect(context.departmentIds.sort()).toEqual([SM_ROOT_ID, 'sm-br-1', 'sm-brigades'].sort());
   });
 
   it('без глобального чтения — скоуп как у списка', async () => {

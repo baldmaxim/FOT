@@ -174,7 +174,7 @@ describe('getAll — параметр section', () => {
     }
   });
 
-  it('su10 при глобальном чтении: отделы СУ-10 без бригад (включая «сопровождение подрядчиков»), отдел до увольнения', async () => {
+  it('su10 при глобальном чтении: отделы СУ-10 вместе с бригадами (включая «сопровождение подрядчиков»), отдел до увольнения', async () => {
     const res = makeRes();
     await employeesController.getAll(makeReq({ page: '1', section: 'su10' }), res as never);
     expect(res.statusCode).toBe(200);
@@ -182,9 +182,17 @@ describe('getAll — параметр section', () => {
     expect(sql).toContain('employee_dismissal_events');
     expect(sql).toContain('d.from_department_id IS NOT NULL');
     const sectionIds = params.find(p => Array.isArray(p) && (p as string[]).includes(SU10_ROOT_ID)) as string[];
-    expect(sectionIds.sort()).toEqual([SU10_ROOT_ID, 'dept-own', 'su-site', 'su-support'].sort());
-    expect(sectionIds).not.toContain('br-1');
+    expect(sectionIds.sort()).toEqual([SU10_ROOT_ID, 'br-1', 'brigades', 'dept-own', 'su-site', 'su-support'].sort());
     expectPlaceholdersMatch(sql, params);
+  });
+
+  it('brigades (старый клиент): только бригады, без отделов СУ-10', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1', section: 'brigades' }), res as never);
+    expect(res.statusCode).toBe(200);
+    const [, params] = employeeListCalls()[0];
+    const sectionIds = params.find(p => Array.isArray(p) && (p as string[]).includes('br-1')) as string[];
+    expect(sectionIds.sort()).toEqual(['br-1', 'brigades']);
   });
 
   it('руководитель: прямой подчинённый вне отделов скоупа не проходит раздел — условие требует отдел скоупа', async () => {
@@ -315,6 +323,104 @@ describe('getAll — порядок и курсор (keyset)', () => {
       await employeesController.getAll(makeReq({ page: '1', ...extra }), res as never);
       expect(res.statusCode).toBe(400);
       expect(res.body).toMatchObject({ code: 'INVALID_CURSOR' });
+    }
+    expect(employeeListCalls()).toHaveLength(0);
+  });
+});
+
+describe('getAll — сортировка по столбцу (keyset + sort)', () => {
+  const sortedRows = (items: Array<[number, string | null]>) => items.map(([id, key]) => ({
+    id, full_name: `Сотрудник ${id}`, employment_status: 'active', sort_key: key,
+  }));
+  const sortedCall = (): Call => h.query.mock.calls.find(c => String(c[0]).includes('AS sort_key')) as Call;
+
+  it('первая порция: ключ во внутреннем SELECT, NULL в конце, next_cursor совместим со старым фронтом', async () => {
+    h.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('AS sort_key') ? sortedRows([[4, 'Бухгалтерия'], [2, 'Склад'], [9, null], [3, null]]) : []
+    ));
+    h.queryOne.mockResolvedValue({ total: 10 });
+
+    const res = makeRes();
+    await employeesController.getAll(makeReq({
+      page: '1', pageSize: '3', keyset: '1', view: 'staff', sort: 'department', dir: 'desc', section: 'su10',
+    }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = sortedCall();
+    expect(sql).toContain('ORDER BY (s.sort_key IS NULL) ASC, s.sort_key DESC, s.id DESC');
+    expect(sql).not.toContain('OFFSET');
+    expect(sql).toContain('staff_comment');
+    expect(params.at(-1)).toBe(4);
+    expectPlaceholdersMatch(sql, params);
+    const body = res.body as { data: Array<{ id: number; sort_key?: unknown }>; meta: { next_cursor: unknown; total: number } };
+    expect(body.data.map(e => e.id)).toEqual([4, 2, 9]);
+    expect(body.data[0]).not.toHaveProperty('sort_key');
+    expect(body.meta).toMatchObject({ total: 10, next_cursor: { name: 'Сотрудник 9', key: null, isNull: true, id: 9 } });
+
+    // count — без курсора и без ключа сортировки, с теми же фильтрами.
+    const [countSql, countParams] = h.queryOne.mock.calls.at(-1) as Call;
+    expect(countSql).not.toContain('sort_key');
+    expectPlaceholdersMatch(countSql, countParams);
+  });
+
+  it('следующая порция после непустого ключа и после NULL-ключа', async () => {
+    h.queryOne.mockResolvedValue({ total: 3 });
+    let res = makeRes();
+    await employeesController.getAll(makeReq({
+      page: '1', pageSize: '3', keyset: '1', sort: 'comment', dir: 'asc', after_key: 'Б', after_null: '0', after_id: '5',
+    }), res as never);
+    expect(res.statusCode).toBe(200);
+    let [sql, params] = sortedCall();
+    expect(sql).toMatch(/s\.sort_key > \$\d+::text/);
+    expect(params).toContain('Б');
+    expect(params).toContain(5);
+    expectPlaceholdersMatch(sql, params);
+    expect((res.body as { meta: { next_cursor: unknown } }).meta.next_cursor).toBeNull();
+
+    h.query.mockClear();
+    res = makeRes();
+    await employeesController.getAll(makeReq({
+      page: '1', pageSize: '3', keyset: '1', sort: 'comment', after_null: '1', after_id: '5',
+    }), res as never);
+    [sql, params] = sortedCall();
+    expect(sql).toMatch(/\(s\.sort_key IS NULL AND s\.id > \$\d+::int\)/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('период «уволены с начала месяца» — dismissal_date в месяце, статус fired', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T09:00:00Z'));
+    try {
+      const res = makeRes();
+      await employeesController.getAll(makeReq({
+        page: '1', keyset: '1', sort: 'name', status: 'fired', period: 'fired_month',
+      }), res as never);
+      expect(res.statusCode).toBe(200);
+      const [sql, params] = sortedCall();
+      expect(sql).toContain(`employment_status = 'fired'`);
+      expect(sql).toMatch(/dismissal_date BETWEEN \$\d+::date AND \$\d+::date/);
+      expect(params).toContain('2026-09-01');
+      expect(params).toContain('2026-09-15');
+      expectPlaceholdersMatch(sql, params);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ошибки параметров — 400 без запроса списка', async () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ sort: 'cost_item', keyset: '1' }, 'INVALID_SORT'],
+      [{ sort: 'name' }, 'INVALID_SORT'],
+      [{ sort: 'name', keyset: '1', status: 'all' }, 'INVALID_STATUS'],
+      [{ sort: 'name', keyset: '1', after_name: 'А', after_id: '3' }, 'INVALID_CURSOR'],
+      [{ sort: 'name', keyset: '1', after_key: 'А', after_id: '3' }, 'INVALID_CURSOR'],
+      [{ keyset: '1', period: 'week' }, 'INVALID_PERIOD'],
+    ];
+    for (const [extra, code] of cases) {
+      const res = makeRes();
+      await employeesController.getAll(makeReq({ page: '1', ...extra }), res as never);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code });
     }
     expect(employeeListCalls()).toHaveLength(0);
   });

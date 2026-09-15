@@ -245,6 +245,8 @@ export interface IBuildSectionsParams {
 
 export interface IDeptPlacement {
   section: ExportSectionKey;
+  /** Компания по верхнему узлу: бригады СУ-10/СМ здесь остаются в su10/sm. */
+  company: ExportSectionKey;
   path: string;
   isMaternity: boolean;
 }
@@ -306,7 +308,7 @@ export function createDepartmentPlacer(departments: IExportDepartmentRow[]): {
       .join(' / ');
     const isMaternity = isInMaternityDepartment(deptId, byId);
 
-    const placement = { section, path, isMaternity };
+    const placement = { section, company: topSection, path, isMaternity };
     placementCache.set(deptId, placement);
     return placement;
   };
@@ -326,10 +328,10 @@ export function placeEmployee(
   const known = effectiveDepartmentId !== null && placer.byId.has(effectiveDepartmentId);
   const placement: IDeptPlacement = known
     ? placer.place(effectiveDepartmentId)
-    : { section: 'other', path: '', isMaternity: false };
+    : { section: 'other', company: 'other', path: '', isMaternity: false };
   return inDepartmentScope
     ? placement
-    : { section: 'other', path: '', isMaternity: placement.isMaternity };
+    : { section: 'other', company: 'other', path: '', isMaternity: placement.isMaternity };
 }
 
 /** Отделы (включая неактивные), чей раздел — section. */
@@ -339,6 +341,18 @@ export function listSectionDepartmentIds(
 ): string[] {
   const placer = createDepartmentPlacer(departments);
   return departments.filter(dept => placer.place(dept.id).section === section).map(dept => dept.id);
+}
+
+/** Компании, в которых бригады входят в саму компанию (фильтр «Управления кадрами»). */
+export const COMPANY_WITH_BRIGADES_KEYS: readonly ExportSectionKey[] = ['su10', 'sm'];
+
+/** Отделы (включая неактивные) компании: для su10/sm — вместе с их бригадами. */
+export function listCompanyDepartmentIds(
+  departments: IExportDepartmentRow[],
+  company: ExportSectionKey,
+): string[] {
+  const placer = createDepartmentPlacer(departments);
+  return departments.filter(dept => placer.place(dept.id).company === company).map(dept => dept.id);
 }
 
 /**

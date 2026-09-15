@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
+import type { StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { useStructureTree } from './useStructure';
 import {
   EMPTY_EMPLOYEE_COUNTS,
@@ -16,6 +17,7 @@ import {
   type IEmployeePagesData,
 } from '../utils/staffInfiniteList';
 import { shouldLoadMore } from '../utils/staffLoadMore';
+import { STAFF_MONTH_MOVEMENT_QUERY_KEY } from './useStaffMonthMovement';
 
 /** Порция «Текущих сотрудников»: догружается при прокрутке к концу списка. */
 export const STAFF_CHUNK_SIZE = 500;
@@ -27,15 +29,18 @@ interface IUseStaffDataParams {
   search?: string;
   departmentId?: string;
   scheduleId?: string;
-  /** Раздел (su10 | sm | brigades | contractors | all). */
+  /** Раздел (su10 | sm | contractors | all). */
   section?: string;
   status?: 'active' | 'fired' | 'excluded';
+  sort: StaffSortKey;
+  dir: StaffSortDir;
+  period?: StaffPeriod;
   /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
   enabled?: boolean;
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { search, departmentId, scheduleId, section, status = 'active', enabled = true } = params;
+  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, enabled = true } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const employeesParams = {
@@ -45,6 +50,10 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     scheduleId: scheduleId || undefined,
     section: section || undefined,
     status,
+    // Новый клиент всегда сортирует явно: сервер отдаёт курсор { key, isNull, id }.
+    sort,
+    dir,
+    period: period || undefined,
     view: 'staff' as const,
   };
   const employeesQueryKey = infiniteEmployeesQueryKey(employeesParams);
@@ -90,10 +99,21 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     queryClient.setQueryData<IEmployeePagesData>(employeesQueryKey, previous => patchEmployeeInPages(previous, id, patch));
   }, [employeesQueryKey, queryClient]);
 
+  /**
+   * Изменилось значение активного столбца сортировки: строка могла сменить место. Порции
+   * перечитываются последовательно с первой, курсоры пересчитываются по свежим данным —
+   * без дублей и пропусков, таблица на время перезапроса не пропадает.
+   */
+  const reloadFromStart = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: employeesQueryKey, exact: true });
+  }, [employeesQueryKey, queryClient]);
+
   const refresh = useCallback(() => {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: employeesQueryKey }),
       queryClient.invalidateQueries({ queryKey: employeeCountsQueryKey(false) }),
+      // Приём, увольнение, восстановление меняют чипы «с начала месяца».
+      queryClient.invalidateQueries({ queryKey: STAFF_MONTH_MOVEMENT_QUERY_KEY }),
     ]);
   }, [employeesQueryKey, queryClient]);
 
@@ -105,6 +125,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     countsByDepartment: counts.byDepartment,
     loading: !enabled || employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
     isFirstPageError: employeesQuery.isError && !pages,
+    firstPageError: employeesQuery.error,
     retryFirstPage: employeesQuery.refetch,
     hasNextPage,
     isFetchingNextPage,
@@ -113,6 +134,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     retryNextPage,
     totalActive: counts.byStatus.active,
     refresh,
+    reloadFromStart,
     patchEmployee,
   };
 };

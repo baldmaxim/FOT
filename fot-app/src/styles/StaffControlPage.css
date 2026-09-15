@@ -101,7 +101,7 @@
  * .sc-filters / .sc-schedule-filter / .sc-filter-search — в общем styles/FilterBar.css.
  * Здесь — только ростерные элементы. */
 
-/* Компания (СУ-10 / СМ / Бригады / Подрядные организации / Все компании). */
+/* Компания (СУ-10 / СМ / Подрядные организации / Все компании); бригады — внутри компаний. */
 .sc-schedule-filter.sc-section-filter {
   min-width: 130px;
 }
@@ -430,9 +430,9 @@
 /* «РОЖДЕНИЯ» ≈ 67px, дата dd.mm.yyyy ≈ 72px + паддинги 24px. */
 .sc-col-birth    { width: 100px; }
 .sc-col-schedule { width: 160px; }
-/* Гибкие колонки: остаток ширины делят «Объект» и «Статья затрат» (список объектов СКУД длиннее). */
+/* Гибкие колонки: остаток ширины делят «Объект» и «Комментарий». */
 .sc-col-main-object { width: auto; }
-.sc-col-cost-item { width: auto; }
+.sc-col-comment { width: auto; }
 /* Бейдж «Работает» ≈ 64px + паддинги ячейки 24px. */
 .sc-col-sign     { width: 96px; }
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
@@ -555,9 +555,223 @@
 }
 
 .sc-td-main-object,
-.sc-td-cost-item,
 .sc-td-sign {
   white-space: nowrap;
+}
+
+/* ── ФИО до двух строк: clamp на внутреннем span, ячейка остаётся table-cell (sticky) ── */
+.sc-table--staff td.sc-td-name {
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.sc-name-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+/* ── Сортировка по столбцу ── */
+.sc-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sc-sort-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sc-th-date .sc-sort-label {
+  white-space: normal;
+}
+
+.sc-sort-icon {
+  flex: 0 0 auto;
+  opacity: 0.35;
+  transition: opacity 150ms ease-out;
+}
+
+.sc-sort-btn:hover .sc-sort-icon,
+.sc-sort-btn:focus-visible .sc-sort-icon,
+.sc-sort-btn.is-active .sc-sort-icon {
+  opacity: 1;
+}
+
+.sc-sort-btn.is-active {
+  color: var(--text-primary);
+}
+
+.sc-sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── Комментарий ── */
+.sc-td-comment {
+  white-space: normal;
+}
+
+.sc-comment {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sc-comment-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  line-height: 1.3;
+}
+
+.sc-comment-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sc-comment-view {
+  display: block;
+  min-width: 0;
+}
+
+.sc-cell-edit.sc-comment-edit {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.sc-modal--comment {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.sc-comment-textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  font-size: 16px;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.sc-comment-counter {
+  margin-top: 4px;
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-comment-counter.is-over {
+  color: var(--error);
+}
+
+.sc-comment-modal-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ── Движение с начала месяца + «Экспорт» (строка вкладок статуса) ── */
+.sc-view-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sc-movement {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.sc-movement-label {
+  color: var(--text-muted);
+}
+
+.sc-movement-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+
+.sc-movement-chip:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.sc-movement-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sc-movement-chip--hired strong {
+  color: var(--success);
+}
+
+.sc-movement-chip--fired strong {
+  color: var(--error);
+}
+
+.sc-movement-chip.is-active {
+  border-color: var(--primary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sc-movement-chip:focus-visible,
+.sc-export-view-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sc-export-view-btn {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sc-sort-icon,
+  .sc-movement-chip {
+    transition: none;
+  }
 }
 
 .sc-ellipsis {
@@ -2197,6 +2411,25 @@
     justify-content: center;
   }
 
+  /* Чипы месяца, «Экспорт» и сортировка — отдельными строками под вкладками статуса. */
+  .sc-view-tools {
+    order: 6;
+    flex: 0 0 100%;
+    justify-content: space-between;
+  }
+
+  .sc-movement-chip,
+  .sc-export-view-btn {
+    min-height: 44px;
+  }
+
+  .sc-filters .sc-sort-select {
+    order: 7;
+    flex: 0 0 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
   .sc-bulk-bar {
     flex-direction: column;
     align-items: stretch;
@@ -2242,6 +2475,17 @@
   .sc-card-actions {
     margin-top: 6px;
     padding-top: 6px;
+  }
+
+  /* 360–430px: подпись «С 1 сент.» переносится над чипами, чипы и «Экспорт» делят строку. */
+  .sc-movement {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .sc-movement-label {
+    flex: 0 0 100%;
+    font-size: 12px;
   }
 }
 

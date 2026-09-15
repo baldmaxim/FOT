@@ -48,6 +48,7 @@ describe('GET /employees/section-departments', () => {
       { id: 'su10-brig-1', parent_id: 'su10-brig', name: 'бр. Иванова', kind: 'brigade' },
       { id: SM_ROOT_ID, parent_id: 'root', name: 'Служба Механизации', kind: 'department' },
       { id: 'sm-garage', parent_id: SM_ROOT_ID, name: 'Гараж', kind: 'department' },
+      { id: 'sm-brig-1', parent_id: SM_ROOT_ID, name: 'бр. Петрова', kind: 'brigade' },
       { id: 'contr', parent_id: 'root', name: 'Подрядные организации', kind: 'department' },
       { id: 'contr-1', parent_id: 'contr', name: 'АСТЕРУС', kind: 'department' },
       { id: 'fired', parent_id: 'root', name: 'Уволенные', kind: 'department' },
@@ -58,9 +59,10 @@ describe('GET /employees/section-departments', () => {
     expect(res.statusCode).toBe(200);
     const { data } = res.payload as { data: Record<string, string[]> };
     expect(Object.keys(data).sort()).toEqual(['brigades', 'contractors', 'sm', 'su10']);
-    expect(data.su10.sort()).toEqual([SU10_ROOT_ID, 'su10-pto'].sort());
-    expect(data.brigades.sort()).toEqual(['su10-brig', 'su10-brig-1']);
-    expect(data.sm.sort()).toEqual([SM_ROOT_ID, 'sm-garage'].sort());
+    // СУ-10 и СМ — со своими бригадами; «brigades» — прежний бакет для старых клиентов.
+    expect(data.su10.sort()).toEqual([SU10_ROOT_ID, 'su10-brig', 'su10-brig-1', 'su10-pto'].sort());
+    expect(data.brigades.sort()).toEqual(['sm-brig-1', 'su10-brig', 'su10-brig-1']);
+    expect(data.sm.sort()).toEqual([SM_ROOT_ID, 'sm-brig-1', 'sm-garage'].sort());
     expect(data.contractors.sort()).toEqual(['contr', 'contr-1']);
     expect(Object.values(data).flat()).not.toContain('fired');
   });

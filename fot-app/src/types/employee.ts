@@ -45,6 +45,11 @@ export interface Employee {
   site_manager_full_name?: string | null;
   /** «Признак» в «Управлении кадрами» (только список view=staff). */
   sign?: EmployeeSign;
+  /** Комментарий HR (только список view=staff). */
+  staff_comment?: string | null;
+  /** Версия комментария (ISO с микросекундами) — для оптимистичной блокировки. */
+  staff_comment_updated_at?: string | null;
+  staff_comment_updated_by_name?: string | null;
 }
 
 export type EmployeeSign = 'Работает' | 'Уволен' | 'Декрет';

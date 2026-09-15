@@ -7,9 +7,7 @@ import { auditService } from '../services/audit.service.js';
 import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
-import { getKnownArchiveDepartment, reconcileFiredEmployeesArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { parseFIO } from '../utils/fio.utils.js';
-import { escapeLike } from '../utils/search.utils.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import {
   ensureSigurPosition,
@@ -47,13 +45,7 @@ import {
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
-import { moscowTodayIso } from '../utils/date.utils.js';
-import {
-  KEYSET_NAME_SQL,
-  mapEmployeeRows,
-  parseKeysetParams,
-  respondKeysetPage,
-} from './employees-list-page.helpers.js';
+import { LIST_COLUMNS, respondEmployeesPage } from './employees-list-paginated.helpers.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
 const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
@@ -168,6 +160,11 @@ export const employeesController = {
   async getAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const t0 = Date.now();
+      // Постраничный режим (включая курсор и сортировку) — общий фильтр «Управления кадрами».
+      if (req.query.page) {
+        await respondEmployeesPage(req, res, t0);
+        return;
+      }
       const { scope, globalRead } = await resolveEmployeeListReadScope(req);
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
@@ -223,217 +220,6 @@ export const employeesController = {
         ...(selfEmployeeIdToInclude != null ? [selfEmployeeIdToInclude] : []),
       ])];
       const isListView = req.query.view === 'list';
-      const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
-      // Оклады в списке «Управления кадрами» не отдаются: они под ключом /salary/terms.
-      // Даты — для столбцов «Трудоустр.»/«Рожд.»; dismissal_date нужен кнопке отмены
-      // запланированного увольнения (раньше не выбирался, и кнопка его не видела).
-      const staffColumns = `${listColumns}, hire_date, birth_date, dismissal_date`;
-
-      // --- Paginated mode ---
-      const pageParam = req.query.page as string | undefined;
-      if (pageParam) {
-        const page = Math.max(1, parseInt(pageParam) || 1);
-        // «Текущие сотрудники» (view=staff) показывают до 1000 строк — таблица виртуализирована.
-        const maxPageSize = req.query.view === 'staff' ? 1000 : 200;
-        const pageSize = Math.min(maxPageSize, Math.max(1, parseInt(req.query.pageSize as string) || 50));
-        const search = (req.query.search as string || '').trim();
-        const status = req.query.status as string | undefined; // 'active' | 'fired' | 'excluded'
-        // keyset=1 — подгрузка «Текущих сотрудников» порциями по курсору (ФИО, id) вместо OFFSET:
-        // увольнение или добавление сотрудника между порциями не сдвигает следующую порцию.
-        const keysetParsed = parseKeysetParams(req.query, status);
-        if (!keysetParsed.ok) {
-          res.status(400).json({ success: false, error: 'Некорректный курсор списка', code: 'INVALID_CURSOR' });
-          return;
-        }
-        const keyset = keysetParsed.keyset;
-        const offset = (page - 1) * pageSize;
-        if (status === 'fired' && departmentId) {
-          const archiveDepartment = await getKnownArchiveDepartment();
-          if (archiveDepartment?.id === departmentId) {
-            await reconcileFiredEmployeesArchiveDepartment(req.user.id);
-          }
-        }
-
-        // Main query with exact count
-        const selectCols = req.query.view === 'staff' ? staffColumns : listColumns;
-        const params: unknown[] = [];
-        const whereParts: string[] = [];
-
-        params.push(showArchived);
-        whereParts.push(`is_archived = $${params.length}`);
-
-        if (scope === 'self') {
-          if (!req.user.employee_id) {
-            res.json({
-              success: true,
-              data: [],
-              meta: { page, pageSize, total: 0, totalPages: 0 },
-            });
-            return;
-          }
-          params.push(req.user.employee_id);
-          whereParts.push(`id = $${params.length}`);
-        } else if (departmentFilterIds?.length) {
-          params.push(departmentFilterIds);
-          const deptIdx = params.length;
-          if (additionalEmployeeIds.length > 0) {
-            params.push(additionalEmployeeIds);
-            whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`);
-          } else {
-            whereParts.push(`org_department_id = ANY($${deptIdx}::uuid[])`);
-          }
-        } else if (additionalEmployeeIds.length > 0) {
-          // Руководитель без managed-отделов: только сам + прямые подчинённые.
-          params.push(additionalEmployeeIds);
-          whereParts.push(`id = ANY($${params.length}::int[])`);
-        } else if (scope === 'department') {
-          // department-scope без отделов и без назначений — не отдаём всю таблицу.
-          res.json({
-            success: true,
-            data: [],
-            meta: { page, pageSize, total: 0, totalPages: 0 },
-          });
-          return;
-        }
-        if (search) {
-          params.push(`%${escapeLike(search)}%`);
-          whereParts.push(`full_name ILIKE $${params.length}`);
-        }
-        if (sectionContext) {
-          whereParts.push(buildSectionConditionSql(sectionContext, 'employees', params));
-        }
-        if (status === 'fired') {
-          whereParts.push(`employment_status = 'fired'`);
-        } else if (status === 'excluded') {
-          whereParts.push(`excluded_from_timesheet = true AND employment_status <> 'fired'`);
-        } else if (status === 'active' || !status) {
-          whereParts.push(`employment_status <> 'fired'`);
-        }
-
-        // Фильтр по графику: schedule_id=<uuid> или schedule_id=__default__ (legacy).
-        const scheduleParam = typeof req.query.schedule_id === 'string' ? req.query.schedule_id.trim() : '';
-        if (scheduleParam) {
-          // Календарь Europe/Moscow — единый источник «сегодня» с listEmployeeAssignments.
-          const today = moscowTodayIso();
-
-          let isDefaultRequested = false;
-          if (scheduleParam === '__default__') {
-            isDefaultRequested = true;
-          } else {
-            try {
-              const tplRow = await queryOne<{ is_default: boolean | null }>(
-                'SELECT is_default FROM work_schedules WHERE id = $1',
-                [scheduleParam],
-              );
-              isDefaultRequested = !!tplRow?.is_default;
-            } catch (tplErr) {
-              console.error('Get schedule template error:', tplErr);
-              res.status(500).json({ success: false, error: 'Failed to fetch employees' });
-              return;
-            }
-          }
-
-          let activeAss: Array<{ employee_id: number; schedule_id: string }>;
-          try {
-            activeAss = await query<{ employee_id: number; schedule_id: string }>(
-              `SELECT employee_id, schedule_id
-                 FROM employee_schedule_assignments
-                WHERE effective_from <= $1
-                  AND (effective_to IS NULL OR effective_to >= $1)`,
-              [today],
-            );
-          } catch (assErr) {
-            console.error('Get schedule assignments error:', assErr);
-            res.status(500).json({ success: false, error: 'Failed to fetch employees' });
-            return;
-          }
-
-          if (isDefaultRequested) {
-            const excluded = [...new Set(
-              activeAss
-                .filter(r => r.schedule_id !== scheduleParam)
-                .map(r => Number(r.employee_id)),
-            )];
-            if (excluded.length > 0) {
-              params.push(excluded);
-              whereParts.push(`id <> ALL($${params.length}::int[])`);
-            }
-          } else {
-            const ids = [...new Set(
-              activeAss
-                .filter(r => r.schedule_id === scheduleParam)
-                .map(r => Number(r.employee_id)),
-            )];
-            if (ids.length === 0) {
-              res.json({
-                success: true,
-                data: [],
-                meta: { page, pageSize, total: 0, totalPages: 0 },
-              });
-              return;
-            }
-            params.push(ids);
-            whereParts.push(`id = ANY($${params.length}::int[])`);
-          }
-        }
-
-        // id — тай-брейк: без него у однофамильцев порядок между запросами не детерминирован.
-        const orderSql = status === 'excluded'
-          ? 'ORDER BY excluded_from_timesheet_at DESC, id DESC'
-          : `ORDER BY ${KEYSET_NAME_SQL} ASC, id ASC`;
-
-        if (keyset) {
-          await respondKeysetPage(req, res, {
-            t0, selectCols, whereParts, params, orderSql, pageSize, keyset, showArchived,
-          });
-          return;
-        }
-
-        params.push(pageSize);
-        const limitIdx = params.length;
-        params.push(offset);
-        const offsetIdx = params.length;
-
-        const sql = `SELECT ${selectCols}, count(*) OVER ()::int AS total_count
-                       FROM employees
-                      WHERE ${whereParts.join(' AND ')}
-                      ${orderSql}
-                      LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
-
-        let data: Array<Record<string, unknown> & { total_count: number }>;
-        let emptyPageTotal: number | null = null;
-        try {
-          data = await query<Record<string, unknown> & { total_count: number }>(sql, params);
-          // Страница за пределами результата: строк нет, оконного count(*) OVER () тоже.
-          // Считаем отдельно тем же WHERE и теми же параметрами (без LIMIT/OFFSET).
-          if (data.length === 0 && offset > 0) {
-            const countRow = await queryOne<{ total: number | string }>(
-              `SELECT count(*)::int AS total FROM employees WHERE ${whereParts.join(' AND ')}`,
-              params.slice(0, limitIdx - 1),
-            );
-            emptyPageTotal = countRow ? Number(countRow.total) : 0;
-          }
-        } catch (err) {
-          console.error('Get employees paginated error:', err);
-          res.status(500).json({ success: false, error: 'Failed to fetch employees' });
-          return;
-        }
-
-        const employees = await mapEmployeeRows(data, req.query.view === 'staff');
-        const total = data.length > 0 ? Number(data[0].total_count) : (emptyPageTotal ?? 0);
-
-        auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
-          details: { count: employees.length, page, archived: showArchived },
-        }).catch((err: unknown) => console.error('[audit] VIEW_EMPLOYEES log failed:', err));
-
-        console.log(`[getAll] Paginated page=${page} size=${pageSize} total=${total} in ${Date.now() - t0}ms`);
-        res.json({
-          success: true,
-          data: employees,
-          meta: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
-        });
-        return;
-      }
 
       // --- Legacy mode (без page) ---
       console.log(`[getAll] Legacy | archived=${showArchived} dept=${departmentId} list=${isListView}`);
@@ -442,7 +228,7 @@ export const employeesController = {
       let from = 0;
       let hasMore = true;
 
-      const legacyColumns: string = isListView ? listColumns : EMPLOYEE_FULL_COLUMNS;
+      const legacyColumns: string = isListView ? LIST_COLUMNS : EMPLOYEE_FULL_COLUMNS;
       while (hasMore) {
         const params: unknown[] = [];
         const whereParts: string[] = [];
