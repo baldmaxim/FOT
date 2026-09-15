@@ -51,11 +51,12 @@ interface IHiringDepartmentGroupsProps {
 
 /** Заявки на поиск, сгруппированные по отделам (вид как в «Согласованиях»). */
 export const HiringDepartmentGroups: FC<IHiringDepartmentGroupsProps> = ({ requests, onOpen }) => {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // По умолчанию все отделы свёрнуты — храним раскрытые.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const groups = useMemo(() => groupByDepartment(requests), [requests]);
 
   const toggle = (key: string): void => {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -66,7 +67,7 @@ export const HiringDepartmentGroups: FC<IHiringDepartmentGroupsProps> = ({ reque
   return (
     <div className={styles.depts}>
       {groups.map(g => {
-        const isOpen = !collapsed.has(g.key);
+        const isOpen = expanded.has(g.key);
         return (
           <section key={g.key} className={styles.dept}>
             <button type="button" className={styles.deptHead} onClick={() => toggle(g.key)} aria-expanded={isOpen}>
