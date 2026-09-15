@@ -228,7 +228,9 @@ export const employeesController = {
       const pageParam = req.query.page as string | undefined;
       if (pageParam) {
         const page = Math.max(1, parseInt(pageParam) || 1);
-        const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string) || 50));
+        // «Текущие сотрудники» (view=staff) показывают до 1000 строк — таблица виртуализирована.
+        const maxPageSize = req.query.view === 'staff' ? 1000 : 200;
+        const pageSize = Math.min(maxPageSize, Math.max(1, parseInt(req.query.pageSize as string) || 50));
         const search = (req.query.search as string || '').trim();
         const status = req.query.status as string | undefined; // 'active' | 'fired' | 'excluded'
         const offset = (page - 1) * pageSize;

@@ -13,7 +13,7 @@ export const StaffSectionSelect: FC<IStaffSectionSelectProps> = ({ value, onChan
     onChange={event => {
       if (isStaffSection(event.target.value)) onChange(event.target.value);
     }}
-    title="Раздел: СУ-10, СМ, бригады, подрядчики"
+    title="Компания: СУ-10, СМ, бригады, подрядные организации или все компании"
     aria-label="Раздел"
   >
     {STAFF_SECTION_OPTIONS.map(option => (

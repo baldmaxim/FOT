@@ -12,8 +12,13 @@ router.use(authenticate);
 // weekend_full_day_threshold) не отразится в табеле в течение 5 минут — клиент
 // получит закэшированный ответ со старым порогом, и покраска полного дня останется
 // прежней даже после F5.
+// POST /employees — чтение (id в теле ради страницы до 1000 человек), кэши не сбрасывает:
+// иначе каждое открытие «Управления кадрами» обнуляло бы кэш табеля всем.
+const READ_ONLY_POST_PATHS = new Set(['/employees']);
+
 router.use((req, res, next) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
+  const isReadOnlyPost = req.method === 'POST' && READ_ONLY_POST_PATHS.has(req.path);
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !isReadOnlyPost) {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         invalidateCaches(
@@ -37,6 +42,7 @@ router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedule
 
 // Назначения сотрудникам / объектам — менеджеру доступны только через автодоступ /staff-control
 router.get('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeAssignments);
+router.post('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeAssignmentsPost);
 router.get('/objects', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listObjectAssignments);
 router.put('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.assignEmployee);
 router.patch('/employee/:employeeId/assignment', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.fixEmployeeAssignment);

@@ -3,6 +3,7 @@ import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
 import { employeesExportController } from '../controllers/employees-export.controller.js';
 import { employeesMainObjectsController } from '../controllers/employees-main-objects.controller.js';
+import { employeesSectionDepartmentsController } from '../controllers/employees-section-departments.controller.js';
 import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -151,6 +152,21 @@ router.get(
   requirePageAccess('/staff-control', 'view'),
   noStore,
   employeesMainObjectsController.getMainObjects
+);
+// POST — те же данные для страницы до 1000 человек: id в теле, а не в URL.
+router.post(
+  '/main-objects',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesMainObjectsController.postMainObjects
+);
+
+// GET /api/employees/section-departments — отделы разделов (СУ-10 / СМ / Бригады /
+// Подрядные организации) для каскадного фильтра «Раздел → Отделы».
+router.get(
+  '/section-departments',
+  requirePageAccess('/staff-control', 'view'),
+  employeesSectionDepartmentsController.getSectionDepartments
 );
 
 // Вводный инструктаж (вкладка «Управление кадрами → Вводный инструктаж»).

@@ -24,8 +24,6 @@ import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useOnlinePresence } from '../contexts/OnlinePresenceContext';
-import { OnlineDot } from '../components/ui/OnlineDot';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../components/layout/HeaderAddonContext';
 import {
@@ -36,10 +34,12 @@ import {
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import { StaffMainObjectCell } from '../components/staff/StaffMainObjectCell';
+import { StaffCostItemCell } from '../components/staff/StaffCostItemCell';
 import { StaffSignBadge } from '../components/staff/StaffSignBadge';
 import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY, useStaffMainObjects } from '../hooks/useStaffMainObjects';
+import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
 import { formatDate } from '../utils/formatMoney';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
@@ -50,6 +50,7 @@ import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const StaffTimesheetModeModal = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
+const StaffCostItemModal = lazy(() => import('../components/staff/StaffCostItemModal').then(m => ({ default: m.StaffCostItemModal })));
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
@@ -73,7 +74,6 @@ import {
 interface IStaffRowProps {
   emp: Employee;
   index: number;
-  isOnline: boolean;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -94,9 +94,10 @@ interface IStaffRowProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
+  onEditCostItem?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -131,7 +132,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews
       )}
       <td className="sc-td-num">{index + 1}</td>
       <td className="sc-td-name" title={emp.full_name}>
-        <OnlineDot online={isOnline} /> {emp.full_name}
+        {emp.full_name}
         {/* Бейдж = employees.excluded_from_timesheet. Независим от employment_status='fired'. */}
         {emp.excluded_from_timesheet && (
           <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
@@ -177,8 +178,12 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews
       <td className="sc-td-main-object">
         <StaffMainObjectCell name={mainObjects === undefined ? undefined : (mainObjects[String(emp.id)] ?? null)} />
       </td>
-      <td className="sc-td-cost-item">
-        <StaffMainObjectCell name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)} />
+      <td className="sc-td-cost-item" onClick={onEditCostItem ? e => e.stopPropagation() : undefined}>
+        <StaffCostItemCell
+          employee={emp}
+          name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)}
+          onEdit={onEditCostItem}
+        />
       </td>
       <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} /></td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
@@ -833,6 +838,7 @@ interface IVirtualTableProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
+  onEditCostItem?: (emp: Employee) => void;
 }
 
 const ROW_HEIGHT = 36;
@@ -862,8 +868,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onFire,
   onCancelDismissal,
   onReturn,
+  onEditCostItem,
 }) => {
-  const { isEmployeeOnline } = useOnlinePresence();
   // №, ФИО, Отдел, Должность, Трудоустр., Рожд., График, Объект, Статья затрат, Признак, действия.
   const totalCols = 11 + (selectionMode ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -933,7 +939,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     key={emp.id}
                     emp={emp}
                     index={vRow.index}
-                    isOnline={isEmployeeOnline(emp.id)}
                     scheduleViews={scheduleViews}
                     selectedIds={selectedIds}
                     selectionMode={selectionMode}
@@ -952,6 +957,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onFire={onFire}
                     onCancelDismissal={onCancelDismissal}
                     onReturn={onReturn}
+                    onEditCostItem={onEditCostItem}
                   />
                 );
               })}
@@ -992,13 +998,13 @@ interface IVirtualCardsProps {
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
+  onEditCostItem?: (emp: Employee) => void;
 }
 
 const CARD_ESTIMATE = 250;
 
 const MobileCard: FC<{
   emp: Employee;
-  isOnline: boolean;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1017,7 +1023,8 @@ const MobileCard: FC<{
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+  onEditCostItem?: (emp: Employee) => void;
+}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -1036,7 +1043,7 @@ const MobileCard: FC<{
     >
       <div className="sc-card-head">
         <div className="sc-card-name">
-          <OnlineDot online={isOnline} /> {emp.full_name}
+          {emp.full_name}
           {emp.excluded_from_timesheet && (
             <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
               Исключён
@@ -1085,7 +1092,11 @@ const MobileCard: FC<{
       </div>
       <div className="sc-card-row">
         <span className="sc-card-label">Статья затрат</span>
-        <StaffMainObjectCell name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)} />
+        <StaffCostItemCell
+          employee={emp}
+          name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)}
+          onEdit={onEditCostItem}
+        />
       </div>
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
@@ -1149,8 +1160,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
-  const { isEmployeeOnline } = useOnlinePresence();
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1174,7 +1184,6 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
             >
               <MobileCard
                 emp={emp}
-                isOnline={isEmployeeOnline(emp.id)}
                 scheduleViews={scheduleViews}
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}
@@ -1193,6 +1202,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 onFire={onFire}
                 onCancelDismissal={onCancelDismissal}
                 onReturn={onReturn}
+                onEditCostItem={onEditCostItem}
               />
             </div>
           );
@@ -1284,6 +1294,9 @@ const FireEmployeeModal: FC<IFireEmployeeModalProps> = ({ emp, date, onChangeDat
 
 /* ───────── Main Page ───────── */
 
+/** Строк на странице: таблица виртуализирована, сервер отдаёт до 1000 при view=staff. */
+const STAFF_PAGE_SIZE = 1000;
+
 export const StaffControlPage: FC = () => {
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
@@ -1341,7 +1354,7 @@ export const StaffControlPage: FC = () => {
 
   const { employees, departments, countsByDepartment, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
     page,
-    pageSize: 100,
+    pageSize: STAFF_PAGE_SIZE,
     search: debouncedSearch || undefined,
     departmentId: deptId || undefined,
     scheduleId: scheduleFilter || undefined,
@@ -1600,14 +1613,35 @@ export const StaffControlPage: FC = () => {
     return getTreeFlatDepartments(filtered);
   }, [departments, restrictToManaged, managedDepartmentIds]);
 
-  // Дерево для DepartmentTreeSelect: тот же scope-фильтр, что и allDepts,
-  // но БЕЗ расплющивания (компонент сам строит раскрывающееся дерево).
-  const deptTree = useMemo(
+  // Дерево в пределах scope пользователя: тот же фильтр, что и allDepts, но БЕЗ
+  // расплющивания. Идёт в модалки (перевод, режим табелирования) — раздел шапки их не сужает.
+  const scopeDeptTree = useMemo(
     () => (restrictToManaged
       ? filterDepartmentTreeByIds(departments, new Set(managedDepartmentIds))
       : departments),
     [departments, restrictToManaged, managedDepartmentIds],
   );
+
+  // Каскад «Компания → Отделы»: только фильтр в шапке. Пока id разделов не загружены —
+  // полный scope, чтобы список не мигал пустым.
+  const sectionDepartmentsQuery = useStaffSectionDepartments();
+  const sectionDeptIds = useMemo(() => {
+    if (section === 'all' || !sectionDepartmentsQuery.data) return null;
+    return new Set(sectionDepartmentsQuery.data[section]);
+  }, [section, sectionDepartmentsQuery.data]);
+  const filterDeptTree = useMemo(
+    () => (sectionDeptIds ? filterDepartmentTreeByIds(scopeDeptTree, sectionDeptIds) : scopeDeptTree),
+    [scopeDeptTree, sectionDeptIds],
+  );
+
+  // Отдел не из выбранной компании (из URL, «назад», восстановленные параметры) дал бы
+  // пустую таблицу — сбрасываем. Фиксированный отдел руководителя не трогаем.
+  useEffect(() => {
+    if (!deptId || !sectionDeptIds || singleManagedDeptId) return;
+    if (sectionDeptIds.has(deptId)) return;
+    setDeptId('');
+    setPage(1);
+  }, [deptId, sectionDeptIds, singleManagedDeptId]);
 
   // Если админ снял у руководителя один из отделов, бэкенд перестаёт включать его
   // в `allDepts` (в дереве флаг `in_scope=false` или отдел вырезан). В URL ещё может
@@ -1633,7 +1667,7 @@ export const StaffControlPage: FC = () => {
     const parts: string[] = [];
     if (section !== 'all') {
       const sectionLabel = STAFF_SECTION_OPTIONS.find(option => option.value === section)?.label;
-      if (sectionLabel) parts.push(`Раздел: ${sectionLabel}`);
+      if (sectionLabel) parts.push(`Компания: ${sectionLabel}`);
     }
     if (deptId) {
       const deptName = allDepts.find(dept => dept.id === deptId)?.name;
@@ -1651,7 +1685,7 @@ export const StaffControlPage: FC = () => {
     if (debouncedSearch) {
       parts.push(`Поиск: "${debouncedSearch}"`);
     }
-    if (parts.length === 0) return 'Все активные сотрудники';
+    if (parts.length === 0) return 'Все действующие сотрудники';
     return parts.join(' • ');
   }, [section, deptId, scheduleFilter, debouncedSearch, allDepts, scheduleTemplates]);
 
@@ -1664,6 +1698,11 @@ export const StaffControlPage: FC = () => {
     setDeptId(value);
     setPage(1);
   }, []);
+
+  // «Статья затрат» = личный режим табелирования: правка только в «Действующих» и с правом режима.
+  const [costItemEmp, setCostItemEmp] = useState<Employee | null>(null);
+  const closeCostItemModal = useCallback(() => setCostItemEmp(null), []);
+  const costItemEditHandler = canEditTimesheetMode && statusFilter === 'active' ? setCostItemEmp : undefined;
 
   const handleSectionChange = useCallback((value: StaffSection) => {
     setSectionChoice(value);
@@ -2342,21 +2381,23 @@ export const StaffControlPage: FC = () => {
 
   const controlsBar = (
     <div className="sc-filters">
+      <StaffSectionSelect value={section} onChange={handleSectionChange} />
       {isSingleManagedDept ? (
         <div className="sc-dept-fixed" title="Вам назначен один отдел">
           {singleManagedDeptName ?? 'Мой отдел'}
         </div>
       ) : (
-        <DepartmentTreeSelect
-          departments={deptTree}
-          value={deptId}
-          onChange={handleDeptChange}
-          isLoading={structureTree.isPending}
-          isError={structureTree.isError}
-          onRetry={() => { void structureTree.refetch(); }}
-        />
+        <div className="sc-filter-dept-slot">
+          <DepartmentTreeSelect
+            departments={filterDeptTree}
+            value={deptId}
+            onChange={handleDeptChange}
+            isLoading={structureTree.isPending}
+            isError={structureTree.isError}
+            onRetry={() => { void structureTree.refetch(); }}
+          />
+        </div>
       )}
-      <StaffSectionSelect value={section} onChange={handleSectionChange} />
       <select
         className="sc-schedule-filter"
         value={scheduleFilter}
@@ -2377,7 +2418,7 @@ export const StaffControlPage: FC = () => {
             className={`sc-seg-btn${statusFilter === 'active' ? ' is-active' : ''}`}
             onClick={() => { setStatusFilter('active'); setPage(1); }}
           >
-            Активные
+            Действующие
           </button>
           <button
             type="button"
@@ -2387,16 +2428,6 @@ export const StaffControlPage: FC = () => {
             onClick={() => { setStatusFilter('fired'); setPage(1); }}
           >
             Уволенные
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={statusFilter === 'excluded'}
-            className={`sc-seg-btn${statusFilter === 'excluded' ? ' is-active' : ''}`}
-            onClick={() => { setStatusFilter('excluded'); setPage(1); }}
-            title="Сотрудники с флагом excluded_from_timesheet (не уволенные)"
-          >
-            Исключённые
           </button>
         </div>
       )}
@@ -2485,7 +2516,8 @@ export const StaffControlPage: FC = () => {
           onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
+          onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
+          onEditCostItem={costItemEditHandler}
         />
       ) : (
         <VirtualTable
@@ -2510,7 +2542,8 @@ export const StaffControlPage: FC = () => {
           onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
+          onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
+          onEditCostItem={costItemEditHandler}
         />
       )}
 
@@ -2543,7 +2576,7 @@ export const StaffControlPage: FC = () => {
         key={`${modalType ?? 'none'}-${modalEmp?.id ?? 'none'}`}
         modalType={modalType}
         modalEmp={modalEmp}
-        deptTree={deptTree}
+        deptTree={scopeDeptTree}
         templates={scheduleTemplates}
         scheduleViews={scheduleViews}
         baseScheduleViews={baseScheduleViews}
@@ -2559,7 +2592,7 @@ export const StaffControlPage: FC = () => {
         <Suspense fallback={null}>
           <StaffTimesheetModeModal
             departments={allDepts}
-            deptTree={deptTree}
+            deptTree={scopeDeptTree}
             initialDepartmentId={deptId || ''}
             onClose={() => {
               setBulkTsModeOpen(false);
@@ -2567,6 +2600,11 @@ export const StaffControlPage: FC = () => {
               void queryClient.invalidateQueries({ queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY] });
             }}
           />
+        </Suspense>
+      )}
+      {costItemEmp && (
+        <Suspense fallback={null}>
+          <StaffCostItemModal employee={costItemEmp} onClose={closeCostItemModal} />
         </Suspense>
       )}
       <BulkScheduleModal

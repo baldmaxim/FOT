@@ -76,7 +76,10 @@ vi.mock('../services/department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: h.listExplicitDepartmentIdsForUser,
 }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: h.listDirectSubordinates }));
-vi.mock('../services/skud-shared.service.js', () => ({ collectDeptIds: vi.fn(async (id: string) => [id]) }));
+vi.mock('../services/skud-shared.service.js', () => ({
+  collectDeptIds: vi.fn(async (id: string) => [id]),
+  getAllDepartmentsTree: vi.fn(async () => []),
+}));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({
   getEmployeeOwnerAndSupervisor: vi.fn().mockResolvedValue([]),
@@ -236,6 +239,20 @@ describe('getAll — параметр section', () => {
     const [sql] = employeeListCalls()[0];
     expect(sql).toContain('AND FALSE');
     expect(res.body).toMatchObject({ meta: { total: 0 } });
+  });
+});
+
+describe('getAll — предел pageSize', () => {
+  const pageSizeOf = async (query: Record<string, unknown>) => {
+    const res = makeRes();
+    await employeesController.getAll(makeReq(query), res as never);
+    return (res.body as { meta: { pageSize: number } }).meta.pageSize;
+  };
+
+  it('view=staff — до 1000, иначе до 200', async () => {
+    expect(await pageSizeOf({ page: '1', pageSize: '1000', view: 'staff' })).toBe(1000);
+    expect(await pageSizeOf({ page: '1', pageSize: '5000', view: 'staff' })).toBe(1000);
+    expect(await pageSizeOf({ page: '1', pageSize: '1000' })).toBe(200);
   });
 });
 

@@ -118,6 +118,15 @@ export interface ITimesheetModeEmployee {
   can_edit?: boolean;
 }
 
+export interface IEmployeeTimesheetModeUpdate {
+  /** false — значение уже было таким, запись и аудит не выполнялись. */
+  changed: boolean;
+  mode: TimesheetExportMode | null;
+  object_id: string | null;
+}
+
+export const TIMESHEET_MODE_CONFLICT_CODE = 'TIMESHEET_MODE_CONFLICT';
+
 export interface ITimesheetModes {
   department: { id: string; mode: TimesheetExportMode | null; object_id: string | null };
   employees: ITimesheetModeEmployee[];
@@ -615,6 +624,27 @@ export const adminService = {
       { employee_ids: employeeIds, mode, object_id: objectId },
     );
     return response.data ?? { affected: 0 };
+  },
+
+  /**
+   * Личный режим одного сотрудника («Статья затрат» в «Управлении кадрами»).
+   * expected — явный режим, который видел пользователь: если его уже поменяли, сервер
+   * отвечает 409 (ApiError.code = TIMESHEET_MODE_CONFLICT, details.data.current).
+   * Повтор того же значения ничего не пишет: changed = false.
+   */
+  async updateEmployeeTimesheetMode(
+    employeeId: number,
+    payload: {
+      mode: TimesheetExportMode | null;
+      object_id: string | null;
+      expected: { mode: TimesheetExportMode | null; object_id: string | null };
+    },
+  ): Promise<IEmployeeTimesheetModeUpdate> {
+    const response = await apiClient.put<ApiResponse<IEmployeeTimesheetModeUpdate>>(
+      `/admin/timesheet-modes/employees/${employeeId}`,
+      payload,
+    );
+    return response.data;
   },
 
   /** Отделы и бригады с их режимом — для массовой настройки. */

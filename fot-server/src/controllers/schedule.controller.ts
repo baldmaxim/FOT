@@ -12,6 +12,19 @@ import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { filterEmployeeIdsByReadScope } from '../services/employee-scope-filter.service.js';
+
+/** Предел POST /schedules/employees: размер страницы «Текущих сотрудников». */
+export const EMPLOYEE_ASSIGNMENTS_MAX_IDS = 1000;
+
+// Предел — по уникальным id; сырой массив ограничен отдельно, чтобы не разбирать мегабайты.
+const employeeIdsBodySchema = z.object({
+  employee_ids: z.array(z.number().int().positive().safe())
+    .min(1)
+    .max(EMPLOYEE_ASSIGNMENTS_MAX_IDS * 5)
+    .transform(ids => [...new Set(ids)])
+    .refine(ids => ids.length <= EMPLOYEE_ASSIGNMENTS_MAX_IDS),
+});
 
 async function emitScheduleChangedForEmployee(employeeId: number, action: string): Promise<void> {
   try {
@@ -1039,6 +1052,37 @@ export const scheduleController = {
       res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] listEmployeeAssignments error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки персональных графиков сотрудников' });
+    }
+  },
+
+  /**
+   * POST /api/schedules/employees { employee_ids } — то же для страницы «Текущих сотрудников»
+   * до 1000 человек: id в теле, а не в URL. Чужие id отбрасываются скоупом чтения списка.
+   */
+  async listEmployeeAssignmentsPost(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsed = employeeIdsBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          success: false,
+          error: `employee_ids: от 1 до ${EMPLOYEE_ASSIGNMENTS_MAX_IDS} корректных id сотрудников`,
+        });
+      }
+      const employeeIds = await filterEmployeeIdsByReadScope(req, parsed.data.employee_ids);
+      if (employeeIds.length === 0) return res.json({ success: true, data: [] });
+
+      const data = await query<Record<string, unknown>>(
+        `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')}
+          WHERE a.employee_id = ANY($1::int[])
+            AND a.effective_from <= $2
+            AND (a.effective_to IS NULL OR a.effective_to >= $2)
+          ORDER BY a.employee_id ASC, a.effective_from DESC`,
+        [employeeIds, moscowTodayIso()],
+      );
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('[schedules] listEmployeeAssignmentsPost error:', err);
       res.status(500).json({ success: false, error: 'Ошибка загрузки персональных графиков сотрудников' });
     }
   },

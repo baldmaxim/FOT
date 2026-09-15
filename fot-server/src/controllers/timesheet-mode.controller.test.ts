@@ -329,6 +329,114 @@ describe('timesheetModeController.updateEmployee — валидация и ск�
   });
 });
 
+describe('timesheetModeController.updateEmployee — идемпотентность и expected', () => {
+  const OBJ2 = '33333333-3333-3333-3333-333333333333';
+  const row = (mode: string | null, objectId: string | null = null) =>
+    ({ rows: [{ timesheet_export_mode: mode, timesheet_export_object_id: objectId, full_name: 'Иванов' }], rowCount: 1 });
+
+  /** Состояние строки живёт между вызовами — как в БД. */
+  const installStatefulTx = (initial: { mode: string | null; objectId: string | null }) => {
+    const state = { ...initial };
+    const updates: unknown[][] = [];
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn({
+      query: vi.fn(async (sql: string, params: unknown[]) => {
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 0 };
+        if (sql.includes('FOR UPDATE')) return row(state.mode, state.objectId);
+        if (sql.includes('UPDATE employees')) {
+          updates.push(params);
+          state.mode = params[0] as string | null;
+          state.objectId = params[1] as string | null;
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    }));
+    return { state, updates };
+  };
+
+  const put = async (body: unknown) => {
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(makeReq({ params: { id: '5' }, body }), res);
+    return res;
+  };
+
+  it('то же значение — changed:false, без UPDATE и без аудита', async () => {
+    const { updates } = installStatefulTx({ mode: 'skud', objectId: null });
+    const res = await put({ mode: 'skud' });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toEqual({ success: true, data: { changed: false, mode: 'skud', object_id: null } });
+    expect(updates).toHaveLength(0);
+    expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
+  });
+
+  it('два одинаковых запроса подряд — одна запись и один аудит', async () => {
+    pgQueryOne.mockResolvedValue({ id: OBJ, is_active: true });
+    const { updates, state } = installStatefulTx({ mode: null, objectId: null });
+    const body = { mode: 'object', object_id: OBJ, expected: { mode: null, object_id: null } };
+
+    const first = await put(body);
+    const second = await put(body);
+
+    expect((first.payload as { data: { changed: boolean } }).data.changed).toBe(true);
+    expect(second.statusCode).toBe(200);
+    expect((second.payload as { data: { changed: boolean } }).data.changed).toBe(false);
+    expect(updates).toHaveLength(1);
+    expect(audit.logFromRequestWithClient).toHaveBeenCalledTimes(1);
+    expect(state).toEqual({ mode: 'object', objectId: OBJ });
+  });
+
+  it('expected не совпал — 409 с текущим значением, ничего не пишется', async () => {
+    pgQueryOne.mockResolvedValue({ id: OBJ, is_active: true });
+    const { updates } = installStatefulTx({ mode: 'object', objectId: OBJ2 });
+    const res = await put({ mode: 'object', object_id: OBJ, expected: { mode: 'skud', object_id: null } });
+    expect(res.statusCode).toBe(409);
+    expect(res.payload).toMatchObject({
+      success: false,
+      code: 'TIMESHEET_MODE_CONFLICT',
+      data: { current: { mode: 'object', object_id: OBJ2 } },
+    });
+    expect(updates).toHaveLength(0);
+    expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
+  });
+
+  it('expected устарел, но значение уже целевое — 200 changed:false, не 409', async () => {
+    const { updates } = installStatefulTx({ mode: 'current_activity', objectId: null });
+    const res = await put({ mode: 'current_activity', expected: { mode: 'skud', object_id: null } });
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { changed: boolean } }).data.changed).toBe(false);
+    expect(updates).toHaveLength(0);
+  });
+
+  it('expected совпал — запись и аудит', async () => {
+    const { updates } = installStatefulTx({ mode: 'skud', objectId: null });
+    const res = await put({ mode: null, expected: { mode: 'skud', object_id: null } });
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { changed: boolean; mode: null } }).data).toEqual({ changed: true, mode: null, object_id: null });
+    expect(updates).toHaveLength(1);
+    expect(audit.logFromRequestWithClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('без expected — прежнее поведение (запись при отличии)', async () => {
+    const { updates } = installStatefulTx({ mode: 'object', objectId: OBJ2 });
+    const res = await put({ mode: 'skud' });
+    expect(res.statusCode).toBe(200);
+    expect(updates).toHaveLength(1);
+  });
+
+  it('некорректный expected — 400 без транзакции', async () => {
+    const res = await put({ mode: 'skud', expected: { mode: 'bogus', object_id: null } });
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('сотрудник не найден — 404', async () => {
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn({
+      query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+    }));
+    expect((await put({ mode: 'skud' })).statusCode).toBe(404);
+  });
+});
+
 describe('timesheetModeController.updateDepartment — поддерево', () => {
   it('apply_to_subtree проверяет доступ к каждому потомку', async () => {
     pgQuery.mockResolvedValueOnce([{ id: DEPT }, { id: 'child-1' }]);

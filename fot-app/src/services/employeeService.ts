@@ -36,6 +36,14 @@ export interface IEmployeeMainObjects {
   cost_items: Record<string, string>;
 }
 
+/** id отделов разделов «Управления кадрами»; «Все компании» — без фильтра. */
+export interface IStaffSectionDepartments {
+  su10: string[];
+  sm: string[];
+  brigades: string[];
+  contractors: string[];
+}
+
 export interface EmployeeCounts {
   byDepartment: Record<string, number>;
   byStatus: { active: number; fired: number };
@@ -136,11 +144,19 @@ export const employeeService = {
    * Таймаут увеличен: основной объект считается по часам СКУД за месяц на всю выборку.
    */
   async getMainObjects(employeeIds: number[]): Promise<IEmployeeMainObjects> {
-    // no-store: сервер ставит max-age=30 на GET /api/* — ячейки отставали бы сверх минуты.
-    const response = await apiClient.get<ApiResponse<IEmployeeMainObjects>>(
-      `/employees/main-objects?ids=${employeeIds.join(',')}`,
-      { cache: 'no-store' },
+    // POST: страница до 1000 человек, id в теле. Запас по таймауту — пока нет ночного
+    // снимка, сервер считает объекты на лету.
+    const response = await apiClient.post<ApiResponse<IEmployeeMainObjects>>(
+      '/employees/main-objects',
+      { ids: employeeIds },
+      { timeoutMs: 60_000 },
     );
+    return response.data;
+  },
+
+  /** id отделов разделов (СУ-10 / СМ / Бригады / Подрядные организации) — каскад фильтров. */
+  async getSectionDepartments(): Promise<IStaffSectionDepartments> {
+    const response = await apiClient.get<ApiResponse<IStaffSectionDepartments>>('/employees/section-departments');
     return response.data;
   },
 

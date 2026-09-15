@@ -40,6 +40,32 @@ const bulkEmployeesSchema = z.object({
   object_id: z.string().uuid().nullable().optional(),
 });
 
+const modeEnum = z.enum(['current_activity', 'object', 'skud']);
+
+/**
+ * Одиночный PUT сотрудника. expected — явный режим, который видел клиент (защита от
+ * потерянного обновления); без него поведение прежнее. Общая modeSchema (отделы) не меняется.
+ */
+const employeeModeSchema = z.object({
+  mode: modeEnum.nullable(),
+  object_id: z.string().uuid().nullable().optional(),
+  expected: z.object({
+    mode: modeEnum.nullable(),
+    object_id: z.string().uuid().nullable(),
+  }).optional(),
+});
+
+export const TIMESHEET_MODE_CONFLICT_CODE = 'TIMESHEET_MODE_CONFLICT';
+
+interface IExplicitMode {
+  mode: TimesheetExportMode | null;
+  objectId: string | null;
+}
+
+/** Пара (mode, object) после нормализации: объект значим только у режима object. */
+const sameExplicitMode = (a: IExplicitMode, b: IExplicitMode): boolean =>
+  a.mode === b.mode && (a.mode !== 'object' || a.objectId === b.objectId);
+
 const modeSchema = z.object({
   // null = сбросить явный режим и вернуться к режиму отдела / legacy-фолбэку.
   mode: z.enum(['current_activity', 'object', 'skud']).nullable(),
@@ -560,7 +586,7 @@ export const timesheetModeController = {
         res.status(400).json({ error: 'Некорректный id сотрудника' });
         return;
       }
-      const parsed = modeSchema.safeParse(req.body);
+      const parsed = employeeModeSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Некорректные данные', details: parsed.error.issues });
         return;
@@ -574,8 +600,11 @@ export const timesheetModeController = {
         res.status(400).json({ error: normalized.error });
         return;
       }
+      const expected: IExplicitMode | null = parsed.data.expected
+        ? { mode: parsed.data.expected.mode, objectId: parsed.data.expected.object_id }
+        : null;
 
-      const updated = await withTransaction(async client => {
+      const outcome = await withTransaction(async client => {
         // Тот же ключ берёт настроечный скрипт — иначе они не увидят друг друга.
         await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
         const before = await client.query<{
@@ -587,7 +616,16 @@ export const timesheetModeController = {
              FROM employees WHERE id = $1::int FOR UPDATE`,
           [employeeId],
         );
-        if (before.rowCount === 0) return null;
+        if (before.rowCount === 0) return { kind: 'not_found' as const };
+
+        const current: IExplicitMode = {
+          mode: before.rows[0].timesheet_export_mode,
+          objectId: before.rows[0].timesheet_export_mode === 'object' ? before.rows[0].timesheet_export_object_id : null,
+        };
+        // Повтор (двойной клик, ретрай после таймаута) — цель уже достигнута: ни UPDATE,
+        // ни updated_at, ни аудита. Проверка до expected: устаревший expected тут не мешает.
+        if (sameExplicitMode(current, normalized)) return { kind: 'unchanged' as const };
+        if (expected && !sameExplicitMode(current, expected)) return { kind: 'conflict' as const, current };
 
         await client.query(
           `UPDATE employees
@@ -609,14 +647,26 @@ export const timesheetModeController = {
             new_object_id: normalized.objectId,
           },
         });
-        return true;
+        return { kind: 'changed' as const };
       });
 
-      if (!updated) {
+      if (outcome.kind === 'not_found') {
         res.status(404).json({ error: 'Сотрудник не найден' });
         return;
       }
-      res.json({ success: true, data: { mode: normalized.mode, object_id: normalized.objectId } });
+      if (outcome.kind === 'conflict') {
+        res.status(409).json({
+          success: false,
+          code: TIMESHEET_MODE_CONFLICT_CODE,
+          error: 'Режим уже изменил другой пользователь',
+          data: { current: { mode: outcome.current.mode, object_id: outcome.current.objectId } },
+        });
+        return;
+      }
+      res.json({
+        success: true,
+        data: { changed: outcome.kind === 'changed', mode: normalized.mode, object_id: normalized.objectId },
+      });
     } catch (error) {
       console.error('timesheetModeController.updateEmployee error:', error);
       res.status(500).json({ error: 'Не удалось сохранить режим табелирования' });

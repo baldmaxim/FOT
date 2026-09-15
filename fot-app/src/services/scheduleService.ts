@@ -67,12 +67,13 @@ export const scheduleService = {
     return res.data;
   },
 
-  /** Активные персональные графики сотрудников */
+  /** Активные персональные графики сотрудников (POST: до 1000 id в теле, а не в URL) */
   async listEmployeeAssignments(employeeIds: number[]): Promise<IEmployeeScheduleAssignment[]> {
     if (employeeIds.length === 0) return [];
-    const params = new URLSearchParams();
-    params.set('employee_ids', employeeIds.join(','));
-    const res = await apiClient.get<ApiResponse<IEmployeeScheduleAssignment[]>>(`/schedules/employees?${params.toString()}`);
+    const res = await apiClient.post<ApiResponse<IEmployeeScheduleAssignment[]>>(
+      '/schedules/employees',
+      { employee_ids: employeeIds },
+    );
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки графиков сотрудников');
     return res.data;
   },

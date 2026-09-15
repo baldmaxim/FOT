@@ -46,7 +46,12 @@ vi.mock('../services/skud-shared.service.js', () => ({
   collectDeptIds: vi.fn(async (id: string) => [id]),
 }));
 
-import { scheduleController } from './schedule.controller.js';
+const readScopeMock = vi.hoisted(() => vi.fn(async (_req: unknown, ids: number[]) => ids));
+vi.mock('../services/employee-scope-filter.service.js', () => ({
+  filterEmployeeIdsByReadScope: readScopeMock,
+}));
+
+import { scheduleController, EMPLOYEE_ASSIGNMENTS_MAX_IDS } from './schedule.controller.js';
 
 const BRIGADE_1 = '11111111-1111-4111-8111-111111111111';
 const BRIGADE_2 = '22222222-2222-4222-8222-222222222222';
@@ -123,6 +128,62 @@ function makeTxClient() {
 const installDefaultTx = () => {
   pgTx.mockImplementation(async (fn: (client: unknown) => unknown) => fn(makeTxClient()));
 };
+
+describe('scheduleController.listEmployeeAssignments (GET) / listEmployeeAssignmentsPost (POST)', () => {
+  beforeEach(() => {
+    pgQuery.mockReset().mockResolvedValue([{ id: 'as-1', employee_id: 1 }]);
+    readScopeMock.mockReset().mockImplementation(async (_req: unknown, ids: number[]) => ids);
+  });
+
+  it('GET: прежнее поведение — id из query без фильтра скоупа', async () => {
+    const res = makeRes();
+    await scheduleController.listEmployeeAssignments(makeReq({ query: { employee_ids: '1,2' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(pgQuery.mock.calls[0][1][0]).toEqual([1, 2]);
+    expect(readScopeMock).not.toHaveBeenCalled();
+    expect(res.payload).toEqual({ success: true, data: [{ id: 'as-1', employee_id: 1 }] });
+  });
+
+  it('GET: без employee_ids — 400', async () => {
+    const res = makeRes();
+    await scheduleController.listEmployeeAssignments(makeReq(), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST: пустой, некорректный и больше лимита — 400 без запроса в БД', async () => {
+    const tooMany = Array.from({ length: EMPLOYEE_ASSIGNMENTS_MAX_IDS + 1 }, (_, i) => i + 1);
+    for (const body of [{}, { employee_ids: [] }, { employee_ids: [1, 'x'] }, { employee_ids: [0] }, { employee_ids: [1.5] }, { employee_ids: tooMany }]) {
+      const res = makeRes();
+      await scheduleController.listEmployeeAssignmentsPost(makeReq({ body }), res);
+      expect(res.statusCode).toBe(400);
+    }
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('POST: 1000 уникальных id с дублями принимаются, дубли схлопнуты', async () => {
+    const ids = Array.from({ length: EMPLOYEE_ASSIGNMENTS_MAX_IDS }, (_, i) => i + 1);
+    const res = makeRes();
+    await scheduleController.listEmployeeAssignmentsPost(makeReq({ body: { employee_ids: [...ids, 1, 2] } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(readScopeMock.mock.calls[0][1]).toEqual(ids);
+  });
+
+  it('POST: чужие id отбрасываются скоупом чтения', async () => {
+    readScopeMock.mockResolvedValue([2]);
+    const res = makeRes();
+    await scheduleController.listEmployeeAssignmentsPost(makeReq({ body: { employee_ids: [1, 2] } }), res);
+    expect(pgQuery.mock.calls[0][1][0]).toEqual([2]);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('POST: никого не видно — пустой ответ без запроса в БД', async () => {
+    readScopeMock.mockResolvedValue([]);
+    const res = makeRes();
+    await scheduleController.listEmployeeAssignmentsPost(makeReq({ body: { employee_ids: [5] } }), res);
+    expect(res.payload).toEqual({ success: true, data: [] });
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+});
 
 describe('scheduleController.bulkApplyToBrigades', () => {
   beforeEach(() => {

@@ -479,7 +479,7 @@ const AppRoutes = () => {
 {/* Хаб сам фильтрует вкладки по правам (HubShell), поэтому пускаем и тех, у кого
             есть только «Заявки на поиск сотрудников» или «Вводный инструктаж» (роль ОТиТБ)
             — иначе пункт меню виден, а страница 403. */}
-        <Route element={<ProtectedRoute requiredPage={['/staff-control', '/staff-control/hiring', '/staff-control/induction']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/staff-control', '/staff-control/hiring']} />}>
           <Route
             path="/staff-control"
             element={

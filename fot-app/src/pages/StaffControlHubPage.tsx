@@ -1,6 +1,6 @@
 import { lazy, useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Users, Briefcase, ShieldCheck, UserPlus } from 'lucide-react';
+import { Users, Briefcase, UserPlus } from 'lucide-react';
 import { HubShell, type IHubTab } from '../components/hub/HubShell';
 import { useAuth } from '../contexts/AuthContext';
 import { hrProfileService } from '../services/hrProfileService';
@@ -10,7 +10,6 @@ import '../styles/FilterBar.css';
 
 const StaffControlPage = lazy(() => import('./StaffControlPage').then(m => ({ default: m.StaffControlPage })));
 const HiringRequestsBoard = lazy(() => import('../components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));
-const EmployeeInductionTab = lazy(() => import('../components/staff/EmployeeInductionTab').then(m => ({ default: m.EmployeeInductionTab })));
 const NewEmployeeTab = lazy(() => import('../components/staff/hr/NewEmployeeTab').then(m => ({ default: m.NewEmployeeTab })));
 
 export const StaffControlHubPage: FC = () => {
@@ -48,15 +47,6 @@ export const StaffControlHubPage: FC = () => {
       accessPath: '/staff-control/hiring',
       icon: Briefcase,
       render: () => <HiringRequestsBoard />,
-    },
-    {
-      key: 'induction',
-      label: 'Вводный инструктаж',
-      // Виден и по общему праву «Управление кадрами» (просмотр), и по узкому ключу
-      // вкладки — им открывается раздел роли ОТиТБ, у которой /staff-control нет.
-      accessPath: ['/staff-control', '/staff-control/induction'],
-      icon: ShieldCheck,
-      render: () => <EmployeeInductionTab />,
     },
     ...(newEmployeeTabAvailable ? [{
       key: 'new-employee',

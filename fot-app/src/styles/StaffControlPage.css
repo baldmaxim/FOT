@@ -98,16 +98,29 @@
 }
 
 /* ── Filter Bar (Level 2) ──
- * .sc-filters / .sc-schedule-filter / .sc-filter-search — в общем styles/FilterBar.css
- * (используются и вкладкой «Вводный инструктаж»). Здесь — только ростерные элементы. */
+ * .sc-filters / .sc-schedule-filter / .sc-filter-search — в общем styles/FilterBar.css.
+ * Здесь — только ростерные элементы. */
 
-/* Раздел (СУ-10 / СМ / Бригады / Подрядчики / Все): короткие подписи — уже фильтра графиков. */
+/* Компания (СУ-10 / СМ / Бригады / Подрядные организации / Все компании). */
 .sc-schedule-filter.sc-section-filter {
   min-width: 130px;
 }
 
+/* Слот фильтра отделов: даёт выбору отдела место в порядке панели на мобиле. */
+.sc-filter-dept-slot {
+  min-width: 200px;
+}
+
 @media (max-width: 768px) {
-  .sc-schedule-filter.sc-section-filter {
+  .sc-filters .sc-schedule-filter.sc-section-filter {
+    order: 1;
+    min-width: 0;
+  }
+
+  .sc-filters .sc-filter-dept-slot,
+  .sc-filters .sc-dept-fixed {
+    order: 2;
+    flex: 1 1 0;
     min-width: 0;
   }
 }
@@ -227,8 +240,10 @@
   background: var(--surface);
   color: var(--text-primary);
   font-size: 13px;
-  display: inline-flex;
-  align-items: center;
+  /* block, а не flex: многоточие работает только у блочного контейнера текста. */
+  display: block;
+  box-sizing: border-box;
+  line-height: 34px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1575,6 +1590,121 @@
   flex: 0 0 auto;
 }
 
+/* fieldset вокруг поиска и списка вариантов (disabled = только просмотр): без рамки
+   браузера, тянется по высоте колонки так же, как раньше тянулся сам список. */
+.sc-mode-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sc-mode-body .sc-obj-col > .sc-mode-fieldset {
+  flex: 1 1 auto;
+}
+
+.sc-mode-fieldset > .sc-obj-search {
+  flex: 0 0 auto;
+}
+
+.sc-mode-fieldset:disabled {
+  opacity: 0.7;
+}
+
+.sc-obj-item--inactive {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.sc-obj-item--inactive .sc-mode-current {
+  color: var(--warning);
+  background: var(--warning-muted);
+}
+
+/* «Статья затрат» из таблицы: один сотрудник — узкое окно; тело — колонка, чтобы над
+   списком поместилось сообщение о чужой правке (грид --single рассчитан на один ряд). */
+.sc-modal--full.sc-modal--cost-item {
+  width: min(560px, 92vw);
+  height: min(720px, 90dvh);
+}
+
+.sc-modal--cost-item .sc-modal-body.sc-mode-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sc-modal--cost-item .sc-mode-body > .sc-obj-col {
+  flex: 1 1 auto;
+}
+
+.sc-cost-item-conflict {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--warning-muted);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* Ячейка «Статья затрат» с правом правки: высота строки таблицы не меняется (36px —
+   расчёт virtualizer), тап-цель увеличена только в мобильной карточке. */
+.sc-cell-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sc-cell-edit:hover {
+  border-color: var(--border);
+  background: var(--bg-secondary);
+}
+
+.sc-cell-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sc-cell-edit-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.sc-card .sc-cell-edit {
+  min-height: 44px;
+  margin: 0;
+  padding: 0 8px;
+  border-color: var(--border);
+  touch-action: manipulation;
+}
+
+@media (max-width: 900px) {
+  .sc-modal--full.sc-modal--cost-item {
+    width: 92vw;
+    height: 92dvh;
+  }
+
+  .sc-modal--cost-item .sc-mode-body > .sc-obj-col {
+    flex: 0 0 auto;
+  }
+}
+
 /* Внутри полноэкранной модалки список тянется по высоте колонки, а не по 220px. */
 .sc-modal--full .sc-obj-list {
   max-height: none;
@@ -2006,14 +2136,8 @@
     gap: 10px;
   }
 
-  .sc-filters .sc-dept-select {
-    order: 1;
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
   .sc-page-actions {
-    order: 3;
+    order: 4;
     margin-left: 0;
     flex: 0 0 auto;
     gap: 6px;
@@ -2042,7 +2166,7 @@
   }
 
   .sc-segmented {
-    order: 4;
+    order: 5;
     flex: 0 0 100%;
     box-sizing: border-box;
     margin: 0;

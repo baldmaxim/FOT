@@ -1,12 +1,12 @@
-/** Разделы «Управления кадрами» — как листы Excel-выгрузки; «Прочие» видны только во «Все». */
+/** Разделы «Управления кадрами» — как листы Excel-выгрузки; «Прочие» видны только во «Все компании». */
 export type StaffSection = 'su10' | 'sm' | 'brigades' | 'contractors' | 'all';
 
 export const STAFF_SECTION_OPTIONS: ReadonlyArray<{ value: StaffSection; label: string }> = [
   { value: 'su10', label: 'СУ-10' },
   { value: 'sm', label: 'СМ' },
   { value: 'brigades', label: 'Бригады' },
-  { value: 'contractors', label: 'Подрядчики' },
-  { value: 'all', label: 'Все' },
+  { value: 'contractors', label: 'Подрядные организации' },
+  { value: 'all', label: 'Все компании' },
 ];
 
 export const isStaffSection = (value: unknown): value is StaffSection =>
