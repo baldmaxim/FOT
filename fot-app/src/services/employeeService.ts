@@ -18,6 +18,17 @@ export interface PaginatedParams {
   section?: string;
   archived?: boolean;
   view?: 'list' | 'staff';
+  /**
+   * Курсорная подгрузка (keyset=1): порция после (ФИО, id). null — первая порция.
+   * Не задан — обычная страница по page (OFFSET).
+   */
+  cursor?: IEmployeeListCursor | null;
+}
+
+/** Позиция курсора списка: последняя строка предыдущей порции. */
+export interface IEmployeeListCursor {
+  name: string;
+  id: number;
 }
 
 export interface PaginatedMeta {
@@ -25,6 +36,8 @@ export interface PaginatedMeta {
   pageSize: number;
   total: number;
   totalPages: number;
+  /** Только в курсорном режиме: курсор следующей порции, null — порций больше нет. */
+  next_cursor?: IEmployeeListCursor | null;
 }
 
 /** Столбец «Объект»: где больше всего часов за период (тот же расчёт, что в Excel). */
@@ -95,7 +108,7 @@ export const employeeService = {
     return response.data || [];
   },
 
-  async getPaginated(params: PaginatedParams): Promise<PaginatedResponse> {
+  async getPaginated(params: PaginatedParams, signal?: AbortSignal): Promise<PaginatedResponse> {
     const qs = new URLSearchParams();
     qs.set('page', String(params.page));
     qs.set('view', params.view || 'list');
@@ -106,7 +119,14 @@ export const employeeService = {
     if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
     if (params.section && params.section !== 'all') qs.set('section', params.section);
     if (params.archived) qs.set('archived', 'true');
-    const response = await apiClient.get<{ data: Employee[]; meta: PaginatedMeta }>(`/employees?${qs}`);
+    if (params.cursor !== undefined) {
+      qs.set('keyset', '1');
+      if (params.cursor) {
+        qs.set('after_name', params.cursor.name);
+        qs.set('after_id', String(params.cursor.id));
+      }
+    }
+    const response = await apiClient.get<{ data: Employee[]; meta: PaginatedMeta }>(`/employees?${qs}`, { signal });
     return { data: response.data || [], meta: response.meta || { page: 1, pageSize: 50, total: 0, totalPages: 0 } };
   },
 
@@ -143,13 +163,13 @@ export const employeeService = {
    * фильтры экрана (отдел, поиск, график, статус) на файл не влияют.
    * Таймаут увеличен: основной объект считается по часам СКУД за месяц на всю выборку.
    */
-  async getMainObjects(employeeIds: number[]): Promise<IEmployeeMainObjects> {
-    // POST: страница до 1000 человек, id в теле. Запас по таймауту — пока нет ночного
-    // снимка, сервер считает объекты на лету.
+  async getMainObjects(employeeIds: number[], signal?: AbortSignal): Promise<IEmployeeMainObjects> {
+    // POST: порция до 1000 человек, id в теле. Запас по таймауту — пока нет ночного
+    // снимка, сервер считает объекты на лету. signal — отмена при смене фильтра.
     const response = await apiClient.post<ApiResponse<IEmployeeMainObjects>>(
       '/employees/main-objects',
       { ids: employeeIds },
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, signal },
     );
     return response.data;
   },

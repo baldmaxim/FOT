@@ -18,7 +18,6 @@ import type {
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
-import { useInvalidateEmployeeData } from '../hooks/useInvalidateEmployeeData';
 import { useStructureTree } from '../hooks/useStructure';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
@@ -40,6 +39,11 @@ import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY, useStaffMainObjects } from '../hooks/useStaffMainObjects';
 import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
+import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
+import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
+import { isHeaderDeptAllowed, resolveHeaderDeptFilter } from '../utils/staffDeptFilter';
+import { buildScheduleViews } from '../utils/staffScheduleViews';
+import { refreshStaffChunksFor } from '../utils/staffChunkInvalidation';
 import { formatDate } from '../utils/formatMoney';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
@@ -55,12 +59,10 @@ const ImportModal = lazy(() => import('../components/employees/ImportModal').the
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
 import {
-  EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
   EMPTY_SCHEDULE_TEMPLATES,
   getLocalISODate,
   getMoscowISODate,
   handleMiddleClickMouseDown,
-  isActiveScheduleAssignment,
   openEmployeeInNewTab,
   SCHEDULE_SOURCE_LABELS,
   type IAddEmployeeForm,
@@ -69,12 +71,45 @@ import {
   type StaffStatusFilter,
 } from './staffControlPage.helpers';
 
+const EMPTY_DEPT_TREE: OrgDepartmentNode[] = [];
+
 /* ───────── Memoized table row ───────── */
+
+/**
+ * Данные ячеек, догружаемые порциями отдельно от списка. Готовность — по порции:
+ * загружается → скелетон, порция упала → приглушённое «—», готово → значение или «—».
+ */
+interface IStaffSideData {
+  scheduleViews: Map<number, IEmployeeScheduleView>;
+  scheduleReadiness: IChunkReadiness;
+  mainObjects: Record<string, string>;
+  costItems: Record<string, string>;
+  mainReadiness: IChunkReadiness;
+}
+
+/** Значение «Объект»/«Статья затрат» для ячейки: undefined — грузится. */
+const sideValue = (map: Record<string, string>, id: number, state: ChunkCellState): string | null | undefined =>
+  (state === 'ready' ? (map[String(id)] ?? null) : undefined);
+
+const StaffScheduleName: FC<{ view: IEmployeeScheduleView | undefined; state: ChunkCellState; withDefaultBadge: boolean }> = ({ view, state, withDefaultBadge }) => {
+  if (state === 'loading') return <span className="sc-skeleton" aria-label="Загрузка" />;
+  if (state === 'error') return <span className="sc-muted" title="Не удалось загрузить">—</span>;
+  return (
+    <>
+      <span className="sc-schedule-name">{view?.scheduleName || '—'}</span>
+      {view && (withDefaultBadge || view.source !== 'default') && (
+        <span className={`sc-schedule-badge ${view.source}`}>{SCHEDULE_SOURCE_LABELS[view.source]}</span>
+      )}
+    </>
+  );
+};
 
 interface IStaffRowProps {
   emp: Employee;
   index: number;
-  scheduleViews: Map<number, IEmployeeScheduleView>;
+  /** Измерение фактической высоты строки virtualizer'ом (отдел/должность переносятся). */
+  measureRef: (element: HTMLTableRowElement | null) => void;
+  sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
@@ -82,10 +117,6 @@ interface IStaffRowProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
-  /** «Объект» за 30 дней: undefined — ещё грузится. */
-  mainObjects: Record<string, string> | undefined;
-  /** «Статья затрат»: undefined — ещё грузится. */
-  costItems: Record<string, string> | undefined;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -97,8 +128,10 @@ interface IStaffRowProps {
   onEditCostItem?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
-  const scheduleView = scheduleViews.get(emp.id);
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+  const scheduleView = sideData.scheduleViews.get(emp.id);
+  const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
+  const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
 
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -113,6 +146,8 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
 
   return (
     <tr
+      ref={measureRef}
+      data-index={index}
       className={`sc-row${isSelected ? ' sc-row--selected' : ''}`}
       style={rowStyle}
       onClick={handleRowClick}
@@ -170,18 +205,18 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
             </button>
           )}
           <span className="sc-schedule-cell">
-            <span className="sc-schedule-name">{scheduleView?.scheduleName || '—'}</span>
-            {scheduleView && scheduleView.source !== 'default' && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
+            <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge={false} />
           </span>
         </span>
       </td>
       <td className="sc-td-main-object">
-        <StaffMainObjectCell name={mainObjects === undefined ? undefined : (mainObjects[String(emp.id)] ?? null)} />
+        <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
       </td>
       <td className="sc-td-cost-item" onClick={onEditCostItem ? e => e.stopPropagation() : undefined}>
         <StaffCostItemCell
           employee={emp}
-          name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)}
+          name={sideValue(sideData.costItems, emp.id, mainState)}
+          failed={mainState === 'error'}
           onEdit={onEditCostItem}
         />
       </td>
@@ -814,9 +849,16 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
 
 /* ───────── Virtualized Table ───────── */
 
-interface IVirtualTableProps {
+interface IVirtualListLoadProps {
+  /** Последний отрисованный индекс → решение о догрузке (guard и стоп-условия — у вызывающего). */
+  onLoadMore: (lastVisibleIndex: number) => void;
+  /** Меняется только при смене фильтров: прокрутка к началу. Догрузка порций ключ не меняет. */
+  resetKey: string;
+}
+
+interface IVirtualTableProps extends IVirtualListLoadProps {
   filtered: Employee[];
-  scheduleViews: Map<number, IEmployeeScheduleView>;
+  sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
@@ -824,8 +866,6 @@ interface IVirtualTableProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
-  mainObjects: Record<string, string> | undefined;
-  costItems: Record<string, string> | undefined;
   /** Подсказка заголовка «Объект» с периодом расчёта. */
   mainObjectTitle: string;
   onNavigate: (emp: Employee) => void;
@@ -841,13 +881,32 @@ interface IVirtualTableProps {
   onEditCostItem?: (emp: Employee) => void;
 }
 
-const ROW_HEIGHT = 36;
+/** Оценка до измерения: строка в одну линию ≈ 36 px, частые переносы отдела/должности — выше. */
+const ROW_ESTIMATE = 44;
 
 const COST_ITEM_TITLE = 'По режиму табелирования: «Текущая деятельность», закреплённый объект или «СКУД» с объектами за 30 дней';
 
+/**
+ * Догрузка у конца списка и сброс прокрутки при смене фильтров — общие для таблицы и карточек.
+ * lastVisibleIndex меняется только при прокрутке/росте списка, поэтому эффект не крутится вхолостую.
+ */
+const useVirtualListLoading = (
+  scrollRef: { current: HTMLDivElement | null },
+  lastVisibleIndex: number,
+  { onLoadMore, resetKey }: IVirtualListLoadProps,
+): void => {
+  useEffect(() => {
+    onLoadMore(lastVisibleIndex);
+  }, [lastVisibleIndex, onLoadMore]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [resetKey, scrollRef]);
+};
+
 const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
-  scheduleViews,
+  sideData,
   selectedIds,
   selectionMode,
   canManage,
@@ -855,8 +914,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   canEditPos,
   canEditSch,
   canOpenCard,
-  mainObjects,
-  costItems,
+  onLoadMore,
+  resetKey,
   mainObjectTitle,
   onNavigate,
   onToggleSelect,
@@ -876,9 +935,15 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => ROW_ESTIMATE,
+    // Строки измеряются: высота зависит от переносов, а постоянная оценка у низа накапливала
+    // ошибку — нижний spacer пересчитывался и таблица дёргалась.
+    getItemKey: index => filtered[index]?.id ?? index,
     overscan: 15,
   });
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastVisibleIndex = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1;
+  useVirtualListLoading(scrollRef, lastVisibleIndex, { onLoadMore, resetKey });
 
   return (
     <div className="sc-table-wrap" ref={scrollRef}>
@@ -906,7 +971,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                   type="checkbox"
                   checked={allSelected}
                   onChange={onToggleSelectAll}
-                  aria-label="Выбрать всех сотрудников на странице"
+                  aria-label="Выбрать всех загруженных сотрудников"
                 />
               </th>
             )}
@@ -929,17 +994,18 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
           ) : (
             <>
               {/* spacer top */}
-              {virtualizer.getVirtualItems()[0]?.start > 0 && (
-                <tr><td colSpan={totalCols} style={{ height: virtualizer.getVirtualItems()[0].start, padding: 0, border: 'none' }} /></tr>
+              {virtualItems[0]?.start > 0 && (
+                <tr aria-hidden="true"><td colSpan={totalCols} style={{ height: virtualItems[0].start, padding: 0, border: 'none' }} /></tr>
               )}
-              {virtualizer.getVirtualItems().map(vRow => {
+              {virtualItems.map(vRow => {
                 const emp = filtered[vRow.index];
                 return (
                   <StaffRow
                     key={emp.id}
                     emp={emp}
                     index={vRow.index}
-                    scheduleViews={scheduleViews}
+                    measureRef={virtualizer.measureElement}
+                    sideData={sideData}
                     selectedIds={selectedIds}
                     selectionMode={selectionMode}
                     canManage={canManage}
@@ -947,8 +1013,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     canEditPos={canEditPos}
                     canEditSch={canEditSch}
                     canOpenCard={canOpenCard}
-                    mainObjects={mainObjects}
-                    costItems={costItems}
                     onNavigate={onNavigate}
                     onToggleSelect={onToggleSelect}
                     onOpenModal={onOpenModal}
@@ -963,10 +1027,9 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
               })}
               {/* spacer bottom */}
               {(() => {
-                const items = virtualizer.getVirtualItems();
-                const lastItem = items[items.length - 1];
+                const lastItem = virtualItems[virtualItems.length - 1];
                 const remaining = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
-                return remaining > 0 ? <tr><td colSpan={totalCols} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
+                return remaining > 0 ? <tr aria-hidden="true"><td colSpan={totalCols} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
               })()}
             </>
           )}
@@ -978,9 +1041,9 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
 
 /* ───────── Virtualized Mobile Cards ───────── */
 
-interface IVirtualCardsProps {
+interface IVirtualCardsProps extends IVirtualListLoadProps {
   filtered: Employee[];
-  scheduleViews: Map<number, IEmployeeScheduleView>;
+  sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
@@ -988,8 +1051,6 @@ interface IVirtualCardsProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
-  mainObjects: Record<string, string> | undefined;
-  costItems: Record<string, string> | undefined;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -1005,7 +1066,7 @@ const CARD_ESTIMATE = 250;
 
 const MobileCard: FC<{
   emp: Employee;
-  scheduleViews: Map<number, IEmployeeScheduleView>;
+  sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
@@ -1013,8 +1074,6 @@ const MobileCard: FC<{
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
-  mainObjects: Record<string, string> | undefined;
-  costItems: Record<string, string> | undefined;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -1024,8 +1083,10 @@ const MobileCard: FC<{
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditCostItem?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
-  const scheduleView = scheduleViews.get(emp.id);
+}> = memo(({ emp, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+  const scheduleView = sideData.scheduleViews.get(emp.id);
+  const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
+  const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
     if (e.button === 1) {
@@ -1082,19 +1143,19 @@ const MobileCard: FC<{
       <div className="sc-card-row">
         <span className="sc-card-label">График</span>
         <span className="sc-schedule-cell">
-          <span className="sc-schedule-name">{scheduleView?.scheduleName || '—'}</span>
-          {scheduleView && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
+          <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge />
         </span>
       </div>
       <div className="sc-card-row">
         <span className="sc-card-label">Объект</span>
-        <StaffMainObjectCell name={mainObjects === undefined ? undefined : (mainObjects[String(emp.id)] ?? null)} />
+        <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
       </div>
       <div className="sc-card-row">
         <span className="sc-card-label">Статья затрат</span>
         <StaffCostItemCell
           employee={emp}
-          name={costItems === undefined ? undefined : (costItems[String(emp.id)] ?? null)}
+          name={sideValue(sideData.costItems, emp.id, mainState)}
+          failed={mainState === 'error'}
           onEdit={onEditCostItem}
         />
       </div>
@@ -1160,20 +1221,24 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, mainObjects, costItems, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditCostItem }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => CARD_ESTIMATE,
+    getItemKey: index => filtered[index]?.id ?? index,
     overscan: 5,
     gap: 4,
   });
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastVisibleIndex = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1;
+  useVirtualListLoading(scrollRef, lastVisibleIndex, { onLoadMore, resetKey });
 
   return (
     <div className="sc-cards" ref={scrollRef}>
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-        {virtualizer.getVirtualItems().map(vRow => {
+        {virtualItems.map(vRow => {
           const emp = filtered[vRow.index];
           return (
             <div
@@ -1184,7 +1249,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
             >
               <MobileCard
                 emp={emp}
-                scheduleViews={scheduleViews}
+                sideData={sideData}
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}
                 canManage={canManage}
@@ -1192,8 +1257,6 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 canEditPos={canEditPos}
                 canEditSch={canEditSch}
                 canOpenCard={canOpenCard}
-                mainObjects={mainObjects}
-                costItems={costItems}
                 onNavigate={onNavigate}
                 onToggleSelect={onToggleSelect}
                 onOpenModal={onOpenModal}
@@ -1294,9 +1357,6 @@ const FireEmployeeModal: FC<IFireEmployeeModalProps> = ({ emp, date, onChangeDat
 
 /* ───────── Main Page ───────── */
 
-/** Строк на странице: таблица виртуализирована, сервер отдаёт до 1000 при view=staff. */
-const STAFF_PAGE_SIZE = 1000;
-
 export const StaffControlPage: FC = () => {
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
@@ -1310,7 +1370,6 @@ export const StaffControlPage: FC = () => {
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
   const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>('active');
-  const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -1343,7 +1402,6 @@ export const StaffControlPage: FC = () => {
   useEffect(() => {
     if (singleManagedDeptId && deptId !== singleManagedDeptId) {
       setDeptId(singleManagedDeptId);
-      setPage(1);
     }
   }, [singleManagedDeptId, deptId]);
 
@@ -1352,9 +1410,24 @@ export const StaffControlPage: FC = () => {
   const scopeKnown = profile != null;
   const section: StaffSection = sectionChoice ?? (isDepartmentScope ? 'all' : 'su10');
 
-  const { employees, departments, countsByDepartment, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
-    page,
-    pageSize: STAFF_PAGE_SIZE,
+  const {
+    employees,
+    pageIdChunks,
+    total,
+    departments,
+    countsByDepartment,
+    loading,
+    isFirstPageError,
+    retryFirstPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    loadMore,
+    retryNextPage,
+    totalActive,
+    refresh,
+    patchEmployee,
+  } = useStaffData({
     search: debouncedSearch || undefined,
     departmentId: deptId || undefined,
     scheduleId: scheduleFilter || undefined,
@@ -1363,7 +1436,6 @@ export const StaffControlPage: FC = () => {
     enabled: sectionChoice !== null || scopeKnown,
   });
 
-  const invalidateEmployee = useInvalidateEmployeeData();
 
   const structureTree = useStructureTree();
   const archiveDepartmentId = structureTree.data?.stats.archive_department_id ?? null;
@@ -1376,11 +1448,9 @@ export const StaffControlPage: FC = () => {
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
   const [bulkMoveDeptOpen, setBulkMoveDeptOpen] = useState(false);
   const [bulkTsModeOpen, setBulkTsModeOpen] = useState(false);
-  const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
-  const mainObjectsQuery = useStaffMainObjects(visibleEmployeeIds);
-  const mainObjects = mainObjectsQuery.data?.objects;
-  const costItems = mainObjectsQuery.data?.cost_items;
-  const mainObjectPeriod = mainObjectsQuery.data?.period;
+  // «Объект», «Статья затрат», «График» — по одному запросу на порцию списка.
+  const mainObjectsData = useStaffMainObjects(pageIdChunks);
+  const mainObjectPeriod = mainObjectsData.period;
   const mainObjectTitle = mainObjectPeriod
     ? `Где больше всего часов по СКУД и корректировкам за ${formatDate(mainObjectPeriod.start)}–${formatDate(mainObjectPeriod.end)}. Пересчитывается ночью.`
     : 'Где больше всего часов по СКУД и корректировкам за последние 30 дней';
@@ -1389,19 +1459,13 @@ export const StaffControlPage: FC = () => {
     queryFn: () => scheduleService.list(),
     staleTime: 5 * 60_000,
   });
-  const employeeScheduleAssignmentsQuery = useQuery({
-    queryKey: ['schedules', 'employee-assignments', visibleEmployeeIds],
-    queryFn: () => scheduleService.listEmployeeAssignments(visibleEmployeeIds),
-    enabled: visibleEmployeeIds.length > 0,
-    placeholderData: previousData => previousData,
-    staleTime: 60_000,
-  });
+  const scheduleAssignmentsData = useStaffScheduleAssignments(pageIdChunks);
   const scheduleTemplates = scheduleTemplatesQuery.data ?? EMPTY_SCHEDULE_TEMPLATES;
-  const employeeScheduleAssignments = employeeScheduleAssignmentsQuery.data ?? EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS;
 
+  const loadedEmployeeIds = useMemo(() => new Set(employees.map(emp => emp.id)), [employees]);
   const selectedEmployeeIdsVisible = useMemo(
-    () => selectedEmployeeIds.filter(id => employees.some(emp => emp.id === id)),
-    [selectedEmployeeIds, employees],
+    () => selectedEmployeeIds.filter(id => loadedEmployeeIds.has(id)),
+    [selectedEmployeeIds, loadedEmployeeIds],
   );
   const selectedEmployeeIdSet = useMemo(() => new Set(selectedEmployeeIdsVisible), [selectedEmployeeIdsVisible]);
 
@@ -1422,58 +1486,43 @@ export const StaffControlPage: FC = () => {
     [employees, selectedEmployeeIdSet],
   );
 
-  const activeEmployeeScheduleAssignments = useMemo(() => {
-    const map = new Map<number, IEmployeeScheduleAssignment>();
-    for (const assignment of employeeScheduleAssignments) {
-      if (!isActiveScheduleAssignment(assignment.effective_from, assignment.effective_to, today)) continue;
-      if (!map.has(assignment.employee_id)) map.set(assignment.employee_id, assignment);
-    }
-    return map;
-  }, [employeeScheduleAssignments, today]);
+  // Шаблоны не загрузились — default-график неизвестен: вместо «—» оставляем загрузку/ошибку.
+  const templatesReady = scheduleTemplatesQuery.isSuccess;
+  const { scheduleViews, baseScheduleViews } = useMemo(() => buildScheduleViews({
+    employeeIds: employees.map(emp => emp.id),
+    assignments: scheduleAssignmentsData.assignments,
+    templates: scheduleTemplates,
+    templatesReady,
+    readyIds: scheduleAssignmentsData.readyIds,
+    today,
+  }), [employees, scheduleAssignmentsData.assignments, scheduleAssignmentsData.readyIds, scheduleTemplates, templatesReady, today]);
 
-  const defaultSchedule = useMemo(
-    () => scheduleTemplates.find(template => template.is_default) || null,
-    [scheduleTemplates],
-  );
+  const scheduleReadiness = useMemo<IChunkReadiness>(() => {
+    if (templatesReady) return { readyIds: scheduleAssignmentsData.readyIds, errorIds: scheduleAssignmentsData.errorIds };
+    // Без шаблонов готовых строк нет; при ошибке шаблонов — все загруженные строки в ошибке.
+    return {
+      readyIds: new Set<number>(),
+      errorIds: scheduleTemplatesQuery.isError ? loadedEmployeeIds : scheduleAssignmentsData.errorIds,
+    };
+  }, [templatesReady, scheduleAssignmentsData.readyIds, scheduleAssignmentsData.errorIds, scheduleTemplatesQuery.isError, loadedEmployeeIds]);
 
-  const baseScheduleViews = useMemo(() => {
-    const map = new Map<number, IEmployeeScheduleView>();
-    if (!defaultSchedule) return map;
-    for (const emp of employees) {
-      map.set(emp.id, {
-        scheduleId: defaultSchedule.id,
-        scheduleName: defaultSchedule.name,
-        source: 'default',
-        scheduleType: defaultSchedule.schedule_type ?? null,
-        effectiveFrom: null,
-      });
-    }
-    return map;
-  }, [employees, defaultSchedule]);
+  const sideDataHasError = mainObjectsData.hasError || scheduleAssignmentsData.hasError || scheduleTemplatesQuery.isError;
+  const { retryFailed: retryMainObjects } = mainObjectsData;
+  const { retryFailed: retryScheduleAssignments } = scheduleAssignmentsData;
+  const { refetch: refetchScheduleTemplates, isError: scheduleTemplatesFailed } = scheduleTemplatesQuery;
+  const retrySideData = useCallback(() => {
+    retryMainObjects();
+    retryScheduleAssignments();
+    if (scheduleTemplatesFailed) void refetchScheduleTemplates();
+  }, [retryMainObjects, retryScheduleAssignments, scheduleTemplatesFailed, refetchScheduleTemplates]);
 
-  const scheduleViews = useMemo(() => {
-    const map = new Map<number, IEmployeeScheduleView>();
-    for (const emp of employees) {
-      const personalAssignment = activeEmployeeScheduleAssignments.get(emp.id);
-      if (personalAssignment?.work_schedules) {
-        const isSameAsDefault = !!defaultSchedule && personalAssignment.work_schedules.id === defaultSchedule.id;
-        map.set(emp.id, {
-          scheduleId: personalAssignment.work_schedules.id,
-          scheduleName: personalAssignment.work_schedules.name,
-          source: isSameAsDefault ? 'default' : 'employee',
-          scheduleType: personalAssignment.work_schedules.schedule_type ?? null,
-          effectiveFrom: isSameAsDefault ? null : personalAssignment.effective_from,
-          assignmentAnchorDate: personalAssignment.anchor_date,
-          assignmentId: personalAssignment.id,
-          templatePatternType: personalAssignment.work_schedules.pattern_type,
-        });
-        continue;
-      }
-      const baseSchedule = baseScheduleViews.get(emp.id);
-      if (baseSchedule) map.set(emp.id, baseSchedule);
-    }
-    return map;
-  }, [employees, activeEmployeeScheduleAssignments, baseScheduleViews, defaultSchedule]);
+  const sideData = useMemo<IStaffSideData>(() => ({
+    scheduleViews,
+    scheduleReadiness,
+    mainObjects: mainObjectsData.objects,
+    costItems: mainObjectsData.costItems,
+    mainReadiness: { readyIds: mainObjectsData.readyIds, errorIds: mainObjectsData.errorIds },
+  }), [scheduleViews, scheduleReadiness, mainObjectsData.objects, mainObjectsData.costItems, mainObjectsData.readyIds, mainObjectsData.errorIds]);
 
   useEffect(() => {
     const p = new URLSearchParams();
@@ -1622,26 +1671,30 @@ export const StaffControlPage: FC = () => {
     [departments, restrictToManaged, managedDepartmentIds],
   );
 
-  // Каскад «Компания → Отделы»: только фильтр в шапке. Пока id разделов не загружены —
-  // полный scope, чтобы список не мигал пустым.
+  // Каскад «Компания → Отделы»: только фильтр в шапке, модалки получают scopeDeptTree.
+  // «Все компании» — только ветки компаний; служебные корни («Уволенные», «test») сервер
+  // относит к «Прочим». Пока id разделов грузятся или не загрузились — дерево пустое,
+  // иначе служебные корни мелькнули бы (или остались при ошибке).
   const sectionDepartmentsQuery = useStaffSectionDepartments();
-  const sectionDeptIds = useMemo(() => {
-    if (section === 'all' || !sectionDepartmentsQuery.data) return null;
-    return new Set(sectionDepartmentsQuery.data[section]);
-  }, [section, sectionDepartmentsQuery.data]);
-  const filterDeptTree = useMemo(
-    () => (sectionDeptIds ? filterDepartmentTreeByIds(scopeDeptTree, sectionDeptIds) : scopeDeptTree),
-    [scopeDeptTree, sectionDeptIds],
+  const headerDeptFilter = useMemo(
+    () => resolveHeaderDeptFilter({ section, sectionIds: sectionDepartmentsQuery.data, restrictToManaged }),
+    [section, sectionDepartmentsQuery.data, restrictToManaged],
   );
+  const filterDeptTree = useMemo(() => {
+    if (headerDeptFilter.kind === 'none') return scopeDeptTree;
+    if (headerDeptFilter.kind === 'pending') return EMPTY_DEPT_TREE;
+    return filterDepartmentTreeByIds(scopeDeptTree, new Set(headerDeptFilter.ids));
+  }, [scopeDeptTree, headerDeptFilter]);
+  const headerDeptPending = headerDeptFilter.kind === 'pending';
 
-  // Отдел не из выбранной компании (из URL, «назад», восстановленные параметры) дал бы
-  // пустую таблицу — сбрасываем. Фиксированный отдел руководителя не трогаем.
+  // Отдел не из выбранной компании или служебный (из URL, «назад», восстановленные параметры)
+  // дал бы неожиданную таблицу — сбрасываем. До загрузки id разделов не решаем.
+  // Фиксированный отдел руководителя не трогаем.
   useEffect(() => {
-    if (!deptId || !sectionDeptIds || singleManagedDeptId) return;
-    if (sectionDeptIds.has(deptId)) return;
+    if (!deptId || singleManagedDeptId) return;
+    if (isHeaderDeptAllowed(deptId, headerDeptFilter) !== false) return;
     setDeptId('');
-    setPage(1);
-  }, [deptId, sectionDeptIds, singleManagedDeptId]);
+  }, [deptId, headerDeptFilter, singleManagedDeptId]);
 
   // Если админ снял у руководителя один из отделов, бэкенд перестаёт включать его
   // в `allDepts` (в дереве флаг `in_scope=false` или отдел вырезан). В URL ещё может
@@ -1691,13 +1744,14 @@ export const StaffControlPage: FC = () => {
 
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
-    setPage(1);
   }, []);
 
   const handleDeptChange = useCallback((value: string) => {
     setDeptId(value);
-    setPage(1);
   }, []);
+
+  // Прокрутка к началу — только при смене фактических фильтров, не при догрузке порций.
+  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}`;
 
   // «Статья затрат» = личный режим табелирования: правка только в «Действующих» и с правом режима.
   const [costItemEmp, setCostItemEmp] = useState<Employee | null>(null);
@@ -1706,14 +1760,12 @@ export const StaffControlPage: FC = () => {
 
   const handleSectionChange = useCallback((value: StaffSection) => {
     setSectionChoice(value);
-    setPage(1);
     // Отдел из другого раздела дал бы пустой список; фиксированный отдел руководителя не трогаем.
     if (!singleManagedDeptId) setDeptId('');
   }, [singleManagedDeptId]);
 
   const handleScheduleFilterChange = useCallback((value: string) => {
     setScheduleFilter(value);
-    setPage(1);
   }, []);
 
   /* ─── stable callbacks for child components ─── */
@@ -1837,6 +1889,38 @@ export const StaffControlPage: FC = () => {
     }
   }, [selectedEmployeeIdsVisible, toast, refresh, queryClient]);
 
+  /**
+   * Обновление после правки сотрудников на этой странице. Порции графиков — только те, где есть
+   * изменённые сотрудники (после правки одного человека при 10 тыс. строк — один POST, а не
+   * по запросу на порцию). Порции списка перечитываются, только если список мог измениться:
+   * увольнение/восстановление или активный фильтр по графику.
+   */
+  const refreshAfterEmployeeChange = useCallback(async (
+    employeeIds: readonly number[] | 'all',
+    { listChanged }: { listChanged: boolean },
+  ): Promise<void> => {
+    const tasks: Array<Promise<void>> = [
+      // Прочие ключи графиков (история назначений в окне и т.п.) — целиком, они не порционные.
+      queryClient.invalidateQueries({
+        predicate: query => query.queryKey[0] === 'schedules' && query.queryKey[1] !== STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY[1],
+      }),
+    ];
+    if (listChanged) {
+      tasks.push(queryClient.invalidateQueries({ queryKey: ['employees'] }));
+      tasks.push(queryClient.invalidateQueries({ queryKey: ['structure'] }));
+    }
+    if (employeeIds === 'all') {
+      tasks.push(queryClient.invalidateQueries({ queryKey: STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY }));
+    } else {
+      for (const id of employeeIds) tasks.push(queryClient.invalidateQueries({ queryKey: ['employee', id] }));
+      tasks.push(refreshStaffChunksFor(queryClient, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY, employeeIds));
+    }
+    await Promise.all(tasks);
+  }, [queryClient]);
+
+  // Состав списка при фильтре по графику зависит от назначений.
+  const scheduleChangeAffectsList = Boolean(scheduleFilter);
+
   // Смена графика влияет на табель (норма/покраска/согласования считаются из
   // расписания). Сбрасываем кэш табеля, иначе пользователь видит старое.
   const invalidateTimesheetQueries = useCallback(() => {
@@ -1859,13 +1943,10 @@ export const StaffControlPage: FC = () => {
       } else {
         await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
       }
-      invalidateEmployee(empId);
       invalidateTimesheetQueries();
-      // Дожидаемся подтягивания свежих employee-assignments из бэка ДО закрытия
-      // модалки, чтобы строка сотрудника в списке обновилась без перезагрузки
-      // страницы. invalidate сам по себе помечает запрос stale, но рефетч
-      // активного подписчика — асинхронный.
-      await employeeScheduleAssignmentsQuery.refetch();
+      // Дожидаемся свежей порции графиков сотрудника ДО закрытия модалки, чтобы строка
+      // обновилась без перезагрузки страницы.
+      await refreshAfterEmployeeChange([empId], { listChanged: scheduleChangeAffectsList });
       toast.success(scheduleId ? 'График назначен' : 'Персональный график снят');
       closeModal();
     } catch (e) {
@@ -1873,7 +1954,7 @@ export const StaffControlPage: FC = () => {
       // показываем тост, модалку оставляем открытой для повтора.
       toast.error(e instanceof ApiError ? e.message : 'Не удалось сохранить график');
     }
-  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
+  }, [closeModal, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const handleFixAssignment = useCallback(async (
     empId: number,
@@ -1881,15 +1962,14 @@ export const StaffControlPage: FC = () => {
   ) => {
     try {
       await scheduleService.fixEmployeeAssignment(empId, data);
-      invalidateEmployee(empId);
       invalidateTimesheetQueries();
-      await employeeScheduleAssignmentsQuery.refetch();
+      await refreshAfterEmployeeChange([empId], { listChanged: scheduleChangeAffectsList });
       toast.success('Даты назначения исправлены');
       closeModal();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
     }
-  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
+  }, [closeModal, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   // Жёсткое удаление КОНКРЕТНОЙ строки из истории назначений (через кнопку 🗑
   // в блоке «История» внутри модалки). Модалку не закрываем — пользователь
@@ -1900,14 +1980,13 @@ export const StaffControlPage: FC = () => {
   ) => {
     try {
       await scheduleService.deleteEmployeeAssignment(empId, assignmentId);
-      invalidateEmployee(empId);
       invalidateTimesheetQueries();
-      await employeeScheduleAssignmentsQuery.refetch();
+      await refreshAfterEmployeeChange([empId], { listChanged: scheduleChangeAffectsList });
       toast.success('Запись назначения удалена');
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось удалить запись назначения');
     }
-  }, [invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
+  }, [refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const applyScheduleToEmployees = useCallback(async (
     employeeIds: number[],
@@ -1942,7 +2021,7 @@ export const StaffControlPage: FC = () => {
   const handleBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const ids = selectedEmployees.map(employee => employee.id);
     const { ok, failed, sampleError } = await applyScheduleToEmployees(ids, scheduleId, effectiveFrom);
-    invalidateEmployee();
+    void refreshAfterEmployeeChange(ids, { listChanged: scheduleChangeAffectsList });
     invalidateTimesheetQueries();
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
@@ -1952,7 +2031,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, invalidateEmployee, selectedEmployees, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, refreshAfterEmployeeChange, scheduleChangeAffectsList, selectedEmployees, toast, invalidateTimesheetQueries]);
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
@@ -1977,14 +2056,14 @@ export const StaffControlPage: FC = () => {
       const rehiredId = rehireEmp.id;
       setRehireEmp(null);
       setRehireDeptId('');
-      invalidateEmployee(rehiredId);
+      void refreshAfterEmployeeChange([rehiredId], { listChanged: true });
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка восстановления сотрудника';
       toast.error(msg);
     } finally {
       setRehireInFlight(false);
     }
-  }, [rehireEmp, rehireDeptId, invalidateEmployee, toast]);
+  }, [rehireEmp, rehireDeptId, refreshAfterEmployeeChange, toast]);
 
   const [fireEmp, setFireEmp] = useState<Employee | null>(null);
   const [fireDate, setFireDate] = useState<string>(() => getMoscowISODate());
@@ -2007,25 +2086,25 @@ export const StaffControlPage: FC = () => {
       await employeeService.fire(fireEmp.id, fireDate);
       const firedId = fireEmp.id;
       setFireEmp(null);
-      invalidateEmployee(firedId);
+      void refreshAfterEmployeeChange([firedId], { listChanged: true });
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка увольнения сотрудника';
       toast.error(msg);
     } finally {
       setFireInFlight(false);
     }
-  }, [fireEmp, fireDate, invalidateEmployee, toast]);
+  }, [fireEmp, fireDate, refreshAfterEmployeeChange, toast]);
 
   const handleCancelDismissal = useCallback(async (emp: Employee) => {
     if (!confirm(`Отменить запланированное увольнение ${emp.full_name} на ${emp.dismissal_date}?`)) return;
     try {
       await employeeService.cancelDismissal(emp.id);
-      invalidateEmployee(emp.id);
+      void refreshAfterEmployeeChange([emp.id], { listChanged: true });
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Не удалось отменить запланированное увольнение';
       toast.error(msg);
     }
-  }, [invalidateEmployee, toast]);
+  }, [refreshAfterEmployeeChange, toast]);
 
   const handleFilteredBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const employeeIds = await employeeService.getFilteredIds({
@@ -2036,7 +2115,7 @@ export const StaffControlPage: FC = () => {
       view: 'list',
     });
     const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
-    invalidateEmployee();
+    void refreshAfterEmployeeChange(employeeIds, { listChanged: scheduleChangeAffectsList });
     invalidateTimesheetQueries();
     setBulkFilterScheduleOpen(false);
     if (employeeIds.length === 0) return;
@@ -2045,7 +2124,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, invalidateEmployee, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (
     departmentIds: string[],
@@ -2082,10 +2161,11 @@ export const StaffControlPage: FC = () => {
         ? `${error.message}. Видимые графики на странице обновлены для проверки состояния.`
         : 'Не удалось массово назначить график по бригадам. Видимые графики на странице обновлены для проверки состояния.');
     } finally {
-      invalidateEmployee();
+      // Затронутые сотрудники заранее неизвестны (все в выбранных бригадах) — порции графиков целиком.
+      void refreshAfterEmployeeChange('all', { listChanged: scheduleChangeAffectsList });
       invalidateTimesheetQueries();
     }
-  }, [invalidateEmployee, toast, invalidateTimesheetQueries]);
+  }, [refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   /* ─── history panel data changed ─── */
 
@@ -2341,7 +2421,7 @@ export const StaffControlPage: FC = () => {
         label: 'Назначить график по фильтру…',
         icon: <Calendar size={14} />,
         onClick: () => setBulkFilterScheduleOpen(true),
-        disabled: meta.total === 0,
+        disabled: total === 0,
       });
       items.push({
         label: 'Импорт…',
@@ -2370,13 +2450,13 @@ export const StaffControlPage: FC = () => {
       });
     }
     return items;
-  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode, canExportEmployees, isExporting, handleExportEmployees]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetMode, canExportEmployees, isExporting, handleExportEmployees]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
-      {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
+      {total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
     </span>
-  ), [meta.total, statusFilter, totalActive]);
+  ), [total, statusFilter, totalActive]);
   useHeaderAddon(headerCounter);
 
   const controlsBar = (
@@ -2392,9 +2472,12 @@ export const StaffControlPage: FC = () => {
             departments={filterDeptTree}
             value={deptId}
             onChange={handleDeptChange}
-            isLoading={structureTree.isPending}
-            isError={structureTree.isError}
-            onRetry={() => { void structureTree.refetch(); }}
+            isLoading={structureTree.isPending || (headerDeptPending && sectionDepartmentsQuery.isPending)}
+            isError={structureTree.isError || (headerDeptPending && sectionDepartmentsQuery.isError)}
+            onRetry={() => {
+              void structureTree.refetch();
+              if (sectionDepartmentsQuery.isError) void sectionDepartmentsQuery.refetch();
+            }}
           />
         </div>
       )}
@@ -2416,7 +2499,7 @@ export const StaffControlPage: FC = () => {
             role="tab"
             aria-selected={statusFilter === 'active'}
             className={`sc-seg-btn${statusFilter === 'active' ? ' is-active' : ''}`}
-            onClick={() => { setStatusFilter('active'); setPage(1); }}
+            onClick={() => setStatusFilter('active')}
           >
             Действующие
           </button>
@@ -2425,7 +2508,7 @@ export const StaffControlPage: FC = () => {
             role="tab"
             aria-selected={statusFilter === 'fired'}
             className={`sc-seg-btn${statusFilter === 'fired' ? ' is-active' : ''}`}
-            onClick={() => { setStatusFilter('fired'); setPage(1); }}
+            onClick={() => setStatusFilter('fired')}
           >
             Уволенные
           </button>
@@ -2494,12 +2577,17 @@ export const StaffControlPage: FC = () => {
         </div>
       )}
 
-      {loading ? (
+      {isFirstPageError ? (
+        <div className="sc-loading sc-loading--error">
+          <span>Не удалось загрузить сотрудников</span>
+          <button className="sc-btn cancel" onClick={() => { void retryFirstPage(); }}>Повторить</button>
+        </div>
+      ) : loading ? (
         <div className="sc-loading">Загрузка...</div>
       ) : isMobile ? (
         <VirtualCards
           filtered={employees}
-          scheduleViews={scheduleViews}
+          sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
           canManage={canManageStaff}
@@ -2507,8 +2595,8 @@ export const StaffControlPage: FC = () => {
           canEditPos={canEditPos}
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
-          mainObjects={mainObjects}
-          costItems={costItems}
+          onLoadMore={loadMore}
+          resetKey={listResetKey}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
@@ -2522,7 +2610,7 @@ export const StaffControlPage: FC = () => {
       ) : (
         <VirtualTable
           filtered={employees}
-          scheduleViews={scheduleViews}
+          sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
           canManage={canManageStaff}
@@ -2530,8 +2618,8 @@ export const StaffControlPage: FC = () => {
           canEditPos={canEditPos}
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
-          mainObjects={mainObjects}
-          costItems={costItems}
+          onLoadMore={loadMore}
+          resetKey={listResetKey}
           mainObjectTitle={mainObjectTitle}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
@@ -2547,12 +2635,27 @@ export const StaffControlPage: FC = () => {
         />
       )}
 
-      {/* Pagination */}
-      {meta.totalPages > 1 && (
-        <div className="sc-pagination">
-          <button className="sc-btn cancel" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Назад</button>
-          <span className="sc-pagination-info">{page} / {meta.totalPages}</span>
-          <button className="sc-btn cancel" disabled={page >= meta.totalPages} onClick={() => setPage(p => p + 1)}>Вперёд →</button>
+      {/* Состояние подгрузки — вне прокручиваемой области и постоянной высоты:
+          появление «Загрузка ещё…» у нижней границы не меняет высоту списка. */}
+      {!loading && !isFirstPageError && total > 0 && (
+        <div className="sc-list-footer" aria-live="polite">
+          {isFetchNextPageError ? (
+            <>
+              <span className="sc-list-footer-info">Не удалось загрузить следующих сотрудников</span>
+              <button className="sc-btn cancel" onClick={retryNextPage}>Повторить</button>
+            </>
+          ) : sideDataHasError ? (
+            <>
+              <span className="sc-list-footer-info">Не удалось загрузить часть данных</span>
+              <button className="sc-btn cancel" onClick={retrySideData}>Повторить</button>
+            </>
+          ) : (
+            <span className="sc-list-footer-info">
+              {isFetchingNextPage || hasNextPage
+                ? `Загружено ${employees.length} из ${total}${isFetchingNextPage ? ' — загрузка…' : ''}`
+                : `Показано ${employees.length} из ${total}`}
+            </span>
+          )}
         </div>
       )}
 
@@ -2618,7 +2721,7 @@ export const StaffControlPage: FC = () => {
       />
       <BulkScheduleModal
         open={bulkFilterScheduleOpen}
-        targetCount={meta.total}
+        targetCount={total}
         targetLabel="Сотрудников по фильтру"
         previewText={currentFilterDescription}
         templates={scheduleTemplates}

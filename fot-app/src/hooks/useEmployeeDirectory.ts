@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { employeeService, type EmployeeCounts, type PaginatedMeta, type PaginatedParams, type PaginatedResponse } from '../services/employeeService';
+import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { employeeService, type EmployeeCounts, type IEmployeeListCursor, type PaginatedMeta, type PaginatedParams, type PaginatedResponse } from '../services/employeeService';
+import { getNextEmployeeCursor } from '../utils/staffInfiniteList';
 import { skudService } from '../services/skudService';
 import type { IEmployeePresence, IPresenceByObjectResponse } from '../types';
 
@@ -32,6 +33,37 @@ export const paginatedEmployeesQueryKey = (params: PaginatedParams) =>
     params.page,
     params.pageSize || 50,
   ] as const;
+
+export type InfiniteEmployeesParams = Omit<PaginatedParams, 'page' | 'cursor'>;
+
+/** Префикс ['employees'] — общие invalidateQueries({ queryKey: ['employees'] }) обновляют и этот список. */
+export const infiniteEmployeesQueryKey = (params: InfiniteEmployeesParams) =>
+  [
+    'employees',
+    'infinite',
+    params.view || 'list',
+    params.status || 'active',
+    params.departmentId || null,
+    params.scheduleId || null,
+    params.section && params.section !== 'all' ? params.section : 'all',
+    params.search || '',
+    params.archived ? 'archived' : 'live',
+    params.pageSize || 50,
+  ] as const;
+
+/**
+ * Список порциями по курсору (ФИО, id): следующая порция не сдвигается, если между запросами
+ * кого-то добавили или уволили. signal отменяет порцию при смене фильтра.
+ */
+export const useInfiniteEmployeesQuery = (params: InfiniteEmployeesParams, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: infiniteEmployeesQueryKey(params),
+    queryFn: ({ pageParam, signal }) => employeeService.getPaginated({ ...params, page: 1, cursor: pageParam }, signal),
+    initialPageParam: null as IEmployeeListCursor | null,
+    getNextPageParam: getNextEmployeeCursor,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
 
 export const presenceQueryKey = (departmentId?: string | null) =>
   ['presence', departmentId || 'all'] as const;

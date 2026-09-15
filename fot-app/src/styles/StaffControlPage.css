@@ -394,6 +394,11 @@
   font-size: 14px;
 }
 
+.sc-loading--error {
+  flex-direction: column;
+  gap: 12px;
+}
+
 /* ── Table ── */
 
 .sc-table-wrap {
@@ -413,8 +418,8 @@
 }
 
 .sc-col-check    { width: 44px; }
-/* Номер строки на странице — до трёх цифр. */
-.sc-col-num      { width: 44px; }
+/* Сквозной номер строки — до пяти цифр (10 499) без многоточия. */
+.sc-col-num      { width: 60px; }
 /* ФИО фиксированной ширины: гибкой колонкой был бы «пустой» простор справа от имени. */
 .sc-col-name     { width: 220px; }
 /* Отдел и должность переносятся на строки. */
@@ -437,24 +442,34 @@
 
 .sc-table-wrap {
   overscroll-behavior-x: contain;
+  /* Прокрутку держит virtualizer (измеряет строки и пересчитывает spacer'ы); браузерный
+     scroll anchoring корректировал бы её параллельно — таблица дёргалась у низа. */
+  overflow-anchor: none;
 }
 
 .sc-table--staff {
-  /* Сумма колонок: 1220 фиксированных + по 140 минимум «Объекту» и «Статье затрат».
+  /* Сумма колонок: 1236 фиксированных + по 140 минимум «Объекту» и «Статье затрат».
      На 1920 с развёрнутым меню (≈1620px) скролла нет; уже — скроллится таблица, не страница. */
-  min-width: 1500px;
+  min-width: 1516px;
   --sc-sticky-num-left: 0px;
-  --sc-sticky-name-left: 44px;
+  --sc-sticky-name-left: 60px;
 }
 
 .sc-table--staff.sc-table--selecting {
-  min-width: 1544px;
+  min-width: 1560px;
   --sc-sticky-num-left: 44px;
-  --sc-sticky-name-left: 88px;
+  --sc-sticky-name-left: 104px;
 }
 
 .sc-table--staff .sc-th-num {
-  width: 44px;
+  width: 60px;
+}
+
+.sc-table--staff .sc-td-num {
+  padding: 4px 6px;
+  white-space: nowrap;
+  text-overflow: clip;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Фон всей строки меняется одновременно: закреплённые ячейки берут цвет из
@@ -2030,16 +2045,20 @@
 
 /* ── Pagination ── */
 
-.sc-pagination {
+/* Футер списка на месте прежней пагинации: «Загружено N из M» или «Повторить».
+   Высота постоянная — смена состояния не двигает таблицу. */
+.sc-list-footer {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 8px 0;
+  min-height: 48px;
+  padding: 8px 0 env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
   flex-shrink: 0;
 }
 
-.sc-pagination-info {
+.sc-list-footer-info {
   font-size: 13px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
@@ -2053,6 +2072,7 @@
   gap: 4px;
   flex: 1;
   overflow: auto;
+  overflow-anchor: none;
   padding-bottom: 20px;
 }
 

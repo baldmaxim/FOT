@@ -46,9 +46,14 @@ import {
 } from '../services/employee-section-filter.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
-import { collectDeptIds, getAllDepartmentsTree } from '../services/skud-shared.service.js';
-import { buildSignDepartmentIndex, resolveEmployeeSign } from '../utils/employee-sign.js';
+import { collectDeptIds } from '../services/skud-shared.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import {
+  KEYSET_NAME_SQL,
+  mapEmployeeRows,
+  parseKeysetParams,
+  respondKeysetPage,
+} from './employees-list-page.helpers.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
 const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
@@ -233,6 +238,14 @@ export const employeesController = {
         const pageSize = Math.min(maxPageSize, Math.max(1, parseInt(req.query.pageSize as string) || 50));
         const search = (req.query.search as string || '').trim();
         const status = req.query.status as string | undefined; // 'active' | 'fired' | 'excluded'
+        // keyset=1 — подгрузка «Текущих сотрудников» порциями по курсору (ФИО, id) вместо OFFSET:
+        // увольнение или добавление сотрудника между порциями не сдвигает следующую порцию.
+        const keysetParsed = parseKeysetParams(req.query, status);
+        if (!keysetParsed.ok) {
+          res.status(400).json({ success: false, error: 'Некорректный курсор списка', code: 'INVALID_CURSOR' });
+          return;
+        }
+        const keyset = keysetParsed.keyset;
         const offset = (page - 1) * pageSize;
         if (status === 'fired' && departmentId) {
           const archiveDepartment = await getKnownArchiveDepartment();
@@ -364,9 +377,18 @@ export const employeesController = {
           }
         }
 
+        // id — тай-брейк: без него у однофамильцев порядок между запросами не детерминирован.
         const orderSql = status === 'excluded'
-          ? 'ORDER BY excluded_from_timesheet_at DESC'
-          : 'ORDER BY full_name ASC';
+          ? 'ORDER BY excluded_from_timesheet_at DESC, id DESC'
+          : `ORDER BY ${KEYSET_NAME_SQL} ASC, id ASC`;
+
+        if (keyset) {
+          await respondKeysetPage(req, res, {
+            t0, selectCols, whereParts, params, orderSql, pageSize, keyset, showArchived,
+          });
+          return;
+        }
+
         params.push(pageSize);
         const limitIdx = params.length;
         params.push(offset);
@@ -397,22 +419,7 @@ export const employeesController = {
           return;
         }
 
-        const structureCache = await loadStructureCache();
-        const isStaffView = req.query.view === 'staff';
-        const signIndex = isStaffView ? buildSignDepartmentIndex(await getAllDepartmentsTree()) : null;
-        const employees = data.map(emp => {
-          const mapped = decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache);
-          if (!signIndex) return mapped;
-          return {
-            ...mapped,
-            birth_date: typeof emp.birth_date === 'string' ? emp.birth_date : null,
-            sign: resolveEmployeeSign({
-              employmentStatus: mapped.employment_status,
-              departmentId: mapped.org_department_id,
-              deptById: signIndex,
-            }),
-          };
-        });
+        const employees = await mapEmployeeRows(data, req.query.view === 'staff');
         const total = data.length > 0 ? Number(data[0].total_count) : (emptyPageTotal ?? 0);
 
         auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {

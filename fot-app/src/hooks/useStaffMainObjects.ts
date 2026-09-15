@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
+import { useQueries, type UseQueryResult } from '@tanstack/react-query';
 import { employeeService, type IEmployeeMainObjects } from '../services/employeeService';
+import { collectChunkReadiness, type IChunkReadiness } from '../utils/staffInfiniteList';
 
 const DATE_CHECK_MS = 60_000;
 /** Снимок пересчитывается ночью — чаще перезапрашивать незачем. */
@@ -22,23 +23,60 @@ const useMoscowDate = (): string => {
   return date;
 };
 
+/** Ключ порции: [префикс, дата МСК, id порции] — id последним (адресная инвалидация по сотруднику). */
 export const STAFF_MAIN_OBJECTS_QUERY_KEY = 'employee-main-objects';
 
+export interface IStaffMainObjectsResult extends IChunkReadiness {
+  objects: Record<string, string>;
+  costItems: Record<string, string>;
+  period: { start: string; end: string } | undefined;
+  hasError: boolean;
+  retryFailed: () => void;
+}
+
 /**
- * Столбец «Объект» для сотрудников текущей страницы — из ночного снимка сервера (тот же
- * источник, что у Excel-выгрузки). Обновляется при возврате во вкладку и раз в 10 минут
- * при следующем обращении; после московской полуночи ключ меняется и данные грузятся заново.
+ * «Объект» и «Статья затрат» — по одному запросу на порцию списка (≤ 500 id), из ночного
+ * снимка сервера. Загруженные порции берутся из кэша, новая порция — один запрос.
+ * Без placeholderData: данные прежнего ключа относились бы к другим сотрудникам.
  */
-export const useStaffMainObjects = (employeeIds: number[]) => {
+export const useStaffMainObjects = (pageIdChunks: readonly number[][]): IStaffMainObjectsResult => {
   const mskDate = useMoscowDate();
-  return useQuery<IEmployeeMainObjects>({
-    queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY, mskDate, employeeIds],
-    queryFn: () => employeeService.getMainObjects(employeeIds),
-    enabled: employeeIds.length > 0,
-    // Прежние значения остаются на экране, пока идёт перезапрос: ячейки не мигают,
-    // высота строк и прокрутка не меняются.
-    placeholderData: previous => previous,
-    staleTime: STALE_MS,
-    refetchOnWindowFocus: true,
+
+  // combine мемоизируется React Query: пока порции не изменились, склейка не пересчитывается.
+  const combine = useCallback((results: Array<UseQueryResult<IEmployeeMainObjects>>): IStaffMainObjectsResult => {
+    const objects: Record<string, string> = {};
+    const costItems: Record<string, string> = {};
+    let period: { start: string; end: string } | undefined;
+    results.forEach(result => {
+      if (!result.isSuccess || result.isPlaceholderData || !result.data) return;
+      Object.assign(objects, result.data.objects);
+      Object.assign(costItems, result.data.cost_items);
+      period ??= result.data.period;
+    });
+    const readiness = collectChunkReadiness(results.map((result, index) => ({
+      ids: pageIdChunks[index] ?? [],
+      data: result.data,
+      isSuccess: result.isSuccess,
+      isError: result.isError,
+      isPlaceholderData: result.isPlaceholderData,
+    })));
+    return {
+      objects,
+      costItems,
+      period,
+      ...readiness,
+      hasError: readiness.errorIds.size > 0,
+      retryFailed: () => { results.forEach(result => { if (result.isError) void result.refetch(); }); },
+    };
+  }, [pageIdChunks]);
+
+  return useQueries({
+    queries: pageIdChunks.map(ids => ({
+      queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY, mskDate, ids] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) => employeeService.getMainObjects(ids, signal),
+      staleTime: STALE_MS,
+      refetchOnWindowFocus: true,
+    })),
+    combine,
   });
 };

@@ -1,21 +1,29 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
-import type { PaginatedMeta } from '../services/employeeService';
 import { useStructureTree } from './useStructure';
 import {
   EMPTY_EMPLOYEE_COUNTS,
-  EMPTY_PAGINATED_META,
-  EMPTY_PAGINATED_RESPONSE,
   employeeCountsQueryKey,
-  paginatedEmployeesQueryKey,
+  infiniteEmployeesQueryKey,
   useEmployeeCountsQuery,
-  usePaginatedEmployeesQuery,
+  useInfiniteEmployeesQuery,
 } from './useEmployeeDirectory';
+import {
+  buildPageIdChunks,
+  mergeEmployeePages,
+  patchEmployeeInPages,
+  type IEmployeePagesData,
+} from '../utils/staffInfiniteList';
+import { shouldLoadMore } from '../utils/staffLoadMore';
+
+/** Порция «Текущих сотрудников»: догружается при прокрутке к концу списка. */
+export const STAFF_CHUNK_SIZE = 500;
+
+const EMPTY_EMPLOYEES: Employee[] = [];
+const EMPTY_CHUNKS: number[][] = [];
 
 interface IUseStaffDataParams {
-  page: number;
-  pageSize?: number;
   search?: string;
   departmentId?: string;
   scheduleId?: string;
@@ -27,12 +35,11 @@ interface IUseStaffDataParams {
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { page, pageSize = 100, search, departmentId, scheduleId, section, status = 'active', enabled = true } = params;
+  const { search, departmentId, scheduleId, section, status = 'active', enabled = true } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const employeesParams = {
-    page,
-    pageSize,
+    pageSize: STAFF_CHUNK_SIZE,
     search: search || undefined,
     departmentId: departmentId || undefined,
     scheduleId: scheduleId || undefined,
@@ -40,25 +47,47 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     status,
     view: 'staff' as const,
   };
-  const employeesQueryKey = paginatedEmployeesQueryKey(employeesParams);
-  const employeesQuery = usePaginatedEmployeesQuery(employeesParams, enabled);
+  const employeesQueryKey = infiniteEmployeesQueryKey(employeesParams);
+  const employeesQuery = useInfiniteEmployeesQuery(employeesParams, enabled);
   const countsQuery = useEmployeeCountsQuery(false);
 
-  const employeesResponse = employeesQuery.data || EMPTY_PAGINATED_RESPONSE;
+  const pages = employeesQuery.data?.pages;
+  const employees = useMemo(() => (pages ? mergeEmployeePages(pages) : EMPTY_EMPLOYEES), [pages]);
+  const pageIdChunks = useMemo(() => (pages ? buildPageIdChunks(pages) : EMPTY_CHUNKS), [pages]);
+  const total = pages?.[0]?.meta.total ?? 0;
+
   const counts = countsQuery.data || EMPTY_EMPLOYEE_COUNTS;
   const departments = structureQuery.data?.departments || [];
-  const meta: PaginatedMeta = employeesResponse.meta || EMPTY_PAGINATED_META;
+
+  // Синхронный guard: isFetchingNextPage обновится только после рендера, а события прокрутки
+  // приходят раньше — без ref одна граница отправила бы несколько запросов.
+  const inFlightRef = useRef(false);
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, isPlaceholderData, fetchNextPage } = employeesQuery;
+
+  const loadMore = useCallback((lastVisibleIndex: number) => {
+    const allowed = shouldLoadMore({
+      lastVisibleIndex,
+      loadedCount: employees.length,
+      hasNextPage,
+      inFlight: inFlightRef.current,
+      isFetchingNextPage,
+      isPlaceholderData,
+      isFetchNextPageError,
+    });
+    if (!allowed) return;
+    inFlightRef.current = true;
+    void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
+  }, [employees.length, hasNextPage, isFetchingNextPage, isPlaceholderData, isFetchNextPageError, fetchNextPage]);
+
+  /** Повтор упавшей порции — только по кнопке, автодогрузка после ошибки остановлена. */
+  const retryNextPage = useCallback(() => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
+  }, [fetchNextPage]);
 
   const patchEmployee = useCallback((id: number, patch: Partial<Employee>) => {
-    queryClient.setQueryData(employeesQueryKey, (previous: typeof employeesResponse | undefined) => {
-      if (!previous) return previous;
-      return {
-        ...previous,
-        data: previous.data.map(employee => (
-          employee.id === id ? { ...employee, ...patch } : employee
-        )),
-      };
-    });
+    queryClient.setQueryData<IEmployeePagesData>(employeesQueryKey, previous => patchEmployeeInPages(previous, id, patch));
   }, [employeesQueryKey, queryClient]);
 
   const refresh = useCallback(() => {
@@ -69,11 +98,19 @@ export const useStaffData = (params: IUseStaffDataParams) => {
   }, [employeesQueryKey, queryClient]);
 
   return {
-    employees: employeesResponse.data,
+    employees,
+    pageIdChunks,
+    total,
     departments,
     countsByDepartment: counts.byDepartment,
     loading: !enabled || employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
-    meta,
+    isFirstPageError: employeesQuery.isError && !pages,
+    retryFirstPage: employeesQuery.refetch,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    loadMore,
+    retryNextPage,
     totalActive: counts.byStatus.active,
     refresh,
     patchEmployee,

@@ -11,6 +11,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY } from '../../hooks/useStaffMainObjects';
+import { refreshStaffChunksFor } from '../../utils/staffChunkInvalidation';
 import type { Employee } from '../../types';
 import { TimesheetModeOptionsColumn } from './TimesheetModeOptionsColumn';
 import { formatTimesheetModeText } from './timesheetModeLabels';
@@ -84,7 +85,8 @@ export const StaffCostItemModal: FC<IProps> = ({ employee, onClose }) => {
         expected: { mode: expected.mode, object_id: expected.objectId },
       });
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY] }),
+        // Только порция этого сотрудника: при тысячах загруженных строк — один запрос, а не все порции.
+        refreshStaffChunksFor(queryClient, [STAFF_MAIN_OBJECTS_QUERY_KEY], [employee.id]),
         queryClient.invalidateQueries({ queryKey: ['admin-timesheet-modes'] }),
         queryClient.invalidateQueries({ queryKey: ['admin-timesheet-mode-departments'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet'] }),

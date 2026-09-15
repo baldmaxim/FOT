@@ -7,13 +7,15 @@ interface IStaffCostItemCellProps {
   employee: Employee;
   /** undefined — ещё грузится; null/'' — значения нет. */
   name: string | null | undefined;
+  /** Порция данных не загрузилась. */
+  failed?: boolean;
   /** Нет — только просмотр (нет права на режим табелирования или не «Действующие»). */
   onEdit?: (employee: Employee) => void;
 }
 
 /** «Статья затрат»: текст, а при праве — кнопка, открывающая выбор режима табелирования. */
-export const StaffCostItemCell: FC<IStaffCostItemCellProps> = ({ employee, name, onEdit }) => {
-  if (!onEdit || name === undefined) return <StaffMainObjectCell name={name} />;
+export const StaffCostItemCell: FC<IStaffCostItemCellProps> = ({ employee, name, failed = false, onEdit }) => {
+  if (!onEdit || failed || name === undefined) return <StaffMainObjectCell name={name} failed={failed} />;
   return (
     <button
       type="button"

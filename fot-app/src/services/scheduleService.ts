@@ -68,11 +68,12 @@ export const scheduleService = {
   },
 
   /** Активные персональные графики сотрудников (POST: до 1000 id в теле, а не в URL) */
-  async listEmployeeAssignments(employeeIds: number[]): Promise<IEmployeeScheduleAssignment[]> {
+  async listEmployeeAssignments(employeeIds: number[], signal?: AbortSignal): Promise<IEmployeeScheduleAssignment[]> {
     if (employeeIds.length === 0) return [];
     const res = await apiClient.post<ApiResponse<IEmployeeScheduleAssignment[]>>(
       '/schedules/employees',
       { employee_ids: employeeIds },
+      { signal },
     );
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки графиков сотрудников');
     return res.data;

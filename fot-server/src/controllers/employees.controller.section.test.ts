@@ -242,6 +242,84 @@ describe('getAll — параметр section', () => {
   });
 });
 
+describe('getAll — порядок и курсор (keyset)', () => {
+  const listRows = (n: number, from = 1) => Array.from({ length: n }, (_, i) => ({
+    id: from + i, full_name: `Сотрудник ${String(from + i).padStart(4, '0')}`, employment_status: 'active',
+  }));
+
+  it('OFFSET-режим: тай-брейк по id — full_name ASC, id ASC; excluded — дата DESC, id DESC', async () => {
+    let res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1' }), res as never);
+    expect(employeeListCalls()[0][0]).toContain("ORDER BY COALESCE(full_name, '') ASC, id ASC");
+
+    h.query.mockClear();
+    res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1', status: 'excluded' }), res as never);
+    expect(employeeListCalls()[0][0]).toContain('ORDER BY excluded_from_timesheet_at DESC, id DESC');
+  });
+
+  it('первая порция: LIMIT pageSize+1 без OFFSET, next_cursor по последней оставленной строке, total отдельным count', async () => {
+    h.query.mockImplementation(async (sql: string) => (String(sql).includes('LIMIT') ? listRows(4) : []));
+    h.queryOne.mockResolvedValue({ total: 9 });
+
+    const res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1', pageSize: '3', keyset: '1', view: 'staff' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = employeeListCalls()[0];
+    expect(sql).not.toContain('OFFSET');
+    expect(sql).not.toContain('> ($');
+    expect(params.at(-1)).toBe(4);
+    expectPlaceholdersMatch(sql, params);
+    const body = res.body as { data: Array<{ id: number }>; meta: { total: number; next_cursor: unknown } };
+    expect(body.data.map(e => e.id)).toEqual([1, 2, 3]);
+    expect(body.meta.total).toBe(9);
+    expect(body.meta.next_cursor).toEqual({ name: 'Сотрудник 0003', id: 3 });
+  });
+
+  it('следующая порция: условие (имя, id) > курсора, count без курсорного условия, последняя порция — next_cursor null', async () => {
+    h.query.mockImplementation(async (sql: string) => (String(sql).includes('LIMIT') ? listRows(2, 4) : []));
+    h.queryOne.mockResolvedValue({ total: 5 });
+
+    const res = makeRes();
+    await employeesController.getAll(makeReq({
+      page: '1', pageSize: '3', keyset: '1', after_name: 'Сотрудник 0003', after_id: '3', section: 'su10', search: 'Сотр',
+    }), res as never);
+
+    const [sql, params] = employeeListCalls()[0];
+    expect(sql).toMatch(/\(COALESCE\(full_name, ''\), id\) > \(\$\d+::text, \$\d+::int\)/);
+    expect(params).toContain('Сотрудник 0003');
+    expect(params).toContain(3);
+    expectPlaceholdersMatch(sql, params);
+
+    const [countSql, countParams] = h.queryOne.mock.calls.at(-1) as Call;
+    expect(countSql).toContain('count(*)');
+    expect(countSql).not.toContain('> ($');
+    expectPlaceholdersMatch(countSql, countParams);
+    expect(countParams).not.toContain('Сотрудник 0003');
+
+    expect((res.body as { meta: { next_cursor: unknown; total: number } }).meta).toMatchObject({ next_cursor: null, total: 5 });
+  });
+
+  it('некорректный курсор — 400 без запроса списка', async () => {
+    const bad = [
+      { keyset: '1', after_name: 'А' },
+      { keyset: '1', after_id: '3' },
+      { keyset: '1', after_name: 'А', after_id: '-1' },
+      { keyset: '1', after_name: 'А', after_id: 'x' },
+      { after_name: 'А', after_id: '3' },
+      { keyset: '1', status: 'excluded' },
+    ];
+    for (const extra of bad) {
+      const res = makeRes();
+      await employeesController.getAll(makeReq({ page: '1', ...extra }), res as never);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'INVALID_CURSOR' });
+    }
+    expect(employeeListCalls()).toHaveLength(0);
+  });
+});
+
 describe('getAll — предел pageSize', () => {
   const pageSizeOf = async (query: Record<string, unknown>) => {
     const res = makeRes();
