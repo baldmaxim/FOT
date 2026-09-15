@@ -27,15 +27,6 @@
   box-sizing: border-box;
 }
 
-.checkboxField {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: var(--text-primary);
-  min-height: 44px;
-}
-
 .warning {
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -77,27 +68,35 @@
 }
 
 /*
- * Широкая таблица скроллится внутри себя ТОЛЬКО по горизонтали: горизонтального скролла страницы
- * на 360px быть не должно. Вертикально страницу скроллит общий Layout .content.
- * overscroll-behavior: contain здесь НЕЛЬЗЯ: overflow-x: auto делает обёртку скролл-контейнером,
- * вертикально ей прокручивать нечего, а contain обрывает передачу колеса родителю — таблица
- * «не скроллится». Так же, как в ChecksPage.module.css.
+ * Таблица скроллится внутри себя по обеим осям: так шапка (sticky th) остаётся на месте —
+ * sticky липнет к ближайшему скролл-контейнеру, а overflow-x: auto уже делает им обёртку.
+ * Горизонтального скролла страницы на 360px нет: он только внутри таблицы.
+ * overscroll-behavior: contain уместен — обёртка теперь сама прокручивается по вертикали;
+ * у края списка колесо не утаскивает страницу.
  */
 .tableWrap {
-  overflow-x: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  max-height: calc(100dvh - 240px);
+  min-height: 320px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
 }
 
-.table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 860px; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; min-width: 1400px; }
 .table th, .table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table th { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
 .table tbody tr:last-child td { border-bottom: none; }
 
 .checkboxCell { width: 36px; }
 .rowMissing { background: color-mix(in srgb, var(--error) 7%, transparent); }
-.missing { color: var(--error); }
 
 .pagination {
   display: flex;
@@ -126,51 +125,14 @@
 
 .pageInfo { font-size: 14px; color: var(--text-secondary); }
 
-/* Карточка вне таблицы: внутри <td> действовал бы nowrap от .table td */
-.explain {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 28px 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  text-align: center;
-}
-
-.explainText {
-  margin: 0;
-  max-width: 560px;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.secondaryButton {
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: 14px;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-
 .state { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 .stateError { padding: 20px; text-align: center; color: var(--error); font-size: 14px; }
 
 @media (min-width: 768px) {
-  .toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; }
+  /* Поиск, подразделение */
+  .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
 }
 
 @media (min-width: 1280px) {
-  /* Дата, подразделение (шире — длинные названия), категория, вид оплаты, поиск, «только без условий» */
-  .toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) repeat(3, minmax(0, 1fr)) auto;
-  }
+  .toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 }

@@ -21,6 +21,18 @@ interface IAssignTermsModalProps {
   resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
 }
 
+const toInputValue = (value: string | number | null | undefined): string => (
+  value === null || value === undefined ? '' : String(value)
+);
+
+/** Необязательная сумма: пусто → undefined, некорректно или < 0 → null. */
+const parseOptionalMoney = (raw: string): number | undefined | null => {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
 export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   rows,
   defaultDate,
@@ -40,6 +52,8 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
     const value = single.calc_type === 'salary' ? single.monthly_salary : single.hourly_rate;
     return value === null || value === undefined ? '' : String(value);
   });
+  const [bonus, setBonus] = useState(() => toInputValue(single?.terms_id ? single.bonus_amount : null));
+  const [housing, setHousing] = useState(() => toInputValue(single?.terms_id ? single.housing_compensation : null));
   const [effectiveFrom, setEffectiveFrom] = useState(defaultDate);
   const [orderNumber, setOrderNumber] = useState('');
   const [orderDate, setOrderDate] = useState('');
@@ -64,12 +78,20 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
       setError(calcType === 'salary' ? 'Укажите оклад' : 'Укажите часовую ставку');
       return;
     }
+    const bonusAmount = parseOptionalMoney(bonus);
+    const housingCompensation = parseOptionalMoney(housing);
+    if (bonusAmount === null || housingCompensation === null) {
+      setError('Премиальная часть и компенсация проживания — число не меньше нуля');
+      return;
+    }
     setError(null);
     onSubmit({
       staff_category: category,
       calc_type: calcType,
       monthly_salary: calcType === 'salary' ? parsed : undefined,
       hourly_rate: calcType === 'hourly' ? parsed : undefined,
+      bonus_amount: bonusAmount,
+      housing_compensation: housingCompensation,
       effective_from: effectiveFrom,
       order_number: orderNumber.trim() || undefined,
       order_date: orderDate || undefined,
@@ -127,6 +149,27 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
               placeholder={calcType === 'salary' ? '175000' : '450'}
             />
           </label>
+
+          <div className={styles.row}>
+            <label className={styles.field}>
+              <span className={styles.label}>Премиальная часть, ₽/мес</span>
+              <input
+                className={styles.input}
+                inputMode="decimal"
+                value={bonus}
+                onChange={event => setBonus(event.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.label}>Компенсация проживания, ₽/мес</span>
+              <input
+                className={styles.input}
+                inputMode="decimal"
+                value={housing}
+                onChange={event => setHousing(event.target.value)}
+              />
+            </label>
+          </div>
 
           <label className={styles.field}>
             <span className={styles.label}>Действует с</span>

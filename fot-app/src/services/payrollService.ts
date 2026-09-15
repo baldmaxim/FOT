@@ -26,12 +26,19 @@ export interface IPayrollTermsRow {
   tab_number: string | null;
   department_id: string | null;
   department_name: string | null;
+  position_name: string | null;
+  /** График, действующий на дату выборки (личный или по умолчанию). */
+  schedule_name: string | null;
   /** null — условий на выбранную дату нет: такой сотрудник не попадёт в расчёт. */
   terms_id: number | null;
   staff_category: StaffCategory | null;
   calc_type: PayrollCalcType | null;
   monthly_salary: string | number | null;
   hourly_rate: string | number | null;
+  /** Премиальная часть, ₽/мес. */
+  bonus_amount: string | number | null;
+  /** Компенсация проживания, ₽/мес. */
+  housing_compensation: string | number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -44,6 +51,8 @@ export interface IPayrollTermsHistoryRow {
   calc_type: PayrollCalcType;
   monthly_salary: string | number | null;
   hourly_rate: string | number | null;
+  bonus_amount: string | number | null;
+  housing_compensation: string | number | null;
   staff_units: string | number;
   effective_from: string;
   effective_to: string | null;
@@ -59,6 +68,9 @@ export interface IAssignTermsPayload {
   calc_type: PayrollCalcType;
   monthly_salary?: number;
   hourly_rate?: number;
+  /** Не передано — сумма не задана (прежнее значение очищается). */
+  bonus_amount?: number;
+  housing_compensation?: number;
   staff_units?: number;
   effective_from: string;
   change_reason?: string;

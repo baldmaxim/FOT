@@ -4,12 +4,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   payrollService,
   PAYROLL_TERMS_PAGE_SIZE,
-  STAFF_CATEGORY_LABELS,
-  CALC_TYPE_LABELS,
   defaultCalcTypeFor,
   type IPayrollTermsRow,
-  type PayrollCalcType,
-  type StaffCategory,
 } from '../../services/payrollService';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
@@ -28,7 +24,16 @@ const withoutNode = (nodes: OrgDepartmentNode[], excludedId: string | null): Org
     : nodes
 );
 
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Сегодня по часам браузера. toISOString() дал бы дату UTC: после местной полуночи
+ * (до 03:00 по Москве) выборка шла бы на вчерашний день.
+ */
+const today = (): string => {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+};
 
 const formatMoney = (value: string | number | null): string => {
   if (value === null || value === undefined) return '—';
@@ -38,11 +43,16 @@ const formatMoney = (value: string | number | null): string => {
 };
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
-const formatAmount = (row: IPayrollTermsRow): string => {
+const formatSalary = (row: IPayrollTermsRow): string => {
   if (!row.terms_id) return '—';
   return row.calc_type === 'salary'
     ? `${formatMoney(row.monthly_salary)} ₽/мес`
     : `${formatMoney(row.hourly_rate)} ₽/час`;
+};
+
+const formatMonthly = (value: string | number | null): string => {
+  const money = formatMoney(value);
+  return money === '—' ? money : `${money} ₽/мес`;
 };
 
 const pluralEmployees = (count: number): string => {
@@ -53,24 +63,21 @@ const pluralEmployees = (count: number): string => {
   return 'сотрудников';
 };
 
+const COLUMN_COUNT = 11;
+
 export const CompensationTermsPage: FC = () => {
   const { success, error: showError, warning } = useToast();
   const queryClient = useQueryClient();
 
-  const [date, setDate] = useState(today);
-  // Подразделение — основной способ найти людей для назначения: категория появляется
-  // только после назначения условий, до этого по ней фильтровать нечего.
+  // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня».
+  const [date] = useState(today);
   const [departmentId, setDepartmentId] = useState('');
-  const [category, setCategory] = useState<StaffCategory | ''>('');
-  const [calcType, setCalcType] = useState<PayrollCalcType | ''>('');
-  const [onlyWithout, setOnlyWithout] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [modalFor, setModalFor] = useState<IPayrollTermsRow[] | null>(null);
 
-  // Поиск идёт на сервере по всему штату: раньше он фильтровал только загруженные строки
-  // и не находил никого за пределами первых 2000 по алфавиту.
+  // Поиск идёт на сервере по всему штату, а не по загруженной странице.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
 
   // Любой фильтр меняет выборку: возвращаемся на первую страницу и снимаем выделение,
@@ -81,13 +88,10 @@ export const CompensationTermsPage: FC = () => {
   };
 
   const termsQuery = useQuery({
-    queryKey: ['payroll-terms', date, departmentId, category, calcType, onlyWithout, debouncedSearch, page],
+    queryKey: ['payroll-terms', date, departmentId, debouncedSearch, page],
     queryFn: () => payrollService.listTerms({
       date,
       departmentId: departmentId || undefined,
-      staffCategory: category || undefined,
-      calcType: calcType || undefined,
-      withoutTerms: onlyWithout || undefined,
       q: debouncedSearch || undefined,
       page,
       pageSize: PAYROLL_TERMS_PAGE_SIZE,
@@ -107,17 +111,6 @@ export const CompensationTermsPage: FC = () => {
     () => withoutNode(structureTree.data?.departments ?? [], contractorRootId),
     [structureTree.data, contractorRootId],
   );
-
-  // Пустой результат из-за фильтра по свойствам условий, когда условия ещё никому не назначали, —
-  // объясняем, а не пишем «не найдены»: люди есть, просто категории у них пока нет.
-  const filtersByAssignedTerms = Boolean(category || calcType);
-  const emptyBecauseNoTerms = filtersByAssignedTerms && total === 0 && meta?.with_terms_total === 0;
-
-  const resetTermsFilters = () => {
-    setCategory('');
-    setCalcType('');
-    resetPaging();
-  };
 
   const assignMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof payrollService.assignBulk>[1] & { ids: number[] }) => {
@@ -168,12 +161,13 @@ export const CompensationTermsPage: FC = () => {
     <div className={styles.page}>
       <div className={styles.toolbar}>
         <label className={styles.field}>
-          <span className={styles.fieldLabel}>На дату</span>
+          <span className={styles.fieldLabel}>Поиск</span>
           <input
-            type="date"
+            type="search"
             className={styles.input}
-            value={date}
-            onChange={event => { setDate(event.target.value); resetPaging(); }}
+            placeholder="Поиск по ФИО…"
+            value={search}
+            onChange={event => { setSearch(event.target.value); resetPaging(); }}
           />
         </label>
 
@@ -188,66 +182,11 @@ export const CompensationTermsPage: FC = () => {
             onRetry={() => { void structureTree.refetch(); }}
           />
         </div>
-
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Категория</span>
-          <select
-            className={styles.input}
-            value={category}
-            onChange={event => { setCategory(event.target.value as StaffCategory | ''); resetPaging(); }}
-          >
-            <option value="">Все</option>
-            {(Object.keys(STAFF_CATEGORY_LABELS) as StaffCategory[]).map(key => (
-              <option key={key} value={key}>{STAFF_CATEGORY_LABELS[key]}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Вид оплаты</span>
-          <select
-            className={styles.input}
-            value={calcType}
-            onChange={event => { setCalcType(event.target.value as PayrollCalcType | ''); resetPaging(); }}
-          >
-            <option value="">Любой</option>
-            {(Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[]).map(key => (
-              <option key={key} value={key}>{CALC_TYPE_LABELS[key]}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Поиск</span>
-          <input
-            type="search"
-            className={styles.input}
-            placeholder="ФИО или табельный"
-            value={search}
-            onChange={event => { setSearch(event.target.value); resetPaging(); }}
-          />
-        </label>
-
-        <label className={styles.checkboxField}>
-          <input
-            type="checkbox"
-            checked={onlyWithout}
-            onChange={event => { setOnlyWithout(event.target.checked); resetPaging(); }}
-          />
-          <span>Только без условий</span>
-        </label>
       </div>
 
       {meta && !meta.contractors_excluded && (
         <div className={styles.warning}>
           Не найден узел «Подрядные организации» — в списке могут оказаться сотрудники подрядчиков.
-        </div>
-      )}
-
-      {meta && meta.without_terms_total > 0 && !onlyWithout && (
-        <div className={styles.warning}>
-          Без условий оплаты: <strong>{meta.without_terms_total}</strong>. Такие сотрудники
-          в расчёт зарплаты не попадут.
         </div>
       )}
 
@@ -268,25 +207,7 @@ export const CompensationTermsPage: FC = () => {
       {termsQuery.isLoading && <div className={styles.state}>Загрузка…</div>}
       {termsQuery.isError && <div className={styles.stateError}>Не удалось загрузить условия оплаты</div>}
 
-      {/*
-        Объяснение — состояние экрана, а не строка данных, поэтому оно вне таблицы. Внутри <td>
-        текст не переносился: `.table td { white-space: nowrap }` специфичнее одиночного класса,
-        и строка растягивала таблицу за край экрана с горизонтальной прокруткой.
-      */}
-      {!termsQuery.isLoading && !termsQuery.isError && emptyBecauseNoTerms && (
-        <div className={styles.explain}>
-          <p className={styles.explainText}>
-            Категория и вид оплаты появляются после назначения условий. В этой выборке
-            условия пока не назначены никому — снимите фильтр и выберите подразделение,
-            чтобы назначить.
-          </p>
-          <button type="button" className={styles.secondaryButton} onClick={resetTermsFilters}>
-            Сбросить фильтры
-          </button>
-        </div>
-      )}
-
-      {!termsQuery.isLoading && !termsQuery.isError && !emptyBecauseNoTerms && (
+      {!termsQuery.isLoading && !termsQuery.isError && (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
@@ -300,11 +221,13 @@ export const CompensationTermsPage: FC = () => {
                   />
                 </th>
                 <th>Сотрудник</th>
-                <th>Таб. №</th>
                 <th>Подразделение</th>
-                <th>Категория</th>
-                <th>Вид оплаты</th>
-                <th>Сумма</th>
+                <th>Должность</th>
+                <th>График работы</th>
+                <th>Оклад</th>
+                <th>Премиальная часть</th>
+                <th>Компенсация проживания</th>
+                <th>Начисления за посл. полгода</th>
                 <th>Действует с</th>
                 <th aria-label="Действия" />
               </tr>
@@ -321,11 +244,14 @@ export const CompensationTermsPage: FC = () => {
                     />
                   </td>
                   <td>{row.full_name ?? '—'}</td>
-                  <td>{row.tab_number ?? '—'}</td>
                   <td>{row.department_name ?? '—'}</td>
-                  <td>{row.staff_category ? STAFF_CATEGORY_LABELS[row.staff_category] : '—'}</td>
-                  <td>{row.calc_type ? CALC_TYPE_LABELS[row.calc_type] : <span className={styles.missing}>не задан</span>}</td>
-                  <td>{formatAmount(row)}</td>
+                  <td>{row.position_name ?? '—'}</td>
+                  <td>{row.schedule_name ?? '—'}</td>
+                  <td>{formatSalary(row)}</td>
+                  <td>{row.terms_id ? formatMonthly(row.bonus_amount) : '—'}</td>
+                  <td>{row.terms_id ? formatMonthly(row.housing_compensation) : '—'}</td>
+                  {/* Фактические начисления придут из 1С ЗУП — импорта пока нет. */}
+                  <td>—</td>
                   <td>{row.effective_from ?? '—'}</td>
                   <td>
                     <button
@@ -340,7 +266,7 @@ export const CompensationTermsPage: FC = () => {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className={styles.state}>Сотрудники не найдены</td>
+                  <td colSpan={COLUMN_COUNT} className={styles.state}>Сотрудники не найдены</td>
                 </tr>
               )}
             </tbody>

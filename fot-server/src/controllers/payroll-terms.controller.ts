@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { queryOne } from '../config/postgres.js';
 import { getContractorRootId } from '../config/contractor.js';
+import { resolveSchedulesBulk } from '../services/schedule.service.js';
 import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
@@ -28,6 +29,8 @@ import {
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
 const moneySchema = z.coerce.number().positive('Сумма должна быть больше нуля');
+/** Премия и проживание могут быть нулевыми: 0 — «явно не положено», отсутствие — «не задано». */
+const optionalMoneySchema = z.coerce.number().min(0, 'Сумма не может быть отрицательной').optional();
 
 /**
  * Сумма привязана к виду оплаты: у оклада — monthly_salary, у почасовой — hourly_rate.
@@ -39,6 +42,8 @@ const termsBodySchema = z.object({
   calc_type: z.enum(['salary', 'hourly']),
   monthly_salary: moneySchema.optional(),
   hourly_rate: moneySchema.optional(),
+  bonus_amount: optionalMoneySchema,
+  housing_compensation: optionalMoneySchema,
   staff_units: z.coerce.number().positive().max(2).optional(),
   organization_id: z.string().uuid().nullable().optional(),
   effective_from: dateSchema,
@@ -119,16 +124,20 @@ const LIST_SQL = `
            e.tab_number,
            d.id   AS department_id,
            d.name AS department_name,
+           p.name AS position_name,
            t.id   AS terms_id,
            t.staff_category,
            t.calc_type,
            t.monthly_salary,
            t.hourly_rate,
+           t.bonus_amount,
+           t.housing_compensation,
            t.staff_units,
            t.effective_from,
            t.effective_to
       FROM employees e
       LEFT JOIN org_departments d ON d.id = e.org_department_id
+      LEFT JOIN positions p ON p.id = e.position_id
       LEFT JOIN payroll_compensation_terms t
              ON t.employee_id = e.id
             AND t.effective_from <= $1::date
@@ -156,6 +165,26 @@ const LIST_SQL = `
                ORDER BY full_name, employee_id
                LIMIT $9 OFFSET $10) p
     ), '[]'::json) AS rows`;
+
+/** Строка списка из LIST_SQL (json_agg отдаёт NUMERIC строками). */
+interface IPayrollTermsListRow {
+  employee_id: number;
+  full_name: string | null;
+  tab_number: string | null;
+  department_id: string | null;
+  department_name: string | null;
+  position_name: string | null;
+  terms_id: number | null;
+  staff_category: string | null;
+  calc_type: string | null;
+  monthly_salary: string | number | null;
+  hourly_rate: string | number | null;
+  bonus_amount: string | number | null;
+  housing_compensation: string | number | null;
+  staff_units: string | number | null;
+  effective_from: string | null;
+  effective_to: string | null;
+}
 
 /**
  * GET /api/payroll/terms — список условий оплаты своего штата.
@@ -194,7 +223,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       total: string | number;
       without_terms_total: string | number;
       with_terms_total: string | number;
-      rows: unknown[];
+      rows: IPayrollTermsListRow[];
     }>(LIST_SQL, [
       onDate,
       parsed.department_id ?? null,
@@ -208,9 +237,17 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       offset,
     ]);
 
+    // График — только для строк текущей страницы: константное число запросов, без N+1.
+    const pageRows = result?.rows ?? [];
+    const schedules = await resolveSchedulesBulk(pageRows.map(row => ({ id: row.employee_id })), onDate);
+    const data = pageRows.map(row => ({
+      ...row,
+      schedule_name: schedules.get(row.employee_id)?.name ?? null,
+    }));
+
     res.json({
       success: true,
-      data: result?.rows ?? [],
+      data,
       meta: {
         date: onDate,
         page: parsed.page,
@@ -251,6 +288,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       calcType: body.calc_type,
       monthlySalary: body.monthly_salary ?? null,
       hourlyRate: body.hourly_rate ?? null,
+      bonusAmount: body.bonus_amount ?? null,
+      housingCompensation: body.housing_compensation ?? null,
       staffUnits: body.staff_units,
       organizationId: body.organization_id ?? null,
       effectiveFrom: body.effective_from,
@@ -272,6 +311,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         // Суммы в аудит пишем: это кадровое основание, а не секрет.
         monthly_salary: body.monthly_salary ?? null,
         hourly_rate: body.hourly_rate ?? null,
+        bonus_amount: body.bonus_amount ?? null,
+        housing_compensation: body.housing_compensation ?? null,
         previous_terms_id: previous?.id ?? null,
         previous_calc_type: previous?.calc_type ?? null,
       },
@@ -307,6 +348,8 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
       calcType: body.calc_type,
       monthlySalary: body.monthly_salary ?? null,
       hourlyRate: body.hourly_rate ?? null,
+      bonusAmount: body.bonus_amount ?? null,
+      housingCompensation: body.housing_compensation ?? null,
       staffUnits: body.staff_units,
       organizationId: body.organization_id ?? null,
       effectiveFrom: body.effective_from,
@@ -331,6 +374,8 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
         skipped: payload.skipped.length,
         staff_category: body.staff_category,
         calc_type: body.calc_type,
+        bonus_amount: body.bonus_amount ?? null,
+        housing_compensation: body.housing_compensation ?? null,
         effective_from: body.effective_from,
       },
     });

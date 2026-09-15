@@ -1,17 +1,15 @@
 import { lazy, useMemo, type FC } from 'react';
-import { Wallet, HeartPulse, Palmtree, MinusCircle } from 'lucide-react';
+import { Wallet } from 'lucide-react';
 
 import { HubShell, type IHubTab } from '../../components/hub/HubShell';
-import { SalaryTabPlaceholder } from '../../components/salary/SalaryTabPlaceholder';
 
 const PaymentsTab = lazy(() => import('../salary/PaymentsTab').then(m => ({ default: m.PaymentsTab })));
 
 /**
- * Раздел «Зарплата»: Выплаты, Больничные, Отпуска, Удержания.
+ * Раздел «Зарплата»: сейчас одна вкладка «Выплаты» (рабочий экран — «Условия оплаты»).
  *
- * Рабочий экран сейчас — «Выплаты → Условия оплаты». Остальные вкладки показывают,
- * что в них появится и на каком этапе. Каждая вкладка — свой ключ доступа, чтобы позже
- * раздать их разным ролям через админку без миграции и деплоя.
+ * Вкладки «Больничные», «Отпуска», «Удержания» убраны с экрана; их ключи доступа
+ * (/salary/sick-leaves|vacations|deductions, миграция 275) сохранены для будущих этапов.
  */
 export const SalaryHubPage: FC = () => {
   const tabs = useMemo<IHubTab[]>(() => [
@@ -22,45 +20,6 @@ export const SalaryHubPage: FC = () => {
       accessPath: ['/salary/payments', '/salary/terms'],
       icon: Wallet,
       render: () => <PaymentsTab />,
-    },
-    {
-      key: 'sick-leaves',
-      label: 'Больничные',
-      accessPath: '/salary/sick-leaves',
-      icon: HeartPulse,
-      render: () => (
-        <SalaryTabPlaceholder
-          title="Больничные"
-          description="Листки нетрудоспособности: период, процент оплаты, дни за счёт работодателя и за счёт СФР, связь с заявлением сотрудника."
-          stage="Этап 4 — после утверждения правил бухгалтерией"
-        />
-      ),
-    },
-    {
-      key: 'vacations',
-      label: 'Отпуска',
-      accessPath: '/salary/vacations',
-      icon: Palmtree,
-      render: () => (
-        <SalaryTabPlaceholder
-          title="Отпуска"
-          description="Отпуска и отпускные: средний заработок, срок выплаты, остатки дней отпуска по каждому сотруднику."
-          stage="Этап 4 — после утверждения правил бухгалтерией"
-        />
-      ),
-    },
-    {
-      key: 'deductions',
-      label: 'Удержания',
-      accessPath: '/salary/deductions',
-      icon: MinusCircle,
-      render: () => (
-        <SalaryTabPlaceholder
-          title="Удержания"
-          description="К удержанию: депремирование, возмещение ущерба, удержания по ст. 137 ТК. Отдельно — возмещения сотруднику за спецодежду, инструмент и медосмотр."
-          stage="Этап 4 — после согласования оснований с юристом и бухгалтерией"
-        />
-      ),
     },
   ], []);
 
