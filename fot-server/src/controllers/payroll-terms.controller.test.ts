@@ -327,6 +327,8 @@ describe('payrollTermsController.list', () => {
       search: params[7],
       limit: params[8],
       offset: params[9],
+      afterName: params[10],
+      afterId: params[11],
     };
   };
 
@@ -517,6 +519,122 @@ describe('payrollTermsController.list', () => {
 
     expect(listParams().sql).toMatch(/t\.bonus_amount/);
     expect(listParams().sql).toMatch(/t\.housing_compensation/);
+  });
+
+  describe('подгрузка по курсору (ФИО, id)', () => {
+    it('курсор уходит в SQL, OFFSET при нём 0 — номер страницы не участвует', async () => {
+      await payrollTermsController.list(
+        makeReq({ query: { page: '4', page_size: '500', after_name: 'Абдуллаев Р.', after_id: '812' } } as Partial<AuthenticatedRequest>),
+        makeRes(),
+      );
+
+      const { sql, limit, offset, afterName, afterId } = listParams();
+      expect(afterName).toBe('Абдуллаев Р.');
+      expect(afterId).toBe(812);
+      expect(limit).toBe(500);
+      expect(offset).toBe(0);
+      expect(sql).toMatch(/\(COALESCE\(full_name, ''\), employee_id\) > \(\$11::text, \$12::int\)/);
+      // Сортировка по тому же выражению, что и сравнение курсора, — иначе порции разъедутся.
+      expect(sql).toMatch(/ORDER BY COALESCE\(full_name, ''\), employee_id/);
+      // next_cursor берётся из последнего элемента массива — порядок нужен внутри агрегата.
+      expect(sql).toMatch(/json_agg\(p ORDER BY COALESCE\(p\.full_name, ''\), p\.employee_id\)/);
+    });
+
+    it('без курсора — прежний режим страниц: курсор NULL, OFFSET по номеру страницы', async () => {
+      await payrollTermsController.list(
+        makeReq({ query: { page: '2', page_size: '50' } } as Partial<AuthenticatedRequest>),
+        makeRes(),
+      );
+
+      const { offset, afterName, afterId } = listParams();
+      expect(offset).toBe(50);
+      expect(afterName).toBeNull();
+      expect(afterId).toBeNull();
+    });
+
+    it('пустое ФИО в курсоре допустимо: сотрудник без ФИО не рвёт подгрузку', async () => {
+      const res = makeRes();
+      await payrollTermsController.list(
+        makeReq({ query: { after_name: '', after_id: '5' } } as Partial<AuthenticatedRequest>),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(listParams().afterName).toBe('');
+      expect(listParams().afterId).toBe(5);
+    });
+
+    it('полная порция отдаёт next_cursor последней строки, пустое ФИО — пустой строкой', async () => {
+      pgQueryOne.mockResolvedValueOnce({
+        total: '3',
+        without_terms_total: '3',
+        rows: [
+          { employee_id: 1, full_name: 'Абаев' },
+          { employee_id: 9, full_name: null },
+        ],
+      });
+      const res = makeRes();
+
+      await payrollTermsController.list(
+        makeReq({ query: { page_size: '2' } } as Partial<AuthenticatedRequest>),
+        res,
+      );
+
+      expect(res.body.meta.next_cursor).toEqual({ name: '', id: 9 });
+    });
+
+    it('неполная порция — последняя: next_cursor null', async () => {
+      pgQueryOne.mockResolvedValueOnce({
+        total: '1',
+        without_terms_total: '1',
+        rows: [{ employee_id: 1, full_name: 'Абаев' }],
+      });
+      const res = makeRes();
+
+      await payrollTermsController.list(
+        makeReq({ query: { page_size: '2' } } as Partial<AuthenticatedRequest>),
+        res,
+      );
+
+      expect(res.body.meta.next_cursor).toBeNull();
+    });
+
+    it('итоги считаются без курсора: total одинаков для любой порции', async () => {
+      pgQueryOne.mockResolvedValueOnce({ total: '1695', without_terms_total: '1695', rows: [] });
+      const res = makeRes();
+
+      await payrollTermsController.list(
+        makeReq({ query: { after_name: 'Яковлев', after_id: '1' } } as Partial<AuthenticatedRequest>),
+        res,
+      );
+
+      expect(res.body.meta.total).toBe(1695);
+      expect(listParams().sql).toMatch(/\(SELECT count\(\*\) FROM filtered\)\s+AS total/);
+    });
+
+    it('половина курсора — 400 до похода в БД', async () => {
+      const onlyId = makeRes();
+      await payrollTermsController.list(
+        makeReq({ query: { after_id: '5' } } as Partial<AuthenticatedRequest>),
+        onlyId,
+      );
+      expect(onlyId.statusCode).toBe(400);
+
+      const onlyName = makeRes();
+      await payrollTermsController.list(
+        makeReq({ query: { after_name: 'Абаев' } } as Partial<AuthenticatedRequest>),
+        onlyName,
+      );
+      expect(onlyName.statusCode).toBe(400);
+
+      const badId = makeRes();
+      await payrollTermsController.list(
+        makeReq({ query: { after_name: 'Абаев', after_id: '-1' } } as Partial<AuthenticatedRequest>),
+        badId,
+      );
+      expect(badId.statusCode).toBe(400);
+      expect(pgQueryOne).not.toHaveBeenCalled();
+    });
   });
 
   it('некорректная дата отклоняется', async () => {

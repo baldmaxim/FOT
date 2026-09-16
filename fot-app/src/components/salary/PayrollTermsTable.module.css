@@ -1,0 +1,181 @@
+/*
+ * Таблица условий оплаты — в стиле «Управления кадрами» (StaffControlPage.css, .sc-table--staff).
+ * Значения скопированы в модуль, глобальный CSS кадров не подключается.
+ *
+ * Обёртка скроллится по обеим осям: шапка (sticky) липнет к ней, горизонтальная прокрутка —
+ * только внутри таблицы, страница на 360px вбок не уезжает. Виртуализация держит прокрутку сама,
+ * поэтому браузерный scroll anchoring выключен — иначе таблица дёргалась бы у низа.
+ */
+.wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  /* Последняя строка не уходит под нижнюю панель Safari iOS 26 */
+  scroll-padding-bottom: env(safe-area-inset-bottom);
+}
+
+.table {
+  width: 100%;
+  /* separate + spacing 0: у collapse границы sticky-ячеек «уезжают» при прокрутке */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  table-layout: fixed;
+  /* Сумма фиксированных колонок; уже — скроллится таблица, не страница. */
+  min-width: 1404px;
+}
+
+.colCheck    { width: 44px; }
+.colNum      { width: 60px; }
+.colName     { width: 220px; }
+.colDept     { width: 150px; }
+.colPosition { width: 160px; }
+.colSchedule { width: 140px; }
+.colMoney    { width: 130px; }
+.colDate     { width: 110px; }
+.colAction   { width: 110px; }
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  /* Длинные заголовки («Компенсация проживания») — в две строки, а не обрезкой */
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.table td {
+  padding: 4px 12px;
+  height: 40px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--row-overlay), var(--row-overlay));
+}
+
+/*
+ * Цвет строки — через переменную: закреплённые слева ячейки должны быть непрозрачными
+ * (под ними прокручивается остальная строка), и тот же цвет получают все ячейки строки —
+ * чередование, hover и выделение меняются одновременно.
+ */
+.table tbody tr { --row-overlay: transparent; }
+.table tbody tr.rowEven { --row-overlay: color-mix(in srgb, var(--text-primary) 2%, transparent); }
+.table tbody tr:hover { --row-overlay: var(--bg-secondary); }
+.table tbody tr.rowSelected,
+.table tbody tr.rowSelected:hover { --row-overlay: color-mix(in srgb, var(--primary) 12%, transparent); }
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.spacer td {
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+/* ── Закреплённые слева: чекбокс, №, ФИО ── */
+.stickyCheck,
+.stickyNum,
+.stickyName {
+  position: sticky;
+}
+.table td.stickyCheck,
+.table td.stickyNum,
+.table td.stickyName { z-index: 1; }
+.table thead th.stickyCheck,
+.table thead th.stickyNum,
+.table thead th.stickyName { z-index: 3; }
+
+.stickyCheck { left: 0; }
+.stickyNum { left: 44px; }
+.stickyName { left: 104px; }
+
+.cellCheck { text-align: center; }
+.table thead th.cellCheck,
+.table thead th.cellNum { text-align: center; }
+
+.check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--primary);
+  vertical-align: middle;
+}
+
+.cellNum {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.table td.cellName { font-weight: 500; }
+
+/* Перенос вместо обрезки: ФИО до двух строк, подразделение и должность — до трёх */
+.clamp2,
+.clamp3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.clamp2 { -webkit-line-clamp: 2; line-clamp: 2; }
+.clamp3 { -webkit-line-clamp: 3; line-clamp: 3; }
+
+.cellOneLine { white-space: nowrap; }
+
+.cellNumber {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cellAction { text-align: right; }
+
+.linkButton {
+  min-height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.linkButton:hover { text-decoration: underline; }
+
+.empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Смартфоны: тап-цели ≥ 44px */
+@media (max-width: 768px) {
+  .linkButton { min-height: 44px; }
+  .check { width: 20px; height: 20px; }
+}

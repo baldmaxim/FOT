@@ -107,6 +107,12 @@ const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, c
  *
  * Подрядчики исключаются через NOT EXISTS, а не NOT IN: у сотрудника без отдела
  * `NULL IN (...)` даёт NULL, и он молча выпал бы из списка.
+ *
+ * Порции по курсору (ФИО, id): экран подгружает список при прокрутке, и между порциями
+ * никто не теряется и не повторяется, даже если штат изменился. Сортировка и сравнение
+ * курсора идут по одному выражению COALESCE(full_name, '') — иначе сотрудник без ФИО
+ * (NULL в сравнении кортежей) выпал бы из списка. Итоги считаются без курсора.
+ * $12 IS NULL — прежний режим страниц через OFFSET (старый фронт на время деплоя).
  */
 const LIST_SQL = `
   WITH contractor_depts AS (
@@ -160,9 +166,13 @@ const LIST_SQL = `
     (SELECT count(*) FROM scoped WHERE terms_id IS NULL)     AS without_terms_total,
     (SELECT count(*) FROM scoped WHERE terms_id IS NOT NULL) AS with_terms_total,
     COALESCE((
-      SELECT json_agg(p)
+      -- ORDER BY внутри json_agg: next_cursor берётся из последнего элемента массива,
+      -- порядок подзапроса агрегат гарантированно не сохраняет.
+      SELECT json_agg(p ORDER BY COALESCE(p.full_name, ''), p.employee_id)
         FROM (SELECT * FROM filtered
-               ORDER BY full_name, employee_id
+               WHERE $12::int IS NULL
+                  OR (COALESCE(full_name, ''), employee_id) > ($11::text, $12::int)
+               ORDER BY COALESCE(full_name, ''), employee_id
                LIMIT $9 OFFSET $10) p
     ), '[]'::json) AS rows`;
 
@@ -207,7 +217,15 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       page: z.coerce.number().int().min(1).default(1),
       page_size: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE, `Не больше ${MAX_PAGE_SIZE} строк на страницу`)
         .default(DEFAULT_PAGE_SIZE),
-    }).parse(req.query);
+      // Курсор — ФИО и id последней строки предыдущей порции. ФИО может быть пустой строкой.
+      after_name: z.string().max(300).optional(),
+      after_id: z.coerce.number().int().positive().optional(),
+    }).refine(
+      value => (value.after_name === undefined) === (value.after_id === undefined),
+      { message: 'Курсор списка задаётся парой after_name и after_id' },
+    ).parse(req.query);
+
+    const hasCursor = parsed.after_id !== undefined;
 
     const onDate = parsed.date ?? new Date().toISOString().slice(0, 10);
 
@@ -217,7 +235,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const contractorRootId = await getContractorRootId();
 
     const search = parsed.q ? toIlikePattern(parsed.q) : null;
-    const offset = (parsed.page - 1) * parsed.page_size;
+    // С курсором порция отсчитывается от него, номер страницы не участвует.
+    const offset = hasCursor ? 0 : (parsed.page - 1) * parsed.page_size;
 
     const result = await queryOne<{
       total: string | number;
@@ -235,6 +254,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       search,
       parsed.page_size,
       offset,
+      hasCursor ? parsed.after_name : null,
+      hasCursor ? parsed.after_id : null,
     ]);
 
     // График — только для строк текущей страницы: константное число запросов, без N+1.
@@ -245,6 +266,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       schedule_name: schedules.get(row.employee_id)?.name ?? null,
     }));
 
+    // Полная порция — возможно, есть следующая. Курсор повторяет выражение сортировки в SQL.
+    const lastRow = pageRows.length === parsed.page_size ? pageRows[pageRows.length - 1] : null;
+    const nextCursor = lastRow ? { name: lastRow.full_name ?? '', id: lastRow.employee_id } : null;
+
     res.json({
       success: true,
       data,
@@ -252,6 +277,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         date: onDate,
         page: parsed.page,
         page_size: parsed.page_size,
+        next_cursor: nextCursor,
         total: Number(result?.total ?? 0),
         without_terms_total: Number(result?.without_terms_total ?? 0),
         // Сколько в выборке уже имеют условия. 0 при фильтре по категории — значит,

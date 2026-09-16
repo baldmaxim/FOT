@@ -100,6 +100,14 @@ export interface IPayrollTermsListMeta {
   contractors_excluded: boolean;
   /** id узла «Подрядные организации» — его ветку убираем из дерева подразделений. */
   contractor_root_id: string | null;
+  /** Курсор следующей порции; null — порция последняя. Поле может отсутствовать у старого бэкенда. */
+  next_cursor?: IPayrollTermsCursor | null;
+}
+
+/** ФИО и id последней строки порции — следующая начинается строго после неё. */
+export interface IPayrollTermsCursor {
+  name: string;
+  id: number;
 }
 
 export interface IPayrollTermsListResult {
@@ -107,7 +115,8 @@ export interface IPayrollTermsListResult {
   meta: IPayrollTermsListMeta;
 }
 
-export const PAYROLL_TERMS_PAGE_SIZE = 100;
+/** Порция подгрузки при прокрутке — максимум, который принимает сервер. */
+export const PAYROLL_TERMS_PAGE_SIZE = 500;
 
 export const payrollService = {
   listTerms: async (params: {
@@ -120,7 +129,9 @@ export const payrollService = {
     q?: string;
     page?: number;
     pageSize?: number;
-  } = {}): Promise<IPayrollTermsListResult> => {
+    /** Курсор порции; без него — первая порция. */
+    cursor?: IPayrollTermsCursor | null;
+  } = {}, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();
     if (params.date) search.set('date', params.date);
     if (params.departmentId) search.set('department_id', params.departmentId);
@@ -130,8 +141,13 @@ export const payrollService = {
     if (params.q) search.set('q', params.q);
     search.set('page', String(params.page ?? 1));
     search.set('page_size', String(params.pageSize ?? PAYROLL_TERMS_PAGE_SIZE));
+    if (params.cursor) {
+      search.set('after_name', params.cursor.name);
+      search.set('after_id', String(params.cursor.id));
+    }
     const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]> & { meta: IPayrollTermsListMeta }>(
       `/payroll/terms?${search.toString()}`,
+      { signal },
     );
     return { rows: res.data, meta: res.meta };
   },
