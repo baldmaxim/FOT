@@ -27,7 +27,7 @@
   font-size: 13px;
   table-layout: fixed;
   /* Сумма фиксированных колонок; уже — скроллится таблица, не страница. */
-  min-width: 1404px;
+  min-width: 1294px;
 }
 
 .colCheck    { width: 44px; }
@@ -37,7 +37,6 @@
 .colPosition { width: 160px; }
 .colSchedule { width: 140px; }
 .colMoney    { width: 130px; }
-.colDate     { width: 110px; }
 .colAction   { width: 110px; }
 
 .table thead th {

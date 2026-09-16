@@ -22,6 +22,8 @@ const termsEdit = requirePageAccess('/salary/terms', 'edit');
 // Статические пути до параметрических: иначе '/terms/employee/:empId' перехватил бы
 // '/terms/bulk'.
 router.get('/terms', termsView, payrollTermsController.list);
+// Варианты фильтра столбца (воронка в заголовке таблицы условий).
+router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 router.post('/terms/bulk', termsEdit, payrollTermsController.assignBulk);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);

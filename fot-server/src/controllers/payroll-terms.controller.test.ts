@@ -42,12 +42,6 @@ vi.mock('../services/audit.service.js', () => ({
   auditService: audit,
 }));
 
-const schedule = vi.hoisted(() => ({
-  resolveSchedulesBulk: vi.fn(async (..._args: unknown[]) => new Map<number, { name?: string | null }>()),
-}));
-
-vi.mock('../services/schedule.service.js', () => schedule);
-
 import { payrollTermsController } from './payroll-terms.controller.js';
 
 const makeRes = () => {
@@ -73,7 +67,6 @@ beforeEach(() => {
   scope.canAccessEmployeeInScope.mockResolvedValue(true);
   scope.canEditEmployeeInScope.mockResolvedValue(true);
   txClient.query.mockResolvedValue({ rows: [{ id: 77 }] });
-  schedule.resolveSchedulesBulk.mockResolvedValue(new Map());
 });
 
 /** Параметры INSERT условий: $14 — премиальная часть, $15 — компенсация проживания. */
@@ -485,31 +478,29 @@ describe('payrollTermsController.list', () => {
     expect(listParams().sql).toMatch(/count\(\*\) FROM scoped WHERE terms_id IS NOT NULL\) AS with_terms_total/);
   });
 
-  it('должность из positions, график — одним вызовом только для строк страницы и на дату выборки', async () => {
+  it('должность из positions, график считается в SQL на дату выборки; служебные поля ключа наружу не уходят', async () => {
     pgQueryOne.mockResolvedValueOnce({
       total: '1710',
       without_terms_total: '0',
       rows: [
-        { employee_id: 1, full_name: 'А', position_name: 'Прораб' },
-        { employee_id: 2, full_name: 'Б', position_name: null },
-        { employee_id: 3, full_name: 'В', position_name: null },
+        { employee_id: 1, full_name: 'А', position_name: 'Прораб', schedule_name: '5/2 8ч', sort_key: 'А', sort_key_text: 'А' },
+        { employee_id: 2, full_name: 'Б', position_name: null, schedule_name: null, sort_key: 'Б', sort_key_text: 'Б' },
       ],
     });
-    schedule.resolveSchedulesBulk.mockResolvedValueOnce(new Map([
-      [1, { name: '5/2 8ч' }],
-      [2, { name: null }],
-    ]));
     const res = makeRes();
 
     await payrollTermsController.list(makeReq({ query: { date: '2026-09-15' } } as Partial<AuthenticatedRequest>), res);
 
-    expect(listParams().sql).toMatch(/LEFT JOIN positions p ON p\.id = e\.position_id/);
-    expect(schedule.resolveSchedulesBulk).toHaveBeenCalledTimes(1);
-    expect(schedule.resolveSchedulesBulk).toHaveBeenCalledWith([{ id: 1 }, { id: 2 }, { id: 3 }], '2026-09-15');
+    const { sql, date } = listParams();
+    expect(date).toBe('2026-09-15');
+    expect(sql).toMatch(/LEFT JOIN positions p ON p\.id = e\.position_id/);
+    // Как у «Текущих сотрудников»: последнее действующее назначение на дату, иначе график по умолчанию.
+    expect(sql).toMatch(/FROM employee_schedule_assignments a\s+WHERE a\.employee_id = e\.id\s+AND a\.effective_from <= \$1::date/);
+    expect(sql).toMatch(/ORDER BY a\.effective_from DESC, a\.id DESC/);
+    expect(sql).toMatch(/WHERE w\.is_default/);
     expect(res.body.data).toEqual([
       { employee_id: 1, full_name: 'А', position_name: 'Прораб', schedule_name: '5/2 8ч' },
       { employee_id: 2, full_name: 'Б', position_name: null, schedule_name: null },
-      { employee_id: 3, full_name: 'В', position_name: null, schedule_name: null },
     ]);
   });
 
@@ -533,11 +524,13 @@ describe('payrollTermsController.list', () => {
       expect(afterId).toBe(812);
       expect(limit).toBe(500);
       expect(offset).toBe(0);
-      expect(sql).toMatch(/\(COALESCE\(full_name, ''\), employee_id\) > \(\$11::text, \$12::int\)/);
-      // Сортировка по тому же выражению, что и сравнение курсора, — иначе порции разъедутся.
-      expect(sql).toMatch(/ORDER BY COALESCE\(full_name, ''\), employee_id/);
+      // Ключ прежнего порядка — COALESCE(full_name, ''): сотрудник без ФИО не выпадает из сравнения кортежей.
+      expect(sql).toMatch(/COALESCE\(full_name, ''\) AS sort_key/);
+      expect(sql).toMatch(/\(k\.sort_key, k\.employee_id\) > \(\$11::text, \$12::int\)/);
+      // Сортировка по тому же ключу, что и сравнение курсора, — иначе порции разъедутся.
+      expect(sql).toMatch(/ORDER BY k\.sort_key, k\.employee_id/);
       // next_cursor берётся из последнего элемента массива — порядок нужен внутри агрегата.
-      expect(sql).toMatch(/json_agg\(p ORDER BY COALESCE\(p\.full_name, ''\), p\.employee_id\)/);
+      expect(sql).toMatch(/json_agg\(p ORDER BY p\.sort_key, p\.employee_id\)/);
     });
 
     it('без курсора — прежний режим страниц: курсор NULL, OFFSET по номеру страницы', async () => {
@@ -643,5 +636,181 @@ describe('payrollTermsController.list', () => {
 
     expect(res.statusCode).toBe(400);
     expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+});
+
+/** Каждый $n в SQL есть в params, и каждый параметр упомянут — иначе PostgreSQL отвергнет запрос. */
+const expectPlaceholdersMatch = (sql: string, params: unknown[]) => {
+  const used = new Set([...sql.matchAll(/\$(\d+)/g)].map(match => Number(match[1])));
+  expect(Math.max(0, ...used)).toBe(params.length);
+  for (let i = 1; i <= params.length; i += 1) expect(used.has(i)).toBe(true);
+};
+
+describe('payrollTermsController.list: сортировка и фильтры столбцов', () => {
+  const lastListCall = () => {
+    const [sql, params] = pgQueryOne.mock.calls[0] as unknown as [string, unknown[]];
+    return { sql, params };
+  };
+
+  beforeEach(() => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+    contractor.getContractorRootId.mockResolvedValue('contractor-root');
+    pgQueryOne.mockResolvedValue({ total: '0', without_terms_total: '0', rows: [] });
+  });
+
+  it('сортировка по окладу: числовой ключ, NULL в конце, курсор приводится к numeric', async () => {
+    await payrollTermsController.list(makeReq({
+      query: { sort: 'salary', dir: 'desc', page_size: '500', after_null: '0', after_key: '175000.00', after_id: '42' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    expect(sql).toMatch(/COALESCE\(monthly_salary, hourly_rate\) AS sort_key/);
+    expect(sql).toMatch(/k\.sort_key < \$14::numeric/);
+    expect(sql).toMatch(/ORDER BY \(k\.sort_key IS NULL\) ASC, k\.sort_key DESC, k\.employee_id DESC/);
+    expect(sql).toMatch(/json_agg\(p ORDER BY \(p\.sort_key IS NULL\) ASC, p\.sort_key DESC, p\.employee_id DESC\)/);
+    // Курсор прежнего порядка при сортировке по столбцу всегда пуст.
+    expect(params[10]).toBeNull();
+    expect(params[11]).toBeNull();
+    expect(params[12]).toBe(42);
+    expect(params[13]).toBe('175000.00');
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('курсор на пустом ключе: дальше только строки с пустым ключом', async () => {
+    await payrollTermsController.list(makeReq({
+      query: { sort: 'department', dir: 'asc', after_null: '1', after_id: '7' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    expect(sql).toMatch(/\(k\.sort_key IS NULL AND k\.employee_id > \$13::int\)/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('next_cursor при сортировке — ключ текстом из SQL, пустой ключ — isNull', async () => {
+    pgQueryOne.mockResolvedValueOnce({
+      total: '5', without_terms_total: '5',
+      rows: [
+        { employee_id: 3, full_name: 'А', sort_key: 450.1, sort_key_text: '450.1000' },
+        { employee_id: 9, full_name: 'Б', sort_key: 175000, sort_key_text: '175000.00' },
+      ],
+    });
+    const full = makeRes();
+    await payrollTermsController.list(makeReq({ query: { sort: 'salary', page_size: '2' } } as Partial<AuthenticatedRequest>), full);
+    // Точность суммы не теряется: берём текст ключа, а не число из JSON.
+    expect(full.body.meta.next_cursor).toEqual({ key: '175000.00', isNull: false, id: 9 });
+    expect(full.body.data[1]).not.toHaveProperty('sort_key');
+    expect(full.body.data[1]).not.toHaveProperty('sort_key_text');
+
+    pgQueryOne.mockResolvedValueOnce({
+      total: '5', without_terms_total: '5',
+      rows: [{ employee_id: 4, full_name: 'В', sort_key: null, sort_key_text: null }],
+    });
+    const empty = makeRes();
+    await payrollTermsController.list(makeReq({ query: { sort: 'bonus', page_size: '1' } } as Partial<AuthenticatedRequest>), empty);
+    expect(empty.body.meta.next_cursor).toEqual({ key: null, isNull: true, id: 4 });
+  });
+
+  it('фильтры столбцов: значения, «(пусто)» и «содержит» — параметрами, итоги с фильтрами', async () => {
+    const cf = JSON.stringify({
+      values: { schedule: ['6+0 (10ч)', null], salary: ['мес:175000.00'], bonus: [null] },
+      text: { name: '50%' },
+    });
+    await payrollTermsController.list(makeReq({ query: { sort: 'name', cf } } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    const filtered = sql.slice(sql.indexOf('filtered AS ('), sql.indexOf('keyed AS ('));
+    expect(filtered).toMatch(/NULLIF\(btrim\(schedule_name\), ''\) = ANY\(\$13::text\[\]\) OR NULLIF\(btrim\(schedule_name\), ''\) IS NULL/);
+    expect(filtered).toMatch(/'мес:' \|\| monthly_salary::text/);
+    expect(filtered).toMatch(/\(bonus_amount::text IS NULL\)/);
+    expect(filtered).toMatch(/NULLIF\(btrim\(full_name\), ''\) ILIKE \$15/);
+    expect(params[12]).toEqual(['6+0 (10ч)']);
+    expect(params[13]).toEqual(['мес:175000.00']);
+    // Спецсимволы шаблона экранированы.
+    expect(params[14]).toBe('%50\\%%');
+    // total считается по filtered — с фильтрами столбцов, без курсора.
+    expect(sql).toMatch(/\(SELECT count\(\*\) FROM filtered\)\s+AS total/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('неверные sort, курсор или cf — 400 с кодом до похода в БД', async () => {
+    const cases: Array<[Record<string, string>, string]> = [
+      [{ sort: 'tab_number' }, 'INVALID_SORT'],
+      [{ dir: 'desc' }, 'INVALID_SORT'],
+      [{ sort: 'name', dir: 'up' }, 'INVALID_SORT'],
+      [{ sort: 'salary', after_null: '0', after_key: '1e5; DROP', after_id: '1' }, 'INVALID_CURSOR'],
+      [{ sort: 'name', after_name: 'А', after_id: '1' }, 'INVALID_CURSOR'],
+      [{ sort: 'name', after_null: '1', after_key: 'А', after_id: '1' }, 'INVALID_CURSOR'],
+      [{ sort: 'name', cf: '{bad json' }, 'INVALID_COLUMN_FILTERS'],
+      [{ sort: 'name', cf: JSON.stringify({ values: { tab_number: ['1'] } }) }, 'INVALID_COLUMN_FILTERS'],
+    ];
+    for (const [query, code] of cases) {
+      const res = makeRes();
+      await payrollTermsController.list(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode, JSON.stringify(query)).toBe(400);
+      expect(res.body.code, JSON.stringify(query)).toBe(code);
+    }
+    expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+
+  it('без sort — прежний порядок: плейсхолдеры согласованы и с фильтрами столбцов', async () => {
+    await payrollTermsController.list(makeReq({
+      query: { cf: JSON.stringify({ values: { position: ['Монтажник'] } }) },
+    } as Partial<AuthenticatedRequest>), makeRes());
+    const { sql, params } = lastListCall();
+    expectPlaceholdersMatch(sql, params);
+  });
+});
+
+describe('payrollTermsController.columnValues', () => {
+  beforeEach(() => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue(['dept-a']);
+    contractor.getContractorRootId.mockResolvedValue('contractor-root');
+    pgQuery.mockResolvedValue([]);
+  });
+
+  it('варианты считаются без фильтра самого столбца, с фильтрами остальных и в скоупе пользователя', async () => {
+    const cf = JSON.stringify({ values: { schedule: ['6+0 (10ч)'], position: ['Монтажник'] } });
+    await payrollTermsController.columnValues(makeReq({
+      query: { column: 'schedule', cf, department_id: '11111111-1111-1111-1111-111111111111' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const [sql, params] = pgQuery.mock.calls[0] as unknown as [string, unknown[]];
+    const filtered = sql.slice(sql.indexOf('filtered AS ('));
+    expect(filtered).not.toMatch(/schedule_name\), ''\) = ANY/);
+    expect(filtered).toMatch(/NULLIF\(btrim\(position_name\), ''\) = ANY\(\$9::text\[\]\)/);
+    expect(params[6]).toEqual(['dept-a']);
+    expect(params[1]).toBe('11111111-1111-1111-1111-111111111111');
+    expect(sql).toMatch(/GROUP BY v\.value/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('суммы упорядочены по числу, поиск по значениям экранируется', async () => {
+    await payrollTermsController.columnValues(makeReq({
+      query: { column: 'salary', value_q: '4_5' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const [sql, params] = pgQuery.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toMatch(/COALESCE\(monthly_salary, hourly_rate\) AS ord/);
+    expect(sql).toMatch(/ORDER BY min\(v\.ord\) ASC NULLS LAST/);
+    expect(params).toContain('%4\\_5%');
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('больше 300 вариантов — первые 300 и truncated', async () => {
+    pgQuery.mockResolvedValueOnce(Array.from({ length: 301 }, (_, i) => ({ value: `v${i}`, count: 1 })));
+    const res = makeRes();
+    await payrollTermsController.columnValues(makeReq({ query: { column: 'position' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.body.data.values).toHaveLength(300);
+    expect(res.body.data.truncated).toBe(true);
+  });
+
+  it('столбец без фильтра значений или неверный cf — 400 до похода в БД', async () => {
+    for (const query of [{ column: 'name' }, { column: 'accruals' }, { column: 'position', cf: '[1]' }]) {
+      const res = makeRes();
+      await payrollTermsController.columnValues(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode, JSON.stringify(query)).toBe(400);
+    }
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 });

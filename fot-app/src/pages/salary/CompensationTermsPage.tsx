@@ -5,28 +5,41 @@ import {
   payrollService,
   PAYROLL_TERMS_PAGE_SIZE,
   defaultCalcTypeFor,
+  type IPayrollColumnFilters,
   type IPayrollTermsCursor,
   type IPayrollTermsRow,
+  type IPayrollTermsViewParams,
+  type PayrollSortDir,
+  type PayrollSortKey,
 } from '../../services/payrollService';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useStructureTree } from '../../hooks/useStructure';
+import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
+import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import {
+  countActivePayrollColumnFilters,
+  serializePayrollColumnFilters,
+  setPayrollColumnFilter,
+} from '../../utils/payrollColumnFilters';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
+import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
-import type { OrgDepartmentNode } from '../../types';
 import styles from './CompensationTermsPage.module.css';
 
-/** Дерево без ветки подрядчиков: они исключены из списка, выбор их узла всегда давал бы 0. */
-const withoutNode = (nodes: OrgDepartmentNode[], excludedId: string | null): OrgDepartmentNode[] => (
-  excludedId
-    ? nodes
-      .filter(node => node.id !== excludedId)
-      .map(node => ({ ...node, children: withoutNode(node.children ?? [], excludedId) }))
-    : nodes
-);
+/** Подписи столбцов для заголовка окна фильтра. */
+const COLUMN_LABELS: Record<PayrollSortKey, string> = {
+  name: 'Сотрудник',
+  department: 'Подразделение',
+  position: 'Должность',
+  schedule: 'График работы',
+  salary: 'Оклад',
+  bonus: 'Премиальная часть',
+  housing: 'Компенсация проживания',
+};
 
 /**
  * Сегодня по часам браузера. toISOString() дал бы дату UTC: после местной полуночи
@@ -47,18 +60,33 @@ export const CompensationTermsPage: FC = () => {
   const [date] = useState(today);
   const [departmentId, setDepartmentId] = useState('');
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<PayrollSortKey>('name');
+  const [dir, setDir] = useState<PayrollSortDir>('asc');
+  const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
+  const [openFilter, setOpenFilter] = useState<{ column: PayrollSortKey; anchor: HTMLElement } | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [modalFor, setModalFor] = useState<IPayrollTermsRow[] | null>(null);
 
   // Поиск идёт на сервере по всему штату, а не по загруженным порциям.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
 
+  // Одинаковые фильтры дают одинаковую строку — один ключ кэша.
+  const columnFiltersKey = serializePayrollColumnFilters(columnFilters);
+  const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
+
+  const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
+    date,
+    departmentId: departmentId || undefined,
+    q: debouncedSearch || undefined,
+    cf: columnFiltersKey || undefined,
+  }), [date, departmentId, debouncedSearch, columnFiltersKey]);
+
   const termsQuery = useInfiniteQuery({
-    queryKey: ['payroll-terms', 'infinite', date, departmentId, debouncedSearch],
+    queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir],
     queryFn: ({ pageParam, signal }) => payrollService.listTerms({
-      date,
-      departmentId: departmentId || undefined,
-      q: debouncedSearch || undefined,
+      ...viewParams,
+      sort,
+      dir,
       pageSize: PAYROLL_TERMS_PAGE_SIZE,
       cursor: pageParam,
     }, signal),
@@ -77,11 +105,16 @@ export const CompensationTermsPage: FC = () => {
   const total = meta?.total ?? 0;
 
   const structureTree = useStructureTree();
-  const contractorRootId = meta?.contractor_root_id ?? null;
-  const departments = useMemo(
-    () => withoutNode(structureTree.data?.departments ?? [], contractorRootId),
-    [structureTree.data, contractorRootId],
-  );
+  const sectionDepartments = useStaffSectionDepartments();
+  // Только ветки компаний (СУ-10, СМ, Бригады), как «Все отделы» в «Управлении кадрами»:
+  // «Уволенные», «test», «Допуск Везде» скрыты; подрядчики исключены из списка и так.
+  // Пока id не загрузились или запрос упал — дерево без фильтра, а не пустой список.
+  const departments = useMemo(() => {
+    const tree = structureTree.data?.departments ?? [];
+    const sections = sectionDepartments.data;
+    if (!sections) return tree;
+    return filterDepartmentTreeByIds(tree, new Set([...sections.su10, ...sections.sm, ...sections.brigades]));
+  }, [structureTree.data, sectionDepartments.data]);
 
   // Синхронный флаг «порция уже запрошена»: isFetchingNextPage обновится только после рендера,
   // и быстрая прокрутка успела бы отправить одну и ту же порцию дважды.
@@ -117,6 +150,29 @@ export const CompensationTermsPage: FC = () => {
   };
   const changeDepartment = (id: string) => {
     setDepartmentId(id);
+    setSelected(new Set());
+  };
+
+  /** Тот же столбец — смена направления, другой — по возрастанию. */
+  const handleSort = useCallback((key: PayrollSortKey) => {
+    setDir(prevDir => (key === sort ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'));
+    setSort(key);
+    setSelected(new Set());
+  }, [sort]);
+
+  const handleOpenFilter = useCallback((column: PayrollSortKey, anchor: HTMLElement) => {
+    setOpenFilter({ column, anchor });
+  }, []);
+
+  const applyColumnFilter = useCallback((column: PayrollSortKey, value: (string | null)[] | string | null) => {
+    setColumnFilters(prev => setPayrollColumnFilter(prev, column, value));
+    setSelected(new Set());
+  }, []);
+
+  const closeFilter = useCallback(() => setOpenFilter(null), []);
+
+  const resetColumnFilters = () => {
+    setColumnFilters({});
     setSelected(new Set());
   };
 
@@ -161,7 +217,7 @@ export const CompensationTermsPage: FC = () => {
     if (chosen.length > 0) setModalFor(chosen);
   };
 
-  const resetKey = `${departmentId}|${debouncedSearch}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
 
   return (
     <div className={styles.page}>
@@ -179,6 +235,11 @@ export const CompensationTermsPage: FC = () => {
             onRetry={() => { void structureTree.refetch(); }}
           />
         </div>
+        {activeFilterCount > 0 && (
+          <button type="button" className={styles.resetFilters} onClick={resetColumnFilters}>
+            Сбросить фильтры ({activeFilterCount})
+          </button>
+        )}
         <div className={styles.actions}>
           {selected.size > 0 && <span className={styles.selectedInfo}>Выделено: {selected.size}</span>}
           <button
@@ -219,6 +280,11 @@ export const CompensationTermsPage: FC = () => {
             onEdit={openOne}
             onLoadMore={loadMore}
             resetKey={resetKey}
+            sort={sort}
+            dir={dir}
+            onSort={handleSort}
+            columnFilters={columnFilters}
+            onOpenFilter={handleOpenFilter}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -235,6 +301,19 @@ export const CompensationTermsPage: FC = () => {
             )}
           </div>
         </>
+      )}
+
+      {openFilter && (
+        <PayrollColumnFilterPopover
+          key={openFilter.column}
+          column={openFilter.column}
+          label={COLUMN_LABELS[openFilter.column]}
+          filters={columnFilters}
+          viewParams={viewParams}
+          anchor={openFilter.anchor}
+          onApply={applyColumnFilter}
+          onClose={closeFilter}
+        />
       )}
 
       {modalFor && (

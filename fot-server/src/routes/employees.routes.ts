@@ -196,10 +196,12 @@ router.put(
 );
 
 // GET /api/employees/section-departments — отделы разделов (СУ-10 / СМ / Бригады /
-// Подрядные организации) для каскадного фильтра «Раздел → Отделы».
+// Подрядные организации) для каскадного фильтра «Раздел → Отделы». Нужен и «Зарплате», и «Табелю»:
+// их выпадающий список отделов показывает только ветки компаний (без «Уволенные», «test»).
+// Отдаются только id отделов — скоуп не расширяется, дерево на клиенте всё равно режется правами.
 router.get(
   '/section-departments',
-  requirePageAccess('/staff-control', 'view'),
+  requireAnyPageAccess(['/staff-control', '/salary/terms', '/timesheet'], 'view'),
   employeesSectionDepartmentsController.getSectionDepartments
 );
 

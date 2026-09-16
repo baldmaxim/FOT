@@ -33,6 +33,23 @@
   justify-content: flex-end;
 }
 
+/* «Сбросить фильтры (N)» — как ссылка-кнопка рядом с фильтрами */
+.resetFilters {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.resetFilters:hover { border-color: var(--primary); }
+
 .selectedInfo {
   font-size: 13px;
   color: var(--text-secondary);
@@ -138,7 +155,8 @@
   }
 
   .primaryButton,
-  .retryButton {
+  .retryButton,
+  .resetFilters {
     min-height: 36px;
   }
 }

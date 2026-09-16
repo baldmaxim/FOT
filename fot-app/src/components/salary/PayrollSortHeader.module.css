@@ -1,0 +1,95 @@
+/* Заголовок столбца: сортировка + воронка — как .sc-sort-btn / .sc-col-filter-btn у кадров. */
+.inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Длинные заголовки («Компенсация проживания») переносятся, иконка остаётся справа */
+.label {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.sortIcon {
+  flex: 0 0 auto;
+  opacity: 0.35;
+  transition: opacity 150ms ease-out;
+}
+
+.sortButton:hover .sortIcon,
+.sortButton:focus-visible .sortIcon,
+.sortActive .sortIcon {
+  opacity: 1;
+}
+
+.sortActive { color: var(--text-primary); }
+
+.sortButton:focus-visible,
+.filterButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.filterButton {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.35;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 150ms ease-out, color 150ms ease-out;
+}
+
+th:hover .filterButton,
+.filterButton:focus-visible,
+.filterActive {
+  opacity: 1;
+}
+
+.filterActive { color: var(--primary); }
+
+/* Смартфоны и планшеты: воронка всегда видна (hover нет), тап-цель шире */
+@media (max-width: 768px) {
+  .filterButton {
+    width: 28px;
+    height: 28px;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sortIcon,
+  .filterButton { transition: none; }
+}

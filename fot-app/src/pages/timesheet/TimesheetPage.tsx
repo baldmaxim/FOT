@@ -66,6 +66,7 @@ import {
   type TimesheetHalf,
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
@@ -316,6 +317,20 @@ export const TimesheetPage: FC = () => {
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
+  // Выпадающий список отделов — только ветки компаний (СУ-10, СМ, Бригады, Подрядные), как
+  // «Все отделы» в «Управлении кадрами»: «Уволенные», «test», «Допуск Везде» скрыты.
+  // У руководителя со скоупом дерево уже сужено — его отдел из «Прочих» терять нельзя.
+  // Пока id не загрузились или запрос упал — без фильтра. Выбранный отдел (например, из ссылки
+  // ?dept=) остаётся в списке, иначе поле показало бы «Все отделы» при открытом отделе.
+  // deptTree (названия, права, ?dept=) не меняется.
+  const sectionDepartments = useStaffSectionDepartments();
+  const pickerDeptTree = useMemo(() => {
+    const sections = sectionDepartments.data;
+    if (!sections || (isDepartmentScope && !hasGlobalTimesheetRead)) return deptTree;
+    const allowed = new Set([...sections.su10, ...sections.sm, ...sections.brigades, ...sections.contractors]);
+    if (selectedDeptId) allowed.add(selectedDeptId);
+    return filterDepartmentTreeByIds(deptTree, allowed);
+  }, [deptTree, sectionDepartments.data, isDepartmentScope, hasGlobalTimesheetRead, selectedDeptId]);
   const viewMode: TimesheetViewMode = (queryView === 'objects' && timesheetMode !== 'employee')
     ? 'objects'
     : queryView === 'corrections'
@@ -1897,7 +1912,7 @@ export const TimesheetPage: FC = () => {
         </button>
       ) : (
         <DepartmentTreeSelect
-          departments={deptTree}
+          departments={pickerDeptTree}
           value={selectedDeptId ?? ''}
           onChange={id => {
             clearBulkState();

@@ -1,7 +1,15 @@
 import { memo, useEffect, useRef, type FC } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import type { IPayrollTermsRow } from '../../services/payrollService';
+import type {
+  IPayrollColumnFilters,
+  IPayrollTermsRow,
+  PayrollSortDir,
+  PayrollSortKey,
+} from '../../services/payrollService';
+import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
+import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
@@ -13,39 +21,41 @@ interface IPayrollTermsTableProps {
   onEdit: (row: IPayrollTermsRow) => void;
   /** Вызывается с индексом последней отрисованной строки — решение о догрузке у родителя. */
   onLoadMore: (lastVisibleIndex: number) => void;
-  /** Смена фильтра: прокрутка возвращается наверх. */
+  /** Смена фильтра или сортировки: прокрутка возвращается наверх. */
   resetKey: string;
+  sort: PayrollSortKey;
+  dir: PayrollSortDir;
+  onSort: (key: PayrollSortKey) => void;
+  columnFilters: IPayrollColumnFilters;
+  onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
 }
+
+/** Столбцы с сортировкой и фильтром — в порядке таблицы. */
+const SORTABLE_COLUMNS: ReadonlyArray<{ key: PayrollSortKey; label: string; className?: string }> = [
+  { key: 'name', label: 'Сотрудник', className: 'stickyName' },
+  { key: 'department', label: 'Подразделение' },
+  { key: 'position', label: 'Должность' },
+  { key: 'schedule', label: 'График работы' },
+  { key: 'salary', label: 'Оклад' },
+  { key: 'bonus', label: 'Премиальная часть' },
+  { key: 'housing', label: 'Компенсация проживания' },
+];
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
-const COLUMN_COUNT = 12;
-
-const formatMoney = (value: string | number | null): string | null => {
-  if (value === null || value === undefined) return null;
-  const num = typeof value === 'string' ? Number(value) : value;
-  if (!Number.isFinite(num)) return null;
-  return num.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
+const COLUMN_COUNT = 11;
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
 const formatSalary = (row: IPayrollTermsRow): string => {
   if (!row.terms_id) return '—';
-  const money = row.calc_type === 'salary' ? formatMoney(row.monthly_salary) : formatMoney(row.hourly_rate);
+  const money = row.calc_type === 'salary' ? formatPayrollMoney(row.monthly_salary) : formatPayrollMoney(row.hourly_rate);
   if (money === null) return '—';
   return row.calc_type === 'salary' ? `${money} ₽/мес` : `${money} ₽/час`;
 };
 
 const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): string => {
-  const money = row.terms_id ? formatMoney(value) : null;
+  const money = row.terms_id ? formatPayrollMoney(value) : null;
   return money === null ? '—' : `${money} ₽/мес`;
-};
-
-/** YYYY-MM-DD → ДД.ММ.ГГГГ, как даты в «Управлении кадрами». */
-const formatDate = (value: string | null): string => {
-  if (!value) return '—';
-  const [year, month, day] = value.slice(0, 10).split('-');
-  return year && month && day ? `${day}.${month}.${year}` : value;
 };
 
 /**
@@ -61,6 +71,11 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onEdit,
   onLoadMore,
   resetKey,
+  sort,
+  dir,
+  onSort,
+  columnFilters,
+  onOpenFilter,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -102,7 +117,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           <col className={styles.colMoney} />
           <col className={styles.colMoney} />
           <col className={styles.colMoney} />
-          <col className={styles.colDate} />
           <col className={styles.colAction} />
         </colgroup>
         <thead>
@@ -117,15 +131,21 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
               />
             </th>
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
-            <th className={styles.stickyName}>Сотрудник</th>
-            <th>Подразделение</th>
-            <th>Должность</th>
-            <th>График работы</th>
-            <th>Оклад</th>
-            <th>Премиальная часть</th>
-            <th>Компенсация проживания</th>
+            {SORTABLE_COLUMNS.map(column => (
+              <PayrollSortHeader
+                key={column.key}
+                sortKey={column.key}
+                label={column.label}
+                className={column.className ? styles[column.className] : undefined}
+                activeKey={sort}
+                dir={dir}
+                onSort={onSort}
+                onOpenFilter={onOpenFilter}
+                filterActive={isPayrollColumnFilterActive(columnFilters, column.key)}
+              />
+            ))}
+            {/* Начислений пока нет (придут из 1С ЗУП) — сортировать и фильтровать нечего. */}
             <th>Начисления за посл. полгода</th>
-            <th>Действует с</th>
             <th aria-label="Действия" />
           </tr>
         </thead>
@@ -180,7 +200,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>
                     {/* Фактические начисления придут из 1С ЗУП — импорта пока нет. */}
                     <td className={styles.cellNumber}>—</td>
-                    <td className={styles.cellNumber}>{formatDate(row.effective_from)}</td>
                     <td className={styles.cellAction}>
                       <button
                         type="button"

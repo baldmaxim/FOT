@@ -104,11 +104,50 @@ export interface IPayrollTermsListMeta {
   next_cursor?: IPayrollTermsCursor | null;
 }
 
-/** ФИО и id последней строки порции — следующая начинается строго после неё. */
+/**
+ * Ключ сортировки и id последней строки порции — следующая начинается строго после неё.
+ * key — значение ключа текстом (суммы тоже текстом, без потери точности); null — пустое.
+ */
 export interface IPayrollTermsCursor {
-  name: string;
+  key: string | null;
+  isNull: boolean;
   id: number;
 }
+
+/** Столбцы с сортировкой (серверный whitelist). */
+export type PayrollSortKey = 'name' | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing';
+export type PayrollSortDir = 'asc' | 'desc';
+/** Столбцы с фильтром «список значений»; у ФИО — «содержит». */
+export type PayrollValueFilterColumn = Exclude<PayrollSortKey, 'name'>;
+
+/** Фильтры столбцов; null в списке — «(пусто)». */
+export interface IPayrollColumnFilters {
+  values?: Partial<Record<PayrollValueFilterColumn, (string | null)[]>>;
+  text?: { name?: string };
+}
+
+export interface IPayrollColumnValues {
+  values: { value: string | null; count: number }[];
+  /** Вариантов больше 300 — показаны первые, уточняется поиском. */
+  truncated: boolean;
+}
+
+/** Параметры выборки, общие для списка и вариантов фильтра. */
+export interface IPayrollTermsViewParams {
+  date?: string;
+  departmentId?: string;
+  /** Поиск по ФИО и табельному — на сервере, по всему штату. */
+  q?: string;
+  /** Фильтры столбцов, сериализованные serializePayrollColumnFilters ('' — без фильтров). */
+  cf?: string;
+}
+
+const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewParams): void => {
+  if (params.date) search.set('date', params.date);
+  if (params.departmentId) search.set('department_id', params.departmentId);
+  if (params.q) search.set('q', params.q);
+  if (params.cf) search.set('cf', params.cf);
+};
 
 export interface IPayrollTermsListResult {
   rows: IPayrollTermsRow[];
@@ -119,30 +158,21 @@ export interface IPayrollTermsListResult {
 export const PAYROLL_TERMS_PAGE_SIZE = 500;
 
 export const payrollService = {
-  listTerms: async (params: {
-    date?: string;
-    departmentId?: string;
-    staffCategory?: StaffCategory;
-    calcType?: PayrollCalcType;
-    withoutTerms?: boolean;
-    /** Поиск по ФИО и табельному — на сервере, по всему штату. */
-    q?: string;
-    page?: number;
+  listTerms: async (params: IPayrollTermsViewParams & {
+    sort: PayrollSortKey;
+    dir: PayrollSortDir;
     pageSize?: number;
     /** Курсор порции; без него — первая порция. */
     cursor?: IPayrollTermsCursor | null;
-  } = {}, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
+  }, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();
-    if (params.date) search.set('date', params.date);
-    if (params.departmentId) search.set('department_id', params.departmentId);
-    if (params.staffCategory) search.set('staff_category', params.staffCategory);
-    if (params.calcType) search.set('calc_type', params.calcType);
-    if (params.withoutTerms) search.set('without_terms', 'true');
-    if (params.q) search.set('q', params.q);
-    search.set('page', String(params.page ?? 1));
+    appendViewParams(search, params);
+    search.set('sort', params.sort);
+    search.set('dir', params.dir);
     search.set('page_size', String(params.pageSize ?? PAYROLL_TERMS_PAGE_SIZE));
     if (params.cursor) {
-      search.set('after_name', params.cursor.name);
+      search.set('after_null', params.cursor.isNull ? '1' : '0');
+      if (!params.cursor.isNull && params.cursor.key !== null) search.set('after_key', params.cursor.key);
       search.set('after_id', String(params.cursor.id));
     }
     const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]> & { meta: IPayrollTermsListMeta }>(
@@ -150,6 +180,24 @@ export const payrollService = {
       { signal },
     );
     return { rows: res.data, meta: res.meta };
+  },
+
+  /** Варианты фильтра столбца с количеством — без фильтра самого столбца. */
+  getColumnValues: async (
+    column: PayrollValueFilterColumn,
+    valueSearch: string,
+    params: IPayrollTermsViewParams,
+    signal?: AbortSignal,
+  ): Promise<IPayrollColumnValues> => {
+    const search = new URLSearchParams();
+    appendViewParams(search, params);
+    search.set('column', column);
+    if (valueSearch) search.set('value_q', valueSearch);
+    const res = await apiClient.get<IApiResponse<IPayrollColumnValues>>(
+      `/payroll/terms/column-values?${search.toString()}`,
+      { signal },
+    );
+    return res.data;
   },
 
   getHistory: async (employeeId: number): Promise<IPayrollTermsHistoryRow[]> => {
