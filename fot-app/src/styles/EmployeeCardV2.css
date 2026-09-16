@@ -1547,6 +1547,39 @@
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
+/* Дата восстановления: 16px, иначе iOS/Android зумят форму при фокусе.
+   Специфичность выше .ec-change-field input (14px). */
+.ec-change-field input.ec-rehire-date {
+  font-size: 16px;
+}
+
+.ec-rehire-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ec-rehire-link {
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--primary);
+  text-decoration: underline;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.ec-rehire-link:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
 .ec-change-modal-footer {
   display: flex;
   justify-content: flex-end;

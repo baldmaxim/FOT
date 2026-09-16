@@ -67,6 +67,15 @@ export const getLocalISODate = (): string => {
 export const getMoscowISODate = (now: Date = new Date()): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
 
+/**
+ * Сдвиг ISO-даты YYYY-MM-DD на N календарных дней. Считается в UTC-компонентах,
+ * поэтому не зависит от TZ браузера и корректно проходит конец месяца/года и 29 февраля.
+ */
+export const addIsoDays = (iso: string, days: number): string => {
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+};
+
 /** true если назначение activeScheduleAssignment покрывает указанную дату. */
 export const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string | null, date: string): boolean =>
   effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);

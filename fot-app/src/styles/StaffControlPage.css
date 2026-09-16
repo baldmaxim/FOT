@@ -2194,6 +2194,39 @@
   box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 59, 130, 246), 0.15);
 }
 
+/* Дата восстановления: 16px, иначе iOS/Android зумят форму при фокусе.
+   Двойная специфичность перебивает .sc-field > input (14px). */
+.sc-field > input.sc-rehire-date {
+  font-size: 16px;
+}
+
+.sc-rehire-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sc-rehire-link {
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--primary);
+  text-decoration: underline;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.sc-rehire-link:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
 .sc-schedule-help {
   display: flex;
   flex-direction: column;

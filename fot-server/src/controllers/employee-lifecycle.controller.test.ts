@@ -467,3 +467,134 @@ describe('rehire — durable-операция восстановления', () 
     );
   });
 });
+
+describe('rehire — дата восстановления (effective_date)', () => {
+  const routeWithOpenAssignment = (employee: Record<string, unknown>, openFrom: string | null) => {
+    h.queryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM org_departments')) {
+        return { id: 'dept-2', sigur_department_id: 42, name: 'Бригада', is_active: true, is_assignable: true };
+      }
+      if (sql.includes('FROM employee_assignments')) return openFrom ? { effective_from: openFrom } : null;
+      return { ...employee };
+    });
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
+    vi.useFakeTimers();
+    // 16.09.2026 12:00 МСК
+    vi.setSystemTime(new Date('2026-09-16T09:00:00Z'));
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.resolveScope.mockResolvedValue('all');
+    h.isConfigured.mockResolvedValue(true);
+    h.openRehire.mockResolvedValue({ ...REHIRE_OP, effective_date: '2026-09-15' });
+    h.executeOp.mockResolvedValue({ ...ACTIVE_EMPLOYEE, org_department_id: 'dept-2', dismissal_date: null });
+    routeQueryOne({ ...FIRED_EMPLOYEE });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('валидная дата уходит в операцию как effectiveDate', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-15' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith(expect.objectContaining({ effectiveDate: '2026-09-15' }));
+  });
+
+  it('поля нет (старый фронтенд) → effectiveDate не передаётся, сервис возьмёт сегодня', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.openRehire.mock.calls[0][0]).not.toHaveProperty('effectiveDate');
+  });
+
+  it.each([
+    ['null', null],
+    ['пустая строка', ''],
+    ['число', 20260915],
+    ['дата со временем', '2026-09-15T00:00:00Z'],
+    ['несуществующий день', '2026-02-31'],
+  ])('невалидное значение (%s) → 400, операция не открывается', async (_label, value) => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: value }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(h.openRehire).not.toHaveBeenCalled();
+  });
+
+  it('дата не позже даты увольнения → 400 с датой увольнения', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-05-10' }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: expect.stringContaining('10.05.2026') });
+    expect(h.openRehire).not.toHaveBeenCalled();
+  });
+
+  it('день после увольнения допустим', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-05-11' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith(expect.objectContaining({ effectiveDate: '2026-05-11' }));
+  });
+
+  it('будущая дата (по МСК) → 400', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-17' }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(h.openRehire).not.toHaveBeenCalled();
+  });
+
+  it('legacy без даты увольнения: раньше открытого назначения → 400, равная ему → ок', async () => {
+    routeWithOpenAssignment({ ...FIRED_EMPLOYEE, dismissal_date: null }, '2026-07-22');
+
+    const early = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-07-21' }), early as never);
+    expect(early.statusCode).toBe(400);
+    expect(early.body).toMatchObject({ error: expect.stringContaining('22.07.2026') });
+    expect(h.openRehire).not.toHaveBeenCalled();
+
+    const exact = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-07-22' }), exact as never);
+    expect(exact.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith(expect.objectContaining({ effectiveDate: '2026-07-22' }));
+  });
+
+  it('legacy без даты увольнения и без открытого назначения → нижней границы нет', async () => {
+    routeWithOpenAssignment({ ...FIRED_EMPLOYEE, dismissal_date: null }, null);
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2025-01-10' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('аудит успеха пишет дату из операции, а не из запроса', async () => {
+    // Повторный запрос вернул уже открытую операцию с прежней датой.
+    h.openRehire.mockResolvedValue({ ...REHIRE_OP, effective_date: '2026-09-14' });
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-15' }), res as never);
+
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
+      expect.objectContaining({ details: expect.objectContaining({ effective_date: '2026-09-14' }) }),
+    );
+  });
+
+  it('аудит ошибки исполнения тоже пишет дату из операции', async () => {
+    h.executeOp.mockRejectedValue(new Error('sigur down'));
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-15' }), res as never);
+
+    expect(res.statusCode).toBe(502);
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
+      expect.objectContaining({ details: expect.objectContaining({ pending: true, effective_date: '2026-09-15' }) }),
+    );
+  });
+});

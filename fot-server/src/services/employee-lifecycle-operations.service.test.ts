@@ -274,6 +274,41 @@ describe('openRehireOperation', () => {
     expect(insert.params.slice(10, 12)).toEqual([true, true]);
   });
 
+  it('выбранная дата восстановления записывается в effective_date операции', async () => {
+    const calls = routeTx((sql) => {
+      if (sql.includes('FOR UPDATE') && sql.includes('FROM employees')) return { rows: [firedRow()], rowCount: 1 };
+      if (sql.includes('FROM employee_lifecycle_operations')) return { rows: [], rowCount: 0 };
+      if (sql.includes('INSERT INTO employee_lifecycle_operations')) return { rows: [baseOp({ kind: 'rehire' })], rowCount: 1 };
+      return undefined;
+    });
+
+    await openRehireOperation({ employeeId: 77, targetDepartmentId: 'dept-2', targetSigurDepartmentId: 42, createdBy: 'admin-1', effectiveDate: '2026-05-11' });
+
+    const insert = calls.find(c => c.sql.includes('INSERT INTO employee_lifecycle_operations'))!;
+    expect(insert.params[8]).toBe('2026-05-11');
+  });
+
+  it('без даты — сегодня по МСК (граница суток МСК, а не UTC)', async () => {
+    vi.useFakeTimers();
+    // 15.09.2026 22:30 UTC = 16.09.2026 01:30 МСК
+    vi.setSystemTime(new Date('2026-09-15T22:30:00Z'));
+    try {
+      const calls = routeTx((sql) => {
+        if (sql.includes('FOR UPDATE') && sql.includes('FROM employees')) return { rows: [firedRow()], rowCount: 1 };
+        if (sql.includes('FROM employee_lifecycle_operations')) return { rows: [], rowCount: 0 };
+        if (sql.includes('INSERT INTO employee_lifecycle_operations')) return { rows: [baseOp({ kind: 'rehire' })], rowCount: 1 };
+        return undefined;
+      });
+
+      await openRehireOperation({ employeeId: 77, targetDepartmentId: 'dept-2', targetSigurDepartmentId: 42, createdBy: 'admin-1' });
+
+      const insert = calls.find(c => c.sql.includes('INSERT INTO employee_lifecycle_operations'))!;
+      expect(insert.params[8]).toBe('2026-09-16');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('повтор при pending rehire с тем же отделом → та же операция, без INSERT', async () => {
     const pending = baseOp({ id: 'op-r', kind: 'rehire', target_department_id: 'dept-2' });
     const calls = routeTx((sql) => {

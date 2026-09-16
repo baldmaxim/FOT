@@ -323,10 +323,11 @@ export const employeeService = {
     return response.data;
   },
 
-  async rehire(id: number, orgDepartmentId: string): Promise<Employee> {
+  /** effectiveDate — первый рабочий день после восстановления (YYYY-MM-DD). */
+  async rehire(id: number, orgDepartmentId: string, effectiveDate: string): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>(
       `/employees/${id}/rehire`,
-      { org_department_id: orgDepartmentId },
+      { org_department_id: orgDepartmentId, effective_date: effectiveDate },
     );
     return response.data;
   },

@@ -313,6 +313,8 @@ export interface IOpenRehireInput {
   targetDepartmentId: string;
   targetSigurDepartmentId: number | null;
   createdBy: string | null;
+  /** Первый рабочий день после восстановления (YYYY-MM-DD). Не передан — сегодня по МСК. */
+  effectiveDate?: string;
 }
 
 /**
@@ -353,7 +355,7 @@ export async function openRehireOperation(input: IOpenRehireInput): Promise<ILif
       fromDepartmentId: emp.org_department_id,
       targetDepartmentId: input.targetDepartmentId,
       targetSigurDepartmentId: input.targetSigurDepartmentId,
-      effectiveDate: moscowTodayIso(),
+      effectiveDate: input.effectiveDate ?? moscowTodayIso(),
       dismissalDate: emp.dismissal_date,
       sigurMoveRequired: hasSigur,
       sigurAccessRequired: hasSigur,

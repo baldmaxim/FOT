@@ -12,6 +12,9 @@ import { skudService } from '../../services/skudService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useInvalidateEmployeeData } from '../../hooks/useInvalidateEmployeeData';
 import { useStructureTree } from '../../hooks/useStructure';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { addIsoDays, getMoscowISODate } from '../staffControlPage.helpers';
+import { formatDate } from '../../utils/formatMoney';
 import { getSortedFlatDepartments } from '../../utils/departmentUtils';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import {
@@ -442,26 +445,36 @@ export const EmployeeCardPage: FC = () => {
   });
   const canSeeHrProfile = hasHrRight && hrCatalogQuery.data?.enabled === true;
   const [rehireDeptId, setRehireDeptId] = useState('');
+  // Дата восстановления намеренно пустая: «сегодня» по умолчанию давало неверный приём.
+  const [rehireDate, setRehireDate] = useState('');
   const [rehireInFlight, setRehireInFlight] = useState(false);
+
+  const resetRehireForm = () => {
+    setRehireModalOpen(false);
+    setRehireDeptId('');
+    setRehireDate('');
+  };
 
   const openRehireModal = () => {
     setRehireDeptId('');
+    setRehireDate('');
     setRehireModalOpen(true);
   };
 
   const closeRehireModal = () => {
     if (rehireInFlight) return;
-    setRehireModalOpen(false);
-    setRehireDeptId('');
+    resetRehireForm();
   };
 
+  // Хук — до ранних return ниже.
+  const rehireOverlayHandlers = useOverlayDismiss(closeRehireModal);
+
   const handleConfirmRehire = async () => {
-    if (!employee || !rehireDeptId) return;
+    if (!employee || !rehireDeptId || !rehireDate) return;
     setRehireInFlight(true);
     try {
-      await employeeService.rehire(employee.id, rehireDeptId);
-      setRehireModalOpen(false);
-      setRehireDeptId('');
+      await employeeService.rehire(employee.id, rehireDeptId, rehireDate);
+      resetRehireForm();
       reloadEmployee();
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Ошибка восстановления');
@@ -669,7 +682,7 @@ export const EmployeeCardPage: FC = () => {
       </Suspense>
 
       {rehireModalOpen && (
-        <div className="ec-overlay" onClick={closeRehireModal}>
+        <div className="ec-overlay" {...rehireOverlayHandlers}>
           <div className="ec-change-modal" onClick={event => event.stopPropagation()}>
             <div className="ec-change-modal-header">
               <h3>Восстановить из уволенных</h3>
@@ -697,6 +710,32 @@ export const EmployeeCardPage: FC = () => {
                   ))}
                 </select>
               </div>
+              <div className="ec-change-field">
+                <label htmlFor="ec-rehire-date">Дата восстановления (первый рабочий день)</label>
+                <input
+                  id="ec-rehire-date"
+                  type="date"
+                  className="ec-rehire-date"
+                  value={rehireDate}
+                  min={employee.dismissal_date ? addIsoDays(employee.dismissal_date, 1) : undefined}
+                  max={getMoscowISODate()}
+                  onChange={event => setRehireDate(event.target.value)}
+                  disabled={rehireInFlight}
+                />
+                {employee.dismissal_date && (
+                  <div className="ec-rehire-hint">
+                    Уволен: {formatDate(employee.dismissal_date)}
+                    <button
+                      type="button"
+                      className="ec-rehire-link"
+                      onClick={() => setRehireDate(addIsoDays(employee.dismissal_date as string, 1))}
+                      disabled={rehireInFlight}
+                    >
+                      Со дня после увольнения
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="ec-change-modal-footer">
               <button
@@ -709,7 +748,7 @@ export const EmployeeCardPage: FC = () => {
               <button
                 className="ec-change-btn apply"
                 onClick={handleConfirmRehire}
-                disabled={!rehireDeptId || rehireInFlight}
+                disabled={!rehireDeptId || !rehireDate || rehireInFlight}
               >
                 {rehireInFlight ? 'Восстанавливаем...' : 'Восстановить'}
               </button>

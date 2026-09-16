@@ -33,7 +33,7 @@ import {
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
-import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming } from '../utils/date.utils.js';
+import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming, moscowTodayIso } from '../utils/date.utils.js';
 
 async function emitEmployeeChanged(employeeId: number, action: string): Promise<void> {
   try {
@@ -126,6 +126,19 @@ export async function loadEmployeeLifecycleRow(employeeId: number): Promise<Empl
 
 function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/** Строго YYYY-MM-DD и существующий день календаря: 2026-02-31 не проходит. */
+function isCalendarIsoDate(value: unknown): value is string {
+  if (!isIsoDate(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function formatRuDate(iso: string): string {
+  const [year, month, day] = iso.split('-');
+  return `${day}.${month}.${year}`;
 }
 
 export { DismissalSigurError };
@@ -630,6 +643,15 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
+    // undefined — старый фронтенд без поля даты: восстановление «сегодня», как раньше.
+    // Любое другое значение (null, '', число, дата со временем) — ошибка, а не молчаливое «сегодня».
+    const rawEffectiveDate: unknown = req.body.effective_date;
+    if (rawEffectiveDate !== undefined && !isCalendarIsoDate(rawEffectiveDate)) {
+      res.status(400).json({ success: false, error: 'effective_date — дата в формате YYYY-MM-DD' });
+      return;
+    }
+    const effectiveDate = rawEffectiveDate;
+
     const connection = (req.body.connection as 'external' | 'internal') || undefined;
 
     await assertDepartmentMoveAllowed(req, org_department_id);
@@ -655,6 +677,40 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     if (existing.employment_status !== 'fired') {
       res.status(409).json({ success: false, error: 'Сотрудник не уволен', code: 'NOT_FIRED' });
       return;
+    }
+
+    if (effectiveDate !== undefined) {
+      if (effectiveDate > moscowTodayIso()) {
+        res.status(400).json({ success: false, error: 'Восстановление будущей датой не поддерживается' });
+        return;
+      }
+      if (existing.dismissal_date) {
+        if (effectiveDate <= existing.dismissal_date) {
+          res.status(400).json({
+            success: false,
+            error: `Дата восстановления должна быть позже даты увольнения (${formatRuDate(existing.dismissal_date)})`,
+          });
+          return;
+        }
+      } else {
+        // Legacy без даты увольнения: нижняя граница — начало текущего открытого
+        // назначения (период «Уволенные»), чтобы не залезть в прежнюю историю.
+        const openAssignment = await queryOne<{ effective_from: string }>(
+          `SELECT effective_from::text AS effective_from
+             FROM employee_assignments
+            WHERE employee_id = $1 AND effective_to IS NULL
+            ORDER BY effective_from DESC
+            LIMIT 1`,
+          [employeeId],
+        );
+        if (openAssignment && effectiveDate < openAssignment.effective_from) {
+          res.status(400).json({
+            success: false,
+            error: `Дата восстановления не может быть раньше ${formatRuDate(openAssignment.effective_from)}`,
+          });
+          return;
+        }
+      }
     }
 
     if (await isProtectedArchiveDepartment(targetDepartment.id, connection)) {
@@ -687,6 +743,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       targetDepartmentId: targetDepartment.id,
       targetSigurDepartmentId: targetDepartment.sigur_department_id,
       createdBy: req.user.id,
+      ...(effectiveDate !== undefined ? { effectiveDate } : {}),
     });
 
     let data: EmployeeEncrypted;
@@ -707,6 +764,8 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
           details: {
             operation_id: operation.id,
             target_department_id: targetDepartment.id,
+            // Из операции: повторный запрос мог вернуть уже открытую операцию с прежней датой.
+            effective_date: operation.effective_date,
             pending: true,
             error: message,
           },
@@ -744,6 +803,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
           detached_from_sigur: detachedFromSigur,
           previous_sigur_employee_id: detachedFromSigur ? existing.sigur_employee_id : undefined,
           prev_dismissal_date: existing.dismissal_date ?? null,
+          effective_date: operation.effective_date,
           operation_id: operation.id,
         },
       });

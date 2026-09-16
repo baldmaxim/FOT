@@ -66,6 +66,7 @@ const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPrev
 
 import {
   EMPTY_SCHEDULE_TEMPLATES,
+  addIsoDays,
   getLocalISODate,
   getMoscowISODate,
   handleMiddleClickMouseDown,
@@ -2124,27 +2125,36 @@ export const StaffControlPage: FC = () => {
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
+  // Дата восстановления намеренно пустая: «сегодня» по умолчанию давало неверный приём.
+  const [rehireDate, setRehireDate] = useState('');
   const [rehireInFlight, setRehireInFlight] = useState(false);
+
+  const resetRehireForm = useCallback(() => {
+    setRehireEmp(null);
+    setRehireDeptId('');
+    setRehireDate('');
+  }, []);
 
   const handleRehire = useCallback((emp: Employee) => {
     setRehireEmp(emp);
     setRehireDeptId('');
+    setRehireDate('');
   }, []);
 
   const closeRehireModal = useCallback(() => {
     if (rehireInFlight) return;
-    setRehireEmp(null);
-    setRehireDeptId('');
-  }, [rehireInFlight]);
+    resetRehireForm();
+  }, [rehireInFlight, resetRehireForm]);
+
+  const rehireOverlayHandlers = useOverlayDismiss(closeRehireModal);
 
   const handleConfirmRehire = useCallback(async () => {
-    if (!rehireEmp || !rehireDeptId) return;
+    if (!rehireEmp || !rehireDeptId || !rehireDate) return;
     setRehireInFlight(true);
     try {
-      await employeeService.rehire(rehireEmp.id, rehireDeptId);
+      await employeeService.rehire(rehireEmp.id, rehireDeptId, rehireDate);
       const rehiredId = rehireEmp.id;
-      setRehireEmp(null);
-      setRehireDeptId('');
+      resetRehireForm();
       void refreshAfterEmployeeChange([rehiredId], { listChanged: true });
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка восстановления сотрудника';
@@ -2152,7 +2162,7 @@ export const StaffControlPage: FC = () => {
     } finally {
       setRehireInFlight(false);
     }
-  }, [rehireEmp, rehireDeptId, refreshAfterEmployeeChange, toast]);
+  }, [rehireEmp, rehireDeptId, rehireDate, resetRehireForm, refreshAfterEmployeeChange, toast]);
 
   const [fireEmp, setFireEmp] = useState<Employee | null>(null);
   const [fireDate, setFireDate] = useState<string>(() => getMoscowISODate());
@@ -3157,7 +3167,7 @@ export const StaffControlPage: FC = () => {
 
       {/* ─── Rehire Modal ─── */}
       {rehireEmp && (
-        <div className="sc-overlay" onClick={closeRehireModal}>
+        <div className="sc-overlay" {...rehireOverlayHandlers}>
           <div className="sc-modal" onClick={e => e.stopPropagation()}>
             <div className="sc-modal-header">
               <h3><ShieldCheck size={16} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} />Восстановить сотрудника</h3>
@@ -3181,13 +3191,39 @@ export const StaffControlPage: FC = () => {
                     ))}
                 </select>
               </div>
+              <div className="sc-field">
+                <label htmlFor="sc-rehire-date">Дата восстановления (первый рабочий день)</label>
+                <input
+                  id="sc-rehire-date"
+                  type="date"
+                  className="sc-rehire-date"
+                  value={rehireDate}
+                  min={rehireEmp.dismissal_date ? addIsoDays(rehireEmp.dismissal_date, 1) : undefined}
+                  max={getMoscowISODate()}
+                  onChange={e => setRehireDate(e.target.value)}
+                  disabled={rehireInFlight}
+                />
+                {rehireEmp.dismissal_date && (
+                  <div className="sc-rehire-hint">
+                    Уволен: {formatDate(rehireEmp.dismissal_date)}
+                    <button
+                      type="button"
+                      className="sc-rehire-link"
+                      onClick={() => setRehireDate(addIsoDays(rehireEmp.dismissal_date as string, 1))}
+                      disabled={rehireInFlight}
+                    >
+                      Со дня после увольнения
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="sc-modal-footer">
               <button className="sc-btn cancel" onClick={closeRehireModal} disabled={rehireInFlight}>Отмена</button>
               <button
                 className="sc-btn apply"
                 onClick={handleConfirmRehire}
-                disabled={!rehireDeptId || rehireInFlight}
+                disabled={!rehireDeptId || !rehireDate || rehireInFlight}
               >
                 {rehireInFlight ? 'Восстанавливаем...' : 'Восстановить'}
               </button>
