@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   fetchEmps: vi.fn(),
   supervisorsBulk: vi.fn(),
   buildUnified: vi.fn(async () => ({})),
+  segments: vi.fn(async () => new Map()),
 }));
 
 vi.mock('../config/postgres.js', () => ({ query: h.pgQuery, queryOne: vi.fn() }));
@@ -33,6 +34,7 @@ vi.mock('../services/timesheet-export.service.js', () => ({
 }));
 vi.mock('../services/timesheet-department-assignments.service.js', () => ({
   listScopedMembersByDepartment: vi.fn(async () => new Map([[1, 'D1']])),
+  resolveTransferSegmentsInPeriod: h.segments,
   resolveTimesheetDateRange: vi.fn(),
   resolveTimesheetPeriodRange: vi.fn(() => ({
     year: 2026,

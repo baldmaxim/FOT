@@ -285,6 +285,8 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
       rangeArg,
       memberByEmp,
       exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
+      scopeDeptIds: scopedDepartmentIds,
+      personOriginEmployeeIds: new Set<number>(),
     });
     console.log(`[export-mass-unified] depts=${scopedDepartmentIds.length} emp=${memberByEmp.size} bytes=${buffer.length} | members=${tFetch - tMembers}ms build=${Date.now() - tFetch}ms total=${Date.now() - tMembers}ms`);
 

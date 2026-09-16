@@ -152,6 +152,8 @@ describe('exportTimesheetDepartmentUnified — состав', () => {
     expect(h.scopedDeptIds).toHaveBeenCalledWith(expect.anything(), [DEPT, 'child-1']);
     expect(h.members).toHaveBeenCalledWith([DEPT, 'child-1'], '2026-07-01', '2026-07-31');
     expect(h.buildBuffer.mock.calls[0][0].memberByEmp).toEqual(new Map([[1, DEPT], [2, 'child-1']]));
+    expect(h.buildBuffer.mock.calls[0][0].scopeDeptIds).toEqual([DEPT, 'child-1']);
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set());
   });
 
   it('поддерево целиком вне скоупа → 403', async () => {
@@ -172,6 +174,9 @@ describe('exportTimesheetDepartmentUnified — состав', () => {
     expect(h.deptByEmp).toHaveBeenCalledWith([7], '2026-07-01', '2026-07-31');
     expect(h.buildBuffer.mock.calls[0][0].memberByEmp).toEqual(new Map([[7, DEPT]]));
     expect(h.buildBuffer.mock.calls[0][0].exemptEmployeeIds).toEqual(new Set());
+    // Состав «по человеку»: набор отделов его дни не режет.
+    expect(h.buildBuffer.mock.calls[0][0].scopeDeptIds).toEqual([]);
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set([7]));
   });
 
   it('object/view-фильтр реально урезает карту перед сборкой', async () => {

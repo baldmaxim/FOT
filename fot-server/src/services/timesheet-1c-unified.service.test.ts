@@ -10,8 +10,17 @@ const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
 // listEffectiveDepartmentManagers проверяет can_edit роли на /timesheet.
 vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
 
+// Режимы резолвятся по парам «сотрудник + отдел строки» (unnest): моки задают строки по
+// сотруднику, а сюда они приходят размноженными на каждую запрошенную пару.
 vi.mock('../config/postgres.js', () => ({
-  query: (sql: string, params?: unknown[]) => queryMock(sql, params),
+  query: async (sql: string, params?: unknown[]) => {
+    const rows = await queryMock(sql, params);
+    if (!sql.includes('unnest($1::int[], $2::uuid[])') || !Array.isArray(rows)) return rows;
+    const [empIds, deptIds] = params as [number[], Array<string | null>];
+    return empIds.flatMap((empId, index) => rows
+      .filter((row: { employee_id: number }) => Number(row.employee_id) === empId)
+      .map((row: Record<string, unknown>) => ({ ...row, pair_dept_id: deptIds[index] })));
+  },
 }));
 
 const ONE_C_DATA_START_ROW = 4;

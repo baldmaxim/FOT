@@ -36,6 +36,8 @@ const head = (employeeId: number, departmentId: string) =>
 import {
   resolveResponsibleEmployeeIdsForRows,
   resolveResponsibleEmployeeIdsByEmployee,
+  resolveResponsibleEmployeeIdsByEmployeeDept,
+  responsiblePairKey,
 } from './approval-routing.service.js';
 
 const WEEKEND = '2026-06-06'; // суббота
@@ -216,5 +218,30 @@ describe('resolveResponsibleEmployeeIdsByEmployee (заявления, без д
 
     const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 5, org_department_id: 'D5' }]);
     expect(res.get(5)).toEqual([]);
+  });
+});
+
+describe('resolveResponsibleEmployeeIdsByEmployeeDept (единый файл 1С, перевод внутри периода)', () => {
+  it('один сотрудник в двух отделах — руководитель каждого отдела отдельно', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      sql.includes('employee_department_access') ? [head(100, 'zulf'), head(200, 'hayd')] : [],
+    );
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveResponsibleEmployeeIdsByEmployeeDept([
+      { employee_id: 2588, org_department_id: 'zulf' },
+      { employee_id: 2588, org_department_id: 'hayd' },
+    ]);
+
+    expect(res.get(responsiblePairKey(2588, 'zulf'))).toEqual([100]);
+    expect(res.get(responsiblePairKey(2588, 'hayd'))).toEqual([200]);
+  });
+
+  it('у отдела нет начальника → непосредственный руководитель (fallback сохранён)', async () => {
+    pgQuery.mockImplementation(async () => []);
+    directMgrsMock.mockResolvedValue(new Map([[1, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveResponsibleEmployeeIdsByEmployeeDept([{ employee_id: 1, org_department_id: null }]);
+    expect(res.get(responsiblePairKey(1, null))).toEqual([300]);
   });
 });

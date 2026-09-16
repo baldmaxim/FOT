@@ -6,6 +6,7 @@ import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from '
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import { buildFiredCutoffMap } from './timesheet-fired-cutoff.service.js';
+import { isDateInEmployeeWindows, type IDayWindow } from './timesheet-day-windows.service.js';
 import {
   listEmployeeIdsAssignedToDepartmentPeriod,
   resolveTimesheetDateRange,
@@ -90,7 +91,12 @@ export interface IDepartmentTimesheetData {
   // Заполняется ТОЛЬКО для уволенных (employment_status='fired'): min(excluded_from_timesheet_date,
   // dismissal_date+1). Для активных не задаётся → их выгрузка не меняется. Аналог cutoff онлайн-табеля.
   cutoffByEmployeeId?: Map<number, string | null>;
+  // Окна дней сотрудника в ЭТОМ наборе (перевод внутри периода: дни до перевода — в старом
+  // отделе, после — в новом). Нет карты или ключа → не ограничен; [] → ни одного дня;
+  // { from: null, toExclusive: null } → весь период. Интервалы — [from, toExclusive).
+  dayWindowsByEmployeeId?: Map<number, IDayWindow[]>;
 }
+
 
 export interface IExportRosterOptions {
   // Исключить из выгрузки сотрудников без единого реального сигнала за период
@@ -595,12 +601,36 @@ export function sliceTimesheetDataByEmployees(
   employeeIds: number[],
   departmentName: string,
   departmentId: string | null,
+  dayWindowsByEmployeeId?: Map<number, IDayWindow[]>,
 ): IDepartmentTimesheetData {
   const ids = new Set(employeeIds);
   const filterByEmployeeMap = <V>(map: Map<number, V>): Map<number, V> => {
     const next = new Map<number, V>();
     for (const [employeeId, value] of map) {
       if (ids.has(employeeId)) next.set(employeeId, value);
+    }
+    return next;
+  };
+
+  // Окна кладём только для сотрудников среза; дни вне окон вырезаем и из данных — иначе
+  // объектная разбивка построила бы пустые строки по объектам чужого отдела.
+  const windows = new Map<number, IDayWindow[]>();
+  if (dayWindowsByEmployeeId) {
+    for (const [employeeId, list] of dayWindowsByEmployeeId) {
+      if (ids.has(employeeId)) windows.set(employeeId, list);
+    }
+  }
+  const scope = { dayWindowsByEmployeeId: windows };
+  const inWindow = (employeeId: number, date: string): boolean => isDateInEmployeeWindows(scope, employeeId, date);
+  const filterByEmployeeDateMap = <V>(map: Map<number, Map<string, V>>): Map<number, Map<string, V>> => {
+    const next = new Map<number, Map<string, V>>();
+    for (const [employeeId, byDate] of map) {
+      if (!ids.has(employeeId)) continue;
+      if (!windows.has(employeeId)) {
+        next.set(employeeId, byDate);
+        continue;
+      }
+      next.set(employeeId, new Map([...byDate].filter(([date]) => inWindow(employeeId, date))));
     }
     return next;
   };
@@ -613,12 +643,13 @@ export function sliceTimesheetDataByEmployees(
     employees: bulk.employees.filter(e => ids.has(e.id)),
     schedulesMap: filterByEmployeeMap(bulk.schedulesMap),
     dailySchedulesMap: filterByEmployeeMap(bulk.dailySchedulesMap),
-    entries: bulk.entries.filter(entry => ids.has(entry.employee_id)),
-    dataMap: filterByEmployeeMap(bulk.dataMap),
-    objectEntries: bulk.objectEntries.filter(entry => ids.has(entry.employee_id)),
-    skudMap: filterByEmployeeMap(bulk.skudMap),
+    entries: bulk.entries.filter(entry => ids.has(entry.employee_id) && inWindow(entry.employee_id, entry.work_date)),
+    dataMap: filterByEmployeeDateMap(bulk.dataMap),
+    objectEntries: bulk.objectEntries.filter(entry => ids.has(entry.employee_id) && inWindow(entry.employee_id, entry.work_date)),
+    skudMap: filterByEmployeeDateMap(bulk.skudMap),
     cutoffByEmployeeId: bulk.cutoffByEmployeeId
       ? filterByEmployeeMap(bulk.cutoffByEmployeeId)
       : undefined,
+    dayWindowsByEmployeeId: windows.size > 0 ? windows : undefined,
   };
 }

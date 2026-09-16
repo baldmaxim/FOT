@@ -2,14 +2,16 @@ import type ExcelJS from 'exceljs';
 import { query } from '../config/postgres.js';
 // Тестовых начальников в выгрузку не пускаем; правило общее со снимком руководителей.
 import { isTestPersonName } from '../utils/person-name.utils.js';
-import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
+import { resolveResponsibleEmployeeIdsByEmployeeDept, responsiblePairKey } from './approval-routing.service.js';
 import {
   CURRENT_ACTIVITY_ADDRESS,
   DEFAULT_EXPORT_MODE,
-  resolveExportModes,
+  exportModePairKey,
+  resolveExportModesForPairs,
   type IResolvedExportMode,
 } from './timesheet-export-mode.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
+import { isDateInEmployeeWindows } from './timesheet-day-windows.service.js';
 import {
   buildEmployeeRowsForOneC,
   buildObjectRowsForOneC,
@@ -23,8 +25,11 @@ import {
 
 export interface IUnifiedRow extends IUnifiedOneCRow {
   departmentNameSort: string;
+  departmentIdSort: string;
   fullNameSort: string;
+  employeeIdSort: number;
   objectNameSort: string;
+  objectKeySort: string;
 }
 
 /**
@@ -44,17 +49,27 @@ const isAggregatedRowIncluded = (policy: AggregatedModesPolicy, resolved: IResol
     && resolved.pinnedObjectId !== null
     && policy.pinnedObjectIds.has(resolved.pinnedObjectId));
 
-// Пары «сотрудник → отдел» для адресной маршрутизации руководителя.
+// Отдел, по которому строке резолвятся руководитель и режим: отдел набора данных (при
+// переводе внутри периода сотрудник есть в нескольких наборах), иначе — текущий отдел
+// сотрудника (выгрузка по объектам, где набор отдела не несёт).
+const rowDepartmentId = (
+  data: IDepartmentTimesheetData,
+  employee: { org_department_id: string | null },
+): string | null => data.departmentId ?? employee.org_department_id;
+
+// Пары «сотрудник → отдел строки» для руководителя и режима.
 const collectEmployeeDeptPairs = (
   departmentsData: IDepartmentTimesheetData[],
 ): Array<{ employee_id: number; org_department_id: string | null }> => {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const pairs: Array<{ employee_id: number; org_department_id: string | null }> = [];
   for (const data of departmentsData) {
     for (const employee of data.employees) {
-      if (seen.has(employee.id)) continue;
-      seen.add(employee.id);
-      pairs.push({ employee_id: employee.id, org_department_id: employee.org_department_id });
+      const deptId = rowDepartmentId(data, employee);
+      const key = exportModePairKey(employee.id, deptId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ employee_id: employee.id, org_department_id: deptId });
     }
   }
   return pairs;
@@ -73,15 +88,6 @@ const fetchEmployeeNames = async (ids: number[]): Promise<Map<number, string>> =
     map.set(Number(row.id), (row.full_name ?? '').trim());
   }
   return map;
-};
-
-// Список сотрудников выгрузки — для резолвинга режимов табелирования.
-const collectEmployeeIds = (departmentsData: IDepartmentTimesheetData[]): number[] => {
-  const ids = new Set<number>();
-  for (const data of departmentsData) {
-    for (const employee of data.employees) ids.add(employee.id);
-  }
-  return [...ids];
 };
 
 // Объекты, для которых нужен адрес: фактические (objectEntries) + закреплённые
@@ -129,8 +135,8 @@ const isOneCRowEmpty = (row: IOneCExportRow): boolean => {
 const buildRowsForDepartment = (
   data: IDepartmentTimesheetData,
   objectAddressMap: Map<string, string>,
-  modeByEmployee: Map<number, IResolvedExportMode>,
-  managerNameMap: Map<number, string>,
+  modeByPair: Map<string, IResolvedExportMode>,
+  managerNameByPair: Map<string, string>,
   policy: AggregatedModesPolicy = 'all',
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
@@ -139,10 +145,32 @@ const buildRowsForDepartment = (
   // (buildEmployeeRowsForOneC/buildObjectRowsForOneC) пропускают даты >= cutoff — день
   // увольнения сохраняется, последующие дни пустые. Паритет с ZIP «Как в 1С»
   // (build1CTimesheetWorkbook), которая fired не режет.
-  const visibleData: IDepartmentTimesheetData = data;
+  // Перевод внутри периода: объектные записи вне окон дней не должны порождать объектные
+  // строки (цели разбивки) — иначе в файле старого отдела появится пустая строка по объекту
+  // нового. Срез уже режет их, но билдер не полагается на вызывающего.
+  const visibleData: IDepartmentTimesheetData = data.dayWindowsByEmployeeId
+    ? {
+      ...data,
+      objectEntries: data.objectEntries.filter(e => isDateInEmployeeWindows(data, e.employee_id, e.work_date)),
+    }
+    : data;
 
+  // Руководитель и режим — по отделу ЭТОГО набора (см. rowDepartmentId).
+  const deptIdByEmpId = new Map<number, string | null>(
+    visibleData.employees.map(e => [e.id, rowDepartmentId(data, e)]),
+  );
   const modeFor = (empId: number): IResolvedExportMode =>
-    modeByEmployee.get(empId) ?? DEFAULT_EXPORT_MODE;
+    modeByPair.get(exportModePairKey(empId, deptIdByEmpId.get(empId) ?? null)) ?? DEFAULT_EXPORT_MODE;
+  const managerFor = (empId: number): string =>
+    managerNameByPair.get(responsiblePairKey(empId, deptIdByEmpId.get(empId) ?? null)) ?? '';
+  const sortKeysFor = (empId: number, fullName: string, objectName: string, objectKey: string) => ({
+    departmentNameSort: data.departmentName,
+    departmentIdSort: data.departmentId ?? '',
+    fullNameSort: fullName,
+    employeeIdSort: empId,
+    objectNameSort: objectName,
+    objectKeySort: objectKey,
+  });
 
   // Агрегированные режимы — одна строка на сотрудника, без дробления по объектам:
   //   current_activity → адрес «Текущая деятельность»;
@@ -202,11 +230,9 @@ const buildRowsForDepartment = (
     for (const oneCRow of objectRows) {
       seenEmployeeIds.add(oneCRow.employeeId);
       const empId = oneCRow.employeeId;
-      const managerName = managerNameMap.get(empId) ?? '';
+      const managerName = managerFor(empId);
       rows.push({
-        departmentNameSort: data.departmentName,
-        fullNameSort: oneCRow.fullName,
-        objectNameSort: target.object_name,
+        ...sortKeysFor(empId, oneCRow.fullName, target.object_name, target.object_id ?? ''),
         oneCRow,
         departmentName: data.departmentName,
         objectAddress,
@@ -222,11 +248,9 @@ const buildRowsForDepartment = (
     if (seenEmployeeIds.has(employeeRow.employeeId)) continue;
     if (isOneCRowEmpty(employeeRow)) continue;
     const empId = employeeRow.employeeId;
-    const managerName = managerNameMap.get(empId) ?? '';
+    const managerName = managerFor(empId);
     rows.push({
-      departmentNameSort: data.departmentName,
-      fullNameSort: employeeRow.fullName,
-      objectNameSort: '',
+      ...sortKeysFor(empId, employeeRow.fullName, '', ''),
       oneCRow: employeeRow,
       departmentName: data.departmentName,
       objectAddress: '',
@@ -251,12 +275,10 @@ const buildRowsForDepartment = (
     for (const employeeRow of buildEmployeeRowsForOneC(aggregatedData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
       const empId = employeeRow.employeeId;
-      const managerName = managerNameMap.get(empId) ?? '';
+      const managerName = managerFor(empId);
       const objectAddress = aggregatedAddressByEmpId.get(empId) ?? CURRENT_ACTIVITY_ADDRESS;
       rows.push({
-        departmentNameSort: data.departmentName,
-        fullNameSort: employeeRow.fullName,
-        objectNameSort: objectAddress,
+        ...sortKeysFor(empId, employeeRow.fullName, objectAddress, modeFor(empId).pinnedObjectId ?? ''),
         oneCRow: employeeRow,
         departmentName: data.departmentName,
         objectAddress,
@@ -269,6 +291,27 @@ const buildRowsForDepartment = (
   return rows;
 };
 
+const compareText = (a: string, b: string): number => a.localeCompare(b, 'ru');
+// Порядок кодовых точек, а не localeCompare: для ключей нужна строгая упорядоченность
+// без «равных» разных значений — иначе порядок решали бы входные данные.
+const compareCode = (a: string, b: string): number => {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+};
+
+/**
+ * Полный ключ сортировки: при однофамильцах, одинаковых названиях отделов и объектов
+ * порядок строк всё равно однозначен — повторный экспорт даёт тот же порядок.
+ */
+export const compareUnifiedRows = (a: IUnifiedRow, b: IUnifiedRow): number => (
+  compareText(a.departmentNameSort, b.departmentNameSort)
+  || compareCode(a.departmentIdSort, b.departmentIdSort)
+  || compareText(a.fullNameSort, b.fullNameSort)
+  || a.employeeIdSort - b.employeeIdSort
+  || compareText(a.objectNameSort, b.objectNameSort)
+  || compareCode(a.objectKeySort, b.objectKeySort)
+);
+
 /**
  * Строки единого файла 1С до рендера в шаблон. Вынесено из buildUnified1CWorkbook,
  * чтобы вызывающий мог связывать строки по oneCRow.employeeId — в самом листе id
@@ -279,43 +322,40 @@ export async function buildUnified1CRows(
   policy: AggregatedModesPolicy = 'all',
 ): Promise<IUnifiedRow[]> {
   // Режимы резолвим первыми: закреплённые объекты нужны до сборки карты адресов.
-  const [modeByEmployee, responsibleIdsMap] = await Promise.all([
-    resolveExportModes(collectEmployeeIds(departmentsData)),
-    // Приоритет: назначенный ответственный (employee_direct_reports) → иначе
-    // начальник(и) отдела/участка с full-доступом по org_department_id.
-    resolveResponsibleEmployeeIdsByEmployee(collectEmployeeDeptPairs(departmentsData)),
+  // И режим, и руководитель — по паре «сотрудник + отдел строки»: переведённый внутри
+  // периода сотрудник в старом отделе получает режим и руководителя старого отдела.
+  const pairs = collectEmployeeDeptPairs(departmentsData);
+  const [modeByPair, responsibleIdsByPair] = await Promise.all([
+    resolveExportModesForPairs(pairs),
+    // Приоритет: начальник(и) отдела/участка с full-доступом → иначе непосредственный
+    // руководитель (employee_direct_reports).
+    resolveResponsibleEmployeeIdsByEmployeeDept(pairs),
   ]);
 
   const pinnedObjectIds = new Set<string>();
-  for (const resolved of modeByEmployee.values()) {
+  for (const resolved of modeByPair.values()) {
     if (resolved.mode === 'object' && resolved.pinnedObjectId) pinnedObjectIds.add(resolved.pinnedObjectId);
   }
   const objectAddressMap = await fetchObjectAddressMap(collectObjectIds(departmentsData, pinnedObjectIds));
 
   // Раскрываем id руководителей в ФИО, отбрасываем тестовых, объединяем через запятую.
   const managerNames = await fetchEmployeeNames(
-    [...new Set([...responsibleIdsMap.values()].flat())],
+    [...new Set([...responsibleIdsByPair.values()].flat())],
   );
-  const managerNameMap = new Map<number, string>();
-  for (const [empId, managerIds] of responsibleIdsMap) {
+  const managerNameByPair = new Map<string, string>();
+  for (const [pairKey, managerIds] of responsibleIdsByPair) {
     const names = managerIds
       .map(id => managerNames.get(id) ?? '')
       .filter(name => name.length > 0 && !isTestPersonName(name))
       .sort((a, b) => a.localeCompare(b, 'ru'));
-    if (names.length > 0) managerNameMap.set(empId, names.join(', '));
+    if (names.length > 0) managerNameByPair.set(pairKey, names.join(', '));
   }
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByEmployee, managerNameMap, policy));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByPair, managerNameByPair, policy));
   }
-  rows.sort((a, b) => {
-    const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');
-    if (byDept !== 0) return byDept;
-    const byFio = a.fullNameSort.localeCompare(b.fullNameSort, 'ru');
-    if (byFio !== 0) return byFio;
-    return a.objectNameSort.localeCompare(b.objectNameSort, 'ru');
-  });
+  rows.sort(compareUnifiedRows);
 
   // «Н» (прогул) в единый файл не выводим: клетка остаётся пустой. Чистим ПОСЛЕ
   // проверок isOneCRowEmpty — сотрудник с одними «Н» сохраняет пустую строку.

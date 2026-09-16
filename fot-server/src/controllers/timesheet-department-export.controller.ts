@@ -70,12 +70,16 @@ export async function exportTimesheetDepartmentUnified(req: AuthenticatedRequest
 
     let memberByEmp: Map<number, string | null>;
     let supervisorSet = new Set<number>();
+    let scopeDeptIds: string[] = [];
+    let personOriginEmployeeIds = new Set<number>();
 
     if (isTimekeeper(req) && departmentId === LI_OBSHESTROY_DEPARTMENT_ID) {
       // Табельщица на «ЛИНИЯ-Общестрой»: состав — не всё подразделение, а её люди
       // по присутствию на объектах за период (как в гриде).
       const liIds = [...await resolveTimekeeperLiObshestroyPresenceIds(req, startDate, endDate)];
       memberByEmp = await resolveDepartmentIdsForEmployeesInPeriod(liIds, startDate, endDate);
+      // Состав «по человеку»: при переводе внутри периода все его дни остаются в файле.
+      personOriginEmployeeIds = new Set(memberByEmp.keys());
     } else {
       // Грид отдела показывает всё поддерево (collectDeptIds), а listScopedMembersByDepartment
       // потомков не раскрывает — раскрываем здесь и повторно пересекаем со скоупом.
@@ -84,6 +88,7 @@ export async function exportTimesheetDepartmentUnified(req: AuthenticatedRequest
       if (scopedDeptIds.length === 0) {
         return res.status(403).json({ success: false, error: 'Нет доступа к выбранному отделу' });
       }
+      scopeDeptIds = scopedDeptIds;
       supervisorSet = await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDeptIds);
       memberByEmp = new Map<number, string | null>(
         await listScopedMembersByDepartment(scopedDeptIds, startDate, endDate),
@@ -101,7 +106,7 @@ export async function exportTimesheetDepartmentUnified(req: AuthenticatedRequest
     }
 
     const buffer = await buildUnified1CBuffer({
-      month, rangeArg, memberByEmp, exemptEmployeeIds: supervisorSet,
+      month, rangeArg, memberByEmp, exemptEmployeeIds: supervisorSet, scopeDeptIds, personOriginEmployeeIds,
     });
 
     const deptRow = await query<{ name: string }>(

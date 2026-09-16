@@ -7,6 +7,12 @@ import {
 } from './timesheet-export.service.js';
 import { buildUnified1CWorkbook } from './timesheet-1c-unified.service.js';
 import { writeTimesheetWorkbookBuffer } from './timesheet-excel.service.js';
+import {
+  resolveTimesheetDateRange,
+  resolveTimesheetPeriodRange,
+  resolveTransferSegmentsInPeriod,
+} from './timesheet-department-assignments.service.js';
+import type { IDayWindow } from './timesheet-day-windows.service.js';
 
 /** Бакет для сотрудников без определившегося подразделения за период. */
 export const UNIFIED_EXPORT_NO_DEPARTMENT_NAME = 'Без названия';
@@ -24,6 +30,76 @@ export interface IUnified1CBuildParams {
    * обратный импорт замкнул бы цикл ESM.
    */
   exemptEmployeeIds: Set<number>;
+  /**
+   * Отделы выгрузки. Сотрудник, попавший через членство, переведённый внутри периода,
+   * получает только дни в отделах из этого набора — остальные дни в файле другого отдела.
+   */
+  scopeDeptIds: string[];
+  /**
+   * Добавленные «по человеку» (прямые подчинённые, люди табельщицы ЛИ-Общестрой).
+   * Их набор отделов не ограничивает: при переводе внутри периода каждая часть
+   * идёт в свой отдел, но все дни остаются в файле.
+   */
+  personOriginEmployeeIds: Set<number>;
+}
+
+interface IDeptBucket {
+  deptId: string | null;
+  employeeIds: number[];
+  windows: Map<number, IDayWindow[]>;
+}
+
+const resolveExportPeriod = (month: string, rangeArg: TimesheetExportRangeArg) => (
+  typeof rangeArg === 'object'
+    ? resolveTimesheetDateRange(month, rangeArg.startDate, rangeArg.endDate)
+    : resolveTimesheetPeriodRange(month, rangeArg)
+);
+
+/**
+ * Раскладка сотрудников по отделам с учётом переводов внутри периода.
+ * Без перевода — отдел из memberByEmp. С переводом — по сегментам: у каждого отдела
+ * свой набор окон дней (A→B→A даёт в A два интервала, одну запись сотрудника).
+ */
+export function groupEmployeesByDepartment(
+  memberByEmp: Map<number, string | null>,
+  segmentsByEmp: Map<number, Array<{ deptId: string | null; from: string | null; toExclusive: string | null }>>,
+  scopeDeptIds: string[],
+  personOriginEmployeeIds: Set<number>,
+): IDeptBucket[] {
+  const scope = new Set(scopeDeptIds);
+  const buckets = new Map<string, IDeptBucket>();
+  const bucketFor = (deptId: string | null): IDeptBucket => {
+    const key = deptId ?? '';
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { deptId, employeeIds: [], windows: new Map() };
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  };
+
+  for (const [empId, deptId] of memberByEmp) {
+    const segments = segmentsByEmp.get(empId);
+    if (!segments) {
+      bucketFor(deptId).employeeIds.push(empId);
+      continue;
+    }
+    const isPersonOrigin = personOriginEmployeeIds.has(empId);
+    const windowsByDept = new Map<string, { deptId: string | null; windows: IDayWindow[] }>();
+    for (const segment of segments) {
+      if (!isPersonOrigin && (segment.deptId == null || !scope.has(segment.deptId))) continue;
+      const key = segment.deptId ?? '';
+      const entry = windowsByDept.get(key) ?? { deptId: segment.deptId, windows: [] };
+      entry.windows.push({ from: segment.from, toExclusive: segment.toExclusive });
+      windowsByDept.set(key, entry);
+    }
+    for (const { deptId: segmentDeptId, windows } of windowsByDept.values()) {
+      const bucket = bucketFor(segmentDeptId);
+      bucket.employeeIds.push(empId);
+      bucket.windows.set(empId, windows);
+    }
+  }
+  return [...buckets.values()];
 }
 
 /**
@@ -32,20 +108,18 @@ export interface IUnified1CBuildParams {
  * формат файла и правила отбора те же, что у выгрузки из «Табели HR».
  */
 export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promise<Buffer> {
-  const { month, rangeArg, memberByEmp, exemptEmployeeIds } = params;
+  const { month, rangeArg, memberByEmp, exemptEmployeeIds, scopeDeptIds, personOriginEmployeeIds } = params;
   const year = Number.parseInt(month.slice(0, 4), 10);
   const mon = Number.parseInt(month.slice(5, 7), 10);
+  const period = resolveExportPeriod(month, rangeArg);
+  if (!period) throw new Error('Invalid export month');
 
-  const empIdsByDept = new Map<string | null, number[]>();
-  for (const [empId, deptId] of memberByEmp) {
-    const list = empIdsByDept.get(deptId);
-    if (list) list.push(empId);
-    else empIdsByDept.set(deptId, [empId]);
-  }
   const allEmployeeIds = [...memberByEmp.keys()];
+  const segmentsByEmp = await resolveTransferSegmentsInPeriod(allEmployeeIds, period.startDate, period.endDate);
+  const buckets = groupEmployeesByDepartment(memberByEmp, segmentsByEmp, scopeDeptIds, personOriginEmployeeIds);
 
   // Названия отделов одним запросом; null-бакет в SQL не отправляем.
-  const deptIds = [...empIdsByDept.keys()].filter((id): id is string => Boolean(id));
+  const deptIds = buckets.map(b => b.deptId).filter((id): id is string => Boolean(id));
   const deptNameRows = deptIds.length > 0
     ? await query<{ id: string; name: string }>(
       'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
@@ -63,12 +137,14 @@ export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promi
     { excludeZeroActivity: true, exemptEmployeeIds },
   );
 
-  const collected: IDepartmentTimesheetData[] = [...empIdsByDept]
-    .map(([deptId, empIds]) => sliceTimesheetDataByEmployees(
+  const collected: IDepartmentTimesheetData[] = buckets
+    .filter(bucket => bucket.employeeIds.length > 0)
+    .map(bucket => sliceTimesheetDataByEmployees(
       bulk,
-      empIds,
-      (deptId && deptNameById.get(deptId)) || UNIFIED_EXPORT_NO_DEPARTMENT_NAME,
-      deptId,
+      bucket.employeeIds,
+      (bucket.deptId && deptNameById.get(bucket.deptId)) || UNIFIED_EXPORT_NO_DEPARTMENT_NAME,
+      bucket.deptId,
+      bucket.windows.size > 0 ? bucket.windows : undefined,
     ));
 
   const workbook = await buildUnified1CWorkbook(mon, year, collected);

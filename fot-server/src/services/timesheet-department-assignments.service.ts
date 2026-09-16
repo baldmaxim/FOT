@@ -424,13 +424,13 @@ export async function listScopedMembersByDepartment(
   const rows = await query<{ employee_id: number; dept_id: string }>(
     `SELECT DISTINCT ON (s.employee_id) s.employee_id, s.dept_id
        FROM (
-         SELECT a.employee_id, a.org_department_id AS dept_id, 1 AS prio
+         SELECT a.employee_id, a.org_department_id AS dept_id, 1 AS prio, a.effective_from AS eff_from
            FROM employee_assignments a
           WHERE a.org_department_id = ANY($1::uuid[])
             AND a.effective_from <= $3::date
             AND (a.effective_to IS NULL OR a.effective_to >= $2::date)
          UNION ALL
-         SELECT e.id, e.org_department_id, 2
+         SELECT e.id, e.org_department_id, 2, NULL::date
            FROM employees e
           WHERE e.org_department_id = ANY($1::uuid[])
             -- Исключаем тех, кто вошёл в поддерево ПОСЛЕ периода (snapshot переписан переводом,
@@ -449,7 +449,7 @@ export async function listScopedMembersByDepartment(
                  AND cur.effective_from > $3::date
             )
          UNION ALL
-         SELECT de.employee_id, de.from_department_id, 3
+         SELECT de.employee_id, de.from_department_id, 3, NULL::date
            FROM employee_dismissal_events de
           WHERE de.from_department_id = ANY($1::uuid[])
             AND de.dismissal_date IS NOT NULL
@@ -466,7 +466,9 @@ export async function listScopedMembersByDepartment(
         AND NOT (emp.excluded_from_timesheet = true
                  AND (emp.excluded_from_timesheet_date IS NULL
                       OR emp.excluded_from_timesheet_date <= $2::date))
-      ORDER BY s.employee_id, s.prio`,
+      -- Tie-breaker обязателен: у сотрудника бывает несколько назначений одного prio,
+      -- без него выбор отдела зависит от плана запроса и повторный экспорт расходится.
+      ORDER BY s.employee_id, s.prio, s.eff_from DESC NULLS LAST, s.dept_id NULLS LAST`,
     [scopedDeptIds, startDate, endDate],
   );
 
@@ -503,17 +505,17 @@ export async function resolveDepartmentIdsForEmployeesInPeriod(
   const rows = await query<{ employee_id: number; dept_id: string | null }>(
     `SELECT DISTINCT ON (s.employee_id) s.employee_id, s.dept_id
        FROM (
-         SELECT a.employee_id, a.org_department_id AS dept_id, 1 AS prio
+         SELECT a.employee_id, a.org_department_id AS dept_id, 1 AS prio, a.effective_from AS eff_from
            FROM employee_assignments a
           WHERE a.employee_id = ANY($1::int[])
             AND a.effective_from <= $3::date
             AND (a.effective_to IS NULL OR a.effective_to >= $2::date)
          UNION ALL
-         SELECT e.id, e.org_department_id, 2
+         SELECT e.id, e.org_department_id, 2, NULL::date
            FROM employees e
           WHERE e.id = ANY($1::int[])
          UNION ALL
-         SELECT de.employee_id, de.from_department_id, 3
+         SELECT de.employee_id, de.from_department_id, 3, NULL::date
            FROM employee_dismissal_events de
           WHERE de.employee_id = ANY($1::int[])
             AND de.dismissal_date IS NOT NULL
@@ -529,7 +531,9 @@ export async function resolveDepartmentIdsForEmployeesInPeriod(
         AND NOT (emp.excluded_from_timesheet = true
                  AND (emp.excluded_from_timesheet_date IS NULL
                       OR emp.excluded_from_timesheet_date <= $2::date))
-      ORDER BY s.employee_id, s.prio`,
+      -- Tie-breaker обязателен: у сотрудника бывает несколько назначений одного prio,
+      -- без него выбор отдела зависит от плана запроса и повторный экспорт расходится.
+      ORDER BY s.employee_id, s.prio, s.eff_from DESC NULLS LAST, s.dept_id NULLS LAST`,
     [uniqueIds, startDate, endDate],
   );
 
@@ -539,6 +543,103 @@ export async function resolveDepartmentIdsForEmployeesInPeriod(
     result.set(empId, row.dept_id ?? null);
   }
   return result;
+}
+
+/** Часть периода, в которой сотрудник числился в одном отделе: [from, toExclusive), null = край периода. */
+export interface ITransferSegment {
+  deptId: string | null;
+  from: string | null;
+  toExclusive: string | null;
+}
+
+export interface IAssignmentPeriodRow {
+  id: string | number;
+  employee_id: number;
+  org_department_id: string | null;
+  effective_from: string;
+  effective_to: string | null;
+}
+
+/**
+ * Разбиение периода на сегменты по НАСТОЯЩИМ переводам (чистая функция, см.
+ * resolveTransferSegmentsInPeriod). Граница — назначение, которому встык предшествует
+ * назначение в другом отделе (то же условие, что joined_via_transfer). Одиночный поздний
+ * effective_from без стыка границей не считается. Сотрудник без границ внутри периода
+ * в результат не попадает. Сегменты покрывают период без дыр и пересечений.
+ */
+export function buildTransferSegments(
+  rows: IAssignmentPeriodRow[],
+  startDate: string,
+  endDate: string,
+): Map<number, ITransferSegment[]> {
+  const byEmployee = new Map<number, IAssignmentPeriodRow[]>();
+  for (const row of rows) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const list = byEmployee.get(empId);
+    if (list) list.push(row);
+    else byEmployee.set(empId, [row]);
+  }
+
+  const compareRows = (a: IAssignmentPeriodRow, b: IAssignmentPeriodRow): number => {
+    if (a.effective_from !== b.effective_from) return a.effective_from < b.effective_from ? -1 : 1;
+    return String(a.id).localeCompare(String(b.id), 'en', { numeric: true });
+  };
+
+  const result = new Map<number, ITransferSegment[]>();
+  for (const empId of [...byEmployee.keys()].sort((a, b) => a - b)) {
+    const list = [...byEmployee.get(empId)!].sort(compareRows);
+    // Одна граница на дату: при «грязных» дублях берём первое назначение в стабильном порядке.
+    const boundaries: Array<{ date: string; prevDeptId: string | null; nextDeptId: string | null }> = [];
+    for (const cur of list) {
+      if (cur.effective_from <= startDate || cur.effective_from > endDate) continue;
+      if (boundaries.some(b => b.date === cur.effective_from)) continue;
+      const prev = list.find(candidate => candidate !== cur
+        && candidate.effective_to != null
+        && formatDateShift(candidate.effective_to, 1) === cur.effective_from
+        && candidate.org_department_id !== cur.org_department_id);
+      if (!prev) continue;
+      boundaries.push({ date: cur.effective_from, prevDeptId: prev.org_department_id, nextDeptId: cur.org_department_id });
+    }
+    if (boundaries.length === 0) continue;
+
+    const segments: ITransferSegment[] = [{ deptId: boundaries[0].prevDeptId, from: null, toExclusive: boundaries[0].date }];
+    boundaries.forEach((boundary, index) => {
+      segments.push({
+        deptId: boundary.nextDeptId,
+        from: boundary.date,
+        toExclusive: boundaries[index + 1]?.date ?? null,
+      });
+    });
+    result.set(empId, segments);
+  }
+  return result;
+}
+
+/**
+ * Сегменты переводов сотрудников внутри [startDate, endDate] по employee_assignments.
+ * Нужны единому файлу 1С: дни до перевода принадлежат старому отделу (и его руководителю),
+ * после — новому. Сотрудники без настоящего перевода в карте отсутствуют.
+ */
+export async function resolveTransferSegmentsInPeriod(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<Map<number, ITransferSegment[]>> {
+  const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) return new Map();
+  // Смежные назначения за границей периода тоже нужны: стык проверяется по effective_to
+  // предыдущего, которое может закончиться накануне первой границы.
+  const rows = await query<IAssignmentPeriodRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+      WHERE employee_id = ANY($1::int[])
+        AND effective_from <= $3::date
+        AND (effective_to IS NULL OR effective_to >= ($2::date - 1))
+      ORDER BY employee_id, effective_from, id`,
+    [uniqueIds, startDate, endDate],
+  );
+  return buildTransferSegments(rows, startDate, endDate);
 }
 
 export async function isEmployeeAssignedToDepartmentOnDate(

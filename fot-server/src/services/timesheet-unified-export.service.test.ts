@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   slice: vi.fn(),
   buildWorkbook: vi.fn(),
   writeBuffer: vi.fn(),
+  segments: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({ query: h.pgQuery, queryOne: vi.fn() }));
@@ -15,8 +16,20 @@ vi.mock('./timesheet-export.service.js', () => ({
 }));
 vi.mock('./timesheet-1c-unified.service.js', () => ({ buildUnified1CWorkbook: h.buildWorkbook }));
 vi.mock('./timesheet-excel.service.js', () => ({ writeTimesheetWorkbookBuffer: h.writeBuffer }));
+vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./timesheet-department-assignments.service.js')>();
+  return {
+    resolveTimesheetDateRange: actual.resolveTimesheetDateRange,
+    resolveTimesheetPeriodRange: actual.resolveTimesheetPeriodRange,
+    resolveTransferSegmentsInPeriod: h.segments,
+  };
+});
 
-import { buildUnified1CBuffer, parseStrictExportPeriod } from './timesheet-unified-export.service.js';
+import {
+  buildUnified1CBuffer,
+  groupEmployeesByDepartment,
+  parseStrictExportPeriod,
+} from './timesheet-unified-export.service.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -25,6 +38,7 @@ beforeEach(() => {
   h.slice.mockImplementation((_bulk: unknown, ids: number[], name: string, deptId: string | null) => ({ ids, name, deptId }));
   h.buildWorkbook.mockResolvedValue({});
   h.writeBuffer.mockResolvedValue(Buffer.from('xlsx'));
+  h.segments.mockResolvedValue(new Map());
 });
 
 describe('parseStrictExportPeriod', () => {
@@ -56,7 +70,12 @@ describe('parseStrictExportPeriod', () => {
 });
 
 describe('buildUnified1CBuffer', () => {
-  const period = { month: '2026-07', rangeArg: { startDate: '2026-07-01', endDate: '2026-07-31' } as const };
+  const period = {
+    month: '2026-07',
+    rangeArg: { startDate: '2026-07-01', endDate: '2026-07-31' } as const,
+    scopeDeptIds: ['D1', 'D2'],
+    personOriginEmployeeIds: new Set<number>(),
+  };
 
   it('группирует сотрудников по отделам и делает ОДИН bulk-прогон', async () => {
     h.pgQuery.mockResolvedValue([{ id: 'D1', name: 'бр. Первая' }, { id: 'D2', name: 'бр. Вторая' }]);
@@ -74,8 +93,9 @@ describe('buildUnified1CBuffer', () => {
     expect(call[6]).toEqual({ excludeZeroActivity: true, exemptEmployeeIds: new Set([9]) });
 
     expect(h.slice).toHaveBeenCalledTimes(2);
-    expect(h.slice.mock.calls[0].slice(1)).toEqual([[1, 3], 'бр. Первая', 'D1']);
-    expect(h.slice.mock.calls[1].slice(1)).toEqual([[2], 'бр. Вторая', 'D2']);
+    expect(h.slice.mock.calls[0].slice(1)).toEqual([[1, 3], 'бр. Первая', 'D1', undefined]);
+    expect(h.slice.mock.calls[1].slice(1)).toEqual([[2], 'бр. Вторая', 'D2', undefined]);
+    expect(h.segments).toHaveBeenCalledWith([1, 2, 3], '2026-07-01', '2026-07-31');
   });
 
   it('сотрудники без отдела попадают в бакет «Без названия», null в SQL не уходит', async () => {
@@ -87,7 +107,7 @@ describe('buildUnified1CBuffer', () => {
     });
 
     expect(h.pgQuery.mock.calls[0][1]).toEqual([['D1']]);
-    expect(h.slice.mock.calls[1].slice(1)).toEqual([[2], 'Без названия', null]);
+    expect(h.slice.mock.calls[1].slice(1)).toEqual([[2], 'Без названия', null, undefined]);
   });
 
   it('отдел отсутствует в org_departments → «Без названия»', async () => {
@@ -98,7 +118,7 @@ describe('buildUnified1CBuffer', () => {
       exemptEmployeeIds: new Set(),
     });
 
-    expect(h.slice.mock.calls[0].slice(1)).toEqual([[1], 'Без названия', 'D-ghost']);
+    expect(h.slice.mock.calls[0].slice(1)).toEqual([[1], 'Без названия', 'D-ghost', undefined]);
   });
 
   it('mon/year выводятся из month, а не приходят снаружи', async () => {
@@ -107,8 +127,121 @@ describe('buildUnified1CBuffer', () => {
       rangeArg: { startDate: '2026-02-01', endDate: '2026-02-28' },
       memberByEmp: new Map([[1, 'D1']]),
       exemptEmployeeIds: new Set(),
+      scopeDeptIds: ['D1'],
+      personOriginEmployeeIds: new Set(),
     });
 
     expect(h.buildWorkbook).toHaveBeenCalledWith(2, 2026, expect.any(Array));
+  });
+
+  it('перевод внутри периода: срез получает окно дней отдела из набора выгрузки', async () => {
+    h.pgQuery.mockResolvedValue([{ id: 'A', name: 'бр.А' }]);
+    h.segments.mockResolvedValue(new Map([[5, [
+      { deptId: 'A', from: null, toExclusive: '2026-07-15' },
+      { deptId: 'B', from: '2026-07-15', toExclusive: null },
+    ]]]));
+    await buildUnified1CBuffer({
+      ...period,
+      memberByEmp: new Map([[5, 'A']]),
+      exemptEmployeeIds: new Set(),
+      scopeDeptIds: ['A'],
+    });
+
+    expect(h.slice).toHaveBeenCalledTimes(1);
+    expect(h.slice.mock.calls[0].slice(1)).toEqual([
+      [5], 'бр.А', 'A', new Map([[5, [{ from: null, toExclusive: '2026-07-15' }]]]),
+    ]);
+  });
+
+  it('повторная сборка при тех же данных даёт те же срезы', async () => {
+    h.segments.mockResolvedValue(new Map([[5, [
+      { deptId: 'A', from: null, toExclusive: '2026-07-15' },
+      { deptId: 'B', from: '2026-07-15', toExclusive: null },
+    ]]]));
+    const params = {
+      ...period,
+      memberByEmp: new Map<number, string | null>([[5, 'A'], [6, 'B']]),
+      exemptEmployeeIds: new Set<number>(),
+      scopeDeptIds: ['A', 'B'],
+    };
+    await buildUnified1CBuffer(params);
+    const first = h.slice.mock.calls.map(call => call.slice(1));
+    h.slice.mockClear();
+    await buildUnified1CBuffer(params);
+    expect(h.slice.mock.calls.map(call => call.slice(1))).toEqual(first);
+  });
+});
+
+describe('groupEmployeesByDepartment', () => {
+  const ABA = [
+    { deptId: 'A', from: null, toExclusive: '2026-07-10' },
+    { deptId: 'B', from: '2026-07-10', toExclusive: '2026-07-20' },
+    { deptId: 'A', from: '2026-07-20', toExclusive: null },
+  ];
+
+  const allDaysOf = (buckets: ReturnType<typeof groupEmployeesByDepartment>, empId: number): string[] => {
+    const days: string[] = [];
+    for (let d = 1; d <= 31; d++) {
+      const iso = `2026-07-${String(d).padStart(2, '0')}`;
+      for (const bucket of buckets) {
+        if (!bucket.employeeIds.includes(empId)) continue;
+        const windows = bucket.windows.get(empId);
+        const inside = !windows || windows.some(w => (w.from == null || iso >= w.from) && (w.toExclusive == null || iso < w.toExclusive));
+        if (inside) days.push(`${bucket.deptId}:${iso}`);
+      }
+    }
+    return days;
+  };
+
+  it('без перевода — отдел из memberByEmp, без окон', () => {
+    const buckets = groupEmployeesByDepartment(new Map([[1, 'A']]), new Map(), ['A'], new Set());
+    expect(buckets).toEqual([{ deptId: 'A', employeeIds: [1], windows: new Map() }]);
+  });
+
+  it('A→B→A при scope {A}: одна запись в A с двумя интервалами, дни B не попадают', () => {
+    const buckets = groupEmployeesByDepartment(new Map([[1, 'A']]), new Map([[1, ABA]]), ['A'], new Set());
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].deptId).toBe('A');
+    expect(buckets[0].employeeIds).toEqual([1]);
+    expect(buckets[0].windows.get(1)).toEqual([
+      { from: null, toExclusive: '2026-07-10' },
+      { from: '2026-07-20', toExclusive: null },
+    ]);
+  });
+
+  it('scope {B}: только дни B', () => {
+    const buckets = groupEmployeesByDepartment(new Map([[1, 'B']]), new Map([[1, ABA]]), ['B'], new Set());
+    expect(buckets.map(b => b.deptId)).toEqual(['B']);
+    expect(buckets[0].windows.get(1)).toEqual([{ from: '2026-07-10', toExclusive: '2026-07-20' }]);
+  });
+
+  it('A + B = A∪B: каждый день ровно в одном отделе, без потерь и задвоений', () => {
+    const only = (scope: string[]) => allDaysOf(
+      groupEmployeesByDepartment(new Map([[1, scope[0]]]), new Map([[1, ABA]]), scope, new Set()), 1,
+    );
+    const union = only(['A', 'B']);
+    expect(union).toHaveLength(31);
+    expect([...only(['A']), ...only(['B'])].sort()).toEqual([...union].sort());
+  });
+
+  it('«по человеку»: все сегменты остаются, каждый в своём отделе, вне зависимости от scope', () => {
+    const buckets = groupEmployeesByDepartment(new Map([[1, 'A']]), new Map([[1, ABA]]), [], new Set([1]));
+    expect(buckets.map(b => b.deptId)).toEqual(['A', 'B']);
+    expect(allDaysOf(buckets, 1)).toHaveLength(31);
+  });
+
+  it('членство без сегментов в scope — сотрудник в файл не попадает', () => {
+    const buckets = groupEmployeesByDepartment(new Map([[1, 'A']]), new Map([[1, ABA]]), ['C'], new Set());
+    expect(buckets).toEqual([]);
+  });
+
+  it('сегмент без отдела у «по человеку» → бакет null («Без названия»)', () => {
+    const buckets = groupEmployeesByDepartment(
+      new Map([[1, 'A']]),
+      new Map([[1, [{ deptId: null, from: null, toExclusive: '2026-07-05' }, { deptId: 'A', from: '2026-07-05', toExclusive: null }]]]),
+      [],
+      new Set([1]),
+    );
+    expect(buckets.map(b => b.deptId)).toEqual([null, 'A']);
   });
 });

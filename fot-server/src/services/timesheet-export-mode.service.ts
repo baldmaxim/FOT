@@ -118,6 +118,70 @@ export async function resolveExportModes(
   return result;
 }
 
+/** Ключ пары «сотрудник + отдел» для resolveExportModesForPairs. */
+export const exportModePairKey = (employeeId: number, departmentId: string | null): string =>
+  `${Number(employeeId)}|${departmentId ?? ''}`;
+
+/**
+ * Режимы по парам «сотрудник + отдел»: режим отдела берётся из отдела ПАРЫ, а не из
+ * текущего employees.org_department_id. Нужен единому файлу 1С при переводе внутри
+ * периода: дни в старом отделе выгружаются по его режиму. Личный режим сотрудника
+ * по-прежнему приоритетнее. Ключ результата — exportModePairKey.
+ */
+export async function resolveExportModesForPairs(
+  pairs: Array<{ employee_id: number; org_department_id: string | null }>,
+  exec?: DbExecutor,
+): Promise<Map<string, IResolvedExportMode>> {
+  const result = new Map<string, IResolvedExportMode>();
+  const unique = new Map<string, { employeeId: number; departmentId: string | null }>();
+  for (const pair of pairs) {
+    const employeeId = Number(pair.employee_id);
+    if (!Number.isInteger(employeeId) || employeeId <= 0) continue;
+    unique.set(exportModePairKey(employeeId, pair.org_department_id), {
+      employeeId,
+      departmentId: pair.org_department_id ?? null,
+    });
+  }
+  if (unique.size === 0) return result;
+
+  const list = [...unique.values()];
+  const rows = await runQuery<IModeRow & { pair_dept_id: string | null }>(
+    exec,
+    `WITH ca AS (
+       SELECT id FROM skud_objects
+        WHERE lower(btrim(coalesce(alt_name, ''))) = lower($3::text)
+     ),
+     dept_ca AS (
+       SELECT DISTINCT doa.org_department_id
+         FROM department_object_assignment doa
+        WHERE doa.is_active = true AND doa.skud_object_id IN (SELECT id FROM ca)
+     ),
+     pairs AS (
+       SELECT p.employee_id, p.dept_id
+         FROM unnest($1::int[], $2::uuid[]) AS p(employee_id, dept_id)
+     )
+     SELECT e.id                                AS employee_id,
+            p.dept_id::text                     AS pair_dept_id,
+            e.timesheet_export_mode             AS emp_mode,
+            e.timesheet_export_object_id::text  AS emp_object_id,
+            d.timesheet_export_mode             AS dept_mode,
+            d.timesheet_export_object_id::text  AS dept_object_id,
+            (dc.org_department_id IS NOT NULL)  AS dept_current_activity
+       FROM pairs p
+       JOIN employees e            ON e.id = p.employee_id
+       LEFT JOIN org_departments d ON d.id = p.dept_id
+       LEFT JOIN dept_ca dc        ON dc.org_department_id = p.dept_id`,
+    [list.map(p => p.employeeId), list.map(p => p.departmentId), CURRENT_ACTIVITY_ADDRESS],
+  );
+
+  for (const row of rows) {
+    const id = Number(row.employee_id);
+    if (!Number.isInteger(id)) continue;
+    result.set(exportModePairKey(id, row.pair_dept_id ?? null), resolveRow(row));
+  }
+  return result;
+}
+
 /** Резолвинг одной строки — вынесен ради тестов и переиспользования в API. */
 export function resolveRow(row: IModeRow): IResolvedExportMode {
   if (row.emp_mode) {

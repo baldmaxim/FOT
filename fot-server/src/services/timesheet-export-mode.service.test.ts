@@ -13,7 +13,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
 vi.mock('../config/postgres.js', () => ({ query: pgQuery }));
 
-import { resolveExportModes, resolveRow } from './timesheet-export-mode.service.js';
+import {
+  exportModePairKey,
+  resolveExportModes,
+  resolveExportModesForPairs,
+  resolveRow,
+} from './timesheet-export-mode.service.js';
 
 const row = (over: Record<string, unknown> = {}) => ({
   employee_id: 1,
@@ -104,5 +109,49 @@ describe('resolveExportModes — вход', () => {
 
     expect((pgQuery.mock.calls[0]![1] as unknown[])[0]).toEqual([1]);
     expect(map.get(1)).toMatchObject({ mode: 'skud', source: 'employee_explicit' });
+  });
+});
+
+describe('resolveExportModesForPairs — режим по отделу пары', () => {
+  it('SQL берёт режим отдела ПАРЫ (unnest), а не текущий отдел сотрудника', async () => {
+    await resolveExportModesForPairs([{ employee_id: 1, org_department_id: 'A' }]);
+    const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('unnest($1::int[], $2::uuid[])');
+    expect(sql).toContain('LEFT JOIN org_departments d ON d.id = p.dept_id');
+    expect(sql).not.toContain('d.id = e.org_department_id');
+    expect(params.slice(0, 2)).toEqual([[1], ['A']]);
+  });
+
+  it('один сотрудник в двух отделах получает режим каждого отдела', async () => {
+    pgQuery.mockResolvedValue([
+      { employee_id: 1, pair_dept_id: 'A', emp_mode: null, emp_object_id: null, dept_mode: 'current_activity', dept_object_id: null, dept_current_activity: false },
+      { employee_id: 1, pair_dept_id: 'B', emp_mode: null, emp_object_id: null, dept_mode: 'skud', dept_object_id: null, dept_current_activity: false },
+    ]);
+
+    const map = await resolveExportModesForPairs([
+      { employee_id: 1, org_department_id: 'A' },
+      { employee_id: 1, org_department_id: 'B' },
+    ]);
+
+    expect(map.get(exportModePairKey(1, 'A'))).toMatchObject({ mode: 'current_activity', source: 'department_explicit' });
+    expect(map.get(exportModePairKey(1, 'B'))).toMatchObject({ mode: 'skud', source: 'department_explicit' });
+  });
+
+  it('дубли пар схлопываются, мусорные id не идут в БД, отдел null допустим', async () => {
+    expect((await resolveExportModesForPairs([{ employee_id: 0, org_department_id: 'A' }])).size).toBe(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+
+    await resolveExportModesForPairs([
+      { employee_id: 2, org_department_id: null },
+      { employee_id: 2, org_department_id: null },
+    ]);
+    expect((pgQuery.mock.calls[0]![1] as unknown[]).slice(0, 2)).toEqual([[2], [null]]);
+  });
+
+  it('exec транзакции используется вместо пула', async () => {
+    const exec = { query: vi.fn(async () => ({ rows: [] })) };
+    await resolveExportModesForPairs([{ employee_id: 1, org_department_id: 'A' }], exec as never);
+    expect(exec.query).toHaveBeenCalledTimes(1);
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 });

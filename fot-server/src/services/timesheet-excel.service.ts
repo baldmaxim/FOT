@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { getFullDayThresholdHoursForDate, getDayNormHours } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
+import { isDateInEmployeeWindows } from './timesheet-day-windows.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
 
@@ -386,6 +387,8 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
       // Уволенный: дни >= cutoff (dismissal+1) не считаются — пустая ячейка, без нормы/факта.
       if (cutoff && dateStr >= cutoff) continue;
+      // Перевод внутри периода: дни вне окна принадлежат другому отделу.
+      if (!isDateInEmployeeWindows(data, employee.id, dateStr)) continue;
       const dateObj = new Date(data.year, data.mon - 1, day);
       const markWeekend = (): void => {
         if (isCalendarWeekend(dateObj, dateStr, data.calendarMonth)) {
@@ -474,6 +477,8 @@ export const buildObjectRowsForOneC = (
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
         // Уволенный: дни >= cutoff не считаются.
         if (cutoff && dateStr >= cutoff) continue;
+        // Перевод внутри периода: дни вне окна принадлежат другому отделу.
+        if (!isDateInEmployeeWindows(data, employee.id, dateStr)) continue;
 
         // Приоритет — статус из утверждённого табеля: если за день стоит буква
         // (Н/Б/УУ/От/С/У/В), показываем её вместо объектных часов.

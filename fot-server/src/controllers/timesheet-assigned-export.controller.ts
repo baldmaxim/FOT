@@ -587,6 +587,9 @@ export async function exportTimesheetAssignedUnified(req: AuthenticatedRequest, 
     let memberByEmp = new Map<number, string | null>();
     let supervisorSet = new Set<number>();
     let leaderName = '';
+    let scopeDeptIds: string[] = [];
+    // Добавленные «по человеку» (прямые подчинённые) — их дни набором бригад не режутся.
+    const personOriginEmployeeIds = new Set<number>();
 
     if (isSelfDirectReports) {
       // «Мои сотрудники»: собственный контекст без подразделений — к списку бригад
@@ -609,6 +612,7 @@ export async function exportTimesheetAssignedUnified(req: AuthenticatedRequest, 
         assignee.department_ids.map(deptId => collectDeptIds(deptId)),
       )).flat())];
       const scopedDeptIds = expanded.length > 0 ? await resolveScopedDepartmentIds(req, expanded) : [];
+      scopeDeptIds = scopedDeptIds;
       if (scopedDeptIds.length > 0) {
         supervisorSet = await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDeptIds);
         memberByEmp = new Map<number, string | null>(
@@ -630,6 +634,7 @@ export async function exportTimesheetAssignedUnified(req: AuthenticatedRequest, 
         for (const id of allowedDirect) {
           if (!deptByEmp.has(id)) continue;   // не прошёл eligibility — в выгрузку не берём
           memberByEmp.set(id, deptByEmp.get(id) ?? null);
+          personOriginEmployeeIds.add(id);
         }
       }
     }
@@ -645,7 +650,7 @@ export async function exportTimesheetAssignedUnified(req: AuthenticatedRequest, 
     }
 
     const buffer = await buildUnified1CBuffer({
-      month, rangeArg, memberByEmp, exemptEmployeeIds: supervisorSet,
+      month, rangeArg, memberByEmp, exemptEmployeeIds: supervisorSet, scopeDeptIds, personOriginEmployeeIds,
     });
 
     const namePart = isSelfDirectReports

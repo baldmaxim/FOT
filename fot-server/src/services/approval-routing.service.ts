@@ -138,28 +138,51 @@ export async function resolveResponsibleEmployeeIdsForRows(
 export async function resolveResponsibleEmployeeIdsByEmployee(
   employees: Array<{ employee_id: number; org_department_id: string | null }>,
 ): Promise<Map<number, number[]>> {
+  const byPair = await resolveResponsibleEmployeeIdsByEmployeeDept(employees);
   const result = new Map<number, number[]>();
-  if (employees.length === 0) return result;
+  for (const e of employees) {
+    const empId = Number(e.employee_id);
+    result.set(empId, byPair.get(responsiblePairKey(empId, e.org_department_id)) ?? []);
+  }
+  return result;
+}
 
-  const empIds = [...new Set(employees.map(e => Number(e.employee_id)))];
+/** Ключ пары «сотрудник + отдел» для resolveResponsibleEmployeeIdsByEmployeeDept. */
+export const responsiblePairKey = (employeeId: number, departmentId: string | null): string =>
+  `${Number(employeeId)}|${departmentId ?? ''}`;
+
+/**
+ * То же, что resolveResponsibleEmployeeIdsByEmployee, но по парам «сотрудник + отдел»:
+ * один сотрудник может встречаться с разными отделами (перевод внутри периода в едином
+ * файле 1С), и руководитель берётся по отделу пары, а не по текущему отделу.
+ * Ключ результата — responsiblePairKey.
+ */
+export async function resolveResponsibleEmployeeIdsByEmployeeDept(
+  pairs: Array<{ employee_id: number; org_department_id: string | null }>,
+): Promise<Map<string, number[]>> {
+  const result = new Map<string, number[]>();
+  if (pairs.length === 0) return result;
+
+  const empIds = [...new Set(pairs.map(e => Number(e.employee_id)))];
   const [directMgrs, deptManagers] = await Promise.all([
     getActiveDirectManagersFor(empIds),
     listFullManagersForDepartments(
-      [...new Set(employees
+      [...new Set(pairs
         .map(e => e.org_department_id)
         .filter((v): v is string => typeof v === 'string' && v.length > 0))],
     ),
   ]);
 
-  for (const e of employees) {
+  for (const e of pairs) {
     const empId = Number(e.employee_id);
+    const key = responsiblePairKey(empId, e.org_department_id);
     const heads = pickHeads(deptManagers, e.org_department_id, empId);
     if (heads.length > 0) {
-      result.set(empId, heads);
+      result.set(key, heads);
       continue;
     }
     const dm = directMgrs.get(empId);
-    result.set(empId, dm ? [dm.managerId] : []);
+    result.set(key, dm ? [dm.managerId] : []);
   }
   return result;
 }

@@ -164,6 +164,8 @@ describe('exportTimesheetAssignedUnified — состав участка', () =>
     expect(h.collectDeptIds).toHaveBeenCalledWith(BRIGADE);
     expect(h.scopedDeptIds).toHaveBeenCalledWith(expect.anything(), [BRIGADE, 'child-1']);
     expect(h.members).toHaveBeenCalledWith([BRIGADE, 'child-1'], '2026-07-01', '2026-07-31');
+    expect(h.buildBuffer.mock.calls[0][0].scopeDeptIds).toEqual([BRIGADE, 'child-1']);
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set());
   });
 
   it('прямые подчинённые берутся периодным запросом и получают ИСТОРИЧЕСКИЙ отдел', async () => {
@@ -174,6 +176,9 @@ describe('exportTimesheetAssignedUnified — состав участка', () =>
     expect(h.directInPeriod).toHaveBeenCalledWith(ASSIGNEE, '2026-07-01', '2026-07-31');
     expect(h.deptByEmp).toHaveBeenCalledWith([42], '2026-07-01', '2026-07-31');
     expect(h.buildBuffer.mock.calls[0][0].memberByEmp).toEqual(new Map([[1, BRIGADE], [42, 'old-dept']]));
+    // Прямой подчинённый помечен «по человеку»: его дни набором бригад не режутся.
+    expect(h.buildBuffer.mock.calls[0][0].scopeDeptIds).toEqual([BRIGADE]);
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set([42]));
   });
 
   it('прямой вне scope вызывающего в файл не попадает', async () => {
@@ -192,6 +197,8 @@ describe('exportTimesheetAssignedUnified — состав участка', () =>
 
     expect(h.filterAdditional).not.toHaveBeenCalled();
     expect(h.buildBuffer.mock.calls[0][0].memberByEmp).toEqual(new Map([[1, BRIGADE]]));
+    // Уже член бригады — остаётся «по членству».
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set());
   });
 
   it('прямой без eligibility (нет ключа в периодной карте) отбрасывается', async () => {
@@ -235,6 +242,8 @@ describe('exportTimesheetAssignedUnified — режим «Мои сотрудн�
     expect(h.members).not.toHaveBeenCalled();
     expect(h.buildBuffer.mock.calls[0][0].memberByEmp).toEqual(new Map([[42, 'D-42']]));
     expect(h.buildBuffer.mock.calls[0][0].exemptEmployeeIds).toEqual(new Set());
+    expect(h.buildBuffer.mock.calls[0][0].scopeDeptIds).toEqual([]);
+    expect(h.buildBuffer.mock.calls[0][0].personOriginEmployeeIds).toEqual(new Set([42]));
   });
 
   it('self-ветка доступна без monitor/review', async () => {
