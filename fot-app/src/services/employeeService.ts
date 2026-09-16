@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { Employee, EmployeeInput, EmployeeHistoryEvent, EnrichPreview, EnrichResult, ContactsEnrichPreview } from '../types';
+import type { Employee, EmployeeInput, EmployeeHistoryEvent } from '../types';
 
 interface ApiResponse<T> {
   data: T;
@@ -264,10 +264,6 @@ export const employeeService = {
     return response.data;
   },
 
-  async exportEmployees(): Promise<{ blob: Blob; filename: string }> {
-    return apiClient.download('/employees/export', 'Сотрудники.xlsx', { timeoutMs: 120_000 });
-  },
-
   /** xlsx ровно текущей таблицы: фильтры, статус, период и сортировка экрана. */
   async exportStaffView(params: IStaffViewParams): Promise<{ blob: Blob; filename: string }> {
     const qs = new URLSearchParams();
@@ -430,81 +426,6 @@ export const employeeService = {
       effective_date: effectiveDate,
       reason,
     });
-    return response.data;
-  },
-
-  async enrichPreview(file: File): Promise<EnrichPreview> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await apiClient.post<ApiResponse<EnrichPreview>>('/employees/enrich?preview=true', formData);
-    return response.data;
-  },
-
-  async enrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (manualMatches?.length) {
-      formData.append('manualMatches', JSON.stringify(manualMatches));
-    }
-    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich?preview=false', formData);
-    return response.data;
-  },
-
-  async salaryEnrichPreview(file: File): Promise<EnrichPreview> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await apiClient.post<ApiResponse<EnrichPreview>>('/employees/enrich-salary?preview=true', formData);
-    return response.data;
-  },
-
-  async salaryEnrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (manualMatches?.length) {
-      formData.append('manualMatches', JSON.stringify(manualMatches));
-    }
-    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-salary?preview=false', formData);
-    return response.data;
-  },
-
-  async salaryHistoryEnrichPreview(file: File): Promise<EnrichPreview> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await apiClient.post<ApiResponse<EnrichPreview>>('/employees/enrich-salary-history?preview=true', formData);
-    return response.data;
-  },
-
-  async salaryHistoryEnrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (manualMatches?.length) {
-      formData.append('manualMatches', JSON.stringify(manualMatches));
-    }
-    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-salary-history?preview=false', formData);
-    return response.data;
-  },
-
-  async contactsEnrichPreview(file: File): Promise<ContactsEnrichPreview> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await apiClient.post<ApiResponse<ContactsEnrichPreview>>('/employees/enrich-contacts?preview=true', formData);
-    return response.data;
-  },
-
-  async contactsEnrichApply(
-    file: File,
-    manualMatches?: Array<{ fullName: string; employeeId: number }>,
-    conflictResolutions?: Array<{ employeeId: number; overwrite: boolean }>,
-  ): Promise<EnrichResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (manualMatches?.length) {
-      formData.append('manualMatches', JSON.stringify(manualMatches));
-    }
-    if (conflictResolutions?.length) {
-      formData.append('conflictResolutions', JSON.stringify(conflictResolutions));
-    }
-    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-contacts?preview=false', formData);
     return response.data;
   },
 };

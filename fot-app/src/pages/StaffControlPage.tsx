@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download, Filter } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download, Filter } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
@@ -64,7 +64,7 @@ import { isHeaderDeptAllowed, resolveHeaderDeptFilter } from '../utils/staffDept
 import { buildScheduleViews } from '../utils/staffScheduleViews';
 import { refreshStaffChunksFor } from '../utils/staffChunkInvalidation';
 import { formatDate } from '../utils/formatMoney';
-import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
+import type { Employee, EmployeeHistoryEvent } from '../types';
 import { structureApi } from '../api/structure';
 import type { OrgDepartmentNode } from '../types/organization';
 import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
@@ -74,8 +74,6 @@ import '../styles/StaffControlPage.css';
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const StaffTimesheetModeModal = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
 const StaffCommentModal = lazy(() => import('../components/staff/StaffCommentModal').then(m => ({ default: m.StaffCommentModal })));
-const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
-const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
 import {
   EMPTY_SCHEDULE_TEMPLATES,
@@ -1428,10 +1426,9 @@ export const StaffControlPage: FC = () => {
   // под is_admin. Право на них даёт edit «Управления кадрами» — сам по себе
   // all_departments_scope это только скоуп данных (см. canManageAsHrAdmin).
   const canManageStaff = canManageAsHrAdmin('/staff-control');
-  // Экспорт — отдельно от canManageStaff: серверный guard у выгрузки view, и
+  // «Экспорт» текущей таблицы — отдельно от canManageStaff: серверный guard у выгрузки view, и
   // руководителю отдела кнопка тоже нужна (canManageStaff даёт только админ/HR-админ).
   const canExportEmployees = isAdmin || canViewPage('/staff-control');
-  const [isExporting, setIsExporting] = useState(false);
   const canEditDept = isAdmin || canEditPage('/staff-control/department');
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
@@ -1668,8 +1665,7 @@ export const StaffControlPage: FC = () => {
   const [modalType, setModalType] = useState<ModalType | null>(null);
   const [modalEmp, setModalEmp] = useState<Employee | null>(null);
 
-  // import / add
-  const [showImportModal, setShowImportModal] = useState(false);
+  // add
   const [showAddModal, setShowAddModal] = useState(false);
   // Мастер со сканами живёт на вкладке «Новый сотрудник». Пока она доступна,
   // кнопку здесь не показываем — точка входа должна быть одна. Если модуль
@@ -1759,18 +1755,6 @@ export const StaffControlPage: FC = () => {
       ]);
     return flatten(sigurDeptsQuery.data || []);
   }, [sigurDeptsQuery.data]);
-  const [enrichPreview, setEnrichPreview] = useState<EnrichPreview | null>(null);
-  const [enrichFile, setEnrichFile] = useState<File | null>(null);
-  const [enrichLoading, setEnrichLoading] = useState(false);
-  const [salaryEnrichPreview, setSalaryEnrichPreview] = useState<EnrichPreview | null>(null);
-  const [salaryEnrichFile, setSalaryEnrichFile] = useState<File | null>(null);
-  const [salaryEnrichLoading, setSalaryEnrichLoading] = useState(false);
-  const [salaryHistoryPreview, setSalaryHistoryPreview] = useState<EnrichPreview | null>(null);
-  const [salaryHistoryFile, setSalaryHistoryFile] = useState<File | null>(null);
-  const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
-  const [contactsPreview, setContactsPreview] = useState<ContactsEnrichPreview | null>(null);
-  const [contactsFile, setContactsFile] = useState<File | null>(null);
-  const [contactsLoading, setContactsLoading] = useState(false);
 
   /* ─── memoized computations ─── */
 
@@ -2343,107 +2327,6 @@ export const StaffControlPage: FC = () => {
     if (panelEmp) openHistory(panelEmp);
   }, [panelEmp, openHistory]);
 
-  /* ─── import handlers ─── */
-
-  const handleEnrichFile = async (file: File) => {
-    setShowImportModal(false);
-    setEnrichLoading(true);
-    try {
-      const preview = await employeeService.enrichPreview(file);
-      setEnrichPreview(preview);
-      setEnrichFile(file);
-    } catch { /* ignore */ }
-    setEnrichLoading(false);
-  };
-
-  const handleEnrichApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
-    if (!enrichFile) return;
-    setEnrichLoading(true);
-    try {
-      const r = await employeeService.enrichApply(enrichFile, manualMatches);
-      alert(`Обновлено: ${r.updated} сотрудников`);
-      refresh();
-    } catch { /* ignore */ }
-    setEnrichLoading(false);
-    setEnrichPreview(null);
-    setEnrichFile(null);
-  };
-
-  const handleSalaryFile = async (file: File) => {
-    setShowImportModal(false);
-    setSalaryEnrichLoading(true);
-    try {
-      const preview = await employeeService.salaryEnrichPreview(file);
-      setSalaryEnrichPreview(preview);
-      setSalaryEnrichFile(file);
-    } catch { /* ignore */ }
-    setSalaryEnrichLoading(false);
-  };
-
-  const handleSalaryApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
-    if (!salaryEnrichFile) return;
-    setSalaryEnrichLoading(true);
-    try {
-      const r = await employeeService.salaryEnrichApply(salaryEnrichFile, manualMatches);
-      alert(`Обновлено: ${r.updated} сотрудников`);
-      refresh();
-    } catch { /* ignore */ }
-    setSalaryEnrichLoading(false);
-    setSalaryEnrichPreview(null);
-    setSalaryEnrichFile(null);
-  };
-
-  const handleSalaryHistoryFile = async (file: File) => {
-    setShowImportModal(false);
-    setSalaryHistoryLoading(true);
-    try {
-      const preview = await employeeService.salaryHistoryEnrichPreview(file);
-      setSalaryHistoryPreview(preview);
-      setSalaryHistoryFile(file);
-    } catch { /* ignore */ }
-    setSalaryHistoryLoading(false);
-  };
-
-  const handleSalaryHistoryApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
-    if (!salaryHistoryFile) return;
-    setSalaryHistoryLoading(true);
-    try {
-      const r = await employeeService.salaryHistoryEnrichApply(salaryHistoryFile, manualMatches);
-      alert(`Обновлено: ${r.updated} сотрудников`);
-      refresh();
-    } catch { /* ignore */ }
-    setSalaryHistoryLoading(false);
-    setSalaryHistoryPreview(null);
-    setSalaryHistoryFile(null);
-  };
-
-  const handleContactsFile = async (file: File) => {
-    setShowImportModal(false);
-    setContactsLoading(true);
-    try {
-      const preview = await employeeService.contactsEnrichPreview(file);
-      setContactsPreview(preview);
-      setContactsFile(file);
-    } catch { /* ignore */ }
-    setContactsLoading(false);
-  };
-
-  const handleContactsApply = async (
-    manualMatches: Array<{ fullName: string; employeeId: number }> = [],
-    conflictResolutions?: Array<{ employeeId: number; overwrite: boolean }>,
-  ) => {
-    if (!contactsFile) return;
-    setContactsLoading(true);
-    try {
-      const r = await employeeService.contactsEnrichApply(contactsFile, manualMatches, conflictResolutions);
-      alert(`Обновлено: ${r.updated} сотрудников`);
-      refresh();
-    } catch { /* ignore */ }
-    setContactsLoading(false);
-    setContactsPreview(null);
-    setContactsFile(null);
-  };
-
   // Ключ идемпотентности создания: один на попытку, сбрасывается после успеха
   // и при закрытии формы — новый сотрудник получает новый ключ.
   const addOperationIdRef = useRef<string | null>(null);
@@ -2559,20 +2442,6 @@ export const StaffControlPage: FC = () => {
     }
   };
 
-  const handleExportEmployees = useCallback(async () => {
-    if (isExporting) return;
-    setIsExporting(true);
-    toast.info('Готовим файл со списком сотрудников…');
-    try {
-      const { blob, filename } = await employeeService.exportEmployees();
-      triggerBlobDownload(blob, filename);
-    } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Не удалось выгрузить сотрудников');
-    } finally {
-      setIsExporting(false);
-    }
-  }, [isExporting, toast]);
-
   // «Экспорт» — ровно текущая таблица: те же фильтры, вкладка, период и сортировка.
   const [isExportingView, setIsExportingView] = useState(false);
   const handleExportView = useCallback(async () => {
@@ -2629,24 +2498,8 @@ export const StaffControlPage: FC = () => {
         onClick: () => setBulkFilterScheduleOpen(true),
         disabled: total === 0,
       });
-      items.push({
-        label: 'Импорт…',
-        icon: <Upload size={14} />,
-        onClick: () => setShowImportModal(true),
-        divideBefore: true,
-      });
     }
-    // Рядом с «Импорт…» — парное действие. Когда импорт скрыт (статус не
-    // «Активные»), экспорт сам открывает группу разделителем.
-    if (canExportEmployees) {
-      items.push({
-        label: 'Экспорт сотрудников…',
-        icon: <Download size={14} />,
-        onClick: () => { void handleExportEmployees(); },
-        disabled: isExporting,
-        divideBefore: !(canManageStaff && statusFilter === 'active'),
-      });
-    }
+    // Импорта и «Экспорта сотрудников» в меню нет: выгрузка — кнопка «Экспорт» текущей таблицы.
     if (canEditTimesheetMode) {
       items.push({
         label: 'Режим табелирования…',
@@ -2656,7 +2509,7 @@ export const StaffControlPage: FC = () => {
       });
     }
     return items;
-  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetMode, canExportEmployees, isExporting, handleExportEmployees]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetMode]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -3037,41 +2890,6 @@ export const StaffControlPage: FC = () => {
         onClose={() => setBulkMoveDeptOpen(false)}
         onApply={handleBulkMoveDepartment}
       />
-      {/* ─── Import Modal ─── */}
-      {showImportModal && (
-        <Suspense fallback={null}>
-          <ImportModal
-            onClose={() => setShowImportModal(false)}
-            onEnrichFile={handleEnrichFile}
-            // Импорт окладов — только с правом на раздел «Зарплата»: сервер без него вернёт 403.
-            onSalaryFile={canEditPage('/salary/terms') ? handleSalaryFile : undefined}
-            onSalaryHistoryFile={canEditPage('/salary/terms') ? handleSalaryHistoryFile : undefined}
-            onContactsFile={handleContactsFile}
-          />
-        </Suspense>
-      )}
-
-      {enrichPreview && (
-        <Suspense fallback={null}>
-          <EnrichPreviewModal preview={enrichPreview} loading={enrichLoading} onApply={handleEnrichApply} onClose={() => { setEnrichPreview(null); setEnrichFile(null); }} title="Импорт документов — Превью" />
-        </Suspense>
-      )}
-      {salaryEnrichPreview && (
-        <Suspense fallback={null}>
-          <EnrichPreviewModal preview={salaryEnrichPreview} loading={salaryEnrichLoading} onApply={handleSalaryApply} onClose={() => { setSalaryEnrichPreview(null); setSalaryEnrichFile(null); }} title="Импорт окладов — Превью" />
-        </Suspense>
-      )}
-      {salaryHistoryPreview && (
-        <Suspense fallback={null}>
-          <EnrichPreviewModal preview={salaryHistoryPreview} loading={salaryHistoryLoading} onApply={handleSalaryHistoryApply} onClose={() => { setSalaryHistoryPreview(null); setSalaryHistoryFile(null); }} title="Импорт истории окладов — Превью" />
-        </Suspense>
-      )}
-      {contactsPreview && (
-        <Suspense fallback={null}>
-          <EnrichPreviewModal preview={contactsPreview} conflicts={contactsPreview.conflicts} loading={contactsLoading} onApply={handleContactsApply} onClose={() => { setContactsPreview(null); setContactsFile(null); }} title="Импорт email — Превью" />
-        </Suspense>
-      )}
-
       {/* ─── Add Employee Modal (без кадрового модуля) ─── */}
       {showAddModal && (
         <div className="sc-overlay" onClick={closeAddModal}>
