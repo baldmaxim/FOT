@@ -2640,30 +2640,6 @@ export const StaffControlPage: FC = () => {
           </button>
         </div>
       )}
-      {(canManageStaff || canExportEmployees) && (
-        <div className="sc-view-tools">
-          {canManageStaff && (
-            <StaffMonthMovement
-              data={monthMovement.data}
-              isError={monthMovement.isError}
-              period={period}
-              onToggle={handlePeriodToggle}
-            />
-          )}
-          {canExportEmployees && (
-            <button
-              type="button"
-              className="sc-btn secondary sc-export-view-btn"
-              onClick={() => { void handleExportView(); }}
-              disabled={isExportingView || total === 0}
-              title="Скачать xlsx с текущей таблицей: фильтры, вкладка и сортировка"
-            >
-              <Download size={14} aria-hidden="true" />
-              <span>{isExportingView ? 'Готовим…' : 'Экспорт'}</span>
-            </button>
-          )}
-        </div>
-      )}
       {isMobile && (
         <select
           className="sc-schedule-filter sc-sort-select"
@@ -2683,8 +2659,21 @@ export const StaffControlPage: FC = () => {
           ])}
         </select>
       )}
-      {(canManageStaff || overflowItems.length > 0) && (
+      {(canManageStaff || canExportEmployees || overflowItems.length > 0) && (
         <div className="sc-page-actions">
+          {canExportEmployees && (
+            <button
+              type="button"
+              className="sc-btn secondary sc-export-view-btn"
+              onClick={() => { void handleExportView(); }}
+              disabled={isExportingView || total === 0}
+              title="Скачать xlsx с текущей таблицей: фильтры, вкладка и сортировка"
+              aria-label="Экспорт текущей таблицы"
+            >
+              <Download size={isMobile ? 20 : 14} aria-hidden="true" />
+              {!isMobile && <span>{isExportingView ? 'Готовим…' : 'Экспорт'}</span>}
+            </button>
+          )}
           {canManageStaff && statusFilter === 'active' && !hrTabAvailable && (
             <button
               className="sc-btn apply"
@@ -2702,6 +2691,17 @@ export const StaffControlPage: FC = () => {
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
+      {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N». */}
+      {canManageStaff && (
+        <div className="sc-movement-row">
+          <StaffMonthMovement
+            data={monthMovement.data}
+            isError={monthMovement.isError}
+            period={period}
+            onToggle={handlePeriodToggle}
+          />
+        </div>
+      )}
     </div>
   );
 

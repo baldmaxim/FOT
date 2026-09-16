@@ -8,9 +8,11 @@ interface IStaffMonthMovementProps {
   onToggle: (period: StaffPeriod) => void;
 }
 
-const MONTHS_GENITIVE = ['янв.', 'февр.', 'марта', 'апр.', 'мая', 'июня', 'июля', 'авг.', 'сент.', 'окт.', 'нояб.', 'дек.'];
+const MONTHS_GENITIVE = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
-const monthLabel = (monthStart: string): string => `С 1 ${MONTHS_GENITIVE[Number(monthStart.slice(5, 7)) - 1] ?? ''}`;
+/** «С 1 сентября 2026» — месяц и год из month_start сервера (текущий месяц по Москве). */
+const monthLabel = (monthStart: string): string =>
+  `С 1 ${MONTHS_GENITIVE[Number(monthStart.slice(5, 7)) - 1] ?? ''} ${monthStart.slice(0, 4)}`;
 
 /** Чипы «Устроены +N / Уволены −N» с начала месяца; клик показывает этих сотрудников. */
 export const StaffMonthMovement: FC<IStaffMonthMovementProps> = memo(({ data, isError, period, onToggle }) => {

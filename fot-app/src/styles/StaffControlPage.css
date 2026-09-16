@@ -112,15 +112,23 @@
 }
 
 @media (max-width: 768px) {
+  /* Мобила: Компания и Отделы — строкой пополам; ниже Графики + Экспорт/Добавить/«…». */
   .sc-filters .sc-schedule-filter.sc-section-filter {
     order: 1;
+    flex: 1 1 calc(50% - 4px);
     min-width: 0;
   }
 
   .sc-filters .sc-filter-dept-slot,
   .sc-filters .sc-dept-fixed {
     order: 2;
-    flex: 1 1 0;
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+
+  /* Обёртка DepartmentTreeSelect держит min-width 200px: рядом с «Экспорт», «Добавить» и «…»
+     на 360–412px это давало горизонтальный скролл. */
+  .sc-filters .sc-filter-dept-slot > div {
     min-width: 0;
   }
 }
@@ -426,15 +434,15 @@
 .sc-col-dept     { width: 150px; }
 .sc-col-position { width: 160px; }
 /* «ТРУДОУСТРОЙСТВА» ≈ 125px + паддинги 24px — уже нельзя, иначе слово обрежется. */
-.sc-col-hire     { width: 150px; }
-/* «РОЖДЕНИЯ» ≈ 67px, дата dd.mm.yyyy ≈ 72px + паддинги 24px. */
-.sc-col-birth    { width: 100px; }
+.sc-col-hire     { width: 170px; }
+/* «РОЖДЕНИЯ» ≈ 67px, дата dd.mm.yyyy ≈ 72px + иконка сортировки 16px + паддинги 24px. */
+.sc-col-birth    { width: 120px; }
 .sc-col-schedule { width: 160px; }
 /* Гибкие колонки: остаток ширины делят «Объект» и «Комментарий». */
 .sc-col-main-object { width: auto; }
 .sc-col-comment { width: auto; }
-/* Бейдж «Работает» ≈ 64px + паддинги ячейки 24px. */
-.sc-col-sign     { width: 96px; }
+/* «ПРИЗНАК» ≈ 62px + иконка сортировки 16px + паддинги ячейки 24px (бейдж «Работает» ≈ 64px). */
+.sc-col-sign     { width: 116px; }
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
 
@@ -448,15 +456,15 @@
 }
 
 .sc-table--staff {
-  /* Сумма колонок: 1236 фиксированных + по 140 минимум «Объекту» и «Статье затрат».
+  /* Сумма колонок: 1296 фиксированных + по 140 минимум «Объекту» и «Комментарию».
      На 1920 с развёрнутым меню (≈1620px) скролла нет; уже — скроллится таблица, не страница. */
-  min-width: 1516px;
+  min-width: 1576px;
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 60px;
 }
 
 .sc-table--staff.sc-table--selecting {
-  min-width: 1560px;
+  min-width: 1620px;
   --sc-sticky-num-left: 44px;
   --sc-sticky-name-left: 104px;
 }
@@ -594,10 +602,9 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Заголовок не режется многоточием: ширины колонок рассчитаны под текст и иконку 16px. */
 .sc-sort-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sc-th-date .sc-sort-label {
@@ -695,18 +702,20 @@
 }
 
 /* ── Движение с начала месяца + «Экспорт» (строка вкладок статуса) ── */
-.sc-view-tools {
-  display: inline-flex;
+/* Вторая строка панели фильтров: всегда под первой, на всю ширину. */
+.sc-movement-row {
+  order: 10;
+  flex: 0 0 100%;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .sc-movement {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -718,7 +727,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 36px;
+  height: 32px;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -771,6 +780,28 @@
   .sc-sort-icon,
   .sc-movement-chip {
     transition: none;
+  }
+}
+
+/* Десктоп: первая строка — Поиск, Компания, Отделы, Графики, статус, Экспорт, Добавить, «…».
+   Нативные select иначе растягиваются по самому длинному варианту и выталкивают кнопки. */
+@media (min-width: 769px) {
+  .sc-filters .sc-filter-search input {
+    width: 200px;
+  }
+
+  .sc-filters > .sc-schedule-filter.sc-section-filter {
+    width: 150px;
+    min-width: 0;
+  }
+
+  .sc-filters .sc-filter-dept-slot {
+    width: 200px;
+  }
+
+  .sc-filters > .sc-schedule-filter:not(.sc-section-filter) {
+    width: 200px;
+    min-width: 0;
   }
 }
 
@@ -2444,16 +2475,22 @@
     justify-content: center;
   }
 
-  /* Чипы месяца, «Экспорт» и сортировка — отдельными строками под вкладками статуса. */
-  .sc-view-tools {
+  /* Чипы месяца и сортировка — отдельными строками под вкладками статуса. */
+  .sc-movement-row {
     order: 6;
-    flex: 0 0 100%;
-    justify-content: space-between;
   }
 
-  .sc-movement-chip,
-  .sc-export-view-btn {
+  .sc-movement-chip {
+    height: auto;
     min-height: 44px;
+  }
+
+  /* «Экспорт» в блоке действий — иконкой 40×40, как «Добавить». */
+  .sc-page-actions .sc-export-view-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
   }
 
   .sc-filters .sc-sort-select {
@@ -2510,7 +2547,7 @@
     padding-top: 6px;
   }
 
-  /* 360–430px: подпись «С 1 сент.» переносится над чипами, чипы и «Экспорт» делят строку. */
+  /* 360–430px: подпись «С 1 сентября 2026» переносится над чипами. */
   .sc-movement {
     flex-wrap: wrap;
     white-space: normal;
