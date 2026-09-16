@@ -11,13 +11,15 @@ import styles from './hiring.module.css';
 
 export const HIRING_QK = ['hiring-requests'];
 
+const isArchived = (stage: HiringStage): boolean => stage === 'closed' || stage === 'cancelled';
+
 interface IHiringRequestsBoardProps {
   /** Добавляет внешние отступы — для standalone-использования в ЛК (EmployeeLayout не пэддит контент). */
   padded?: boolean;
 }
 
 export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = false }) => {
-  const [stageFilter, setStageFilter] = useState<HiringStage | 'all'>('all');
+  const [stageFilter, setStageFilter] = useState<HiringStage | 'all' | 'archive'>('all');
   const [view, setView] = useState<'board' | 'analytics'>('board');
   const [createOpen, setCreateOpen] = useState(false);
   const [poolOpen, setPoolOpen] = useState(false);
@@ -44,7 +46,14 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
     ? Math.round(requests.filter(r => r.stage === 'closed').reduce((a, r) => a + r.days_in_work, 0) / closed)
     : null;
 
-  const cards = requests.filter(r => stageFilter === 'all' || r.stage === stageFilter);
+  // Закрытые и отменённые видны только в «Архиве».
+  const archivedCount = requests.filter(r => isArchived(r.stage)).length;
+  const activeCount = requests.length - archivedCount;
+  const cards = requests.filter(r => {
+    if (stageFilter === 'archive') return isArchived(r.stage);
+    if (isArchived(r.stage)) return false;
+    return stageFilter === 'all' || r.stage === stageFilter;
+  });
 
   if (view === 'analytics') {
     return (
@@ -99,9 +108,9 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
 
       <div className={styles.stages}>
         <button className={`${styles.scount} ${stageFilter === 'all' ? styles.on : ''}`} onClick={() => setStageFilter('all')}>
-          <span className={styles.d} style={{ background: 'var(--text-secondary)' }} />Все <span className={styles.n}>{requests.length}</span>
+          <span className={styles.d} style={{ background: 'var(--text-secondary)' }} />Все <span className={styles.n}>{activeCount}</span>
         </button>
-        {(['new', 'in_progress', 'interview', 'offer', 'closed', 'rework'] as HiringStage[]).map(s => {
+        {(['new', 'in_progress', 'interview', 'offer', 'rework'] as HiringStage[]).map(s => {
           if (!counts[s]) return null;
           const m = stageMeta(s);
           return (
@@ -110,6 +119,11 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
             </button>
           );
         })}
+        {archivedCount > 0 && (
+          <button className={`${styles.scount} ${stageFilter === 'archive' ? styles.on : ''}`} style={{ color: 'var(--success)' }} onClick={() => setStageFilter('archive')}>
+            <span className={styles.d} style={{ background: 'var(--success)' }} />Архив <span className={styles.n}>{archivedCount}</span>
+          </button>
+        )}
       </div>
 
       {isLoading ? (
