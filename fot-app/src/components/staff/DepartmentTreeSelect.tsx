@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect, memo, type FC, type ChangeEvent, type KeyboardEvent, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { OrgDepartmentNode } from '../../types/organization';
 import {
   getVisibleRootNodes,
@@ -201,6 +201,18 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
     [debounced, expanded],
   );
 
+  // Крестик: при поиске — стирает текст (список остаётся открытым); без поиска — сбрасывает
+  // выбранный отдел на «Все отделы» (только там, где такой вариант есть).
+  const canClear = open ? query.length > 0 : showAllOption && Boolean(value);
+  const handleClear = useCallback(() => {
+    if (open) {
+      setQuery('');
+      inputRef.current?.focus();
+      return;
+    }
+    onChange('');
+  }, [open, onChange]);
+
   const hasData = roots.length > 0;
   const showStaleBadge = isError && hasData;
   const showLoadingState = isLoading && !hasData;
@@ -255,7 +267,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
 
   return (
     <div className={styles.wrapper}>
-      <div ref={triggerRef} className={styles.trigger}>
+      <div ref={triggerRef} className={`${styles.trigger}${open ? ` ${styles.triggerOpen}` : ''}`}>
         <input
           ref={inputRef}
           className={styles.input}
@@ -268,6 +280,19 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
           aria-expanded={open}
         />
         <span className={styles.adornment}>
+          {canClear && (
+            <button
+              type="button"
+              className={styles.clear}
+              // Клик не уводит фокус из поля: список при поиске не закрывается.
+              onMouseDown={e => e.preventDefault()}
+              onClick={handleClear}
+              aria-label={open ? 'Очистить поиск отдела' : 'Сбросить отдел'}
+              title={open ? 'Очистить' : 'Все отделы'}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          )}
           {showStaleBadge && (
             <AlertTriangle size={12} aria-label="Данные могут быть устаревшими" />
           )}

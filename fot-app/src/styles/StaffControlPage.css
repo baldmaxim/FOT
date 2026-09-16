@@ -434,15 +434,16 @@
 .sc-col-dept     { width: 150px; }
 .sc-col-position { width: 160px; }
 /* «ТРУДОУСТРОЙСТВА» ≈ 125px + паддинги 24px — уже нельзя, иначе слово обрежется. */
-.sc-col-hire     { width: 170px; }
-/* «РОЖДЕНИЯ» ≈ 67px, дата dd.mm.yyyy ≈ 72px + иконка сортировки 16px + паддинги 24px. */
-.sc-col-birth    { width: 120px; }
+/* «ТРУДОУСТРОЙСТВА» ≈ 125px + сортировка 16px + воронка 16px + паддинги 24px. */
+.sc-col-hire     { width: 180px; }
+/* «РОЖДЕНИЯ» ≈ 67px, дата dd.mm.yyyy ≈ 72px + сортировка и воронка + паддинги 24px. */
+.sc-col-birth    { width: 130px; }
 .sc-col-schedule { width: 160px; }
 /* Гибкие колонки: остаток ширины делят «Объект» и «Комментарий». */
 .sc-col-main-object { width: auto; }
 .sc-col-comment { width: auto; }
-/* «ПРИЗНАК» ≈ 62px + иконка сортировки 16px + паддинги ячейки 24px (бейдж «Работает» ≈ 64px). */
-.sc-col-sign     { width: 116px; }
+/* «ПРИЗНАК» ≈ 62px + сортировка и воронка + паддинги ячейки 24px (бейдж «Работает» ≈ 64px). */
+.sc-col-sign     { width: 130px; }
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
 
@@ -456,15 +457,15 @@
 }
 
 .sc-table--staff {
-  /* Сумма колонок: 1296 фиксированных + по 140 минимум «Объекту» и «Комментарию».
+  /* Сумма колонок: 1330 фиксированных + по 140 минимум «Объекту» и «Комментарию».
      На 1920 с развёрнутым меню (≈1620px) скролла нет; уже — скроллится таблица, не страница. */
-  min-width: 1576px;
+  min-width: 1610px;
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 60px;
 }
 
 .sc-table--staff.sc-table--selecting {
-  min-width: 1620px;
+  min-width: 1654px;
   --sc-sticky-num-left: 44px;
   --sc-sticky-name-left: 104px;
 }
@@ -708,7 +709,261 @@
   flex: 0 0 100%;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   min-width: 0;
+}
+
+/* ── Фильтры столбцов ── */
+.sc-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.sc-col-filter-btn {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.35;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 150ms ease-out, color 150ms ease-out;
+}
+
+.sc-table th:hover .sc-col-filter-btn,
+.sc-col-filter-btn:focus-visible {
+  opacity: 1;
+}
+
+.sc-col-filter-btn.is-active {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.sc-col-filter-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sc-colfilter-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: transparent;
+}
+
+.sc-colfilter {
+  position: fixed;
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(480px, calc(100dvh - 24px));
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.sc-colfilter--sheet {
+  left: 8px;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  max-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px));
+}
+
+.sc-colfilter-title {
+  font-weight: 600;
+}
+
+.sc-colfilter-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.sc-colfilter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sc-colfilter-bulk {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sc-colfilter-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sc-colfilter-link:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.sc-colfilter-list {
+  flex: 1 1 auto;
+  min-height: 60px;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 -4px;
+}
+
+.sc-colfilter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sc-colfilter-option:hover {
+  background: var(--bg-secondary);
+}
+
+.sc-colfilter-option input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.sc-colfilter-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sc-colfilter-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-colfilter-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px;
+}
+
+.sc-colfilter-hint--error {
+  color: var(--error);
+}
+
+.sc-colfilter-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sc-colfilter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sc-colfilter-segmented {
+  align-self: flex-start;
+}
+
+.sc-colfilter-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.sc-colfilter-columns {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sc-colfilter-column {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sc-colfilter-column > span {
+  flex: 1 1 auto;
+}
+
+.sc-colfilter-column-active {
+  color: var(--primary);
+}
+
+.sc-colfilter-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sc-colfilter-reset:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.sc-mobile-filters-btn.is-active {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .sc-movement {
@@ -778,8 +1033,31 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sc-sort-icon,
-  .sc-movement-chip {
+  .sc-movement-chip,
+  .sc-col-filter-btn {
     transition: none;
+  }
+}
+
+/* Мобила: поля фильтра 16px (без авто-зума iOS), тап-цели 44px. */
+@media (max-width: 768px) {
+  .sc-colfilter-input {
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .sc-colfilter-option {
+    min-height: 44px;
+  }
+
+  .sc-colfilter-list {
+    max-height: none;
+  }
+
+  .sc-colfilter-footer .sc-btn,
+  .sc-colfilter-reset,
+  .sc-mobile-filters-btn {
+    min-height: 44px;
   }
 }
 

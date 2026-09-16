@@ -300,6 +300,56 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
     }
   });
 
+  it('фильтры столбцов: обход по курсору = SQL-выборка, total совпадает, фасеты без своего столбца', async () => {
+    const cf = { values: { department: ['Бухгалтерия', null] }, dates: { hire_date: { from: '2026-02-01', empty: true } } };
+    const expected = (await q<{ id: number }>(
+      `SELECT e.id FROM employees e LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE (d.name = 'Бухгалтерия' OR e.org_department_id IS NULL)
+          AND (e.hire_date >= '2026-02-01' OR e.hire_date IS NULL)
+        ORDER BY (NULLIF(btrim(e.full_name), '') IS NULL), NULLIF(btrim(e.full_name), '') DESC, e.id DESC`,
+    )).map(row => Number(row.id));
+    expect(expected.length).toBeGreaterThan(2);
+
+    for (const pageSize of [1, 3, 50]) {
+      const ids: number[] = [];
+      let cursor: { key: string | null; isNull: boolean; id: number } | null = null;
+      for (let guard = 0; guard < 100; guard += 1) {
+        const query: Record<string, string> = {
+          page: '1', keyset: '1', view: 'staff', pageSize: String(pageSize), sort: 'name', dir: 'desc', cf: JSON.stringify(cf),
+        };
+        if (cursor) {
+          query.after_id = String(cursor.id);
+          query.after_null = cursor.isNull ? '1' : '0';
+          if (!cursor.isNull && cursor.key !== null) query.after_key = cursor.key;
+        }
+        const res = await callPage(query);
+        expect(res.statusCode).toBe(200);
+        expect(res.body.meta.total).toBe(expected.length);
+        ids.push(...res.body.data.map(row => row.id));
+        cursor = res.body.meta.next_cursor;
+        if (!cursor) break;
+      }
+      expect(ids, `по ${pageSize}`).toEqual(expected);
+    }
+
+    // Фасеты отдела: фильтр по отделу не применяется, фильтр по дате — применяется.
+    const res = {
+      statusCode: 200, body: null as unknown,
+      status(code: number) { res.statusCode = code; return res; },
+      json(body: unknown) { res.body = body; return res; },
+    };
+    await employeesStaffController.getColumnValues(makeReq({ column: 'department', cf: JSON.stringify(cf) }), res as unknown as Response);
+    const facets = (res.body as { data: { values: Array<{ value: string | null; count: number }> } }).data.values;
+    const expectedFacets = await q<{ value: string | null; count: number }>(
+      `SELECT NULLIF(btrim(d.name), '') AS value, count(*)::int AS count
+         FROM employees e LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE (e.hire_date >= '2026-02-01' OR e.hire_date IS NULL)
+        GROUP BY 1 ORDER BY 1 ASC NULLS LAST`,
+    );
+    expect(facets).toEqual(expectedFacets.map(row => ({ value: row.value, count: Number(row.count) })));
+    expect(facets.map(f => f.value)).toContain('Склад');
+  });
+
   it('удаление профиля автора не удаляет комментарий (ON DELETE SET NULL)', async () => {
     const U3 = '00000000-0000-0000-0000-0000000000f3';
     await q(`INSERT INTO user_profiles VALUES ($1, 'Временный')`, [U3]);

@@ -200,6 +200,71 @@ describe('GET /employees/export-view', () => {
   });
 });
 
+describe('фильтры столбцов в счётчиках и выгрузке', () => {
+  const cf = JSON.stringify({ values: { sign: ['Декрет'] }, has_comment: true });
+
+  it('month-movement учитывает фильтры столбцов, неверные — 400', async () => {
+    h.queryOne.mockResolvedValue({ hired: 1, fired: 0 });
+    let res = makeRes();
+    await employeesStaffController.getMonthMovement(makeReq({ cf }), res as unknown as Response);
+    const [sql, params] = h.queryOne.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('EXISTS (SELECT 1 FROM employee_staff_comments');
+    expect(params).toContainEqual(['Декрет']);
+
+    res = makeRes();
+    await employeesStaffController.getMonthMovement(makeReq({ cf: '[]' }), res as unknown as Response);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_COLUMN_FILTERS' });
+  });
+
+  it('выгрузка учитывает фильтры и пишет их в аудит; объект без снимка — 409 FILTER_UNAVAILABLE', async () => {
+    h.query.mockResolvedValue([{ id: 2, full_name: 'А', hire_date: null, birth_date: null, department_name: null, position_name: null, schedule_name: null, staff_comment: 'x', sign: 'Декрет' }]);
+    let res = makeRes();
+    await employeesStaffController.exportView(makeReq({ cf }), res as unknown as Response);
+    expect(res.statusCode).toBe(200);
+    expect((h.query.mock.calls[0] as [string])[0]).toContain('EXISTS (SELECT 1 FROM employee_staff_comments');
+    expect(h.logWithClient.mock.calls[0][4].details.column_filters).toEqual(JSON.parse(cf));
+
+    h.loadActiveSnapshotRun.mockResolvedValue(null);
+    res = makeRes();
+    await employeesStaffController.exportView(makeReq({ cf: JSON.stringify({ values: { main_object: ['ЖК'] } }) }), res as unknown as Response);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'FILTER_UNAVAILABLE' });
+  });
+});
+
+describe('GET /employees/column-values', () => {
+  it('варианты без фильтра своего столбца, с поиском и пометкой усечения', async () => {
+    h.query.mockResolvedValue([{ value: 'Бухгалтерия', count: '3' }, { value: null, count: 1 }]);
+    const res = makeRes();
+    await employeesStaffController.getColumnValues(makeReq({
+      column: 'department',
+      q: 'бух',
+      cf: JSON.stringify({ values: { department: ['Склад'], position: ['Мастер'] } }),
+    }), res as unknown as Response);
+    expect(res.body).toEqual({ success: true, data: { values: [{ value: 'Бухгалтерия', count: 3 }, { value: null, count: 1 }], truncated: false } });
+    const [sql, params] = h.query.mock.calls[0] as [string, unknown[]];
+    expect(params).toContainEqual(['Мастер']);
+    expect(params).not.toContainEqual(['Склад']);
+    expect(params).toContain('%бух%');
+    expect(sql).toContain('GROUP BY v.value');
+    expect(params.at(-1)).toBe(301);
+  });
+
+  it('недопустимый столбец — 400; объект без снимка — 409', async () => {
+    for (const column of [undefined, 'name', 'hire_date', 'cost_item']) {
+      const res = makeRes();
+      await employeesStaffController.getColumnValues(makeReq({ column }), res as unknown as Response);
+      expect(res.statusCode).toBe(400);
+    }
+    h.loadActiveSnapshotRun.mockResolvedValue(null);
+    const res = makeRes();
+    await employeesStaffController.getColumnValues(makeReq({ column: 'main_object' }), res as unknown as Response);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'FILTER_UNAVAILABLE' });
+  });
+});
+
 describe('PUT /employees/:id/staff-comment', () => {
   const put = async (body: unknown, id = '7') => {
     const res = makeRes();

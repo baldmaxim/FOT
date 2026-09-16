@@ -407,6 +407,43 @@ describe('getAll — сортировка по столбцу (keyset + sort)', 
     }
   });
 
+  it('фильтры столбцов: в WHERE порции и в total, плейсхолдеры согласованы с курсором', async () => {
+    h.queryOne.mockResolvedValue({ total: 2 });
+    const cf = JSON.stringify({ values: { sign: ['Работает', null] }, text: { name: 'Ив' }, dates: { hire_date: { from: '2026-09-01' } } });
+    const res = makeRes();
+    await employeesController.getAll(makeReq({
+      page: '1', keyset: '1', sort: 'department', dir: 'asc', cf, after_key: 'А', after_null: '0', after_id: '3',
+    }), res as never);
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = sortedCall();
+    expect(sql).toContain('ILIKE');
+    expect(sql).toContain('employees.hire_date >= $');
+    expect(params).toContainEqual(['Работает']);
+    expect(params).toContain('%Ив%');
+    expectPlaceholdersMatch(sql, params);
+    const [countSql, countParams] = h.queryOne.mock.calls.at(-1) as Call;
+    expect(countSql).toContain('ILIKE');
+    expect(countParams).toContain('%Ив%');
+    expectPlaceholdersMatch(countSql, countParams);
+  });
+
+  it('фильтры столбцов работают и в OFFSET-режиме (массовое назначение графика по фильтру)', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1', cf: JSON.stringify({ has_comment: true }) }), res as never);
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = employeeListCalls()[0];
+    expect(sql).toContain('EXISTS (SELECT 1 FROM employee_staff_comments');
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('неверные фильтры столбцов — 400 INVALID_COLUMN_FILTERS без запроса', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeReq({ page: '1', keyset: '1', sort: 'name', cf: '{bad' }), res as never);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_COLUMN_FILTERS' });
+    expect(employeeListCalls()).toHaveLength(0);
+  });
+
   it('ошибки параметров — 400 без запроса списка', async () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ sort: 'cost_item', keyset: '1' }, 'INVALID_SORT'],

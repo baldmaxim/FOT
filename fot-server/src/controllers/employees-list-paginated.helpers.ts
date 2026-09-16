@@ -27,6 +27,11 @@ import {
   statusConditionSql,
 } from './employees-staff-filter.helpers.js';
 import {
+  appendColumnFilters,
+  parseStaffColumnFilters,
+  StaffFilterUnavailableError,
+} from './employees-staff-column-filters.helpers.js';
+import {
   buildSortCursorSql,
   buildSortOrderSql,
   buildStaffSortKeySql,
@@ -76,6 +81,8 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   }
   const periodParsed = parseStaffPeriod(req.query.period);
   if (!periodParsed.ok) return badRequest(res, 'Некорректный период', 'INVALID_PERIOD');
+  const columnFiltersParsed = parseStaffColumnFilters(req.query.cf);
+  if (!columnFiltersParsed.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
 
   const filter = await buildStaffBaseFilter(req);
   if (filter.kind === 'error') {
@@ -98,6 +105,15 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   const statusSql = statusConditionSql(status);
   if (statusSql) whereParts.push(statusSql);
   if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
+  try {
+    await appendColumnFilters(whereParts, params, columnFiltersParsed.filters);
+  } catch (error) {
+    if (error instanceof StaffFilterUnavailableError) {
+      res.status(409).json({ success: false, error: error.message, code: 'FILTER_UNAVAILABLE' });
+      return;
+    }
+    throw error;
+  }
 
   const selectCols = isStaffView ? STAFF_COLUMNS : LIST_COLUMNS;
 

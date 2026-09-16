@@ -35,12 +35,14 @@ interface IUseStaffDataParams {
   sort: StaffSortKey;
   dir: StaffSortDir;
   period?: StaffPeriod;
+  /** Сериализованные фильтры столбцов ('' — нет). */
+  cf?: string;
   /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
   enabled?: boolean;
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, enabled = true } = params;
+  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, cf, enabled = true } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const employeesParams = {
@@ -54,6 +56,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     sort,
     dir,
     period: period || undefined,
+    cf: cf || undefined,
     view: 'staff' as const,
   };
   const employeesQueryKey = infiniteEmployeesQueryKey(employeesParams);

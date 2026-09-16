@@ -61,6 +61,62 @@
   pointer-events: none;
 }
 
+/* Открытый список: поле над подложкой, иначе клик по крестику попал бы в подложку и закрыл список. */
+.triggerOpen {
+  z-index: 1092;
+}
+
+/* Крестик очистки: виден при наведении или фокусе, на touch-экранах — всегда. */
+.clear {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out, color 150ms ease-out;
+}
+
+.trigger:hover .clear,
+.trigger:focus-within .clear {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.clear:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.clear:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (hover: none) {
+  .clear {
+    opacity: 1;
+    pointer-events: auto;
+    width: 32px;
+    height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clear {
+    transition: none;
+  }
+}
+
 .backdrop {
   position: fixed;
   inset: 0;

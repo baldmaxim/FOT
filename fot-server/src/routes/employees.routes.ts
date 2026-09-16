@@ -171,6 +171,14 @@ router.get(
   employeesStaffController.exportView
 );
 
+// GET /api/employees/column-values?column=… — варианты значений для фильтра столбца в заголовке.
+router.get(
+  '/column-values',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesStaffController.getColumnValues
+);
+
 // GET /api/employees/month-movement — устроены/уволены с 1-го числа по текущим фильтрам.
 // noStore: после приёма/увольнения чипы обязаны обновиться сразу.
 router.get(

@@ -28,6 +28,8 @@ export interface PaginatedParams {
   dir?: StaffSortDir;
   /** Устроенные / уволенные с начала месяца. */
   period?: StaffPeriod;
+  /** Фильтры столбцов — уже сериализованные (serializeColumnFilters); '' — нет. */
+  cf?: string;
 }
 
 export type StaffSortKey =
@@ -53,6 +55,19 @@ export interface IStaffViewParams {
   period?: StaffPeriod;
   sort?: StaffSortKey;
   dir?: StaffSortDir;
+  cf?: string;
+}
+
+export interface IStaffColumnValue {
+  /** null — «пусто». */
+  value: string | null;
+  count: number;
+}
+
+export interface IStaffColumnValues {
+  values: IStaffColumnValue[];
+  /** Вариантов больше показанных — уточните поиском. */
+  truncated: boolean;
 }
 
 export interface IStaffMonthMovement {
@@ -85,6 +100,7 @@ const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewParams): v
   if (params.period) qs.set('period', params.period);
   if (params.sort) qs.set('sort', params.sort);
   if (params.dir) qs.set('dir', params.dir);
+  if (params.cf) qs.set('cf', params.cf);
 };
 
 export interface PaginatedMeta {
@@ -176,6 +192,7 @@ export const employeeService = {
     if (params.section && params.section !== 'all') qs.set('section', params.section);
     if (params.archived) qs.set('archived', 'true');
     if (params.period) qs.set('period', params.period);
+    if (params.cf) qs.set('cf', params.cf);
     if (params.sort && params.cursor !== undefined) {
       qs.set('sort', params.sort);
       qs.set('dir', params.dir ?? 'asc');
@@ -256,6 +273,21 @@ export const employeeService = {
     const qs = new URLSearchParams();
     appendStaffViewParams(qs, params);
     return apiClient.download(`/employees/export-view?${qs}`, 'Сотрудники.xlsx', { timeoutMs: 120_000 });
+  },
+
+  /** Варианты значений столбца для фильтра в заголовке (без фильтра самого столбца). */
+  async getColumnValues(
+    column: string,
+    q: string,
+    params: Omit<IStaffViewParams, 'sort' | 'dir'>,
+    signal?: AbortSignal,
+  ): Promise<IStaffColumnValues> {
+    const qs = new URLSearchParams();
+    qs.set('column', column);
+    if (q) qs.set('q', q);
+    appendStaffViewParams(qs, params);
+    const response = await apiClient.get<ApiResponse<IStaffColumnValues>>(`/employees/column-values?${qs}`, { signal });
+    return response.data;
   },
 
   /** Устроены / уволены с 1-го числа месяца по фильтрам экрана (статус и период не передаются). */

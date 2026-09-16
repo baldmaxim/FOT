@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download, Filter } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
@@ -39,11 +39,24 @@ import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
 import { StaffSortHeader } from '../components/staff/StaffSortHeader';
 import { STAFF_SORT_OPTIONS, isStaffSortKey } from '../components/staff/staffSort';
 import { StaffMonthMovement } from '../components/staff/StaffMonthMovement';
+import { StaffColumnFilterPopover } from '../components/staff/StaffColumnFilterPopover';
+import { StaffColumnFilterSheet } from '../components/staff/StaffColumnFilterSheet';
+import {
+  countActiveColumnFilters,
+  EMPTY_COLUMN_FILTERS,
+  isColumnFilterActive,
+  parseColumnFilters,
+  serializeColumnFilters,
+  setColumnFilter,
+  type IColumnFilterValue,
+  type IStaffColumnFilters,
+  type StaffFilterColumn,
+} from '../utils/staffColumnFilters';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY, useStaffMainObjects } from '../hooks/useStaffMainObjects';
 import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
 import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
-import { affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
+import { affectsActiveFilters, affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
 import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
 import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
 import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
@@ -884,10 +897,19 @@ interface IVirtualTableProps extends IVirtualListLoadProps {
   sort: StaffSortKey;
   dir: StaffSortDir;
   onSort: (key: StaffSortKey) => void;
+  columnFilters: IStaffColumnFilters;
+  onOpenFilter: (key: StaffSortKey, anchor: HTMLElement) => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36 px, частые переносы отдела/должности — выше. */
 const ROW_ESTIMATE = 44;
+
+/** Классы заголовков: ФИО закреплено слева, даты переносятся на две строки. */
+const HEADER_CLASS_BY_KEY: Partial<Record<StaffSortKey, string>> = {
+  name: 'sc-th-name',
+  hire_date: 'sc-th-date',
+  birth_date: 'sc-th-date',
+};
 
 /**
  * Догрузка у конца списка и сброс прокрутки при смене фильтров — общие для таблицы и карточек.
@@ -934,6 +956,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   sort,
   dir,
   onSort,
+  columnFilters,
+  onOpenFilter,
 }) => {
   // №, ФИО, Отдел, Должность, Трудоустр., Рожд., График, Объект, Комментарий, Признак, действия.
   const totalCols = 11 + (selectionMode ? 1 : 0);
@@ -982,15 +1006,20 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
               </th>
             )}
             <th className="sc-th-num">№</th>
-            <StaffSortHeader sortKey="name" label="ФИО" className="sc-th-name" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="department" label="Отдел" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="position" label="Должность" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="hire_date" label="Дата трудоустройства" className="sc-th-date" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="birth_date" label="Дата рождения" className="sc-th-date" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="schedule" label="График" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="main_object" label="Объект" title={mainObjectTitle} activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="comment" label="Комментарий" activeKey={sort} dir={dir} onSort={onSort} />
-            <StaffSortHeader sortKey="sign" label="Признак" activeKey={sort} dir={dir} onSort={onSort} />
+            {STAFF_SORT_OPTIONS.map(option => (
+              <StaffSortHeader
+                key={option.key}
+                sortKey={option.key}
+                label={option.label}
+                className={HEADER_CLASS_BY_KEY[option.key]}
+                title={option.key === 'main_object' ? mainObjectTitle : undefined}
+                activeKey={sort}
+                dir={dir}
+                onSort={onSort}
+                onOpenFilter={onOpenFilter}
+                filterActive={isColumnFilterActive(columnFilters, option.key)}
+              />
+            ))}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
@@ -1384,6 +1413,13 @@ export const StaffControlPage: FC = () => {
     if (fromUrl === 'fired_month' && status === 'fired') return fromUrl;
     return null;
   });
+  // Фильтры столбцов (воронки в заголовках); сериализованная форма — в URL, query key и запросы.
+  const [columnFilters, setColumnFilters] = useState<IStaffColumnFilters>(() => parseColumnFilters(urlParams.get('cf')));
+  const columnFiltersKey = useMemo(() => serializeColumnFilters(columnFilters), [columnFilters]);
+  const activeColumnFilterCount = useMemo(() => countActiveColumnFilters(columnFilters), [columnFilters]);
+  const [openFilter, setOpenFilter] = useState<{ column: StaffSortKey; anchor: HTMLElement | null } | null>(null);
+  // Мобила: заголовков нет — список столбцов в нижнем листе, фильтр открывается на всю ширину.
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -1452,6 +1488,7 @@ export const StaffControlPage: FC = () => {
     sort: sortKey,
     dir: sortDir,
     period: period ?? undefined,
+    cf: columnFiltersKey,
     enabled: sectionChoice !== null || scopeKnown,
   });
 
@@ -1463,6 +1500,26 @@ export const StaffControlPage: FC = () => {
     setSortKey('name');
     setSortDir('asc');
   }, [sortUnavailable, firstPageError, toast]);
+
+  // Фильтр по объекту без ночного снимка недоступен (409): снимаем только его.
+  const filterUnavailable = firstPageError instanceof ApiError && firstPageError.code === 'FILTER_UNAVAILABLE';
+  useEffect(() => {
+    if (!filterUnavailable) return;
+    toast.info(firstPageError instanceof ApiError ? firstPageError.message : 'Фильтр недоступен');
+    setColumnFilters(prev => setColumnFilter(prev, 'main_object', null));
+  }, [filterUnavailable, firstPageError, toast]);
+
+  const handleApplyColumnFilter = useCallback((column: StaffFilterColumn, value: IColumnFilterValue | null) => {
+    setColumnFilters(prev => setColumnFilter(prev, column, value));
+  }, []);
+
+  const handleOpenFilter = useCallback((column: StaffSortKey, anchor: HTMLElement | null) => {
+    setOpenFilter({ column, anchor });
+  }, []);
+
+  const closeFilter = useCallback(() => setOpenFilter(null), []);
+
+  const resetColumnFilters = useCallback(() => setColumnFilters(EMPTY_COLUMN_FILTERS), []);
 
   const handleSort = useCallback((key: StaffSortKey) => {
     if (key === sortKey) {
@@ -1494,6 +1551,7 @@ export const StaffControlPage: FC = () => {
     departmentId: deptId,
     search: debouncedSearch,
     scheduleId: scheduleFilter,
+    cf: columnFiltersKey,
     enabled: (sectionChoice !== null || scopeKnown) && canManageStaff,
   });
 
@@ -1597,8 +1655,9 @@ export const StaffControlPage: FC = () => {
       p.set('dir', sortDir);
     }
     if (period) p.set('period', period);
+    if (columnFiltersKey) p.set('cf', columnFiltersKey);
     setUrlParams(p, { replace: true });
-  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, statusFilter, sortKey, sortDir, period, setUrlParams]);
+  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, statusFilter, sortKey, sortDir, period, columnFiltersKey, setUrlParams]);
 
   // history panel
   const [panelEmp, setPanelEmp] = useState<Employee | null>(null);
@@ -1806,9 +1865,10 @@ export const StaffControlPage: FC = () => {
       parts.push(`Поиск: "${debouncedSearch}"`);
     }
     if (period === 'hired_month') parts.push('Устроены с начала месяца');
+    if (activeColumnFilterCount > 0) parts.push(`Фильтры столбцов: ${activeColumnFilterCount}`);
     if (parts.length === 0) return 'Все действующие сотрудники';
     return parts.join(' • ');
-  }, [section, deptId, scheduleFilter, debouncedSearch, period, allDepts, scheduleTemplates]);
+  }, [section, deptId, scheduleFilter, debouncedSearch, period, activeColumnFilterCount, allDepts, scheduleTemplates]);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
@@ -1819,7 +1879,7 @@ export const StaffControlPage: FC = () => {
   }, []);
 
   // Прокрутка к началу — только при смене фактических фильтров и сортировки, не при догрузке порций.
-  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}`;
+  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}|${columnFiltersKey}`;
 
   // «Уволенные» доступны только с правом управления кадрами: ?status=fired из чужой ссылки — сброс.
   useEffect(() => {
@@ -1834,11 +1894,17 @@ export const StaffControlPage: FC = () => {
   const closeCommentModal = useCallback(() => setCommentEmp(null), []);
   const commentEditHandler = canEditStaffComment ? setCommentEmp : undefined;
 
-  /** Правка строки: активный столбец сортировки затронут — перечитать список, иначе поправить на месте. */
+  /**
+   * Правка строки: затронут столбец активной сортировки или фильтра — перечитать список (строка
+   * могла сменить место или выпасть из выдачи), иначе поправить на месте.
+   */
   const applyRowChange = useCallback((empId: number, patch: Partial<Employee>, changes: readonly StaffRowChange[]) => {
     patchEmployee(empId, patch);
-    if (affectsActiveSort(changes, sortKey)) reloadFromStart();
-  }, [patchEmployee, reloadFromStart, sortKey]);
+    if (affectsActiveSort(changes, sortKey)
+      || affectsActiveFilters(changes, column => isColumnFilterActive(columnFilters, column))) {
+      reloadFromStart();
+    }
+  }, [patchEmployee, reloadFromStart, sortKey, columnFilters]);
 
   const handleCommentSaved = useCallback((emp: Employee, saved: IStaffCommentSaved) => {
     applyRowChange(emp.id, {
@@ -2009,7 +2075,9 @@ export const StaffControlPage: FC = () => {
   }, [queryClient]);
 
   // Состав списка при фильтре по графику и порядок при сортировке по графику зависят от назначений.
-  const scheduleChangeAffectsList = Boolean(scheduleFilter) || affectsActiveSort(['schedule'], sortKey);
+  const scheduleChangeAffectsList = Boolean(scheduleFilter)
+    || affectsActiveSort(['schedule'], sortKey)
+    || isColumnFilterActive(columnFilters, 'schedule');
 
   // Смена графика влияет на табель (норма/покраска/согласования считаются из
   // расписания). Сбрасываем кэш табеля, иначе пользователь видит старое.
@@ -2213,6 +2281,7 @@ export const StaffControlPage: FC = () => {
       status: 'active',
       // Как в таблице: при чипе «Устроены» — только принятые с начала месяца.
       period: period === 'hired_month' ? period : undefined,
+      cf: columnFiltersKey || undefined,
       view: 'list',
     });
     const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
@@ -2225,7 +2294,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, period, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, period, columnFiltersKey, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (
     departmentIds: string[],
@@ -2519,6 +2588,7 @@ export const StaffControlPage: FC = () => {
         period: period ?? undefined,
         sort: sortKey,
         dir: sortDir,
+        cf: columnFiltersKey || undefined,
       });
       triggerBlobDownload(blob, filename);
     } catch (err) {
@@ -2526,7 +2596,18 @@ export const StaffControlPage: FC = () => {
     } finally {
       setIsExportingView(false);
     }
-  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, toast]);
+  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, columnFiltersKey, toast]);
+
+  // Параметры экрана для вариантов значений в фильтре столбца (сервер не применяет фильтр самого столбца).
+  const filterViewParams = useMemo(() => ({
+    search: debouncedSearch || undefined,
+    departmentId: deptId || undefined,
+    scheduleId: scheduleFilter || undefined,
+    section,
+    status: statusFilter,
+    period: period ?? undefined,
+    cf: columnFiltersKey || undefined,
+  }), [debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, columnFiltersKey]);
 
   const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
     const items: IOverflowMenuItem[] = [];
@@ -2691,15 +2772,33 @@ export const StaffControlPage: FC = () => {
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
-      {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N». */}
-      {canManageStaff && (
+      {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N», фильтры столбцов. */}
+      {(canManageStaff || isMobile || activeColumnFilterCount > 0) && (
         <div className="sc-movement-row">
-          <StaffMonthMovement
-            data={monthMovement.data}
-            isError={monthMovement.isError}
-            period={period}
-            onToggle={handlePeriodToggle}
-          />
+          {canManageStaff && (
+            <StaffMonthMovement
+              data={monthMovement.data}
+              isError={monthMovement.isError}
+              period={period}
+              onToggle={handlePeriodToggle}
+            />
+          )}
+          {isMobile && (
+            <button
+              type="button"
+              className={`sc-btn secondary sc-mobile-filters-btn${activeColumnFilterCount > 0 ? ' is-active' : ''}`}
+              onClick={() => setMobileFiltersOpen(true)}
+            >
+              <Filter size={14} aria-hidden="true" />
+              <span>Фильтры{activeColumnFilterCount > 0 ? ` (${activeColumnFilterCount})` : ''}</span>
+            </button>
+          )}
+          {activeColumnFilterCount > 0 && (
+            <button type="button" className="sc-colfilter-reset" onClick={resetColumnFilters}>
+              <X size={12} aria-hidden="true" />
+              Сбросить фильтры столбцов ({activeColumnFilterCount})
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -2804,6 +2903,8 @@ export const StaffControlPage: FC = () => {
           sort={sortKey}
           dir={sortDir}
           onSort={handleSort}
+          columnFilters={columnFilters}
+          onOpenFilter={handleOpenFilter}
         />
       )}
 
@@ -2881,6 +2982,26 @@ export const StaffControlPage: FC = () => {
         <Suspense fallback={null}>
           <StaffCommentModal employee={commentEmp} onClose={closeCommentModal} onSaved={handleCommentSaved} />
         </Suspense>
+      )}
+      {mobileFiltersOpen && !openFilter && (
+        <StaffColumnFilterSheet
+          filters={columnFilters}
+          onPick={column => handleOpenFilter(column, null)}
+          onReset={resetColumnFilters}
+          onClose={() => setMobileFiltersOpen(false)}
+        />
+      )}
+      {openFilter && (
+        <StaffColumnFilterPopover
+          key={openFilter.column}
+          column={openFilter.column}
+          label={STAFF_SORT_OPTIONS.find(option => option.key === openFilter.column)?.label ?? ''}
+          filters={columnFilters}
+          viewParams={filterViewParams}
+          anchor={openFilter.anchor}
+          onApply={handleApplyColumnFilter}
+          onClose={closeFilter}
+        />
       )}
       <BulkScheduleModal
         open={bulkScheduleOpen}

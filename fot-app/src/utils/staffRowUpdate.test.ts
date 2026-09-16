@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { affectsActiveSort } from './staffRowUpdate';
+import { affectsActiveFilters, affectsActiveSort } from './staffRowUpdate';
+
+describe('affectsActiveFilters', () => {
+  it('правка столбца с фильтром — перечитать; «Признак» зависит от отдела', () => {
+    expect(affectsActiveFilters(['comment'], column => column === 'comment')).toBe(true);
+    expect(affectsActiveFilters(['department'], column => column === 'sign')).toBe(true);
+    expect(affectsActiveFilters(['position'], column => column === 'comment')).toBe(false);
+    expect(affectsActiveFilters([], () => true)).toBe(false);
+  });
+});
 
 describe('affectsActiveSort', () => {
   it('правка столбца, по которому отсортировано, — перечитать список', () => {

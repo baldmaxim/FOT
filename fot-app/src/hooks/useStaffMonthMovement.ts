@@ -8,6 +8,8 @@ interface IUseStaffMonthMovementParams {
   departmentId: string;
   search: string;
   scheduleId: string;
+  /** Сериализованные фильтры столбцов ('' — нет). */
+  cf: string;
   enabled: boolean;
 }
 
@@ -16,14 +18,15 @@ interface IUseStaffMonthMovementParams {
  * счётчики не зависят от вкладки. Префикс ['employees'] — обновляются вместе со списком
  * после приёма, увольнения и восстановления.
  */
-export const useStaffMonthMovement = ({ section, departmentId, search, scheduleId, enabled }: IUseStaffMonthMovementParams) =>
+export const useStaffMonthMovement = ({ section, departmentId, search, scheduleId, cf, enabled }: IUseStaffMonthMovementParams) =>
   useQuery({
-    queryKey: [...STAFF_MONTH_MOVEMENT_QUERY_KEY, section, departmentId || null, search || '', scheduleId || null],
+    queryKey: [...STAFF_MONTH_MOVEMENT_QUERY_KEY, section, departmentId || null, search || '', scheduleId || null, cf || ''],
     queryFn: ({ signal }) => employeeService.getMonthMovement({
       section,
       departmentId: departmentId || undefined,
       search: search || undefined,
       scheduleId: scheduleId || undefined,
+      cf: cf || undefined,
     }, signal),
     staleTime: 60_000,
     enabled,
