@@ -29,7 +29,10 @@
 .label {
   min-width: 0;
   white-space: normal;
-  overflow-wrap: break-word;
+  /* Перенос только между словами: «ПОДРАЗДЕЛЕНИ / Е» недопустимо */
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
 }
 
 .sortIcon {

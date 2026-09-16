@@ -43,7 +43,7 @@ const SORTABLE_COLUMNS: ReadonlyArray<{ key: PayrollSortKey; label: string; clas
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
-const COLUMN_COUNT = 11;
+const COLUMN_COUNT = 10;
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
 const formatSalary = (row: IPayrollTermsRow): string => {
@@ -113,11 +113,10 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           <col className={styles.colDept} />
           <col className={styles.colPosition} />
           <col className={styles.colSchedule} />
-          <col className={styles.colMoney} />
-          <col className={styles.colMoney} />
-          <col className={styles.colMoney} />
-          <col className={styles.colMoney} />
-          <col className={styles.colAction} />
+          <col className={styles.colSalary} />
+          <col className={styles.colBonus} />
+          <col className={styles.colHousing} />
+          <col className={styles.colAccruals} />
         </colgroup>
         <thead>
           <tr>
@@ -146,7 +145,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
             ))}
             {/* Начислений пока нет (придут из 1С ЗУП) — сортировать и фильтровать нечего. */}
             <th>Начисления за посл. полгода</th>
-            <th aria-label="Действия" />
           </tr>
         </thead>
         <tbody>
@@ -171,13 +169,26 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                   isSelected ? styles.rowSelected : '',
                 ].filter(Boolean).join(' ');
                 return (
+                  // Строка кликабельна, как в «Текущих сотрудниках»: открывает окно условий оплаты.
                   <tr
                     key={row.employee_id}
                     ref={virtualizer.measureElement}
                     data-index={item.index}
-                    className={rowClass || undefined}
+                    className={`${styles.rowClickable}${rowClass ? ` ${rowClass}` : ''}`}
+                    tabIndex={0}
+                    aria-label={`Условия оплаты: ${row.full_name ?? 'сотрудник'}`}
+                    onClick={() => onEdit(row)}
+                    onKeyDown={event => {
+                      // Только клавиши на самой строке: пробел на чекбоксе внутри должен выделять, а не открывать окно.
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onEdit(row);
+                      }
+                    }}
                   >
-                    <td className={`${styles.stickyCheck} ${styles.cellCheck}`}>
+                    {/* Выделение не открывает окно — как ячейка чекбокса у кадров. */}
+                    <td className={`${styles.stickyCheck} ${styles.cellCheck}`} onClick={event => event.stopPropagation()}>
                       <input
                         type="checkbox"
                         className={styles.check}
@@ -200,15 +211,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>
                     {/* Фактические начисления придут из 1С ЗУП — импорта пока нет. */}
                     <td className={styles.cellNumber}>—</td>
-                    <td className={styles.cellAction}>
-                      <button
-                        type="button"
-                        className={styles.linkButton}
-                        onClick={() => onEdit(row)}
-                      >
-                        {row.terms_id ? 'Изменить' : 'Назначить'}
-                      </button>
-                    </td>
                   </tr>
                 );
               })}

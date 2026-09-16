@@ -27,17 +27,25 @@
   font-size: 13px;
   table-layout: fixed;
   /* Сумма фиксированных колонок; уже — скроллится таблица, не страница. */
-  min-width: 1294px;
+  min-width: 1464px;
 }
 
+/*
+ * Ширины — под самое длинное слово заголовка (Inter 600, 12px, заглавные, letter-spacing .04em,
+ * замер в Chrome): «ПОДРАЗДЕЛЕНИЕ» 117px, «КОМПЕНСАЦИЯ» 102px, «ПРЕМИАЛЬНАЯ» 101px,
+ * «ПРОЖИВАНИЯ» 94px, «НАЧИСЛЕНИЯ» 91px — плюс стрелка и воронка (34px, на смартфоне 46px)
+ * и паддинги 24px. Уже — слово рвалось посередине («ПОДРАЗДЕЛЕНИ / Е»).
+ */
 .colCheck    { width: 44px; }
 .colNum      { width: 60px; }
 .colName     { width: 220px; }
-.colDept     { width: 150px; }
+.colDept     { width: 200px; }
 .colPosition { width: 160px; }
-.colSchedule { width: 140px; }
-.colMoney    { width: 130px; }
-.colAction   { width: 110px; }
+.colSchedule { width: 150px; }
+.colSalary   { width: 130px; }
+.colBonus    { width: 180px; }
+.colHousing  { width: 180px; }
+.colAccruals { width: 140px; }
 
 .table thead th {
   position: sticky;
@@ -54,9 +62,11 @@
   color: var(--text-secondary);
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  /* Длинные заголовки («Компенсация проживания») — в две строки, а не обрезкой */
+  /* Длинные заголовки («Компенсация проживания») — в две строки, перенос только между словами */
   white-space: normal;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
 }
 
 .table td {
@@ -83,6 +93,22 @@
 .table tbody tr.rowSelected:hover { --row-overlay: color-mix(in srgb, var(--primary) 12%, transparent); }
 
 .table tbody tr:last-child td { border-bottom: none; }
+
+/* Строка открывает окно условий оплаты — как строка «Текущих сотрудников» */
+.rowClickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.rowClickable:focus-visible { outline: none; }
+.rowClickable:focus-visible td {
+  box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+.rowClickable:focus-visible td:first-child { box-shadow: inset 2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.rowClickable:focus-visible td:last-child { box-shadow: inset -2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+
+/* Ячейка чекбокса только выделяет — курсор обычный */
+.table tbody td.cellCheck { cursor: default; }
 
 .spacer td {
   padding: 0;
@@ -150,23 +176,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.cellAction { text-align: right; }
-
-.linkButton {
-  min-height: 28px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--primary);
-  font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.linkButton:hover { text-decoration: underline; }
-
 .empty {
   padding: 40px 0;
   text-align: center;
@@ -175,6 +184,6 @@
 
 /* Смартфоны: тап-цели ≥ 44px */
 @media (max-width: 768px) {
-  .linkButton { min-height: 44px; }
   .check { width: 20px; height: 20px; }
+  .table td { height: 48px; }
 }
