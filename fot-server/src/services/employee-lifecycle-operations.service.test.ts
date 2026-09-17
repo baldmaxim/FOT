@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { AxiosError } from 'axios';
 
 /**
@@ -714,6 +714,169 @@ describe('runOperation — dismiss', () => {
       expect(result.outcome).toBe('applied');
       expect(sigurCalls()).toBe(before);
       expect(h.changeDepartment).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('запись 404 employee.bulk.not.found + GET 422 object.not.found (ответы Sigur 17.09.2026)', () => {
+    const sigurError = (status: number, data?: unknown) =>
+      new AxiosError('sigur', String(status), undefined, undefined, { status, data } as never);
+    /** Тело PUT /employees/{id} по удалённой карточке (прод, 145298). */
+    const bulkNotFound = (ids = '555') => sigurError(404, {
+      status: 404,
+      errors: [`Не найдены сотрудники с идентификаторами [${ids}]`],
+      errorsKeys: ['employee.bulk.not.found'],
+    });
+    /** Тело GET /employees/{id} по удалённой карточке (прод, 145298). */
+    const objectNotFound = () => sigurError(422, { status: 422, errors: ['Объект не найден'], errorsKeys: ['object.not.found'] });
+    const detachWrites = () => h.queryOne.mock.calls.filter(([sql]) => String(sql).includes('sigur_detached = $'));
+
+    let warnSpy: MockInstance<typeof console.warn>;
+    const unconfirmedWarns = () => warnSpy.mock.calls.filter(([msg]) => String(msg).includes('404 без подтверждения удаления'));
+    const detachWarns = () => warnSpy.mock.calls.filter(([msg]) => String(msg).includes('auto-detach'));
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      h.getDepartmentById.mockResolvedValue({ id: 9 });
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    const expectPending = async (op: ILifecycleOperation = baseOp()) => {
+      await expect(runOperation(op, OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
+      expect(detachWrites()).toHaveLength(0);
+      expect(op.sigur_detached).toBe(false);
+      expect(h.changeDepartment).not.toHaveBeenCalled();
+      expect(h.txQuery).not.toHaveBeenCalled();
+    };
+
+    it('перенос: bulk-404 для своего ID + GET 422 object.not.found → detach, увольнение применено', async () => {
+      const tx = finalizeOk();
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+      const op = baseOp();
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(op).toMatchObject({ sigur_detached: true, sigur_move_required: false, sigur_access_required: false });
+      expect(detachWrites()).toHaveLength(1);
+      expect(h.blockEmployee).not.toHaveBeenCalled();
+      expect(tx.some(c => c.sql.includes("employment_status = 'fired'"))).toBe(true);
+      expect(unconfirmedWarns()).toHaveLength(0);
+      expect(detachWarns()[0][1]).toMatchObject({ sigurEmployeeId: 555, rule: 'bulk_404_get_422' });
+    });
+
+    it('список ID в ответе, где есть свой ([554, 555]) → applied', async () => {
+      finalizeOk();
+      h.updateEmployee.mockRejectedValue(bulkNotFound('554, 555'));
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+
+      await expect(runOperation(baseOp(), OWNER)).resolves.toMatchObject({ outcome: 'applied' });
+    });
+
+    it('блокировка (access_only, архив из настроек): bulk-404 + GET 422 → applied', async () => {
+      finalizeOk();
+      h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: 9 });
+      h.blockEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+      const op = baseOp({ sigur_move_required: false, target_sigur_department_id: null });
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(h.ensureArchiveSigur).not.toHaveBeenCalled();
+      expect(h.getDepartmentById).toHaveBeenCalledWith(9, undefined);
+      expect(op.sigur_detached).toBe(true);
+    });
+
+    it('регресс старого правила: обычный PUT 404 без тела + GET 404 → applied (rule get_404)', async () => {
+      finalizeOk();
+      h.updateEmployee.mockRejectedValue(sigurError(404));
+      h.getEmployeeById.mockRejectedValue(sigurError(404));
+      const op = baseOp();
+
+      await expect(runOperation(op, OWNER)).resolves.toMatchObject({ outcome: 'applied' });
+      expect(op.sigur_detached).toBe(true);
+      expect(detachWarns()[0][1]).toMatchObject({ rule: 'get_404' });
+    });
+
+    it.each([
+      ['без errorsKeys', () => sigurError(422, { status: 422, errors: ['Объект не найден'] })],
+      ['с другим ключом', () => sigurError(422, { status: 422, errorsKeys: ['validation.failed'] })],
+      ['без тела', () => sigurError(422)],
+    ])('GET 422 %s → pending', async (_label, getError) => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockRejectedValue(getError());
+
+      await expectPending();
+      expect(unconfirmedWarns()[0][1]).toMatchObject({ bulkNotFoundForId: true, probeState: 'unknown', httpStatus: 422 });
+    });
+
+    it.each([400, 401, 403, 409, 410, 429, 500, 503])('GET %i (даже с ключом object.not.found) → pending, warn с httpStatus', async (status) => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockRejectedValue(sigurError(status, { status, errorsKeys: ['object.not.found'] }));
+
+      await expectPending();
+      expect(unconfirmedWarns()[0][1]).toMatchObject({
+        departmentAlive: true, bulkNotFoundForId: true, probeState: 'unknown', httpStatus: status, errorKeys: ['object.not.found'],
+      });
+    });
+
+    it('GET timeout (нет HTTP-ответа) → pending, httpStatus не заполнен', async () => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockRejectedValue(new Error('timeout of 10000ms exceeded'));
+
+      await expectPending();
+      const details = unconfirmedWarns()[0][1] as Record<string, unknown>;
+      expect(details).toMatchObject({ probeState: 'unknown' });
+      expect(details.httpStatus).toBeUndefined();
+      expect(details.errorKeys).toBeUndefined();
+    });
+
+    it.each([
+      ['рабочая карточка', { id: 555, departmentId: 42 }, 'working'],
+      ['живая карточка без отдела (departmentId 0, как 142928)', { id: 555, departmentId: 0 }, 'working'],
+      ['карточка в архиве', { id: 555, departmentId: 9 }, 'archived'],
+    ])('GET 200: %s → pending — «без отдела» не значит «удалён»', async (_label, card, state) => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getEmployeeById.mockResolvedValue(card);
+
+      await expectPending();
+      expect(unconfirmedWarns()[0][1]).toMatchObject({ probeState: state });
+    });
+
+    it.each(['5555', '55', '1555', '556, 557', '5550'])('bulk-404 с чужим ID [%s] + GET 422 → pending', async (ids) => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound(ids));
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+
+      await expectPending();
+      expect(unconfirmedWarns()[0][1]).toMatchObject({ bulkNotFoundForId: false, httpStatus: 422 });
+    });
+
+    it.each([
+      ['без errorsKeys', () => sigurError(404, { status: 404, errors: ['Не найдены сотрудники с идентификаторами [555]'] })],
+      ['с другим ключом', () => sigurError(404, { status: 404, errors: ['Не найдены сотрудники с идентификаторами [555]'], errorsKeys: ['object.not.found'] })],
+      ['без errors', () => sigurError(404, { status: 404, errorsKeys: ['employee.bulk.not.found'] })],
+    ])('PUT 404 %s + GET 422 → pending', async (_label, putError) => {
+      h.updateEmployee.mockRejectedValue(putError());
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+
+      await expectPending();
+      expect(unconfirmedWarns()[0][1]).toMatchObject({ bulkNotFoundForId: false });
+    });
+
+    it('архив мёртв → проба карточки не запускается, pending, warn probeState not_run', async () => {
+      h.updateEmployee.mockRejectedValue(bulkNotFound());
+      h.getDepartmentById.mockRejectedValue(sigurError(404));
+      h.getEmployeeById.mockRejectedValue(objectNotFound());
+
+      await expectPending();
+      expect(h.getEmployeeById).not.toHaveBeenCalled();
+      const details = unconfirmedWarns()[0][1] as Record<string, unknown>;
+      expect(details).toMatchObject({ departmentAlive: false, bulkNotFoundForId: true, probeState: 'not_run' });
+      expect(details.httpStatus).toBeUndefined();
+      expect(details.errorKeys).toBeUndefined();
     });
   });
 });

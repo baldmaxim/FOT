@@ -531,6 +531,29 @@ function isSigurNotFound(error: unknown): boolean {
   return error instanceof AxiosError && error.response?.status === 404;
 }
 
+/** errorsKeys из тела ошибки Sigur: {"status":…,"errors":[…],"errorsKeys":[…]}. */
+function sigurErrorKeys(error: unknown): string[] {
+  if (!(error instanceof AxiosError)) return [];
+  const keys = (error.response?.data as { errorsKeys?: unknown } | undefined)?.errorsKeys;
+  return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : [];
+}
+
+/**
+ * 404 записи, в котором Sigur явно назвал именно этот ID:
+ * `employee.bulk.not.found` + «Не найдены сотрудники с идентификаторами [145298]».
+ * ID сравнивается целым числом из списка в скобках, не подстрокой.
+ */
+function isSigurBulkNotFoundFor(error: unknown, sigurEmployeeId: number): boolean {
+  if (!isSigurNotFound(error) || !sigurErrorKeys(error).includes('employee.bulk.not.found')) return false;
+  const messages = ((error as AxiosError).response?.data as { errors?: unknown } | undefined)?.errors;
+  if (!Array.isArray(messages)) return false;
+  return messages.some(message => typeof message === 'string'
+    && [...message.matchAll(/\[([^\]]*)\]/g)].some(([, list]) => list
+      .split(',')
+      .map(part => part.trim())
+      .some(part => /^\d+$/.test(part) && Number(part) === sigurEmployeeId)));
+}
+
 /**
  * Отдел Sigur существует: ответ получен и его id совпадает с запрошенным. Любая ошибка
  * (404/5xx/timeout) или невалидное тело — false: решения по нему принимаются только
@@ -550,9 +573,13 @@ async function isSigurDepartmentAlive(sigurDepartmentId: number | null, connecti
 
 /**
  * Шаг увольнения над карточкой Sigur (перенос/блокировка). 404 от employee-endpoint
- * считается удалённой карточкой, только если архивный отдел жив и точечная проба
- * карточки вернула 'deleted'; тогда сотрудник отвязывается от Sigur и увольнение
- * доводится локально. Иначе исходная ошибка — операция остаётся pending.
+ * считается удалённой карточкой, только если архивный отдел жив и удаление подтверждено
+ * точечной пробой карточки одним из двух способов:
+ *   • GET → 404 ('deleted');
+ *   • запись вернула `employee.bulk.not.found` именно с этим ID, а GET → 422 `object.not.found`
+ *     (так Sigur 17.09.2026 отвечал по удалённым карточкам; живая карточка без отдела — 200).
+ * Тогда сотрудник отвязывается от Sigur и увольнение доводится локально. Иначе — warn
+ * с причиной и исходная ошибка: операция остаётся pending.
  */
 async function runDismissSigurCardStep(
   op: ILifecycleOperation,
@@ -567,11 +594,31 @@ async function runDismissSigurCardStep(
     return 'done';
   } catch (error) {
     if (!isSigurNotFound(error)) throw error;
-    if (!(await isSigurDepartmentAlive(archiveSigurDepartmentId, connection))) throw error;
-    const probe = await probeSigurCard(sigurEmployeeId, archiveSigurDepartmentId, connection);
-    if (probe.state !== 'deleted') throw error;
+    const bulkNotFoundForId = isSigurBulkNotFoundFor(error, sigurEmployeeId);
+    const departmentAlive = await isSigurDepartmentAlive(archiveSigurDepartmentId, connection);
+    const probe = departmentAlive
+      ? await probeSigurCard(sigurEmployeeId, archiveSigurDepartmentId, connection)
+      : null;
+    const confirmedByGet404 = probe?.state === 'deleted';
+    const confirmedByBulk422 = bulkNotFoundForId
+      && probe?.state === 'unknown'
+      && probe.httpStatus === 422
+      && (probe.errorKeys ?? []).includes('object.not.found');
+    if (!confirmedByGet404 && !confirmedByBulk422) {
+      console.warn('[lifecycle-ops] dismiss: 404 без подтверждения удаления', {
+        operationId: op.id,
+        sigurEmployeeId,
+        departmentAlive,
+        bulkNotFoundForId,
+        probeState: probe?.state ?? 'not_run',
+        httpStatus: probe?.httpStatus,
+        errorKeys: probe?.errorKeys,
+      });
+      throw error;
+    }
     console.warn('[lifecycle-ops] dismiss: auto-detach sigur_employee_id (карточка удалена в Sigur)', {
       operationId: op.id, employeeId: op.employee_id, sigurEmployeeId,
+      rule: confirmedByGet404 ? 'get_404' : 'bulk_404_get_422',
     });
     await writeStep(op, owner, { sigur_detached: true, sigur_move_required: false, sigur_access_required: false });
     return 'detached';
@@ -1125,6 +1172,9 @@ export interface ISigurCardProbe {
   state: TSigurCardState;
   departmentId: number | null;
   error?: string;
+  /** Только для 'unknown' с HTTP-ответом Sigur: статус и errorsKeys тела ошибки. */
+  httpStatus?: number;
+  errorKeys?: string[];
 }
 
 /**
@@ -1154,7 +1204,10 @@ export async function probeSigurCard(
     return { state: 'working', departmentId };
   } catch (error) {
     if (isSigurNotFound(error)) return { state: 'deleted', departmentId: null };
-    return { state: 'unknown', departmentId: null, error: errorText(error) };
+    const status = error instanceof AxiosError ? error.response?.status : undefined;
+    return status != null
+      ? { state: 'unknown', departmentId: null, error: errorText(error), httpStatus: status, errorKeys: sigurErrorKeys(error) }
+      : { state: 'unknown', departmentId: null, error: errorText(error) };
   }
 }
 
