@@ -1001,6 +1001,107 @@ describe('attendance.service', () => {
     expect(result.entries).toEqual([]);
   });
 
+  // Пустой summary рабочего дня (пересчёт D−1 ночного окна) у графика без СКУД-контроля
+  // (remote / неофисный hybrid) — не неявка: синтетическая ветка ставит 'remote' с плановыми часами.
+  it('empty summary on a working day without SKUD check becomes remote with planned hours', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.needsSkudCheck = false;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-09-02',
+      first_entry: null,
+      last_exit: null,
+      total_hours: null,
+      total_minutes: null,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-09-02',
+      endDate: '2026-09-02',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-09-02', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-09-17',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-09-02',
+      status: 'remote',
+      hours_worked: 8,
+      is_correction: false,
+    });
+  });
+
+  it('empty summary on a working day with SKUD check stays absent', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.needsSkudCheck = true;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-09-02',
+      first_entry: null,
+      last_exit: null,
+      total_hours: null,
+      total_minutes: null,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-09-02',
+      endDate: '2026-09-02',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-09-02', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-09-17',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-09-02',
+      status: 'absent',
+      hours_worked: 0,
+    });
+  });
+
+  it('real presence on a remote working day stays work with actual hours', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.needsSkudCheck = false;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-09-03',
+      first_entry: '09:00:00',
+      last_exit: '15:00:00',
+      total_hours: 6,
+      total_minutes: 360,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-09-03',
+      endDate: '2026-09-03',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-09-03', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-09-17',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-09-03',
+      status: 'work',
+      hours_worked: 6,
+      first_entry: '09:00:00',
+      last_exit: '15:00:00',
+    });
+  });
+
   it('still records actual presence on a non-working day (employee came in on Saturday)', async () => {
     mockedState.isWorkingDay = false;
     mockedState.summaryRows = [{

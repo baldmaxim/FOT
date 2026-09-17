@@ -872,11 +872,11 @@ export async function buildAttendanceEntries(params: {
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
     const isPresent = baseHours > 0 || summary.first_entry !== null;
-    // Пустой summary (без часов и без first_entry) на не-рабочий день — это заглушка
-    // от batch_recalculate_skud_daily_summary, а не реальная неявка. Симметрично
-    // ветке adjustments (NON_WORK_ADJUSTMENT_STATUSES + !isAdjWorkingDay), без entry
-    // фронт покажет «—», как у остальных сотрудников с тем же графиком.
-    if (!isPresent && schedule && !isWorkingDay(schedule, dateObject, calendarMonth)) {
+    // Пустой summary (без часов и без first_entry) — заглушка batch_recalculate_skud_daily_summary
+    // (пересчёт D−1 для ночного окна), а не реальная неявка. Если в этот день СКУД не контролируется
+    // (выходной, remote, неофисный день hybrid), пропускаем: выходной останется «—», а удалёнка
+    // дойдёт до синтетической ветки ниже и получит status 'remote' с плановыми часами.
+    if (!isPresent && schedule && !needsSkudCheck(schedule, dateObject, calendarMonth)) {
       continue;
     }
     let presenceCoversShift: boolean | undefined;

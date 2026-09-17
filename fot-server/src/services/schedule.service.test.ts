@@ -233,6 +233,44 @@ describe('schedule.service pre-holidays', () => {
   });
 });
 
+describe('schedule.service needsSkudCheck: remote/hybrid', () => {
+  const weekly = (overrides: Partial<IResolvedSchedule>): IResolvedSchedule => ({
+    schedule_id: 's-remote',
+    schedule_type: 'office',
+    work_start: '09:00:00',
+    work_end: '18:00:00',
+    work_hours: 8,
+    work_days: [1, 2, 3, 4, 5],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: true,
+    pattern_type: 'custom',
+    expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: null,
+    cycle_days: null,
+    anchor_date: null,
+    assignment_anchor_date: null,
+    source: 'employee',
+    ...overrides,
+  });
+
+  it('remote: рабочий день без СКУД-контроля', () => {
+    expect(needsSkudCheck(weekly({ schedule_type: 'remote' }), new Date(2026, 8, 2))).toBe(false);
+  });
+
+  it('hybrid: офисный день = true, неофисный = false', () => {
+    // 2026-09-02 — среда (ISO 3), 2026-09-03 — четверг (ISO 4)
+    const s = weekly({ schedule_type: 'hybrid', office_days: [4] });
+    expect(needsSkudCheck(s, new Date(2026, 8, 3))).toBe(true);
+    expect(needsSkudCheck(s, new Date(2026, 8, 2))).toBe(false);
+  });
+});
+
 describe('schedule.service cycle patterns', () => {
   const buildCycle22 = (overrides: Partial<IResolvedSchedule> = {}): IResolvedSchedule => ({
     schedule_id: 'sched-2-2',
