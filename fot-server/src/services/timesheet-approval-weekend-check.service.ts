@@ -247,7 +247,8 @@ export function evaluateManagerObjMemoRequirement(input: {
 /**
  * Возвращает даты работы в выходной, у которых НЕТ приложенной служебки. День считается
  * покрытым, если хотя бы у одной его корректировки есть вложение (own-файл или файл из
- * связанной заявки) ЛИБО к time_correction-заявке этого дня прикреплён файл.
+ * связанной заявки) ЛИБО файл прикреплён к заявке этого дня: time_correction или
+ * «Работа в выходной» (work, pending/approved), в которую входит день.
  */
 async function listWeekendDaysWithoutCorrectionMemo(
   pairs: Array<{ employee_id: number; date: string }>,
@@ -284,8 +285,8 @@ async function listWeekendDaysWithoutCorrectionMemo(
   for (const a of adjustments) {
     if ((counts.get(a.id) ?? 0) > 0) coveredKeys.add(`${a.employee_id}|${a.work_date}`);
   }
-  // Файл на time_correction-заявке дня покрывает день, даже если у самой корректировки
-  // (manual/manual_object) файла нет — служебку сотрудник прикрепляет к заявке.
+  // Файл на заявке дня (time_correction или work) покрывает день, даже если у самой
+  // корректировки (manual/manual_object) файла нет — служебку прикрепляют к заявке.
   for (const key of await listDaysWithTimeCorrectionMemo(empIds, dates)) {
     coveredKeys.add(key);
   }
@@ -303,7 +304,8 @@ async function listWeekendDaysWithoutCorrectionMemo(
  *   1) есть blanket-вложение на уровне подачи (entity='timesheet_approval') — покрывает
  *      весь период (как раньше, руководитель прикрепил служебку при подаче); ЛИБО
  *   2) у КАЖДОГО дня работы в выходной есть файл на самой корректировке дня
- *      (служебка, приложенная сотрудником/руководителем к корректировке).
+ *      (служебка, приложенная сотрудником/руководителем к корректировке) или на заявке
+ *      этого дня — time_correction либо «Работа в выходной» (work).
  * Если флаг роли weekend_memo_required выключен — IO-запросы пропускаются.
  */
 export async function checkManagerObjWeekendMemoRequirement(params: {

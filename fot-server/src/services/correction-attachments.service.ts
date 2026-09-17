@@ -103,19 +103,38 @@ async function fetchUploaderNames(uploadedByIds: Array<string | null>): Promise<
 }
 
 /**
- * Идентификаторы approved/pending time_correction-заявок сотрудника на конкретный день.
- * Служебка о работе в выходной сотрудник прикрепляет именно к такой заявке, при этом
- * сама дневная/объектная корректировка может быть source_type='manual'/'manual_object'
- * (без привязки source → leave_request). Поэтому файлы заявки этого дня подмешиваем
- * к корректировке по паре (employee, date).
+ * SQL-условие «заявка на день несёт служебку о работе в выходной» для строки `lr` и
+ * выражения даты `day`:
+ *   - time_correction на этот день (не отклонённая);
+ *   - «Работа в выходной» (work) pending/approved, в которую входит этот день. work
+ *     подаётся дискретным набором selected_dates (start/end — лишь границы набора),
+ *     диапазон start_date…end_date — только для legacy-заявок без selected_dates.
+ *     Отменённая work освобождает даты — её файл день не покрывает.
+ */
+const dayMemoLeaveRequestCondition = (day: string): string => `(
+  (lr.request_type = 'time_correction'
+    AND lr.status <> 'rejected'
+    AND COALESCE(lr.correction_date, lr.start_date) = ${day})
+  OR (lr.request_type = 'work'
+    AND lr.status IN ('pending', 'approved')
+    AND CASE WHEN cardinality(lr.selected_dates) > 0
+             THEN ${day} = ANY(lr.selected_dates)
+             ELSE ${day} BETWEEN lr.start_date AND COALESCE(lr.end_date, lr.start_date)
+        END)
+)`;
+
+/**
+ * Идентификаторы заявок сотрудника на конкретный день, к которым прикрепляют служебку
+ * о работе в выходной: time_correction этого дня и «Работа в выходной» (work), куда
+ * входит день. Сама дневная/объектная корректировка при этом может быть
+ * source_type='manual'/'manual_object' (без привязки source → leave_request), поэтому
+ * файлы таких заявок подмешиваем к корректировке по паре (employee, date).
  */
 async function timeCorrectionLeaveIdsForDay(employeeId: number, workDate: string): Promise<number[]> {
   const rows = await query<{ id: number | string }>(
-    `SELECT id FROM leave_requests
-       WHERE employee_id = $1
-         AND request_type = 'time_correction'
-         AND status <> 'rejected'
-         AND COALESCE(correction_date, start_date) = $2::date`,
+    `SELECT lr.id FROM leave_requests lr
+       WHERE lr.employee_id = $1
+         AND ${dayMemoLeaveRequestCondition('$2::date')}`,
     [employeeId, workDate],
   );
   return rows.map(r => Number(r.id)).filter(id => Number.isFinite(id) && id > 0);
@@ -150,7 +169,8 @@ async function leaveRequestDocIds(leaveRequestIds: number[]): Promise<Set<number
  * Список файлов корректировки:
  *   1) собственные (entity_type='attendance_adjustment')
  *   2) подмешанные из связанной leave_request (source_type='leave_request', read-only)
- *   3) подмешанные из time_correction-заявок этого дня (служебка о выходных, read-only)
+ *   3) подмешанные из заявок этого дня — time_correction и «Работа в выходной» (work),
+ *      куда входит день (служебка о выходных, read-only)
  */
 export async function listCorrectionAttachments(adj: ICorrectionAdjustmentMeta): Promise<ICorrectionAttachment[]> {
   const ownLinks = await query<{ document_id: number | string }>(
@@ -160,7 +180,7 @@ export async function listCorrectionAttachments(adj: ICorrectionAdjustmentMeta):
   );
   const ownIds = new Set(ownLinks.map(link => Number(link.document_id)));
 
-  // Кандидаты-заявки: привязанная по source + time_correction-заявки этого дня.
+  // Кандидаты-заявки: привязанная по source + time_correction/work-заявки этого дня.
   const candidateLeaveIds = new Set<number>();
   const sourceLeaveId = leaveRequestIdFromAdjustment(adj);
   if (sourceLeaveId != null) candidateLeaveIds.add(sourceLeaveId);
@@ -253,9 +273,10 @@ export async function countCorrectionAttachments(
 
 /**
  * Для пар (employee, date): множество ключей `emp|date`, у которых есть прикреплённый
- * файл к time_correction-заявке этого дня (служебка о работе в выходной). Используется
- * проверкой служебки при подаче табеля — файл на заявке покрывает день, даже если на
- * самой корректировке файла нет.
+ * файл к заявке этого дня — time_correction или «Работа в выходной» (work), куда входит
+ * день (служебка о работе в выходной). Многодневная work покрывает каждый свой день.
+ * Используется проверкой служебки при подаче табеля — файл на заявке покрывает день,
+ * даже если на самой корректировке файла нет.
  */
 export async function listDaysWithTimeCorrectionMemo(
   employeeIds: number[],
@@ -267,12 +288,11 @@ export async function listDaysWithTimeCorrectionMemo(
   if (emps.length === 0 || days.length === 0) return out;
 
   const rows = await query<{ employee_id: number | string; d: string }>(
-    `SELECT lr.employee_id, COALESCE(lr.correction_date, lr.start_date)::text AS d
+    `SELECT DISTINCT lr.employee_id, x.d::text AS d
        FROM leave_requests lr
+       CROSS JOIN unnest($2::date[]) AS x(d)
       WHERE lr.employee_id = ANY($1::int[])
-        AND lr.request_type = 'time_correction'
-        AND lr.status <> 'rejected'
-        AND COALESCE(lr.correction_date, lr.start_date) = ANY($2::date[])
+        AND ${dayMemoLeaveRequestCondition('x.d')}
         AND (
           EXISTS (SELECT 1 FROM document_links dl
                    WHERE dl.entity_type = 'leave_request' AND dl.entity_id = lr.id::text)

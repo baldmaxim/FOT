@@ -17,6 +17,8 @@ vi.mock('../config/postgres.js', () => ({
 import {
   createCorrectionAttachmentForMany,
   deleteCorrectionAttachment,
+  listCorrectionAttachments,
+  listDaysWithTimeCorrectionMemo,
   purgeCorrectionAttachments,
 } from './correction-attachments.service.js';
 
@@ -146,5 +148,90 @@ describe('purgeCorrectionAttachments', () => {
 
     expect(keys).toEqual(['k20']);
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes('DELETE FROM documents'))).toBe(true);
+  });
+});
+
+/** SQL-условие по work-заявке: дискретные selected_dates, диапазон — только legacy. */
+const expectWorkDayCondition = (sql: string, day: string) => {
+  expect(sql).toContain(`lr.request_type = 'work'`);
+  expect(sql).toContain(`lr.status IN ('pending', 'approved')`);
+  expect(sql).toContain(`WHEN cardinality(lr.selected_dates) > 0`);
+  expect(sql).toContain(`THEN ${day} = ANY(lr.selected_dates)`);
+  expect(sql).toContain(`ELSE ${day} BETWEEN lr.start_date AND COALESCE(lr.end_date, lr.start_date)`);
+  // time_correction-ветка сохранена без изменений.
+  expect(sql).toContain(`lr.request_type = 'time_correction'`);
+  expect(sql).toContain(`COALESCE(lr.correction_date, lr.start_date) = ${day}`);
+};
+
+describe('listCorrectionAttachments', () => {
+  it('подмешивает файл work-заявки дня к manual_object-корректировке как source=leave_request', async () => {
+    const calls: ClientCall[] = [];
+    pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      if (sql.includes('entity_type = $1 AND entity_id = $2')) return [];
+      if (sql.includes('FROM leave_requests lr')) return [{ id: 7634 }];
+      if (sql.includes(`entity_type = 'leave_request' AND entity_id = ANY`)) return [{ document_id: 13477 }];
+      if (sql.includes('WHERE leave_request_id = ANY')) return [{ id: 13477 }];
+      if (sql.includes('FROM documents')) {
+        return [{
+          id: 13477, file_name: 'Работа01.pdf', file_size: 1000, mime_type: 'application/pdf',
+          r2_key: 'k', uploaded_by: null, created_at: '2026-09-04T11:36:36.814Z',
+        }];
+      }
+      return [];
+    });
+
+    const items = await listCorrectionAttachments({
+      id: 1109597, employee_id: 2156, work_date: '2026-09-06',
+      source_type: 'manual_object', source_id: '5e919f10-f345-4f85-ac7e-1a41890aa008',
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 13477, source: 'leave_request', original_name: 'Работа01.pdf' });
+    const leaveCall = calls.find(c => c.sql.includes('FROM leave_requests lr'))!;
+    expectWorkDayCondition(leaveCall.sql, '$2::date');
+    expect(leaveCall.params).toEqual([2156, '2026-09-06']);
+  });
+
+  it('без заявок дня (rejected/cancelled отсекаются в SQL) файлов нет', async () => {
+    pgQuery.mockImplementation(async () => []);
+    const items = await listCorrectionAttachments({
+      id: 1113527, employee_id: 1122, work_date: '2026-09-12',
+      source_type: 'manual_object', source_id: null,
+    });
+    expect(items).toEqual([]);
+    const leaveSql = pgQuery.mock.calls.map(c => String(c[0])).find(s => s.includes('FROM leave_requests lr'))!;
+    expect(leaveSql).not.toContain(`'cancelled'`);
+    expect(leaveSql).toContain(`IN ('pending', 'approved')`);
+  });
+});
+
+describe('listDaysWithTimeCorrectionMemo', () => {
+  it('разворачивает запрошенные даты и возвращает каждый покрытый день', async () => {
+    // work на 06 и 08 (не подряд): БД по ANY(selected_dates) вернёт только 06 и 08, не 07.
+    pgQuery.mockResolvedValueOnce([
+      { employee_id: '2156', d: '2026-09-06' },
+      { employee_id: 2156, d: '2026-09-08' },
+      { employee_id: 1122, d: '2026-09-11' },
+    ]);
+
+    const covered = await listDaysWithTimeCorrectionMemo(
+      [2156, 2156, 1122],
+      ['2026-09-06', '2026-09-07', '2026-09-08', '2026-09-11'],
+    );
+
+    expect([...covered].sort()).toEqual(['1122|2026-09-11', '2156|2026-09-06', '2156|2026-09-08']);
+    expect(covered.has('2156|2026-09-07')).toBe(false);
+    const [sql, params] = pgQuery.mock.calls[0]!;
+    expect(sql).toContain('CROSS JOIN unnest($2::date[]) AS x(d)');
+    expect(sql).toContain('x.d::text AS d');
+    expectWorkDayCondition(String(sql), 'x.d');
+    expect(params).toEqual([[2156, 1122], ['2026-09-06', '2026-09-07', '2026-09-08', '2026-09-11']]);
+  });
+
+  it('пустые входы — без запроса', async () => {
+    expect((await listDaysWithTimeCorrectionMemo([], ['2026-09-06'])).size).toBe(0);
+    expect((await listDaysWithTimeCorrectionMemo([2156], [])).size).toBe(0);
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 });
