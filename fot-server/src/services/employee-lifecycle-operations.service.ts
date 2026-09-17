@@ -28,7 +28,7 @@ import { getIo } from '../socket/io-instance.js';
 import { getUserIdsByEmployeeIds } from './recipients.service.js';
 import { listEffectiveDepartmentManagers } from './department-managers.service.js';
 import { auditService, AUDIT_ACTIONS } from './audit.service.js';
-import { normalizeEmployee } from './sigur-sync-shared.js';
+import { normalizeEmployee, resolveField } from './sigur-sync-shared.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { ConnectionType } from './sigur-base.service.js';
 import type { EmployeeEncrypted } from '../types/index.js';
@@ -531,11 +531,59 @@ function isSigurNotFound(error: unknown): boolean {
   return error instanceof AxiosError && error.response?.status === 404;
 }
 
+/**
+ * Отдел Sigur существует: ответ получен и его id совпадает с запрошенным. Любая ошибка
+ * (404/5xx/timeout) или невалидное тело — false: решения по нему принимаются только
+ * на положительном доказательстве.
+ */
+async function isSigurDepartmentAlive(sigurDepartmentId: number | null, connection?: ConnectionType): Promise<boolean> {
+  if (sigurDepartmentId == null) return false;
+  try {
+    const raw = await sigurService.getDepartmentById(sigurDepartmentId, connection);
+    if (!raw || typeof raw !== 'object') return false;
+    return Number(resolveField(raw, 'id', 'ID', 'Id')) === sigurDepartmentId;
+  } catch (error) {
+    console.warn('[lifecycle-ops] department probe failed', { sigurDepartmentId, message: errorText(error) });
+    return false;
+  }
+}
+
+/**
+ * Шаг увольнения над карточкой Sigur (перенос/блокировка). 404 от employee-endpoint
+ * считается удалённой карточкой, только если архивный отдел жив и точечная проба
+ * карточки вернула 'deleted'; тогда сотрудник отвязывается от Sigur и увольнение
+ * доводится локально. Иначе исходная ошибка — операция остаётся pending.
+ */
+async function runDismissSigurCardStep(
+  op: ILifecycleOperation,
+  owner: string,
+  sigurEmployeeId: number,
+  archiveSigurDepartmentId: number | null,
+  call: () => Promise<unknown>,
+  connection?: ConnectionType,
+): Promise<'done' | 'detached'> {
+  try {
+    await call();
+    return 'done';
+  } catch (error) {
+    if (!isSigurNotFound(error)) throw error;
+    if (!(await isSigurDepartmentAlive(archiveSigurDepartmentId, connection))) throw error;
+    const probe = await probeSigurCard(sigurEmployeeId, archiveSigurDepartmentId, connection);
+    if (probe.state !== 'deleted') throw error;
+    console.warn('[lifecycle-ops] dismiss: auto-detach sigur_employee_id (карточка удалена в Sigur)', {
+      operationId: op.id, employeeId: op.employee_id, sigurEmployeeId,
+    });
+    await writeStep(op, owner, { sigur_detached: true, sigur_move_required: false, sigur_access_required: false });
+    return 'detached';
+  }
+}
+
 async function runDismiss(op: ILifecycleOperation, owner: string, connection?: ConnectionType): Promise<EmployeeEncrypted> {
   if (op.sigur_employee_id != null && (op.sigur_move_required || op.sigur_access_required)) {
     if (!(await sigurService.isConfigured())) {
       throw new LifecycleOperationError(503, 'Sigur не настроен', 'SIGUR_NOT_CONFIGURED');
     }
+    const sigurEmployeeId = op.sigur_employee_id;
     try {
       if (op.sigur_move_required && !op.sigur_moved) {
         const archive = await ensureArchiveSigurDepartment(op.created_by, connection);
@@ -543,12 +591,24 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
           target_sigur_department_id: archive.sigurDepartmentId,
           target_department_id: archive.localDepartmentId || op.target_department_id,
         });
-        await sigurService.updateEmployee(op.sigur_employee_id, { departmentId: archive.sigurDepartmentId }, connection);
-        await writeStep(op, owner, { sigur_moved: true });
+        const step = await runDismissSigurCardStep(
+          op, owner, sigurEmployeeId, archive.sigurDepartmentId,
+          () => sigurService.updateEmployee(sigurEmployeeId, { departmentId: archive.sigurDepartmentId }, connection),
+          connection,
+        );
+        if (step === 'done') await writeStep(op, owner, { sigur_moved: true });
       }
       if (op.sigur_access_required && !op.sigur_access_toggled) {
-        await sigurService.blockEmployee(op.sigur_employee_id, connection);
-        await writeStep(op, owner, { sigur_access_toggled: true });
+        // access_only: перенос пропущен, target_sigur_department_id не записан — берём архив из настроек.
+        const archiveSigurDepartmentId = op.target_sigur_department_id
+          ?? (await settingsService.getSigurConnectionSettings()).archiveDepartmentId
+          ?? null;
+        const step = await runDismissSigurCardStep(
+          op, owner, sigurEmployeeId, archiveSigurDepartmentId,
+          () => sigurService.blockEmployee(sigurEmployeeId, connection),
+          connection,
+        );
+        if (step === 'done') await writeStep(op, owner, { sigur_access_toggled: true });
       }
     } catch (error) {
       if (error instanceof LeaseLostError || error instanceof LifecycleOperationError) throw error;
@@ -719,16 +779,7 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
         if (!isSigurNotFound(error)) throw error;
         // 404: карточка удалена в Sigur или удалён отдел. Отдел жив → отвязываем сотрудника
         // и восстанавливаем локально; иначе — ошибка наружу, операция ждёт синка структуры.
-        let departmentAlive = false;
-        try {
-          await sigurService.getDepartmentById(op.target_sigur_department_id, connection);
-          departmentAlive = true;
-        } catch (probeErr) {
-          console.warn('[lifecycle-ops] rehire: department probe failed', {
-            operationId: op.id, sigurDepartmentId: op.target_sigur_department_id, message: errorText(probeErr),
-          });
-        }
-        if (!departmentAlive) {
+        if (!(await isSigurDepartmentAlive(op.target_sigur_department_id, connection))) {
           throw new LifecycleOperationError(
             409,
             `Sigur вернул 404: вероятно, отдел (sigur_department_id=${op.target_sigur_department_id}) удалён в Sigur. Запустите синхронизацию структуры и повторите восстановление.`,

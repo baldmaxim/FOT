@@ -65,6 +65,7 @@ vi.mock('./employee-department-access.service.js', () => ({
 }));
 vi.mock('./employee-cache.service.js', () => ({ employeeCache: { invalidate: h.invalidate } }));
 vi.mock('./sigur-sync-shared.js', () => ({
+  resolveField: (obj: Record<string, unknown>, ...keys: string[]) => keys.map(k => obj[k]).find(v => v !== undefined),
   normalizeEmployee: (raw: Record<string, unknown>) => ({
     id: raw.id, name: String(raw.name ?? ''), departmentId: raw.departmentId,
     positionId: raw.positionId, position: String(raw.position ?? ''), tabId: String(raw.tabId ?? ''),
@@ -527,6 +528,193 @@ describe('runOperation — dismiss', () => {
 
     await expect(runOperation(baseOp({ attempts: 50 }), OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
     expect(h.captureMessage).toHaveBeenCalledWith(expect.stringContaining('stuck after 50 attempts'), expect.anything());
+  });
+
+  describe('404 на карточку сотрудника (карточка удалена в Sigur)', () => {
+    const notFound = () => new AxiosError('nf', '404', undefined, undefined, { status: 404 } as never);
+    const detachWrites = () => h.queryOne.mock.calls.filter(([sql]) => String(sql).includes('sigur_detached = $'));
+    /** Архив 9 жив, точечная проба карточки 555 → 404. */
+    const confirmDeleted = () => {
+      h.getDepartmentById.mockResolvedValue({ id: 9 });
+      h.getEmployeeById.mockRejectedValue(notFound());
+    };
+
+    it('перенос 404 + архив жив + проба deleted → detach записан, блокировка пропущена, увольнение применено локально', async () => {
+      const tx = finalizeOk();
+      h.updateEmployee.mockRejectedValue(notFound());
+      confirmDeleted();
+      const op = baseOp();
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(h.getDepartmentById).toHaveBeenCalledWith(9, undefined);
+      expect(h.getEmployeeById).toHaveBeenCalledWith(555, undefined);
+      expect(h.blockEmployee).not.toHaveBeenCalled();
+      expect(op).toMatchObject({ sigur_detached: true, sigur_move_required: false, sigur_access_required: false, sigur_moved: false });
+      expect(detachWrites()).toHaveLength(1);
+      expect(detachWrites()[0][1]).toEqual([true, false, false, 'op-1', OWNER]);
+      expect(h.changeDepartment).toHaveBeenCalledWith(77, 'arch-1', expect.objectContaining({ skipIfScheduledToTarget: true }));
+      expect(tx.some(c => c.sql.includes("employment_status = 'fired'"))).toBe(true);
+      expect(tx.some(c => c.sql.includes("status = 'applied'"))).toBe(true);
+    });
+
+    it('перенос прошёл, блокировка 404 + подтверждение → applied', async () => {
+      finalizeOk();
+      h.blockEmployee.mockRejectedValue(notFound());
+      confirmDeleted();
+      const op = baseOp();
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(h.updateEmployee).toHaveBeenCalledTimes(1);
+      expect(h.getDepartmentById).toHaveBeenCalledWith(9, undefined);
+      expect(op).toMatchObject({ sigur_moved: true, sigur_detached: true, sigur_access_toggled: false });
+    });
+
+    it('404 сотрудника + архивный отдел тоже 404 → pending, локальные шаги не начинались', async () => {
+      h.updateEmployee.mockRejectedValue(notFound());
+      h.getDepartmentById.mockRejectedValue(notFound());
+      h.getEmployeeById.mockRejectedValue(notFound());
+
+      await expect(runOperation(baseOp(), OWNER)).rejects.toMatchObject({ code: 'SIGUR_WRITE_FAILED' });
+      expect(h.getEmployeeById).not.toHaveBeenCalled();
+      expect(detachWrites()).toHaveLength(0);
+      expect(h.changeDepartment).not.toHaveBeenCalled();
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['500', () => h.getDepartmentById.mockRejectedValue(new AxiosError('boom', '500', undefined, undefined, { status: 500 } as never))],
+      ['timeout', () => h.getDepartmentById.mockRejectedValue(new Error('timeout of 10000ms exceeded'))],
+      ['пустое тело', () => h.getDepartmentById.mockResolvedValue(null)],
+      ['чужой id', () => h.getDepartmentById.mockResolvedValue({ id: 10 })],
+      ['нет id', () => h.getDepartmentById.mockResolvedValue({ name: 'Уволенные' })],
+    ])('404 сотрудника + проба отдела %s → pending, без detach', async (_label, setup) => {
+      h.updateEmployee.mockRejectedValue(notFound());
+      h.getEmployeeById.mockRejectedValue(notFound());
+      setup();
+
+      await expect(runOperation(baseOp(), OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
+      expect(detachWrites()).toHaveLength(0);
+      expect(h.changeDepartment).not.toHaveBeenCalled();
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['карточка найдена', () => h.getEmployeeById.mockResolvedValue({ id: 555, departmentId: 42 })],
+      ['проба карточки 500', () => h.getEmployeeById.mockRejectedValue(new AxiosError('boom', '500', undefined, undefined, { status: 500 } as never))],
+    ])('404 сотрудника, архив жив, но %s → pending, без detach', async (_label, setup) => {
+      h.updateEmployee.mockRejectedValue(notFound());
+      h.getDepartmentById.mockResolvedValue({ id: 9 });
+      setup();
+
+      await expect(runOperation(baseOp(), OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
+      expect(detachWrites()).toHaveLength(0);
+      expect(h.changeDepartment).not.toHaveBeenCalled();
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it('access_only: блокировка 404 → проба по archiveDepartmentId из настроек, не null', async () => {
+      finalizeOk();
+      h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: 9 });
+      h.blockEmployee.mockRejectedValue(notFound());
+      confirmDeleted();
+      const op = baseOp({ sigur_move_required: false, target_sigur_department_id: null });
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(h.ensureArchiveSigur).not.toHaveBeenCalled();
+      expect(h.updateEmployee).not.toHaveBeenCalled();
+      expect(h.getDepartmentById).toHaveBeenCalledWith(9, undefined);
+      expect(h.getEmployeeById).toHaveBeenCalledWith(555, undefined);
+      expect(op.sigur_detached).toBe(true);
+    });
+
+    it('access_only без archiveDepartmentId в настройках → pending, отдел не пробуется', async () => {
+      h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: null });
+      h.blockEmployee.mockRejectedValue(notFound());
+      h.getEmployeeById.mockRejectedValue(notFound());
+      const op = baseOp({ sigur_move_required: false, target_sigur_department_id: null });
+
+      await expect(runOperation(op, OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
+      expect(h.getDepartmentById).not.toHaveBeenCalled();
+      expect(h.getEmployeeById).not.toHaveBeenCalled();
+      expect(detachWrites()).toHaveLength(0);
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it('404 при подготовке архива (ensureArchiveSigurDepartment) → pending, карточка не пробуется', async () => {
+      h.ensureArchiveSigur.mockRejectedValue(notFound());
+      h.getDepartmentById.mockResolvedValue({ id: 9 });
+      h.getEmployeeById.mockRejectedValue(notFound());
+
+      await expect(runOperation(baseOp(), OWNER)).rejects.toBeInstanceOf(DismissalSigurError);
+      expect(h.updateEmployee).not.toHaveBeenCalled();
+      expect(h.getEmployeeById).not.toHaveBeenCalled();
+      expect(detachWrites()).toHaveLength(0);
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it('операция уже отвязана (detach сохранён) → ни одного вызова Sigur, финализация проходит', async () => {
+      finalizeOk();
+      const op = baseOp({
+        sigur_detached: true, sigur_move_required: false, sigur_access_required: false, target_sigur_department_id: 9,
+      });
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(h.isConfigured).not.toHaveBeenCalled();
+      expect(h.ensureArchiveSigur).not.toHaveBeenCalled();
+      expect(h.updateEmployee).not.toHaveBeenCalled();
+      expect(h.blockEmployee).not.toHaveBeenCalled();
+      expect(h.getDepartmentById).not.toHaveBeenCalled();
+      expect(h.getEmployeeById).not.toHaveBeenCalled();
+    });
+
+    it('lease потерян при записи detach → lease_lost, локальные шаги не начинались', async () => {
+      h.updateEmployee.mockRejectedValue(notFound());
+      confirmDeleted();
+      h.queryOne.mockImplementation(async (sql: string) => {
+        if (sql.includes('sigur_detached = $')) return null;
+        if (sql.includes('UPDATE employee_lifecycle_operations') && sql.includes('lease_owner = $')) return { id: 'op-1' };
+        return null;
+      });
+
+      const result = await runOperation(baseOp(), OWNER);
+
+      expect(result.outcome).toBe('lease_lost');
+      expect(h.blockEmployee).not.toHaveBeenCalled();
+      expect(h.changeDepartment).not.toHaveBeenCalled();
+      expect(h.txQuery).not.toHaveBeenCalled();
+    });
+
+    it('после detach упал changeDepartment → повтор идёт без обращений к Sigur и доводит до applied', async () => {
+      h.updateEmployee.mockRejectedValue(notFound());
+      confirmDeleted();
+      h.changeDepartment.mockRejectedValueOnce(new Error('db blip'));
+      const op = baseOp();
+
+      await expect(runOperation(op, OWNER)).rejects.toThrow('db blip');
+      expect(op.sigur_detached).toBe(true);
+      expect(h.txQuery).not.toHaveBeenCalled();
+
+      // Повтор: флаги операции уже сохранены (writeStep обновил и БД, и объект).
+      const sigurCalls = () => h.isConfigured.mock.calls.length + h.ensureArchiveSigur.mock.calls.length
+        + h.updateEmployee.mock.calls.length + h.blockEmployee.mock.calls.length
+        + h.getDepartmentById.mock.calls.length + h.getEmployeeById.mock.calls.length;
+      const before = sigurCalls();
+      finalizeOk();
+
+      const result = await runOperation(op, OWNER);
+
+      expect(result.outcome).toBe('applied');
+      expect(sigurCalls()).toBe(before);
+      expect(h.changeDepartment).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
