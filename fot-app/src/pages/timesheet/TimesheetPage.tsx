@@ -35,6 +35,7 @@ import type {
 } from '../../types';
 import type { TimesheetResponse, IEmployeeApprovalLock, IEmployeeAssignmentPeriod } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
+import { decideModalRefresh, pickModalDayData } from '../../utils/timesheetModalRefresh';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
 import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
@@ -111,6 +112,13 @@ import {
 // Псевдо-id отдела для руководителя без managed-отделов (только employee_direct_reports):
 // активирует timesheet-запрос без department_id; бэк сам резолвит direct_reports по токену.
 const DIRECT_REPORTS_DEPT = '__direct_reports__';
+
+const MODAL_WRITE_BLOCKED_MESSAGE = 'Данные дня обновляются — повторите через секунду';
+
+// idle — окно работает как обычно; fetching — идёт перезапрос; applying — ответ получен,
+// ждём, пока все запросы источника окна завершатся, и подставляем свежую запись;
+// error — перезапрос не удался, правка заблокирована до «Повторить».
+type ModalRefreshStatus = 'idle' | 'fetching' | 'applying' | 'error';
 
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile, canEditPage, canViewPage, canManageAsHrAdmin, showActualHours } = useAuth();
@@ -271,6 +279,22 @@ export const TimesheetPage: FC = () => {
   const [modalMode, setModalMode] = useState<'day' | 'object'>('day');
   const [modalObjectEntry, setModalObjectEntry] = useState<TimesheetObjectEntry | null>(null);
   const [modalObjectTarget, setModalObjectTarget] = useState<IObjectModalTarget | null>(null);
+  // Свежесть данных окна дня (см. MODAL_DATA_MAX_AGE_MS). Ref дублирует статус для
+  // обработчиков записи, token отсекает ответы запросов от уже закрытого окна.
+  const [modalRefreshStatus, setModalRefreshStatus] = useState<ModalRefreshStatus>('idle');
+  const modalRefreshStatusRef = useRef<ModalRefreshStatus>('idle');
+  const modalRefreshTokenRef = useRef(0);
+  const updateModalRefreshStatus = useCallback((status: ModalRefreshStatus) => {
+    modalRefreshStatusRef.current = status;
+    setModalRefreshStatus(status);
+  }, []);
+  // Страховка в обработчиках записи: блок корректировок во время обновления не
+  // смонтирован, но запись не должна пройти ни одним путём.
+  const isModalWriteBlocked = useCallback((): boolean => {
+    if (modalRefreshStatusRef.current === 'idle') return false;
+    toast.info?.(MODAL_WRITE_BLOCKED_MESSAGE);
+    return true;
+  }, [toast]);
   // Объекты сотрудника + серверная подсказка на дату модалки. Грузим только когда
   // модалка открыта: запрос на каждую клетку грида был бы лишним.
   // Дата модалки нужна раньше объявления modalWorkDate ниже — считаем ту же строку.
@@ -630,6 +654,101 @@ export const TimesheetPage: FC = () => {
     }
     return map;
   }, [objectEntries]);
+
+  // Источник данных окна дня — НЕ через useDeferredValue: отложенная копия сетки может
+  // отставать от завершившегося запроса, и окно разблокировалось бы со старыми цифрами.
+  // Считается только при открытом окне и только по одному сотруднику/дню.
+  const modalLiveSource = useMemo(() => {
+    if (!modalOpen || !modalEmployee) return null;
+    const sourceEntries = isEmployeeMode ? employeeModeData.entries : (timesheetQuery.data?.entries || []);
+    const sourceObjects = isEmployeeMode ? employeeModeData.objectEntries : (timesheetQuery.data?.object_entries || []);
+    return pickModalDayData(sourceEntries, sourceObjects, modalEmployee.id, modalDayIso);
+  }, [modalOpen, modalEmployee, modalDayIso, isEmployeeMode, employeeModeData, timesheetQuery.data]);
+
+  // Идёт ли загрузка любого запроса, из которого окно берёт данные. В режиме «По сотруднику»
+  // это список периодов и периодные запросы (у недоступных периодов запрос выключен).
+  const modalSourceFetching = isEmployeeMode
+    ? employeePeriodsQuery.isFetching || employeePeriodQueries.some(query => query.isFetching)
+    : timesheetQuery.isFetching;
+
+  // Вызывается при открытии окна дня (и по «Повторить»). Перечитывает сетку, если ей
+  // больше MODAL_DATA_MAX_AGE_MS; иначе окно работает сразу. Роль без права правки
+  // блока корректировок не видит — ей перезапрос не нужен.
+  const startModalDataRefresh = useCallback(() => {
+    // «Повторить» после ошибки: блок корректировок уже скрыт, и если данные тем временем
+    // обновились фоном, всё равно надо подставить свежую запись, а не разблокировать старую.
+    const wasBlocked = modalRefreshStatusRef.current !== 'idle';
+    modalRefreshTokenRef.current += 1;
+    const token = modalRefreshTokenRef.current;
+    if (!canEditTimesheet) {
+      updateModalRefreshStatus('idle');
+      return;
+    }
+    // Возраст считаем только по включённым запросам: у недоступных периодов
+    // dataUpdatedAt = 0, и они считались бы устаревшими всегда.
+    const activePeriodQueries = isEmployeeMode
+      ? employeePeriodQueries.filter((_, index) => employeePeriods[index]?.accessible)
+      : [];
+    const sourceQueries = isEmployeeMode
+      ? [employeePeriodsQuery, ...activePeriodQueries]
+      : [timesheetQuery];
+    const decision = decideModalRefresh(sourceQueries, Date.now());
+    if (decision !== 'refetch') {
+      // Свежие данные, но запрос ещё идёт (например, после возврата на вкладку) —
+      // дождаться его и подставить результат, а не показывать то, что было до него.
+      updateModalRefreshStatus(decision === 'await' || wasBlocked ? 'applying' : 'idle');
+      return;
+    }
+    updateModalRefreshStatus('fetching');
+    // cancelRefetch: false — уже идущий запрос не отменяется, а переиспользуется.
+    const refetchSource = async (): Promise<boolean> => {
+      if (isEmployeeMode) {
+        const periodsResult = await employeePeriodsQuery.refetch({ cancelRefetch: false });
+        if (periodsResult.isError) return false;
+        const periodResults = await Promise.all(
+          activePeriodQueries.map(query => query.refetch({ cancelRefetch: false })),
+        );
+        return periodResults.every(result => !result.isError);
+      }
+      const result = await timesheetQuery.refetch({ cancelRefetch: false });
+      return !result.isError;
+    };
+    refetchSource()
+      .then((ok) => {
+        if (token !== modalRefreshTokenRef.current) return;
+        updateModalRefreshStatus(ok ? 'applying' : 'error');
+      })
+      .catch(() => {
+        if (token !== modalRefreshTokenRef.current) return;
+        updateModalRefreshStatus('error');
+      });
+  }, [
+    canEditTimesheet, isEmployeeMode, employeePeriodQueries, employeePeriods, employeePeriodsQuery,
+    timesheetQuery, updateModalRefreshStatus,
+  ]);
+
+  // Ответ получен и все запросы источника завершились — подставляем свежую запись дня
+  // (и объектную запись в объектном режиме) и открываем правку. Блок корректировок до
+  // этого не смонтирован, поэтому кадра «новые объекты + старая запись» пользователь не видит,
+  // а формы монтируются уже со свежими значениями. queueMicrotask — setState не в теле эффекта.
+  useEffect(() => {
+    if (modalRefreshStatus !== 'applying' || modalSourceFetching) return;
+    const token = modalRefreshTokenRef.current;
+    const freshEntry = modalLiveSource?.entry ?? null;
+    const objectKey = modalMode === 'object' ? (modalObjectTarget?.object_key ?? null) : null;
+    const freshObjectEntry = objectKey
+      ? (modalLiveSource?.objects.find(item => item.object_key === objectKey) ?? null)
+      : null;
+    queueMicrotask(() => {
+      if (token !== modalRefreshTokenRef.current || modalRefreshStatusRef.current !== 'applying') return;
+      setModalEntry(freshEntry);
+      // Объектной записи больше нет — окно остаётся в объектном режиме без записи
+      // (то же состояние, что и при клике по пустой клетке объекта).
+      if (objectKey) setModalObjectEntry(freshObjectEntry);
+      updateModalRefreshStatus('idle');
+    });
+  }, [modalRefreshStatus, modalSourceFetching, modalLiveSource, modalMode, modalObjectTarget, updateModalRefreshStatus]);
+
   // splitDayKeys раньше исключал дни с object_detail_mode='available' из обычного и bulk-клика,
   // чтобы заставить выбрать объект через split-view. UX убран — корректировка теперь применяется
   // к дню целиком, и bulk-edit работает по таким ячейкам как и по обычным.
@@ -716,11 +835,14 @@ export const TimesheetPage: FC = () => {
   };
 
   const closeModal = useCallback(() => {
+    // Ответ перезапроса, пришедший после закрытия, не должен трогать следующее окно.
+    modalRefreshTokenRef.current += 1;
+    updateModalRefreshStatus('idle');
     setModalOpen(false);
     setModalMode('day');
     setModalObjectEntry(null);
     setModalObjectTarget(null);
-  }, []);
+  }, [updateModalRefreshStatus]);
 
   // Day click -> modal
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
@@ -753,6 +875,7 @@ export const TimesheetPage: FC = () => {
     setModalObjectEntry(null);
     setModalObjectTarget(null);
     setModalOpen(true);
+    startModalDataRefresh();
   };
 
   const handleObjectDayClick = useCallback((
@@ -781,7 +904,8 @@ export const TimesheetPage: FC = () => {
     setModalObjectEntry(objectEntry);
     setModalObjectTarget(target);
     setModalOpen(true);
-  }, [entryMap, year, month]);
+    startModalDataRefresh();
+  }, [entryMap, year, month, startModalDataRefresh]);
 
   // Save correction
   const handleSaveCorrection = useCallback(async (
@@ -792,6 +916,7 @@ export const TimesheetPage: FC = () => {
     allocations?: Array<{ object_id: string; hours: number }> | null,
   ) => {
     if (!modalEmployee) return;
+    if (isModalWriteBlocked()) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       if (modalEntry?.id) {
@@ -847,7 +972,7 @@ export const TimesheetPage: FC = () => {
       console.error('Save correction error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Добавление ОТДЕЛЬНОЙ корректировки «Удалёнка» поверх согласованного выхода в выходной.
   // Всегда create() (не update заявки): backend сделает source_type='manual', auto_approved
@@ -855,6 +980,7 @@ export const TimesheetPage: FC = () => {
   // из свежих данных — у create()-ответа ещё нет companion_work_request.
   const handleAddRemoteOverWork = useCallback(async (hours: number, notes: string, files?: File[]) => {
     if (!modalEmployee) return;
+    if (isModalWriteBlocked()) return;
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
     try {
       const created = await timesheetService.create({
@@ -893,11 +1019,12 @@ export const TimesheetPage: FC = () => {
       console.error('Add remote over work error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось добавить удалёнку');
     }
-  }, [modalEmployee, year, month, modalDay, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, year, month, modalDay, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Повторное сохранение корректировки с явно выбранным объектом (после OBJECT_REQUIRED).
   const confirmObjectPrompt = useCallback(async () => {
     if (!objectPrompt || !modalEmployee || !objectPrompt.selected) return;
+    if (isModalWriteBlocked()) return;
     const { pending, selected } = objectPrompt;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -927,10 +1054,11 @@ export const TimesheetPage: FC = () => {
       console.error('Save correction with object error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [objectPrompt, modalEmployee, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches]);
+  }, [objectPrompt, modalEmployee, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
+    if (isModalWriteBlocked()) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       const saved = await timesheetService.upsertObjectEntry({
@@ -959,7 +1087,7 @@ export const TimesheetPage: FC = () => {
       console.error('Save object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   const handleSaveModalCorrection = useCallback(
     (
@@ -985,6 +1113,7 @@ export const TimesheetPage: FC = () => {
 
   const handleDeleteDayCorrection = useCallback(async () => {
     if (!modalEntry?.id || !modalEmployee) return;
+    if (isModalWriteBlocked()) return;
     try {
       await timesheetService.delete(modalEntry.id);
       closeModal();
@@ -998,11 +1127,13 @@ export const TimesheetPage: FC = () => {
       console.error('Delete day correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     }
-  }, [modalEntry?.id, modalEmployee, closeModal, queryClient, toast, invalidateTimesheetCaches]);
+  }, [modalEntry?.id, modalEmployee, closeModal, queryClient, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Точечная правка текста заявки «работа в выходной/праздник» (initialNotes или
   // companion_work_request.reason) — не закрывает модалку, только обновляет отображаемый текст.
   const handleUpdateReason = useCallback(async (id: number, reason: string) => {
+    // Вызывающий ждёт промис: при блокировке — ошибка, чтобы форма не считала текст сохранённым.
+    if (isModalWriteBlocked()) throw new Error(MODAL_WRITE_BLOCKED_MESSAGE);
     try {
       await timesheetService.update(id, { notes: reason });
     } catch (error) {
@@ -1022,7 +1153,7 @@ export const TimesheetPage: FC = () => {
       queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
       queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
     ]);
-  }, [queryClient, toast, invalidateTimesheetCaches]);
+  }, [queryClient, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (objectEntriesDisabled) {
@@ -1030,6 +1161,7 @@ export const TimesheetPage: FC = () => {
       return;
     }
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
+    if (isModalWriteBlocked()) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       await timesheetService.deleteObjectEntry({
@@ -1045,7 +1177,7 @@ export const TimesheetPage: FC = () => {
       console.error('Delete object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Сохранение/удаление per-object из «День»-модалки (modalMode='day'): таргет приходит из аргументов,
   // а не из modalObjectTarget — позволяет редактировать любой объект в списке.
@@ -1059,6 +1191,7 @@ export const TimesheetPage: FC = () => {
       return;
     }
     if (!modalEmployee) return;
+    if (isModalWriteBlocked()) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       await timesheetService.upsertObjectEntry({
@@ -1078,7 +1211,7 @@ export const TimesheetPage: FC = () => {
       console.error('Save object correction (by target) error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   const handleDeleteObjectByTarget = useCallback(async (
     target: { object_key: string; object_id: string | null; object_name: string },
@@ -1088,6 +1221,7 @@ export const TimesheetPage: FC = () => {
       return;
     }
     if (!modalEmployee) return;
+    if (isModalWriteBlocked()) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       await timesheetService.deleteObjectEntry({
@@ -1103,7 +1237,7 @@ export const TimesheetPage: FC = () => {
       console.error('Delete object correction (by target) error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Export. Во всех режимах отдаётся ЕДИНЫЙ файл для 1С — тот же, что в «Табели HR».
   // Режим «Мои сотрудники» (руководитель без назначенных отделов) идёт через
@@ -2841,11 +2975,11 @@ export const TimesheetPage: FC = () => {
             // Показывается, когда у дня нет объектной детализации (иначе объект
             // задаётся в списке объектов).
             objectChoice={modalObjectsQuery.data ?? null}
-            objectEntries={modalEmployee
+            // Из недеферированного источника (modalLiveSource), а не из отложенной копии сетки.
+            objectEntries={modalLiveSource
               // Прячем «эхо» day-level корректировки, размазанное на объект (#8): такая запись
               // дублирует day-level «Корректировка табеля», которая показывается отдельно.
-              ? (objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(modalWorkDate) ?? [])
-                  .filter(e => !e.from_day_level)
+              ? modalLiveSource.objects.filter(e => !e.from_day_level)
               : undefined}
             // Роль без объектных правок: «По сотрудникам» показываем дневную форму, а не
             // объектный список (иначе единственный путь правки упирается в запрет).
@@ -2876,6 +3010,10 @@ export const TimesheetPage: FC = () => {
                 ) || 8)
               : 8}
             onAddRemote={handleAddRemoteOverWork}
+            dataRefreshState={
+              modalRefreshStatus === 'idle' ? null : (modalRefreshStatus === 'error' ? 'error' : 'loading')
+            }
+            onRetryDataRefresh={startModalDataRefresh}
           />
         </Suspense>
       )}

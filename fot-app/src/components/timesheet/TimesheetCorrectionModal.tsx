@@ -130,6 +130,11 @@ interface ICorrectionModalProps {
   // не открывая полную форму редактирования корректировки.
   canEditReasonText?: boolean;
   onUpdateReason?: (id: number, reason: string) => Promise<void>;
+  // Данные дня перечитываются при открытии окна (список проходов свежий, а часы и
+  // корректировки — из ранее загруженной сетки). Пока идёт обновление или оно упало,
+  // блок корректировок не монтируется: старые цифры не видны и сохранить по ним нельзя.
+  dataRefreshState?: 'loading' | 'error' | null;
+  onRetryDataRefresh?: () => void;
 }
 
 type ModalTab = 'events' | 'correction';
@@ -1644,6 +1649,8 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   readOnly,
   canEditReasonText,
   onUpdateReason,
+  dataRefreshState = null,
+  onRetryDataRefresh,
 }) => {
   const hasObjectsBlock = !disableObjectEntries
     && Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
@@ -1810,7 +1817,20 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     return null;
   })() : null;
 
-  const correctionPanel = showCorrectionTab ? (
+  const correctionPanel = showCorrectionTab && dataRefreshState ? (
+    <div className="ts-corr-card">
+      {dataRefreshState === 'loading' ? (
+        <div className="ts-corr-refresh" role="status">Обновляем данные…</div>
+      ) : (
+        <div className="ts-corr-refresh ts-corr-refresh--error" role="alert">
+          <span>Не удалось обновить данные дня. Корректировки недоступны, пока данные не обновятся.</span>
+          {onRetryDataRefresh && (
+            <button type="button" className="ts-btn" onClick={onRetryDataRefresh}>Повторить</button>
+          )}
+        </div>
+      )}
+    </div>
+  ) : showCorrectionTab ? (
     <div className="ts-corr-card">
       {correctionAuthorBlock}
       {!hasObjectsBlock && (

@@ -5542,6 +5542,31 @@
   background: var(--bg-secondary, transparent);
   overflow: hidden;
 }
+/* Окно дня перечитывает данные: блок корректировок заменяется статусом. */
+.ts-corr-refresh {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.ts-corr-refresh--error {
+  color: var(--error);
+}
+.ts-corr-refresh .ts-btn {
+  min-height: 44px;
+  padding: 0 16px;
+}
+@media (min-width: 1024px) {
+  .ts-corr-refresh .ts-btn {
+    min-height: 32px;
+  }
+}
 .ts-corr-card__author {
   display: flex;
   align-items: center;
