@@ -42,6 +42,60 @@
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
+/* Крестик очистки (как в DepartmentTreeSelect): виден, пока поле непустое. */
+.wrapper.withClear .input {
+  padding-right: 34px;
+}
+
+.clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.clear:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (hover: none) {
+  .clear {
+    right: 2px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .wrapper.withClear .input {
+    padding-right: 36px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clear {
+    transition: none;
+  }
+}
+
 @media (max-width: 768px) {
   .wrapper {
     width: 100%;

@@ -2623,7 +2623,7 @@ export const StaffControlPage: FC = () => {
         </div>
       )}
       <div className="sc-filter-search">
-        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+        <SearchInput clearable value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
       {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N», фильтры столбцов. */}
       {(canManageStaff || isMobile || activeColumnFilterCount > 0) && (
