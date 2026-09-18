@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Сегменты переводов внутри периода (единый файл 1С) и детерминизм периодных резолверов отдела.
 
-const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
+const { pgQuery, getArchive } = vi.hoisted(() => ({ pgQuery: vi.fn(), getArchive: vi.fn() }));
 vi.mock('../config/postgres.js', () => ({
   query: pgQuery,
   queryOne: vi.fn(),
@@ -10,6 +10,7 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 vi.mock('./skud-shared.service.js', () => ({ collectDeptIds: vi.fn() }));
+vi.mock('./employee-archive-department.service.js', () => ({ getKnownArchiveDepartment: getArchive }));
 
 import {
   buildTransferSegments,
@@ -32,6 +33,7 @@ const row = (
 
 beforeEach(() => {
   pgQuery.mockReset().mockResolvedValue([]);
+  getArchive.mockReset().mockResolvedValue(null);
 });
 
 describe('buildTransferSegments', () => {
@@ -112,6 +114,83 @@ describe('buildTransferSegments', () => {
   });
 });
 
+describe('buildTransferSegments: архивный отдел «Уволенные»', () => {
+  const ARCHIVE = 'archive';
+
+  it('A → архив → A (ошибочное увольнение, Садиев) → не делим, все дни в A', () => {
+    const segments = buildTransferSegments([
+      row(1, 1549, 'A', '2026-04-20', '2026-09-09'),
+      row(2, 1549, ARCHIVE, '2026-09-10', '2026-09-10'),
+      row(3, 1549, ARCHIVE, '2026-09-11', '2026-09-11'),
+      row(4, 1549, 'A', '2026-09-12', null),
+    ], START, END, ARCHIVE);
+    expect(segments.has(1549)).toBe(false);
+  });
+
+  it('без архивного id тот же случай режется как раньше (A / архив / A)', () => {
+    const segments = buildTransferSegments([
+      row(1, 1549, 'A', '2026-04-20', '2026-09-09'),
+      row(2, 1549, ARCHIVE, '2026-09-10', '2026-09-11'),
+      row(3, 1549, 'A', '2026-09-12', null),
+    ], START, END);
+    expect(segments.get(1549)).toEqual([
+      { deptId: 'A', from: null, toExclusive: '2026-09-10' },
+      { deptId: ARCHIVE, from: '2026-09-10', toExclusive: '2026-09-12' },
+      { deptId: 'A', from: '2026-09-12', toExclusive: null },
+    ]);
+  });
+
+  it('A → архив → B → промежуток в A, граница A→B в дату восстановления', () => {
+    const segments = buildTransferSegments([
+      row(1, 7, 'A', '2026-01-01', '2026-09-09'),
+      row(2, 7, ARCHIVE, '2026-09-10', '2026-09-14'),
+      row(3, 7, 'B', '2026-09-15', null),
+    ], START, END, ARCHIVE);
+    expect(segments.get(7)).toEqual([
+      { deptId: 'A', from: null, toExclusive: '2026-09-15' },
+      { deptId: 'B', from: '2026-09-15', toExclusive: null },
+    ]);
+  });
+
+  it('предыдущего назначения нет (архив → B) → промежуток в B, не делим', () => {
+    const segments = buildTransferSegments([
+      row(2, 7, ARCHIVE, '2026-08-20', '2026-09-14'),
+      row(3, 7, 'B', '2026-09-15', null),
+    ], START, END, ARCHIVE);
+    expect(segments.has(7)).toBe(false);
+  });
+
+  it('уволенный без восстановления (A → архив до конца) → не делим, отсечку даёт cutoff', () => {
+    const segments = buildTransferSegments([
+      row(1, 7, 'A', '2026-01-01', '2026-09-09'),
+      row(2, 7, ARCHIVE, '2026-09-10', null),
+    ], START, END, ARCHIVE);
+    expect(segments.has(7)).toBe(false);
+  });
+
+  it('NULL-отдел архивом не считается: NULL → B остаётся переводом', () => {
+    const segments = buildTransferSegments([
+      row(1, 7, null, '2026-01-01', '2026-09-04'),
+      row(2, 7, 'B', '2026-09-05', null),
+    ], START, END, ARCHIVE);
+    expect(segments.get(7)).toEqual([
+      { deptId: null, from: null, toExclusive: '2026-09-05' },
+      { deptId: 'B', from: '2026-09-05', toExclusive: null },
+    ]);
+  });
+
+  it('входные строки не мутируются', () => {
+    const rows = [
+      row(1, 7, 'A', '2026-01-01', '2026-09-09'),
+      row(2, 7, ARCHIVE, '2026-09-10', '2026-09-14'),
+      row(3, 7, 'B', '2026-09-15', null),
+    ];
+    const snapshot = JSON.parse(JSON.stringify(rows));
+    buildTransferSegments(rows, START, END, ARCHIVE);
+    expect(rows).toEqual(snapshot);
+  });
+});
+
 describe('resolveTransferSegmentsInPeriod', () => {
   it('читает назначения сотрудников с запасом на стык и детерминированным порядком', async () => {
     pgQuery.mockResolvedValue([
@@ -131,6 +210,32 @@ describe('resolveTransferSegmentsInPeriod', () => {
   it('пустой список → без запроса', async () => {
     expect((await resolveTransferSegmentsInPeriod([], START, END)).size).toBe(0);
     expect(pgQuery).not.toHaveBeenCalled();
+    expect(getArchive).not.toHaveBeenCalled();
+  });
+
+  it('архивный отдел известен → промежуток увольнения не режет период', async () => {
+    getArchive.mockResolvedValue({ id: 'archive', name: 'Уволенные', source: 'local', sigurDepartmentId: null });
+    pgQuery.mockResolvedValue([
+      row(1, 1549, 'A', '2026-04-20', '2026-09-09'),
+      row(2, 1549, 'archive', '2026-09-10', '2026-09-11'),
+      row(3, 1549, 'A', '2026-09-12', null),
+    ]);
+    const segments = await resolveTransferSegmentsInPeriod([1549], START, END);
+    expect(getArchive).toHaveBeenCalledTimes(1);
+    expect(segments.has(1549)).toBe(false);
+  });
+
+  it('архив не определён (null или ошибка) → поведение прежнее', async () => {
+    const rows = [
+      row(1, 1549, 'A', '2026-04-20', '2026-09-09'),
+      row(2, 1549, 'archive', '2026-09-10', '2026-09-11'),
+      row(3, 1549, 'A', '2026-09-12', null),
+    ];
+    pgQuery.mockResolvedValue(rows);
+    expect((await resolveTransferSegmentsInPeriod([1549], START, END)).get(1549)).toHaveLength(3);
+
+    getArchive.mockRejectedValue(new Error('settings unavailable'));
+    expect((await resolveTransferSegmentsInPeriod([1549], START, END)).get(1549)).toHaveLength(3);
   });
 });
 

@@ -22,9 +22,11 @@ vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) 
     resolveTimesheetDateRange: actual.resolveTimesheetDateRange,
     resolveTimesheetPeriodRange: actual.resolveTimesheetPeriodRange,
     resolveTransferSegmentsInPeriod: h.segments,
+    buildTransferSegments: actual.buildTransferSegments,
   };
 });
 
+import { buildTransferSegments } from './timesheet-department-assignments.service.js';
 import {
   buildUnified1CBuffer,
   groupEmployeesByDepartment,
@@ -243,5 +245,44 @@ describe('groupEmployeesByDepartment', () => {
       new Set([1]),
     );
     expect(buckets.map(b => b.deptId)).toEqual([null, 'A']);
+  });
+
+  describe('промежуток в архиве «Уволенные» (сегменты — настоящий buildTransferSegments)', () => {
+    const START = '2026-07-01';
+    const END = '2026-07-31';
+    const ARCHIVE = 'archive';
+    const assignment = (id: number, dept: string, from: string, to: string | null) => ({
+      id, employee_id: 1, org_department_id: dept, effective_from: from, effective_to: to,
+    });
+
+    it('A → архив → A при scope {A}: окон нет, все 31 день в A (случай Садиева)', () => {
+      const segments = buildTransferSegments([
+        assignment(1, 'A', '2026-04-20', '2026-07-09'),
+        assignment(2, ARCHIVE, '2026-07-10', '2026-07-10'),
+        assignment(3, ARCHIVE, '2026-07-11', '2026-07-11'),
+        assignment(4, 'A', '2026-07-12', null),
+      ], START, END, ARCHIVE);
+      const buckets = groupEmployeesByDepartment(new Map([[1, 'A']]), segments, ['A'], new Set());
+      expect(buckets).toEqual([{ deptId: 'A', employeeIds: [1], windows: new Map() }]);
+      expect(allDaysOf(buckets, 1)).toHaveLength(31);
+    });
+
+    it('A → архив → B: {A} + {B} покрывают каждый день ровно один раз, бакета «Уволенные» нет', () => {
+      const segments = buildTransferSegments([
+        assignment(1, 'A', '2026-01-01', '2026-07-09'),
+        assignment(2, ARCHIVE, '2026-07-10', '2026-07-14'),
+        assignment(3, 'B', '2026-07-15', null),
+      ], START, END, ARCHIVE);
+      const only = (scope: string[]) => groupEmployeesByDepartment(new Map([[1, scope[0]]]), segments, scope, new Set());
+
+      const inB = only(['B']);
+      expect(inB.map(b => b.deptId)).toEqual(['B']);
+      expect(inB[0].windows.get(1)).toEqual([{ from: '2026-07-15', toExclusive: null }]);
+
+      const days = [...allDaysOf(only(['A']), 1), ...allDaysOf(inB, 1)];
+      expect(days).toHaveLength(31);
+      expect(days.filter(d => d.startsWith('A:'))).toHaveLength(14);
+      expect(days.some(d => d.startsWith(`${ARCHIVE}:`))).toBe(false);
+    });
   });
 });

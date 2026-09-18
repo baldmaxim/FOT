@@ -561,16 +561,44 @@ export interface IAssignmentPeriodRow {
 }
 
 /**
+ * Копия отсортированных назначений сотрудника, где архивный отдел заменён отделом
+ * ближайшего предыдущего неархивного назначения (нет его — следующего). Входные
+ * строки не меняются.
+ */
+const normalizeArchiveAssignments = (
+  sorted: IAssignmentPeriodRow[],
+  archiveDeptId: string | null,
+): IAssignmentPeriodRow[] => {
+  if (!archiveDeptId) return sorted;
+  const isArchive = (row: IAssignmentPeriodRow): boolean => row.org_department_id === archiveDeptId;
+  if (!sorted.some(isArchive)) return sorted;
+  return sorted.map((row, index) => {
+    if (!isArchive(row)) return row;
+    const donor = sorted.slice(0, index).reverse().find(candidate => !isArchive(candidate))
+      ?? sorted.slice(index + 1).find(candidate => !isArchive(candidate));
+    return donor ? { ...row, org_department_id: donor.org_department_id } : row;
+  });
+};
+
+/**
  * Разбиение периода на сегменты по НАСТОЯЩИМ переводам (чистая функция, см.
  * resolveTransferSegmentsInPeriod). Граница — назначение, которому встык предшествует
  * назначение в другом отделе (то же условие, что joined_via_transfer). Одиночный поздний
  * effective_from без стыка границей не считается. Сотрудник без границ внутри периода
  * в результат не попадает. Сегменты покрывают период без дыр и пересечений.
+ *
+ * archiveDeptId — архивный отдел «Уволенные». Назначение в нём — не перевод, а
+ * промежуток увольнения: его дни относятся к ближайшему предыдущему неархивному
+ * назначению (иначе — к ближайшему следующему), как в онлайн-табеле. Без этого
+ * ошибочно уволенный и восстановленный терял в едином файле 1С отработанные дни
+ * промежутка: сегмент «Уволенные» вне отделов выгрузки и отбрасывается. null —
+ * архив не определён, поведение прежнее; NULL-отдел назначения архивом не считается.
  */
 export function buildTransferSegments(
   rows: IAssignmentPeriodRow[],
   startDate: string,
   endDate: string,
+  archiveDeptId: string | null = null,
 ): Map<number, ITransferSegment[]> {
   const byEmployee = new Map<number, IAssignmentPeriodRow[]>();
   for (const row of rows) {
@@ -588,7 +616,7 @@ export function buildTransferSegments(
 
   const result = new Map<number, ITransferSegment[]>();
   for (const empId of [...byEmployee.keys()].sort((a, b) => a - b)) {
-    const list = [...byEmployee.get(empId)!].sort(compareRows);
+    const list = normalizeArchiveAssignments([...byEmployee.get(empId)!].sort(compareRows), archiveDeptId);
     // Одна граница на дату: при «грязных» дублях берём первое назначение в стабильном порядке.
     const boundaries: Array<{ date: string; prevDeptId: string | null; nextDeptId: string | null }> = [];
     for (const cur of list) {
@@ -628,6 +656,10 @@ export async function resolveTransferSegmentsInPeriod(
 ): Promise<Map<number, ITransferSegment[]>> {
   const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   if (uniqueIds.length === 0) return new Map();
+  // Динамический импорт: сервис архива тянет Sigur-модули, статический замкнул бы цикл ESM.
+  // Не удалось определить архив — промежутки увольнения режутся как раньше, выгрузка не падает.
+  const { getKnownArchiveDepartment } = await import('./employee-archive-department.service.js');
+  const archive = await getKnownArchiveDepartment().catch(() => null);
   // Смежные назначения за границей периода тоже нужны: стык проверяется по effective_to
   // предыдущего, которое может закончиться накануне первой границы.
   const rows = await query<IAssignmentPeriodRow>(
@@ -639,7 +671,7 @@ export async function resolveTransferSegmentsInPeriod(
       ORDER BY employee_id, effective_from, id`,
     [uniqueIds, startDate, endDate],
   );
-  return buildTransferSegments(rows, startDate, endDate);
+  return buildTransferSegments(rows, startDate, endDate, archive?.id ?? null);
 }
 
 export async function isEmployeeAssignedToDepartmentOnDate(
