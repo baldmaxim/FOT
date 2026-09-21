@@ -919,7 +919,13 @@ export async function resolveEditableDirectSubordinates(req: AuthenticatedReques
 
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const { owned, partiallyCovered } = await splitDirectReportsByCoverage(all, today, today);
+  // viewer пятым аргументом (четвёртый — exec): руководитель, который сам владеет
+  // табелем отдела, не теряет права на своих же прямых подчинённых. Скоуп общий —
+  // через resolveEditableEmployeeIds/canEditEmployeeInScope он питает и заявления, и
+  // условия оплаты; основанием остаётся личное подчинение, как было до сентября.
+  const { owned, partiallyCovered } = await splitDirectReportsByCoverage(
+    all, today, today, undefined, req.user.employee_id ?? undefined,
+  );
   // partiallyCovered на однодневном окне пуст, но включаем его явно: инвариант
   // «owned ∪ partiallyCovered = кого ведёт сам» не должен зависеть от длины окна.
   const editable = [...new Set([...owned, ...partiallyCovered])];

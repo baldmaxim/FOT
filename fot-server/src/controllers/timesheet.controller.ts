@@ -1533,7 +1533,11 @@ async function canAccessEmployeeForTimesheetDate(
     if (!requireEdit) return true;
     // Главный write-гейт корректировок: на дату, где у сотрудника есть действующий
     // руководитель отдела, табель ведёт он — личный руководитель только смотрит.
-    const { owned } = await splitDirectReportsByCoverage([employeeId], workDate, workDate);
+    // Исключение — сам спрашивающий и есть владелец табеля отдела: тогда день не
+    // покрыт, иначе правка отбиралась бы в пользу него же и не могла бы пройти.
+    const { owned } = await splitDirectReportsByCoverage(
+      [employeeId], workDate, workDate, undefined, req.user.employee_id ?? undefined,
+    );
     return owned.includes(employeeId);
   }
 
@@ -2790,8 +2794,13 @@ export const timesheetController = {
       // показываем (руководитель видит посещаемость), но правку и подачу забираем.
       // Полностью покрытые уходят отдельной секцией вниз; частично покрытые остаются
       // среди своих, а их покрытые дни приходят в covered_dates и гасятся на фронте.
+      // Владелец отдела, открывший свой же грид, покрытием не связан: иначе его
+      // подчинённые становились бы read-only для него самого (covered_dates гасят
+      // и клик по дню, и bulk), и закрыть дни было бы некому.
       const coverageSplit = directReportIds.length > 0
-        ? await splitDirectReportsByCoverage(directReportIds, startDate, endDate)
+        ? await splitDirectReportsByCoverage(
+            directReportIds, startDate, endDate, undefined, req.user.employee_id ?? undefined,
+          )
         : null;
       const coveredDirectReportSet = new Set<number>(coverageSplit?.fullyCovered ?? []);
       const coveredDatesByEmployee = coverageSplit?.coveredDates ?? new Map<number, string[]>();

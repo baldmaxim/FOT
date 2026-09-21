@@ -40,6 +40,12 @@ vi.mock('./timesheet-department-assignments.service.js', () => ({
   listEmployeeIdsAssignedToDepartmentPeriod: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('./direct-report-coverage.service.js', () => ({
+  splitDirectReportsByCoverage: vi.fn(async () => ({
+    owned: [], fullyCovered: [], partiallyCovered: [], coveredDates: new Map(),
+  })),
+}));
+
 import {
   canAccessEmployeeForTimesheetPeriod,
   filterAdditionalEmployeeIdsForTimesheetPeriod,
@@ -51,8 +57,10 @@ import {
   hasAllDepartmentsScope,
   hasGlobalDepartmentReadScope,
   resolveAccessibleDepartmentIds,
+  resolveEffectiveDirectSubordinates,
   resolveScopedDepartmentId,
 } from './data-scope.service.js';
+import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -154,5 +162,41 @@ describe('resolveTimesheetScope — all_departments_scope', () => {
     vi.mocked(hasGlobalDepartmentReadScope).mockResolvedValue(true);
     const req = { user: { role_code: 'security', is_admin: false, employee_id: 2 } } as unknown as AuthenticatedRequest;
     expect(await resolveTimesheetScope(req)).toBe('department');
+  });
+});
+
+/**
+ * Проводка viewerEmployeeId в write-гейт периода: без неё руководитель, который сам
+ * владеет табелем отдела, терял правку на собственных прямых подчинённых.
+ */
+describe('canAccessEmployeeForTimesheetPeriod — передаёт viewerEmployeeId', () => {
+  const SUB = 777;
+
+  beforeEach(() => {
+    vi.mocked(resolveEffectiveDirectSubordinates).mockResolvedValue([SUB]);
+    vi.mocked(splitDirectReportsByCoverage).mockReset().mockResolvedValue({
+      owned: [SUB], fullyCovered: [], partiallyCovered: [], coveredDates: new Map(),
+    });
+  });
+
+  it('пятым аргументом уходит employee_id текущего пользователя (четвёртый — exec)', async () => {
+    const allowed = await canAccessEmployeeForTimesheetPeriod(
+      buildReq({ employee_id: 500 }), SUB, '2026-09-01', '2026-09-15', true,
+    );
+
+    expect(allowed).toBe(true);
+    expect(splitDirectReportsByCoverage).toHaveBeenCalledWith(
+      [SUB], '2026-09-01', '2026-09-15', undefined, 500,
+    );
+  });
+
+  it('у пользователя нет employee_id → передаём undefined, а не null', async () => {
+    await canAccessEmployeeForTimesheetPeriod(
+      buildReq({ employee_id: null }), SUB, '2026-09-01', '2026-09-15', true,
+    );
+
+    expect(splitDirectReportsByCoverage).toHaveBeenCalledWith(
+      [SUB], '2026-09-01', '2026-09-15', undefined, undefined,
+    );
   });
 });

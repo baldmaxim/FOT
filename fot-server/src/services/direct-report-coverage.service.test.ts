@@ -185,3 +185,91 @@ describe('splitDirectReportsByCoverage', () => {
     expect(pgQuery).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Руководитель, который ОДНОВРЕМЕННО владеет табелем отдела и держит тех же людей
+ * в личных подчинённых. До фикса их дни помечались покрытыми, правка отбиралась
+ * в пользу него же — и не мог внести её никто.
+ */
+describe('viewerEmployeeId — владелец отдела не покрывает сам себя', () => {
+  const VIEWER = 900;
+
+  it('единственный владелец отдела = viewer → день не покрыт, сотрудник owned', async () => {
+    mockDb({
+      snapshot: [{ id: EMP, org_department_id: MANAGED }],
+      heads: [{ employee_id: VIEWER, department_id: MANAGED }],
+    });
+
+    const coverage = await loadCoverage([EMP], '2026-09-01', '2026-09-15', undefined, VIEWER);
+    expect(isCoveredOn(coverage.get(EMP), '2026-09-07')).toBe(false);
+
+    const split = await splitDirectReportsByCoverage(
+      [EMP], '2026-09-01', '2026-09-03', undefined, VIEWER,
+    );
+    expect(split.owned).toEqual([EMP]);
+    expect(split.fullyCovered).toEqual([]);
+    expect(split.coveredDates.has(EMP)).toBe(false);
+  });
+
+  it('владельцев двое, viewer один из них → день по-прежнему покрыт вторым', async () => {
+    mockDb({
+      snapshot: [{ id: EMP, org_department_id: MANAGED }],
+      heads: [
+        { employee_id: VIEWER, department_id: MANAGED },
+        { employee_id: 901, department_id: MANAGED },
+      ],
+    });
+
+    const coverage = await loadCoverage([EMP], '2026-09-01', '2026-09-15', undefined, VIEWER);
+
+    expect(isCoveredOn(coverage.get(EMP), '2026-09-07')).toBe(true);
+  });
+
+  it('viewer — единственный владелец в статусе deputy → день не покрыт', async () => {
+    mockDb({
+      snapshot: [{ id: EMP, org_department_id: MANAGED }],
+      heads: [],
+      deputies: [{ employee_id: VIEWER, department_id: MANAGED }],
+    });
+
+    const coverage = await loadCoverage([EMP], '2026-09-01', '2026-09-15', undefined, VIEWER);
+
+    expect(isCoveredOn(coverage.get(EMP), '2026-09-07')).toBe(false);
+  });
+
+  it('viewer не передан → поведение прежнее (ownership и состав подач не меняются)', async () => {
+    mockDb({
+      snapshot: [{ id: EMP, org_department_id: MANAGED }],
+      heads: [{ employee_id: VIEWER, department_id: MANAGED }],
+    });
+
+    const coverage = await loadCoverage([EMP], '2026-09-01', '2026-09-15');
+
+    expect(isCoveredOn(coverage.get(EMP), '2026-09-07')).toBe(true);
+  });
+
+  it('перевод внутри периода: свой отдел не покрыт, чужой покрыт', async () => {
+    const OTHER = 'dept-other-head';
+    mockDb({
+      assignments: [
+        { employee_id: EMP, dept_id: MANAGED, effective_from: '2026-01-01', effective_to: '2026-09-05' },
+        { employee_id: EMP, dept_id: OTHER, effective_from: '2026-09-06', effective_to: null },
+      ],
+      snapshot: [{ id: EMP, org_department_id: OTHER }],
+      heads: [
+        { employee_id: VIEWER, department_id: MANAGED },
+        { employee_id: 901, department_id: OTHER },
+      ],
+    });
+
+    const split = await splitDirectReportsByCoverage(
+      [EMP], '2026-09-01', '2026-09-10', undefined, VIEWER,
+    );
+
+    expect(split.partiallyCovered).toEqual([EMP]);
+    // Покрыты только дни в чужом отделе: 06–10 сентября.
+    expect(split.coveredDates.get(EMP)).toEqual([
+      '2026-09-06', '2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10',
+    ]);
+  });
+});

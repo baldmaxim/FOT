@@ -201,8 +201,10 @@ export async function canAccessEmployeeForTimesheetPeriod(
     // Для записи: дни, на которые у сотрудника есть действующий руководитель отдела,
     // ведёт он. Пропускаем, только если в периоде остался хоть один свой день —
     // конкретную дату проверит canAccessEmployeeForTimesheetDate.
+    // Пятым аргументом — сам спрашивающий: если владелец табеля отдела это он,
+    // покрытие на него не распространяется (иначе правку не мог бы внести никто).
     const { owned, partiallyCovered } = await splitDirectReportsByCoverage(
-      [employeeId], startDate, endDate,
+      [employeeId], startDate, endDate, undefined, req.user.employee_id ?? undefined,
     );
     return owned.includes(employeeId) || partiallyCovered.includes(employeeId);
   }

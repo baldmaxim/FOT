@@ -91,12 +91,19 @@ interface ISnapshotRow extends QueryResultRow {
  *
  * Три запроса на весь набор (назначения, snapshot, руководители отделов), а не серия
  * на каждого сотрудника: функция вызывается в том числе из-под advisory-локов.
+ *
+ * viewerEmployeeId — тот, для кого считаем покрытие (личный руководитель, открывший
+ * грид/пишущий правку). Если ЕДИНСТВЕННЫЙ владелец табеля отдела — он сам, день для
+ * него не покрыт: отбирать правку в пользу самого себя бессмысленно, а раньше так и
+ * выходило — дни не мог править никто. Без параметра поведение прежнее, поэтому
+ * принадлежность дня подаче (timesheet-day-ownership) и состав подач его не передают.
  */
 export async function loadCoverage(
   employeeIds: readonly number[],
   minDate: string,
   maxDate: string,
   exec?: DbExecutor,
+  viewerEmployeeId?: number,
 ): Promise<TCoverageMap> {
   const result: TCoverageMap = new Map();
   const ids = [...new Set(employeeIds.map(Number).filter(id => Number.isInteger(id) && id > 0))];
@@ -150,8 +157,13 @@ export async function loadCoverage(
   // Владельцы табеля, а не «начальники отдела»: заместитель (миграция 283) подаёт
   // отдел наравне с начальником, значит его дни тоже покрыты подачей отдела.
   const managers = await listDepartmentTimesheetOwners([...departmentIds], exec);
-  const isManaged = (departmentId: string | null): boolean =>
-    departmentId != null && (managers.get(departmentId)?.length ?? 0) > 0;
+  const isManaged = (departmentId: string | null): boolean => {
+    if (departmentId == null) return false;
+    const owners = managers.get(departmentId) ?? [];
+    // Сам viewer в роли владельца не «покрывает» собственного подчинённого (см. док выше).
+    // Второй владелец отдела покрытие сохраняет: он подаёт отдел и ведёт эти дни.
+    return owners.some(ownerId => ownerId !== viewerEmployeeId);
+  };
 
   const ensure = (employeeId: number): IEmployeeCoverage => {
     const existing = result.get(employeeId);
@@ -207,12 +219,16 @@ export interface ICoverageSplit {
 /**
  * Единственная точка входа для вызывающих: делит прямых подчинённых на тех, кого
  * личный руководитель ведёт сам, и тех, за кого отвечает руководитель отдела.
+ *
+ * viewerEmployeeId передают только гейты «может ли ЭТОТ пользователь править» —
+ * см. док loadCoverage.
  */
 export async function splitDirectReportsByCoverage(
   employeeIds: readonly number[],
   startDate: string,
   endDate: string,
   exec?: DbExecutor,
+  viewerEmployeeId?: number,
 ): Promise<ICoverageSplit> {
   const split: ICoverageSplit = {
     owned: [], fullyCovered: [], partiallyCovered: [], coveredDates: new Map(),
@@ -226,7 +242,7 @@ export async function splitDirectReportsByCoverage(
     return split;
   }
 
-  const coverage = await loadCoverage(ids, startDate, endDate, exec);
+  const coverage = await loadCoverage(ids, startDate, endDate, exec, viewerEmployeeId);
 
   for (const employeeId of ids) {
     const own = coverage.get(employeeId);
