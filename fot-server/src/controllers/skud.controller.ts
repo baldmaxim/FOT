@@ -21,9 +21,9 @@ import {
   type DisciplineExportEmployeeSummary,
   type DisciplineViolationType,
 } from '../services/skud-export.service.js';
-import {
 import { collectEmployeeTimesheetDetail, isRealIsoDate } from '../services/skud-timesheet-detail-export.service.js';
 import { buildTimesheetDetailWorkbook } from '../services/skud-timesheet-detail-excel.service.js';
+import {
   getSyncFilteredEmployees,
   queryEventsByEmployeeId,
   searchAndBackfillByName,
@@ -851,49 +851,6 @@ const skudReadController = {
   },
 
   /**
-   * GET /api/skud/events
-   */
-  async getEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { startDate, endDate, accessPoint, employeeId, search } = req.query;
-      const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
-
-      const limit = searchStr ? 10000 : 1000;
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-
-      if (startDate && typeof startDate === 'string') {
-        params.push(startDate);
-        conditions.push(`event_date >= $${params.length}`);
-      }
-      if (endDate && typeof endDate === 'string') {
-        params.push(endDate);
-        conditions.push(`event_date <= $${params.length}`);
-      }
-      if (accessPoint && typeof accessPoint === 'string') {
-        params.push(accessPoint);
-        conditions.push(`access_point = $${params.length}`);
-      }
-      if (employeeId && typeof employeeId === 'string') {
-        params.push(parseInt(employeeId, 10));
-        conditions.push(`employee_id = $${params.length}`);
-      }
-
-      const syncFilter = await getSyncFilteredEmployees();
-      if (syncFilter) {
-        const { empIds: allowedIds } = syncFilter;
-        if (allowedIds.size > 0) {
-          params.push([...allowedIds]);
-          conditions.push(`employee_id = ANY($${params.length}::bigint[])`);
-        } else {
-          res.json({ success: true, data: [] });
-          return;
-        }
-      }
-
-      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      let data: Array<{
-  /**
    * GET /api/skud/employee-events/:employeeId/export-detail
    *
    * Выгрузка боковой панели «Детализация» табеля: дни периода с часами из табеля
@@ -982,6 +939,49 @@ const skudReadController = {
     }
   },
 
+  /**
+   * GET /api/skud/events
+   */
+  async getEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { startDate, endDate, accessPoint, employeeId, search } = req.query;
+      const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
+
+      const limit = searchStr ? 10000 : 1000;
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+
+      if (startDate && typeof startDate === 'string') {
+        params.push(startDate);
+        conditions.push(`event_date >= $${params.length}`);
+      }
+      if (endDate && typeof endDate === 'string') {
+        params.push(endDate);
+        conditions.push(`event_date <= $${params.length}`);
+      }
+      if (accessPoint && typeof accessPoint === 'string') {
+        params.push(accessPoint);
+        conditions.push(`access_point = $${params.length}`);
+      }
+      if (employeeId && typeof employeeId === 'string') {
+        params.push(parseInt(employeeId, 10));
+        conditions.push(`employee_id = $${params.length}`);
+      }
+
+      const syncFilter = await getSyncFilteredEmployees();
+      if (syncFilter) {
+        const { empIds: allowedIds } = syncFilter;
+        if (allowedIds.size > 0) {
+          params.push([...allowedIds]);
+          conditions.push(`employee_id = ANY($${params.length}::bigint[])`);
+        } else {
+          res.json({ success: true, data: [] });
+          return;
+        }
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      let data: Array<{
         id: number;
         physical_person: string;
         card_number: string | null;
