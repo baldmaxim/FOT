@@ -3525,6 +3525,36 @@
   background: var(--surface-hover);
 }
 
+.ts-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ts-panel-export {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+
+.ts-panel-export:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--accent);
+}
+
+.ts-panel-export:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
 .ts-panel-content {
   flex: 1;
   overflow-y: auto;
@@ -4847,6 +4877,12 @@
   }
   .ts-side-panel--open {
     right: 0;
+  }
+  /* Две кнопки в шапке панели: на телефоне тап-цель — не меньше 44px. */
+  .ts-panel-export,
+  .ts-panel-close {
+    width: 44px;
+    height: 44px;
   }
   .ts-modal,
   .ts-late-modal {

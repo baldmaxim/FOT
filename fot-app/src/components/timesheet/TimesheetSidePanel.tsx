@@ -1,9 +1,10 @@
 import { type FC, useMemo, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer, Check, XCircle } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer, Check, XCircle, Download } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, SkudEvent, SkudEventFailure, IProductionCalendarMonth } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -27,6 +28,7 @@ import {
   getFullDayThresholdHoursForDay,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { triggerBlobDownload } from '../../utils/download';
 import { selectVisibleHours, formatHoursLabel, formatSecondsLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 
@@ -111,11 +113,25 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     openAccessPointMap,
     accessPointMapModal,
   } = useAccessPointMapViewer(canViewSkudDirectory);
+  const toast = useToast();
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set());
   const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
   const [loadingSkud, setLoadingSkud] = useState(false);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
   const overlayHandlers = useOverlayDismiss(onClose);
+
+  // Границы периода (1–15 / 16–30 / весь месяц) — один источник и для загрузки
+  // событий, и для выгрузки: файл всегда за тот период, что показан на экране.
+  const panelRange = useMemo(() => {
+    const firstVisibleDay = visibleDays?.[0] || 1;
+    const lastVisibleDay = visibleDays?.[visibleDays.length - 1] || getDaysInMonth(year, month);
+    const pad = (value: number): string => String(value).padStart(2, '0');
+    return {
+      startDate: `${year}-${pad(month)}-${pad(firstVisibleDay)}`,
+      endDate: `${year}-${pad(month)}-${pad(lastVisibleDay)}`,
+    };
+  }, [visibleDays, year, month]);
 
   useEffect(() => {
     skudService.getAccessPointSettings().then(settings => {
@@ -128,18 +144,35 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     if (!employee || !open || !canViewSkud) return;
     setLoadingSkud(true);
     try {
-      const firstVisibleDay = visibleDays?.[0] || 1;
-      const lastVisibleDay = visibleDays?.[visibleDays.length - 1] || getDaysInMonth(year, month);
-      const startDate = `${year}-${String(month).padStart(2, '0')}-${String(firstVisibleDay).padStart(2, '0')}`;
-      const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastVisibleDay).padStart(2, '0')}`;
-      const { events, failures } = await skudService.getEmployeeEventsWithFailures(employee.id, startDate, endDate);
+      const { events, failures } = await skudService.getEmployeeEventsWithFailures(
+        employee.id,
+        panelRange.startDate,
+        panelRange.endDate,
+      );
       setSkudEvents(groupEventsByDay(events, failures));
     } catch {
       setSkudEvents(new Map());
     } finally {
       setLoadingSkud(false);
     }
-  }, [employee, open, year, month, visibleDays, canViewSkud]);
+  }, [employee, open, panelRange, canViewSkud]);
+
+  const handleExport = useCallback(async () => {
+    if (!employee || exporting) return;
+    setExporting(true);
+    try {
+      const { blob, filename } = await skudService.exportTimesheetDetail(
+        employee.id,
+        panelRange.startDate,
+        panelRange.endDate,
+      );
+      triggerBlobDownload(blob, filename);
+    } catch (error) {
+      toast.error?.(error instanceof Error ? error.message : 'Не удалось выгрузить детализацию');
+    } finally {
+      setExporting(false);
+    }
+  }, [employee, exporting, panelRange, toast]);
 
   useEffect(() => {
     if (open && employee) {
@@ -230,9 +263,22 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       <div className={`ts-side-panel ${open ? 'ts-side-panel--open' : ''}`}>
         <div className="ts-panel-header">
           <h3 className="ts-panel-title">Детализация</h3>
-          <button className="ts-panel-close" onClick={onClose}>
-            <X size={18} />
-          </button>
+          <div className="ts-panel-header-actions">
+            {canViewSkud && (
+              <button
+                className="ts-panel-export"
+                onClick={handleExport}
+                disabled={exporting}
+                title="Выгрузить в Excel за выбранный период"
+                aria-label="Выгрузить в Excel"
+              >
+                <Download size={17} />
+              </button>
+            )}
+            <button className="ts-panel-close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <div className="ts-panel-content">
           <div className="ts-panel-employee">

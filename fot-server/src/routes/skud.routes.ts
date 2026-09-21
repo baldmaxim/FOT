@@ -158,6 +158,18 @@ router.get(
   skudController.exportEmployeeEvents
 );
 
+// GET /api/skud/employee-events/:employeeId/export-detail — выгрузка боковой панели
+// «Детализация» табеля (дни с часами из табеля + проходы СКУД). Гейт тот же, что у
+// самих событий: файл не показывает ничего сверх того, что доступно в панели.
+router.get(
+  '/employee-events/:employeeId/export-detail',
+  requireAnyPageAccess(
+    ['/employee', '/staff-control', '/timesheet'],
+    'view',
+  ),
+  skudController.exportEmployeeTimesheetDetail
+);
+
 // GET /api/skud/events - события СКУД (admin+)
 // Доступ под /skud-settings: вкладка «База» живёт на этой странице.
 router.get(

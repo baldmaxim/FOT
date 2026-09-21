@@ -522,6 +522,20 @@ export const skudService = {
     );
   },
 
+  /**
+   * Выгрузка боковой панели «Детализация» табеля за выбранный период.
+   * Идёт через apiClient.download (а не локальный fetchExportFile): так не теряются
+   * refresh сессии на 401, таймаут и текст ошибки из ApiError для тоста.
+   */
+  async exportTimesheetDetail(employeeId: number, startDate: string, endDate: string): Promise<DownloadFileResult> {
+    const params = new URLSearchParams({ startDate, endDate });
+    return apiClient.download(
+      `/skud/employee-events/${employeeId}/export-detail?${params.toString()}`,
+      `Детализация_${startDate}_${endDate}.xlsx`,
+      { timeoutMs: 120_000 },
+    );
+  },
+
   async exportDiscipline(filters: {
     startMonth: string;
     endMonth?: string;

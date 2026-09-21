@@ -22,6 +22,8 @@ import {
   type DisciplineViolationType,
 } from '../services/skud-export.service.js';
 import {
+import { collectEmployeeTimesheetDetail, isRealIsoDate } from '../services/skud-timesheet-detail-export.service.js';
+import { buildTimesheetDetailWorkbook } from '../services/skud-timesheet-detail-excel.service.js';
   getSyncFilteredEmployees,
   queryEventsByEmployeeId,
   searchAndBackfillByName,
@@ -891,6 +893,95 @@ const skudReadController = {
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       let data: Array<{
+  /**
+   * GET /api/skud/employee-events/:employeeId/export-detail
+   *
+   * Выгрузка боковой панели «Детализация» табеля: дни периода с часами из табеля
+   * плюс проходы СКУД по каждому дню. Отличается от exportEmployeeEvents тем, что
+   * часы и границы дня берутся из табельной записи, а не считаются по проходам —
+   * файл обязан совпадать с экраном.
+   */
+  async exportEmployeeTimesheetDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = parseInt(req.params.employeeId, 10);
+      if (isNaN(employeeId)) {
+        res.status(400).json({ success: false, error: 'Invalid employeeId' });
+        return;
+      }
+
+      const startDate = typeof req.query.startDate === 'string' ? req.query.startDate : '';
+      const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : '';
+      // Обе даты обязательны и обязаны быть РЕАЛЬНОЙ календарной датой: регулярку
+      // проходит и '2026-99-99', а такой текст падает уже в PostgreSQL 500-й.
+      if (!isRealIsoDate(startDate) || !isRealIsoDate(endDate) || endDate < startDate) {
+        res.status(400).json({
+          success: false,
+          error: 'Параметры startDate и endDate обязательны в формате YYYY-MM-DD, endDate >= startDate',
+        });
+        return;
+      }
+
+      const gate = await ensureEmployeeEventsAccess(req, employeeId, startDate, endDate);
+      if (!gate.ok) {
+        res.status(gate.status).json({ success: false, error: gate.error });
+        return;
+      }
+
+      // Графики и производственный календарь резолвятся помесячно, панель тоже всегда
+      // работает внутри одного месяца — межмесячный диапазон не собрать одним вызовом.
+      if (startDate.slice(0, 7) !== endDate.slice(0, 7)) {
+        res.status(400).json({ success: false, error: 'Период должен быть внутри одного месяца' });
+        return;
+      }
+
+      if (isSelfEmployeeRequest(req, employeeId)) {
+        const selfLimit = getSelfHistoryLimitForUser(req.user);
+        if (selfLimit.minDate !== null && startDate < selfLimit.minDate) {
+          res.status(403).json({ success: false, error: selfLimit.message });
+          return;
+        }
+      }
+
+      const [{ events }, failures, internalPoints] = await Promise.all([
+        loadEmployeeEventsForRequest(employeeId, startDate, endDate, { includeEmployeeName: false }),
+        loadEmployeeEventFailuresForRequest(employeeId, startDate, endDate),
+        getInternalAccessPointsForRequest(req),
+      ]);
+
+      const data = await collectEmployeeTimesheetDetail({
+        employeeId,
+        startDate,
+        endDate,
+        showActualHours: !!req.user?.show_actual_hours,
+        events,
+        failures,
+        internalPoints,
+      });
+
+      const workbook = buildTimesheetDetailWorkbook(data);
+      const buffer = await workbook.xlsx.writeBuffer();
+
+      const fileName = sanitizeExportFileName(
+        `Детализация_${data.employeeName.replace(/\s+/g, '_')}_${startDate.split('-').reverse().join('-')}_${endDate.split('-').reverse().join('-')}.xlsx`,
+      );
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      if (error instanceof Error && error.message === 'EMPLOYEE_NOT_FOUND') {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+      console.error('exportEmployeeTimesheetDetail error:', error);
+      Sentry.captureException(error, { tags: { route: 'skud.exportEmployeeTimesheetDetail' } });
+      res.status(500).json({ success: false, error: 'Ошибка экспорта детализации' });
+    }
+  },
+
         id: number;
         physical_person: string;
         card_number: string | null;
