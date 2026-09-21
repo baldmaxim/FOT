@@ -15,6 +15,7 @@ import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 import {
   loadEmployeeManagerAssignmentMap,
+  loadDeputyAssignmentMap,
   loadExplicitManagerAssignmentMap,
   loadAssignedEmployeeMap,
   replaceUserEmployeeAccess,
@@ -36,6 +37,7 @@ import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { getActiveDirectManagersFor } from '../services/employee-direct-reports.service.js';
 import { listFullManagersForDepartments } from '../services/approval-routing.service.js';
+import { normalizeAccessLevel, type DepartmentAccessLevel } from '../services/department-access.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { hasPageEdit } from '../services/access-control.service.js';
 import {
@@ -43,8 +45,6 @@ import {
   checkTargetUserManageable,
 } from '../services/assignable-roles.service.js';
 import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
-
-/**
 import { getContractorRootId } from '../config/contractor.js';
 
 /**
@@ -52,6 +52,8 @@ import { getContractorRootId } from '../config/contractor.js';
  * Прежние 10000 упирались в реальные ~10.9k активных и молча срезали хвост алфавита.
  */
 const EMPLOYEE_ASSIGNMENTS_LIMIT = 50000;
+
+/**
  * Кто вправе работать с очередью заявок на регистрацию (список, одобрение,
  * отклонение, запросы на сброс пароля).
  *
@@ -103,18 +105,56 @@ const updateDepartmentAccessSchema = z.object({
   // Подмножество department_ids, назначенное «только для просмотра» (миграция 167).
   // Остальные отделы — уровень 'full' (видит и редактирует/согласует).
   view_only_department_ids: z.array(z.string().uuid()).default([]),
+  // Подмножество department_ids с уровнем «заместитель» (миграция 283): ведёт табель
+  // отдела и подаёт заявки на поиск, но не согласует и не руководитель в 1С.
+  deputy_department_ids: z.array(z.string().uuid()).default([]),
 });
 
-/** Строит assignments (отдел + уровень) из списка отделов и подмножества view-only. */
+/** Строит assignments (отдел + уровень) из списка отделов и подмножеств уровней. */
 function buildDepartmentAssignments(
   departmentIds: string[],
   viewOnlyDepartmentIds: string[],
-): Array<{ department_id: string; access_level: 'full' | 'view' }> {
+  deputyDepartmentIds: string[] = [],
+): Array<{ department_id: string; access_level: DepartmentAccessLevel }> {
   const viewSet = new Set(viewOnlyDepartmentIds.map(v => v.trim()));
+  const deputySet = new Set(deputyDepartmentIds.map(v => v.trim()));
   return departmentIds.map(id => ({
     department_id: id,
-    access_level: viewSet.has(id) ? 'view' : 'full',
+    access_level: deputySet.has(id) ? 'deputy' : (viewSet.has(id) ? 'view' : 'full'),
   }));
+}
+
+/**
+ * Проверяет подмножества уровней: отдел не может быть одновременно «просмотр» и
+ * «заместитель», а лишние id молча игнорировать нельзя — иначе админ сохранит
+ * уровень, думая, что он применился.
+ */
+function validateLevelSubsets(
+  departmentIds: string[],
+  viewOnlyDepartmentIds: string[],
+  deputyDepartmentIds: string[],
+): { ok: true } | { ok: false; error: string; details: Record<string, string[]> } {
+  const all = new Set(departmentIds.map(v => v.trim()));
+  const view = [...new Set(viewOnlyDepartmentIds.map(v => v.trim()))];
+  const deputy = [...new Set(deputyDepartmentIds.map(v => v.trim()))];
+
+  const intersection = view.filter(id => deputy.includes(id));
+  if (intersection.length > 0) {
+    return {
+      ok: false,
+      error: 'Отдел не может быть одновременно «Только просмотр» и «Заместитель»',
+      details: { conflicting_department_ids: intersection },
+    };
+  }
+  const unknown = [...view, ...deputy].filter(id => !all.has(id));
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      error: 'Уровень указан для отдела, которого нет в списке назначенных',
+      details: { unknown_department_ids: [...new Set(unknown)] },
+    };
+  }
+  return { ok: true };
 }
 
 const updateEmployeeAccessSchema = z.object({
@@ -260,17 +300,18 @@ const MEMBERSHIP_SOURCE = 'sigur_sync';
 
 async function replaceExplicitDepartmentAccess(params: {
   employeeId: number;
-  /** Отделы с уровнем доступа: 'full' (видит+редактирует) или 'view' (только просмотр, миграция 167). */
-  assignments: Array<{ department_id: string; access_level: 'full' | 'view' }>;
+  /** Отделы с уровнем доступа: 'full' (начальник), 'deputy' (заместитель, миграция 283)
+   *  или 'view' (только просмотр, миграция 167). */
+  assignments: Array<{ department_id: string; access_level: DepartmentAccessLevel }>;
   actorUserId: string;
   source: string;
 }): Promise<string[]> {
   // Дедуп по отделу (последний уровень выигрывает).
-  const levelByDept = new Map<string, 'full' | 'view'>();
+  const levelByDept = new Map<string, DepartmentAccessLevel>();
   for (const a of params.assignments) {
     const id = typeof a.department_id === 'string' ? a.department_id.trim() : '';
     if (!id) continue;
-    levelByDept.set(id, a.access_level === 'view' ? 'view' : 'full');
+    levelByDept.set(id, normalizeAccessLevel(a.access_level));
   }
   const explicitDepartmentIds = [...levelByDept.keys()];
   const accessLevels = explicitDepartmentIds.map(id => levelByDept.get(id) as string);
@@ -514,8 +555,9 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
 
   // assigned_employee_ids/assigned_employees НЕ читаются AllUsersTab UI —
   // не грузим их здесь, экономим 2 запроса (user_employee_access + employees).
-  const [assignedDepartmentMap, authUsersById] = await Promise.all([
+  const [assignedDepartmentMap, deputyDepartmentMap, authUsersById] = await Promise.all([
     loadExplicitManagerAssignmentMap(userEmployeePairs),
+    loadDeputyAssignmentMap(userEmployeePairs),
     localAuthService.getUsersByIds(userIds).catch((err: unknown) => {
       console.error('[GetUsers] Auth fetch error:', err);
       return new Map() as Awaited<ReturnType<typeof localAuthService.getUsersByIds>>;
@@ -539,6 +581,8 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
       email_confirmed: authInfo?.email_confirmed ?? false,
       full_name: u.full_name,
       assigned_department_ids: assignedDepartmentIds,
+      // Пометка «зам.» в колонке «Отделы»: уровень назначения, а не роль (миграция 283).
+      deputy_department_ids: deputyDepartmentMap.get(u.id) || [],
       position_type: roleCodeById.get(u.system_role_id) ?? '',
       imported_position: u.imported_position,
       employee_id: u.employee_id,
@@ -648,11 +692,13 @@ export const adminUsersController = {
       // wall-time = sum(t_i), теперь = max(t_i). На типичной БД ~250-300 мс экономии.
       const [
         assignedDepartmentMap,
+        deputyDepartmentMap,
         assignedEmployeeMap,
         allRoles,
         authUsersById,
       ] = await Promise.all([
         loadExplicitManagerAssignmentMap(userEmployeePairs),
+        loadDeputyAssignmentMap(userEmployeePairs),
         loadAssignedEmployeeMap(userIds),
         getAllRoles(),
         localAuthService.getUsersByIds(userIds).catch((err: unknown) => {
@@ -695,6 +741,7 @@ export const adminUsersController = {
           email_confirmed: authInfo?.email_confirmed ?? false,
           full_name: u.full_name,
           assigned_department_ids: assignedDepartmentIds,
+          deputy_department_ids: deputyDepartmentMap.get(u.id) || [],
           assigned_employee_ids: assignedEmployeeIds,
           assigned_employees: assignedEmployees,
           position_type: roleCodeById.get(u.system_role_id) ?? '',
@@ -729,44 +776,8 @@ export const adminUsersController = {
         full_name: string;
         position_id: string | number | null;
         org_department_id: string | null;
-      };
-      let employees: EmployeeRow[];
-      try {
-        if (accessible === 'all') {
-          employees = await query<EmployeeRow>(selectEmployeesSql(''), [contractorRootParam]);
-        } else {
-          employees = await query<EmployeeRow>(
-            selectEmployeesSql(' AND org_department_id = ANY($2::uuid[])'),
-            [contractorRootParam, accessible],
-          );
-        }
-      } catch (employeesError) {
-        logSupabaseError('GetEmployeeDepartmentAssignments', employeesError);
-        res.status(500).json({ success: false, error: 'Не удалось загрузить назначения сотрудников' });
-        return;
-      }
-
-      const employeeIds = employees.map(employee => employee.id);
-      // HR-экран «Назначения сотрудников»: показываем только ручные
-      // назначения (manual/excel/manager_excel), sigur_sync (членство) сюда
-      // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
-      const [explicitDepartmentMap, directManagerMap] = await Promise.all([
-        loadEmployeeManagerAssignmentMap(employeeIds),
-        getActiveDirectManagersFor(employeeIds),
-      ]);
-
-      // Карта отделов уровня 'view' (только просмотр, миграция 167) — для галки в UI.
-      const viewOnlyMap = new Map<number, string[]>();
-      if (employeeIds.length > 0) {
-        const viewRows = await query<{ employee_id: number | string; department_id: string }>(
-          `SELECT employee_id, department_id FROM employee_department_access
-            WHERE employee_id = ANY($1::int[]) AND is_active = true
-              AND source <> 'sigur_sync' AND access_level = 'view'`,
-          [employeeIds],
-        );
-        for (const r of viewRows) {
         is_contractor: boolean;
-          const empId = Number(r.employee_id);
+      };
       // Корень «Подрядные организации» может быть не синхронизирован из Sigur — тогда
       // пустой uuid[] даёт ноль потомков и флаг у всех false. Отдельной ветки не нужно.
       const contractorRootId = await getContractorRootId();
@@ -783,10 +794,56 @@ export const adminUsersController = {
           WHERE employment_status = 'active' AND is_archived = false${scopeCondition}
           ORDER BY full_name ASC
           LIMIT ${EMPLOYEE_ASSIGNMENTS_LIMIT}`;
+      let employees: EmployeeRow[];
+      try {
+        if (accessible === 'all') {
+          employees = await query<EmployeeRow>(selectEmployeesSql(''), [contractorRootParam]);
+        } else {
+          employees = await query<EmployeeRow>(
+            selectEmployeesSql(' AND org_department_id = ANY($2::uuid[])'),
+            [contractorRootParam, accessible],
+          );
+        }
+      } catch (employeesError) {
+        logSupabaseError('GetEmployeeDepartmentAssignments', employeesError);
+        res.status(500).json({ success: false, error: 'Не удалось загрузить назначения сотрудников' });
+        return;
+      }
+      // Упор в лимит режет хвост алфавита молча: раньше так пропали 176 штатных
+      // сотрудников и 10 их назначений. Лимит — страховка, а не рабочий предел.
+      if (employees.length >= EMPLOYEE_ASSIGNMENTS_LIMIT) {
+        console.warn(
+          `[GetEmployeeDepartmentAssignments] выборка упёрлась в лимит ${EMPLOYEE_ASSIGNMENTS_LIMIT} — список усечён, лимит пора поднимать`,
+        );
+      }
+
+      const employeeIds = employees.map(employee => employee.id);
+      // HR-экран «Назначения сотрудников»: показываем только ручные
+      // назначения (manual/excel/manager_excel), sigur_sync (членство) сюда
+      // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
+      const [explicitDepartmentMap, directManagerMap] = await Promise.all([
+        loadEmployeeManagerAssignmentMap(employeeIds),
+        getActiveDirectManagersFor(employeeIds),
+      ]);
+
+      // Карты уровней: 'view' (только просмотр, миграция 167) и 'deputy'
+      // (заместитель начальника отдела, миграция 283) — для кнопок в UI.
+      const viewOnlyMap = new Map<number, string[]>();
+      const deputyMap = new Map<number, string[]>();
+      if (employeeIds.length > 0) {
+        const levelRows = await query<{ employee_id: number | string; department_id: string; access_level: string }>(
+          `SELECT employee_id, department_id, access_level FROM employee_department_access
+            WHERE employee_id = ANY($1::int[]) AND is_active = true
+              AND source <> 'sigur_sync' AND access_level IN ('view', 'deputy')`,
+          [employeeIds],
+        );
+        for (const r of levelRows) {
+          const empId = Number(r.employee_id);
           if (!Number.isInteger(empId)) continue;
-          const list = viewOnlyMap.get(empId) ?? [];
+          const target = r.access_level === 'deputy' ? deputyMap : viewOnlyMap;
+          const list = target.get(empId) ?? [];
           list.push(r.department_id);
-          viewOnlyMap.set(empId, list);
+          target.set(empId, list);
         }
       }
 
@@ -809,13 +866,6 @@ export const adminUsersController = {
           ? query<{ id: string; name: string }>(
               'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
               [departmentIds],
-      // Упор в лимит режет хвост алфавита молча: раньше так пропали 176 штатных
-      // сотрудников и 10 их назначений. Лимит — страховка, а не рабочий предел.
-      if (employees.length >= EMPLOYEE_ASSIGNMENTS_LIMIT) {
-        console.warn(
-          `[GetEmployeeDepartmentAssignments] выборка упёрлась в лимит ${EMPLOYEE_ASSIGNMENTS_LIMIT} — список усечён, лимит пора поднимать`,
-        );
-      }
             )
           : Promise.resolve([] as Array<{ id: string; name: string }>),
       ]);
@@ -839,6 +889,7 @@ export const adminUsersController = {
           org_department_id: employee.org_department_id ?? null,
           assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
           view_only_department_ids: viewOnlyMap.get(employee.id) || [],
+          deputy_department_ids: deputyMap.get(employee.id) || [],
           position_name: employee.position_id != null
             ? (positionMap.get(String(employee.position_id)) ?? null)
             : null,
@@ -847,6 +898,9 @@ export const adminUsersController = {
             : null,
           direct_manager_employee_id: managerInfo?.managerId ?? null,
           direct_manager_full_name: managerInfo?.managerFullName ?? null,
+          // Подрядчик: строка остаётся в выдаче, фильтрует её клиент (чекбокс
+          // «Показывать подрядчиков»), иначе выданный подрядчику доступ не отозвать.
+          is_contractor: employee.is_contractor === true,
           // «Есть ответственный» = индивидуальный руководитель ИЛИ начальник отдела.
           has_responsible:
             directManagerMap.has(employee.id) ||
@@ -885,7 +939,7 @@ export const adminUsersController = {
         position_id: string | number | null;
         employment_status: string;
         excluded_from_timesheet: boolean;
-        access_level: 'full' | 'view';
+        access_level: DepartmentAccessLevel;
       };
       const rows = await query<AssignedRow>(
         `SELECT e.id, e.full_name, e.position_id,
@@ -898,9 +952,6 @@ export const adminUsersController = {
             AND eda.source <> 'sigur_sync'
           ORDER BY e.full_name ASC`,
         [departmentId],
-          // Подрядчик: строка остаётся в выдаче, фильтрует её клиент (чекбокс
-          // «Показывать подрядчиков»), иначе выданный подрядчику доступ не отозвать.
-          is_contractor: employee.is_contractor === true,
       );
 
       const positionIds = [...new Set(rows
@@ -1812,8 +1863,13 @@ export const adminUsersController = {
   async updateUserDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { department_ids, view_only_department_ids } = updateDepartmentAccessSchema.parse(req.body);
+      const { department_ids, view_only_department_ids, deputy_department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = [...new Set(department_ids.map(value => value.trim()))];
+      const levelsCheck = validateLevelSubsets(normalizedDepartmentIds, view_only_department_ids, deputy_department_ids);
+      if (!levelsCheck.ok) {
+        res.status(400).json({ success: false, error: levelsCheck.error, details: levelsCheck.details });
+        return;
+      }
 
       const profile = await queryOne<{ employee_id: number | null }>(
         'SELECT employee_id FROM user_profiles WHERE id = $1::uuid',
@@ -1862,7 +1918,7 @@ export const adminUsersController = {
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
         employeeId: profile.employee_id,
-        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids),
+        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids, deputy_department_ids),
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
       });
@@ -1883,6 +1939,8 @@ export const adminUsersController = {
           assigned_department_count: explicitDepartmentIds.length,
           full_name: userFullName,
           assigned_department_names: assignedDepartmentNames,
+          view_only_department_ids,
+          deputy_department_ids,
         },
       });
 
@@ -1893,6 +1951,8 @@ export const adminUsersController = {
         success: true,
         data: {
           assigned_department_ids: explicitDepartmentIds,
+          view_only_department_ids,
+          deputy_department_ids,
         },
       });
     } catch (error) {
@@ -1997,8 +2057,13 @@ export const adminUsersController = {
   async updateEmployeeDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = z.coerce.number().int().positive().parse(req.params.id);
-      const { department_ids, view_only_department_ids } = updateDepartmentAccessSchema.parse(req.body);
+      const { department_ids, view_only_department_ids, deputy_department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = uniqueStringValues(department_ids);
+      const levelsCheck = validateLevelSubsets(normalizedDepartmentIds, view_only_department_ids, deputy_department_ids);
+      if (!levelsCheck.ok) {
+        res.status(400).json({ success: false, error: levelsCheck.error, details: levelsCheck.details });
+        return;
+      }
 
       const employee = await queryOne<{ id: number; full_name: string | null }>(
         'SELECT id, full_name FROM employees WHERE id = $1',
@@ -2038,7 +2103,7 @@ export const adminUsersController = {
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
         employeeId,
-        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids),
+        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids, deputy_department_ids),
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
       });
@@ -2058,6 +2123,8 @@ export const adminUsersController = {
           assigned_department_ids: explicitDepartmentIds,
           assigned_department_count: explicitDepartmentIds.length,
           assigned_department_names: assignedDepartmentNames,
+          view_only_department_ids,
+          deputy_department_ids,
         },
       });
 
@@ -2072,6 +2139,8 @@ export const adminUsersController = {
         success: true,
         data: {
           assigned_department_ids: explicitDepartmentIds,
+          view_only_department_ids,
+          deputy_department_ids,
         },
       });
     } catch (error) {
