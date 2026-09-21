@@ -40,6 +40,7 @@ import {
   resolveTimesheetScope,
 } from '../services/timesheet-scope.service.js';
 import { buildUnified1CBuffer, parseStrictExportPeriod } from '../services/timesheet-unified-export.service.js';
+import { departmentManagerConditionSql } from '../services/department-managers.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -88,8 +89,9 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   // Только пользователи с ролью site_supervisor («Начальник участка»)
   // попадают в выгрузку.
   const edaWhere: string[] = [
-    `eda.is_active = true`,
-    `eda.source <> 'sigur_sync'`,
+    // Начальник участка — это full-назначение: заместитель (миграция 283) в выгрузку
+    // и в exempt-список 1С попадать не должен.
+    departmentManagerConditionSql('eda'),
     `e.employment_status = 'active'`,
     `e.is_archived = false`,
     `e.excluded_from_timesheet = false`,
@@ -432,8 +434,7 @@ async function queryBrigadeSupervisorRows(
        INNER JOIN user_profiles up   ON up.employee_id = e.id
        INNER JOIN system_roles sr    ON sr.id = up.system_role_id
       WHERE eda.department_id = $1
-        AND eda.is_active = true
-        AND eda.source <> 'sigur_sync'
+        AND ${departmentManagerConditionSql('eda')}
         AND e.employment_status = 'active'
         AND e.is_archived = false
         AND od.is_active = true
@@ -478,6 +479,9 @@ export async function listBrigadeSupervisorEmployeeIdsForDepartments(
   return new Set(rows.map(row => Number(row.id)).filter(Number.isFinite));
 }
 
+/** Экспортируется только для теста инварианта «начальник участка = full-назначение». */
+export const SUPERVISOR_IDS_SQL_FOR_TESTS = (): string => SUPERVISOR_IDS_SQL;
+
 const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
        FROM employee_department_access eda
        INNER JOIN employees e        ON e.id = eda.employee_id
@@ -486,8 +490,7 @@ const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
        INNER JOIN system_roles sr    ON sr.id = up.system_role_id
       WHERE eda.department_id = ANY($1::uuid[])
         AND od.kind = 'brigade'
-        AND eda.is_active = true
-        AND eda.source <> 'sigur_sync'
+        AND ${departmentManagerConditionSql('eda')}
         AND e.employment_status = 'active'
         AND e.is_archived = false
         AND od.is_active = true

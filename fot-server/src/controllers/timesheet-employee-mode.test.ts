@@ -75,6 +75,9 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveScopedDepartmentId: vi.fn(async (_req: unknown, id: string | null) => id),
   resolveEffectiveDirectSubordinates: vi.fn(async () => []),
   hasObjectViewScope: vi.fn(async () => false),
+  resolveWritableScopedDepartmentId: vi.fn(async (_req: unknown, id: string | null) => id),
+  resolveTimesheetEditableDepartmentIds: vi.fn(async () => 'all'),
+  resolveTimesheetEditableEmployeeIds: vi.fn(async () => 'all'),
 }));
 
 vi.mock('../services/timekeeper-scope.service.js', () => ({

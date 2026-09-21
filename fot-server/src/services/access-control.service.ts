@@ -6,6 +6,7 @@ import {
 } from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
+import { hasDeputyAssignment } from './data-scope.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -29,6 +30,40 @@ const ECONOMICS_HEAD_PAGE = '/discipline/objects';
 const MANAGER_AUTO_ACCESS_PAGES = new Set<string>([
   '/staff-control',
 ]);
+
+/**
+ * Страницы, которые выдаёт НАЗНАЧЕНИЕ уровня 'deputy' (заместитель начальника отдела,
+ * миграция 283), а не матрица роли.
+ *
+ * Роль у пользователя одна, и менять её ради ведения табеля нельзя: заместителем
+ * бывает сотрудник с любой ролью (например «Отдел безопасности»). Поэтому право
+ * живёт на назначении — как у «Руководителя экономического отдела» ниже.
+ *
+ * Сами действия при этом сужены скоупом:
+ *  - /timesheet — запись только по отделам заместителя (resolveTimesheetEditableDepartmentIds);
+ *  - /leave-requests — решения только по заявлениям «Корректировка табеля» своего отдела;
+ *  - /staff-control/hiring — view, как у ролей-заявителей.
+ */
+const DEPUTY_AUTO_ACCESS_PAGES = new Map<string, { can_view: boolean; can_edit: boolean }>([
+  ['/timesheet', { can_view: true, can_edit: true }],
+  ['/leave-requests', { can_view: true, can_edit: true }],
+  ['/staff-control/hiring', { can_view: true, can_edit: false }],
+]);
+
+/** Права страницы, выданные назначением заместителя (пусто — назначения нет). */
+export async function resolveDeputyPageAccess(
+  req: AuthenticatedRequest,
+  pagePath: string,
+): Promise<{ can_view: boolean; can_edit: boolean } | null> {
+  const grant = DEPUTY_AUTO_ACCESS_PAGES.get(pagePath);
+  if (!grant) return null;
+  return (await hasDeputyAssignment(req)) ? grant : null;
+}
+
+/** Полный набор страниц заместителя — для инъекции в page_access на /auth/me. */
+export function listDeputyAutoAccessPages(): Array<[string, { can_view: boolean; can_edit: boolean }]> {
+  return [...DEPUTY_AUTO_ACCESS_PAGES.entries()].map(([key, value]) => [key, { ...value }]);
+}
 
 export interface PageAccessPermission {
   can_view: boolean;
@@ -189,6 +224,14 @@ export async function resolveEffectivePageAccess(
   // и роль-грантом это право выдать нельзя (роль одна на пользователя).
   // Сравнение строк первым условием: на любой другой странице ветка не делает ничего.
   if (pagePath === ECONOMICS_HEAD_PAGE && await isEconomicsHead(req.user.employee_id)) {
+    return true;
+  }
+
+  // Заместитель начальника отдела (миграция 283). Ветка тоже стоит ДО гейта
+  // admin_access и не гейтится manager_auto_access: у заместителя роль может быть
+  // любой (в т.ч. узкой, с выключенным авто-доступом), а право даёт назначение.
+  const deputyGrant = await resolveDeputyPageAccess(req, pagePath);
+  if (deputyGrant && (action === 'edit' ? deputyGrant.can_edit : deputyGrant.can_view)) {
     return true;
   }
 

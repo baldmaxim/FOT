@@ -51,6 +51,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveManagedDepartmentIds: vi.fn(async () => []),
   resolveAccessibleEmployeeIds: vi.fn(async () => 'all'),
   hasObjectViewScope: vi.fn(async () => false),
+  canWriteEmployeeInScope: vi.fn(async () => true),
+  resolveWritableScopedDepartmentId: vi.fn(async () => null),
 }));
 
 const grants = vi.hoisted(() => ({ pages: new Set<string>() }));

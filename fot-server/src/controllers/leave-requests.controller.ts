@@ -7,15 +7,19 @@ import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getEmployeeUserId, resolveRoutedLeaveApprovers } from '../services/recipients.service.js';
-import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { hasPageView, resolveEffectivePageAccess, roleHasAdminAccess } from '../services/access-control.service.js';
+
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
+  canEditEmployeeTimesheetInScope,
+  hasDeputyAssignment,
   resolveAccessibleDepartmentIds,
   resolveEditableEmployeeIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
+  resolveTimesheetEditableEmployeeIds,
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-routing.service.js';
@@ -915,6 +919,36 @@ async function filterRoutedVisibility<T extends { employee_id: number; request_t
 }
 
 /**
+ * Заявления, которые заместитель начальника отдела (миграция 283) ведёт наравне с
+ * начальником: «Корректировка табеля» — это продолжение ведения табеля, а не кадровое
+ * согласование. Отпуска, больничные, выходные и увольнения остаются у начальника.
+ */
+const DEPUTY_DECIDABLE_REQUEST_TYPES = new Set<string>(['time_correction']);
+
+/**
+ * Доступ к странице «Заявления» получен ТОЛЬКО авто-грантом заместителя (роль его не
+ * даёт). Такому пользователю список отдела сужается до его типов: чужие отпуска и
+ * больничные он видеть не должен.
+ */
+async function hasDeputyOnlyLeaveAccess(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin) return false;
+  if (!req.user.employee_id) return false;
+  const roleGrant = (await roleHasAdminAccess(req.user.role_code))
+    && (await hasPageView(req.user.role_code, '/leave-requests'));
+  if (roleGrant) return false;
+  return hasDeputyAssignment(req);
+}
+
+/** Сужение списка заявлений для «только заместителя»: свои типы плюс собственные заявки. */
+function filterDeputyVisibleRequests<T extends { employee_id: number; request_type: string }>(
+  rows: T[],
+  viewerEmployeeId: number | null,
+): T[] {
+  return rows.filter(r => DEPUTY_DECIDABLE_REQUEST_TYPES.has(String(r.request_type))
+    || (viewerEmployeeId != null && Number(r.employee_id) === viewerEmployeeId));
+}
+
+/**
  * Может ли текущий пользователь действовать над заявкой сотрудника.
  * Админ (scope=all) — всегда. Для routed-типов — только назначенный ответственный
  * (или начальник отдела при отсутствии назначенного). Прочие типы — обычный
@@ -936,6 +970,11 @@ async function canManageLeaveRequest(
       [{ employee_id: employeeId, org_department_id: emp?.org_department_id ?? null }],
     )).get(employeeId) ?? [];
     return req.user.employee_id != null && resp.includes(req.user.employee_id);
+  }
+  if (fallback === 'edit' && DEPUTY_DECIDABLE_REQUEST_TYPES.has(requestType)) {
+    // «Корректировка табеля»: ведёт тот, кто ведёт табель сотрудника — начальник
+    // отдела или его заместитель (миграция 283).
+    return canEditEmployeeTimesheetInScope(req, employeeId);
   }
   return fallback === 'edit'
     ? canEditEmployeeInScope(req, employeeId)
@@ -981,11 +1020,14 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
     const deptByEmp = new Map<number, string | null>(
       [...metaMap.entries()].map(([id, m]) => [id, m.org_department_id]),
     );
-    const visibleData = await filterRoutedVisibility(
+    const routedVisible = await filterRoutedVisibility(
       workFiltered,
       deptByEmp,
       req.user.employee_id ?? null,
     );
+    const visibleData = (await hasDeputyOnlyLeaveAccess(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
     const correctionRequestIds = visibleData
@@ -1076,13 +1118,16 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     );
     const workFiltered = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
     // Админ (scope=all) видит всё; ограниченный скоуп — адресная маршрутизация routed-типов.
-    const visibleData = isAllScope
+    const routedVisible = isAllScope
       ? workFiltered
       : await filterRoutedVisibility(
           workFiltered,
           new Map([...metaMap.entries()].map(([id, m]) => [id, m.org_department_id])),
           req.user.employee_id ?? null,
         );
+    const visibleData = (await hasDeputyOnlyLeaveAccess(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
     const correctionRequestIds = visibleData
@@ -1170,7 +1215,10 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
     const deptByEmp = new Map<number, string | null>(
       rows.map(r => [Number(r.employee_id), r.org_department_id]),
     );
-    const visible = await filterRoutedVisibility(rows, deptByEmp, req.user.employee_id ?? null);
+    const routedVisible = await filterRoutedVisibility(rows, deptByEmp, req.user.employee_id ?? null);
+    const visible = (await hasDeputyOnlyLeaveAccess(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      : routedVisible;
     res.json({ success: true, data: { count: visible.length } });
   } catch (err) {
     console.error('leave-requests.pendingCount error:', err);
@@ -1313,6 +1361,8 @@ interface IDecisionTarget {
  */
 interface IDecisionContext {
   editableEmployeeIds: Set<number> | 'all';
+  /** Кого пользователь ведёт в ТАБЕЛЕ: начальник (full) + заместитель (миграция 283). */
+  timesheetEditableEmployeeIds: Set<number> | 'all';
   responsibleByEmployee: Map<number, number[]>;
 }
 
@@ -1321,6 +1371,7 @@ async function buildDecisionContext(
   targets: IDecisionTarget[],
 ): Promise<IDecisionContext> {
   const editableEmployeeIds = await resolveEditableEmployeeIds(req);
+  const timesheetEditableEmployeeIds = await resolveTimesheetEditableEmployeeIds(req);
   const routedEmployeeIds = [...new Set(
     targets
       .filter(t => ROUTED_LEAVE_TYPES.has(String(t.request_type)))
@@ -1328,7 +1379,7 @@ async function buildDecisionContext(
       .filter(Number.isFinite),
   )];
   if (routedEmployeeIds.length === 0) {
-    return { editableEmployeeIds, responsibleByEmployee: new Map() };
+    return { editableEmployeeIds, timesheetEditableEmployeeIds, responsibleByEmployee: new Map() };
   }
   // Один запрос отделов и один резолв ответственных на весь пакет — вместо пары
   // запросов на каждую заявку.
@@ -1342,7 +1393,7 @@ async function buildDecisionContext(
   const responsibleByEmployee = await resolveResponsibleEmployeeIdsByEmployee(
     routedEmployeeIds.map(id => ({ employee_id: id, org_department_id: deptByEmployee.get(id) ?? null })),
   );
-  return { editableEmployeeIds, responsibleByEmployee };
+  return { editableEmployeeIds, timesheetEditableEmployeeIds, responsibleByEmployee };
 }
 
 /** Может ли текущий пользователь принять решение по заявке (согласовать/отклонить). */
@@ -1360,6 +1411,11 @@ function canDecideLeaveRequest(
   if (ROUTED_LEAVE_TYPES.has(String(requestType))) {
     const responsible = ctx.responsibleByEmployee.get(Number(employeeId)) ?? [];
     return req.user.employee_id != null && responsible.includes(req.user.employee_id);
+  }
+  if (DEPUTY_DECIDABLE_REQUEST_TYPES.has(String(requestType))) {
+    // «Корректировка табеля» — за тем, кто ведёт табель: начальник или заместитель.
+    return ctx.timesheetEditableEmployeeIds === 'all'
+      || ctx.timesheetEditableEmployeeIds.has(Number(employeeId));
   }
   return ctx.editableEmployeeIds.has(Number(employeeId));
 }

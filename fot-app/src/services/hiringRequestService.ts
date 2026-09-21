@@ -83,9 +83,21 @@ export interface IHiringRequestDetail extends IHiringRequest {
   files: IHiringFile[];
   events: IHiringEvent[];
   can_manage: boolean;
+  /** Сторона заявителя: автор, начальник или заместитель отдела заявки (миграция 283). */
+  is_applicant: boolean;
+  /** Утверждение кандидата и набора: HR/админ, начальник отдела или автор, но не заместитель. */
+  can_approve: boolean;
 }
 
-export interface IHiringCaps { can_manage: boolean; is_recruiter: boolean; can_create: boolean }
+/** Отдел, от имени которого пользователь может подать заявку (начальник или заместитель). */
+export interface IHiringApplicantDepartment { id: string; name: string }
+
+export interface IHiringCaps {
+  can_manage: boolean;
+  is_recruiter: boolean;
+  can_create: boolean;
+  applicant_departments?: IHiringApplicantDepartment[];
+}
 
 export interface IRecruiter {
   employee_id: number;

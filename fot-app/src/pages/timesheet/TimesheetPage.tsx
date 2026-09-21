@@ -529,6 +529,11 @@ export const TimesheetPage: FC = () => {
   // пересборку грида прерываемым low-priority рендером — дропдаун/скролл/ввод не
   // фризятся, грид догоняет следом. Виртуализация срезала объём DOM, это — CPU-пересчёт.
   const deferredTimesheetData = useDeferredValue(timesheetQuery.data);
+  // Право на ОТДЕЛ: «Обновить» и массовые корректировки переписывают данные, а право
+  // на страницу /timesheet есть и у тех, кто чужой отдел только видит (глобальный
+  // просмотр табелей, view-назначение). Признак считает сервер; сервер же отвечает 403.
+  const canWriteActiveDept = canEditTimesheet
+    && (isEmployeeMode || timesheetQuery.data?.department_writable === true);
   const employees = useMemo<TimesheetEmployee[]>(() => {
     // Персональный режим: строки уже собраны по периодам и упорядочены по дате входа —
     // пересортировка по source схлопнула бы порядок отделов.
@@ -2239,7 +2244,7 @@ export const TimesheetPage: FC = () => {
   const headerApprovalDeptId = !isAssignedMode ? approvalBarDeptId : null;
   const headerApprovalMode = !isAssignedMode ? approvalSubmissionMode : 'department';
   const headerApproval = useTimesheetApprovalStatus(headerApprovalMode, headerApprovalDeptId, rangeStart, rangeEnd);
-  const headerApprovalStatus = headerApproval.data?.status ?? null;
+  const headerApprovalStatus = headerApproval.data?.approval?.status ?? null;
   const headerMonth = `${year}-${String(month).padStart(2, '0')}`;
   const headerMonthApprovals = useTimesheetDepartmentApprovals(headerApprovalMode, headerApprovalDeptId, headerMonth);
 
@@ -2249,7 +2254,7 @@ export const TimesheetPage: FC = () => {
     // В персональном режиме счётчик «N сотр.» бессмыслен — в сетке один человек,
     // поэтому вместо него показываем его ФИО.
     const showCounter = !isEmployeeMode && Boolean(stats.employeeCount);
-    const activeApproval = headerApproval.data ?? null;
+    const activeApproval = headerApproval.data?.approval ?? null;
     const otherApprovals = (headerMonthApprovals.data ?? []).filter(
       a => !activeApproval || a.id !== activeApproval.id,
     );
@@ -2571,7 +2576,7 @@ export const TimesheetPage: FC = () => {
                     {isExporting ? 'Экспорт…' : 'Экспорт'}
                   </button>
                 )}
-                {canEditTimesheet && (
+                {canWriteActiveDept && (
                   <button
                     type="button"
                     className="ts-btn"
@@ -2604,7 +2609,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {canEditTimesheet && activeGridDeptId && !isEmployeeMode && (viewMode === 'employees' || viewMode === 'objects') && (
+                {canWriteActiveDept && activeGridDeptId && !isEmployeeMode && (viewMode === 'employees' || viewMode === 'objects') && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}

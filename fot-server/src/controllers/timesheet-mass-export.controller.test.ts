@@ -26,6 +26,7 @@ vi.mock('archiver', () => ({
 vi.mock('../services/data-scope.service.js', () => ({
   resolveRequestDataScope: vi.fn(async () => 'all'),
   resolveScopedDepartmentIds: vi.fn(async (_req: unknown, ids: string[]) => ids),
+  resolveWritableScopedDepartmentIds: vi.fn(async (_req: unknown, ids: string[]) => ids),
 }));
 vi.mock('../services/timesheet-export.service.js', () => ({
   fetchTimesheetDataForDepartment: h.fetchDept,

@@ -6,7 +6,10 @@
 import type { Response } from 'express';
 import { execute } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+} from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import { isHrCryptoConfigured } from '../services/hr-crypto.service.js';
 import {
@@ -66,7 +69,7 @@ const uploadForEmployee = async (req: MulterRequest, res: Response): Promise<voi
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = Number(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -134,7 +137,7 @@ const listForEmployee = async (req: AuthenticatedRequest, res: Response): Promis
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = Number(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

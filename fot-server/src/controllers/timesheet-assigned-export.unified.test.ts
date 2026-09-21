@@ -50,6 +50,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveRequestDataScope: h.requestScope,
   resolveManagedDepartmentIds: h.managedDeptIds,
   resolveScopedDepartmentIds: h.scopedDeptIds,
+  resolveWritableScopedDepartmentIds: h.scopedDeptIds,
 }));
 vi.mock('../services/skud-shared.service.js', () => ({ collectDeptIds: h.collectDeptIds }));
 vi.mock('../services/timekeeper-scope.service.js', () => ({ isTimekeeper: h.isTimekeeper }));

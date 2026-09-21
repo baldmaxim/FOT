@@ -8,7 +8,8 @@ import {
   normalizeUuidParam,
   resolveAccessibleDepartmentIds,
   resolveAccessibleEmployeeIds,
-  resolveEditableDepartmentIds,
+  hasDeputyAssignment,
+  resolveTimesheetEditableDepartmentIds,
   resolveEffectiveDirectSubordinates,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
@@ -16,6 +17,7 @@ import {
 import { isTimekeeper, resolveTimekeeperEditableLiIds, LI_OBSHESTROY_DEPARTMENT_ID } from './timekeeper-scope.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
+
 
 /**
  * Скоуп табеля. Вынесено из timesheet.controller.ts, чтобы экспортные контроллеры
@@ -30,7 +32,10 @@ export async function hasManagedTimesheetAccess(
 ): Promise<boolean> {
   const checker = action === 'edit' ? hasPageEdit : hasPageView;
   const checks = await Promise.all(MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => checker(req.user.role_code, pageKey)));
-  return checks.some(Boolean);
+  if (checks.some(Boolean)) return true;
+  // Заместителю страницу табеля выдаёт назначение, а не роль (миграция 283):
+  // без этой ветки resolveTimesheetScope отдал бы ему 'self'.
+  return hasDeputyAssignment(req);
 }
 
 export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<DataScope | null> {
@@ -163,8 +168,10 @@ export async function canAccessEmployeeForTimesheetPeriod(
     return acc === 'all' || acc.has(employeeId);
   }
 
+  // Запись в ТАБЕЛЬ: editable (full) + отделы заместителя (миграция 283).
+  // Остальные write/approve-гейты остаются строго на resolveEditableDepartmentIds.
   const managedDepartmentIds = requireEdit
-    ? await resolveEditableDepartmentIds(req)
+    ? await resolveTimesheetEditableDepartmentIds(req)
     : await resolveManagedDepartmentIds(req);
   if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
     const employeeIdsByDepartment = await Promise.all(

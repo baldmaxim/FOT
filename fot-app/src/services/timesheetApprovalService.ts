@@ -289,15 +289,29 @@ export const timesheetApprovalService = {
     return res.data;
   },
 
-  getStatus: async (target: ISubmissionTarget, start_date: string, end_date: string) => {
+  /**
+   * Статус подачи и признак «в этот отдел можно писать» (meta.can_write).
+   *
+   * Флаг приходит всегда, в том числе когда подачи ещё нет (черновой период) —
+   * именно тогда решается, показывать ли кнопку «Подать». Отсутствие поля трактуем
+   * как «нельзя»: право на страницу /timesheet само по себе записи не даёт
+   * (глобальный просмотр табелей, view-назначение, чужой отдел).
+   */
+  getStatus: async (
+    target: ISubmissionTarget,
+    start_date: string,
+    end_date: string,
+  ): Promise<{ approval: ITimesheetApproval | null; can_write: boolean }> => {
     const params = new URLSearchParams({ start_date, end_date });
     if (target.mode === 'personal') {
       params.set('personal', 'true');
     } else if (target.department_id) {
       params.set('department_id', target.department_id);
     }
-    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?${params.toString()}`);
-    return res.data;
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null> & { meta?: { can_write?: boolean } }>(
+      `/timesheet-approvals/status?${params.toString()}`,
+    );
+    return { approval: res.data ?? null, can_write: res.meta?.can_write === true };
   },
 
   listDepartment: async (department_id: string, month: string) => {

@@ -56,6 +56,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveManagedDepartmentIds: vi.fn(async () => []),
   resolveScopedDepartmentId: vi.fn(),
   canAccessEmployeeInScope: vi.fn(async () => true),
+  canWriteEmployeeInScope: vi.fn(async () => true),
+  resolveWritableScopedDepartmentId: vi.fn(),
 }));
 vi.mock('../services/department-access.service.js', () => ({ listExplicitDepartmentIdsForUser: vi.fn(async () => []) }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));

@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { query, queryOne, execute } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope, resolveAccessibleEmployeeIds } from '../services/data-scope.service.js';
+import {
+  canWriteEmployeeInScope,
+  resolveAccessibleEmployeeIds,
+} from '../services/data-scope.service.js';
 import { loadCalendarMonth } from '../services/schedule.service.js';
 import { settingsService } from '../services/settings.service.js';
 
@@ -390,7 +393,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json({ success: false, error: 'Обращение не найдено' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, msg.employee_id))) {
+    if (!(await canWriteEmployeeInScope(req, msg.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }

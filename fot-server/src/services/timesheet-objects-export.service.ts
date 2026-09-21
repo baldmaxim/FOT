@@ -1,3 +1,4 @@
+import { departmentManagerConditionSql } from './department-managers.service.js';
 import { query } from '../config/postgres.js';
 import type { IDepartmentTimesheetData, TimesheetExportRangeArg } from './timesheet-export.service.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
@@ -164,8 +165,7 @@ export async function fetchManagerIdsForDepartments(
          FROM ancestry an
          JOIN employee_department_access eda
            ON eda.department_id = an.dept_id
-          AND eda.is_active = true
-          AND eda.source <> 'sigur_sync'
+          AND ${departmentManagerConditionSql('eda')}
          JOIN employees e
            ON e.id = eda.employee_id
           AND e.is_archived = false

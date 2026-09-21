@@ -22,9 +22,9 @@ import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
 import { isAdminAreaPageKey } from '../config/access-control.js';
-import { getRolePageAccess } from '../services/access-control.service.js';
+import { getRolePageAccess, listDeputyAutoAccessPages } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
-import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
+import { listManagedDepartmentIdsForUser, hasActiveDeputyAssignment } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
@@ -164,6 +164,20 @@ async function buildProfileResponse(
   if (managerAutoAccess && !role.is_admin && !page_access['/staff-control/hiring']?.can_view
       && (isHiringRequesterRole(role.code) || await hasHiringAutoAccess(profile.employee_id, role.is_admin))) {
     page_access['/staff-control/hiring'] = { can_view: true, can_edit: false };
+  }
+
+  // Заместитель начальника отдела (миграция 283): страницы даёт назначение, а не роль.
+  // Зеркало ветки в resolveEffectivePageAccess — без этого бэк запрос пропустит, а
+  // фронт пункты меню не покажет (canViewPage смотрит именно в page_access).
+  // Гейта managerAutoAccess здесь нет намеренно: роль заместителя может быть любой.
+  if (!role.is_admin && await hasActiveDeputyAssignment(profile.employee_id)) {
+    for (const [key, grant] of listDeputyAutoAccessPages()) {
+      const current = page_access[key];
+      page_access[key] = {
+        can_view: current?.can_view || grant.can_view,
+        can_edit: current?.can_edit || grant.can_edit,
+      };
+    }
   }
 
   // «Руководитель экономического отдела» — внесистемная роль (object_kpi_global_roles).

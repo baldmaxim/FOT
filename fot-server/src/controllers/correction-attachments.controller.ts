@@ -1,5 +1,7 @@
 import type { Response } from 'express';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canWriteEmployeeInScope,
+} from '../services/data-scope.service.js';
 import { r2Service } from '../services/r2.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
@@ -73,7 +75,7 @@ const ensureAdjustmentAccess = async (
     res.status(404).json({ success: false, error: 'Корректировка не найдена' });
     return null;
   }
-  if (!(await canAccessEmployeeInScope(req, adj.employee_id))) {
+  if (!(await canWriteEmployeeInScope(req, adj.employee_id))) {
     res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
     return null;
   }
@@ -219,7 +221,7 @@ const uploadBulk = async (req: MulterRequest, res: Response): Promise<void> => {
       return;
     }
     const employeeId = employeeIds[0];
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -292,7 +294,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     // сотрудникам этих дней (после фикса — один и тот же, но защищаемся от чужих связей).
     const linkedEmployeeIds = await loadCorrectionDocumentEmployeeIds(documentId);
     for (const empId of linkedEmployeeIds) {
-      if (!(await canAccessEmployeeInScope(req, empId))) {
+      if (!(await canWriteEmployeeInScope(req, empId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к части связанных дней' });
         return;
       }

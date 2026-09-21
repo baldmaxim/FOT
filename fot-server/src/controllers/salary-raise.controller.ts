@@ -22,7 +22,12 @@ function emitSalaryRaiseChanged(params: {
     payload: { entityId: params.requestId, action: params.action },
   });
 }
-import { canAccessEmployeeInScope, resolveManagedDepartmentIds, resolveRequestDataScope } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+  resolveManagedDepartmentIds,
+  resolveRequestDataScope,
+} from '../services/data-scope.service.js';
 import { listTravelObjects } from '../services/skud-travel.service.js';
 import { buildAttendanceEntries, type IAttendanceEntry } from '../services/attendance.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
@@ -441,7 +446,7 @@ const canManageSalaryRaiseEmployee = async (req: AuthenticatedRequest, employeeI
   }
 
   if (scope === 'all') {
-    return canAccessEmployeeInScope(req, employeeId);
+    return canWriteEmployeeInScope(req, employeeId);
   }
 
   const managedDepartmentIds = await resolveManagedDepartmentIds(req);

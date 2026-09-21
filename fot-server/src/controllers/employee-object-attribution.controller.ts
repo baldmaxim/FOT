@@ -7,7 +7,10 @@ import { z } from 'zod';
 import type { Response } from 'express';
 import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+} from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { resolveSchedule } from '../services/schedule.service.js';
@@ -78,7 +81,7 @@ export const employeeObjectAttributionController = {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
       }
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!(await canWriteEmployeeInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
         return;
       }

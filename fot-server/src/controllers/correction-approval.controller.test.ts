@@ -20,6 +20,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveAccessibleDepartmentIds: accessibleMock,
   resolveEditableDepartmentIds: editableMock,
   resolveScopedDepartmentId: scopedMock,
+  resolveWritableScopedDepartmentId: scopedMock,
+  resolveTimesheetEditableDepartmentIds: editableMock,
 }));
 
 vi.mock('../services/employee-direct-reports.service.js', () => ({

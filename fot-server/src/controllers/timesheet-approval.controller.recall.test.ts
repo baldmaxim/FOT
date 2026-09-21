@@ -24,6 +24,8 @@ vi.mock('../services/data-scope.service.js', async (importActual) => ({
   ...(await importActual<typeof import('../services/data-scope.service.js')>()),
   resolveScopedDepartmentId: resolveScopedDeptMock,
   resolveEditableDepartmentIds: resolveEditableDeptsMock,
+  // Отзыв табеля резолвит отдел по табельному скоупу (full + отделы заместителя).
+  resolveTimesheetEditableDepartmentIds: resolveEditableDeptsMock,
 }));
 
 vi.mock('../services/audit.service.js', () => ({

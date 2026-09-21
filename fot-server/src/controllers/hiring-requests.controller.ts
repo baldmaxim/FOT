@@ -9,7 +9,10 @@ import {
   getActiveAssigneeEmployeeIds,
   getHiringManagerEmployeeIds,
   isHiringRequesterRole,
+  resolveHiringDepartmentSides,
+  type IHiringDepartmentSides,
 } from '../services/hiring-access.service.js';
+import { hasDeputyAssignment } from '../services/data-scope.service.js';
 import { getUserIdsByEmployeeIds, getEmployeeUserId } from '../services/recipients.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
@@ -40,8 +43,53 @@ async function canCreateHiring(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin) return true;
   // Руководитель отдела / руководитель строительства подают заявки по роли.
   if (isHiringRequesterRole(req.user.role_code)) return true;
+  // Заместитель начальника отдела (миграция 283) — по назначению, роль может быть любой.
+  if (await hasDeputyAssignment(req)) return true;
   if (await isHiringManagerByEmployee(req.user.employee_id)) return true;
   return hasPageView(req.user.role_code, '/staff-control/hiring');
+}
+
+/** Отдел заявки на «моей» стороне: как начальник или как заместитель. */
+function isApplicantDepartment(sides: IHiringDepartmentSides, departmentId: unknown): boolean {
+  const id = typeof departmentId === 'string' ? departmentId : null;
+  if (!id) return false;
+  return sides.head.includes(id) || sides.deputy.includes(id);
+}
+
+/**
+ * Кто «заявитель» по этой заявке: автор либо любой начальник/заместитель её отдела.
+ * Начальник и заместитель работают с заявками отдела сообща.
+ */
+function isApplicantSide(
+  req: AuthenticatedRequest,
+  sides: IHiringDepartmentSides,
+  request: { author_employee_id?: unknown; department_id?: unknown },
+): boolean {
+  const isAuthor = req.user.employee_id != null
+    && Number(request.author_employee_id) === req.user.employee_id;
+  return isAuthor || isApplicantDepartment(sides, request.department_id);
+}
+
+/**
+ * Кто утверждает кандидата и набор («оффер»): HR/админ, начальник отдела заявки —
+ * и, как исключение для обратной совместимости, автор-руководитель, у которого
+ * full-назначения на отдел нет вовсе (руководитель «по людям»). Заместителю
+ * утверждение закрыто: по его заявкам решает начальник отдела.
+ */
+function canApplicantDecide(
+  req: AuthenticatedRequest,
+  sides: IHiringDepartmentSides,
+  manage: boolean,
+  request: { author_employee_id?: unknown; department_id?: unknown },
+): boolean {
+  if (manage) return true;
+  if (isApplicantDepartment(sides, request.department_id)) {
+    const id = String(request.department_id);
+    return sides.head.includes(id);
+  }
+  const isAuthor = req.user.employee_id != null
+    && Number(request.author_employee_id) === req.user.employee_id;
+  return isAuthor;
 }
 
 // Доступ к доске заявок (page_access['/staff-control/hiring']) у рекрутера/ответственного
@@ -103,14 +151,18 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
   const can_create = await canCreateHiring(req);
   const is_recruiter = await isRecruiter(empId);
 
+  const sides = manage ? { head: [], deputy: [] } : await resolveHiringDepartmentSides(req);
   const params: unknown[] = [];
   let where = '';
   if (!manage) {
-    // свои (автор) ∪ назначенные мне
+    // свои (автор) ∪ назначенные мне ∪ заявки моих отделов (начальник и заместитель
+    // видят заявки друг друга: по заявке заместителя оффер утверждает начальник)
     params.push(empId ?? -1);
+    params.push([...sides.head, ...sides.deputy]);
     where = `WHERE (r.author_employee_id = $1
                  OR EXISTS (SELECT 1 FROM hiring_request_assignees a
-                             WHERE a.request_id = r.id AND a.is_active = TRUE AND a.employee_id = $1))`;
+                             WHERE a.request_id = r.id AND a.is_active = TRUE AND a.employee_id = $1)
+                 OR r.department_id = ANY($2::uuid[]))`;
   }
 
   const rows = await query<Record<string, unknown>>(
@@ -130,7 +182,21 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
   const assignees = await loadAssignees(ids);
   const data = rows.map(r => ({ ...r, assignees: assignees.get(Number(r.id)) ?? [] }));
 
-  res.json({ success: true, data, meta: { can_manage: manage, is_recruiter, can_create } });
+  // Отделы, от имени которых пользователь может подать заявку: если их больше одного,
+  // фронт просит выбрать отдел явно (детерминированность вместо «первого попавшегося»).
+  const applicantDepartmentIds = [...new Set([...sides.head, ...sides.deputy])];
+  const applicant_departments = applicantDepartmentIds.length > 0
+    ? await query<{ id: string; name: string }>(
+        `SELECT id::text AS id, name FROM org_departments WHERE id = ANY($1::uuid[]) AND is_active = true ORDER BY name`,
+        [applicantDepartmentIds],
+      )
+    : [];
+
+  res.json({
+    success: true,
+    data,
+    meta: { can_manage: manage, is_recruiter, can_create, applicant_departments },
+  });
 };
 
 const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -150,11 +216,13 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
   // видимость
   const manage = await canManageHiring(req);
+  const sides = manage ? { head: [], deputy: [] } : await resolveHiringDepartmentSides(req);
   if (!manage) {
-    const isAuthor = req.user.employee_id != null && Number(request.author_employee_id) === req.user.employee_id;
     const isAssignee = req.user.employee_id != null
       && (await getActiveAssigneeEmployeeIds(id)).includes(req.user.employee_id);
-    if (!isAuthor && !isAssignee) { res.status(403).json({ success: false, error: 'Нет доступа к заявке' }); return; }
+    if (!isApplicantSide(req, sides, request) && !isAssignee) {
+      res.status(403).json({ success: false, error: 'Нет доступа к заявке' }); return;
+    }
   }
 
   const [assignees, candidates, files, events] = await Promise.all([
@@ -172,7 +240,17 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
   res.json({
     success: true,
-    data: { ...request, assignees: assignees.get(id) ?? [], candidates, files, events, can_manage: manage },
+    data: {
+      ...request,
+      assignees: assignees.get(id) ?? [],
+      candidates,
+      files,
+      events,
+      can_manage: manage,
+      // Флаги считает сервер: фронт не знает ни назначений, ни уровней.
+      is_applicant: manage || isApplicantSide(req, sides, request),
+      can_approve: canApplicantDecide(req, sides, manage, request),
+    },
   });
 };
 
@@ -202,12 +280,34 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   // Отдел автора — для аналитики. Грузим строку сотрудника при наличии employee_id.
   let departmentId: string | null = b.department_id ?? null;
   let authorName: string | null = null;
+  let ownDepartmentId: string | null = null;
   if (req.user.employee_id) {
     const emp = await queryOne<{ org_department_id: string | null; full_name: string | null }>(
       `SELECT org_department_id, full_name FROM employees WHERE id = $1`, [req.user.employee_id],
     );
-    if (!departmentId) departmentId = emp?.org_department_id ?? null;
+    ownDepartmentId = emp?.org_department_id ?? null;
     authorName = emp?.full_name ?? null;
+  }
+
+  // Отдел заявки — только «свой»: иначе любой заявитель заводил бы заявку на чужой
+  // отдел по одному лишь UUID, а утверждать её пришлось бы чужому начальнику.
+  if (!(await canManageHiring(req))) {
+    const sides = await resolveHiringDepartmentSides(req);
+    const allowed = [...new Set([...sides.head, ...sides.deputy])];
+    if (departmentId) {
+      const isOwn = allowed.includes(departmentId) || departmentId === ownDepartmentId;
+      if (!isOwn) { res.status(403).json({ success: false, error: 'Нет доступа к этому отделу' }); return; }
+    } else if (ownDepartmentId && (allowed.length === 0 || allowed.includes(ownDepartmentId))) {
+      departmentId = ownDepartmentId;
+    } else if (allowed.length === 1) {
+      departmentId = allowed[0];
+    } else if (allowed.length > 1) {
+      res.status(400).json({ success: false, error: 'Укажите отдел заявки', code: 'DEPARTMENT_REQUIRED' }); return;
+    } else {
+      departmentId = ownDepartmentId;
+    }
+  } else if (!departmentId) {
+    departmentId = ownDepartmentId;
   }
   // Дата создания заявки = «дата поступления в работу» (если фронт не прислал — сегодня).
   const startWorkDate = b.start_work_date || null;
@@ -520,8 +620,11 @@ const updateCandidate = async (req: AuthenticatedRequest, res: Response): Promis
   if (!cand || Number(cand.request_id) !== id) { res.status(404).json({ success: false, error: 'Кандидат не найден' }); return; }
 
   const isWork = await canWorkRequest(req, id);
-  const request = await queryOne<{ author_employee_id: number | null }>(`SELECT author_employee_id FROM hiring_requests WHERE id = $1`, [id]);
-  const isAuthor = req.user.employee_id != null && request?.author_employee_id === req.user.employee_id;
+  const request = await queryOne<{ author_employee_id: number | null; department_id: string | null }>(
+    `SELECT author_employee_id, department_id FROM hiring_requests WHERE id = $1`, [id],
+  );
+  const isAuthor = request != null
+    && isApplicantSide(req, await resolveHiringDepartmentSides(req), request);
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -561,8 +664,12 @@ const verdictCandidate = async (req: AuthenticatedRequest, res: Response): Promi
   if (!(VERDICTS as readonly string[]).includes(verdict)) { res.status(400).json({ success: false, error: 'Недопустимый вердикт' }); return; }
 
   const isWork = await canWorkRequest(req, id);
-  const request = await queryOne<{ author_employee_id: number | null }>(`SELECT author_employee_id FROM hiring_requests WHERE id = $1`, [id]);
-  const isAuthor = req.user.employee_id != null && request?.author_employee_id === req.user.employee_id;
+  const request = await queryOne<{ author_employee_id: number | null; department_id: string | null }>(
+    `SELECT author_employee_id, department_id FROM hiring_requests WHERE id = $1`, [id],
+  );
+  // Вердикт «Пригласить/Отказать» — мнение заявителя: его ставит и заместитель.
+  const isAuthor = request != null
+    && isApplicantSide(req, await resolveHiringDepartmentSides(req), request);
   if (!isWork && !isAuthor) { res.status(403).json({ success: false, error: 'Нет прав' }); return; }
 
   const sets = ['applicant_verdict = $1', 'verdict_by = $2', 'verdict_at = NOW()'];
@@ -586,11 +693,15 @@ const approveCandidate = async (req: AuthenticatedRequest, res: Response): Promi
   if (!id || !cid) { res.status(400).json({ success: false, error: 'Некорректные параметры' }); return; }
   const approved = !!req.body?.approved;
 
-  const request = await queryOne<{ author_employee_id: number | null }>(`SELECT author_employee_id FROM hiring_requests WHERE id = $1`, [id]);
+  const request = await queryOne<{ author_employee_id: number | null; department_id: string | null }>(
+    `SELECT author_employee_id, department_id FROM hiring_requests WHERE id = $1`, [id],
+  );
   if (!request) { res.status(404).json({ success: false, error: 'Заявка не найдена' }); return; }
   const manage = await canManageHiring(req);
-  const isAuthor = req.user.employee_id != null && request.author_employee_id === req.user.employee_id;
-  if (!manage && !isAuthor) { res.status(403).json({ success: false, error: 'Утверждать может заявитель или руководитель' }); return; }
+  const sides = manage ? { head: [], deputy: [] } : await resolveHiringDepartmentSides(req);
+  if (!canApplicantDecide(req, sides, manage, request)) {
+    res.status(403).json({ success: false, error: 'Утверждение кандидата — за начальником отдела' }); return;
+  }
 
   try {
     await withTransaction(async (client) => {
@@ -638,13 +749,15 @@ const deleteCandidate = async (req: AuthenticatedRequest, res: Response): Promis
 const finalizeSelection = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const id = parseId(req.params.id);
   if (!id) { res.status(400).json({ success: false, error: 'Некорректный id' }); return; }
-  const request = await queryOne<{ author_employee_id: number | null; headcount: number }>(
-    `SELECT author_employee_id, headcount FROM hiring_requests WHERE id = $1`, [id],
+  const request = await queryOne<{ author_employee_id: number | null; headcount: number; department_id: string | null }>(
+    `SELECT author_employee_id, headcount, department_id FROM hiring_requests WHERE id = $1`, [id],
   );
   if (!request) { res.status(404).json({ success: false, error: 'Заявка не найдена' }); return; }
   const manage = await canManageHiring(req);
-  const isAuthor = req.user.employee_id != null && request.author_employee_id === req.user.employee_id;
-  if (!manage && !isAuthor) { res.status(403).json({ success: false, error: 'Нет прав' }); return; }
+  const sides = manage ? { head: [], deputy: [] } : await resolveHiringDepartmentSides(req);
+  if (!canApplicantDecide(req, sides, manage, request)) {
+    res.status(403).json({ success: false, error: 'Утверждение набора — за начальником отдела' }); return;
+  }
 
   const cnt = await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n FROM hiring_candidates WHERE request_id = $1 AND applicant_approved = TRUE`, [id]);
   const approved = Number(cnt?.n ?? 0);
@@ -719,10 +832,13 @@ const downloadFile = async (req: AuthenticatedRequest, res: Response): Promise<v
   const fileId = parseId(req.params.fileId);
   if (!id || !fileId) { res.status(400).json({ success: false, error: 'Некорректные параметры' }); return; }
   if (!(await canWorkRequest(req, id)) && !(await canManageHiring(req))) {
-    // автор тоже может скачивать вложения своей заявки
-    const request = await queryOne<{ author_employee_id: number | null }>(`SELECT author_employee_id FROM hiring_requests WHERE id = $1`, [id]);
-    const isAuthor = req.user.employee_id != null && request?.author_employee_id === req.user.employee_id;
-    if (!isAuthor) { res.status(403).json({ success: false, error: 'Нет прав' }); return; }
+    // сторона заявителя (автор, начальник или заместитель отдела) тоже скачивает вложения
+    const request = await queryOne<{ author_employee_id: number | null; department_id: string | null }>(
+      `SELECT author_employee_id, department_id FROM hiring_requests WHERE id = $1`, [id],
+    );
+    const applicant = request != null
+      && isApplicantSide(req, await resolveHiringDepartmentSides(req), request);
+    if (!applicant) { res.status(403).json({ success: false, error: 'Нет прав' }); return; }
   }
   const file = await queryOne<{ r2_key: string; file_name: string }>(
     `SELECT r2_key, file_name FROM hiring_request_files WHERE id = $1 AND request_id = $2`, [fileId, id],

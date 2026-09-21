@@ -69,6 +69,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
   canAccessDepartmentInScope: vi.fn().mockResolvedValue(true),
   resolveRequestDataScope: h.resolveScope,
+  canWriteEmployeeInScope: h.canAccessEmployeeInScope,
+  canWriteDepartmentInScope: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('../services/employee-department-access.service.js', () => ({
   upsertTechnicalDepartmentAccess: vi.fn(),

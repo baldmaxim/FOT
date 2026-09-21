@@ -28,7 +28,12 @@ import {
   saveTravelConfig as saveTravelConfigService,
   updateTravelRoute,
 } from '../services/skud-travel-routes.service.js';
-import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import {
+  hasGlobalDepartmentReadScope,
+  resolveAccessibleDepartmentIds,
+  resolveScopedDepartmentId,
+  resolveWritableScopedDepartmentId,
+} from '../services/data-scope.service.js';
 
 const monthRegex = /^\d{4}-\d{2}$/;
 
@@ -562,7 +567,7 @@ export const skudTravelController = {
   async rebuildTravelSegments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const requestedDepartmentId = typeof req.body?.department_id === 'string' ? req.body.department_id : null;
-      const scopedDepartmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      const scopedDepartmentId = await resolveWritableScopedDepartmentId(req, requestedDepartmentId);
       // Без этой проверки rebuild без фильтра запускал бы пересчёт по всем сотрудникам
       // компании при подмене department_id.
       if (requestedDepartmentId && !scopedDepartmentId) {

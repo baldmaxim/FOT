@@ -12,6 +12,8 @@ interface UserFromApi {
   email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
+  /** Подмножество assigned_department_ids с уровнем «заместитель» (миграция 283). */
+  deputy_department_ids?: string[];
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
@@ -62,6 +64,8 @@ export interface EmployeeDepartmentAssignmentFromApi {
   assigned_department_ids: string[];
   /** Подмножество assigned_department_ids с уровнем «только просмотр» (миграция 167). */
   view_only_department_ids?: string[];
+  /** Подмножество assigned_department_ids с уровнем «заместитель» (миграция 283). */
+  deputy_department_ids?: string[];
   position_name?: string | null;
   department_name?: string | null;
   direct_manager_employee_id?: number | null;
@@ -79,7 +83,7 @@ export interface IBrigadeAssignedEmployee {
   position_name: string | null;
   employment_status: string;
   excluded_from_timesheet: boolean;
-  access_level: 'full' | 'view';
+  access_level: 'full' | 'view' | 'deputy';
 }
 
 /** Карты назначений «сущность → объекты входа» (id объектов). */
@@ -450,10 +454,15 @@ export const adminService = {
     userId: string,
     departmentIds: string[],
     viewOnlyDepartmentIds: string[] = [],
+    deputyDepartmentIds: string[] = [],
   ): Promise<{ assigned_department_ids: string[] }> {
     const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/users/${userId}/department-access`,
-      { department_ids: departmentIds, view_only_department_ids: viewOnlyDepartmentIds },
+      {
+        department_ids: departmentIds,
+        view_only_department_ids: viewOnlyDepartmentIds,
+        deputy_department_ids: deputyDepartmentIds,
+      },
     );
     return response.data;
   },
@@ -462,10 +471,15 @@ export const adminService = {
     employeeId: number,
     departmentIds: string[],
     viewOnlyDepartmentIds: string[] = [],
+    deputyDepartmentIds: string[] = [],
   ): Promise<{ assigned_department_ids: string[] }> {
     const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/employees/${employeeId}/department-access`,
-      { department_ids: departmentIds, view_only_department_ids: viewOnlyDepartmentIds },
+      {
+        department_ids: departmentIds,
+        view_only_department_ids: viewOnlyDepartmentIds,
+        deputy_department_ids: deputyDepartmentIds,
+      },
     );
     return response.data;
   },

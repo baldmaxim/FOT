@@ -30,11 +30,13 @@ import { isProtectedArchiveDepartment } from '../services/employee-archive-depar
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
   hasGlobalDepartmentReadScope,
   normalizeUuidParam,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
+  resolveWritableScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { resolveEmployeeListReadScope } from '../services/employee-scope-filter.service.js';
 import {
@@ -526,7 +528,7 @@ export const employeesController = {
         return;
       }
       if (scope === 'department') {
-        const scopedDepartmentId = await resolveScopedDepartmentId(req, validated.org_department_id);
+        const scopedDepartmentId = await resolveWritableScopedDepartmentId(req, validated.org_department_id);
         if (!scopedDepartmentId) {
           res.status(403).json({ success: false, error: 'Можно создавать сотрудников только в назначенных бригадах' });
           return;
@@ -817,13 +819,13 @@ export const employeesController = {
       }
       const validated = updateEmployeeSchema.parse(req.body);
       const employeeId = Number(id);
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!(await canWriteEmployeeInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }
       const scope = await resolveRequestDataScope(req);
       if (scope === 'department' && validated.org_department_id) {
-        const scopedDepartmentId = await resolveScopedDepartmentId(req, validated.org_department_id);
+        const scopedDepartmentId = await resolveWritableScopedDepartmentId(req, validated.org_department_id);
         if (!scopedDepartmentId) {
           res.status(403).json({ success: false, error: 'Нельзя перевести сотрудника в неназначенную бригаду при department scope' });
           return;
@@ -1126,7 +1128,7 @@ export const employeesController = {
   async changeSalary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      if (!(await canAccessEmployeeInScope(req, Number(id)))) {
+      if (!(await canWriteEmployeeInScope(req, Number(id)))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }
@@ -1165,7 +1167,7 @@ export const employeesController = {
     try {
       const { id } = req.params;
       const employeeId = Number(id);
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!(await canWriteEmployeeInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

@@ -279,6 +279,12 @@ export interface TimesheetResponse {
   approval_locks?: IEmployeeApprovalLock[];
   /** Легаси-поле: плоский список дат. Оставлено на переходный релиз, не использовать. */
   approval_locked_dates?: string[];
+  /**
+   * Можно ли ПИСАТЬ в выбранный отдел (meta.department_writable сервера).
+   * true только когда открыт ровно один отдел из табельно-редактируемого скоупа:
+   * право на страницу /timesheet само по себе записи не даёт.
+   */
+  department_writable?: boolean;
 }
 
 export interface IAssignedEmployeeDepartment {

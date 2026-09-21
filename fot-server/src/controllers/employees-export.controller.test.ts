@@ -19,6 +19,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveRequestDataScopeWithDirectReports: vi.fn(async () => scope.dataScope),
   resolveManagedDepartmentIds: vi.fn(async () => scope.managedDepartmentIds),
   resolveScopedDepartmentId: vi.fn(async () => scope.scopedDepartmentId),
+  resolveWritableScopedDepartmentId: vi.fn(async () => scope.scopedDepartmentId),
 }));
 
 vi.mock('../services/department-access.service.js', () => ({

@@ -17,8 +17,9 @@ import { syncLinkedEmployeeFromSigur } from '../services/sigur-linked-employees.
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
-  canAccessDepartmentInScope,
   canAccessEmployeeInScope,
+  canWriteDepartmentInScope,
+  canWriteEmployeeInScope,
   resolveRequestDataScope,
 } from '../services/data-scope.service.js';
 import { upsertTechnicalDepartmentAccess } from '../services/employee-department-access.service.js';
@@ -253,7 +254,7 @@ async function assertDepartmentMoveAllowed(
     throw createHttpError(403, 'Недостаточно прав для перевода сотрудников');
   }
 
-  if (scope === 'department' && !(await canAccessDepartmentInScope(req, targetDepartmentId))) {
+  if (scope === 'department' && !(await canWriteDepartmentInScope(req, targetDepartmentId))) {
     throw createHttpError(403, 'Нельзя перевести сотрудника в другой отдел при department scope');
   }
 }
@@ -373,7 +374,7 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
   try {
     const { id } = req.params;
     const employeeId = Number(id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -559,7 +560,7 @@ export async function cancelDismissal(req: AuthenticatedRequest, res: Response):
   try {
     const { id } = req.params;
     const employeeId = Number(id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -632,7 +633,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
   try {
     const { id } = req.params;
     const employeeId = Number(id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -856,7 +857,7 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
   try {
     const { id } = req.params;
     const employeeId = Number(id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -989,7 +990,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
     const skippedIds: number[] = [];
 
     for (const employeeId of employeeIds) {
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!(await canWriteEmployeeInScope(req, employeeId))) {
         failures.push({ employee_id: employeeId, error: 'Нет доступа к сотруднику' });
         continue;
       }
@@ -1167,7 +1168,7 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
 export async function updateHistoryEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const employeeId = Number(req.params.id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -1212,7 +1213,7 @@ export async function updateHistoryEvent(req: AuthenticatedRequest, res: Respons
 export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const employeeId = Number(req.params.id);
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

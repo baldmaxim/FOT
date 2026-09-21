@@ -1,4 +1,10 @@
 import { query } from '../config/postgres.js';
+import type { AuthenticatedRequest } from '../types/index.js';
+import { expandDepartmentSubtree } from './data-scope.service.js';
+import {
+  listDeputyDepartmentIdsForUser,
+  listEditableDepartmentIdsForUser,
+} from './department-access.service.js';
 
 /**
  * Права доступа модуля «Заявки для HR» (подбор персонала).
@@ -97,4 +103,40 @@ export async function hasHiringAutoAccess(
     hasActiveHiringAssignment(employeeId),
   ]);
   return recruiter || manager || assignment;
+}
+
+/**
+ * Отделы заявителя: где пользователь начальник (full-назначение) и где заместитель
+ * (миграция 283). Нужны заявкам на поиск: обе стороны видят заявки отдела, но
+ * утверждать кандидата и набор может только сторона начальника.
+ *
+ * Берём ЯВНЫЕ назначения (listEditableDepartmentIdsForUser), а не resolveEditableDepartmentIds:
+ * последний отдаёт админу и табельщице весь их видимый скоуп, и они стали бы
+ * «начальниками» чужих отделов в этом модуле.
+ */
+export interface IHiringDepartmentSides {
+  /** Отделы, где пользователь — начальник (и их поддерево). */
+  head: string[];
+  /** Отделы, где пользователь — заместитель (поддерево, без head-отделов). */
+  deputy: string[];
+}
+
+export async function resolveHiringDepartmentSides(
+  req: AuthenticatedRequest,
+): Promise<IHiringDepartmentSides> {
+  const employeeId = req.user.employee_id ?? null;
+  if (employeeId == null) return { head: [], deputy: [] };
+
+  const [headExplicit, deputyExplicit] = await Promise.all([
+    listEditableDepartmentIdsForUser(req.user.id, employeeId),
+    listDeputyDepartmentIdsForUser(req.user.id, employeeId),
+  ]);
+
+  const [head, deputyExpanded] = await Promise.all([
+    expandDepartmentSubtree([...new Set(headExplicit)], 'hiring_head'),
+    expandDepartmentSubtree([...new Set(deputyExplicit)], 'hiring_deputy'),
+  ]);
+
+  const headSet = new Set(head);
+  return { head, deputy: deputyExpanded.filter(id => !headSet.has(id)) };
 }

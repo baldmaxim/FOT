@@ -27,13 +27,23 @@ function warnMissingEmployeeDepartmentAccessTable(): void {
   );
 }
 
+/** Уровень ручного назначения отдела: начальник / заместитель / только просмотр. */
+export type DepartmentAccessLevel = 'full' | 'view' | 'deputy';
+
+/** Неизвестный уровень трактуем как 'full' — дефолт колонки с миграции 167. */
+export function normalizeAccessLevel(raw: string | null | undefined): DepartmentAccessLevel {
+  if (raw === 'view') return 'view';
+  if (raw === 'deputy') return 'deputy';
+  return 'full';
+}
+
 function uniqueDepartmentIds(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((v): v is string => typeof v === 'string' && v.trim().length > 0))];
 }
 
 async function listEmployeeAccessDepartmentIds(
   employeeId: number,
-  options: { excludeSource?: string; onlyFullAccess?: boolean } = {},
+  options: { excludeSource?: string; onlyFullAccess?: boolean; levels?: readonly string[] } = {},
 ): Promise<string[]> {
   try {
     const params: unknown[] = [employeeId];
@@ -42,8 +52,11 @@ async function listEmployeeAccessDepartmentIds(
       params.push(options.excludeSource);
       sql += ` AND source <> $${params.length}`;
     }
-    if (options.onlyFullAccess) {
-      sql += " AND access_level = 'full'";
+    // levels перекрывает onlyFullAccess; последний оставлен алиасом ['full'] для старых вызовов.
+    const levels = options.levels ?? (options.onlyFullAccess ? ['full'] : null);
+    if (levels) {
+      params.push([...levels]);
+      sql += ` AND access_level = ANY($${params.length}::text[])`;
     }
 
     const rows = await query<{ department_id: string | null }>(sql, params);
@@ -62,6 +75,8 @@ const IN_FILTER_THRESHOLD = 300;
 interface ILoadEmployeeAccessOptions {
   /** Исключить из выборки строки с данным source (например 'sigur_sync' — членство). */
   excludeSource?: string;
+  /** Оставить только эти уровни назначения ('full' | 'view' | 'deputy'). */
+  levels?: readonly string[];
 }
 
 export async function loadEmployeeAccessMap(
@@ -80,6 +95,10 @@ export async function loadEmployeeAccessMap(
     if (options.excludeSource) {
       params.push(options.excludeSource);
       sql += ` AND source <> $${params.length}`;
+    }
+    if (options.levels) {
+      params.push([...options.levels]);
+      sql += ` AND access_level = ANY($${params.length}::text[])`;
     }
     if (useInFilter) {
       params.push(unique);
@@ -142,6 +161,13 @@ export async function loadExplicitManagerAssignmentMap(
   seeds: Array<{ user_id: string; employee_id?: number | null }>,
 ): Promise<Map<string, string[]>> {
   return loadExplicitDepartmentMap(seeds, { excludeSource: 'sigur_sync' });
+}
+
+/** Отделы уровня 'deputy' (миграция 283) по пользователям — для пометки «зам.» в списках. */
+export async function loadDeputyAssignmentMap(
+  seeds: Array<{ user_id: string; employee_id?: number | null }>,
+): Promise<Map<string, string[]>> {
+  return loadExplicitDepartmentMap(seeds, { excludeSource: 'sigur_sync', levels: ['deputy'] });
 }
 
 export async function listUserIdsAssignedToDepartment(departmentId: string): Promise<string[]> {
@@ -213,12 +239,66 @@ export async function listEditableDepartmentIdsForUser(
 }
 
 /**
+ * Отделы, где сотрудник — ЗАМЕСТИТЕЛЬ начальника (access_level='deputy', миграция 283).
+ *
+ * Заместитель ведёт табель отдела (правка, подача, заявления «Корректировка табеля»)
+ * и подаёт заявки на поиск, но начальником отдела не считается: правило начальника —
+ * departmentManagerConditionSql (строго 'full'), поэтому в согласования, снимок
+ * руководителей для 1С и «начальника участка» он не попадает.
+ */
+export async function listDeputyDepartmentIdsForUser(
+  _userId: string | null,
+  employeeId?: number | null,
+): Promise<string[]> {
+  if (employeeId == null) return [];
+  return listEmployeeAccessDepartmentIds(employeeId, { excludeSource: 'sigur_sync', levels: ['deputy'] });
+}
+
+/**
+ * Ручные назначения БЕЗ уровня 'deputy' (миграция 283): начальник ('full') и
+ * просмотр ('view'). Нужен write-гейтам вне табеля: назначение заместителем не
+ * должно давать кадровых прав, а всё остальное поведение обязано остаться прежним.
+ */
+export async function listNonDeputyDepartmentIdsForUser(
+  _userId: string | null,
+  employeeId?: number | null,
+): Promise<string[]> {
+  if (employeeId == null) return [];
+  return listEmployeeAccessDepartmentIds(employeeId, {
+    excludeSource: 'sigur_sync',
+    levels: ['full', 'view'],
+  });
+}
+
+/**
+ * Есть ли у сотрудника хотя бы одно активное назначение уровня 'deputy'.
+ *
+ * Межзапросного кэша намеренно нет: снятие заместителя должно действовать сразу,
+ * а в рамках одного HTTP-запроса результат кэширует hasDeputyAssignment(req)
+ * (data-scope.service) на req.user.
+ *
+ * Предикат зовут page- и скоуп-гейты, в том числе на путях без своей обработки
+ * ошибок БД, поэтому недоступная база здесь означает «прав по назначению нет»
+ * (fail-closed), а не 500 на весь запрос.
+ */
+export async function hasActiveDeputyAssignment(employeeId?: number | null): Promise<boolean> {
+  if (employeeId == null) return false;
+  try {
+    const ids = await listDeputyDepartmentIdsForUser(null, employeeId);
+    return ids.length > 0;
+  } catch (err) {
+    console.warn('[department-access] deputy check failed:', err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
+/**
  * Ручные назначения сотрудника с уровнем доступа. Membership-строки (sigur_sync)
- * исключены. Для админ-экрана «Назначенные отделы» (галка «только просмотр»).
+ * исключены. Для админ-экрана «Назначенные отделы» (кнопка уровня у отдела).
  */
 export async function listManagerAssignmentsWithLevel(
   employeeId: number,
-): Promise<Array<{ department_id: string; access_level: 'full' | 'view' }>> {
+): Promise<Array<{ department_id: string; access_level: DepartmentAccessLevel }>> {
   try {
     const rows = await query<{ department_id: string | null; access_level: string | null }>(
       `SELECT department_id, access_level FROM employee_department_access
@@ -226,12 +306,12 @@ export async function listManagerAssignmentsWithLevel(
       [employeeId],
     );
     const seen = new Set<string>();
-    const result: Array<{ department_id: string; access_level: 'full' | 'view' }> = [];
+    const result: Array<{ department_id: string; access_level: DepartmentAccessLevel }> = [];
     for (const row of rows) {
       const id = typeof row.department_id === 'string' ? row.department_id.trim() : '';
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      result.push({ department_id: id, access_level: row.access_level === 'view' ? 'view' : 'full' });
+      result.push({ department_id: id, access_level: normalizeAccessLevel(row.access_level) });
     }
     return result;
   } catch (err) {

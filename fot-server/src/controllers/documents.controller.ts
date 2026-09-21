@@ -2,7 +2,11 @@ import type { Response } from 'express';
 import { query, queryOne, execute } from '../config/postgres.js';
 import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+  resolveScopedDepartmentId,
+} from '../services/data-scope.service.js';
 import { hasPageView } from '../services/access-control.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
@@ -148,7 +152,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
       res.status(400).json({ success: false, error: 'Недопустимая категория документа' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -374,7 +378,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (doc.employee_id != null && !(await canAccessEmployeeInScope(req, doc.employee_id))) {
+    if (doc.employee_id != null && !(await canWriteEmployeeInScope(req, doc.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

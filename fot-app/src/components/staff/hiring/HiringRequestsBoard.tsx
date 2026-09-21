@@ -31,7 +31,7 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
     staleTime: 20_000,
   });
   const requests = data?.data ?? [];
-  const caps = data?.meta ?? { can_manage: false, is_recruiter: false, can_create: false };
+  const caps = data?.meta ?? { can_manage: false, is_recruiter: false, can_create: false, applicant_departments: [] };
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -138,7 +138,12 @@ export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = fa
         Клик по строке — рабочая панель: воронка кандидатов, ссылки HH, файлы, комментарии, переключатель этапа.
       </div>
 
-      {createOpen && <HiringRequestCreateModal onClose={() => setCreateOpen(false)} />}
+      {createOpen && (
+        <HiringRequestCreateModal
+          onClose={() => setCreateOpen(false)}
+          applicantDepartments={caps.applicant_departments ?? []}
+        />
+      )}
       {poolOpen && <RecruiterPoolModal onClose={() => setPoolOpen(false)} />}
       {openId != null && (
         <HiringRequestPanel

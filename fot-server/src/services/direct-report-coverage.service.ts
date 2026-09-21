@@ -1,6 +1,6 @@
 import type { QueryResultRow } from 'pg';
 import { query, type DbExecutor } from '../config/postgres.js';
-import { listEffectiveDepartmentManagers } from './department-managers.service.js';
+import { listDepartmentTimesheetOwners } from './department-managers.service.js';
 
 /**
  * «Покрытие отделом»: у сотрудника на конкретную дату есть действующий руководитель
@@ -147,7 +147,9 @@ export async function loadCoverage(
     if (row.org_department_id) departmentIds.add(String(row.org_department_id));
   }
 
-  const managers = await listEffectiveDepartmentManagers([...departmentIds], exec);
+  // Владельцы табеля, а не «начальники отдела»: заместитель (миграция 283) подаёт
+  // отдел наравне с начальником, значит его дни тоже покрыты подачей отдела.
+  const managers = await listDepartmentTimesheetOwners([...departmentIds], exec);
   const isManaged = (departmentId: string | null): boolean =>
     departmentId != null && (managers.get(departmentId)?.length ?? 0) > 0;
 

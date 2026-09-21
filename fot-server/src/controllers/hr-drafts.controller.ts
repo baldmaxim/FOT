@@ -6,7 +6,10 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
-import { resolveRequestDataScope, canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canWriteEmployeeInScope,
+  resolveRequestDataScope,
+} from '../services/data-scope.service.js';
 import { isHrCryptoConfigured } from '../services/hr-crypto.service.js';
 import {
   HrDraftError,
@@ -124,7 +127,7 @@ const markCreated = async (req: AuthenticatedRequest, res: Response): Promise<vo
       res.status(400).json({ success: false, error: 'employee_id обязателен' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -142,7 +145,7 @@ const attach = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(400).json({ success: false, error: 'employee_id обязателен' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

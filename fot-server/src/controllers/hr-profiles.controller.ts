@@ -9,6 +9,7 @@ import { query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
   resolveAccessibleDepartmentIds,
   resolveAccessibleEmployeeIds,
 } from '../services/data-scope.service.js';
@@ -344,7 +345,7 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -365,7 +366,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -404,7 +405,7 @@ const zupToggle = async (req: AuthenticatedRequest, res: Response): Promise<void
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -423,7 +424,7 @@ const zupBulk = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     const body = z.object({ employee_ids: z.array(z.number().int().positive()).min(1).max(500), is_uploaded: z.boolean() }).parse(req.body ?? {});
     let done = 0;
     for (const id of body.employee_ids) {
-      if (!(await canAccessEmployeeInScope(req, id))) continue;
+      if (!(await canWriteEmployeeInScope(req, id))) continue;
       await setZupUploaded(id, body.is_uploaded, { userId: req.user.id });
       done += 1;
     }

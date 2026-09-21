@@ -16,13 +16,20 @@ vi.mock('../config/postgres.js', () => ({
   query: pgQuery, queryOne: pgQueryOne, execute: pgExecute, withTransaction: pgTx,
 }));
 
-const { mgr, recruiter, assignees, autoAccess, hrManagers } = vi.hoisted(() => ({
+const { mgr, recruiter, assignees, autoAccess, hrManagers, hiringSides } = vi.hoisted(() => ({
   mgr: vi.fn(async () => false),
   recruiter: vi.fn(async () => false),
   assignees: vi.fn(async () => [] as number[]),
   autoAccess: vi.fn(async () => true),
   hrManagers: vi.fn(async () => [] as number[]),
+  hiringSides: vi.fn(async () => ({ head: [] as string[], deputy: [] as string[] })),
 }));
+
+// Заместителей нет: иначе предикат ходил бы в БД и съедал мок первого запроса.
+vi.mock('../services/data-scope.service.js', () => ({
+  hasDeputyAssignment: vi.fn(async () => false),
+}));
+
 vi.mock('../services/hiring-access.service.js', () => ({
   isHiringManagerByEmployee: mgr,
   isRecruiter: recruiter,
@@ -31,6 +38,8 @@ vi.mock('../services/hiring-access.service.js', () => ({
   hasActiveHiringAssignment: vi.fn(async () => false),
   hasHiringAutoAccess: autoAccess,
   isHiringRequesterRole: (code: string) => code === 'manager' || code === 'manager_obj',
+  // Начальник/заместитель отдела заявки (миграция 283): по умолчанию сторон нет.
+  resolveHiringDepartmentSides: hiringSides,
 }));
 
 const { userIdsByEmp, empUserId, createMany, sendPush } = vi.hoisted(() => ({
@@ -292,6 +301,88 @@ describe('approveCandidate', () => {
     pgQueryOne.mockResolvedValueOnce({ author_employee_id: 99 });
     const res = makeRes();
     await c.approveCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+    expect(res._status).toBe(403);
+  });
+});
+
+describe('заместитель начальника отдела (миграция 283)', () => {
+  const DEPT = 'dddddddd-0000-4000-8000-000000000001';
+
+  it('подаёт заявку по назначению, даже если роль не «руководитель»', async () => {
+    // Роль по умолчанию в тестах — office: права даёт назначение, а не роль.
+    const { hasDeputyAssignment } = await import('../services/data-scope.service.js');
+    vi.mocked(hasDeputyAssignment).mockResolvedValue(true);
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: DEPT, full_name: 'Гладкая Н.В.' })
+      .mockResolvedValueOnce({ id: 7 });
+
+    const res = makeRes();
+    await c.create(makeReq({ body: { position_title: 'Инженер' } }), res);
+
+    expect(res._status).toBe(201);
+  });
+
+  it('не утверждает кандидата: оффер за начальником отдела', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, department_id: DEPT });
+
+    const res = makeRes();
+    await c.approveCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('не утверждает набор по своей же заявке', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, headcount: 1, department_id: DEPT });
+
+    const res = makeRes();
+    await c.finalizeSelection(makeReq({ params: { id: '1' }, body: {} }), res);
+
+    expect(res._status).toBe(403);
+  });
+
+  it('начальник отдела утверждает кандидата по заявке заместителя', async () => {
+    hiringSides.mockResolvedValue({ head: [DEPT], deputy: [] });
+    // Автор — другой человек (заместитель), решает начальник отдела.
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 99, department_id: DEPT });
+    txClient.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FOR UPDATE')) return { rows: [{ headcount: 2 }] };
+      if (sql.includes('SELECT 1 FROM hiring_candidates WHERE id')) return { rowCount: 1, rows: [{}] };
+      if (sql.includes('COUNT(*)::int AS n')) return { rows: [{ n: 0 }] };
+      return { rows: [] };
+    });
+
+    const res = makeRes();
+    await c.approveCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+
+    expect(res._json).toMatchObject({ success: true });
+  });
+
+  it('видит заявку своего отдела, даже если автор — начальник', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ id: 1, author_employee_id: 99, department_id: DEPT });
+    pgQuery.mockResolvedValue([]);
+
+    const res = makeRes();
+    await c.getById(makeReq({ params: { id: '1' } }), res);
+
+    expect(res._status).not.toBe(403);
+    expect(res._json).toMatchObject({ data: { is_applicant: true, can_approve: false } });
+  });
+
+  it('создание заявки на чужой отдел — 403', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    const { hasDeputyAssignment } = await import('../services/data-scope.service.js');
+    vi.mocked(hasDeputyAssignment).mockResolvedValue(true);
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: DEPT, full_name: 'Гладкая Н.В.' });
+
+    const res = makeRes();
+    await c.create(makeReq({
+      body: { position_title: 'Инженер', department_id: 'eeeeeeee-0000-4000-8000-000000000009' },
+    }), res);
+
     expect(res._status).toBe(403);
   });
 });

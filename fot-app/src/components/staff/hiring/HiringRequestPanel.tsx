@@ -57,7 +57,13 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
   }, [r, isAdmin, myEmp]);
   const isAuthor = r != null && myEmp != null && r.author_employee_id === myEmp;
   const canManage = (r?.can_manage ?? canManageHint) || isAdmin;
-  const canApprove = isAuthor || canManage;
+  // Утверждение кандидата и набора («оффер») считает сервер: заместителю начальника
+  // отдела (миграция 283) оно закрыто, по его заявкам решает начальник. Отсутствие
+  // поля трактуем как «нельзя» — фронт про назначения ничего не знает.
+  const canApprove = r?.can_approve === true || (isAdmin && r != null);
+  // Сторона заявителя (автор, начальник или заместитель отдела заявки): вердикт
+  // «Пригласить/Отказать» и отзыв заявителя — мнение, его ставит и заместитель.
+  const isApplicantSide = r?.is_applicant === true || canApprove;
 
   const [comment, setComment] = useState('');
   const [vacEdit, setVacEdit] = useState<string | null>(null);
@@ -159,7 +165,7 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
             {r.candidates.map(c => (
               <CandidateRow
                 key={c.id} c={c} requestId={requestId}
-                canWork={canWork} canApprove={canApprove}
+                canWork={canWork} canApprove={canApprove} canVerdict={isApplicantSide || canWork}
                 approvedReached={approvedCount >= r.headcount}
                 onChanged={invalidate}
               />
@@ -268,7 +274,11 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
               <button className={styles.btnPrimary} style={{ flex: 1 }} disabled={resubmitMut.isPending} onClick={() => resubmitMut.mutate()}>↻ Пересдать заявку</button>
             </div>
           ) : (
-            <div className={styles.pHint}>Просмотр. {canApprove ? 'Вы можете утверждать кандидатов и оставлять отзыв.' : 'Действия доступны отделу подбора.'}</div>
+            <div className={styles.pHint}>Просмотр. {canApprove
+              ? 'Вы можете утверждать кандидатов и оставлять отзыв.'
+              : isApplicantSide
+                ? 'Вы можете оставлять отзыв и вердикт. Утверждение кандидатов — за начальником отдела.'
+                : 'Действия доступны отделу подбора.'}</div>
           )}
         </div>
 
@@ -298,15 +308,15 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
 };
 
 // ===== Кандидат =====
-const CandidateRow: FC<{ c: IHiringCandidate; requestId: number; canWork: boolean; canApprove: boolean; approvedReached: boolean; onChanged: () => void }> = ({ c, requestId, canWork, canApprove, approvedReached, onChanged }) => {
+const CandidateRow: FC<{ c: IHiringCandidate; requestId: number; canWork: boolean; canApprove: boolean; canVerdict: boolean; approvedReached: boolean; onChanged: () => void }> = ({ c, requestId, canWork, canApprove, canVerdict, approvedReached, onChanged }) => {
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [fbEdit, setFbEdit] = useState<string | null>(null);
   const [vModal, setVModal] = useState<'invite' | 'reject' | null>(null);
   const onErr = (e: unknown) => toast.error(e instanceof ApiError ? e.message : 'Ошибка');
 
-  // «Пригласить»/«Отказать» — вердикт по кандидату (мнение), доступен заказчику и рекрутёру/HR.
-  const canVerdict = canApprove || canWork;
+  // «Пригласить»/«Отказать» — вердикт по кандидату (мнение): сторона заявителя
+  // (включая заместителя) и рекрутёр/HR.
 
   const status = c.applicant_approved ? { label: 'Кандидат выбран', color: 'var(--success)' } : CANDIDATE_STATUS_META[c.status];
   const approve = async (v: boolean) => { try { await hiringRequestService.approveCandidate(requestId, c.id, v); onChanged(); } catch (e) { onErr(e); } };
@@ -368,7 +378,7 @@ const CandidateRow: FC<{ c: IHiringCandidate; requestId: number; canWork: boolea
           <div className={styles.fb}>
             <div className={styles.fbLabel}>
               Отзыв заявителя <span className={styles.by}>· нач. отдела</span>
-              {canApprove && fbEdit === null && <button className={styles.mini} onClick={() => setFbEdit(c.applicant_feedback ?? '')}>{c.applicant_feedback ? '✎ Изменить' : '＋ Добавить'}</button>}
+              {canVerdict && fbEdit === null && <button className={styles.mini} onClick={() => setFbEdit(c.applicant_feedback ?? '')}>{c.applicant_feedback ? '✎ Изменить' : '＋ Добавить'}</button>}
             </div>
             {fbEdit !== null ? (
               <div>

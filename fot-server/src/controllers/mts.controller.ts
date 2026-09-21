@@ -7,7 +7,10 @@ import { mtsMappingService } from '../services/mts-mapping.service.js';
 import { mtsTasksService } from '../services/mts-tasks.service.js';
 import { MtsApiError } from '../services/mts-base.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+} from '../services/data-scope.service.js';
 import { mtsGeofenceService, GeofenceValidationError } from '../services/mts-geofence.service.js';
 import { query as pgQuery } from '../config/postgres.js';
 import { encryptionService } from '../services/encryption.service.js';
@@ -391,7 +394,7 @@ export const mtsController = {
       const subId = subscriberID == null ? null : Number(subscriberID);
       if (subId != null && !hasFullMtsAccess(req)) {
         const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subId);
-        if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+        if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
           res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
           return;
         }
@@ -507,7 +510,7 @@ export const mtsController = {
       }
       // Не-admin не может привязывать абонента к сотруднику вне своего скоупа
       // (закрывает «перепривяжу на себя, чтобы увидеть»).
-      if (!hasFullMtsAccess(req) && empId != null && !(await canAccessEmployeeInScope(req, empId))) {
+      if (!hasFullMtsAccess(req) && empId != null && !(await canWriteEmployeeInScope(req, empId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

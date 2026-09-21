@@ -2,7 +2,10 @@ import { Response } from 'express';
 import { AxiosError } from 'axios';
 import { queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import {
+  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
+} from '../services/data-scope.service.js';
 import {
   ensureArchiveSigurDepartment,
   getEmployeeAccessPointBindings,
@@ -1250,7 +1253,7 @@ export const sigurController = {
       if (
         !Number.isInteger(employeeId)
         || !Number.isInteger(cardId)
-        || !(await canAccessEmployeeInScope(req, employeeId))
+        || !(await canWriteEmployeeInScope(req, employeeId))
       ) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
@@ -1356,7 +1359,7 @@ export const sigurController = {
       if (
         !Number.isInteger(employeeId)
         || !Number.isInteger(cardId)
-        || !(await canAccessEmployeeInScope(req, employeeId))
+        || !(await canWriteEmployeeInScope(req, employeeId))
       ) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
@@ -1469,7 +1472,7 @@ export const sigurController = {
   async saveEmployeeAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = Number(req.params.id);
-      if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!Number.isInteger(employeeId) || !(await canWriteEmployeeInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

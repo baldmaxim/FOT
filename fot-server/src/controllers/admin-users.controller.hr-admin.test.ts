@@ -54,6 +54,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(),
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   resolveCompanyScope: h.resolveCompanyScope,
+  canWriteEmployeeInScope: vi.fn(),
 }));
 vi.mock('../services/access-control.service.js', () => ({ hasPageEdit: h.hasPageEdit }));
 vi.mock('../services/org-wide-account-access.service.js', () => ({

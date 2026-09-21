@@ -162,6 +162,13 @@ export interface AuthenticatedRequest extends Request {
     __accessible_employee_ids?: Set<number>;
     __editable_subtree_ids?: string[];
     __editable_employee_ids?: Set<number>;
+    /** Заместитель ли пользователь (миграция 283) — один запрос на HTTP-запрос. */
+    __has_deputy_assignment?: boolean;
+    /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */
+    __non_deputy_subtree_ids?: string[];
+    /** Отделы, где можно ВЕСТИ ТАБЕЛЬ: full-поддерево + поддерево заместителя (миграция 283). */
+    __timesheet_editable_subtree_ids?: string[];
+    __timesheet_editable_employee_ids?: Set<number>;
     __manager_object_ids?: string[];
     __manager_object_employee_ids?: Set<number>;
     /** Скоуп объектов KPI на HTTP-запрос (object-kpi-scope.service). */

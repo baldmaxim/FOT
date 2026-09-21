@@ -10,7 +10,7 @@ import {
   hasGlobalDepartmentReadScope,
   normalizeUuidParam,
   resolveAccessibleDepartmentIds,
-  resolveEditableDepartmentIds,
+  resolveTimesheetEditableDepartmentIds,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
@@ -224,6 +224,7 @@ import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { departmentManagerConditionSql } from '../services/department-managers.service.js';
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -349,9 +350,10 @@ async function resolveTimesheetActionDepartmentId(
 /**
  * WRITE-вариант: подача, отзыв и загрузка служебок к подаче отдела.
  *
- * База — editable-отделы (access_level='full' плюс поддерево). Для админов и
- * табельщиц resolveEditableDepartmentIds совпадает с видимым скоупом, так что их
- * права не меняются.
+ * База — отделы, где можно вести табель: full-назначения плюс поддерево и отделы
+ * уровня 'deputy' (миграция 283). Для админов и табельщиц набор совпадает с видимым
+ * скоупом, так что их права не меняются. Согласования сюда не завязаны — они живут
+ * на resolveEditableDepartmentIds (только full).
  *
  * Fallback «есть прямой подчинённый в этом отделе → можно подать отдел» убран
  * намеренно: подача отдела забирает ВСЕХ его сотрудников, включая тех, кто этому
@@ -362,7 +364,7 @@ async function resolveTimesheetWritableDepartmentId(
   req: AuthenticatedRequest,
   requestedDepartmentId: string | null,
 ): Promise<string | null> {
-  const editable = await resolveEditableDepartmentIds(req);
+  const editable = await resolveTimesheetEditableDepartmentIds(req);
   const requested = normalizeUuidParam(requestedDepartmentId);
 
   if (editable === 'all') return requested;
@@ -1329,13 +1331,13 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
     const personal = req.query.personal === 'true' || req.query.personal === '1';
     const range = parseRangeFromQuery(req.query as Record<string, unknown>);
     if (!range) {
-      res.json({ success: true, data: null });
+      res.json({ success: true, data: null, meta: { can_write: false } });
       return;
     }
 
     if (personal) {
       if (!req.user.employee_id) {
-        res.json({ success: true, data: null });
+        res.json({ success: true, data: null, meta: { can_write: false } });
         return;
       }
       const data = await queryOne<TimesheetApproval>(
@@ -1344,7 +1346,8 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
            LIMIT 1`,
         [req.user.employee_id, range.startDate, range.endDate],
       );
-      res.json({ success: true, data: await withUnlockAuthor(data) });
+      // Персональная подача: «можно писать» = это моя подача, отдел тут ни при чём.
+      res.json({ success: true, data: await withUnlockAuthor(data), meta: { can_write: true } });
       return;
     }
 
@@ -1358,7 +1361,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
       return;
     }
     if (!department_id) {
-      res.json({ success: true, data: null });
+      res.json({ success: true, data: null, meta: { can_write: false } });
       return;
     }
 
@@ -1369,7 +1372,15 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
          LIMIT 1`,
       [department_id, range.startDate, range.endDate],
     );
-    res.json({ success: true, data: await withUnlockAuthor(data) });
+    // meta.can_write отдаём ВСЕГДА, в том числе при data: null (черновой период —
+    // именно тогда фронту решать, показывать ли кнопку «Подать»). Глобальный просмотр
+    // табелей (view_all_departments) даёт статус чужого отдела, но не запись в него.
+    const writableDepartmentId = await resolveTimesheetWritableDepartmentId(req, department_id);
+    res.json({
+      success: true,
+      data: await withUnlockAuthor(data),
+      meta: { can_write: writableDepartmentId === department_id },
+    });
   } catch (err) {
     console.error('timesheet-approval.getStatus error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения статуса' });
@@ -2025,7 +2036,7 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
  * - полная подача (manager_employee_id IS NULL): обычная проверка ensureTimesheetActionDepartmentAccess;
  * - персональная (manager_employee_id NOT NULL): автор подачи или HR со scope='all'.
  */
-async function ensureAttachmentAccess(
+async function ensureAttachmentReadAccess(
   req: AuthenticatedRequest,
   approval: Pick<TimesheetApproval, 'department_id' | 'manager_employee_id'>,
 ): Promise<boolean> {
@@ -2036,6 +2047,27 @@ async function ensureAttachmentAccess(
   }
   if (approval.department_id) {
     return ensureTimesheetActionDepartmentAccess(req, approval.department_id);
+  }
+  return false;
+}
+
+/**
+ * Загрузка и удаление вложений — это ЗАПИСЬ в подачу отдела, поэтому read-скоупа мало:
+ * видимость отдела (в т.ч. view-назначение или глобальный просмотр табелей) не должна
+ * давать право удалить чужую служебку. Совпадает с гейтом самой подачи.
+ */
+async function ensureAttachmentWriteAccess(
+  req: AuthenticatedRequest,
+  approval: Pick<TimesheetApproval, 'department_id' | 'manager_employee_id'>,
+): Promise<boolean> {
+  if (approval.manager_employee_id != null) {
+    if (req.user.employee_id && req.user.employee_id === approval.manager_employee_id) return true;
+    const scope = await resolveRequestDataScope(req);
+    return scope === 'all';
+  }
+  if (approval.department_id) {
+    const writable = await resolveTimesheetWritableDepartmentId(req, approval.department_id);
+    return writable === approval.department_id;
   }
   return false;
 }
@@ -2106,7 +2138,7 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    if (!(await ensureAttachmentAccess(req, approval))) {
+    if (!(await ensureAttachmentReadAccess(req, approval))) {
       res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
@@ -2147,7 +2179,7 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureAttachmentAccess(req, approval))) {
+    if (!(await ensureAttachmentWriteAccess(req, approval))) {
       res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
@@ -2204,7 +2236,7 @@ const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureAttachmentAccess(req, approval))) {
+    if (!(await ensureAttachmentReadAccess(req, approval))) {
       res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
@@ -2879,8 +2911,8 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
          FROM user_profiles up
          JOIN system_roles sr ON sr.id = up.system_role_id
          LEFT JOIN employee_department_access eda
-                ON eda.employee_id = up.employee_id AND eda.is_active = TRUE
-               AND eda.source <> 'sigur_sync'
+                ON eda.employee_id = up.employee_id
+               AND ${departmentManagerConditionSql('eda')}
          LEFT JOIN org_departments od ON od.id = eda.department_id
         WHERE sr.code = ANY($1::text[])
           AND up.is_approved = TRUE
@@ -3008,8 +3040,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
              FROM employee_department_access eda
              JOIN user_profiles up ON up.employee_id = eda.employee_id
              JOIN system_roles sr ON sr.id = up.system_role_id
-            WHERE eda.is_active = TRUE
-              AND eda.source <> 'sigur_sync'
+            WHERE ${departmentManagerConditionSql('eda')}
               AND up.is_approved = TRUE
               AND sr.code = ANY($1::text[])
          ) s

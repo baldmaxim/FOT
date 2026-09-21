@@ -56,6 +56,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveAccessibleEmployeeIds: vi.fn(async () => new Set([441])),
   hasObjectViewScope: vi.fn(async () => false),
   normalizeUuidParam: (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null),
+  canWriteEmployeeInScope: vi.fn(async () => false),
+  resolveWritableScopedDepartmentId: h.scopedDepartmentId,
 }));
 vi.mock('../services/access-control.service.js', () => ({
   resolveEffectivePageAccess: vi.fn(async (req: { user: { is_admin?: boolean } }, page: string) =>

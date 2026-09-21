@@ -16,7 +16,11 @@ vi.mock('./roles-cache.service.js', () => ({
   getRoleById: h.getRoleById,
   invalidateRolesCache: vi.fn(),
 }));
-vi.mock('./data-scope.service.js', () => ({ resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds }));
+vi.mock('./data-scope.service.js', () => ({
+  resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
+  // Авто-грант заместителя (миграция 283) по умолчанию выключен.
+  hasDeputyAssignment: vi.fn(async () => false),
+}));
 vi.mock('./hiring-access.service.js', () => ({
   hasHiringAutoAccess: h.hasHiringAutoAccess,
   isHiringRequesterRole: h.isHiringRequesterRole,

@@ -6,7 +6,11 @@ import { z } from 'zod';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
-import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
+import {
+  canWriteEmployeeInScope,
+  resolveRequestDataScope,
+  resolveWritableScopedDepartmentIds,
+} from '../services/data-scope.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -1113,7 +1117,7 @@ export const scheduleController = {
       const parsed = assignEmployeeSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
-      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+      if (!(await canWriteEmployeeInScope(req, parsedEmployeeId.data))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
@@ -1154,7 +1158,7 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Неверный employeeId' });
       }
 
-      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+      if (!(await canWriteEmployeeInScope(req, parsedEmployeeId.data))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
@@ -1189,7 +1193,7 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Неверный assignmentId' });
       }
 
-      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+      if (!(await canWriteEmployeeInScope(req, parsedEmployeeId.data))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
@@ -1219,7 +1223,7 @@ export const scheduleController = {
       const parsed = fixAssignmentSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
-      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+      if (!(await canWriteEmployeeInScope(req, parsedEmployeeId.data))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
@@ -1281,7 +1285,7 @@ export const scheduleController = {
 
       const { department_ids: departmentIds, action, schedule_id: scheduleId, effective_date: effectiveDate } = parsed.data;
       if (scope === 'department') {
-        const scopedDepartmentIds = await resolveScopedDepartmentIds(req, departmentIds);
+        const scopedDepartmentIds = await resolveWritableScopedDepartmentIds(req, departmentIds);
         if (scopedDepartmentIds.length !== departmentIds.length) {
           return res.status(403).json({ success: false, error: 'Можно назначать график только по своей бригаде' });
         }
@@ -1398,7 +1402,7 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Некорректная дата effective_to' });
       }
 
-      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+      if (!(await canWriteEmployeeInScope(req, parsedEmployeeId.data))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 

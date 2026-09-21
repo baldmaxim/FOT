@@ -5,7 +5,7 @@ import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import {
-  canAccessEmployeeInScope,
+  canWriteEmployeeInScope,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
@@ -254,7 +254,7 @@ async function transition(req: AuthenticatedRequest, res: Response, nextStatus: 
       return;
     }
 
-    if (!(await canAccessEmployeeInScope(req, memo.employee_id))) {
+    if (!(await canWriteEmployeeInScope(req, memo.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к записке сотрудника' });
       return;
     }

@@ -29,6 +29,8 @@ export interface IUserFromApi {
   email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
+  /** Подмножество assigned_department_ids с уровнем «заместитель» (миграция 283). */
+  deputy_department_ids?: string[];
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
@@ -558,7 +560,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   const renderAssignedDepartments = useCallback((user: IUserFromApi) => {
     const ids = user.assigned_department_ids ?? [];
     if (ids.length === 0) return '—';
-    const names = ids.map(id => departmentMap.get(id)?.name || '—');
+    // «зам.» — уровень назначения (миграция 283), а не роль: такой человек ведёт
+    // табель отдела, но начальником отдела не считается.
+    const deputySet = new Set(user.deputy_department_ids ?? []);
+    const names = ids.map(id => {
+      const name = departmentMap.get(id)?.name || '—';
+      return deputySet.has(id) ? `${name} (зам.)` : name;
+    });
     if (names.length === 1) return names[0];
     return `${names[0]} +${names.length - 1}`;
   }, [departmentMap]);
@@ -817,7 +825,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   <span
                     className={styles.userRowOrg}
                     title={user.assigned_department_ids
-                      .map(id => departmentMap.get(id)?.name || id)
+                      .map(id => {
+                        const name = departmentMap.get(id)?.name || id;
+                        return (user.deputy_department_ids ?? []).includes(id) ? `${name} (зам.)` : name;
+                      })
                       .join(', ')}
                   >
                     {renderAssignedDepartments(user)}

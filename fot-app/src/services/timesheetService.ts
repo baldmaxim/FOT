@@ -266,9 +266,16 @@ export const timesheetService = {
       params.append('include_empty', filters.include_empty ? '1' : '0');
     }
     params.append('schedule_payload', filters.schedule_payload ?? 'compact');
-    const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
+    const res = await apiClient.get<ApiResponse<TimesheetResponse> & { meta?: { department_writable?: boolean } }>(
+      `/timesheet?${params.toString()}`,
+    );
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');
-    return hydrateCompactSchedules(res.data);
+    // meta живёт рядом с data — переносим в payload, чтобы не тащить его отдельным полем
+    // через все хуки. Отсутствие поля = «писать нельзя» (fail-closed).
+    return hydrateCompactSchedules({
+      ...res.data,
+      department_writable: res.meta?.department_writable === true,
+    });
   },
 
   /** Поиск сотрудника для режима «По сотруднику». Период обязателен: доступ считается на нём. */

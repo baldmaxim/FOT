@@ -82,6 +82,9 @@ export const BrigadeAssignmentsTab: FC = () => {
                     {emp.access_level === 'view' && (
                       <span className={styles.badge}>Только просмотр</span>
                     )}
+                    {emp.access_level === 'deputy' && (
+                      <span className={styles.badge}>Заместитель</span>
+                    )}
                     {emp.employment_status !== 'active' && (
                       <span className={`${styles.badge} ${styles.badgeDanger}`}>Уволен</span>
                     )}

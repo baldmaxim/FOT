@@ -19,6 +19,7 @@ vi.mock('./data-scope.service.js', () => ({
   hasGlobalDepartmentReadScope: vi.fn(async () => scope.globalRead),
   resolveManagedDepartmentIds: vi.fn(async () => scope.managedDepartmentIds),
   resolveScopedDepartmentId: vi.fn(async () => null),
+  resolveWritableScopedDepartmentId: vi.fn(async () => null),
 }));
 vi.mock('./department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: vi.fn(async () => scope.explicitDepartmentIds),

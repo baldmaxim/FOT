@@ -20,6 +20,9 @@ vi.mock('./data-scope.service.js', () => ({
   resolveEffectiveDirectSubordinates: vi.fn().mockResolvedValue([]),
   resolveManagedDepartmentIds: vi.fn().mockResolvedValue([]),
   resolveScopedDepartmentId: vi.fn().mockResolvedValue(null),
+  resolveWritableScopedDepartmentId: vi.fn().mockResolvedValue(null),
+  resolveTimesheetEditableDepartmentIds: vi.fn().mockResolvedValue([]),
+  hasDeputyAssignment: vi.fn(async () => false),
 }));
 
 vi.mock('./access-control.service.js', () => ({

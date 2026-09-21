@@ -31,6 +31,8 @@ interface IFixture {
   assignments?: Array<{ employee_id: number; dept_id: string; effective_from: string; effective_to: string | null }>;
   snapshot?: Array<{ id: number; org_department_id: string | null }>;
   heads?: Array<{ employee_id: number; department_id: string; role_code?: string; is_admin?: boolean }>;
+  /** Заместители начальника отдела (миграция 283) — они тоже подают табель отдела. */
+  deputies?: Array<{ employee_id: number; department_id: string }>;
 }
 
 const mockDb = (fixture: IFixture) => {
@@ -38,6 +40,8 @@ const mockDb = (fixture: IFixture) => {
     if (sql.includes('FROM employee_assignments')) return fixture.assignments ?? [];
     if (sql.includes('FROM employees')) return fixture.snapshot ?? [];
     if (sql.includes('FROM employee_department_access')) {
+      // Две разные выборки: эффективные начальники (JOIN system_roles) и заместители.
+      if (sql.includes("access_level = 'deputy'")) return fixture.deputies ?? [];
       return (fixture.heads ?? []).map(row => ({
         role_code: 'manager', is_admin: false, ...row,
       }));

@@ -38,6 +38,14 @@ vi.mock('../services/data-scope.service.js', () => ({
     const allowedDepartmentId = req.user.department_id;
     return (departmentIds || []).filter(departmentId => departmentId === allowedDepartmentId);
   }),
+  canWriteEmployeeInScope: vi.fn(async () => true),
+  resolveWritableScopedDepartmentIds: vi.fn(async (req: AuthenticatedRequest, departmentIds?: string[] | null) => {
+    if (mockedState.scope !== 'department') {
+      return departmentIds || [];
+    }
+    const allowedDepartmentId = req.user.department_id;
+    return (departmentIds || []).filter(departmentId => departmentId === allowedDepartmentId);
+  }),
 }));
 
 // collectDeptIds расширяет выбранную бригаду дочерними отделами. В юнит-тестах

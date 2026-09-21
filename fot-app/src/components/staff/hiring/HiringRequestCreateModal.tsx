@@ -1,6 +1,10 @@
 import { useState, type FC } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { hiringRequestService, type IHiringRequestDetail } from '../../../services/hiringRequestService';
+import {
+  hiringRequestService,
+  type IHiringApplicantDepartment,
+  type IHiringRequestDetail,
+} from '../../../services/hiringRequestService';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import { useToast } from '../../../contexts/ToastContext';
 import { HIRING_QK } from './HiringRequestsBoard';
@@ -9,9 +13,11 @@ import styles from './hiring.module.css';
 interface IProps {
   onClose: () => void;
   request?: IHiringRequestDetail; // режим редактирования
+  /** Отделы, от имени которых можно подать заявку: начальник и заместитель (миграция 283). */
+  applicantDepartments?: IHiringApplicantDepartment[];
 }
 
-export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
+export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request, applicantDepartments = [] }) => {
   const dismiss = useOverlayDismiss(onClose);
   const toast = useToast();
   const qc = useQueryClient();
@@ -30,9 +36,19 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
   });
   const set = (k: keyof typeof f, v: string | number) => setF(p => ({ ...p, [k]: v }));
 
+  // Отдел спрашиваем, только если их несколько: при одном сервер подставит его сам,
+  // при нескольких — вернёт 400 DEPARTMENT_REQUIRED, гадать за пользователя нельзя.
+  const needsDepartment = !isEdit && applicantDepartments.length > 1;
+  const [departmentId, setDepartmentId] = useState('');
+
   const mutation = useMutation({
     mutationFn: async () => {
-      const body = { ...f, headcount: Number(f.headcount) || 1, gender: f.gender as 'any' | 'male' | 'female' };
+      const body = {
+        ...f,
+        headcount: Number(f.headcount) || 1,
+        gender: f.gender as 'any' | 'male' | 'female',
+        ...(needsDepartment && departmentId ? { department_id: departmentId } : {}),
+      };
       if (isEdit && request) return hiringRequestService.update(request.id, body);
       return hiringRequestService.create(body);
     },
@@ -47,6 +63,7 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
 
   const submit = () => {
     if (!f.position_title.trim()) { toast.error('Укажите должность'); return; }
+    if (needsDepartment && !departmentId) { toast.error('Выберите отдел заявки'); return; }
     if (!f.deadline && !isEdit) { /* deadline желателен, но не обязателен */ }
     mutation.mutate();
   };
@@ -64,6 +81,17 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
 
         <div className={styles.modalBody}>
           <div className={styles.formGrid}>
+            {needsDepartment && (
+              <div className={styles.field}>
+                <label>Отдел заявки <span className={styles.req}>*</span></label>
+                <select value={departmentId} onChange={e => setDepartmentId(e.target.value)}>
+                  <option value="">Выберите отдел</option>
+                  {applicantDepartments.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className={styles.field}>
               <label>Должность <span className={styles.req}>*</span></label>
               <input placeholder="инженер контроля качества по фасадным работам" value={f.position_title} onChange={e => set('position_title', e.target.value)} />

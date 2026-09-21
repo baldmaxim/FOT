@@ -133,3 +133,52 @@ export async function listEffectiveDepartmentManagers(
   }
   return map;
 }
+
+/**
+ * Кто ФАКТИЧЕСКИ ведёт табель отдела: эффективные начальники (full) плюс активные
+ * заместители (access_level='deputy', миграция 283).
+ *
+ * Нужна покрытию по дням: подача отдела забирает всех его сотрудников, поэтому если
+ * отдел ведёт только заместитель, эти дни обязаны считаться покрытыми — иначе их
+ * заберёт ещё и персональная подача личного руководителя, и пара (сотрудник, дата)
+ * окажется в двух подачах сразу.
+ *
+ * Для маршрутов согласований и снимка руководителей 1С эта функция НЕ годится:
+ * там «начальник отдела» — строго full (listDepartmentManagers).
+ *
+ * Заместителю право edit на /timesheet даёт авто-грант по назначению, поэтому
+ * hasPageEdit для него не проверяем: достаточно живой одобренной учётной записи.
+ */
+export async function listDepartmentTimesheetOwners(
+  departmentIds: readonly string[],
+  exec?: DbExecutor,
+): Promise<Map<string, number[]>> {
+  const map = await listEffectiveDepartmentManagers(departmentIds, exec);
+  const ids = [...new Set(departmentIds.filter(id => typeof id === 'string' && id.length > 0))];
+  if (ids.length === 0) return map;
+
+  const rows = await runQuery<{ employee_id: string | number; department_id: string }>(
+    exec,
+    `SELECT DISTINCT eda.employee_id, eda.department_id
+       FROM employee_department_access eda
+       JOIN employees e ON e.id = eda.employee_id
+       JOIN user_profiles up ON up.employee_id = e.id AND up.is_approved = true
+      WHERE eda.department_id = ANY($1::uuid[])
+        AND eda.is_active = true
+        AND eda.access_level = 'deputy'
+        AND eda.source <> 'sigur_sync'
+        AND e.is_archived = false
+        AND e.employment_status = 'active'
+      ORDER BY eda.employee_id`,
+    [ids],
+  );
+
+  for (const row of rows) {
+    const dept = String(row.department_id);
+    const list = map.get(dept) ?? [];
+    const employeeId = Number(row.employee_id);
+    if (!list.includes(employeeId)) list.push(employeeId);
+    map.set(dept, list);
+  }
+  return map;
+}

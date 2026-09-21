@@ -24,8 +24,8 @@ import {
   isSelfEmployeeRequest,
   resolveAccessibleEmployeeIds,
   resolveManagedDepartmentIds,
-  resolveEditableDepartmentIds,
-  resolveEditableEmployeeIds,
+  resolveTimesheetEditableDepartmentIds,
+  resolveTimesheetEditableEmployeeIds,
   resolveEffectiveDirectSubordinates,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
@@ -1501,10 +1501,10 @@ async function canAccessEmployeeForTimesheetDate(
     return acc === 'all' || acc.has(employeeId);
   }
 
-  // Для записи/согласования используем «редактируемый» подскоуп (исключает
-  // view-отделы, миграция 167); для просмотра — полный видимый скоуп.
+  // Для записи в табель — «редактируемый» подскоуп (без view-отделов, миграция 167)
+  // плюс отделы заместителя (миграция 283); для просмотра — полный видимый скоуп.
   const managedDepartmentIds = requireEdit
-    ? await resolveEditableDepartmentIds(req)
+    ? await resolveTimesheetEditableDepartmentIds(req)
     : await resolveManagedDepartmentIds(req);
   if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
     const matches = await Promise.all(
@@ -2237,6 +2237,7 @@ export const timesheetController = {
       const hasEmployeeFilter = Number.isInteger(requestedEmployeeId) && (requestedEmployeeId as number) > 0;
       const emptyResponse = {
         success: true,
+        meta: { department_writable: false },
         data: {
           employees: [],
           entries: [],
@@ -2796,7 +2797,7 @@ export const timesheetController = {
       const coveredDatesByEmployee = coverageSplit?.coveredDates ?? new Map<number, string[]>();
       // Редактируемость per-employee: view-отделы (миграция 167) видны, но не
       // редактируемы. Фронт по флагу editable прячет правку дня/кнопки.
-      const editableEmpsForList = await resolveEditableEmployeeIds(req);
+      const editableEmpsForList = await resolveTimesheetEditableEmployeeIds(req);
       const isListEmpEditable = (id: number): boolean => editableEmpsForList === 'all' || editableEmpsForList.has(id);
       // Уволенные/переведённые члены отдела попадают в грид через dismissal_events
       // и закрытые assignments (listEmployeeMembershipsForDepartmentPeriod), но их строка
@@ -2804,7 +2805,7 @@ export const timesheetController = {
       // их не видит. Если отображаемый отдел в editable-скоупе (миграция 167: full, не view) —
       // все его члены за период редактируемы. Дни после увольнения/перевода всё равно
       // отсекаются: фронт рисует их inactive, а create() — через isEmployeeAssignedToDepartmentOnDate.
-      const editableDeptIds = await resolveEditableDepartmentIds(req);
+      const editableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
       const displayedDeptEditable = shouldApplyDeptFilter
         && membershipDeptId != null
         && (editableDeptIds === 'all' || editableDeptIds.includes(membershipDeptId));
@@ -2915,8 +2916,16 @@ export const timesheetController = {
         timings,
       });
 
+      // Признак отдаётся только для ОДНОГО выбранного отдела: по смешанному набору
+      // «хотя бы один доступен» фронт показал бы подачу и массовые действия там,
+      // где сервер ответит 403.
+      const writableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
+      const departmentWritable = shouldApplyDeptFilter && membershipDeptId != null
+        && (writableDeptIds === 'all' || writableDeptIds.includes(membershipDeptId));
+
       res.json({
         success: true,
+        meta: { department_writable: departmentWritable },
         data: {
           employees: employeesWithNames,
           entries,
@@ -4451,7 +4460,7 @@ export const timesheetController = {
         const departmentIds = requestedDepartmentId && managedIds.includes(requestedDepartmentId)
           ? [requestedDepartmentId]
           : managedIds;
-        const editableDeptIds = await resolveEditableDepartmentIds(req);
+        const editableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
         const isDeptEditable = (id: string): boolean => editableDeptIds === 'all' || editableDeptIds.includes(id);
         const ids = new Set<number>();
         for (const deptId of departmentIds) {
@@ -4490,7 +4499,7 @@ export const timesheetController = {
       );
       // View-отделы (миграция 167): сотрудники вне editable-скоупа не редактируемы,
       // даже если видимы. Для admin/scope='all' — не ограничиваем.
-      const editableEmps = await resolveEditableEmployeeIds(req);
+      const editableEmps = await resolveTimesheetEditableEmployeeIds(req);
       const isEmpEditable = (id: number): boolean =>
         editableEmps === 'all' || editableEmps.has(id) || periodEditableMemberIds.has(id);
       const correctionLocks = await loadLocksForScope(
@@ -4745,10 +4754,16 @@ export const timesheetController = {
       let employeeIds: number[] = [];
       let scopedToDepartment = false;
       if (scope === 'department') {
-        const managedIds = await resolveManagedDepartmentIds(req);
-        const departmentIds = requestedDepartmentId && managedIds.includes(requestedDepartmentId)
-          ? [requestedDepartmentId]
-          : managedIds;
+        // «Обновить» переписывает сводки и переоткрывает согласования — это ЗАПИСЬ,
+        // поэтому скоуп берём табельно-редактируемый (full + отделы заместителя),
+        // а не видимый. Явно запрошенный чужой отдел — 403, без тихого fallback
+        // на «все доступные»: иначе пересчёт уходил бы мимо запроса.
+        const writableIds = await resolveTimesheetEditableDepartmentIds(req);
+        const writableList = writableIds === 'all' ? [] : writableIds;
+        if (requestedDepartmentId && writableIds !== 'all' && !writableList.includes(requestedDepartmentId)) {
+          return res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+        }
+        const departmentIds = requestedDepartmentId ? [requestedDepartmentId] : writableList;
         const ids = new Set<number>();
         for (const deptId of departmentIds) {
           const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);

@@ -5,8 +5,8 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { getIo } from '../socket/io-instance.js';
 import {
-  canAccessDepartmentInScope,
-  canAccessEmployeeInScope,
+  canWriteDepartmentInScope,
+  canWriteEmployeeInScope,
   resolveAccessibleDepartmentIds,
 } from '../services/data-scope.service.js';
 import {
@@ -126,7 +126,7 @@ export const objectAssignmentController = {
         res.status(404).json({ success: false, error: 'Отдел не найден' });
         return;
       }
-      if (!(await canAccessDepartmentInScope(req, departmentId))) {
+      if (!(await canWriteDepartmentInScope(req, departmentId))) {
         res.status(403).json({ success: false, error: 'Отдел вне вашей зоны доступа' });
         return;
       }
@@ -177,7 +177,7 @@ export const objectAssignmentController = {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
       }
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!(await canWriteEmployeeInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
         return;
       }

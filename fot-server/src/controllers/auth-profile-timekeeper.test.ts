@@ -46,6 +46,7 @@ vi.mock('../services/access-control.service.js', () => ({
 }));
 vi.mock('../services/department-access.service.js', () => ({
   listManagedDepartmentIdsForUser: mocked.listManagedDepartmentIdsForUser,
+  hasActiveDeputyAssignment: vi.fn(async () => false),
 }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({
   listDirectSubordinates: mocked.listDirectSubordinates,

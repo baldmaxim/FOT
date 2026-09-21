@@ -513,11 +513,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   submitProblems = [],
 }) => {
   const { hasPermission, canViewPage, canEditPage, canManageAsHrAdmin, profile } = useAuth();
-  const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
+  const canSubmitDepartmentByRole = hasPermission('timesheet.workflow.submit');
   // Утверждённый период руководитель сам не переоткрывает — иначе он снимал бы
   // утверждение HR и правил закрытый табель. Остальным его возвращает кадровая
   // служба через «Согласования» → «Вернуть на доработку».
-  const canRecallApproved = canSubmitDepartment
+  const canRecallApproved = canSubmitDepartmentByRole
     && (profile?.is_admin === true || canManageAsHrAdmin('/timesheet-hr'));
   // Открыть/закрыть сданный период. Зеркалит серверный canToggleTimesheetLock:
   // отдельный ключ /timesheet/lock-toggle (гейт /timesheet-hr не подходит — у роли hr
@@ -549,6 +549,10 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     ? ({ mode: 'personal' } as const)
     : ({ mode: 'department', department_id: departmentId } as const);
   const activeStatus = useTimesheetApprovalStatus(submissionMode, departmentId, startDate, endDate);
+  // Право на страницу даёт кнопку, право на ОТДЕЛ — сервер (meta.can_write).
+  // Fail-closed: пока статус не загружен, действий по отделу не предлагаем.
+  const canWriteDepartment = isPersonal || activeStatus.data?.can_write === true;
+  const canSubmitDepartment = canSubmitDepartmentByRole && canWriteDepartment;
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -633,7 +637,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     // кэша, пока статус на бэке уже rejected/returned. Не дёргаем API впустую —
     // показываем ошибку и инвалидируем, чтобы кнопка пропала. Отзыв разрешён из
     // submitted (обычный) и approved (руководитель возвращает на переподачу).
-    const currentStatus = activeStatus.data?.status;
+    const currentStatus = activeStatus.data?.approval?.status;
     if (currentStatus && currentStatus !== 'submitted' && currentStatus !== 'approved') {
       setSubmitError('Табель уже рассмотрен — обновляем статус.');
       await invalidate();
@@ -661,7 +665,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
    * 409 приходит, если период уже открыт или его успели перевести в другой статус.
    */
   const handleOpenPeriod = async (reason: string) => {
-    const approvalId = activeStatus.data?.id;
+    const approvalId = activeStatus.data?.approval?.id;
     if (!approvalId) return;
     setLoading(true);
     try {
@@ -681,7 +685,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const handleClosePeriod = async () => {
-    const approvalId = activeStatus.data?.id;
+    const approvalId = activeStatus.data?.approval?.id;
     if (!approvalId) return;
     setLoading(true);
     try {
@@ -741,7 +745,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const handleApprove = async () => {
-    const approval = activeStatus.data ?? null;
+    const approval = activeStatus.data?.approval ?? null;
     if (!approval) return;
     await runAction(async () => {
       await timesheetApprovalService.approve(approval.id, comment || undefined);
@@ -750,7 +754,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const handleReject = async () => {
-    const approval = activeStatus.data ?? null;
+    const approval = activeStatus.data?.approval ?? null;
     if (!approval) return;
     await runAction(async () => {
       await timesheetApprovalService.reject(approval.id, comment || undefined);
@@ -764,7 +768,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     setMemoRequired(false);
   };
 
-  const activeApproval = activeStatus.data ?? null;
+  const activeApproval = activeStatus.data?.approval ?? null;
   // Редактирование (загрузка/удаление служебки) — только в редактируемом окне.
   const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && (
     !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
@@ -780,11 +784,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
       </div>
       <div className="ts-approval-card-wrap">
         <ActiveCard
-          approval={activeStatus.data ?? null}
+          approval={activeStatus.data?.approval ?? null}
           canSubmitDepartment={canSubmitDepartment}
           canRecallApproved={canRecallApproved}
           canToggleLock={canToggleLock}
-          periodUnlocked={!!activeStatus.data?.unlocked_at}
+          periodUnlocked={!!activeStatus.data?.approval?.unlocked_at}
           canReviewApproval={canReviewApproval}
           comment={comment}
           compact={compact}

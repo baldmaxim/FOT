@@ -2,7 +2,14 @@ import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { query } from '../config/postgres.js';
 import { withDbSlot } from '../config/db-instrumentation.js';
-import { listEditableDepartmentIdsForUser, listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import {
+  hasActiveDeputyAssignment,
+  listDeputyDepartmentIdsForUser,
+  listEditableDepartmentIdsForUser,
+  listExplicitDepartmentIdsForUser,
+  listNonDeputyDepartmentIdsForUser,
+  loadEmployeeAccessMap,
+} from './department-access.service.js';
 import { listObjectIdsForEmployee } from './employee-skud-object-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
@@ -594,6 +601,224 @@ export async function canEditEmployeeInScope(
   }
 
   return false;
+}
+
+/**
+ * Заместитель ли пользователь хоть где-то (миграция 283). Кэш на время HTTP-запроса:
+ * предикат зовут page-гейты, скоупы табеля и модуль заявок — без кэша это лишние
+ * одинаковые запросы в каждом обработчике.
+ */
+export async function hasDeputyAssignment(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.__has_deputy_assignment !== undefined) return req.user.__has_deputy_assignment;
+  const value = await hasActiveDeputyAssignment(req.user.employee_id ?? null);
+  req.user.__has_deputy_assignment = value;
+  return value;
+}
+
+/** Поддерево отделов через SQL-функцию. Падение RPC не должно отнимать явные отделы. */
+export async function expandDepartmentSubtree(explicit: string[], tag: string): Promise<string[]> {
+  if (explicit.length === 0) return [];
+  try {
+    const rows = await withDbSlot('get_descendant_department_ids', async () => (
+      query<{ id: string }>(
+        'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',
+        [explicit],
+      )
+    ));
+    const subtree = rows.map(r => r.id);
+    return subtree.length > 0 ? [...new Set([...explicit, ...subtree])] : explicit;
+  } catch (error) {
+    Sentry.captureMessage(`${tag}_subtree_rpc_failed`, {
+      level: 'warning',
+      tags: { rpc: 'get_descendant_department_ids' },
+      extra: { error: error instanceof Error ? error.message : String(error), explicit },
+    });
+    return explicit;
+  }
+}
+
+/**
+ * Отделы, в которых пользователь может ВЕСТИ ТАБЕЛЬ: editable-отделы (full) плюс
+ * поддерево назначений уровня 'deputy' (миграция 283).
+ *
+ * Отдельная функция, а не расширение resolveEditableDepartmentIds: на последней
+ * висят согласование заявлений и корректировок, условия оплаты и кадровые действия —
+ * туда заместитель попадать не должен. Табельные write-гейты берут этот набор.
+ */
+export async function resolveTimesheetEditableDepartmentIds(
+  req: AuthenticatedRequest,
+): Promise<string[] | 'all'> {
+  const editable = await resolveEditableDepartmentIds(req);
+  if (editable === 'all') return 'all';
+  if (req.user.__timesheet_editable_subtree_ids) return req.user.__timesheet_editable_subtree_ids;
+
+  const deputy = [...new Set(
+    await listDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
+  )];
+  if (deputy.length === 0) {
+    req.user.__timesheet_editable_subtree_ids = editable;
+    return editable;
+  }
+
+  const expanded = await expandDepartmentSubtree(deputy, 'deputy');
+  const merged = [...new Set([...editable, ...expanded])];
+  req.user.__timesheet_editable_subtree_ids = merged;
+  return merged;
+}
+
+/** Батч-аналог: сотрудники, чей табель пользователь может править. */
+export async function resolveTimesheetEditableEmployeeIds(
+  req: AuthenticatedRequest,
+): Promise<Set<number> | 'all'> {
+  if (req.user.__timesheet_editable_employee_ids) return req.user.__timesheet_editable_employee_ids;
+
+  const editableEmployees = await resolveEditableEmployeeIds(req);
+  if (editableEmployees === 'all') return 'all';
+
+  const timesheetDepartments = await resolveTimesheetEditableDepartmentIds(req);
+  if (timesheetDepartments === 'all') return 'all';
+
+  const ids = new Set<number>(editableEmployees);
+  const editableDepartments = await resolveEditableDepartmentIds(req);
+  const editableSet = new Set<string>(editableDepartments === 'all' ? [] : editableDepartments);
+  const deputyOnly = timesheetDepartments.filter(id => !editableSet.has(id));
+
+  if (deputyOnly.length > 0) {
+    const rows = await query<{ employee_id: number | string }>(
+      `SELECT DISTINCT employee_id FROM employee_department_access
+        WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+      [deputyOnly],
+    );
+    for (const row of rows) {
+      const id = Number(row.employee_id);
+      if (Number.isInteger(id)) ids.add(id);
+    }
+  }
+
+  req.user.__timesheet_editable_employee_ids = ids;
+  return ids;
+}
+
+/** Может ли пользователь править табель этого сотрудника (без учёта дат). */
+export async function canEditEmployeeTimesheetInScope(
+  req: AuthenticatedRequest,
+  employeeId: number | null | undefined,
+): Promise<boolean> {
+  if (!employeeId) return false;
+  if (await canEditEmployeeInScope(req, employeeId)) return true;
+
+  const timesheetDepartments = await resolveTimesheetEditableDepartmentIds(req);
+  if (timesheetDepartments === 'all') return true;
+  if (timesheetDepartments.length === 0) return false;
+
+  const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
+  const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
+  if (targetDepartmentIds.length === 0) return false;
+  const allowed = new Set(timesheetDepartments);
+  return targetDepartmentIds.some(id => allowed.has(id));
+}
+
+/**
+ * Видимые отделы БЕЗ тех, что доступны только как «заместительские» (миграция 283).
+ *
+ * База нетабельных write-гейтов. Для всех, у кого назначений 'deputy' нет, совпадает
+ * с обычным видимым скоупом — поведение существующих ролей не меняется.
+ */
+async function resolveNonDeputyDepartmentIds(
+  req: AuthenticatedRequest,
+): Promise<string[] | 'all'> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return 'all';
+  if (!(await hasDeputyAssignment(req))) return accessible;
+  if (req.user.__non_deputy_subtree_ids) return req.user.__non_deputy_subtree_ids;
+
+  const explicit = [...new Set(
+    await listNonDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
+  )];
+  const expanded = explicit.length > 0
+    ? await expandDepartmentSubtree(explicit, 'non_deputy')
+    : [];
+  // Пересекаем с видимым скоупом: у админа компании он шире явных назначений.
+  const accessibleSet = new Set(accessible);
+  const merged = expanded.filter(id => accessibleSet.has(id));
+  req.user.__non_deputy_subtree_ids = merged;
+  return merged;
+}
+
+/**
+ * WRITE-вариант canAccessEmployeeInScope для НЕТАБЕЛЬНЫХ мутаций: кадровых действий,
+ * документов, графиков, служебок, заявок на повышение.
+ *
+ * Отличие ровно одно: доступ, полученный назначением уровня 'deputy' (миграция 283),
+ * здесь не считается — заместитель ведёт табель, но не кадры. Всё остальное (включая
+ * view-назначения и прямых подчинённых) работает как раньше, поэтому для пользователей
+ * без 'deputy' функция эквивалентна canAccessEmployeeInScope.
+ */
+export async function canWriteEmployeeInScope(
+  req: AuthenticatedRequest,
+  employeeId: number | null | undefined,
+): Promise<boolean> {
+  if (!(await canAccessEmployeeInScope(req, employeeId))) return false;
+  if (!employeeId) return false;
+  if (req.user.employee_id === employeeId) return true;
+
+  const nonDeputy = await resolveNonDeputyDepartmentIds(req);
+  if (nonDeputy === 'all') return true;
+  // Табельщица и прямые подчинённые приходят не из назначений отделов — их не режем.
+  if (isTimekeeper(req)) return true;
+  const directSubordinates = await resolveEffectiveDirectSubordinates(req);
+  if (directSubordinates.includes(employeeId)) return true;
+
+  const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
+  const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
+  const allowed = new Set(nonDeputy);
+  return targetDepartmentIds.some(id => allowed.has(id));
+}
+
+/** WRITE-вариант canAccessDepartmentInScope: «заместительские» отделы не считаются. */
+export async function canWriteDepartmentInScope(
+  req: AuthenticatedRequest,
+  departmentId: string | null | undefined,
+): Promise<boolean> {
+  if (!(await canAccessDepartmentInScope(req, departmentId))) return false;
+  const normalized = normalizeUuidParam(departmentId);
+  if (!normalized) return false;
+  const nonDeputy = await resolveNonDeputyDepartmentIds(req);
+  return nonDeputy === 'all' || nonDeputy.includes(normalized);
+}
+
+/** WRITE-вариант resolveScopedDepartmentId: «заместительские» отделы не считаются. */
+export async function resolveWritableScopedDepartmentId(
+  req: AuthenticatedRequest,
+  requestedDepartmentId?: string | null,
+): Promise<string | null> {
+  const requested = normalizeUuidParam(requestedDepartmentId);
+  const nonDeputy = await resolveNonDeputyDepartmentIds(req);
+  if (nonDeputy === 'all') return requested;
+  if (nonDeputy.length === 0) return null;
+
+  if (requested) {
+    return nonDeputy.includes(requested) ? requested : null;
+  }
+  if (req.user.department_id && nonDeputy.includes(req.user.department_id)) {
+    return req.user.department_id;
+  }
+  return nonDeputy[0] ?? null;
+}
+
+/** WRITE-вариант resolveScopedDepartmentIds: «заместительские» отделы не считаются. */
+export async function resolveWritableScopedDepartmentIds(
+  req: AuthenticatedRequest,
+  requestedDepartmentIds?: string[] | null,
+): Promise<string[]> {
+  const nonDeputy = await resolveNonDeputyDepartmentIds(req);
+  const normalized = (requestedDepartmentIds || [])
+    .map(normalizeUuidParam)
+    .filter((id): id is string => id !== null);
+
+  if (nonDeputy === 'all') return [...new Set(normalized)];
+  if (normalized.length === 0) return nonDeputy;
+  return normalized.filter(id => nonDeputy.includes(id));
 }
 
 export async function canAccessDepartmentInScope(

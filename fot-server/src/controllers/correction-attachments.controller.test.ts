@@ -6,6 +6,7 @@ const { accessMock } = vi.hoisted(() => ({
 }));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: accessMock,
+  canWriteEmployeeInScope: accessMock,
 }));
 
 const { r2Mock } = vi.hoisted(() => ({

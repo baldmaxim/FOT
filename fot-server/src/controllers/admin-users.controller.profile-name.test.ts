@@ -55,6 +55,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   resolveCompanyScope: h.resolveCompanyScope,
+  canWriteEmployeeInScope: h.canAccessEmployeeInScope,
 }));
 vi.mock('../services/department-access.service.js', () => ({
   loadEmployeeManagerAssignmentMap: h.loadEmployeeManagerAssignmentMap,
