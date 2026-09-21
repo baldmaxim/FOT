@@ -10,6 +10,7 @@ import { addEntryIn as addBlacklistEntryIn, findActive as findActiveBlacklist } 
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
 import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
+import { TOMBSTONE_USER_ID, describeBlockingTable, isTombstoneUser } from '../config/system-users.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 import {
@@ -564,6 +565,11 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
  * «отклонение» снесло бы рабочий аккаунт.
  */
 async function hardDeleteUserCascadeIn(client: PoolClient, id: string): Promise<void> {
+  // Надгробие держит авторские ссылки удалённых учёток (FK ON DELETE SET
+  // DEFAULT, миграция 284): без него удаление начнёт нарушать FK.
+  if (isTombstoneUser(id)) {
+    throw new Error('Служебный профиль «Удалённый пользователь» удалять нельзя');
+  }
   // user_profiles.id → app_auth.users CASCADE + миграция 097 каскадят
   // user_profiles → дочерние. Одно удаление чистит всё.
   const r = await client.query(
@@ -582,6 +588,24 @@ async function hardDeleteUserCascadeIn(client: PoolClient, id: string): Promise<
 
 async function hardDeleteUserCascade(id: string): Promise<void> {
   await withTransaction(client => hardDeleteUserCascadeIn(client, id));
+}
+
+/**
+ * FK/NOT NULL на удалении учётки — это не «внутренняя ошибка», а колонка, не
+ * покрытая политикой из миграции 284 (см. `npm run audit:user-fk`). Отвечаем
+ * 409 с понятным текстом вместо 500 «Failed to delete user»: админ видит, что
+ * именно держит запись, и данные при этом целы.
+ */
+function respondUserDeleteConflict(res: Response, error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code !== '23503' && code !== '23502') return false;
+  const table = (error as { table?: unknown }).table;
+  const what = describeBlockingTable(typeof table === 'string' ? table : null);
+  res.status(409).json({
+    success: false,
+    error: `Нельзя удалить пользователя: на него ссылаются ${what}. Обратитесь к администратору системы.`,
+  });
+  return true;
 }
 
 export const adminUsersController = {
@@ -917,11 +941,15 @@ export const adminUsersController = {
         // учётной записи) исключаются: по ним вход невозможен, одобрять их
         // бессмысленно, а в очереди они перехватывают одобрение у актуальной
         // заявки → одобренный пользователь видит «Ожидание одобрения».
+        // Надгробие (284) живёт с is_approved = false и иначе попало бы в
+        // очередь заявок как «Удалённый пользователь».
         users = await query<UserProfile>(
           `SELECT up.* FROM user_profiles up
              JOIN app_auth.users au ON au.id = up.id
             WHERE up.is_approved = false
+              AND up.id <> $1::uuid
             ORDER BY up.created_at DESC`,
+          [TOMBSTONE_USER_ID],
         );
       } catch (usersError) {
         logSupabaseError('GetPendingUsers', usersError);
@@ -1220,7 +1248,8 @@ export const adminUsersController = {
         }
       } catch (deleteError) {
         console.error('Reject user delete error:', deleteError);
-        res.status(500).json({ success: false, error: 'Failed to reject user' });
+        if (respondUserDeleteConflict(res, deleteError)) return;
+        res.status(500).json({ success: false, error: 'Не удалось отклонить заявку' });
         return;
       }
 
@@ -1240,6 +1269,13 @@ export const adminUsersController = {
   async deleteUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      if (isTombstoneUser(id)) {
+        res.status(400).json({
+          success: false,
+          error: 'Служебный профиль «Удалённый пользователь» удалить нельзя',
+        });
+        return;
+      }
       const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
@@ -1269,7 +1305,8 @@ export const adminUsersController = {
         await hardDeleteUserCascade(id);
       } catch (deleteError) {
         console.error('Delete user error:', deleteError);
-        res.status(500).json({ success: false, error: 'Failed to delete user' });
+        if (respondUserDeleteConflict(res, deleteError)) return;
+        res.status(500).json({ success: false, error: 'Не удалось удалить пользователя' });
         return;
       }
 

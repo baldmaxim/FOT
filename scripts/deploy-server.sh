@@ -506,6 +506,26 @@ run_migrations() {
     --env "$SITE_DIR/fot-server/.env" \
     --ca "$SITE_DIR/.migration/yandex-ca.pem" \
     "${MIGRATE_ARGS[@]}"
+  audit_user_fk
+}
+
+# Политика ON DELETE у FK на пользователя (миграция 284): NO ACTION ломает
+# удаление учётки, лишний CASCADE уносит чужие деловые строки. Проверяем после
+# миграций — новая таблица со ссылкой на user_profiles не должна проехать молча.
+audit_user_fk() {
+  local audit="$BUILD_DIR/fot-server/scripts/audit-user-fk.ts"
+  if [[ ! -f "$audit" ]]; then
+    log "audit-user-fk.ts не найден — пропускаю проверку политики FK"
+    return 0
+  fi
+  if [[ "${MIGRATE_ARGS[*]}" == *--dry-run* ]]; then
+    return 0
+  fi
+  log "Проверяю политику FK на пользователя..."
+  ( cd "$BUILD_DIR/fot-server" && npx tsx scripts/audit-user-fk.ts \
+      --env "$SITE_DIR/fot-server/.env" \
+      --ca "$SITE_DIR/.migration/yandex-ca.pem" ) \
+    || die "политика FK на пользователя нарушена (см. вывод выше)"
 }
 
 wait_http_ok() {

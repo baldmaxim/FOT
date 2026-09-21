@@ -1,6 +1,7 @@
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { TOMBSTONE_USER_ID } from '../config/system-users.js';
 import {
   chatPolicyService,
   type ChatAvailability,
@@ -597,24 +598,28 @@ export const chatService = {
     const trimmed = searchQuery.trim();
     let users: Array<{ id: string }>;
     try {
+      // Надгробие (284) не одобрено и в выдачу не попадает, но исключаем явно:
+      // писать «Удалённому пользователю» нельзя ни при каких настройках.
       if (trimmed) {
         users = await query<{ id: string }>(
           `SELECT id FROM user_profiles
             WHERE id <> $1
+              AND id <> $3::uuid
               AND is_approved = true
               AND full_name ILIKE $2
             ORDER BY full_name ASC
             LIMIT 50`,
-          [currentUserId, `%${escapeLike(trimmed)}%`],
+          [currentUserId, `%${escapeLike(trimmed)}%`, TOMBSTONE_USER_ID],
         );
       } else {
         users = await query<{ id: string }>(
           `SELECT id FROM user_profiles
             WHERE id <> $1
+              AND id <> $2::uuid
               AND is_approved = true
             ORDER BY full_name ASC
             LIMIT 50`,
-          [currentUserId],
+          [currentUserId, TOMBSTONE_USER_ID],
         );
       }
     } catch {

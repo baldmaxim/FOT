@@ -50,6 +50,9 @@ cd fot-server && npm run sentry:sourcemaps
 # Аудит защиты роутов (бэкенд)
 cd fot-server && npm run audit:routes
 
+# Аудит политики ON DELETE у FK на пользователя (бэкенд; --env .env для прод-БД)
+cd fot-server && npm run audit:user-fk
+
 # Генерация PWA-иконок (фронтенд)
 cd fot-app && npm run icons:generate
 
@@ -64,6 +67,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 - **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type` + `system_role_id` (таблица `system_roles`). Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`. Иерархия ролей через `level` из `system_roles`.
 - **Скоуп админа**: `system_admin` видит все компании; `admin` (компанийный) — только корни Sigur, привязанные через таблицу `user_company_access` (миграция 083). Резолвинг скоупа в `data-scope.service.ts` + функция `public.get_descendant_department_ids($1::uuid[])`.
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
+- **FK на пользователя**: политика из миграции 284 — владение (подписки, доступы, участие в чатах) `ON DELETE CASCADE`, авторство (кто согласовал/создал/загрузил) `ON DELETE SET DEFAULT` на надгробный профиль «Удалённый пользователь» (`config/system-users.ts`). Новая колонка со ссылкой на `user_profiles`/`app_auth.users` обязана попасть в политику, иначе удаление учётки падает; стережёт `npm run audit:user-fk` (вызывается в `deploy-server.sh` после миграций).
 - **БД-runtime**: прямой `pg.Pool` через `config/postgres.ts` (`query/queryOne/execute/withTransaction`). Supabase SDK удалён из package.json в Phase 10E (см. `docs/yandex-postgres-migration/`). RLS не используется — авторизация проверяется в middleware. Аутентификация через `app_auth.users` + bcrypt (`local-auth.service.ts`).
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approvals, patent-receipts, daily-tasks, direct-reports.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin` видит `/employees`, `/skud-settings`, `/admin/*`.
