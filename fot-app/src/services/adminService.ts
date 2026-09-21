@@ -72,12 +72,12 @@ export interface EmployeeDepartmentAssignmentFromApi {
   direct_manager_full_name?: string | null;
   /** Есть ли над сотрудником ответственный: индивидуальный руководитель или начальник его отдела. */
   has_responsible?: boolean;
+  /** Сотрудник из ветки «Подрядные организации»: скрывается чекбоксом, из выдачи не режется. */
+  is_contractor?: boolean;
 }
 
 /** Сотрудник, назначенный на бригаду/отдел (обратное представление назначений). */
 export interface IBrigadeAssignedEmployee {
-  /** Сотрудник из ветки «Подрядные организации»: скрывается чекбоксом, из выдачи не режется. */
-  is_contractor?: boolean;
   employee_id: number;
   full_name: string;
   position_name: string | null;
