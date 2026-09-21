@@ -44,6 +44,13 @@ import {
 import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
 
 /**
+import { getContractorRootId } from '../config/contractor.js';
+
+/**
+ * Страховочный предел выборки «Назначения сотрудников» — не рабочий размер списка.
+ * Прежние 10000 упирались в реальные ~10.9k активных и молча срезали хвост алфавита.
+ */
+const EMPLOYEE_ASSIGNMENTS_LIMIT = 50000;
  * Кто вправе работать с очередью заявок на регистрацию (список, одобрение,
  * отклонение, запросы на сброс пароля).
  *
@@ -702,22 +709,11 @@ export const adminUsersController = {
       let employees: EmployeeRow[];
       try {
         if (accessible === 'all') {
-          employees = await query<EmployeeRow>(
-            `SELECT id, full_name, position_id, org_department_id
-               FROM employees
-              WHERE employment_status = 'active' AND is_archived = false
-              ORDER BY full_name ASC
-              LIMIT 10000`,
-          );
+          employees = await query<EmployeeRow>(selectEmployeesSql(''), [contractorRootParam]);
         } else {
           employees = await query<EmployeeRow>(
-            `SELECT id, full_name, position_id, org_department_id
-               FROM employees
-              WHERE employment_status = 'active' AND is_archived = false
-                AND org_department_id = ANY($1::uuid[])
-              ORDER BY full_name ASC
-              LIMIT 10000`,
-            [accessible],
+            selectEmployeesSql(' AND org_department_id = ANY($2::uuid[])'),
+            [contractorRootParam, accessible],
           );
         }
       } catch (employeesError) {
@@ -745,7 +741,24 @@ export const adminUsersController = {
           [employeeIds],
         );
         for (const r of viewRows) {
+        is_contractor: boolean;
           const empId = Number(r.employee_id);
+      // Корень «Подрядные организации» может быть не синхронизирован из Sigur — тогда
+      // пустой uuid[] даёт ноль потомков и флаг у всех false. Отдельной ветки не нужно.
+      const contractorRootId = await getContractorRootId();
+      const contractorRootParam = contractorRootId ? [contractorRootId] : [];
+      // Ветка подрядчиков из выдачи не режется (иначе выданный подрядчику доступ
+      // стало бы нечем отозвать) — фильтрует её клиент по is_contractor.
+      const selectEmployeesSql = (scopeCondition: string): string =>
+        `WITH contractor AS (
+           SELECT id FROM public.get_descendant_department_ids($1::uuid[])
+         )
+         SELECT id, full_name, position_id, org_department_id,
+                COALESCE(org_department_id IN (SELECT id FROM contractor), false) AS is_contractor
+           FROM employees
+          WHERE employment_status = 'active' AND is_archived = false${scopeCondition}
+          ORDER BY full_name ASC
+          LIMIT ${EMPLOYEE_ASSIGNMENTS_LIMIT}`;
           if (!Number.isInteger(empId)) continue;
           const list = viewOnlyMap.get(empId) ?? [];
           list.push(r.department_id);
@@ -772,6 +785,13 @@ export const adminUsersController = {
           ? query<{ id: string; name: string }>(
               'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
               [departmentIds],
+      // Упор в лимит режет хвост алфавита молча: раньше так пропали 176 штатных
+      // сотрудников и 10 их назначений. Лимит — страховка, а не рабочий предел.
+      if (employees.length >= EMPLOYEE_ASSIGNMENTS_LIMIT) {
+        console.warn(
+          `[GetEmployeeDepartmentAssignments] выборка упёрлась в лимит ${EMPLOYEE_ASSIGNMENTS_LIMIT} — список усечён, лимит пора поднимать`,
+        );
+      }
             )
           : Promise.resolve([] as Array<{ id: string; name: string }>),
       ]);
@@ -854,6 +874,9 @@ export const adminUsersController = {
             AND eda.source <> 'sigur_sync'
           ORDER BY e.full_name ASC`,
         [departmentId],
+          // Подрядчик: строка остаётся в выдаче, фильтрует её клиент (чекбокс
+          // «Показывать подрядчиков»), иначе выданный подрядчику доступ не отозвать.
+          is_contractor: employee.is_contractor === true,
       );
 
       const positionIds = [...new Set(rows

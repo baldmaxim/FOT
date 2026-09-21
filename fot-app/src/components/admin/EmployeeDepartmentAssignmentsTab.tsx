@@ -54,6 +54,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const searchQuery = searchParams.get('q') || '';
   const hideEmployeesWithoutAssignments = searchParams.get('hideUnassigned') === '1';
   const showWithoutResponsible = searchParams.get('noResp') === '1';
+  const showContractors = searchParams.get('contractors') === '1';
   const setUrlParam = (key: string, value: string | null) => {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
@@ -105,6 +106,10 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     () => employees.filter(employee => employee.assigned_department_ids.length > 0).length,
     [employees],
   );
+  const contractorsCount = useMemo(
+    () => employees.filter(employee => employee.is_contractor === true).length,
+    [employees],
+  );
   const employeesWithoutResponsibleCount = useMemo(
     () => employees.filter(employee => (
       employee.has_responsible === false
@@ -119,6 +124,12 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     return employees.filter(employee => {
       const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids || []);
       if (hideEmployeesWithoutAssignments && additionalDepartmentIds.length === 0) {
+        return false;
+      }
+
+      // Ветка подрядчиков — 9/10 списка и не штат, поэтому по умолчанию скрыта.
+      // Подрядчик С назначением виден всегда: иначе выданный ему доступ не отозвать.
+      if (!showContractors && employee.is_contractor === true && additionalDepartmentIds.length === 0) {
         return false;
       }
 
@@ -149,7 +160,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
       return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
     });
-  }, [departmentMap, employees, hideEmployeesWithoutAssignments, showWithoutResponsible, su10DepartmentIds, linkedUserByEmployeeId, searchQuery]);
+  }, [departmentMap, employees, hideEmployeesWithoutAssignments, showContractors, showWithoutResponsible, su10DepartmentIds, linkedUserByEmployeeId, searchQuery]);
 
   // Виртуализация: рендерим только видимые строки. Без неё список из ~8700
   // сотрудников = десятки тысяч DOM-узлов → тяжёлый рендер + расширения браузера
@@ -214,10 +225,19 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           />
           Показать сотрудников без ответственного (ООО СУ-10)
         </label>
+        <label className={styles.assignmentToggle}>
+          <input
+            type="checkbox"
+            checked={showContractors}
+            onChange={(event) => setUrlParam('contractors', event.target.checked ? '1' : null)}
+          />
+          Показывать подрядчиков{contractorsCount > 0 ? ` (${contractorsCount})` : ''}
+        </label>
       </div>
 
       <div className={styles.importSummary}>
-        <div>Всего сотрудников: <strong>{isLoadingList && employees.length === 0 ? '…' : employees.length}</strong></div>
+        <div>Всего сотрудников: <strong>{isLoadingList && employees.length === 0 ? '…' : employees.length - contractorsCount}</strong></div>
+        <div>Подрядчики: <strong>{isLoadingList && employees.length === 0 ? '…' : contractorsCount}</strong></div>
         <div>С назначениями: <strong>{isLoadingList && employees.length === 0 ? '…' : employeesWithAssignmentsCount}</strong></div>
         <div>Без ответственного: <strong>{isLoadingList && employees.length === 0 ? '…' : employeesWithoutResponsibleCount}</strong></div>
         <div>В текущем списке: <strong>{isLoadingList && employees.length === 0 ? '…' : filteredEmployees.length}</strong></div>

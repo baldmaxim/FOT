@@ -72,6 +72,8 @@ export interface EmployeeDepartmentAssignmentFromApi {
 
 /** Сотрудник, назначенный на бригаду/отдел (обратное представление назначений). */
 export interface IBrigadeAssignedEmployee {
+  /** Сотрудник из ветки «Подрядные организации»: скрывается чекбоксом, из выдачи не режется. */
+  is_contractor?: boolean;
   employee_id: number;
   full_name: string;
   position_name: string | null;
