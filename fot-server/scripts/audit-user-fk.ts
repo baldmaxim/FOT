@@ -7,10 +7,12 @@
 // Миграция 097 правила не закрепила, и каждая новая колонка «кто сделал»
 // повторяла проблему. Политику задаёт миграция 284, этот скрипт её стережёт.
 //
-// Правила:
-//   own       — строка принадлежит самой учётке  → CASCADE
-//   author    — поле хранит автора/действующего   → SET DEFAULT на надгробие
-//   keep_null — ссылка не показывается как автор  → SET NULL, колонка nullable
+// Правила (уточнены миграцией 285):
+//   own                      — строка принадлежит самой учётке → CASCADE
+//   author, колонка NOT NULL — SET DEFAULT на надгробие (имя в UI сохраняется)
+//   author, колонка NULL     — SET NULL, DEFAULT отсутствует: с DEFAULT'ом
+//                              INSERT без автора писал бы надгробие вместо NULL
+//   keep_null                — ссылка не показывается как автор → SET NULL
 //   любая колонка вне списков                     → нарушение (нужно решение)
 //   NO ACTION / RESTRICT / SET DEFAULT без надгробия / SET NULL на NOT NULL
 //                                                 → нарушение
@@ -162,21 +164,39 @@ export function auditRows(rows: FkRow[]): Violation[] {
 
     // Колонка не объявлена ни владением, ни исключением: по умолчанию считаем
     // её авторской, но требуем явного решения — иначе новая таблица молча
-    // получит чужую политику.
-    if (policy === 'author' && row.del !== 'd') {
-      push(
-        `ON DELETE ${del}, ожидалось SET DEFAULT (${row.target})`,
-        'добавьте колонку в миграцию-политику как author, либо внесите её в OWNERSHIP/KEEP_NULL этого скрипта',
-      );
-      continue;
+    // получит чужую политику. Политика зависит от nullability (см. 285).
+    if (policy === 'author' && row.not_null) {
+      if (row.del !== 'd') {
+        push(
+          `ON DELETE ${del}, для обязательной авторской колонки ожидалось SET DEFAULT (${row.target})`,
+          'добавьте колонку в миграцию-политику как author, либо внесите её в OWNERSHIP/KEEP_NULL этого скрипта',
+        );
+        continue;
+      }
+      if (row.column_default !== EXPECTED_DEFAULT) {
+        push(
+          `SET DEFAULT, но DEFAULT = ${row.column_default ?? 'отсутствует'} вместо надгробия`,
+          `ALTER TABLE ${row.schema}.${row.table} ALTER COLUMN ${row.column} SET DEFAULT ${EXPECTED_DEFAULT}`,
+        );
+        continue;
+      }
     }
 
-    if (policy === 'author' && row.column_default !== EXPECTED_DEFAULT) {
-      push(
-        `SET DEFAULT, но DEFAULT = ${row.column_default ?? 'отсутствует'} вместо надгробия`,
-        `ALTER TABLE ${row.schema}.${row.table} ALTER COLUMN ${row.column} SET DEFAULT ${EXPECTED_DEFAULT}`,
-      );
-      continue;
+    if (policy === 'author' && !row.not_null) {
+      if (row.del !== 'n') {
+        push(
+          `ON DELETE ${del}, для авторской колонки с NULL ожидалось SET NULL (${row.target})`,
+          'добавьте колонку в миграцию-политику как author, либо внесите её в OWNERSHIP/KEEP_NULL этого скрипта',
+        );
+        continue;
+      }
+      if (row.column_default === EXPECTED_DEFAULT) {
+        push(
+          'DEFAULT = надгробие на колонке, допускающей NULL: INSERT без автора запишет «Удалённого пользователя»',
+          `ALTER TABLE ${row.schema}.${row.table} ALTER COLUMN ${row.column} DROP DEFAULT`,
+        );
+        continue;
+      }
     }
 
     if (policy === 'own' && row.del !== 'c') {

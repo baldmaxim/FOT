@@ -19,6 +19,7 @@ const describeIf = PG_URL ? describe : describe.skip;
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const migration284 = (): string => readFileSync(`${MIGRATIONS_DIR}284_user_delete_tombstone.sql`, 'utf8');
+const migration285 = (): string => readFileSync(`${MIGRATIONS_DIR}285_user_delete_tombstone_nullable_fix.sql`, 'utf8');
 
 const TOMB = '00000000-0000-0000-0000-00000000dead';
 const USER = '11111111-1111-1111-1111-111111111111';
@@ -160,6 +161,7 @@ describeIf('удаление пользователя: политика FK (ми
     pool = new Pool({ connectionString: PG_URL, max: 4 });
     await q(SLICE_SQL);
     await q(migration284());
+    await q(migration285());
     // Один сценарий на всю группу: заполнили спутниками и удалили учётку.
     await seed();
     await q('DELETE FROM app_auth.users WHERE id = $1::uuid', [USER]);
@@ -170,41 +172,121 @@ describeIf('удаление пользователя: политика FK (ми
   });
 
   it('повторное применение ничего не меняет (идемпотентность)', async () => {
-    const before = await q<{ n: string }>(
-      `SELECT count(*)::text AS n FROM pg_constraint
-        WHERE contype='f' AND confrelid IN ('public.user_profiles'::regclass,'app_auth.users'::regclass)
-          AND confdeltype = 'd'`,
-    );
+    const policies = async (): Promise<string> => {
+      const [row] = await q<{ n: string }>(
+        `SELECT string_agg(c.conrelid::regclass::text || '.' || a.attname || ':' || c.confdeltype::text, ',' ORDER BY 1) AS n
+           FROM pg_constraint c
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+          WHERE c.contype='f'
+            AND c.confrelid IN ('public.user_profiles'::regclass,'app_auth.users'::regclass)`,
+      );
+      return row.n;
+    };
+    const before = await policies();
     await q(migration284());
-    const after = await q<{ n: string }>(
-      `SELECT count(*)::text AS n FROM pg_constraint
-        WHERE contype='f' AND confrelid IN ('public.user_profiles'::regclass,'app_auth.users'::regclass)
-          AND confdeltype = 'd'`,
-    );
-    expect(after[0].n).toBe(before[0].n);
+    await q(migration285());
+    expect(await policies()).toBe(before);
     const [tomb] = await q<{ full_name: string }>('SELECT full_name FROM user_profiles WHERE id = $1::uuid', [TOMB]);
     expect(tomb.full_name).toBe('Удалённый пользователь');
   });
 
-  it('учётка удаляется, деловые строки остаются и указывают на надгробие', async () => {
+  /**
+   * Регресс, пойманный на проде после 284: заявка 8671 приехала с тремя
+   * «призрачными» авторами, потому что INSERT эти колонки не перечисляет, а
+   * DEFAULT перестал быть NULL. Проверяем именно путь вставки, а не удаления.
+   */
+  it('вставка без автора оставляет NULL, а не надгробие', async () => {
+    await q(`INSERT INTO leave_requests (id, employee_id, status) VALUES (8671, 2053, 'pending')`);
+    try {
+      const [row] = await q<{ reviewer_id: string | null; cancelled_by: string | null; hr_acknowledged_by: string | null }>(
+        'SELECT reviewer_id, cancelled_by, hr_acknowledged_by FROM leave_requests WHERE id = 8671',
+      );
+      expect(row).toEqual({ reviewer_id: null, cancelled_by: null, hr_acknowledged_by: null });
+    } finally {
+      await q('DELETE FROM leave_requests WHERE id = 8671');
+    }
+  });
+
+  /**
+   * Сохранность данных: 285 только снимает DEFAULT, меняет политику ссылки и
+   * возвращает NULL там, где надгробие приехало из DEFAULT. Ни одна строка не
+   * должна исчезнуть — проверяем счётчики по всем таблицам среза.
+   */
+  it('повторное применение 285 не удаляет ни одной строки', async () => {
+    const counts = async (): Promise<Record<string, string>> => {
+      const [row] = await q<Record<string, string>>(
+        `SELECT (SELECT count(*)::text FROM leave_requests) AS lr,
+                (SELECT count(*)::text FROM leave_request_history) AS history,
+                (SELECT count(*)::text FROM hiring_requests) AS hiring,
+                (SELECT count(*)::text FROM contractor_submissions) AS submissions,
+                (SELECT count(*)::text FROM documents) AS docs,
+                (SELECT count(*)::text FROM chat_messages) AS messages,
+                (SELECT count(*)::text FROM audit_logs) AS audit,
+                (SELECT count(*)::text FROM adaptive_test_sessions) AS sessions,
+                (SELECT count(*)::text FROM user_profiles) AS profiles`,
+      );
+      return row;
+    };
+    const before = await counts();
+    await q(migration285());
+    expect(await counts()).toEqual(before);
+  });
+
+  it('ни одна колонка с NULL не несёт DEFAULT-надгробие', async () => {
+    const rows = await q<{ tbl: string; col: string }>(
+      `SELECT c.conrelid::regclass::text AS tbl, a.attname AS col
+         FROM pg_constraint c
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+        WHERE c.contype='f'
+          AND c.confrelid IN ('public.user_profiles'::regclass,'app_auth.users'::regclass)
+          AND NOT a.attnotnull
+          AND COALESCE((SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d
+                         WHERE d.adrelid = c.conrelid AND d.adnum = a.attnum), '')
+              = '''00000000-0000-0000-0000-00000000dead''::uuid'`,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('учётка удаляется, а деловые строки остаются на месте', async () => {
     const [gone] = await q<{ n: string }>(
       'SELECT count(*)::text AS n FROM app_auth.users WHERE id = $1::uuid', [USER],
     );
     expect(gone.n).toBe('0');
 
     const [row] = await q<Record<string, string>>(
-      `SELECT (SELECT count(*)::text FROM leave_requests WHERE id = 6803 AND cancelled_by = $1::uuid) AS lr_cancelled,
-              (SELECT count(*)::text FROM leave_requests WHERE id = 6803 AND reviewer_id = $1::uuid) AS lr_reviewer,
-              (SELECT count(*)::text FROM leave_request_history WHERE id = 590 AND actor_id = $1::uuid) AS history,
-              (SELECT count(*)::text FROM hiring_requests WHERE author_user_id = $1::uuid) AS hiring,
-              (SELECT count(*)::text FROM documents WHERE uploaded_by = $1::uuid) AS docs,
-              (SELECT count(*)::text FROM chat_messages WHERE sender_id = $1::uuid) AS messages,
-              (SELECT count(*)::text FROM audit_logs WHERE user_id = $1::uuid) AS audit`,
-      [TOMB],
+      `SELECT (SELECT count(*)::text FROM leave_requests WHERE id = 6803) AS lr,
+              (SELECT count(*)::text FROM leave_request_history WHERE id = 590) AS history,
+              (SELECT count(*)::text FROM hiring_requests) AS hiring,
+              (SELECT count(*)::text FROM documents) AS docs,
+              (SELECT count(*)::text FROM chat_messages) AS messages,
+              (SELECT count(*)::text FROM audit_logs) AS audit,
+              (SELECT count(*)::text FROM contractor_submissions) AS submissions`,
     );
     expect(row).toEqual({
-      lr_cancelled: '1', lr_reviewer: '1', history: '1',
-      hiring: '1', docs: '1', messages: '1', audit: '1',
+      lr: '1', history: '1', hiring: '1', docs: '1', messages: '1', audit: '1', submissions: '1',
+    });
+  });
+
+  it('обязательные поля автора переходят на надгробие, необязательные обнуляются', async () => {
+    const [row] = await q<Record<string, string | null>>(
+      `SELECT (SELECT uploaded_by::text FROM documents LIMIT 1) AS docs_not_null,
+              (SELECT sender_id::text FROM chat_messages LIMIT 1) AS chat_not_null,
+              (SELECT author_user_id::text FROM hiring_requests LIMIT 1) AS hiring_not_null,
+              (SELECT submitted_by::text FROM contractor_submissions LIMIT 1) AS submission_not_null,
+              (SELECT cancelled_by::text FROM leave_requests WHERE id = 6803) AS lr_cancelled_nullable,
+              (SELECT reviewer_id::text FROM leave_requests WHERE id = 6803) AS lr_reviewer_nullable,
+              (SELECT actor_id::text FROM leave_request_history WHERE id = 590) AS history_nullable,
+              (SELECT user_id::text FROM audit_logs LIMIT 1) AS audit_nullable`,
+    );
+    expect(row).toEqual({
+      docs_not_null: TOMB,
+      chat_not_null: TOMB,
+      hiring_not_null: TOMB,
+      submission_not_null: TOMB,
+      lr_cancelled_nullable: null,
+      lr_reviewer_nullable: null,
+      history_nullable: null,
+      audit_nullable: null,
     });
   });
 
@@ -229,15 +311,15 @@ describeIf('удаление пользователя: политика FK (ми
     expect(row).toEqual({ push: '0', reminders: '0', sessions_null: '1', profiles: '1' });
   });
 
-  it('в интерфейсе на месте автора — «Удалённый пользователь»', async () => {
-    const [row] = await q<{ cancelled_by_name: string; uploaded_by_name: string }>(
+  it('в интерфейсе: у обязательных полей — «Удалённый пользователь», у необязательных — пусто', async () => {
+    const [row] = await q<{ cancelled_by_name: string | null; uploaded_by_name: string | null }>(
       `SELECT (SELECT full_name FROM user_profiles WHERE id = lr.cancelled_by) AS cancelled_by_name,
               (SELECT full_name FROM user_profiles WHERE id = d.uploaded_by) AS uploaded_by_name
          FROM leave_requests lr, documents d
         WHERE lr.id = 6803`,
     );
-    expect(row.cancelled_by_name).toBe('Удалённый пользователь');
     expect(row.uploaded_by_name).toBe('Удалённый пользователь');
+    expect(row.cancelled_by_name).toBeNull();
   });
 
   it('надгробие удалить нельзя: авторские ссылки держат его как родителя', async () => {
