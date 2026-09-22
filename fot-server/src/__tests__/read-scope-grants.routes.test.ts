@@ -180,6 +180,36 @@ d('точечные права на чтение — гейты', () => {
     if (method !== 'get') expect(callsAfter).toBe(callsBefore);
   });
 
+  /**
+   * Вкладка «Система» → «Бригады» объявлена ключом /admin/users, а состав бригады
+   * висел на /admin/users/access и /staff-control/direct-reports — у security их нет,
+   * вкладка открывалась с «Не удалось загрузить». npm run audit:routes видит лишь
+   * наличие middleware, поэтому набор ключей держим здесь.
+   */
+  describe('вкладка «Бригады»: гейт состава', () => {
+    const URL = '/api/admin/departments/d1/assigned-employees';
+
+    it('только /admin/users:view → доходит до контроллера', async () => {
+      h.grants.add('/admin/users:view');
+      const res = await send('get', URL);
+      expect(res.status).toBe(200);
+      expect(h.calls).toContain('admin.getDepartmentAssignedEmployees');
+    });
+
+    it('без всех трёх ключей → 403, контроллер не вызван', async () => {
+      const res = await send('get', URL);
+      expect(res.status).toBe(403);
+      expect(h.calls).toHaveLength(0);
+    });
+
+    it('правка назначений по-прежнему закрыта: /admin/users:view не открывает запись', async () => {
+      h.grants.add('/admin/users:view');
+      const res = await send('put', '/api/admin/employees/1/department-access');
+      expect(res.status).toBe(403);
+      expect(h.calls).toHaveLength(0);
+    });
+  });
+
   it('сохранение профиля роли сбрасывает кеши экранов с точечными правами', async () => {
     h.grants.add('/admin/roles:edit');
     const res = await send('put', '/api/roles/security/access-profile');

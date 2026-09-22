@@ -50,6 +50,7 @@ vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest, log: vi.fn() },
 }));
 vi.mock('../services/data-scope.service.js', () => ({
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   resolveCompanyScope: h.resolveCompanyScope,

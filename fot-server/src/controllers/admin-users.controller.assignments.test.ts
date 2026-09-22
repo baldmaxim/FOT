@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   execute: vi.fn(),
   withTransaction: vi.fn(),
   resolveAccessibleDepartmentIds: vi.fn(),
+  hasGlobalDepartmentReadScope: vi.fn(),
   getContractorRootId: vi.fn(),
   loadEmployeeManagerAssignmentMap: vi.fn(),
   getActiveDirectManagersFor: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock('../services/roles-cache.service.js', () => ({ getRoleByCode: vi.fn(), g
 vi.mock('../services/local-auth.service.js', () => ({ localAuthService: {} }));
 vi.mock('../services/audit.service.js', () => ({ auditService: { logFromRequest: vi.fn(), log: vi.fn() } }));
 vi.mock('../services/data-scope.service.js', () => ({
+  hasGlobalDepartmentReadScope: h.hasGlobalDepartmentReadScope,
   canAccessEmployeeInScope: vi.fn(),
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   resolveCompanyScope: vi.fn(),
@@ -121,6 +123,7 @@ type Payload = { success: boolean; data: Array<Record<string, unknown>> };
 beforeEach(() => {
   Object.values(h).forEach(fn => fn.mockReset());
   h.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+  h.hasGlobalDepartmentReadScope.mockResolvedValue(false);
   h.getContractorRootId.mockResolvedValue(CONTRACTOR_ROOT);
   h.loadEmployeeManagerAssignmentMap.mockResolvedValue(new Map());
   h.getActiveDirectManagersFor.mockResolvedValue(new Map());
@@ -188,5 +191,81 @@ describe('getEmployeeDepartmentAssignments: выборка сотруднико�
 
     expect(h.query).not.toHaveBeenCalled();
     expect((res.body as Payload).data).toEqual([]);
+  });
+});
+
+/**
+ * Вкладка «Система» → «Бригады»: состав бригады, read-only.
+ *
+ * Роль «Отдел безопасности» видела «Не удалось загрузить»: вкладка объявлена
+ * ключом /admin/users, а общий скоуп отделов (resolveAccessibleDepartmentIds)
+ * флаг роли view_all_departments не учитывает, так что даже после снятия 403
+ * состав приходил пустым. Метод read-only и потому идёт по глобальному
+ * read-предикату; правка назначений осталась под /admin/users/access.
+ */
+describe('getDepartmentAssignedEmployees: скоуп чтения', () => {
+  const BRIGADE = '33333333-3333-3333-3333-333333333333';
+  const OTHER_DEPT = '55555555-5555-5555-5555-555555555555';
+
+  const makeBrigadeReq = (): AuthenticatedRequest => ({
+    user: { id: 'actor-2', is_admin: false, role_code: 'security' },
+    params: { id: BRIGADE },
+    body: {},
+    headers: {},
+  }) as unknown as AuthenticatedRequest;
+
+  const expected = [{
+    employee_id: 10,
+    full_name: 'Маматхалилов Д.А.',
+    position_name: 'Начальник общестроительного участка',
+    employment_status: 'active',
+    excluded_from_timesheet: false,
+    access_level: 'full',
+  }];
+
+  beforeEach(() => {
+    h.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employee_department_access')) {
+        return [{
+          id: 10,
+          full_name: 'Маматхалилов Д.А.',
+          position_id: 7,
+          employment_status: 'active',
+          excluded_from_timesheet: false,
+          access_level: 'full',
+        }];
+      }
+      if (sql.includes('FROM positions')) return [{ id: 7, name: 'Начальник общестроительного участка' }];
+      return [];
+    });
+  });
+
+  it('глобальный read-scope: состав любой бригады, общий скоуп отделов не резолвится', async () => {
+    h.hasGlobalDepartmentReadScope.mockResolvedValue(true);
+
+    const res = makeRes();
+    await adminUsersController.getDepartmentAssignedEmployees(makeBrigadeReq(), res as never);
+
+    expect(h.resolveAccessibleDepartmentIds).not.toHaveBeenCalled();
+    expect((res.body as Payload).data).toEqual(expected);
+  });
+
+  it('без глобального read-scope: чужая бригада — пустой список, запроса в БД нет', async () => {
+    h.resolveAccessibleDepartmentIds.mockResolvedValue([OTHER_DEPT]);
+
+    const res = makeRes();
+    await adminUsersController.getDepartmentAssignedEmployees(makeBrigadeReq(), res as never);
+
+    expect((res.body as Payload).data).toEqual([]);
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('без глобального read-scope: своя бригада — состав отдаётся', async () => {
+    h.resolveAccessibleDepartmentIds.mockResolvedValue([BRIGADE]);
+
+    const res = makeRes();
+    await adminUsersController.getDepartmentAssignedEmployees(makeBrigadeReq(), res as never);
+
+    expect((res.body as Payload).data).toEqual(expected);
   });
 });

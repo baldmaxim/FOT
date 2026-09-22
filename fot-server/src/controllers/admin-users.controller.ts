@@ -28,6 +28,7 @@ import { invalidatePresenceByObjectCache } from '../services/skud-presence-by-ob
 import { invalidateDashboardCache } from '../services/skud-dashboard.service.js';
 import {
   canAccessEmployeeInScope,
+  hasGlobalDepartmentReadScope,
   resolveAccessibleDepartmentIds,
   resolveCompanyScope,
 } from '../services/data-scope.service.js';
@@ -927,7 +928,12 @@ export const adminUsersController = {
         return;
       }
 
-      const accessible = await resolveAccessibleDepartmentIds(req);
+      // Глобальный read-scope (hr / флаг роли view_all_departments) читает состав
+      // любой бригады: метод read-only, запись назначений живёт на отдельных
+      // роутах под /admin/users/access и флагом не расширяется.
+      const accessible = (await hasGlobalDepartmentReadScope(req))
+        ? 'all' as const
+        : await resolveAccessibleDepartmentIds(req);
       if (accessible !== 'all' && !accessible.includes(departmentId)) {
         res.json({ success: true, data: [] });
         return;

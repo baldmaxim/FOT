@@ -134,7 +134,10 @@ router.post('/users/blacklist/:entryId/memos/:memoId/remove', requirePageAccess(
 // прямых подчинённых (кадровый админ) — без него экран «Прямые подчинённые» пуст.
 router.get('/employees/department-access', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getEmployeeDepartmentAssignments);
 // Обратное представление: по бригаде/отделу — назначенные на неё сотрудники с должностями.
-router.get('/departments/:id/assigned-employees', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getDepartmentAssignedEmployees);
+// Читают с двух экранов: «Назначения» (/admin/users/access, /staff-control/direct-reports)
+// и вкладка «Системы» → «Бригады», объявленная ключом /admin/users — гейт роута обязан
+// совпадать с гейтом вкладки, иначе вкладка видна, а состав отдаёт 403 (роль security).
+router.get('/departments/:id/assigned-employees', requireAnyPageAccess(['/admin/users', '/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getDepartmentAssignedEmployees);
 router.post('/users/:id/approve', requirePageAccess('/admin/users', 'edit'), adminController.approveUser);
 router.post('/users/:id/reject', requirePageAccess('/admin/users', 'edit'), adminController.rejectUser);
 router.delete('/users/:id', requirePageAccess('/admin/users', 'edit'), adminController.deleteUser);
