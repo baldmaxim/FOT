@@ -520,7 +520,11 @@ const resolveConflict = (decision: 'applied' | 'dismissed') => async (req: Authe
     const conflictId = Number(req.params.id);
     const row = await queryOne<IConflictRow>(`SELECT * FROM employee_hr_ocr_conflicts WHERE id = $1`, [conflictId]);
     if (!row) { res.status(404).json({ success: false, error: 'Расхождение не найдено' }); return; }
-    if (!(await canAccessEmployeeInScope(req, row.employee_id))) {
+    // WRITE-скоуп: «Применить» переписывает поле профиля (и через write-through —
+    // employees), поэтому доступ здесь тот же, что у правки профиля. Через
+    // canAccessEmployeeInScope заместитель мог бы поменять паспорт или ИНН
+    // сотруднику, правка которого ему не положена.
+    if (!(await canWriteEmployeeInScope(req, row.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

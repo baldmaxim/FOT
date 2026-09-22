@@ -15,7 +15,9 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
 vi.mock('../config/postgres.js', () => ({
-  queryOne: vi.fn().mockResolvedValue({ token_version: 0 }),
+  // Один мок на две роли: проверка token_version при аутентификации и строка
+  // расхождения OCR — обеим достаточно этих полей.
+  queryOne: vi.fn().mockResolvedValue({ token_version: 0, id: 7, employee_id: 5001, field_name: 'inn', status: 'open', document_id: 42, ocr_value_enc: null }),
   query: vi.fn().mockResolvedValue([]),
   execute: vi.fn().mockResolvedValue(0),
   withTransaction: vi.fn(),
@@ -24,7 +26,7 @@ vi.mock('../config/postgres.js', () => ({
 }));
 
 /** Право на страницу выдаём по действию: edit-пользователь — всё, view-пользователь — только чтение. */
-const access = vi.hoisted(() => ({ allowEdit: true }));
+const access = vi.hoisted(() => ({ allowEdit: true, allowWriteScope: true }));
 vi.mock('../services/access-control.service.js', () => ({
   resolveEffectivePageAccess: vi.fn(async (_req: unknown, _page: string, action: 'view' | 'edit') =>
     action === 'view' ? true : access.allowEdit),
@@ -39,9 +41,11 @@ vi.mock('../services/hr-feature-flag.service.js', () => ({
 }));
 
 vi.mock('../services/data-scope.service.js', () => ({
+  // Чтение доступно всегда, запись — по флагу: так моделируем заместителя, у
+  // которого сотрудник в скоупе просмотра, но не в скоупе кадровых правок.
   canAccessEmployeeInScope: vi.fn(async () => true),
   resolveScopedDepartmentId: vi.fn(async () => null),
-  canWriteEmployeeInScope: vi.fn(async () => true),
+  canWriteEmployeeInScope: vi.fn(async () => access.allowWriteScope),
   resolveWritableScopedDepartmentId: vi.fn(async () => null),
 }));
 
@@ -120,6 +124,7 @@ const d = process.env.CODEX_SANDBOX ? describe.skip : describe;
 d('/api/hr-profiles — доступ без 2FA', () => {
   beforeEach(() => {
     access.allowEdit = true;
+    access.allowWriteScope = true;
     uploaded.calls = 0;
     recognizeCalls.calls = 0;
   });
@@ -156,6 +161,25 @@ d('/api/hr-profiles — доступ без 2FA', () => {
 
     expect(res.status).toBe(403);
     expect(uploaded.calls).toBe(0);
+  });
+
+  it('«Применить расхождение» требует скоуп записи, а не просмотра', async () => {
+    // Регресс: обработчик проверял canAccessEmployeeInScope, и заместитель мог
+    // переписать паспорт или ИНН сотруднику, правка которого ему не положена.
+    access.allowWriteScope = false;
+    const res = await request(app)
+      .post('/api/hr-profiles/ocr-conflicts/7/apply')
+      .set('Authorization', `Bearer ${token()}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('со скоупом записи расхождение применяется', async () => {
+    const res = await request(app)
+      .post('/api/hr-profiles/ocr-conflicts/7/apply')
+      .set('Authorization', `Bearer ${token()}`);
+
+    expect(res.status).not.toBe(403);
   });
 
   it('только HR view: чтение профиля остаётся доступным', async () => {
