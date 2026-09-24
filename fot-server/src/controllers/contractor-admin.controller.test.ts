@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
   countInductionByOrg: vi.fn(),
   getContractorOrgs: vi.fn(),
   hasOrgWideAccountAccess: vi.fn(),
+  resolveEffectivePageAccess: vi.fn(),
+  renamePassHolder: vi.fn(),
 }));
 
 vi.mock('../services/org-wide-account-access.service.js', () => ({
@@ -47,6 +49,11 @@ vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.res
 vi.mock('../services/access-control.service.js', () => ({
   hasPageView: h.hasPageView,
   hasPageEdit: h.hasPageEdit,
+  resolveEffectivePageAccess: h.resolveEffectivePageAccess,
+}));
+vi.mock('../services/contractor-pass-rename.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/contractor-pass-rename.service.js')>()),
+  renamePassHolder: h.renamePassHolder,
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest },
@@ -1931,5 +1938,96 @@ describe('contractorAdminController — привязка подрядчика к
     await contractorAdminController.listContractorUsers(orgReq(), res as never);
     expect(h.hasOrgWideAccountAccess).toHaveBeenCalledWith(expect.anything(), 'view');
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('contractorAdminController.renamePassHolderAdmin', () => {
+  const PASS = '99999999-9999-9999-9999-999999999999';
+  const REVISION = '2026-09-16T12:11:08.495Z';
+
+  const renameReq = (body: Record<string, unknown>, user: Record<string, unknown> = {
+    id: 'u-sec', role_code: 'security', is_admin: false,
+  }) => ({
+    user,
+    params: { id: PASS },
+    body,
+    ip: '10.0.0.1',
+    headers: { 'user-agent': 'vitest' },
+    socket: {},
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    // security: грант раздела без админского скоупа.
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    h.hasPageView.mockResolvedValue(true);
+    h.hasPageEdit.mockResolvedValue(true);
+    h.resolveEffectivePageAccess.mockResolvedValue(true);
+    h.renamePassHolder.mockResolvedValue({
+      changed: true, holder_name: 'Насиров Шерзад Хасанович', employee_updated: true, sigur_updated: true,
+    });
+  });
+
+  it('security с edit: нормализованное ФИО и ревизия уходят в сервис → 200', async () => {
+    const res = makeRes();
+    await contractorAdminController.renamePassHolderAdmin(
+      renameReq({ full_name: ' Насиров  Шерзад Хасанович ', expected_updated_at: REVISION }),
+      res as never,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(h.renamePassHolder).toHaveBeenCalledWith({
+      passId: PASS,
+      newName: 'Насиров Шерзад Хасанович',
+      expectedUpdatedAt: REVISION,
+      userId: 'u-sec',
+      canSeeBlacklistReason: true,
+      ipAddress: '10.0.0.1',
+      userAgent: 'vitest',
+    });
+    expect(h.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/admin/users', 'view');
+  });
+
+  it('грант только на просмотр → 403, сервис не вызывается', async () => {
+    h.hasPageEdit.mockResolvedValue(false);
+    const res = makeRes();
+    await contractorAdminController.renamePassHolderAdmin(
+      renameReq({ full_name: 'Насиров Шерзад', expected_updated_at: REVISION }),
+      res as never,
+    );
+    expect(res.statusCode).toBe(403);
+    expect(h.renamePassHolder).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ full_name: 'Насиров Шерзад' }, 'без ревизии'],
+    [{ full_name: 'Насиров Шерзад', expected_updated_at: 'abc' }, 'битая ревизия'],
+    [{ full_name: 'Насиров', expected_updated_at: REVISION }, 'одно слово'],
+  ])('%j → 400 (%s), сервис не вызывается', async body => {
+    const res = makeRes();
+    await contractorAdminController.renamePassHolderAdmin(renameReq(body), res as never);
+    expect(res.statusCode).toBe(400);
+    expect(h.renamePassHolder).not.toHaveBeenCalled();
+  });
+
+  it('RenameHolderError отдаётся со своим статусом и текстом', async () => {
+    const { RenameHolderError } = await import('../services/contractor-pass-rename.service.js');
+    h.renamePassHolder.mockRejectedValue(new RenameHolderError(409, 'Пропуск изменён другим пользователем'));
+    const res = makeRes();
+    await contractorAdminController.renamePassHolderAdmin(
+      renameReq({ full_name: 'Насиров Шерзад', expected_updated_at: REVISION }),
+      res as never,
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ success: false, error: 'Пропуск изменён другим пользователем' });
+  });
+
+  it('неожиданная ошибка → 500', async () => {
+    h.renamePassHolder.mockRejectedValue(new Error('boom'));
+    const res = makeRes();
+    await contractorAdminController.renamePassHolderAdmin(
+      renameReq({ full_name: 'Насиров Шерзад', expected_updated_at: REVISION }),
+      res as never,
+    );
+    expect(res.statusCode).toBe(500);
   });
 });

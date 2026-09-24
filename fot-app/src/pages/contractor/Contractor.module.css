@@ -1043,3 +1043,124 @@
   .rowActions { flex-wrap: wrap; justify-content: flex-start; }
   .rowBtn { min-height: 44px; padding: 10px 14px; }
 }
+
+/* «Мониторинг»: клик по ФИО включает правку на месте (MonitorHolderNameCell). */
+.nameMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.nameEditBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nameEditLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s ease-out;
+}
+
+.nameEditBtn:hover .nameEditLabel,
+.nameEditBtn:focus-visible .nameEditLabel {
+  text-decoration-color: var(--text-secondary);
+}
+
+.nameEditIcon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+}
+
+.nameEditBtn:hover .nameEditIcon,
+.nameEditBtn:focus-visible .nameEditIcon {
+  opacity: 1;
+}
+
+/* Тач-экраны без hover: карандаш виден всегда, иначе правку не найти. */
+@media (hover: none) {
+  .nameEditIcon { opacity: 1; }
+}
+
+/* Чип расхождения с «Управлением кадрами»: текст основным цветом ради контраста. */
+.nameMismatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button.nameMismatch { cursor: pointer; }
+button.nameMismatch:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.nameMismatchIcon {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.nameEditForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 320px;
+}
+
+.nameEditInput {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 16px;
+}
+
+.nameEditHint,
+.nameEditError {
+  flex-basis: 100%;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.nameEditHint { color: var(--text-secondary); }
+.nameEditError { color: var(--error); }
+
+.historySectionTitle { margin-top: 16px; }
+
+@media (max-width: 768px) {
+  .nameEditForm { min-width: 0; }
+  .nameEditBtn,
+  button.nameMismatch { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nameEditLabel,
+  .nameEditIcon { transition: none; }
+}

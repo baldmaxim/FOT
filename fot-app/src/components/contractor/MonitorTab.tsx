@@ -7,7 +7,6 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { BarChart3 } from 'lucide-react';
 import {
   contractorAdminService,
-  type IPassHistory,
   type IMonitorPassRow,
   type IPassDocuments,
 } from '../../services/contractorService';
@@ -16,6 +15,8 @@ import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
 import { PassEventsModal } from './PassEventsModal';
 import { PassDocumentsModal } from './PassDocumentsModal';
+import { PassHistoryModal } from './PassHistoryModal';
+import { MonitorHolderNameCell } from './MonitorHolderNameCell';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 /** Застрявшие отзывы: вернулись в пул в БД, но Sigur не подтвердил перенос/блокировку. */
@@ -76,97 +77,6 @@ const SyncFailedPanel: FC = () => {
           ))}
         </tbody>
       </table>
-    </div>
-  );
-};
-
-const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId, onClose }) => {
-  const overlay = useOverlayDismiss(onClose);
-  const query = useQuery<IPassHistory>({
-    queryKey: ['contractor-pass-history', passId],
-    queryFn: () => contractorAdminService.getPassHistoryAdmin(passId),
-  });
-  const data = query.data;
-  return (
-    <div
-      className={styles.overlay}
-      onMouseDown={overlay.onMouseDown}
-      onMouseUp={overlay.onMouseUp}
-      onMouseLeave={overlay.onMouseLeave}
-      onTouchStart={overlay.onTouchStart}
-      onTouchEnd={overlay.onTouchEnd}
-    >
-      <div className={styles.modal} style={{ maxWidth: 640 }}>
-        <h2 className={styles.modalTitle}>История пропуска</h2>
-        {query.isLoading && <div className={styles.detailRow}>Загрузка…</div>}
-        {data && (
-          <>
-            <h3 className={styles.title}>Владельцы</h3>
-            <table className={styles.table}>
-              <thead>
-                <tr><th>С</th><th>По</th><th>ФИО</th><th>Кто записал</th><th>Кто одобрил</th></tr>
-              </thead>
-              <tbody>
-                {data.holders.map(h => (
-                  <tr key={h.id}>
-                    <td>{h.valid_from}</td>
-                    <td>{h.valid_until ?? '—'}</td>
-                    <td>{h.holder_name}</td>
-                    <td>{h.changed_by_name ?? '—'}</td>
-                    <td>
-                      {h.approved_by_name
-                        ? `${h.approved_by_name}${h.approved_at ? ` (${new Date(h.approved_at).toLocaleString('ru')})` : ''}`
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-                {data.holders.length === 0 && <tr><td colSpan={5}>—</td></tr>}
-              </tbody>
-            </table>
-            <h3 className={styles.title} style={{ marginTop: 16 }}>Решения</h3>
-            <table className={styles.table}>
-              <thead>
-                <tr><th>Когда</th><th>Решение</th><th>Кто</th><th>Точки</th><th>Причина</th></tr>
-              </thead>
-              <tbody>
-                {data.decisions.map(d => (
-                  <tr key={d.id}>
-                    <td>{new Date(d.decided_at).toLocaleString('ru')}</td>
-                    <td>{d.decision === 'approved' ? 'одобрено' : 'отклонено'}</td>
-                    <td>{d.decided_by_name ?? '—'}</td>
-                    <td>{(d.access_point_names ?? []).join(', ') || '—'}</td>
-                    <td>{d.reason ?? '—'}</td>
-                  </tr>
-                ))}
-                {data.decisions.length === 0 && <tr><td colSpan={5}>—</td></tr>}
-              </tbody>
-            </table>
-            {(data.accessPointEvents?.length ?? 0) > 0 && (
-              <>
-                <h3 className={styles.title} style={{ marginTop: 16 }}>Изменения точек доступа</h3>
-                <table className={styles.table}>
-                  <thead>
-                    <tr><th>Когда</th><th>Кто</th><th>Добавлены</th><th>Итог</th></tr>
-                  </thead>
-                  <tbody>
-                    {data.accessPointEvents!.map(e => (
-                      <tr key={e.id}>
-                        <td>{new Date(e.created_at).toLocaleString('ru')}</td>
-                        <td>{e.changed_by_name ?? '—'}</td>
-                        <td>{(e.details?.added_names ?? []).join(', ') || '—'}</td>
-                        <td>{(e.details?.total_names ?? []).join(', ') || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            )}
-          </>
-        )}
-        <div className={styles.modalActions}>
-          <button className="btn-secondary" onClick={onClose}>Закрыть</button>
-        </div>
-      </div>
     </div>
   );
 };
@@ -289,6 +199,15 @@ export const MonitorTab: FC = () => {
   const [eventsRow, setEventsRow] = useState<IMonitorPassRow | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
 
+  // ФИО держателя видно ещё в истории пропуска и во вкладках заявок/отправленных.
+  const onHolderRenamed = (passId: string) => {
+    void qc.invalidateQueries({ queryKey: ['contractor-monitor'] });
+    void qc.invalidateQueries({ queryKey: ['contractor-monitor-search'] });
+    void qc.invalidateQueries({ queryKey: ['contractor-pass-history', passId] });
+    void qc.invalidateQueries({ queryKey: ['contractor-sub-detail'] });
+    void qc.invalidateQueries({ queryKey: ['contractor-sent-passes'] });
+  };
+
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const searchActive = debouncedSearch.length >= 1;
 
@@ -382,17 +301,12 @@ export const MonitorTab: FC = () => {
                   {searchActive && <td>{p.org_name ?? '—'}</td>}
                   <td title={p.card_uid ?? ''}>{p.w26 ?? formatCardW26(p.card_uid)}</td>
                   <td>
-                    <div className={styles.nameCell}>
-                      <span className={styles.nameText}>{p.holder_name ?? '—'}</span>
-                      <button
-                        type="button"
-                        className={styles.rowBtn}
-                        onClick={() => setDocRow(p)}
-                        title={canEdit ? 'Документы держателя (просмотр и правка)' : 'Просмотр документов'}
-                      >
-                        Документы
-                      </button>
-                    </div>
+                    <MonitorHolderNameCell
+                      row={p}
+                      canEdit={canEdit}
+                      onOpenDocs={() => setDocRow(p)}
+                      onSaved={() => onHolderRenamed(p.id)}
+                    />
                   </td>
                   <td>{p.status}</td>
                   <td>{p.approval_status}</td>

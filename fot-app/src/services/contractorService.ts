@@ -247,6 +247,8 @@ export interface IMonitorPassRow {
   card_uid: string | null;
   w26: string | null;
   holder_name: string | null;
+  /** ФИО из «Управления кадрами» (копия Sigur) — только у одобренного и только при расхождении. */
+  employee_holder_name?: string | null;
   org_name?: string | null;
   expires_at: string | null;
   access_point_names: string[] | null;
@@ -394,10 +396,27 @@ export interface IAccessPointEventRow {
   } | null;
 }
 
+/** Исправление ФИО держателя со вкладки «Мониторинг» (из audit_logs). */
+export interface IHolderRenameEventRow {
+  id: string;
+  created_at: string;
+  old_name: string | null;
+  new_name: string | null;
+  changed_by_name: string | null;
+}
+
 export interface IPassHistory {
   holders: IHolderHistoryRow[];
   decisions: ISubmissionDecisionRow[];
   accessPointEvents?: IAccessPointEventRow[];
+  renameEvents?: IHolderRenameEventRow[];
+}
+
+export interface IRenameHolderResult {
+  changed: boolean;
+  holder_name: string;
+  employee_updated: boolean;
+  sigur_updated: boolean;
 }
 
 export interface IDecideItem {
@@ -1064,6 +1083,17 @@ export const contractorAdminService = {
   /** Освободить пропуск: обнулить ФИО/документы/выдачу + заблокировать профиль в Sigur. */
   async clearPassHolder(passId: string): Promise<void> {
     await apiClient.post(`/admin/contractor/passes/${passId}/clear-holder`, {});
+  },
+  /** Исправить ФИО держателя: пропуск, а у одобренного — ещё «Управление кадрами» и Sigur. */
+  async renamePassHolder(
+    passId: string,
+    body: { full_name: string; expected_updated_at: string },
+  ): Promise<IRenameHolderResult> {
+    const r = await apiClient.post<ApiResponse<IRenameHolderResult>>(
+      `/admin/contractor/passes/${passId}/holder-name`,
+      body,
+    );
+    return r.data;
   },
 
   // Статистика пропусков (новые номерные vs старые белые)

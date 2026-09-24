@@ -29,6 +29,11 @@ import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 import { withSigurProfileGuard } from '../services/blacklist.service.js';
+import {
+  renamePassHolder,
+  renameHolderBodySchema,
+  RenameHolderError,
+} from '../services/contractor-pass-rename.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { sigurService } from '../services/sigur.service.js';
@@ -1972,6 +1977,15 @@ export const contractorAdminController = {
                p.sigur_employee_id,
                p.card_uid,
                COALESCE(h.holder_name, p.holder_name) AS holder_name,
+               -- ФИО из «Управления кадрами» (копия Sigur) — только у одобренного и только
+               -- при расхождении: у неодобренного профиль Sigur называется «Пропуск N».
+               CASE
+                 WHEN p.approval_status = 'approved'
+                  AND btrim(COALESCE(e.full_name, '')) <> ''
+                  AND regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
+                      IS DISTINCT FROM regexp_replace(btrim(COALESCE(h.holder_name, p.holder_name, '')), '\\s+', ' ', 'g')
+                 THEN regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
+               END AS employee_holder_name,
                od.name AS org_name,
                p.expires_at,
                p.access_point_names,
@@ -1993,15 +2007,20 @@ export const contractorAdminController = {
           FROM contractor_passes p
           LEFT JOIN contractor_pass_holders h
             ON h.pass_id = p.id AND h.valid_until IS NULL
+          LEFT JOIN employees e
+            ON e.sigur_employee_id = p.sigur_employee_id AND e.is_archived = false
           LEFT JOIN org_departments od ON od.id = p.org_department_id`;
 
       let rows;
       if (q) {
         const pattern = `%${escapeLike(q)}%`;
+        // Ищем и по ФИО из кадров: пропуск с опечаткой находится по верному имени.
         rows = await query(
           `${baseSelect}
             WHERE p.status <> 'revoked'
-              AND (p.pass_number ILIKE $1 OR COALESCE(h.holder_name, p.holder_name) ILIKE $1)
+              AND (p.pass_number ILIKE $1
+                   OR COALESCE(h.holder_name, p.holder_name) ILIKE $1
+                   OR (p.approval_status = 'approved' AND e.full_name ILIKE $1))
             ORDER BY p.pass_number::int ASC
             LIMIT 100`,
           [pattern],
@@ -2282,7 +2301,21 @@ export const contractorAdminController = {
           ORDER BY a.created_at DESC`,
         [passId],
       );
-      res.json({ success: true, data: { holders, decisions, accessPointEvents } });
+      // Исправления ФИО из «Мониторинга» — строку владельца правят на месте, след только в аудите.
+      const renameEvents = await query(
+        `SELECT a.id, a.created_at,
+                a.details->>'old_name' AS old_name,
+                a.details->>'new_name' AS new_name,
+                up.full_name AS changed_by_name
+           FROM audit_logs a
+           LEFT JOIN user_profiles up ON up.id = a.user_id
+          WHERE a.entity_type = 'contractor_pass'
+            AND a.entity_id = $1
+            AND a.action = 'CONTRACTOR_PASS_HOLDER_RENAMED'
+          ORDER BY a.created_at DESC`,
+        [passId],
+      );
+      res.json({ success: true, data: { holders, decisions, accessPointEvents, renameEvents } });
     } catch (error) {
       console.error('Contractor getPassHistoryAdmin error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить историю' });
@@ -3572,6 +3605,43 @@ export const contractorAdminController = {
       console.error('Contractor clearPassHolder error:', error);
       Sentry.captureException(error, { tags: { route: 'contractor.clearPassHolder' } });
       res.status(500).json({ success: false, error: 'Не удалось освободить пропуск' });
+    }
+  },
+
+  /**
+   * POST /passes/:id/holder-name — исправить опечатку в ФИО держателя со вкладки
+   * «Мониторинг». Body: { full_name, expected_updated_at }. У одобренного пропуска
+   * то же имя уходит в «Управление кадрами» и в Sigur (contractor-pass-rename.service.ts).
+   */
+  async renamePassHolderAdmin(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      const body = renameHolderBodySchema.parse(req.body ?? {});
+      const canSeeBlacklistReason = await resolveEffectivePageAccess(req, '/admin/users', 'view');
+
+      const data = await renamePassHolder({
+        passId,
+        newName: body.full_name,
+        expectedUpdatedAt: body.expected_updated_at,
+        userId: req.user.id,
+        canSeeBlacklistReason,
+        ipAddress: req.ip || req.socket?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0]?.message ?? 'Некорректные данные' });
+        return;
+      }
+      if (error instanceof RenameHolderError) {
+        res.status(error.http).json({ success: false, error: error.message });
+        return;
+      }
+      console.error('Contractor renamePassHolderAdmin error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.renamePassHolder' } });
+      res.status(500).json({ success: false, error: 'Не удалось исправить ФИО' });
     }
   },
 };

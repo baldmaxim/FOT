@@ -92,6 +92,8 @@ router.post('/passes/:id/retry-sync', apprEdit, contractorPoolController.retrySy
 // Освободить пропуск: обнулить ФИО/документы/выдачу, вернуть пустой assigned-слот подрядчику,
 // заблокировать профиль ушедшего в Sigur (для повторной выдачи после увольнения).
 router.post('/passes/:id/clear-holder', apprEdit, contractorAdminController.clearPassHolder);
+// Исправить опечатку в ФИО держателя: пропуск, а у одобренного ещё кадры и профиль Sigur.
+router.post('/passes/:id/holder-name', apprEdit, contractorAdminController.renamePassHolderAdmin);
 
 // Общий пул свободных пропусков.
 router.get('/pool/settings', apprView, contractorPoolController.getSettings);
