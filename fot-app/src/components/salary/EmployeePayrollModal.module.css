@@ -1,0 +1,141 @@
+/*
+ * Карточка сотрудника «Условия оплаты». Mobile-first: на телефоне — полный экран,
+ * с 768px — 90vw × 90dvh (dvh: адрес-бар съедает vh). Скроллится только тело.
+ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.headerText { min-width: 0; }
+.title { margin: 0; font-size: 17px; font-weight: 600; color: var(--text-primary); }
+.subtitle { margin: 2px 0 0; font-size: 14px; color: var(--text-primary); overflow-wrap: anywhere; }
+.meta { margin: 2px 0 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.closeButton {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.closeButton:hover { color: var(--text-primary); }
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-content: start;
+}
+.column { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.readOnlyNote {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warning-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 10px 16px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dateField { display: flex; flex-direction: column; gap: 4px; flex: 1 1 180px; min-width: 0; }
+.dateLabel { font-size: 12px; color: var(--text-secondary); }
+.dateInput {
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 44px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.error { margin: 0; flex-basis: 100%; font-size: 13px; color: var(--error); }
+
+.actions { display: flex; gap: 8px; margin-left: auto; }
+
+.primaryButton, .secondaryButton {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.primaryButton { border: none; background: var(--primary); color: #fff; }
+.primaryButton:disabled { opacity: 0.5; cursor: default; }
+.secondaryButton { border: 1px solid var(--border); background: transparent; color: var(--text-primary); }
+
+@media (min-width: 768px) {
+  .overlay { align-items: center; }
+  .container {
+    width: 90vw;
+    height: 90dvh;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-xl);
+  }
+  .header { padding: 14px 20px; }
+  .body { padding: 16px 20px; gap: 16px; }
+  .column { gap: 16px; }
+  .footer { padding: 12px 20px; }
+  .dateField { flex: 0 1 220px; }
+}
+
+@media (min-width: 1024px) {
+  .body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}

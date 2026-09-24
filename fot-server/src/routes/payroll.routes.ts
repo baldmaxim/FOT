@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
+import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 
 const router = Router();
 
@@ -26,6 +27,11 @@ router.get('/terms', termsView, payrollTermsController.list);
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 router.post('/terms/bulk', termsEdit, payrollTermsController.assignBulk);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
+// Изменения оклада / ставки для карточки сотрудника («было → стало»).
+router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsController.getSalaryHistory);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
+
+// ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
+router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
 
 export default router;

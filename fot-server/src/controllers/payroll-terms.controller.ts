@@ -29,19 +29,22 @@ import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
   resolveAccessibleDepartmentIds,
+  resolveEditableEmployeeIds,
 } from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
   assignTerms,
   assignTermsBulk,
+  getSalaryChanges,
   getTermsHistory,
   getTermsOnDate,
   type IAssignResult,
 } from '../services/payroll/payroll-terms.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
 const moneySchema = z.coerce.number().positive('Сумма должна быть больше нуля');
-/** Премия и проживание могут быть нулевыми: 0 — «явно не положено», отсутствие — «не задано». */
+/** Премия, компенсации и удержание могут быть нулевыми: 0 — «явно не положено», отсутствие — «не задано». */
 const optionalMoneySchema = z.coerce.number().min(0, 'Сумма не может быть отрицательной').optional();
 
 /**
@@ -56,6 +59,9 @@ const termsBodySchema = z.object({
   hourly_rate: moneySchema.optional(),
   bonus_amount: optionalMoneySchema,
   housing_compensation: optionalMoneySchema,
+  travel_compensation: optionalMoneySchema,
+  communication_compensation: optionalMoneySchema,
+  deduction_amount: optionalMoneySchema,
   staff_units: z.coerce.number().positive().max(2).optional(),
   organization_id: z.string().uuid().nullable().optional(),
   effective_from: dateSchema,
@@ -97,6 +103,22 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
   } catch (err) {
     console.error('payrollTerms.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения условий оплаты' });
+  }
+};
+
+/** GET /api/payroll/terms/employee/:empId/salary-history — изменения оклада / ставки. */
+const getSalaryHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = Number(req.params.empId);
+    if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+    const data = await getSalaryChanges(employeeId);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('payrollTerms.getSalaryHistory error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения истории зарплаты' });
   }
 };
 
@@ -166,6 +188,9 @@ const buildBaseCtes = (columnFilterSql: string): string => `
            t.hourly_rate,
            t.bonus_amount,
            t.housing_compensation,
+           t.travel_compensation,
+           t.communication_compensation,
+           t.deduction_amount,
            t.staff_units,
            t.effective_from,
            t.effective_to
@@ -243,6 +268,9 @@ interface IPayrollTermsListRow {
   hourly_rate: string | number | null;
   bonus_amount: string | number | null;
   housing_compensation: string | number | null;
+  travel_compensation: string | number | null;
+  communication_compensation: string | number | null;
+  deduction_amount: string | number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -264,7 +292,8 @@ type BaseQuery = z.infer<typeof baseQuerySchema>;
 
 /** $1–$8 для buildBaseCtes. */
 const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuery) => {
-  const onDate = query.date ?? new Date().toISOString().slice(0, 10);
+  // «Сегодня» по Москве, как на экране: toISOString() дал бы дату UTC.
+  const onDate = query.date ?? moscowTodayIso();
   const accessible = await resolveAccessibleDepartmentIds(req);
   // Корень «Подрядные организации» не найден — подрядчиков не исключаем, но говорим
   // об этом экрану: молча показать лишних людей в зарплатном списке нельзя.
@@ -373,8 +402,14 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         : { name: lastRow.full_name ?? '', id: lastRow.employee_id };
     }
 
+    // can_edit — скоуп правки конкретного сотрудника (то же, что проверит assign):
+    // право на страницу есть, а отдел — только на просмотр → карточка без правки.
+    const editable = await resolveEditableEmployeeIds(req);
     // Служебные поля ключа наружу не отдаём.
-    const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, ...row }) => row);
+    const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, ...row }) => ({
+      ...row,
+      can_edit: editable === 'all' || editable.has(row.employee_id),
+    }));
 
     res.json({
       success: true,
@@ -477,6 +512,9 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       hourlyRate: body.hourly_rate ?? null,
       bonusAmount: body.bonus_amount ?? null,
       housingCompensation: body.housing_compensation ?? null,
+      travelCompensation: body.travel_compensation ?? null,
+      communicationCompensation: body.communication_compensation ?? null,
+      deductionAmount: body.deduction_amount ?? null,
       staffUnits: body.staff_units,
       organizationId: body.organization_id ?? null,
       effectiveFrom: body.effective_from,
@@ -500,6 +538,9 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         hourly_rate: body.hourly_rate ?? null,
         bonus_amount: body.bonus_amount ?? null,
         housing_compensation: body.housing_compensation ?? null,
+        travel_compensation: body.travel_compensation ?? null,
+        communication_compensation: body.communication_compensation ?? null,
+        deduction_amount: body.deduction_amount ?? null,
         previous_terms_id: previous?.id ?? null,
         previous_calc_type: previous?.calc_type ?? null,
       },
@@ -537,6 +578,9 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
       hourlyRate: body.hourly_rate ?? null,
       bonusAmount: body.bonus_amount ?? null,
       housingCompensation: body.housing_compensation ?? null,
+      travelCompensation: body.travel_compensation ?? null,
+      communicationCompensation: body.communication_compensation ?? null,
+      deductionAmount: body.deduction_amount ?? null,
       staffUnits: body.staff_units,
       organizationId: body.organization_id ?? null,
       effectiveFrom: body.effective_from,
@@ -563,6 +607,9 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
         calc_type: body.calc_type,
         bonus_amount: body.bonus_amount ?? null,
         housing_compensation: body.housing_compensation ?? null,
+        travel_compensation: body.travel_compensation ?? null,
+        communication_compensation: body.communication_compensation ?? null,
+        deduction_amount: body.deduction_amount ?? null,
         effective_from: body.effective_from,
       },
     });
@@ -575,4 +622,6 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-export const payrollTermsController = { list, columnValues, getByEmployee, assign, assignBulk };
+export const payrollTermsController = {
+  list, columnValues, getByEmployee, getSalaryHistory, assign, assignBulk,
+};

@@ -39,9 +39,19 @@ export interface IPayrollTermsRow {
   bonus_amount: string | number | null;
   /** Компенсация проживания, ₽/мес. */
   housing_compensation: string | number | null;
+  /** Компенсации проезда и связи, ₽/мес. */
+  travel_compensation?: string | number | null;
+  communication_compensation?: string | number | null;
+  /** Ежемесячное удержание, ₽/мес. */
+  deduction_amount?: string | number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
+  /**
+   * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
+   * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
+   */
+  can_edit?: boolean;
 }
 
 export interface IPayrollTermsHistoryRow {
@@ -53,6 +63,9 @@ export interface IPayrollTermsHistoryRow {
   hourly_rate: string | number | null;
   bonus_amount: string | number | null;
   housing_compensation: string | number | null;
+  travel_compensation: string | number | null;
+  communication_compensation: string | number | null;
+  deduction_amount: string | number | null;
   staff_units: string | number;
   effective_from: string;
   effective_to: string | null;
@@ -71,12 +84,60 @@ export interface IAssignTermsPayload {
   /** Не передано — сумма не задана (прежнее значение очищается). */
   bonus_amount?: number;
   housing_compensation?: number;
+  travel_compensation?: number;
+  communication_compensation?: number;
+  deduction_amount?: number;
   staff_units?: number;
   effective_from: string;
-  change_reason?: string;
-  order_number?: string;
-  order_date?: string;
-  note?: string;
+}
+
+/** Изменение оклада / ставки. Суммы — текстом NUMERIC; разница — только при том же виде оплаты. */
+export interface ISalaryChange {
+  effective_from: string;
+  /** null — действует по сей день. */
+  effective_to: string | null;
+  calc_type: PayrollCalcType;
+  amount: string;
+  prev_calc_type: PayrollCalcType | null;
+  prev_amount: string | null;
+  diff: string | null;
+  diff_percent: string | null;
+  changed_by_name: string | null;
+  changed_at: string;
+}
+
+export type VacationStatus = 'vacation' | 'unpaid' | 'educational_leave';
+
+export const VACATION_STATUS_LABELS: Record<VacationStatus, string> = {
+  vacation: 'Ежегодный отпуск',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
+};
+
+/** Сводка по отпуску на сегодня (Москва). Ежегодный — без нерабочих праздничных (ст. 120 ТК). */
+export interface IVacationSummary {
+  year: number;
+  today: string;
+  used_days: number;
+  planned_days: number;
+  unpaid_days: number;
+}
+
+export interface IVacationPeriod {
+  start_date: string;
+  end_date: string;
+  status: VacationStatus;
+  calendar_days: number;
+  holiday_days: number;
+  source: 'leave_request' | 'timesheet';
+  leave_request_id: number | null;
+  reviewer_name: string | null;
+  reviewed_at: string | null;
+}
+
+export interface IEmployeeVacation {
+  summary: IVacationSummary;
+  history: IVacationPeriod[];
 }
 
 export interface IAssignResult {
@@ -203,6 +264,24 @@ export const payrollService = {
   getHistory: async (employeeId: number): Promise<IPayrollTermsHistoryRow[]> => {
     const res = await apiClient.get<IApiResponse<IPayrollTermsHistoryRow[]>>(
       `/payroll/terms/employee/${employeeId}`,
+    );
+    return res.data;
+  },
+
+  /** Изменения оклада / ставки, новые сверху. */
+  getSalaryHistory: async (employeeId: number, signal?: AbortSignal): Promise<ISalaryChange[]> => {
+    const res = await apiClient.get<IApiResponse<ISalaryChange[]>>(
+      `/payroll/terms/employee/${employeeId}/salary-history`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Сколько отгулено в текущем году и история отпусков по табелю. */
+  getVacation: async (employeeId: number, signal?: AbortSignal): Promise<IEmployeeVacation> => {
+    const res = await apiClient.get<IApiResponse<IEmployeeVacation>>(
+      `/payroll/vacation/employee/${employeeId}`,
+      { signal },
     );
     return res.data;
   },

@@ -1,4 +1,7 @@
-/* Модалка назначения условий оплаты. Высота — dvh: адрес-бар Chrome съедает vh. */
+/*
+ * Массовое назначение условий оплаты. Высота — dvh: адрес-бар Chrome съедает vh.
+ * Скроллятся только поля; дата и кнопки закреплены внизу.
+ */
 .overlay {
   position: fixed;
   inset: 0;
@@ -13,22 +16,39 @@
 .modal {
   width: 100%;
   max-height: 92dvh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px 14px 0 0;
-  padding: 16px;
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  overflow: hidden;
   box-sizing: border-box;
 }
 
-.title { margin: 0 0 4px; font-size: 17px; color: var(--text-primary); }
-.subtitle { margin: 0 0 12px; font-size: 14px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
-.form { display: flex; flex-direction: column; gap: 12px; }
-.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.title { margin: 0; padding: 16px 16px 12px; font-size: 17px; color: var(--text-primary); }
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px 12px;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
+
+.dateField { display: flex; flex-direction: column; gap: 4px; flex: 1 1 180px; min-width: 0; }
 .label { font-size: 12px; color: var(--text-secondary); }
 
 .input {
@@ -43,15 +63,9 @@
   box-sizing: border-box;
 }
 
-.radioGroup { display: flex; flex-direction: column; gap: 6px; border: none; margin: 0; padding: 0; }
-.radio { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary); min-height: 44px; }
+.error { margin: 0; flex-basis: 100%; font-size: 13px; color: var(--error); }
 
-.row { display: grid; grid-template-columns: 1fr; gap: 12px; }
-
-.hint { margin: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.error { margin: 0; font-size: 13px; color: var(--error); }
-
-.footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.actions { display: flex; gap: 8px; margin-left: auto; }
 
 .primaryButton, .secondaryButton {
   min-height: 44px;
@@ -68,10 +82,6 @@
 
 @media (min-width: 768px) {
   .overlay { align-items: center; padding: 24px; }
-  .modal { max-width: 520px; border-radius: 14px; padding-bottom: 16px; }
-  .row { grid-template-columns: 1fr 1fr; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .modal { transition: none; }
+  .modal { max-width: 560px; border-radius: 14px; }
+  .footer { padding-bottom: 12px; }
 }

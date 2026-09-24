@@ -16,6 +16,8 @@ interface IPayrollTermsTableProps {
   rows: IPayrollTermsRow[];
   selected: Set<number>;
   allSelected: boolean;
+  /** Право правки страницы. Без него, как и у строки вне скоупа правки, выделять нечего. */
+  canEdit: boolean;
   onToggleOne: (employeeId: number) => void;
   onToggleAll: () => void;
   onEdit: (row: IPayrollTermsRow) => void;
@@ -66,6 +68,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   rows,
   selected,
   allSelected,
+  canEdit,
   onToggleOne,
   onToggleAll,
   onEdit,
@@ -126,6 +129,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                 className={styles.check}
                 aria-label="Выделить всех загруженных"
                 checked={allSelected}
+                disabled={!canEdit}
                 onChange={onToggleAll}
               />
             </th>
@@ -194,6 +198,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                         className={styles.check}
                         aria-label={`Выделить ${row.full_name ?? ''}`}
                         checked={isSelected}
+                        disabled={!canEdit || row.can_edit === false}
                         onChange={() => onToggleOne(row.employee_id)}
                       />
                     </td>

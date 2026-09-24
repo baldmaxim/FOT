@@ -29,6 +29,11 @@ export interface IPayrollTerms {
   bonus_amount: number | null;
   /** Компенсация проживания, ₽/мес. Справочно, в расчёте пока не участвует. */
   housing_compensation: number | null;
+  /** Компенсации проезда и связи, ₽/мес. Справочно, в расчёте пока не участвуют. */
+  travel_compensation: number | null;
+  communication_compensation: number | null;
+  /** Ежемесячное удержание, ₽/мес (положительное). Справочно, в расчёте пока не участвует. */
+  deduction_amount: number | null;
   staff_units: number;
   time_accounting_mode: 'daily' | 'summarized';
   accounting_period_months: number | null;
@@ -54,6 +59,9 @@ export interface IAssignTermsInput {
   /** Не передано — NULL: условия пишутся новой строкой, и прежнее значение очищается. */
   bonusAmount?: number | null;
   housingCompensation?: number | null;
+  travelCompensation?: number | null;
+  communicationCompensation?: number | null;
+  deductionAmount?: number | null;
   staffUnits?: number;
   organizationId?: string | null;
   effectiveFrom: string;
@@ -77,7 +85,8 @@ const EXCLUSION_VIOLATION = '23P01';
 
 const TERMS_COLUMNS = `
   id, employee_id, organization_id, staff_category, calc_type,
-  monthly_salary, hourly_rate, bonus_amount, housing_compensation, staff_units,
+  monthly_salary, hourly_rate, bonus_amount, housing_compensation,
+  travel_compensation, communication_compensation, deduction_amount, staff_units,
   time_accounting_mode, accounting_period_months,
   effective_from, effective_to,
   change_reason, order_number, order_date, note,
@@ -94,6 +103,79 @@ export const getTermsHistory = async (employeeId: number): Promise<IPayrollTerms
        FROM payroll_compensation_terms
       WHERE employee_id = $1
       ORDER BY effective_from DESC, id DESC`,
+    [employeeId],
+  );
+
+/** Изменение оклада или ставки. Суммы — текстом: NUMERIC без потери точности. */
+export interface ISalaryChange {
+  effective_from: string;
+  /** null — действует по сей день. */
+  effective_to: string | null;
+  calc_type: PayrollCalcType;
+  /** Оклад (₽/мес) или часовая ставка (₽/ч). */
+  amount: string;
+  prev_calc_type: PayrollCalcType | null;
+  prev_amount: string | null;
+  /** Разница и процент — только при том же виде оплаты: оклад со ставкой не сравнить. */
+  diff: string | null;
+  diff_percent: string | null;
+  changed_by_name: string | null;
+  changed_at: string;
+}
+
+/**
+ * История оклада / ставки, новые сверху.
+ *
+ * Новая строка условий появляется и при смене одной премии, поэтому подряд идущие строки
+ * с тем же видом оплаты и суммой склеиваются в одно изменение (острова по флагу смены).
+ * Деньги считаются в SQL: NUMERIC приходит строкой, арифметика в JS запрещена.
+ */
+export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChange[]> =>
+  query<ISalaryChange>(
+    `WITH terms AS (
+       SELECT t.id, t.effective_from, t.effective_to, t.calc_type, t.created_by, t.created_at,
+              COALESCE(t.monthly_salary, t.hourly_rate) AS amount,
+              CASE
+                WHEN LAG(t.calc_type) OVER w = t.calc_type
+                 AND LAG(COALESCE(t.monthly_salary, t.hourly_rate)) OVER w
+                     = COALESCE(t.monthly_salary, t.hourly_rate)
+                THEN 0 ELSE 1
+              END AS is_change
+         FROM payroll_compensation_terms t
+        WHERE t.employee_id = $1
+       WINDOW w AS (ORDER BY t.effective_from, t.id)
+     ), grouped AS (
+       SELECT terms.*, SUM(is_change) OVER (ORDER BY effective_from, id) AS grp
+         FROM terms
+     ), periods AS (
+       SELECT MIN(effective_from) AS effective_from,
+              CASE WHEN bool_or(effective_to IS NULL) THEN NULL ELSE MAX(effective_to) END AS effective_to,
+              (array_agg(calc_type ORDER BY effective_from, id))[1] AS calc_type,
+              (array_agg(amount ORDER BY effective_from, id))[1] AS amount,
+              (array_agg(created_by ORDER BY effective_from, id))[1] AS created_by,
+              (array_agg(created_at ORDER BY effective_from, id))[1] AS created_at
+         FROM grouped
+        GROUP BY grp
+     ), compared AS (
+       SELECT periods.*,
+              LAG(calc_type) OVER o AS prev_calc_type,
+              LAG(amount) OVER o AS prev_amount
+         FROM periods
+       WINDOW o AS (ORDER BY effective_from)
+     )
+     SELECT c.effective_from, c.effective_to, c.calc_type,
+            c.amount::text AS amount,
+            c.prev_calc_type,
+            c.prev_amount::text AS prev_amount,
+            CASE WHEN c.prev_calc_type = c.calc_type
+                 THEN (c.amount - c.prev_amount)::text END AS diff,
+            CASE WHEN c.prev_calc_type = c.calc_type AND c.prev_amount > 0
+                 THEN ROUND((c.amount - c.prev_amount) * 100 / c.prev_amount, 1)::text END AS diff_percent,
+            up.full_name AS changed_by_name,
+            c.created_at AS changed_at
+       FROM compared c
+       LEFT JOIN user_profiles up ON up.id = c.created_by
+      ORDER BY c.effective_from DESC`,
     [employeeId],
   );
 
@@ -200,8 +282,10 @@ export const assignTerms = async (
          (employee_id, organization_id, staff_category, calc_type,
           monthly_salary, hourly_rate, staff_units,
           effective_from, change_reason, order_number, order_date, note, created_by,
-          bonus_amount, housing_compensation)
-       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 1.000), $8, $9, $10, $11, $12, $13, $14, $15)
+          bonus_amount, housing_compensation,
+          travel_compensation, communication_compensation, deduction_amount)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 1.000), $8, $9, $10, $11, $12, $13, $14, $15,
+               $16, $17, $18)
        RETURNING id`,
       [
         input.employeeId,
@@ -219,6 +303,9 @@ export const assignTerms = async (
         input.createdBy,
         input.bonusAmount ?? null,
         input.housingCompensation ?? null,
+        input.travelCompensation ?? null,
+        input.communicationCompensation ?? null,
+        input.deductionAmount ?? null,
       ],
     );
     return inserted.rows[0].id;

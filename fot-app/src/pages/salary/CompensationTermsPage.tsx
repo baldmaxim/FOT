@@ -12,12 +12,14 @@ import {
   type PayrollSortDir,
   type PayrollSortKey,
 } from '../../services/payrollService';
+import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { moscowTodayIso } from '../../utils/moscowDate';
 import {
   countActivePayrollColumnFilters,
   serializePayrollColumnFilters,
@@ -25,6 +27,7 @@ import {
 } from '../../utils/payrollColumnFilters';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
+import { EmployeePayrollModal } from '../../components/salary/EmployeePayrollModal';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
@@ -41,23 +44,15 @@ const COLUMN_LABELS: Record<PayrollSortKey, string> = {
   housing: 'Компенсация проживания',
 };
 
-/**
- * Сегодня по часам браузера. toISOString() дал бы дату UTC: после местной полуночи
- * (до 03:00 по Москве) выборка шла бы на вчерашний день.
- */
-const today = (): string => {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
-};
-
 export const CompensationTermsPage: FC = () => {
   const { success, error: showError, warning } = useToast();
+  const { canEditPage } = useAuth();
   const queryClient = useQueryClient();
+  const canEdit = canEditPage('/salary/terms');
 
-  // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня».
-  const [date] = useState(today);
+  // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня» по Москве,
+  // как на сервере. Дата браузера в другом поясе давала бы соседний день.
+  const [date] = useState(moscowTodayIso);
   const [departmentId, setDepartmentId] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<PayrollSortKey>('name');
@@ -65,7 +60,9 @@ export const CompensationTermsPage: FC = () => {
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
   const [openFilter, setOpenFilter] = useState<{ column: PayrollSortKey; anchor: HTMLElement } | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [modalFor, setModalFor] = useState<IPayrollTermsRow[] | null>(null);
+  // Карточка одного сотрудника и массовое назначение — разные окна.
+  const [cardRow, setCardRow] = useState<IPayrollTermsRow | null>(null);
+  const [bulkRows, setBulkRows] = useState<IPayrollTermsRow[] | null>(null);
 
   // Поиск идёт на сервере по всему штату, а не по загруженным порциям.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -184,9 +181,11 @@ export const CompensationTermsPage: FC = () => {
         : payrollService.assignBulk(ids, rest);
     },
     onSuccess: (result) => {
+      // Префикс сбрасывает и список, и историю зарплаты в карточке.
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
       setSelected(new Set());
-      setModalFor(null);
+      setCardRow(null);
+      setBulkRows(null);
       if (result.skipped.length > 0) {
         warning(`Применено: ${result.applied.length}. Отклонено: ${result.skipped.length} — ${result.skipped[0].message}`);
       } else {
@@ -205,16 +204,24 @@ export const CompensationTermsPage: FC = () => {
     });
   }, []);
 
-  const allLoadedSelected = rows.length > 0 && rows.every(row => selected.has(row.employee_id));
-  const toggleAll = useCallback(() => {
-    setSelected(allLoadedSelected ? new Set() : new Set(rows.map(row => row.employee_id)));
-  }, [allLoadedSelected, rows]);
+  /** Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер). */
+  const isRowEditable = useCallback(
+    (row: IPayrollTermsRow) => canEdit && row.can_edit !== false,
+    [canEdit],
+  );
 
-  const openOne = useCallback((row: IPayrollTermsRow) => setModalFor([row]), []);
+  // Выделяются только редактируемые строки: назначить условия остальным всё равно нельзя.
+  const editableRows = useMemo(() => rows.filter(isRowEditable), [rows, isRowEditable]);
+  const allLoadedSelected = editableRows.length > 0 && editableRows.every(row => selected.has(row.employee_id));
+  const toggleAll = useCallback(() => {
+    setSelected(allLoadedSelected ? new Set() : new Set(editableRows.map(row => row.employee_id)));
+  }, [allLoadedSelected, editableRows]);
+
+  const openOne = useCallback((row: IPayrollTermsRow) => setCardRow(row), []);
 
   const openBulk = () => {
-    const chosen = rows.filter(row => selected.has(row.employee_id));
-    if (chosen.length > 0) setModalFor(chosen);
+    const chosen = editableRows.filter(row => selected.has(row.employee_id));
+    if (chosen.length > 0) setBulkRows(chosen);
   };
 
   const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
@@ -245,7 +252,7 @@ export const CompensationTermsPage: FC = () => {
           <button
             type="button"
             className={styles.primaryButton}
-            disabled={selected.size === 0}
+            disabled={!canEdit || selected.size === 0}
             onClick={openBulk}
           >
             Назначить выделенным
@@ -275,6 +282,7 @@ export const CompensationTermsPage: FC = () => {
             rows={rows}
             selected={selected}
             allSelected={allLoadedSelected}
+            canEdit={canEdit}
             onToggleOne={toggleOne}
             onToggleAll={toggleAll}
             onEdit={openOne}
@@ -316,15 +324,27 @@ export const CompensationTermsPage: FC = () => {
         />
       )}
 
-      {modalFor && (
-        <AssignTermsModal
-          rows={modalFor}
+      {cardRow && (
+        <EmployeePayrollModal
+          row={cardRow}
+          canEdit={isRowEditable(cardRow)}
           defaultDate={date}
           isSaving={assignMutation.isPending}
-          onClose={() => setModalFor(null)}
+          onClose={() => setCardRow(null)}
+          onSubmit={(payload) => assignMutation.mutate({ ...payload, ids: [cardRow.employee_id] })}
+          resolveDefaultCalcType={defaultCalcTypeFor}
+        />
+      )}
+
+      {bulkRows && (
+        <AssignTermsModal
+          count={bulkRows.length}
+          defaultDate={date}
+          isSaving={assignMutation.isPending}
+          onClose={() => setBulkRows(null)}
           onSubmit={(payload) => assignMutation.mutate({
             ...payload,
-            ids: modalFor.map(row => row.employee_id),
+            ids: bulkRows.map(row => row.employee_id),
           })}
           resolveDefaultCalcType={defaultCalcTypeFor}
         />

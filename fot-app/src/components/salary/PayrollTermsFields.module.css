@@ -1,0 +1,50 @@
+/* Разделы формы условий оплаты: общие для карточки сотрудника и массового назначения. */
+.sections { display: flex; flex-direction: column; gap: 12px; }
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.sectionTitle { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.label { font-size: 12px; color: var(--text-secondary); }
+
+.input {
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 44px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.input:disabled { opacity: 0.7; cursor: default; }
+
+.radioGroup { display: flex; flex-direction: column; gap: 2px; border: none; margin: 0; padding: 0; min-width: 0; }
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+  min-height: 44px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.radioGroup:disabled .radio { opacity: 0.7; }
+
+.grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+
+@media (min-width: 480px) {
+  .grid { grid-template-columns: 1fr 1fr; }
+}
