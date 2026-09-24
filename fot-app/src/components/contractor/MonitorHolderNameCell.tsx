@@ -72,21 +72,20 @@ export const MonitorHolderNameCell: FC<IMonitorHolderNameCellProps> = ({ row, ca
     }
   };
 
-  const mismatchTitle = 'ФИО в «Управлении кадрами» — копия Sigur, обновляется синхронизацией раз в 2 часа';
   const mismatchChip = referenceName && (
     editable ? (
       <button
         type="button"
         className={styles.nameMismatch}
         onClick={() => (editing ? setValue(referenceName) : startEdit(referenceName))}
-        title={`${mismatchTitle}. Нажмите, чтобы подставить`}
+        title="Нажмите, чтобы подставить ФИО из «Управления кадрами»"
         disabled={mutation.isPending}
       >
         <AlertTriangle size={14} className={styles.nameMismatchIcon} aria-hidden />
         В кадрах: {referenceName}
       </button>
     ) : (
-      <span className={styles.nameMismatch} title={mismatchTitle}>
+      <span className={styles.nameMismatch} title="ФИО в «Управлении кадрами»">
         <AlertTriangle size={14} className={styles.nameMismatchIcon} aria-hidden />
         В кадрах: {referenceName}
       </span>
