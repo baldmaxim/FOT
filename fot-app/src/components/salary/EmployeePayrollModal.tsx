@@ -26,9 +26,9 @@ interface IEmployeePayrollModalProps {
 }
 
 /**
- * Карточка сотрудника в «Условиях оплаты»: слева форма (Оклад, Премиальная часть,
- * Компенсация), справа справка (Отпуск, История изменения зарплаты). Справка грузится
- * отдельно — её ошибки форму не блокируют.
+ * Карточка сотрудника в «Условиях оплаты»: в основной колонке форма (Оклад, Премиальная часть,
+ * Компенсация — на широком экране в одну строку) и История изменения зарплаты, в узкой боковой —
+ * Отпуск. Справка грузится отдельно — её ошибки форму не блокируют.
  */
 export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
   row,
@@ -71,15 +71,15 @@ export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
           </header>
 
           <div className={styles.body}>
-            <div className={styles.column}>
+            <div className={styles.mainColumn}>
               {!canEdit && (
                 <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
               )}
-              <PayrollTermsFields form={form} readOnly={!canEdit} />
-            </div>
-            <div className={styles.column}>
-              <EmployeeVacationSection employeeId={row.employee_id} />
+              <PayrollTermsFields form={form} readOnly={!canEdit} layout="row" />
               <SalaryHistorySection employeeId={row.employee_id} />
+            </div>
+            <div className={styles.sideColumn}>
+              <EmployeeVacationSection employeeId={row.employee_id} />
             </div>
           </div>
 

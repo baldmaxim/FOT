@@ -28,7 +28,7 @@ const formatSource = (period: IVacationPeriod): string => {
 };
 
 /**
- * Отпуск в карточке сотрудника: сколько отгулено в текущем году и история по табелю.
+ * Отпуск в карточке сотрудника: сколько использовано в текущем году и история по табелю.
  * Свой запрос и своя ошибка: сбой здесь не мешает править условия оплаты.
  */
 export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ employeeId }) => {
@@ -58,7 +58,7 @@ export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ emp
           <div className={styles.stats}>
             <div className={styles.stat}>
               <span className={styles.statValue}>{data.summary.used_days}</span>
-              <span className={styles.statLabel}>дн. отгулено в {data.summary.year}</span>
+              <span className={styles.statLabel}>дн. использовано в {data.summary.year}</span>
             </div>
             <div className={styles.stat}>
               <span className={styles.statValue}>{data.summary.planned_days}</span>

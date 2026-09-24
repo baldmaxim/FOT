@@ -48,3 +48,14 @@
 @media (min-width: 480px) {
   .grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Карточка сотрудника на широком экране: Оклад, Премиальная часть, Компенсация — в одну строку,
+   карточки одной высоты. Уже 1280px Компенсации (поля 2×2) не хватило бы ширины. */
+@media (min-width: 1280px) {
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.4fr);
+    align-items: stretch;
+    gap: 16px;
+  }
+}

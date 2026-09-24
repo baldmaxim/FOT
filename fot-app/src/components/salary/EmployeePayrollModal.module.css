@@ -1,6 +1,6 @@
 /*
  * Карточка сотрудника «Условия оплаты». Mobile-first: на телефоне — полный экран,
- * с 768px — 90vw × 90dvh (dvh: адрес-бар съедает vh). Скроллится только тело.
+ * с 768px — 95vw × 95dvh (dvh: адрес-бар съедает vh). Скроллится только тело.
  */
 .overlay {
   position: fixed;
@@ -67,7 +67,7 @@
   gap: 12px;
   align-content: start;
 }
-.column { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.mainColumn, .sideColumn { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 .readOnlyNote {
   margin: 0;
@@ -123,19 +123,23 @@
 @media (min-width: 768px) {
   .overlay { align-items: center; }
   .container {
-    width: 90vw;
-    height: 90dvh;
+    width: 95vw;
+    height: 95dvh;
     border: 1px solid var(--border);
     border-radius: 14px;
     box-shadow: var(--shadow-xl);
   }
   .header { padding: 14px 20px; }
   .body { padding: 16px 20px; gap: 16px; }
-  .column { gap: 16px; }
+  .mainColumn, .sideColumn { gap: 16px; }
   .footer { padding: 12px 20px; }
   .dateField { flex: 0 1 220px; }
 }
 
+/* Отпуск — узкая боковая колонка: на 1800px ~440px вместо половины окна. */
 @media (min-width: 1024px) {
-  .body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .body {
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 28vw, 440px);
+    align-items: start;
+  }
 }

@@ -13,6 +13,8 @@ interface IPayrollTermsFieldsProps {
   form: PayrollTermsFormApi;
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
+  /** row — на широком экране разделы в одну строку (карточка сотрудника); stack — друг под другом. */
+  layout?: 'stack' | 'row';
 }
 
 const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> = [
@@ -23,12 +25,12 @@ const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: stri
 ];
 
 /** Разделы формы условий оплаты: Оклад, Премиальная часть, Компенсация. */
-export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({ form, readOnly = false }) => {
+export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({ form, readOnly = false, layout = 'stack' }) => {
   // Имя группы радиокнопок уникально на экземпляр формы.
   const radioName = useId();
 
   return (
-    <div className={styles.sections}>
+    <div className={layout === 'row' ? `${styles.sections} ${styles.row}` : styles.sections}>
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Оклад</h3>
         <label className={styles.field}>

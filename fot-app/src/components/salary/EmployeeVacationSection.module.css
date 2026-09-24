@@ -1,5 +1,7 @@
 /* Раздел «Отпуск» карточки сотрудника. */
 .section {
+  /* Ширина колонки зависит от окна (узкая боковая / телефон) — плитки подстраиваются под неё. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -45,7 +47,14 @@
   min-width: 0;
 }
 .statValue { font-size: 20px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.statLabel { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.statLabel { font-size: 12px; color: var(--text-secondary); overflow-wrap: break-word; }
+
+/* Узкая колонка: три плитки в ряд рвали подписи посреди слова — ставим их строками «34 дн. …». */
+@container (max-width: 380px) {
+  .stats { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .stat { flex-direction: row; align-items: baseline; gap: 8px; padding: 6px 10px; }
+  .statValue { font-size: 18px; min-width: 2ch; }
+}
 
 .hint { margin: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 

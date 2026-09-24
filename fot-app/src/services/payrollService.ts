@@ -277,7 +277,7 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Сколько отгулено в текущем году и история отпусков по табелю. */
+  /** Сколько дней отпуска использовано в текущем году и история отпусков по табелю. */
   getVacation: async (employeeId: number, signal?: AbortSignal): Promise<IEmployeeVacation> => {
     const res = await apiClient.get<IApiResponse<IEmployeeVacation>>(
       `/payroll/vacation/employee/${employeeId}`,
