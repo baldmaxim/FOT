@@ -8,6 +8,12 @@ export const formatPayrollMoney = (value: string | number | null | undefined): s
   return num.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+/** Целые рубли для итогов: 742300.45 → «742 300»; не число — null. */
+export const formatPayrollRubles = (value: number | null | undefined): string | null => {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return Math.round(value).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+};
+
 const EMPTY_VALUE_LABELS: Record<PayrollValueFilterColumn, string> = {
   department: 'Без подразделения',
   position: 'Без должности',

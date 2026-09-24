@@ -36,8 +36,9 @@
 /*
  * Ширины — под самое длинное слово заголовка (Inter 600, 12px, заглавные, letter-spacing .04em,
  * замер в Chrome): «ПОДРАЗДЕЛЕНИЕ» 117px, «КОМПЕНСАЦИЯ» 102px, «ПРЕМИАЛЬНАЯ» 101px,
- * «ПРОЖИВАНИЯ» 94px, «НАЧИСЛЕНИЯ» 91px — плюс стрелка и воронка (34px, на смартфоне 46px)
- * и паддинги 24px. Уже — слово рвалось посередине («ПОДРАЗДЕЛЕНИ / Е»).
+ * «ПРОЖИВАНИЯ» 94px — плюс стрелка и воронка (34px, на смартфоне 46px) и паддинги 24px.
+ * Уже — слово рвалось посередине («ПОДРАЗДЕЛЕНИ / Е»). «Начисления» — по содержимому ячейки:
+ * итог до «9 999 999 ₽» (~75px), зазор 10px, мини-график 46px и паддинги 24px.
  */
 .colCheck    { width: 44px; }
 .colNum      { width: 60px; }
@@ -48,7 +49,7 @@
 .colSalary   { width: 130px; }
 .colBonus    { width: 180px; }
 .colHousing  { width: 180px; }
-.colAccruals { width: 140px; }
+.colAccruals { width: 170px; }
 
 .table thead th {
   position: sticky;
@@ -173,6 +174,21 @@
 .clamp3 { -webkit-line-clamp: 3; line-clamp: 3; }
 
 .cellOneLine { white-space: nowrap; }
+
+/* Кнопка ячейки держит свой отступ 4px 8px — итог стоит на тех же 12px от края */
+.table td.cellAccruals { padding: 2px 4px; }
+
+/* Период под заголовком «Начисления»: обычный регистр, одной строкой */
+.headPeriod {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
 
 .cellNumber {
   white-space: nowrap;

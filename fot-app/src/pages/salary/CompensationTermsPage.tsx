@@ -22,6 +22,7 @@ import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartmen
 import { shouldLoadMore } from '../../utils/staffLoadMore';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { moscowTodayIso } from '../../utils/moscowDate';
+import { payrollAccrualMonths } from '../../utils/payrollAccruals';
 import {
   countActivePayrollColumnFilters,
   isPayrollColumnFilterActive,
@@ -32,6 +33,7 @@ import type { PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
 import { EmployeePayrollModal } from '../../components/salary/EmployeePayrollModal';
+import { PayrollAccrualsPopover } from '../../components/salary/PayrollAccrualsPopover';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
@@ -58,6 +60,8 @@ export const CompensationTermsPage: FC = () => {
   // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня» по Москве,
   // как на сервере. Дата браузера в другом поясе давала бы соседний день.
   const [date] = useState(moscowTodayIso);
+  // Начисления — за закрытые месяцы перед месяцем этой даты.
+  const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [departmentId, setDepartmentId] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<PayrollSortKey>('name');
@@ -191,6 +195,17 @@ export const CompensationTermsPage: FC = () => {
   const closeColumnsMenu = () => {
     columnsAnchor?.focus();
     setColumnsAnchor(null);
+  };
+
+  // Суммы по месяцам из ячейки «Начисления». Закрытие возвращает фокус на ячейку, если строка
+  // ещё отрисована (виртуализация могла её убрать).
+  const [accrualsFor, setAccrualsFor] = useState<{ row: IPayrollTermsRow; anchor: HTMLElement } | null>(null);
+  const openAccruals = useCallback((row: IPayrollTermsRow, anchor: HTMLElement) => {
+    setAccrualsFor({ row, anchor });
+  }, []);
+  const closeAccruals = () => {
+    if (accrualsFor?.anchor.isConnected) accrualsFor.anchor.focus();
+    setAccrualsFor(null);
   };
 
   const resetColumnFilters = () => {
@@ -344,6 +359,8 @@ export const CompensationTermsPage: FC = () => {
             onSort={handleSort}
             columnFilters={columnFilters}
             onOpenFilter={handleOpenFilter}
+            accrualMonths={accrualMonths}
+            onOpenAccruals={openAccruals}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -382,6 +399,15 @@ export const CompensationTermsPage: FC = () => {
           onToggle={setColumnVisible}
           onShowAll={showAll}
           onClose={closeColumnsMenu}
+        />
+      )}
+
+      {accrualsFor && (
+        <PayrollAccrualsPopover
+          row={accrualsFor.row}
+          months={accrualMonths}
+          anchor={accrualsFor.anchor}
+          onClose={closeAccruals}
         />
       )}
 

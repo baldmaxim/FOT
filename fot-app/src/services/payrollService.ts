@@ -20,6 +20,14 @@ export const CALC_TYPE_LABELS: Record<PayrollCalcType, string> = {
 export const defaultCalcTypeFor = (category: StaffCategory): PayrollCalcType =>
   (category === 'office' ? 'salary' : 'hourly');
 
+/** Начислено сотруднику за месяц. */
+export interface IPayrollMonthlyAccrual {
+  /** YYYY-MM. */
+  month: string;
+  /** Начислено всего за месяц, ₽ (NUMERIC может прийти строкой); null — нет данных. */
+  amount: string | number | null;
+}
+
 export interface IPayrollTermsRow {
   employee_id: number;
   full_name: string | null;
@@ -47,6 +55,11 @@ export interface IPayrollTermsRow {
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
+  /**
+   * Начисления по месяцам (придут из 1С ЗУП). Сервер пока не отдаёт — источник подключается
+   * отдельно; без поля ячейка «Начисления» показывает «—».
+   */
+  accruals?: IPayrollMonthlyAccrual[] | null;
   /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
