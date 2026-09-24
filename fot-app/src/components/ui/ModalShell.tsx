@@ -22,6 +22,11 @@ interface IModalShellProps {
   containerStyle?: CSSProperties;
   /** Закрывать по Escape. По умолчанию true. */
   closeOnEscape?: boolean;
+  /**
+   * Вызывается перед любым закрытием (крестик/Отмена через requestClose, Escape, клик по фону).
+   * false — окно остаётся открытым: например, пользователь отказался терять несохранённые правки.
+   */
+  onBeforeClose?: () => boolean;
   'aria-label'?: string;
   'aria-labelledby'?: string;
   children: ReactNode | ((api: IModalShellApi) => ReactNode);
@@ -41,6 +46,7 @@ export const ModalShell: FC<IModalShellProps> = ({
   overlayStyle,
   containerStyle,
   closeOnEscape = true,
+  onBeforeClose,
   children,
   ...aria
 }) => {
@@ -52,7 +58,12 @@ export const ModalShell: FC<IModalShellProps> = ({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const requestClose = useCallback(() => setPhase('closing'), []);
+  const requestClose = useCallback(() => {
+    // Уже закрывается — повторный Escape не должен снова спрашивать подтверждение.
+    if (phase === 'closing') return;
+    if (onBeforeClose && !onBeforeClose()) return;
+    setPhase('closing');
+  }, [phase, onBeforeClose]);
 
   // Выход: проигрываем закрытие, затем зовём onClose (родитель размонтирует).
   useEffect(() => {

@@ -6,39 +6,16 @@ import type {
   PayrollCalcType,
   StaffCategory,
 } from '../services/payrollService';
-
-/** Необязательные суммы условий, ₽/мес: премия, компенсации и удержание. */
-export type PayrollMoneyField = 'bonus' | 'housing' | 'travel' | 'communication' | 'deduction';
-
-export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing', 'travel', 'communication', 'deduction'];
-
-/** NUMERIC приходит строкой с хвостом нулей: «450.0000» → «450», «175000.50» → «175000.5». */
-const toInputValue = (value: string | number | null | undefined): string => {
-  if (value === null || value === undefined) return '';
-  const text = String(value);
-  return text.includes('.') ? text.replace(/\.?0+$/, '') : text;
-};
-
-/** Необязательная сумма: пусто → undefined, некорректно или < 0 → null. */
-const parseOptionalMoney = (raw: string): number | undefined | null => {
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number(trimmed.replace(',', '.'));
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-};
-
-/** Значения строки списка по полям формы; без условий — пусто. */
-const initialMoney = (row: IPayrollTermsRow | null): Record<PayrollMoneyField, string> => {
-  const hasTerms = Boolean(row?.terms_id);
-  const pick = (value: string | number | null | undefined) => (hasTerms ? toInputValue(value) : '');
-  return {
-    bonus: pick(row?.bonus_amount),
-    housing: pick(row?.housing_compensation),
-    travel: pick(row?.travel_compensation),
-    communication: pick(row?.communication_compensation),
-    deduction: pick(row?.deduction_amount),
-  };
-};
+import {
+  firstInvalidField,
+  initialPayrollTermsValues,
+  isSamePayrollTermsValues,
+  validatePayrollTerms,
+  type IPayrollTermsFormValues,
+  type PayrollMoneyField,
+  type PayrollTermsFieldErrors,
+  type PayrollTermsFieldKey,
+} from '../utils/payrollTermsForm';
 
 interface IUsePayrollTermsFormArgs {
   /** Строка одного сотрудника — предзаполнение; null — массовое назначение. */
@@ -48,77 +25,69 @@ interface IUsePayrollTermsFormArgs {
 }
 
 /**
- * Состояние и проверка формы условий оплаты — общие для карточки сотрудника
- * и массового назначения. Суммы уходят числами; деньги дальше считает сервер.
+ * Состояние формы условий оплаты — общее для карточки сотрудника и массового назначения.
+ * Проверка и состав запроса — в utils/payrollTermsForm (покрыты тестом); деньги дальше
+ * считает сервер. Ошибки хранятся по полям и снимаются при правке своего поля.
  */
 export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }: IUsePayrollTermsFormArgs) => {
-  const [category, setCategory] = useState<StaffCategory>(row?.staff_category ?? 'worker');
-  const [calcType, setCalcType] = useState<PayrollCalcType>(
-    row?.calc_type ?? resolveDefaultCalcType(row?.staff_category ?? 'worker'),
+  const [initial] = useState<IPayrollTermsFormValues>(
+    () => initialPayrollTermsValues(row, defaultDate, resolveDefaultCalcType),
   );
-  const [amount, setAmount] = useState<string>(() => {
-    if (!row?.terms_id) return '';
-    return toInputValue(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate);
-  });
-  const [money, setMoney] = useState<Record<PayrollMoneyField, string>>(() => initialMoney(row));
-  const [effectiveFrom, setEffectiveFrom] = useState(defaultDate);
-  const [error, setError] = useState<string | null>(null);
+  const [values, setValues] = useState<IPayrollTermsFormValues>(initial);
+  const [fieldErrors, setFieldErrors] = useState<PayrollTermsFieldErrors>({});
+
+  const clearError = (key: PayrollTermsFieldKey) => {
+    setFieldErrors(prev => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
 
   /**
    * Смена категории подставляет вид оплаты по умолчанию (Офис — оклад, стройка — часы),
    * но не запрещает выбрать другой: ИТР на окладе и офисный на часах — рабочие случаи.
+   * Введённая сумма при смене вида оплаты сохраняется.
    */
   const changeCategory = (next: StaffCategory) => {
-    setCategory(next);
-    setCalcType(resolveDefaultCalcType(next));
+    setValues(prev => ({ ...prev, category: next, calcType: resolveDefaultCalcType(next) }));
+  };
+
+  const setCalcType = (next: PayrollCalcType) => {
+    setValues(prev => ({ ...prev, calcType: next }));
+    clearError('amount');
+  };
+
+  const setAmount = (value: string) => {
+    setValues(prev => ({ ...prev, amount: value }));
+    clearError('amount');
   };
 
   const changeMoney = (field: PayrollMoneyField, value: string) => {
-    setMoney(prev => ({ ...prev, [field]: value }));
+    setValues(prev => ({ ...prev, money: { ...prev.money, [field]: value } }));
+    clearError(field);
   };
 
-  /** Проверяет форму. Ошибку показывает сама и возвращает null. */
-  const buildPayload = (): IAssignTermsPayload | null => {
-    const parsed = Number(amount.replace(',', '.'));
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setError(calcType === 'salary' ? 'Укажите оклад' : 'Укажите часовую ставку');
-      return null;
-    }
-    const optional: Partial<Record<PayrollMoneyField, number>> = {};
-    for (const field of PAYROLL_MONEY_FIELDS) {
-      const value = parseOptionalMoney(money[field]);
-      if (value === null) {
-        setError('Премия, компенсации и удержание — число не меньше нуля');
-        return null;
-      }
-      if (value !== undefined) optional[field] = value;
-    }
-    if (!effectiveFrom) {
-      setError('Укажите дату «Действует с»');
-      return null;
-    }
-    setError(null);
-    return {
-      staff_category: category,
-      calc_type: calcType,
-      monthly_salary: calcType === 'salary' ? parsed : undefined,
-      hourly_rate: calcType === 'hourly' ? parsed : undefined,
-      bonus_amount: optional.bonus,
-      housing_compensation: optional.housing,
-      travel_compensation: optional.travel,
-      communication_compensation: optional.communication,
-      deduction_amount: optional.deduction,
-      effective_from: effectiveFrom,
-    };
+  const setEffectiveFrom = (value: string) => {
+    setValues(prev => ({ ...prev, effectiveFrom: value }));
+    clearError('effectiveFrom');
+  };
+
+  /** Проверяет форму: запрос сохранения или первое поле с ошибкой (для фокуса). */
+  const buildPayload = (): { payload: IAssignTermsPayload | null; firstInvalid: PayrollTermsFieldKey | null } => {
+    const result = validatePayrollTerms(values);
+    setFieldErrors(result.errors ?? {});
+    return result.payload
+      ? { payload: result.payload, firstInvalid: null }
+      : { payload: null, firstInvalid: firstInvalidField(result.errors) };
   };
 
   return {
-    category,
-    calcType,
-    amount,
-    money,
-    effectiveFrom,
-    error,
+    ...values,
+    fieldErrors,
+    /** Есть ли несохранённые изменения относительно открытия окна. */
+    isDirty: !isSamePayrollTermsValues(values, initial),
     changeCategory,
     setCalcType,
     setAmount,

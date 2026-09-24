@@ -1,0 +1,141 @@
+/*
+ * Окна раздела «Зарплата → Условия оплаты» (карточка сотрудника и массовое назначение).
+ * Ширина ~1000px, но не шире экрана; высота по содержимому, не больше calc(100dvh - 48px).
+ * Шапка и подвал всегда на месте, прокручивается только тело.
+ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.container {
+  --payroll-control-h: 44px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(1000px, 100%);
+  /* 100% — высота области оверлея за вычетом отступов и safe-area: так окно не залезет под «чёлку». */
+  max-height: min(calc(100dvh - 48px), 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+.form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.headerText { flex: 1; min-width: 0; }
+.title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
+.name { margin: 4px 0 0; font-size: 15px; font-weight: 500; line-height: 1.35; color: var(--text-primary); overflow-wrap: anywhere; }
+.meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.closeButton {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.closeButton:hover { background: var(--surface-hover); color: var(--text-primary); }
+.closeButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 20px 20px;
+}
+
+.readOnlyNote {
+  margin: 0 0 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Справка под формой: раскрываемые блоки через тонкие разделители. */
+.reference { margin-top: 20px; border-top: 1px solid var(--border-subtle); }
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.saveError { flex: 1 1 240px; margin: 0; font-size: 13px; color: var(--error); overflow-wrap: anywhere; }
+
+.actions { display: flex; gap: 8px; margin-left: auto; }
+
+.primaryButton,
+.secondaryButton {
+  height: var(--payroll-control-h);
+  padding: 0 18px;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--transition), border-color var(--transition);
+}
+.primaryButton { border: 1px solid var(--primary); background: var(--primary); color: #fff; }
+.primaryButton:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+.primaryButton:disabled { opacity: 0.6; cursor: default; }
+.secondaryButton { border: 1px solid var(--border); background: transparent; color: var(--text-primary); }
+.secondaryButton:hover { background: var(--surface-hover); }
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 768px) {
+  .container { --payroll-control-h: 40px; }
+  .closeButton { width: 40px; height: 40px; }
+}
+
+/* Низкий экран (крупный масштаб, альбомный телефон): шапка и подвал компактнее — больше места полям. */
+@media (max-height: 560px) {
+  .header { padding: 8px 12px 8px 16px; }
+  .title { font-size: 16px; }
+  .name { margin-top: 2px; font-size: 14px; }
+  .body { padding: 12px 16px 16px; }
+  .footer { padding: 8px 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryButton, .secondaryButton { transition: none; }
+}

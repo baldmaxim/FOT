@@ -192,8 +192,16 @@ export const CompensationTermsPage: FC = () => {
         success(`Условия оплаты назначены: ${result.applied.length}`);
       }
     },
-    onError: (err: Error) => showError(err.message || 'Не удалось назначить условия'),
+    // Ошибку сохранения показывает само окно (ввод не теряется). Тост — только если окно
+    // успели закрыть, пока шёл запрос.
+    onError: (err: Error) => {
+      if (!cardRow && !bulkRows) showError(err.message || 'Не удалось назначить условия');
+    },
   });
+  const { reset: resetAssign } = assignMutation;
+  const saveError = assignMutation.isError
+    ? (assignMutation.error?.message || 'Не удалось назначить условия')
+    : null;
 
   const toggleOne = useCallback((employeeId: number) => {
     setSelected(prev => {
@@ -217,11 +225,17 @@ export const CompensationTermsPage: FC = () => {
     setSelected(allLoadedSelected ? new Set() : new Set(editableRows.map(row => row.employee_id)));
   }, [allLoadedSelected, editableRows]);
 
-  const openOne = useCallback((row: IPayrollTermsRow) => setCardRow(row), []);
+  // Ошибка прошлого сохранения не должна всплыть в новом окне.
+  const openOne = useCallback((row: IPayrollTermsRow) => {
+    resetAssign();
+    setCardRow(row);
+  }, [resetAssign]);
 
   const openBulk = () => {
     const chosen = editableRows.filter(row => selected.has(row.employee_id));
-    if (chosen.length > 0) setBulkRows(chosen);
+    if (chosen.length === 0) return;
+    resetAssign();
+    setBulkRows(chosen);
   };
 
   const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
@@ -330,6 +344,7 @@ export const CompensationTermsPage: FC = () => {
           canEdit={isRowEditable(cardRow)}
           defaultDate={date}
           isSaving={assignMutation.isPending}
+          saveError={saveError}
           onClose={() => setCardRow(null)}
           onSubmit={(payload) => assignMutation.mutate({ ...payload, ids: [cardRow.employee_id] })}
           resolveDefaultCalcType={defaultCalcTypeFor}
@@ -341,6 +356,7 @@ export const CompensationTermsPage: FC = () => {
           count={bulkRows.length}
           defaultDate={date}
           isSaving={assignMutation.isPending}
+          saveError={saveError}
           onClose={() => setBulkRows(null)}
           onSubmit={(payload) => assignMutation.mutate({
             ...payload,

@@ -1,4 +1,5 @@
 import { useId, type FC, type FormEvent } from 'react';
+import { X } from 'lucide-react';
 
 import type {
   IAssignTermsPayload,
@@ -6,68 +7,81 @@ import type {
   StaffCategory,
 } from '../../services/payrollService';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
+import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { ModalShell } from '../ui/ModalShell';
 import { PayrollTermsFields } from './PayrollTermsFields';
-import styles from './AssignTermsModal.module.css';
+import styles from './PayrollModal.module.css';
 
 interface IAssignTermsModalProps {
   /** Сколько сотрудников получат условия с общей датой. */
   count: number;
   defaultDate: string;
   isSaving: boolean;
+  /** Ошибка сохранения с сервера: окно остаётся открытым, ввод не теряется. */
+  saveError: string | null;
   onClose: () => void;
   onSubmit: (payload: IAssignTermsPayload) => void;
   resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
 }
 
+const DISCARD_QUESTION = 'Есть несохранённые изменения. Закрыть без сохранения?';
+
 /**
  * Массовое назначение условий выделенным сотрудникам: та же форма, что в карточке,
- * без отпуска и истории (они у каждого свои). Дата и кнопки закреплены внизу.
+ * без справки (история и отпуска у каждого свои).
  */
 export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   count,
   defaultDate,
   isSaving,
+  saveError,
   onClose,
   onSubmit,
   resolveDefaultCalcType,
 }) => {
   const titleId = useId();
+  const idPrefix = useId();
   const form = usePayrollTermsForm({ row: null, defaultDate, resolveDefaultCalcType });
+
+  const confirmDiscard = () => !form.isDirty || window.confirm(DISCARD_QUESTION);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const payload = form.buildPayload();
-    if (payload) onSubmit(payload);
+    if (isSaving) return;
+    const { payload, firstInvalid } = form.buildPayload();
+    if (payload) {
+      onSubmit(payload);
+      return;
+    }
+    if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
   };
 
   return (
     <ModalShell
       onClose={onClose}
+      onBeforeClose={confirmDiscard}
       overlayClassName={styles.overlay}
-      containerClassName={styles.modal}
+      containerClassName={styles.container}
       aria-labelledby={titleId}
     >
       {({ requestClose }) => (
         <form className={styles.form} onSubmit={handleSubmit} noValidate>
-          <h2 id={titleId} className={styles.title}>Условия оплаты: {count} сотрудников</h2>
+          <header className={styles.header}>
+            <div className={styles.headerText}>
+              <h2 id={titleId} className={styles.title}>Условия оплаты</h2>
+              <p className={styles.meta}>Назначение выделенным сотрудникам: {count}</p>
+            </div>
+            <button type="button" className={styles.closeButton} onClick={requestClose} aria-label="Закрыть">
+              <X size={20} aria-hidden="true" />
+            </button>
+          </header>
 
           <div className={styles.body}>
-            <PayrollTermsFields form={form} />
+            <PayrollTermsFields form={form} idPrefix={idPrefix} autoFocus />
           </div>
 
-          <div className={styles.footer}>
-            <label className={styles.dateField}>
-              <span className={styles.label}>Действует с</span>
-              <input
-                type="date"
-                className={styles.input}
-                value={form.effectiveFrom}
-                onChange={event => form.setEffectiveFrom(event.target.value)}
-                required
-              />
-            </label>
-            {form.error && <p className={styles.error}>{form.error}</p>}
+          <footer className={styles.footer}>
+            {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
             <div className={styles.actions}>
               <button type="button" className={styles.secondaryButton} onClick={requestClose}>
                 Отмена
@@ -76,7 +90,7 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
                 {isSaving ? 'Сохранение…' : 'Сохранить'}
               </button>
             </div>
-          </div>
+          </footer>
         </form>
       )}
     </ModalShell>

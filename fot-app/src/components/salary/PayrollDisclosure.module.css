@@ -1,0 +1,67 @@
+/*
+ * Справка в карточке «Условия оплаты»: раскрываемые блоки (нативные details/summary —
+ * клавиатура и свёрнутое состояние по умолчанию), тонкие разделители вместо карточек.
+ */
+.disclosure { border-bottom: 1px solid var(--border-subtle); }
+
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-height: 44px;
+  padding: 8px 0;
+  list-style: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.summary::-webkit-details-marker { display: none; }
+.summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+.summaryHead { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.chevron { flex-shrink: 0; color: var(--text-tertiary); transition: transform var(--transition); }
+.disclosure[open] .chevron { transform: rotate(90deg); }
+
+.summaryTitle { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.summaryMeta { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.summaryMetaError { color: var(--error); }
+
+.content { padding: 0 0 12px 22px; }
+
+.state { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.hint { margin: 0 0 8px; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.stateError { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--error); }
+.retryButton {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.retryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.list { list-style: none; margin: 0; padding: 0; }
+.item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border-subtle); }
+.item:first-child { border-top: none; padding-top: 0; }
+
+.itemHead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+.itemPrimary { font-size: 14px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.itemSecondary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.itemMeta { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.amounts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-variant-numeric: tabular-nums; }
+.prevAmount { font-size: 14px; color: var(--text-secondary); }
+.amount { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.deltaUp, .deltaDown { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.deltaUp { color: var(--success); }
+.deltaDown { color: var(--error); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron { transition: none; }
+}

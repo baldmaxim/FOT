@@ -1,61 +1,111 @@
-/* Разделы формы условий оплаты: общие для карточки сотрудника и массового назначения. */
-.sections { display: flex; flex-direction: column; gap: 12px; }
+/*
+ * Форма условий оплаты: секции через тонкий разделитель, без карточек.
+ * Две колонки, в узком окне (и при крупном масштабе) — одна: container query по ширине формы.
+ * Высота контролов — --payroll-control-h от модалки (44px на телефоне, 40px с 768px).
+ */
+.form { container-type: inline-size; display: flex; flex-direction: column; }
 
-.section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  min-width: 0;
+.section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.section + .section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+
+.sectionTitle { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+
+@container (max-width: 560px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
 }
-
-.sectionTitle { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); }
 
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.label { font-size: 12px; color: var(--text-secondary); }
+.label { padding: 0; font-size: 13px; color: var(--text-secondary); }
 
-.input {
-  font-size: 16px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  min-height: 44px;
-  width: 100%;
+.control {
   box-sizing: border-box;
+  width: 100%;
+  height: var(--payroll-control-h, 44px);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  transition: border-color var(--transition), box-shadow var(--transition);
 }
-.input:disabled { opacity: 0.7; cursor: default; }
+.control:hover:not(:disabled) { border-color: var(--text-tertiary); }
+/* focus-visible: кольцо у клавиатуры и текстовых полей, но не у списка, открытого мышью. */
+.control:focus { outline: none; }
+.control:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.control[aria-invalid='true'] { border-color: var(--error); }
 
-.radioGroup { display: flex; flex-direction: column; gap: 2px; border: none; margin: 0; padding: 0; min-width: 0; }
-.radio {
+/* Заблокированное поле отличается от редактируемого: серый фон без рамки, приглушённый текст. */
+.control:disabled {
+  background: var(--bg-secondary);
+  border-color: transparent;
+  color: var(--text-secondary);
+  -webkit-text-fill-color: var(--text-secondary);
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.error { margin: 0; font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
+
+/* Вид оплаты — компактная сегментная радиогруппа на нативных radio (стрелки, Tab, фокус). */
+.segmented {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  height: var(--payroll-control-h, 44px);
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.segment { position: relative; display: flex; min-width: 0; }
+
+.segmentInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmentLabel {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   font-size: 14px;
-  color: var(--text-primary);
-  min-height: 44px;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  transition: background var(--transition), color var(--transition);
 }
-.radioGroup:disabled .radio { opacity: 0.7; }
+.segmentInput:checked + .segmentLabel {
+  background: var(--surface);
+  color: var(--text-primary);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+.segmentInput:focus-visible + .segmentLabel { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-
-@media (min-width: 480px) {
-  .grid { grid-template-columns: 1fr 1fr; }
+.segmentedDisabled { border-color: transparent; }
+.segmentedDisabled .segmentLabel { cursor: not-allowed; }
+.segmentedDisabled .segmentInput:checked + .segmentLabel {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  box-shadow: none;
 }
 
-/* Карточка сотрудника на широком экране: Оклад, Премиальная часть, Компенсация — в одну строку,
-   карточки одной высоты. Уже 1280px Компенсации (поля 2×2) не хватило бы ширины. */
-@media (min-width: 1280px) {
-  .row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.4fr);
-    align-items: stretch;
-    gap: 16px;
-  }
+@media (prefers-reduced-motion: reduce) {
+  .control, .segmentLabel { transition: none; }
 }
