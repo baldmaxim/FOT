@@ -24,9 +24,10 @@ interface IPayrollTermsFieldsProps {
   autoFocus?: boolean;
 }
 
-const EXTRA_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> = [
-  { field: 'bonus', label: 'Премиальная часть, ₽/мес' },
+/** «Компенсация» 2×2 — в порядке на экране: проживание | удержание, проезд | связь. */
+const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> = [
   { field: 'housing', label: 'Проживание, ₽/мес' },
+  { field: 'deduction', label: 'Удержание, ₽/мес' },
   { field: 'travel', label: 'Проезд, ₽/мес' },
   { field: 'communication', label: 'Связь, ₽/мес' },
 ];
@@ -34,8 +35,8 @@ const EXTRA_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> =
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
- * Форма условий оплаты: основная оплата, дополнительные суммы (2×2) и удержание отдельно.
- * Две колонки, в узком окне — одна (container query). Ошибки — под своим полем.
+ * Форма условий оплаты: основная оплата (оклад или ставка и премия — парой в одной ячейке)
+ * и «Компенсация» 2×2. Две колонки, в узком окне — одна (container query). Ошибки — под своим полем.
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({ form, idPrefix, readOnly = false, autoFocus = false }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
@@ -127,31 +128,28 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({ form, idPrefi
             </div>
           </div>
 
-          {renderMoney(
-            'amount',
-            form.calcType === 'salary' ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
-            form.amount,
-            form.setAmount,
-          )}
+          {/* Два отдельных поля в одной ячейке: оклад (или ставка) и премия. Сохраняются раздельно. */}
+          <div className={styles.pair}>
+            {renderMoney(
+              'amount',
+              form.calcType === 'salary' ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
+              form.amount,
+              form.setAmount,
+            )}
+            {renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
+          </div>
         </div>
       </section>
 
-      <section className={styles.section} aria-labelledby={`${idPrefix}-extra`}>
-        <h3 id={`${idPrefix}-extra`} className={styles.sectionTitle}>Дополнительные суммы</h3>
+      <section className={styles.section} aria-labelledby={`${idPrefix}-compensation`}>
+        <h3 id={`${idPrefix}-compensation`} className={styles.sectionTitle}>Компенсация</h3>
         <div className={styles.grid}>
-          {EXTRA_FIELDS.map(({ field, label }) => renderMoney(
+          {COMPENSATION_FIELDS.map(({ field, label }) => renderMoney(
             field,
             label,
             form.money[field],
             value => form.changeMoney(field, value),
           ))}
-        </div>
-      </section>
-
-      <section className={styles.section} aria-labelledby={`${idPrefix}-deduction`}>
-        <h3 id={`${idPrefix}-deduction`} className={styles.sectionTitle}>Удержание</h3>
-        <div className={styles.grid}>
-          {renderMoney('deduction', 'Удержание, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
         </div>
       </section>
     </div>

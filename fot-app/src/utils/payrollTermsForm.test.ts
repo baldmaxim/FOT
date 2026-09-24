@@ -83,6 +83,11 @@ describe('validatePayrollTerms: состав запроса сохранения
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
   });
 
+  it('порядок фокуса — как на экране: премия рядом с окладом, удержание перед проездом', () => {
+    expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('deduction');
+    expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
+  });
+
   it('оклад ноль — ошибка оклада', () => {
     expect(validatePayrollTerms(values({ amount: '0' })).errors).toEqual({ amount: 'Укажите оклад' });
   });
