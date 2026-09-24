@@ -28,12 +28,10 @@ interface IEmployeePayrollModalProps {
   resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
 }
 
-const DISCARD_QUESTION = 'Есть несохранённые изменения. Закрыть без сохранения?';
-
 /**
- * Карточка сотрудника в «Условиях оплаты»: компактная форма (основная оплата, дополнительные
- * суммы, удержание) и под ней свёрнутая справка — история изменений и отпуска. Справка грузится
- * отдельно, её ошибки форму не блокируют.
+ * Карточка сотрудника в «Условиях оплаты»: форма (основная оплата, компенсация) и под ней свёрнутая
+ * справка — история изменений и отпуска. Справка грузится отдельно, её ошибки форму не блокируют.
+ * Крестик, «Отмена», Escape и клик мимо окна закрывают сразу, без вопроса — как остальные окна.
  */
 export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
   row,
@@ -56,9 +54,6 @@ export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
     if (!canEdit) closeRef.current?.focus();
   }, [canEdit]);
 
-  /** Крестик, «Отмена», Escape и клик по фону: несохранённые правки молча не теряем. */
-  const confirmDiscard = () => !canEdit || !form.isDirty || window.confirm(DISCARD_QUESTION);
-
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || isSaving) return;
@@ -73,7 +68,6 @@ export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
   return (
     <ModalShell
       onClose={onClose}
-      onBeforeClose={confirmDiscard}
       overlayClassName={styles.overlay}
       containerClassName={styles.container}
       aria-labelledby={titleId}

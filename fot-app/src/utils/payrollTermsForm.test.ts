@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   firstInvalidField,
   initialPayrollTermsValues,
-  isSamePayrollTermsValues,
   toInputValue,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
@@ -122,15 +121,7 @@ describe('initialPayrollTermsValues', () => {
   });
 });
 
-describe('isSamePayrollTermsValues / toInputValue', () => {
-  it('любое отличие — несохранённые изменения', () => {
-    const base = values();
-    expect(isSamePayrollTermsValues(base, values())).toBe(true);
-    expect(isSamePayrollTermsValues(base, values({ calcType: 'hourly' }))).toBe(false);
-    expect(isSamePayrollTermsValues(base, values({ money: { ...EMPTY_MONEY, communication: '1' } }))).toBe(false);
-    expect(isSamePayrollTermsValues(base, values({ effectiveFrom: '2026-10-01' }))).toBe(false);
-  });
-
+describe('toInputValue', () => {
   it('целые не трогает, дробные обрезает только по нулям', () => {
     expect(toInputValue('100')).toBe('100');
     expect(toInputValue('0.00')).toBe('0');

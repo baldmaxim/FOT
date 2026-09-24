@@ -24,8 +24,6 @@ interface IAssignTermsModalProps {
   resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
 }
 
-const DISCARD_QUESTION = 'Есть несохранённые изменения. Закрыть без сохранения?';
-
 /**
  * Массовое назначение условий выделенным сотрудникам: та же форма, что в карточке,
  * без справки (история и отпуска у каждого свои).
@@ -43,8 +41,6 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   const idPrefix = useId();
   const form = usePayrollTermsForm({ row: null, defaultDate, resolveDefaultCalcType });
 
-  const confirmDiscard = () => !form.isDirty || window.confirm(DISCARD_QUESTION);
-
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (isSaving) return;
@@ -59,7 +55,6 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   return (
     <ModalShell
       onClose={onClose}
-      onBeforeClose={confirmDiscard}
       overlayClassName={styles.overlay}
       containerClassName={styles.container}
       aria-labelledby={titleId}

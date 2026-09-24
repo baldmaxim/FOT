@@ -9,7 +9,6 @@ import type {
 import {
   firstInvalidField,
   initialPayrollTermsValues,
-  isSamePayrollTermsValues,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
   type PayrollMoneyField,
@@ -30,10 +29,9 @@ interface IUsePayrollTermsFormArgs {
  * считает сервер. Ошибки хранятся по полям и снимаются при правке своего поля.
  */
 export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }: IUsePayrollTermsFormArgs) => {
-  const [initial] = useState<IPayrollTermsFormValues>(
+  const [values, setValues] = useState<IPayrollTermsFormValues>(
     () => initialPayrollTermsValues(row, defaultDate, resolveDefaultCalcType),
   );
-  const [values, setValues] = useState<IPayrollTermsFormValues>(initial);
   const [fieldErrors, setFieldErrors] = useState<PayrollTermsFieldErrors>({});
 
   const clearError = (key: PayrollTermsFieldKey) => {
@@ -86,8 +84,6 @@ export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }
   return {
     ...values,
     fieldErrors,
-    /** Есть ли несохранённые изменения относительно открытия окна. */
-    isDirty: !isSamePayrollTermsValues(values, initial),
     changeCategory,
     setCalcType,
     setAmount,

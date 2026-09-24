@@ -59,15 +59,6 @@ export const initialPayrollTermsValues = (
   };
 };
 
-/** Совпадают ли значения — для защиты несохранённых изменений. */
-export const isSamePayrollTermsValues = (a: IPayrollTermsFormValues, b: IPayrollTermsFormValues): boolean => (
-  a.category === b.category
-  && a.calcType === b.calcType
-  && a.amount === b.amount
-  && a.effectiveFrom === b.effectiveFrom
-  && PAYROLL_MONEY_FIELDS.every(field => a.money[field] === b.money[field])
-);
-
 /** Необязательная сумма: пусто → undefined, некорректно или < 0 → null. */
 const parseOptionalMoney = (raw: string): number | undefined | null => {
   const trimmed = raw.trim();
