@@ -1,0 +1,95 @@
+/* Меню «Столбцы таблицы» — в стиле окна фильтра столбца (PayrollColumnFilterPopover). */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: transparent;
+}
+
+.menu {
+  position: fixed;
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(480px, calc(100dvh - 24px));
+  padding: 12px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* Смартфон: лист снизу во всю ширину, над домашней полоской */
+.sheet {
+  left: 8px;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  max-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px));
+}
+
+.title { font-weight: 600; font-size: 14px; }
+.fixed { margin: 0; color: var(--text-secondary); font-size: 12px; }
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.option:hover { background: var(--surface-hover); }
+
+.checkbox { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--primary); cursor: pointer; }
+.checkbox:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.link {
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.link:disabled { color: var(--text-tertiary); cursor: default; }
+.link:focus-visible,
+.doneButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.doneButton {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Смартфон: тап-цели ≥ 44px */
+@media (max-width: 768px) {
+  .option { min-height: 44px; }
+  .checkbox { width: 20px; height: 20px; }
+  .doneButton { min-height: 44px; }
+  .link { min-height: 44px; }
+}

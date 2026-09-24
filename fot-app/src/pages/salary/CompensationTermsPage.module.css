@@ -81,6 +81,28 @@
 }
 .primaryButton:disabled { opacity: 0.5; cursor: default; }
 
+/* Шестерёнка «Столбцы таблицы» — квадратная, высотой с соседнюю кнопку. */
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.iconButton:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.iconButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Часть столбцов скрыта — шестерёнка подсвечена, чтобы не забыть про скрытое. */
+.iconButtonActive { color: var(--primary); border-color: var(--primary); }
+
 .warning {
   padding: 8px 12px;
   border: 1px solid var(--border);
@@ -159,4 +181,6 @@
   .resetFilters {
     min-height: 36px;
   }
+
+  .iconButton { width: 36px; height: 36px; }
 }

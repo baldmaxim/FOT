@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type FC } from 'react';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Settings } from 'lucide-react';
 
 import {
   payrollService,
@@ -15,6 +16,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
@@ -22,13 +24,16 @@ import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { moscowTodayIso } from '../../utils/moscowDate';
 import {
   countActivePayrollColumnFilters,
+  isPayrollColumnFilterActive,
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
 } from '../../utils/payrollColumnFilters';
+import type { PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
 import { EmployeePayrollModal } from '../../components/salary/EmployeePayrollModal';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
+import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import styles from './CompensationTermsPage.module.css';
@@ -168,6 +173,26 @@ export const CompensationTermsPage: FC = () => {
 
   const closeFilter = useCallback(() => setOpenFilter(null), []);
 
+  // Шестерёнка «Столбцы таблицы». Скрытый столбец не должен фильтровать и сортировать невидимо —
+  // его фильтр и сортировка снимаются вместе со скрытием.
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
+    if (column === 'accruals') return;
+    const hadFilter = isPayrollColumnFilterActive(columnFilters, column);
+    if (hadFilter) setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
+    if (sort === column) {
+      setSort('name');
+      setDir('asc');
+    }
+    if (hadFilter || sort === column) setSelected(new Set());
+  };
+  const { hidden: hiddenColumns, setColumnVisible, showAll } = usePayrollHiddenColumns(clearHiddenColumnConditions);
+  /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
+  const closeColumnsMenu = () => {
+    columnsAnchor?.focus();
+    setColumnsAnchor(null);
+  };
+
   const resetColumnFilters = () => {
     setColumnFilters({});
     setSelected(new Set());
@@ -271,6 +296,17 @@ export const CompensationTermsPage: FC = () => {
           >
             Назначить выделенным
           </button>
+          <button
+            type="button"
+            className={hiddenColumns.size > 0 ? `${styles.iconButton} ${styles.iconButtonActive}` : styles.iconButton}
+            aria-label="Столбцы таблицы"
+            aria-haspopup="dialog"
+            aria-expanded={columnsAnchor !== null}
+            title={hiddenColumns.size > 0 ? `Столбцы таблицы · скрыто: ${hiddenColumns.size}` : 'Столбцы таблицы'}
+            onClick={event => setColumnsAnchor(event.currentTarget)}
+          >
+            <Settings size={18} aria-hidden="true" />
+          </button>
         </div>
       </div>
 
@@ -297,6 +333,7 @@ export const CompensationTermsPage: FC = () => {
             selected={selected}
             allSelected={allLoadedSelected}
             canEdit={canEdit}
+            hiddenColumns={hiddenColumns}
             onToggleOne={toggleOne}
             onToggleAll={toggleAll}
             onEdit={openOne}
@@ -335,6 +372,16 @@ export const CompensationTermsPage: FC = () => {
           anchor={openFilter.anchor}
           onApply={applyColumnFilter}
           onClose={closeFilter}
+        />
+      )}
+
+      {columnsAnchor && (
+        <PayrollColumnsMenu
+          anchor={columnsAnchor}
+          hidden={hiddenColumns}
+          onToggle={setColumnVisible}
+          onShowAll={showAll}
+          onClose={closeColumnsMenu}
         />
       )}
 

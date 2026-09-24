@@ -8,6 +8,7 @@ import type {
   PayrollSortKey,
 } from '../../services/payrollService';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
+import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
@@ -18,6 +19,8 @@ interface IPayrollTermsTableProps {
   allSelected: boolean;
   /** Право правки страницы. Без него, как и у строки вне скоупа правки, выделять нечего. */
   canEdit: boolean;
+  /** Скрытые шестерёнкой столбцы; чекбокс, «№» и «Сотрудник» видны всегда. */
+  hiddenColumns: ReadonlySet<PayrollTableColumn>;
   onToggleOne: (employeeId: number) => void;
   onToggleAll: () => void;
   onEdit: (row: IPayrollTermsRow) => void;
@@ -45,7 +48,19 @@ const SORTABLE_COLUMNS: ReadonlyArray<{ key: PayrollSortKey; label: string; clas
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
-const COLUMN_COUNT = 10;
+/** Всегда видимые столбцы: чекбокс, «№», «Сотрудник». */
+const FIXED_COLUMN_COUNT = 3;
+
+/** Класс ширины колонки (colgroup) для скрываемых столбцов. */
+const COL_CLASS: Record<PayrollTableColumn, string> = {
+  department: 'colDept',
+  position: 'colPosition',
+  schedule: 'colSchedule',
+  salary: 'colSalary',
+  bonus: 'colBonus',
+  housing: 'colHousing',
+  accruals: 'colAccruals',
+};
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
 const formatSalary = (row: IPayrollTermsRow): string => {
@@ -69,6 +84,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   selected,
   allSelected,
   canEdit,
+  hiddenColumns,
   onToggleOne,
   onToggleAll,
   onEdit,
@@ -106,6 +122,11 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const lastItem = virtualItems[virtualItems.length - 1];
   const bottomSpacer = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
 
+  const shown = (column: PayrollTableColumn) => !hiddenColumns.has(column);
+  const visibleColumns = PAYROLL_TABLE_COLUMNS.filter(column => shown(column.key));
+  const columnCount = FIXED_COLUMN_COUNT + visibleColumns.length;
+  const sortableHeaders = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
+
   return (
     <div className={styles.wrap} ref={scrollRef}>
       <table className={styles.table}>
@@ -113,13 +134,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           <col className={styles.colCheck} />
           <col className={styles.colNum} />
           <col className={styles.colName} />
-          <col className={styles.colDept} />
-          <col className={styles.colPosition} />
-          <col className={styles.colSchedule} />
-          <col className={styles.colSalary} />
-          <col className={styles.colBonus} />
-          <col className={styles.colHousing} />
-          <col className={styles.colAccruals} />
+          {visibleColumns.map(column => <col key={column.key} className={styles[COL_CLASS[column.key]]} />)}
         </colgroup>
         <thead>
           <tr>
@@ -134,7 +149,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
               />
             </th>
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
-            {SORTABLE_COLUMNS.map(column => (
+            {sortableHeaders.map(column => (
               <PayrollSortHeader
                 key={column.key}
                 sortKey={column.key}
@@ -148,19 +163,19 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
               />
             ))}
             {/* Начислений пока нет (придут из 1С ЗУП) — сортировать и фильтровать нечего. */}
-            <th>Начисления за посл. полгода</th>
+            {shown('accruals') && <th>Начисления за посл. полгода</th>}
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={COLUMN_COUNT} className={styles.empty}>Сотрудники не найдены</td>
+              <td colSpan={columnCount} className={styles.empty}>Сотрудники не найдены</td>
             </tr>
           ) : (
             <>
               {topSpacer > 0 && (
                 <tr aria-hidden="true" className={styles.spacer}>
-                  <td colSpan={COLUMN_COUNT} style={{ height: topSpacer }} />
+                  <td colSpan={columnCount} style={{ height: topSpacer }} />
                 </tr>
               )}
               {virtualItems.map(item => {
@@ -206,22 +221,24 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
-                    <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>
-                    <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>
-                    <td className={styles.cellOneLine} title={row.schedule_name ?? undefined}>
-                      {row.schedule_name ?? '—'}
-                    </td>
-                    <td className={styles.cellNumber}>{formatSalary(row)}</td>
-                    <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>
-                    <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>
+                    {shown('department') && <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>}
+                    {shown('position') && <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>}
+                    {shown('schedule') && (
+                      <td className={styles.cellOneLine} title={row.schedule_name ?? undefined}>
+                        {row.schedule_name ?? '—'}
+                      </td>
+                    )}
+                    {shown('salary') && <td className={styles.cellNumber}>{formatSalary(row)}</td>}
+                    {shown('bonus') && <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>}
+                    {shown('housing') && <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>}
                     {/* Фактические начисления придут из 1С ЗУП — импорта пока нет. */}
-                    <td className={styles.cellNumber}>—</td>
+                    {shown('accruals') && <td className={styles.cellNumber}>—</td>}
                   </tr>
                 );
               })}
               {bottomSpacer > 0 && (
                 <tr aria-hidden="true" className={styles.spacer}>
-                  <td colSpan={COLUMN_COUNT} style={{ height: bottomSpacer }} />
+                  <td colSpan={columnCount} style={{ height: bottomSpacer }} />
                 </tr>
               )}
             </>
