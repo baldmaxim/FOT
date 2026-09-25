@@ -14,7 +14,7 @@ export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'hou
 export type PayrollTermsFieldKey = 'effectiveFrom' | 'amount' | PayrollMoneyField;
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
-  'effectiveFrom', 'amount', 'bonus', 'housing', 'deduction', 'travel', 'communication',
+  'effectiveFrom', 'amount', 'bonus', 'housing', 'travel', 'communication', 'deduction',
 ];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;

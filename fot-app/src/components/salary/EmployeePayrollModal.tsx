@@ -8,6 +8,7 @@ import type {
   StaffCategory,
 } from '../../services/payrollService';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
+import { payrollAccrualMonths } from '../../utils/payrollAccruals';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { ModalShell } from '../ui/ModalShell';
 import { PayrollTermsFields } from './PayrollTermsFields';
@@ -29,8 +30,8 @@ interface IEmployeePayrollModalProps {
 }
 
 /**
- * Карточка сотрудника в «Условиях оплаты»: форма (основная оплата, компенсация) и под ней свёрнутая
- * справка — история изменений и отпуска. Справка грузится отдельно, её ошибки форму не блокируют.
+ * Карточка сотрудника в «Условиях оплаты»: форма (основная оплата с «Оплачено», компенсация, удержание)
+ * и под ней свёрнутая справка — история изменений и отпуска. Справка грузится отдельно, её ошибки форму не блокируют.
  * Крестик, «Отмена», Escape и клик мимо окна закрывают сразу, без вопроса — как остальные окна.
  */
 export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
@@ -95,7 +96,14 @@ export const EmployeePayrollModal: FC<IEmployeePayrollModalProps> = ({
             {!canEdit && (
               <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
             )}
-            <PayrollTermsFields form={form} idPrefix={idPrefix} readOnly={!canEdit} autoFocus={canEdit} />
+            <PayrollTermsFields
+              form={form}
+              idPrefix={idPrefix}
+              readOnly={!canEdit}
+              autoFocus={canEdit}
+              // То же окно 6 закрытых месяцев, что у столбца «Начисления».
+              paidMonths={payrollAccrualMonths(defaultDate)}
+            />
 
             <div className={styles.reference}>
               <SalaryHistorySection employeeId={row.employee_id} />

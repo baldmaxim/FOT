@@ -82,8 +82,9 @@ describe('validatePayrollTerms: состав запроса сохранения
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
   });
 
-  it('порядок фокуса — как на экране: премия рядом с окладом, удержание перед проездом', () => {
-    expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('deduction');
+  it('порядок фокуса — как на экране: премия рядом с окладом, удержание после проезда и связи', () => {
+    expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('travel');
+    expect(firstInvalidField({ communication: 'x', deduction: 'x' })).toBe('communication');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
   });
 
