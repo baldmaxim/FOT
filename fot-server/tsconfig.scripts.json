@@ -28,6 +28,7 @@
     "scripts/backfill-version-managers.ts",
     "scripts/lib/version-snapshot-backfill.ts",
     "scripts/merge-duplicate-department.ts",
+    "scripts/sync-contractor-pass-expiry.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

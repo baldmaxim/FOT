@@ -23,6 +23,10 @@ import { startDailyTasksReminderScheduler, stopDailyTasksReminderScheduler } fro
 import { startTimesheetVersionRebuildScheduler, stopTimesheetVersionRebuildScheduler } from './services/timesheet-version-rebuild.service.js';
 import { startDismissalScheduler, stopDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
+import {
+  startContractorPassExpirySyncScheduler,
+  stopContractorPassExpirySyncScheduler,
+} from './services/contractor-pass-expiry-sync.scheduler.js';
 import { startBlacklistSigurScheduler, stopBlacklistSigurScheduler } from './services/blacklist-sigur.scheduler.js';
 import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newdb-pending-poller.service.js';
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
@@ -164,6 +168,8 @@ httpServer.listen(PORT, HOST, () => {
   startTimesheetVersionRebuildScheduler();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
+  // «Срок» пропусков подрядчиков в «Мониторинге» — ночью подтягивается из Sigur.
+  void startContractorPassExpirySyncScheduler();
   startBlacklistSigurScheduler();
   // Фиксация месячного плана KPI объектов. Сам по себе не работает: включается
   // в настройках (system_settings.object_kpi_freezer_enabled, по умолчанию false).
@@ -238,7 +244,8 @@ const gracefulShutdown = (signal: string): void => {
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopDismissalScheduler,
-    stopContractorPassSyncScheduler, stopBlacklistSigurScheduler, stopObjectKpiPlanFreezer,
+    stopContractorPassSyncScheduler, stopContractorPassExpirySyncScheduler, stopBlacklistSigurScheduler,
+    stopObjectKpiPlanFreezer,
     stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsForwardingOperationsWorker, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
