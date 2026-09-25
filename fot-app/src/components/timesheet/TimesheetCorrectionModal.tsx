@@ -23,6 +23,7 @@ import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { PresenceTimeline } from '../skud/PresenceTimeline';
 import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '../../utils/correctionStatus';
+import { distributeHours, syncAllocationsWithHours, type IAllocationDraft } from '../../utils/correctionAllocations';
 
 interface ICorrectionModalProps {
   open: boolean;
@@ -177,41 +178,6 @@ export interface IObjectChoice {
   ambiguous: boolean;
   objectEntriesAllowed: boolean;
 }
-
-/** Строка распределения в форме. */
-interface IAllocationDraft {
-  object_id: string;
-  hours: number;
-}
-
-/**
- * Раскладывает введённые часы по весам подсказки методом наибольшего остатка:
- * сумма долей точно равна итогу, копейки не теряются. Нулевые веса (объект известен,
- * минут нет) делят часы поровну.
- */
-const distributeHours = (
-  slices: Array<{ object_id: string; minutes: number }>,
-  hours: number,
-): IAllocationDraft[] => {
-  if (slices.length === 0) return [];
-  const total = Math.round(hours * 100);
-  const weights = slices.map(slice => Math.max(0, slice.minutes));
-  const weightSum = weights.reduce((sum, value) => sum + value, 0);
-  const effective = weightSum > 0 ? weights : slices.map(() => 1);
-  const effectiveSum = effective.reduce((sum, value) => sum + value, 0);
-
-  const exact = effective.map(value => (total * value) / effectiveSum);
-  const centi = exact.map(value => Math.floor(value));
-  let distributed = centi.reduce((sum, value) => sum + value, 0);
-  const byFraction = exact
-    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
-    .sort((left, right) => right.frac - left.frac);
-  for (let k = 0; distributed < total; k += 1) {
-    centi[byFraction[k % centi.length].index] += 1;
-    distributed += 1;
-  }
-  return slices.map((slice, index) => ({ object_id: slice.object_id, hours: centi[index] / 100 }));
-};
 
 // Откуда взялся предложенный объект. Догадка по истории помечается явно, чтобы
 // табельщица понимала: здесь нужно её решение, а не молчаливое согласие.
@@ -603,20 +569,13 @@ const CorrectionTab: FC<{
     setAllocationsTouched(false);
   }, [initialAllocations]);
 
-  // Часы изменились, а распределение человек ещё не правил — пересчитываем:
-  // «весь день на объекте» просто следует за итогом, разбивка — по весам подсказки.
+  // Часы изменились — подгоняем распределение: один объект следует за итогом всегда,
+  // разбивка — по весам подсказки, пока человек её не правил.
   useEffect(() => {
-    if (allocationsTouched) return;
-    setAllocations(prev => {
-      if (prev.length === 0) return prev;
-      if (prev.length === 1) return [{ ...prev[0], hours }];
-      const slices = prev.map(item => {
-        const suggested = objectChoice?.suggestedDistribution.find(s => s.object_id === item.object_id);
-        return { object_id: item.object_id, minutes: suggested?.minutes ?? Math.round(item.hours * 60) };
-      });
-      return distributeHours(slices, hours);
-    });
-  }, [hours, allocationsTouched, objectChoice?.suggestedDistribution]);
+    setAllocations(prev => syncAllocationsWithHours(
+      prev, hours, allocationMode, allocationsTouched, objectChoice?.suggestedDistribution ?? [],
+    ));
+  }, [hours, allocationMode, allocationsTouched, objectChoice?.suggestedDistribution]);
   const exceedsMax = needsHoursForStatus && maxHours != null && hours > maxHours;
   const canSave = trimmedNotes.length > 0 && !exceedsMax;
 

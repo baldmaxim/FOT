@@ -36,6 +36,7 @@ import type {
 import type { TimesheetResponse, IEmployeeApprovalLock, IEmployeeAssignmentPeriod } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { decideModalRefresh, pickModalDayData } from '../../utils/timesheetModalRefresh';
+import { canUseBulkCorrections } from '../../utils/timesheetBulkAccess';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
 import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
@@ -554,6 +555,12 @@ export const TimesheetPage: FC = () => {
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
   }, [deferredTimesheetData, isEmployeeMode, employeeModeData]);
+  const canBulkEdit = canUseBulkCorrections({
+    canWriteActiveDept,
+    canEditTimesheet,
+    isDirectReportsGrid: isDirectReportsMarker,
+    employees,
+  });
   const entries = useMemo<TimesheetEntry[]>(
     () => (isEmployeeMode ? employeeModeData.entries : (deferredTimesheetData?.entries || [])),
     [deferredTimesheetData, isEmployeeMode, employeeModeData],
@@ -2609,7 +2616,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {canWriteActiveDept && activeGridDeptId && !isEmployeeMode && (viewMode === 'employees' || viewMode === 'objects') && (
+                {canBulkEdit && activeGridDeptId && !isEmployeeMode && (viewMode === 'employees' || viewMode === 'objects') && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
