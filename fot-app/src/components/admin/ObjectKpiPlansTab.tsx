@@ -22,6 +22,13 @@ import styles from './ObjectKpiCardModal.module.css';
 
 export type PlanDraft = Record<string, { amount: string; reason: string }>;
 
+const STATUS_LABELS: Record<string, string> = {
+  open: 'открыт',
+  fixed: 'зафиксирован',
+  corrected: 'пересмотрен',
+  data_incomplete: 'неполные данные',
+};
+
 interface IProps {
   card: IObjectKpiCard | undefined;
   canEdit: boolean;
@@ -121,7 +128,7 @@ export const ObjectKpiPlansTab: FC<IProps> = ({
               <td>{formatMoney(row.fact_amount)}</td>
               <td>{formatPercent(row.completion_pct)}</td>
               <td>
-                {row.report_status}
+                {STATUS_LABELS[row.report_status] ?? row.report_status}
                 {plan && plan.revision > 1 && <span className={styles.mark}>ревизия {plan.revision}</span>}
               </td>
               <td className={styles.actions}>

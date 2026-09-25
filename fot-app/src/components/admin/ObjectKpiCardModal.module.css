@@ -13,21 +13,22 @@
   display: flex;
   flex-direction: column;
   width: min(1000px, 100%);
-  /* dvh, а не vh: адресная строка мобильного Chrome иначе срезает низ модалки. */
-  max-height: min(90dvh, 900px);
+  /* Высота фиксированная, а не max-height: иначе короткая вкладка сжимала окно, и оно
+     прыгало по центру экрана при каждом переключении. Прокручивается только .body.
+     dvh, а не vh: адресная строка мобильного Chrome иначе срезает низ модалки. */
+  height: min(90dvh, 900px);
   border-radius: 14px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   overflow: hidden;
 }
 
-/* Свободнее раскладке формы: на широком экране 1000px давали четыре узкие колонки,
-   и длинные подписи полей ломались на две строки. Порог 1200px — ниже него 85vw уже
-   текущей ширины, и правило только сузило бы модалку. */
+/* На широком экране — 85 % ширины и высоты. Порог 1200px: ниже него 85vw уже 1000px,
+   и правило только сузило бы модалку. */
 @media (min-width: 1200px) {
   .container {
-    width: min(85vw, 1400px);
-    max-height: 85dvh;
+    width: 85vw;
+    height: 85dvh;
   }
 }
 
@@ -101,13 +102,29 @@
      собственной прокрутки раздавливает шапку с вкладками. */
   min-height: 0;
   overflow-y: auto;
+  /* Место под полосу прокрутки занято всегда: иначе на длинной вкладке она появлялась
+     и сдвигала таблицу влево. */
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   padding: 16px;
+}
+
+/* Блоки вкладки не сжимаются: .tableWrap с overflow-x — скролл-контейнер, и без этого
+   длинная таблица получила бы собственную вертикальную прокрутку внутри .body. */
+.body > * {
+  flex-shrink: 0;
 }
 
 .form {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Та же рамка, что у таблиц на соседних вкладках: у всех вкладок один вид блока. */
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
 }
 
 .grid {
@@ -178,7 +195,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
 }
 
 .tableWrap {
@@ -200,6 +216,25 @@
   text-align: left;
   white-space: nowrap;
   border-bottom: 1px solid var(--border-color);
+}
+
+/* Строки с полями ввода и кнопками (36 px + отступы) и без них — одной высоты:
+   у ячейки height работает как минимум. */
+.table td {
+  height: 52px;
+  vertical-align: middle;
+}
+
+/* Таблица с многострочными ячейками («История»): строка читается сверху. */
+.tableTop td {
+  vertical-align: top;
+}
+
+/* Ячейка с длинным текстом — переносится, а не растягивает таблицу. */
+.table td.wrapCell {
+  min-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .table th {
@@ -244,17 +279,17 @@
 .cellInputDate { width: 150px; }
 .cellInputMonth { width: 150px; }
 .cellInputMoney { width: 170px; }
-/* Комментарий под суммой — по ширине суммы, чтобы столбец не расползался. */
-.cellInputNote { width: 170px; font-size: 13px; min-height: 30px; }
+/* Комментарий рядом с суммой — той же высоты и ширины, строка остаётся в одну линию. */
+.cellInputNote { width: 170px; }
 
-/* Ячейка с двумя полями (сумма и комментарий). Размечается на <div>, а НЕ на <td>:
-   ячейка с display:flex выпадает из табличного потока, и две соседние такие ячейки
-   браузер сливает в одну анонимную. */
+/* Ячейка с двумя полями (сумма и комментарий) — в ряд, чтобы все строки таблицы были
+   одной высоты. Размечается на <div>, а НЕ на <td>: ячейка с display:flex выпадает из
+   табличного потока, и две соседние такие ячейки браузер сливает в одну анонимную. */
 .cellStack {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .cellNote {
@@ -324,41 +359,7 @@
   color: var(--text-secondary);
 }
 
-.history {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.historyRow {
-  display: grid;
-  grid-template-columns: 160px 160px 1fr 160px;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.historyDate {
-  color: var(--text-secondary);
-}
-
-.historyFields {
-  overflow-wrap: anywhere;
-}
-
-.historyReason {
-  grid-column: 1 / -1;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
 @media (max-width: 768px) {
-  .historyRow {
-    grid-template-columns: 1fr;
-  }
-
   .inlineForm {
     flex-direction: column;
   }
@@ -377,25 +378,8 @@
 
   .container {
     width: 100%;
-    max-height: 100dvh;
+    height: 100dvh;
     border-radius: 0;
     padding-bottom: env(safe-area-inset-bottom);
   }
-}
-
-/* Кнопки подтверждения правки факта — в столбик под полями ввода. */
-.factActions {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.factActions button {
-  min-height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
 }

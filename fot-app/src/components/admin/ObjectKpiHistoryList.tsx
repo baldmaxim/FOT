@@ -3,10 +3,12 @@ import type { FC } from 'react';
 import type { IObjectKpiHistoryEntry } from '../../api/objectKpi';
 import { formatDate, formatMoney, formatMonthLabel } from '../../utils/formatMoney';
 import { formatFioShort } from '../../utils/formatFio';
+import tableStyles from './ObjectKpiCardModal.module.css';
 import styles from './ObjectKpiHistoryList.module.css';
 
 /**
  * История изменений по объекту: кто, что и когда сделал, с переходом «было → стало».
+ * Таблица — того же вида, что на остальных вкладках карточки.
  *
  * Заголовок строки выводится из смены СТАТУСА, а не из action: подписание и аннулирование
  * пишутся в журнал как action='update', и по нему одному получилось бы бессодержательное
@@ -132,43 +134,50 @@ export const ObjectKpiHistoryList: FC<IProps> = ({ entries, isLoading }) => {
   if (entries.length === 0) return <p className={styles.empty}>Изменений нет</p>;
 
   return (
-    <div className={styles.list}>
-      {entries.map(entry => {
-        // Статус показан в заголовке — в списке полей он был бы дублем; служебные поля
-        // снимка человеку не нужны вовсе.
-        const fields = entry.changed_fields.filter(
-          field => field !== 'status' && !TECHNICAL_FIELDS.has(field),
-        );
-        return (
-          <div key={entry.id} className={styles.item}>
-            <div className={styles.head}>
-              <span className={styles.action}>{buildTitle(entry)}</span>
-              <span className={styles.meta}>
-                {new Date(entry.changed_at).toLocaleString('ru-RU')}
-                {entry.changed_by_name ? ` · ${formatFioShort(entry.changed_by_name)}` : ''}
-              </span>
-            </div>
-
-            {fields.length > 0 && (
-              <ul className={styles.changes}>
-                {fields.map(field => (
-                  <li key={field}>
-                    <span className={styles.fieldName}>{FIELD_LABELS[field] ?? field}:</span>
-                    {' '}
-                    {formatFieldValue(field, entry.before_data?.[field])}
-                    <span className={styles.arrow}>→</span>
-                    <strong>{formatFieldValue(field, entry.after_data?.[field])}</strong>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {entry.reason && (
-              <div className={styles.reason}>Основание: {entry.reason}</div>
-            )}
-          </div>
-        );
-      })}
+    <div className={tableStyles.tableWrap}>
+      <table className={`${tableStyles.table} ${tableStyles.tableTop}`}>
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Кто</th>
+            <th>Событие</th>
+            <th>Изменения</th>
+            <th>Основание</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(entry => {
+            // Статус показан в «Событии» — в списке полей он был бы дублем; служебные поля
+            // снимка человеку не нужны вовсе.
+            const fields = entry.changed_fields.filter(
+              field => field !== 'status' && !TECHNICAL_FIELDS.has(field),
+            );
+            return (
+              <tr key={entry.id}>
+                <td>{new Date(entry.changed_at).toLocaleString('ru-RU')}</td>
+                <td>{entry.changed_by_name ? formatFioShort(entry.changed_by_name) : '—'}</td>
+                <td>{buildTitle(entry)}</td>
+                <td className={tableStyles.wrapCell}>
+                  {fields.length > 0 ? (
+                    <ul className={styles.changes}>
+                      {fields.map(field => (
+                        <li key={field}>
+                          <span className={styles.fieldName}>{FIELD_LABELS[field] ?? field}:</span>
+                          {' '}
+                          {formatFieldValue(field, entry.before_data?.[field])}
+                          <span className={styles.arrow}>→</span>
+                          <strong>{formatFieldValue(field, entry.after_data?.[field])}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : '—'}
+                </td>
+                <td className={tableStyles.wrapCell}>{entry.reason || '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 };
