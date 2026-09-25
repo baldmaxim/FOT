@@ -16,6 +16,7 @@ import {
   type ObjectKpiReportParams,
 } from '../services/object-kpi-report.service.js';
 import { fetchManagerPremium, EMPTY_PREMIUM_TOTALS } from '../services/object-kpi-premium.service.js';
+import { fetchObjectKpiForecast } from '../services/object-kpi-forecast.service.js';
 import { listObjectKpiHistory } from '../services/object-kpi-history.service.js';
 import {
   assertCanManageAssignmentsOr403,
@@ -135,6 +136,8 @@ type ReportRequest =
     period: { from: string; to: string };
     /** Полный скоуп зрителя — НЕ суженный фильтром «Объект»; нужен для сокрытия чужих премий. */
     viewerScope: ObjectKpiScope;
+    /** Объект авто-окна: только в этом режиме окно кончается текущим месяцем и есть прогноз. */
+    autoObjectId: string | null;
   }
   | { error: { http: number; message: string } };
 
@@ -182,6 +185,7 @@ async function resolveReportRequest(
     params: { monthFrom: bounds.monthFrom, monthTo: bounds.monthTo, objectIds },
     period: window,
     viewerScope: scope,
+    autoObjectId: isAuto && requestedId ? requestedId : null,
   };
 }
 
@@ -268,10 +272,19 @@ export const objectKpiController = {
         return;
       }
 
-      const rows = await fetchObjectKpiReport(resolved.params);
+      // Прогноз до контрольной даты — только в авто-окне по одному объекту: тогда окно
+      // кончается текущим месяцем, и прогноз продолжает таблицу без разрыва. Сводка и
+      // премия считаются только по фактическим строкам — прогноз в них не входит.
+      const [rows, forecast] = await Promise.all([
+        fetchObjectKpiReport(resolved.params),
+        resolved.autoObjectId
+          ? fetchObjectKpiForecast(resolved.autoObjectId, resolved.period.to)
+          : Promise.resolve([]),
+      ]);
       res.json({
         success: true,
         data: rows,
+        forecast,
         summary: summarizeCompletion(rows),
         period: resolved.period,
       });

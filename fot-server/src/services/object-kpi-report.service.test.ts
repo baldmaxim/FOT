@@ -145,14 +145,33 @@ describe('OBJECT_KPI_REPORT_SQL', () => {
       .toContain('x.contract_total_calc < (x.ks2_cumulative_before_calc + x.fact_net)');
   });
 
-  it('ручной план открытого месяца подменяет только сумму', () => {
-    // Флаг узкий намеренно: остаток, число месяцев и контрольная дата у открытого месяца
-    // обязаны считаться формулой, иначе правка суммы тихо закрывала бы месяц.
-    expect(OBJECT_KPI_REPORT_SQL)
-      .toContain("COALESCE(mp.status = 'open' AND mp.override_plan_amount IS NOT NULL, false) AS use_open_override");
-    // Ручная сумма попадает и в план, и в знаменатель процента выполнения.
-    const overrideUses = OBJECT_KPI_REPORT_SQL.match(/use_open_override THEN x\.snap_override_plan_amount/g);
+  it('ручной план подменяет только сумму — и в плане, и в знаменателе процента', () => {
+    // Остаток, число месяцев и контрольная дата продолжают считаться формулой: правка
+    // суммы не должна тихо закрывать месяц.
+    const overrideUses = OBJECT_KPI_REPORT_SQL.match(/COALESCE\(x\.override_plan_amount, x\.plan_amount_calc\)/g);
     expect(overrideUses).toHaveLength(2);
+    // У строки data_incomplete ручная сумма не применяется — там нет расчётного плана.
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain("CASE WHEN mp.status IN ('open', 'fixed', 'corrected') THEN mp.override_plan_amount END");
+  });
+
+  it('зафиксированный месяц закрепляет только ЗОС, контрольную дату и число месяцев', () => {
+    // П. 6.3: перенос ЗОС не пересчитывает закрытый месяц. Деньги — всегда по текущим данным:
+    // замороженный целиком снимок показывал бы остаток, который с актами уже не сходится.
+    expect(OBJECT_KPI_REPORT_SQL).toContain('WHEN e.is_fixed THEN e.snap_months_remaining');
+    expect(OBJECT_KPI_REPORT_SQL).toContain('x.remainder_calc                                     AS remainder');
+    expect(OBJECT_KPI_REPORT_SQL).not.toContain('snap_remainder');
+    expect(OBJECT_KPI_REPORT_SQL).not.toContain('use_snapshot');
+    expect(OBJECT_KPI_REPORT_SQL).not.toContain('plan_drift');
+  });
+
+  it('качество данных и неполнота проверяются по итоговой ЗОС', () => {
+    // Иначе очищенная ЗОС договора сделала бы закрытый месяц «неполным», и snapshotValues
+    // обнулил бы его ревизию при пересмотре.
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain("WHEN x.effective_planned_zos_date IS NULL THEN 'no_planned_zos_date'");
+    expect(OBJECT_KPI_REPORT_SQL).not.toContain("WHEN x.planned_zos_date IS NULL THEN 'no_planned_zos_date'");
+    expect(OBJECT_KPI_REPORT_SQL).toContain('COALESCE(x.effective_control_date < x.period_month, false)');
   });
 
   it('ручной остаток становится точкой отсчёта накопления', () => {

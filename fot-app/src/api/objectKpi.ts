@@ -34,9 +34,7 @@ export interface IObjectKpiReportRow {
   fact_acts: string;
   fact_reductions: string;
   completion_pct: string | null;
-  plan_source: 'snapshot' | 'calculated';
   plan_overridden: boolean;
-  plan_drift: boolean;
   report_status: ObjectKpiPlanStatus;
   data_quality: 'ok' | 'no_active_contract' | 'no_base_amount' | 'no_planned_zos_date';
   over_contract: boolean;
@@ -44,6 +42,8 @@ export interface IObjectKpiReportRow {
   managers: Array<{ employee_id: number; full_name: string | null; days: number }>;
   primary_manager_id: number | null;
   primary_manager_name: string | null;
+  /** Прогнозная строка: месяц после текущего, план выполняется на 100 %. */
+  is_forecast?: boolean;
 }
 
 export interface IObjectKpiSummary {
@@ -358,7 +358,13 @@ export const objectKpiApi = {
   async getReport(
     period: IPeriod | null | undefined,
     objectId?: string | null,
-  ): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary; period: IPeriod }> {
+  ): Promise<{
+    data: IObjectKpiReportRow[];
+    /** Месяцы после текущего до контрольной даты — только в авто-окне по объекту. */
+    forecast?: IObjectKpiReportRow[];
+    summary: IObjectKpiSummary;
+    period: IPeriod;
+  }> {
     return apiClient.get(`/object-kpi/report${reportQuery(period, objectId)}`);
   },
 

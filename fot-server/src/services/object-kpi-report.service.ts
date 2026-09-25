@@ -14,6 +14,13 @@ import { moscowTodayIso } from '../utils/date.utils.js';
  *   fact(M)             = Σ КС-2(signed) с period_month = M                     (п. 3.1)
  *   completion(M)       = fact / plan × 100                                     (п. 3.4)
  *
+ * Зафиксированный месяц (object_kpi_month_plans, fixed/corrected) закрепляет только плановую
+ * ЗОС, контрольную дату и число месяцев: по п. 6.3 перенос ЗОС завершённые периоды не
+ * пересчитывает. Деньги — стоимость, накопление КС-2, остаток, план — считаются по текущим
+ * данным всегда: правка исходных данных закрытого месяца — это исправление ошибки по п. 2.8,
+ * и её основание уже обязательно и лежит в журнале. Снимок, замороженный целиком, показывал
+ * бы остаток, который после исправления актов с ними не сходится.
+ *
  * Ручная точка отсчёта (object_contracts.opening_remainder, NULL = считать как обычно):
  *   ks2_cumulative(plan_start_month − 1) = contract_total(plan_start_month) − opening_remainder
  * то есть введённый остаток становится остатком на начало первого расчётного месяца, а КС-2
@@ -25,8 +32,7 @@ import { moscowTodayIso } from '../utils/date.utils.js';
  *
  * Обе половины остатка берутся на ОДИН момент — начало месяца M. Отсюда граница
  * ДС `<= 1-е число`, а не `<= последний день месяца`: иначе допник, заехавший
- * 25-го числа, менял бы уже зафиксированный план, и сигнал plan_drift («после
- * фиксации в исходные данные что-то заехало») превратился бы в постоянный шум.
+ * 25-го числа, задним числом менял бы остаток и план уже идущего месяца.
  *
  * Карточка одного объекта — ЭТОТ ЖЕ запрос с $3 = ARRAY[objectId]. Дублировать
  * формулы вторым запросом нельзя: расхождение сводного отчёта и карточки по одному
@@ -57,9 +63,7 @@ export interface ObjectKpiReportRow {
   fact_acts: string;
   fact_reductions: string;
   completion_pct: string | null;
-  plan_source: 'snapshot' | 'calculated';
   plan_overridden: boolean;
-  plan_drift: boolean;
   report_status: 'open' | 'fixed' | 'corrected' | 'data_incomplete';
   data_quality: 'ok' | 'no_active_contract' | 'no_base_amount' | 'no_planned_zos_date';
   over_contract: boolean;
@@ -251,7 +255,6 @@ running AS (
 calc AS (
   SELECT
     r.*,
-    (r.planned_zos_date + INTERVAL '3 months')::date AS control_date_calc,
     -- GREATEST(x, 0) игнорирует NULL: для объекта БЕЗ договора он вернул бы 0
     -- («всё закрыто») вместо «нет данных». Отсюда внешний CASE.
     CASE
@@ -260,63 +263,65 @@ calc AS (
     END AS remainder_calc
   FROM running r
 ),
-planned AS (
-  SELECT
-    c.*,
-    -- Развёрнутый CASE, а не GREATEST(raw, 1): GREATEST подменил бы случай
-    -- «нет плановой ЗОС» единицей и выставил объекту план «весь остаток за месяц»
-    -- вместо data_incomplete.
-    CASE
-      WHEN c.control_date_calc IS NULL THEN NULL
-      ELSE GREATEST(
-        (EXTRACT(YEAR FROM c.control_date_calc)::int * 12 + EXTRACT(MONTH FROM c.control_date_calc)::int)
-        - (EXTRACT(YEAR FROM c.period_month)::int * 12 + EXTRACT(MONTH FROM c.period_month)::int) + 1,
-        1
-      )
-    END AS months_remaining_calc
-  FROM calc c
-),
-computed AS (
-  SELECT
-    p.*,
-    CASE
-      WHEN p.remainder_calc IS NULL OR p.months_remaining_calc IS NULL THEN NULL
-      -- Та же ROUND(..., 2), что и у снимка в numeric(15,2): иначе plan_drift
-      -- ложно срабатывал бы на каждой строке из-за 16-го знака.
-      ELSE ROUND(p.remainder_calc / p.months_remaining_calc, 2)
-    END AS plan_amount_calc
-  FROM planned p
-),
--- Снимок подтягивается ОДИН раз. Флаг use_snapshot управляет всей семёркой полей
--- атомарно: поле-за-полем COALESCE после ретро-допника развалил бы тождество
--- remainder / months_remaining = plan_amount прямо в строке отчёта.
-final AS (
+-- Текущая ревизия снимка присоединяется ДО расчёта плана: у зафиксированного месяца из неё
+-- берутся плановая ЗОС, контрольная дата и число месяцев (п. 6.3). Ревизия без числа
+-- месяцев (записана при неполных данных) ничего не закрепляет — такой месяц считается
+-- как открытый.
+snap AS (
   SELECT
     c.*,
     mp.id                    AS month_plan_id,
     mp.status                AS stored_plan_status,
     mp.planned_zos_date_used AS snap_planned_zos_date,
     mp.control_date          AS snap_control_date,
-    mp.contract_total        AS snap_contract_total,
-    mp.ks2_cumulative_before AS snap_ks2_cumulative_before,
-    mp.remainder             AS snap_remainder,
     mp.months_remaining      AS snap_months_remaining,
-    mp.plan_amount           AS snap_plan_amount,
-    mp.override_plan_amount  AS snap_override_plan_amount,
-    -- Расчётная половина снимка нужна отдельно от plan_amount: по ней считается
-    -- plan_drift. Через plan_amount (= COALESCE(override, calculated)) флаг горел бы
-    -- на КАЖДОМ месяце с ручной корректировкой — это и так видно по plan_overridden.
-    mp.calculated_plan_amount AS snap_calculated_plan_amount,
-    COALESCE(mp.status IN ('fixed','corrected') AND mp.plan_amount IS NOT NULL, false) AS use_snapshot,
-    -- Ручной план ОТКРЫТОГО месяца. Флаг узкий намеренно: подменяется только сумма плана,
-    -- а остаток, число месяцев и контрольная дата продолжают считаться формулой — месяц
-    -- не закрыт, и новые ДС с актами обязаны его двигать.
-    COALESCE(mp.status = 'open' AND mp.override_plan_amount IS NOT NULL, false) AS use_open_override
-  FROM computed c
+    -- Ручной план действует у открытого и закрытого месяца. У строки data_incomplete
+    -- расчётного плана нет, и ручная сумма там не применяется.
+    CASE WHEN mp.status IN ('open', 'fixed', 'corrected') THEN mp.override_plan_amount END AS override_plan_amount,
+    COALESCE(mp.status IN ('fixed', 'corrected') AND mp.months_remaining IS NOT NULL, false) AS is_fixed
+  FROM calc c
   LEFT JOIN object_kpi_month_plans mp
          ON mp.skud_object_id = c.skud_object_id
         AND mp.period_month   = c.period_month
         AND mp.is_current
+),
+-- Итоговые ЗОС и контрольная дата — единый набор для плана, статуса, качества данных и
+-- просрочки. Если у зафиксированного месяца потом очистили плановую ЗОС договора, месяц
+-- остаётся полным: его ЗОС закреплена в снимке, и snapshotValues не обнулит ревизию.
+effective AS (
+  SELECT
+    s.*,
+    CASE WHEN s.is_fixed THEN s.snap_planned_zos_date ELSE s.planned_zos_date END AS effective_planned_zos_date,
+    CASE WHEN s.is_fixed THEN s.snap_control_date
+         ELSE (s.planned_zos_date + INTERVAL '3 months')::date END            AS effective_control_date
+  FROM snap s
+),
+planned AS (
+  SELECT
+    e.*,
+    -- Развёрнутый CASE, а не GREATEST(raw, 1): GREATEST подменил бы случай
+    -- «нет плановой ЗОС» единицей и выставил объекту план «весь остаток за месяц»
+    -- вместо data_incomplete.
+    CASE
+      WHEN e.is_fixed THEN e.snap_months_remaining
+      WHEN e.effective_control_date IS NULL THEN NULL
+      ELSE GREATEST(
+        (EXTRACT(YEAR FROM e.effective_control_date)::int * 12 + EXTRACT(MONTH FROM e.effective_control_date)::int)
+        - (EXTRACT(YEAR FROM e.period_month)::int * 12 + EXTRACT(MONTH FROM e.period_month)::int) + 1,
+        1
+      )
+    END AS effective_months_remaining
+  FROM effective e
+),
+computed AS (
+  SELECT
+    p.*,
+    CASE
+      WHEN p.remainder_calc IS NULL OR p.effective_months_remaining IS NULL THEN NULL
+      -- Та же ROUND(..., 2), что и у снимка в numeric(15,2).
+      ELSE ROUND(p.remainder_calc / p.effective_months_remaining, 2)
+    END AS plan_amount_calc
+  FROM planned p
 )
 SELECT
   x.skud_object_id,
@@ -329,63 +334,49 @@ SELECT
   to_char(x.planned_zos_date, 'YYYY-MM-DD') AS planned_zos_date,
   to_char(x.actual_zos_date,  'YYYY-MM-DD') AS actual_zos_date,
 
-  to_char(CASE WHEN x.use_snapshot THEN x.snap_planned_zos_date     ELSE x.planned_zos_date            END, 'YYYY-MM-DD') AS planned_zos_date_used,
-  to_char(CASE WHEN x.use_snapshot THEN x.snap_control_date         ELSE x.control_date_calc           END, 'YYYY-MM-DD') AS control_date,
-         (CASE WHEN x.use_snapshot THEN x.snap_contract_total       ELSE x.contract_total_calc         END) AS contract_total,
-         (CASE WHEN x.use_snapshot THEN x.snap_ks2_cumulative_before ELSE x.ks2_cumulative_before_calc END) AS ks2_cumulative_before,
-         (CASE WHEN x.use_snapshot THEN x.snap_remainder            ELSE x.remainder_calc              END) AS remainder,
-         (CASE WHEN x.use_snapshot THEN x.snap_months_remaining     ELSE x.months_remaining_calc       END) AS months_remaining,
-         (CASE WHEN x.use_snapshot      THEN x.snap_plan_amount
-               WHEN x.use_open_override THEN x.snap_override_plan_amount
-               ELSE x.plan_amount_calc END) AS plan_amount,
+  to_char(x.effective_planned_zos_date, 'YYYY-MM-DD') AS planned_zos_date_used,
+  to_char(x.effective_control_date,     'YYYY-MM-DD') AS control_date,
+  x.contract_total_calc                                AS contract_total,
+  x.ks2_cumulative_before_calc                         AS ks2_cumulative_before,
+  x.remainder_calc                                     AS remainder,
+  x.effective_months_remaining                         AS months_remaining,
+  COALESCE(x.override_plan_amount, x.plan_amount_calc) AS plan_amount,
 
   x.plan_amount_calc,
-  -- Факт НИКОГДА не берётся из снимка: приказ фиксирует план, а факт по определению
-  -- доначисляется задним числом при подписании актов Заказчиком (п. 3.1).
   x.ks2_cumulative_before_calc + x.fact_net AS ks2_cumulative_after,
   x.fact_net        AS fact_amount,
   x.fact_acts,
   x.fact_reductions,
 
   -- NULLIF(plan, 0) даёт NULL и при fact = 0. UI обязан рисовать «—», а не «0 %»:
-  -- иначе полностью закрытый объект выглядел бы провалившим KPI.
+  -- иначе полностью закрытый объект выглядел бы провалившим KPI. Ручная сумма плана
+  -- идёт и в план, и в знаменатель процента.
   ROUND(
-    x.fact_net
-    / NULLIF(CASE WHEN x.use_snapshot      THEN x.snap_plan_amount
-                  WHEN x.use_open_override THEN x.snap_override_plan_amount
-                  ELSE x.plan_amount_calc END, 0)
-    * 100,
+    x.fact_net / NULLIF(COALESCE(x.override_plan_amount, x.plan_amount_calc), 0) * 100,
     2
   ) AS completion_pct,
 
-  CASE WHEN x.use_snapshot THEN 'snapshot' ELSE 'calculated' END AS plan_source,
-  (x.snap_override_plan_amount IS NOT NULL)                      AS plan_overridden,
-  -- «После фиксации в исходные данные месяца что-то заехало» (аудит п. 2.8).
-  -- Сравнивается РАСЧЁТНАЯ половина снимка с текущим расчётом: ручная корректировка —
-  -- это не дрейф данных, для неё есть plan_overridden.
-  -- IS DISTINCT FROM, а не <>: иначе NULL-случай не детектится.
-  (x.use_snapshot AND x.snap_calculated_plan_amount IS DISTINCT FROM x.plan_amount_calc) AS plan_drift,
+  (x.override_plan_amount IS NOT NULL) AS plan_overridden,
 
-  -- Приоритет «снимок -> data_incomplete -> open»: если после фиксации у объекта
-  -- затёрли planned_zos_date, зафиксированный план стирать нельзя — он валиден
-  -- вместе со своим planned_zos_date_used.
+  -- Приоритет «зафиксирован -> data_incomplete -> open». Неполнота проверяется по итоговой
+  -- ЗОС: у зафиксированного месяца она из снимка и не пропадает от правки договора.
   CASE
-    WHEN x.use_snapshot THEN x.stored_plan_status
-    WHEN x.contract_id IS NULL OR x.base_amount IS NULL OR x.planned_zos_date IS NULL THEN 'data_incomplete'
+    WHEN x.is_fixed THEN x.stored_plan_status
+    WHEN x.contract_id IS NULL OR x.base_amount IS NULL OR x.effective_planned_zos_date IS NULL THEN 'data_incomplete'
     ELSE 'open'
   END AS report_status,
 
   CASE
-    WHEN x.contract_id IS NULL      THEN 'no_active_contract'
-    WHEN x.base_amount IS NULL      THEN 'no_base_amount'
-    WHEN x.planned_zos_date IS NULL THEN 'no_planned_zos_date'
+    WHEN x.contract_id IS NULL                THEN 'no_active_contract'
+    WHEN x.base_amount IS NULL                THEN 'no_base_amount'
+    WHEN x.effective_planned_zos_date IS NULL THEN 'no_planned_zos_date'
     ELSE 'ok'
   END AS data_quality,
 
   -- Сравнение с накоплением НА КОНЕЦ месяца: с before превышение, возникшее внутри
   -- самого месяца, оставалось незамеченным до следующей строки отчёта.
   COALESCE(x.contract_total_calc < (x.ks2_cumulative_before_calc + x.fact_net), false) AS over_contract,
-  COALESCE(x.control_date_calc < x.period_month, false)                 AS is_overdue,
+  COALESCE(x.effective_control_date < x.period_month, false)                           AS is_overdue,
 
   x.month_plan_id,
   x.stored_plan_status,
@@ -393,7 +384,7 @@ SELECT
   COALESCE(mgr.managers, '[]'::jsonb) AS managers,
   mgr.primary_manager_id,
   mgr.primary_manager_name
-FROM final x
+FROM computed x
 LEFT JOIN LATERAL (
   -- Руководители месяца + число дней пересечения периода закрепления с месяцем.
   -- Дни нужны Этапу 2 для пропорции при смене руководителя (п. 6.4); в Этапе 1
@@ -431,7 +422,7 @@ ORDER BY x.object_name, x.period_month
 /** Потолок авто-окна: 10 лет. Глубже отчёт превращается в решётку на десятки тысяч строк. */
 export const OBJECT_KPI_MAX_AUTO_MONTHS = 120;
 
-const shiftMonth = (month: string, delta: number): string => {
+export const shiftMonth = (month: string, delta: number): string => {
   const [year, value] = month.split('-').map(Number);
   const total = year * 12 + (value - 1) + delta;
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;

@@ -250,8 +250,15 @@
   cursor: pointer;
 }
 
-.row:hover {
+/* Текущий месяц подсвечен тем же фоном, что и строка под курсором. */
+.row:hover,
+.currentRow {
   background: var(--bg-hover, var(--bg-tertiary));
+}
+
+/* Прогноз: месяцы после текущего при выполнении плана на 100 %. */
+.forecastRow {
+  color: var(--text-secondary);
 }
 
 .objectCell {

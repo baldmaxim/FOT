@@ -24,8 +24,8 @@ const SETTING_ENABLED = 'object_kpi_freezer_enabled';
 const SETTING_WORKING_DAY = 'object_kpi_fix_working_day';
 const SETTING_DATE_OVERRIDE = 'object_kpi_fix_date_override';
 
-/** Приказ говорит «3-й рабочий день», рабочее решение — 5-й (меняется без релиза). */
-const DEFAULT_FIX_WORKING_DAY = 5;
+/** П. 2.8 приказа: план фиксируется не позднее 3-го рабочего дня (меняется без релиза). */
+const DEFAULT_FIX_WORKING_DAY = 3;
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;

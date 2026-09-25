@@ -21,8 +21,9 @@ import styles from './ObjectKpiPage.module.css';
  * Вкладка «KPI объектов» на странице «Аналитика».
  *
  * Виджеты показывают весь расчёт до текущего месяца — окно считает сервер, фронт датами
- * не жонглирует. Таблица появляется после выбора объекта и сразу показывает все его месяцы,
- * свежий сверху.
+ * не жонглирует. Таблица появляется после выбора объекта и показывает все его месяцы по
+ * порядку: от первого расчётного до месяца контрольной даты. Месяцы после текущего —
+ * прогноз сервера при выполнении плана на 100 %.
  *
  * Все суммы — с НДС, в рублях (п. 2.1).
  */
@@ -179,18 +180,19 @@ export const ObjectKpiPage: FC = () => {
     (summaryLoading ? '…' : formatter(value as never));
 
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
-  // а эта кнопка живёт над таблицей.
+  // а эта кнопка живёт над таблицей. Прогнозные месяцы идут следом за фактическими.
   const rows = useMemo(
-    () => (tableQuery.data?.data ?? [])
+    () => [...(tableQuery.data?.data ?? []), ...(tableQuery.data?.forecast ?? [])]
       .filter(row => row.contract_id !== null)
-      .slice()
-      .sort((a, b) => b.period_month.localeCompare(a.period_month)),
+      .sort((a, b) => a.period_month.localeCompare(b.period_month)),
     [tableQuery.data],
   );
 
-  // Шапка ЗОС — из самого свежего месяца отчёта. Контрольную дату фронт не вычисляет:
-  // формула «плановая ЗОС + 3 месяца» принадлежит приказу и живёт в SQL.
-  const latestRow = rows[0] ?? null;
+  // Шапка ЗОС — из последнего фактического месяца, прогноз идёт после него. Контрольную дату
+  // фронт не вычисляет: формула «плановая ЗОС + 3 месяца» принадлежит приказу и живёт в SQL.
+  const latestRow = rows.filter(row => !row.is_forecast).at(-1) ?? null;
+  // Текущий месяц — по серверу (МСК), а не по часам браузера: авто-окно кончается им.
+  const currentMonth = tableQuery.data?.period.to ?? null;
 
   return (
     <div className={styles.page}>
@@ -311,13 +313,9 @@ export const ObjectKpiPage: FC = () => {
                     <th>Месяц</th>
                     <th>Руководитель</th>
                     <th>Договор с ДС</th>
+                    <th>КС-6</th>
+                    <th>Остаток</th>
                     <th title="Подписано за месяц, с учётом уменьшений объёма (п. 3.1, 3.3)">КС-2</th>
-                    <th title="Накопительный итог подписанных КС-2 на конец месяца">
-                      КС-6
-                    </th>
-                    <th title="Остаток на начало месяца — из него считается план (п. 2.2), поэтому «Договор − КС-6» ему не равен">
-                      Остаток
-                    </th>
                     <th>Мес.</th>
                     <th>План месяца</th>
                     <th>%</th>
@@ -337,30 +335,28 @@ export const ObjectKpiPage: FC = () => {
                   {rows.map(row => (
                     <tr
                       key={`${row.skud_object_id}-${row.period_month}`}
-                      className={styles.row}
+                      className={[
+                        styles.row,
+                        row.is_forecast ? styles.forecastRow : '',
+                        row.period_month.slice(0, 7) === currentMonth ? styles.currentRow : '',
+                      ].filter(Boolean).join(' ')}
                       onClick={() => setOpenCard({ objectId: row.skud_object_id, mode: 'view' })}
                     >
                       <td>{renderPremium(row.primary_manager_id, row.period_month)}</td>
                       <td>{formatMonthLabel(row.period_month)}</td>
                       <td>{row.primary_manager_name ?? '—'}</td>
                       <td>{formatMoneyShort(row.contract_total)}</td>
-                      {/* КС-2 — акты этого месяца; КС-6 — накопительный итог на его КОНЕЦ.
-                          Остаток при этом берётся на начало месяца (из него считается план),
-                          поэтому «Договор − КС-6» остатку намеренно не равен. */}
-                      <td>{formatMoneyShort(row.fact_amount)}</td>
-                      <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
+                      {/* КС-6 — сумма КС-2 за все прошлые месяцы (со стартом из ручного остатка),
+                          поэтому в каждой строке «Договор − КС-6 = Остаток» (п. 2.2).
+                          КС-2 — акты этого месяца, у прогнозного месяца — его план. */}
+                      <td>{formatMoneyShort(row.ks2_cumulative_before)}</td>
                       <td>{formatMoneyShort(row.remainder)}</td>
+                      <td>{formatMoneyShort(row.fact_amount)}</td>
                       <td>{row.months_remaining ?? '—'}</td>
                       <td>
                         {formatMoneyShort(row.plan_amount)}
                         {row.plan_overridden && (
                           <span className={styles.mark} title="План задан вручную">✎</span>
-                        )}
-                        {row.plan_drift && (
-                          <span
-                            className={styles.mark}
-                            title="Исходные данные изменились после фиксации"
-                          >!</span>
                         )}
                       </td>
                       <td>{formatPercent(row.completion_pct)}</td>
