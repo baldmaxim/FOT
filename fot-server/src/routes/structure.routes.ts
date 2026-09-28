@@ -88,6 +88,16 @@ router.get(
   structureController.getDashboardTree
 );
 
+// GET /api/structure/payroll-tree - дерево фильтра «Все отделы» в «Зарплате»: с персональным
+// доступом к разделу (миграция 288) — полное, без него — то же, что /api/structure.
+// Серверного кэша нет: грант снимается сразу, а дерево грузит только экран «Зарплаты».
+router.get(
+  '/payroll-tree',
+  requirePageAccess('/salary/terms', 'view'),
+  noBrowserCache,
+  structureController.getPayrollTree
+);
+
 // GET /api/structure/positions - список должностей (worker+, кэш 15мин)
 router.get(
   '/positions',

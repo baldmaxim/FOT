@@ -7,6 +7,7 @@ import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
 import { hasDashboardAllDepartmentsGrant } from '../services/read-scope-grants.service.js';
+import { getRequestPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -337,6 +338,11 @@ async function loadTreeForCache(req: AuthenticatedRequest): Promise<object> {
  */
 async function loadDashboardTreeForCache(req: AuthenticatedRequest): Promise<object> {
   if (!(await hasDashboardAllDepartmentsGrant(req))) return loadTreeForCache(req);
+  return loadUnscopedTree();
+}
+
+/** Полное дерево без скоупа пользователя (только навигация: id, названия, иерархия). */
+async function loadUnscopedTree(): Promise<object> {
   const [departments, archiveDepartment] = await Promise.all([
     loadAllActiveDepartments(),
     getKnownArchiveDepartment(),
@@ -353,6 +359,16 @@ async function loadDashboardTreeForCache(req: AuthenticatedRequest): Promise<obj
   };
 }
 
+/**
+ * Дерево фильтра «Все отделы» в «Зарплате». С персональным доступом к разделу (миграция 288)
+ * охват — весь штат, а общее /api/structure режет дерево по отделам человека: у бухгалтера
+ * без назначенных отделов фильтр был бы пуст. Без гранта — ровно то же, что /api/structure.
+ */
+async function loadPayrollTree(req: AuthenticatedRequest): Promise<object> {
+  if (!(await getRequestPayrollAccessLevel(req))) return loadTreeForCache(req);
+  return loadUnscopedTree();
+}
+
 export const structureController = {
   loadTreeForCache,
   loadDashboardTreeForCache,
@@ -362,6 +378,15 @@ export const structureController = {
       res.json(await loadDashboardTreeForCache(req));
     } catch (error) {
       console.error('Get dashboard structure error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения структуры' });
+    }
+  },
+
+  async getPayrollTree(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json(await loadPayrollTree(req));
+    } catch (error) {
+      console.error('Get payroll structure error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения структуры' });
     }
   },

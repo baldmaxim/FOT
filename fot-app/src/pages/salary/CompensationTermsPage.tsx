@@ -17,7 +17,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
-import { useStructureTree } from '../../hooks/useStructure';
+import { usePayrollStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
@@ -110,7 +110,7 @@ export const CompensationTermsPage: FC = () => {
   const meta = data?.pages[0]?.meta;
   const total = meta?.total ?? 0;
 
-  const structureTree = useStructureTree();
+  const structureTree = usePayrollStructureTree();
   const sectionDepartments = useStaffSectionDepartments();
   // Только ветки компаний (СУ-10, СМ, Бригады), как «Все отделы» в «Управлении кадрами»:
   // «Уволенные», «test», «Допуск Везде» скрыты; подрядчики исключены из списка и так.

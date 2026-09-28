@@ -32,7 +32,7 @@ import {
   type TLifecycleOperationSource,
 } from '../services/employee-lifecycle-operations.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { resolveRolePageAccess } from '../services/access-control.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming, moscowTodayIso } from '../utils/date.utils.js';
 
@@ -1092,7 +1092,9 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
     // Доступ к карточке сотрудника (кадры, руководитель, «все отделы на чтение») сам
     // по себе права на оклады не даёт. Фильтруем в SQL, а не после выборки, чтобы
     // суммы вообще не покидали БД для такого пользователя.
-    const canViewSalary = await resolveEffectivePageAccess(req, '/salary/terms', 'view');
+    // Право — только по роли: персональный доступ к «Зарплате» (миграция 288) открывает
+    // сам раздел, а не кадровые экраны вне его.
+    const canViewSalary = await resolveRolePageAccess(req, '/salary/terms', 'view');
 
     let data: Record<string, unknown>[];
     try {

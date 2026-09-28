@@ -11,7 +11,7 @@ import { employeeEnrichController } from '../controllers/employee-enrich.control
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
 import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
 import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
-import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin, requireSystemAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 import { noStore } from '../middleware/noStore.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
@@ -82,13 +82,16 @@ router.post(
   employeeEnrichController.enrich
 );
 
-// Запись окладов — только с правом на раздел «Зарплата» (/salary/terms), а не
-// «Управление кадрами»: иначе оклады меняла бы любая роль с доступом к кадрам.
+// Legacy-запись окладов (employees/salary_history, мимо «Условий оплаты») — только системный
+// администратор. Не «Управление кадрами» (оклады меняла бы любая роль с доступом к кадрам) и
+// не ключ /salary/terms: его теперь даёт и персональный доступ к «Зарплате» (миграция 288),
+// а он открывает только сам раздел. Импорт пишет по всей организации — админу компании
+// он тоже закрыт.
 
 // POST /api/employees/enrich-salary - импорт окладов и ставок из Excel (требуется 2FA)
 router.post(
   '/enrich-salary',
-  requirePageAccess('/salary/terms', 'edit'),
+  requireSystemAdmin,
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -99,7 +102,7 @@ router.post(
 // POST /api/employees/enrich-salary-history - импорт истории окладов из Excel (требуется 2FA)
 router.post(
   '/enrich-salary-history',
-  requirePageAccess('/salary/terms', 'edit'),
+  requireSystemAdmin,
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -355,10 +358,11 @@ router.post(
   employeesController.moveDepartment
 );
 
-// POST /api/employees/:id/change-salary - изменить оклад (право на /salary/terms, требуется 2FA)
+// POST /api/employees/:id/change-salary - изменить оклад (legacy «+ Оклад» в карточке; только
+// системный администратор — см. комментарий у enrich-salary; требуется 2FA)
 router.post(
   '/:id/change-salary',
-  requirePageAccess('/salary/terms', 'edit'),
+  requireSystemAdmin,
   requireCritical2FA,
   employeesController.changeSalary
 );

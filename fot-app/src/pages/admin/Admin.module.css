@@ -2419,7 +2419,8 @@
 
 .assignmentPanel {
   width: 50%;
-  min-width: 480px;
+  /* 760, а не 480: шесть вкладок (с «Зарплатой») помещаются в ряд и на ноутбуке 1280–1366 px. */
+  min-width: 760px;
   max-width: 800px;
   height: 100vh;
   background: var(--bg-secondary);
@@ -2485,9 +2486,17 @@
   padding: 0 24px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* Шесть вкладок не помещаются в узкую панель (телефон, десктоп ≤1440): ряд прокручивается
+     сам, а не страница. Полоса тонкая, но видимая — иначе мышью до «Зарплаты» не добраться. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .assignmentPanelTab {
+  flex-shrink: 0;
+  white-space: nowrap;
   background: transparent;
   border: none;
   padding: 12px 16px;

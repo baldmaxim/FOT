@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * Лента истории сотрудника: события оклада видны только с правом на раздел «Зарплата».
+ * Лента истории сотрудника: события оклада видны только с правом на раздел «Зарплата»
+ * по РОЛИ (resolveRolePageAccess). Персональный доступ к «Зарплате» (миграция 288)
+ * открывает только сам раздел и эту ленту не расширяет.
  *
  * Доступ к карточке (кадры, руководитель, «Отдел безопасности» с чтением всей организации)
  * сам по себе права на оклады не даёт. Фильтр — в SQL, чтобы суммы не покидали БД.
@@ -10,7 +12,7 @@ const h = vi.hoisted(() => ({
   query: vi.fn(),
   queryOne: vi.fn(),
   canAccessEmployeeInScope: vi.fn(),
-  resolveEffectivePageAccess: vi.fn(),
+  resolveRolePageAccess: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -20,7 +22,7 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 vi.mock('../services/access-control.service.js', () => ({
-  resolveEffectivePageAccess: h.resolveEffectivePageAccess,
+  resolveRolePageAccess: h.resolveRolePageAccess,
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: vi.fn(), log: vi.fn() },
@@ -98,14 +100,14 @@ const historySql = (): { sql: string; params: unknown[] } => {
 };
 
 describe('GET /employees/:id/history — события оклада', () => {
-  it('без права на /salary/terms события оклада не выбираются из БД', async () => {
-    h.resolveEffectivePageAccess.mockResolvedValue(false);
+  it('без ролевого права на /salary/terms события оклада не выбираются из БД', async () => {
+    h.resolveRolePageAccess.mockResolvedValue(false);
     const res = makeRes();
 
     await getHistory(makeReq(), res as never);
 
     expect(res.statusCode).toBe(200);
-    expect(h.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/salary/terms', 'view');
+    expect(h.resolveRolePageAccess).toHaveBeenCalledWith(expect.anything(), '/salary/terms', 'view');
 
     const { sql, params } = historySql();
     expect(sql).toMatch(/event_type\s*<>\s*'salary'/);
@@ -117,8 +119,8 @@ describe('GET /employees/:id/history — события оклада', () => {
     expect(JSON.stringify(res.body)).not.toContain('150000');
   });
 
-  it('с правом на /salary/terms история оклада видна полностью', async () => {
-    h.resolveEffectivePageAccess.mockResolvedValue(true);
+  it('с ролевым правом на /salary/terms история оклада видна полностью', async () => {
+    h.resolveRolePageAccess.mockResolvedValue(true);
     const res = makeRes();
 
     await getHistory(makeReq(), res as never);

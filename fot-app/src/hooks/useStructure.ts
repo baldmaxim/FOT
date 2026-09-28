@@ -26,6 +26,16 @@ export const useStructureTree = (enabled = true) => useTreeQuery(STRUCTURE_QUERY
 export const useDashboardStructureTree = (enabled = true) =>
   useTreeQuery(DASHBOARD_STRUCTURE_QUERY_KEY, () => structureApi.getDashboardTree(), enabled);
 
+// Под префиксом ['structure'] — realtime-инвалидация структуры сбрасывает и его.
+export const PAYROLL_STRUCTURE_QUERY_KEY = ['structure', 'payroll-tree'] as const;
+
+/**
+ * Дерево фильтра «Все отделы» в «Зарплате». С персональным доступом к разделу охват — весь
+ * штат, а общее дерево режется по отделам человека: у бухгалтера фильтр был бы пуст.
+ */
+export const usePayrollStructureTree = (enabled = true) =>
+  useTreeQuery(PAYROLL_STRUCTURE_QUERY_KEY, () => structureApi.getPayrollTree(), enabled);
+
 const useTreeQuery = (
   queryKey: readonly string[],
   fetchTree: () => ReturnType<typeof structureApi.getTree>,

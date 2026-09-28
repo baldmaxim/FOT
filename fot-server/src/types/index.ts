@@ -65,7 +65,12 @@ export interface UserProfileResponse {
   role_name: string;
   position_type: string;
   is_admin: boolean;
-  /** true → роль видит админку (сайдбар и страницы вне личного кабинета). is_admin ⇒ всегда true. */
+  /**
+   * true → у пользователя есть вход в админку (сайдбар и страницы вне личного кабинета):
+   * её даёт роль (admin_access) либо персональный доступ к «Зарплате» (миграция 288) —
+   * иначе получателю на роли только с личным кабинетом не попасть в раздел.
+   * is_admin ⇒ всегда true. Права страниц этот флаг не расширяет: они в page_access.
+   */
   has_admin_access: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
@@ -164,6 +169,8 @@ export interface AuthenticatedRequest extends Request {
     __editable_employee_ids?: Set<number>;
     /** Заместитель ли пользователь (миграция 283) — один запрос на HTTP-запрос. */
     __has_deputy_assignment?: boolean;
+    /** Персональный доступ к «Зарплате» (миграция 288) — один запрос на HTTP-запрос. */
+    __payroll_access_level?: 'view' | 'edit' | null;
     /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */
     __non_deputy_subtree_ids?: string[];
     /** Отделы, где можно ВЕСТИ ТАБЕЛЬ: full-поддерево + поддерево заместителя (миграция 283). */

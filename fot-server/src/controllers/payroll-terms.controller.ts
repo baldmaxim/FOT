@@ -1,7 +1,7 @@
 /**
  * Условия оплаты сотрудников: чтение истории и назначение (в т.ч. массовое).
  *
- * Скоуп проверяется по каждому сотруднику отдельно (canEditEmployeeInScope):
+ * Скоуп проверяется по каждому сотруднику отдельно (canEditPayrollEmployee):
  * ролевого права на страницу мало — бухгалтер подразделения не должен править
  * условия чужих людей. Массовое назначение возвращает отчёт «применено / отклонено»,
  * а не молча пропускает недоступных.
@@ -26,11 +26,11 @@ import {
   type IPayrollSortCursor,
 } from './payroll-terms-list.helpers.js';
 import {
-  canAccessEmployeeInScope,
-  canEditEmployeeInScope,
-  resolveAccessibleDepartmentIds,
-  resolveEditableEmployeeIds,
-} from '../services/data-scope.service.js';
+  canEditPayrollEmployee,
+  canReadPayrollEmployee,
+  resolvePayrollEditPredicate,
+  resolvePayrollReadableDepartmentIds,
+} from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
   assignTerms,
@@ -94,7 +94,7 @@ function handleZodError(error: unknown, res: Response): boolean {
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
-    if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -110,7 +110,7 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
 const getSalaryHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
-    if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -294,7 +294,7 @@ type BaseQuery = z.infer<typeof baseQuerySchema>;
 const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuery) => {
   // «Сегодня» по Москве, как на экране: toISOString() дал бы дату UTC.
   const onDate = query.date ?? moscowTodayIso();
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  const accessible = await resolvePayrollReadableDepartmentIds(req);
   // Корень «Подрядные организации» не найден — подрядчиков не исключаем, но говорим
   // об этом экрану: молча показать лишних людей в зарплатном списке нельзя.
   const contractorRootId = await getContractorRootId();
@@ -404,11 +404,11 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     // can_edit — скоуп правки конкретного сотрудника (то же, что проверит assign):
     // право на страницу есть, а отдел — только на просмотр → карточка без правки.
-    const editable = await resolveEditableEmployeeIds(req);
+    const canEditRow = await resolvePayrollEditPredicate(req);
     // Служебные поля ключа наружу не отдаём.
     const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, ...row }) => ({
       ...row,
-      can_edit: editable === 'all' || editable.has(row.employee_id),
+      can_edit: canEditRow(row.employee_id),
     }));
 
     res.json({
@@ -496,7 +496,7 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
 const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
-    if (!Number.isInteger(employeeId) || !(await canEditEmployeeInScope(req, employeeId))) {
+    if (!Number.isInteger(employeeId) || !(await canEditPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -567,7 +567,7 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
     const allowed: number[] = [];
     const skipped: IAssignResult['skipped'] = [];
     for (const employeeId of body.employee_ids) {
-      if (await canEditEmployeeInScope(req, employeeId)) allowed.push(employeeId);
+      if (await canEditPayrollEmployee(req, employeeId)) allowed.push(employeeId);
       else skipped.push({ employee_id: employeeId, reason: 'NO_ACCESS', message: 'Нет доступа к сотруднику' });
     }
 

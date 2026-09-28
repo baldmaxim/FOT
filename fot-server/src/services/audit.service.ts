@@ -236,6 +236,8 @@ export const AUDIT_ACTIONS = {
   // Кадровое основание, а не секрет — суммы пишем в details.
   PAYROLL_TERMS_ASSIGNED: 'PAYROLL_TERMS_ASSIGNED',
   PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
+  // Персональный доступ к разделу «Зарплата» (миграция 288): было → стало (view | edit | null).
+  PAYROLL_ACCESS_CHANGED: 'PAYROLL_ACCESS_CHANGED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

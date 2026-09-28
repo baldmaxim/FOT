@@ -9,6 +9,11 @@ import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
 import { hasDeputyAssignment } from './data-scope.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
+import {
+  PAYROLL_GRANT_PAGE,
+  getRequestPayrollAccessLevel,
+  payrollGrantAllows,
+} from './payroll/payroll-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
@@ -200,6 +205,28 @@ export async function roleHasManagerAutoAccess(roleRef: string): Promise<boolean
 }
 
 /**
+ * Право страницы только по РОЛИ: bypass для is_admin и матрица роли с гейтом admin_access
+ * (см. resolveEffectivePageAccess). Авто-гранты и персональные назначения (заместитель,
+ * экономист, доступ к «Зарплате») здесь не учитываются.
+ *
+ * Нужна там, где ключ страницы исторически гейтит что-то ВНЕ её раздела: например,
+ * события оклада в общей истории сотрудника смотрят на /salary/terms, а персональный
+ * доступ к «Зарплате» должен открывать только сам раздел.
+ */
+export async function resolveRolePageAccess(
+  req: AuthenticatedRequest,
+  pagePath: string,
+  action: 'view' | 'edit',
+): Promise<boolean> {
+  if (req.user.is_admin) return true;
+  const roleGrantAllowed = isPersonalPageKey(pagePath) || await roleHasAdminAccess(req.user.role_code);
+  if (!roleGrantAllowed) return false;
+  return action === 'edit'
+    ? hasPageEdit(req.user.role_code, pagePath)
+    : hasPageView(req.user.role_code, pagePath);
+}
+
+/**
  * Эффективная проверка доступа к странице: bypass для is_admin (симметрично
  * фронту, где canViewPage возвращает true для админа), role-based по
  * role_page_access + авто-доступ «руководителя» (не-админ с назначенными
@@ -235,13 +262,16 @@ export async function resolveEffectivePageAccess(
     return true;
   }
 
-  const roleGrantAllowed = isPersonalPageKey(pagePath) || await roleHasAdminAccess(req.user.role_code);
-  if (roleGrantAllowed) {
-    const byRole = action === 'edit'
-      ? await hasPageEdit(req.user.role_code, pagePath)
-      : await hasPageView(req.user.role_code, pagePath);
-    if (byRole) return true;
+  // Персональный доступ к «Зарплате» (миграция 288): даёт назначение, а не роль, поэтому
+  // ветка тоже стоит ДО гейта admin_access — получатель бывает на любой роли, в том числе
+  // только с личным кабинетом. Открывает ровно /salary/terms; сравнение строк первым
+  // условием — на любой другой странице ветка не делает запроса.
+  if (pagePath === PAYROLL_GRANT_PAGE
+    && payrollGrantAllows(await getRequestPayrollAccessLevel(req), action)) {
+    return true;
   }
+
+  if (await resolveRolePageAccess(req, pagePath, action)) return true;
 
   const autoAccessEnabled = await roleHasManagerAutoAccess(req.user.role_code);
   if (autoAccessEnabled && await hasManagerAutoAccess(req, pagePath)) return true;

@@ -5,7 +5,7 @@
 import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import { canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 import { getVacationHistory, getVacationSummary } from '../services/payroll/payroll-vacation.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
@@ -13,7 +13,7 @@ import { moscowTodayIso } from '../utils/date.utils.js';
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
-    if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

@@ -34,9 +34,10 @@ const getAssignmentTitle = (data: Record<string, unknown>): string => {
 };
 
 export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ employeeId, history, loading, onRefresh }) => {
-  // Добавить оклад можно только с правом на раздел «Зарплата»: сервер без него вернёт 403.
-  const { canEditPage } = useAuth();
-  const canEditSalary = canEditPage('/salary/terms');
+  // Legacy «+ Оклад» (change-salary) — только системный администратор, как на сервере:
+  // персональный доступ к «Зарплате» открывает сам раздел, а не кадровые карточки.
+  const { isSystemAdmin } = useAuth();
+  const canEditSalary = isSystemAdmin;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');

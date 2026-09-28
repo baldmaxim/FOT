@@ -76,7 +76,10 @@ export interface UserProfile {
   // Алиас role_code — сохраняем для обратной совместимости UI.
   position_type: EmployeePositionType;
   is_admin: boolean;
-  /** true → роль видит админку (страницы вне личного кабинета). Может отсутствовать в старом JWT. */
+  /**
+   * true → есть вход в админку (страницы вне личного кабинета): по роли либо по персональному
+   * доступу к «Зарплате» (миграция 288). Может отсутствовать в старом JWT.
+   */
   has_admin_access?: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;

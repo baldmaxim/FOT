@@ -6,6 +6,7 @@ import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
 import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { resolveCompanyScope } from '../services/data-scope.service.js';
 import { canToggleTimesheetLock } from '../utils/timesheet-lock-toggle.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 import { queryOne } from '../config/postgres.js';
@@ -179,6 +180,39 @@ export const requireAdmin = (
     return;
   }
   next();
+};
+
+/**
+ * Только системный администратор: is_admin без ограничения компанией (user_company_access).
+ *
+ * requireAdmin пропускает и админа компании, а тот обходит page-access по is_admin. Там, где
+ * действие пишет по всей организации (импорт окладов, выдача доступа к «Зарплате» на весь
+ * штат), этого мало: админ компании получил бы права шире своего охвата.
+ */
+export const requireSystemAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Authentication required' });
+    return;
+  }
+  if (!req.user.is_admin) {
+    res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+    return;
+  }
+  try {
+    const scope = await resolveCompanyScope(req);
+    if (scope.roots !== 'all') {
+      res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      return;
+    }
+    next();
+  } catch (error) {
+    console.error('requireSystemAdmin error:', error);
+    res.status(500).json({ success: false, error: 'Authorization check failed' });
+  }
 };
 
 export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction = 'view') => {

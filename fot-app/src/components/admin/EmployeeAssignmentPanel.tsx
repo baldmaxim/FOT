@@ -17,6 +17,9 @@ import { correctionApprovalService } from '../../services/correctionApprovalServ
 import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { usePayrollAccessDraft } from '../../hooks/usePayrollAccessDraft';
+import { useAuth } from '../../contexts/AuthContext';
+import { PayrollAccessTab } from './PayrollAccessTab';
 import styles from '../../pages/admin/Admin.module.css';
 
 const AUTO_EXPAND_ALL_THRESHOLD = 40;
@@ -35,9 +38,9 @@ interface IEmployeeAssignmentPanelProps {
   allowedTabs?: readonly Tab[];
 }
 
-type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend';
+type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'salary';
 
-const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend'];
+const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend', 'salary'];
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -74,7 +77,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   // (/admin/users/access) со всеми вкладками и из «Управления кадрами» только со
   // вкладкой «Человек» (/staff-control/direct-reports). Запросы скрытых вкладок не
   // запускаем — часть их эндпоинтов кадровой роли закрыта и вернула бы 403.
-  const tabAllowed = useCallback((tab: Tab) => allowedTabs.includes(tab), [allowedTabs]);
+  // «Зарплата» (персональный доступ к разделу, миграция 288) — только системному админу:
+  // эндпоинты за requireSystemAdmin, админ компании получил бы 403.
+  const { isSystemAdmin } = useAuth();
+  const tabAllowed = useCallback(
+    (tab: Tab) => allowedTabs.includes(tab) && (tab !== 'salary' || isSystemAdmin),
+    [allowedTabs, isSystemAdmin],
+  );
   const toast = useToast();
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
@@ -141,6 +150,12 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     queryFn: () => weekendApprovalService.listEligible(false),
     enabled: isOpen && tabAllowed('weekend'),
     staleTime: 60_000,
+  });
+
+  // Вкладка «Зарплата»: черновик уровня доступа (Нет / Просмотр / Редактирование).
+  const payrollAccess = usePayrollAccessDraft({
+    employeeId: employee?.employee_id ?? null,
+    enabled: isOpen && tabAllowed('salary'),
   });
 
   const initialDepartmentIds = useMemo(
@@ -288,7 +303,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const hasWeekendChanges = !arraysEqual(draftWeekendDeptIds, initialWeekendDeptIds)
     || !numbersEqual(draftWeekendEmpIds, initialWeekendEmpIds);
   const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDeputyChanges || hasDirectChanges
-    || hasObjectChanges || hasWeekendChanges;
+    || hasObjectChanges || hasWeekendChanges || payrollAccess.hasChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -360,6 +375,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     setDraftObjectIds(initialObjectIds);
     setDraftWeekendDeptIds(initialWeekendDeptIds);
     setDraftWeekendEmpIds(initialWeekendEmpIds);
+    payrollAccess.reset();
     setSearchQuery('');
   };
 
@@ -425,6 +441,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         if (conflicts.length > 0) {
           toast.error(`Часть назначений уже закреплена за другим ответственным (${conflicts.length}) — пропущены`);
         }
+      }
+      // 5) Доступ к «Зарплате» — только если уровень изменён (и уже был загружен).
+      if (payrollAccess.hasChanges) {
+        await payrollAccess.save();
       }
       toast.success('Назначения сохранены');
       // Панель не закрываем: сбрасываем только поиск, добавленный человек остаётся
@@ -549,6 +569,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               Выходные ({draftWeekendDeptIds.length + draftWeekendEmpIds.length})
             </button>
           )}
+          {tabAllowed('salary') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'salary' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('salary'); setSearchQuery(''); }}
+            >
+              Зарплата ({payrollAccess.level ? 1 : 0})
+            </button>
+          )}
         </nav>
 
         <div className={styles.assignmentPanelBody}>
@@ -582,15 +611,17 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               )}
             </div>
           )}
-          <input
-            type="text"
-            placeholder={activeTab === 'person' || (activeTab === 'weekend' && weekendMode === 'employee')
-              ? 'Поиск по ФИО, должности, отделу...'
-              : 'Поиск...'}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className={styles.assignmentPanelSearch}
-          />
+          {activeTab !== 'salary' && (
+            <input
+              type="text"
+              placeholder={activeTab === 'person' || (activeTab === 'weekend' && weekendMode === 'employee')
+                ? 'Поиск по ФИО, должности, отделу...'
+                : 'Поиск...'}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={styles.assignmentPanelSearch}
+            />
+          )}
 
           {activeTab === 'department' && (
             <DepartmentList
@@ -659,6 +690,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               onToggle={toggleWeekendEmp}
               loading={weekendEligibleQuery.isLoading}
               showFree={weekendShowFree}
+            />
+          )}
+
+          {activeTab === 'salary' && (
+            <PayrollAccessTab
+              value={payrollAccess.level}
+              onChange={payrollAccess.setLevel}
+              loading={payrollAccess.isLoading}
+              error={payrollAccess.isError}
+              disabled={saving}
             />
           )}
         </div>

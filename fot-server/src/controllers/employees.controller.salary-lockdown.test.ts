@@ -301,7 +301,7 @@ describe('чтение — поля оклада не покидают БД', ()
   });
 });
 
-describe('роуты записи оклада — только с правом на раздел «Зарплата»', () => {
+describe('роуты legacy-записи оклада — только системный администратор', () => {
   const routesSource = readFileSync(
     path.resolve(__dirname, '..', 'routes', 'employees.routes.ts'),
     'utf8',
@@ -315,12 +315,15 @@ describe('роуты записи оклада — только с правом 
     return routesSource.slice(start, end === -1 ? undefined : end);
   };
 
+  // Не ключ /salary/terms: его даёт и персональный доступ к «Зарплате» (миграция 288), а он
+  // открывает только сам раздел. Не «Управление кадрами»: оклады меняла бы любая кадровая роль.
   it.each(['/:id/change-salary', '/enrich-salary', '/enrich-salary-history'])(
-    '%s защищён /salary/terms edit и 2FA, а не ключом «Управления кадрами»',
+    '%s защищён requireSystemAdmin и 2FA, а не ключами страниц',
     (routePath) => {
       const guards = guardsOf(routePath);
-      expect(guards).toContain("requirePageAccess('/salary/terms', 'edit')");
+      expect(guards).toContain('requireSystemAdmin');
       expect(guards).toContain('requireCritical2FA');
+      expect(guards).not.toContain("'/salary/terms'");
       expect(guards).not.toContain("'/staff-control'");
     },
   );

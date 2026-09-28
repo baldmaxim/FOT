@@ -16,6 +16,7 @@ const PROTECTION_MARKERS = [
   'requirePageAccess',
   'requireAnyPageAccess',
   'requireAdmin',
+  'requireSystemAdmin',
 ];
 
 // Файлы целиком исключены из аудита: содержат публичные роуты или роуты со

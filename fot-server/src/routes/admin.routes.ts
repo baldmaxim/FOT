@@ -2,7 +2,8 @@ import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { timesheetModeController } from '../controllers/timesheet-mode.controller.js';
-import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { payrollAccessController } from '../controllers/payroll-access.controller.js';
+import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess, requireSystemAdmin } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { acceptMemoFile } from '../middleware/blacklistMemoUpload.js';
@@ -155,6 +156,11 @@ router.put('/employees/:id/department-access', requirePageAccess('/admin/users/a
 router.get('/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.listSkudObjectsForAssignment);
 router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.getEmployeeSkudObjects);
 router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeSkudObjectAccess);
+
+// Персональный доступ к разделу «Зарплата» (миграция 288, вкладка «Зарплата» в панели назначений).
+// Только системный администратор: доступ открывает условия оплаты всего штата.
+router.get('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessController.get);
+router.put('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessController.set);
 
 // Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
 router.put('/users/:id/employee-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserEmployeeAccess);
