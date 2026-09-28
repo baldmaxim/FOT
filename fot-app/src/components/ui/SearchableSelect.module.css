@@ -1,0 +1,236 @@
+/* Вид — как у DepartmentTreeSelect: поле-триггер и панель в портале. */
+.wrapper {
+  position: relative;
+  width: 100%;
+}
+
+/* Без z-index в закрытом виде: иначе при прокрутке поле проезжало бы
+   поверх sticky-панелей страницы (например, панели массового выбора). */
+.trigger {
+  position: relative;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.trigger:hover {
+  border-color: var(--text-muted);
+}
+
+.trigger:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+[data-theme="light"] .trigger:focus-within {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+/* Открытый список: поле над подложкой, иначе клик по крестику попал бы в подложку и закрыл список. */
+.triggerOpen {
+  z-index: 1092;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 34px 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.input:focus {
+  cursor: text;
+}
+
+/* Место под крестик — только когда он есть, иначе на узком экране обрезается «Все отделы». */
+.hasClear .input {
+  padding-right: 56px;
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.adornment {
+  position: absolute;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Крестик очистки: виден при наведении или фокусе, на touch-экранах — всегда. */
+.clear {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: opacity 150ms ease-out, color 150ms ease-out;
+}
+
+.trigger:hover .clear,
+.trigger:focus-within .clear {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.clear:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.clear:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1090;
+}
+
+.panel {
+  /* top/left/min-width проставляются inline (см. SearchableSelect.tsx),
+     панель рендерится через React Portal в document.body, поэтому position: fixed. */
+  position: fixed;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 1091;
+  display: flex;
+  flex-direction: column;
+}
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+}
+
+/* block, а не flex: иначе не сработает многоточие у длинного названия. */
+.option {
+  display: block;
+  padding: 5px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.option:hover {
+  background: var(--bg-secondary);
+}
+
+.optionActive {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.allOption {
+  border-bottom: 1px solid var(--border);
+}
+
+.empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Touch: крестик виден всегда и крупнее, строки — тап-цель 44px,
+   шрифт поля 16px — иначе iOS/Android-Chrome зумят страницу при фокусе. */
+@media (hover: none) {
+  .clear {
+    opacity: 1;
+    pointer-events: auto;
+    width: 32px;
+    height: 32px;
+  }
+
+  .input {
+    font-size: 16px;
+  }
+
+  .hasClear .input {
+    padding-right: 64px;
+  }
+
+  .option {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger,
+  .clear {
+    transition: none;
+  }
+}
+
+@media (min-width: 431px) and (max-width: 768px) {
+  .panel {
+    max-width: none;
+  }
+}
+
+@media (max-width: 430px) {
+  /* Высота как у соседних фильтров и поиска на телефоне. */
+  .trigger {
+    height: 32px;
+  }
+
+  /* Панель под полем (top и max-height — inline) на всю ширину экрана: left перебиваем.
+     Ширина от 100vw, а не right: 8px — если страница шире экрана, fixed-панель
+     иначе растягивается по расширенному viewport и уезжает вправо. */
+  .panel {
+    left: 8px !important;
+    right: auto;
+    width: calc(100vw - 16px);
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  /* Список занимает всю панель — её высоту ограничивает inline max-height. */
+  .list {
+    max-height: none;
+  }
+}

@@ -16,6 +16,7 @@ import {
 } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
+import { SearchableSelect } from '../components/ui/SearchableSelect';
 import { HrAckRequestCard } from '../components/leave-requests/HrAckRequestCard';
 import { isLeaveRequestFullyFuture, leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
 import { TIMESHEET_FAMILY_KEYS } from '../api/queryKeys';
@@ -96,7 +97,8 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
   // Под-вкладки: «Не ознакомлен» (hr_acknowledged_at пусто) / «Ознакомлен».
   const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
   const [search, setSearch] = useState('');
-  const [deptFilter, setDeptFilter] = useState<string>('all');
+  // '' — все отделы.
+  const [deptFilter, setDeptFilter] = useState('');
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
 
@@ -109,6 +111,10 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
   const deptOptions = useMemo(
     () => Array.from(new Set(ackFiltered.map(deptKeyOf))).sort(compareDeptKeys),
     [ackFiltered],
+  );
+  const deptSelectOptions = useMemo(
+    () => deptOptions.map(key => ({ value: key, label: key })),
+    [deptOptions],
   );
 
   // Дата МСК на один рендер: по ней решаем, начался ли уже согласованный отпуск.
@@ -124,12 +130,12 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
 
   const query = search.trim().toLowerCase();
   const hasPeriod = periodFrom !== '' || periodTo !== '';
-  const isFiltering = query !== '' || deptFilter !== 'all' || hasPeriod;
+  const isFiltering = query !== '' || deptFilter !== '' || hasPeriod;
 
   const filtered = useMemo(() => {
     if (!isFiltering) return ackFiltered;
     return ackFiltered.filter(r =>
-      (deptFilter === 'all' || deptKeyOf(r) === deptFilter)
+      (deptFilter === '' || deptKeyOf(r) === deptFilter)
       && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
       && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
   }, [ackFiltered, isFiltering, deptFilter, hasPeriod, periodFrom, periodTo, query]);
@@ -292,17 +298,16 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
           <>
             <div className="lrm-header">
               <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
-              <select
-                className="lrm-filter-select"
-                value={deptFilter}
-                onChange={e => setDeptFilter(e.target.value)}
-                aria-label="Фильтр по отделу"
-              >
-                <option value="all">Все отделы</option>
-                {deptOptions.map(key => (
-                  <option key={key} value={key}>{key}</option>
-                ))}
-              </select>
+              <div className="lrm-dept-filter">
+                <SearchableSelect
+                  options={deptSelectOptions}
+                  value={deptFilter}
+                  onChange={setDeptFilter}
+                  allLabel="Все отделы"
+                  placeholder="Поиск отдела..."
+                  ariaLabel="Фильтр по отделу"
+                />
+              </div>
               <div className="lrm-date-range">
                 <span className="lrm-date-label">Период</span>
                 <input

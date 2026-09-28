@@ -14,6 +14,7 @@ import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { useLeaveRequestBulkActions } from '../hooks/useLeaveRequestBulkActions';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
+import { SearchableSelect } from '../components/ui/SearchableSelect';
 import { LeaveRequestRow } from '../components/leave-requests/LeaveRequestRow';
 import { LeaveRequestsBulkBar } from '../components/leave-requests/LeaveRequestsBulkBar';
 import { LeaveRequestsGroup } from '../components/leave-requests/LeaveRequestsGroup';
@@ -59,7 +60,8 @@ export const LeaveRequestsManagePage: FC = () => {
 
   const [filter, setFilter] = useState<'pending' | 'all'>('pending');
   const [search, setSearch] = useState('');
-  const [deptFilter, setDeptFilter] = useState<string>('all');
+  // '' — все отделы.
+  const [deptFilter, setDeptFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
@@ -93,16 +95,20 @@ export const LeaveRequestsManagePage: FC = () => {
     () => Array.from(new Set(baseRequests.map(groupKeyOf))).sort(compareGroupKeys),
     [baseRequests],
   );
+  const deptSelectOptions = useMemo(
+    () => deptOptions.map(key => ({ value: key, label: key === DIRECT_REPORTS_KEY ? DIRECT_REPORTS_TITLE : key })),
+    [deptOptions],
+  );
 
   const query = search.trim().toLowerCase();
   const hasPeriod = periodFrom !== '' || periodTo !== '';
-  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all' || hasPeriod;
+  const isFiltering = query !== '' || deptFilter !== '' || typeFilter !== 'all' || hasPeriod;
 
   const filteredRequests = useMemo(() => {
     if (!isFiltering) return baseRequests;
     return baseRequests.filter(r =>
       (typeFilter === 'all' || r.request_type === typeFilter)
-      && (deptFilter === 'all' || groupKeyOf(r) === deptFilter)
+      && (deptFilter === '' || groupKeyOf(r) === deptFilter)
       && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
       && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
   }, [baseRequests, isFiltering, typeFilter, deptFilter, hasPeriod, periodFrom, periodTo, query]);
@@ -311,19 +317,16 @@ export const LeaveRequestsManagePage: FC = () => {
           {scope === 'all' && (
             <>
               <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
-              <select
-                className="lrm-filter-select"
-                value={deptFilter}
-                onChange={e => setDeptFilter(e.target.value)}
-                aria-label="Фильтр по отделу"
-              >
-                <option value="all">Все отделы</option>
-                {deptOptions.map(key => (
-                  <option key={key} value={key}>
-                    {key === DIRECT_REPORTS_KEY ? DIRECT_REPORTS_TITLE : key}
-                  </option>
-                ))}
-              </select>
+              <div className="lrm-dept-filter">
+                <SearchableSelect
+                  options={deptSelectOptions}
+                  value={deptFilter}
+                  onChange={setDeptFilter}
+                  allLabel="Все отделы"
+                  placeholder="Поиск отдела..."
+                  ariaLabel="Фильтр по отделу"
+                />
+              </div>
               <select
                 className="lrm-filter-select"
                 value={typeFilter}

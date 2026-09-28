@@ -284,7 +284,7 @@ export const CompensationTermsPage: FC = () => {
     <div className={styles.page}>
       <div className={styles.toolbar}>
         <div className={styles.search}>
-          <SearchInput value={search} onValueChange={changeSearch} placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
+          <SearchInput clearable value={search} onValueChange={changeSearch} placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
         </div>
         <div className={styles.department}>
           <DepartmentTreeSelect
