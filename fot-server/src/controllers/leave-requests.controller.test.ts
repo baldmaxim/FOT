@@ -129,6 +129,7 @@ import {
   leaveRequestsController,
   validateLeaveRequestPeriod,
   formatLeaveDateLabel,
+  listOccupiedWorkedDays,
   MAX_MATERIALIZED_LEAVE_DAYS,
 } from './leave-requests.controller.js';
 import { notificationService } from '../services/notification.service.js';
@@ -1118,18 +1119,23 @@ describe('leaveRequestsController.create', () => {
   });
 
   it('work-заявка при создании НЕ материализует корректировки — сначала «Заявления»', async () => {
-    txClient.query.mockResolvedValueOnce({
-      rows: [{
-        id: 900,
-        employee_id: 247,
-        request_type: 'work',
-        status: 'pending',
-        start_date: '2026-06-06',
-        end_date: '2026-06-06',
-        selected_dates: ['2026-06-06'],
-        reason: 'работа в выходной',
-      }],
-      rowCount: 1,
+    // Ответ по тексту SQL: до INSERT транзакция берёт лок и проверяет занятость дня.
+    txClient.query.mockReset();
+    txClient.query.mockImplementation(async (sql: unknown) => {
+      if (!String(sql).includes('INSERT INTO leave_requests')) return { rows: [], rowCount: 0 };
+      return {
+        rows: [{
+          id: 900,
+          employee_id: 247,
+          request_type: 'work',
+          status: 'pending',
+          start_date: '2026-06-06',
+          end_date: '2026-06-06',
+          selected_dates: ['2026-06-06'],
+          reason: 'работа в выходной',
+        }],
+        rowCount: 1,
+      };
     });
     const res = makeRes();
 
@@ -1244,7 +1250,7 @@ describe('leaveRequestsController.create (корректировка — оди�
     expect((dupCall?.[1] as unknown[])[2]).toEqual(['pending', 'approved', 'rejected']);
   });
 
-  it('гард применяется только к time_correction: work на тот же день проходит', async () => {
+  it('гард корректировки не применяется к work: работа на тот же день проходит', async () => {
     const res = makeRes();
 
     await leaveRequestsController.create(makeReq({
@@ -1259,7 +1265,23 @@ describe('leaveRequestsController.create (корректировка — оди�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res._status).toBe(200);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('pg_advisory_xact_lock'))).toBe(false);
+    const lockKeys = txClient.query.mock.calls
+      .filter(c => String(c[0]).includes('pg_advisory_xact_lock'))
+      .map(c => (c[1] as string[])[0]);
+    expect(lockKeys.some(k => k.startsWith('leave_request:time_correction:'))).toBe(false);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('SELECT status FROM leave_requests'))).toBe(false);
+  });
+
+  it('корректировка не проверяет занятость «Работой»/«Удалёнкой»: worked-day лока нет', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq(), res);
+
+    expect(res._status).toBe(200);
+    const lockKeys = txClient.query.mock.calls
+      .filter(c => String(c[0]).includes('pg_advisory_xact_lock'))
+      .map(c => (c[1] as string[])[0]);
+    expect(lockKeys.some(k => k.startsWith('leave_request:worked_day:'))).toBe(false);
   });
 
   it('порядок в транзакции: advisory-лок → выборка дубля → INSERT', async () => {
@@ -1318,6 +1340,213 @@ describe('leaveRequestsController.create (корректировка — оди�
     expect(res._status).toBe(400);
     expect(pgTx).not.toHaveBeenCalled();
     expect(selectableObjectsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('listOccupiedWorkedDays (какие дни держит заявление «Работа»/«Удалёнка»)', () => {
+  const SAT = '2026-07-25';
+  const one = (status: string, request_type = 'work') => ({
+    request_type, status, start_date: SAT, end_date: SAT, selected_dates: [SAT],
+  });
+  const approvals = (status?: string) => new Map<string, string>(status ? [[SAT, status]] : []);
+
+  it.each([
+    ['pending', undefined, 'pending'],
+    ['pending', 'rejected', 'pending'],
+    ['approved', 'pending', 'pending'],
+    ['approved', 'approved', 'approved'],
+    ['approved', 'auto_approved', 'approved'],
+    ['approved', undefined, 'approved'],
+    ['rejected', 'pending', 'pending'],
+    ['rejected', 'approved', 'approved'],
+    ['rejected', 'auto_approved', 'approved'],
+  ] as Array<[string, string | undefined, string]>)('заявление %s, строка дня %s → день занят (%s)', (status, dayStatus, state) => {
+    expect(listOccupiedWorkedDays(one(status), approvals(dayStatus))).toEqual([{ date: SAT, state }]);
+  });
+
+  it.each([
+    ['approved', 'rejected'],
+    ['rejected', 'rejected'],
+    ['rejected', undefined],
+    ['cancelled', undefined],
+    ['cancelled', 'pending'],
+  ] as Array<[string, string | undefined]>)('заявление %s, строка дня %s → день свободен', (status, dayStatus) => {
+    expect(listOccupiedWorkedDays(one(status), approvals(dayStatus))).toEqual([]);
+  });
+
+  it('многодневная work с частичным отказом держит только живые дни', () => {
+    const request = {
+      request_type: 'work', status: 'rejected',
+      start_date: '2026-09-26', end_date: '2026-09-27', selected_dates: ['2026-09-26', '2026-09-27'],
+    };
+    const dayApprovals = new Map([['2026-09-26', 'rejected'], ['2026-09-27', 'pending']]);
+    expect(listOccupiedWorkedDays(request, dayApprovals)).toEqual([{ date: '2026-09-27', state: 'pending' }]);
+  });
+
+  it('удалёнка периодом без selected_dates не держит субботу и воскресенье', () => {
+    const request = {
+      request_type: 'remote', status: 'pending',
+      start_date: '2026-09-25', end_date: '2026-09-28', selected_dates: null,
+    };
+    expect(listOccupiedWorkedDays(request, new Map()).map(d => d.date)).toEqual(['2026-09-25', '2026-09-28']);
+  });
+});
+
+describe('leaveRequestsController.create (Работа/Удалёнка — одно заявление на день)', () => {
+  const SAT = '2026-07-25';
+  type Candidate = {
+    id: number; request_type: string; status: string;
+    start_date: string; end_date: string; selected_dates: string[] | null;
+  };
+  type DayRow = { source_id: string; work_date: string; approval_status: string };
+
+  const candidate = (over: Partial<Candidate> = {}): Candidate => ({
+    id: 800, request_type: 'work', status: 'pending',
+    start_date: SAT, end_date: SAT, selected_dates: [SAT], ...over,
+  });
+
+  // txClient отвечает по тексту SQL: кандидаты, строки дней и INSERT задаются в тесте.
+  const setupTx = (candidates: Candidate[], dayRows: DayRow[] = []) => {
+    txClient.query.mockReset();
+    txClient.query.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+      if (text.includes('FROM leave_requests') && text.includes('request_type = ANY')) {
+        return { rows: candidates, rowCount: candidates.length };
+      }
+      if (text.includes('FROM attendance_adjustments')) return { rows: dayRows, rowCount: dayRows.length };
+      if (text.includes('INSERT INTO leave_requests')) {
+        return {
+          rows: [{ id: 950, employee_id: 247, request_type: 'work', status: 'pending', start_date: SAT, end_date: SAT, selected_dates: [SAT] }],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+  };
+
+  const makeWorkedDayReq = (request_type: 'work' | 'remote', dates: string[] = [SAT]) => makeReq({
+    body: {
+      request_type,
+      start_date: dates[0],
+      end_date: dates[dates.length - 1],
+      selected_dates: dates,
+      reason: 'выход на объект',
+    },
+    user: { ...makeReq().user, employee_id: 247 },
+  } as Partial<AuthenticatedRequest>);
+
+  const insertCalls = () =>
+    txClient.query.mock.calls.filter(c => String(c[0]).includes('INSERT INTO leave_requests'));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    setupTx([]);
+  });
+
+  it.each([
+    ['work', 'work на рассмотрении у руководителя', [candidate()], [], 'на согласовании'],
+    ['work', 'work у ответственного за выходные', [candidate({ status: 'approved' })], [{ source_id: '800', work_date: SAT, approval_status: 'pending' }], 'на согласовании'],
+    ['work', 'work уже согласована', [candidate({ status: 'approved' })], [{ source_id: '800', work_date: SAT, approval_status: 'approved' }], 'согласовано'],
+    ['remote', 'remote на рассмотрении (двойной клик)', [candidate({ request_type: 'remote' })], [], 'на согласовании'],
+    ['remote', 'work на рассмотрении', [candidate()], [], 'на согласовании'],
+    ['work', 'remote согласована', [candidate({ request_type: 'remote', status: 'approved' })], [{ source_id: '800', work_date: SAT, approval_status: 'auto_approved' }], 'согласовано'],
+  ] as Array<['work' | 'remote', string, Candidate[], DayRow[], string]>)(
+    '409 DAY_ALREADY_REQUESTED: подаём %s, а на день уже есть %s',
+    async (requestType, _title, candidates, dayRows, stateLabel) => {
+      setupTx(candidates, dayRows);
+      const res = makeRes();
+
+      await leaveRequestsController.create(makeWorkedDayReq(requestType), res);
+
+      expect(res._status).toBe(409);
+      const body = res._json as { code: string; error: string };
+      expect(body.code).toBe('DAY_ALREADY_REQUESTED');
+      expect(body.error).toContain('25.07.2026');
+      expect(body.error).toContain(`(${stateLabel})`);
+      expect(insertCalls()).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ['руководитель отказал (строк дня нет)', [candidate({ status: 'rejected' })], []],
+    ['ответственный за выходные отказал по work', [candidate({ status: 'rejected' })], [{ source_id: '800', work_date: SAT, approval_status: 'rejected' }]],
+    ['ответственный отказал по remote (статус заявления остался approved)', [candidate({ request_type: 'remote', status: 'approved' })], [{ source_id: '800', work_date: SAT, approval_status: 'rejected' }]],
+    ['прежних заявлений нет или они отменены', [], []],
+  ] as Array<[string, Candidate[], DayRow[]]>)(
+    'подача проходит: %s',
+    async (_title, candidates, dayRows) => {
+      setupTx(candidates, dayRows);
+      const res = makeRes();
+
+      await leaveRequestsController.create(makeWorkedDayReq('work'), res);
+
+      expect(res._status).toBe(200);
+      expect(insertCalls()).toHaveLength(1);
+    },
+  );
+
+  it('две старые заявки на один день: отказ по одной не освобождает день, пока другая на проверке', async () => {
+    setupTx(
+      [candidate({ id: 5550, status: 'rejected' }), candidate({ id: 5551, status: 'approved' })],
+      [
+        { source_id: '5550', work_date: SAT, approval_status: 'rejected' },
+        { source_id: '5551', work_date: SAT, approval_status: 'pending' },
+      ],
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeWorkedDayReq('work'), res);
+
+    expect(res._status).toBe(409);
+    expect((res._json as { error: string }).error).toContain('(на согласовании)');
+    expect(insertCalls()).toHaveLength(0);
+  });
+
+  it('в тексте отказа только занятые дни многодневной заявки', async () => {
+    setupTx(
+      [candidate({ start_date: '2026-09-20', end_date: '2026-09-20', selected_dates: ['2026-09-20'] })],
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeWorkedDayReq('work', ['2026-09-19', '2026-09-20', '2026-09-26']), res);
+
+    expect(res._status).toBe(409);
+    const error = (res._json as { error: string }).error;
+    expect(error).toContain('На 20.09.2026 ');
+    expect(error).not.toContain('19.09');
+    expect(error).not.toContain('26.09');
+  });
+
+  it('порядок в транзакции: worked-day лок → выборка занятости → INSERT; ключ лока по сотруднику', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeWorkedDayReq('remote', ['2026-09-19', '2026-09-26']), res);
+
+    expect(res._status).toBe(200);
+    const calls = txClient.query.mock.calls;
+    const sqls = calls.map(c => String(c[0]));
+    const lockIdx = sqls.findIndex(t => t.includes('pg_advisory_xact_lock'));
+    const selectIdx = sqls.findIndex(t => t.includes('FROM leave_requests') && t.includes('request_type = ANY'));
+    const insIdx = sqls.findIndex(t => t.includes('INSERT INTO leave_requests'));
+    expect(lockIdx).toBe(0);
+    expect(lockIdx).toBeLessThan(selectIdx);
+    expect(selectIdx).toBeLessThan(insIdx);
+    expect((calls[lockIdx][1] as string[])[0]).toBe('leave_request:worked_day:247');
+    // Кандидаты: оба типа, без отменённых, пересечение по крайним дням новой заявки.
+    expect(calls[selectIdx][1]).toEqual([247, ['work', 'remote'], ['pending', 'approved', 'rejected'], '2026-09-19', '2026-09-26']);
+  });
+
+  it('строки дней берутся только этого сотрудника и этих заявлений', async () => {
+    setupTx([candidate({ id: 801 }), candidate({ id: 802, status: 'approved' })]);
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeWorkedDayReq('work'), res);
+
+    const dayCall = txClient.query.mock.calls.find(c => String(c[0]).includes('FROM attendance_adjustments'));
+    expect(String(dayCall?.[0])).toContain("source_type = 'leave_request'");
+    expect(dayCall?.[1]).toEqual([247, ['801', '802']]);
   });
 });
 

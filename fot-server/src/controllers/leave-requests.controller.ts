@@ -491,6 +491,117 @@ function collectMaterializedLeaveDates(request: {
   return [...new Set(isoDates)].sort();
 }
 
+// «Работа в выходной/праздник» и «Удалёнка» на один день не дублируются (друг друга
+// тоже блокируют): пока заявление на день на рассмотрении у руководителя, у
+// ответственного за выходные или уже согласовано, новое на этот день не подать.
+// Отказ на любом этапе и отмена день освобождают.
+const WORKED_DAY_REQUEST_TYPES: readonly string[] = ['work', 'remote'];
+// cancelled в выборку не входит: отменённое заявление день не держит никогда.
+const WORKED_DAY_CANDIDATE_STATUSES: readonly string[] = ['pending', 'approved', 'rejected'];
+export type WorkedDayState = 'pending' | 'approved';
+const WORKED_DAY_STATE_LABEL: Record<WorkedDayState, string> = {
+  pending: 'на согласовании',
+  approved: 'согласовано',
+};
+
+/**
+ * Дни заявления work/remote, которые оно ещё держит. Решение по дню берётся из строки
+ * attendance_adjustments ЭТОГО заявления (`dayApprovals`: дата → approval_status), а не
+ * только из статуса заявления: отказ ответственного за выходные у remote статус заявления
+ * не меняет (синхронизация есть только у work), а у work при частичном отказе многодневной
+ * заявки статус становится rejected, хотя остальные дни ещё живы.
+ */
+export function listOccupiedWorkedDays(
+  request: {
+    request_type: string;
+    status: string;
+    start_date: string;
+    end_date: string;
+    selected_dates: string[] | null;
+  },
+  dayApprovals: ReadonlyMap<string, string>,
+): Array<{ date: string; state: WorkedDayState }> {
+  const occupied: Array<{ date: string; state: WorkedDayState }> = [];
+  for (const date of collectMaterializedLeaveDates(request)) {
+    const dayStatus = dayApprovals.get(date);
+    if (request.status === 'pending') {
+      occupied.push({ date, state: 'pending' });
+    } else if (request.status === 'approved') {
+      if (dayStatus !== 'rejected') occupied.push({ date, state: dayStatus === 'pending' ? 'pending' : 'approved' });
+    } else if (request.status === 'rejected') {
+      if (dayStatus === 'pending') occupied.push({ date, state: 'pending' });
+      else if (dayStatus === 'approved' || dayStatus === 'auto_approved') occupied.push({ date, state: 'approved' });
+    }
+  }
+  return occupied;
+}
+
+/**
+ * Дни из `requestedDays` (отсортированы, без повторов), которые держат другие заявления
+ * work/remote сотрудника. Вызывать в транзакции подачи под worked-day локом.
+ */
+async function findOccupiedWorkedDays(
+  client: DbExecutor,
+  employeeId: number,
+  requestedDays: string[],
+): Promise<Array<{ date: string; state: WorkedDayState }>> {
+  if (requestedDays.length === 0) return [];
+  const candidates = (await client.query<{
+    id: number;
+    request_type: string;
+    status: string;
+    start_date: string;
+    end_date: string;
+    selected_dates: string[] | null;
+  }>(
+    `SELECT id, request_type, status, start_date, end_date, selected_dates
+       FROM leave_requests
+      WHERE employee_id = $1
+        AND request_type = ANY($2::text[])
+        AND status = ANY($3::text[])
+        AND start_date <= $5::date
+        AND end_date >= $4::date`,
+    [
+      employeeId,
+      WORKED_DAY_REQUEST_TYPES,
+      WORKED_DAY_CANDIDATE_STATUSES,
+      requestedDays[0],
+      requestedDays[requestedDays.length - 1],
+    ],
+  )).rows;
+  if (candidates.length === 0) return [];
+
+  // Строка дня однозначна: уникальный индекс (employee_id, work_date, source_type, source_id).
+  const dayRows = (await client.query<{ source_id: string; work_date: string; approval_status: string }>(
+    `SELECT source_id, work_date::text AS work_date, approval_status
+       FROM attendance_adjustments
+      WHERE employee_id = $1
+        AND source_type = 'leave_request'
+        AND source_id = ANY($2::text[])`,
+    [employeeId, candidates.map(c => String(c.id))],
+  )).rows;
+  const approvalsByRequest = new Map<string, Map<string, string>>();
+  for (const row of dayRows) {
+    const byDate = approvalsByRequest.get(String(row.source_id)) ?? new Map<string, string>();
+    byDate.set(String(row.work_date), String(row.approval_status));
+    approvalsByRequest.set(String(row.source_id), byDate);
+  }
+
+  const requested = new Set(requestedDays);
+  const occupied = new Map<string, WorkedDayState>();
+  for (const candidate of candidates) {
+    const days = listOccupiedWorkedDays(candidate, approvalsByRequest.get(String(candidate.id)) ?? new Map());
+    for (const { date, state } of days) {
+      if (!requested.has(date)) continue;
+      // «На согласовании» важнее «согласовано»: именно этого решения сотрудник и ждёт.
+      if (occupied.get(date) !== 'pending') occupied.set(date, state);
+    }
+  }
+  return [...occupied.entries()]
+    .map(([date, state]) => ({ date, state }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 /**
  * Берёт advisory-локи квоты (employee, YYYYMM) для набора дат на УЖЕ ОТКРЫТОМ клиенте
  * транзакции. Ключи сортируются по возрастанию месяца — детерминированный порядок
@@ -653,6 +764,11 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       normalizedSelectedDates = uniq;
     }
 
+    // «Работа»/«Удалёнка»: дни новой заявки — по тем же правилам, что материализация.
+    const workedDays = WORKED_DAY_REQUEST_TYPES.includes(request_type)
+      ? collectMaterializedLeaveDates({ request_type, start_date, end_date, selected_dates: normalizedSelectedDates })
+      : [];
+
     const attachmentIds = Array.isArray(attachments)
       ? attachments.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
       : [];
@@ -722,6 +838,16 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         if (existing) return { duplicate: true as const, duplicateStatus: existing.status };
       }
 
+      // Лок на сотрудника сериализует конкурентные подачи (двойной клик): вторая
+      // транзакция ждёт коммита первой и уже видит её заявление.
+      if (workedDays.length > 0) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `leave_request:worked_day:${employeeId}`,
+        ]);
+        const occupiedDays = await findOccupiedWorkedDays(client, employeeId, workedDays);
+        if (occupiedDays.length > 0) return { duplicate: false as const, occupiedDays };
+      }
+
       const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
       const insertCasts: string[] = ['', '', '', '', ''];
@@ -783,6 +909,23 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         success: false,
         code: 'CORRECTION_ALREADY_REQUESTED',
         error: `Корректировка на ${dateLabel} уже подавалась (${BLOCKING_CORRECTION_LABEL[result.duplicateStatus]}). Повторная подача на этот день невозможна.`,
+      });
+      return;
+    }
+    if (result.occupiedDays) {
+      const dates = result.occupiedDays.map(d => d.date);
+      const states = [...new Set(result.occupiedDays.map(d => WORKED_DAY_STATE_LABEL[d.state]))].join(' / ');
+      const dateLabel = formatLeaveDateLabel({
+        request_type,
+        start_date: dates[0],
+        end_date: dates[dates.length - 1],
+        correction_date: null,
+        selected_dates: dates,
+      });
+      res.status(409).json({
+        success: false,
+        code: 'DAY_ALREADY_REQUESTED',
+        error: `На ${dateLabel} уже есть заявление (${states}). Повторно подать можно только после отказа или отмены.`,
       });
       return;
     }
