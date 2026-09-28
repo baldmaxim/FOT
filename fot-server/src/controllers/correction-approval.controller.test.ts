@@ -49,8 +49,31 @@ vi.mock('../services/audit.service.js', () => ({
   },
   auditService: { logFromRequest: vi.fn(async () => undefined) },
 }));
-vi.mock('./timesheet.controller.js', () => ({
-  reapproveAdjustmentsForRange: vi.fn(async () => 0),
+// Транзакция решения: колбэк исполняется на фейковом tx-клиенте. Исключение внутри
+// пробрасывается без «коммита» — как ROLLBACK + rethrow у настоящего withTransaction.
+const { txClient, commits } = vi.hoisted(() => ({
+  txClient: { query: vi.fn() },
+  commits: { count: 0 },
+}));
+vi.mock('./timesheet.controller.js', () => {
+  const inTx = async (fn: (client: typeof txClient) => Promise<unknown>): Promise<unknown> => {
+    const out = await fn(txClient);
+    commits.count += 1;
+    return out;
+  };
+  return {
+    reapproveAdjustmentsForRange: vi.fn(async () => 0),
+    reapproveEmployeeMonthTail: vi.fn(async () => []),
+    reportQuotaTailTransitions: vi.fn(async () => undefined),
+    withEmployeeMonthQuotaLock: vi.fn(
+      (_employeeId: number, _workDate: string, fn: (client: typeof txClient) => Promise<unknown>) => inTx(fn),
+    ),
+    withQuotaLocks: vi.fn((_pairs: unknown, fn: (client: typeof txClient) => Promise<unknown>) => inTx(fn)),
+  };
+});
+// Закрытых периодов нет: решение не упирается в гард табеля.
+vi.mock('../services/timesheet-version.service.js', () => ({
+  loadClosedTimesheetLocks: vi.fn(async () => new Map()),
 }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({
@@ -66,6 +89,8 @@ vi.mock('../services/employee-skud-object-access.service.js', () => ({
 }));
 
 import { correctionApprovalController } from './correction-approval.controller.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { auditService } from '../services/audit.service.js';
 
 function makeReq(employeeId: number): AuthenticatedRequest {
   return {
@@ -341,5 +366,202 @@ describe('correctionApprovalController.getAllByResponsible (админ-обзо�
     // pending-статусы биндятся через $1::text[].
     expect(sql).toContain('$1::text[]');
     expect(params[0]).toEqual(['pending']);
+  });
+});
+
+describe('решение по дню «Работы в выходной»: заявка синхронизируется в транзакции решения', () => {
+  // День 77 заявки 900 сотрудника 247 адресован ответственному за выходные 2063.
+  const ADJ = { id: 77, employee_id: 247, work_date: '2026-06-06' };
+  // Заявка, у которой сменился статус (строка RETURNING синхронизации).
+  let syncedRow: { id: number; employee_id: number; status: string } = { id: 900, employee_id: 247, status: 'approved' };
+  let failSync = false;
+  let syncCommitsSeen: number[] = [];
+
+  const reqAs = (employeeId: number, extra: { params?: Record<string, string>; body?: Record<string, unknown> } = {}) => {
+    const req = makeReq(employeeId);
+    return { ...req, params: extra.params ?? {}, body: extra.body ?? {} } as unknown as AuthenticatedRequest;
+  };
+  const txSql = () => txClient.query.mock.calls.map(c => String(c[0]));
+  const syncCalls = () => txClient.query.mock.calls.filter(c => String(c[0]).includes('UPDATE leave_requests'));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    txClient.query.mockReset();
+    commits.count = 0;
+    failSync = false;
+    syncCommitsSeen = [];
+    syncedRow = { id: 900, employee_id: 247, status: 'approved' };
+    accessibleMock.mockResolvedValue('all');
+    editableMock.mockResolvedValue('all');
+    routeMock.mockResolvedValue(new Map([[77, [2063]], [78, [2063]]]));
+    txClient.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('UPDATE attendance_adjustments')) {
+        const ids = Array.isArray(params?.[4]) ? params[4] as number[]
+          : Array.isArray(params?.[0]) ? params[0] as number[]
+            : Array.isArray(params?.[2]) ? params[2] as number[]
+              : [ADJ.id];
+        return { rows: ids.map(id => ({ id })), rowCount: ids.length };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        syncCommitsSeen.push(commits.count);
+        if (failSync) throw new Error('sync failed');
+        return { rows: [syncedRow], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+  });
+
+  // filterApprovableIds: отделы сотрудников строк.
+  const mockApprovableEmployees = () => {
+    pgQuery.mockResolvedValueOnce([{ id: ADJ.employee_id, org_department_id: 'D1' }]);
+  };
+
+  it('approveOne: день и заявка меняются одним tx-клиентом, до коммита; realtime — после', async () => {
+    pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '77' } }), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { approval_status: string } }).data.approval_status).toBe('approved');
+    const sql = txSql();
+    const adjIdx = sql.findIndex(s => s.includes('UPDATE attendance_adjustments'));
+    const syncIdx = sql.findIndex(s => s.includes('UPDATE leave_requests'));
+    expect(adjIdx).toBeGreaterThanOrEqual(0);
+    expect(syncIdx).toBeGreaterThan(adjIdx);
+    expect(syncCalls()[0][1]).toEqual([[77], 'user-2063', null]);
+    // Синхронизация — внутри транзакции (до коммита), а не отдельным запросом через пул.
+    expect(syncCommitsSeen).toEqual([0]);
+    expect(commits.count).toBe(1);
+    expect(pgQuery.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+    await vi.waitFor(() => expect(vi.mocked(emitDomainChange).mock.calls
+      .some(c => c[0].event === 'leave_request:changed')).toBe(true));
+    const leaveEmit = vi.mocked(emitDomainChange).mock.calls.find(c => c[0].event === 'leave_request:changed');
+    expect(leaveEmit?.[0].payload).toMatchObject({ entityId: 900, employeeId: 247, action: 'approve' });
+  });
+
+  it('rejectOne: комментарий отказа уходит в заявку той же транзакцией', async () => {
+    syncedRow = { id: 900, employee_id: 247, status: 'rejected' };
+    pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.rejectOne(
+      reqAs(2063, { params: { id: '77' }, body: { comment: 'нет основания' } }), res,
+    );
+
+    expect(res._status).toBe(200);
+    expect(syncCalls()[0][1]).toEqual([[77], 'user-2063', 'нет основания']);
+    expect(syncCommitsSeen).toEqual([0]);
+  });
+
+  it('сбой синхронизации откатывает решение: 500, коммита нет, realtime и аудита нет', async () => {
+    failSync = true;
+    pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '77' } }), res);
+
+    expect(res._status).toBe(500);
+    expect(commits.count).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(emitDomainChange).not.toHaveBeenCalled();
+    expect(auditService.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('bulkApproveByIds: все обработанные дни синхронизируются внутри транзакции', async () => {
+    pgQuery
+      .mockResolvedValueOnce([
+        { ...ADJ, approval_status: 'pending' },
+        { id: 78, employee_id: 247, work_date: '2026-06-13', approval_status: 'pending' },
+      ]);
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.bulkApproveByIds(reqAs(2063, { body: { ids: [77, 78] } }), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { processed_count: number } }).data.processed_count).toBe(2);
+    expect(syncCalls()[0][1]).toEqual([[77, 78], 'user-2063', null]);
+    expect(syncCommitsSeen).toEqual([0]);
+  });
+
+  it('bulkRevertByIds: откат возвращает заявку в pending той же транзакцией', async () => {
+    syncedRow = { id: 900, employee_id: 247, status: 'pending' };
+    pgQuery.mockResolvedValueOnce([{ ...ADJ, approval_status: 'approved' }]);
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.bulkRevertByIds(reqAs(2063, { body: { ids: [77] } }), res);
+
+    expect(res._status).toBe(200);
+    expect(syncCalls()[0][1]).toEqual([[77], 'user-2063', null]);
+    expect(syncCommitsSeen).toEqual([0]);
+  });
+
+  it('revertOne: одиночный откат тоже синхронизирует заявку (раньше не синхронизировал вовсе)', async () => {
+    syncedRow = { id: 900, employee_id: 247, status: 'pending' };
+    pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'approved' });
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.revertOne(reqAs(2063, { params: { id: '77' } }), res);
+
+    expect(res._status).toBe(200);
+    expect(syncCalls()[0][1]).toEqual([[77], 'user-2063', null]);
+    expect(syncCommitsSeen).toEqual([0]);
+    await vi.waitFor(() => expect(vi.mocked(emitDomainChange).mock.calls
+      .some(c => c[0].event === 'leave_request:changed' && c[0].payload?.action === 'revert')).toBe(true));
+  });
+
+  it('согласование отдела: синхронизация внутри транзакции', async () => {
+    pgQuery
+      .mockResolvedValueOnce([{ id: ADJ.employee_id }]) // сотрудники отдела
+      .mockResolvedValueOnce([ADJ]); // pending-кандидаты периода
+    mockApprovableEmployees();
+    const res = makeRes();
+
+    await correctionApprovalController.bulkApprove(
+      reqAs(2063, { body: { department_id: 'D1', start_date: '2026-06-01', end_date: '2026-06-30' } }), res,
+    );
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { approved_count: number } }).data.approved_count).toBe(1);
+    expect(syncCalls()[0][1]).toEqual([[77], 'user-2063', null]);
+    expect(syncCommitsSeen).toEqual([0]);
+  });
+
+  it('сценарий: день заявки виден только ответственному, его решение закрывает заявку', async () => {
+    // Другой админ строку не видит (routed-строка — только ответственному).
+    mockPendingQueries();
+    routeMock.mockResolvedValueOnce(new Map([[10, [2063]]]));
+    const adminRes = makeRes();
+    await correctionApprovalController.getPendingByDepartment(makeReq(999), adminRes);
+    expect((adminRes._json as { data: unknown[] }).data).toEqual([]);
+
+    // Ответственный её видит…
+    mockPendingQueries();
+    routeMock.mockResolvedValueOnce(new Map([[10, [2063]]]));
+    pgQuery.mockResolvedValueOnce([{ id: 'D1', name: 'Отдел по управлению персоналом' }]);
+    const respRes = makeRes();
+    await correctionApprovalController.getPendingByDepartment(makeReq(2063), respRes);
+    const groups = (respRes._json as { data: Array<{ items: Array<{ id: number }> }> }).data;
+    expect(groups[0].items.map(i => i.id)).toEqual([10]);
+
+    // …и его решение переводит заявку в approved с ним как согласующим.
+    routeMock.mockResolvedValueOnce(new Map([[10, [2063]]]));
+    pgQueryOne.mockResolvedValueOnce({ id: 10, employee_id: 1, work_date: '2026-06-06', approval_status: 'pending' });
+    pgQuery.mockResolvedValueOnce([{ id: 1, org_department_id: 'D1' }]);
+    syncedRow = { id: 900, employee_id: 1, status: 'approved' };
+    const approveRes = makeRes();
+    await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '10' } }), approveRes);
+
+    expect(approveRes._status).toBe(200);
+    expect(syncCalls()[0][1]).toEqual([[10], 'user-2063', null]);
   });
 });

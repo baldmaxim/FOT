@@ -633,6 +633,9 @@ async function materializeLeaveRequestAdjustments(
   // user_profiles.id одобряющего, если он сам — ответственный за выходные
   // сотрудника: pending-дни схлопываются в approved без второго этапа.
   weekendCollapseApproverUserId: string | null = null,
+  // Статусы, уже рассчитанные вызывающим под этим же локом. Повторный резолв мог бы с
+  // ними разойтись: график, whitelist и отдел precheck читает вне транзакции.
+  plannedStatuses: ReadonlyMap<string, 'auto_approved' | 'pending'> | null = null,
 ): Promise<{ dates: string[]; hasPending: boolean }> {
   const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
     ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
@@ -649,7 +652,7 @@ async function materializeLeaveRequestAdjustments(
   await lockQuotaMonthsOnClient(client, request.employee_id, isoDates);
 
   for (const iso of isoDates) {
-    const resolvedStatus = await resolveAdjustmentApprovalStatus(
+    const resolvedStatus = plannedStatuses?.get(iso) ?? await resolveAdjustmentApprovalStatus(
       request.employee_id,
       iso,
       timesheetStatus,
@@ -677,6 +680,92 @@ async function materializeLeaveRequestAdjustments(
   }
 
   return { dates: isoDates, hasPending };
+}
+
+interface IWeekendApprovalsRoute {
+  responsibleEmployeeId: number;
+  /** user_profiles.id ответственного — адресаты уведомления и realtime. */
+  responsibleUserIds: string[];
+}
+
+/**
+ * «Работа в выходной», которую в «Заявлениях» согласовать некому: заявитель сам начальник
+ * отдела без личного руководителя либо в отделе руководителя нет вовсе. Такую заявку видят
+ * только админы, а уведомление не получает никто — она неделями висит «ничьей».
+ *
+ * Если каждый её день требует согласования выходного и у сотрудника есть ответственный за
+ * выходные с рабочей учёткой, дни материализуются pending сразу при подаче: заявка уходит из
+ * «Заявлений» к ответственному в «Согласования», а его решение переносится в заявку
+ * синхронизацией внутри транзакции решения (work-leave-request-sync.service).
+ * Иначе null — строго до каких-либо записей, и заявка идёт обычным путём.
+ */
+async function routeWorkRequestToWeekendApprovals(
+  request: {
+    id: number;
+    employee_id: number;
+    request_type: string;
+    start_date: string;
+    end_date: string;
+    selected_dates: string[] | null;
+    reason: string | null;
+  },
+  authorUserId: string,
+  client: DbExecutor,
+): Promise<IWeekendApprovalsRoute | null> {
+  const employeeId = Number(request.employee_id);
+  const emp = await queryOne<{ org_department_id: string | null }>(
+    'SELECT org_department_id FROM employees WHERE id = $1',
+    [employeeId],
+  );
+  const departmentId = emp?.org_department_id ?? null;
+
+  const firstStage = (await resolveResponsibleEmployeeIdsByEmployee(
+    [{ employee_id: employeeId, org_department_id: departmentId }],
+  )).get(employeeId) ?? [];
+  if (firstStage.length > 0) return null;
+
+  const responsibleEmployeeId = await resolveResponsibleEmployeeForTarget(employeeId, departmentId);
+  if (responsibleEmployeeId == null || Number(responsibleEmployeeId) === employeeId) return null;
+
+  // Routed-строку в «Согласованиях» видит и решает только ответственный (админ — лишь
+  // в «Просмотре»). Без рабочей учётки заявка снова стала бы ничьей — оставляем её админам.
+  const profiles = await query<{ id: string }>(
+    `SELECT up.id
+       FROM user_profiles up
+       JOIN employees e ON e.id = up.employee_id
+      WHERE up.employee_id = $1
+        AND up.is_approved = true
+        AND e.is_archived = false
+        AND e.employment_status = 'active'`,
+    [responsibleEmployeeId],
+  );
+  const responsibleUserIds = profiles.map(p => String(p.id));
+  if (responsibleUserIds.length === 0) {
+    const message = `[leave-requests] work ${request.id}: у ответственного за выходные ${responsibleEmployeeId} нет рабочей учётки — заявка остаётся в «Заявлениях»`;
+    console.warn(message);
+    Sentry.captureMessage(message, 'warning');
+    return null;
+  }
+
+  const isoDates = collectMaterializedLeaveDates(request);
+  if (isoDates.length === 0) return null;
+  await lockQuotaMonthsOnClient(client, employeeId, isoDates);
+  if (await hasLockedTimesheetDates(employeeId, isoDates, client)) return null;
+
+  const plannedStatuses = new Map<string, 'auto_approved' | 'pending'>();
+  for (const iso of isoDates) {
+    const status = await resolveAdjustmentApprovalStatus(
+      employeeId, iso, LEAVE_TO_TIMESHEET.work, null, false, null, client,
+    );
+    // Квотная суббота, рабочий по графику день, отдел вне whitelist: второго этапа нет,
+    // такую заявку, как и раньше, решают в «Заявлениях».
+    if (status !== 'pending') return null;
+    plannedStatuses.set(iso, status);
+  }
+
+  // Последний шаг — запись ровно рассчитанных статусов; после неё только не-null.
+  await materializeLeaveRequestAdjustments(request, authorUserId, client, null, plannedStatuses);
+  return { responsibleEmployeeId: Number(responsibleEmployeeId), responsibleUserIds };
 }
 
 function broadcastPendingChanged(): void {
@@ -812,8 +901,10 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     // Многошаговая операция: insert заявления + связь с документами в одной TX.
-    // Корректировки (attendance_adjustments) НЕ создаются здесь: work-заявка сначала
-    // проходит согласование в «Заявлениях», материализация — в approve().
+    // Корректировки (attendance_adjustments) здесь, как правило, НЕ создаются: work-заявка
+    // сначала проходит согласование в «Заявлениях», материализация — в approve().
+    // Исключение — заявка, которую в «Заявлениях» согласовать некому
+    // (routeWorkRequestToWeekendApprovals): она сразу уходит в «Согласования».
     const result = await withTransaction(async (client) => {
       // Корректировку на конкретный день подают один раз: pending/approved/rejected
       // закрывают дату навсегда, cancelled — освобождает. Advisory-лок сериализует
@@ -894,7 +985,11 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         );
       }
 
-      return { duplicate: false as const, row };
+      const weekendRoute = request_type === 'work'
+        ? await routeWorkRequestToWeekendApprovals(row, req.user.id, client)
+        : null;
+
+      return { duplicate: false as const, row, weekendRoute };
     });
 
     if (result.duplicate) {
@@ -930,12 +1025,29 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
     const data = result.row;
+    const { weekendRoute } = result;
 
     broadcastPendingChanged();
 
+    if (weekendRoute) {
+      // Очередь «Согласований» ответственного и табель автора обновятся без F5.
+      emitDomainChange({
+        event: 'correction:changed',
+        targetUserIds: [...new Set([...weekendRoute.responsibleUserIds, req.user.id])],
+        payload: { entityId: data.id, employeeId, action: 'create' },
+      });
+    }
+
     // Получатели считаются один раз: realtime (списки надо обновить и автору) и
-    // уведомления (только согласующим) — это разные наборы.
-    const recipientsPromise = resolveCreateRecipients(request_type, employeeId, req.user.id);
+    // уведомления (только согласующим) — это разные наборы. Заявка, ушедшая сразу в
+    // «Согласования», адресована ответственному за выходные, а не supervisor_id.
+    const recipientsPromise = resolveCreateRecipients(request_type, employeeId, req.user.id)
+      .then(recipients => (weekendRoute
+        ? {
+          realtime: [...new Set([...recipients.realtime, ...weekendRoute.responsibleUserIds])],
+          notify: weekendRoute.responsibleUserIds.filter(uid => uid !== req.user.id),
+        }
+        : recipients));
 
     // Realtime: инвалидируем списки заявлений у автора и согласующих.
     recipientsPromise

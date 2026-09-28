@@ -132,6 +132,7 @@ import {
   listOccupiedWorkedDays,
   MAX_MATERIALIZED_LEAVE_DAYS,
 } from './leave-requests.controller.js';
+import * as Sentry from '@sentry/node';
 import { notificationService } from '../services/notification.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { pushService } from '../services/push.service.js';
@@ -1157,6 +1158,171 @@ describe('leaveRequestsController.create', () => {
     expect(resolveApprovalMock).not.toHaveBeenCalled();
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes("status = 'approved'"))).toBe(false);
     expect((res._json as { data: { status: string } }).data.status).toBe('pending');
+  });
+});
+
+describe('leaveRequestsController.create (работа в выходной без согласующего 1-го этапа)', () => {
+  // Две субботы; заявитель 247 — начальник своего отдела без личного руководителя.
+  const WORK_ROW = {
+    id: 900,
+    employee_id: 247,
+    request_type: 'work',
+    status: 'pending',
+    start_date: '2026-06-06',
+    end_date: '2026-06-13',
+    selected_dates: ['2026-06-06', '2026-06-13'],
+    reason: 'работа в выходной',
+  };
+  let lockedTimesheet = false;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lockedTimesheet = false;
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    weekendResponsibleMock.mockResolvedValue(2063);
+    resolveApprovalMock.mockResolvedValue('pending');
+    pgQueryOne.mockResolvedValue({ org_department_id: 'dep-hr' });
+    // Рабочая учётка ответственного (одобренный профиль активного сотрудника).
+    pgQuery.mockImplementation(async (sql: string) => (
+      String(sql).includes('FROM user_profiles up') ? [{ id: 'resp-user-uuid' }] : []
+    ));
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('INSERT INTO leave_requests')) return { rows: [WORK_ROW], rowCount: 1 };
+      if (text.includes('WITH RECURSIVE pairs') && lockedTimesheet) {
+        return {
+          rows: [{
+            employee_id: 247, work_date: '2026-06-06', id: 5,
+            start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
+          }],
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    // Push возвращает адресатов — по ним же пишутся уведомления в БД.
+    vi.mocked(pushService.sendLeaveRequestNotification)
+      .mockImplementation(async (_emp, _type, _submitter, _label, ids) => ids ?? []);
+  });
+
+  // clearAllMocks реализации не сбрасывает: вернуть умолчания, иначе остальные work-заявки
+  // в файле пошли бы по этому маршруту.
+  afterEach(() => {
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    weekendResponsibleMock.mockResolvedValue(null);
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    vi.mocked(pushService.sendLeaveRequestNotification).mockResolvedValue([]);
+  });
+
+  const submit = async () => {
+    const res = makeRes();
+    await leaveRequestsController.create(makeReq({
+      body: {
+        request_type: 'work',
+        start_date: '2026-06-06',
+        end_date: '2026-06-13',
+        selected_dates: ['2026-06-06', '2026-06-13'],
+        reason: 'работа в выходной',
+      },
+      user: { ...makeReq().user, id: 'author-uuid', employee_id: 247 },
+    } as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+  const approvalStatuses = () => upsertSpy.mock.calls
+    .map(c => (c[0] as { approval_status?: string }).approval_status);
+
+  it('согласовать некому → дни сразу pending в той же транзакции, заявка остаётся pending', async () => {
+    const res = await submit();
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { status: string } }).data.status).toBe('pending');
+    expect(upsertSpy).toHaveBeenCalledTimes(2);
+    for (const call of upsertSpy.mock.calls) {
+      expect(call[0]).toMatchObject({
+        employee_id: 247,
+        status: 'work',
+        source_type: 'leave_request',
+        source_id: '900',
+        approval_status: 'pending',
+        created_by: 'author-uuid',
+      });
+      expect(call[1]).toBe(txClient);
+    }
+    // Резолвер — ровно по разу на день: материализация берёт статусы предпрохода.
+    expect(resolveApprovalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('повторного резолва нет: записан статус предпрохода, даже если резолвер «передумал»', async () => {
+    resolveApprovalMock
+      .mockResolvedValueOnce('pending')
+      .mockResolvedValueOnce('pending')
+      .mockResolvedValue('auto_approved');
+
+    await submit();
+
+    expect(resolveApprovalMock).toHaveBeenCalledTimes(2);
+    expect(approvalStatuses()).toEqual(['pending', 'pending']);
+  });
+
+  it('уведомление и realtime — UUID учётки ответственного, а не его employee_id', async () => {
+    await submit();
+
+    await vi.waitFor(() => expect(notificationService.createMany).toHaveBeenCalled());
+    expect(vi.mocked(pushService.sendLeaveRequestNotification).mock.calls[0][4]).toEqual(['resp-user-uuid']);
+    const saved = vi.mocked(notificationService.createMany).mock.calls[0][0] as Array<{ userId: string }>;
+    expect(saved.map(n => n.userId)).toEqual(['resp-user-uuid']);
+
+    const correction = vi.mocked(emitDomainChange).mock.calls.find(c => c[0].event === 'correction:changed');
+    expect(correction?.[0].targetUserIds).toEqual(['resp-user-uuid', 'author-uuid']);
+  });
+
+  it('у ответственного нет рабочей учётки → без записей, warning в Sentry, обычный путь', async () => {
+    pgQuery.mockResolvedValue([]);
+
+    const res = await submit();
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).not.toHaveBeenCalled();
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(expect.stringContaining('нет рабочей учётки'), 'warning');
+    expect(vi.mocked(emitDomainChange).mock.calls.some(c => c[0].event === 'correction:changed')).toBe(false);
+  });
+
+  it('есть согласующий 1-го этапа → обычный путь через «Заявления»', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [55]]]));
+
+    await submit();
+
+    expect(weekendResponsibleMock).not.toHaveBeenCalled();
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('ответственный за выходные — сам заявитель → обычный путь', async () => {
+    weekendResponsibleMock.mockResolvedValue(247);
+
+    await submit();
+
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('хоть один день не требует согласования (квотная суббота) → без записей', async () => {
+    resolveApprovalMock.mockResolvedValueOnce('pending').mockResolvedValueOnce('auto_approved');
+
+    await submit();
+
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('табель за день закрыт → без записей, заявка создана', async () => {
+    lockedTimesheet = true;
+
+    const res = await submit();
+
+    expect(res._status).toBe(200);
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+    expect(upsertSpy).not.toHaveBeenCalled();
   });
 });
 
