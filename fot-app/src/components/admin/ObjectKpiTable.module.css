@@ -1,0 +1,126 @@
+/*
+ * Таблицы «KPI объектов» — в стиле «Управления кадрами» (StaffControlPage, .sc-table--staff),
+ * значения взяты из PayrollTermsTable.module.css. Строк не больше пары десятков, поэтому без
+ * виртуализации: обёртка скроллится только по горизонтали, страница на 360px вбок не уезжает.
+ */
+.wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.table {
+  width: 100%;
+  /* separate + spacing 0: у collapse граница шапки «уезжает» при горизонтальной прокрутке */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  /* fixed: ширина — большее из 100% и суммы колонок; не влезает — скроллится таблица, не страница */
+  table-layout: fixed;
+}
+
+/*
+ * Ширины — под самое длинное слово заголовка (заглавные 12px, letter-spacing .04em) плюс стрелка
+ * и воронка (34px, на смартфоне 46px) и паддинги 24px; у сумм — под «99 999 999 999 ₽».
+ */
+.colNum     { width: 56px; }
+.colObject  { width: 190px; }
+.colManager { width: 210px; }
+.colMonth   { width: 140px; }
+.colMoney   { width: 150px; }
+.colPercent { width: 88px; }
+.colShort   { width: 76px; }
+
+.table thead th {
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  /* Длинные заголовки («План месяца») — в две строки, перенос только между словами */
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+}
+
+.table td {
+  padding: 4px 12px;
+  height: 40px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--row-overlay), var(--row-overlay));
+}
+
+/* Цвет строки — через переменную: чередование, hover и текущий месяц меняются одновременно */
+.table tbody tr { --row-overlay: transparent; }
+.table tbody tr.rowEven { --row-overlay: color-mix(in srgb, var(--text-primary) 2%, transparent); }
+.table tbody tr:hover,
+.table tbody tr.rowCurrent { --row-overlay: var(--bg-secondary); }
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+/* Прогноз: месяцы после текущего при выполнении плана на 100 % */
+.table tbody tr.rowForecast td { color: var(--text-secondary); }
+
+/* Строка открывает объект или его карточку */
+.rowClickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.rowClickable:focus-visible { outline: none; }
+.rowClickable:focus-visible td {
+  box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+.rowClickable:focus-visible td:first-child { box-shadow: inset 2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.rowClickable:focus-visible td:last-child { box-shadow: inset -2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+
+.table thead th.cellNum { text-align: center; }
+
+.cellNum {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: clip;
+}
+
+.cellNumber { font-variant-numeric: tabular-nums; }
+
+/* Название объекта и ФИО переносятся до двух строк, как ФИО у кадров, а не режутся «…» */
+.table td.cellText { white-space: normal; }
+
+.clamp2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.table td.empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Смартфоны: тап-цели ≥ 44px */
+@media (max-width: 768px) {
+  .table td { height: 48px; }
+}

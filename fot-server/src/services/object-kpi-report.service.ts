@@ -527,3 +527,67 @@ export function summarizeCompletion(rows: ObjectKpiReportRow[]): {
     completion_pct: totalPlan === 0 ? null : Number(((totalFact / totalPlan) * 100).toFixed(2)),
   };
 }
+
+/**
+ * Строки только за выбранные месяцы. Окно запроса — [первый, последний] выбора, а месяцы
+ * между ними отбрасываются здесь. Строка месяца от ширины окна не зависит: накопление до
+ * окна считает CTE baselines, а period_month у КС-2 — генерируемая колонка от даты подписания.
+ */
+export function filterRowsByMonths(
+  rows: ObjectKpiReportRow[],
+  months: ReadonlySet<string> | null,
+): ObjectKpiReportRow[] {
+  if (!months) return rows;
+  return rows.filter((row) => months.has(row.period_month.slice(0, 7)));
+}
+
+/** Строка таблицы «Все объекты»: объект за выбранные месяцы. */
+export interface ObjectKpiObjectStat {
+  skud_object_id: string;
+  object_name: string;
+  /** Руководители выбранных месяцев без повторов, по порядку месяцев. */
+  manager_names: string[];
+  /** Договор, КС-6 и остаток — на начало первого выбранного месяца: там «Договор − КС-6 = Остаток». */
+  contract_total: string | null;
+  ks2_cumulative_before: string | null;
+  remainder: string | null;
+  /** Все подписанные КС-2 за месяцы, включая месяцы без плана. */
+  fact_amount: number;
+  /** null — ни в одном месяце плана нет (неполные данные договора). */
+  plan_amount: number | null;
+  completion_pct: number | null;
+}
+
+/**
+ * Сводка по каждому объекту — та же summarizeCompletion, что у плиток: % = Σфакт / Σплан по
+ * месяцам с планом (п. 3.5). Объекты без договора в таблицу не попадают, как и на экране объекта.
+ */
+export function summarizeByObject(rows: ObjectKpiReportRow[]): ObjectKpiObjectStat[] {
+  const groups = new Map<string, ObjectKpiReportRow[]>();
+  for (const row of rows) {
+    if (row.contract_id === null) continue;
+    const list = groups.get(row.skud_object_id);
+    if (list) list.push(row);
+    else groups.set(row.skud_object_id, [row]);
+  }
+
+  return [...groups.values()].map((objectRows) => {
+    const sorted = [...objectRows].sort((a, b) => a.period_month.localeCompare(b.period_month));
+    const first = sorted[0];
+    const totals = summarizeCompletion(sorted);
+    const managerNames = [...new Set(
+      sorted.map((row) => row.primary_manager_name).filter((name): name is string => Boolean(name)),
+    )];
+    return {
+      skud_object_id: first.skud_object_id,
+      object_name: first.object_name,
+      manager_names: managerNames,
+      contract_total: first.contract_total,
+      ks2_cumulative_before: first.ks2_cumulative_before,
+      remainder: first.remainder,
+      fact_amount: Number((totals.total_fact + totals.total_fact_unplanned).toFixed(2)),
+      plan_amount: sorted.some((row) => row.plan_amount !== null) ? totals.total_plan : null,
+      completion_pct: totals.completion_pct,
+    };
+  });
+}

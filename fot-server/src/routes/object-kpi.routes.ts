@@ -5,6 +5,7 @@ import { noStore } from '../middleware/noStore.js';
 import { objectKpiController } from '../controllers/object-kpi.controller.js';
 import { objectKpiEntriesController } from '../controllers/object-kpi-entries.controller.js';
 import { objectKpiKs6Controller } from '../controllers/object-kpi-ks6.controller.js';
+import { objectKpiExportController } from '../controllers/object-kpi-export.controller.js';
 
 const router = Router();
 
@@ -31,6 +32,8 @@ router.get('/report/summary', reportView, objectKpiController.getReportSummary);
 // Премия — только для вкладки экономиста: в ЛК руководителя своя ветка /my/objects.
 router.get('/report/premium', kpiView, objectKpiController.getReportPremium);
 router.get('/report/headcount', reportView, objectKpiController.getHeadcount);
+// Экспорт — POST со снимком таблицы экрана: сервер только оформляет xlsx, данных не читает.
+router.post('/report/export', kpiView, objectKpiExportController.exportTable);
 router.get('/plans/fixation-info', reportView, objectKpiController.getFixationInfo);
 router.get('/my/objects', lkView, objectKpiController.getMyObjects);
 router.get('/assignments', kpiView, objectKpiController.listAssignments);

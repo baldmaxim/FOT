@@ -16,7 +16,9 @@ vi.mock('../config/postgres.js', () => ({
 
 import { queryOne } from '../config/postgres.js';
 import {
+  filterRowsByMonths,
   resolveCalcWindow,
+  summarizeByObject,
   summarizeCompletion,
   OBJECT_KPI_MAX_AUTO_MONTHS,
   OBJECT_KPI_REPORT_SQL,
@@ -57,6 +59,86 @@ describe('summarizeCompletion', () => {
     // Полностью закрытый объект не должен выглядеть провалившим KPI.
     expect(summarizeCompletion([row('0.00', '0.00')]).completion_pct).toBeNull();
     expect(summarizeCompletion([]).completion_pct).toBeNull();
+  });
+});
+
+describe('filterRowsByMonths', () => {
+  const monthRow = (periodMonth: string) => ({ period_month: periodMonth } as ObjectKpiReportRow);
+  const rows = ['2026-07-01', '2026-08-01', '2026-09-01'].map(monthRow);
+
+  it('без набора месяцев строки не трогает', () => {
+    expect(filterRowsByMonths(rows, null)).toBe(rows);
+  });
+
+  it('оставляет только выбранные месяцы, в том числе вразброс', () => {
+    const result = filterRowsByMonths(rows, new Set(['2026-07', '2026-09']));
+    expect(result.map((item) => item.period_month)).toEqual(['2026-07-01', '2026-09-01']);
+  });
+});
+
+describe('summarizeByObject', () => {
+  const objectRow = (over: Partial<ObjectKpiReportRow>): ObjectKpiReportRow => ({
+    skud_object_id: 'obj-a',
+    object_name: 'ЖК А',
+    contract_id: 'c-a',
+    period_month: '2026-07-01',
+    contract_total: '1000.00',
+    ks2_cumulative_before: '100.00',
+    remainder: '900.00',
+    plan_amount: '100.00',
+    fact_amount: '50.00',
+    primary_manager_name: 'Иванов И. И.',
+    ...over,
+  } as ObjectKpiReportRow);
+
+  it('строка на объект: договор/КС-6/остаток — из первого месяца, план и факт — суммой', () => {
+    const [stat] = summarizeByObject([
+      // Порядок SQL — по объекту и месяцу, но и перемешанные строки дают первый месяц.
+      objectRow({ period_month: '2026-08-01', contract_total: '1100.00', ks2_cumulative_before: '150.00',
+        remainder: '950.00', plan_amount: '300.00', fact_amount: '240.00' }),
+      objectRow({}),
+    ]);
+
+    expect(stat).toMatchObject({
+      skud_object_id: 'obj-a',
+      contract_total: '1000.00',
+      ks2_cumulative_before: '100.00',
+      remainder: '900.00',
+      plan_amount: 400,
+      fact_amount: 290,
+    });
+    // Σфакт / Σплан, а не среднее процентов (50 % и 80 % → 72,5 %).
+    expect(stat.completion_pct).toBe(72.5);
+  });
+
+  it('руководители месяцев — без повторов, по порядку месяцев', () => {
+    const [stat] = summarizeByObject([
+      objectRow({ period_month: '2026-07-01', primary_manager_name: 'Иванов И. И.' }),
+      objectRow({ period_month: '2026-08-01', primary_manager_name: 'Петров П. П.' }),
+      objectRow({ period_month: '2026-09-01', primary_manager_name: 'Иванов И. И.' }),
+      objectRow({ period_month: '2026-10-01', primary_manager_name: null }),
+    ]);
+    expect(stat.manager_names).toEqual(['Иванов И. И.', 'Петров П. П.']);
+  });
+
+  it('объекты без договора в таблицу не попадают, порядок объектов — как у строк', () => {
+    const stats = summarizeByObject([
+      objectRow({ skud_object_id: 'obj-b', object_name: 'База Б' }),
+      objectRow({ skud_object_id: 'obj-c', object_name: 'Офис', contract_id: null, plan_amount: null }),
+      objectRow({ skud_object_id: 'obj-a', object_name: 'ЖК А' }),
+    ]);
+    expect(stats.map((stat) => stat.skud_object_id)).toEqual(['obj-b', 'obj-a']);
+  });
+
+  it('факт месяцев без плана входит в КС-2, но не в процент; без плана вовсе — план и % пустые', () => {
+    const [mixed] = summarizeByObject([
+      objectRow({ plan_amount: '100.00', fact_amount: '100.00' }),
+      objectRow({ period_month: '2026-08-01', plan_amount: null, fact_amount: '30.00' }),
+    ]);
+    expect(mixed).toMatchObject({ plan_amount: 100, fact_amount: 130, completion_pct: 100 });
+
+    const [noPlan] = summarizeByObject([objectRow({ plan_amount: null, fact_amount: '30.00' })]);
+    expect(noPlan).toMatchObject({ plan_amount: null, fact_amount: 30, completion_pct: null });
   });
 });
 

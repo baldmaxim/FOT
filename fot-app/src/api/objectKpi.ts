@@ -55,6 +55,33 @@ export interface IObjectKpiSummary {
 }
 
 /**
+ * Строка таблицы «Все объекты» за выбранные месяцы — посчитана на сервере той же формулой,
+ * что плитки. Договор, КС-6 и остаток — на начало первого месяца, КС-2 и план — суммой.
+ */
+export interface IObjectKpiObjectStat {
+  skud_object_id: string;
+  object_name: string;
+  manager_names: string[];
+  contract_total: string | null;
+  ks2_cumulative_before: string | null;
+  remainder: string | null;
+  fact_amount: number;
+  plan_amount: number | null;
+  completion_pct: number | null;
+}
+
+export type ObjectKpiExportColumnType = 'text' | 'money' | 'percent' | 'int';
+
+/** Снимок таблицы экрана для xlsx: видимые строки в порядке экрана, сервер только оформляет лист. */
+export interface IObjectKpiExportTable {
+  title: string;
+  subtitle: string;
+  file_name: string;
+  columns: Array<{ label: string; type: ObjectKpiExportColumnType }>;
+  rows: Array<{ cells: Array<string | number | null>; muted?: boolean }>;
+}
+
+/**
  * Строка отчёта в ЛК — с долей руководителя. Доля считается на сервере: денежная
  * арифметика на фронте запрещена, здесь только показ готовых значений.
  */
@@ -331,11 +358,13 @@ const periodQuery = ({ from, to }: IPeriod): string =>
 /**
  * Период и объект — оба необязательны. Без периода окно считает сервер: «весь расчёт
  * по объекту до текущего месяца». Границы уходят только парой — сервер отвергает
- * запрос с одной.
+ * запрос с одной. Набор месяцев (YYYY-MM) — вместо периода, не вместе с ним.
  */
-const reportQuery = (period?: IPeriod | null, objectId?: string | null): string => {
+const reportQuery = (period?: IPeriod | null, objectId?: string | null, months?: string[] | null): string => {
   const params = new URLSearchParams();
-  if (period) {
+  if (months && months.length > 0) {
+    params.set('months', months.join(','));
+  } else if (period) {
     params.set('from', period.from);
     params.set('to', period.to);
   }
@@ -380,14 +409,23 @@ export const objectKpiApi = {
   },
 
   /**
-   * Только сводка и использованное окно — без строк отчёта.
-   * Без периода сервер считает весь расчёт; с периодом — конкретный месяц.
+   * Сводка для плиток и таблица «Все объекты» — без строк отчёта.
+   * Без месяцев сервер считает весь расчёт; с месяцами — только их (один, подряд или вразброс).
    */
   async getReportSummary(
-    period?: IPeriod | null,
+    months?: string[] | null,
     objectId?: string | null,
-  ): Promise<{ summary: IObjectKpiSummary; period: IPeriod }> {
-    return apiClient.get(`/object-kpi/report/summary${reportQuery(period, objectId)}`);
+  ): Promise<{ summary: IObjectKpiSummary; objects: IObjectKpiObjectStat[]; period: IPeriod }> {
+    return apiClient.get(`/object-kpi/report/summary${reportQuery(null, objectId, months)}`);
+  },
+
+  /** xlsx ровно той таблицы, что на экране: сортировка, фильтры и месяцы уже применены. */
+  async exportTable(table: IObjectKpiExportTable): Promise<{ blob: Blob; filename: string }> {
+    return apiClient.download('/object-kpi/report/export', table.file_name, {
+      method: 'POST',
+      body: JSON.stringify(table),
+      timeoutMs: 120_000,
+    });
   },
 
   async getHeadcount(period: IPeriod): Promise<IObjectKpiHeadcountRow[]> {

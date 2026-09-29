@@ -32,7 +32,7 @@ vi.mock('../config/postgres.js', async () => {
   };
 });
 
-import { OBJECT_KPI_REPORT_SQL, type ObjectKpiReportRow } from './object-kpi-report.service.js';
+import { filterRowsByMonths, OBJECT_KPI_REPORT_SQL, type ObjectKpiReportRow } from './object-kpi-report.service.js';
 import { fetchObjectKpiForecast } from './object-kpi-forecast.service.js';
 
 const ALIA = '00000000-0000-0000-0000-00000000a11a';
@@ -176,6 +176,28 @@ describe.skipIf(!PG_URL)('отчёт и прогноз KPI объектов на
       expect(cents(row.contract_total) - cents(row.ks2_cumulative_before)).toBe(cents(row.remainder));
       expect(cents(row.plan_amount)).toBe(Math.round(cents(row.remainder) / row.months_remaining!));
     }
+  });
+
+  it('выбор месяцев: строки широкого окна совпадают с окнами из одного месяца', async () => {
+    // Вкладка берёт окно [первый, последний] выбора и отбрасывает лишние месяцы. Это верно,
+    // только пока строка месяца не зависит от начала окна: ручной остаток, «зазор» до окна
+    // и ДС внутри окна обязаны давать те же суммы. ДС с 20.08 действует с сентября.
+    await exec(
+      `INSERT INTO object_contract_addenda (contract_id, status, amount_delta, effective_date)
+       VALUES ($1, 'signed', 250000000.00, '2026-08-20')`,
+      [ALIA_CONTRACT],
+    );
+
+    const wide = filterRowsByMonths(
+      await report('2026-07-01', '2026-09-01', ALIA),
+      new Set(['2026-08', '2026-09']),
+    );
+    const august = await report('2026-08-01', '2026-08-01', ALIA);
+    const september = await report('2026-09-01', '2026-09-01', ALIA);
+
+    expect(wide).toEqual([...august, ...september]);
+    expect(cents(byMonth(wide, '2026-09-01').contract_total) - cents(byMonth(wide, '2026-08-01').contract_total))
+      .toBe(25_000_000_000);
   });
 
   it('перенос ЗОС после фиксации: закрытый месяц держит число месяцев, прогноз идёт по новой дате', async () => {

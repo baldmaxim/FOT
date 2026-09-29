@@ -1,30 +1,53 @@
-import { useMemo, useState, type FC } from 'react';
+import { useMemo, useState, type FC, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 
-import { objectKpiApi, type IPeriod, type IReportPremiumRow } from '../../api/objectKpi';
+import {
+  objectKpiApi,
+  type IObjectKpiObjectStat,
+  type IObjectKpiReportRow,
+  type IPeriod,
+  type IReportPremiumRow,
+} from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
-import { PREMIUM_STATUS_SHORT, PREMIUM_STATUS_TEXT } from '../../utils/premiumStatus';
-import { shiftMonth } from '../../utils/moscowDate';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
+import { triggerBlobDownload } from '../../utils/download';
 import {
   formatDate,
   formatMoneyShort,
   formatMonthLabel,
   formatPercent,
 } from '../../utils/formatMoney';
+import {
+  applyTableView,
+  buildExportTable,
+  buildMonthColumns,
+  defaultMonths,
+  formatMonthsLabel,
+  listWindowMonths,
+  OBJECT_STAT_COLUMNS,
+  premiumCell,
+  type IKpiColumn,
+  type IKpiTableView,
+  type IPremiumView,
+} from '../../utils/objectKpiTable';
 import { ObjectKpiCardModal } from '../../components/admin/ObjectKpiCardModal';
 import { ObjectKpiAssignmentModal } from '../../components/admin/ObjectKpiAssignmentModal';
+import { ObjectKpiMonthsPicker } from '../../components/admin/ObjectKpiMonthsPicker';
+import { ObjectKpiTable } from '../../components/admin/ObjectKpiTable';
 import styles from './ObjectKpiPage.module.css';
 
 /**
  * Вкладка «KPI объектов» на странице «Аналитика».
  *
- * Виджеты показывают весь расчёт до текущего месяца — окно считает сервер, фронт датами
- * не жонглирует. Таблица появляется после выбора объекта и показывает все его месяцы по
- * порядку: от первого расчётного до месяца контрольной даты. Месяцы после текущего —
- * прогноз сервера при выполнении плана на 100 %.
+ * Плитки и таблицы показывают выбранные месяцы — по умолчанию прошлый. «Весь период» — весь
+ * расчёт до текущего месяца: окно считает сервер, фронт датами не жонглирует. Без объекта —
+ * таблица «Все объекты» (строка на объект), с объектом — его месяцы; при «весь период» — все,
+ * от первого расчётного до месяца контрольной даты, после текущего — прогноз сервера при
+ * выполнении плана на 100 %.
  *
+ * Сортировка и фильтры столбцов — на клиенте, «Экспорт» выгружает ровно видимые строки.
  * Все суммы — с НДС, в рублях (п. 2.1).
  */
 
@@ -35,15 +58,23 @@ const formatPeriod = (period?: IPeriod): string | null => {
   return from === to ? from : `${from} — ${to}`;
 };
 
+const OBJECTS_DEFAULT_VIEW: IKpiTableView = { sort: 'object', dir: 'asc', filters: {} };
+const MONTHS_DEFAULT_VIEW: IKpiTableView = { sort: 'month', dir: 'asc', filters: {} };
+
 export const ObjectKpiPage: FC = () => {
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/discipline/objects');
+  const toast = useToast();
 
   const [objectFilter, setObjectFilter] = useState('');
-  /** Месяц в виджетах: пусто — весь период. Сбрасывается при смене объекта. */
-  const [selectedMonth, setSelectedMonth] = useState('');
+  /** Выбранные месяцы (YYYY-MM): null — не трогали (прошлый месяц), [] — весь период. */
+  const [selectedMonths, setSelectedMonths] = useState<string[] | null>(null);
+  // Сортировка и фильтры обеих таблиц живут здесь: переход «объект ↔ все» их не сбрасывает.
+  const [objectsView, setObjectsView] = useState<IKpiTableView>(OBJECTS_DEFAULT_VIEW);
+  const [monthsView, setMonthsView] = useState<IKpiTableView>(MONTHS_DEFAULT_VIEW);
   const [openCard, setOpenCard] = useState<{ objectId: string; mode: 'view' | 'create' } | null>(null);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const objectsQuery = useQuery({
     queryKey: objectKpiKeys.objects(),
@@ -61,8 +92,7 @@ export const ObjectKpiPage: FC = () => {
   const effectiveObjectFilter = lockedObjectId ?? objectFilter;
   const selectedObject = objects.find(item => item.id === effectiveObjectFilter) ?? null;
 
-  // Таблица — только по выбранному объекту: без него сервер отказывает, чтобы не строить
-  // решётку «все объекты × 10 лет».
+  // Таблица объекта — весь его расчёт (авто-окно) с прогнозом; выбор месяцев режет строки здесь.
   const tableQuery = useQuery({
     queryKey: objectKpiKeys.reportAuto(effectiveObjectFilter),
     queryFn: () => objectKpiApi.getReport(null, effectiveObjectFilter),
@@ -83,55 +113,21 @@ export const ObjectKpiPage: FC = () => {
     enabled: Boolean(effectiveObjectFilter) && Boolean(tablePeriod),
   });
 
-  // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
-  const premiumByManager = useMemo(() => {
-    const map = new Map<string, IReportPremiumRow>();
+  const premiumView = useMemo<IPremiumView>(() => {
+    // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
+    const byKey = new Map<string, IReportPremiumRow>();
     for (const item of premiumQuery.data?.data ?? []) {
-      map.set(`${item.employee_id}|${item.period_month}`, item);
+      byKey.set(`${item.employee_id}|${item.period_month}`, item);
     }
-    return map;
-  }, [premiumQuery.data]);
+    return {
+      state: premiumQuery.isLoading ? 'loading' : premiumQuery.isError ? 'error' : 'ready',
+      byKey,
+      hidden: new Set(premiumQuery.data?.hidden_manager_ids ?? []),
+    };
+  }, [premiumQuery.data, premiumQuery.isLoading, premiumQuery.isError]);
 
-  // Руководители с объектами вне скоупа зрителя: премия по приказу совокупная, и её не
-  // показываем вовсе — ни усечённую, ни раскрывающую чужие объекты.
-  const hiddenManagerIds = useMemo(
-    () => new Set(premiumQuery.data?.hidden_manager_ids ?? []),
-    [premiumQuery.data],
-  );
-
-  /** Состояния колонки «Премия»: считается, ошибка, скрыта по доступу, не рассчитана. */
-  const renderPremium = (managerId: number | null, periodMonth: string) => {
-    if (!managerId) return <span title="За месяц нет закреплённого руководителя">—</span>;
-    if (premiumQuery.isLoading) return <span className={styles.muted}>…</span>;
-    if (premiumQuery.isError) {
-      return <span className={styles.muted} title="Не удалось рассчитать премию">н/д</span>;
-    }
-    if (hiddenManagerIds.has(managerId)) {
-      return (
-        <span className={styles.muted} title="Недоступно: у руководителя есть объекты вне вашего доступа">
-          —
-        </span>
-      );
-    }
-
-    const item = premiumByManager.get(`${managerId}|${periodMonth}`);
-    if (!item) return <span title="Премия за этот месяц не рассчитывалась">—</span>;
-    if (item.status !== 'calculated') {
-      return (
-        <span className={styles.muted} title={PREMIUM_STATUS_TEXT[item.status]}>
-          {PREMIUM_STATUS_SHORT[item.status]}
-        </span>
-      );
-    }
-    return (
-      <span title="Совокупно за все объекты руководителя (п. 3.5)">
-        {formatMoneyShort(item.premium_amount)}
-      </span>
-    );
-  };
-
-  // Сводка по всем объектам — отдельным лёгким запросом. При выбранном объекте она уже
-  // пришла вместе с таблицей, второй запрос был бы тем же самым по нагрузке на БД.
+  // Весь период по всем объектам: окно для выбора месяцев, плитки и таблица «Все объекты».
+  // При выбранном объекте всё это уже пришло вместе с его таблицей.
   const summaryQuery = useQuery({
     queryKey: objectKpiKeys.reportSummary('all'),
     queryFn: () => objectKpiApi.getReportSummary(),
@@ -139,60 +135,134 @@ export const ObjectKpiPage: FC = () => {
   });
 
   // Базовое окно — «весь период». Список месяцев строится ИЗ НЕГО, а не из ответа на
-  // месячный запрос: тот сузился бы до одного месяца, и переключаться стало бы некуда.
+  // запрос по месяцам: тот сузился бы до выбора, и переключаться стало бы некуда.
   const basePeriod = effectiveObjectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
+  const monthOptions = useMemo(() => (basePeriod ? listWindowMonths(basePeriod) : []), [basePeriod]);
 
-  const monthOptions = useMemo(() => {
+  // Не трогали — прошлый месяц от текущего месяца сервера (им кончается окно). Месяцы вне
+  // окна показывать нечем — отбрасываем (окно меняется вместе с объектом).
+  const activeMonths = useMemo(() => {
     if (!basePeriod) return [];
-    const result: string[] = [];
-    for (let month = basePeriod.to; month >= basePeriod.from; month = shiftMonth(month, -1)) {
-      result.push(month);
-      if (result.length > 240) break;  // страховка от кривого окна
-    }
-    return result;
-  }, [basePeriod]);
+    const wanted = selectedMonths ?? defaultMonths(monthOptions, basePeriod.to);
+    return wanted.filter(month => monthOptions.includes(month));
+  }, [basePeriod, monthOptions, selectedMonths]);
+  const hasMonths = activeMonths.length > 0;
 
-  // Месяц вне базового окна показывать нечем — сбрасываем (окно меняется вместе с объектом).
-  const activeMonth = selectedMonth && monthOptions.includes(selectedMonth) ? selectedMonth : '';
-
-  const monthSummaryQuery = useQuery({
-    queryKey: objectKpiKeys.reportSummary(effectiveObjectFilter || 'all', activeMonth),
-    queryFn: () => objectKpiApi.getReportSummary(
-      { from: activeMonth, to: activeMonth },
-      effectiveObjectFilter || null,
-    ),
-    enabled: Boolean(activeMonth),
+  const monthsSummaryQuery = useQuery({
+    queryKey: objectKpiKeys.reportSummary(effectiveObjectFilter || 'all', activeMonths.join(',')),
+    queryFn: () => objectKpiApi.getReportSummary(activeMonths, effectiveObjectFilter || null),
+    enabled: hasMonths,
   });
 
-  // Пока месячная сводка грузится, показываем «…», а не суммы прошлого месяца: иначе
-  // переключение выглядит так, будто у двух месяцев одинаковые деньги.
-  const summaryLoading = activeMonth
-    ? monthSummaryQuery.isLoading
+  // Пока сводка по месяцам грузится, показываем «…», а не суммы прошлого выбора: иначе
+  // переключение выглядит так, будто у разных месяцев одинаковые деньги.
+  const summaryLoading = hasMonths
+    ? monthsSummaryQuery.isLoading
     : (effectiveObjectFilter ? tableQuery.isLoading : summaryQuery.isLoading);
-  const summary = activeMonth
-    ? monthSummaryQuery.data?.summary
+  const summary = hasMonths
+    ? monthsSummaryQuery.data?.summary
     : (effectiveObjectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary);
-  const period = activeMonth ? monthSummaryQuery.data?.period : basePeriod;
-  const periodLabel = formatPeriod(period);
+  const periodLabel = hasMonths ? formatMonthsLabel(activeMonths) : formatPeriod(basePeriod);
 
   /** Значение плитки: «…» на время загрузки, иначе форматированное число. */
   const tileValue = (value: number | string | null | undefined, formatter: (v: never) => string) =>
     (summaryLoading ? '…' : formatter(value as never));
 
+  // ─── Таблица «Все объекты» ──────────────────────────────────────────────────
+  const objectRows = useMemo<IObjectKpiObjectStat[]>(
+    () => (hasMonths ? monthsSummaryQuery.data?.objects : summaryQuery.data?.objects) ?? [],
+    [hasMonths, monthsSummaryQuery.data, summaryQuery.data],
+  );
+  const objectsLoading = hasMonths ? monthsSummaryQuery.isLoading : summaryQuery.isLoading;
+  const visibleObjectRows = useMemo(
+    () => applyTableView(objectRows, OBJECT_STAT_COLUMNS, objectsView),
+    [objectRows, objectsView],
+  );
+
+  // ─── Таблица объекта по месяцам ─────────────────────────────────────────────
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
   // а эта кнопка живёт над таблицей. Прогнозные месяцы идут следом за фактическими.
-  const rows = useMemo(
+  const allMonthRows = useMemo(
     () => [...(tableQuery.data?.data ?? []), ...(tableQuery.data?.forecast ?? [])]
       .filter(row => row.contract_id !== null)
       .sort((a, b) => a.period_month.localeCompare(b.period_month)),
     [tableQuery.data],
   );
+  // Прогнозных месяцев в выборе не бывает: выбрать можно только месяцы до текущего.
+  const monthRows = useMemo(() => {
+    if (!hasMonths) return allMonthRows;
+    const selected = new Set(activeMonths);
+    return allMonthRows.filter(row => selected.has(row.period_month.slice(0, 7)));
+  }, [allMonthRows, activeMonths, hasMonths]);
+  const monthColumns = useMemo(() => buildMonthColumns(premiumView), [premiumView]);
+  const visibleMonthRows = useMemo(
+    () => applyTableView(monthRows, monthColumns, monthsView),
+    [monthRows, monthColumns, monthsView],
+  );
 
   // Шапка ЗОС — из последнего фактического месяца, прогноз идёт после него. Контрольную дату
   // фронт не вычисляет: формула «плановая ЗОС + 3 месяца» принадлежит приказу и живёт в SQL.
-  const latestRow = rows.filter(row => !row.is_forecast).at(-1) ?? null;
+  const latestRow = allMonthRows.filter(row => !row.is_forecast).at(-1) ?? null;
   // Текущий месяц — по серверу (МСК), а не по часам браузера: авто-окно кончается им.
   const currentMonth = tableQuery.data?.period.to ?? null;
+
+  const renderMonthCell = (
+    column: IKpiColumn<IObjectKpiReportRow>,
+    row: IObjectKpiReportRow,
+  ): ReactNode | undefined => {
+    if (column.key === 'premium') {
+      const cell = premiumCell(row, premiumView);
+      return <span className={cell.muted ? styles.muted : undefined} title={cell.title}>{cell.text}</span>;
+    }
+    if (column.key === 'plan' && row.plan_overridden) {
+      return (
+        <>
+          {column.text(row)}
+          <span className={styles.mark} title="План задан вручную">✎</span>
+        </>
+      );
+    }
+    return undefined;
+  };
+
+  // ─── Экспорт: ровно видимая таблица ─────────────────────────────────────────
+  const showMonthTable = Boolean(selectedObject?.contract_id);
+  const exportRowsCount = selectedObject
+    ? (showMonthTable ? visibleMonthRows.length : 0)
+    : visibleObjectRows.length;
+  const tableLoading = selectedObject
+    ? tableQuery.isLoading || premiumQuery.isLoading
+    : objectsLoading;
+
+  const handleExport = async (): Promise<void> => {
+    const scopeName = selectedObject?.name ?? 'Все объекты';
+    const fileMonths = hasMonths ? activeMonths : (basePeriod ? [basePeriod.from, basePeriod.to] : []);
+    const first = fileMonths[0] ?? '';
+    const last = fileMonths.at(-1) ?? '';
+    const base = {
+      title: `KPI объектов — ${scopeName}`,
+      subtitle: `Период: ${periodLabel ?? '—'}. Все суммы — в рублях, с НДС.`,
+      fileName: `KPI объектов_${scopeName}_${first === last ? first : `${first}_${last}`}.xlsx`,
+    };
+    const table = selectedObject
+      ? buildExportTable({
+        ...base,
+        columns: monthColumns,
+        rows: visibleMonthRows,
+        isMuted: row => Boolean(row.is_forecast),
+      })
+      : buildExportTable({ ...base, columns: OBJECT_STAT_COLUMNS, rows: visibleObjectRows });
+
+    setExporting(true);
+    try {
+      const { blob, filename } = await objectKpiApi.exportTable(table);
+      triggerBlobDownload(blob, filename);
+    } catch (error) {
+      toast.error(error instanceof Error && error.message ? error.message : 'Не удалось выгрузить таблицу');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className={styles.page}>
@@ -200,20 +270,10 @@ export const ObjectKpiPage: FC = () => {
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>План за период</span>
           <strong>{tileValue(summary?.total_plan ?? null, formatMoneyShort)}</strong>
-          {/* Переключатель прямо в плитке: он меняет все три виджета разом. */}
-          <select
-            className={styles.tileSelect}
-            value={activeMonth}
-            onChange={e => setSelectedMonth(e.target.value)}
-            aria-label="Месяц для виджетов"
-          >
-            <option value="">весь период</option>
-            {monthOptions.map(month => (
-              <option key={month} value={month}>{formatMonthLabel(`${month}-01`)}</option>
-            ))}
-          </select>
+          {/* Выбор месяцев прямо в плитке: он меняет плитки и таблицу разом. */}
+          <ObjectKpiMonthsPicker value={activeMonths} options={monthOptions} onChange={setSelectedMonths} />
         </div>
-        <div className={styles.summaryTile}>
+        <div className={`${styles.summaryTile} ${styles.summaryTileCompact}`}>
           <span className={styles.summaryLabel}>Факт КС-2</span>
           <strong>{tileValue(summary?.total_fact ?? null, formatMoneyShort)}</strong>
           {/* Факт месяцев без плана в «Выполнение» не входит, но и потеряться не должен. */}
@@ -223,7 +283,7 @@ export const ObjectKpiPage: FC = () => {
             </span>
           )}
         </div>
-        <div className={styles.summaryTile}>
+        <div className={`${styles.summaryTile} ${styles.summaryTileCompact}`}>
           <span className={styles.summaryLabel}>Выполнение</span>
           {/* Σфакт / Σплан, а не среднее процентов по месяцам (п. 3.5). */}
           <strong>{tileValue(summary?.completion_pct ?? null, formatPercent)}</strong>
@@ -237,7 +297,7 @@ export const ObjectKpiPage: FC = () => {
               className={styles.select}
               value={effectiveObjectFilter}
               disabled={lockedObjectId !== null}
-              onChange={e => { setObjectFilter(e.target.value); setSelectedMonth(''); }}
+              onChange={e => setObjectFilter(e.target.value)}
             >
               {lockedObjectId === null && <option value="">Все объекты</option>}
               {objects.map(item => (
@@ -250,7 +310,7 @@ export const ObjectKpiPage: FC = () => {
                 className={styles.clearInside}
                 aria-label="Сбросить объект"
                 title="Все объекты"
-                onClick={() => { setObjectFilter(''); setSelectedMonth(''); }}
+                onClick={() => setObjectFilter('')}
               >
                 <X size={16} />
               </button>
@@ -263,13 +323,41 @@ export const ObjectKpiPage: FC = () => {
             Назначения
           </button>
         )}
+        {/* Выгружается ровно видимая таблица: месяцы, сортировка и фильтры столбцов. */}
+        <button
+          type="button"
+          className={`${styles.secondaryBtn} ${styles.exportBtn}`}
+          onClick={() => { void handleExport(); }}
+          disabled={exporting || tableLoading || exportRowsCount === 0}
+        >
+          <Download size={14} aria-hidden="true" />
+          <span>{exporting ? 'Готовим…' : 'Экспорт'}</span>
+        </button>
       </div>
 
       {/* Период подписан явно: он вычисляется сервером и ограничен 10 годами. */}
       {periodLabel && <p className={styles.note}>Период: {periodLabel}. Все суммы — в рублях, с НДС.</p>}
 
       {tableQuery.isError && <div className={styles.error}>Не удалось загрузить отчёт</div>}
-      {summaryQuery.isError && <div className={styles.error}>Не удалось загрузить сводку</div>}
+      {(summaryQuery.isError || monthsSummaryQuery.isError) && (
+        <div className={styles.error}>Не удалось загрузить сводку</div>
+      )}
+
+      {!selectedObject && (
+        <ObjectKpiTable
+          ariaLabel="KPI по всем объектам"
+          rows={objectRows}
+          visibleRows={visibleObjectRows}
+          columns={OBJECT_STAT_COLUMNS}
+          view={objectsView}
+          onViewChange={setObjectsView}
+          rowKey={row => row.skud_object_id}
+          rowLabel={row => `Открыть объект: ${row.object_name}`}
+          onRowClick={row => setObjectFilter(row.skud_object_id)}
+          loading={objectsLoading}
+          emptyText="Нет объектов с договором за выбранные месяцы"
+        />
+      )}
 
       {selectedObject && (
         <>
@@ -302,69 +390,26 @@ export const ObjectKpiPage: FC = () => {
             )}
           </div>
 
-          {!selectedObject.contract_id ? (
+          {!showMonthTable ? (
             <div className={styles.emptyBlock}>По объекту нет договора</div>
           ) : (
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Премия</th>
-                    <th>Месяц</th>
-                    <th>Руководитель</th>
-                    <th>Договор с ДС</th>
-                    <th>КС-6</th>
-                    <th>Остаток</th>
-                    <th title="Подписано за месяц, с учётом уменьшений объёма (п. 3.1, 3.3)">КС-2</th>
-                    <th>Мес.</th>
-                    <th>План месяца</th>
-                    <th>%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tableQuery.isLoading && (
-                    <tr><td colSpan={10} className={styles.empty}>Загрузка…</td></tr>
-                  )}
-                  {!tableQuery.isLoading && rows.length === 0 && (
-                    <tr>
-                      <td colSpan={10} className={styles.empty}>
-                        Расчётных месяцев по договору нет
-                      </td>
-                    </tr>
-                  )}
-                  {rows.map(row => (
-                    <tr
-                      key={`${row.skud_object_id}-${row.period_month}`}
-                      className={[
-                        styles.row,
-                        row.is_forecast ? styles.forecastRow : '',
-                        row.period_month.slice(0, 7) === currentMonth ? styles.currentRow : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => setOpenCard({ objectId: row.skud_object_id, mode: 'view' })}
-                    >
-                      <td>{renderPremium(row.primary_manager_id, row.period_month)}</td>
-                      <td>{formatMonthLabel(row.period_month)}</td>
-                      <td>{row.primary_manager_name ?? '—'}</td>
-                      <td>{formatMoneyShort(row.contract_total)}</td>
-                      {/* КС-6 — сумма КС-2 за все прошлые месяцы (со стартом из ручного остатка),
-                          поэтому в каждой строке «Договор − КС-6 = Остаток» (п. 2.2).
-                          КС-2 — акты этого месяца, у прогнозного месяца — его план. */}
-                      <td>{formatMoneyShort(row.ks2_cumulative_before)}</td>
-                      <td>{formatMoneyShort(row.remainder)}</td>
-                      <td>{formatMoneyShort(row.fact_amount)}</td>
-                      <td>{row.months_remaining ?? '—'}</td>
-                      <td>
-                        {formatMoneyShort(row.plan_amount)}
-                        {row.plan_overridden && (
-                          <span className={styles.mark} title="План задан вручную">✎</span>
-                        )}
-                      </td>
-                      <td>{formatPercent(row.completion_pct)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ObjectKpiTable
+              ariaLabel={`KPI объекта ${selectedObject.name} по месяцам`}
+              rows={monthRows}
+              visibleRows={visibleMonthRows}
+              columns={monthColumns}
+              view={monthsView}
+              onViewChange={setMonthsView}
+              rowKey={row => `${row.skud_object_id}-${row.period_month}`}
+              rowLabel={row => `${formatMonthLabel(row.period_month)}: данные объекта`}
+              onRowClick={row => setOpenCard({ objectId: row.skud_object_id, mode: 'view' })}
+              rowTone={row => (row.is_forecast
+                ? 'forecast'
+                : row.period_month.slice(0, 7) === currentMonth ? 'current' : undefined)}
+              renderCell={renderMonthCell}
+              loading={tableQuery.isLoading}
+              emptyText="Расчётных месяцев по договору нет"
+            />
           )}
         </>
       )}

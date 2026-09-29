@@ -10,7 +10,9 @@ import { fetchObjectKpiHeadcount } from '../services/object-kpi-headcount.servic
 import { listMonthPlans, normalizeMonth } from '../services/object-kpi-plan.service.js';
 import {
   fetchObjectKpiReport,
+  filterRowsByMonths,
   resolveCalcWindow,
+  summarizeByObject,
   summarizeCompletion,
   OBJECT_KPI_MAX_AUTO_MONTHS,
   type ObjectKpiReportParams,
@@ -61,6 +63,20 @@ export const optionalPeriodSchema = z
   .refine((v) => !v.from || !v.to || v.from <= v.to, { message: 'Начало периода позже конца' })
   .refine(
     (v) => !v.from || !v.to || monthsBetween(v.from, v.to) <= OBJECT_KPI_MAX_AUTO_MONTHS,
+    { message: `Период больше ${OBJECT_KPI_MAX_AUTO_MONTHS} месяцев` },
+  );
+
+/**
+ * Набор месяцев «YYYY-MM,YYYY-MM» — выбор на вкладке: один месяц, подряд или вразброс.
+ * Повторы и порядок не важны; окно отчёта — от первого до последнего месяца набора.
+ */
+export const monthsParamSchema = z
+  .string()
+  .max(1200, 'Слишком много месяцев')
+  .regex(/^\d{4}-(0[1-9]|1[0-2])(,\d{4}-(0[1-9]|1[0-2]))*$/, 'Ожидается список месяцев YYYY-MM через запятую')
+  .transform((value) => [...new Set(value.split(','))].sort())
+  .refine(
+    (months) => monthsBetween(months[0], months[months.length - 1]) <= OBJECT_KPI_MAX_AUTO_MONTHS,
     { message: `Период больше ${OBJECT_KPI_MAX_AUTO_MONTHS} месяцев` },
   );
 
@@ -138,12 +154,14 @@ type ReportRequest =
     viewerScope: ObjectKpiScope;
     /** Объект авто-окна: только в этом режиме окно кончается текущим месяцем и есть прогноз. */
     autoObjectId: string | null;
+    /** Выбранные месяцы (YYYY-MM) внутри окна; null — все месяцы окна. */
+    monthFilter: ReadonlySet<string> | null;
   }
   | { error: { http: number; message: string } };
 
 /**
- * Общий разбор запроса отчёта для /report и /report/summary: период (передан или авто),
- * скоуп, фильтр по объекту.
+ * Общий разбор запроса отчёта для /report и /report/summary: период (передан, набор месяцев
+ * или авто), скоуп, фильтр по объекту.
  *
  * В авто-режиме скоуп резолвится на СЕГОДНЯ, а не на вычисленное окно: окно считается по
  * объектам скоупа, и обратная зависимость дала бы цикл. Для экономиста и админа скоуп от
@@ -153,7 +171,14 @@ async function resolveReportRequest(
   req: AuthenticatedRequest,
   options: { requireObjectInAutoMode: boolean },
 ): Promise<ReportRequest> {
-  const { from, to } = optionalPeriodSchema.parse(req.query);
+  const period = optionalPeriodSchema.parse(req.query);
+  const months = req.query.months === undefined ? null : monthsParamSchema.parse(req.query.months);
+  if (months && (period.from !== undefined || period.to !== undefined)) {
+    return { error: { http: 400, message: 'Укажите либо месяцы, либо период' } };
+  }
+  // Набор месяцев превращается в окно [первый, последний]; лишние месяцы режет monthFilter.
+  const from = months ? months[0] : period.from;
+  const to = months ? months[months.length - 1] : period.to;
   // Валидируем как uuid: иначе мусорная строка даёт пустой 200, неотличимый от «нет данных».
   const requestedId = z.string().uuid().optional().parse(req.query.object_id ?? undefined);
   const isAuto = from === undefined || to === undefined;
@@ -186,6 +211,7 @@ async function resolveReportRequest(
     period: window,
     viewerScope: scope,
     autoObjectId: isAuto && requestedId ? requestedId : null,
+    monthFilter: months ? new Set(months) : null,
   };
 }
 
@@ -275,12 +301,13 @@ export const objectKpiController = {
       // Прогноз до контрольной даты — только в авто-окне по одному объекту: тогда окно
       // кончается текущим месяцем, и прогноз продолжает таблицу без разрыва. Сводка и
       // премия считаются только по фактическим строкам — прогноз в них не входит.
-      const [rows, forecast] = await Promise.all([
+      const [allRows, forecast] = await Promise.all([
         fetchObjectKpiReport(resolved.params),
         resolved.autoObjectId
           ? fetchObjectKpiForecast(resolved.autoObjectId, resolved.period.to)
           : Promise.resolve([]),
       ]);
+      const rows = filterRowsByMonths(allRows, resolved.monthFilter);
       res.json({
         success: true,
         data: rows,
@@ -294,8 +321,8 @@ export const objectKpiController = {
   },
 
   /**
-   * Сводка без строк: виджеты вкладки показывают весь период по всем объектам, а решётка
-   * «объекты × месяцы» на таком окне — десятки тысяч строк, которые фронту не нужны.
+   * Сводка без строк: виджеты вкладки и таблица «Все объекты» (строка на объект), а не
+   * решётка «объекты × месяцы» — на длинном окне это десятки тысяч строк, фронту не нужных.
    *
    * Формулы не дублируются: тот же fetchObjectKpiReport и та же summarizeCompletion, что
    * у /report. По нагрузке на БД это ровно тот же запрос — экономится только трафик,
@@ -309,8 +336,14 @@ export const objectKpiController = {
         return;
       }
 
-      const rows = await fetchObjectKpiReport(resolved.params);
-      res.json({ success: true, summary: summarizeCompletion(rows), period: resolved.period });
+      const rows = filterRowsByMonths(await fetchObjectKpiReport(resolved.params), resolved.monthFilter);
+      res.json({
+        success: true,
+        summary: summarizeCompletion(rows),
+        // Таблица «Все объекты» — из тех же строк и той же формулы, что плитки.
+        objects: summarizeByObject(rows),
+        period: resolved.period,
+      });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getReportSummary');
     }
@@ -338,7 +371,7 @@ export const objectKpiController = {
         return;
       }
 
-      const rows = await fetchObjectKpiReport(resolved.params);
+      const rows = filterRowsByMonths(await fetchObjectKpiReport(resolved.params), resolved.monthFilter);
       const managerIds = [...new Set(
         rows.flatMap((row) => (row.managers ?? []).map((item) => Number(item.employee_id))),
       )].filter((id) => Number.isFinite(id) && id > 0);
@@ -373,6 +406,7 @@ export const objectKpiController = {
 
         const result = await fetchManagerPremium({ employeeId, objectIds, monthFrom, monthTo });
         for (const month of result.premium) {
+          if (resolved.monthFilter && !resolved.monthFilter.has(month.period_month.slice(0, 7))) continue;
           data.push({
             employee_id: employeeId,
             period_month: month.period_month,
