@@ -15,9 +15,12 @@ const modes = vi.hoisted(() => ({
   calls: [] as Array<unknown>,
 }));
 
+// Текущее правило владения днём: false — день теперь отдан другой подаче.
+const ownership = vi.hoisted(() => ({ owns: true }));
+
 vi.mock('./timesheet-day-ownership.service.js', () => ({
   resolveDayOwnership: vi.fn(async () => new Map()),
-  ownsDay: () => true,
+  ownsDay: () => ownership.owns,
   ownershipKey: (a: number, b: number, c: string) => `${a}|${b}|${c}`,
   enumerateDatesInclusive: () => ['2026-09-03'],
 }));
@@ -117,6 +120,7 @@ beforeEach(() => {
     [2, { mode: 'skud', pinnedObjectId: null, source: 'legacy_default' }],
   ]);
   modes.calls = [];
+  ownership.owns = true;
   store.inserts = [];
   store.latest = {
     id: 5001, revision: 1, content_hash: 'hash-payload', payload: PAYLOAD, scope_kind: 'department',
@@ -202,6 +206,21 @@ describe('rebuildVersionObjects', () => {
     const result = await rebuildVersionObjects(client, APPROVAL, null);
     expect(result.created).toBe(false);
     expect(store.inserts).toEqual([]);
+  });
+
+  it('чей день — по самой редакции: правило поменялось после закрытия, часы остаются', async () => {
+    // Сотрудник в двух подачах: при закрытии день был этой подачи, теперь правило отдаёт
+    // его другой. Разбивка обязана сходиться с днями табеля своей редакции.
+    ownership.owns = false;
+    const result = await rebuildVersionObjects(client, APPROVAL, null);
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [1] });
+
+    const objects = store.inserts.find(i => i.sql.includes('INSERT INTO timesheet_version_objects'))!;
+    const payload = JSON.parse(String(objects.params[2]));
+    expect(payload.employees[0]).toMatchObject({
+      total_hours: 8,
+      objects: [{ object_id: 'obj-b', total_hours: 8, days: { '2026-09-03': 8 } }],
+    });
   });
 
   it('редакции без снимка объектов не трогаем (это бэкфилл)', async () => {

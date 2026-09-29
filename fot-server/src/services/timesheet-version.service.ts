@@ -226,30 +226,28 @@ interface IMembershipWindow {
 }
 
 /**
- * Объектные интервалы подачи, отфильтрованные правилом владения днём.
+ * Объектные интервалы сохранённой редакции, отфильтрованные владением днём.
  *
  * Владение обязано быть тем же, что у основного payload: иначе переведённый в середине
- * периода унёс бы объектные часы новой бригады в выгрузку старой.
+ * периода унёс бы объектные часы новой бригады в выгрузку старой. Поэтому оно берётся
+ * из самой редакции — в payload попали ровно дни, которыми подача владела при закрытии.
+ * Пересчёт по текущему правилу здесь нельзя: если сотрудник в двух подачах и правило
+ * с тех пор поменялось, разбивка разошлась бы с днями табеля этой же редакции.
  */
 async function collectOwnedObjectEntries(
   client: PoolClient,
   approval: IVersionApproval,
-  employeeIds: number[],
+  payload: ITimesheetVersionPayload,
 ): Promise<{
   objectEntries: IAttendanceObjectEntry[];
   ownsEmployeeDay: (employeeId: number, date: string) => boolean;
 }> {
-  const ownership = await resolveDayOwnership(
-    [{
-      approvalId: approval.id,
-      departmentId: approval.department_id,
-      employeeIds,
-      dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
-    }],
-    client,
+  const ownedDays = new Map<number, Set<string>>(
+    payload.employees.map(employee => [employee.identity.employee_id, new Set(Object.keys(employee.days))]),
   );
   const ownsEmployeeDay = (employeeId: number, date: string): boolean =>
-    ownsDay(ownership.get(ownershipKey(approval.id, employeeId, date)));
+    ownedDays.get(employeeId)?.has(date) ?? false;
+  const employeeIds = [...ownedDays.keys()];
 
   const objectEntries: IAttendanceObjectEntry[] = [];
   for (const anchor of monthAnchorsInRange(approval.start_date, approval.end_date)) {
@@ -714,10 +712,7 @@ export async function buildObjectsSnapshotForVersion(
   approval: IVersionApproval,
   payload: ITimesheetVersionPayload,
 ): Promise<IVersionObjectsSnapshot> {
-  const employeeIds = payload.employees.map(employee => employee.identity.employee_id);
-  const { objectEntries, ownsEmployeeDay } = await collectOwnedObjectEntries(
-    client, approval, employeeIds,
-  );
+  const { objectEntries, ownsEmployeeDay } = await collectOwnedObjectEntries(client, approval, payload);
   return buildObjectsSnapshot(client, payload, objectEntries, ownsEmployeeDay);
 }
 
