@@ -17,14 +17,16 @@ import styles from './PayrollTermsFields.module.css';
 
 interface IPayrollTermsFieldsProps {
   form: PayrollTermsFormApi;
-  /** Префикс id полей: по нему модалка ставит фокус на первое поле с ошибкой. */
+  /** Префикс id полей: по нему карточка и окно ставят фокус на первое поле с ошибкой. */
   idPrefix: string;
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
-  /** Фокус на «Категорию» при открытии окна. */
+  /** Фокус на «Категорию» при открытии карточки или окна. */
   autoFocus?: boolean;
   /** Месяцы (YYYY-MM) блока «Оплачено» под окладом и премией; не передано или пусто — блока нет. */
   paidMonths?: string[];
+  /** «Основная оплата» в одну колонку: сумма, премия и «Оплачено» — под «Категорией · Видом оплаты · Действует с». */
+  stacked?: boolean;
 }
 
 /** «Компенсация» в одну строку — в порядке на экране. */
@@ -41,7 +43,7 @@ const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория · Вид оплаты · Действует с,
- * компенсации и удержание; справа оклад (или ставка) с премией и «Оплачено». В узком окне
+ * компенсации и удержание; справа оклад (или ставка) с премией и «Оплачено». В узком окне и при stacked
  * половины встают друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
@@ -50,6 +52,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   readOnly = false,
   autoFocus = false,
   paidMonths,
+  stacked = false,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
 
@@ -86,7 +89,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
     <div className={styles.form}>
       <section className={styles.section} aria-labelledby={`${idPrefix}-main`}>
         <h3 id={`${idPrefix}-main`} className={styles.sectionTitle}>Основная оплата</h3>
-        <div className={styles.halves}>
+        <div className={stacked ? `${styles.halves} ${styles.halvesStacked}` : styles.halves}>
           <div className={styles.half}>
             <div className={styles.mainRow}>
               <div className={styles.field}>

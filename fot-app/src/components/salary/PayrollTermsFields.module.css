@@ -3,7 +3,7 @@
  * Каждая секция — две половины (слева параметры, компенсации, удержание; справа оклад, премия, «Оплачено»).
  * Ширину решают container queries: форма (payroll-form) — стоят ли половины рядом, половина (payroll-half) —
  * сколько полей в строке. Контейнеры именованные: они вложены друг в друга.
- * Высота контролов — --payroll-control-h от модалки (44px на телефоне, 40px с 768px).
+ * Высота контролов — --payroll-control-h от окна или карточки «Подробно» (44px на телефоне, 40px с 768px).
  */
 .form { container: payroll-form / inline-size; display: flex; flex-direction: column; }
 
@@ -18,6 +18,9 @@
 @container payroll-form (min-width: 1380px) {
   .halves { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Карточка «Подробно»: сумма, премия и «Оплачено» — под первой строкой, в той же колонке и той же ширины. */
+.halvesStacked > .half + .half { grid-column: 1; }
 
 .half { container: payroll-half / inline-size; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 

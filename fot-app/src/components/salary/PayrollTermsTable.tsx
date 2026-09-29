@@ -206,7 +206,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                   isSelected ? styles.rowSelected : '',
                 ].filter(Boolean).join(' ');
                 return (
-                  // Строка кликабельна, как в «Текущих сотрудниках»: открывает окно условий оплаты.
+                  // Строка кликабельна, как в «Текущих сотрудниках»: открывает карточку во вкладке «Подробно».
                   <tr
                     key={row.employee_id}
                     ref={virtualizer.measureElement}
@@ -216,7 +216,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     aria-label={`Условия оплаты: ${row.full_name ?? 'сотрудник'}`}
                     onClick={() => onEdit(row)}
                     onKeyDown={event => {
-                      // Только клавиши на самой строке: пробел на чекбоксе внутри должен выделять, а не открывать окно.
+                      // Только клавиши на самой строке: пробел на чекбоксе внутри должен выделять, а не открывать карточку.
                       if (event.target !== event.currentTarget) return;
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
@@ -224,7 +224,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                       }
                     }}
                   >
-                    {/* Выделение не открывает окно — как ячейка чекбокса у кадров. */}
+                    {/* Выделение не открывает карточку — как ячейка чекбокса у кадров. */}
                     <td className={`${styles.stickyCheck} ${styles.cellCheck}`} onClick={event => event.stopPropagation()}>
                       <input
                         type="checkbox"

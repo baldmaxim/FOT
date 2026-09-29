@@ -21,7 +21,6 @@ import { usePayrollStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
-import { moscowTodayIso } from '../../utils/moscowDate';
 import { payrollAccrualMonths } from '../../utils/payrollAccruals';
 import {
   countActivePayrollColumnFilters,
@@ -32,7 +31,6 @@ import {
 import type { PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
-import { EmployeePayrollModal } from '../../components/salary/EmployeePayrollModal';
 import { PayrollAccrualsPopover } from '../../components/salary/PayrollAccrualsPopover';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
@@ -51,15 +49,28 @@ const COLUMN_LABELS: Record<PayrollSortKey, string> = {
   housing: 'Компенсация проживания',
 };
 
-export const CompensationTermsPage: FC = () => {
+interface ICompensationTermsPageProps {
+  /** Дата выборки — одна на список и карточку «Подробно» (см. PaymentsTab). */
+  date: string;
+  /** Список на экране. Скрытый список не размонтируется: фильтры, выделение и прокрутка сохраняются. */
+  active: boolean;
+  /** Клик по строке — вкладка «Подробно» с этим сотрудником. */
+  onOpenEmployee: (row: IPayrollTermsRow) => void;
+  /** Массовое назначение сохранено: сотрудники, чьи условия действительно изменились. */
+  onAssigned: (employeeIds: number[]) => void;
+}
+
+export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
+  date,
+  active,
+  onOpenEmployee,
+  onAssigned,
+}) => {
   const { success, error: showError, warning } = useToast();
   const { canEditPage } = useAuth();
   const queryClient = useQueryClient();
   const canEdit = canEditPage('/salary/terms');
 
-  // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня» по Москве,
-  // как на сервере. Дата браузера в другом поясе давала бы соседний день.
-  const [date] = useState(moscowTodayIso);
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [departmentId, setDepartmentId] = useState('');
@@ -69,8 +80,6 @@ export const CompensationTermsPage: FC = () => {
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
   const [openFilter, setOpenFilter] = useState<{ column: PayrollSortKey; anchor: HTMLElement } | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  // Карточка одного сотрудника и массовое назначение — разные окна.
-  const [cardRow, setCardRow] = useState<IPayrollTermsRow | null>(null);
   const [bulkRows, setBulkRows] = useState<IPayrollTermsRow[] | null>(null);
 
   // Поиск идёт на сервере по всему штату, а не по загруженным порциям.
@@ -208,6 +217,23 @@ export const CompensationTermsPage: FC = () => {
     setAccrualsFor(null);
   };
 
+  // Уход со списка (другая вкладка, «Назад» браузера) закрывает всплывающие окна и массовое назначение:
+  // они в портале, и visibility: hidden списка их не прячет. Выбор подразделения перемонтируется — его
+  // список тоже в портале. Фильтры, выделение и прокрутка остаются. Паттерн «состояние из прошлого
+  // рендера» вместо setState-в-effect (react.dev «You Might Not Need an Effect»).
+  const [wasActive, setWasActive] = useState(active);
+  const [departmentSelectKey, setDepartmentSelectKey] = useState(0);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) {
+      setOpenFilter(null);
+      setColumnsAnchor(null);
+      setAccrualsFor(null);
+      setBulkRows(null);
+      setDepartmentSelectKey(key => key + 1);
+    }
+  }
+
   const resetColumnFilters = () => {
     setColumnFilters({});
     setSelected(new Set());
@@ -224,8 +250,9 @@ export const CompensationTermsPage: FC = () => {
       // Префикс сбрасывает и список, и историю зарплаты в карточке.
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
       setSelected(new Set());
-      setCardRow(null);
       setBulkRows(null);
+      // Только применённые: у отклонённых (skipped) условия не менялись, их карточка остаётся.
+      onAssigned(result.applied.map(item => item.employee_id));
       if (result.skipped.length > 0) {
         warning(`Применено: ${result.applied.length}. Отклонено: ${result.skipped.length} — ${result.skipped[0].message}`);
       } else {
@@ -235,7 +262,7 @@ export const CompensationTermsPage: FC = () => {
     // Ошибку сохранения показывает само окно (ввод не теряется). Тост — только если окно
     // успели закрыть, пока шёл запрос.
     onError: (err: Error) => {
-      if (!cardRow && !bulkRows) showError(err.message || 'Не удалось назначить условия');
+      if (!bulkRows) showError(err.message || 'Не удалось назначить условия');
     },
   });
   const { reset: resetAssign } = assignMutation;
@@ -266,11 +293,6 @@ export const CompensationTermsPage: FC = () => {
   }, [allLoadedSelected, editableRows]);
 
   // Ошибка прошлого сохранения не должна всплыть в новом окне.
-  const openOne = useCallback((row: IPayrollTermsRow) => {
-    resetAssign();
-    setCardRow(row);
-  }, [resetAssign]);
-
   const openBulk = () => {
     const chosen = editableRows.filter(row => selected.has(row.employee_id));
     if (chosen.length === 0) return;
@@ -288,6 +310,7 @@ export const CompensationTermsPage: FC = () => {
         </div>
         <div className={styles.department}>
           <DepartmentTreeSelect
+            key={departmentSelectKey}
             departments={departments}
             value={departmentId}
             onChange={changeDepartment}
@@ -351,7 +374,7 @@ export const CompensationTermsPage: FC = () => {
             hiddenColumns={hiddenColumns}
             onToggleOne={toggleOne}
             onToggleAll={toggleAll}
-            onEdit={openOne}
+            onEdit={onOpenEmployee}
             onLoadMore={loadMore}
             resetKey={resetKey}
             sort={sort}
@@ -408,19 +431,6 @@ export const CompensationTermsPage: FC = () => {
           months={accrualMonths}
           anchor={accrualsFor.anchor}
           onClose={closeAccruals}
-        />
-      )}
-
-      {cardRow && (
-        <EmployeePayrollModal
-          row={cardRow}
-          canEdit={isRowEditable(cardRow)}
-          defaultDate={date}
-          isSaving={assignMutation.isPending}
-          saveError={saveError}
-          onClose={() => setCardRow(null)}
-          onSubmit={(payload) => assignMutation.mutate({ ...payload, ids: [cardRow.employee_id] })}
-          resolveDefaultCalcType={defaultCalcTypeFor}
         />
       )}
 

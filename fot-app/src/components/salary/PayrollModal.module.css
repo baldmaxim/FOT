@@ -1,5 +1,5 @@
 /*
- * Окна раздела «Зарплата → Условия оплаты» (карточка сотрудника и массовое назначение).
+ * Окно «Назначить выделенным» раздела «Зарплата → Условия оплаты» (массовое назначение).
  * 90% ширины и высоты экрана (dvh: адрес-бар мобильных браузеров съедает vh).
  * Шапка и подвал всегда на месте, прокручивается только тело.
  */
@@ -45,7 +45,6 @@
 }
 .headerText { flex: 1; min-width: 0; }
 .title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
-.name { margin: 4px 0 0; font-size: 15px; font-weight: 500; line-height: 1.35; color: var(--text-primary); overflow-wrap: anywhere; }
 .meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .closeButton {
@@ -74,18 +73,6 @@
   -webkit-overflow-scrolling: touch;
   padding: 16px 20px 20px;
 }
-
-.readOnlyNote {
-  margin: 0 0 16px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-/* Справка под формой: раскрываемые блоки через тонкие разделители. */
-.reference { margin-top: 20px; border-top: 1px solid var(--border-subtle); }
 
 .footer {
   display: flex;
@@ -131,7 +118,6 @@
 @media (max-height: 560px) {
   .header { padding: 8px 12px 8px 16px; }
   .title { font-size: 16px; }
-  .name { margin-top: 2px; font-size: 14px; }
   .body { padding: 12px 16px 16px; }
   .footer { padding: 8px 16px; }
 }
