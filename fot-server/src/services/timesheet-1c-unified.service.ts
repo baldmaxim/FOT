@@ -1,5 +1,5 @@
 import type ExcelJS from 'exceljs';
-import { query } from '../config/postgres.js';
+import { query, withReadOnlySnapshot } from '../config/postgres.js';
 // Тестовых начальников в выгрузку не пускаем; правило общее со снимком руководителей.
 import { isTestPersonName } from '../utils/person-name.utils.js';
 import { resolveResponsibleEmployeeIdsByEmployeeDept, responsiblePairKey } from './approval-routing.service.js';
@@ -12,6 +12,7 @@ import {
 } from './timesheet-export-mode.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import { isDateInEmployeeWindows } from './timesheet-day-windows.service.js';
+import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
 import {
   buildEmployeeRowsForOneC,
   buildObjectRowsForOneC,
@@ -137,6 +138,7 @@ const buildRowsForDepartment = (
   objectAddressMap: Map<string, string>,
   modeByPair: Map<string, IResolvedExportMode>,
   managerNameByPair: Map<string, string>,
+  objectChangeByEmpId: ReadonlyMap<number, string>,
   policy: AggregatedModesPolicy = 'all',
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
@@ -163,6 +165,8 @@ const buildRowsForDepartment = (
     modeByPair.get(exportModePairKey(empId, deptIdByEmpId.get(empId) ?? null)) ?? DEFAULT_EXPORT_MODE;
   const managerFor = (empId: number): string =>
     managerNameByPair.get(responsiblePairKey(empId, deptIdByEmpId.get(empId) ?? null)) ?? '';
+  // Личный режим один на все отделы сотрудника — подпись тоже по сотруднику.
+  const objectChangeFor = (empId: number): string => objectChangeByEmpId.get(empId) ?? '';
   const sortKeysFor = (empId: number, fullName: string, objectName: string, objectKey: string) => ({
     departmentNameSort: data.departmentName,
     departmentIdSort: data.departmentId ?? '',
@@ -236,6 +240,7 @@ const buildRowsForDepartment = (
         oneCRow,
         departmentName: data.departmentName,
         objectAddress,
+        objectChange: objectChangeFor(empId),
         managerName,
         position: positionForEmpId(empId),
       });
@@ -254,6 +259,7 @@ const buildRowsForDepartment = (
       oneCRow: employeeRow,
       departmentName: data.departmentName,
       objectAddress: '',
+      objectChange: objectChangeFor(empId),
       managerName,
       position: positionForEmpId(empId),
     });
@@ -282,6 +288,7 @@ const buildRowsForDepartment = (
         oneCRow: employeeRow,
         departmentName: data.departmentName,
         objectAddress,
+        objectChange: objectChangeFor(empId),
         managerName,
         position: positionForEmpId(empId),
       });
@@ -327,8 +334,15 @@ export async function buildUnified1CRows(
   // периода сотрудник в старом отделе получает режим и руководителя старого отдела.
   // month — месяц выгрузки: для прошедшего месяца личный режим из фиксации (288).
   const pairs = collectEmployeeDeptPairs(departmentsData);
-  const [modeByPair, responsibleIdsByPair] = await Promise.all([
-    resolveExportModesForPairs(pairs, undefined, month ? { month } : undefined),
+  // Один «сейчас» на режимы и авторов: на границе суток оба видят один текущий месяц.
+  const now = new Date();
+  const [[modeByPair, objectChangeByEmpId], responsibleIdsByPair] = await Promise.all([
+    // Режим строки и автор объекта (289) — из одного снимка БД: ручная смена между двумя
+    // запросами дала бы адрес одного объекта и подпись другого.
+    withReadOnlySnapshot(async client => [
+      await resolveExportModesForPairs(pairs, client, month ? { month, now } : undefined),
+      await loadTimesheetObjectChanges(pairs.map(pair => pair.employee_id), month, { now, exec: client }),
+    ] as const),
     // Приоритет: начальник(и) отдела/участка с full-доступом → иначе непосредственный
     // руководитель (employee_direct_reports).
     resolveResponsibleEmployeeIdsByEmployeeDept(pairs),
@@ -355,7 +369,9 @@ export async function buildUnified1CRows(
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByPair, managerNameByPair, policy));
+    rows.push(...buildRowsForDepartment(
+      data, objectAddressMap, modeByPair, managerNameByPair, objectChangeByEmpId, policy,
+    ));
   }
   rows.sort(compareUnifiedRows);
 

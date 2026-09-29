@@ -12,6 +12,10 @@ const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
 vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
 vi.mock('../config/postgres.js', () => ({
   query: (sql: string, params?: unknown[]) => queryMock(sql, params),
+  // Режимы и подписи объекта читаются одним снимком — клиент ходит в тот же мок.
+  withReadOnlySnapshot: async <T>(fn: (client: unknown) => Promise<T>): Promise<T> => fn({
+    query: async (sql: string, params?: unknown[]) => ({ rows: await queryMock(sql, params) }),
+  }),
 }));
 
 const ONE_C_DATA_START_ROW = 4;
@@ -20,7 +24,7 @@ const COL_DAY1 = 3;
 const COL_TOTAL = 34;
 const COL_DEPT = 36;
 const COL_ADDRESS = 37;
-const COL_MANAGER = 38;
+const COL_MANAGER = 39;
 
 const ZULF = 'dept-zulf';
 const HAYD = 'dept-hayd';

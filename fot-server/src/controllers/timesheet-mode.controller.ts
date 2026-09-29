@@ -561,14 +561,17 @@ export const timesheetModeController = {
         }
 
         // Ручная правка админа: источник NULL — ночной расчёт её не трогает (миграция 288).
+        // Автор и время (289); у «По СКУД» и сброса режима автора обнуляет триггер.
         await client.query(
           `UPDATE employees
               SET timesheet_export_mode = $1,
                   timesheet_export_object_id = $2::uuid,
                   timesheet_export_set_by = NULL,
+                  timesheet_export_set_by_user_id = $4::uuid,
+                  timesheet_export_set_at = now(),
                   updated_at = now()
             WHERE id = ANY($3::int[])`,
-          [normalized.mode, normalized.objectId, employeeIds],
+          [normalized.mode, normalized.objectId, employeeIds, req.user.id],
         );
 
         // Ошибка аудита пробрасывается и откатывает UPDATE: запись без следа недопустима.
@@ -660,14 +663,17 @@ export const timesheetModeController = {
         if (sameExplicitMode(current, normalized) && manualAlready) return { kind: 'unchanged' as const };
         if (expected && !sameExplicitMode(current, expected)) return { kind: 'conflict' as const, current };
 
+        // Автор и время (289); у «По СКУД» и сброса режима автора обнуляет триггер.
         await client.query(
           `UPDATE employees
               SET timesheet_export_mode = $1,
                   timesheet_export_object_id = $2::uuid,
                   timesheet_export_set_by = NULL,
+                  timesheet_export_set_by_user_id = $4::uuid,
+                  timesheet_export_set_at = now(),
                   updated_at = now()
             WHERE id = $3::int`,
-          [normalized.mode, normalized.objectId, employeeId],
+          [normalized.mode, normalized.objectId, employeeId, req.user.id],
         );
 
         await auditService.logFromRequestWithClient(client, req, req.user.id, AUDIT_ACTIONS.TIMESHEET_MODE_UPDATED, {

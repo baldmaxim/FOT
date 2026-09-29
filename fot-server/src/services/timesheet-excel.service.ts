@@ -590,6 +590,8 @@ export interface IUnifiedOneCRow {
   oneCRow: IOneCExportRow;
   departmentName: string;
   objectAddress: string;
+  /** Кто и когда вручную поставил объект табелирования; пусто — не человек. */
+  objectChange?: string;
   managerName?: string;
   position?: string;
 }
@@ -597,15 +599,17 @@ export interface IUnifiedOneCRow {
 const UNIFIED_COL_DAYS = ONE_C_TOTAL_COLUMN + 1; // 35
 const UNIFIED_COL_DEPARTMENT = ONE_C_TOTAL_COLUMN + 2; // 36
 const UNIFIED_COL_OBJECT_ADDRESS = ONE_C_TOTAL_COLUMN + 3; // 37
-const UNIFIED_COL_MANAGER = ONE_C_TOTAL_COLUMN + 4; // 38
-const UNIFIED_COL_POSITION = ONE_C_TOTAL_COLUMN + 5; // 39 — крайняя правая
+const UNIFIED_COL_OBJECT_CHANGE = ONE_C_TOTAL_COLUMN + 4; // 38
+const UNIFIED_COL_MANAGER = ONE_C_TOTAL_COLUMN + 5; // 39
+const UNIFIED_COL_POSITION = ONE_C_TOTAL_COLUMN + 6; // 40 — крайняя правая
 const UNIFIED_HEADER_ROW = ONE_C_DATA_START_ROW - 1; // 3 — шапка шаблона
 
 /**
  * Единый файл для 1С: тот же шаблон, что и одиночный «Как в 1С» (шапка в строке 3,
  * данные с строки 4, дни 1..31, итог часов в колонке 34), плюс справа «Дни» (35),
- * «Отдел» (36), «Адрес объекта» (37), «Руководитель» (38) и «Должность» (39) —
- * без них строки разных отделов/объектов неразличимы.
+ * «Отдел» (36), «Адрес объекта» (37), «Изменения объекта табелирования» (38),
+ * «Руководитель» (39) и «Должность» (40) — без них строки разных отделов/объектов
+ * неразличимы.
  */
 export async function buildUnified1CWorkbookFromTemplate(
   sheetName: string,
@@ -637,6 +641,10 @@ export async function buildUnified1CWorkbookFromTemplate(
   addressHeader.style = cloneExcelValue(headerStyle) || {};
   addressHeader.value = 'Адрес объекта';
   addressHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  const objectChangeHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_OBJECT_CHANGE);
+  objectChangeHeader.style = cloneExcelValue(headerStyle) || {};
+  objectChangeHeader.value = 'Изменения объекта табелирования';
+  objectChangeHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
   // Образец стиля тела — ячейка ФИО строки-образца (левое выравнивание текста).
   const bodyStyle = worksheet.getRow(ONE_C_TEMPLATE_STYLE_ROW).getCell(COL_FIO).style;
@@ -673,6 +681,11 @@ export async function buildUnified1CWorkbookFromTemplate(
     addressCell.value = row.objectAddress;
     addressCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
 
+    const objectChangeCell = worksheet.getCell(rowNumber, UNIFIED_COL_OBJECT_CHANGE);
+    objectChangeCell.style = cloneExcelValue(bodyStyle) || {};
+    objectChangeCell.value = row.objectChange ?? '';
+    objectChangeCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
     const managerCell = worksheet.getCell(rowNumber, UNIFIED_COL_MANAGER);
     managerCell.style = cloneExcelValue(bodyStyle) || {};
     managerCell.value = row.managerName ?? '';
@@ -687,6 +700,9 @@ export async function buildUnified1CWorkbookFromTemplate(
   worksheet.getColumn(UNIFIED_COL_DAYS).width = 6;
   worksheet.getColumn(UNIFIED_COL_DEPARTMENT).width = 26;
   worksheet.getColumn(UNIFIED_COL_OBJECT_ADDRESS).width = 32;
+  // Высота строк шаблона фиксирована: шапка и «Руководитель Фамилия И. О., дд.мм.гггг»
+  // должны помещаться в одну строку.
+  worksheet.getColumn(UNIFIED_COL_OBJECT_CHANGE).width = 38;
   worksheet.getColumn(UNIFIED_COL_MANAGER).width = 26;
   worksheet.getColumn(UNIFIED_COL_POSITION).width = 24;
 

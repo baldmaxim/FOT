@@ -367,14 +367,17 @@ export async function setTimesheetObject(
       && (before.timesheet_export_object_id ?? null) === (target.objectId ?? null);
     if (sameMode && before.timesheet_export_set_by === setBy) return false;
 
+    // Автор и время (289): без новой даты триггер считает запись не человеческой.
     await client.query(
       `UPDATE employees
           SET timesheet_export_mode = $1,
               timesheet_export_object_id = $2::uuid,
               timesheet_export_set_by = $3,
+              timesheet_export_set_by_user_id = $5::uuid,
+              timesheet_export_set_at = now(),
               updated_at = now()
         WHERE id = $4::int`,
-      [target.mode, target.objectId, setBy, employeeId],
+      [target.mode, target.objectId, setBy, employeeId, req.user.id],
     );
     await auditService.logFromRequestWithClient(
       client, req, req.user.id,

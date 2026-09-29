@@ -182,7 +182,10 @@ describe('setTimesheetObject', () => {
     const result = await setTimesheetObject(req, 815, 'o-zil', 'employee', IN_WINDOW);
     expect(result.changed).toBe(true);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['object', 'o-zil', 'employee', 815]);
+    expect(update?.[1]).toEqual(['object', 'o-zil', 'employee', 815, 'user-1']);
+    // Автор и новая дата (289): без даты триггер счёл бы запись не человеческой.
+    expect(String(update?.[0])).toContain('timesheet_export_set_by_user_id = $5::uuid');
+    expect(String(update?.[0])).toContain('timesheet_export_set_at = now()');
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(), req, 'user-1', 'TIMESHEET_OBJECT_SELF_SELECTED',
       expect.objectContaining({ entityId: '815' }),
@@ -197,7 +200,7 @@ describe('setTimesheetObject', () => {
     const result = await setTimesheetObject(req, 815, 'o-dom', 'employee', IN_WINDOW);
     expect(result.changed).toBe(true);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['object', 'o-dom', 'employee', 815]);
+    expect(update?.[1]).toEqual(['object', 'o-dom', 'employee', 815, 'user-1']);
   });
 
   it('повтор того же выбора тем же источником — без UPDATE и аудита', async () => {
@@ -219,7 +222,7 @@ describe('setTimesheetObject', () => {
     ]]]));
     await setTimesheetObject(req, 815, 'office', 'manager', IN_WINDOW);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['current_activity', null, 'manager', 815]);
+    expect(update?.[1]).toEqual(['current_activity', null, 'manager', 815, 'user-1']);
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(), req, 'user-1', 'TIMESHEET_OBJECT_MANAGER_SELECTED', expect.anything(),
     );
@@ -257,7 +260,7 @@ describe('setTimesheetObject', () => {
     const result = await setTimesheetObject(req, 815, 'o-city', 'manager', OUT_OF_WINDOW);
     expect(result.changed).toBe(true);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['object', 'o-city', 'manager', 815]);
+    expect(update?.[1]).toEqual(['object', 'o-city', 'manager', 815, 'user-1']);
   });
 });
 
@@ -292,7 +295,7 @@ describe('откат ручной смены', () => {
     const result = await setTimesheetObject(req, 815, 'office', 'manager', IN_WINDOW);
     expect(result.changed).toBe(true);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['current_activity', null, 'manager', 815]);
+    expect(update?.[1]).toEqual(['current_activity', null, 'manager', 815, 'user-1']);
   });
 
   it('прежний объект из журнала этого месяца — в списке даже без 24 ч; неактивный — нет', async () => {

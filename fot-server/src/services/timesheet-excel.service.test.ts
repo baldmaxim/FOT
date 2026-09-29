@@ -630,15 +630,38 @@ describe('timesheet-excel.service — колонка «Дни» единого �
     return wb.getWorksheet(1)!;
   };
 
-  it('шапка: «Дни» в 35, «ч/часы» остаётся в 34, служебные колонки сдвинуты в 36–39', async () => {
+  it('шапка: «Дни» в 35, «ч/часы» остаётся в 34, служебные колонки сдвинуты в 36–40', async () => {
     const ws = await buildUnifiedSheet(makeStatusData([['2026-04-01', { status: 'work', hours: 8 }]]));
 
     expect(ws.getCell(3, COL_TOTAL).value).toBe('ч/часы');
     expect(ws.getCell(3, COL_DAYS).value).toBe('Дни');
     expect(ws.getCell(3, 36).value).toBe('Отдел');
     expect(ws.getCell(3, 37).value).toBe('Адрес объекта');
-    expect(ws.getCell(3, 38).value).toBe('Руководитель');
-    expect(ws.getCell(3, 39).value).toBe('Должность');
+    expect(ws.getCell(3, 38).value).toBe('Изменения объекта табелирования');
+    expect(ws.getCell(3, 39).value).toBe('Руководитель');
+    expect(ws.getCell(3, 40).value).toBe('Должность');
+  });
+
+  it('«Изменения объекта табелирования» (38): текст влево, ширина под одну строку, пусто без подписи', async () => {
+    const data = makeStatusData([['2026-04-01', { status: 'work', hours: 8 }]]);
+    const rows = buildEmployeeRowsForOneC(data).map(oneCRow => ({
+      oneCRow,
+      departmentName: data.departmentName,
+      objectAddress: 'Раменки ВТМО, ЖК "Stories"',
+      objectChange: 'Руководитель Боюкян М. В., 29.09.2026',
+      managerName: 'Боюкян Микаел Варужанович',
+      position: 'Инженер',
+    }));
+    const ws = (await buildUnified1CWorkbookFromTemplate('Табель 1С', rows)).getWorksheet(1)!;
+
+    expect(ws.getCell(4, 38).value).toBe('Руководитель Боюкян М. В., 29.09.2026');
+    expect(ws.getCell(4, 38).alignment).toMatchObject({ horizontal: 'left', wrapText: true });
+    expect(ws.getColumn(38).width).toBe(38);
+    expect(ws.getCell(4, 39).value).toBe('Боюкян Микаел Варужанович');
+    expect(ws.getCell(4, 40).value).toBe('Инженер');
+
+    const empty = await buildUnifiedSheet(data);
+    expect(empty.getCell(4, 38).value).toBe('');
   });
 
   it('три отработанных дня по 8 ч → «Дни» = 3, часы = 24', async () => {

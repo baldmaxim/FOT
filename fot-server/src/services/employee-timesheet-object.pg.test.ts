@@ -53,9 +53,12 @@ vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: vi.
 import { resolveExportModes, nextMonthStart } from './timesheet-export-mode.service.js';
 import { fetchEmployeeIdsPinnedToObjects } from './timesheet-objects-export.service.js';
 import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './employee-timesheet-object-auto.service.js';
+import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
+const MIGRATION_AUTHOR = readFileSync(`${MIGRATIONS_DIR}289_timesheet_object_author.sql`, 'utf8');
 
 const ROOT = '00000000-0000-0000-0000-00000000c000';
 const CONTR = '00000000-0000-0000-0000-00000000c001';
@@ -87,7 +90,15 @@ let baseline = '';
 const resetSchema = async (): Promise<void> => {
   await pg.pool!.query(`
     DROP TABLE IF EXISTS employee_timesheet_object_months, timesheet_object_auto_state, timesheet_versions,
-      department_object_assignment, audit_logs, employees, skud_objects, org_departments CASCADE;
+      department_object_assignment, audit_logs, employees, skud_objects, org_departments,
+      user_profiles, system_roles CASCADE;
+    CREATE TABLE system_roles (
+      id uuid PRIMARY KEY, code text NOT NULL, name text NOT NULL, is_admin boolean NOT NULL DEFAULT false
+    );
+    CREATE TABLE user_profiles (
+      id uuid PRIMARY KEY, full_name text NULL, employee_id integer NULL,
+      system_role_id uuid NULL REFERENCES system_roles(id)
+    );
     CREATE TABLE org_departments (
       id uuid PRIMARY KEY, name text NOT NULL, parent_id uuid NULL, is_active boolean NOT NULL DEFAULT true,
       timesheet_export_mode text NULL, timesheet_export_object_id uuid NULL
@@ -346,6 +357,239 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       await q(`INSERT INTO employee_timesheet_object_months (employee_id, month) VALUES (1, $1::date)`, [next]);
       await expect(freezeMonth(next, new Date(`${shift(baseline, 3)}T04:30:00+03:00`))).rejects.toThrow();
       expect((await q<{ f: string }>('SELECT frozen_month::text AS f FROM timesheet_object_auto_state'))[0].f).toBe(month);
+    });
+  });
+
+  // Автор объекта табелирования (миграция 289): кто и когда вручную поставил личный режим.
+  describe('автор объекта (289)', () => {
+    const R_ADMIN = '00000000-0000-0000-0000-00000000e0ad';
+    const R_MANAGER = '00000000-0000-0000-0000-00000000e0aa';
+    const U_SHUPTA = '00000000-0000-0000-0000-00000000b020';
+    const U_BOYUKYAN = '00000000-0000-0000-0000-00000000b351';
+    const U_ADMIN = '00000000-0000-0000-0000-00000000b0ad';
+    const U_TEMP = '00000000-0000-0000-0000-00000000b0ee';
+    const AUTHOR_IDS = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 90];
+    let m1 = '';
+
+    const authors = async () => q<{ id: number; user_id: string | null; set_at: string | null }>(
+      `SELECT id, timesheet_export_set_by_user_id::text AS user_id,
+              to_char(timesheet_export_set_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS set_at
+         FROM employees WHERE id = ANY($1::int[]) ORDER BY id`, [AUTHOR_IDS],
+    );
+    const modes = async () => q(
+      `SELECT id, timesheet_export_mode, timesheet_export_object_id::text, timesheet_export_set_by
+         FROM employees ORDER BY id`,
+    );
+    const author = async (id: number) => (await authors()).find(row => row.id === id);
+    const mskDate = (date: Date): string => moscowTodayIso(date).split('-').reverse().join('.');
+
+    let modesBefore: unknown[] = [];
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      hours.byEmployee = new Map();
+      m1 = shift(baseline, 1);
+      // Состояние до 289: режимы уже стоят, журнал записан — миграция восстанавливает авторов.
+      await pg.pool!.query(`
+        INSERT INTO system_roles (id, code, name, is_admin) VALUES
+          ('${R_ADMIN}', 'admin', 'Администратор', true),
+          ('${R_MANAGER}', 'manager', 'Руководитель', false);
+        INSERT INTO employees (id, full_name, org_department_id, timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (20, 'Шупта Максим Сергеевич', '${D_OWN}', 'object', '${DOM}', 'employee'),
+          (21, 'Глянь Артём Денисович', '${D_OWN}', 'object', '${ZIL}', 'manager'),
+          (22, 'Скрипт сменил объект', '${D_OWN}', 'object', '${DOM}', 'manager'),
+          (23, 'Скрипт записал то же', '${D_OWN}', 'object', '${DOM}', NULL),
+          (24, 'Откат скрипта без списка', '${D_OWN}', 'object', '${DOM}', NULL),
+          (25, 'Чужой путь', '${D_OWN}', 'object', '${DOM}', 'employee'),
+          (26, 'Без журнала', '${D_OWN}', 'object', '${DOM}', NULL),
+          (27, 'Офис от админа', '${D_OWN}', 'current_activity', NULL, NULL),
+          (28, 'По СКУД от админа', '${D_OWN}', 'skud', NULL, NULL),
+          (29, 'Авто', '${D_OWN}', 'object', '${ZIL}', 'auto'),
+          (90, 'Боюкян Микаел Варужанович', '${D_OWN}', NULL, NULL, NULL);
+        INSERT INTO user_profiles (id, full_name, employee_id, system_role_id) VALUES
+          ('${U_SHUPTA}', 'Шупта Максим', 20, '${R_MANAGER}'),
+          ('${U_BOYUKYAN}', 'Боюкян Микаел', 90, '${R_MANAGER}'),
+          ('${U_ADMIN}', 'Есенов Максим АДМ', NULL, '${R_ADMIN}'),
+          ('${U_TEMP}', 'Временный Руководитель', NULL, '${R_MANAGER}');
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, created_at) VALUES
+          ('${U_ADMIN}', 'TIMESHEET_MODE_UPDATED', 'employee', '28',
+            '{"new_mode":"skud","new_object_id":null}', '2026-09-19T10:00:00Z'),
+          ('${U_ADMIN}', 'TIMESHEET_MODE_UPDATED', 'employee', '23',
+            '{"new_mode":"object","new_object_id":"${DOM}"}', '2026-09-20T10:00:00Z'),
+          ('${U_ADMIN}', 'TIMESHEET_MODE_UPDATED', 'employee', '24',
+            '{"new_mode":"object","new_object_id":"${DOM}"}', '2026-09-20T11:00:00Z'),
+          -- Аудированный скрипт записал 23-му тот же объект.
+          ('${U_ADMIN}', 'TIMESHEET_MODE_BULK_UPDATED', 'timesheet_export_mode', 'l4-objects-setup',
+            '{"source":"set-timesheet-modes-l4","employees":[{"id":23,"new_mode":"object"}]}', '2026-09-21T10:00:00Z'),
+          -- Откат скрипта без списка сотрудников — отменяет всех, кто был до него.
+          ('${U_ADMIN}', 'TIMESHEET_MODE_BULK_UPDATED', 'timesheet_export_mode', 'l4-objects-rollback',
+            '{"source":"set-timesheet-modes-l4 --rollback","reverted":5}', '2026-09-22T10:00:00Z'),
+          ('${U_ADMIN}', 'TIMESHEET_MODE_BULK_UPDATED', 'employee', 'bulk:1',
+            '{"new_mode":"current_activity","new_object_id":null,"affected_employees":[{"id":27,"name":"Офис от админа","old_mode":null,"old_object_id":null}]}',
+            '2026-09-23T13:49:59Z'),
+          ('${U_BOYUKYAN}', 'TIMESHEET_OBJECT_MANAGER_SELECTED', 'employee', '21',
+            '{"new_mode":"object","new_object_id":"${ZIL}"}', '2026-09-29T06:40:23Z'),
+          ('${U_BOYUKYAN}', 'TIMESHEET_OBJECT_MANAGER_SELECTED', 'employee', '22',
+            '{"new_mode":"object","new_object_id":"${ZIL}"}', '2026-09-29T06:44:25Z'),
+          ('${U_BOYUKYAN}', 'TIMESHEET_OBJECT_MANAGER_SELECTED', 'employee', '25',
+            '{"new_mode":"object","new_object_id":"${DOM}"}', '2026-09-29T06:50:00Z'),
+          ('${U_SHUPTA}', 'TIMESHEET_OBJECT_SELF_SELECTED', 'employee', '20',
+            '{"new_mode":"object","new_object_id":"${DOM}"}', '2026-09-29T07:10:32Z');
+        -- Месяц после базовой, зафиксированный до миграции: у 21-го правка раньше фиксации,
+        -- у 20-го — позже.
+        INSERT INTO employee_timesheet_object_months (employee_id, month, mode, object_id, set_by, frozen_at) VALUES
+          (21, '${m1}', 'object', '${ZIL}', 'manager', '2026-10-01T01:00:00Z'),
+          (20, '${m1}', 'object', '${DOM}', 'employee', '2026-09-29T07:00:00Z');
+      `);
+      modesBefore = await modes();
+      await pg.pool!.query(MIGRATION_AUTHOR);
+    });
+
+    it('восстановление из журнала: только правка человеком того же пути и значения без скрипта после неё', async () => {
+      expect(await authors()).toEqual([
+        { id: 20, user_id: U_SHUPTA, set_at: '2026-09-29T07:10:32Z' },
+        { id: 21, user_id: U_BOYUKYAN, set_at: '2026-09-29T06:40:23Z' },
+        { id: 22, user_id: null, set_at: null }, // после человека объект сменил скрипт
+        { id: 23, user_id: null, set_at: null }, // человек X → аудированный скрипт X
+        { id: 24, user_id: null, set_at: null }, // откат скрипта без списка после человека
+        { id: 25, user_id: null, set_at: null }, // последняя запись — другого пути
+        { id: 26, user_id: null, set_at: null }, // журнала нет
+        { id: 27, user_id: U_ADMIN, set_at: '2026-09-23T13:49:59Z' }, // массовая правка админа, «Офис»
+        { id: 28, user_id: null, set_at: null }, // «По СКУД»
+        { id: 29, user_id: null, set_at: null }, // авто
+        { id: 90, user_id: null, set_at: null },
+      ]);
+      // Фиксация до миграции: запись не позже frozen_at.
+      const months = await q(
+        `SELECT employee_id, set_by_user_id::text AS user_id FROM employee_timesheet_object_months
+          WHERE month = $1::date ORDER BY employee_id`, [m1],
+      );
+      expect(months).toEqual([
+        { employee_id: 20, user_id: null },
+        { employee_id: 21, user_id: U_BOYUKYAN },
+      ]);
+      // Режимы, объекты и источники миграция не трогает.
+      expect(await modes()).toEqual(modesBefore);
+    });
+
+    it('повтор 289 ничего не меняет: восстановление только при первом запуске', async () => {
+      // Скрипт привёл 22-го к значению его старой правки — повтор не должен вернуть автора.
+      await q(`UPDATE employees SET timesheet_export_object_id = $1 WHERE id = 22`, [ZIL]);
+      const before = await authors();
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      expect(await authors()).toEqual(before);
+      expect((await author(22))?.user_id).toBeNull();
+    });
+
+    it('триггер: человек — автор остаётся; «человек X → скрипт записал тот же X» и «По СКУД» — автора нет', async () => {
+      await q(`UPDATE employees
+                  SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = NULL,
+                      timesheet_export_set_by_user_id = $2, timesheet_export_set_at = now()
+                WHERE id = 26`, [ZIL, U_ADMIN]);
+      expect((await author(26))?.user_id).toBe(U_ADMIN);
+
+      await q(`UPDATE employees
+                  SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = NULL
+                WHERE id = 26`, [ZIL]);
+      expect(await author(26)).toMatchObject({ user_id: null, set_at: null });
+
+      await q(`UPDATE employees
+                  SET timesheet_export_mode = 'skud', timesheet_export_object_id = NULL, timesheet_export_set_by = NULL,
+                      timesheet_export_set_by_user_id = $1, timesheet_export_set_at = now()
+                WHERE id = 28`, [U_ADMIN]);
+      expect(await author(28)).toMatchObject({ user_id: null, set_at: null });
+    });
+
+    it('CHECK: дата только у объекта или «Офиса» не от авто, ID — только с датой', async () => {
+      await expect(q(`UPDATE employees SET timesheet_export_set_at = now() WHERE id = 28`))
+        .rejects.toThrow(/employees_timesheet_export_author_check/);
+      await expect(q(`UPDATE employees SET timesheet_export_set_at = now() WHERE id = 29`))
+        .rejects.toThrow(/employees_timesheet_export_author_check/);
+      await expect(q(`UPDATE employees SET timesheet_export_set_at = now() WHERE id = 90`))
+        .rejects.toThrow(/employees_timesheet_export_author_check/);
+      await expect(q(`UPDATE employees SET timesheet_export_set_by_user_id = $1 WHERE id = 22`, [U_ADMIN]))
+        .rejects.toThrow(/employees_timesheet_export_author_check/);
+      await expect(q(`INSERT INTO employee_timesheet_object_months (employee_id, month, mode, set_at)
+                        VALUES (28, $1::date, 'skud', now())`, [shift(baseline, 5)]))
+        .rejects.toThrow(/employee_timesheet_object_months_author_check/);
+    });
+
+    it('удаление профиля автора: ID обнуляется, дата остаётся, подпись — без ФИО', async () => {
+      await q(`UPDATE employees
+                  SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = 'manager',
+                      timesheet_export_set_by_user_id = $2, timesheet_export_set_at = now()
+                WHERE id = 24`, [DOM, U_TEMP]);
+      await q(`DELETE FROM user_profiles WHERE id = $1`, [U_TEMP]);
+      const row = await author(24);
+      expect(row?.user_id).toBeNull();
+      expect(row?.set_at).not.toBeNull();
+      const labels = await loadTimesheetObjectChanges([24], null);
+      expect(labels.get(24)).toBe(`Руководитель, ${mskDate(new Date(row!.set_at!))}`);
+    });
+
+    it('загрузчик: текущий месяц — живой автор; прошедший — из фиксации; нет фиксации и базовый месяц — пусто', async () => {
+      const live = await loadTimesheetObjectChanges(AUTHOR_IDS, null);
+      expect(live.get(20)).toBe('Сам сотрудник, 29.09.2026');
+      expect(live.get(21)).toBe('Руководитель Боюкян М. В., 29.09.2026');
+      expect(live.get(27)).toBe('Админ Есенов Максим АДМ, 23.09.2026');
+      for (const id of [22, 23, 25, 26, 28, 29, 90]) expect(live.has(id)).toBe(false);
+
+      const currentMonth = await loadTimesheetObjectChanges(
+        AUTHOR_IDS, m1, { now: new Date(`${m1.slice(0, 8)}15T12:00:00+03:00`) },
+      );
+      expect(currentMonth).toEqual(live);
+
+      // m1 прошёл: у 21-го — из фиксации, у 20-го строка фиксации без автора, у 27-го строки нет.
+      const past = await loadTimesheetObjectChanges(
+        AUTHOR_IDS, m1, { now: new Date(`${shift(baseline, 2)}T12:00:00+03:00`) },
+      );
+      expect(past).toEqual(new Map([[21, 'Руководитель Боюкян М. В., 29.09.2026']]));
+
+      // Базовая фиксация (и месяцы раньше неё) авторов не несёт: у 2-го живой автор есть, в августе — пусто.
+      await q(`UPDATE employees
+                  SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = NULL,
+                      timesheet_export_set_by_user_id = $2, timesheet_export_set_at = now()
+                WHERE id = 2`, [DOM, U_ADMIN]);
+      const afterNow = { now: new Date(`${shift(baseline, 2)}T12:00:00+03:00`) };
+      expect((await loadTimesheetObjectChanges([2], null)).has(2)).toBe(true);
+      expect(await loadTimesheetObjectChanges([2, 21], baseline, afterNow)).toEqual(new Map());
+      expect(await loadTimesheetObjectChanges([2, 21], minusMonth(baseline), afterNow)).toEqual(new Map());
+    });
+
+    it('фиксация месяца копирует автора в строку месяца', async () => {
+      await q(`DELETE FROM employee_timesheet_object_months WHERE month = $1::date`, [m1]);
+      await q(`UPDATE timesheet_object_auto_state SET enabled = true`);
+      hours.byEmployee = new Map();
+
+      const result = await freezeMonth(m1, new Date(`${shift(baseline, 2)}T04:30:00+03:00`));
+      expect(result).toMatchObject({ kind: 'frozen', month: m1 });
+      const rows = await q(
+        `SELECT employee_id, set_by_user_id::text AS user_id,
+                to_char(set_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS set_at
+           FROM employee_timesheet_object_months
+          WHERE month = $1::date AND employee_id IN (21, 22, 27) ORDER BY employee_id`, [m1],
+      );
+      expect(rows).toEqual([
+        { employee_id: 21, user_id: U_BOYUKYAN, set_at: '2026-09-29T06:40:23Z' },
+        { employee_id: 22, user_id: null, set_at: null },
+        { employee_id: 27, user_id: U_ADMIN, set_at: '2026-09-23T13:49:59Z' },
+      ]);
+    });
+
+    it('активация --all перезаписывает ручной режим админа — автор стирается; выбор руководителя не трогается', async () => {
+      hours.byEmployee = new Map([[27, [{ value: ZIL, label: 'ЖК Зил 18,19,27', objectId: ZIL, hours: 40 }]]]);
+      const now = new Date(`${shift(baseline, 2).slice(0, 8)}10T12:00:00+03:00`);
+
+      await activateTimesheetObjects({ all: true, force: true, dryRun: false, now });
+
+      const [emp27] = await q(
+        `SELECT timesheet_export_mode AS mode, timesheet_export_set_by AS set_by,
+                timesheet_export_set_by_user_id AS user_id, timesheet_export_set_at AS set_at
+           FROM employees WHERE id = 27`,
+      );
+      expect(emp27).toEqual({ mode: 'object', set_by: 'auto', user_id: null, set_at: null });
+      expect((await author(21))?.user_id).toBe(U_BOYUKYAN);
     });
   });
 });

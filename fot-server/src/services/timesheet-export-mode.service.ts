@@ -176,6 +176,8 @@ export const FROZEN_PERSONAL_MODE_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.mode ELSE e.timesheet_export_mode END';
 export const FROZEN_PERSONAL_OBJECT_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.object_id ELSE e.timesheet_export_object_id END';
+export const FROZEN_PERSONAL_SET_BY_SQL =
+  'CASE WHEN f.employee_id IS NOT NULL THEN f.set_by ELSE e.timesheet_export_set_by END';
 
 /**
  * Параметры месяца для запроса. null — месяц не задан или некорректен: живой режим.

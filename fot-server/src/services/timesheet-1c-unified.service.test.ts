@@ -6,22 +6,52 @@ import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
 // Мокаем postgres: buildUnified1CWorkbook читает адреса объектов и список отделов
 // в режиме «текущая деятельность» из БД. vi.hoisted — чтобы mock-фабрика видела queryMock.
-const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+const { queryMock, objectChangesMock, modesSpy } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  objectChangesMock: vi.fn(),
+  modesSpy: vi.fn(),
+}));
+// Настоящий резолвер режимов; аргументы запоминаем — снимок и «сейчас» должны совпадать
+// с теми, что получил загрузчик подписей.
+vi.mock('./timesheet-export-mode.service.js', async importOriginal => {
+  const original = await importOriginal<typeof import('./timesheet-export-mode.service.js')>();
+  return {
+    ...original,
+    resolveExportModesForPairs: (...args: Parameters<typeof original.resolveExportModesForPairs>) => {
+      modesSpy(...args);
+      return original.resolveExportModesForPairs(...args);
+    },
+  };
+});
 // listEffectiveDepartmentManagers проверяет can_edit роли на /timesheet.
 vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
+// Подписи «Изменения объекта табелирования» — свой сервис со своими тестами.
+vi.mock('./timesheet-object-changes.service.js', () => ({ loadTimesheetObjectChanges: objectChangesMock }));
 
 // Режимы резолвятся по парам «сотрудник + отдел строки» (unnest): моки задают строки по
 // сотруднику, а сюда они приходят размноженными на каждую запрошенную пару.
-vi.mock('../config/postgres.js', () => ({
-  query: async (sql: string, params?: unknown[]) => {
+vi.mock('../config/postgres.js', () => {
+  const query = async (sql: string, params?: unknown[]) => {
     const rows = await queryMock(sql, params);
     if (!sql.includes('unnest($1::int[], $2::uuid[])') || !Array.isArray(rows)) return rows;
     const [empIds, deptIds] = params as [number[], Array<string | null>];
     return empIds.flatMap((empId, index) => rows
       .filter((row: { employee_id: number }) => Number(row.employee_id) === empId)
       .map((row: Record<string, unknown>) => ({ ...row, pair_dept_id: deptIds[index] })));
-  },
-}));
+  };
+  return {
+    query,
+    // Режимы и подписи читаются одним снимком — клиент ходит в тот же мок.
+    withReadOnlySnapshot: async <T>(fn: (client: unknown) => Promise<T>): Promise<T> => fn({
+      query: async (sql: string, params?: unknown[]) => ({ rows: await query(sql, params) }),
+    }),
+  };
+});
+
+beforeEach(() => {
+  objectChangesMock.mockReset();
+  objectChangesMock.mockResolvedValue(new Map());
+});
 
 const ONE_C_DATA_START_ROW = 4;
 const COL_FIO = 2;
@@ -29,7 +59,9 @@ const COL_DAY1 = 3;
 const COL_TOTAL = 34;
 const COL_DAYS = 35;
 const COL_ADDRESS = 37;
-const COL_MANAGER = 38;
+const COL_OBJECT_CHANGE = 38;
+const COL_MANAGER = 39;
+const COL_POSITION = 40;
 
 // Строка resolveExportModes (timesheet-export-mode.service). Явные режимы + legacy-признаки
 // по назначениям объектов. Все запросы режимов узнаются по подстроке timesheet_export_mode
@@ -782,7 +814,7 @@ describe('buildUnified1CWorkbook — строки связываются по em
       rows.push({
         fio,
         address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
-        position: String(ws.getCell(r, 39).value ?? ''),
+        position: String(ws.getCell(r, COL_POSITION).value ?? ''),
       });
     }
 
@@ -942,5 +974,82 @@ describe('buildUnified1CWorkbook — object-only день (суббота без
 
     const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
     expect(readRows(ws)).toHaveLength(1);
+  });
+});
+
+// «Изменения объекта табелирования» (миграция 289): кто вручную поставил объект — в 38-м
+// столбце; «Руководитель» и «Должность» сдвинуты в 39 и 40.
+describe('buildUnified1CWorkbook — «Изменения объекта табелирования»', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    modesSpy.mockReset();
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([
+          { id: 'obj-a', alt_name: null, name: 'ЖК Сад 69' },
+          { id: 'obj-b', alt_name: null, name: 'Склад 7' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  const readChangeRows = (ws: ExcelJS.Worksheet) => {
+    const rows: Array<{ fio: string; address: string; change: string; manager: string }> = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      rows.push({
+        fio,
+        address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
+        change: String(ws.getCell(r, COL_OBJECT_CHANGE).value ?? ''),
+        manager: String(ws.getCell(r, COL_MANAGER).value ?? ''),
+      });
+    }
+    return rows;
+  };
+
+  it('подпись стоит во всех строках сотрудника, у остальных пусто', async () => {
+    objectChangesMock.mockResolvedValue(new Map([[1, 'Руководитель Боюкян М. В., 29.09.2026']]));
+    // Глянь в режиме «По СКУД» по отделу — две строки по объектам; подпись у обеих.
+    const deptA = makeDept('Гарантийный отдел', 'dept-a',
+      { id: 1, full_name: 'Глянь Артём Денисович', org_department_id: 'dept-a' },
+      8, [
+        { object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК Сад 69', hours: 5 },
+        { object_key: 'obj-b', object_id: 'obj-b', object_name: 'Склад 7', hours: 3 },
+      ]);
+    const deptB = makeDept('Геодезическая служба', 'dept-b',
+      { id: 2, full_name: 'Агарков Артем Эдуардович', org_department_id: 'dept-b' },
+      8, [{ object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК Сад 69', hours: 8 }]);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [deptA, deptB])).getWorksheet(1)!;
+
+    expect(ws.getCell(3, COL_OBJECT_CHANGE).value).toBe('Изменения объекта табелирования');
+    const rows = readChangeRows(ws);
+    const glyan = rows.filter(r => r.fio === 'Глянь Артём Денисович');
+    expect(glyan.map(r => r.address).sort()).toEqual(['ЖК Сад 69', 'Склад 7']);
+    expect(glyan.map(r => r.change)).toEqual([
+      'Руководитель Боюкян М. В., 29.09.2026',
+      'Руководитель Боюкян М. В., 29.09.2026',
+    ]);
+    expect(rows.find(r => r.fio === 'Агарков Артем Эдуардович')?.change).toBe('');
+  });
+
+  it('режимы и подписи — из одного снимка и с одним «сейчас», месяц — месяц выгрузки', async () => {
+    const dept = makeDept('Гарантийный отдел', 'dept-a',
+      { id: 1, full_name: 'Глянь Артём Денисович', org_department_id: 'dept-a' },
+      8, [{ object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК Сад 69', hours: 8 }]);
+
+    await buildUnified1CWorkbook(4, 2026, [dept]);
+
+    expect(objectChangesMock).toHaveBeenCalledTimes(1);
+    const [ids, month, options] = objectChangesMock.mock.calls[0] as [number[], string, { now: Date; exec: unknown }];
+    expect(ids).toEqual([1]);
+    expect(month).toBe('2026-04-01');
+    expect(options.now).toBeInstanceOf(Date);
+    const [, modesExec, modesOptions] = modesSpy.mock.calls[0] as [unknown, unknown, { month: string; now: Date }];
+    expect(modesExec).toBe(options.exec);
+    expect(modesOptions.month).toBe('2026-04-01');
+    expect(modesOptions.now).toBe(options.now);
   });
 });

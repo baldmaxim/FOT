@@ -381,6 +381,8 @@ describe('timesheetModeController.updateEmployee — идемпотентнос�
     expect(second.statusCode).toBe(200);
     expect((second.payload as { data: { changed: boolean } }).data.changed).toBe(false);
     expect(updates).toHaveLength(1);
+    // Автор правки (289) — последним параметром; дату ставит сам UPDATE.
+    expect(updates[0][3]).toBe('user-1');
     expect(audit.logFromRequestWithClient).toHaveBeenCalledTimes(1);
     expect(state).toEqual({ mode: 'object', objectId: OBJ });
   });
@@ -789,6 +791,10 @@ describe('timesheetModeController — массовая настройка под
       expect(calls[0]).toContain('pg_advisory_xact_lock');
       expect(calls[1]).toContain('FOR UPDATE');
       expect(calls.filter(sql => sql.includes('UPDATE employees'))).toHaveLength(1);
+      // Автор правки (289): у сброса режима его обнулит триггер, код передаёт всегда.
+      const updateCall = client.query.mock.calls.find(([sql]) => String(sql).includes('UPDATE employees'));
+      expect(String(updateCall?.[0])).toContain('timesheet_export_set_at = now()');
+      expect((updateCall as unknown as [string, unknown[]] | undefined)?.[1]?.[3]).toBe('user-1');
       // Режимы подразделений и назначения объектов не трогаются.
       expect(calls.some(sql => sql.includes('UPDATE org_departments'))).toBe(false);
       expect(calls.some(sql => sql.includes('object_assignment'))).toBe(false);

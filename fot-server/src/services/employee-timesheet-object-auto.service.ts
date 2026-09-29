@@ -288,7 +288,8 @@ async function auditChanges(
 /**
  * Фиксация месяца: строки для своих не архивных (включая уволенных) из текущих
  * режимов. Без ON CONFLICT: строки месяца при frozen_month < M — порча состояния,
- * её нельзя молча проглотить.
+ * её нельзя молча проглотить. Автора ручной смены (289) строка получает триггером
+ * из employees.
  */
 async function insertMonthFreeze(client: PoolClient, month: string, contractorIds: string[]): Promise<number> {
   const result = await client.query(
