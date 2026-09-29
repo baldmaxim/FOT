@@ -59,6 +59,7 @@ import { moscowTodayIso } from '../utils/date.utils.js';
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
 const MIGRATION_AUTHOR = readFileSync(`${MIGRATIONS_DIR}289_timesheet_object_author.sql`, 'utf8');
+const MIGRATION_DROP_MODE = readFileSync(`${MIGRATIONS_DIR}290_drop_timesheet_mode_management.sql`, 'utf8');
 
 const ROOT = '00000000-0000-0000-0000-00000000c000';
 const CONTR = '00000000-0000-0000-0000-00000000c001';
@@ -91,7 +92,11 @@ const resetSchema = async (): Promise<void> => {
   await pg.pool!.query(`
     DROP TABLE IF EXISTS employee_timesheet_object_months, timesheet_object_auto_state, timesheet_versions,
       department_object_assignment, audit_logs, employees, skud_objects, org_departments,
-      user_profiles, system_roles CASCADE;
+      user_profiles, system_roles, role_page_access, access_pages CASCADE;
+    CREATE TABLE access_pages (key text PRIMARY KEY);
+    CREATE TABLE role_page_access (
+      role_code text NOT NULL, page_path text NOT NULL, PRIMARY KEY (role_code, page_path)
+    );
     CREATE TABLE system_roles (
       id uuid PRIMARY KEY, code text NOT NULL, name text NOT NULL, is_admin boolean NOT NULL DEFAULT false
     );
@@ -217,11 +222,54 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
     });
   });
 
+  // Дальше код работает на схеме после 290 — без колонок режима отдела, как на проде.
+  describe('удаление ручной настройки режима (290)', () => {
+    const deptModeColumns = async (): Promise<string[]> => (await q<{ c: string }>(
+      `SELECT column_name AS c FROM information_schema.columns
+        WHERE table_name = 'org_departments' AND column_name LIKE 'timesheet_export%' ORDER BY 1`,
+    )).map(row => row.c);
+
+    it('режим отдела отличается от правила по умолчанию — миграция останавливается, ничего не меняя', async () => {
+      const client = await pg.pool!.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE org_departments SET timesheet_export_mode = 'object', timesheet_export_object_id = $1 WHERE id = $2`,
+          [DOM, D_OWN],
+        );
+        await expect(client.query(MIGRATION_DROP_MODE.replace(/^BEGIN;|COMMIT;\s*$/gm, '')))
+          .rejects.toThrow(/290 остановлена/);
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+      expect(await deptModeColumns()).toEqual(['timesheet_export_mode', 'timesheet_export_object_id']);
+    });
+
+    it('режим отдела совпадает с «офисом отдела» — право и колонки удалены, повтор безопасен', async () => {
+      await q(`INSERT INTO department_object_assignment (org_department_id, skud_object_id) VALUES ($1, $2)`, [D_OWN, OFFICE]);
+      await q(`UPDATE org_departments SET timesheet_export_mode = 'current_activity' WHERE id = $1`, [D_OWN]);
+      await q(`INSERT INTO access_pages (key) VALUES ('/staff-control/timesheet-mode'), ('/staff-control/schedule')`);
+      await q(`INSERT INTO role_page_access (role_code, page_path)
+               VALUES ('hr', '/staff-control/timesheet-mode'), ('hr', '/staff-control/schedule')`);
+      try {
+        await pg.pool!.query(MIGRATION_DROP_MODE);
+        await pg.pool!.query(MIGRATION_DROP_MODE);
+      } finally {
+        await q('DELETE FROM department_object_assignment');
+      }
+
+      expect(await deptModeColumns()).toEqual([]);
+      expect(await q('SELECT key FROM access_pages ORDER BY key')).toEqual([{ key: '/staff-control/schedule' }]);
+      expect(await q('SELECT role_code, page_path FROM role_page_access'))
+        .toEqual([{ role_code: 'hr', page_path: '/staff-control/schedule' }]);
+    });
+  });
+
   describe('режим за прошедший месяц', () => {
     beforeEach(async () => {
       await pg.pool!.query(`
         DELETE FROM employee_timesheet_object_months WHERE month <> '${baseline}'::date;
-        UPDATE org_departments SET timesheet_export_mode = NULL, timesheet_export_object_id = NULL;
         UPDATE employees SET timesheet_export_mode = NULL, timesheet_export_object_id = NULL WHERE id = 1;
         UPDATE employees SET timesheet_export_mode = 'object', timesheet_export_object_id = '${DOM}' WHERE id = 2;
       `);
@@ -259,11 +307,15 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       expect(missing.get(1)).toMatchObject({ mode: 'current_activity' });
     });
 
-    it('режим отдела после фиксации — живой (граница задачи)', async () => {
+    it('назначение офиса отделу после фиксации — живое (граница задачи)', async () => {
       const now = new Date(`${shift(baseline, 1)}T12:00:00+03:00`);
-      await q(`UPDATE org_departments SET timesheet_export_mode = 'current_activity' WHERE id = $1`, [D_OWN]);
-      const past = await resolveExportModes([1], undefined, { month: baseline, now });
-      expect(past.get(1)).toMatchObject({ mode: 'current_activity', source: 'department_explicit' });
+      await q(`INSERT INTO department_object_assignment (org_department_id, skud_object_id) VALUES ($1, $2)`, [D_OWN, OFFICE]);
+      try {
+        const past = await resolveExportModes([1], undefined, { month: baseline, now });
+        expect(past.get(1)).toMatchObject({ mode: 'current_activity', source: 'legacy_department' });
+      } finally {
+        await q('DELETE FROM department_object_assignment');
+      }
     });
 
     it('выгрузка по объектам: состав прошедшего месяца — по фиксации, текущего — по живому', async () => {
@@ -282,6 +334,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
     beforeAll(async () => {
       await resetSchema();
       await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
     });
 
     it('активация с --all: ручные режимы пересчитаны, подрядчик и архивный не тронуты, повтор без --force отклонён', async () => {
@@ -444,6 +497,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       `);
       modesBefore = await modes();
       await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
     });
 
     it('восстановление из журнала: только правка человеком того же пути и значения без скрипта после неё', async () => {

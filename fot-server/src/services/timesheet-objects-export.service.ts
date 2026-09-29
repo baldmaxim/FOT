@@ -85,10 +85,9 @@ export async function fetchEmployeeIdsForObjects(
 }
 
 /**
- * Сотрудники, закреплённые за объектами режимом табелирования «object» (приоритет как
- * в resolveExportModes: явный режим сотрудника, иначе режим его отдела). В выгрузке по
- * объектам их часы принадлежат закреплённому объекту независимо от проходов, поэтому
- * одних СКУД-событий для отбора состава недостаточно.
+ * Сотрудники, закреплённые за объектами личным режимом «object» (объект табелирования,
+ * как в resolveExportModes). В выгрузке по объектам их часы принадлежат закреплённому
+ * объекту независимо от проходов, поэтому одних СКУД-событий для отбора состава недостаточно.
  *
  * month — месяц выгрузки: для прошедшего месяца личный режим берётся из фиксации
  * (миграция 288) — тем же правилом, что в resolveExportModes, иначе состав файла
@@ -106,15 +105,9 @@ export async function fetchEmployeeIdsPinnedToObjects(
     const rows = await query<{ employee_id: number | string }>(
       `SELECT e.id AS employee_id
          FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.is_archived = false
-          AND (
-            (e.timesheet_export_mode = 'object'
-              AND e.timesheet_export_object_id = ANY($1::uuid[]))
-            OR (e.timesheet_export_mode IS NULL
-              AND d.timesheet_export_mode = 'object'
-              AND d.timesheet_export_object_id = ANY($1::uuid[]))
-          )`,
+          AND e.timesheet_export_mode = 'object'
+          AND e.timesheet_export_object_id = ANY($1::uuid[])`,
       [objectIds],
     );
     return rows.map(r => Number(r.employee_id));
@@ -124,7 +117,6 @@ export async function fetchEmployeeIdsPinnedToObjects(
     `WITH ${freezeMonthCte('$2', '$3')},
      personal AS (
        SELECT e.id,
-              e.org_department_id,
               ${FROZEN_PERSONAL_MODE_SQL}   AS mode,
               ${FROZEN_PERSONAL_OBJECT_SQL} AS object_id
          FROM employees e
@@ -135,11 +127,7 @@ export async function fetchEmployeeIdsPinnedToObjects(
      )
      SELECT p.id AS employee_id
        FROM personal p
-       LEFT JOIN org_departments d ON d.id = p.org_department_id
-      WHERE (p.mode = 'object' AND p.object_id = ANY($1::uuid[]))
-         OR (p.mode IS NULL
-             AND d.timesheet_export_mode = 'object'
-             AND d.timesheet_export_object_id = ANY($1::uuid[]))`,
+      WHERE p.mode = 'object' AND p.object_id = ANY($1::uuid[])`,
     [objectIds, monthStart, currentMonthStartMsk(now)],
   );
 

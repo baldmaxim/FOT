@@ -1,5 +1,5 @@
 /**
- * Режим табелирования сотрудника для выгрузки «Единый файл для 1С» (миграция 249).
+ * Режим выгрузки сотрудника в «Единый файл для 1С» (миграция 249).
  *
  * Три режима:
  *   current_activity — одна строка, «Адрес объекта» = «Текущая деятельность»;
@@ -7,16 +7,17 @@
  *   skud             — разбивка по фактическим СКУД-проходам (несколько строк на человека).
  *
  * Приоритет источников:
- *   1) employees.timesheet_export_mode         → employee_explicit
- *   2) org_departments.timesheet_export_mode   → department_explicit
- *   3) legacy-фолбэк по объектам ОТДЕЛА        → legacy_department | legacy_default
+ *   1) employees.timesheet_export_mode — объект табелирования (миграция 288: ночной
+ *      расчёт, выбор в ЛК/табеле)              → employee_explicit
+ *   2) legacy-фолбэк по объектам ОТДЕЛА        → legacy_department | legacy_default
+ * Режим отдела удалён вместе с ручной настройкой «Режим табелирования» (миграция 290).
  *
  * Персональные назначения объектов (employee_object_assignment) в резолвинге НЕ участвуют
  * (миграция 253). Это управление доступом табельщиц — «кого она дополнительно видит», —
  * и до 253 они по историческим причинам подменяли собой режим: галочка, поставленная ради
  * доступа, молча меняла человеку строки в файле 1С. Тем, кто резолвился через эту ветку,
  * миграция записала их тогдашний режим явно, поэтому удаление ветки выгрузку не изменило.
- * Возвращать её нельзя: режим задаётся слева, в «Варианте табелирования».
+ * Возвращать её нельзя: личный режим задаёт объект табелирования.
  */
 import * as Sentry from '@sentry/node';
 import { query, type DbExecutor } from '../config/postgres.js';
@@ -34,7 +35,6 @@ export type TimesheetExportMode = 'current_activity' | 'object' | 'skud';
 
 export type TimesheetExportModeSource =
   | 'employee_explicit'
-  | 'department_explicit'
   | 'legacy_department'
   | 'legacy_default';
 
@@ -58,9 +58,9 @@ export const isTimesheetExportMode = (value: unknown): value is TimesheetExportM
 export const CURRENT_ACTIVITY_ADDRESS = 'Текущая деятельность';
 
 /**
- * Ключ advisory-локи для записи режимов. Один и тот же берут PUT-эндпоинты и
- * настроечный скрипт — иначе они не увидят друг друга (advisory lock защищает
- * только от процессов, берущих тот же ключ).
+ * Ключ advisory-локи для записи личного режима. Один и тот же берут ночной расчёт объекта
+ * табелирования (и скрипт активации) и выбор в ЛК/табеле — иначе они не увидят друг друга
+ * (advisory lock защищает только от процессов, берущих тот же ключ).
  */
 export const TIMESHEET_MODE_LOCK_KEY = 249_0001;
 
@@ -68,8 +68,6 @@ interface IModeRow {
   employee_id: number | string;
   emp_mode: TimesheetExportMode | null;
   emp_object_id: string | null;
-  dept_mode: TimesheetExportMode | null;
-  dept_object_id: string | null;
   dept_current_activity: boolean | null;
 }
 
@@ -85,8 +83,8 @@ interface IFrozenModeRow extends IModeRow {
  *
  * Для прошедшего месяца личный режим берётся из фиксации employee_timesheet_object_months,
  * а не живой: ночной расчёт и выбор сотрудника меняют текущий месяц, и без фиксации
- * табель сентября, закрытый в октябре, ушёл бы в 1С с октябрьским объектом. Режимы
- * отделов и legacy-назначения остаются живыми (граница задачи).
+ * табель сентября, закрытый в октябре, ушёл бы в 1С с октябрьским объектом. Legacy-назначения
+ * объектов отделам остаются живыми (граница задачи).
  */
 export interface IExportModeMonthOptions {
   /** Любой день месяца или YYYY-MM. Не задан — живой режим, как раньше. */
@@ -94,7 +92,7 @@ export interface IExportModeMonthOptions {
   /** «Сейчас» — для тестов. */
   now?: Date;
   /**
-   * Без личного режима: что сотрудник получил бы от отдела / legacy-назначений.
+   * Без личного режима: что сотрудник получил бы по legacy-назначениям объектов отдела.
    * Нужно, чтобы ручную смену объекта можно было откатить к значению по умолчанию.
    */
   ignorePersonal?: boolean;
@@ -169,8 +167,8 @@ export function freezeMonthCte(monthParam: string, currentMonthParam: string): s
 
 /**
  * Личный режим с учётом фиксации: CASE по факту существования строки, а не COALESCE.
- * Зафиксированный NULL значит «личного режима не было» — месяц берёт режим отдела,
- * даже если позже у сотрудника появился личный объект.
+ * Зафиксированный NULL значит «личного режима не было» — месяц берёт legacy-режим по
+ * объектам отдела, даже если позже у сотрудника появился личный объект.
  */
 export const FROZEN_PERSONAL_MODE_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.mode ELSE e.timesheet_export_mode END';
@@ -215,8 +213,8 @@ function reportMissingFreeze(rows: readonly IFrozenModeRow[], monthStart: string
 }
 
 /**
- * Режимы для списка сотрудников. Один запрос: явные режимы сотрудника и его отдела
- * плюс legacy-признак по объектам отдела.
+ * Режимы для списка сотрудников. Один запрос: личный режим сотрудника плюс
+ * legacy-признак по объектам его отдела.
  *
  * exec — клиент транзакции. Обязателен при сборке официальной версии табеля: режим
  * влияет на объектную разбивку, и читать его из другого снимка БД, чем часы, нельзя.
@@ -249,8 +247,6 @@ export async function resolveExportModes(
        SELECT e.id                                      AS employee_id,
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
-              d.timesheet_export_mode                   AS dept_mode,
-              d.timesheet_export_object_id::text        AS dept_object_id,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -259,8 +255,7 @@ export async function resolveExportModes(
         CROSS JOIN fm
          LEFT JOIN employee_timesheet_object_months f
                 ON f.employee_id = e.id AND f.month = fm.month
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
-         LEFT JOIN dept_ca dc        ON dc.org_department_id = e.org_department_id
+         LEFT JOIN dept_ca dc ON dc.org_department_id = e.org_department_id
         WHERE e.id = ANY($1::int[])`,
       [ids, CURRENT_ACTIVITY_ADDRESS, monthParams.monthStart, monthParams.currentMonthStart],
     );
@@ -287,12 +282,9 @@ export async function resolveExportModes(
      SELECT e.id                                AS employee_id,
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
-            d.timesheet_export_mode             AS dept_mode,
-            d.timesheet_export_object_id::text  AS dept_object_id,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-       LEFT JOIN dept_ca dc        ON dc.org_department_id = e.org_department_id
+       LEFT JOIN dept_ca dc ON dc.org_department_id = e.org_department_id
       WHERE e.id = ANY($1::int[])`,
     [ids, CURRENT_ACTIVITY_ADDRESS],
   );
@@ -310,9 +302,9 @@ export const exportModePairKey = (employeeId: number, departmentId: string | nul
   `${Number(employeeId)}|${departmentId ?? ''}`;
 
 /**
- * Режимы по парам «сотрудник + отдел»: режим отдела берётся из отдела ПАРЫ, а не из
+ * Режимы по парам «сотрудник + отдел»: legacy-признак берётся по объектам отдела ПАРЫ, а не
  * текущего employees.org_department_id. Нужен единому файлу 1С при переводе внутри
- * периода: дни в старом отделе выгружаются по его режиму. Личный режим сотрудника
+ * периода: дни в старом отделе выгружаются по его объектам. Личный режим сотрудника
  * по-прежнему приоритетнее. Ключ результата — exportModePairKey.
  */
 export async function resolveExportModesForPairs(
@@ -356,8 +348,6 @@ export async function resolveExportModesForPairs(
               p.dept_id::text                           AS pair_dept_id,
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
-              d.timesheet_export_mode                   AS dept_mode,
-              d.timesheet_export_object_id::text        AS dept_object_id,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -367,7 +357,6 @@ export async function resolveExportModesForPairs(
         CROSS JOIN fm
          LEFT JOIN employee_timesheet_object_months f
                 ON f.employee_id = e.id AND f.month = fm.month
-         LEFT JOIN org_departments d ON d.id = p.dept_id
          LEFT JOIN dept_ca dc        ON dc.org_department_id = p.dept_id`,
       [
         list.map(p => p.employeeId),
@@ -404,12 +393,9 @@ export async function resolveExportModesForPairs(
             p.dept_id::text                     AS pair_dept_id,
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
-            d.timesheet_export_mode             AS dept_mode,
-            d.timesheet_export_object_id::text  AS dept_object_id,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM pairs p
        JOIN employees e            ON e.id = p.employee_id
-       LEFT JOIN org_departments d ON d.id = p.dept_id
        LEFT JOIN dept_ca dc        ON dc.org_department_id = p.dept_id`,
     [list.map(p => p.employeeId), list.map(p => p.departmentId), CURRENT_ACTIVITY_ADDRESS],
   );
@@ -422,20 +408,13 @@ export async function resolveExportModesForPairs(
   return result;
 }
 
-/** Резолвинг одной строки — вынесен ради тестов и переиспользования в API. */
+/** Резолвинг одной строки — вынесен ради тестов. */
 export function resolveRow(row: IModeRow): IResolvedExportMode {
   if (row.emp_mode) {
     return {
       mode: row.emp_mode,
       pinnedObjectId: row.emp_mode === 'object' ? row.emp_object_id : null,
       source: 'employee_explicit',
-    };
-  }
-  if (row.dept_mode) {
-    return {
-      mode: row.dept_mode,
-      pinnedObjectId: row.dept_mode === 'object' ? row.dept_object_id : null,
-      source: 'department_explicit',
     };
   }
   // Legacy: только объекты отдела. Персональные назначения сюда намеренно не входят —

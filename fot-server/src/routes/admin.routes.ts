@@ -1,7 +1,6 @@
 import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
-import { timesheetModeController } from '../controllers/timesheet-mode.controller.js';
 import { payrollAccessController } from '../controllers/payroll-access.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess, requireSystemAdmin } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
@@ -171,14 +170,6 @@ router.put('/users/:id/employee-access', requirePageAccess('/admin/users/access'
 router.get('/object-assignments', requirePageAccess('/admin/users/access', 'view'), adminController.getObjectAssignments);
 router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users/access', 'edit'), adminController.updateDepartmentObjectAssignment);
 router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeObjectAssignment);
-// Режим табелирования для «Единого файла 1С» (миграция 249). Отдельное право:
-// назначения объектов выше — админская функция, а режим правит ещё и HR.
-router.get('/timesheet-modes', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.list);
-router.get('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.listDepartments);
-router.put('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartmentsBulk);
-router.put('/timesheet-modes/employees', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployeesBulk);
-router.put('/timesheet-modes/employees/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployee);
-router.put('/timesheet-modes/departments/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartment);
 
 router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users/access', 'view'), adminController.getUserTimekeeperObjects);
 router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserTimekeeperObjects);

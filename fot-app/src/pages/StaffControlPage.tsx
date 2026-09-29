@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download, Filter } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, Download, Filter } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
@@ -53,7 +53,7 @@ import {
   type StaffFilterColumn,
 } from '../utils/staffColumnFilters';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
-import { STAFF_MAIN_OBJECTS_QUERY_KEY, useStaffMainObjects } from '../hooks/useStaffMainObjects';
+import { useStaffMainObjects } from '../hooks/useStaffMainObjects';
 import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
 import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { affectsActiveFilters, affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
@@ -72,7 +72,6 @@ import { triggerBlobDownload } from '../utils/download';
 import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
-const StaffTimesheetModeModal = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
 const StaffCommentModal = lazy(() => import('../components/staff/StaffCommentModal').then(m => ({ default: m.StaffCommentModal })));
 
 import {
@@ -1433,9 +1432,6 @@ export const StaffControlPage: FC = () => {
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
   const canOpenCard = isAdmin || canViewPage('/employees');
-  // Режим табелирования — отдельное право (миграция 249). В таблице его нет: смотрят и
-  // меняют в окне «Режим табелирования» (вкладки отделы / бригады / сотрудники).
-  const canEditTimesheetMode = isAdmin || canEditPage('/staff-control/timesheet-mode');
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -1563,7 +1559,6 @@ export const StaffControlPage: FC = () => {
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
   const [bulkMoveDeptOpen, setBulkMoveDeptOpen] = useState(false);
-  const [bulkTsModeOpen, setBulkTsModeOpen] = useState(false);
   // «Объект», «Статья затрат», «График» — по одному запросу на порцию списка.
   const mainObjectsData = useStaffMainObjects(pageIdChunks);
   const mainObjectPeriod = mainObjectsData.period;
@@ -1773,7 +1768,7 @@ export const StaffControlPage: FC = () => {
   }, [departments, restrictToManaged, managedDepartmentIds]);
 
   // Дерево в пределах scope пользователя: тот же фильтр, что и allDepts, но БЕЗ
-  // расплющивания. Идёт в модалки (перевод, режим табелирования) — раздел шапки их не сужает.
+  // расплющивания. Идёт в модалки (перевод) — раздел шапки их не сужает.
   const scopeDeptTree = useMemo(
     () => (restrictToManaged
       ? filterDepartmentTreeByIds(departments, new Set(managedDepartmentIds))
@@ -2500,16 +2495,8 @@ export const StaffControlPage: FC = () => {
       });
     }
     // Импорта и «Экспорта сотрудников» в меню нет: выгрузка — кнопка «Экспорт» текущей таблицы.
-    if (canEditTimesheetMode) {
-      items.push({
-        label: 'Режим табелирования…',
-        icon: <CalendarCog size={14} />,
-        onClick: () => setBulkTsModeOpen(true),
-        divideBefore: true,
-      });
-    }
     return items;
-  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetMode]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2817,20 +2804,6 @@ export const StaffControlPage: FC = () => {
         onDeleteAssignmentRow={handleDeleteAssignmentRow}
       />
 
-      {bulkTsModeOpen && (
-        <Suspense fallback={null}>
-          <StaffTimesheetModeModal
-            departments={allDepts}
-            deptTree={scopeDeptTree}
-            initialDepartmentId={deptId || ''}
-            onClose={() => {
-              setBulkTsModeOpen(false);
-              // Порции объектов несут и режим табелирования — после правок в окне перечитываем сразу.
-              void queryClient.invalidateQueries({ queryKey: [STAFF_MAIN_OBJECTS_QUERY_KEY] });
-            }}
-          />
-        </Suspense>
-      )}
       {commentEmp && (
         <Suspense fallback={null}>
           <StaffCommentModal employee={commentEmp} onClose={closeCommentModal} onSaved={handleCommentSaved} />

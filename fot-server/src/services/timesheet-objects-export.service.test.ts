@@ -235,6 +235,16 @@ describe('timesheet-objects-export.service', () => {
       await expect(fetchEmployeeIdsPinnedToObjects(['O1'])).resolves.toEqual([7, 8]);
     });
 
+    it('режима отдела нет (миграция 290): SQL не читает org_departments — ни живой, ни за месяц', async () => {
+      pgQuery.mockResolvedValue([]);
+
+      await fetchEmployeeIdsPinnedToObjects(['O1']);
+      await fetchEmployeeIdsPinnedToObjects(['O1'], '2026-08', new Date('2026-09-15T12:00:00Z'));
+
+      expect(pgQuery).toHaveBeenCalledTimes(2);
+      for (const [sql] of pgQuery.mock.calls) expect(String(sql)).not.toContain('org_departments');
+    });
+
     it('пустой список объектов — без запроса в БД', async () => {
       await expect(fetchEmployeeIdsPinnedToObjects([])).resolves.toEqual([]);
       expect(pgQuery).not.toHaveBeenCalled();

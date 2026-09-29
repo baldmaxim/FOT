@@ -63,24 +63,20 @@ const COL_OBJECT_CHANGE = 38;
 const COL_MANAGER = 39;
 const COL_POSITION = 40;
 
-// Строка resolveExportModes (timesheet-export-mode.service). Явные режимы + legacy-признаки
-// по назначениям объектов. Все запросы режимов узнаются по подстроке timesheet_export_mode
-// и должны проверяться в моках ПЕРВЫМИ: этот SQL содержит и skud_objects, и обе таблицы назначений.
+// Строка resolveExportModes (timesheet-export-mode.service). Личный режим + legacy-признак
+// по назначениям объектов отдела. Все запросы режимов узнаются по подстроке timesheet_export_mode
+// и должны проверяться в моках ПЕРВЫМИ: этот SQL содержит и skud_objects, и назначения отдела.
 const modeRow = (
   employee_id: number,
   over: Partial<{
     emp_mode: string | null;
     emp_object_id: string | null;
-    dept_mode: string | null;
-    dept_object_id: string | null;
     dept_current_activity: boolean;
   }> = {},
 ): Record<string, unknown> => ({
   employee_id,
   emp_mode: null,
   emp_object_id: null,
-  dept_mode: null,
-  dept_object_id: null,
   dept_current_activity: false,
   ...over,
 });
@@ -462,27 +458,8 @@ describe('buildUnified1CWorkbook — явные режимы табелиров�
     expect(rows[0].address).toBe('Текущая деятельность');
   });
 
-  it('режим сотрудника перекрывает режим отдела', async () => {
-    mockModes(
-      [modeRow(2, { emp_mode: 'current_activity', dept_mode: 'skud' })],
-      OBJECTS,
-    );
-
-    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].address).toBe('Текущая деятельность');
-  });
-
-  it('режим отдела применяется, когда у сотрудника режим не задан', async () => {
-    mockModes([modeRow(2, { dept_mode: 'current_activity' })], OBJECTS);
-
-    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].address).toBe('Текущая деятельность');
-  });
-
   it('сброс режима в NULL возвращает legacy-поведение (ТД отдела)', async () => {
-    mockModes([modeRow(2, { emp_mode: null, dept_mode: null, dept_current_activity: true })], OBJECTS);
+    mockModes([modeRow(2, { emp_mode: null, dept_current_activity: true })], OBJECTS);
 
     const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
     expect(rows).toHaveLength(1);

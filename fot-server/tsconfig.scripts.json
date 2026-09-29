@@ -22,7 +22,6 @@
     "scripts/probe-binding-patch.ts",
     "scripts/verify-timekeeper-scope-equivalence.ts",
     "scripts/analyze-skud-may-partition.ts",
-    "scripts/set-timesheet-modes-itr.ts",
     "scripts/reconcile-1c-objects.ts",
     "scripts/backfill-version-objects.ts",
     "scripts/backfill-version-managers.ts",

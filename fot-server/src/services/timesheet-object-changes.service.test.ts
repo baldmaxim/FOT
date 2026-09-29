@@ -45,7 +45,7 @@ describe('buildObjectChangeLabel', () => {
     }))).toBe('Админ Есенов Максим АДМ, 29.09.2026');
   });
 
-  it('окно «Режим табелирования» (set_by = NULL) — «Админ», даже если правили кадры', () => {
+  it('прежняя ручная настройка (set_by = NULL) — «Админ», даже если правили кадры', () => {
     expect(buildObjectChangeLabel(row({
       set_by: null,
       author_employee_name: 'Иванова Ирина Петровна',

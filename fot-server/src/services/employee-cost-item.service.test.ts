@@ -38,7 +38,7 @@ describe('buildCostItemLabel', () => {
 describe('loadCostItems', () => {
   it('строка для каждого id: без часов, без режима в карте (фолбэк skud), объект — по имени из skud_objects', async () => {
     resolveModesMock.mockResolvedValue(new Map([
-      [1, { mode: 'current_activity', pinnedObjectId: null, source: 'department_explicit' }],
+      [1, { mode: 'current_activity', pinnedObjectId: null, source: 'legacy_department' }],
       [2, { mode: 'object', pinnedObjectId: 'obj-1', source: 'employee_explicit' }],
       [3, { mode: 'skud', pinnedObjectId: null, source: 'legacy_default' }],
       [5, { mode: 'object', pinnedObjectId: 'obj-missing', source: 'employee_explicit' }],

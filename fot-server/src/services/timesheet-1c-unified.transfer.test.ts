@@ -100,8 +100,6 @@ const mockDb = (deptModes: ModeByDept = {}): void => {
         pair_dept_id: deptIds[i],
         emp_mode: null,
         emp_object_id: null,
-        dept_mode: null,
-        dept_object_id: null,
         dept_current_activity: false,
         ...(deptModes[deptIds[i] ?? ''] ?? {}),
       })));
@@ -231,7 +229,7 @@ describe('единый 1С: перевод внутри периода', () => {
   });
 
   it('режим — по отделу строки: старый отдел «текущая деятельность», новый — разбивка по объектам', async () => {
-    mockDb({ [ZULF]: { dept_mode: 'current_activity' } });
+    mockDb({ [ZULF]: { dept_current_activity: true } });
     const rows = readRows((await buildUnified1CWorkbook(9, 2026, [
       makeSlice('бр.Зулфикаров Т.Т.', ZULF, [PULATOV], BEFORE),
       makeSlice('бр.Хайдаров Н.И.', HAYD, [PULATOV], AFTER),

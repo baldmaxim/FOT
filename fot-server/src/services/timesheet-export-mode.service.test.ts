@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Резолвинг режима табелирования для «Единого файла 1С».
+ * Резолвинг режима выгрузки в «Единый файл 1С».
  *
  * Главное, что здесь закреплено, — персональные назначения объектов
  * (employee_object_assignment) в резолвинге НЕ участвуют (миграция 253). Это управление
  * доступом табельщиц; до 253 галочка, поставленная ради доступа, молча меняла человеку
  * строки в выгрузке. Проверяем это на двух уровнях: таблицы нет в SQL и решают только
- * объекты отдела.
+ * объекты отдела. Режима отдела нет (миграция 290): SQL не читает org_departments.
  */
 
 const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
@@ -24,8 +24,6 @@ const row = (over: Record<string, unknown> = {}) => ({
   employee_id: 1,
   emp_mode: null,
   emp_object_id: null,
-  dept_mode: null,
-  dept_object_id: null,
   dept_current_activity: false,
   ...over,
 }) as Parameters<typeof resolveRow>[0];
@@ -36,7 +34,7 @@ beforeEach(() => {
 
 describe('resolveRow — приоритет источников', () => {
   it('явный режим сотрудника выигрывает у всего остального', () => {
-    const r = resolveRow(row({ emp_mode: 'skud', dept_mode: 'current_activity', dept_current_activity: true }));
+    const r = resolveRow(row({ emp_mode: 'skud', dept_current_activity: true }));
     expect(r).toMatchObject({ mode: 'skud', source: 'employee_explicit', pinnedObjectId: null });
   });
 
@@ -45,12 +43,7 @@ describe('resolveRow — приоритет источников', () => {
     expect(r).toMatchObject({ mode: 'object', pinnedObjectId: 'obj-1', source: 'employee_explicit' });
   });
 
-  it('без режима сотрудника действует режим отдела', () => {
-    const r = resolveRow(row({ dept_mode: 'object', dept_object_id: 'obj-2', dept_current_activity: true }));
-    expect(r).toMatchObject({ mode: 'object', pinnedObjectId: 'obj-2', source: 'department_explicit' });
-  });
-
-  it('оба режима пусты, у отдела ТД-объект → current_activity', () => {
+  it('личного режима нет, у отдела ТД-объект → current_activity', () => {
     const r = resolveRow(row({ dept_current_activity: true }));
     expect(r).toMatchObject({ mode: 'current_activity', source: 'legacy_department' });
   });
@@ -93,6 +86,19 @@ describe('персональные назначения объектов не в
   });
 });
 
+describe('режима отдела нет (миграция 290)', () => {
+  it('SQL резолверов не читает org_departments — ни живой режим, ни за месяц', async () => {
+    const month = { month: '2026-08', now: new Date('2026-09-15T12:00:00Z') };
+    await resolveExportModes([1]);
+    await resolveExportModes([1], undefined, month);
+    await resolveExportModesForPairs([{ employee_id: 1, org_department_id: 'A' }]);
+    await resolveExportModesForPairs([{ employee_id: 1, org_department_id: 'A' }], undefined, month);
+
+    expect(pgQuery).toHaveBeenCalledTimes(4);
+    for (const [sql] of pgQuery.mock.calls) expect(String(sql)).not.toContain('org_departments');
+  });
+});
+
 describe('resolveExportModes — вход', () => {
   it('пустой и мусорный список не идёт в БД', async () => {
     expect((await resolveExportModes([])).size).toBe(0);
@@ -102,7 +108,7 @@ describe('resolveExportModes — вход', () => {
 
   it('дубликаты схлопываются, результат — карта по employee_id', async () => {
     pgQuery.mockResolvedValue([
-      { employee_id: 1, emp_mode: 'skud', emp_object_id: null, dept_mode: null, dept_object_id: null, dept_current_activity: false },
+      { employee_id: 1, emp_mode: 'skud', emp_object_id: null, dept_current_activity: false },
     ]);
 
     const map = await resolveExportModes([1, 1, 1]);
@@ -112,20 +118,20 @@ describe('resolveExportModes — вход', () => {
   });
 });
 
-describe('resolveExportModesForPairs — режим по отделу пары', () => {
-  it('SQL берёт режим отдела ПАРЫ (unnest), а не текущий отдел сотрудника', async () => {
+describe('resolveExportModesForPairs — legacy-режим по отделу пары', () => {
+  it('SQL берёт объекты отдела ПАРЫ (unnest), а не текущий отдел сотрудника', async () => {
     await resolveExportModesForPairs([{ employee_id: 1, org_department_id: 'A' }]);
     const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('unnest($1::int[], $2::uuid[])');
-    expect(sql).toContain('LEFT JOIN org_departments d ON d.id = p.dept_id');
-    expect(sql).not.toContain('d.id = e.org_department_id');
+    expect(sql).toContain('dc.org_department_id = p.dept_id');
+    expect(sql).not.toContain('= e.org_department_id');
     expect(params.slice(0, 2)).toEqual([[1], ['A']]);
   });
 
-  it('один сотрудник в двух отделах получает режим каждого отдела', async () => {
+  it('один сотрудник в двух отделах получает legacy-режим каждого отдела', async () => {
     pgQuery.mockResolvedValue([
-      { employee_id: 1, pair_dept_id: 'A', emp_mode: null, emp_object_id: null, dept_mode: 'current_activity', dept_object_id: null, dept_current_activity: false },
-      { employee_id: 1, pair_dept_id: 'B', emp_mode: null, emp_object_id: null, dept_mode: 'skud', dept_object_id: null, dept_current_activity: false },
+      { employee_id: 1, pair_dept_id: 'A', emp_mode: null, emp_object_id: null, dept_current_activity: true },
+      { employee_id: 1, pair_dept_id: 'B', emp_mode: null, emp_object_id: null, dept_current_activity: false },
     ]);
 
     const map = await resolveExportModesForPairs([
@@ -133,8 +139,8 @@ describe('resolveExportModesForPairs — режим по отделу пары',
       { employee_id: 1, org_department_id: 'B' },
     ]);
 
-    expect(map.get(exportModePairKey(1, 'A'))).toMatchObject({ mode: 'current_activity', source: 'department_explicit' });
-    expect(map.get(exportModePairKey(1, 'B'))).toMatchObject({ mode: 'skud', source: 'department_explicit' });
+    expect(map.get(exportModePairKey(1, 'A'))).toMatchObject({ mode: 'current_activity', source: 'legacy_department' });
+    expect(map.get(exportModePairKey(1, 'B'))).toMatchObject({ mode: 'skud', source: 'legacy_default' });
   });
 
   it('дубли пар схлопываются, мусорные id не идут в БД, отдел null допустим', async () => {
