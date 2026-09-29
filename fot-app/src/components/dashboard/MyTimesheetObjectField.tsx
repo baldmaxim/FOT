@@ -51,7 +51,8 @@ export const MyTimesheetObjectField: FC<IMyTimesheetObjectFieldProps> = ({
           disabled={mutation.isPending}
           aria-label={label}
         >
-          {state.value === null && <option value="" disabled>—</option>}
+          {/* «—» виден в поле, но не в списке — там только объекты, как у выбора компании. */}
+          {state.value === null && <option value="" disabled hidden>—</option>}
           {state.options.map(option => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}

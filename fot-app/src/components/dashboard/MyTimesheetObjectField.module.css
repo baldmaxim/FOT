@@ -23,9 +23,11 @@
   text-align: right;
 }
 
+/* Под подписью на всю ширину; на широкой карточке — справа от подписи, не шире 360px. */
 .row .select {
-  flex: 0 1 auto;
-  max-width: 100%;
+  flex: 1 1 100%;
+  max-width: 360px;
+  margin-left: auto;
 }
 
 /* ЛК рабочего: как остальные поля профиля — подпись над значением. */
@@ -50,26 +52,43 @@
   width: 100%;
 }
 
-/* 16px — иначе Safari/Chrome на телефоне зумят форму; 44px — тап-цель. */
+/* Как выбор компании «СУ-10» в «Управлении кадрами» (.sc-schedule-filter, styles/FilterBar.css). */
 .select {
-  min-height: 44px;
+  height: 36px;
+  min-width: 130px;
   padding: 0 10px;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 13px;
   color: var(--text-primary);
-  background: var(--bg-primary);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+}
+
+.select:hover {
+  border-color: var(--text-muted);
 }
 
 .select:disabled {
   opacity: 0.6;
 }
 
+/* Сенсорный экран: тап-цель 44px, шрифт 16px — иначе Safari/Chrome зумят форму. */
+@media (hover: none) {
+  .select {
+    height: 44px;
+    font-size: 16px;
+  }
+}
+
 @media (max-width: 430px) {
   .row .select {
-    width: 100%;
+    max-width: none;
+  }
+
+  .select {
+    font-size: 16px;
   }
 }
