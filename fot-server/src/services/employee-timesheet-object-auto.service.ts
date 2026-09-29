@@ -156,7 +156,9 @@ export function summarizeAutoChanges(
     else if (change.fromMode === 'object') report.fromAdminObject += 1;
     else report.fromAdminOffice += 1;
   }
-  report.unchanged = report.withHours - report.changed;
+  // Кандидаты, у которых объект остаётся (нет часов или цель совпала); вместе с изменёнными
+  // и нетронутыми — все сотрудники.
+  report.unchanged = report.employees - report.changed - report.skippedManual;
   return report;
 }
 

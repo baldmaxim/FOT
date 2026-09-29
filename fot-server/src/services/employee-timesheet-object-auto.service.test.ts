@@ -93,12 +93,15 @@ describe('planAutoChanges', () => {
       row(3, { mode: 'object', object_id: 'o-zil', set_by: null }),
       row(4, { mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
       row(9),
+      row(10, { mode: 'object', object_id: 'o-zil', set_by: null }),
     ];
     const changes = planAutoChanges(rows, tops, true);
     const report = summarizeAutoChanges(rows, tops, changes, true);
+    // Без изменений — 9 и 10 (нет часов); выбор сотрудника (4) с часами сюда не входит.
     expect(report).toMatchObject({
-      employees: 5, withHours: 4, changed: 3, toOffice: 1, toObject: 2,
-      fromNone: 1, fromSkud: 1, fromAdminObject: 1, skippedManual: 1, unchanged: 1,
+      employees: 6, withHours: 4, changed: 3, toOffice: 1, toObject: 2,
+      fromNone: 1, fromSkud: 1, fromAdminObject: 1, skippedManual: 1, unchanged: 2,
     });
+    expect(report.changed + report.unchanged + report.skippedManual).toBe(report.employees);
   });
 });
