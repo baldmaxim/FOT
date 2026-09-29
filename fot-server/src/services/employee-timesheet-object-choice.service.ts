@@ -12,11 +12,13 @@
  *     без объекта (новичок без проходов) первый объект ставится в любой день;
  *   - пока прошлый месяц не зафиксирован, менять нельзя: выбор попал бы в него;
  *   - в списке только объекты, где у сотрудника больше 24 ч с 1-го числа, плюс
- *     текущий; новичку без объекта ведущий табель выбирает из всех объектов.
+ *     текущий и то, к чему можно вернуться после ручной смены (значение по умолчанию
+ *     от отдела и прежние объекты этого месяца); новичку без объекта ведущий табель
+ *     выбирает из всех объектов.
  * Ночной расчёт ручной выбор не перезаписывает.
  */
 import type { AuthenticatedRequest } from '../types/index.js';
-import { queryOne, withTransaction } from '../config/postgres.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { AUDIT_ACTIONS, auditService } from './audit.service.js';
@@ -126,6 +128,18 @@ export function buildHoursOptions(
   return options;
 }
 
+/** Добавляет пункты, которых ещё нет в списке (по значению). */
+export function appendOptions(
+  base: readonly ITimesheetObjectOption[],
+  extra: readonly ITimesheetObjectOption[],
+): ITimesheetObjectOption[] {
+  const result = [...base];
+  for (const option of extra) {
+    if (!result.some(existing => existing.value === option.value)) result.push(option);
+  }
+  return result;
+}
+
 /** Все активные объекты: «Офис» одним пунктом, остальные по имени. */
 export function buildAllObjectOptions(objectsById: ReadonlyMap<string, ISkudObjectInfo>): ITimesheetObjectOption[] {
   const active = [...objectsById.values()].filter(object => object.is_active);
@@ -188,6 +202,62 @@ async function loadContext(
   };
 }
 
+/**
+ * Действия аудита, чьи old_* — прежний объект сотрудника (личный режим). Функция, а не
+ * константа модуля: тесты с моком audit.service без AUDIT_ACTIONS грузят app.ts.
+ */
+const revertableAuditActions = (): string[] => [
+  AUDIT_ACTIONS.TIMESHEET_OBJECT_SELF_SELECTED,
+  AUDIT_ACTIONS.TIMESHEET_OBJECT_MANAGER_SELECTED,
+  AUDIT_ACTIONS.TIMESHEET_MODE_UPDATED,
+];
+
+/**
+ * Куда можно вернуться после ручной смены: значение по умолчанию (от отдела и
+ * legacy-назначений, без личного режима) и объекты, которые были до ручных смен в
+ * этом месяце (журнал аудита). Без этого случайную смену не откатить: у прежнего
+ * объекта часов может быть меньше 24 — например, «Офис» отдела при работе на объекте.
+ */
+async function loadRevertOptions(
+  employeeId: number,
+  objectsById: ReadonlyMap<string, ISkudObjectInfo>,
+  now: Date,
+): Promise<ITimesheetObjectOption[]> {
+  const options: ITimesheetObjectOption[] = [];
+  const add = (value: string | null, label: string | null): void => {
+    if (value && label && !options.some(option => option.value === value)) options.push({ value, label });
+  };
+
+  const defaults = await resolveExportModes([employeeId], undefined, { ignorePersonal: true });
+  const fallback = defaults.get(employeeId) ?? DEFAULT_EXPORT_MODE;
+  add(valueForResolved(fallback, objectsById), labelForResolved(fallback, objectsById));
+
+  const rows = await query<{ old_mode: string | null; old_object_id: string | null }>(
+    `SELECT details->>'old_mode' AS old_mode, details->>'old_object_id' AS old_object_id
+       FROM audit_logs
+      WHERE entity_type = 'employee'
+        AND entity_id = $1
+        AND action = ANY($2::text[])
+        AND created_at >= $3::timestamptz
+      ORDER BY created_at DESC`,
+    [String(employeeId), revertableAuditActions(), `${currentMonthStartMsk(now)}T00:00:00+03:00`],
+  );
+  for (const row of rows) {
+    // NULL — «личного режима не было»: это значение по умолчанию, оно уже в списке.
+    if (row.old_mode === 'current_activity') {
+      add(OFFICE_VALUE, OFFICE_LABEL);
+      continue;
+    }
+    if (row.old_mode !== 'object' || !row.old_object_id) continue;
+    // Неактивный объект вернуть нельзя — запись режима требует активный объект.
+    const object = objectsById.get(row.old_object_id);
+    if (!object?.is_active) continue;
+    const resolved = { mode: 'object' as const, pinnedObjectId: object.id, source: 'employee_explicit' as const };
+    add(valueForResolved(resolved, objectsById), labelForResolved(resolved, objectsById));
+  }
+  return options;
+}
+
 async function loadOptions(
   context: IChoiceContext,
   actor: TimesheetObjectActor,
@@ -195,15 +265,19 @@ async function loadOptions(
 ): Promise<ITimesheetObjectOption[]> {
   if (actor === 'manager' && context.label === null) return buildAllObjectOptions(context.objectsById);
   const today = moscowTodayIso(now);
-  const hours = await loadTimesheetObjectHours(
-    [context.employee.id],
-    { start: currentMonthStartMsk(now), end: today },
-    { todayStr: today, objectsById: context.objectsById },
-  );
-  return buildHoursOptions(hours.get(context.employee.id) ?? [], {
+  const [hours, revert] = await Promise.all([
+    loadTimesheetObjectHours(
+      [context.employee.id],
+      { start: currentMonthStartMsk(now), end: today },
+      { todayStr: today, objectsById: context.objectsById },
+    ),
+    loadRevertOptions(context.employee.id, context.objectsById, now),
+  ]);
+  const byHours = buildHoursOptions(hours.get(context.employee.id) ?? [], {
     value: context.value,
     label: context.label,
   });
+  return appendOptions(byHours, revert);
 }
 
 /** Состояние для ЛК и окна в табеле. Список считается только когда менять можно. */
