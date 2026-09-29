@@ -8,6 +8,7 @@ import {
   UserIcon,
   BarChartIcon,
   ShieldIcon,
+  ClockIcon,
   DollarIcon,
   FileTextIcon,
   KeyIcon,
@@ -86,7 +87,7 @@ export const navGroups: INavGroup[] = [
     label: 'Администрирование',
     area: 'admin',
     items: [
-      { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
+      { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: ClockIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
       // Раздел «Зарплата». Доступ ограничен ролью admin через role_page_access
       // (миграция 272), а НЕ systemAdminOnly: флаг скрыл бы пункт от админа со скоупом
       // компании — именно такой роли (бухгалтеру подразделения) доступ понадобится первым.
