@@ -214,6 +214,8 @@ export interface TimesheetEmployee {
   row_key?: string;
   /** Период сотрудника в отделе недоступен по правам: строка без цифр и без правки. */
   is_restricted_period?: boolean;
+  /** Объект табелирования за месяц табеля: «Офис», имя объекта или null (миграция 288). */
+  timesheet_object_label?: string | null;
 }
 
 /** Период работы сотрудника в отделе — строка режима «По сотруднику». */
@@ -285,6 +287,16 @@ export interface TimesheetResponse {
    * право на страницу /timesheet само по себе записи не даёт.
    */
   department_writable?: boolean;
+  /**
+   * Смена объекта табелирования в табеле (meta.timesheet_object сервера): окно последних
+   * 3 дней месяца и признак, что прошлый месяц зафиксирован. Сервер проверяет сам.
+   */
+  timesheet_object?: ITimesheetObjectWindow;
+}
+
+export interface ITimesheetObjectWindow {
+  window_open: boolean;
+  previous_month_frozen: boolean;
 }
 
 export interface IAssignedEmployeeDepartment {

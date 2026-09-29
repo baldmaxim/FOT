@@ -252,7 +252,8 @@ async function main(): Promise<void> {
       [deptIds],
     );
     await client.query(
-      `UPDATE employees SET timesheet_export_mode = 'current_activity', timesheet_export_object_id = NULL, updated_at = now()
+      `UPDATE employees SET timesheet_export_mode = 'current_activity', timesheet_export_object_id = NULL,
+              timesheet_export_set_by = NULL, updated_at = now()
         WHERE id = ANY($1::int[])`,
       [empIds],
     );
@@ -334,7 +335,7 @@ async function runRollback(
     }
     for (const e of snapshot.employees) {
       await client.query(
-        'UPDATE employees SET timesheet_export_mode = $1, timesheet_export_object_id = $2::uuid, updated_at = now() WHERE id = $3::int',
+        'UPDATE employees SET timesheet_export_mode = $1, timesheet_export_object_id = $2::uuid, timesheet_export_set_by = NULL, updated_at = now() WHERE id = $3::int',
         [e.mode, e.object_id, e.id],
       );
     }

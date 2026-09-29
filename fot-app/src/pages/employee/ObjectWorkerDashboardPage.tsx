@@ -19,6 +19,7 @@ import {
   type WorkerLocale,
 } from '../../i18n/workerCabinet';
 import { SHOW_TESTING_SECTION } from '../../config/uiFlags';
+import { MyTimesheetObjectField } from '../../components/dashboard/MyTimesheetObjectField';
 
 const AdaptiveTestModal = lazy(() =>
   import('../../components/adaptive-testing/AdaptiveTestModal').then(m => ({ default: m.AdaptiveTestModal })),
@@ -642,6 +643,15 @@ const ObjectWorkerDashboardContent: FC = () => {
             <div style={labelStyle}>{t('profile.label.site')}</div>
             <div style={valueStyle}>{siteDisplay || '—'}</div>
           </div>
+          {employeeId && (
+            <MyTimesheetObjectField
+              employeeId={employeeId}
+              label={t('profile.label.timesheetObject')}
+              layout="stack"
+              savedMessage={t('timesheetObject.saved')}
+              errorMessage={t('timesheetObject.saveError')}
+            />
+          )}
           <div>
             <div style={labelStyle}>{t('profile.label.hireDate')}</div>
             <div style={valueStyle}>{formatDate(hireDate)}</div>

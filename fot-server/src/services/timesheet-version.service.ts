@@ -19,9 +19,10 @@ import {
   computeObjectsContentHash,
   type IObjectConfigError,
   type IObjectMeta,
+  type IVersionObjectsEmployee,
   type IVersionObjectsPayload,
 } from './timesheet-object-breakdown.service.js';
-import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
+import { UNKNOWN_OBJECT_KEY, type IAttendanceObjectEntry } from './timesheet-object.service.js';
 import { listDepartmentManagers } from './department-managers.service.js';
 import { listEmployeeDepartmentPeriodsBulk } from './timesheet-employee-periods.service.js';
 import {
@@ -50,7 +51,9 @@ import type { IApprovalLockInfo } from './timesheet-department-assignments.servi
 // 'rebuild' — аварийная пересборка фоновым воркером. В штатном процессе не возникает:
 // закрытый табель правится только через «Открыть → Закрыть», и это даёт source='close'.
 // Остаётся для операторского восстановления после ручной правки БД (миграция 257).
-export type TimesheetVersionSource = 'approve' | 'close' | 'backfill' | 'rebuild';
+// 'objects' — новая редакция только из-за смены объекта табелирования после фиксации
+// месяца (миграция 288): payload и content_hash прежние, меняется объектная разбивка.
+export type TimesheetVersionSource = 'approve' | 'close' | 'backfill' | 'rebuild' | 'objects';
 export type TimesheetExportState = 'not_exported' | 'stale' | 'exported';
 
 /** Подача в том виде, в каком она нужна материализации. */
@@ -144,6 +147,20 @@ export class TimesheetVersionEmptyRosterError extends Error {
   constructor(approvalId: number) {
     super(`У подачи ${approvalId} нет снимка состава — версию собрать не из чего`);
     this.name = 'TimesheetVersionEmptyRosterError';
+  }
+}
+
+/**
+ * Период подачи пересекает границу месяца (миграция 288). Объект табелирования
+ * фиксируется помесячно, и одной редакции нельзя приписать один режим на два месяца.
+ * Новые такие подачи запрещены валидатором периода; эта ошибка — защита для старых.
+ */
+export class TimesheetVersionCrossMonthError extends Error {
+  readonly code = 'CROSS_MONTH_RANGE';
+
+  constructor(startDate: string, endDate: string) {
+    super(`Период ${startDate} — ${endDate} пересекает границу месяца`);
+    this.name = 'TimesheetVersionCrossMonthError';
   }
 }
 
@@ -276,7 +293,12 @@ async function buildObjectsSnapshot(
   ownsEmployeeDay: (employeeId: number, date: string) => boolean,
 ): Promise<IVersionObjectsSnapshot> {
   const employeeIds = payload.employees.map(employee => employee.identity.employee_id);
-  const modeByEmployee = await resolveExportModes(employeeIds, client);
+  // Режим — месяца подачи: для прошедшего месяца личный режим из фиксации (288).
+  const { start_date: startDate, end_date: endDate } = payload.approval;
+  if (startDate.slice(0, 7) !== endDate.slice(0, 7)) {
+    throw new TimesheetVersionCrossMonthError(startDate, endDate);
+  }
+  const modeByEmployee = await resolveExportModes(employeeIds, client, { month: startDate });
 
   // Адреса нужны и фактическим объектам, и закреплённым в режиме «объект»: без второго
   // слагаемого у сотрудника без проходов адрес не нашёлся бы и строка уехала бы в
@@ -824,6 +846,155 @@ export async function materializeVersion(
   await insertManagersSnapshot(client, inserted.id, managers, 'materialize');
 
   return { version: inserted, created: true };
+}
+
+/**
+ * Что определяет строку сотрудника в разбивке: режим и, для «объекта», закреплённый
+ * объект. У «объекта» без часов строк нет — признак только режим.
+ */
+function objectsPinIdentity(employee: IVersionObjectsEmployee): string {
+  if (employee.mode !== 'object') return employee.mode;
+  const pinned = employee.objects.find(row => row.object_key !== UNKNOWN_OBJECT_KEY)
+    ?? employee.objects[0];
+  return `object:${pinned?.object_key ?? ''}`;
+}
+
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+/**
+ * Сохранённая разбивка + свежая → разбивка, где заменены ТОЛЬКО сотрудники со сменой
+ * режима или закреплённого объекта. Остальные строки остаются байт в байт: живые веса
+ * СКУД могли уехать, и без этого редакция менялась бы не только из-за объекта.
+ */
+export function mergeObjectsSnapshots(
+  stored: { payload: IVersionObjectsPayload; configErrors: IObjectConfigError[] },
+  fresh: IVersionObjectsSnapshot,
+): IVersionObjectsSnapshot & { changedEmployeeIds: number[] } {
+  const freshById = new Map(fresh.payload.employees.map(employee => [employee.employee_id, employee]));
+  const changed = new Set<number>();
+
+  const employees = stored.payload.employees.map(storedEmployee => {
+    const freshEmployee = freshById.get(storedEmployee.employee_id);
+    if (!freshEmployee) return storedEmployee;
+    if (objectsPinIdentity(storedEmployee) === objectsPinIdentity(freshEmployee)) return storedEmployee;
+    changed.add(storedEmployee.employee_id);
+    return freshEmployee;
+  });
+  employees.sort((left, right) => left.employee_id - right.employee_id);
+
+  const configErrors = [
+    ...stored.configErrors.filter(error => !changed.has(error.employee_id)),
+    ...fresh.configErrors.filter(error => changed.has(error.employee_id)),
+  ].sort((left, right) => left.employee_id - right.employee_id || left.code.localeCompare(right.code));
+
+  const payload: IVersionObjectsPayload = { employees };
+  return {
+    payload,
+    hash: computeObjectsContentHash(payload, configErrors),
+    configErrors,
+    employeesCount: employees.length,
+    totalHours: round2(employees.reduce((sum, employee) => sum + employee.total_hours, 0)),
+    changedEmployeeIds: [...changed].sort((a, b) => a - b),
+  };
+}
+
+/**
+ * Новая редакция «только объекты» (миграция 288): после фиксации месяца подача,
+ * закрытая раньше (1–15 число), получает объектную разбивку по зафиксированному
+ * объекту. Payload и content_hash — прежние: часы не пересчитываются. Снимок
+ * руководителей переносится из предыдущей редакции как есть.
+ *
+ * Вызывать под блокировкой подачи (SELECT … FOR UPDATE в той же транзакции), как
+ * materializeVersion. Повтор — no-op: хэш совпадёт.
+ */
+export async function rebuildVersionObjects(
+  client: PoolClient,
+  approval: IVersionApproval,
+  actorUserId: string | null,
+): Promise<{ created: boolean; revision: number | null; changedEmployeeIds: number[] }> {
+  const latest = (await client.query<{
+    id: number;
+    revision: number;
+    content_hash: string;
+    payload: ITimesheetVersionPayload;
+    scope_kind: string;
+    employees_count: number;
+    total_hours: number;
+    membership_windows: unknown;
+    objects_content_hash: string | null;
+    objects_payload: IVersionObjectsPayload | null;
+    config_errors: IObjectConfigError[] | null;
+  }>(
+    `SELECT v.id, v.revision, v.content_hash, v.payload, v.scope_kind,
+            v.employees_count, v.total_hours, v.membership_windows,
+            vo.objects_content_hash,
+            vo.payload       AS objects_payload,
+            vo.config_errors
+       FROM timesheet_versions v
+       LEFT JOIN timesheet_version_objects vo ON vo.version_id = v.id
+      WHERE v.approval_id = $1
+      ORDER BY v.revision DESC
+      LIMIT 1`,
+    [approval.id],
+  )).rows[0];
+
+  // Редакции без снимка объектов — забота бэкфилла, не этой пересборки.
+  if (!latest || latest.objects_content_hash == null || !latest.objects_payload) {
+    return { created: false, revision: null, changedEmployeeIds: [] };
+  }
+
+  const fresh = await buildObjectsSnapshotForVersion(client, approval, latest.payload);
+  const merged = mergeObjectsSnapshots(
+    {
+      payload: latest.objects_payload,
+      configErrors: Array.isArray(latest.config_errors) ? latest.config_errors : [],
+    },
+    fresh,
+  );
+  if (merged.changedEmployeeIds.length === 0 || merged.hash === latest.objects_content_hash) {
+    return { created: false, revision: null, changedEmployeeIds: [] };
+  }
+
+  const nextRevision = Number(latest.revision) + 1;
+  const inserted = (await client.query<{ id: number }>(
+    `INSERT INTO timesheet_versions (
+       approval_id, revision, content_hash, payload, scope_kind, department_id,
+       manager_employee_id, start_date, end_date, employees_count, total_hours,
+       membership_windows, source, created_by
+     ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'objects',$13)
+     RETURNING id`,
+    [
+      approval.id,
+      nextRevision,
+      latest.content_hash,
+      JSON.stringify(latest.payload),
+      latest.scope_kind,
+      approval.department_id,
+      approval.manager_employee_id,
+      approval.start_date,
+      approval.end_date,
+      latest.employees_count,
+      latest.total_hours,
+      JSON.stringify(latest.membership_windows ?? {}),
+      actorUserId,
+    ],
+  )).rows[0]!;
+
+  await insertObjectsSnapshot(client, inserted.id, merged, 'materialize');
+  await client.query(
+    `INSERT INTO timesheet_version_managers (
+       version_id, managers_content_hash, payload, employees_count, without_manager,
+       snapshot_source, resolved_at
+     )
+     SELECT $1, managers_content_hash, payload, employees_count, without_manager,
+            snapshot_source, resolved_at
+       FROM timesheet_version_managers
+      WHERE version_id = $2
+     ON CONFLICT (version_id) DO NOTHING`,
+    [inserted.id, latest.id],
+  );
+
+  return { created: true, revision: nextRevision, changedEmployeeIds: merged.changedEmployeeIds };
 }
 
 /**

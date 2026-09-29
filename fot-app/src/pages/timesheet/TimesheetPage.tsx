@@ -8,6 +8,7 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { TimesheetEmployeePicker } from '../../components/timesheet/TimesheetEmployeePicker';
+import { TimesheetObjectModal } from '../../components/timesheet/TimesheetObjectModal';
 import { buildEmployeeModeGridData } from './timesheetEmployeeMode.helpers';
 import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService, uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
@@ -535,6 +536,11 @@ export const TimesheetPage: FC = () => {
   // просмотр табелей, view-назначение). Признак считает сервер; сервер же отвечает 403.
   const canWriteActiveDept = canEditTimesheet
     && (isEmployeeMode || timesheetQuery.data?.department_writable === true);
+
+  // Объект табелирования под ФИО (миграция 288): выбирает тот, кто ведёт табель строки.
+  const [timesheetObjectEmployee, setTimesheetObjectEmployee] = useState<TimesheetEmployee | null>(null);
+  const timesheetObjectWindow = timesheetQuery.data?.timesheet_object;
+  const handleTimesheetObjectClick = canEditTimesheet ? setTimesheetObjectEmployee : undefined;
   const employees = useMemo<TimesheetEmployee[]>(() => {
     // Персональный режим: строки уже собраны по периодам и упорядочены по дате входа —
     // пересортировка по source схлопнула бы порядок отделов.
@@ -2761,6 +2767,8 @@ export const TimesheetPage: FC = () => {
             onEmployeeClick={handleEmployeeClick}
             onDayClick={handleDayClick}
             onObjectDayClick={handleObjectDayClick}
+            timesheetObjectWindow={timesheetObjectWindow}
+            onTimesheetObjectClick={handleTimesheetObjectClick}
           />
         )
       ) : isAssignedMode ? (
@@ -2811,6 +2819,8 @@ export const TimesheetPage: FC = () => {
             onExcludeEmployee={handleExcludeEmployeeFromDepartment}
             onDayClick={handleDayClick}
             onObjectDayClick={handleObjectDayClick}
+            timesheetObjectWindow={timesheetObjectWindow}
+            onTimesheetObjectClick={handleTimesheetObjectClick}
           />
         )
       ) : loading ? (
@@ -2848,6 +2858,15 @@ export const TimesheetPage: FC = () => {
           onExcludeEmployee={handleExcludeEmployeeFromDepartment}
           onDayClick={handleDayClick}
           onObjectDayClick={handleObjectDayClick}
+          timesheetObjectWindow={timesheetObjectWindow}
+          onTimesheetObjectClick={handleTimesheetObjectClick}
+        />
+      )}
+
+      {timesheetObjectEmployee && (
+        <TimesheetObjectModal
+          employee={timesheetObjectEmployee}
+          onClose={() => setTimesheetObjectEmployee(null)}
         />
       )}
 

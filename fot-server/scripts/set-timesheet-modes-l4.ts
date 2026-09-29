@@ -386,10 +386,21 @@ async function main(): Promise<void> {
 
     let affected = 0;
     for (const r of finalRows) {
+      // Офисный объект закреплённым не хранится — это «Офис» (current_activity);
+      // запись скрипта — ручная, источник NULL (миграция 288).
       const res = await client.query(
-        `UPDATE employees
-            SET timesheet_export_mode = $1,
-                timesheet_export_object_id = $2::uuid
+        `WITH office AS (
+           SELECT EXISTS (
+             SELECT 1 FROM skud_objects so
+              WHERE so.id = $2::uuid
+                AND lower(btrim(coalesce(so.alt_name, ''))) = lower('Текущая деятельность')
+           ) AS is_office
+         )
+         UPDATE employees
+            SET timesheet_export_mode = CASE WHEN $1 = 'object' AND office.is_office THEN 'current_activity' ELSE $1 END,
+                timesheet_export_object_id = CASE WHEN $1 = 'object' AND office.is_office THEN NULL ELSE $2::uuid END,
+                timesheet_export_set_by = NULL
+           FROM office
           WHERE id = $3::int AND timesheet_export_mode IS NULL`,
         [r.after_mode, r.after_object_id, r.id],
       );
@@ -464,7 +475,8 @@ async function runRollback(
       const res = await client.query(
         `UPDATE employees
             SET timesheet_export_mode = $1,
-                timesheet_export_object_id = $2::uuid
+                timesheet_export_object_id = $2::uuid,
+                timesheet_export_set_by = NULL
           WHERE id = $3::int
             AND timesheet_export_mode IS NOT DISTINCT FROM $4
             AND timesheet_export_object_id::text IS NOT DISTINCT FROM $5`,

@@ -4,7 +4,6 @@ import { Check, Clock, LogIn, LogOut, XCircle } from 'lucide-react';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { useCanViewSkudDirectory } from '../../hooks/useCanViewSkudDirectory';
 import type { Employee, EmployeeInput, SkudEvent, SkudEventFailure } from '../../types';
-import type { IWorkObjectOption } from '../../services/employeeService';
 import type { IDayAttendance } from '../../utils/attendanceCalc';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
 import {
@@ -40,7 +39,6 @@ interface IEmployeeAttendanceSectionProps {
   isEditing: boolean;
   isSigurLinked: boolean;
   editData: Partial<EmployeeInput>;
-  workObjectOptions: IWorkObjectOption[];
   onEditDataChange: (data: Partial<EmployeeInput>) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -80,7 +78,6 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   isEditing,
   isSigurLinked,
   editData,
-  workObjectOptions,
   onEditDataChange,
   onSave,
   onCancel,
@@ -247,7 +244,6 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
           isEditing={isEditing}
           isSigurLinked={isSigurLinked}
           editData={editData}
-          workObjectOptions={workObjectOptions}
           onEditDataChange={onEditDataChange}
           onSave={onSave}
           onCancel={onCancel}

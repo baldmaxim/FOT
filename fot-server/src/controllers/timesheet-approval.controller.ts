@@ -38,6 +38,7 @@ import {
   clearVersionDirty,
   materializeVersion,
   resolveState,
+  TimesheetVersionCrossMonthError,
   TimesheetVersionEmptyRosterError,
   TimesheetVersionIncompleteError,
   type IVersionApproval,
@@ -144,6 +145,14 @@ function respondVersionError(res: Response, err: unknown): boolean {
       success: false,
       error: 'У табеля нет сохранённого состава сотрудников — обратитесь к администратору',
       code: 'TIMESHEET_VERSION_EMPTY_ROSTER',
+    });
+    return true;
+  }
+  if (err instanceof TimesheetVersionCrossMonthError) {
+    res.status(409).json({
+      success: false,
+      error: 'Период табеля пересекает границу месяца — подайте табель по месяцам',
+      code: 'CROSS_MONTH_RANGE',
     });
     return true;
   }

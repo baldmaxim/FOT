@@ -2798,6 +2798,66 @@
   text-align: left;
 }
 
+/* ФИО и объект табелирования под ним (миграция 288). */
+.ts-employee-name-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.ts-mobile-card-name-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.ts-mobile-card-name-block .ts-mobile-card-name {
+  max-width: 100%;
+}
+
+.ts-employee-object {
+  max-width: 100%;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  /* Выравнивание — как у ФИО в ячейке: слева «По сотрудникам», по центру «По объектам». */
+  text-align: inherit;
+}
+
+/* Табельщица и руководитель в окне смены: объект нажимается — открывается выбор. */
+.ts-employee-object--button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  color: var(--accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.ts-employee-object--button:hover {
+  text-decoration-style: solid;
+}
+
+/* На телефоне кнопка — полноценная тап-цель. */
+.ts-mobile-card .ts-employee-object--button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+}
+
 .ts-expand-placeholder {
   display: inline-block;
   width: 22px;

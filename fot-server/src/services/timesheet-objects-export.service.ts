@@ -3,6 +3,13 @@ import { query } from '../config/postgres.js';
 import type { IDepartmentTimesheetData, TimesheetExportRangeArg } from './timesheet-export.service.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
 import { resolveTimesheetPeriodRange, resolveTimesheetDateRange } from './timesheet-department-assignments.service.js';
+import {
+  FROZEN_PERSONAL_MODE_SQL,
+  FROZEN_PERSONAL_OBJECT_SQL,
+  currentMonthStartMsk,
+  freezeMonthCte,
+  toMonthStart,
+} from './timesheet-export-mode.service.js';
 
 interface IDeptGroup {
   name: string;
@@ -82,23 +89,58 @@ export async function fetchEmployeeIdsForObjects(
  * в resolveExportModes: явный режим сотрудника, иначе режим его отдела). В выгрузке по
  * объектам их часы принадлежат закреплённому объекту независимо от проходов, поэтому
  * одних СКУД-событий для отбора состава недостаточно.
+ *
+ * month — месяц выгрузки: для прошедшего месяца личный режим берётся из фиксации
+ * (миграция 288) — тем же правилом, что в resolveExportModes, иначе состав файла
+ * разошёлся бы с режимами строк.
  */
-export async function fetchEmployeeIdsPinnedToObjects(objectIds: string[]): Promise<number[]> {
+export async function fetchEmployeeIdsPinnedToObjects(
+  objectIds: string[],
+  month: string | null = null,
+  now: Date = new Date(),
+): Promise<number[]> {
   if (objectIds.length === 0) return [];
 
+  const monthStart = toMonthStart(month);
+  if (!monthStart) {
+    const rows = await query<{ employee_id: number | string }>(
+      `SELECT e.id AS employee_id
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.is_archived = false
+          AND (
+            (e.timesheet_export_mode = 'object'
+              AND e.timesheet_export_object_id = ANY($1::uuid[]))
+            OR (e.timesheet_export_mode IS NULL
+              AND d.timesheet_export_mode = 'object'
+              AND d.timesheet_export_object_id = ANY($1::uuid[]))
+          )`,
+      [objectIds],
+    );
+    return rows.map(r => Number(r.employee_id));
+  }
+
   const rows = await query<{ employee_id: number | string }>(
-    `SELECT e.id AS employee_id
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-      WHERE e.is_archived = false
-        AND (
-          (e.timesheet_export_mode = 'object'
-            AND e.timesheet_export_object_id = ANY($1::uuid[]))
-          OR (e.timesheet_export_mode IS NULL
-            AND d.timesheet_export_mode = 'object'
-            AND d.timesheet_export_object_id = ANY($1::uuid[]))
-        )`,
-    [objectIds],
+    `WITH ${freezeMonthCte('$2', '$3')},
+     personal AS (
+       SELECT e.id,
+              e.org_department_id,
+              ${FROZEN_PERSONAL_MODE_SQL}   AS mode,
+              ${FROZEN_PERSONAL_OBJECT_SQL} AS object_id
+         FROM employees e
+        CROSS JOIN fm
+         LEFT JOIN employee_timesheet_object_months f
+                ON f.employee_id = e.id AND f.month = fm.month
+        WHERE e.is_archived = false
+     )
+     SELECT p.id AS employee_id
+       FROM personal p
+       LEFT JOIN org_departments d ON d.id = p.org_department_id
+      WHERE (p.mode = 'object' AND p.object_id = ANY($1::uuid[]))
+         OR (p.mode IS NULL
+             AND d.timesheet_export_mode = 'object'
+             AND d.timesheet_export_object_id = ANY($1::uuid[]))`,
+    [objectIds, monthStart, currentMonthStartMsk(now)],
   );
 
   return rows.map(r => Number(r.employee_id));
@@ -234,7 +276,7 @@ export async function fetchTimesheetDataForObjectIds(
   // закреплён за ними режимом «object» — его часы принадлежат объекту без проходов.
   const [eventEmployeeIds, pinnedEmployeeIds] = await Promise.all([
     fetchEmployeeIdsForObjects(objectIds, startDate, endDate),
-    fetchEmployeeIdsPinnedToObjects(objectIds),
+    fetchEmployeeIdsPinnedToObjects(objectIds, month),
   ]);
   const employeeIds = [...new Set([...eventEmployeeIds, ...pinnedEmployeeIds])];
 

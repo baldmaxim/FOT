@@ -1,0 +1,75 @@
+/* Карточка дня ЛК: как строки итогов — подпись слева, значение справа. */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+}
+
+.row .label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.row .value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.row .select {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* ЛК рабочего: как остальные поля профиля — подпись над значением. */
+.stack {
+  display: grid;
+  gap: 4px;
+}
+
+.stack .label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.stack .value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.stack .select {
+  width: 100%;
+}
+
+/* 16px — иначе Safari/Chrome на телефоне зумят форму; 44px — тап-цель. */
+.select {
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.select:disabled {
+  opacity: 0.6;
+}
+
+@media (max-width: 430px) {
+  .row .select {
+    width: 100%;
+  }
+}

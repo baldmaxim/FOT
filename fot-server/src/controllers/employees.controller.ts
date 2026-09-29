@@ -61,6 +61,7 @@ import { fire, rehire, cancelDismissal, moveDepartment, batchMoveEmployees, getH
 import { deleteAll } from './employee-import.controller.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor } from '../services/recipients.service.js';
+import { loadTimesheetObjectLabels } from '../services/employee-timesheet-object.service.js';
 
 async function emitEmployeeChangedHere(employeeId: number, action: string): Promise<void> {
   try {
@@ -493,6 +494,9 @@ export const employeesController = {
           }
         }
       }
+
+      // Объект табелирования (миграция 288) — внутри кэшируемой записи и её ETag.
+      employee.timesheet_object_label = (await loadTimesheetObjectLabels([idNum])).get(idNum) ?? null;
 
       const entry = employeeCache.set(idNum, employee);
 

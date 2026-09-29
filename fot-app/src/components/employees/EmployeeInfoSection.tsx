@@ -1,7 +1,6 @@
 import { type FC } from 'react';
 import { X, Check } from 'lucide-react';
 import type { Employee, EmployeeInput } from '../../types';
-import type { IWorkObjectOption } from '../../services/employeeService';
 import { EMPLOYEE_COUNTRY_OPTIONS } from '../../services/citizenship';
 
 interface IEmployeeInfoSectionProps {
@@ -9,7 +8,6 @@ interface IEmployeeInfoSectionProps {
   isEditing: boolean;
   isSigurLinked: boolean;
   editData: Partial<EmployeeInput>;
-  workObjectOptions: IWorkObjectOption[];
   onEditDataChange: (data: Partial<EmployeeInput>) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -43,14 +41,11 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
   isEditing,
   isSigurLinked,
   editData,
-  workObjectOptions,
   onEditDataChange,
   onSave,
   onCancel,
 }) => {
   if (isEditing) {
-    const currentObject = editData.work_object ?? '';
-    const currentObjectInList = !currentObject || workObjectOptions.some(o => o.name === currentObject);
     const currentCountry = editData.country ?? '';
     const currentCountryInList = !currentCountry || EMPLOYEE_COUNTRY_OPTIONS.includes(currentCountry);
     return (
@@ -70,18 +65,7 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
           </div>
           <div className="form-group">
             <label>Объект</label>
-            <select
-              value={currentObject}
-              onChange={e => onEditDataChange({ ...editData, work_object: e.target.value || null })}
-            >
-              <option value="">—</option>
-              {!currentObjectInList && (
-                <option value={currentObject}>{currentObject}</option>
-              )}
-              {workObjectOptions.map(o => (
-                <option key={o.id} value={o.name}>{o.name}</option>
-              ))}
-            </select>
+            <span className="form-readonly">{employee.timesheet_object_label || '—'}</span>
           </div>
           <div className="form-group">
             <label>Дата найма</label>
@@ -109,7 +93,7 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
           {isSigurLinked ? (
             <div className="form-group">
               <label>Режим редактирования</label>
-              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО, Объект, Дату найма и Гражданство.</span>
+              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО, Дату найма и Гражданство.</span>
             </div>
           ) : (
             <div className="form-group">
@@ -201,10 +185,10 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
           <span className="ec-info-label">Отдел</span>
           <span className="ec-info-val">{employee.department || '—'}</span>
         </div>
-        {employee.work_object && (
+        {employee.timesheet_object_label && (
           <div className="ec-info-row">
             <span className="ec-info-label">Объект</span>
-            <span className="ec-info-val">{employee.work_object}</span>
+            <span className="ec-info-val">{employee.timesheet_object_label}</span>
           </div>
         )}
       </div>

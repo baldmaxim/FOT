@@ -683,6 +683,17 @@ export const publicTimesheetsController = {
           };
         }
 
+        // Недостоверная объектная разбивка (config_errors) — подтверждать нельзя, даже
+        // если клиент 1С не запросил /objects или проигнорировал его 409 (миграция 288).
+        const objectsState = (await client.query<{ config_errors: unknown }>(
+          'SELECT config_errors FROM timesheet_version_objects WHERE version_id = $1',
+          [latest.id],
+        )).rows[0];
+        const configErrors = Array.isArray(objectsState?.config_errors) ? objectsState.config_errors : [];
+        if (configErrors.length > 0) {
+          return { kind: 'invalid_objects' as const, configErrors };
+        }
+
         // Идемпотентность: конкурентные ACK одной версии дают одну строку.
         await client.query(
           `INSERT INTO timesheet_1c_exports (version_id, key_id, document_ref, note)
@@ -723,6 +734,15 @@ export const publicTimesheetsController = {
             current_revision: result.currentRevision,
             current_content_hash: result.currentHash,
           });
+          return;
+        case 'invalid_objects':
+          fail(
+            res, 409,
+            'Разбивка по объектам недостоверна: у части сотрудников повреждён режим табелирования. '
+            + 'Подтверждать эту редакцию нельзя — сообщите администратору ФОТ.',
+            'INVALID_EXPORT_MODE_CONFIG',
+            { employees: result.configErrors },
+          );
           return;
         default:
           break;

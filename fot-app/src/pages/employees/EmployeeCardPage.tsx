@@ -149,16 +149,6 @@ export const EmployeeCardPage: FC = () => {
   const employee = employeeQuery.data ?? null;
   const loading = employeeQuery.isLoading;
 
-  // Список объектов строительства для выбора поля «Объект» в форме правки.
-  // Грузим только для тех, кто может редактировать; объекты меняются редко.
-  const workObjectOptionsQuery = useQuery({
-    queryKey: ['employee-work-object-options'],
-    queryFn: () => employeeService.listWorkObjectOptions(),
-    enabled: canEdit,
-    staleTime: 30 * 60_000,
-  });
-  const workObjectOptions = workObjectOptionsQuery.data ?? [];
-
   // Структура (для редактирования отделов и модалки восстановления) — общий query key
   const structureQuery = useStructureTree(true);
   const rehireTargetDepartments = useMemo(() => {
@@ -378,7 +368,6 @@ export const EmployeeCardPage: FC = () => {
     setEditData({
       full_name: employee.full_name,
       hire_date: employee.hire_date,
-      work_object: employee.work_object,
       country: employee.country ?? undefined,
       ...(isSigurLinked ? {} : {
         birth_date: employee.birth_date || undefined,
@@ -397,9 +386,6 @@ export const EmployeeCardPage: FC = () => {
       const fullName = (editData.full_name ?? '').trim();
       if (fullName !== (employee.full_name ?? '').trim()) {
         payload.full_name = fullName;
-      }
-      if (nullableText(editData.work_object) !== nullableText(employee.work_object)) {
-        payload.work_object = nullableText(editData.work_object);
       }
       const hireDate = dateOnly(editData.hire_date);
       if (hireDate && hireDate !== dateOnly(employee.hire_date)) {
@@ -674,7 +660,6 @@ export const EmployeeCardPage: FC = () => {
           isEditing={isEditing}
           isSigurLinked={employee.sigur_employee_id != null}
           editData={editData}
-          workObjectOptions={workObjectOptions}
           onEditDataChange={setEditData}
           onSave={saveEditing}
           onCancel={() => { setIsEditing(false); setEditData({}); }}

@@ -1,9 +1,9 @@
-import { Fragment, type FC, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FC, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronUp, Menu, UserMinus } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetObjectEntry, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
-import type { IProductionCalendarMonth, IEmployeeStats } from '../../types/timesheet';
+import type { IProductionCalendarMonth, IEmployeeStats, ITimesheetObjectWindow } from '../../types/timesheet';
 import {
   getDaysInMonth,
   isWeekend,
@@ -68,6 +68,10 @@ interface ITimesheetGridProps {
     target: { object_key: string; object_id: string | null; object_name: string },
     entry: TimesheetObjectEntry | null,
   ) => void;
+  /** Окно смены объекта табелирования (meta.timesheet_object). */
+  timesheetObjectWindow?: ITimesheetObjectWindow;
+  /** Выбор объекта табелирования — только со страницы «Табель», для строк, которые ведёт пользователь. */
+  onTimesheetObjectClick?: (employee: TimesheetEmployee) => void;
 }
 
 interface IObjectRowData {
@@ -483,6 +487,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   onExcludeEmployee,
   onDayClick,
   onObjectDayClick,
+  timesheetObjectWindow,
+  onTimesheetObjectClick,
 }) => {
   const { showActualHours } = useAuth();
   // Синхронизируем module-level flag, к которому обращаются helper-функции
@@ -495,6 +501,37 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
+
+  // Объект табелирования под ФИО (миграция 288). Кнопкой — только там, где пользователь
+  // ведёт табель строки: в окне последних 3 дней месяца, новичку без объекта — в любой
+  // день. Решение окончательно проверяет сервер.
+  const canPickTimesheetObject = (employee: TimesheetEmployee): boolean => Boolean(
+    onTimesheetObjectClick
+    && !bulkEditMode
+    && employee.editable !== false
+    && !employee.is_restricted_period
+    && employee.employment_status === 'active'
+    && timesheetObjectWindow?.previous_month_frozen
+    && (timesheetObjectWindow.window_open || !employee.timesheet_object_label),
+  );
+  const renderTimesheetObject = (employee: TimesheetEmployee): ReactNode => {
+    const label = employee.timesheet_object_label ?? null;
+    if (canPickTimesheetObject(employee)) {
+      return (
+        <button
+          type="button"
+          className="ts-employee-object ts-employee-object--button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onTimesheetObjectClick?.(employee);
+          }}
+        >
+          {label ?? '—'}
+        </button>
+      );
+    }
+    return label ? <div className="ts-employee-object">{label}</div> : null;
+  };
   const compactInlineExclude = days.length > 16;
   const employeeStatsMap = useMemo(() => {
     // Ключ — строка, а не сотрудник: у строк одного человека по разным отделам
@@ -698,10 +735,15 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   // большой отдел (сотни сотрудников × дни) фризит main-thread при смене отдела.
   // measureElement на <tbody> учитывает реальную высоту группы (вкл. раскрытые объекты).
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  const hasTimesheetObjectLine = useMemo(
+    () => Boolean(onTimesheetObjectClick) || employees.some(employee => Boolean(employee.timesheet_object_label)),
+    [employees, onTimesheetObjectClick],
+  );
   const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableSectionElement>({
     count: employeeRows.length,
     getScrollElement: () => tableScrollRef.current,
-    estimateSize: () => 34,
+    // Вторая строка под ФИО — объект табелирования (миграция 288).
+    estimateSize: () => (hasTimesheetObjectLine ? 46 : 34),
     overscan: 12,
   });
 
@@ -1040,7 +1082,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 <div className="ts-mobile-card-header">
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
-                    <div className="ts-mobile-card-name">{displayName}</div>
+                    <div className="ts-mobile-card-name-block">
+                      <div className="ts-mobile-card-name">{displayName}</div>
+                      {renderTimesheetObject(row.employee)}
+                    </div>
                   </div>
                 </div>
 
@@ -1175,7 +1220,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 <div className="ts-mobile-card-header">
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
-                    <div className="ts-mobile-card-name" title={row.employee.full_name}>{displayName}</div>
+                    <div className="ts-mobile-card-name-block">
+                      <div className="ts-mobile-card-name" title={row.employee.full_name}>{displayName}</div>
+                      {renderTimesheetObject(row.employee)}
+                    </div>
                     {row.employee.transferred_out_date && (
                       <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
                         Переведён {formatBadgeDate(row.employee.transferred_out_date)}
@@ -1381,6 +1429,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         <div className="ts-object-employee-name" title={row.employee.full_name}>
                           {formatTimesheetEmployeeName(row.employee.full_name)}
                         </div>
+                        {renderTimesheetObject(row.employee)}
                       </td>
                       {days.map(day => {
                         const objectEntry = row.days.get(day) || null;
@@ -1584,8 +1633,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <span className="ts-expand-placeholder" aria-hidden="true" />
                         )}
                         <span className="ts-employee-index">{employeeIndex}.</span>
-                        <div className="ts-employee-name" title={row.employee.full_name}>
-                          {displayName}
+                        <div className="ts-employee-name-block">
+                          <div className="ts-employee-name" title={row.employee.full_name}>
+                            {displayName}
+                          </div>
+                          {renderTimesheetObject(row.employee)}
                         </div>
                         {row.employee.transferred_out_date && (
                           <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>

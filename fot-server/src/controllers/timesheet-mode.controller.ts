@@ -17,6 +17,9 @@ import {
   resolveAccessibleDepartmentIds,
 } from '../services/data-scope.service.js';
 import { filterEmployeeIdsByReadScope } from '../services/employee-scope-filter.service.js';
+import { employeeCache } from '../services/employee-cache.service.js';
+import { isOfficeAddress } from '../services/employee-timesheet-object.service.js';
+import { invalidateCaches } from '../middleware/cacheResponse.js';
 import {
   resolveRow,
   TIMESHEET_MODE_LOCK_KEY,
@@ -101,13 +104,33 @@ async function normalizeModePayload(
   if (!objectId) return { error: 'Для режима «объект» нужно выбрать закреплённый объект' };
   // Активность требуется только на запись: уже настроенный объект может стать неактивным,
   // и выгрузка обязана продолжать работать.
-  const obj = await queryOne<{ id: string; is_active: boolean }>(
-    'SELECT id, is_active FROM skud_objects WHERE id = $1::uuid',
+  const obj = await queryOne<{ id: string; is_active: boolean; alt_name: string | null }>(
+    'SELECT id, is_active, alt_name FROM skud_objects WHERE id = $1::uuid',
     [objectId],
   );
   if (!obj) return { error: 'Объект не найден' };
   if (!obj.is_active) return { error: 'Объект неактивен — выберите другой' };
+  // Офисный объект закреплённым не хранится — это «Офис» (миграция 288): иначе в
+  // карточке «Офис», а в выгрузке по объектам сотрудник ушёл бы в файл офиса.
+  if (isOfficeAddress(obj.alt_name)) return { mode: 'current_activity', objectId: null };
   return { mode, objectId };
+}
+
+/**
+ * После записи режима: подписи объекта табелирования в карточке и табеле вычисляются
+ * из режима — сбросить их серверные кэши (миграция 288).
+ */
+function invalidateTimesheetObjectCaches(employeeIds: number[] | 'all'): void {
+  if (employeeIds === 'all') employeeCache.clear();
+  else if (employeeIds.length === 1) employeeCache.invalidate(employeeIds[0]);
+  else employeeCache.clear();
+  invalidateCaches(
+    'timesheet',
+    'timesheet:today',
+    'timesheet:overview',
+    'timesheet:overview:today',
+    'timesheet:search',
+  );
 }
 
 export const timesheetModeController = {
@@ -456,6 +479,9 @@ export const timesheetModeController = {
         return before.rowCount ?? 0;
       });
 
+      // Режим отдела меняет вычисляемую подпись у сотрудников без личного режима, а
+      // employees.updated_at — нет: кэши карточек сбрасываем целиком.
+      invalidateTimesheetObjectCaches('all');
       res.json({ success: true, data: { affected, mode: normalized.mode, object_id: normalized.objectId } });
     } catch (error) {
       console.error('timesheetModeController.updateDepartmentsBulk error:', error);
@@ -534,10 +560,12 @@ export const timesheetModeController = {
           return { conflict: true as const };
         }
 
+        // Ручная правка админа: источник NULL — ночной расчёт её не трогает (миграция 288).
         await client.query(
           `UPDATE employees
               SET timesheet_export_mode = $1,
                   timesheet_export_object_id = $2::uuid,
+                  timesheet_export_set_by = NULL,
                   updated_at = now()
             WHERE id = ANY($3::int[])`,
           [normalized.mode, normalized.objectId, employeeIds],
@@ -568,6 +596,7 @@ export const timesheetModeController = {
         res.status(409).json({ error: 'Список сотрудников изменился, обновите окно' });
         return;
       }
+      invalidateTimesheetObjectCaches(employeeIds);
       res.json({
         success: true,
         data: { affected: outcome.affected, mode: normalized.mode, object_id: normalized.objectId },
@@ -610,9 +639,10 @@ export const timesheetModeController = {
         const before = await client.query<{
           timesheet_export_mode: TimesheetExportMode | null;
           timesheet_export_object_id: string | null;
+          timesheet_export_set_by?: string | null;
           full_name: string;
         }>(
-          `SELECT timesheet_export_mode, timesheet_export_object_id::text, full_name
+          `SELECT timesheet_export_mode, timesheet_export_object_id::text, timesheet_export_set_by, full_name
              FROM employees WHERE id = $1::int FOR UPDATE`,
           [employeeId],
         );
@@ -624,13 +654,17 @@ export const timesheetModeController = {
         };
         // Повтор (двойной клик, ретрай после таймаута) — цель уже достигнута: ни UPDATE,
         // ни updated_at, ни аудита. Проверка до expected: устаревший expected тут не мешает.
-        if (sameExplicitMode(current, normalized)) return { kind: 'unchanged' as const };
+        // Тот же режим, поставленный ночным расчётом или сотрудником, — не повтор: запись
+        // админа закрепляет его (источник NULL), иначе ночь его перезапишет.
+        const manualAlready = (before.rows[0].timesheet_export_set_by ?? null) === null;
+        if (sameExplicitMode(current, normalized) && manualAlready) return { kind: 'unchanged' as const };
         if (expected && !sameExplicitMode(current, expected)) return { kind: 'conflict' as const, current };
 
         await client.query(
           `UPDATE employees
               SET timesheet_export_mode = $1,
                   timesheet_export_object_id = $2::uuid,
+                  timesheet_export_set_by = NULL,
                   updated_at = now()
             WHERE id = $3::int`,
           [normalized.mode, normalized.objectId, employeeId],
@@ -663,6 +697,7 @@ export const timesheetModeController = {
         });
         return;
       }
+      if (outcome.kind === 'changed') invalidateTimesheetObjectCaches([employeeId]);
       res.json({
         success: true,
         data: { changed: outcome.kind === 'changed', mode: normalized.mode, object_id: normalized.objectId },
@@ -766,6 +801,7 @@ export const timesheetModeController = {
         res.status(404).json({ error: 'Отдел не найден' });
         return;
       }
+      invalidateTimesheetObjectCaches('all');
       res.json({ success: true, data: { affected: changed, mode: normalized.mode, object_id: normalized.objectId } });
     } catch (error) {
       console.error('timesheetModeController.updateDepartment error:', error);

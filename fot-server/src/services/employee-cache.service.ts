@@ -20,7 +20,10 @@ const TTL_MS = 60_000;
 const cache = new Map<number, CacheEntry>();
 
 const computeEtag = (emp: Employee): string => {
-  const raw = `${emp.id}:${emp.updated_at || ''}:${emp.employment_status}:${emp.is_archived}`;
+  // Объект табелирования вычисляется из режима отдела и справочника объектов: их смена
+  // не трогает updated_at сотрудника, поэтому подпись входит в ETag явно (миграция 288).
+  const raw = `${emp.id}:${emp.updated_at || ''}:${emp.employment_status}:${emp.is_archived}`
+    + `:${emp.timesheet_object_label ?? ''}`;
   return `W/"${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16)}"`;
 };
 

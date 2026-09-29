@@ -4,6 +4,7 @@ import { selectVisibleHours, formatHoursLabel, formatSecondsHms } from '../../ut
 import { STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { useDayPresence } from '../../hooks/useDayPresence';
 import type { IDayFocusPayload } from './MyMonthTimesheet';
+import { MyTimesheetObjectField } from './MyTimesheetObjectField';
 import styles from './DayDetailPanel.module.css';
 
 const EmployeeSkudSection = lazy(() =>
@@ -160,6 +161,15 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
       {!entry && realObjects.length === 0 ? (
         <div className={styles.empty}>Нет данных по этому дню</div>
       ) : null}
+
+      {/* Объект табелирования — не зависит от дня, виден всегда (миграция 288) */}
+      <MyTimesheetObjectField
+        employeeId={employeeId}
+        label="Объект табелирования"
+        layout="row"
+        savedMessage="Объект табелирования сохранён"
+        errorMessage="Не удалось сохранить объект табелирования"
+      />
 
       {/* Проходы СКУД — только для проблемных («жёлтых») дней (#7) */}
       {isProblematic ? (

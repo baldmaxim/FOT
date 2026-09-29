@@ -320,13 +320,15 @@ export const compareUnifiedRows = (a: IUnifiedRow, b: IUnifiedRow): number => (
 export async function buildUnified1CRows(
   departmentsData: IDepartmentTimesheetData[],
   policy: AggregatedModesPolicy = 'all',
+  month: string | null = null,
 ): Promise<IUnifiedRow[]> {
   // Режимы резолвим первыми: закреплённые объекты нужны до сборки карты адресов.
   // И режим, и руководитель — по паре «сотрудник + отдел строки»: переведённый внутри
   // периода сотрудник в старом отделе получает режим и руководителя старого отдела.
+  // month — месяц выгрузки: для прошедшего месяца личный режим из фиксации (288).
   const pairs = collectEmployeeDeptPairs(departmentsData);
   const [modeByPair, responsibleIdsByPair] = await Promise.all([
-    resolveExportModesForPairs(pairs),
+    resolveExportModesForPairs(pairs, undefined, month ? { month } : undefined),
     // Приоритет: начальник(и) отдела/участка с full-доступом → иначе непосредственный
     // руководитель (employee_direct_reports).
     resolveResponsibleEmployeeIdsByEmployeeDept(pairs),
@@ -369,12 +371,15 @@ export async function buildUnified1CRows(
 }
 
 export async function buildUnified1CWorkbook(
-  _month: number,
-  _year: number,
+  month: number,
+  year: number,
   departmentsData: IDepartmentTimesheetData[],
   policy: AggregatedModesPolicy = 'all',
 ): Promise<ExcelJS.Workbook> {
-  const rows = await buildUnified1CRows(departmentsData, policy);
+  const monthStart = Number.isInteger(month) && month >= 1 && month <= 12 && Number.isInteger(year)
+    ? `${year}-${String(month).padStart(2, '0')}-01`
+    : null;
+  const rows = await buildUnified1CRows(departmentsData, policy, monthStart);
   return buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
 }
 

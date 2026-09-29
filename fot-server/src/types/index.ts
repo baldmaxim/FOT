@@ -260,6 +260,8 @@ export interface Employee {
   excluded_from_timesheet_date?: string | null;
   site_name?: string | null;
   site_manager_full_name?: string | null;
+  /** Объект табелирования (миграция 288): «Офис», имя объекта или null. */
+  timesheet_object_label?: string | null;
 }
 
 export interface SalaryHistoryEncrypted {

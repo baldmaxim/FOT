@@ -384,6 +384,27 @@ describe('ack', () => {
     expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(false);
   });
 
+  it('недостоверная объектная разбивка (config_errors) — 409, подтверждение не пишется', async () => {
+    // Клиент 1С мог не запросить /objects или проигнорировать его 409 — ACK обязан
+    // отказать сам (миграция 288).
+    const configErrors = [{ employee_id: 7, code: 'PINNED_OBJECT_NOT_FOUND', message: 'нет объекта' }];
+    txClient.handler = (sql) => {
+      if (/FOR UPDATE/i.test(sql)) return [approvalRow()];
+      if (/SELECT id, revision, content_hash FROM timesheet_versions/i.test(sql)) {
+        return [{ id: 9001, revision: 2, content_hash: 'hash-v2' }];
+      }
+      if (/FROM timesheet_version_objects/i.test(sql)) return [{ config_errors: configErrors }];
+      return [];
+    };
+    const res = makeRes();
+    await publicTimesheetsController.ack(makeReq({ body: { revision: 2 } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('INVALID_EXPORT_MODE_CONFIG');
+    expect(res.payload.employees).toEqual(configErrors);
+    expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(false);
+  });
+
   it('подтверждение пишется идемпотентно и возвращает исходный acked_at', async () => {
     txClient.handler = (sql) => {
       if (/FOR UPDATE/i.test(sql)) return [approvalRow()];

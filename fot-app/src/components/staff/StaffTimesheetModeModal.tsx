@@ -188,6 +188,9 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ departments, deptTree, ini
         queryClient.invalidateQueries({ queryKey: ['admin-timesheet-mode-departments'] }),
         queryClient.invalidateQueries({ queryKey: ['admin-timesheet-modes'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+        // Объект табелирования в карточке вычисляется из режима (миграция 288).
+        queryClient.invalidateQueries({ queryKey: ['employee'] }),
       ]);
       const what = isEmployeeTab ? 'сотрудников' : 'подразделений';
       toast.success(nextMode === null ? `Явный режим сброшен: ${what} ${affected}` : `Режим применён: ${what} ${affected}`);
@@ -200,13 +203,13 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ departments, deptTree, ini
 
   const handleReset = (): void => {
     const message = isEmployeeTab
-      ? `Сбросить личный режим у выбранных сотрудников (${selectedCount})?\nОни вернутся к режиму своего отдела.`
+      ? `Сбросить личный режим у выбранных сотрудников (${selectedCount})?`
       : `Сбросить явный режим у выбранных подразделений (${selectedCount})?\nОни вернутся к режиму по умолчанию — тому, что даёт назначение объектов.`;
     if (window.confirm(message)) void applyMode(null);
   };
 
   const hint = isEmployeeTab
-    ? 'Личный режим важнее режима отдела. «Сбросить явный режим» вернёт сотрудника к режиму его отдела.'
+    ? 'Личный режим важнее режима отдела.'
     : personalInSelectedDepts > 0
       ? `Режим получат сотрудники подразделения без личного режима. У ${personalInSelectedDepts} из выбранных личный режим — он останется.`
       : 'Режим получат сотрудники подразделения без личного режима.';

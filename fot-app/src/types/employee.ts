@@ -28,6 +28,8 @@ export interface Employee {
   registration_cat4: string | null;
   doc_receipt_date: string | null;
   work_object: string | null;
+  /** Объект табелирования (миграция 288): «Офис», имя объекта или null. */
+  timesheet_object_label?: string | null;
   employment_status: 'active' | 'fired';
   department_locked: boolean;
   is_archived: boolean;

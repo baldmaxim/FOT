@@ -149,6 +149,9 @@ describe('submission period lock', () => {
     expect(isRangeWithinCompletedPeriods('2026-07-01', '2026-07-20', today)).toBe(false);
     // перевёрнутый диапазон
     expect(isRangeWithinCompletedPeriods('2026-07-31', '2026-07-01', today)).toBe(false);
+    // через границу месяца — нельзя: объект табелирования фиксируется помесячно (288)
+    expect(isRangeWithinCompletedPeriods('2026-06-16', '2026-07-15', today)).toBe(false);
+    expect(isRangeWithinCompletedPeriods('2026-06-01', '2026-07-31', today)).toBe(false);
     // невалидные даты
     expect(isRangeWithinCompletedPeriods('2026-02-30', '2026-02-30', today)).toBe(false);
     expect(isRangeWithinCompletedPeriods('', '2026-07-15', today)).toBe(false);

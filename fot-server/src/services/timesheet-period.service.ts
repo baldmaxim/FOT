@@ -159,6 +159,8 @@ export function isRangeWithinCompletedPeriods(
   const end = parseIsoDate(endDate);
   if (!start || !end) return false;
   if (startDate > endDate) return false;
+  // Объект табелирования фиксируется помесячно (миграция 288): одна подача — один месяц.
+  if (start.year !== end.year || start.month !== end.month) return false;
   if (start.day !== 1 && start.day !== 16) return false;
   if (end.day !== 15 && end.day !== getLastDayOfMonth(end.year, end.month)) return false;
 
