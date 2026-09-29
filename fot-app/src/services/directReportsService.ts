@@ -5,6 +5,8 @@ export interface IDirectReportEmployeeRef {
   full_name: string | null;
   org_department_id: string | null;
   position_id: number | null;
+  employment_status?: string | null;
+  dismissal_date?: string | null;
 }
 
 export interface IDirectReport {

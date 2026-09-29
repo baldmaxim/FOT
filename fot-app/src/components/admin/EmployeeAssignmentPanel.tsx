@@ -7,7 +7,11 @@ import {
 } from '../../services/adminService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
-import { directReportsService, type IDirectReport } from '../../services/directReportsService';
+import {
+  directReportsService,
+  type IDirectReport,
+  type IDirectReportEmployeeRef,
+} from '../../services/directReportsService';
 import {
   weekendApprovalService,
   type IWeekendEligibleEmployee,
@@ -19,6 +23,7 @@ import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { usePayrollAccessDraft } from '../../hooks/usePayrollAccessDraft';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatDate } from '../../utils/formatMoney';
 import { PayrollAccessTab } from './PayrollAccessTab';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -63,6 +68,18 @@ const numbersEqual = (left: number[], right: number[]): boolean => {
   const a = [...left].sort();
   const b = [...right].sort();
   return a.every((v, i) => v === b[i]);
+};
+
+/** Назначенный подчинённый, которого нет в списке сотрудников панели. */
+interface IMissingDirectReport {
+  employee_id: number;
+  full_name: string;
+  note: string;
+}
+
+const formatMissingDirectReportNote = (ref: IDirectReportEmployeeRef | null | undefined): string => {
+  if (ref?.employment_status && ref.employment_status !== 'fired') return 'Нет в списке сотрудников';
+  return ref?.dismissal_date ? `Уволен ${formatDate(ref.dismissal_date)}` : 'Уволен';
 };
 
 export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
@@ -258,6 +275,21 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     const rest = filtered.filter(e => !pinnedIds.has(e.employee_id));
     return [...pinned, ...rest.slice(0, 60)];
   }, [employee, allEmployees, searchQuery, initialDirectIds, draftDirectIds]);
+
+  // Список сотрудников панели — только действующие, а связь с уволенным подчинённым
+  // живёт до конца периода и дальше не снимается. Без этих строк счётчик вкладки
+  // не сходился со списком, и такую связь было нечем снять.
+  const missingDirectReports = useMemo<IMissingDirectReport[]>(() => {
+    const search = normalizeText(searchQuery);
+    return (directReportsQuery.data || [])
+      .filter(row => !employeeMap.has(row.subordinate_employee_id))
+      .map(row => ({
+        employee_id: row.subordinate_employee_id,
+        full_name: row.subordinate?.full_name || `ID ${row.subordinate_employee_id}`,
+        note: formatMissingDirectReportNote(row.subordinate),
+      }))
+      .filter(item => !search || normalizeText(item.full_name).includes(search));
+  }, [directReportsQuery.data, employeeMap, searchQuery]);
 
   // === Вкладка «Выходные»: производные данные ===
   const whitelistSet = useMemo(
@@ -652,6 +684,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           {activeTab === 'person' && (
             <PersonList
               candidates={personCandidates}
+              missing={missingDirectReports}
               selectedIdsSet={directIdsSet}
               currentManagerEmployeeId={employee.employee_id}
               onToggle={toggleDirect}
@@ -934,16 +967,40 @@ const DepartmentList: FC<{
 
 const PersonList: FC<{
   candidates: EmployeeDepartmentAssignmentFromApi[];
+  missing: IMissingDirectReport[];
   selectedIdsSet: Set<number>;
   currentManagerEmployeeId: number;
   onToggle: (id: number) => void;
-}> = ({ candidates, selectedIdsSet, currentManagerEmployeeId, onToggle }) => {
-  if (candidates.length === 0) {
+}> = ({ candidates, missing, selectedIdsSet, currentManagerEmployeeId, onToggle }) => {
+  if (candidates.length === 0 && missing.length === 0) {
     return <div className={styles.departmentAccessEmpty}>Сотрудники не найдены</div>;
   }
 
   const selected = candidates.filter(c => selectedIdsSet.has(c.employee_id));
   const rest = candidates.filter(c => !selectedIdsSet.has(c.employee_id));
+  const missingSelected = missing.filter(m => selectedIdsSet.has(m.employee_id));
+  const missingRest = missing.filter(m => !selectedIdsSet.has(m.employee_id));
+  const selectedCount = selected.length + missingSelected.length;
+
+  const renderMissingItem = (item: IMissingDirectReport) => {
+    const checked = selectedIdsSet.has(item.employee_id);
+    return (
+      <label
+        key={`missing-${item.employee_id}`}
+        className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(item.employee_id)}
+        />
+        <div className={styles.assignmentPanelPersonInfo}>
+          <div className={styles.assignmentPanelPersonName}>{item.full_name}</div>
+          <div className={styles.assignmentPanelPersonMeta}>{item.note}</div>
+        </div>
+      </label>
+    );
+  };
 
   const renderItem = (candidate: EmployeeDepartmentAssignmentFromApi, keyPrefix: string) => {
     const checked = selectedIdsSet.has(candidate.employee_id);
@@ -980,14 +1037,16 @@ const PersonList: FC<{
 
   return (
     <div className={styles.assignmentPanelList}>
-      {selected.length > 0 && (
+      {selectedCount > 0 && (
         <>
           <div className={styles.departmentAccessGroupHeader}>
-            Назначенные ({selected.length})
+            Назначенные ({selectedCount})
           </div>
           {selected.map(c => renderItem(c, 'selected'))}
+          {missingSelected.map(renderMissingItem)}
         </>
       )}
+      {missingRest.map(renderMissingItem)}
       {rest.map(c => renderItem(c, 'rest'))}
     </div>
   );

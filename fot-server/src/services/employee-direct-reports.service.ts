@@ -11,19 +11,21 @@ export interface IDirectReportRow {
   note: string | null;
 }
 
+interface IDirectReportEmployeeRef {
+  id: number;
+  full_name: string | null;
+  org_department_id: string | null;
+  position_id: number | null;
+  // Уволенного подчинённого связь держит до конца периода (lifecycle-revocations),
+  // а список сотрудников панели назначений его не содержит — по статусу панель
+  // показывает такую связь отдельно, иначе её не снять.
+  employment_status: string | null;
+  dismissal_date: string | null;
+}
+
 export interface IDirectReportWithEmployee extends IDirectReportRow {
-  subordinate?: {
-    id: number;
-    full_name: string | null;
-    org_department_id: string | null;
-    position_id: number | null;
-  } | null;
-  manager?: {
-    id: number;
-    full_name: string | null;
-    org_department_id: string | null;
-    position_id: number | null;
-  } | null;
+  subordinate?: IDirectReportEmployeeRef | null;
+  manager?: IDirectReportEmployeeRef | null;
 }
 
 let missingTableWarned = false;
@@ -307,19 +309,15 @@ export async function listDirectReports(
   if (rows.length === 0) return [];
 
   const employeeIds = [...new Set(rows.flatMap(r => [r.subordinate_employee_id, r.manager_employee_id]))];
-  const employees = await query<{
-    id: number;
-    full_name: string | null;
-    org_department_id: string | null;
-    position_id: number | null;
-  }>(
-    `SELECT id, full_name, org_department_id, position_id
+  const employees = await query<IDirectReportEmployeeRef>(
+    `SELECT id, full_name, org_department_id, position_id,
+            employment_status, dismissal_date::text AS dismissal_date
        FROM employees
       WHERE id = ANY($1::int[])`,
     [employeeIds],
   );
 
-  const employeeMap = new Map<number, { id: number; full_name: string | null; org_department_id: string | null; position_id: number | null }>(
+  const employeeMap = new Map<number, IDirectReportEmployeeRef>(
     employees.map(e => [
       e.id,
       {
@@ -327,6 +325,8 @@ export async function listDirectReports(
         full_name: e.full_name ?? null,
         org_department_id: e.org_department_id ?? null,
         position_id: e.position_id ?? null,
+        employment_status: e.employment_status ?? null,
+        dismissal_date: e.dismissal_date ?? null,
       },
     ]),
   );

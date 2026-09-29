@@ -60,3 +60,36 @@ describe('shouldBypassHttpCache — чеки за патент', () => {
     expect(initOf(0).cache).toBeUndefined();
   });
 });
+
+/**
+ * Регресс: панель назначений сотрудника перечитывает вкладки сразу после «Сохранить».
+ * С кэшем max-age=30 браузер отдавал состав до сохранения — добавленный подчинённый
+ * висел несохранённым, и его назначали по 2–4 раза.
+ */
+describe('shouldBypassHttpCache — панель назначений', () => {
+  beforeEach(() => {
+    fetchMock.mockClear();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    '/direct-reports?manager_employee_id=1532',
+    '/admin/employees/department-access',
+    '/admin/employees/1532/skud-objects',
+    '/admin/employees/1532/payroll-access',
+    '/admin/weekend-approvals/1532',
+    '/admin/weekend-approvals/eligible',
+  ])('%s идёт мимо HTTP-кэша', async (endpoint) => {
+    await apiClient.get(endpoint);
+    expect(initOf(0).cache).toBe('no-store');
+  });
+
+  it('справочник объектов кэш не обходит', async () => {
+    await apiClient.get('/admin/skud-objects');
+    expect(initOf(0).cache).toBeUndefined();
+  });
+});

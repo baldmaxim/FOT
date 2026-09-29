@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { directReportsController } from '../controllers/direct-reports.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
+import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 
@@ -32,7 +33,9 @@ router.use((req, res, next) => {
 // право не разошлось по всем ролям с доступом к кадрам.
 // GET остаётся под authenticate: обычный пользователь читает своих подчинённых
 // (self-service), а чужого руководителя контроллер отдаёт только по этому ключу.
-router.get('/', directReportsController.list);
+// noStore: панель назначений перечитывает список сразу после «Сохранить» —
+// с дефолтным max-age=30 (app.ts) браузер отдавал состав до сохранения.
+router.get('/', noStore, directReportsController.list);
 router.post('/', requirePageAccess('/staff-control/direct-reports', 'edit'), directReportsController.assign);
 router.delete('/:id', requirePageAccess('/staff-control/direct-reports', 'edit'), directReportsController.unassign);
 

@@ -233,7 +233,14 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // Сервер шлёт no-store, это дубль на стороне клиента: иначе уже прогретый у
     // пользователя HTTP-кэш переживает деплой.
     || path === '/patent-receipts'
-    || path.startsWith('/patent-receipts/');
+    || path.startsWith('/patent-receipts/')
+    // Панель назначений сотрудника: после «Сохранить» вкладки перечитываются с сервера.
+    // max-age=30 отдавал тело, снятое ДО сохранения, — добавленный подчинённый так и
+    // висел несохранённым, «Сохранить» оставалась активной, и его назначали по 2–4 раза.
+    || path === '/direct-reports'
+    || path === '/admin/employees/department-access'
+    || /^\/admin\/employees\/\d+\/(skud-objects|payroll-access)$/.test(path)
+    || path.startsWith('/admin/weekend-approvals/');
 };
 
 const refreshSession = async (): Promise<boolean> => {

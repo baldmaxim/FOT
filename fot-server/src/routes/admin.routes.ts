@@ -133,7 +133,9 @@ router.post('/users/blacklist/:entryId/memos/:memoId/remove', requirePageAccess(
 
 // Список назначений читают оба: администратор доступов и тот, кто ведёт только
 // прямых подчинённых (кадровый админ) — без него экран «Прямые подчинённые» пуст.
-router.get('/employees/department-access', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getEmployeeDepartmentAssignments);
+// noStore — как у всех GET панели назначений: после «Сохранить» она перечитывает
+// их сразу, а дефолтный max-age=30 (app.ts) отдавал тело до сохранения.
+router.get('/employees/department-access', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), noStore, adminController.getEmployeeDepartmentAssignments);
 // Обратное представление: по бригаде/отделу — назначенные на неё сотрудники с должностями.
 // Читают с двух экранов: «Назначения» (/admin/users/access, /staff-control/direct-reports)
 // и вкладка «Системы» → «Бригады», объявленная ключом /admin/users — гейт роута обязан
@@ -154,12 +156,12 @@ router.put('/employees/:id/department-access', requirePageAccess('/admin/users/a
 
 // Приписка сотрудника к объектам строительства (миграция 092).
 router.get('/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.listSkudObjectsForAssignment);
-router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.getEmployeeSkudObjects);
+router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'view'), noStore, adminController.getEmployeeSkudObjects);
 router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeSkudObjectAccess);
 
 // Персональный доступ к разделу «Зарплата» (миграция 288, вкладка «Зарплата» в панели назначений).
 // Только системный администратор: доступ открывает условия оплаты всего штата.
-router.get('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessController.get);
+router.get('/employees/:id/payroll-access', requireSystemAdmin, noStore, payrollAccessController.get);
 router.put('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessController.set);
 
 // Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
