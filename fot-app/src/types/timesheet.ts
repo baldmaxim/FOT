@@ -287,16 +287,6 @@ export interface TimesheetResponse {
    * право на страницу /timesheet само по себе записи не даёт.
    */
   department_writable?: boolean;
-  /**
-   * Смена объекта табелирования в табеле (meta.timesheet_object сервера): окно последних
-   * 3 дней месяца и признак, что прошлый месяц зафиксирован. Сервер проверяет сам.
-   */
-  timesheet_object?: ITimesheetObjectWindow;
-}
-
-export interface ITimesheetObjectWindow {
-  window_open: boolean;
-  previous_month_frozen: boolean;
 }
 
 export interface IAssignedEmployeeDepartment {

@@ -2,16 +2,15 @@
  * Авторасчёт объекта табелирования и фиксация месяцев (миграция 288).
  *
  * Объект = где у своего сотрудника больше всего часов с 1-го числа месяца (офисы —
- * суммой, как «Офис»). Пересчитываются только авто-объекты и сотрудники без личного
- * режима; выбор сотрудника ('employee'), ведущего табель ('manager') и ручной режим
- * админа (set_by = NULL) ночь не трогает. С all = true (первый запуск) пересчитываются
- * и ручные админские — кроме личного «Офиса» из окна «Режим табелирования» (миграция 291).
+ * суммой, как «Офис»). Пересчитываются все свои работающие сотрудники, кроме «Офиса» из
+ * окна «Режим табелирования» (миграция 291): личный «Офис» не трогается никогда. Нет часов
+ * на объектах — объект прежний. Правило одно для ночи, фиксации месяца и скрипта.
  *
  * Сотрудники отделов с «Офисом» (291) в расчёт по часам не идут: им правило отдела ставит
  * «Офис» при любом источнике — одинаково в пересчёте, фиксации месяца и активации.
  *
- * Все операции — под session-локом TIMESHEET_MODE_LOCK_KEY (его же берёт выбор объекта
- * в ЛК и табеле), в одной транзакции REPEATABLE READ: часы, режимы,
+ * Все операции — под session-локом TIMESHEET_MODE_LOCK_KEY (его же берёт окно «Режим
+ * табелирования»), в одной транзакции REPEATABLE READ: часы, режимы,
  * объекты и состояние читаются одним снимком, запись, аудит и состояние — там же.
  * Кэши сбрасываются только после COMMIT; повтор после отката аудит не дублирует.
  */
@@ -73,19 +72,9 @@ export interface IAutoChange {
   hours: number;
 }
 
-/**
- * Трогает ли ночной расчёт строку. Выбор сотрудника и ведущего табель и личный «Офис»
- * из окна — никогда; авто и «ничего не задано» — всегда; ручной режим админа — только с all.
- */
-export function isAutoCandidate(
-  row: Pick<IEmployeeModeRow, 'mode' | 'set_by'> & { personal_office?: boolean },
-  all: boolean,
-): boolean {
-  if (row.personal_office) return false;
-  if (row.set_by === 'employee' || row.set_by === 'manager') return false;
-  if (row.set_by === 'auto') return true;
-  if (row.mode === null) return true;
-  return all;
+/** Трогает ли расчёт строку: всех, кроме личного «Офиса» из окна «Режим табелирования». */
+export function isAutoCandidate(row: { personal_office?: boolean }): boolean {
+  return !row.personal_office;
 }
 
 /** Цель по объекту с максимумом часов. */
@@ -103,11 +92,10 @@ export function targetFromTop(top: ITimesheetObjectHours): { mode: 'current_acti
 export function planAutoChanges(
   rows: readonly IEmployeeModeRow[],
   topsByEmployee: ReadonlyMap<number, ITimesheetObjectHours[]>,
-  all: boolean,
 ): IAutoChange[] {
   const changes: IAutoChange[] = [];
   for (const row of rows) {
-    if (row.office_department || !isAutoCandidate(row, all)) continue;
+    if (row.office_department || !isAutoCandidate(row)) continue;
     const top = topsByEmployee.get(row.id)?.[0];
     if (!top) continue;
     const target = targetFromTop(top);
@@ -139,9 +127,12 @@ export interface IAutoReport {
   fromSkud: number;
   fromAdminObject: number;
   fromAdminOffice: number;
+  /** Прежний выбор сотрудника в ЛК или того, кто ведёт табель (до 30.09.2026). */
+  fromChoice: number;
   fromAuto: number;
   unchanged: number;
-  skippedManual: number;
+  /** Личный «Офис» из окна «Режим табелирования» — не трогается. */
+  personalOffice: number;
   /** Сотрудники отделов с «Офисом»: объект ставит правило отдела (291). */
   officeDepartment: number;
 }
@@ -150,7 +141,6 @@ export function summarizeAutoChanges(
   rows: readonly IEmployeeModeRow[],
   topsByEmployee: ReadonlyMap<number, ITimesheetObjectHours[]>,
   changes: readonly IAutoChange[],
-  all: boolean,
 ): IAutoReport {
   const report: IAutoReport = {
     employees: rows.length,
@@ -162,21 +152,23 @@ export function summarizeAutoChanges(
     fromSkud: 0,
     fromAdminObject: 0,
     fromAdminOffice: 0,
+    fromChoice: 0,
     fromAuto: 0,
     unchanged: 0,
-    skippedManual: rows.filter(row => !row.office_department && !isAutoCandidate(row, all)).length,
+    personalOffice: rows.filter(row => !row.office_department && !isAutoCandidate(row)).length,
     officeDepartment: rows.filter(row => row.office_department).length,
   };
   for (const change of changes) {
     if (change.fromSetBy === 'auto') report.fromAuto += 1;
+    else if (change.fromSetBy === 'employee' || change.fromSetBy === 'manager') report.fromChoice += 1;
     else if (change.fromMode === null) report.fromNone += 1;
     else if (change.fromMode === 'skud') report.fromSkud += 1;
     else if (change.fromMode === 'object') report.fromAdminObject += 1;
     else report.fromAdminOffice += 1;
   }
   // Кандидаты, у которых объект остаётся (нет часов или цель совпала); вместе с изменёнными,
-  // нетронутыми и отделами с «Офисом» — все сотрудники.
-  report.unchanged = report.employees - report.changed - report.skippedManual - report.officeDepartment;
+  // личным «Офисом» и отделами с «Офисом» — все сотрудники.
+  report.unchanged = report.employees - report.changed - report.personalOffice - report.officeDepartment;
   return report;
 }
 
@@ -259,7 +251,7 @@ export async function loadOwnActiveEmployees(
 }
 
 /** Запись изменений; условие кандидата — ещё раз в самом UPDATE. */
-export async function applyChanges(client: PoolClient, changes: readonly IAutoChange[], all: boolean): Promise<number[]> {
+export async function applyChanges(client: PoolClient, changes: readonly IAutoChange[]): Promise<number[]> {
   if (changes.length === 0) return [];
   const rows = (await client.query<{ id: number }>(
     `UPDATE employees e
@@ -270,14 +262,12 @@ export async function applyChanges(client: PoolClient, changes: readonly IAutoCh
        FROM unnest($1::int[], $2::text[], $3::uuid[]) AS c(id, mode, object_id)
       WHERE e.id = c.id
         AND e.is_archived = false
-        AND (e.timesheet_export_set_by IS NULL OR e.timesheet_export_set_by = 'auto')
-        AND ($4::boolean OR e.timesheet_export_set_by = 'auto' OR e.timesheet_export_mode IS NULL)
+        AND NOT ${personalOfficeSql('e')}
       RETURNING e.id`,
     [
       changes.map(change => change.employeeId),
       changes.map(change => change.toMode),
       changes.map(change => change.toObjectId),
-      all,
     ],
   )).rows;
   return rows.map(row => Number(row.id));
@@ -287,7 +277,7 @@ export async function auditChanges(
   client: PoolClient,
   changes: readonly IAutoChange[],
   appliedIds: readonly number[],
-  context: { period: { start: string; end: string }; all: boolean; reason: string; userId: string | null },
+  context: { period: { start: string; end: string }; reason: string; userId: string | null },
 ): Promise<void> {
   if (appliedIds.length === 0) return;
   const applied = new Set(appliedIds);
@@ -299,7 +289,6 @@ export async function auditChanges(
     details: {
       reason: context.reason,
       period: context.period,
-      all: context.all,
       changed: applied.size,
       changes: changes
         .filter(change => applied.has(change.employeeId))
@@ -376,7 +365,6 @@ export function yesterdayMsk(now: Date): string {
 async function computeChanges(
   client: PoolClient,
   period: { start: string; end: string },
-  all: boolean,
   now: Date,
 ): Promise<{
   contractorIds: string[];
@@ -392,7 +380,7 @@ async function computeChanges(
     period,
     { todayStr: moscowTodayIso(now), exec: client, objectsById },
   );
-  return { contractorIds, rows, tops, changes: planAutoChanges(rows, tops, all) };
+  return { contractorIds, rows, tops, changes: planAutoChanges(rows, tops) };
 }
 
 export type AutoRunResult =
@@ -419,9 +407,9 @@ export async function recomputeCurrentMonth(now: Date = new Date()): Promise<Aut
       return { kind: 'skipped', reason: 'previous_month_not_frozen' } as AutoRunResult;
     }
 
-    const { contractorIds, changes } = await computeChanges(client, period, false, now);
-    const appliedIds = await applyChanges(client, changes, false);
-    await auditChanges(client, changes, appliedIds, { period, all: false, reason: 'current_month', userId: null });
+    const { contractorIds, changes } = await computeChanges(client, period, now);
+    const appliedIds = await applyChanges(client, changes);
+    await auditChanges(client, changes, appliedIds, { period, reason: 'current_month', userId: null });
     const officeChanged = await applyOfficeRule(client, contractorIds, 'current_month');
     await client.query(
       'UPDATE timesheet_object_auto_state SET applied_date = $1::date, updated_at = now() WHERE singleton',
@@ -456,9 +444,9 @@ export async function freezeMonth(month: string, now: Date = new Date()): Promis
       throw new Error(`Фиксация по порядку: после ${state.frozen_month} идёт ${nextMonthStart(state.frozen_month)}, а не ${month}`);
     }
 
-    const { contractorIds, changes } = await computeChanges(client, period, false, now);
-    const appliedIds = await applyChanges(client, changes, false);
-    await auditChanges(client, changes, appliedIds, { period, all: false, reason: 'month_freeze', userId: null });
+    const { contractorIds, changes } = await computeChanges(client, period, now);
+    const appliedIds = await applyChanges(client, changes);
+    await auditChanges(client, changes, appliedIds, { period, reason: 'month_freeze', userId: null });
     // Месяц уходит с объектом на момент фиксации: «Офис» отдела — тем, кто в нём сейчас.
     const officeChanged = await applyOfficeRule(client, contractorIds, 'month_freeze');
     const rows = await insertMonthFreeze(client, month, contractorIds);
@@ -497,13 +485,13 @@ export interface IActivationResult {
 }
 
 /**
- * Первый запуск (скрипт). Одной транзакцией: дозафиксация пропущенных месяцев
- * текущими значениями (расчёт тогда ещё не работал), пересчёт текущего месяца с 1-го
- * по вчера, enabled = true, applied_date, frozen_month. dryRun — только отчёт.
+ * Запуск скрипта: первая активация или пересчёт сразу, не дожидаясь ночи. Одной
+ * транзакцией: дозафиксация пропущенных месяцев текущими значениями (только при первой
+ * активации — расчёт тогда ещё не работал), пересчёт текущего месяца с 1-го по вчера
+ * по тому же правилу, что ночь, enabled = true, applied_date, frozen_month. dryRun —
+ * только отчёт.
  */
 export async function activateTimesheetObjects(options: {
-  all: boolean;
-  force: boolean;
   dryRun: boolean;
   now?: Date;
 }): Promise<IActivationResult> {
@@ -517,19 +505,20 @@ export async function activateTimesheetObjects(options: {
 
   const result = await withModeSnapshot(async client => {
     const state = requireState(await readTimesheetObjectState(client, true));
-    if (state.enabled && options.all && !options.force) {
-      throw new TimesheetObjectActivationError(
-        'Расчёт уже включён: --all перезапишет ручные режимы админа — добавьте --force, если это нужно',
-      );
-    }
-
-    const { contractorIds, rows, tops, changes } = await computeChanges(client, period, options.all, now);
-    const report = summarizeAutoChanges(rows, tops, changes, options.all);
-
     const frozenMonths: string[] = [];
     for (let month = nextMonthStart(state.frozen_month); month <= previousMonth; month = nextMonthStart(month)) {
       frozenMonths.push(month);
     }
+    // Расчёт уже работает — месяцы фиксирует ночь, с пересчётом за весь месяц. Скрипт
+    // зафиксировал бы их текущими режимами, поэтому ждёт ночной фиксации.
+    if (state.enabled && frozenMonths.length > 0) {
+      throw new TimesheetObjectActivationError(
+        `Месяц ${frozenMonths[0]} ещё не зафиксирован ночным расчётом — запустите после фиксации`,
+      );
+    }
+
+    const { contractorIds, rows, tops, changes } = await computeChanges(client, period, now);
+    const report = summarizeAutoChanges(rows, tops, changes);
     if (options.dryRun) {
       return { dryRun: true, period, frozenMonths, report, changes };
     }
@@ -538,17 +527,15 @@ export async function activateTimesheetObjects(options: {
     for (const month of frozenMonths) {
       await insertMonthFreeze(client, month, contractorIds);
     }
-    const appliedIds = await applyChanges(client, changes, options.all);
-    await auditChanges(client, changes, appliedIds, {
-      period, all: options.all, reason: 'activation', userId: null,
-    });
+    const appliedIds = await applyChanges(client, changes);
+    await auditChanges(client, changes, appliedIds, { period, reason: 'activation', userId: null });
     await applyOfficeRule(client, contractorIds, 'activation');
     await auditService.logWithClient(client, {
       user_id: null,
       action: AUDIT_ACTIONS.TIMESHEET_OBJECT_ACTIVATED,
       entity_type: 'timesheet_object_state',
       entity_id: today,
-      details: { period, all: options.all, force: options.force, frozen_months: frozenMonths, report },
+      details: { period, frozen_months: frozenMonths, report },
     });
     const frozenMonth = frozenMonths.length > 0 ? frozenMonths[frozenMonths.length - 1] : state.frozen_month;
     // Месяцы, зафиксированные при активации, не пересобираются: их версии собраны

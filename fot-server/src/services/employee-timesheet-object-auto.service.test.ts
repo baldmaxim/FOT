@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 /**
- * Ночной авторасчёт объекта табелирования (миграция 288): кого трогаем, что меняем,
- * что считается повтором.
+ * Авторасчёт объекта табелирования (миграция 288) — ночь, фиксация месяца и скрипт: кого
+ * трогаем, что меняем, что считается повтором.
  */
 
 vi.mock('../config/postgres.js', () => ({ pool: vi.fn(), query: vi.fn() }));
@@ -24,23 +24,21 @@ const top = (value: string, hours: number, label = value) => ({
 });
 
 describe('isAutoCandidate', () => {
-  it('выбор сотрудника и ведущего табель ночь не трогает никогда', () => {
-    expect(isAutoCandidate({ mode: 'object', set_by: 'employee' }, true)).toBe(false);
-    expect(isAutoCandidate({ mode: 'object', set_by: 'manager' }, true)).toBe(false);
+  it('считаются все: авто, без режима, прежний выбор в ЛК/табеле, ручной режим админа', () => {
+    for (const candidate of [
+      { mode: 'object', set_by: 'auto' },
+      { mode: null, set_by: null },
+      { mode: 'object', set_by: 'employee' },
+      { mode: 'object', set_by: 'manager' },
+      { mode: 'skud', set_by: null },
+      { mode: 'object', set_by: null },
+      { mode: 'current_activity', set_by: null, personal_office: false },
+    ]) {
+      expect(isAutoCandidate(candidate)).toBe(true);
+    }
   });
-  it('авто и «ничего не задано» — всегда', () => {
-    expect(isAutoCandidate({ mode: 'object', set_by: 'auto' }, false)).toBe(true);
-    expect(isAutoCandidate({ mode: null, set_by: null }, false)).toBe(true);
-  });
-  it('личный «Офис» из окна «Режим табелирования» — никогда, даже с all', () => {
-    expect(isAutoCandidate({ mode: 'current_activity', set_by: null, personal_office: true }, false)).toBe(false);
-    expect(isAutoCandidate({ mode: 'current_activity', set_by: null, personal_office: true }, true)).toBe(false);
-  });
-  it('ручной режим админа — только с all (первый запуск)', () => {
-    expect(isAutoCandidate({ mode: 'skud', set_by: null }, false)).toBe(false);
-    expect(isAutoCandidate({ mode: 'object', set_by: null }, false)).toBe(false);
-    expect(isAutoCandidate({ mode: 'skud', set_by: null }, true)).toBe(true);
-    expect(isAutoCandidate({ mode: 'current_activity', set_by: null }, true)).toBe(true);
+  it('личный «Офис» из окна «Режим табелирования» — никогда', () => {
+    expect(isAutoCandidate({ personal_office: true })).toBe(false);
   });
 });
 
@@ -58,10 +56,11 @@ describe('planAutoChanges', () => {
     [3, [top('o-dom', 50)]],
     [4, [top('o-zil', 10)]],
     [5, [top('o-zil', 10)]],
+    [6, [top('o-dom', 40)]],
   ]);
 
   it('без режима → объект с максимумом часов; «Офис» → current_activity', () => {
-    const changes = planAutoChanges([row(1), row(2)], tops, false);
+    const changes = planAutoChanges([row(1), row(2)], tops);
     expect(changes.map(c => [c.employeeId, c.toMode, c.toObjectId, c.label])).toEqual([
       [1, 'object', 'o-dom', 'ЖК Дом 56'],
       [2, 'current_activity', null, 'Офис'],
@@ -69,22 +68,31 @@ describe('planAutoChanges', () => {
   });
 
   it('тот же объект с тем же источником — не изменение (повтор — no-op)', () => {
-    expect(planAutoChanges([row(3, { mode: 'object', object_id: 'o-dom', set_by: 'auto' })], tops, false)).toEqual([]);
+    expect(planAutoChanges([row(3, { mode: 'object', object_id: 'o-dom', set_by: 'auto' })], tops)).toEqual([]);
   });
 
-  it('тот же объект у ручного режима при all — изменение источника на auto', () => {
-    const changes = planAutoChanges([row(3, { mode: 'object', object_id: 'o-dom', set_by: null })], tops, true);
+  it('тот же объект у ручного режима админа — изменение источника на auto', () => {
+    const changes = planAutoChanges([row(3, { mode: 'object', object_id: 'o-dom', set_by: null })], tops);
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ fromSetBy: null, toMode: 'object', toObjectId: 'o-dom' });
   });
 
-  it('выбор сотрудника/табеля и (без all) ручной админа — не трогаем', () => {
+  it('прежний выбор сотрудника/табеля и ручной режим админа — по часам', () => {
     const rows = [
       row(4, { mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
       row(5, { mode: 'object', object_id: 'o-dom', set_by: 'manager' }),
       row(3, { mode: 'skud', set_by: null }),
     ];
-    expect(planAutoChanges(rows, tops, false)).toEqual([]);
+    expect(planAutoChanges(rows, tops).map(c => [c.employeeId, c.fromSetBy, c.toObjectId])).toEqual([
+      [4, 'employee', 'o-zil'],
+      [5, 'manager', 'o-zil'],
+      [3, null, 'o-dom'],
+    ]);
+  });
+
+  it('личный «Офис» из окна не трогаем даже при часах на объекте', () => {
+    const rows = [row(6, { mode: 'current_activity', set_by: null, personal_office: true })];
+    expect(planAutoChanges(rows, tops)).toEqual([]);
   });
 
   it('сотрудники отдела с «Офисом» в расчёт по часам не идут — их ведёт правило отдела', () => {
@@ -93,12 +101,12 @@ describe('planAutoChanges', () => {
       row(2, { office_department: true, mode: 'object', object_id: 'o-zil', set_by: 'auto' }),
       row(4, { office_department: true, mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
     ];
-    expect(planAutoChanges(rows, tops, false)).toEqual([]);
-    expect(planAutoChanges(rows, tops, true)).toEqual([]);
+    expect(planAutoChanges(rows, tops)).toEqual([]);
   });
 
-  it('нет часов за период — объект прежний', () => {
-    expect(planAutoChanges([row(9, { mode: 'object', object_id: 'o-dom', set_by: 'auto' })], tops, false)).toEqual([]);
+  it('нет часов за период — объект и источник прежние', () => {
+    expect(planAutoChanges([row(9, { mode: 'object', object_id: 'o-dom', set_by: 'auto' })], tops)).toEqual([]);
+    expect(planAutoChanges([row(9, { mode: 'object', object_id: 'o-dom', set_by: 'employee' })], tops)).toEqual([]);
   });
 
   it('сводка переходов', () => {
@@ -110,26 +118,29 @@ describe('planAutoChanges', () => {
       row(9),
       row(10, { mode: 'object', object_id: 'o-zil', set_by: null }),
     ];
-    const changes = planAutoChanges(rows, tops, true);
-    const report = summarizeAutoChanges(rows, tops, changes, true);
-    // Без изменений — 9 и 10 (нет часов); выбор сотрудника (4) с часами сюда не входит.
+    const changes = planAutoChanges(rows, tops);
+    const report = summarizeAutoChanges(rows, tops, changes);
+    // Без изменений — 9 и 10 (нет часов).
     expect(report).toMatchObject({
-      employees: 6, withHours: 4, changed: 3, toOffice: 1, toObject: 2,
-      fromNone: 1, fromSkud: 1, fromAdminObject: 1, skippedManual: 1, unchanged: 2,
+      employees: 6, withHours: 4, changed: 4, toOffice: 1, toObject: 3,
+      fromNone: 1, fromSkud: 1, fromAdminObject: 1, fromChoice: 1, personalOffice: 0, unchanged: 2,
     });
-    expect(report.changed + report.unchanged + report.skippedManual).toBe(report.employees);
+    expect(report.changed + report.unchanged + report.personalOffice).toBe(report.employees);
   });
 
-  it('сводка: отделы с «Офисом» — отдельной строкой, в «без изменений» и «не трогаем» не входят', () => {
+  it('сводка: отделы с «Офисом» и личный «Офис» — отдельными строками, в «без изменений» не входят', () => {
     const rows = [
       row(1),
       row(2, { office_department: true }),
       row(4, { office_department: true, mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
       row(5, { mode: 'object', object_id: 'o-dom', set_by: 'manager' }),
+      row(6, { mode: 'current_activity', set_by: null, personal_office: true }),
     ];
-    const changes = planAutoChanges(rows, tops, false);
-    const report = summarizeAutoChanges(rows, tops, changes, false);
-    expect(report).toMatchObject({ employees: 4, changed: 1, officeDepartment: 2, skippedManual: 1, unchanged: 0 });
-    expect(report.changed + report.unchanged + report.skippedManual + report.officeDepartment).toBe(report.employees);
+    const changes = planAutoChanges(rows, tops);
+    const report = summarizeAutoChanges(rows, tops, changes);
+    expect(report).toMatchObject({
+      employees: 5, changed: 2, fromNone: 1, fromChoice: 1, officeDepartment: 2, personalOffice: 1, unchanged: 0,
+    });
+    expect(report.changed + report.unchanged + report.personalOffice + report.officeDepartment).toBe(report.employees);
   });
 });

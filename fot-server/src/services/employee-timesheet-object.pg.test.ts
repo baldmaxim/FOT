@@ -62,7 +62,7 @@ import { fetchEmployeeIdsPinnedToObjects } from './timesheet-objects-export.serv
 import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './employee-timesheet-object-auto.service.js';
 import { monthEnd } from './employee-timesheet-object.service.js';
 import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
-import { enforceOfficeForDepartments, isTimesheetOfficeLocked } from './timesheet-office-rule.js';
+import { enforceOfficeForDepartments } from './timesheet-office-rule.js';
 import { updateTimesheetOffice } from './timesheet-office.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
@@ -356,7 +356,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       await pg.pool!.query(MIGRATION_OFFICE);
     });
 
-    it('активация с --all: ручные режимы пересчитаны, подрядчик и архивный не тронуты, повтор без --force отклонён', async () => {
+    it('активация: ручные режимы пересчитаны, подрядчик и архивный не тронуты; повтор — без изменений; пропущенный месяц при включённом расчёте — отказ', async () => {
       const current = shift(baseline, 1);
       const now = new Date(`${current.slice(0, 8)}10T12:00:00+03:00`);
       hours.byEmployee = new Map([
@@ -365,11 +365,11 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
         [4, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]],
       ]);
 
-      const dry = await activateTimesheetObjects({ all: true, force: false, dryRun: true, now });
+      const dry = await activateTimesheetObjects({ dryRun: true, now });
       expect(dry.report).toMatchObject({ employees: 3, withHours: 2, changed: 2, toOffice: 1, toObject: 1 });
       expect((await q<{ enabled: boolean }>('SELECT enabled FROM timesheet_object_auto_state'))[0].enabled).toBe(false);
 
-      await activateTimesheetObjects({ all: true, force: false, dryRun: false, now });
+      await activateTimesheetObjects({ dryRun: false, now });
       const emps = await q(`SELECT id, timesheet_export_mode, timesheet_export_object_id::text, timesheet_export_set_by
                               FROM employees ORDER BY id`);
       expect(emps).toEqual([
@@ -382,11 +382,15 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       const [state] = await q(`SELECT enabled, applied_date::text FROM timesheet_object_auto_state`);
       expect(state).toEqual({ enabled: true, applied_date: `${current.slice(0, 8)}10` });
 
-      await expect(activateTimesheetObjects({ all: true, force: false, dryRun: false, now }))
-        .rejects.toThrow(/--force/);
+      // Повтор — тот же расчёт, без изменений.
+      expect((await activateTimesheetObjects({ dryRun: false, now })).report.changed).toBe(0);
+      // Расчёт включён, а прошлый месяц не зафиксирован ночью — скрипт его не фиксирует.
+      const nextMonthNow = new Date(`${shift(baseline, 2).slice(0, 8)}10T12:00:00+03:00`);
+      await expect(activateTimesheetObjects({ dryRun: true, now: nextMonthNow }))
+        .rejects.toThrow(/не зафиксирован/);
     });
 
-    it('ночной пересчёт за ту же дату — no-op; ручной выбор сотрудника не трогается', async () => {
+    it('ночной пересчёт за ту же дату — no-op; прежний выбор сотрудника ночь ставит по часам; ноль изменений — без аудита', async () => {
       const current = shift(baseline, 1);
       await q(`UPDATE employees SET timesheet_export_mode = 'object', timesheet_export_object_id = $1,
                  timesheet_export_set_by = 'employee' WHERE id = 1`, [DOM]);
@@ -394,15 +398,17 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       expect(await recomputeCurrentMonth(sameDay)).toEqual({ kind: 'skipped', reason: 'already_applied' });
 
       const nextDay = new Date(`${current.slice(0, 8)}11T05:00:00+03:00`);
+      expect(await recomputeCurrentMonth(nextDay)).toMatchObject({ kind: 'applied', changed: 1 });
+      const [emp1] = await q(`SELECT timesheet_export_object_id::text AS o, timesheet_export_set_by AS s FROM employees WHERE id = 1`);
+      expect(emp1).toEqual({ o: ZIL, s: 'auto' });
+
+      const dayAfter = new Date(`${current.slice(0, 8)}12T05:00:00+03:00`);
       const auditBefore = Number((await q<{ n: string }>('SELECT count(*) AS n FROM audit_logs'))[0].n);
-      const result = await recomputeCurrentMonth(nextDay);
-      expect(result).toMatchObject({ kind: 'applied', changed: 0 });
+      expect(await recomputeCurrentMonth(dayAfter)).toMatchObject({ kind: 'applied', changed: 0 });
       // Ноль изменений — аудита нет, но applied_date сдвинулась.
       expect(Number((await q<{ n: string }>('SELECT count(*) AS n FROM audit_logs'))[0].n)).toBe(auditBefore);
       expect((await q<{ d: string }>('SELECT applied_date::text AS d FROM timesheet_object_auto_state'))[0].d)
-        .toBe(`${current.slice(0, 8)}11`);
-      const [emp1] = await q(`SELECT timesheet_export_object_id::text AS o, timesheet_export_set_by AS s FROM employees WHERE id = 1`);
-      expect(emp1).toEqual({ o: DOM, s: 'employee' });
+        .toBe(`${current.slice(0, 8)}12`);
     });
 
     it('фиксация месяца: строки своих сотрудников, frozen_month; повтор — no-op; порча состояния — ошибка', async () => {
@@ -414,13 +420,13 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       const rows = await q(`SELECT employee_id, mode, object_id::text, set_by FROM employee_timesheet_object_months
                               WHERE month = $1::date ORDER BY employee_id`, [month]);
       expect(rows).toEqual([
-        { employee_id: 1, mode: 'object', object_id: DOM, set_by: 'employee' },
+        { employee_id: 1, mode: 'object', object_id: ZIL, set_by: 'auto' },
         { employee_id: 2, mode: 'current_activity', object_id: null, set_by: 'auto' },
         { employee_id: 3, mode: 'current_activity', object_id: null, set_by: null },
       ]);
       // applied_date фиксация не трогает.
       const [state] = await q(`SELECT frozen_month::text AS f, applied_date::text AS a FROM timesheet_object_auto_state`);
-      expect(state).toEqual({ f: month, a: `${month.slice(0, 8)}11` });
+      expect(state).toEqual({ f: month, a: `${month.slice(0, 8)}12` });
 
       expect(await freezeMonth(month, now)).toEqual({ kind: 'skipped', reason: 'already_frozen' });
 
@@ -651,26 +657,30 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       ]);
     });
 
-    it('активация --all перезаписывает ручной объект админа; личный «Офис» (291) и выбор руководителя не трогает', async () => {
+    it('скрипт пересчитывает прежний выбор сотрудника и ручной объект админа; личный «Офис» (291) не трогает; без часов — прежние объект и автор', async () => {
       hours.byEmployee = new Map([
+        [20, [{ value: ZIL, label: 'ЖК Зил 18,19,27', objectId: ZIL, hours: 30 }]],
         [26, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 40 }]],
         [27, [{ value: ZIL, label: 'ЖК Зил 18,19,27', objectId: ZIL, hours: 40 }]],
       ]);
       const now = new Date(`${shift(baseline, 2).slice(0, 8)}10T12:00:00+03:00`);
 
-      await activateTimesheetObjects({ all: true, force: true, dryRun: false, now });
+      await activateTimesheetObjects({ dryRun: false, now });
 
       const rows = await q(
         `SELECT id, timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
                 timesheet_export_set_by AS set_by, timesheet_export_set_by_user_id::text AS user_id
-           FROM employees WHERE id IN (26, 27) ORDER BY id`,
+           FROM employees WHERE id IN (20, 26, 27) ORDER BY id`,
       );
       expect(rows).toEqual([
+        // Прежний выбор сотрудника в ЛК — по часам, автор стёрт.
+        { id: 20, mode: 'object', object_id: ZIL, set_by: 'auto', user_id: null },
         // Ручной объект админа без автора — пересчитан.
         { id: 26, mode: 'object', object_id: DOM, set_by: 'auto', user_id: null },
-        // «Офис» с автором и set_by = NULL — личный «Офис» окна: не трогает даже --all.
+        // «Офис» с автором и set_by = NULL — личный «Офис» окна: не трогается.
         { id: 27, mode: 'current_activity', object_id: null, set_by: null, user_id: U_ADMIN },
       ]);
+      // У 21-го (выбор руководителя) часов нет — объект и автор прежние.
       expect((await author(21))?.user_id).toBe(U_BOYUKYAN);
     });
   });
@@ -750,11 +760,6 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       expect(await emp(43)).toMatchObject({ mode: 'object', object_id: DOM, set_by: 'auto' });
       expect(await emp(4)).toMatchObject({ mode: null });
 
-      // Выбор закрыт: сотруднику отдела с «Офисом» и с личным «Офисом»; остальным — нет.
-      expect(await isTimesheetOfficeLocked(40)).toBe(true);
-      expect(await isTimesheetOfficeLocked(42)).toBe(true);
-      expect(await isTimesheetOfficeLocked(44)).toBe(false);
-
       // Повтор — без изменений.
       expect(await enforce([D_OWN])).toEqual([]);
     });
@@ -780,9 +785,8 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       expect(next).toMatchObject({ kind: 'applied', changed: 0 });
     });
 
-    it('ушедший из отдела с «Офисом» — выбор открыт, объект снова по часам', async () => {
+    it('ушедший из отдела с «Офисом» — объект снова по часам', async () => {
       await q('UPDATE employees SET org_department_id = $1 WHERE id = 40', [D_OTHER]);
-      expect(await isTimesheetOfficeLocked(40)).toBe(false);
       hours.byEmployee = new Map([[40, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]]]);
       const result = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}12T05:00:00+03:00`));
       expect(result).toMatchObject({ kind: 'applied', changed: 1 });
@@ -835,7 +839,6 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       const back = await updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [], remove: [46] } }, now);
       expect(back).toMatchObject({ changed: true, employees_removed: 1, recomputed: 1 });
       expect(await emp(46)).toEqual({ mode: 'object', object_id: DOM, set_by: 'auto', user_id: null });
-      expect(await isTimesheetOfficeLocked(46)).toBe(false);
 
       // Снятие «Офиса» с отдела: сотрудники с часами — сразу по часам, без часов — «Офис» от авто.
       hours.byEmployee = new Map([
@@ -847,7 +850,6 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       expect(await emp(40)).toMatchObject({ mode: 'object', object_id: ZIL, set_by: 'auto' });
       expect(await emp(44)).toMatchObject({ mode: 'object', object_id: DOM, set_by: 'auto' });
       expect(await emp(41)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
-      expect(await isTimesheetOfficeLocked(41)).toBe(false);
       expect(await q(`SELECT user_id::text, details->>'reason' AS reason, (details->>'changed')::int AS changed
                         FROM audit_logs WHERE action = 'TIMESHEET_OBJECT_AUTO_ASSIGNED' AND details->>'reason' = 'office_removed'
                        ORDER BY id`))

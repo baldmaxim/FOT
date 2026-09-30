@@ -50,39 +50,43 @@ beforeEach(() => {
 });
 
 describe('recomputeTimesheetObjectsNow', () => {
-  it('объект по часам с 1-го по вчера; ручной выбор и отдел с «Офисом» не трогаются; аудит office_removed', async () => {
+  it('объект по часам с 1-го по вчера, в том числе поверх прежнего выбора; личный «Офис» и отдел с «Офисом» не трогаются; аудит office_removed', async () => {
     const { client, calls } = fakeClient([
       row(3),
       row(5, { mode: 'object', object_id: 'o-a', set_by: 'employee' }),
+      row(6, { set_by: null, personal_office: true }),
       row(7, { office_department: true }),
-    ], [3]);
+    ], [3, 5]);
     h.hours.mockResolvedValue(new Map([
       [3, [{ value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 120 }]],
       [5, [{ value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 90 }]],
+      [6, [{ value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 85 }]],
       [7, [{ value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 80 }]],
     ]));
 
-    const changed = await recomputeTimesheetObjectsNow(client, [7, 5, 3, 5], {
+    const changed = await recomputeTimesheetObjectsNow(client, [7, 6, 5, 3, 5], {
       contractorIds: CONTRACTORS, now: NOW, userId: 'user-1', reason: 'office_removed',
     });
 
-    expect(changed).toEqual([3]);
+    expect(changed).toEqual([3, 5]);
     const [load] = calls;
     expect(load.sql).toContain('AND e.id = ANY($2::int[])');
     expect(load.sql).toContain('FOR UPDATE OF e');
-    expect(load.params).toEqual([CONTRACTORS, [3, 5, 7]]);
+    expect(load.params).toEqual([CONTRACTORS, [3, 5, 6, 7]]);
     // Период — как у ночи: сегодняшние незакрытые часы не участвуют.
     expect(h.hours).toHaveBeenCalledWith(
-      [3, 5, 7],
+      [3, 5, 6, 7],
       { start: '2026-09-01', end: '2026-09-29' },
       expect.objectContaining({ todayStr: '2026-09-30', exec: client }),
     );
     const update = calls.find(call => call.sql.startsWith('UPDATE employees'));
-    expect(update?.params.slice(0, 3)).toEqual([[3], ['object'], ['o-metro']]);
+    expect(update?.params).toEqual([[3, 5], ['object', 'object'], ['o-metro', 'o-metro']]);
+    // Личный «Офис» защищён и в самом UPDATE.
+    expect(update?.sql).toContain('AND NOT (e.timesheet_export_mode IS NOT DISTINCT FROM \'current_activity\'');
     expect(h.logWithClient).toHaveBeenCalledWith(client, expect.objectContaining({
       user_id: 'user-1',
       action: 'TIMESHEET_OBJECT_AUTO_ASSIGNED',
-      details: expect.objectContaining({ reason: 'office_removed', changed: 1 }),
+      details: expect.objectContaining({ reason: 'office_removed', changed: 2 }),
     }));
   });
 

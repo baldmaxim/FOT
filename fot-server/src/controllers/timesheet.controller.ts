@@ -114,11 +114,7 @@ import { r2Service } from '../services/r2.service.js';
 import { syncLeaveRequestOnDayRemoval, syncLeaveRequestReason } from '../services/leave-request-sync.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import {
-  isPreviousMonthFrozen,
-  isTimesheetObjectWindowOpen,
-  loadTimesheetObjectLabels,
-} from '../services/employee-timesheet-object.service.js';
+import { loadTimesheetObjectLabels } from '../services/employee-timesheet-object.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   isDepartmentMonthAllowed,
@@ -2824,11 +2820,11 @@ export const timesheetController = {
         && membershipDeptId != null
         && (editableDeptIds === 'all' || editableDeptIds.includes(membershipDeptId));
       // Объект табелирования под ФИО (миграция 288): за месяц табеля — для прошедшего
-      // месяца из фиксации. Флаг окна — можно ли сейчас менять объект в табеле.
-      const [timesheetObjectLabels, timesheetObjectPreviousMonthFrozen] = await Promise.all([
-        loadTimesheetObjectLabels((employees || []).map(e => Number(e.id)), startDate),
-        isPreviousMonthFrozen(),
-      ]);
+      // месяца из фиксации.
+      const timesheetObjectLabels = await loadTimesheetObjectLabels(
+        (employees || []).map(e => Number(e.id)),
+        startDate,
+      );
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
         const source = resolveEmployeeTimesheetSource({
@@ -2948,12 +2944,6 @@ export const timesheetController = {
         success: true,
         meta: {
           department_writable: departmentWritable,
-          // Смена объекта в табеле: окно последних 3 дней; новичку без объекта — в любой
-          // день. Пока прошлый месяц не зафиксирован — никогда (сервер проверит сам).
-          timesheet_object: {
-            window_open: timesheetObjectPreviousMonthFrozen && isTimesheetObjectWindowOpen(),
-            previous_month_frozen: timesheetObjectPreviousMonthFrozen,
-          },
         },
         data: {
           employees: employeesWithNames,

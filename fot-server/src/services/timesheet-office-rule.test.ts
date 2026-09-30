@@ -1,17 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * «Офис» из окна «Режим табелирования» (миграция 291): правило отдела, блокировка выбора,
- * аудит. SQL проверяется по форме — поведение на настоящей БД в employee-timesheet-object.pg.test.ts.
+ * «Офис» из окна «Режим табелирования» (миграция 291): правило отдела и аудит. SQL проверяется по форме — поведение на настоящей БД в employee-timesheet-object.pg.test.ts.
  */
 
 const h = vi.hoisted(() => ({
-  query: vi.fn(),
   logWithClient: vi.fn(),
   logFromRequestWithClient: vi.fn(),
 }));
 
-vi.mock('../config/postgres.js', () => ({ query: h.query }));
 vi.mock('./audit.service.js', () => ({
   AUDIT_ACTIONS: { TIMESHEET_OFFICE_UPDATED: 'TIMESHEET_OFFICE_UPDATED' },
   auditService: { logWithClient: h.logWithClient, logFromRequestWithClient: h.logFromRequestWithClient },
@@ -19,7 +16,6 @@ vi.mock('./audit.service.js', () => ({
 
 const {
   enforceOfficeForDepartments,
-  isTimesheetOfficeLocked,
   officeRuleAuditEntries,
   personalOfficeSql,
   writeOfficeAudit,
@@ -107,21 +103,6 @@ describe('enforceOfficeForDepartments', () => {
     const { client, calls } = fakeClient([], []);
     expect(await enforceOfficeForDepartments(client, 'all', CONTRACTORS)).toEqual([]);
     expect(calls.some(call => call.sql.startsWith('UPDATE'))).toBe(false);
-  });
-});
-
-describe('isTimesheetOfficeLocked', () => {
-  it('личный «Офис» или отдел с «Офисом»; в транзакции — через её клиента', async () => {
-    h.query.mockResolvedValue([{ locked: true }]);
-    expect(await isTimesheetOfficeLocked(20)).toBe(true);
-    expect(String(h.query.mock.calls[0][0])).toContain('FROM timesheet_office_departments tod');
-
-    const clientQuery = vi.fn(async () => ({ rows: [{ locked: false }] }));
-    expect(await isTimesheetOfficeLocked(20, { query: clientQuery } as never)).toBe(false);
-    expect(clientQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE e.id = $1::int'), [20]);
-
-    h.query.mockResolvedValue([]);
-    expect(await isTimesheetOfficeLocked(999)).toBe(false);
   });
 });
 

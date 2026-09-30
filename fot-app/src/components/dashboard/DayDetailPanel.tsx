@@ -17,6 +17,8 @@ interface IDayDetailPanelProps {
   focusedDay: string;
   payload: IDayFocusPayload;
   focusKey: number;
+  /** Объект табелирования: undefined — сотрудник ещё не загружен, null — объекта нет. */
+  timesheetObjectLabel?: string | null;
 }
 
 type Approval = 'auto_approved' | 'pending' | 'approved' | 'rejected';
@@ -49,6 +51,7 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
   focusedDay,
   payload,
   focusKey,
+  timesheetObjectLabel,
 }) => {
   const { showActualHours } = useAuth();
   const { entry, objectEntries, ds, isProblematic } = payload;
@@ -163,13 +166,9 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
       ) : null}
 
       {/* Объект табелирования — не зависит от дня, виден всегда (миграция 288) */}
-      <MyTimesheetObjectField
-        employeeId={employeeId}
-        label="Объект табелирования"
-        layout="row"
-        savedMessage="Объект табелирования сохранён"
-        errorMessage="Не удалось сохранить объект табелирования"
-      />
+      {timesheetObjectLabel !== undefined ? (
+        <MyTimesheetObjectField label="Объект табелирования" value={timesheetObjectLabel} layout="row" />
+      ) : null}
 
       {/* Проходы СКУД — только для проблемных («жёлтых») дней (#7) */}
       {isProblematic ? (

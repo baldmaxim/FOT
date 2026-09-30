@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Объект табелирования (миграция 288): группа «Офис», окно последних 3 дней, часы по
- * объектам табелирования, подписи.
+ * Объект табелирования (миграция 288): группа «Офис», границы месяцев, часы по объектам
+ * табелирования, подписи.
  */
 
 const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
@@ -17,12 +17,10 @@ const {
   canonicalizeMode,
   groupObjectHours,
   isOfficeAddress,
-  isTimesheetObjectWindowOpen,
   labelForResolved,
   loadContractorDepartmentIds,
   monthEnd,
   previousMonthStartMsk,
-  valueForResolved,
 } = await import('./employee-timesheet-object.service.js');
 const contractor = await import('../config/contractor.js');
 
@@ -58,33 +56,7 @@ describe('группа «Офис»', () => {
   });
 });
 
-describe('окно смены — последние 3 календарных дня месяца по МСК', () => {
-  it('30 дней: 28, 29, 30', () => {
-    expect(isTimesheetObjectWindowOpen(msk('2026-09-27T23:59:00'))).toBe(false);
-    expect(isTimesheetObjectWindowOpen(msk('2026-09-28T00:00:00'))).toBe(true);
-    expect(isTimesheetObjectWindowOpen(msk('2026-09-30T23:59:00'))).toBe(true);
-  });
-
-  it('31 день: 29, 30, 31', () => {
-    expect(isTimesheetObjectWindowOpen(msk('2026-10-28T12:00:00'))).toBe(false);
-    expect(isTimesheetObjectWindowOpen(msk('2026-10-29T00:00:00'))).toBe(true);
-    expect(isTimesheetObjectWindowOpen(msk('2026-10-31T12:00:00'))).toBe(true);
-  });
-
-  it('февраль: 26, 27, 28 (и 27–29 в високосный)', () => {
-    expect(isTimesheetObjectWindowOpen(msk('2027-02-25T12:00:00'))).toBe(false);
-    expect(isTimesheetObjectWindowOpen(msk('2027-02-26T12:00:00'))).toBe(true);
-    expect(isTimesheetObjectWindowOpen(msk('2028-02-26T12:00:00'))).toBe(false);
-    expect(isTimesheetObjectWindowOpen(msk('2028-02-27T12:00:00'))).toBe(true);
-  });
-
-  it('граница суток — по МСК, а не по UTC', () => {
-    // 27.09 22:30 UTC = 28.09 01:30 МСК — окно уже открыто.
-    expect(isTimesheetObjectWindowOpen(new Date('2026-09-27T22:30:00Z'))).toBe(true);
-    // 30.09 21:30 UTC = 01.10 00:30 МСК — окно закрыто.
-    expect(isTimesheetObjectWindowOpen(new Date('2026-09-30T21:30:00Z'))).toBe(false);
-  });
-
+describe('границы месяцев по МСК', () => {
   it('прошлый месяц и конец месяца', () => {
     expect(previousMonthStartMsk(msk('2026-10-01T04:00:00'))).toBe('2026-09-01');
     expect(previousMonthStartMsk(msk('2026-01-15T12:00:00'))).toBe('2025-12-01');
@@ -121,7 +93,7 @@ describe('groupObjectHours — объекты табелирования', () =>
   });
 });
 
-describe('подписи и значения', () => {
+describe('подписи', () => {
   it('current_activity → «Офис»; объект → имя; офисный объект → «Офис»; skud → null', () => {
     const pinned = (id: string) => ({ mode: 'object' as const, pinnedObjectId: id, source: 'employee_explicit' as const });
     expect(labelForResolved({ mode: 'current_activity', pinnedObjectId: null, source: 'legacy_department' }, objects))
@@ -129,8 +101,6 @@ describe('подписи и значения', () => {
     expect(labelForResolved(pinned('o-dom'), objects)).toBe('ЖК Дом 56');
     expect(labelForResolved(pinned('o-polk'), objects)).toBe(OFFICE_LABEL);
     expect(labelForResolved({ mode: 'skud', pinnedObjectId: null, source: 'legacy_default' }, objects)).toBeNull();
-    expect(valueForResolved(pinned('o-polk'), objects)).toBe(OFFICE_VALUE);
-    expect(valueForResolved(pinned('o-dom'), objects)).toBe('o-dom');
   });
 });
 

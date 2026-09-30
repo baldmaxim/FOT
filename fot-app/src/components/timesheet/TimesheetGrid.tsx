@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronUp, Menu, UserMinus } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetObjectEntry, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
-import type { IProductionCalendarMonth, IEmployeeStats, ITimesheetObjectWindow } from '../../types/timesheet';
+import type { IProductionCalendarMonth, IEmployeeStats } from '../../types/timesheet';
 import {
   getDaysInMonth,
   isWeekend,
@@ -68,10 +68,6 @@ interface ITimesheetGridProps {
     target: { object_key: string; object_id: string | null; object_name: string },
     entry: TimesheetObjectEntry | null,
   ) => void;
-  /** Окно смены объекта табелирования (meta.timesheet_object). */
-  timesheetObjectWindow?: ITimesheetObjectWindow;
-  /** Выбор объекта табелирования — только со страницы «Табель», для строк, которые ведёт пользователь. */
-  onTimesheetObjectClick?: (employee: TimesheetEmployee) => void;
 }
 
 interface IObjectRowData {
@@ -487,8 +483,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   onExcludeEmployee,
   onDayClick,
   onObjectDayClick,
-  timesheetObjectWindow,
-  onTimesheetObjectClick,
 }) => {
   const { showActualHours } = useAuth();
   // Синхронизируем module-level flag, к которому обращаются helper-функции
@@ -502,34 +496,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
 
-  // Объект табелирования под ФИО (миграция 288). Кнопкой — только там, где пользователь
-  // ведёт табель строки: в окне последних 3 дней месяца, новичку без объекта — в любой
-  // день. Решение окончательно проверяет сервер.
-  const canPickTimesheetObject = (employee: TimesheetEmployee): boolean => Boolean(
-    onTimesheetObjectClick
-    && !bulkEditMode
-    && employee.editable !== false
-    && !employee.is_restricted_period
-    && employee.employment_status === 'active'
-    && timesheetObjectWindow?.previous_month_frozen
-    && (timesheetObjectWindow.window_open || !employee.timesheet_object_label),
-  );
+  // Объект табелирования под ФИО (миграция 288) — только показ: объект ставит ночной
+  // расчёт по часам, «Офис» — окно «Режим табелирования».
   const renderTimesheetObject = (employee: TimesheetEmployee): ReactNode => {
     const label = employee.timesheet_object_label ?? null;
-    if (canPickTimesheetObject(employee)) {
-      return (
-        <button
-          type="button"
-          className="ts-employee-object ts-employee-object--button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onTimesheetObjectClick?.(employee);
-          }}
-        >
-          {label ?? '—'}
-        </button>
-      );
-    }
     return label ? <div className="ts-employee-object">{label}</div> : null;
   };
   const compactInlineExclude = days.length > 16;
@@ -736,8 +706,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   // measureElement на <tbody> учитывает реальную высоту группы (вкл. раскрытые объекты).
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const hasTimesheetObjectLine = useMemo(
-    () => Boolean(onTimesheetObjectClick) || employees.some(employee => Boolean(employee.timesheet_object_label)),
-    [employees, onTimesheetObjectClick],
+    () => employees.some(employee => Boolean(employee.timesheet_object_label)),
+    [employees],
   );
   const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableSectionElement>({
     count: employeeRows.length,

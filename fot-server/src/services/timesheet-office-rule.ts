@@ -1,20 +1,19 @@
 /**
- * «Офис» из окна «Режим табелирования» (миграция 291) — общее правило для ночного расчёта,
- * окна и выбора объекта в ЛК/табеле.
+ * «Офис» из окна «Режим табелирования» (миграция 291) — общее правило для ночного расчёта
+ * и окна.
  *
  * Личный «Офис» хранится в полях сотрудника: current_activity, set_by = NULL и автор (289).
  * «Офис» отдела — строка timesheet_office_departments: всем прямым своим работающим
  * сотрудникам отдела объект «Офис» с set_by = 'auto'. Подотделы правило не получают.
  * Отдел главнее личного: в отделе с «Офисом» личного «Офиса» не бывает — правило его
- * переводит, окно не ставит. Кому «Офис» поставлен в окне — лично или через отдел, — выбор
- * объекта закрыт.
+ * переводит, окно не ставит. Кому «Офис» поставлен в окне — лично или через отдел, — тому
+ * ночной расчёт объект по часам не ставит.
  *
  * SQL собирается функциями, а AUDIT_ACTIONS читается только внутри функций: тесты с моком
  * audit.service без новых ключей грузят этот модуль транзитивно.
  */
 import type { Request } from 'express';
 import type { PoolClient } from 'pg';
-import { query, type DbExecutor } from '../config/postgres.js';
 import { AUDIT_ACTIONS, auditService } from './audit.service.js';
 import type { TimesheetExportMode } from './timesheet-export-mode.service.js';
 import type { TimesheetObjectSetBy } from './employee-timesheet-object.service.js';
@@ -34,19 +33,6 @@ export function personalOfficeSql(alias: string): string {
 function autoOfficeSql(alias: string): string {
   return `(${alias}.timesheet_export_mode IS NOT DISTINCT FROM 'current_activity'
       AND ${alias}.timesheet_export_set_by IS NOT DISTINCT FROM 'auto')`;
-}
-
-/** Закрыт ли выбор объекта: личный «Офис» или отдел сотрудника с «Офисом». */
-export async function isTimesheetOfficeLocked(employeeId: number, exec?: DbExecutor): Promise<boolean> {
-  const sql = `SELECT (${personalOfficeSql('e')}
-            OR EXISTS (SELECT 1 FROM timesheet_office_departments tod
-                        WHERE tod.org_department_id = e.org_department_id)) AS locked
-       FROM employees e
-      WHERE e.id = $1::int`;
-  const rows = exec
-    ? (await exec.query<{ locked: boolean }>(sql, [employeeId])).rows
-    : await query<{ locked: boolean }>(sql, [employeeId]);
-  return rows[0]?.locked === true;
 }
 
 export interface IOfficeRuleChange {

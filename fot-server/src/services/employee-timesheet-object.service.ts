@@ -23,15 +23,8 @@ import {
 } from './timesheet-export-mode.service.js';
 
 export const OFFICE_LABEL = 'Офис';
-/** Значение «Офиса» в API выбора (вместо id объекта). */
+/** Ключ группы «Офис» в часах по объектам (вместо id объекта). */
 export const OFFICE_VALUE = 'office';
-/**
- * Второй объект по часам можно выбрать, только если он отстаёт от первого меньше чем на
- * эту долю, считая от большего: (h1 − h2) / h1 < 0.15.
- */
-export const TIMESHEET_OBJECT_CHOICE_GAP = 0.15;
-/** Сменить объект можно в последние столько календарных дней месяца (МСК). */
-export const TIMESHEET_OBJECT_WINDOW_DAYS = 3;
 /** Сотрудников на один проход расчёта часов (как в снимке основного объекта). */
 const EMPLOYEE_CHUNK_SIZE = 1000;
 
@@ -88,13 +81,6 @@ function daysInMonth(isoDate: string): number {
   const year = Number(isoDate.slice(0, 4));
   const month = Number(isoDate.slice(5, 7));
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-/** Окно смены — последние 3 календарных дня месяца по МСК. */
-export function isTimesheetObjectWindowOpen(now: Date = new Date()): boolean {
-  const today = moscowTodayIso(now);
-  const day = Number(today.slice(8, 10));
-  return day > daysInMonth(today) - TIMESHEET_OBJECT_WINDOW_DAYS;
 }
 
 /** Первое число прошлого месяца по МСК. */
@@ -226,20 +212,6 @@ export function labelForResolved(
   return null;
 }
 
-/** Значение для списка выбора: 'office', id объекта или null. */
-export function valueForResolved(
-  resolved: IResolvedExportMode,
-  objectsById: ReadonlyMap<string, ISkudObjectInfo>,
-): string | null {
-  if (resolved.mode === 'current_activity') return OFFICE_VALUE;
-  if (resolved.mode === 'object' && resolved.pinnedObjectId) {
-    const object = objectsById.get(resolved.pinnedObjectId);
-    if (object && isOfficeAddress(object.alt_name)) return OFFICE_VALUE;
-    return resolved.pinnedObjectId;
-  }
-  return null;
-}
-
 /**
  * Подписи объекта табелирования для списка сотрудников. month — месяц табеля: для
  * прошедшего месяца личный режим берётся из фиксации (миграция 288).
@@ -286,14 +258,4 @@ export async function readTimesheetObjectState(
       WHERE singleton${forUpdate ? '\n      FOR UPDATE' : ''}`,
   );
   return rows[0] ?? null;
-}
-
-/**
- * Прошлый месяц зафиксирован. Пока нет — выбор объекта запрещён: иначе он попал бы
- * в прошедший месяц через живой режим. Нет состояния — не блокируем.
- */
-export async function isPreviousMonthFrozen(now: Date = new Date(), exec?: DbExecutor): Promise<boolean> {
-  const state = await readTimesheetObjectState(exec);
-  if (!state) return true;
-  return state.frozen_month >= previousMonthStartMsk(now);
 }

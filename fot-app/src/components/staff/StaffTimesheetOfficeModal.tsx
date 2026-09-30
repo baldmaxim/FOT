@@ -30,7 +30,7 @@ import styles from './StaffTimesheetOfficeModal.module.css';
 const TIMESHEET_OFFICE_QUERY_KEY = ['admin-timesheet-office'] as const;
 /** Ключи, где видно объект табелирования: карточка, табель, ЛК, «Статья затрат». */
 const TIMESHEET_OBJECT_QUERY_KEYS = [
-  'employee', 'timesheet', 'timesheet-page', 'timesheet-object', 'my-timesheet-object', STAFF_MAIN_OBJECTS_QUERY_KEY,
+  'employee', 'timesheet', 'timesheet-page', STAFF_MAIN_OBJECTS_QUERY_KEY,
 ];
 
 type Target = 'department' | 'employee';
@@ -51,7 +51,7 @@ interface IStaffTimesheetOfficeModalProps {
 
 /**
  * Окно «Режим табелирования» (миграция 291): «Офис» отделу или сотруднику. Кому «Офис»
- * поставлен здесь, тому выбор объекта в ЛК и табеле закрыт, ночной пересчёт его не меняет.
+ * поставлен здесь, тому ночной пересчёт объект по часам не ставит.
  * Клики по «Офис» в таблице — отметки; записывает их одна кнопка «Сохранить» внизу.
  */
 export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({ deptTree, onClose }) => {

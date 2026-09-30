@@ -1,9 +1,8 @@
 /**
  * Пересчёт объекта табелирования по часам сразу, не дожидаясь ночи: после снятия «Офиса»
  * в окне «Режим табелирования» (миграция 291) объект возвращается к тому, что посчитала бы
- * ночь. Правило и период — ночные: planAutoChanges, с 1-го числа по вчера. Ручной выбор,
- * личный «Офис» и отделы с «Офисом» не трогаются; нет часов (в том числе 1-го числа) —
- * объект прежний.
+ * ночь. Правило и период — ночные: planAutoChanges, с 1-го числа по вчера. Личный «Офис»
+ * и отделы с «Офисом» не трогаются; нет часов (в том числе 1-го числа) — объект прежний.
  *
  * Транзакция и лок режимов (TIMESHEET_MODE_LOCK_KEY) — у вызывающего; строки сотрудников
  * берутся FOR UPDATE по порядку id. applied_date не двигается.
@@ -37,10 +36,10 @@ export async function recomputeTimesheetObjectsNow(
     period,
     { todayStr: moscowTodayIso(context.now), exec: client, objectsById: await loadSkudObjects(client) },
   );
-  const changes = planAutoChanges(rows, tops, false);
-  const appliedIds = await applyChanges(client, changes, false);
+  const changes = planAutoChanges(rows, tops);
+  const appliedIds = await applyChanges(client, changes);
   await auditChanges(client, changes, appliedIds, {
-    period, all: false, reason: context.reason, userId: context.userId,
+    period, reason: context.reason, userId: context.userId,
   });
   return appliedIds;
 }

@@ -13,7 +13,6 @@ import type {
   TimesheetStatus,
   TimesheetTeamManagementCandidate,
   TimesheetTeamManagementConfig,
-  ITimesheetObjectWindow,
 } from '../types';
 
 interface TimesheetFilters {
@@ -268,7 +267,7 @@ export const timesheetService = {
     }
     params.append('schedule_payload', filters.schedule_payload ?? 'compact');
     const res = await apiClient.get<ApiResponse<TimesheetResponse> & {
-      meta?: { department_writable?: boolean; timesheet_object?: ITimesheetObjectWindow };
+      meta?: { department_writable?: boolean };
     }>(
       `/timesheet?${params.toString()}`,
     );
@@ -278,10 +277,6 @@ export const timesheetService = {
     return hydrateCompactSchedules({
       ...res.data,
       department_writable: res.meta?.department_writable === true,
-      timesheet_object: {
-        window_open: res.meta?.timesheet_object?.window_open === true,
-        previous_month_frozen: res.meta?.timesheet_object?.previous_month_frozen === true,
-      },
     });
   },
 

@@ -192,6 +192,7 @@ export const EmployeeDashboardPage: React.FC = () => {
                   focusedDay={focusedDay}
                   payload={focusedPayload}
                   focusKey={focusKey}
+                  timesheetObjectLabel={employee ? employee.timesheet_object_label ?? null : undefined}
                 />
               </Suspense>
             ) : (

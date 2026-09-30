@@ -643,13 +643,11 @@ const ObjectWorkerDashboardContent: FC = () => {
             <div style={labelStyle}>{t('profile.label.site')}</div>
             <div style={valueStyle}>{siteDisplay || '—'}</div>
           </div>
-          {employeeId && (
+          {employee && (
             <MyTimesheetObjectField
-              employeeId={employeeId}
               label={t('profile.label.timesheetObject')}
+              value={employee.timesheet_object_label ?? null}
               layout="stack"
-              savedMessage={t('timesheetObject.saved')}
-              errorMessage={t('timesheetObject.saveError')}
             />
           )}
           <div>

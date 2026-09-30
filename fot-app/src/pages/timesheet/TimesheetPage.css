@@ -2832,32 +2832,6 @@
   text-align: inherit;
 }
 
-/* Табельщица и руководитель в окне смены: объект нажимается — открывается выбор. */
-.ts-employee-object--button {
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-  color: var(--accent);
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-
-.ts-employee-object--button:hover {
-  text-decoration-style: solid;
-}
-
-/* На телефоне кнопка — полноценная тап-цель. */
-.ts-mobile-card .ts-employee-object--button {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  font-size: 13px;
-}
-
 .ts-expand-placeholder {
   display: inline-block;
   width: 22px;
