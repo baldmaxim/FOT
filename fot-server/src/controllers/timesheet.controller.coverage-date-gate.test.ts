@@ -87,6 +87,7 @@ vi.mock('../services/timesheet-scope.service.js', () => ({
   resolveTimesheetReadableDepartmentId: vi.fn(async (_req: unknown, id: string | null) => id ?? null),
   canAccessEmployeeForTimesheetPeriod: vi.fn(async () => true),
   hasManagedTimesheetAccess: vi.fn(async () => true),
+  roleAllowsTimesheet: vi.fn(async () => true),
 }));
 
 vi.mock('../services/timekeeper-scope.service.js', () => ({

@@ -7,6 +7,7 @@ import {
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
 import { hasDeputyAssignment } from './data-scope.service.js';
+import { isDeputyRole } from './deputy-role.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
 import {
@@ -62,7 +63,34 @@ export async function resolveDeputyPageAccess(
 ): Promise<{ can_view: boolean; can_edit: boolean } | null> {
   const grant = DEPUTY_AUTO_ACCESS_PAGES.get(pagePath);
   if (!grant) return null;
+  // У роли «Заместитель» (миграция 292) страницы решает только её матрица: иначе старое
+  // назначение 'deputy' держало бы доступ, снятый галочкой в «Ролях».
+  if (isDeputyRole(req.user.role_code)) return null;
   return (await hasDeputyAssignment(req)) ? grant : null;
+}
+
+/**
+ * Страницы, которые роль «Заместитель» (миграция 292) открывает только при наличии хотя бы
+ * одного отдела: своего по правилу А, ручных deputy по правилу А, ручных full или view.
+ * Без отделов эти разделы закрыты — иначе пустой скоуп местами читается как «вся
+ * организация» (списки заявлений и служебок, refresh и экспорт табеля).
+ */
+export const DEPUTY_ROLE_DEPARTMENT_PAGES: ReadonlySet<string> = new Set([
+  '/timesheet',
+  '/timesheet-hr',
+  '/leave-requests',
+  '/staff-control/hiring',
+]);
+
+/** Закрыт ли раздел заместителю из-за пустого набора отделов. */
+async function isDeputyRoleDepartmentPageBlocked(
+  req: AuthenticatedRequest,
+  pagePath: string,
+): Promise<boolean> {
+  if (req.user.is_admin || !isDeputyRole(req.user.role_code)) return false;
+  if (!DEPUTY_ROLE_DEPARTMENT_PAGES.has(pagePath)) return false;
+  const scope = await resolveAccessibleDepartmentIds(req);
+  return scope !== 'all' && scope.length === 0;
 }
 
 /** Полный набор страниц заместителя — для инъекции в page_access на /auth/me. */
@@ -245,6 +273,8 @@ export async function resolveEffectivePageAccess(
   action: 'view' | 'edit',
 ): Promise<boolean> {
   if (req.user.is_admin) return true;
+
+  if (await isDeputyRoleDepartmentPageBlocked(req, pagePath)) return false;
 
   // Авто-грант «Руководителю экономического отдела»: view+edit на вкладку «KPI объектов».
   // Стоит ДО гейта admin_access — у руководителя отдела роль без доступа в админку,

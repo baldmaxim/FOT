@@ -387,6 +387,78 @@ describe('заместитель начальника отдела (миграц
   });
 });
 
+describe('роль «Заместитель» (deputy_head, миграция 292)', () => {
+  const DEPT = 'dddddddd-0000-4000-8000-000000000001';
+  const OLD_DEPT = 'dddddddd-0000-4000-8000-000000000002';
+  const OWN_INELIGIBLE = 'dddddddd-0000-4000-8000-000000000003';
+  const roleReq = (o: Parameters<typeof makeReq>[0] = {}): AuthenticatedRequest =>
+    makeReq({ ...o, user: { role_code: 'deputy_head' } as AuthenticatedRequest['user'] });
+
+  it('своя заявка без отдела — утверждение 403: «автор утверждает» у роли нет', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, department_id: null });
+    const res = makeRes();
+    await c.approveCandidate(roleReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('заявка старого отдела после перевода — утверждение и набор 403', async () => {
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, department_id: OLD_DEPT });
+    const res = makeRes();
+    await c.approveCandidate(roleReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+    expect(res._status).toBe(403);
+
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, headcount: 1, department_id: OLD_DEPT });
+    const res2 = makeRes();
+    await c.finalizeSelection(roleReq({ params: { id: '1' }, body: {} }), res2);
+    expect(res2._status).toBe(403);
+  });
+
+  it('в отделе, где он «Начальник» (назначение главнее), утверждает', async () => {
+    hiringSides.mockResolvedValue({ head: [DEPT], deputy: [] });
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, department_id: DEPT });
+    txClient.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FOR UPDATE')) return { rows: [{ headcount: 2 }] };
+      if (sql.includes('SELECT 1 FROM hiring_candidates WHERE id')) return { rowCount: 1, rows: [{}] };
+      if (sql.includes('COUNT(*)::int AS n')) return { rows: [{ n: 0 }] };
+      return { rows: [] };
+    });
+    const res = makeRes();
+    await c.approveCandidate(roleReq({ params: { id: '1', cid: '2' }, body: { approved: true } }), res);
+    expect(res._json).toMatchObject({ success: true });
+  });
+
+  it('заявка создаётся на заместительский отдел, даже если свой отдел не прошёл правило А', async () => {
+    pageView.mockResolvedValue(true);
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: OWN_INELIGIBLE, full_name: 'Заместитель' })
+      .mockResolvedValueOnce({ id: 7 });
+    const res = makeRes();
+    await c.create(roleReq({ body: { position_title: 'Инженер' } }), res);
+    expect(res._status).toBe(201);
+    const insertParams = pgQueryOne.mock.calls[1]![1] as unknown[];
+    expect(insertParams).toContain(DEPT);
+    expect(insertParams).not.toContain(OWN_INELIGIBLE);
+  });
+
+  it('на свой отдел вне правила А — 403, без отделов — 403', async () => {
+    pageView.mockResolvedValue(true);
+    hiringSides.mockResolvedValue({ head: [], deputy: [DEPT] });
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: OWN_INELIGIBLE, full_name: 'Заместитель' });
+    const res = makeRes();
+    await c.create(roleReq({ body: { position_title: 'Инженер', department_id: OWN_INELIGIBLE } }), res);
+    expect(res._status).toBe(403);
+
+    hiringSides.mockResolvedValue({ head: [], deputy: [] });
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: OWN_INELIGIBLE, full_name: 'Заместитель' });
+    const res2 = makeRes();
+    await c.create(roleReq({ body: { position_title: 'Инженер' } }), res2);
+    expect(res2._status).toBe(403);
+  });
+});
+
 describe('verdictCandidate', () => {
   it('заказчик (author) invite + comment → applicant_verdict + applicant_feedback (trim)', async () => {
     pgQueryOne

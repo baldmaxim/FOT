@@ -3,11 +3,13 @@ import { query, queryOne, execute } from '../config/postgres.js';
 import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
-  canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope,
+  canEditEmployeeTimesheetInScope,
   canWriteEmployeeInScope,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
-import { hasPageView } from '../services/access-control.service.js';
+import { hasPageView, resolveRolePageAccess } from '../services/access-control.service.js';
+import { isDeputyRole } from '../services/deputy-role.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
@@ -204,6 +206,25 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
   }
 };
 
+/**
+ * Роль «Заместитель» (миграция 292): документы коллег ей закрыты
+ * (canAccessEmployeeRecordsInScope), кроме вложений заявления «Корректировка табеля»,
+ * по которому она решает, — при галочке «Заявления» и праве вести табель сотрудника.
+ */
+async function canDeputyRoleReadCorrectionRequest(
+  req: AuthenticatedRequest,
+  leaveRequestId: number | string | null | undefined,
+): Promise<boolean> {
+  if (req.user.is_admin || !isDeputyRole(req.user.role_code) || leaveRequestId == null) return false;
+  const request = await queryOne<{ employee_id: number | string; request_type: string }>(
+    `SELECT employee_id, request_type FROM leave_requests WHERE id = $1`,
+    [leaveRequestId],
+  );
+  if (!request || request.request_type !== 'time_correction') return false;
+  if (!(await resolveRolePageAccess(req, '/leave-requests', 'view'))) return false;
+  return canEditEmployeeTimesheetInScope(req, Number(request.employee_id));
+}
+
 /** Получить presigned URL для скачивания */
 const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -216,6 +237,7 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
     const doc = await queryOne<{
       id: number;
       employee_id: number | null;
+      leave_request_id: number | null;
       r2_key: string;
       file_name: string;
       category: string;
@@ -232,7 +254,15 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
 
     let allowed = false;
     if (doc.employee_id != null) {
-      allowed = await canAccessEmployeeInScope(req, doc.employee_id);
+      allowed = await canAccessEmployeeRecordsInScope(req, doc.employee_id);
+      if (!allowed && isDeputyRole(req.user.role_code)) {
+        const leaveRequestId = doc.leave_request_id ?? (await queryOne<{ entity_id: string | null }>(
+          `SELECT entity_id FROM document_links
+            WHERE document_id = $1 AND entity_type = 'leave_request' LIMIT 1`,
+          [doc.id],
+        ))?.entity_id ?? null;
+        allowed = await canDeputyRoleReadCorrectionRequest(req, leaveRequestId);
+      }
     } else {
       const link = await queryOne<{ entity_type: string | null; entity_id: string | null }>(
         `SELECT entity_type, entity_id FROM document_links WHERE document_id = $1 LIMIT 1`,
@@ -301,7 +331,8 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
       res.status(404).json({ success: false, error: 'Заявка не найдена' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, request.employee_id))) {
+    if (!(await canAccessEmployeeRecordsInScope(req, request.employee_id))
+      && !(await canDeputyRoleReadCorrectionRequest(req, request.id))) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }
@@ -351,7 +382,7 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       res.status(400).json({ success: false, error: 'Некорректный employee id' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!(await canAccessEmployeeRecordsInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

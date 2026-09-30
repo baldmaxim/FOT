@@ -3,7 +3,7 @@ import { AxiosError } from 'axios';
 import { queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import {
-  canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope,
   canWriteEmployeeInScope,
 } from '../services/data-scope.service.js';
 import {
@@ -1124,7 +1124,7 @@ export const sigurController = {
   async getEmployeeAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = Number(req.params.id);
-      if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!Number.isInteger(employeeId) || !(await canAccessEmployeeRecordsInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }
@@ -1186,7 +1186,7 @@ export const sigurController = {
   async getEmployeeProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = Number(req.params.id);
-      if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+      if (!Number.isInteger(employeeId) || !(await canAccessEmployeeRecordsInScope(req, employeeId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

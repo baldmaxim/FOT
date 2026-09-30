@@ -33,6 +33,7 @@ import {
   type IMembershipWindow,
 } from '../services/timesheet-department-assignments.service.js';
 import { lockTimesheetMonthsOnClient } from '../services/timesheet-lock.service.js';
+import { roleAllowsTimesheet } from '../services/timesheet-scope.service.js';
 import { withTimesheetSnapshotTransaction } from '../services/timesheet-snapshot-tx.js';
 import {
   clearVersionDirty,
@@ -1385,10 +1386,13 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
     // именно тогда фронту решать, показывать ли кнопку «Подать»). Глобальный просмотр
     // табелей (view_all_departments) даёт статус чужого отдела, но не запись в него.
     const writableDepartmentId = await resolveTimesheetWritableDepartmentId(req, department_id);
+    // «Заместитель» без галочки «Табель → правка» подать не сможет (маршрут отдаст 403) —
+    // кнопку «Подать» не обещаем (миграция 292).
+    const roleCanEdit = await roleAllowsTimesheet(req, 'edit');
     res.json({
       success: true,
       data: await withUnlockAuthor(data),
-      meta: { can_write: writableDepartmentId === department_id },
+      meta: { can_write: roleCanEdit && writableDepartmentId === department_id },
     });
   } catch (err) {
     console.error('timesheet-approval.getStatus error:', err);

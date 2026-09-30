@@ -29,7 +29,7 @@ import {
 import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
-  canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope,
   canWriteEmployeeInScope,
   hasGlobalDepartmentReadScope,
   normalizeUuidParam,
@@ -425,7 +425,7 @@ export const employeesController = {
         return;
       }
       // Чтение карточки: скоуп отделов ИЛИ «все отделы на чтение» (view_all_departments).
-      if (!(await canAccessEmployeeInScope(req, idNum)) && !(await hasGlobalDepartmentReadScope(req))) {
+      if (!(await canAccessEmployeeRecordsInScope(req, idNum)) && !(await hasGlobalDepartmentReadScope(req))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

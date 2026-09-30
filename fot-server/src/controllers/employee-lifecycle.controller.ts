@@ -17,7 +17,7 @@ import { syncLinkedEmployeeFromSigur } from '../services/sigur-linked-employees.
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
-  canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope,
   canWriteDepartmentInScope,
   canWriteEmployeeInScope,
   resolveRequestDataScope,
@@ -1074,7 +1074,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
 export async function getHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    if (!(await canAccessEmployeeInScope(req, Number(id)))) {
+    if (!(await canAccessEmployeeRecordsInScope(req, Number(id)))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

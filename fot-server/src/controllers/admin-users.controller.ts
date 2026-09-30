@@ -25,6 +25,11 @@ import {
   replaceEmployeeObjectAccess,
 } from '../services/employee-skud-object-access.service.js';
 import { invalidatePresenceByObjectCache } from '../services/skud-presence-by-object.service.js';
+import {
+  findDeputyTopologyViolations,
+  formatDeputyTopologyError,
+  type IDeputyTopologyViolation,
+} from '../services/deputy-role.service.js';
 import { invalidateDashboardCache } from '../services/skud-dashboard.service.js';
 import {
   canAccessEmployeeInScope,
@@ -156,6 +161,46 @@ function validateLevelSubsets(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Правило А (миграция 292, deputy-role.service) для НОВЫХ назначений «Заместитель» — для
+ * любой роли: отдел должен быть листом без владельца табеля выше по дереву. Иначе подача
+ * отдела и личная подача (или подача родителя) забрали бы одни и те же дни.
+ *
+ * Проверяется итоговое состояние: «Начальник» родителя в этом же сохранении — тоже
+ * владелец выше. Уже действующие строки 'deputy' не перепроверяются: сохранение соседних
+ * назначений не должно ломаться из-за прежних данных.
+ */
+async function checkDeputyTopology(
+  employeeId: number,
+  departmentIds: string[],
+  viewOnlyDepartmentIds: string[],
+  deputyDepartmentIds: string[],
+): Promise<{ ok: true } | { ok: false; error: string; details: IDeputyTopologyViolation[] }> {
+  const deputy = [...new Set(deputyDepartmentIds.map(v => v.trim()).filter(Boolean))];
+  if (deputy.length === 0) return { ok: true };
+
+  const current = await query<{ department_id: string }>(
+    `SELECT department_id::text AS department_id
+       FROM employee_department_access
+      WHERE employee_id = $1 AND is_active = true
+        AND access_level = 'deputy' AND source <> 'sigur_sync'`,
+    [employeeId],
+  );
+  const currentDeputy = new Set(current.map(row => String(row.department_id)));
+  const added = deputy.filter(id => !currentDeputy.has(id));
+  if (added.length === 0) return { ok: true };
+
+  const viewOnly = new Set(viewOnlyDepartmentIds.map(v => v.trim()));
+  const violations = await findDeputyTopologyViolations({
+    employeeId,
+    checkDepartmentIds: added,
+    finalOwnedDepartmentIds: departmentIds.filter(id => !viewOnly.has(id)),
+  });
+  return violations.length === 0
+    ? { ok: true }
+    : { ok: false, error: formatDeputyTopologyError(violations), details: violations };
 }
 
 const updateEmployeeAccessSchema = z.object({
@@ -1922,6 +1967,19 @@ export const adminUsersController = {
         return;
       }
 
+      const topology = await checkDeputyTopology(
+        profile.employee_id, normalizedDepartmentIds, view_only_department_ids, deputy_department_ids,
+      );
+      if (!topology.ok) {
+        res.status(409).json({
+          success: false,
+          code: 'DEPUTY_DEPARTMENT_TOPOLOGY',
+          error: topology.error,
+          details: topology.details,
+        });
+        return;
+      }
+
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
         employeeId: profile.employee_id,
         assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids, deputy_department_ids),
@@ -2103,6 +2161,19 @@ export const adminUsersController = {
           success: false,
           error: 'Некоторые отделы не найдены',
           details: { missing_department_ids: missingIds },
+        });
+        return;
+      }
+
+      const topology = await checkDeputyTopology(
+        employeeId, normalizedDepartmentIds, view_only_department_ids, deputy_department_ids,
+      );
+      if (!topology.ok) {
+        res.status(409).json({
+          success: false,
+          code: 'DEPUTY_DEPARTMENT_TOPOLOGY',
+          error: topology.error,
+          details: topology.details,
         });
         return;
       }

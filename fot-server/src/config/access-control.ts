@@ -45,6 +45,7 @@ export const HR_ASSIGNABLE_ROLE_CODES = [
   'economist',
   'otitb',
   'mts_manager',
+  'deputy_head',
 ] as const;
 
 /**

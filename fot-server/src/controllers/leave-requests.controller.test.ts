@@ -115,11 +115,14 @@ vi.mock('../services/timesheet-object.service.js', async (importActual) => ({
   OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
 }));
 // hrAcknowledge проверяет право по маркеру семейства заявления (отпуск/увольнение).
-const { pageAccessMock } = vi.hoisted(() => ({
+const { pageAccessMock, rolePageMock } = vi.hoisted(() => ({
   pageAccessMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
+  // Матрица роли «Заместитель» (миграция 292): для других ролей не вызывается.
+  rolePageMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
 }));
 vi.mock('../services/access-control.service.js', () => ({
   resolveEffectivePageAccess: pageAccessMock,
+  resolveRolePageAccess: rolePageMock,
   // Нужны hasDeputyOnlyLeaveAccess: страницу «Заявления» роль выдаёт сама.
   hasPageView: vi.fn(async () => true),
   roleHasAdminAccess: vi.fn(async () => true),
@@ -2817,6 +2820,152 @@ describe('заместитель начальника отдела: «Корре
       res,
     );
 
+    const data = (res._json as { data: { processed_count: number; skipped_no_access: number } }).data;
+    expect(data.processed_count).toBe(0);
+    expect(data.skipped_no_access).toBe(1);
+  });
+});
+
+describe('роль «Заместитель» (deputy_head, миграция 292): заявления по галочкам роли', () => {
+  const COLLEAGUE = 555;
+  const HEAD_DEPT_EMP = 556;
+  const roleUser = () => ({ ...makeReq().user, employee_id: 7, role_code: 'deputy_head' }) as AuthenticatedRequest['user'];
+  const roleReq = (over: Partial<AuthenticatedRequest> = {}) => makeReq({ ...over, user: roleUser() });
+  /** Галочки роли: «Заявления» (view/edit) и «Табель → правка». */
+  const setMatrix = (leave: boolean, timesheetEdit: boolean) => {
+    rolePageMock.mockImplementation(async (_req: unknown, page: string, action: string) => {
+      if (page === '/leave-requests') return leave;
+      if (page === '/timesheet') return action === 'view' ? true : timesheetEdit;
+      return false;
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMatrix(true, true);
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue(['dep-1']);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue(['dep-1']);
+  });
+
+  const requestRow = (over: Record<string, unknown>) => ({
+    id: 90, employee_id: COLLEAGUE, status: 'pending', request_type: 'remote', reviewer_id: null, ...over,
+  });
+
+  it('«удалёнку» коллеги по ID не открыть: только в отделе «Начальника»', async () => {
+    const ds = await import('../services/data-scope.service.js');
+    vi.mocked(ds.canWriteEmployeeInScope).mockResolvedValueOnce(false);
+    pgQueryOne.mockResolvedValueOnce(requestRow({ request_type: 'remote' }));
+    const res = makeRes();
+    await leaveRequestsController.getById(roleReq({ params: { id: '90' } } as Partial<AuthenticatedRequest>), res);
+    expect(res._status).toBe(403);
+  });
+
+  it('историю «справки» коллеги не открыть', async () => {
+    const ds = await import('../services/data-scope.service.js');
+    vi.mocked(ds.canWriteEmployeeInScope).mockResolvedValueOnce(false);
+    pgQueryOne.mockResolvedValueOnce({ employee_id: COLLEAGUE, request_type: 'certificate' });
+    const res = makeRes();
+    await leaveRequestsController.getHistory(roleReq({ params: { id: '90' } } as Partial<AuthenticatedRequest>), res);
+    expect(res._status).toBe(403);
+  });
+
+  it('без галочки «Заявления» даже «Корректировку» коллеги по ID не открыть', async () => {
+    setMatrix(false, true);
+    pgQueryOne.mockResolvedValueOnce(requestRow({ request_type: 'time_correction' }));
+    const res = makeRes();
+    await leaveRequestsController.getById(roleReq({ params: { id: '90' } } as Partial<AuthenticatedRequest>), res);
+    expect(res._status).toBe(403);
+  });
+
+  it('своё заявление открывается и без галочки «Заявления»', async () => {
+    setMatrix(false, false);
+    pgQueryOne
+      .mockResolvedValueOnce(requestRow({ employee_id: 7, request_type: 'remote' }))
+      .mockResolvedValue(null);
+    pgQuery.mockResolvedValue([]);
+    const res = makeRes();
+    await leaveRequestsController.getById(roleReq({ params: { id: '90' } } as Partial<AuthenticatedRequest>), res);
+    expect(res._status).toBe(200);
+  });
+
+  it('список отдела: «Корректировки» отдела и всё — у сотрудников отдела «Начальника»', async () => {
+    editableEmployeesMock.mockResolvedValue(new Set([HEAD_DEPT_EMP]));
+    pgQuery
+      .mockResolvedValueOnce([
+        { id: COLLEAGUE, full_name: 'Коллега К.', org_department_id: 'dep-1' },
+        { id: HEAD_DEPT_EMP, full_name: 'Подчинённый П.', org_department_id: 'dep-1' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 11, employee_id: COLLEAGUE, request_type: 'remote', status: 'pending', reviewer_id: null },
+        { id: 12, employee_id: COLLEAGUE, request_type: 'time_correction', status: 'pending', reviewer_id: null },
+        { id: 13, employee_id: HEAD_DEPT_EMP, request_type: 'remote', status: 'pending', reviewer_id: null },
+      ])
+      .mockResolvedValue([]);
+    const res = makeRes();
+    await leaveRequestsController.getDepartment(roleReq(), res);
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id).sort()).toEqual([12, 13]);
+  });
+});
+
+describe('роль «Заместитель»: решение по «Корректировке» требует «Табель → правка»', () => {
+  const CORRECTION = {
+    id: 77, employee_id: 555, status: 'pending', request_type: 'time_correction',
+    start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+    correction_date: '2026-06-01', correction_status: 'present', correction_hours: 8,
+    correction_object_id: null, correction_object_name: null, reason: null,
+  };
+  const roleReq = (body: unknown) => makeReq({
+    body: body as AuthenticatedRequest['body'],
+    user: { ...makeReq().user, employee_id: 7, role_code: 'deputy_head' } as AuthenticatedRequest['user'],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    pgQuery.mockImplementation((async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) {
+        const ids = (params?.[0] as number[]) ?? [];
+        return ids.map(id => (Number(id) === CORRECTION.id ? CORRECTION : null)).filter(Boolean);
+      }
+      if (text.includes('FROM employees')) return [{ id: CORRECTION.employee_id, org_department_id: 'dep-1' }];
+      return [];
+    }) as never);
+    pgQueryOne.mockImplementation((async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) return CORRECTION;
+      if (text.includes('user_profiles')) return { id: 'author-uuid' };
+      if (text.includes('FROM employees')) return { org_department_id: 'dep-1' };
+      return null;
+    }) as never);
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [CORRECTION], rowCount: 1 };
+      if (text.includes('WITH RECURSIVE pairs')) return { rows: [], rowCount: 0 };
+      if (text.includes('UPDATE leave_requests')) return { rows: [{ ...CORRECTION, status: 'approved' }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    editableEmployeesMock.mockResolvedValue(new Set<number>());
+    timesheetEditableEmployeesMock.mockResolvedValue(new Set([CORRECTION.employee_id]));
+  });
+
+  it('с галочкой правки табеля — решает', async () => {
+    rolePageMock.mockResolvedValue(true);
+    const res = makeRes();
+    await leaveRequestsController.bulkApprove(roleReq({ ids: [CORRECTION.id] }), res);
+    expect((res._json as { data: { processed_count: number } }).data.processed_count).toBe(1);
+  });
+
+  it('без неё — пропуск без доступа', async () => {
+    rolePageMock.mockImplementation(async (_req: unknown, page: string, action: string) => (
+      page === '/leave-requests' || (page === '/timesheet' && action === 'view')
+    ));
+    const res = makeRes();
+    await leaveRequestsController.bulkApprove(roleReq({ ids: [CORRECTION.id] }), res);
     const data = (res._json as { data: { processed_count: number; skipped_no_access: number } }).data;
     expect(data.processed_count).toBe(0);
     expect(data.skipped_no_access).toBe(1);

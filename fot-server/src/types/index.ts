@@ -169,6 +169,8 @@ export interface AuthenticatedRequest extends Request {
     __editable_employee_ids?: Set<number>;
     /** Заместитель ли пользователь (миграция 283) — один запрос на HTTP-запрос. */
     __has_deputy_assignment?: boolean;
+    /** Отделы роли «Заместитель» по правилу А (миграция 292, deputy-role.service). */
+    __deputy_head_department_ids?: string[];
     /** Персональный доступ к «Зарплате» (миграция 288) — один запрос на HTTP-запрос. */
     __payroll_access_level?: 'view' | 'edit' | null;
     /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */

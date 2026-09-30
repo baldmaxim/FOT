@@ -36,6 +36,7 @@ import {
   resolveTimesheetReadableDepartmentId,
   resolveTimesheetScope,
   resolveTimesheetScopedDepartmentId,
+  roleAllowsTimesheet,
 } from '../services/timesheet-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { listEmployeeDepartmentPeriods } from '../services/timesheet-employee-periods.service.js';
@@ -1472,6 +1473,12 @@ async function canAccessEmployeeForTimesheetDate(
     return false;
   }
 
+  // «Заместитель» без галочки «Табель → правка» пишет только свою строку — в том числе
+  // через маршруты с личным ключом /employee/requests (миграция 292, правило Б).
+  if (requireEdit && !(await roleAllowsTimesheet(req, 'edit'))) {
+    return req.user.employee_id === employeeId;
+  }
+
   const scope = await resolveTimesheetScope(req);
   if (!scope) {
     return false;
@@ -2808,7 +2815,12 @@ export const timesheetController = {
       // Редактируемость per-employee: view-отделы (миграция 167) видны, но не
       // редактируемы. Фронт по флагу editable прячет правку дня/кнопки.
       const editableEmpsForList = await resolveTimesheetEditableEmployeeIds(req);
-      const isListEmpEditable = (id: number): boolean => editableEmpsForList === 'all' || editableEmpsForList.has(id);
+      // «Заместитель» без галочки «Табель → правка» правит только свою строку (миграция 292):
+      // признаки для UI не должны обещать правку, которую сервер отклонит.
+      const roleCanEditTimesheet = await roleAllowsTimesheet(req, 'edit');
+      const isListEmpEditable = (id: number): boolean =>
+        (roleCanEditTimesheet || id === req.user.employee_id)
+        && (editableEmpsForList === 'all' || editableEmpsForList.has(id));
       // Уволенные/переведённые члены отдела попадают в грид через dismissal_events
       // и закрытые assignments (listEmployeeMembershipsForDepartmentPeriod), но их строка
       // employee_department_access уже is_active=false, поэтому resolveEditableEmployeeIds
@@ -2816,7 +2828,8 @@ export const timesheetController = {
       // все его члены за период редактируемы. Дни после увольнения/перевода всё равно
       // отсекаются: фронт рисует их inactive, а create() — через isEmployeeAssignedToDepartmentOnDate.
       const editableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
-      const displayedDeptEditable = shouldApplyDeptFilter
+      const displayedDeptEditable = roleCanEditTimesheet
+        && shouldApplyDeptFilter
         && membershipDeptId != null
         && (editableDeptIds === 'all' || editableDeptIds.includes(membershipDeptId));
       // Объект табелирования под ФИО (миграция 288): за месяц табеля — для прошедшего
@@ -2937,7 +2950,8 @@ export const timesheetController = {
       // «хотя бы один доступен» фронт показал бы подачу и массовые действия там,
       // где сервер ответит 403.
       const writableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
-      const departmentWritable = shouldApplyDeptFilter && membershipDeptId != null
+      const departmentWritable = roleCanEditTimesheet
+        && shouldApplyDeptFilter && membershipDeptId != null
         && (writableDeptIds === 'all' || writableDeptIds.includes(membershipDeptId));
 
       res.json({
@@ -4480,7 +4494,9 @@ export const timesheetController = {
           ? [requestedDepartmentId]
           : managedIds;
         const editableDeptIds = await resolveTimesheetEditableDepartmentIds(req);
-        const isDeptEditable = (id: string): boolean => editableDeptIds === 'all' || editableDeptIds.includes(id);
+        const roleCanEditTimesheet = await roleAllowsTimesheet(req, 'edit');
+        const isDeptEditable = (id: string): boolean =>
+          roleCanEditTimesheet && (editableDeptIds === 'all' || editableDeptIds.includes(id));
         const ids = new Set<number>();
         for (const deptId of departmentIds) {
           const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
@@ -4519,8 +4535,10 @@ export const timesheetController = {
       // View-отделы (миграция 167): сотрудники вне editable-скоупа не редактируемы,
       // даже если видимы. Для admin/scope='all' — не ограничиваем.
       const editableEmps = await resolveTimesheetEditableEmployeeIds(req);
+      const canEditOthers = await roleAllowsTimesheet(req, 'edit');
       const isEmpEditable = (id: number): boolean =>
-        editableEmps === 'all' || editableEmps.has(id) || periodEditableMemberIds.has(id);
+        (canEditOthers || id === req.user.employee_id)
+        && (editableEmps === 'all' || editableEmps.has(id) || periodEditableMemberIds.has(id));
       const correctionLocks = await loadLocksForScope(
         req,
         adjustments.map(item => ({ employeeId: item.employee_id, workDate: item.work_date })),

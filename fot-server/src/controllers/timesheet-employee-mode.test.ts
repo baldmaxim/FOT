@@ -224,6 +224,7 @@ vi.mock('../services/timesheet-scope.service.js', () => ({
   canAccessEmployeeForTimesheetPeriod: scope.canAccess,
   filterEmployeeIdsByTimesheetScope: vi.fn(async (_req: unknown, ids: number[]) => ids),
   filterAdditionalEmployeeIdsForTimesheetPeriod: vi.fn(async (_req: unknown, ids: number[]) => ids),
+  roleAllowsTimesheet: vi.fn(async () => true),
 }));
 
 vi.mock('../services/timesheet-employee-periods.service.js', () => ({

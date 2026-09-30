@@ -13,6 +13,7 @@ import {
   type IHiringDepartmentSides,
 } from '../services/hiring-access.service.js';
 import { hasDeputyAssignment } from '../services/data-scope.service.js';
+import { isDeputyRole } from '../services/deputy-role.service.js';
 import { getUserIdsByEmployeeIds, getEmployeeUserId } from '../services/recipients.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
@@ -83,6 +84,13 @@ function canApplicantDecide(
   request: { author_employee_id?: unknown; department_id?: unknown },
 ): boolean {
   if (manage) return true;
+  // Роль «Заместитель» (миграция 292) утверждает только там, где назначение главнее роли, —
+  // в отделе, где она «Начальник». Запасного «автор утверждает» у неё нет: иначе заявка без
+  // отдела или старого отдела после перевода обходила бы запрет на оффер.
+  if (!req.user.is_admin && isDeputyRole(req.user.role_code)) {
+    const id = typeof request.department_id === 'string' ? request.department_id : null;
+    return id != null && sides.head.includes(id);
+  }
   if (isApplicantDepartment(sides, request.department_id)) {
     const id = String(request.department_id);
     return sides.head.includes(id);
@@ -294,7 +302,21 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   if (!(await canManageHiring(req))) {
     const sides = await resolveHiringDepartmentSides(req);
     const allowed = [...new Set([...sides.head, ...sides.deputy])];
-    if (departmentId) {
+    // Роль «Заместитель» (миграция 292): заявка — только на отдел, который он ведёт
+    // (заместительский по правилу А или «Начальник»), без фолбэка «свой по карточке».
+    if (!req.user.is_admin && isDeputyRole(req.user.role_code)) {
+      if (departmentId) {
+        if (!allowed.includes(departmentId)) { res.status(403).json({ success: false, error: 'Нет доступа к этому отделу' }); return; }
+      } else if (ownDepartmentId && allowed.includes(ownDepartmentId)) {
+        departmentId = ownDepartmentId;
+      } else if (allowed.length === 1) {
+        departmentId = allowed[0];
+      } else if (allowed.length > 1) {
+        res.status(400).json({ success: false, error: 'Укажите отдел заявки', code: 'DEPARTMENT_REQUIRED' }); return;
+      } else {
+        res.status(403).json({ success: false, error: 'Нет отдела, для которого можно подать заявку' }); return;
+      }
+    } else if (departmentId) {
       const isOwn = allowed.includes(departmentId) || departmentId === ownDepartmentId;
       if (!isOwn) { res.status(403).json({ success: false, error: 'Нет доступа к этому отделу' }); return; }
     } else if (ownDepartmentId && (allowed.length === 0 || allowed.includes(ownDepartmentId))) {

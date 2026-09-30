@@ -76,6 +76,7 @@ vi.mock('../services/sigur.service.js', () => ({
 vi.mock('../services/sigur-live-employees-crud.service.js', () => ({ createSigurEmployee: vi.fn() }));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope: h.canAccessEmployeeInScope,
   hasGlobalDepartmentReadScope: h.hasGlobalDepartmentReadScope,
   normalizeUuidParam: (value: unknown) => (typeof value === 'string' && value.trim() ? value : null),
   resolveManagedDepartmentIds: h.resolveManagedDepartmentIds,

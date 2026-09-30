@@ -1,6 +1,6 @@
 import type { AuthenticatedRequest } from '../types/index.js';
 import type { DataScope } from '../config/access-control.js';
-import { hasPageEdit, hasPageView } from './access-control.service.js';
+import { hasPageEdit, hasPageView, resolveRolePageAccess } from './access-control.service.js';
 import {
   hasAllDepartmentsScope,
   hasGlobalDepartmentReadScope,
@@ -15,6 +15,7 @@ import {
   resolveScopedDepartmentId,
 } from './data-scope.service.js';
 import { isTimekeeper, resolveTimekeeperEditableLiIds, LI_OBSHESTROY_DEPARTMENT_ID } from './timekeeper-scope.service.js';
+import { isDeputyRole } from './deputy-role.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
 
@@ -26,10 +27,29 @@ import { splitDirectReportsByCoverage } from './direct-report-coverage.service.j
 
 export const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 
+/**
+ * Роль «Заместитель» (миграция 292): табель — строго по галочкам роли. Эффективное право
+ * (матрица + «Доступ в админку») на /timesheet или /timesheet-hr. Авто-гранты назначения
+ * 'deputy' и прямые подчинённые его не заменяют. Для остальных ролей — всегда true:
+ * их поведение не меняется.
+ */
+export async function roleAllowsTimesheet(
+  req: AuthenticatedRequest,
+  action: 'view' | 'edit',
+): Promise<boolean> {
+  if (req.user.is_admin || !isDeputyRole(req.user.role_code)) return true;
+  const checks = await Promise.all(
+    MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => resolveRolePageAccess(req, pageKey, action)),
+  );
+  return checks.some(Boolean);
+}
+
 export async function hasManagedTimesheetAccess(
   req: AuthenticatedRequest,
   action: 'view' | 'edit',
 ): Promise<boolean> {
+  // «Заместитель»: только матрица роли, без ветки назначения 'deputy'.
+  if (!req.user.is_admin && isDeputyRole(req.user.role_code)) return roleAllowsTimesheet(req, action);
   const checker = action === 'edit' ? hasPageEdit : hasPageView;
   const checks = await Promise.all(MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => checker(req.user.role_code, pageKey)));
   if (checks.some(Boolean)) return true;
@@ -44,6 +64,12 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     if (accessible === 'all') return 'all';
     if (accessible.length > 0) return 'department';
     // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
+  }
+
+  // «Заместитель» без галочки «Табель → просмотр» видит только себя — даже при прямых
+  // подчинённых или назначениях (миграция 292, правило Б).
+  if (!(await roleAllowsTimesheet(req, 'view'))) {
+    return req.user.employee_id ? 'self' : null;
   }
 
   // Роль с all_departments_scope (миграция 270) ведёт табель всей организации —
@@ -136,6 +162,12 @@ export async function canAccessEmployeeForTimesheetPeriod(
 ): Promise<boolean> {
   if (!employeeId) {
     return false;
+  }
+
+  // «Заместитель» без галочки «Табель → правка» пишет только свою строку — через любые
+  // назначения, отдел роли и прямых подчинённых (миграция 292, правило Б).
+  if (requireEdit && !(await roleAllowsTimesheet(req, 'edit'))) {
+    return req.user.employee_id === employeeId;
   }
 
   const scope = await resolveTimesheetScope(req);

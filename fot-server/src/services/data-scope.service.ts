@@ -19,6 +19,7 @@ import {
   resolveTimekeeperDirectEmployeeIds,
 } from './timekeeper-scope.service.js';
 import { getRoleByCode } from './roles-cache.service.js';
+import { isDeputyRole, resolveDeputyHeadDepartmentIds } from './deputy-role.service.js';
 import { DEFAULT_TIMESHEET_MONTHS_BACK } from '../utils/timesheet-month-access.js';
 
 export type DataScope = 'self' | 'department' | 'all';
@@ -153,8 +154,22 @@ export async function resolveRequestDataScopeWithDirectReports(
  * - is_admin С записями → плоский список потомков назначенных корней (включая сами корни).
  * - manager → только явно назначенные через employee_department_access.
  *   Пустой массив → только свои /employee/*.
+ * - роль «Заместитель» (миграция 292) — плюс его заместительские отделы по правилу А
+ *   (deputy-role.service), без поддерева. Добавляются здесь, одной операцией: у
+ *   resolveAssignedDepartmentScope много ранних возвратов (нет назначений, кэши, падение RPC).
  */
 export async function resolveAccessibleDepartmentIds(
+  req: AuthenticatedRequest,
+): Promise<string[] | 'all'> {
+  const assigned = await resolveAssignedDepartmentScope(req);
+  if (assigned === 'all') return assigned;
+  const deputyHead = await resolveDeputyHeadDepartmentIds(req);
+  if (deputyHead.length === 0) return assigned;
+  return [...new Set([...assigned, ...deputyHead])];
+}
+
+/** Видимые отделы по назначениям (без отделов роли «Заместитель»). */
+async function resolveAssignedDepartmentScope(
   req: AuthenticatedRequest,
 ): Promise<string[] | 'all'> {
   // Кадровая служба (hr) видит всю организацию на ЧТЕНИЕ. Не через is_admin —
@@ -237,9 +252,13 @@ export async function resolveAccessibleDepartmentIds(
   // ЛИБО по фактическим проходам СКУД (skud_events → skud_object_access_points),
   // пересечённые с её папками. См. listTimekeeperDepartmentSeeds.
   // Не employee_department_access её самой.
+  // «Заместитель» (миграция 292): ручные 'deputy' не расширяются поддеревом — они
+  // приходят в resolveAccessibleDepartmentIds вместе с отделом роли, по правилу А.
   const assigned = isTimekeeper(req)
     ? await resolveTimekeeperDepartmentSeeds(req)
-    : await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
+    : isDeputyRole(req.user.role_code)
+      ? await listNonDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null)
+      : await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
   const explicit = [...new Set(assigned)];
   if (explicit.length === 0) return explicit;
 
@@ -287,6 +306,22 @@ export async function resolveAccessibleDepartmentIds(
   return merged;
 }
 
+/**
+ * Отделы, которые при ПРОСМОТРЕ считаются «полными», а не view (миграция 167): editable
+ * (full) плюс заместительские отделы роли «Заместитель» (миграция 292). Отдел роли — не
+ * ручное назначение «Только просмотр», поэтому по объектам СКУД заместителя не режется:
+ * иначе при хотя бы одном его объекте табель показал бы только часть отдела.
+ */
+async function resolveVisibilityFullDepartmentIds(
+  req: AuthenticatedRequest,
+  accessible: string[],
+): Promise<Set<string>> {
+  const editable = await resolveEditableDepartmentIds(req);
+  const full = editable === 'all' ? new Set<string>(accessible) : new Set<string>(editable);
+  for (const id of await resolveDeputyHeadDepartmentIds(req)) full.add(id);
+  return full;
+}
+
 export async function canAccessEmployeeInScope(
   req: AuthenticatedRequest,
   employeeId: number | null | undefined,
@@ -301,8 +336,7 @@ export async function canAccessEmployeeInScope(
     const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
     const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
     if (targetDepartmentIds.length > 0) {
-      const editable = await resolveEditableDepartmentIds(req);
-      const fullSet = editable === 'all' ? new Set(accessible) : new Set(editable);
+      const fullSet = await resolveVisibilityFullDepartmentIds(req, accessible);
       // Через full-отдел (редактируемый) — без ограничений.
       if (targetDepartmentIds.some(id => fullSet.has(id))) return true;
       // Через view-отдел (миграция 167) — только если сотрудник на объектах
@@ -391,8 +425,7 @@ export async function hasObjectViewScope(req: AuthenticatedRequest): Promise<boo
   if (objects.length === 0) return false;
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all' || accessible.length === 0) return false;
-  const editable = await resolveEditableDepartmentIds(req);
-  const fullSet = editable === 'all' ? new Set(accessible) : new Set(editable);
+  const fullSet = await resolveVisibilityFullDepartmentIds(req, accessible);
   return accessible.some(id => !fullSet.has(id));
 }
 
@@ -420,8 +453,7 @@ export async function resolveAccessibleEmployeeIds(
 
   if (accessible.length > 0) {
     // Разделяем full-отделы (редактируемые) и view-отделы (только просмотр).
-    const editable = await resolveEditableDepartmentIds(req);
-    const fullSet = editable === 'all' ? new Set<string>(accessible) : new Set<string>(editable);
+    const fullSet = await resolveVisibilityFullDepartmentIds(req, accessible);
     const viewDeptIds = accessible.filter(id => !fullSet.has(id));
     const fullDeptIds = accessible.filter(id => fullSet.has(id));
 
@@ -652,6 +684,16 @@ export async function resolveTimesheetEditableDepartmentIds(
   if (editable === 'all') return 'all';
   if (req.user.__timesheet_editable_subtree_ids) return req.user.__timesheet_editable_subtree_ids;
 
+  // «Заместитель» (миграция 292): его заместительские отделы — свой по роли и ручные
+  // 'deputy' — уже прошли правило А (листья), поэтому без поддерева. Галочку «Табель →
+  // правка» здесь не проверяем: её держат точки входа (timesheet-scope.roleAllowsTimesheet),
+  // иначе data-scope пришлось бы импортировать access-control (цикл).
+  if (isDeputyRole(req.user.role_code)) {
+    const merged = [...new Set([...editable, ...await resolveDeputyHeadDepartmentIds(req)])];
+    req.user.__timesheet_editable_subtree_ids = merged;
+    return merged;
+  }
+
   const deputy = [...new Set(
     await listDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
   )];
@@ -729,11 +771,16 @@ async function resolveNonDeputyDepartmentIds(
 ): Promise<string[] | 'all'> {
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return 'all';
-  if (!(await hasDeputyAssignment(req))) return accessible;
+  const deputyRole = isDeputyRole(req.user.role_code);
+  if (!deputyRole && !(await hasDeputyAssignment(req))) return accessible;
   if (req.user.__non_deputy_subtree_ids) return req.user.__non_deputy_subtree_ids;
 
+  // «Заместитель» (миграция 292): ограничения роли снимает только назначение «Начальник»
+  // (full). Ручной view, пересекающийся с отделом роли, их не снимает.
   const explicit = [...new Set(
-    await listNonDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
+    deputyRole
+      ? await listEditableDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null)
+      : await listNonDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
   )];
   const expanded = explicit.length > 0
     ? await expandDepartmentSubtree(explicit, 'non_deputy')
@@ -773,6 +820,23 @@ export async function canWriteEmployeeInScope(
   const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
   const allowed = new Set(nonDeputy);
   return targetDepartmentIds.some(id => allowed.has(id));
+}
+
+/**
+ * Чтение ЧУЖИХ карточек, истории, СКУД-профиля и документов сотрудника.
+ *
+ * Роль «Заместитель» (миграция 292) ведёт табель, но не кадры: заместительские отделы
+ * доступа к этим данным не дают — только свой, прямые подчинённые и отделы, где он
+ * «Начальник» (канон — canWriteEmployeeInScope). Для остальных ролей — как раньше.
+ */
+export async function canAccessEmployeeRecordsInScope(
+  req: AuthenticatedRequest,
+  employeeId: number | null | undefined,
+): Promise<boolean> {
+  if (!req.user.is_admin && isDeputyRole(req.user.role_code)) {
+    return canWriteEmployeeInScope(req, employeeId);
+  }
+  return canAccessEmployeeInScope(req, employeeId);
 }
 
 /** WRITE-вариант canAccessDepartmentInScope: «заместительские» отделы не считаются. */

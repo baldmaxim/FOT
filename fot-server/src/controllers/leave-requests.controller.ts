@@ -7,13 +7,16 @@ import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getEmployeeUserId, resolveRoutedLeaveApprovers } from '../services/recipients.service.js';
-import { hasPageView, resolveEffectivePageAccess, roleHasAdminAccess } from '../services/access-control.service.js';
+import { hasPageView, resolveEffectivePageAccess, resolveRolePageAccess, roleHasAdminAccess } from '../services/access-control.service.js';
+import { isDeputyRole } from '../services/deputy-role.service.js';
+import { roleAllowsTimesheet } from '../services/timesheet-scope.service.js';
 
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
   canEditEmployeeTimesheetInScope,
+  canWriteEmployeeInScope,
   hasDeputyAssignment,
   resolveAccessibleDepartmentIds,
   resolveEditableEmployeeIds,
@@ -1188,19 +1191,42 @@ const DEPUTY_DECIDABLE_REQUEST_TYPES = new Set<string>(['time_correction']);
 async function hasDeputyOnlyLeaveAccess(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin) return false;
   if (!req.user.employee_id) return false;
+  // Роль «Заместитель» (миграция 292): сужение действует, даже когда «Заявления» дала
+  // её матрица, — роль ведёт «Корректировки», а не отпуска и прочие заявления отдела.
+  if (isDeputyRole(req.user.role_code)) return true;
   const roleGrant = (await roleHasAdminAccess(req.user.role_code))
     && (await hasPageView(req.user.role_code, '/leave-requests'));
   if (roleGrant) return false;
   return hasDeputyAssignment(req);
 }
 
+/**
+ * Что роль «Заместитель» (миграция 292) видит сверх сужения заместителя: маршрутизируемые
+ * заявления, где она ответственный (их уже отфильтровал filterRoutedVisibility), и все
+ * заявления сотрудников, которых ведёт по назначению «Начальник» или как личный
+ * руководитель — назначение главнее роли.
+ */
+interface IDeputyRoleVisibility {
+  keepEmployeeIds: Set<number> | 'all';
+}
+
+async function resolveDeputyRoleVisibility(req: AuthenticatedRequest): Promise<IDeputyRoleVisibility | undefined> {
+  if (req.user.is_admin || !isDeputyRole(req.user.role_code)) return undefined;
+  return { keepEmployeeIds: await resolveEditableEmployeeIds(req) };
+}
+
 /** Сужение списка заявлений для «только заместителя»: свои типы плюс собственные заявки. */
 function filterDeputyVisibleRequests<T extends { employee_id: number; request_type: string }>(
   rows: T[],
   viewerEmployeeId: number | null,
+  roleVisibility?: IDeputyRoleVisibility,
 ): T[] {
   return rows.filter(r => DEPUTY_DECIDABLE_REQUEST_TYPES.has(String(r.request_type))
-    || (viewerEmployeeId != null && Number(r.employee_id) === viewerEmployeeId));
+    || (viewerEmployeeId != null && Number(r.employee_id) === viewerEmployeeId)
+    || (roleVisibility != null && (
+      ROUTED_LEAVE_TYPES.has(String(r.request_type))
+      || roleVisibility.keepEmployeeIds === 'all'
+      || roleVisibility.keepEmployeeIds.has(Number(r.employee_id)))));
 }
 
 /**
@@ -1215,6 +1241,10 @@ async function canManageLeaveRequest(
   requestType: string,
   fallback: 'view' | 'edit',
 ): Promise<boolean> {
+  // Роль «Заместитель» (миграция 292): чужое заявление — только при своей галочке
+  // «Заявления». Личный ключ /employee/requests (детали, история) её не заменяет.
+  const deputyRole = !req.user.is_admin && isDeputyRole(req.user.role_code);
+  if (deputyRole && !(await resolveRolePageAccess(req, '/leave-requests', fallback))) return false;
   if ((await resolveAccessibleDepartmentIds(req)) === 'all') return true;
   if (ROUTED_LEAVE_TYPES.has(requestType)) {
     const emp = await queryOne<{ org_department_id: string | null }>(
@@ -1228,8 +1258,15 @@ async function canManageLeaveRequest(
   }
   if (fallback === 'edit' && DEPUTY_DECIDABLE_REQUEST_TYPES.has(requestType)) {
     // «Корректировка табеля»: ведёт тот, кто ведёт табель сотрудника — начальник
-    // отдела или его заместитель (миграция 283).
+    // отдела или его заместитель (миграция 283). Решение пишет табель, поэтому роли
+    // «Заместитель» нужна ещё и галочка «Табель → правка».
+    if (!(await roleAllowsTimesheet(req, 'edit'))) return false;
     return canEditEmployeeTimesheetInScope(req, employeeId);
+  }
+  // «Удалёнка», «справка», «учебный» чужого сотрудника роли «Заместитель» видны только
+  // там, где назначение главнее роли: «Начальник», личный руководитель.
+  if (fallback === 'view' && deputyRole && !DEPUTY_DECIDABLE_REQUEST_TYPES.has(requestType)) {
+    return canWriteEmployeeInScope(req, employeeId);
   }
   return fallback === 'edit'
     ? canEditEmployeeInScope(req, employeeId)
@@ -1281,7 +1318,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       req.user.employee_id ?? null,
     );
     const visibleData = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
       : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
@@ -1381,7 +1418,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           req.user.employee_id ?? null,
         );
     const visibleData = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
       : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
@@ -1472,7 +1509,7 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
     );
     const routedVisible = await filterRoutedVisibility(rows, deptByEmp, req.user.employee_id ?? null);
     const visible = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null)
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
       : routedVisible;
     res.json({ success: true, data: { count: visible.length } });
   } catch (err) {
@@ -1618,6 +1655,8 @@ interface IDecisionContext {
   editableEmployeeIds: Set<number> | 'all';
   /** Кого пользователь ведёт в ТАБЕЛЕ: начальник (full) + заместитель (миграция 283). */
   timesheetEditableEmployeeIds: Set<number> | 'all';
+  /** Роль «Заместитель» без галочки «Табель → правка» «Корректировки» не решает (миграция 292). */
+  timesheetEditAllowed: boolean;
   responsibleByEmployee: Map<number, number[]>;
 }
 
@@ -1627,6 +1666,7 @@ async function buildDecisionContext(
 ): Promise<IDecisionContext> {
   const editableEmployeeIds = await resolveEditableEmployeeIds(req);
   const timesheetEditableEmployeeIds = await resolveTimesheetEditableEmployeeIds(req);
+  const timesheetEditAllowed = await roleAllowsTimesheet(req, 'edit');
   const routedEmployeeIds = [...new Set(
     targets
       .filter(t => ROUTED_LEAVE_TYPES.has(String(t.request_type)))
@@ -1634,7 +1674,7 @@ async function buildDecisionContext(
       .filter(Number.isFinite),
   )];
   if (routedEmployeeIds.length === 0) {
-    return { editableEmployeeIds, timesheetEditableEmployeeIds, responsibleByEmployee: new Map() };
+    return { editableEmployeeIds, timesheetEditableEmployeeIds, timesheetEditAllowed, responsibleByEmployee: new Map() };
   }
   // Один запрос отделов и один резолв ответственных на весь пакет — вместо пары
   // запросов на каждую заявку.
@@ -1648,7 +1688,7 @@ async function buildDecisionContext(
   const responsibleByEmployee = await resolveResponsibleEmployeeIdsByEmployee(
     routedEmployeeIds.map(id => ({ employee_id: id, org_department_id: deptByEmployee.get(id) ?? null })),
   );
-  return { editableEmployeeIds, timesheetEditableEmployeeIds, responsibleByEmployee };
+  return { editableEmployeeIds, timesheetEditableEmployeeIds, timesheetEditAllowed, responsibleByEmployee };
 }
 
 /** Может ли текущий пользователь принять решение по заявке (согласовать/отклонить). */
@@ -1669,6 +1709,7 @@ function canDecideLeaveRequest(
   }
   if (DEPUTY_DECIDABLE_REQUEST_TYPES.has(String(requestType))) {
     // «Корректировка табеля» — за тем, кто ведёт табель: начальник или заместитель.
+    if (!ctx.timesheetEditAllowed) return false;
     return ctx.timesheetEditableEmployeeIds === 'all'
       || ctx.timesheetEditableEmployeeIds.has(Number(employeeId));
   }

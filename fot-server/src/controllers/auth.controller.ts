@@ -22,9 +22,14 @@ import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
 import { isAdminAreaPageKey } from '../config/access-control.js';
-import { getRolePageAccess, listDeputyAutoAccessPages } from '../services/access-control.service.js';
+import { DEPUTY_ROLE_DEPARTMENT_PAGES, getRolePageAccess, listDeputyAutoAccessPages } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
-import { listManagedDepartmentIdsForUser, hasActiveDeputyAssignment } from '../services/department-access.service.js';
+import {
+  listManagedDepartmentIdsForUser,
+  listNonDeputyDepartmentIdsForUser,
+  hasActiveDeputyAssignment,
+} from '../services/department-access.service.js';
+import { isDeputyRole, loadDeputyHeadDepartmentIds } from '../services/deputy-role.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
@@ -115,9 +120,17 @@ async function buildProfileResponse(
   // объектам входа (семена + потомки) — чтобы селектор на /timesheet показывал все
   // дочерние бригады, даже если объект назначен на родительский отдел.
   // НЕ выдаём ей /staff-control.
+  // «Заместитель» (миграция 292): ручные full/view + заместительские отделы по правилу А
+  // (свой по роли и ручные deputy) — ровно те, что даёт серверный скоуп.
+  const deputyRole = !role.is_admin && isDeputyRole(role.code);
   const managed_department_ids = timekeeperScope
     ? await expandTimekeeperAccessibleDepartmentIds(timekeeperScope.departmentSeeds)
-    : await listManagedDepartmentIdsForUser(profile.id, null, profile.employee_id);
+    : deputyRole
+      ? [...new Set([
+        ...await listNonDeputyDepartmentIdsForUser(profile.id, profile.employee_id),
+        ...(profile.employee_id != null ? await loadDeputyHeadDepartmentIds(profile.employee_id) : []),
+      ])]
+      : await listManagedDepartmentIdsForUser(profile.id, null, profile.employee_id);
 
   // Табельщица: «прямые подчинённые» = сотрудники её объектов (employee_object_assignment
   // + место работы СКУД employee_skud_object_access). Нужно фронту для рендера direct-reports
@@ -171,7 +184,8 @@ async function buildProfileResponse(
   // Зеркало ветки в resolveEffectivePageAccess — без этого бэк запрос пропустит, а
   // фронт пункты меню не покажет (canViewPage смотрит именно в page_access).
   // Гейта managerAutoAccess здесь нет намеренно: роль заместителя может быть любой.
-  if (!role.is_admin && await hasActiveDeputyAssignment(profile.employee_id)) {
+  // Роли «Заместитель» (миграция 292) страницы даёт только её матрица.
+  if (!role.is_admin && !deputyRole && await hasActiveDeputyAssignment(profile.employee_id)) {
     for (const [key, grant] of listDeputyAutoAccessPages()) {
       const current = page_access[key];
       page_access[key] = {
@@ -179,6 +193,11 @@ async function buildProfileResponse(
         can_edit: current?.can_edit || grant.can_edit,
       };
     }
+  }
+
+  // Зеркало гейта resolveEffectivePageAccess: без единого отдела разделы заместителя закрыты.
+  if (deputyRole && managed_department_ids.length === 0) {
+    for (const key of DEPUTY_ROLE_DEPARTMENT_PAGES) delete page_access[key];
   }
 
   // «Руководитель экономического отдела» — внесистемная роль (object_kpi_global_roles).

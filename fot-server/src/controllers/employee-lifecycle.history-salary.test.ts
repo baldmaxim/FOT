@@ -44,6 +44,7 @@ vi.mock('../services/sigur-linked-employees.service.js', () => ({ syncLinkedEmpl
 vi.mock('../services/sigur.service.js', () => ({ sigurService: {} }));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
+  canAccessEmployeeRecordsInScope: h.canAccessEmployeeInScope,
   canAccessDepartmentInScope: vi.fn().mockResolvedValue(true),
   resolveRequestDataScope: vi.fn().mockResolvedValue('all'),
   canWriteEmployeeInScope: h.canAccessEmployeeInScope,

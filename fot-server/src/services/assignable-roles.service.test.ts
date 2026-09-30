@@ -41,7 +41,7 @@ beforeEach(() => {
 describe('isRoleAssignableByNonAdmin', () => {
   it('обычные рабочие роли — назначаемы', async () => {
     for (const code of ['office', 'worker', 'contractor', 'manager', 'manager_obj',
-      'site_supervisor', 'timekeeper', 'hr', 'economist', 'otitb', 'mts_manager']) {
+      'site_supervisor', 'timekeeper', 'hr', 'economist', 'otitb', 'mts_manager', 'deputy_head']) {
       expect(await isRoleAssignableByNonAdmin(code)).toBe(true);
     }
   });

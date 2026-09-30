@@ -1,6 +1,7 @@
 import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { expandDepartmentSubtree } from './data-scope.service.js';
+import { isDeputyRole, resolveDeputyHeadDepartmentIds } from './deputy-role.service.js';
 import {
   listDeputyDepartmentIdsForUser,
   listEditableDepartmentIdsForUser,
@@ -127,14 +128,21 @@ export async function resolveHiringDepartmentSides(
   const employeeId = req.user.employee_id ?? null;
   if (employeeId == null) return { head: [], deputy: [] };
 
+  // Роль «Заместитель» (миграция 292): её заместительские отделы — свой по роли и ручные
+  // deputy — уже прошли правило А (листья), поэтому без поддерева.
+  const deputyRole = !req.user.is_admin && isDeputyRole(req.user.role_code);
   const [headExplicit, deputyExplicit] = await Promise.all([
     listEditableDepartmentIdsForUser(req.user.id, employeeId),
-    listDeputyDepartmentIdsForUser(req.user.id, employeeId),
+    deputyRole
+      ? resolveDeputyHeadDepartmentIds(req)
+      : listDeputyDepartmentIdsForUser(req.user.id, employeeId),
   ]);
 
   const [head, deputyExpanded] = await Promise.all([
     expandDepartmentSubtree([...new Set(headExplicit)], 'hiring_head'),
-    expandDepartmentSubtree([...new Set(deputyExplicit)], 'hiring_deputy'),
+    deputyRole
+      ? Promise.resolve([...new Set(deputyExplicit)])
+      : expandDepartmentSubtree([...new Set(deputyExplicit)], 'hiring_deputy'),
   ]);
 
   const headSet = new Set(head);
