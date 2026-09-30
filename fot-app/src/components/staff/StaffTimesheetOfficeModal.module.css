@@ -1,5 +1,5 @@
 /* Окно «Режим табелирования» (миграция 291). Mobile-first: база — телефон, окно на весь экран;
-   с 769 px — 85 % × 85 %. Каркас (.sc-overlay, .sc-modal, шапка, кнопки, таблица) —
+   с 769 px — по ширине содержимого (не шире 820 px и 85 % экрана) × 85 % высоты, по центру. Каркас (.sc-overlay, .sc-modal, шапка, кнопки, таблица) —
    StaffControlPage.css. Двойной класс (.modal.modal, .tableWrap.tableWrap) перебивает глобальные
    правила независимо от порядка подключения CSS. Прокручивается только тело: футер с
    «Сохранить» всегда в окне. */
@@ -195,7 +195,6 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  max-width: 760px;
 }
 
 .sectionTitle {
@@ -306,12 +305,11 @@
   gap: 12px;
 }
 
-/* Таблица — как у «Текущих сотрудников» (.sc-table), но узкая: три колонки без простора.
+/* Таблица — как у «Текущих сотрудников» (.sc-table), на всю ширину окна: окно само узкое.
    Без своей прокрутки: шапка липнет к прокрутке тела окна. */
 .tableWrap.tableWrap {
   flex: none;
   overflow: visible;
-  max-width: 760px;
 }
 
 .table.table thead {
@@ -343,21 +341,29 @@
   vertical-align: middle;
 }
 
+/* Телефон: ячейки плотнее и «Назначить» впритык к «Офис» с галочкой — ФИО не рвётся посреди
+   слова даже на 360 px. */
+.table.table th,
+.table.table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .colObject {
-  width: 32%;
+  width: 30%;
 }
 
 .colAssign {
-  width: 116px;
+  width: 104px;
 }
 
 .nameCell.nameCell,
 .objectCell {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
-/* На телефоне «Назначить» и «Офис» в шапке — друг под другом. */
+/* «Назначить» сверху, «Офис» отдела под ним — ровно над «Офис» строк на любой ширине. */
 .thAssign {
   display: flex;
   flex-direction: column;
@@ -413,7 +419,7 @@
 
 @media (min-width: 769px) {
   .modal.modal {
-    width: 85vw;
+    width: min(85vw, 820px);
     height: 85dvh;
     max-height: 85dvh;
     border-radius: var(--radius-lg);
@@ -459,23 +465,23 @@
     padding: 14px 24px;
   }
 
+  .table.table th,
+  .table.table td {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
   .colObject {
     width: 240px;
   }
 
   .colAssign {
-    width: 210px;
+    width: 150px;
   }
 
   .nameCell.nameCell,
   .table th {
     white-space: nowrap;
-  }
-
-  .thAssign {
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
   }
 
   .officeButton {
