@@ -48,6 +48,13 @@ vi.mock('./employee-timesheet-object.service.js', async importOriginal => ({
   )),
 }));
 vi.mock('./attendance.service.js', () => ({ loadAttendanceAdjustments: vi.fn() }));
+// Права окна «Режим табелирования» проверяются в юнит-тестах; здесь — всё разрешено.
+vi.mock('./data-scope.service.js', () => ({
+  canWriteDepartmentInScope: vi.fn(async () => true),
+  canWriteEmployeeInScope: vi.fn(async () => true),
+  resolveAccessibleDepartmentIds: vi.fn(async () => 'all'),
+  resolveWritableScopedDepartmentIds: vi.fn(async (_req: unknown, ids: string[] = []) => ids),
+}));
 vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: vi.fn() }));
 
 import { resolveExportModes, nextMonthStart } from './timesheet-export-mode.service.js';
@@ -56,6 +63,7 @@ import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './
 import { monthEnd } from './employee-timesheet-object.service.js';
 import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
 import { enforceOfficeForDepartments, isTimesheetOfficeLocked } from './timesheet-office-rule.js';
+import { updateTimesheetOffice } from './timesheet-office.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
@@ -793,6 +801,8 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       await recomputeCurrentMonth(new Date(`${lastDay}T05:00:00+03:00`));
       expect(await emp(40)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
       expect(await emp(46)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+      // Отдел главнее личного: личный «Офис» 42-го стал «Офисом» отдела — источник auto, автора нет.
+      expect(await emp(42)).toEqual({ mode: 'current_activity', object_id: null, set_by: 'auto', user_id: null });
 
       // После пересчёта дня «Офис» с «Другого отдела» сняли — фиксация считает 46-го по часам.
       await q('DELETE FROM timesheet_office_departments WHERE org_department_id = $1', [D_OTHER]);
@@ -808,6 +818,43 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
 
       expect(await freezeMonth(current, new Date(`${next}T06:00:00+03:00`)))
         .toEqual({ kind: 'skipped', reason: 'already_frozen' });
+    });
+
+    it('окно: личный «Офис» в отделе с «Офисом» — 400; «Вернуть» и снятие с отдела — объект по часам сразу', async () => {
+      const req = { user: { id: U_HR }, ip: '127.0.0.1', headers: {}, socket: {} } as never;
+      const now = new Date(`${nextMonthStart(current).slice(0, 8)}10T12:00:00+03:00`);
+
+      await updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [46], remove: [] } }, now);
+      expect(await emp(46)).toEqual({ mode: 'current_activity', object_id: null, set_by: null, user_id: U_HR });
+
+      // 41 — в отделе с «Офисом»: личного там не бывает.
+      await expect(updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [41], remove: [] } }, now))
+        .rejects.toMatchObject({ status: 400, code: 'TIMESHEET_OFFICE_INVALID', details: [41] });
+
+      hours.byEmployee = new Map([[46, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 80 }]]]);
+      const back = await updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [], remove: [46] } }, now);
+      expect(back).toMatchObject({ changed: true, employees_removed: 1, recomputed: 1 });
+      expect(await emp(46)).toEqual({ mode: 'object', object_id: DOM, set_by: 'auto', user_id: null });
+      expect(await isTimesheetOfficeLocked(46)).toBe(false);
+
+      // Снятие «Офиса» с отдела: сотрудники с часами — сразу по часам, без часов — «Офис» от авто.
+      hours.byEmployee = new Map([
+        [40, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 30 }]],
+        [44, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 50 }]],
+      ]);
+      const removed = await updateTimesheetOffice(req, { departments: { add: [], remove: [D_OWN] }, employees: { add: [], remove: [] } }, now);
+      expect(removed).toMatchObject({ changed: true, departments_removed: 1, recomputed: 2 });
+      expect(await emp(40)).toMatchObject({ mode: 'object', object_id: ZIL, set_by: 'auto' });
+      expect(await emp(44)).toMatchObject({ mode: 'object', object_id: DOM, set_by: 'auto' });
+      expect(await emp(41)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+      expect(await isTimesheetOfficeLocked(41)).toBe(false);
+      expect(await q(`SELECT user_id::text, details->>'reason' AS reason, (details->>'changed')::int AS changed
+                        FROM audit_logs WHERE action = 'TIMESHEET_OBJECT_AUTO_ASSIGNED' AND details->>'reason' = 'office_removed'
+                       ORDER BY id`))
+        .toEqual([
+          { user_id: U_HR, reason: 'office_removed', changed: 1 },
+          { user_id: U_HR, reason: 'office_removed', changed: 2 },
+        ]);
     });
   });
 });

@@ -244,7 +244,8 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // Окно «Режим табелирования»: после «Сохранить» и «Снять» список «Назначено» обязан
     // перечитаться с сервера — max-age=30 показал бы состояние до правки.
     || path === '/admin/timesheet-office'
-    || path === '/admin/timesheet-office/employees';
+    || path === '/admin/timesheet-office/employees'
+    || path.startsWith('/admin/timesheet-office/departments/');
 };
 
 const refreshSession = async (): Promise<boolean> => {

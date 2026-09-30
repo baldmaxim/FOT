@@ -226,7 +226,17 @@ async function withModeSnapshot<T>(fn: (client: PoolClient) => Promise<T>): Prom
   throw lastError instanceof Error ? lastError : new Error('timesheet object transaction failed');
 }
 
-async function loadOwnActiveEmployees(client: PoolClient, contractorIds: string[]): Promise<IEmployeeModeRow[]> {
+/**
+ * Свои работающие сотрудники с режимами. employeeIds — только эти, и строки берутся
+ * FOR UPDATE по порядку id (пересчёт сразу после снятия «Офиса» в окне). Без списка —
+ * все и без блокировки строк: ночь не держит всех сотрудников на время расчёта часов.
+ */
+export async function loadOwnActiveEmployees(
+  client: PoolClient,
+  contractorIds: string[],
+  employeeIds?: readonly number[],
+): Promise<IEmployeeModeRow[]> {
+  const filtered = employeeIds !== undefined;
   const rows = (await client.query<IEmployeeModeRow>(
     `SELECT e.id,
             e.full_name,
@@ -239,15 +249,17 @@ async function loadOwnActiveEmployees(client: PoolClient, contractorIds: string[
        LEFT JOIN timesheet_office_departments tod ON tod.org_department_id = e.org_department_id
       WHERE e.is_archived = false
         AND e.employment_status = 'active'
-        AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($1::uuid[])))
-      ORDER BY e.id`,
-    [contractorIds],
+        AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($1::uuid[])))${filtered ? `
+        AND e.id = ANY($2::int[])` : ''}
+      ORDER BY e.id${filtered ? `
+      FOR UPDATE OF e` : ''}`,
+    filtered ? [contractorIds, [...employeeIds]] : [contractorIds],
   )).rows;
   return rows.map(row => ({ ...row, id: Number(row.id) }));
 }
 
 /** Запись изменений; условие кандидата — ещё раз в самом UPDATE. */
-async function applyChanges(client: PoolClient, changes: readonly IAutoChange[], all: boolean): Promise<number[]> {
+export async function applyChanges(client: PoolClient, changes: readonly IAutoChange[], all: boolean): Promise<number[]> {
   if (changes.length === 0) return [];
   const rows = (await client.query<{ id: number }>(
     `UPDATE employees e
@@ -271,7 +283,7 @@ async function applyChanges(client: PoolClient, changes: readonly IAutoChange[],
   return rows.map(row => Number(row.id));
 }
 
-async function auditChanges(
+export async function auditChanges(
   client: PoolClient,
   changes: readonly IAutoChange[],
   appliedIds: readonly number[],
@@ -355,7 +367,7 @@ function requireState(state: ITimesheetObjectAutoState | null): ITimesheetObject
 }
 
 /** Вчера по МСК. */
-function yesterdayMsk(now: Date): string {
+export function yesterdayMsk(now: Date): string {
   const date = new Date(`${moscowTodayIso(now)}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);

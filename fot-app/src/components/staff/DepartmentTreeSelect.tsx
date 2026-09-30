@@ -29,6 +29,8 @@ interface IDepartmentTreeSelectProps {
   showAllOption?: boolean;
   /** Текст в триггере при пустом value. Default «Все отделы». */
   emptyLabel?: string;
+  /** Крестик сброса выбранного отдела и без строки «Все отделы» (формы). Default false. */
+  clearable?: boolean;
   /**
    * Форма назначения/перевода: отделы с is_assignable=false нельзя выбрать.
    * По умолчанию false — в фильтрах и навигации такой отдел выбирается
@@ -70,6 +72,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   placeholder = 'Поиск отдела...',
   showAllOption = true,
   emptyLabel = ALL_LABEL,
+  clearable = false,
   disableUnassignable = false,
   flattenSingleRoot = false,
 }) => {
@@ -202,8 +205,8 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   );
 
   // Крестик: при поиске — стирает текст (список остаётся открытым); без поиска — сбрасывает
-  // выбранный отдел на «Все отделы» (только там, где такой вариант есть).
-  const canClear = open ? query.length > 0 : showAllOption && Boolean(value);
+  // выбранный отдел: на «Все отделы», где такой вариант есть, или на пустое значение (clearable).
+  const canClear = open ? query.length > 0 : (showAllOption || clearable) && Boolean(value);
   const handleClear = useCallback(() => {
     if (open) {
       setQuery('');
@@ -288,7 +291,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
               onMouseDown={e => e.preventDefault()}
               onClick={handleClear}
               aria-label={open ? 'Очистить поиск отдела' : 'Сбросить отдел'}
-              title={open ? 'Очистить' : 'Все отделы'}
+              title={open || !showAllOption ? 'Очистить' : 'Все отделы'}
             >
               <X size={14} aria-hidden="true" />
             </button>

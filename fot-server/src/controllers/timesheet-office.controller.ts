@@ -1,7 +1,7 @@
 /**
  * Окно «Режим табелирования» в «Управлении кадрами» (миграция 291): «Офис» отделу или
  * сотруднику. Право — /staff-control/timesheet-office (admin, hr_admin); логика —
- * timesheet-office.service.ts.
+ * timesheet-office.service.ts (запись) и timesheet-office-read.service.ts (чтение).
  */
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -9,10 +9,13 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import {
   TIMESHEET_OFFICE_BATCH_LIMIT,
   TimesheetOfficeError,
-  getTimesheetOfficeState,
-  searchTimesheetOfficeEmployees,
   updateTimesheetOffice,
 } from '../services/timesheet-office.service.js';
+import {
+  getTimesheetOfficeDepartmentMembers,
+  getTimesheetOfficeState,
+  searchTimesheetOfficeEmployees,
+} from '../services/timesheet-office-read.service.js';
 
 const idList = <T extends z.ZodTypeAny>(item: T) => z.array(item).max(TIMESHEET_OFFICE_BATCH_LIMIT).default([]);
 
@@ -29,6 +32,10 @@ const updateSchema = z.object({
 
 const searchSchema = z.object({
   search: z.string().trim().max(64).default(''),
+});
+
+const departmentParamsSchema = z.object({
+  id: z.string().uuid(),
 });
 
 function handleError(res: Response, err: unknown, context: string): void {
@@ -61,6 +68,20 @@ export const timesheetOfficeController = {
       res.json({ success: true, data: await searchTimesheetOfficeEmployees(req, parsed.data.search) });
     } catch (err) {
       handleError(res, err, 'searchEmployees');
+    }
+  },
+
+  /** GET /api/admin/timesheet-office/departments/:id/employees */
+  async getDepartmentMembers(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const parsed = departmentParamsSchema.safeParse(req.params);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'Некорректный id отдела', details: parsed.error.issues });
+      return;
+    }
+    try {
+      res.json({ success: true, data: await getTimesheetOfficeDepartmentMembers(req, parsed.data.id) });
+    } catch (err) {
+      handleError(res, err, 'getDepartmentMembers');
     }
   },
 

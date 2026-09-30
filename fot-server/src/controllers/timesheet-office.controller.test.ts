@@ -5,14 +5,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   getState: vi.fn(),
   search: vi.fn(),
+  members: vi.fn(),
   update: vi.fn(),
 }));
 
 vi.mock('../services/timesheet-office.service.js', async importOriginal => ({
   ...(await importOriginal<typeof import('../services/timesheet-office.service.js')>()),
+  updateTimesheetOffice: h.update,
+}));
+vi.mock('../services/timesheet-office-read.service.js', () => ({
   getTimesheetOfficeState: h.getState,
   searchTimesheetOfficeEmployees: h.search,
-  updateTimesheetOffice: h.update,
+  getTimesheetOfficeDepartmentMembers: h.members,
 }));
 
 const { timesheetOfficeController } = await import('./timesheet-office.controller.js');
@@ -82,5 +86,28 @@ describe('timesheetOfficeController.searchEmployees', () => {
     await timesheetOfficeController.searchEmployees({ query: { search: ' Семёнов ' } } as never, res as never);
     expect(h.search).toHaveBeenCalledWith(expect.anything(), 'Семёнов');
     expect(res.body).toEqual({ success: true, data: [] });
+  });
+});
+
+describe('timesheetOfficeController.getDepartmentMembers', () => {
+  it('id не uuid — 400 без вызова сервиса; иначе — данные сервиса', async () => {
+    const bad = mockRes();
+    await timesheetOfficeController.getDepartmentMembers({ params: { id: 'abc' } } as never, bad as never);
+    expect(bad.statusCode).toBe(400);
+    expect(h.members).not.toHaveBeenCalled();
+
+    h.members.mockResolvedValue({ office: false, employees: [] });
+    const res = mockRes();
+    await timesheetOfficeController.getDepartmentMembers({ params: { id: DEPT } } as never, res as never);
+    expect(h.members).toHaveBeenCalledWith(expect.anything(), DEPT);
+    expect(res.body).toEqual({ success: true, data: { office: false, employees: [] } });
+  });
+
+  it('ошибка сервиса — её статус и код', async () => {
+    h.members.mockRejectedValue(new TimesheetOfficeError(403, 'TIMESHEET_OFFICE_FORBIDDEN', 'Отдел вне вашего доступа'));
+    const res = mockRes();
+    await timesheetOfficeController.getDepartmentMembers({ params: { id: DEPT } } as never, res as never);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ success: false, code: 'TIMESHEET_OFFICE_FORBIDDEN' });
   });
 });

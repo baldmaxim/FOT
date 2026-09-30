@@ -61,11 +61,12 @@ describe('enforceOfficeForDepartments', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('«Офис» всем, кроме уже «Офиса» от авто и личного: FOR UPDATE по id, условия повторены в UPDATE', async () => {
+  it('«Офис» всем, кроме уже «Офиса» от авто — и личный «Офис» (отдел главнее): FOR UPDATE по id, условия повторены в UPDATE', async () => {
     const { client, calls } = fakeClient([
       { id: 20, full_name: 'Шупта М. С.', department_id: DEPT, mode: 'object', object_id: 'o-metro', set_by: 'employee' },
       { id: 21, full_name: 'Новичок', department_id: DEPT, mode: null, object_id: null, set_by: null },
-    ], [20, 21]);
+      { id: 22, full_name: 'Личный', department_id: DEPT, mode: 'current_activity', object_id: null, set_by: null },
+    ], [20, 21, 22]);
 
     const changes = await enforceOfficeForDepartments(client, [DEPT], CONTRACTORS);
 
@@ -75,16 +76,20 @@ describe('enforceOfficeForDepartments', () => {
     expect(select.sql).toContain('FOR UPDATE OF e');
     expect(select.sql).toContain("e.employment_status = 'active'");
     expect(select.sql).toContain("NOT (e.timesheet_export_mode IS NOT DISTINCT FROM 'current_activity'");
+    // Личный «Офис» не исключается: в отделе с «Офисом» он становится «Офисом» отдела.
+    expect(select.sql).not.toContain('timesheet_export_set_at IS NOT NULL');
     expect(select.params).toEqual([CONTRACTORS, false, [DEPT]]);
 
     expect(update.sql).toContain("timesheet_export_set_by = 'auto'");
     expect(update.sql).toContain('tod.org_department_id = e.org_department_id');
     expect(update.sql).toContain("e.employment_status = 'active'");
-    expect(update.params).toEqual([CONTRACTORS, [20, 21]]);
+    expect(update.sql).not.toContain('timesheet_export_set_at IS NOT NULL');
+    expect(update.params).toEqual([CONTRACTORS, [20, 21, 22]]);
 
     expect(changes).toEqual([
       { employeeId: 20, fullName: 'Шупта М. С.', departmentId: DEPT, fromMode: 'object', fromObjectId: 'o-metro', fromSetBy: 'employee' },
       { employeeId: 21, fullName: 'Новичок', departmentId: DEPT, fromMode: null, fromObjectId: null, fromSetBy: null },
+      { employeeId: 22, fullName: 'Личный', departmentId: DEPT, fromMode: 'current_activity', fromObjectId: null, fromSetBy: null },
     ]);
   });
 

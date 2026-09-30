@@ -64,10 +64,29 @@
   font-size: 16px;
 }
 
-.select.select:focus,
-.input:focus {
+.select.select:focus {
   outline: none;
   border-color: var(--primary);
+}
+
+/* Поиск по ФИО и выбранный сотрудник — как поле «Отдел» (DepartmentTreeSelect): фон, рамка,
+   наведение и фокус. */
+.input,
+.picked {
+  background: var(--surface);
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.input:hover:not(:disabled),
+.picked:hover {
+  border-color: var(--text-muted);
+}
+
+.input:focus,
+.picked:focus-within {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
 }
 
 .actions {
@@ -137,7 +156,6 @@
   padding: 0 0 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
 }
 
 .pickedText {
@@ -251,6 +269,79 @@
   cursor: not-allowed;
 }
 
+/* Сотрудники отдела: на телефоне объект под ФИО, кнопка справа; с 769 px — три колонки. */
+.memberRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  min-height: 52px;
+  padding: 6px 4px 6px 12px;
+}
+
+.memberRow + .memberRow {
+  border-top: 1px solid var(--border);
+}
+
+.memberName {
+  grid-column: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.memberObject {
+  grid-column: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.memberRow .rowButton {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.rowButton {
+  flex: 0 0 auto;
+  min-width: 88px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color 150ms ease-out;
+}
+
+.rowButton:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.rowButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.banner {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-muted);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.stateRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 @media (min-width: 769px) {
   .modal.modal {
     width: 85vw;
@@ -290,8 +381,26 @@
     min-height: 44px;
   }
 
-  .removeButton {
+  .removeButton,
+  .rowButton {
     min-height: 34px;
+  }
+
+  .memberRow {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+    min-height: 44px;
+    padding: 4px 4px 4px 12px;
+  }
+
+  .memberObject {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 14px;
+  }
+
+  .memberRow .rowButton {
+    grid-column: 3;
+    grid-row: 1;
   }
 }
 
@@ -300,7 +409,8 @@
   .select.select,
   .input,
   .saveButton,
-  .removeButton {
+  .removeButton,
+  .rowButton {
     min-height: 44px;
     height: auto;
   }
@@ -308,7 +418,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .resultButton,
-  .removeButton {
+  .removeButton,
+  .rowButton,
+  .input,
+  .picked {
     transition: none;
   }
 }

@@ -6,17 +6,14 @@
  * (TIMESHEET_MODE_LOCK_KEY — его же берут ночной расчёт, выбор в ЛК/табеле, дедуп и слияние
  * отделов): прошлый месяц не зафиксирован — 409; сотрудники перечитываются FOR UPDATE и
  * сверяются со снимком проверок — расхождение 409; запись и аудит — одной транзакцией.
+ *
+ * Отдел главнее личного: сотруднику отдела с «Офисом» личный «Офис» не ставится. Снятие
+ * «Офиса» — личного или с отдела — сразу возвращает объект по часам, как посчитала бы ночь.
  */
 import type { AuthenticatedRequest } from '../types/index.js';
 import { query, withTransaction } from '../config/postgres.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
-import { escapeLike } from '../utils/search.utils.js';
-import {
-  canWriteDepartmentInScope,
-  canWriteEmployeeInScope,
-  resolveAccessibleDepartmentIds,
-  resolveWritableScopedDepartmentIds,
-} from './data-scope.service.js';
+import { canWriteDepartmentInScope, canWriteEmployeeInScope } from './data-scope.service.js';
 import { employeeCache } from './employee-cache.service.js';
 import {
   loadContractorDepartmentIds,
@@ -32,12 +29,11 @@ import {
   writeOfficeAudit,
   type IOfficeAuditEntry,
 } from './timesheet-office-rule.js';
+import { recomputeTimesheetObjectsNow } from './timesheet-object-recompute.service.js';
 import { isRetryableDbError } from './timesheet-snapshot-tx.js';
 
 /** Предел одного списка в запросе записи. */
 export const TIMESHEET_OFFICE_BATCH_LIMIT = 500;
-const SEARCH_LIMIT = 20;
-const SEARCH_MIN_LENGTH = 2;
 const MAX_ATTEMPTS = 3;
 
 export type TimesheetOfficeErrorCode =
@@ -61,27 +57,6 @@ export class TimesheetOfficeError extends Error {
   }
 }
 
-export interface ITimesheetOfficeDepartment {
-  id: string;
-  name: string;
-  employees_count: number;
-}
-
-export interface ITimesheetOfficeEmployee {
-  id: number;
-  full_name: string;
-  department: string | null;
-}
-
-export interface ITimesheetOfficeState {
-  /** Отделы, которые можно выбрать: активные, не подрядные, в скоупе записи. */
-  allowed_department_ids: string[];
-  /** Отделы с «Офисом». */
-  departments: ITimesheetOfficeDepartment[];
-  /** Сотрудники с личным «Офисом». */
-  employees: ITimesheetOfficeEmployee[];
-}
-
 export interface ITimesheetOfficeUpdate {
   departments: { add: string[]; remove: string[] };
   employees: { add: number[]; remove: number[] };
@@ -95,107 +70,11 @@ export interface ITimesheetOfficeResult {
   employees_removed: number;
   /** Сотрудникам добавленных отделов поставлен «Офис». */
   members_applied: number;
+  /** После снятия «Офиса» объект по часам сменился у стольких сотрудников. */
+  recomputed: number;
 }
 
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
-
-/** Скоуп чтения как предикат по отделу. */
-async function readScopePredicate(req: AuthenticatedRequest): Promise<(departmentId: string | null) => boolean> {
-  const accessible = await resolveAccessibleDepartmentIds(req);
-  if (accessible === 'all') return () => true;
-  const allowed = new Set(accessible);
-  return departmentId => departmentId !== null && allowed.has(departmentId);
-}
-
-/** GET /api/admin/timesheet-office */
-export async function getTimesheetOfficeState(req: AuthenticatedRequest): Promise<ITimesheetOfficeState> {
-  const [contractorIds, inReadScope] = await Promise.all([
-    loadContractorDepartmentIds(),
-    readScopePredicate(req),
-  ]);
-
-  const candidates = await query<{ id: string }>(
-    `SELECT id::text AS id
-       FROM org_departments
-      WHERE is_active = true
-        AND kind IS DISTINCT FROM 'object'
-        AND NOT (id = ANY($1::uuid[]))`,
-    [contractorIds],
-  );
-  // С id: без них при скоупе «все» функция возвращает пустой список.
-  const allowed = candidates.length > 0
-    ? await resolveWritableScopedDepartmentIds(req, candidates.map(row => row.id))
-    : [];
-
-  // Отделы с «Офисом» — и неактивные: снять правило должно быть можно всегда.
-  const departments = (await query<ITimesheetOfficeDepartment>(
-    `SELECT d.id::text AS id,
-            d.name,
-            (SELECT count(*)::int
-               FROM employees e
-              WHERE e.org_department_id = d.id
-                AND e.is_archived = false
-                AND e.employment_status = 'active') AS employees_count
-       FROM timesheet_office_departments tod
-       JOIN org_departments d ON d.id = tod.org_department_id
-      ORDER BY d.name, d.id`,
-  )).filter(row => inReadScope(row.id));
-
-  const employees = (await query<ITimesheetOfficeEmployee & { department_id: string | null }>(
-    `SELECT e.id,
-            e.full_name,
-            e.org_department_id::text AS department_id,
-            d.name AS department
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-      WHERE e.is_archived = false
-        AND ${personalOfficeSql('e')}
-      ORDER BY e.full_name, e.id`,
-  ))
-    .filter(row => inReadScope(row.department_id))
-    .map(row => ({ id: Number(row.id), full_name: row.full_name, department: row.department }));
-
-  return { allowed_department_ids: allowed, departments, employees };
-}
-
-/** GET /api/admin/timesheet-office/employees?search= — подсказки для «Поиска по ФИО». */
-export async function searchTimesheetOfficeEmployees(
-  req: AuthenticatedRequest,
-  search: string,
-): Promise<ITimesheetOfficeEmployee[]> {
-  const term = search.trim().toLowerCase().replace(/ё/g, 'е');
-  if (term.length < SEARCH_MIN_LENGTH) return [];
-
-  const [contractorIds, accessible] = await Promise.all([
-    loadContractorDepartmentIds(),
-    resolveAccessibleDepartmentIds(req),
-  ]);
-  // Скоуп записи: при «всех» фильтра нет, иначе — отделы, где пользователь может править.
-  const writable = accessible === 'all' ? null : await resolveWritableScopedDepartmentIds(req, accessible);
-  if (writable && writable.length === 0) return [];
-
-  const params: unknown[] = [contractorIds, `%${escapeLike(term)}%`];
-  let scopeSql = '';
-  if (writable) {
-    params.push(writable);
-    scopeSql = 'AND e.org_department_id = ANY($3::uuid[])';
-  }
-  const rows = await query<ITimesheetOfficeEmployee>(
-    `SELECT e.id, e.full_name, d.name AS department
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-      WHERE e.is_archived = false
-        AND e.employment_status = 'active'
-        AND e.org_department_id IS NOT NULL
-        AND NOT (e.org_department_id = ANY($1::uuid[]))
-        AND replace(lower(e.full_name), 'ё', 'е') LIKE $2
-        ${scopeSql}
-      ORDER BY e.full_name, e.id
-      LIMIT ${SEARCH_LIMIT}`,
-    params,
-  );
-  return rows.map(row => ({ id: Number(row.id), full_name: row.full_name, department: row.department }));
-}
 
 interface IEmployeeCheckRow {
   id: number | string;
@@ -270,6 +149,13 @@ const personalAudit = (
   },
 });
 
+const OFFICE_DEPARTMENTS_SQL =
+  'SELECT org_department_id::text AS id FROM timesheet_office_departments WHERE org_department_id = ANY($1::uuid[])';
+
+/** Отделы с «Офисом» после запроса: текущие плюс добавленные, минус снятые. */
+const officeAfterRequest = (current: readonly string[], add: readonly string[], remove: readonly string[]): Set<string> =>
+  new Set([...current, ...add].filter(id => !remove.includes(id)));
+
 /** PUT /api/admin/timesheet-office */
 export async function updateTimesheetOffice(
   req: AuthenticatedRequest,
@@ -290,7 +176,7 @@ export async function updateTimesheetOffice(
   }
   const noop: ITimesheetOfficeResult = {
     changed: false, departments_added: 0, departments_removed: 0,
-    employees_added: 0, employees_removed: 0, members_applied: 0,
+    employees_added: 0, employees_removed: 0, members_applied: 0, recomputed: 0,
   };
   if (deptAdd.length + deptRemove.length + empAdd.length + empRemove.length === 0) return noop;
 
@@ -336,6 +222,20 @@ export async function updateTimesheetOffice(
       invalidEmployees,
     );
   }
+  // Отдел главнее личного: сотруднику отдела, который после запроса будет с «Офисом», — 400.
+  const addDepartments = unique(empAdd.map(id => checkedById.get(id)!.org_department_id!));
+  const officeBefore = officeAfterRequest(
+    addDepartments.length > 0
+      ? (await query<{ id: string }>(OFFICE_DEPARTMENTS_SQL, [addDepartments])).map(row => row.id)
+      : [],
+    deptAdd,
+    deptRemove,
+  );
+  const inOfficeDepartment = empAdd.filter(id => officeBefore.has(checkedById.get(id)!.org_department_id!));
+  if (inOfficeDepartment.length > 0) {
+    throw new TimesheetOfficeError(400, 'TIMESHEET_OFFICE_INVALID', 'Отделу сотрудника уже назначен «Офис»', inOfficeDepartment);
+  }
+
   // Снять можно только личный «Офис»; остальное — no-op.
   const personalToRemove = empRemove.filter(id => checkedById.get(id)?.personal_office === true);
 
@@ -391,6 +291,19 @@ export async function updateTimesheetOffice(
     // Личный «Офис» — поверх любого объекта, в том числе «Офиса» от авто или ручного выбора:
     // меняются источник и автор (столбец 38 «Единого 1С»).
     const addIds = empAdd.filter(id => lockedById.get(id)?.personal_office !== true);
+    // Отделу «Офис» могли назначить после проверки — повторно, под локом.
+    if (addIds.length > 0) {
+      const departments = unique(addIds.map(id => lockedById.get(id)!.org_department_id!));
+      const office = officeAfterRequest(
+        (await client.query<{ id: string }>(OFFICE_DEPARTMENTS_SQL, [departments])).rows.map(row => row.id),
+        deptAdd,
+        deptRemove,
+      );
+      const conflict = addIds.filter(id => office.has(lockedById.get(id)!.org_department_id!));
+      if (conflict.length > 0) {
+        throw new TimesheetOfficeError(409, 'TIMESHEET_OFFICE_CHANGED', 'Отделу сотрудника назначен «Офис» — обновите окно', conflict);
+      }
+    }
     const added = addIds.length > 0
       ? (await client.query<{ id: number | string }>(
         `UPDATE employees e
@@ -410,7 +323,7 @@ export async function updateTimesheetOffice(
       : [];
     for (const id of added) audit.push(personalAudit(lockedById.get(id)!, 'add'));
 
-    // Снятие: объект снова считает ночь (set_by = 'auto'); автора обнулит триггер 289.
+    // Снятие: объект снова авто (set_by = 'auto'), пересчёт по часам — ниже; автора обнулит триггер 289.
     const removeIds = personalToRemove.filter(id => lockedById.get(id)?.personal_office === true);
     const removed = removeIds.length > 0
       ? (await client.query<{ id: number | string }>(
@@ -458,13 +371,28 @@ export async function updateTimesheetOffice(
 
     await writeOfficeAudit(client, audit, { req, userId: req.user.id });
 
+    // «Вернуть»: с кого снят «Офис» — лично или с отдела, — тем объект по часам сразу.
+    const removedDepartmentMembers = departmentsRemoved.length > 0
+      ? (await client.query<{ id: number | string }>(
+        `SELECT e.id FROM employees e
+          WHERE e.org_department_id = ANY($1::uuid[])
+            AND e.is_archived = false
+            AND e.employment_status = 'active'`,
+        [departmentsRemoved.map(row => row.id)],
+      )).rows.map(row => Number(row.id))
+      : [];
+    const recomputed = await recomputeTimesheetObjectsNow(client, [...removed, ...removedDepartmentMembers], {
+      contractorIds, now, userId: req.user.id, reason: 'office_removed',
+    });
+
     return {
-      changed: audit.length > 0,
+      changed: audit.length > 0 || recomputed.length > 0,
       departments_added: departmentsAdded.length,
       departments_removed: departmentsRemoved.length,
       employees_added: added.length,
       employees_removed: removed.length,
       members_applied: members.length,
+      recomputed: recomputed.length,
     };
   }));
 

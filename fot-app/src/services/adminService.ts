@@ -113,6 +113,21 @@ export interface ITimesheetOfficeState {
   employees: ITimesheetOfficeEmployee[];
 }
 
+export interface ITimesheetOfficeMember {
+  id: number;
+  full_name: string;
+  /** Объект табелирования сейчас: «Офис», имя объекта или null. */
+  label: string | null;
+  /** Личный «Офис» из окна. */
+  personal_office: boolean;
+}
+
+export interface ITimesheetOfficeDepartmentMembers {
+  /** У отдела «Офис». */
+  office: boolean;
+  employees: ITimesheetOfficeMember[];
+}
+
 export interface ITimesheetOfficeUpdate {
   departments?: { add?: string[]; remove?: string[] };
   employees?: { add?: number[]; remove?: number[] };
@@ -533,6 +548,13 @@ export const adminService = {
       { signal },
     );
     return response.data || [];
+  },
+
+  async getTimesheetOfficeDepartmentMembers(departmentId: string): Promise<ITimesheetOfficeDepartmentMembers> {
+    const response = await apiClient.get<ApiResponse<ITimesheetOfficeDepartmentMembers>>(
+      `/admin/timesheet-office/departments/${encodeURIComponent(departmentId)}/employees`,
+    );
+    return response.data || { office: false, employees: [] };
   },
 
   async updateTimesheetOffice(payload: ITimesheetOfficeUpdate): Promise<ITimesheetOfficeResult> {

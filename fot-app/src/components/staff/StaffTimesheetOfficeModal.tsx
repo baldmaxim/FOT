@@ -4,6 +4,7 @@ import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { STAFF_MAIN_OBJECTS_QUERY_KEY } from '../../hooks/useStaffMainObjects';
+import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import {
   adminService,
   type ITimesheetOfficeEmployee,
@@ -11,7 +12,9 @@ import {
 } from '../../services/adminService';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { selectableTimesheetOfficeDepartmentIds } from '../../utils/timesheetOfficeDeptFilter';
 import { DepartmentTreeSelect } from './DepartmentTreeSelect';
+import { TimesheetOfficeDepartmentMembers } from './TimesheetOfficeDepartmentMembers';
 import { TimesheetOfficeEmployeeSearch } from './TimesheetOfficeEmployeeSearch';
 import styles from './StaffTimesheetOfficeModal.module.css';
 
@@ -69,11 +72,14 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     staleTime: 0,
   });
   const state = stateQuery.data;
+  const sectionsQuery = useStaffSectionDepartments();
 
+  // Без служебных корней («Уволенные», «test»): только ветки компаний.
   const selectTree = useMemo(() => {
-    const allowed = new Set(state?.allowed_department_ids ?? []);
-    return markAllowed(filterDepartmentTreeByIds(deptTree, allowed), allowed);
-  }, [deptTree, state?.allowed_department_ids]);
+    const selectable = selectableTimesheetOfficeDepartmentIds(state?.allowed_department_ids ?? [], sectionsQuery.data);
+    if (!selectable) return [];
+    return markAllowed(filterDepartmentTreeByIds(deptTree, selectable), selectable);
+  }, [deptTree, state?.allowed_department_ids, sectionsQuery.data]);
 
   const submit = async (payload: ITimesheetOfficeUpdate, successText: string): Promise<boolean> => {
     setBusy(true);
@@ -92,11 +98,13 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     }
   };
 
-  const canSave = !busy && (target === 'department' ? departmentId !== '' : employee !== null);
+  const departmentOffice = state?.departments.some(dept => dept.id === departmentId) ?? false;
+  const canSave = !busy && (target === 'department' ? departmentId !== '' && !departmentOffice : employee !== null);
 
   const handleSave = async (): Promise<void> => {
     if (target === 'department' && departmentId) {
-      if (await submit({ departments: { add: [departmentId] } }, 'Сохранено')) setDepartmentId('');
+      // Отдел остаётся выбранным: в списке ниже видно, что у всех стал «Офис».
+      await submit({ departments: { add: [departmentId] } }, 'Сохранено');
     } else if (target === 'employee' && employee) {
       if (await submit({ employees: { add: [employee.id] } }, 'Сохранено')) setEmployee(null);
     }
@@ -153,11 +161,15 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                   departments={selectTree}
                   value={departmentId}
                   onChange={setDepartmentId}
-                  isLoading={stateQuery.isLoading}
-                  isError={stateQuery.isError}
-                  onRetry={() => void stateQuery.refetch()}
+                  isLoading={stateQuery.isLoading || sectionsQuery.isLoading}
+                  isError={stateQuery.isError || sectionsQuery.isError}
+                  onRetry={() => {
+                    void stateQuery.refetch();
+                    void sectionsQuery.refetch();
+                  }}
                   showAllOption={false}
                   emptyLabel="Выберите отдел"
+                  clearable
                 />
               </div>
             ) : (
@@ -191,6 +203,15 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
               </button>
             </div>
           </section>
+
+          {target === 'department' && departmentId && (
+            <TimesheetOfficeDepartmentMembers
+              departmentId={departmentId}
+              busy={busy}
+              onAssign={id => void submit({ employees: { add: [id] } }, 'Сохранено')}
+              onReturn={id => void submit({ employees: { remove: [id] } }, 'Возвращено к автоматическому расчёту')}
+            />
+          )}
 
           <section className={styles.assigned} aria-labelledby="timesheet-office-assigned">
             <h4 id="timesheet-office-assigned" className={styles.sectionTitle}>Назначено «Офис»</h4>
