@@ -306,19 +306,22 @@
 }
 
 /* Таблица — как у «Текущих сотрудников» (.sc-table), на всю ширину окна: окно само узкое.
-   Без своей прокрутки: шапка липнет к прокрутке тела окна. */
+   ФИО всегда в одну строку: колонка по самому длинному имени (до 40 символов на проде),
+   «Текущий объект» забирает остаток и переносится. На телефоне три колонки не помещаются —
+   таблица прокручивается вбок, как «Текущие сотрудники». */
 .tableWrap.tableWrap {
   flex: none;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 
-.table.table thead {
-  top: calc(-1 * var(--office-body-pad-top));
+.table.table {
+  table-layout: auto;
 }
 
-/* На телефоне заголовки переносятся: «Текущий объект» не лезет в соседнюю колонку. */
 .table th {
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .table thead th:first-child {
@@ -341,23 +344,26 @@
   vertical-align: middle;
 }
 
-/* Телефон: ячейки плотнее и «Назначить» впритык к «Офис» с галочкой — ФИО не рвётся посреди
-   слова даже на 360 px. */
-.table.table th,
-.table.table td {
-  padding-left: 8px;
-  padding-right: 8px;
-}
-
+/* При прокрутке вбок «Текущий объект» не сжимается в столбик из слов. */
 .colObject {
-  width: 30%;
+  width: 150px;
 }
 
+/* «Назначить» — по содержимому: «Офис» с галочкой. */
 .colAssign {
-  width: 104px;
+  width: 1%;
 }
 
-.nameCell.nameCell,
+.table td:last-child {
+  white-space: nowrap;
+}
+
+.nameCell.nameCell {
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .objectCell {
   white-space: normal;
   overflow-wrap: break-word;
@@ -465,23 +471,17 @@
     padding: 14px 24px;
   }
 
-  .table.table th,
-  .table.table td {
-    padding-left: 12px;
-    padding-right: 12px;
+  /* Места хватает: без своей прокрутки, шапка липнет к прокрутке тела окна. */
+  .tableWrap.tableWrap {
+    overflow: visible;
+  }
+
+  .table.table thead {
+    top: calc(-1 * var(--office-body-pad-top));
   }
 
   .colObject {
-    width: 240px;
-  }
-
-  .colAssign {
-    width: 150px;
-  }
-
-  .nameCell.nameCell,
-  .table th {
-    white-space: nowrap;
+    width: auto;
   }
 
   .officeButton {
