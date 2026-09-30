@@ -18,9 +18,13 @@ interface IOfficeToggleProps {
   label: string;
 }
 
-/** «Офис» и зелёная галочка рядом; место под галочку занято всегда — строка не прыгает. */
+/**
+ * Зелёная галочка и «Офис»: галочка слева, чтобы кнопки стояли в одну линию у правого края;
+ * место под галочку занято всегда — строка не прыгает.
+ */
 const OfficeToggle: FC<IOfficeToggleProps> = ({ checked, disabled, onClick, label }) => (
   <span className={styles.assign}>
+    <Check size={18} className={`${styles.check}${checked ? ` ${styles.checkOn}` : ''}`} aria-hidden="true" />
     <button
       type="button"
       className={styles.officeButton}
@@ -31,7 +35,6 @@ const OfficeToggle: FC<IOfficeToggleProps> = ({ checked, disabled, onClick, labe
     >
       Офис
     </button>
-    <Check size={18} className={`${styles.check}${checked ? ` ${styles.checkOn}` : ''}`} aria-hidden="true" />
   </span>
 );
 

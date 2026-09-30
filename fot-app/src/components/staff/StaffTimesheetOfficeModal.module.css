@@ -1,5 +1,5 @@
 /* Окно «Режим табелирования» (миграция 291). Mobile-first: база — телефон, окно на весь экран;
-   с 769 px — по ширине содержимого (не шире 820 px и 85 % экрана) × 85 % высоты, по центру. Каркас (.sc-overlay, .sc-modal, шапка, кнопки, таблица) —
+   с 769 px — не шире 1000 px и 90 % экрана × 90 % высоты, по центру. Каркас (.sc-overlay, .sc-modal, шапка, кнопки, таблица) —
    StaffControlPage.css. Двойной класс (.modal.modal, .tableWrap.tableWrap) перебивает глобальные
    правила независимо от порядка подключения CSS. Прокручивается только тело: футер с
    «Сохранить» всегда в окне. */
@@ -94,7 +94,7 @@
 
 .footer.footer {
   flex: 0 0 auto;
-  justify-content: flex-start;
+  justify-content: flex-end;
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   background: var(--surface);
 }
@@ -354,8 +354,11 @@
   width: 1%;
 }
 
+/* «Офис» у правого края таблицы — с тем же отступом, с каким слева начинается ФИО. */
+.table th:last-child,
 .table td:last-child {
   white-space: nowrap;
+  text-align: right;
 }
 
 .nameCell.nameCell {
@@ -369,14 +372,15 @@
   overflow-wrap: break-word;
 }
 
-/* «Назначить» сверху, «Офис» отдела под ним — ровно над «Офис» строк на любой ширине. */
+/* Шапка в одну строку: «Назначить», справа «Офис» отдела — ровно над «Офис» строк. */
 .thAssign {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
+/* Галочка слева от «Офис»: кнопки стоят в одну линию у края, место под галочку занято всегда. */
 .assign {
   display: inline-flex;
   align-items: center;
@@ -425,9 +429,9 @@
 
 @media (min-width: 769px) {
   .modal.modal {
-    width: min(85vw, 820px);
-    height: 85dvh;
-    max-height: 85dvh;
+    width: min(90vw, 1000px);
+    height: 90dvh;
+    max-height: 90dvh;
     border-radius: var(--radius-lg);
     padding-top: 0;
   }
@@ -471,21 +475,41 @@
     padding: 14px 24px;
   }
 
-  /* Места хватает: без своей прокрутки, шапка липнет к прокрутке тела окна. */
-  .tableWrap.tableWrap {
-    overflow: visible;
-  }
-
-  .table.table thead {
-    top: calc(-1 * var(--office-body-pad-top));
-  }
-
   .colObject {
     width: auto;
   }
 
   .officeButton {
     min-height: 30px;
+  }
+}
+
+/* Узкий экран ноутбука и планшет: окно почти во всю ширину и отступы меньше — шапка таблицы
+   в одну строку помещается без прокрутки вбок. */
+@media (min-width: 769px) and (max-width: 1023px) {
+  .modal.modal {
+    width: 96vw;
+  }
+
+  .body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .footer.footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+/* С 1024 px таблица всегда помещается: без своей прокрутки, шапка липнет к прокрутке тела. */
+@media (min-width: 1024px) {
+  .tableWrap.tableWrap {
+    overflow: visible;
+  }
+
+  .table.table thead {
+    top: calc(-1 * var(--office-body-pad-top));
   }
 }
 
