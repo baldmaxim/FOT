@@ -168,6 +168,7 @@ router.put('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessCon
 // выбора объекта (миграция 291). Отдельное право — только администратор и кадровый админ.
 router.get('/timesheet-office', requirePageAccess('/staff-control/timesheet-office', 'view'), noStore, timesheetOfficeController.getState);
 router.get('/timesheet-office/employees', requirePageAccess('/staff-control/timesheet-office', 'view'), noStore, timesheetOfficeController.searchEmployees);
+router.get('/timesheet-office/employees/:id', requirePageAccess('/staff-control/timesheet-office', 'edit'), noStore, timesheetOfficeController.getEmployee);
 router.get('/timesheet-office/departments/:id/employees', requirePageAccess('/staff-control/timesheet-office', 'edit'), noStore, timesheetOfficeController.getDepartmentMembers);
 router.put('/timesheet-office', requirePageAccess('/staff-control/timesheet-office', 'edit'), timesheetOfficeController.update);
 

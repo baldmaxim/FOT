@@ -245,6 +245,7 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // перечитаться с сервера — max-age=30 показал бы состояние до правки.
     || path === '/admin/timesheet-office'
     || path === '/admin/timesheet-office/employees'
+    || path.startsWith('/admin/timesheet-office/employees/')
     || path.startsWith('/admin/timesheet-office/departments/');
 };
 

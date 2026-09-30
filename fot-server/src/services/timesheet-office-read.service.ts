@@ -7,6 +7,7 @@ import { query, queryOne } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
 import {
   canWriteDepartmentInScope,
+  canWriteEmployeeInScope,
   resolveAccessibleDepartmentIds,
   resolveWritableScopedDepartmentIds,
 } from './data-scope.service.js';
@@ -45,6 +46,12 @@ export interface ITimesheetOfficeMember {
   label: string | null;
   /** Личный «Офис» из окна. */
   personal_office: boolean;
+}
+
+export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
+  department: string | null;
+  /** У отдела сотрудника «Офис»: личный не ставится, отдел главнее. */
+  department_office: boolean;
 }
 
 export interface ITimesheetOfficeDepartmentMembers {
@@ -196,5 +203,58 @@ export async function getTimesheetOfficeDepartmentMembers(
       label: labels.get(row.id) ?? null,
       personal_office: row.personal_office === true,
     })),
+  };
+}
+
+/** GET /api/admin/timesheet-office/employees/:id — строка таблицы для вкладки «Сотрудник». */
+export async function getTimesheetOfficeEmployee(
+  req: AuthenticatedRequest,
+  employeeId: number,
+): Promise<ITimesheetOfficeEmployeeRow> {
+  const [row, contractorIds] = await Promise.all([
+    queryOne<{
+      id: number | string;
+      full_name: string;
+      is_archived: boolean;
+      employment_status: string | null;
+      org_department_id: string | null;
+      department: string | null;
+      personal_office: boolean;
+      department_office: boolean;
+    }>(
+      `SELECT e.id,
+              e.full_name,
+              e.is_archived,
+              e.employment_status,
+              e.org_department_id::text AS org_department_id,
+              d.name AS department,
+              ${personalOfficeSql('e')} AS personal_office,
+              EXISTS (SELECT 1 FROM timesheet_office_departments tod
+                       WHERE tod.org_department_id = e.org_department_id) AS department_office
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.id = $1::int`,
+      [employeeId],
+    ),
+    loadContractorDepartmentIds(),
+  ]);
+  if (!row || row.is_archived || row.employment_status !== 'active' || !row.org_department_id
+    || contractorIds.includes(row.org_department_id)) {
+    throw new TimesheetOfficeError(
+      400, 'TIMESHEET_OFFICE_INVALID', 'Сотрудник не найден, в архиве, не работает или из подрядной организации', [employeeId],
+    );
+  }
+  if (!(await canWriteEmployeeInScope(req, employeeId))) {
+    throw new TimesheetOfficeError(403, 'TIMESHEET_OFFICE_FORBIDDEN', 'Сотрудник вне вашего доступа', { employees: [employeeId] });
+  }
+  const id = Number(row.id);
+  const labels = await loadTimesheetObjectLabels([id]);
+  return {
+    id,
+    full_name: row.full_name,
+    department: row.department,
+    label: labels.get(id) ?? null,
+    personal_office: row.personal_office === true,
+    department_office: row.department_office === true,
   };
 }

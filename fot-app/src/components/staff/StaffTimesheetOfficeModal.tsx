@@ -8,13 +8,22 @@ import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartmen
 import {
   adminService,
   type ITimesheetOfficeEmployee,
+  type ITimesheetOfficeMember,
   type ITimesheetOfficeUpdate,
 } from '../../services/adminService';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { selectableTimesheetOfficeDepartmentIds } from '../../utils/timesheetOfficeDeptFilter';
+import {
+  EMPTY_TIMESHEET_OFFICE_DRAFT,
+  buildTimesheetOfficePayload,
+  draftDepartmentOffice,
+  isTimesheetOfficeRowChecked,
+  type ITimesheetOfficeDraft,
+  type ITimesheetOfficeDraftSource,
+} from '../../utils/timesheetOfficeDraft';
 import { DepartmentTreeSelect } from './DepartmentTreeSelect';
-import { TimesheetOfficeDepartmentMembers } from './TimesheetOfficeDepartmentMembers';
+import { TimesheetOfficeAssignTable, type ITimesheetOfficeTableRow } from './TimesheetOfficeAssignTable';
 import { TimesheetOfficeEmployeeSearch } from './TimesheetOfficeEmployeeSearch';
 import styles from './StaffTimesheetOfficeModal.module.css';
 
@@ -23,7 +32,6 @@ const TIMESHEET_OFFICE_QUERY_KEY = ['admin-timesheet-office'] as const;
 const TIMESHEET_OBJECT_QUERY_KEYS = [
   'employee', 'timesheet', 'timesheet-page', 'timesheet-object', 'my-timesheet-object', STAFF_MAIN_OBJECTS_QUERY_KEY,
 ];
-const OFFICE_VALUE = 'office';
 
 type Target = 'department' | 'employee';
 
@@ -44,6 +52,7 @@ interface IStaffTimesheetOfficeModalProps {
 /**
  * Окно «Режим табелирования» (миграция 291): «Офис» отделу или сотруднику. Кому «Офис»
  * поставлен здесь, тому выбор объекта в ЛК и табеле закрыт, ночной пересчёт его не меняет.
+ * Клики по «Офис» в таблице — отметки; записывает их одна кнопка «Сохранить» внизу.
  */
 export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({ deptTree, onClose }) => {
   const toast = useToast();
@@ -52,6 +61,12 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
   const [departmentId, setDepartmentId] = useState('');
   const [employee, setEmployee] = useState<ITimesheetOfficeEmployee | null>(null);
   const [busy, setBusy] = useState(false);
+  // Отметки живут, пока открыт тот же отдел или сотрудник: смена — чистый лист.
+  const draftKey = target === 'department' ? `department:${departmentId}` : `employee:${employee?.id ?? ''}`;
+  const [draftState, setDraftState] = useState<{ key: string; draft: ITimesheetOfficeDraft }>(
+    { key: '', draft: EMPTY_TIMESHEET_OFFICE_DRAFT },
+  );
+  const draft = draftState.key === draftKey ? draftState.draft : EMPTY_TIMESHEET_OFFICE_DRAFT;
 
   const close = useCallback(() => {
     if (!busy) onClose();
@@ -81,14 +96,78 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     return markAllowed(filterDepartmentTreeByIds(deptTree, selectable), selectable);
   }, [deptTree, state?.allowed_department_ids, sectionsQuery.data]);
 
-  const submit = async (payload: ITimesheetOfficeUpdate, successText: string): Promise<boolean> => {
+  // Строки таблицы: все прямые сотрудники отдела или один сотрудник. Префикс ключа общий
+  // с состоянием окна — после записи перечитывается всё.
+  const membersQuery = useQuery({
+    queryKey: [...TIMESHEET_OFFICE_QUERY_KEY, 'department', departmentId],
+    queryFn: () => adminService.getTimesheetOfficeDepartmentMembers(departmentId),
+    enabled: target === 'department' && departmentId !== '',
+    staleTime: 0,
+  });
+  const employeeQuery = useQuery({
+    queryKey: [...TIMESHEET_OFFICE_QUERY_KEY, 'employee', employee?.id],
+    queryFn: () => adminService.getTimesheetOfficeEmployee(employee!.id),
+    enabled: target === 'employee' && employee !== null,
+    staleTime: 0,
+  });
+  const rowsQuery = target === 'department' ? membersQuery : employeeQuery;
+  const hasSubject = target === 'department' ? departmentId !== '' : employee !== null;
+
+  const subjectRows = useMemo<Array<ITimesheetOfficeMember & { locked?: boolean }> | undefined>(() => {
+    if (target === 'department') return membersQuery.data?.employees;
+    const row = employeeQuery.data;
+    return row ? [{ ...row, locked: row.department_office }] : undefined;
+  }, [target, membersQuery.data, employeeQuery.data]);
+
+  const source = useMemo<ITimesheetOfficeDraftSource | null>(() => {
+    if (!subjectRows) return null;
+    return target === 'department'
+      ? { departmentId, departmentOffice: membersQuery.data?.office ?? false, rows: subjectRows }
+      : { departmentId: null, departmentOffice: false, rows: subjectRows };
+  }, [target, departmentId, membersQuery.data?.office, subjectRows]);
+
+  const tableRows = useMemo<ITimesheetOfficeTableRow[] | undefined>(() => {
+    if (!source || !subjectRows) return undefined;
+    const departmentOffice = draftDepartmentOffice(draft, source);
+    return subjectRows.map(row => ({
+      id: row.id,
+      full_name: row.full_name,
+      label: row.label,
+      checked: isTimesheetOfficeRowChecked(row, draft, source),
+      disabled: busy || departmentOffice || row.locked === true,
+    }));
+  }, [source, subjectRows, draft, busy]);
+
+  const payload = source ? buildTimesheetOfficePayload(draft, source) : null;
+
+  const updateDraft = (change: (current: ITimesheetOfficeDraft) => ITimesheetOfficeDraft): void => {
+    setDraftState({ key: draftKey, draft: change(draft) });
+  };
+  const toggleRow = (id: number): void => {
+    if (!source) return;
+    const row = source.rows.find(item => item.id === id);
+    if (!row) return;
+    const checked = isTimesheetOfficeRowChecked(row, draft, source);
+    updateDraft(current => ({ ...current, employees: new Map(current.employees).set(id, !checked) }));
+  };
+  const toggleDepartment = (): void => {
+    if (!source) return;
+    updateDraft(current => ({ ...current, department: !draftDepartmentOffice(current, source) }));
+  };
+
+  const refreshAfterWrite = async (): Promise<void> => {
+    for (const key of TIMESHEET_OBJECT_QUERY_KEYS) void queryClient.invalidateQueries({ queryKey: [key] });
+    // Ждём перечитывания окна: иначе после сброса отметок на миг мелькнуло бы старое.
+    await queryClient.invalidateQueries({ queryKey: TIMESHEET_OFFICE_QUERY_KEY });
+  };
+
+  const submit = async (update: ITimesheetOfficeUpdate, successText: string): Promise<boolean> => {
     setBusy(true);
     try {
-      const result = await adminService.updateTimesheetOffice(payload);
+      const result = await adminService.updateTimesheetOffice(update);
       if (result.changed) toast.success(successText);
       else toast.info('Без изменений');
-      void queryClient.invalidateQueries({ queryKey: TIMESHEET_OFFICE_QUERY_KEY });
-      for (const key of TIMESHEET_OBJECT_QUERY_KEYS) void queryClient.invalidateQueries({ queryKey: [key] });
+      await refreshAfterWrite();
       return true;
     } catch (error) {
       toast.error(error instanceof ApiError && error.message ? error.message : 'Не удалось сохранить');
@@ -98,16 +177,10 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     }
   };
 
-  const departmentOffice = state?.departments.some(dept => dept.id === departmentId) ?? false;
-  const canSave = !busy && (target === 'department' ? departmentId !== '' && !departmentOffice : employee !== null);
-
   const handleSave = async (): Promise<void> => {
-    if (target === 'department' && departmentId) {
-      // Отдел остаётся выбранным: в списке ниже видно, что у всех стал «Офис».
-      await submit({ departments: { add: [departmentId] } }, 'Сохранено');
-    } else if (target === 'employee' && employee) {
-      if (await submit({ employees: { add: [employee.id] } }, 'Сохранено')) setEmployee(null);
-    }
+    if (!payload) return;
+    // При ошибке отметки остаются — можно поправить и сохранить ещё раз.
+    if (await submit(payload, 'Сохранено')) setDraftState({ key: '', draft: EMPTY_TIMESHEET_OFFICE_DRAFT });
   };
 
   const removeDepartment = (id: string, name: string): void => {
@@ -179,37 +252,18 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
               </div>
             )}
 
-            <div className="sc-field">
-              <label htmlFor="timesheet-office-object">Объект табелирования</label>
-              <select
-                id="timesheet-office-object"
-                className={styles.select}
-                value={OFFICE_VALUE}
-                onChange={() => undefined}
-                disabled={busy}
-              >
-                <option value={OFFICE_VALUE}>Офис</option>
-              </select>
-            </div>
-
-            <div className={styles.actions}>
-              <button
-                type="button"
-                className={`sc-btn apply ${styles.saveButton}`}
-                onClick={() => void handleSave()}
-                disabled={!canSave}
-              >
-                {busy ? 'Сохранение…' : 'Сохранить'}
-              </button>
-            </div>
           </section>
 
-          {target === 'department' && departmentId && (
-            <TimesheetOfficeDepartmentMembers
-              departmentId={departmentId}
-              busy={busy}
-              onAssign={id => void submit({ employees: { add: [id] } }, 'Сохранено')}
-              onReturn={id => void submit({ employees: { remove: [id] } }, 'Возвращено к автоматическому расчёту')}
+          {hasSubject && (
+            <TimesheetOfficeAssignTable
+              rows={tableRows}
+              isLoading={rowsQuery.isLoading}
+              isError={rowsQuery.isError}
+              onRetry={() => void rowsQuery.refetch()}
+              header={target === 'department' && source
+                ? { checked: draftDepartmentOffice(draft, source), disabled: busy, onToggle: toggleDepartment }
+                : null}
+              onToggleRow={toggleRow}
             />
           )}
 
@@ -267,6 +321,17 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
               </div>
             )}
           </section>
+        </div>
+
+        <div className={`sc-modal-footer ${styles.footer}`}>
+          <button
+            type="button"
+            className={`sc-btn apply ${styles.saveButton}`}
+            onClick={() => void handleSave()}
+            disabled={busy || !payload}
+          >
+            {busy ? 'Сохранение…' : 'Сохранить'}
+          </button>
         </div>
       </div>
     </div>

@@ -109,6 +109,7 @@ describe('shouldBypassHttpCache — режим табелирования', () =
     '/admin/timesheet-office',
     '/admin/timesheet-office/employees?search=%D0%A1%D0%B5%D0%BC',
     '/admin/timesheet-office/departments/11111111-1111-4111-8111-111111111111/employees',
+    '/admin/timesheet-office/employees/60',
   ])('%s идёт мимо HTTP-кэша', async (endpoint) => {
     await apiClient.get(endpoint);
     expect(initOf(0).cache).toBe('no-store');

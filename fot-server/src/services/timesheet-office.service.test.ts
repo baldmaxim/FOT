@@ -50,6 +50,7 @@ vi.mock('./timesheet-object-recompute.service.js', () => ({ recomputeTimesheetOb
 const { TimesheetOfficeError, updateTimesheetOffice } = await import('./timesheet-office.service.js');
 const {
   getTimesheetOfficeDepartmentMembers,
+  getTimesheetOfficeEmployee,
   getTimesheetOfficeState,
   searchTimesheetOfficeEmployees,
 } = await import('./timesheet-office-read.service.js');
@@ -434,6 +435,39 @@ describe('сотрудники отдела', () => {
         { id: 52, full_name: 'Васильев', label: null, personal_office: false },
       ],
     });
+  });
+});
+
+describe('сотрудник для вкладки «Сотрудник»', () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: '60', full_name: 'Семенов Иван', is_archived: false, employment_status: 'active',
+    org_department_id: DEPT, department: 'Бухгалтерия', personal_office: false, department_office: false, ...over,
+  });
+
+  it('не найден, в архиве, не работает, без отдела или подрядчик — 400 до прав', async () => {
+    for (const value of [null, row({ is_archived: true }), row({ employment_status: 'fired' }), row({ org_department_id: null }), row({ org_department_id: CONTRACTOR_DEPT })]) {
+      h.queryOne.mockResolvedValueOnce(value);
+      await expect(getTimesheetOfficeEmployee(req, 60)).rejects.toMatchObject({ status: 400, code: 'TIMESHEET_OFFICE_INVALID' });
+    }
+    expect(h.canWriteEmployee).not.toHaveBeenCalled();
+  });
+
+  it('вне скоупа записи — 403', async () => {
+    h.queryOne.mockResolvedValue(row());
+    h.canWriteEmployee.mockResolvedValue(false);
+    await expect(getTimesheetOfficeEmployee(req, 60)).rejects.toMatchObject({ status: 403, code: 'TIMESHEET_OFFICE_FORBIDDEN' });
+  });
+
+  it('строка: объект на сейчас, личный «Офис», «Офис» отдела', async () => {
+    h.queryOne.mockResolvedValue(row({ personal_office: false, department_office: true }));
+    h.labels.mockResolvedValue(new Map([[60, 'Офис']]));
+    await expect(getTimesheetOfficeEmployee(req, 60)).resolves.toEqual({
+      id: 60, full_name: 'Семенов Иван', department: 'Бухгалтерия', label: 'Офис', personal_office: false, department_office: true,
+    });
+    const [sql, params] = h.queryOne.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('FROM timesheet_office_departments tod');
+    expect(params).toEqual([60]);
+    expect(h.canWriteEmployee).toHaveBeenCalledWith(req, 60);
   });
 });
 

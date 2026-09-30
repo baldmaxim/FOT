@@ -13,6 +13,7 @@ import {
 } from '../services/timesheet-office.service.js';
 import {
   getTimesheetOfficeDepartmentMembers,
+  getTimesheetOfficeEmployee,
   getTimesheetOfficeState,
   searchTimesheetOfficeEmployees,
 } from '../services/timesheet-office-read.service.js';
@@ -36,6 +37,10 @@ const searchSchema = z.object({
 
 const departmentParamsSchema = z.object({
   id: z.string().uuid(),
+});
+
+const employeeParamsSchema = z.object({
+  id: z.coerce.number().int().positive(),
 });
 
 function handleError(res: Response, err: unknown, context: string): void {
@@ -82,6 +87,20 @@ export const timesheetOfficeController = {
       res.json({ success: true, data: await getTimesheetOfficeDepartmentMembers(req, parsed.data.id) });
     } catch (err) {
       handleError(res, err, 'getDepartmentMembers');
+    }
+  },
+
+  /** GET /api/admin/timesheet-office/employees/:id */
+  async getEmployee(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const parsed = employeeParamsSchema.safeParse(req.params);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'Некорректный id сотрудника', details: parsed.error.issues });
+      return;
+    }
+    try {
+      res.json({ success: true, data: await getTimesheetOfficeEmployee(req, parsed.data.id) });
+    } catch (err) {
+      handleError(res, err, 'getEmployee');
     }
   },
 

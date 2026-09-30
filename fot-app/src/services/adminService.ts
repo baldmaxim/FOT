@@ -122,6 +122,12 @@ export interface ITimesheetOfficeMember {
   personal_office: boolean;
 }
 
+export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
+  department: string | null;
+  /** У отдела сотрудника «Офис»: личный не ставится, отдел главнее. */
+  department_office: boolean;
+}
+
 export interface ITimesheetOfficeDepartmentMembers {
   /** У отдела «Офис». */
   office: boolean;
@@ -555,6 +561,13 @@ export const adminService = {
       `/admin/timesheet-office/departments/${encodeURIComponent(departmentId)}/employees`,
     );
     return response.data || { office: false, employees: [] };
+  },
+
+  async getTimesheetOfficeEmployee(employeeId: number): Promise<ITimesheetOfficeEmployeeRow> {
+    const response = await apiClient.get<ApiResponse<ITimesheetOfficeEmployeeRow>>(
+      `/admin/timesheet-office/employees/${employeeId}`,
+    );
+    return response.data;
   },
 
   async updateTimesheetOffice(payload: ITimesheetOfficeUpdate): Promise<ITimesheetOfficeResult> {

@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   getState: vi.fn(),
   search: vi.fn(),
   members: vi.fn(),
+  employee: vi.fn(),
   update: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock('../services/timesheet-office-read.service.js', () => ({
   getTimesheetOfficeState: h.getState,
   searchTimesheetOfficeEmployees: h.search,
   getTimesheetOfficeDepartmentMembers: h.members,
+  getTimesheetOfficeEmployee: h.employee,
 }));
 
 const { timesheetOfficeController } = await import('./timesheet-office.controller.js');
@@ -109,5 +111,22 @@ describe('timesheetOfficeController.getDepartmentMembers', () => {
     await timesheetOfficeController.getDepartmentMembers({ params: { id: DEPT } } as never, res as never);
     expect(res.statusCode).toBe(403);
     expect(res.body).toMatchObject({ success: false, code: 'TIMESHEET_OFFICE_FORBIDDEN' });
+  });
+});
+
+describe('timesheetOfficeController.getEmployee', () => {
+  it('id не целое положительное — 400 без вызова сервиса; иначе — число в сервис', async () => {
+    for (const id of ['abc', '0', '1.5']) {
+      const bad = mockRes();
+      await timesheetOfficeController.getEmployee({ params: { id } } as never, bad as never);
+      expect(bad.statusCode).toBe(400);
+    }
+    expect(h.employee).not.toHaveBeenCalled();
+
+    h.employee.mockResolvedValue({ id: 60 });
+    const res = mockRes();
+    await timesheetOfficeController.getEmployee({ params: { id: '60' } } as never, res as never);
+    expect(h.employee).toHaveBeenCalledWith(expect.anything(), 60);
+    expect(res.body).toEqual({ success: true, data: { id: 60 } });
   });
 });
