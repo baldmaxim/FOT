@@ -5,7 +5,10 @@
  * суммой, как «Офис»). Пересчитываются только авто-объекты и сотрудники без личного
  * режима; выбор сотрудника ('employee'), ведущего табель ('manager') и ручной режим
  * админа (set_by = NULL) ночь не трогает. С all = true (первый запуск) пересчитываются
- * и ручные админские.
+ * и ручные админские — кроме личного «Офиса» из окна «Режим табелирования» (миграция 291).
+ *
+ * Сотрудники отделов с «Офисом» (291) в расчёт по часам не идут: им правило отдела ставит
+ * «Офис» при любом источнике — одинаково в пересчёте, фиксации месяца и активации.
  *
  * Все операции — под session-локом TIMESHEET_MODE_LOCK_KEY (его же берёт выбор объекта
  * в ЛК и табеле), в одной транзакции REPEATABLE READ: часы, режимы,
@@ -37,6 +40,12 @@ import {
   type ITimesheetObjectHours,
   type TimesheetObjectSetBy,
 } from './employee-timesheet-object.service.js';
+import {
+  enforceOfficeForDepartments,
+  officeRuleAuditEntries,
+  personalOfficeSql,
+  writeOfficeAudit,
+} from './timesheet-office-rule.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -46,6 +55,10 @@ export interface IEmployeeModeRow {
   mode: TimesheetExportMode | null;
   object_id: string | null;
   set_by: TimesheetObjectSetBy | null;
+  /** Отдел сотрудника с «Офисом» (291): объект ставит правило отдела, не часы. */
+  office_department: boolean;
+  /** Личный «Офис» из окна «Режим табелирования» (291). */
+  personal_office: boolean;
 }
 
 export interface IAutoChange {
@@ -61,13 +74,14 @@ export interface IAutoChange {
 }
 
 /**
- * Трогает ли ночной расчёт строку. Выбор сотрудника и ведущего табель — никогда;
- * авто и «ничего не задано» — всегда; ручной режим админа — только с all.
+ * Трогает ли ночной расчёт строку. Выбор сотрудника и ведущего табель и личный «Офис»
+ * из окна — никогда; авто и «ничего не задано» — всегда; ручной режим админа — только с all.
  */
 export function isAutoCandidate(
-  row: Pick<IEmployeeModeRow, 'mode' | 'set_by'>,
+  row: Pick<IEmployeeModeRow, 'mode' | 'set_by'> & { personal_office?: boolean },
   all: boolean,
 ): boolean {
+  if (row.personal_office) return false;
   if (row.set_by === 'employee' || row.set_by === 'manager') return false;
   if (row.set_by === 'auto') return true;
   if (row.mode === null) return true;
@@ -83,7 +97,8 @@ export function targetFromTop(top: ITimesheetObjectHours): { mode: 'current_acti
 
 /**
  * Изменения ночного расчёта. Нет часов — объект прежний. Строка без изменений режима,
- * объекта и источника — не изменение (повтор — no-op).
+ * объекта и источника — не изменение (повтор — no-op). Сотрудников отделов с «Офисом»
+ * здесь нет — их ведёт enforceOfficeForDepartments.
  */
 export function planAutoChanges(
   rows: readonly IEmployeeModeRow[],
@@ -92,7 +107,7 @@ export function planAutoChanges(
 ): IAutoChange[] {
   const changes: IAutoChange[] = [];
   for (const row of rows) {
-    if (!isAutoCandidate(row, all)) continue;
+    if (row.office_department || !isAutoCandidate(row, all)) continue;
     const top = topsByEmployee.get(row.id)?.[0];
     if (!top) continue;
     const target = targetFromTop(top);
@@ -127,6 +142,8 @@ export interface IAutoReport {
   fromAuto: number;
   unchanged: number;
   skippedManual: number;
+  /** Сотрудники отделов с «Офисом»: объект ставит правило отдела (291). */
+  officeDepartment: number;
 }
 
 export function summarizeAutoChanges(
@@ -147,7 +164,8 @@ export function summarizeAutoChanges(
     fromAdminOffice: 0,
     fromAuto: 0,
     unchanged: 0,
-    skippedManual: rows.filter(row => !isAutoCandidate(row, all)).length,
+    skippedManual: rows.filter(row => !row.office_department && !isAutoCandidate(row, all)).length,
+    officeDepartment: rows.filter(row => row.office_department).length,
   };
   for (const change of changes) {
     if (change.fromSetBy === 'auto') report.fromAuto += 1;
@@ -156,9 +174,9 @@ export function summarizeAutoChanges(
     else if (change.fromMode === 'object') report.fromAdminObject += 1;
     else report.fromAdminOffice += 1;
   }
-  // Кандидаты, у которых объект остаётся (нет часов или цель совпала); вместе с изменёнными
-  // и нетронутыми — все сотрудники.
-  report.unchanged = report.employees - report.changed - report.skippedManual;
+  // Кандидаты, у которых объект остаётся (нет часов или цель совпала); вместе с изменёнными,
+  // нетронутыми и отделами с «Офисом» — все сотрудники.
+  report.unchanged = report.employees - report.changed - report.skippedManual - report.officeDepartment;
   return report;
 }
 
@@ -214,8 +232,11 @@ async function loadOwnActiveEmployees(client: PoolClient, contractorIds: string[
             e.full_name,
             e.timesheet_export_mode             AS mode,
             e.timesheet_export_object_id::text  AS object_id,
-            e.timesheet_export_set_by           AS set_by
+            e.timesheet_export_set_by           AS set_by,
+            (tod.org_department_id IS NOT NULL) AS office_department,
+            ${personalOfficeSql('e')}           AS personal_office
        FROM employees e
+       LEFT JOIN timesheet_office_departments tod ON tod.org_department_id = e.org_department_id
       WHERE e.is_archived = false
         AND e.employment_status = 'active'
         AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($1::uuid[])))
@@ -307,6 +328,16 @@ async function insertMonthFreeze(client: PoolClient, month: string, contractorId
   return result.rowCount ?? 0;
 }
 
+/**
+ * Правило «Офиса» отдела (291) и его аудит — по строке на сотрудника. Вызывается после
+ * расчёта по часам в той же транзакции; возвращает число изменённых сотрудников.
+ */
+async function applyOfficeRule(client: PoolClient, contractorIds: string[], reason: string): Promise<number> {
+  const changes = await enforceOfficeForDepartments(client, 'all', contractorIds);
+  await writeOfficeAudit(client, officeRuleAuditEntries(changes, reason), { req: null, userId: null });
+  return changes.length;
+}
+
 function invalidateAfterWrite(): void {
   employeeCache.clear();
   invalidateCaches(
@@ -376,14 +407,15 @@ export async function recomputeCurrentMonth(now: Date = new Date()): Promise<Aut
       return { kind: 'skipped', reason: 'previous_month_not_frozen' } as AutoRunResult;
     }
 
-    const { changes } = await computeChanges(client, period, false, now);
+    const { contractorIds, changes } = await computeChanges(client, period, false, now);
     const appliedIds = await applyChanges(client, changes, false);
     await auditChanges(client, changes, appliedIds, { period, all: false, reason: 'current_month', userId: null });
+    const officeChanged = await applyOfficeRule(client, contractorIds, 'current_month');
     await client.query(
       'UPDATE timesheet_object_auto_state SET applied_date = $1::date, updated_at = now() WHERE singleton',
       [today],
     );
-    return { kind: 'applied', period, changed: appliedIds.length } as AutoRunResult;
+    return { kind: 'applied', period, changed: appliedIds.length + officeChanged } as AutoRunResult;
   });
 
   if (outcome.kind === 'applied' && outcome.changed > 0) invalidateAfterWrite();
@@ -415,19 +447,22 @@ export async function freezeMonth(month: string, now: Date = new Date()): Promis
     const { contractorIds, changes } = await computeChanges(client, period, false, now);
     const appliedIds = await applyChanges(client, changes, false);
     await auditChanges(client, changes, appliedIds, { period, all: false, reason: 'month_freeze', userId: null });
+    // Месяц уходит с объектом на момент фиксации: «Офис» отдела — тем, кто в нём сейчас.
+    const officeChanged = await applyOfficeRule(client, contractorIds, 'month_freeze');
     const rows = await insertMonthFreeze(client, month, contractorIds);
+    const changed = appliedIds.length + officeChanged;
     await auditService.logWithClient(client, {
       user_id: null,
       action: AUDIT_ACTIONS.TIMESHEET_OBJECT_MONTH_FROZEN,
       entity_type: 'timesheet_object_month',
       entity_id: month,
-      details: { month, rows, changed: appliedIds.length },
+      details: { month, rows, changed },
     });
     await client.query(
       'UPDATE timesheet_object_auto_state SET frozen_month = $1::date, updated_at = now() WHERE singleton',
       [month],
     );
-    return { kind: 'frozen', month, changed: appliedIds.length, rows } as FreezeResult;
+    return { kind: 'frozen', month, changed, rows } as FreezeResult;
   });
 
   if (outcome.kind === 'frozen') invalidateAfterWrite();
@@ -495,6 +530,7 @@ export async function activateTimesheetObjects(options: {
     await auditChanges(client, changes, appliedIds, {
       period, all: options.all, reason: 'activation', userId: null,
     });
+    await applyOfficeRule(client, contractorIds, 'activation');
     await auditService.logWithClient(client, {
       user_id: null,
       action: AUDIT_ACTIONS.TIMESHEET_OBJECT_ACTIVATED,

@@ -41,9 +41,8 @@ export const AUDIT_ACTIONS = {
   USER_SITE_SUPERVISOR_CHANGED: 'USER_SITE_SUPERVISOR_CHANGED',
   DEPARTMENT_OBJECT_ASSIGNMENT_CHANGED: 'DEPARTMENT_OBJECT_ASSIGNMENT_CHANGED',
   EMPLOYEE_OBJECT_ASSIGNMENT_CHANGED: 'EMPLOYEE_OBJECT_ASSIGNMENT_CHANGED',
-  // Историческое: правки ручной настройки «Режим табелирования» (удалена). Больше не пишется;
-  // журнал читается при откате выбора объекта табелирования.
-  TIMESHEET_MODE_UPDATED: 'TIMESHEET_MODE_UPDATED',
+  // «Офис» из окна «Режим табелирования» (миграция 291): лично или через отдел.
+  TIMESHEET_OFFICE_UPDATED: 'TIMESHEET_OFFICE_UPDATED',
   // Объект табелирования (миграция 288).
   TIMESHEET_OBJECT_SELF_SELECTED: 'TIMESHEET_OBJECT_SELF_SELECTED',
   TIMESHEET_OBJECT_MANAGER_SELECTED: 'TIMESHEET_OBJECT_MANAGER_SELECTED',

@@ -14,6 +14,7 @@ import {
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { detectDepartmentKindFromName } from '../utils/department-kind.utils.js';
 import { evaluateAutoFireSafety, type IAutoFireDecision, type IAutoFireSafetyOptions } from './sigur-sync-employees.service.js';
+import { TIMESHEET_MODE_LOCK_KEY } from './timesheet-export-mode.service.js';
 
 // ─── Типы результатов ───
 
@@ -520,6 +521,10 @@ export async function consolidateDuplicateDepartments(): Promise<IConsolidateRes
     const pairs = Number((await client.query('SELECT count(*)::int AS n FROM dept_dedup_map')).rows[0].n);
     if (pairs === 0) return { pairs: 0, employeesMoved: 0 };
 
+    // Лок режимов табелирования — до переносов: окно «Режим табелирования» и ночной расчёт
+    // объекта берут его первым, так что взаимной блокировки с ними нет (миграция 291).
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
+
     const employeesMoved = Number((await client.query(
       `SELECT count(*)::int AS n FROM employees e JOIN dept_dedup_map m ON m.orphan_id = e.org_department_id
         WHERE e.is_archived = false AND e.excluded_from_timesheet = false AND e.employment_status <> 'fired'`,
@@ -551,6 +556,9 @@ export async function consolidateDuplicateDepartments(): Promise<IConsolidateRes
        `UPDATE contractor_passes t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`],
       [`DELETE FROM contractor_roster t USING dept_dedup_map m WHERE t.org_department_id = m.orphan_id AND t.sigur_employee_id IS NOT NULL AND EXISTS (SELECT 1 FROM contractor_roster x WHERE x.org_department_id = m.canonical_id AND x.sigur_employee_id = t.sigur_employee_id)`,
        `UPDATE contractor_roster t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`],
+      // «Офис» отдела (291): переносится на оставшийся отдел вместе с людьми.
+      [`DELETE FROM timesheet_office_departments t USING dept_dedup_map m WHERE t.org_department_id = m.orphan_id AND EXISTS (SELECT 1 FROM timesheet_office_departments x WHERE x.org_department_id = m.canonical_id)`,
+       `UPDATE timesheet_office_departments t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`],
     ];
     for (const [del, upd] of guarded) { await client.query(del); await client.query(upd); }
 

@@ -93,3 +93,23 @@ describe('shouldBypassHttpCache — панель назначений', () => {
     expect(initOf(0).cache).toBeUndefined();
   });
 });
+
+/** Окно «Режим табелирования» (291): после «Сохранить» список «Назначено» — с сервера. */
+describe('shouldBypassHttpCache — режим табелирования', () => {
+  beforeEach(() => {
+    fetchMock.mockClear();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    '/admin/timesheet-office',
+    '/admin/timesheet-office/employees?search=%D0%A1%D0%B5%D0%BC',
+  ])('%s идёт мимо HTTP-кэша', async (endpoint) => {
+    await apiClient.get(endpoint);
+    expect(initOf(0).cache).toBe('no-store');
+  });
+});

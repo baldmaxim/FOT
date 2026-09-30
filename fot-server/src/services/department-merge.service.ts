@@ -10,13 +10,19 @@
  *
  * Здесь операция идемпотентна по фактическому состоянию: каждый шаг — UPDATE со
  * строгим `WHERE ... = source`, поэтому повторный запуск даёт нули по счётчикам.
- * Пишем ровно в три места: `employees.org_department_id`, ОТКРЫТЫЕ
- * `employee_assignments` и `employee_department_access`. Табели, версии, составы
- * подач и закрытая история назначений не трогаются вообще.
+ * Пишем в четыре места: `employees.org_department_id`, ОТКРЫТЫЕ
+ * `employee_assignments`, `employee_department_access` и «Офис» отдела
+ * (`timesheet_office_departments`, миграция 291: правило источника копируется на цель,
+ * иначе перенесённые потеряли бы «Офис»). Табели, версии, составы подач и закрытая
+ * история назначений не трогаются вообще.
+ *
+ * FOT-транзакции слияния и отката берут лок режимов табелирования (TIMESHEET_MODE_LOCK_KEY):
+ * иначе окно «Режим табелирования» могло бы поменять «Офис» источника посреди переноса.
  */
 import type { PoolClient } from 'pg';
 import { sigurService, type ConnectionType } from './sigur.service.js';
 import { normalizeEmployee } from './sigur-sync-shared.js';
+import { TIMESHEET_MODE_LOCK_KEY } from './timesheet-export-mode.service.js';
 
 /**
  * Таблицы, привязанные к employee_id: отдел в них не хранится, поэтому числа до и
@@ -67,6 +73,8 @@ export interface IMergeCounters {
   accessGranted: number;
   accessReactivated: number;
   accessRevoked: number;
+  /** «Офис» источника скопирован на целевой отдел (у цели его не было). */
+  officeRuleCopied: boolean;
 }
 
 export interface IMergeSnapshotEmployee {
@@ -207,6 +215,8 @@ export async function mergeDepartmentEmployeesTx(
     throw new Error('Отдел-источник совпадает с целевым');
   }
 
+  await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
+
   // FOR UPDATE: параллельный синк сотрудников не перепишет отдел между шагами.
   await client.query('SELECT id FROM employees WHERE id = ANY($1::bigint[]) FOR UPDATE', [employeeIds]);
 
@@ -251,12 +261,24 @@ export async function mergeDepartmentEmployeesTx(
     [sourceDepartmentId],
   );
 
+  // «Офис» отдела (291): перенесённые остаются в «Офисе». Правило источника остаётся —
+  // откат вернёт людей туда же; флаг в снимке нужен, чтобы откат снял скопированное.
+  const officeRule = await client.query(
+    `INSERT INTO timesheet_office_departments (org_department_id, created_by, created_at)
+     SELECT $1::uuid, created_by, created_at
+       FROM timesheet_office_departments
+      WHERE org_department_id = $2::uuid
+     ON CONFLICT (org_department_id) DO NOTHING`,
+    [targetDepartmentId, sourceDepartmentId],
+  );
+
   return {
     employeesUpdated: employeesUpdated.rowCount ?? 0,
     assignmentsUpdated: assignmentsUpdated.rowCount ?? 0,
     accessGranted: accessGranted.rowCount ?? 0,
     accessReactivated: accessReactivated.rowCount ?? 0,
     accessRevoked: accessRevoked.rowCount ?? 0,
+    officeRuleCopied: (officeRule.rowCount ?? 0) > 0,
   };
 }
 
@@ -270,12 +292,22 @@ export async function rollbackDepartmentMergeTx(
     targetDepartmentId: string;
     employees: IMergeSnapshotEmployee[];
     access: IMergeSnapshotAccess[];
+    /** Слияние скопировало «Офис» на цель — откат его снимает. */
+    officeRuleCopied?: boolean;
   },
-): Promise<{ employeesRestored: number; assignmentsRestored: number; accessRestored: number; skipped: string[] }> {
+): Promise<{
+  employeesRestored: number;
+  assignmentsRestored: number;
+  accessRestored: number;
+  officeRuleRemoved: boolean;
+  skipped: string[];
+}> {
   const skipped: string[] = [];
   let employeesRestored = 0;
   let assignmentsRestored = 0;
   let accessRestored = 0;
+
+  await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
 
   for (const employee of snapshot.employees) {
     if (!employee.orgDepartmentId) {
@@ -312,5 +344,14 @@ export async function rollbackDepartmentMergeTx(
     accessRestored += restored.rowCount ?? 0;
   }
 
-  return { employeesRestored, assignmentsRestored, accessRestored, skipped };
+  let officeRuleRemoved = false;
+  if (snapshot.officeRuleCopied) {
+    const removed = await client.query(
+      'DELETE FROM timesheet_office_departments WHERE org_department_id = $1::uuid',
+      [snapshot.targetDepartmentId],
+    );
+    officeRuleRemoved = (removed.rowCount ?? 0) > 0;
+  }
+
+  return { employeesRestored, assignmentsRestored, accessRestored, officeRuleRemoved, skipped };
 }

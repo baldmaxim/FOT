@@ -73,6 +73,7 @@ vi.mock('../controllers/documents.controller.js', () => ({ documentsController: 
 vi.mock('../controllers/leave-requests.controller.js', () => ({ leaveRequestsController: h.stubController('leave') }));
 vi.mock('../controllers/admin.controller.js', () => ({ adminController: h.stubController('admin') }));
 vi.mock('../controllers/admin-system-resources.controller.js', () => ({ adminSystemResourcesController: h.stubController('sysres') }));
+vi.mock('../controllers/timesheet-office.controller.js', () => ({ timesheetOfficeController: h.stubController('timesheetOffice') }));
 
 const app = express();
 app.use(express.json());

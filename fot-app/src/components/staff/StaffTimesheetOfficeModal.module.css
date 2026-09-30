@@ -1,0 +1,314 @@
+/* Окно «Режим табелирования» (миграция 291). Mobile-first: база — телефон, окно на весь экран;
+   с 769 px — 85 % × 85 %. Каркас (.sc-overlay, .sc-modal, шапка, кнопки) — StaffControlPage.css.
+   Двойной класс (.modal.modal, .select.select) перебивает .sc-modal и .sc-field > select
+   независимо от порядка подключения CSS. */
+
+.modal.modal {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 560px;
+}
+
+/* .sc-segmented на телефоне у страницы — order: 5 и flex: 0 0 100% (строка тулбара):
+   в колонке формы это уводило переключатель вниз и растягивало на всю высоту. */
+.segmented.segmented {
+  order: 0;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  height: 44px;
+}
+
+.segmented :global(.sc-seg-btn) {
+  min-width: 112px;
+  justify-content: center;
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.select.select,
+.input {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  /* 16 px — иначе iOS и Android-Chrome зумят форму при фокусе. */
+  font-size: 16px;
+}
+
+.select.select:focus,
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.actions {
+  display: flex;
+}
+
+.saveButton {
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.resultButton {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color 150ms ease-out;
+}
+
+.resultButton:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.hint {
+  padding: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.picked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.pickedText {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.iconButton {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.assigned {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.groupTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 4px 4px 4px 12px;
+}
+
+.row + .row {
+  border-top: 1px solid var(--border);
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.removeButton {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--error);
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color 150ms ease-out;
+}
+
+.removeButton:hover:not(:disabled) {
+  background: var(--error-muted);
+}
+
+.removeButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (min-width: 769px) {
+  .modal.modal {
+    width: 85vw;
+    height: 85dvh;
+    max-height: 85dvh;
+    border-radius: var(--radius-lg);
+    padding-top: 0;
+  }
+
+  .body {
+    padding: 20px 24px;
+  }
+
+  .segmented.segmented {
+    height: 36px;
+  }
+
+  .segmented :global(.sc-seg-btn) {
+    font-size: 13px;
+  }
+
+  .select.select,
+  .input {
+    height: 38px;
+    font-size: 14px;
+  }
+
+  .saveButton {
+    min-height: 38px;
+  }
+
+  .resultButton {
+    min-height: 40px;
+  }
+
+  .row {
+    min-height: 44px;
+  }
+
+  .removeButton {
+    min-height: 34px;
+  }
+}
+
+/* На сенсорных экранах тап-цели не меньше 44 px и на планшете. */
+@media (min-width: 769px) and (pointer: coarse) {
+  .select.select,
+  .input,
+  .saveButton,
+  .removeButton {
+    min-height: 44px;
+    height: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resultButton,
+  .removeButton {
+    transition: none;
+  }
+}

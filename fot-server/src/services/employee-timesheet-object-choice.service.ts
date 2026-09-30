@@ -8,17 +8,19 @@
  *
  * Правила одни для обоих:
  *   - только свои работающие сотрудники (не подрядчики, не уволенные, не архив);
+ *   - кому «Офис» поставлен в окне «Режим табелирования» — лично или через отдел
+ *     (миграция 291), — менять нельзя никому;
  *   - только в последние 3 дня месяца; у ведущего табель исключение — сотруднику
  *     без объекта (новичок без проходов) первый объект ставится в любой день;
  *   - пока прошлый месяц не зафиксирован, менять нельзя: выбор попал бы в него;
- *   - в списке только объекты, где у сотрудника больше 24 ч с 1-го числа, плюс
- *     текущий и то, к чему можно вернуться после ручной смены (значение по умолчанию
- *     от отдела и прежние объекты этого месяца); новичку без объекта ведущий табель
- *     выбирает из всех объектов.
- * Ночной расчёт ручной выбор не перезаписывает.
+ *   - выбрать можно из двух объектов с наибольшими часами с 1-го числа, и только если
+ *     второй отстаёт от первого меньше чем на 15 % (от большего); текущий — в списке для
+ *     показа. Нет второго — нет и выбора. Новичку без объекта ведущий табель выбирает
+ *     из всех объектов.
+ * Ночной расчёт ручной выбор не перезаписывает, и в следующих месяцах тоже.
  */
 import type { AuthenticatedRequest } from '../types/index.js';
-import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { queryOne, withTransaction } from '../config/postgres.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { AUDIT_ACTIONS, auditService } from './audit.service.js';
@@ -33,7 +35,7 @@ import {
 import {
   OFFICE_LABEL,
   OFFICE_VALUE,
-  TIMESHEET_OBJECT_MIN_HOURS,
+  TIMESHEET_OBJECT_CHOICE_GAP,
   canonicalizeMode,
   isOfficeAddress,
   isPreviousMonthFrozen,
@@ -46,6 +48,7 @@ import {
   type ISkudObjectInfo,
   type TimesheetObjectSetBy,
 } from './employee-timesheet-object.service.js';
+import { isTimesheetOfficeLocked } from './timesheet-office-rule.js';
 
 export type TimesheetObjectActor = 'employee' | 'manager';
 
@@ -66,7 +69,8 @@ export type TimesheetObjectErrorCode =
   | 'TIMESHEET_OBJECT_NOT_ELIGIBLE'
   | 'TIMESHEET_OBJECT_PREVIOUS_MONTH_NOT_FROZEN'
   | 'TIMESHEET_OBJECT_WINDOW_CLOSED'
-  | 'TIMESHEET_OBJECT_NOT_ALLOWED';
+  | 'TIMESHEET_OBJECT_NOT_ALLOWED'
+  | 'TIMESHEET_OBJECT_LOCKED';
 
 export class TimesheetObjectError extends Error {
   readonly status: number;
@@ -95,6 +99,8 @@ interface IChoiceContext {
   value: string | null;
   eligible: boolean;
   previousMonthFrozen: boolean;
+  /** «Офис» из окна «Режим табелирования» — лично или через отдел (291). */
+  locked: boolean;
   canChange: boolean;
 }
 
@@ -105,39 +111,43 @@ export function canChangeTimesheetObject(input: {
   previousMonthFrozen: boolean;
   windowOpen: boolean;
   hasObject: boolean;
+  locked?: boolean;
 }): boolean {
-  if (!input.eligible || !input.previousMonthFrozen) return false;
+  if (input.locked || !input.eligible || !input.previousMonthFrozen) return false;
   if (input.windowOpen) return true;
   return input.actor === 'manager' && !input.hasObject;
 }
 
+/** Погрешность сравнения долей: ровно 15 % — уже не «меньше 15 %». */
+const CHOICE_GAP_EPSILON = 1e-9;
+
 /**
- * Список выбора: объекты > 24 ч с 1-го числа + текущий. hoursList — уже сгруппирован
- * («Офис» — суммой) и отсортирован по часам.
+ * Список выбора: первый объект по часам — всегда, второй — если отстаёт от первого меньше
+ * чем на 15 % от большего; текущий — для показа. hoursList — уже сгруппирован («Офис» —
+ * суммой) и отсортирован по часам тем же порядком, что у ночного расчёта.
  */
 export function buildHoursOptions(
   hoursList: ReadonlyArray<{ value: string; label: string; hours: number }>,
   current: { value: string | null; label: string | null },
 ): ITimesheetObjectOption[] {
-  const options: ITimesheetObjectOption[] = hoursList
-    .filter(item => item.hours > TIMESHEET_OBJECT_MIN_HOURS || item.value === current.value)
-    .map(item => ({ value: item.value, label: item.label }));
+  const [first, second] = hoursList;
+  const options: ITimesheetObjectOption[] = [];
+  if (first) options.push({ value: first.value, label: first.label });
+  if (first && second && first.hours - second.hours < first.hours * TIMESHEET_OBJECT_CHOICE_GAP - CHOICE_GAP_EPSILON) {
+    options.push({ value: second.value, label: second.label });
+  }
   if (current.value && current.label && !options.some(option => option.value === current.value)) {
     options.push({ value: current.value, label: current.label });
   }
   return options;
 }
 
-/** Добавляет пункты, которых ещё нет в списке (по значению). */
-export function appendOptions(
-  base: readonly ITimesheetObjectOption[],
-  extra: readonly ITimesheetObjectOption[],
-): ITimesheetObjectOption[] {
-  const result = [...base];
-  for (const option of extra) {
-    if (!result.some(existing => existing.value === option.value)) result.push(option);
-  }
-  return result;
+/** Есть ли на что сменить: пункт, отличный от текущего значения. */
+export function hasAlternativeOption(
+  options: readonly ITimesheetObjectOption[],
+  currentValue: string | null,
+): boolean {
+  return options.some(option => option.value !== currentValue);
 }
 
 /** Все активные объекты: «Офис» одним пунктом, остальные по имени. */
@@ -173,11 +183,12 @@ async function loadContext(
   const employee = await loadEmployee(employeeId);
   if (!employee) throw new TimesheetObjectError(404, 'EMPLOYEE_NOT_FOUND', 'Сотрудник не найден');
 
-  const [objectsById, modes, contractorIds, previousMonthFrozen] = await Promise.all([
+  const [objectsById, modes, contractorIds, previousMonthFrozen, locked] = await Promise.all([
     loadSkudObjects(),
     resolveExportModes([employeeId]),
     loadContractorDepartmentIds(),
     isPreviousMonthFrozen(now),
+    isTimesheetOfficeLocked(employeeId),
   ]);
   const resolved = modes.get(employeeId) ?? DEFAULT_EXPORT_MODE;
   const label = labelForResolved(resolved, objectsById);
@@ -192,70 +203,16 @@ async function loadContext(
     value,
     eligible,
     previousMonthFrozen,
+    locked,
     canChange: canChangeTimesheetObject({
       actor,
       eligible,
       previousMonthFrozen,
       windowOpen: isTimesheetObjectWindowOpen(now),
       hasObject: label !== null,
+      locked,
     }),
   };
-}
-
-/**
- * Действия аудита, чьи old_* — прежний объект сотрудника (личный режим). Функция, а не
- * константа модуля: тесты с моком audit.service без AUDIT_ACTIONS грузят app.ts.
- */
-const revertableAuditActions = (): string[] => [
-  AUDIT_ACTIONS.TIMESHEET_OBJECT_SELF_SELECTED,
-  AUDIT_ACTIONS.TIMESHEET_OBJECT_MANAGER_SELECTED,
-  AUDIT_ACTIONS.TIMESHEET_MODE_UPDATED,
-];
-
-/**
- * Куда можно вернуться после ручной смены: значение по умолчанию (по legacy-назначениям
- * объектов отдела, без личного режима) и объекты, которые были до ручных смен в
- * этом месяце (журнал аудита). Без этого случайную смену не откатить: у прежнего
- * объекта часов может быть меньше 24 — например, «Офис» отдела при работе на объекте.
- */
-async function loadRevertOptions(
-  employeeId: number,
-  objectsById: ReadonlyMap<string, ISkudObjectInfo>,
-  now: Date,
-): Promise<ITimesheetObjectOption[]> {
-  const options: ITimesheetObjectOption[] = [];
-  const add = (value: string | null, label: string | null): void => {
-    if (value && label && !options.some(option => option.value === value)) options.push({ value, label });
-  };
-
-  const defaults = await resolveExportModes([employeeId], undefined, { ignorePersonal: true });
-  const fallback = defaults.get(employeeId) ?? DEFAULT_EXPORT_MODE;
-  add(valueForResolved(fallback, objectsById), labelForResolved(fallback, objectsById));
-
-  const rows = await query<{ old_mode: string | null; old_object_id: string | null }>(
-    `SELECT details->>'old_mode' AS old_mode, details->>'old_object_id' AS old_object_id
-       FROM audit_logs
-      WHERE entity_type = 'employee'
-        AND entity_id = $1
-        AND action = ANY($2::text[])
-        AND created_at >= $3::timestamptz
-      ORDER BY created_at DESC`,
-    [String(employeeId), revertableAuditActions(), `${currentMonthStartMsk(now)}T00:00:00+03:00`],
-  );
-  for (const row of rows) {
-    // NULL — «личного режима не было»: это значение по умолчанию, оно уже в списке.
-    if (row.old_mode === 'current_activity') {
-      add(OFFICE_VALUE, OFFICE_LABEL);
-      continue;
-    }
-    if (row.old_mode !== 'object' || !row.old_object_id) continue;
-    // Неактивный объект вернуть нельзя — запись режима требует активный объект.
-    const object = objectsById.get(row.old_object_id);
-    if (!object?.is_active) continue;
-    const resolved = { mode: 'object' as const, pinnedObjectId: object.id, source: 'employee_explicit' as const };
-    add(valueForResolved(resolved, objectsById), labelForResolved(resolved, objectsById));
-  }
-  return options;
 }
 
 async function loadOptions(
@@ -265,35 +222,41 @@ async function loadOptions(
 ): Promise<ITimesheetObjectOption[]> {
   if (actor === 'manager' && context.label === null) return buildAllObjectOptions(context.objectsById);
   const today = moscowTodayIso(now);
-  const [hours, revert] = await Promise.all([
-    loadTimesheetObjectHours(
-      [context.employee.id],
-      { start: currentMonthStartMsk(now), end: today },
-      { todayStr: today, objectsById: context.objectsById },
-    ),
-    loadRevertOptions(context.employee.id, context.objectsById, now),
-  ]);
-  const byHours = buildHoursOptions(hours.get(context.employee.id) ?? [], {
+  const hours = await loadTimesheetObjectHours(
+    [context.employee.id],
+    { start: currentMonthStartMsk(now), end: today },
+    { todayStr: today, objectsById: context.objectsById },
+  );
+  return buildHoursOptions(hours.get(context.employee.id) ?? [], {
     value: context.value,
     label: context.label,
   });
-  return appendOptions(byHours, revert);
 }
 
-/** Состояние для ЛК и окна в табеле. Список считается только когда менять можно. */
+/**
+ * Состояние для ЛК и окна в табеле. Список считается только когда менять можно; менять
+ * можно, только если в списке есть что-то кроме текущего значения — иначе текст.
+ */
 export async function getTimesheetObjectState(
   employeeId: number,
   actor: TimesheetObjectActor,
   now: Date = new Date(),
 ): Promise<ITimesheetObjectState> {
   const context = await loadContext(employeeId, actor, now);
+  const options = context.canChange ? await loadOptions(context, actor, now) : [];
+  const canChange = hasAlternativeOption(options, context.value);
   return {
     label: context.label,
     value: context.value,
-    can_change: context.canChange,
-    options: context.canChange ? await loadOptions(context, actor, now) : [],
+    can_change: canChange,
+    options: canChange ? options : [],
   };
 }
+
+const lockedError = (): TimesheetObjectError => new TimesheetObjectError(
+  409, 'TIMESHEET_OBJECT_LOCKED',
+  'Объект «Офис» назначен в режиме табелирования — сменить нельзя',
+);
 
 function invalidateTimesheetCaches(): void {
   invalidateCaches(
@@ -323,6 +286,7 @@ export async function setTimesheetObject(
       'Объект табелирования ставится только работающим сотрудникам организации',
     );
   }
+  if (context.locked) throw lockedError();
   if (!context.previousMonthFrozen) {
     throw new TimesheetObjectError(
       409, 'TIMESHEET_OBJECT_PREVIOUS_MONTH_NOT_FROZEN',
@@ -337,10 +301,10 @@ export async function setTimesheetObject(
   }
 
   const options = await loadOptions(context, actor, now);
-  if (!options.some(option => option.value === rawValue)) {
+  if (!hasAlternativeOption(options, context.value) || !options.some(option => option.value === rawValue)) {
     throw new TimesheetObjectError(
       400, 'TIMESHEET_OBJECT_NOT_ALLOWED',
-      'Этот объект нельзя выбрать: на нём меньше 24 ч с начала месяца',
+      'Можно выбрать объект с наибольшими часами или второй, если разница меньше 15 %',
     );
   }
 
@@ -350,7 +314,7 @@ export async function setTimesheetObject(
   const setBy: TimesheetObjectSetBy = actor === 'employee' ? 'employee' : 'manager';
 
   const changed = await withTransaction(async client => {
-    // Тот же ключ берут админские пути, ночной расчёт и скрипты режимов.
+    // Тот же ключ берут окно «Режим табелирования», ночной расчёт, дедуп и слияние отделов.
     await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
     const before = (await client.query<{
       timesheet_export_mode: TimesheetExportMode | null;
@@ -362,6 +326,8 @@ export async function setTimesheetObject(
       [employeeId],
     )).rows[0];
     if (!before) return false;
+    // «Офис» могли поставить в окне между чтением и записью — проверка под тем же локом.
+    if (await isTimesheetOfficeLocked(employeeId, client)) throw lockedError();
 
     const sameMode = before.timesheet_export_mode === target.mode
       && (before.timesheet_export_object_id ?? null) === (target.objectId ?? null);

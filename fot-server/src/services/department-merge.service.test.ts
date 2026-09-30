@@ -106,6 +106,7 @@ describe('mergeDepartmentEmployeesTx', () => {
       accessGranted: 1,
       accessReactivated: 0,
       accessRevoked: 3,
+      officeRuleCopied: false,
     });
 
     const employeesUpdate = calls.find(call => call.sql.includes('UPDATE employees'))!;
@@ -117,19 +118,34 @@ describe('mergeDepartmentEmployeesTx', () => {
     expect(assignmentsUpdate.sql).not.toContain('effective_from');
     expect(assignmentsUpdate.sql).not.toContain('change_reason');
 
-    // Ни одной записи в табели и историю подач.
-    expect(calls.some(call => /timesheet_/i.test(call.sql))).toBe(false);
+    // Ни одной записи в табели и историю подач («Офис» отдела — не табель).
+    expect(calls.some(call => /timesheet_(?!office_departments)/i.test(call.sql))).toBe(false);
     expect(calls.some(call => call.sql.startsWith('INSERT INTO employee_assignments'))).toBe(false);
   });
 
-  it('блокирует сотрудников до записи', async () => {
+  it('берёт лок режимов табелирования и блокирует сотрудников до записи', async () => {
     const { calls, client } = createClient([]);
     await mergeDepartmentEmployeesTx(client, {
       sourceDepartmentId: SOURCE,
       targetDepartmentId: TARGET,
       employeeIds: [600],
     });
-    expect(calls[0].sql).toContain('FOR UPDATE');
+    expect(calls[0].sql).toContain('pg_advisory_xact_lock');
+    expect(calls[0].params).toEqual([249_0001]);
+    expect(calls[1].sql).toContain('FOR UPDATE');
+  });
+
+  it('«Офис» источника копируется на целевой отдел; флаг — только если скопировали', async () => {
+    const { client, calls } = createClient([{ match: 'INSERT INTO timesheet_office_departments', rowCount: 1 }]);
+    const counters = await mergeDepartmentEmployeesTx(client, {
+      sourceDepartmentId: SOURCE,
+      targetDepartmentId: TARGET,
+      employeeIds: [600],
+    });
+    expect(counters.officeRuleCopied).toBe(true);
+    const copy = calls.find(call => call.sql.includes('INSERT INTO timesheet_office_departments'))!;
+    expect(copy.sql).toContain('ON CONFLICT (org_department_id) DO NOTHING');
+    expect(copy.params).toEqual([TARGET, SOURCE]);
   });
 
   it('повторный прогон даёт нули', async () => {
@@ -145,6 +161,7 @@ describe('mergeDepartmentEmployeesTx', () => {
       accessGranted: 0,
       accessReactivated: 0,
       accessRevoked: 0,
+      officeRuleCopied: false,
     });
   });
 
@@ -224,9 +241,27 @@ describe('rollbackDepartmentMergeTx', () => {
       access: [{ id: 'bb27eebb-844e-48e5-a1af-4e0fce702ad2', employeeId: 600, departmentId: SOURCE, isActive: true }],
     });
 
-    expect(result).toMatchObject({ employeesRestored: 1, assignmentsRestored: 1, accessRestored: 1, skipped: [] });
+    expect(result).toMatchObject({
+      employeesRestored: 1, assignmentsRestored: 1, accessRestored: 1, officeRuleRemoved: false, skipped: [],
+    });
     const restore = calls.find(call => call.sql.includes('UPDATE employees'))!;
     expect(restore.params).toEqual([SOURCE, 600, TARGET]);
+    // Лок режимов — первым; «Офис» не копировали — и не снимаем.
+    expect(calls[0].sql).toContain('pg_advisory_xact_lock');
+    expect(calls.some(call => call.sql.includes('timesheet_office_departments'))).toBe(false);
+  });
+
+  it('снимает «Офис» с целевого отдела, только если его скопировало слияние', async () => {
+    const { client, calls } = createClient([{ match: 'DELETE FROM timesheet_office_departments', rowCount: 1 }]);
+    const result = await rollbackDepartmentMergeTx(client, {
+      targetDepartmentId: TARGET,
+      employees: [],
+      access: [],
+      officeRuleCopied: true,
+    });
+    expect(result.officeRuleRemoved).toBe(true);
+    const removal = calls.find(call => call.sql.includes('DELETE FROM timesheet_office_departments'))!;
+    expect(removal.params).toEqual([TARGET]);
   });
 
   it('пропускает строку, которую уже поменяли после операции', async () => {

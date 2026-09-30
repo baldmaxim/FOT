@@ -2,6 +2,7 @@ import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { payrollAccessController } from '../controllers/payroll-access.controller.js';
+import { timesheetOfficeController } from '../controllers/timesheet-office.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess, requireSystemAdmin } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
@@ -162,6 +163,12 @@ router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access
 // Только системный администратор: доступ открывает условия оплаты всего штата.
 router.get('/employees/:id/payroll-access', requireSystemAdmin, noStore, payrollAccessController.get);
 router.put('/employees/:id/payroll-access', requireSystemAdmin, payrollAccessController.set);
+
+// «Режим табелирования» в «Управлении кадрами»: «Офис» отделу или сотруднику с блокировкой
+// выбора объекта (миграция 291). Отдельное право — только администратор и кадровый админ.
+router.get('/timesheet-office', requirePageAccess('/staff-control/timesheet-office', 'view'), noStore, timesheetOfficeController.getState);
+router.get('/timesheet-office/employees', requirePageAccess('/staff-control/timesheet-office', 'view'), noStore, timesheetOfficeController.searchEmployees);
+router.put('/timesheet-office', requirePageAccess('/staff-control/timesheet-office', 'edit'), timesheetOfficeController.update);
 
 // Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
 router.put('/users/:id/employee-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserEmployeeAccess);

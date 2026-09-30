@@ -240,7 +240,11 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/direct-reports'
     || path === '/admin/employees/department-access'
     || /^\/admin\/employees\/\d+\/(skud-objects|payroll-access)$/.test(path)
-    || path.startsWith('/admin/weekend-approvals/');
+    || path.startsWith('/admin/weekend-approvals/')
+    // Окно «Режим табелирования»: после «Сохранить» и «Снять» список «Назначено» обязан
+    // перечитаться с сервера — max-age=30 показал бы состояние до правки.
+    || path === '/admin/timesheet-office'
+    || path === '/admin/timesheet-office/employees';
 };
 
 const refreshSession = async (): Promise<boolean> => {

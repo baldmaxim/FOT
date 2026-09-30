@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, Download, Filter } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, Download, Filter, Building2 } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
@@ -73,6 +73,7 @@ import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const StaffCommentModal = lazy(() => import('../components/staff/StaffCommentModal').then(m => ({ default: m.StaffCommentModal })));
+const StaffTimesheetOfficeModal = lazy(() => import('../components/staff/StaffTimesheetOfficeModal').then(m => ({ default: m.StaffTimesheetOfficeModal })));
 
 import {
   EMPTY_SCHEDULE_TEMPLATES,
@@ -1431,6 +1432,8 @@ export const StaffControlPage: FC = () => {
   const canEditDept = isAdmin || canEditPage('/staff-control/department');
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
+  // «Режим табелирования»: «Офис» отделу или сотруднику (миграция 291) — администратор и кадровый админ.
+  const canEditTimesheetOffice = isAdmin || canEditPage('/staff-control/timesheet-office');
   const canOpenCard = isAdmin || canViewPage('/employees');
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
@@ -1559,6 +1562,7 @@ export const StaffControlPage: FC = () => {
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
   const [bulkMoveDeptOpen, setBulkMoveDeptOpen] = useState(false);
+  const [timesheetOfficeOpen, setTimesheetOfficeOpen] = useState(false);
   // «Объект», «Статья затрат», «График» — по одному запросу на порцию списка.
   const mainObjectsData = useStaffMainObjects(pageIdChunks);
   const mainObjectPeriod = mainObjectsData.period;
@@ -2494,9 +2498,17 @@ export const StaffControlPage: FC = () => {
         disabled: total === 0,
       });
     }
+    // Не зависит от вкладки и фильтра таблицы: окно работает с отделами и сотрудниками целиком.
+    if (canEditTimesheetOffice) {
+      items.push({
+        label: 'Режим табелирования…',
+        icon: <Building2 size={14} />,
+        onClick: () => setTimesheetOfficeOpen(true),
+      });
+    }
     // Импорта и «Экспорта сотрудников» в меню нет: выгрузка — кнопка «Экспорт» текущей таблицы.
     return items;
-  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetOffice]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2807,6 +2819,11 @@ export const StaffControlPage: FC = () => {
       {commentEmp && (
         <Suspense fallback={null}>
           <StaffCommentModal employee={commentEmp} onClose={closeCommentModal} onSaved={handleCommentSaved} />
+        </Suspense>
+      )}
+      {timesheetOfficeOpen && (
+        <Suspense fallback={null}>
+          <StaffTimesheetOfficeModal deptTree={scopeDeptTree} onClose={() => setTimesheetOfficeOpen(false)} />
         </Suspense>
       )}
       {mobileFiltersOpen && !openFilter && (

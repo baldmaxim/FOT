@@ -16,7 +16,8 @@ const {
 
 type Row = Parameters<typeof planAutoChanges>[0][number];
 const row = (id: number, over: Partial<Row> = {}): Row => ({
-  id, full_name: `Сотрудник ${id}`, mode: null, object_id: null, set_by: null, ...over,
+  id, full_name: `Сотрудник ${id}`, mode: null, object_id: null, set_by: null,
+  office_department: false, personal_office: false, ...over,
 });
 const top = (value: string, hours: number, label = value) => ({
   value, label, objectId: value === 'office' ? null : value, hours,
@@ -30,6 +31,10 @@ describe('isAutoCandidate', () => {
   it('авто и «ничего не задано» — всегда', () => {
     expect(isAutoCandidate({ mode: 'object', set_by: 'auto' }, false)).toBe(true);
     expect(isAutoCandidate({ mode: null, set_by: null }, false)).toBe(true);
+  });
+  it('личный «Офис» из окна «Режим табелирования» — никогда, даже с all', () => {
+    expect(isAutoCandidate({ mode: 'current_activity', set_by: null, personal_office: true }, false)).toBe(false);
+    expect(isAutoCandidate({ mode: 'current_activity', set_by: null, personal_office: true }, true)).toBe(false);
   });
   it('ручной режим админа — только с all (первый запуск)', () => {
     expect(isAutoCandidate({ mode: 'skud', set_by: null }, false)).toBe(false);
@@ -82,6 +87,16 @@ describe('planAutoChanges', () => {
     expect(planAutoChanges(rows, tops, false)).toEqual([]);
   });
 
+  it('сотрудники отдела с «Офисом» в расчёт по часам не идут — их ведёт правило отдела', () => {
+    const rows = [
+      row(1, { office_department: true }),
+      row(2, { office_department: true, mode: 'object', object_id: 'o-zil', set_by: 'auto' }),
+      row(4, { office_department: true, mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
+    ];
+    expect(planAutoChanges(rows, tops, false)).toEqual([]);
+    expect(planAutoChanges(rows, tops, true)).toEqual([]);
+  });
+
   it('нет часов за период — объект прежний', () => {
     expect(planAutoChanges([row(9, { mode: 'object', object_id: 'o-dom', set_by: 'auto' })], tops, false)).toEqual([]);
   });
@@ -103,5 +118,18 @@ describe('planAutoChanges', () => {
       fromNone: 1, fromSkud: 1, fromAdminObject: 1, skippedManual: 1, unchanged: 2,
     });
     expect(report.changed + report.unchanged + report.skippedManual).toBe(report.employees);
+  });
+
+  it('сводка: отделы с «Офисом» — отдельной строкой, в «без изменений» и «не трогаем» не входят', () => {
+    const rows = [
+      row(1),
+      row(2, { office_department: true }),
+      row(4, { office_department: true, mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
+      row(5, { mode: 'object', object_id: 'o-dom', set_by: 'manager' }),
+    ];
+    const changes = planAutoChanges(rows, tops, false);
+    const report = summarizeAutoChanges(rows, tops, changes, false);
+    expect(report).toMatchObject({ employees: 4, changed: 1, officeDepartment: 2, skippedManual: 1, unchanged: 0 });
+    expect(report.changed + report.unchanged + report.skippedManual + report.officeDepartment).toBe(report.employees);
   });
 });

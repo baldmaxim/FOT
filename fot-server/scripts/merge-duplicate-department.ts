@@ -96,6 +96,8 @@ interface ISnapshot {
   access: Array<{ id: string; employeeId: number; departmentId: string; isActive: boolean }>;
   inventory: Record<string, number>;
   approvals: IApprovalSlice[];
+  /** Слияние скопировало «Офис» источника на цель (миграция 291) — откат его снимет. */
+  office_rule_copied?: boolean;
 }
 
 const argValue = (name: string): string | undefined => {
@@ -154,10 +156,11 @@ async function main(): Promise<void> {
       targetDepartmentId: snapshot.target.department_id,
       employees: snapshot.employees,
       access: snapshot.access,
+      officeRuleCopied: snapshot.office_rule_copied === true,
     }));
     console.log(
       `Возвращено: сотрудников ${result.employeesRestored}, назначений ${result.assignmentsRestored},`
-      + ` доступов ${result.accessRestored}`,
+      + ` доступов ${result.accessRestored}${result.officeRuleRemoved ? ', «Офис» с целевого отдела снят' : ''}`,
     );
     for (const skip of result.skipped) console.warn(`  ⏭ ${skip}`);
     await getPool().end();
@@ -331,6 +334,17 @@ async function main(): Promise<void> {
       targetDepartmentId: target!.id,
       employeeIds,
     });
+    snapshot.office_rule_copied = result.officeRuleCopied;
+
+    // «Офис» отдела (291): был у источника — должен быть и у цели, иначе люди его потеряют.
+    const officeRules = await client.query<{ id: string }>(
+      'SELECT org_department_id::text AS id FROM timesheet_office_departments WHERE org_department_id = ANY($1::uuid[])',
+      [[source!.id, target!.id]],
+    );
+    const officeRuleIds = new Set(officeRules.rows.map(row => row.id));
+    if (officeRuleIds.has(source!.id) && !officeRuleIds.has(target!.id)) {
+      throw new Error('«Офис» источника не перенёсся на целевой отдел — откат');
+    }
 
     // Post-check ДО commit: источник пуст, у каждого ровно одно открытое назначение в цели.
     const left = await client.query<{ count: string }>(
@@ -360,7 +374,8 @@ async function main(): Promise<void> {
   console.log(
     `FOT: сотрудников ${counters.employeesUpdated}, открытых назначений ${counters.assignmentsUpdated},`
     + ` доступ создан ${counters.accessGranted}, включён ${counters.accessReactivated},`
-    + ` погашено на источнике ${counters.accessRevoked}`,
+    + ` погашено на источнике ${counters.accessRevoked}`
+    + `${counters.officeRuleCopied ? '; «Офис» отдела перенесён на целевой' : ''}`,
   );
   console.log(`Снимок для отката: ${snapshotPath}`);
 

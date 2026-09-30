@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Выбор объекта табелирования вручную (миграция 288): сотрудник в ЛК и тот, кто ведёт
- * табель. Порог 24 ч, окно последних 3 дней, исключение для новичка, повтор без записи.
+ * табель. Два объекта с наибольшими часами и разница меньше 15 %, окно последних 3 дней,
+ * исключение для новичка, повтор без записи, блокировка «Офисом» из окна (291).
  */
 
 const h = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const h = vi.hoisted(() => ({
   contractorIds: vi.fn(),
   frozen: vi.fn(),
   hours: vi.fn(),
+  locked: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -30,7 +32,6 @@ vi.mock('./audit.service.js', () => ({
   AUDIT_ACTIONS: {
     TIMESHEET_OBJECT_SELF_SELECTED: 'TIMESHEET_OBJECT_SELF_SELECTED',
     TIMESHEET_OBJECT_MANAGER_SELECTED: 'TIMESHEET_OBJECT_MANAGER_SELECTED',
-    TIMESHEET_MODE_UPDATED: 'TIMESHEET_MODE_UPDATED',
   },
   auditService: { logFromRequestWithClient: h.audit },
 }));
@@ -46,6 +47,7 @@ vi.mock('./employee-timesheet-object.service.js', async importOriginal => ({
   isPreviousMonthFrozen: h.frozen,
   loadTimesheetObjectHours: h.hours,
 }));
+vi.mock('./timesheet-office-rule.js', () => ({ isTimesheetOfficeLocked: h.locked }));
 
 const {
   TimesheetObjectError,
@@ -53,6 +55,7 @@ const {
   buildHoursOptions,
   canChangeTimesheetObject,
   getTimesheetObjectState,
+  hasAlternativeOption,
   setTimesheetObject,
 } = await import('./employee-timesheet-object-choice.service.js');
 
@@ -76,10 +79,10 @@ const employeeRow = (over: Record<string, unknown> = {}) => ({
   org_department_id: 'dept-own', ...over,
 });
 
-/** Кенгашев: Дом 56 — 200 ч, ЗИЛ — 30 ч, Ситибэй — 20 ч. */
+/** Кенгашев: Дом 56 — 100 ч, ЗИЛ — 90 ч (разница 10 %), Ситибэй — 20 ч. */
 const KENGASHEV_HOURS = [
-  { value: 'o-dom', label: 'ЖК Дом 56', objectId: 'o-dom', hours: 200 },
-  { value: 'o-zil', label: 'ЖК Зил 18,19,27', objectId: 'o-zil', hours: 30 },
+  { value: 'o-dom', label: 'ЖК Дом 56', objectId: 'o-dom', hours: 100 },
+  { value: 'o-zil', label: 'ЖК Зил 18,19,27', objectId: 'o-zil', hours: 90 },
   { value: 'o-city', label: 'ЖК Ситибэй', objectId: 'o-city', hours: 20 },
 ];
 
@@ -92,6 +95,7 @@ beforeEach(() => {
   h.frozen.mockResolvedValue(true);
   h.modes.mockResolvedValue(new Map([[815, { mode: 'object', pinnedObjectId: 'o-dom', source: 'employee_explicit' }]]));
   h.hours.mockResolvedValue(new Map([[815, KENGASHEV_HOURS]]));
+  h.locked.mockResolvedValue(false);
   h.clientQuery.mockImplementation(async (sql: string) => {
     if (sql.includes('FOR UPDATE')) {
       return { rows: [{ timesheet_export_mode: 'object', timesheet_export_object_id: 'o-dom', timesheet_export_set_by: 'auto' }] };
@@ -116,26 +120,47 @@ describe('canChangeTimesheetObject', () => {
     expect(canChangeTimesheetObject({ ...base, actor: 'manager', previousMonthFrozen: false })).toBe(false);
     expect(canChangeTimesheetObject({ ...base, actor: 'manager', eligible: false, hasObject: false })).toBe(false);
   });
+  it('«Офис» из окна «Режим табелирования» — никому, ни в окне, ни новичку', () => {
+    expect(canChangeTimesheetObject({ ...base, actor: 'employee', locked: true })).toBe(false);
+    expect(canChangeTimesheetObject({ ...base, actor: 'manager', locked: true })).toBe(false);
+    expect(canChangeTimesheetObject({ ...base, actor: 'manager', windowOpen: false, hasObject: false, locked: true }))
+      .toBe(false);
+  });
 });
 
-describe('список выбора — больше 24 ч с 1-го числа + текущий', () => {
-  it('Дом 56 (200 ч, текущий) и ЗИЛ (30 ч); Ситибэй (20 ч) — нет', () => {
-    expect(buildHoursOptions(KENGASHEV_HOURS, { value: 'o-dom', label: 'ЖК Дом 56' }).map(o => o.value))
-      .toEqual(['o-dom', 'o-zil']);
+describe('список выбора — два лучших по часам, разница меньше 15 % от большего', () => {
+  const pair = (first: number, second: number) => [
+    { value: 'o-metro', label: 'ЖК Метрополия', hours: first },
+    { value: 'o-zil', label: 'ЖК Зил 18,19,27', hours: second },
+    { value: 'o-city', label: 'ЖК Ситибэй', hours: 5 },
+  ];
+
+  it('100 ч и 86 ч (14 %) — можно любой из двух; третий — нет', () => {
+    expect(buildHoursOptions(pair(100, 86), { value: 'o-metro', label: 'ЖК Метрополия' }).map(o => o.value))
+      .toEqual(['o-metro', 'o-zil']);
   });
 
-  it('ровно 24 ч — нет, 24,5 ч — есть', () => {
-    const list = [
-      { value: 'o-zil', label: 'ЗИЛ', hours: 24 },
-      { value: 'o-city', label: 'Ситибэй', hours: 24.5 },
-    ];
-    expect(buildHoursOptions(list, { value: null, label: null }).map(o => o.value)).toEqual(['o-city']);
+  it('100 ч и 85 ч (ровно 15 %) — выбора нет, только первый', () => {
+    expect(buildHoursOptions(pair(100, 85), { value: 'o-metro', label: 'ЖК Метрополия' }).map(o => o.value))
+      .toEqual(['o-metro']);
   });
 
-  it('текущий объект в списке, даже если часов мало или нет вовсе', () => {
-    expect(buildHoursOptions([{ value: 'o-dom', label: 'ЖК Дом 56', hours: 10 }], { value: 'o-dom', label: 'ЖК Дом 56' }))
+  it('равные часы — оба; один объект — только он', () => {
+    expect(buildHoursOptions(pair(50, 50), { value: null, label: null }).map(o => o.value)).toEqual(['o-metro', 'o-zil']);
+    expect(buildHoursOptions([{ value: 'o-dom', label: 'ЖК Дом 56', hours: 10 }], { value: null, label: null }))
       .toEqual([{ value: 'o-dom', label: 'ЖК Дом 56' }]);
+  });
+
+  it('текущий вне двух лучших — в списке для показа; нет часов — только текущий', () => {
+    expect(buildHoursOptions(pair(100, 50), { value: 'o-city', label: 'ЖК Ситибэй' }).map(o => o.value))
+      .toEqual(['o-metro', 'o-city']);
     expect(buildHoursOptions([], { value: 'office', label: 'Офис' })).toEqual([{ value: 'office', label: 'Офис' }]);
+  });
+
+  it('есть ли на что сменить', () => {
+    expect(hasAlternativeOption([{ value: 'o-dom', label: 'ЖК Дом 56' }], 'o-dom')).toBe(false);
+    expect(hasAlternativeOption([{ value: 'o-dom', label: 'ЖК Дом 56' }], null)).toBe(true);
+    expect(hasAlternativeOption([], null)).toBe(false);
   });
 
   it('все объекты новичку: «Офис» одним пунктом, неактивных нет', () => {
@@ -156,11 +181,41 @@ describe('getTimesheetObjectState', () => {
     expect(h.hours).not.toHaveBeenCalled();
   });
 
-  it('в окне — список по часам текущего месяца (с 1-го по сегодня)', async () => {
+  it('в окне — два лучших по часам текущего месяца (с 1-го по сегодня)', async () => {
     const state = await getTimesheetObjectState(815, 'employee', IN_WINDOW);
     expect(state.can_change).toBe(true);
     expect(state.options.map(o => o.label)).toEqual(['ЖК Дом 56', 'ЖК Зил 18,19,27']);
     expect(h.hours).toHaveBeenCalledWith([815], { start: '2026-09-01', end: '2026-09-29' }, expect.any(Object));
+  });
+
+  it('в окне, но второй отстаёт на 15 % и больше — выбора нет, только текст', async () => {
+    h.hours.mockResolvedValue(new Map([[815, [
+      { value: 'o-dom', label: 'ЖК Дом 56', objectId: 'o-dom', hours: 200 },
+      { value: 'o-zil', label: 'ЖК Зил 18,19,27', objectId: 'o-zil', hours: 30 },
+    ]]]));
+    const state = await getTimesheetObjectState(815, 'employee', IN_WINDOW);
+    expect(state).toEqual({ label: 'ЖК Дом 56', value: 'o-dom', can_change: false, options: [] });
+  });
+
+  it('текущий выбран вручную вне двух лучших — можно вернуть первый', async () => {
+    h.modes.mockResolvedValue(new Map([[815, { mode: 'object', pinnedObjectId: 'o-metro', source: 'employee_explicit' }]]));
+    h.hours.mockResolvedValue(new Map([[815, [
+      { value: 'o-dom', label: 'ЖК Дом 56', objectId: 'o-dom', hours: 200 },
+      { value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 16 },
+    ]]]));
+    const state = await getTimesheetObjectState(815, 'employee', IN_WINDOW);
+    expect(state.can_change).toBe(true);
+    expect(state.options.map(o => o.value)).toEqual(['o-dom', 'o-metro']);
+  });
+
+  it('«Офис» из окна «Режим табелирования» — только подпись, список не считается', async () => {
+    h.locked.mockResolvedValue(true);
+    h.modes.mockResolvedValue(new Map([[815, { mode: 'current_activity', pinnedObjectId: null, source: 'employee_explicit' }]]));
+    const employee = await getTimesheetObjectState(815, 'employee', IN_WINDOW);
+    const manager = await getTimesheetObjectState(815, 'manager', OUT_OF_WINDOW);
+    expect(employee).toEqual({ label: 'Офис', value: 'office', can_change: false, options: [] });
+    expect(manager).toEqual({ label: 'Офис', value: 'office', can_change: false, options: [] });
+    expect(h.hours).not.toHaveBeenCalled();
   });
 
   it('новичок без объекта: ведущему табель — все объекты в любой день', async () => {
@@ -217,7 +272,7 @@ describe('setTimesheetObject', () => {
 
   it('ведущий табель выбирает «Офис»: current_activity, set_by = manager', async () => {
     h.hours.mockResolvedValue(new Map([[815, [
-      { value: 'office', label: 'Офис', objectId: null, hours: 40 },
+      { value: 'office', label: 'Офис', objectId: null, hours: 105 },
       ...KENGASHEV_HOURS,
     ]]]));
     await setTimesheetObject(req, 815, 'office', 'manager', IN_WINDOW);
@@ -228,10 +283,46 @@ describe('setTimesheetObject', () => {
     );
   });
 
-  it('Ситибэй (20 ч) выбрать нельзя — 400 TIMESHEET_OBJECT_NOT_ALLOWED', async () => {
+  it('Ситибэй (третий по часам) выбрать нельзя — 400 TIMESHEET_OBJECT_NOT_ALLOWED', async () => {
     await expect(setTimesheetObject(req, 815, 'o-city', 'employee', IN_WINDOW)).rejects.toMatchObject({
       status: 400, code: 'TIMESHEET_OBJECT_NOT_ALLOWED',
     });
+  });
+
+  it('выбора нет (разница 15 % и больше) — даже текущий не закрепить: 400', async () => {
+    h.hours.mockResolvedValue(new Map([[815, [
+      { value: 'o-dom', label: 'ЖК Дом 56', objectId: 'o-dom', hours: 100 },
+      { value: 'o-zil', label: 'ЖК Зил 18,19,27', objectId: 'o-zil', hours: 85 },
+    ]]]));
+    await expect(setTimesheetObject(req, 815, 'o-zil', 'employee', IN_WINDOW)).rejects.toMatchObject({
+      status: 400, code: 'TIMESHEET_OBJECT_NOT_ALLOWED',
+    });
+    await expect(setTimesheetObject(req, 815, 'o-dom', 'employee', IN_WINDOW)).rejects.toMatchObject({
+      status: 400, code: 'TIMESHEET_OBJECT_NOT_ALLOWED',
+    });
+    expect(h.clientQuery.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE employees'))).toBe(false);
+  });
+
+  it('«Офис» из окна — 409 TIMESHEET_OBJECT_LOCKED и сотруднику, и ведущему табель', async () => {
+    h.locked.mockResolvedValue(true);
+    await expect(setTimesheetObject(req, 815, 'o-zil', 'employee', IN_WINDOW)).rejects.toMatchObject({
+      status: 409, code: 'TIMESHEET_OBJECT_LOCKED',
+    });
+    await expect(setTimesheetObject(req, 815, 'o-zil', 'manager', IN_WINDOW)).rejects.toMatchObject({
+      status: 409, code: 'TIMESHEET_OBJECT_LOCKED',
+    });
+    expect(h.clientQuery).not.toHaveBeenCalled();
+  });
+
+  it('«Офис» поставили в окне между чтением и записью — 409 из транзакции, без UPDATE и аудита', async () => {
+    // Вне транзакции (без клиента) — ещё не закрыт, под локом (с клиентом) — уже закрыт.
+    h.locked.mockImplementation(async (_id: number, exec?: unknown) => exec !== undefined);
+    await expect(setTimesheetObject(req, 815, 'o-zil', 'employee', IN_WINDOW)).rejects.toMatchObject({
+      status: 409, code: 'TIMESHEET_OBJECT_LOCKED',
+    });
+    expect(h.clientQuery.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE employees'))).toBe(false);
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.locked).toHaveBeenLastCalledWith(815, expect.objectContaining({ query: h.clientQuery }));
   });
 
   it('вне окна — 409; прошлый месяц не зафиксирован — 409; подрядчик — 400', async () => {
@@ -261,58 +352,5 @@ describe('setTimesheetObject', () => {
     expect(result.changed).toBe(true);
     const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
     expect(update?.[1]).toEqual(['object', 'o-city', 'manager', 815, 'user-1']);
-  });
-});
-
-describe('откат ручной смены', () => {
-  /** Бовсуновский: «Офис» от отдела (legacy), руководитель поставил ЖК Метрополия. */
-  const setBovsunovsky = () => {
-    h.modes.mockImplementation(async (_ids: number[], _exec: unknown, options?: { ignorePersonal?: boolean }) => (
-      options?.ignorePersonal
-        ? new Map([[815, { mode: 'current_activity', pinnedObjectId: null, source: 'legacy_department' }]])
-        : new Map([[815, { mode: 'object', pinnedObjectId: 'o-metro', source: 'employee_explicit' }]])
-    ));
-    h.hours.mockResolvedValue(new Map([[815, [
-      { value: 'o-metro', label: 'ЖК Метрополия', objectId: 'o-metro', hours: 113 },
-      { value: 'o-zil', label: 'ЖК Зил 18,19,27', objectId: 'o-zil', hours: 16 },
-    ]]]));
-    h.clientQuery.mockImplementation(async (sql: string) => (sql.includes('FOR UPDATE')
-      ? { rows: [{ timesheet_export_mode: 'object', timesheet_export_object_id: 'o-metro', timesheet_export_set_by: 'manager' }] }
-      : { rows: [] }));
-  };
-
-  it('«Офис» по умолчанию от отдела остаётся в списке, хотя часов в офисе нет', async () => {
-    setBovsunovsky();
-    const state = await getTimesheetObjectState(815, 'manager', IN_WINDOW);
-    expect(state.options).toEqual([
-      { value: 'o-metro', label: 'ЖК Метрополия' },
-      { value: 'office', label: 'Офис' },
-    ]);
-  });
-
-  it('вернуть «Офис» можно: current_activity, источник — ведущий табель', async () => {
-    setBovsunovsky();
-    const result = await setTimesheetObject(req, 815, 'office', 'manager', IN_WINDOW);
-    expect(result.changed).toBe(true);
-    const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE employees'));
-    expect(update?.[1]).toEqual(['current_activity', null, 'manager', 815, 'user-1']);
-  });
-
-  it('прежний объект из журнала этого месяца — в списке даже без 24 ч; неактивный — нет', async () => {
-    setBovsunovsky();
-    h.query.mockResolvedValue([
-      { old_mode: 'object', old_object_id: 'o-zil' },
-      { old_mode: 'object', old_object_id: 'o-old' },
-      { old_mode: null, old_object_id: null },
-    ]);
-    const state = await getTimesheetObjectState(815, 'manager', IN_WINDOW);
-    expect(state.options.map(o => o.value)).toEqual(['o-metro', 'office', 'o-zil']);
-    // Журнал — только этот сотрудник и этот месяц (с 1-го числа по МСК).
-    const [sql, params] = h.query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('FROM audit_logs');
-    expect(params[0]).toBe('815');
-    expect(params[2]).toBe('2026-09-01T00:00:00+03:00');
-
-    await expect(setTimesheetObject(req, 815, 'o-zil', 'manager', IN_WINDOW)).resolves.toMatchObject({ changed: true });
   });
 });

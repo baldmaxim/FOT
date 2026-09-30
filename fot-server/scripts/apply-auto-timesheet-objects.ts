@@ -42,6 +42,7 @@ const main = async (): Promise<void> => {
     + `авто ${report.fromAuto}`,
   );
   console.log(`${prefix}без изменений: ${report.unchanged}; не трогаем (выбор сотрудника/табеля${all ? '' : ', ручные админа'}): ${report.skippedManual}`);
+  console.log(`${prefix}в отделах с «Офисом» (объект ставит правило отдела): ${report.officeDepartment}`);
 
   if (details) {
     for (const change of result.changes) {

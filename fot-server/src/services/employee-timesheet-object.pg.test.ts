@@ -53,13 +53,16 @@ vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: vi.
 import { resolveExportModes, nextMonthStart } from './timesheet-export-mode.service.js';
 import { fetchEmployeeIdsPinnedToObjects } from './timesheet-objects-export.service.js';
 import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './employee-timesheet-object-auto.service.js';
+import { monthEnd } from './employee-timesheet-object.service.js';
 import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
+import { enforceOfficeForDepartments, isTimesheetOfficeLocked } from './timesheet-office-rule.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
 const MIGRATION_AUTHOR = readFileSync(`${MIGRATIONS_DIR}289_timesheet_object_author.sql`, 'utf8');
 const MIGRATION_DROP_MODE = readFileSync(`${MIGRATIONS_DIR}290_drop_timesheet_mode_management.sql`, 'utf8');
+const MIGRATION_OFFICE = readFileSync(`${MIGRATIONS_DIR}291_timesheet_office_departments.sql`, 'utf8');
 
 const ROOT = '00000000-0000-0000-0000-00000000c000';
 const CONTR = '00000000-0000-0000-0000-00000000c001';
@@ -91,11 +94,17 @@ let baseline = '';
 const resetSchema = async (): Promise<void> => {
   await pg.pool!.query(`
     DROP TABLE IF EXISTS employee_timesheet_object_months, timesheet_object_auto_state, timesheet_versions,
-      department_object_assignment, audit_logs, employees, skud_objects, org_departments,
-      user_profiles, system_roles, role_page_access, access_pages CASCADE;
-    CREATE TABLE access_pages (key text PRIMARY KEY);
+      department_object_assignment, timesheet_office_departments, audit_logs, employees, skud_objects,
+      org_departments, user_profiles, system_roles, role_page_access, access_pages CASCADE;
+    CREATE TABLE access_pages (
+      key text PRIMARY KEY, label text NULL, group_code text NULL, group_label text NULL, area text NULL,
+      surface text NULL, supports_edit boolean NULL, requires_data_scope boolean NULL,
+      requires_employee_variant boolean NULL, sort_order integer NULL, is_active boolean NULL, is_system boolean NULL
+    );
     CREATE TABLE role_page_access (
-      role_code text NOT NULL, page_path text NOT NULL, PRIMARY KEY (role_code, page_path)
+      role_code text NOT NULL, page_path text NOT NULL,
+      can_view boolean NOT NULL DEFAULT false, can_edit boolean NOT NULL DEFAULT false,
+      PRIMARY KEY (role_code, page_path)
     );
     CREATE TABLE system_roles (
       id uuid PRIMARY KEY, code text NOT NULL, name text NOT NULL, is_admin boolean NOT NULL DEFAULT false
@@ -106,7 +115,7 @@ const resetSchema = async (): Promise<void> => {
     );
     CREATE TABLE org_departments (
       id uuid PRIMARY KEY, name text NOT NULL, parent_id uuid NULL, is_active boolean NOT NULL DEFAULT true,
-      timesheet_export_mode text NULL, timesheet_export_object_id uuid NULL
+      kind text NULL, timesheet_export_mode text NULL, timesheet_export_object_id uuid NULL
     );
     CREATE TABLE skud_objects (
       id uuid PRIMARY KEY, name text NOT NULL UNIQUE, alt_name text NULL,
@@ -334,7 +343,9 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
     beforeAll(async () => {
       await resetSchema();
       await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
       await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
     });
 
     it('активация с --all: ручные режимы пересчитаны, подрядчик и архивный не тронуты, повтор без --force отклонён', async () => {
@@ -498,6 +509,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       modesBefore = await modes();
       await pg.pool!.query(MIGRATION_AUTHOR);
       await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
     });
 
     it('восстановление из журнала: только правка человеком того же пути и значения без скрипта после неё', async () => {
@@ -631,19 +643,171 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       ]);
     });
 
-    it('активация --all перезаписывает ручной режим админа — автор стирается; выбор руководителя не трогается', async () => {
-      hours.byEmployee = new Map([[27, [{ value: ZIL, label: 'ЖК Зил 18,19,27', objectId: ZIL, hours: 40 }]]]);
+    it('активация --all перезаписывает ручной объект админа; личный «Офис» (291) и выбор руководителя не трогает', async () => {
+      hours.byEmployee = new Map([
+        [26, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 40 }]],
+        [27, [{ value: ZIL, label: 'ЖК Зил 18,19,27', objectId: ZIL, hours: 40 }]],
+      ]);
       const now = new Date(`${shift(baseline, 2).slice(0, 8)}10T12:00:00+03:00`);
 
       await activateTimesheetObjects({ all: true, force: true, dryRun: false, now });
 
-      const [emp27] = await q(
-        `SELECT timesheet_export_mode AS mode, timesheet_export_set_by AS set_by,
-                timesheet_export_set_by_user_id AS user_id, timesheet_export_set_at AS set_at
-           FROM employees WHERE id = 27`,
+      const rows = await q(
+        `SELECT id, timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
+                timesheet_export_set_by AS set_by, timesheet_export_set_by_user_id::text AS user_id
+           FROM employees WHERE id IN (26, 27) ORDER BY id`,
       );
-      expect(emp27).toEqual({ mode: 'object', set_by: 'auto', user_id: null, set_at: null });
+      expect(rows).toEqual([
+        // Ручной объект админа без автора — пересчитан.
+        { id: 26, mode: 'object', object_id: DOM, set_by: 'auto', user_id: null },
+        // «Офис» с автором и set_by = NULL — личный «Офис» окна: не трогает даже --all.
+        { id: 27, mode: 'current_activity', object_id: null, set_by: null, user_id: U_ADMIN },
+      ]);
       expect((await author(21))?.user_id).toBe(U_BOYUKYAN);
+    });
+  });
+
+  // «Офис» из окна «Режим табелирования» (миграция 291): правило отдела, ночь, фиксация.
+  describe('«Офис» отдела и личный «Офис» (291)', () => {
+    const D_OTHER = '00000000-0000-0000-0000-00000000d002';
+    const U_HR = '00000000-0000-0000-0000-00000000b0a1';
+    const CONTRACTOR_IDS = [ROOT, CONTR];
+    let current = '';
+
+    const emp = async (id: number) => (await q(
+      `SELECT timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
+              timesheet_export_set_by AS set_by, timesheet_export_set_by_user_id::text AS user_id
+         FROM employees WHERE id = $1`, [id],
+    ))[0];
+    const enforce = async (departmentIds: string[]) => {
+      const client = await pg.pool!.connect();
+      try {
+        await client.query('BEGIN');
+        const changes = await enforceOfficeForDepartments(client, departmentIds, CONTRACTOR_IDS);
+        await client.query('COMMIT');
+        return changes;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
+      current = shift(baseline, 1);
+      hours.byEmployee = new Map();
+      await pg.pool!.query(`
+        INSERT INTO org_departments (id, name) VALUES ('${D_OTHER}', 'Другой отдел');
+        INSERT INTO user_profiles (id, full_name) VALUES ('${U_HR}', 'Кадровый админ');
+        UPDATE timesheet_object_auto_state
+           SET enabled = true, frozen_month = '${baseline}', objects_rebuilt_month = '${baseline}', applied_date = NULL;
+        INSERT INTO employees (id, full_name, org_department_id, employment_status,
+                               timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (40, 'Сам выбрал ЗИЛ', '${D_OWN}', 'active', 'object', '${ZIL}', 'employee'),
+          (41, 'Уже «Офис» от ночи', '${D_OWN}', 'active', 'current_activity', NULL, 'auto'),
+          (43, 'Уволен', '${D_OWN}', 'dismissed', 'object', '${DOM}', 'auto'),
+          (44, 'В другом отделе', '${D_OTHER}', 'active', 'object', '${DOM}', 'auto'),
+          (46, 'Другой отдел, авто', '${D_OTHER}', 'active', 'object', '${ZIL}', 'auto');
+        INSERT INTO employees (id, full_name, org_department_id, timesheet_export_mode,
+                               timesheet_export_set_by, timesheet_export_set_by_user_id, timesheet_export_set_at) VALUES
+          (42, 'Личный «Офис»', '${D_OTHER}', 'current_activity', NULL, '${U_HR}', now());
+      `);
+    });
+
+    it('миграция 291: таблица, право для admin и hr_admin; повтор ничего не меняет', async () => {
+      await pg.pool!.query(MIGRATION_OFFICE);
+      expect(await q(`SELECT key, sort_order FROM access_pages WHERE key = '/staff-control/timesheet-office'`))
+        .toEqual([{ key: '/staff-control/timesheet-office', sort_order: 164 }]);
+      expect(await q(`SELECT role_code, can_view, can_edit FROM role_page_access
+                       WHERE page_path = '/staff-control/timesheet-office' ORDER BY role_code`))
+        .toEqual([
+          { role_code: 'admin', can_view: true, can_edit: true },
+          { role_code: 'hr_admin', can_view: true, can_edit: true },
+        ]);
+    });
+
+    it('правило отдела: «Офис» всем прямым работающим своим при любом источнике; личный, уволенный и чужой — нет', async () => {
+      await q('INSERT INTO timesheet_office_departments (org_department_id, created_by) VALUES ($1, $2)', [D_OWN, U_HR]);
+      const changes = await enforce([D_OWN]);
+      // 1 — без режима, 2 — старый ручной объект админа, 3 — «Офис» без автора, 40 — сам выбрал ЗИЛ.
+      expect(changes.map(change => change.employeeId).sort((a, b) => a - b)).toEqual([1, 2, 3, 40]);
+      expect(await emp(40)).toEqual({ mode: 'current_activity', object_id: null, set_by: 'auto', user_id: null });
+      expect(await emp(41)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+      expect(await emp(43)).toMatchObject({ mode: 'object', object_id: DOM, set_by: 'auto' });
+      expect(await emp(4)).toMatchObject({ mode: null });
+
+      // Выбор закрыт: сотруднику отдела с «Офисом» и с личным «Офисом»; остальным — нет.
+      expect(await isTimesheetOfficeLocked(40)).toBe(true);
+      expect(await isTimesheetOfficeLocked(42)).toBe(true);
+      expect(await isTimesheetOfficeLocked(44)).toBe(false);
+
+      // Повтор — без изменений.
+      expect(await enforce([D_OWN])).toEqual([]);
+    });
+
+    it('ночь: у сотрудников отдела «Офис» при любых часах; переведённому — поверх ручного выбора; повтор — без изменений', async () => {
+      // Перевод в отдел с «Офисом» с ручным объектом из прошлого отдела.
+      await q(`UPDATE employees SET org_department_id = $1, timesheet_export_object_id = $2, timesheet_export_set_by = 'manager'
+                WHERE id = 44`, [D_OWN, ZIL]);
+      hours.byEmployee = new Map([
+        [40, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]],
+        [44, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 50 }]],
+      ]);
+      const result = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}10T05:00:00+03:00`));
+      expect(result).toMatchObject({ kind: 'applied', changed: 1 });
+      expect(await emp(40)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+      expect(await emp(44)).toMatchObject({ mode: 'current_activity', object_id: null, set_by: 'auto' });
+      expect(await emp(42)).toMatchObject({ mode: 'current_activity', set_by: null, user_id: U_HR });
+      expect(await q(`SELECT entity_id, details->>'old_set_by' AS old_set_by, details->>'reason' AS reason
+                        FROM audit_logs WHERE action = 'TIMESHEET_OFFICE_UPDATED'`))
+        .toEqual([{ entity_id: '44', old_set_by: 'manager', reason: 'current_month' }]);
+
+      const next = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}11T05:00:00+03:00`));
+      expect(next).toMatchObject({ kind: 'applied', changed: 0 });
+    });
+
+    it('ушедший из отдела с «Офисом» — выбор открыт, объект снова по часам', async () => {
+      await q('UPDATE employees SET org_department_id = $1 WHERE id = 40', [D_OTHER]);
+      expect(await isTimesheetOfficeLocked(40)).toBe(false);
+      hours.byEmployee = new Map([[40, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]]]);
+      const result = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}12T05:00:00+03:00`));
+      expect(result).toMatchObject({ kind: 'applied', changed: 1 });
+      expect(await emp(40)).toMatchObject({ mode: 'object', object_id: DOM, set_by: 'auto' });
+    });
+
+    it('закрытие месяца: перевод в последний день до 04:00 — месяц с «Офисом»; снятие правила после пересчёта дня — по часам', async () => {
+      const lastDay = monthEnd(current);
+      // Ночью последнего дня (до 04:00): 40 вернули в отдел с «Офисом», у «Другого отдела» тоже «Офис».
+      await q('UPDATE employees SET org_department_id = $1 WHERE id = 40', [D_OWN]);
+      await q('INSERT INTO timesheet_office_departments (org_department_id) VALUES ($1)', [D_OTHER]);
+      hours.byEmployee = new Map([
+        [40, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]],
+        [46, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 80 }]],
+      ]);
+      await recomputeCurrentMonth(new Date(`${lastDay}T05:00:00+03:00`));
+      expect(await emp(40)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+      expect(await emp(46)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
+
+      // После пересчёта дня «Офис» с «Другого отдела» сняли — фиксация считает 46-го по часам.
+      await q('DELETE FROM timesheet_office_departments WHERE org_department_id = $1', [D_OTHER]);
+      const next = nextMonthStart(current);
+      const frozen = await freezeMonth(current, new Date(`${next}T05:00:00+03:00`));
+      expect(frozen).toMatchObject({ kind: 'frozen', month: current });
+      expect(await q(`SELECT employee_id, mode, object_id::text FROM employee_timesheet_object_months
+                        WHERE month = $1::date AND employee_id IN (40, 46) ORDER BY employee_id`, [current]))
+        .toEqual([
+          { employee_id: 40, mode: 'current_activity', object_id: null },
+          { employee_id: 46, mode: 'object', object_id: DOM },
+        ]);
+
+      expect(await freezeMonth(current, new Date(`${next}T06:00:00+03:00`)))
+        .toEqual({ kind: 'skipped', reason: 'already_frozen' });
     });
   });
 });

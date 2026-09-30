@@ -92,6 +92,41 @@ export interface IObjectAssignments {
   employee_objects: Record<string, string[]>;
 }
 
+// ─── Режим табелирования: «Офис» отделу или сотруднику (миграция 291) ──────
+
+export interface ITimesheetOfficeDepartment {
+  id: string;
+  name: string;
+  employees_count: number;
+}
+
+export interface ITimesheetOfficeEmployee {
+  id: number;
+  full_name: string;
+  department: string | null;
+}
+
+export interface ITimesheetOfficeState {
+  /** Отделы, которые можно выбрать: активные, не подрядные, в доступе пользователя. */
+  allowed_department_ids: string[];
+  departments: ITimesheetOfficeDepartment[];
+  employees: ITimesheetOfficeEmployee[];
+}
+
+export interface ITimesheetOfficeUpdate {
+  departments?: { add?: string[]; remove?: string[] };
+  employees?: { add?: number[]; remove?: number[] };
+}
+
+export interface ITimesheetOfficeResult {
+  changed: boolean;
+  departments_added: number;
+  departments_removed: number;
+  employees_added: number;
+  employees_removed: number;
+  members_applied: number;
+}
+
 // ─── Чёрный список (миграция 273) ───────────────────────────────────────────
 
 export interface IBlacklistRow {
@@ -483,6 +518,26 @@ export const adminService = {
     const params = new URLSearchParams({ q: query, include_linked: 'true' });
     const response = await apiClient.get<ApiResponse<{ id: number; full_name: string; org_department_id: string | null }[]>>(`/admin/employees/search?${params}`);
     return response.data || [];
+  },
+
+  // ─── Режим табелирования: «Офис» отделу или сотруднику (миграция 291) ───
+  async getTimesheetOffice(): Promise<ITimesheetOfficeState> {
+    const response = await apiClient.get<ApiResponse<ITimesheetOfficeState>>('/admin/timesheet-office');
+    return response.data || { allowed_department_ids: [], departments: [], employees: [] };
+  },
+
+  async searchTimesheetOfficeEmployees(search: string, signal?: AbortSignal): Promise<ITimesheetOfficeEmployee[]> {
+    const params = new URLSearchParams({ search });
+    const response = await apiClient.get<ApiResponse<ITimesheetOfficeEmployee[]>>(
+      `/admin/timesheet-office/employees?${params}`,
+      { signal },
+    );
+    return response.data || [];
+  },
+
+  async updateTimesheetOffice(payload: ITimesheetOfficeUpdate): Promise<ITimesheetOfficeResult> {
+    const response = await apiClient.put<ApiResponse<ITimesheetOfficeResult>>('/admin/timesheet-office', payload);
+    return response.data;
   },
 
   // ─── Назначение «объектов входа» для скоупа табельщицы (миграция 150) ───

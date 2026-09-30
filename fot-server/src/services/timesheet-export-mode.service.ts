@@ -91,16 +91,7 @@ export interface IExportModeMonthOptions {
   month?: string | null;
   /** «Сейчас» — для тестов. */
   now?: Date;
-  /**
-   * Без личного режима: что сотрудник получил бы по legacy-назначениям объектов отдела.
-   * Нужно, чтобы ручную смену объекта можно было откатить к значению по умолчанию.
-   */
-  ignorePersonal?: boolean;
 }
-
-/** Строка без личного режима — для ignorePersonal. */
-const withoutPersonal = <T extends IModeRow>(row: T, ignore: boolean | undefined): T =>
-  (ignore ? { ...row, emp_mode: null, emp_object_id: null } : row);
 
 /** '2026-09-17' | '2026-09' → '2026-09-01'; мусор → null. */
 export function toMonthStart(value: string | null | undefined): string | null {
@@ -263,7 +254,7 @@ export async function resolveExportModes(
     for (const row of rows) {
       const id = Number(row.employee_id);
       if (!Number.isInteger(id)) continue;
-      result.set(id, resolveRow(withoutPersonal(row, options?.ignorePersonal)));
+      result.set(id, resolveRow(row));
     }
     return result;
   }
@@ -292,7 +283,7 @@ export async function resolveExportModes(
   for (const row of rows) {
     const id = Number(row.employee_id);
     if (!Number.isInteger(id)) continue;
-    result.set(id, resolveRow(withoutPersonal(row, options?.ignorePersonal)));
+    result.set(id, resolveRow(row));
   }
   return result;
 }
