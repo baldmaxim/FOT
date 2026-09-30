@@ -43,6 +43,7 @@
 
 .actions {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
 }
 
@@ -76,14 +77,28 @@
   overflow: auto;
 }
 
-.image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: 6px;
+/* При переполнении center уводит левый/верхний край за начало прокрутки —
+   поэтому flex-start, а маленькую картинку центрирует margin: auto рамки. */
+.bodyImage {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+/* Видимый прямоугольник картинки (с учётом поворота); 0×0, пока размер не посчитан. */
+.imageFrame {
+  position: relative;
+  flex: none;
   margin: auto;
+  overflow: hidden;
+}
+
+.image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: none;
+  border-radius: 6px;
   user-select: none;
-  transition: width 0.12s ease;
 }
 
 .zoomLabel {

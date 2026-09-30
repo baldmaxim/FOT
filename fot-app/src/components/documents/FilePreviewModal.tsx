@@ -1,5 +1,5 @@
-import { type FC, type WheelEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { X, Download, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { type FC, type SyntheticEvent, type WheelEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { X, Download, ZoomIn, ZoomOut, Maximize, RotateCwSquare } from 'lucide-react';
 import { documentService } from '../../services/documentService';
 import { ModalShell } from '../ui/ModalShell';
 import styles from './FilePreviewModal.module.css';
@@ -10,6 +10,11 @@ const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_STEP = 0.25;
 const clampZoom = (z: number): number => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+interface ISize {
+  w: number;
+  h: number;
+}
 
 interface IFilePreviewModalProps {
   documentId?: number;
@@ -34,24 +39,47 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [baseW, setBaseW] = useState<number | null>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
+  const [rotation, setRotation] = useState(0);
+  const [natural, setNatural] = useState<ISize | null>(null);
+  const [box, setBox] = useState<ISize | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Сброс зума при смене файла, чтобы новый открывался вписанным.
-  useEffect(() => {
+  // Сброс зума и поворота при смене файла, чтобы новый открывался вписанным.
+  const viewKey = `${url ?? ''}|${fileName}`;
+  const [prevViewKey, setPrevViewKey] = useState(viewKey);
+  if (viewKey !== prevViewKey) {
+    setPrevViewKey(viewKey);
     setZoom(1);
-    setBaseW(null);
-  }, [url, fileName]);
+    setRotation(0);
+    setNatural(null);
+  }
 
-  // Ширина картинки во вписанном (zoom=1) состоянии — база для масштаба.
-  const handleImgLoad = useCallback(() => {
-    const w = imgRef.current?.getBoundingClientRect().width;
-    if (w) setBaseW(w);
+  // Доступная область без padding. border-box не меняется от появления
+  // скроллбара, поэтому зум не зацикливает пересчёт; offsetWidth не зависит
+  // от scale-анимации входа модалки.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const cs = getComputedStyle(el);
+      setBox({
+        w: el.offsetWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        h: el.offsetHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+      });
+    });
+    ro.observe(el, { box: 'border-box' });
+    return () => ro.disconnect();
+  }, []);
+
+  const handleImgLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+    if (w && h) setNatural({ w, h });
   }, []);
 
   const zoomIn = useCallback(() => setZoom(z => clampZoom(z + ZOOM_STEP)), []);
   const zoomOut = useCallback(() => setZoom(z => clampZoom(z - ZOOM_STEP)), []);
   const zoomReset = useCallback(() => setZoom(1), []);
+  const rotate = useCallback(() => setRotation(r => (r + 90) % 360), []);
 
   const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
     if (!e.ctrlKey && !e.metaKey) return;
@@ -95,6 +123,20 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   const isImage = mimeType?.startsWith('image/');
   const isPdf = mimeType === 'application/pdf';
 
+  // Вписывание с учётом поворота: боком у картинки меняются местами стороны.
+  // Рамка — видимый прямоугольник, картинка поворачивается в её центре.
+  const sideways = rotation % 180 !== 0;
+  let imgSize: ISize | null = null;
+  if (natural && box && box.w > 0 && box.h > 0) {
+    const fit = Math.min(
+      1,
+      box.w / (sideways ? natural.h : natural.w),
+      box.h / (sideways ? natural.w : natural.h),
+    ) * zoom;
+    imgSize = { w: natural.w * fit, h: natural.h * fit };
+  }
+  const showImage = Boolean(url && !error && isImage);
+
   return (
     <ModalShell onClose={onClose} overlayClassName={styles.overlay} containerClassName={styles.container}>
       {({ requestClose }) => (
@@ -104,6 +146,15 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
             <div className={styles.actions}>
               {url && isImage && (
                 <>
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    onClick={rotate}
+                    title="Повернуть на 90°"
+                    aria-label="Повернуть на 90°"
+                  >
+                    <RotateCwSquare size={16} />
+                  </button>
                   <button
                     type="button"
                     className={styles.iconBtn}
@@ -147,23 +198,31 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
               </button>
             </div>
           </div>
-          <div className={styles.body} onWheel={handleWheel}>
+          <div
+            ref={bodyRef}
+            className={showImage ? `${styles.body} ${styles.bodyImage}` : styles.body}
+            onWheel={handleWheel}
+          >
             {error && <div className={styles.error}>{error}</div>}
             {!error && !url && <div className={styles.loading}>Загрузка…</div>}
-            {url && !error && isImage && (
-              <img
-                ref={imgRef}
-                src={url}
-                alt={fileName}
-                className={styles.image}
-                onLoad={handleImgLoad}
-                style={
-                  zoom > 1 && baseW
-                    ? { width: baseW * zoom, height: 'auto', maxWidth: 'none', maxHeight: 'none' }
-                    : undefined
-                }
-                draggable={false}
-              />
+            {showImage && url && (
+              <div
+                className={styles.imageFrame}
+                style={imgSize ? { width: sideways ? imgSize.h : imgSize.w, height: sideways ? imgSize.w : imgSize.h } : undefined}
+              >
+                <img
+                  src={url}
+                  alt={fileName}
+                  className={styles.image}
+                  onLoad={handleImgLoad}
+                  style={
+                    imgSize
+                      ? { width: imgSize.w, height: imgSize.h, transform: `translate(-50%, -50%) rotate(${rotation}deg)` }
+                      : undefined
+                  }
+                  draggable={false}
+                />
+              </div>
             )}
             {url && !error && isPdf && (
               <iframe src={url} title={fileName} className={styles.iframe} />
