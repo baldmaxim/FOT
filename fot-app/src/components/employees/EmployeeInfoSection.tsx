@@ -64,7 +64,7 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
             <span className="form-readonly">{employee.position_name || '—'}</span>
           </div>
           <div className="form-group">
-            <label>Объект</label>
+            <label>Объект табелирования</label>
             <span className="form-readonly">{employee.timesheet_object_label || '—'}</span>
           </div>
           <div className="form-group">
@@ -187,7 +187,7 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
         </div>
         {employee.timesheet_object_label && (
           <div className="ec-info-row">
-            <span className="ec-info-label">Объект</span>
+            <span className="ec-info-label">Объект табелирования</span>
             <span className="ec-info-val">{employee.timesheet_object_label}</span>
           </div>
         )}
