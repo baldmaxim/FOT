@@ -38,13 +38,15 @@ vi.mock('../services/attendance.service.js', () => ({
   upsertAttendanceAdjustment: upsertSpy,
 }));
 
-const { editableEmployeesMock, timesheetEditableEmployeesMock } = vi.hoisted(() => {
+const { editableEmployeesMock, timesheetEditableEmployeesMock, hasDeputyAssignmentMock } = vi.hoisted(() => {
   const editableEmployeesMock = vi.fn(async (): Promise<Set<number> | 'all'> => 'all');
   return {
     editableEmployeesMock,
     // Табельный набор (начальник + заместитель, миграция 283). По умолчанию совпадает
     // с editable: расходятся они только там, где это проверяется намеренно.
     timesheetEditableEmployeesMock: vi.fn(async (): Promise<Set<number> | 'all'> => editableEmployeesMock()),
+    // Назначение «Заместитель» (миграция 283): по умолчанию его нет.
+    hasDeputyAssignmentMock: vi.fn(async () => false),
   };
 });
 vi.mock('../services/data-scope.service.js', () => ({
@@ -60,13 +62,21 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveTimesheetEditableDepartmentIds: vi.fn(async () => []),
   resolveTimesheetEditableEmployeeIds: timesheetEditableEmployeesMock,
   canEditEmployeeTimesheetInScope: vi.fn(async () => true),
+  hasDeputyAssignment: hasDeputyAssignmentMock,
 }));
 
-const { responsiblesByEmpMock } = vi.hoisted(() => ({
-  responsiblesByEmpMock: vi.fn(async () => new Map<number, number[]>()),
-}));
+const { responsiblesByEmpMock, leaveApproversMock } = vi.hoisted(() => {
+  const responsiblesByEmpMock = vi.fn(async (_emps?: unknown) => new Map<number, number[]>());
+  return {
+    responsiblesByEmpMock,
+    // Маршрут заявлений = ответственный + заместители по назначению. По умолчанию — как
+    // ответственный: заместители добавляются только там, где это проверяется намеренно.
+    leaveApproversMock: vi.fn(async (emps?: unknown) => responsiblesByEmpMock(emps)),
+  };
+});
 vi.mock('../services/approval-routing.service.js', () => ({
   resolveResponsibleEmployeeIdsByEmployee: responsiblesByEmpMock,
+  resolveLeaveApproverEmployeeIdsByEmployee: leaveApproversMock,
 }));
 
 const { resolveApprovalMock } = vi.hoisted(() => ({
@@ -104,6 +114,7 @@ vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSub
 // leave-request-history.service НЕ мокаем: он пишет через client.query того же
 // tx-клиента, что и остальной код, — так тесты видят INSERT в leave_request_history.
 import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
+import { hasPageView } from '../services/access-control.service.js';
 const { selectableObjectsMock } = vi.hoisted(() => ({
   selectableObjectsMock: vi.fn(async () => [] as Array<{ object_id: string; object_name: string }>),
 }));
@@ -212,6 +223,10 @@ beforeEach(() => {
   pgQueryOne.mockReset();
   pgQuery.mockReset();
   txClient.query.mockReset();
+  // clearAllMocks реализации не сбрасывает: заместителя по назначению нет, маршрут
+  // заявлений совпадает с ответственным — пока тест не задаст иное.
+  hasDeputyAssignmentMock.mockResolvedValue(false);
+  leaveApproversMock.mockImplementation(async (emps?: unknown) => responsiblesByEmpMock(emps));
 });
 
 describe('leaveRequestsController.approve', () => {
@@ -1299,6 +1314,17 @@ describe('leaveRequestsController.create (работа в выходной бе�
     expect(weekendResponsibleMock).not.toHaveBeenCalled();
     expect(resolveApprovalMock).not.toHaveBeenCalled();
     expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('заместитель по назначению не делает 1-й этап непустым: передача в «Согласования» прежняя', async () => {
+    // Маршрут заявлений с заместителем не пуст, но передачу решает ответственный без него.
+    leaveApproversMock.mockImplementation(async () => new Map([[247, [7]]]));
+
+    await submit();
+
+    expect(leaveApproversMock).not.toHaveBeenCalled();
+    expect(responsiblesByEmpMock).toHaveBeenCalled();
+    expect(upsertSpy).toHaveBeenCalledTimes(2);
   });
 
   it('ответственный за выходные — сам заявитель → обычный путь', async () => {
@@ -2799,7 +2825,7 @@ describe('заместитель начальника отдела: «Корре
     expect(data.skipped_no_access).toBe(1);
   });
 
-  it('отпуск заместителю не отдаём: routed-типы идут по маршруту начальника', async () => {
+  it('отпуск: решает тот, кто в маршруте заявлений (начальник и заместитель по назначению)', async () => {
     const vacation = { ...CORRECTION, id: 78, request_type: 'vacation' };
     pgQuery.mockImplementation((async (sql: string) => {
       const text = String(sql);
@@ -2807,22 +2833,224 @@ describe('заместитель начальника отдела: «Корре
       if (text.includes('FROM employees')) return [{ id: vacation.employee_id, org_department_id: 'dep-1' }];
       return [];
     }) as never);
-    pgQueryOne.mockImplementation((async (sql: string) => (
-      String(sql).includes('FROM leave_requests') ? vacation : null
-    )) as never);
+    pgQueryOne.mockImplementation((async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) return vacation;
+      if (text.includes('user_profiles')) return { id: 'author-uuid' };
+      if (text.includes('FROM employees')) return { org_department_id: 'dep-1' };
+      return null;
+    }) as never);
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [vacation], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) return { rows: [{ ...vacation, status: 'approved' }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
     editableEmployeesMock.mockResolvedValue(new Set<number>());
     timesheetEditableEmployeesMock.mockResolvedValue(new Set([vacation.employee_id]));
+    // Ответственный (1С, уведомления) — только начальник 999.
     responsiblesByEmpMock.mockResolvedValue(new Map([[vacation.employee_id, [999]]]));
+
+    // Зритель 7 — не в маршруте заявлений: отказ.
+    const denied = makeRes();
+    await leaveRequestsController.bulkApprove(
+      makeReq({ body: { ids: [vacation.id] } as AuthenticatedRequest['body'] }),
+      denied,
+    );
+    const deniedData = (denied._json as { data: { processed_count: number; skipped_no_access: number } }).data;
+    expect(deniedData.processed_count).toBe(0);
+    expect(deniedData.skipped_no_access).toBe(1);
+
+    // Зритель 7 — заместитель по назначению: в маршруте заявлений вместе с начальником.
+    leaveApproversMock.mockImplementation(async () => new Map([[vacation.employee_id, [7, 999]]]));
+    const allowed = makeRes();
+    await leaveRequestsController.bulkApprove(
+      makeReq({ body: { ids: [vacation.id] } as AuthenticatedRequest['body'] }),
+      allowed,
+    );
+    expect((allowed._json as { data: { processed_count: number } }).data.processed_count).toBe(1);
+  });
+});
+
+describe('заместитель по назначению (миграция 283): все заявления своих отделов', () => {
+  // Зритель 7 — «Заместитель» в dep-1 (начальник 999), dep-9 — чужой отдел (начальник 888).
+  const DEPUTY_EMP = 555;
+  const FOREIGN_EMP = 600;
+  const VIEWER = 7;
+  const makeRow = (id: number, employeeId: number, requestType: string) => ({
+    id, employee_id: employeeId, status: 'pending', request_type: requestType,
+    start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+    correction_date: null, correction_status: null, correction_hours: null,
+    correction_object_id: null, correction_object_name: null, reason: null, reviewer_id: null,
+  });
+  const ROWS = [
+    makeRow(1, DEPUTY_EMP, 'vacation'),
+    makeRow(2, DEPUTY_EMP, 'remote'),
+    makeRow(3, FOREIGN_EMP, 'vacation'),
+    makeRow(4, FOREIGN_EMP, 'remote'),
+    makeRow(5, VIEWER, 'remote'),
+    makeRow(6, DEPUTY_EMP, 'work'),
+  ];
+  let rowsById: Map<number, Record<string, unknown>>;
+  let listedRows: Array<Record<string, unknown>>;
+  const deptOf = (employeeId: number): string => (employeeId === FOREIGN_EMP ? 'dep-9' : 'dep-1');
+  const employeeRow = (id: number) => ({
+    id, full_name: `Сотрудник ${id}`, org_department_id: deptOf(id), department_name: deptOf(id), position_name: null,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rowsById = new Map(ROWS.map(r => [r.id, { ...r }] as const));
+    listedRows = [rowsById.get(1)!, rowsById.get(3)!];
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    weekendResponsibleMock.mockResolvedValue(null);
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    hasDeputyAssignmentMock.mockResolvedValue(true);
+    // Свой edit-скоуп начальника пуст, кроме себя (как resolveEditableEmployeeIds).
+    editableEmployeesMock.mockResolvedValue(new Set([VIEWER]));
+    timesheetEditableEmployeesMock.mockResolvedValue(new Set([DEPUTY_EMP]));
+    responsiblesByEmpMock.mockResolvedValue(new Map([[DEPUTY_EMP, [999]], [FOREIGN_EMP, [888]]]));
+    leaveApproversMock.mockImplementation(async () => new Map([[DEPUTY_EMP, [VIEWER, 999]], [FOREIGN_EMP, [888]]]));
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue(['dep-1', 'dep-9']);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue(['dep-1', 'dep-9']);
+
+    pgQuery.mockImplementation((async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      // Отделы заместителя (listDeputyDepartmentIdsForUser) и их члены, включая его самого.
+      if (text.includes('SELECT department_id FROM employee_department_access')) return [{ department_id: 'dep-1' }];
+      if (text.includes('SELECT DISTINCT employee_id FROM employee_department_access')) {
+        return [{ employee_id: DEPUTY_EMP }, { employee_id: VIEWER }];
+      }
+      if (text.includes('FROM leave_requests lr')) {
+        return listedRows.map(r => ({ ...r, org_department_id: deptOf(Number(r.employee_id)) }));
+      }
+      if (text.includes('FROM leave_requests')) {
+        const ids = Array.isArray(params?.[0]) ? (params[0] as number[]) : null;
+        const rows = ids && text.includes('WHERE id = ANY') ? ids.map(id => rowsById.get(Number(id))) : listedRows;
+        return rows.filter(Boolean);
+      }
+      if (text.includes('FROM employees')) return [DEPUTY_EMP, FOREIGN_EMP, VIEWER].map(employeeRow);
+      return [];
+    }) as never);
+    pgQueryOne.mockImplementation((async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) return rowsById.get(Number(params?.[0])) ?? null;
+      if (text.includes('user_profiles')) return { id: 'author-uuid' };
+      if (text.includes('FROM employees')) {
+        const row = rowsById.get(1);
+        return employeeRow(Number(params?.[0] ?? row?.employee_id));
+      }
+      return null;
+    }) as never);
+    txClient.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) {
+        const row = rowsById.get(Number(params?.[0]));
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        const row = rowsById.get(Number(params?.[3]));
+        return row ? { rows: [{ ...row, status: 'approved' }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(hasPageView).mockResolvedValue(true);
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue([]);
+    editableEmployeesMock.mockResolvedValue('all');
+  });
+
+  const idsOf = (res: { _json: unknown }) => (res._json as { data: Array<{ id: number }> }).data.map(r => r.id).sort();
+
+  it('видит отпуск своего отдела в getDepartment, чужой — нет', async () => {
+    const res = makeRes();
+    await leaveRequestsController.getDepartment(makeReq(), res);
+    expect(res._status).toBe(200);
+    expect(idsOf(res)).toEqual([1]);
+  });
+
+  it('видит отпуск своего отдела в getAll, чужой — нет', async () => {
+    const res = makeRes();
+    await leaveRequestsController.getAll(makeReq({ query: { status: 'pending' } }), res);
+    expect(res._status).toBe(200);
+    expect(idsOf(res)).toEqual([1]);
+  });
+
+  it('бейдж «Заявления»: pendingCount = 1', async () => {
+    const res = makeRes();
+    await leaveRequestsController.pendingCount(makeReq(), res);
+    expect(res._json).toEqual({ success: true, data: { count: 1 } });
+  });
+
+  it('«Заявления» только от назначения: свои отделы целиком, отдел «Только просмотр» — нет', async () => {
+    // Роль страницу «Заявления» не даёт — доступ получен авто-грантом заместителя.
+    vi.mocked(hasPageView).mockResolvedValue(false);
+    listedRows = [1, 2, 3, 4].map(id => rowsById.get(id)!);
+    const res = makeRes();
+    await leaveRequestsController.getDepartment(makeReq(), res);
+    expect(idsOf(res)).toEqual([1, 2]);
+  });
+
+  it('карточка и история: свой отдел — 200, чужой — 403', async () => {
+    for (const [id, status] of [[1, 200], [3, 403]] as const) {
+      const card = makeRes();
+      await leaveRequestsController.getById(makeReq({ params: { id: String(id) } }), card);
+      expect(card._status).toBe(status);
+      const history = makeRes();
+      await leaveRequestsController.getHistory(makeReq({ params: { id: String(id) } }), history);
+      expect(history._status).toBe(status);
+    }
+  });
+
+  it('согласует отпуск, удалёнку и работу в выходной своего отдела; чужой отдел и своё — нет', async () => {
+    // Сам заместитель в edit-скоупе не числится: проверяем, что назначение не даёт права на своё.
+    editableEmployeesMock.mockResolvedValue(new Set<number>());
     const res = makeRes();
 
     await leaveRequestsController.bulkApprove(
-      makeReq({ body: { ids: [vacation.id] } as AuthenticatedRequest['body'] }),
+      makeReq({ body: { ids: [1, 2, 3, 4, 5, 6] } as AuthenticatedRequest['body'] }),
       res,
     );
 
-    const data = (res._json as { data: { processed_count: number; skipped_no_access: number } }).data;
+    const data = (res._json as { data: { processed_ids: number[]; skipped_no_access: number } }).data;
+    expect([...data.processed_ids].sort()).toEqual([1, 2, 6]);
+    expect(data.skipped_no_access).toBe(3);
+  });
+
+  it('начальник успел раньше: решение заместителя не применяется второй раз', async () => {
+    // Предчтение видит pending, блокирующее чтение — уже согласованную начальником строку.
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FOR UPDATE')
+        ? { rows: [{ ...rowsById.get(1), status: 'approved' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    ));
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq({ params: { id: '1' } }), res);
+
+    expect(res._status).toBe(409);
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const writes = txClient.query.mock.calls.map(c => String(c[0]))
+      .filter(text => text.includes('UPDATE leave_requests') || text.includes('INSERT INTO leave_request_history'));
+    expect(writes).toEqual([]);
+  });
+
+  it('уже согласованная заявка: повторное согласование — без изменений', async () => {
+    rowsById.set(1, { ...rowsById.get(1)!, status: 'approved' });
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(
+      makeReq({ body: { ids: [1] } as AuthenticatedRequest['body'] }),
+      res,
+    );
+
+    const data = (res._json as { data: { processed_count: number; skipped_not_pending: number } }).data;
     expect(data.processed_count).toBe(0);
-    expect(data.skipped_no_access).toBe(1);
+    expect(data.skipped_not_pending).toBe(1);
+    expect(upsertSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -47,7 +47,8 @@ const MANAGER_AUTO_ACCESS_PAGES = new Set<string>([
  *
  * Сами действия при этом сужены скоупом:
  *  - /timesheet — запись только по отделам заместителя (resolveTimesheetEditableDepartmentIds);
- *  - /leave-requests — решения только по заявлениям «Корректировка табеля» своего отдела;
+ *  - /leave-requests — все заявления сотрудников своих отделов, наравне с начальником
+ *    (маршрут — resolveLeaveApproverEmployeeIdsByEmployee);
  *  - /staff-control/hiring — view, как у ролей-заявителей.
  */
 const DEPUTY_AUTO_ACCESS_PAGES = new Map<string, { can_view: boolean; can_edit: boolean }>([

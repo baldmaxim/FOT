@@ -25,7 +25,11 @@ import {
   resolveTimesheetEditableEmployeeIds,
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
-import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-routing.service.js';
+import {
+  resolveLeaveApproverEmployeeIdsByEmployee,
+  resolveResponsibleEmployeeIdsByEmployee,
+} from '../services/approval-routing.service.js';
+import { listDeputyDepartmentIdsForUser } from '../services/department-access.service.js';
 import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus, quotaLockKeys } from './timesheet.controller.js';
@@ -1157,7 +1161,7 @@ async function filterRoutedVisibility<T extends { employee_id: number; request_t
       .map(r => Number(r.employee_id)),
   )].map(id => ({ employee_id: id, org_department_id: deptByEmp.get(id) ?? null }));
   if (routableEmps.length === 0) return rows;
-  const responsibles = await resolveResponsibleEmployeeIdsByEmployee(routableEmps);
+  const responsibles = await resolveLeaveApproverEmployeeIdsByEmployee(routableEmps);
   return rows.filter(r => {
     if (!ROUTED_LEAVE_TYPES.has(String(r.request_type))) return true;
     const resp = responsibles.get(Number(r.employee_id)) ?? [];
@@ -1166,16 +1170,18 @@ async function filterRoutedVisibility<T extends { employee_id: number; request_t
 }
 
 /**
- * Заявления, которые заместитель начальника отдела (миграция 283) ведёт наравне с
- * начальником: «Корректировка табеля» — это продолжение ведения табеля, а не кадровое
- * согласование. Отпуска, больничные, выходные и увольнения остаются у начальника.
+ * Заявления, которые роль «Заместитель» (миграция 292) решает по своим отделам:
+ * «Корректировка табеля» — продолжение ведения табеля, а не кадровое согласование.
+ * Заместитель по НАЗНАЧЕНИЮ (миграция 283) решает все заявления своих отделов наравне
+ * с начальником: routed-типы — через resolveLeaveApproverEmployeeIdsByEmployee,
+ * остальные — через resolveAssignedDeputyLeaveEmployeeIds.
  */
 const DEPUTY_DECIDABLE_REQUEST_TYPES = new Set<string>(['time_correction']);
 
 /**
  * Доступ к странице «Заявления» получен ТОЛЬКО авто-грантом заместителя (роль его не
- * даёт). Такому пользователю список отдела сужается до его типов: чужие отпуска и
- * больничные он видеть не должен.
+ * даёт). Такому пользователю список сужается до заявлений его отделов: заявления
+ * отделов, где он «Только просмотр», он видеть не должен.
  */
 async function hasDeputyOnlyLeaveAccess(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin) return false;
@@ -1190,32 +1196,64 @@ async function hasDeputyOnlyLeaveAccess(req: AuthenticatedRequest): Promise<bool
 }
 
 /**
- * Что роль «Заместитель» (миграция 292) видит сверх сужения заместителя: маршрутизируемые
- * заявления, где она ответственный (их уже отфильтровал filterRoutedVisibility), и все
- * заявления сотрудников, которых ведёт по назначению «Начальник» или как личный
- * руководитель — назначение главнее роли.
+ * Сотрудники отделов, где пользователь — «Заместитель» по назначению (миграция 283): он
+ * согласует их заявления наравне с начальником. Выборка та же, что у начальника в
+ * resolveEditableEmployeeIds (активное членство отдела), но без самого пользователя —
+ * своё заявление заместитель не согласует. Пусто для админа и роли «Заместитель»
+ * (миграция 292): роль ведёт только «Корректировки».
  */
-interface IDeputyRoleVisibility {
+async function resolveAssignedDeputyLeaveEmployeeIds(req: AuthenticatedRequest): Promise<Set<number>> {
+  const ids = new Set<number>();
+  if (req.user.is_admin || isDeputyRole(req.user.role_code)) return ids;
+  if (!(await hasDeputyAssignment(req))) return ids;
+  const departmentIds = await listDeputyDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
+  if (departmentIds.length === 0) return ids;
+  const rows = await query<{ employee_id: number | string }>(
+    `SELECT DISTINCT employee_id FROM employee_department_access
+      WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+    [departmentIds],
+  );
+  for (const row of rows) {
+    const id = Number(row.employee_id);
+    if (Number.isInteger(id)) ids.add(id);
+  }
+  if (req.user.employee_id != null) ids.delete(req.user.employee_id);
+  return ids;
+}
+
+/**
+ * Что заместитель видит сверх «Корректировок» и своих заявок: маршрутизируемые заявления,
+ * где он согласующий (их уже отфильтровал filterRoutedVisibility), и все заявления
+ * сотрудников из keepEmployeeIds. Три ветки:
+ *  - админ — сужения нет (undefined; hasDeputyOnlyLeaveAccess для него false);
+ *  - роль «Заместитель» (миграция 292) — кого ведёт по назначению «Начальник» или как
+ *    личный руководитель (назначение главнее роли), заместительские отделы не добавляются;
+ *  - заместитель по назначению — то же плюс сотрудники его заместительских отделов.
+ */
+interface IDeputyVisibility {
   keepEmployeeIds: Set<number> | 'all';
 }
 
-async function resolveDeputyRoleVisibility(req: AuthenticatedRequest): Promise<IDeputyRoleVisibility | undefined> {
-  if (req.user.is_admin || !isDeputyRole(req.user.role_code)) return undefined;
-  return { keepEmployeeIds: await resolveEditableEmployeeIds(req) };
+async function resolveDeputyVisibility(req: AuthenticatedRequest): Promise<IDeputyVisibility | undefined> {
+  if (req.user.is_admin) return undefined;
+  const editable = await resolveEditableEmployeeIds(req);
+  if (isDeputyRole(req.user.role_code) || editable === 'all') return { keepEmployeeIds: editable };
+  const deputyEmployees = await resolveAssignedDeputyLeaveEmployeeIds(req);
+  return { keepEmployeeIds: new Set([...editable, ...deputyEmployees]) };
 }
 
 /** Сужение списка заявлений для «только заместителя»: свои типы плюс собственные заявки. */
 function filterDeputyVisibleRequests<T extends { employee_id: number; request_type: string }>(
   rows: T[],
   viewerEmployeeId: number | null,
-  roleVisibility?: IDeputyRoleVisibility,
+  visibility?: IDeputyVisibility,
 ): T[] {
   return rows.filter(r => DEPUTY_DECIDABLE_REQUEST_TYPES.has(String(r.request_type))
     || (viewerEmployeeId != null && Number(r.employee_id) === viewerEmployeeId)
-    || (roleVisibility != null && (
+    || (visibility != null && (
       ROUTED_LEAVE_TYPES.has(String(r.request_type))
-      || roleVisibility.keepEmployeeIds === 'all'
-      || roleVisibility.keepEmployeeIds.has(Number(r.employee_id)))));
+      || visibility.keepEmployeeIds === 'all'
+      || visibility.keepEmployeeIds.has(Number(r.employee_id)))));
 }
 
 /**
@@ -1240,7 +1278,7 @@ async function canManageLeaveRequest(
       `SELECT org_department_id FROM employees WHERE id = $1`,
       [employeeId],
     );
-    const resp = (await resolveResponsibleEmployeeIdsByEmployee(
+    const resp = (await resolveLeaveApproverEmployeeIdsByEmployee(
       [{ employee_id: employeeId, org_department_id: emp?.org_department_id ?? null }],
     )).get(employeeId) ?? [];
     return req.user.employee_id != null && resp.includes(req.user.employee_id);
@@ -1307,7 +1345,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       req.user.employee_id ?? null,
     );
     const visibleData = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyVisibility(req))
       : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
@@ -1407,7 +1445,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           req.user.employee_id ?? null,
         );
     const visibleData = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyVisibility(req))
       : routedVisible;
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
@@ -1498,7 +1536,7 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
     );
     const routedVisible = await filterRoutedVisibility(rows, deptByEmp, req.user.employee_id ?? null);
     const visible = (await hasDeputyOnlyLeaveAccess(req))
-      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyRoleVisibility(req))
+      ? filterDeputyVisibleRequests(routedVisible, req.user.employee_id ?? null, await resolveDeputyVisibility(req))
       : routedVisible;
     res.json({ success: true, data: { count: visible.length } });
   } catch (err) {
@@ -1650,6 +1688,8 @@ interface IDecisionContext {
   timesheetEditableEmployeeIds: Set<number> | 'all';
   /** Роль «Заместитель» без галочки «Табель → правка» «Корректировки» не решает (миграция 292). */
   timesheetEditAllowed: boolean;
+  /** Сотрудники отделов заместителя по назначению — нероутируемые заявления (миграция 283). */
+  deputyLeaveEmployeeIds: Set<number>;
   responsibleByEmployee: Map<number, number[]>;
 }
 
@@ -1660,6 +1700,7 @@ async function buildDecisionContext(
   const editableEmployeeIds = await resolveEditableEmployeeIds(req);
   const timesheetEditableEmployeeIds = await resolveTimesheetEditableEmployeeIds(req);
   const timesheetEditAllowed = await roleAllowsTimesheet(req, 'edit');
+  const deputyLeaveEmployeeIds = await resolveAssignedDeputyLeaveEmployeeIds(req);
   const routedEmployeeIds = [...new Set(
     targets
       .filter(t => ROUTED_LEAVE_TYPES.has(String(t.request_type)))
@@ -1667,7 +1708,13 @@ async function buildDecisionContext(
       .filter(Number.isFinite),
   )];
   if (routedEmployeeIds.length === 0) {
-    return { editableEmployeeIds, timesheetEditableEmployeeIds, timesheetEditAllowed, responsibleByEmployee: new Map() };
+    return {
+      editableEmployeeIds,
+      timesheetEditableEmployeeIds,
+      timesheetEditAllowed,
+      deputyLeaveEmployeeIds,
+      responsibleByEmployee: new Map(),
+    };
   }
   // Один запрос отделов и один резолв ответственных на весь пакет — вместо пары
   // запросов на каждую заявку.
@@ -1678,10 +1725,10 @@ async function buildDecisionContext(
   const deptByEmployee = new Map<number, string | null>(
     (rows ?? []).map(r => [Number(r.id), r.org_department_id ?? null]),
   );
-  const responsibleByEmployee = await resolveResponsibleEmployeeIdsByEmployee(
+  const responsibleByEmployee = await resolveLeaveApproverEmployeeIdsByEmployee(
     routedEmployeeIds.map(id => ({ employee_id: id, org_department_id: deptByEmployee.get(id) ?? null })),
   );
-  return { editableEmployeeIds, timesheetEditableEmployeeIds, timesheetEditAllowed, responsibleByEmployee };
+  return { editableEmployeeIds, timesheetEditableEmployeeIds, timesheetEditAllowed, deputyLeaveEmployeeIds, responsibleByEmployee };
 }
 
 /** Может ли текущий пользователь принять решение по заявке (согласовать/отклонить). */
@@ -1706,7 +1753,10 @@ function canDecideLeaveRequest(
     return ctx.timesheetEditableEmployeeIds === 'all'
       || ctx.timesheetEditableEmployeeIds.has(Number(employeeId));
   }
-  return ctx.editableEmployeeIds.has(Number(employeeId));
+  // «Удалёнка», «Справка», «Учебный»: начальник — по edit-скоупу, заместитель по
+  // назначению — по своим отделам (без собственных заявлений).
+  return ctx.editableEmployeeIds.has(Number(employeeId))
+    || ctx.deputyLeaveEmployeeIds.has(Number(employeeId));
 }
 
 /** Realtime после принятого решения. Никогда не влияет на исход самой операции. */

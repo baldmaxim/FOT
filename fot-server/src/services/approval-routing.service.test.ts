@@ -34,6 +34,7 @@ const head = (employeeId: number, departmentId: string) =>
   ({ employee_id: employeeId, department_id: departmentId, role_code: 'manager', is_admin: false });
 
 import {
+  resolveLeaveApproverEmployeeIdsByEmployee,
   resolveResponsibleEmployeeIdsForRows,
   resolveResponsibleEmployeeIdsByEmployee,
   resolveResponsibleEmployeeIdsByEmployeeDept,
@@ -243,5 +244,71 @@ describe('resolveResponsibleEmployeeIdsByEmployeeDept (единый файл 1С
 
     const res = await resolveResponsibleEmployeeIdsByEmployeeDept([{ employee_id: 1, org_department_id: null }]);
     expect(res.get(responsiblePairKey(1, null))).toEqual([300]);
+  });
+});
+
+describe('resolveLeaveApproverEmployeeIdsByEmployee (заявления: + заместитель по назначению)', () => {
+  // Начальники (full) и заместители (deputy) отдают разные запросы — различаем по уровню.
+  const wire = (heads: Array<[number, string]>, deputies: Array<[number, string]>) => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("access_level = 'deputy'")) {
+        return deputies.map(([employee_id, department_id]) => ({ employee_id, department_id }));
+      }
+      if (sql.includes('employee_department_access')) return heads.map(([id, dept]) => head(id, dept));
+      return [];
+    });
+  };
+
+  it('начальник и заместители отдела, без самого сотрудника; id уникальны и отсортированы', async () => {
+    wire([[1095, 'D1']], [[441, 'D1'], [555, 'D1'], [441, 'D1']]);
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveLeaveApproverEmployeeIdsByEmployee([
+      { employee_id: 555, org_department_id: 'D1' },
+      { employee_id: 441, org_department_id: 'D1' },
+    ]);
+
+    expect(res.get(555)).toEqual([441, 1095]);
+    // Своё заявление заместитель не согласует: себя в маршруте нет, остальные — есть.
+    expect(res.get(441)).toEqual([555, 1095]);
+  });
+
+  it('без начальника: личный руководитель плюс заместитель', async () => {
+    wire([], [[441, 'D2']]);
+    directMgrsMock.mockResolvedValue(new Map([[7, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveLeaveApproverEmployeeIdsByEmployee([{ employee_id: 7, org_department_id: 'D2' }]);
+    expect(res.get(7)).toEqual([300, 441]);
+  });
+
+  it('заместитель чужого отдела в маршрут не попадает; сотрудник без отдела — прежний маршрут', async () => {
+    wire([[1095, 'D1']], [[441, 'D9']]);
+    directMgrsMock.mockResolvedValue(new Map([[8, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveLeaveApproverEmployeeIdsByEmployee([
+      { employee_id: 555, org_department_id: 'D1' },
+      { employee_id: 8, org_department_id: null },
+    ]);
+    expect(res.get(555)).toEqual([1095]);
+    expect(res.get(8)).toEqual([300]);
+  });
+
+  it('повторный вызов даёт тот же результат', async () => {
+    wire([[1095, 'D1']], [[441, 'D1']]);
+    directMgrsMock.mockResolvedValue(new Map());
+    const input = [{ employee_id: 555, org_department_id: 'D1' }];
+
+    const first = await resolveLeaveApproverEmployeeIdsByEmployee(input);
+    const second = await resolveLeaveApproverEmployeeIdsByEmployee(input);
+    expect(second).toEqual(first);
+  });
+
+  it('маршрут 1С (resolveResponsibleEmployeeIdsByEmployeeDept) заместителей не берёт', async () => {
+    wire([[1095, 'D1']], [[441, 'D1']]);
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveResponsibleEmployeeIdsByEmployeeDept([{ employee_id: 555, org_department_id: 'D1' }]);
+    expect(res.get(responsiblePairKey(555, 'D1'))).toEqual([1095]);
+    expect(pgQuery.mock.calls.some(c => String(c[0]).includes("access_level = 'deputy'"))).toBe(false);
   });
 });

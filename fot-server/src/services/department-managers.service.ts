@@ -136,6 +136,56 @@ export async function listEffectiveDepartmentManagers(
 }
 
 /**
+ * Ручные заместители отдела (access_level='deputy', миграция 283) с живой одобренной
+ * учётной записью, БЕЗ роли «Заместитель» (миграция 292): у роли свой набор отделов
+ * (deputyHeadAssignmentsSql) и своя, более узкая семантика.
+ */
+const assignedDeputiesSql = (departmentsParam: string, roleParam: string): string => `
+  SELECT DISTINCT eda.employee_id, eda.department_id
+    FROM employee_department_access eda
+    JOIN employees e ON e.id = eda.employee_id
+    JOIN user_profiles up ON up.employee_id = e.id AND up.is_approved = true
+    LEFT JOIN system_roles sr ON sr.id = up.system_role_id
+   WHERE eda.department_id = ANY(${departmentsParam}::uuid[])
+     AND eda.is_active = true
+     AND eda.access_level = 'deputy'
+     AND eda.source <> 'sigur_sync'
+     AND e.is_archived = false
+     AND e.employment_status = 'active'
+     AND COALESCE(sr.code, '') <> ${roleParam}`;
+
+/**
+ * departmentId → employee_id заместителей отдела по назначению «Заместитель» (без роли
+ * «Заместитель»). Нужна маршруту ЗАЯВЛЕНИЙ: такой заместитель согласует их наравне с
+ * начальником. Руководителем отдела (1С, «кто начальник») заместитель не считается.
+ */
+export async function listAssignedDepartmentDeputies(
+  departmentIds: readonly string[],
+  exec?: DbExecutor,
+): Promise<Map<string, number[]>> {
+  const map = new Map<string, number[]>();
+  const ids = [...new Set(departmentIds.filter(id => typeof id === 'string' && id.length > 0))];
+  if (ids.length === 0) return map;
+
+  const rows = await runQuery<{ employee_id: string | number; department_id: string }>(
+    exec,
+    `${assignedDeputiesSql('$1', '$2')}
+      ORDER BY 1`,
+    [ids, DEPUTY_ROLE_CODE],
+  );
+
+  for (const row of rows) {
+    const dept = String(row.department_id);
+    const list = map.get(dept) ?? [];
+    const employeeId = Number(row.employee_id);
+    if (!list.includes(employeeId)) list.push(employeeId);
+    map.set(dept, list);
+  }
+  for (const list of map.values()) list.sort((a, b) => a - b);
+  return map;
+}
+
+/**
  * Кто ФАКТИЧЕСКИ ведёт табель отдела: эффективные начальники (full) плюс активные
  * заместители (access_level='deputy', миграция 283).
  *
@@ -171,18 +221,8 @@ export async function listDepartmentTimesheetOwners(
 
   const rows = await runQuery<{ employee_id: string | number; department_id: string; via_role: boolean | null }>(
     exec,
-    `SELECT DISTINCT eda.employee_id, eda.department_id, false AS via_role
-       FROM employee_department_access eda
-       JOIN employees e ON e.id = eda.employee_id
-       JOIN user_profiles up ON up.employee_id = e.id AND up.is_approved = true
-       LEFT JOIN system_roles sr ON sr.id = up.system_role_id
-      WHERE eda.department_id = ANY($1::uuid[])
-        AND eda.is_active = true
-        AND eda.access_level = 'deputy'
-        AND eda.source <> 'sigur_sync'
-        AND e.is_archived = false
-        AND e.employment_status = 'active'
-        AND COALESCE(sr.code, '') <> $2
+    `SELECT d.employee_id, d.department_id, false AS via_role
+       FROM (${assignedDeputiesSql('$1', '$2')}) d
      UNION
      SELECT r.employee_id, r.department_id, true AS via_role
        FROM (${deputyHeadAssignmentsSql({ roleParam: '$2', departmentsParam: '$1' })}) r

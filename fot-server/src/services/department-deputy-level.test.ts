@@ -16,8 +16,12 @@ vi.mock('../config/postgres.js', () => ({ query: pgQuery }));
 const { hasPageEditMock } = vi.hoisted(() => ({ hasPageEditMock: vi.fn(async () => true) }));
 vi.mock('./access-control.service.js', () => ({ hasPageEdit: hasPageEditMock }));
 
-const { listDepartmentManagers, listDepartmentTimesheetOwners, DEPARTMENT_MANAGER_CONDITION_SQL } =
-  await import('./department-managers.service.js');
+const {
+  listAssignedDepartmentDeputies,
+  listDepartmentManagers,
+  listDepartmentTimesheetOwners,
+  DEPARTMENT_MANAGER_CONDITION_SQL,
+} = await import('./department-managers.service.js');
 const { SUPERVISOR_IDS_SQL_FOR_TESTS } = await import('../controllers/timesheet-assigned-export.controller.js');
 
 const DEPT = '0b24809e-5f04-45e1-bbe2-8a82990d6bdd';
@@ -72,5 +76,37 @@ describe('listDepartmentTimesheetOwners', () => {
     expect(deputySql).toContain('up.is_approved = true');
     expect(deputySql).toContain("e.employment_status = 'active'");
     expect(deputySql).toContain('e.is_archived = false');
+  });
+});
+
+describe('listAssignedDepartmentDeputies (маршрут заявлений)', () => {
+  it('пустой список отделов — без запроса', async () => {
+    const res = await listAssignedDepartmentDeputies([]);
+    expect(res.size).toBe(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('id по отделу уникальны и отсортированы', async () => {
+    pgQuery.mockResolvedValue([
+      { employee_id: '9', department_id: DEPT },
+      { employee_id: 3, department_id: DEPT },
+      { employee_id: 9, department_id: DEPT },
+    ]);
+    const res = await listAssignedDepartmentDeputies([DEPT, DEPT]);
+    expect(res.get(DEPT)).toEqual([3, 9]);
+    expect(pgQuery.mock.calls[0]![1]).toEqual([[DEPT], 'deputy_head']);
+  });
+
+  it('только живые ручные заместители и без роли «Заместитель»', async () => {
+    await listAssignedDepartmentDeputies([DEPT]);
+    const sql = String(pgQuery.mock.calls[0]![0]);
+    expect(sql).toContain("eda.access_level = 'deputy'");
+    expect(sql).toContain('eda.is_active = true');
+    expect(sql).toContain("eda.source <> 'sigur_sync'");
+    expect(sql).toContain('up.is_approved = true');
+    expect(sql).toContain('e.is_archived = false');
+    expect(sql).toContain("e.employment_status = 'active'");
+    // Роль «Заместитель» (deputy_head) исключается параметром $2.
+    expect(sql).toContain("COALESCE(sr.code, '') <> $2");
   });
 });

@@ -1,4 +1,4 @@
-import { listEffectiveDepartmentManagers } from './department-managers.service.js';
+import { listAssignedDepartmentDeputies, listEffectiveDepartmentManagers } from './department-managers.service.js';
 import { resolveSchedulesForPeriod, isWorkingDay, loadCalendarMonth } from './schedule.service.js';
 import { loadAssignmentMaps, resolveFromMaps } from './weekend-approval-assignments.service.js';
 import { getActiveDirectManagersFor } from './employee-direct-reports.service.js';
@@ -143,6 +143,35 @@ export async function resolveResponsibleEmployeeIdsByEmployee(
   for (const e of employees) {
     const empId = Number(e.employee_id);
     result.set(empId, byPair.get(responsiblePairKey(empId, e.org_department_id)) ?? []);
+  }
+  return result;
+}
+
+/**
+ * Кто видит и согласует ЗАЯВЛЕНИЯ сотрудника: ответственный по маршруту
+ * (resolveResponsibleEmployeeIdsByEmployee) плюс заместители его отдела по назначению
+ * «Заместитель» (listAssignedDepartmentDeputies, без роли «Заместитель»). Сам сотрудник
+ * исключён. Только для заявлений: снимок руководителей 1С, уведомления и прочие маршруты
+ * берут resolveResponsibleEmployeeIdsByEmployee(Dept) — заместитель там не начальник.
+ */
+export async function resolveLeaveApproverEmployeeIdsByEmployee(
+  employees: Array<{ employee_id: number; org_department_id: string | null }>,
+): Promise<Map<number, number[]>> {
+  const [responsible, deputies] = await Promise.all([
+    resolveResponsibleEmployeeIdsByEmployee(employees),
+    listAssignedDepartmentDeputies(
+      employees
+        .map(e => e.org_department_id)
+        .filter((v): v is string => typeof v === 'string' && v.length > 0),
+    ),
+  ]);
+  const result = new Map<number, number[]>();
+  for (const e of employees) {
+    const empId = Number(e.employee_id);
+    const ids = new Set(responsible.get(empId) ?? []);
+    for (const id of e.org_department_id ? deputies.get(String(e.org_department_id)) ?? [] : []) ids.add(id);
+    ids.delete(empId);
+    result.set(empId, [...ids].sort((a, b) => a - b));
   }
   return result;
 }
