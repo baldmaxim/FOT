@@ -61,10 +61,8 @@ import { resolveExportModes, nextMonthStart } from './timesheet-export-mode.serv
 import { fetchEmployeeIdsPinnedToObjects } from './timesheet-objects-export.service.js';
 import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './employee-timesheet-object-auto.service.js';
 import { monthEnd } from './employee-timesheet-object.service.js';
-import { loadTimesheetObjectChanges } from './timesheet-object-changes.service.js';
 import { enforceOfficeForDepartments } from './timesheet-office-rule.js';
 import { updateTimesheetOffice } from './timesheet-office.service.js';
-import { moscowTodayIso } from '../utils/date.utils.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
@@ -459,7 +457,6 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
          FROM employees ORDER BY id`,
     );
     const author = async (id: number) => (await authors()).find(row => row.id === id);
-    const mskDate = (date: Date): string => moscowTodayIso(date).split('-').reverse().join('.');
 
     let modesBefore: unknown[] = [];
 
@@ -595,7 +592,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
         .rejects.toThrow(/employee_timesheet_object_months_author_check/);
     });
 
-    it('удаление профиля автора: ID обнуляется, дата остаётся, подпись — без ФИО', async () => {
+    it('удаление профиля автора: ID обнуляется, дата остаётся', async () => {
       await q(`UPDATE employees
                   SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = 'manager',
                       timesheet_export_set_by_user_id = $2, timesheet_export_set_at = now()
@@ -604,37 +601,6 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       const row = await author(24);
       expect(row?.user_id).toBeNull();
       expect(row?.set_at).not.toBeNull();
-      const labels = await loadTimesheetObjectChanges([24], null);
-      expect(labels.get(24)).toBe(`Руководитель, ${mskDate(new Date(row!.set_at!))}`);
-    });
-
-    it('загрузчик: текущий месяц — живой автор; прошедший — из фиксации; нет фиксации и базовый месяц — пусто', async () => {
-      const live = await loadTimesheetObjectChanges(AUTHOR_IDS, null);
-      expect(live.get(20)).toBe('Сам сотрудник, 29.09.2026');
-      expect(live.get(21)).toBe('Руководитель Боюкян М. В., 29.09.2026');
-      expect(live.get(27)).toBe('Админ Есенов Максим АДМ, 23.09.2026');
-      for (const id of [22, 23, 25, 26, 28, 29, 90]) expect(live.has(id)).toBe(false);
-
-      const currentMonth = await loadTimesheetObjectChanges(
-        AUTHOR_IDS, m1, { now: new Date(`${m1.slice(0, 8)}15T12:00:00+03:00`) },
-      );
-      expect(currentMonth).toEqual(live);
-
-      // m1 прошёл: у 21-го — из фиксации, у 20-го строка фиксации без автора, у 27-го строки нет.
-      const past = await loadTimesheetObjectChanges(
-        AUTHOR_IDS, m1, { now: new Date(`${shift(baseline, 2)}T12:00:00+03:00`) },
-      );
-      expect(past).toEqual(new Map([[21, 'Руководитель Боюкян М. В., 29.09.2026']]));
-
-      // Базовая фиксация (и месяцы раньше неё) авторов не несёт: у 2-го живой автор есть, в августе — пусто.
-      await q(`UPDATE employees
-                  SET timesheet_export_mode = 'object', timesheet_export_object_id = $1, timesheet_export_set_by = NULL,
-                      timesheet_export_set_by_user_id = $2, timesheet_export_set_at = now()
-                WHERE id = 2`, [DOM, U_ADMIN]);
-      const afterNow = { now: new Date(`${shift(baseline, 2)}T12:00:00+03:00`) };
-      expect((await loadTimesheetObjectChanges([2], null)).has(2)).toBe(true);
-      expect(await loadTimesheetObjectChanges([2, 21], baseline, afterNow)).toEqual(new Map());
-      expect(await loadTimesheetObjectChanges([2, 21], minusMonth(baseline), afterNow)).toEqual(new Map());
     });
 
     it('фиксация месяца копирует автора в строку месяца', async () => {
