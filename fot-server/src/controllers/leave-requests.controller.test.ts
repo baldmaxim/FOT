@@ -3054,6 +3054,7 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
       processed_count: number; processed_ids: number[];
       skipped_not_pending: number; skipped_no_access: number;
       skipped_locked: number; locked_ids: number[];
+      skipped_day_allocation: number; day_allocation_ids: number[];
       skipped_failed: number; failed_ids: number[];
     };
   }).data;
@@ -3061,7 +3062,8 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
   // Инвариант контракта: каждая входная заявка попала ровно в одну категорию.
   const expectCoversInput = (s: ReturnType<typeof summaryOf>, uniqueInputCount: number) => {
     expect(
-      s.processed_count + s.skipped_not_pending + s.skipped_no_access + s.skipped_locked + s.skipped_failed,
+      s.processed_count + s.skipped_not_pending + s.skipped_no_access + s.skipped_locked
+        + s.skipped_day_allocation + s.skipped_failed,
     ).toBe(uniqueInputCount);
   };
 
@@ -3114,6 +3116,46 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
     expect(summary.processed_ids.sort()).toEqual([1, 3]);
     expect(summary.skipped_locked).toBe(1);
     expect(summary.locked_ids).toEqual([2]);
+    expectCoversInput(summary, 3);
+  });
+
+  it('день уже распределён по объектам в табеле → skipped_day_allocation без Sentry, остальные согласованы', async () => {
+    // Заявка 2 — объектная корректировка; табельщица до согласования сама разметила
+    // этот день с распределением по объектам.
+    rowsById.set(2, makeRow(2, {
+      request_type: 'time_correction',
+      correction_date: '2026-06-01',
+      correction_status: 'work',
+      correction_hours: 8,
+      correction_object_id: 'obj-mark',
+      correction_object_name: 'ЖК Марк',
+    }));
+    const original = txClient.query.getMockImplementation()!;
+    txClient.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (String(sql).includes('SELECT metadata FROM attendance_adjustments') && Number(params?.[0]) === 242) {
+        return {
+          rows: [{ metadata: { object_allocations: [{ object_id: 'obj-mark', object_name: 'ЖК Марк', hours: 9 }] } }],
+          rowCount: 1,
+        };
+      }
+      return original(sql, params);
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(res._status).toBe(200);
+    expect(summary.processed_ids.sort()).toEqual([1, 3]);
+    expect(summary.skipped_day_allocation).toBe(1);
+    expect(summary.day_allocation_ids).toEqual([2]);
+    expect(summary.skipped_failed).toBe(0);
+    expect(summary.failed_ids).toEqual([]);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    // Ручная разметка дня не тронута, объектную строку заявление не создало.
+    const deleteCall = txClient.query.mock.calls.find(c => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deleteCall).toBeUndefined();
+    expect(upsertSpy.mock.calls.some(([payload]) => (payload as { employee_id: number }).employee_id === 242)).toBe(false);
     expectCoversInput(summary, 3);
   });
 

@@ -189,6 +189,9 @@ export interface ILeaveRequestBulkResult {
   skipped_no_access: number;
   skipped_locked: number;
   locked_ids: number[];
+  /** День уже размечен ручной корректировкой с распределением по объектам. Старый бэк не присылает. */
+  skipped_day_allocation?: number;
+  day_allocation_ids?: number[];
   skipped_failed: number;
   failed_ids: number[];
 }

@@ -40,17 +40,6 @@ import {
   hasObjectAllocations,
   OBJECT_ADJUSTMENT_SOURCE_TYPE,
 } from '../services/timesheet-object.service.js';
-
-/**
- * Согласование заявления с объектом пришло на день, размеченный дневной корректировкой
- * с распределением по объектам. Бросается ДО записей, чтобы транзакция откатилась целиком.
- */
-class DayAllocationConflictError extends Error {
-  constructor() {
-    super('За этот день часы уже распределены по объектам в корректировке дня. Согласование заявления изменило бы её — снимите распределение в табеле.');
-    this.name = 'DayAllocationConflictError';
-  }
-}
 import { findApprovalLocksForEmployeeDates } from '../services/timesheet-lock.service.js';
 import type { TimeStatus } from '../types/index.js';
 
@@ -1611,7 +1600,10 @@ const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<voi
 
 type DecisionFail =
   | 'not_found' | 'already_processed' | 'forbidden'
-  | 'invalid_period' | 'timesheet_locked' | 'stale';
+  | 'invalid_period' | 'timesheet_locked' | 'stale'
+  // Объектная корректировка пришла на день, размеченный дневной корректировкой
+  // с распределением по объектам: согласование перезаписало бы ручную разметку.
+  | 'day_allocation_conflict';
 
 /**
  * Отказ внутри транзакции. Именно исключение, а не возврат значения: withTransaction
@@ -1633,6 +1625,7 @@ const DECISION_HTTP_STATUS: Record<DecisionFail, number> = {
   forbidden: 403,
   timesheet_locked: 409,
   stale: 409,
+  day_allocation_conflict: 409,
 };
 
 type DecisionResult =
@@ -1908,7 +1901,10 @@ async function approveLeaveRequestById(
             [approvedRequest.employee_id, approvedRequest.correction_date],
           );
           if (dayAllocationRows.rows.some(row => hasObjectAllocations(row.metadata))) {
-            throw new DayAllocationConflictError();
+            throw new LeaveDecisionError(
+              'day_allocation_conflict',
+              'За этот день часы уже распределены по объектам в корректировке дня. Согласование заявления изменило бы её — снимите распределение в табеле.',
+            );
           }
           // Корректировка привязана к конкретному объекту → создаём manual_object
           // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
@@ -2057,6 +2053,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         success: false,
         error: result.error,
         ...(result.code === 'timesheet_locked' ? { code: TIMESHEET_PERIOD_CLOSED } : {}),
+        // Транзакция откатилась: заявление осталось на согласовании, дневная корректировка
+        // и её вложения не тронуты.
+        ...(result.code === 'day_allocation_conflict' ? { code: 'DAY_ALLOCATION_CONFLICT' } : {}),
       });
       return;
     }
@@ -2066,16 +2065,6 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     res.json({ success: true, data: result.row });
   } catch (err) {
-    if (err instanceof DayAllocationConflictError) {
-      // Транзакция откатилась: заявление осталось на согласовании, дневная корректировка
-      // и её вложения не тронуты.
-      res.status(409).json({
-        success: false,
-        code: 'DAY_ALLOCATION_CONFLICT',
-        error: err.message,
-      });
-      return;
-    }
     console.error('leave-requests.approve error:', err);
     res.status(500).json({ success: false, error: 'Ошибка одобрения заявления' });
   }
@@ -2142,6 +2131,9 @@ interface IBulkDecisionSummary {
   skipped_no_access: number;
   skipped_locked: number;
   locked_ids: number[];
+  /** День уже размечен ручной корректировкой с распределением по объектам. */
+  skipped_day_allocation: number;
+  day_allocation_ids: number[];
   skipped_failed: number;
   failed_ids: number[];
 }
@@ -2178,6 +2170,8 @@ async function bulkDecide(
     skipped_no_access: 0,
     skipped_locked: 0,
     locked_ids: [],
+    skipped_day_allocation: 0,
+    day_allocation_ids: [],
     skipped_failed: 0,
     failed_ids: [],
   };
@@ -2252,6 +2246,10 @@ async function bulkDecide(
       } else if (result.code === 'timesheet_locked') {
         summary.skipped_locked++;
         summary.locked_ids.push(id);
+      } else if (result.code === 'day_allocation_conflict') {
+        // Ожидаемый отказ, а не сбой: в Sentry не шлём.
+        summary.skipped_day_allocation++;
+        summary.day_allocation_ids.push(id);
       } else {
         summary.skipped_failed++;
         summary.failed_ids.push(id);
