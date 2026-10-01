@@ -66,11 +66,13 @@ function monthAnchorsInRange(startDate: string, endDate: string): string[] {
 }
 
 /**
- * Сколько pending-корректировок мешает утверждению подачи.
+ * Сколько дней с pending-корректировками мешает утверждению подачи.
  *
  * Одна реализация на два места: ранний precheck в approve (быстрый отказ до локов)
  * и повторная проверка ВНУТРИ транзакции под FOR UPDATE — именно она авторитетна,
  * потому что между precheck и записью статуса корректировка могла появиться.
+ * Правило общее с подачей (listPendingCorrectionDays): что не пускает утвердить,
+ * то не пускает и подать.
  *
  * exec: undefined — через пул (precheck), клиент транзакции — внутри неё.
  */
@@ -79,39 +81,19 @@ async function countPendingCorrectionsForApproval(
   approval: Pick<TimesheetApproval, 'id' | 'department_id' | 'manager_employee_id' | 'start_date' | 'end_date'>,
 ): Promise<number> {
   // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
-  let employeeIds: number[];
-  let membershipWindow: Map<number, IMembershipWindow> | null = null;
+  let scope: ICorrectionValidationScope;
   if (approval.manager_employee_id != null) {
     const snap = await listApprovalEmployees(Number(approval.id), exec);
-    employeeIds = snap.map(s => s.employee_id);
+    scope = { kind: 'personal', employeeIds: snap.map(s => s.employee_id) };
   } else if (approval.department_id) {
-    const memberships = await listEmployeeMembershipsForDepartmentPeriod(
-      approval.department_id, approval.start_date, approval.end_date, exec,
-    );
-    employeeIds = memberships.map(m => m.employee_id);
-    membershipWindow = buildMembershipWindowMap(memberships);
+    scope = { kind: 'department', departmentId: approval.department_id };
   } else {
-    employeeIds = [];
+    return 0;
   }
-  if (employeeIds.length === 0) return 0;
-
-  // Берём pending-корректировки и отбрасываем те, что вне окна членства сотрудника
-  // в этом отделе (чужой выход после перевода не должен блокировать утверждение).
-  const sql = `SELECT employee_id, work_date::text AS work_date FROM attendance_adjustments
-             WHERE approval_status = 'pending'
-               AND employee_id = ANY($1::int[])
-               AND work_date >= $2
-               AND work_date <= $3`;
-  const params = [employeeIds, approval.start_date, approval.end_date];
-  const pendingRows: Array<{ employee_id: number; work_date: string }> = exec
-    ? (await exec.query<{ employee_id: number; work_date: string }>(sql, params)).rows
-    : await query<{ employee_id: number; work_date: string }>(sql, params);
-
-  return pendingRows.filter((r) =>
-    membershipWindow == null
-      ? true
-      : isWithinMembershipWindow(membershipWindow.get(Number(r.employee_id)), String(r.work_date).slice(0, 10), 'viaTransferOnly'),
-  ).length;
+  const days = await listPendingCorrectionDays(
+    scope, { startDate: approval.start_date, endDate: approval.end_date }, exec,
+  );
+  return days.length;
 }
 
 /** Подача в форме, которую ждёт материализация версии. */
@@ -210,7 +192,12 @@ import {
   checkManagerObjWeekendMemoRequirement,
   checkWeekendWorkRequirement,
 } from '../services/timesheet-approval-weekend-check.service.js';
-import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
+import {
+  listPendingCorrectionDays,
+  validateCorrectionAttachments,
+  type ICorrectionValidationScope,
+  type IMissingDay,
+} from '../services/timesheet-approval-correction-validation.service.js';
 import { resolveOverlapSubmission } from '../services/timesheet-approval-overlap.service.js';
 import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import { getAllowedSubmissionRange, isRangeSubmittable, isRangeWithinCompletedPeriods } from '../services/timesheet-period.service.js';
@@ -794,6 +781,18 @@ async function persistApprovalTransition(input: {
   });
 }
 
+/** Pending-корректировка появилась между внешней проверкой подачи и advisory-локом — откат. */
+class PendingCorrectionsOnSubmitError extends Error {}
+
+function sendCorrectionValidationFailed(res: Response, missing: IMissingDay[]): void {
+  res.status(400).json({
+    success: false,
+    error: 'Есть несогласованные корректировки или незакрытые работы в выходные — подача невозможна',
+    code: 'CORRECTION_VALIDATION_FAILED',
+    missing_days: missing,
+  });
+}
+
 /**
  * Руководитель подаёт табель за произвольный диапазон.
  * Два режима:
@@ -907,12 +906,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       : { kind: 'department' as const, departmentId: deptId! };
     const correctionCheck = await validateCorrectionAttachments(correctionScope, range);
     if (!correctionCheck.ok) {
-      res.status(400).json({
-        success: false,
-        error: 'Есть несогласованные корректировки или незакрытые работы в выходные — подача невозможна',
-        code: 'CORRECTION_VALIDATION_FAILED',
-        missing_days: correctionCheck.missing,
-      });
+      sendCorrectionValidationFailed(res, correctionCheck.missing);
       return;
     }
 
@@ -1008,6 +1002,10 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             monthAnchorsInRange(range.startDate, range.endDate).map(workDate => ({ employeeId, workDate })),
           ),
         );
+        // Повторно под локом: внешняя проверка могла устареть — корректировка, сохранённая
+        // между ней и локом, осталась бы pending в закрытом периоде без выхода.
+        const pendingDays = await listPendingCorrectionDays(correctionScope, range, client);
+        if (pendingDays.length > 0) throw new PendingCorrectionsOnSubmitError();
 
         let row: TimesheetApproval | null;
         if (reuseRow) {
@@ -1060,6 +1058,11 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         return row;
       });
     } catch (dbErr) {
+      if (dbErr instanceof PendingCorrectionsOnSubmitError) {
+        const recheck = await validateCorrectionAttachments(correctionScope, range);
+        sendCorrectionValidationFailed(res, recheck.ok ? [] : recheck.missing);
+        return;
+      }
       const code = (dbErr as { code?: string } | null)?.code;
       if (code === '23P01') {
         res.status(409).json({
