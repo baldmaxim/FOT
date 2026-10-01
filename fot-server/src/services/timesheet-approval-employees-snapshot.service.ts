@@ -23,9 +23,14 @@ export interface IApprovalEmployeeSnapshot {
  *  - те, кто уже попал в ПЕРЕСЕКАЮЩУЮСЯ подачу отдела (наследование скоупа: подача
  *    родительского отдела забирает и потомков, покрытие такое наследование не знает).
  *
- * Сам руководитель правилу покрытия не подчиняется: его собственную строку ведёт
- * персональная подача, иначе руководитель, сидящий в отделе с руководителем, терял
- * бы себя.
+ * Сам руководитель подчиняется тому же правилу покрытия: если у его собственного отдела
+ * есть хоть один владелец табеля (full или deputy, в том числе он сам), его строку
+ * подаёт отдел. Раньше строка попадала в личную подачу безусловно, если свой отдел ещё
+ * не подан, — исход зависел от порядка подач: подача чужого отдела первой забирала строку
+ * в личную, следом её брала и подача своего отдела (дубль версии для 1С), а отзыв отдела
+ * личную не снимал, и свою строку руководитель править уже не мог. Владение днём
+ * (resolveDayOwnership) это не меняет: уже утверждённые личные подачи со строкой
+ * руководителя сохраняют её.
  *
  * Пересечение диапазонов (а не точное совпадение дат) зеркалит EXCLUDE-констрейнты
  * миграции 122 и сам submit.
@@ -38,12 +43,13 @@ export async function resolvePersonalSubmissionComposition(
   const subordinateIds = await listDirectReportIdsInPeriod(managerEmployeeId, startDate, endDate);
   const hasDirectReports = subordinateIds.length > 0;
 
-  const split = await splitDirectReportsByCoverage(subordinateIds, startDate, endDate);
-  const candidateIds = [...new Set([
-    managerEmployeeId,
-    ...split.owned,
-    ...split.partiallyCovered,
-  ])];
+  // Руководитель идёт в один split с подчинёнными и без viewer: владелец своего отдела
+  // тоже «покрывает» себя — его строку подаст этот отдел.
+  const split = await splitDirectReportsByCoverage(
+    [managerEmployeeId, ...subordinateIds], startDate, endDate,
+  );
+  const candidateIds = [...new Set([...split.owned, ...split.partiallyCovered])];
+  if (candidateIds.length === 0) return { employeeIds: [], affectedDepartmentIds: [], hasDirectReports };
 
   // Eligibility — та же, что у состава подачи отдела: уволенный внутри периода
   // выгружается за отработанную часть, а не пропадает.
@@ -75,8 +81,9 @@ export async function resolvePersonalSubmissionComposition(
         AND s.employee_id = ANY($3::int[])`,
     [startDate, endDate, [...ids]],
   );
-  // Вычитаем и самого руководителя: если он уже поехал в подаче своего отдела,
-  // persona-подача из одной его строки не нужна — пустой состав означает «подачи нет».
+  // Вычитаем и самого руководителя: если он уже поехал в подаче отдела (в том числе
+  // родительского — покрытие наследование не знает), persona-подача его строку не берёт.
+  // Пустой состав означает «подачи нет».
   for (const row of coveredRows) ids.delete(Number(row.employee_id));
 
   const employeeIds = [...ids].sort((a, b) => a - b);

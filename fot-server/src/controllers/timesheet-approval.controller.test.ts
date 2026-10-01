@@ -78,7 +78,7 @@ describe('resolvePersonalSubmissionContext — состав персональн
   it('подчинённого, которого весь период ведёт руководитель отдела, в составе нет', async () => {
     listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A, SUB_B]);
     splitMock.mockResolvedValue({
-      owned: [SUB_A],
+      owned: [MANAGER, SUB_A],
       fullyCovered: [SUB_B],
       partiallyCovered: [],
       coveredDates: new Map([[SUB_B, ['2026-09-01']]]),
@@ -98,7 +98,7 @@ describe('resolvePersonalSubmissionContext — состав персональн
   it('частично покрытый остаётся в составе: его непокрытые дни ведёт личный руководитель', async () => {
     listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A]);
     splitMock.mockResolvedValue({
-      owned: [],
+      owned: [MANAGER],
       fullyCovered: [],
       partiallyCovered: [SUB_A],
       coveredDates: new Map([[SUB_A, ['2026-09-01', '2026-09-02']]]),
@@ -141,6 +141,72 @@ describe('resolvePersonalSubmissionContext — состав персональн
     const ctx = await resolvePersonalSubmissionContext(makeReq(null), RANGE);
     expect(ctx).toBeNull();
     expect(listDirectReportIdsInPeriodMock).not.toHaveBeenCalled();
+  });
+
+  it('руководитель идёт в один split с подчинёнными и без viewer', async () => {
+    listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A, SUB_B]);
+    mockQueries([
+      { id: MANAGER, org_department_id: 'DM' },
+      { id: SUB_A, org_department_id: 'D1' },
+      { id: SUB_B, org_department_id: 'D1' },
+    ]);
+
+    await resolvePersonalSubmissionContext(makeReq(MANAGER), RANGE);
+
+    expect(splitMock).toHaveBeenCalledTimes(1);
+    // Без viewer (5-й аргумент): владелец своего отдела тоже «покрывает» себя.
+    expect(splitMock.mock.calls[0]).toEqual([[MANAGER, SUB_A, SUB_B], RANGE.startDate, RANGE.endDate]);
+  });
+
+  it('у своего отдела руководителя есть владелец табеля → его строки в составе нет', async () => {
+    listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A]);
+    splitMock.mockResolvedValue({
+      owned: [SUB_A],
+      fullyCovered: [MANAGER],
+      partiallyCovered: [],
+      coveredDates: new Map([[MANAGER, ['2026-09-01']]]),
+    });
+    mockQueries([{ id: SUB_A, org_department_id: 'D1' }]);
+
+    const ctx = await resolvePersonalSubmissionContext(makeReq(MANAGER), RANGE);
+
+    expect(ctx?.employeeIds).toEqual([SUB_A]);
+    expect(ctx?.managerEmployeeId).toBe(MANAGER);
+    // Покрытый руководитель не доходит даже до eligibility.
+    expect(pgQuery.mock.calls[0][1]).toEqual([[SUB_A], RANGE.startDate]);
+  });
+
+  it('руководитель покрыт, лично назначенных вне отделов нет → null, запросов нет', async () => {
+    listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A]);
+    splitMock.mockResolvedValue({
+      owned: [],
+      fullyCovered: [MANAGER, SUB_A],
+      partiallyCovered: [],
+      coveredDates: new Map(),
+    });
+
+    const ctx = await resolvePersonalSubmissionContext(makeReq(MANAGER), RANGE);
+
+    expect(ctx).toBeNull();
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('частично покрытый руководитель остаётся, но уже поданный отделом — вычитается целиком', async () => {
+    listDirectReportIdsInPeriodMock.mockResolvedValue([SUB_A]);
+    splitMock.mockResolvedValue({
+      owned: [SUB_A],
+      fullyCovered: [],
+      partiallyCovered: [MANAGER],
+      coveredDates: new Map([[MANAGER, ['2026-09-10']]]),
+    });
+
+    mockQueries([{ id: MANAGER, org_department_id: 'DM' }, { id: SUB_A, org_department_id: 'D1' }]);
+    expect((await resolvePersonalSubmissionContext(makeReq(MANAGER), RANGE))?.employeeIds)
+      .toEqual([MANAGER, SUB_A].sort((l, r) => l - r));
+
+    // Пересекающаяся подача отдела уже содержит его строку — текущее поведение coveredRows.
+    mockQueries([{ id: MANAGER, org_department_id: 'DM' }, { id: SUB_A, org_department_id: 'D1' }], [MANAGER]);
+    expect((await resolvePersonalSubmissionContext(makeReq(MANAGER), RANGE))?.employeeIds).toEqual([SUB_A]);
   });
 
   it('нет подчинённых → null', async () => {

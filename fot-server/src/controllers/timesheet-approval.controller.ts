@@ -427,35 +427,61 @@ export async function resolvePersonalSubmissionContext(
 }
 
 /**
- * Гарантирует, что у руководителя за указанный диапазон есть persona-подача,
- * включающая его самого + его активных прямых подчинённых (employee_direct_reports),
- * за вычетом тех, кто уже покрыт department-подачей за этот период. Используется
- * после успешной полной подачи отдела: подчинённые, назначенные руководителю лично
- * (и сидящие вне подаваемых бригад), иначе не попадут ни в одну подачу и будут не
- * видны HR на странице согласования. Идемпотентно — повторные вызовы для того же
- * диапазона не создают дублей, partial EXCLUDE на manager_employee_id это поддерживает.
+ * Поля возврата подачи в черновик. unlocked_* обнуляем здесь же: открытие не должно
+ * пережить возврат в draft (иначе CHECK timesheet_approvals_unlock_status_check отбил
+ * бы UPDATE). $1 — время изменения.
+ */
+const RECALL_TO_DRAFT_SET_SQL = `status = 'draft',
+             submitted_by = NULL,
+             submitted_at = NULL,
+             reviewed_by = NULL,
+             reviewed_at = NULL,
+             review_comment = NULL,
+             unlocked_at = NULL,
+             unlocked_by = NULL,
+             unlock_reason = NULL,
+             updated_at = $1`;
+
+const sortedUniqueIds = (ids: readonly (number | string)[]): number[] =>
+  [...new Set(ids.map(Number))].sort((l, r) => l - r);
+
+const sameSortedIds = (l: readonly number[], r: readonly number[]): boolean =>
+  l.length === r.length && l.every((id, index) => id === r[index]);
+
+/** Итог сверки авто-личной подачи руководителя с её текущим составом. */
+type TManagerSelfApprovalChange =
+  | { kind: 'submitted'; approval: TimesheetApproval; fromStatus: TimesheetApprovalStatus | null }
+  | { kind: 'recalled'; approval: TimesheetApproval; fromStatus: TimesheetApprovalStatus }
+  | { kind: 'roster_rebuilt'; approval: TimesheetApproval; before: number[]; after: number[] };
+
+/**
+ * Сводит persona-подачу руководителя за диапазон к его текущему составу (сам руководитель,
+ * если его строку не подаёт свой отдел, + прямые подчинённые вне отделов с владельцем,
+ * за вычетом уже покрытых department-подачами). Вызывается после подачи отдела — и новой,
+ * и повторной: подчинённые, назначенные руководителю лично, иначе не попадут ни в одну
+ * подачу и будут не видны HR на странице согласования.
  *
- * Возвращает:
- *  - null, если подача не нужна (нет employee_id, итоговый набор пуст — нет активных
- *    direct reports и сам руководитель уже покрыт department-подачей; либо persona
- *    уже актуальна и состав лишь дополнен idempotent-upsert'ом).
- *  - { approval, transitioned: true } — если подача создана или переведена в submitted
- *    (нужно отправить notify HR + событие в историю).
+ * Идемпотентна: повтор при неизменном составе ничего не пишет. Каждый UPDATE — с guard
+ * по статусу, прочитанному до транзакции: если кадры успели утвердить подачу, её не
+ * трогаем (снимок утверждённой — официальная редакция для 1С).
+ *
+ * Возвращает null, если ничего не изменилось, иначе — что именно:
+ *  - submitted — подача создана или переведена в submitted (notify HR + событие);
+ *  - recalled — состав пуст, а от прошлых подач осталась submitted/rejected: уведена в
+ *    пустой черновик. Иначе submitted держала бы замок на строке руководителя, хотя её
+ *    уже подаёт свой отдел, — свою строку он после отзыва отдела не мог бы исправить;
+ *  - roster_rebuilt — submitted осталась, но её снимок пересобран.
  */
 async function ensureManagerSelfApprovalForRange(
   req: AuthenticatedRequest,
   range: ITimesheetDateRange,
-): Promise<{ approval: TimesheetApproval; transitioned: boolean } | null> {
+): Promise<TManagerSelfApprovalChange | null> {
   const managerEmpId = req.user.employee_id;
   if (!managerEmpId) return null;
 
-  // Состав persona-подачи: сам руководитель + активные прямые подчинённые, за вычетом
-  // уже покрытых department-подачами за этот период (дедуп против двойного показа).
-  // Если набор пуст (нет подчинённых вне бригад и сам руководитель в бригаде) —
-  // persona-подача не нужна.
-  const snapshotIds = await resolveManagerPersonalSnapshotIds(managerEmpId, range.startDate, range.endDate);
-  if (snapshotIds.length === 0) return null;
-
+  const snapshotIds = sortedUniqueIds(
+    await resolveManagerPersonalSnapshotIds(managerEmpId, range.startDate, range.endDate),
+  );
   const now = new Date().toISOString();
 
   const existing = await queryOne<TimesheetApproval>(
@@ -465,20 +491,45 @@ async function ensureManagerSelfApprovalForRange(
     [managerEmpId, range.startDate, range.endDate],
   );
 
+  if (snapshotIds.length === 0) {
+    // approved/returned — решение кадров, их не трогаем; draft уже ничего не держит.
+    if (!existing || (existing.status !== 'submitted' && existing.status !== 'rejected')) return null;
+    const recalled = await withTransaction(async client => {
+      const r = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals
+           SET ${RECALL_TO_DRAFT_SET_SQL}
+         WHERE id = $2 AND status = $3
+         RETURNING *`,
+        [now, existing.id, existing.status],
+      );
+      const row = r.rows[0] ?? null;
+      if (row) await snapshotApprovalEmployees(client, row.id, []);
+      return row;
+    });
+    return recalled ? { kind: 'recalled', approval: recalled, fromStatus: existing.status } : null;
+  }
+
   if (existing) {
     // Утверждённую подачу не трогаем вообще: её состав — официальная редакция табеля
     // для 1С, и переписывать его задним числом нельзя. Открыть закрытый табель можно
     // только через «Открыть → правки → Закрыть».
     if (existing.status === 'approved') return null;
-    // submitted — статус не трогаем, но перезаписываем состав полным набором
-    // (self + direct reports за период минус ведомые руководителями отделов), чтобы
-    // назначенные сотрудники попали в snapshot. snapshotApprovalEmployees делает
-    // DELETE+INSERT — передаём полный набор, не дельту.
+    // submitted — статус не трогаем, состав пересобираем только при изменении.
     if (existing.status === 'submitted') {
-      await withTransaction(async client => {
+      const rebuilt = await withTransaction(async client => {
+        const locked = await client.query<{ status: TimesheetApprovalStatus }>(
+          `SELECT status FROM timesheet_approvals WHERE id = $1 FOR UPDATE`,
+          [existing.id],
+        );
+        if (locked.rows[0]?.status !== 'submitted') return null;
+        const before = sortedUniqueIds(
+          (await listApprovalEmployees(existing.id, client)).map(row => row.employee_id),
+        );
+        if (sameSortedIds(before, snapshotIds)) return null;
         await snapshotApprovalEmployees(client, existing.id, snapshotIds);
+        return { before, after: snapshotIds };
       });
-      return null;
+      return rebuilt ? { kind: 'roster_rebuilt', approval: existing, ...rebuilt } : null;
     }
     // draft / returned / rejected → переводим в submitted и пишем полный snapshot.
     const updated = await withTransaction(async client => {
@@ -486,15 +537,16 @@ async function ensureManagerSelfApprovalForRange(
         `UPDATE timesheet_approvals
            SET status = 'submitted', submitted_by = $1, submitted_at = $2,
                reviewed_by = NULL, reviewed_at = NULL, review_comment = NULL,
-               updated_at = $3
-           WHERE id = $4
+               updated_at = $2
+           WHERE id = $3 AND status = $4
            RETURNING *`,
-        [req.user.id, now, now, existing.id],
+        [req.user.id, now, existing.id, existing.status],
       );
-      await snapshotApprovalEmployees(client, existing.id, snapshotIds);
-      return r.rows[0] ?? null;
+      const row = r.rows[0] ?? null;
+      if (row) await snapshotApprovalEmployees(client, row.id, snapshotIds);
+      return row;
     });
-    return updated ? { approval: updated, transitioned: true } : null;
+    return updated ? { kind: 'submitted', approval: updated, fromStatus: existing.status } : null;
   }
 
   try {
@@ -511,7 +563,7 @@ async function ensureManagerSelfApprovalForRange(
       if (row) await snapshotApprovalEmployees(client, row.id, snapshotIds);
       return row;
     });
-    return created ? { approval: created, transitioned: true } : null;
+    return created ? { kind: 'submitted', approval: created, fromStatus: null } : null;
   } catch (err) {
     // Гонка двух submit'ов в один и тот же момент — partial EXCLUDE отшил один.
     // Тихо: другая попытка уже создала подачу.
@@ -781,6 +833,93 @@ async function persistApprovalTransition(input: {
   });
 }
 
+/**
+ * Сверка авто-persona подачи после подачи отдела + её аудит, события и уведомления.
+ * Вызывается и на повторной подаче уже поданного отдела: однажды не доехавшая сверка
+ * (best-effort) иначе не исправилась бы ничем. Основную подачу отдела не валит.
+ * Возвращает true, если persona-подача изменилась (замки дней сменились).
+ */
+async function reconcileManagerSelfApproval(
+  req: AuthenticatedRequest,
+  range: ITimesheetDateRange,
+): Promise<boolean> {
+  try {
+    const change = await ensureManagerSelfApprovalForRange(req, range);
+    const managerEmployeeId = req.user.employee_id;
+    if (!change || !managerEmployeeId) return false;
+    const auditBase = {
+      department_id: null,
+      manager_employee_id: managerEmployeeId,
+      start_date: range.startDate,
+      end_date: range.endDate,
+    };
+
+    if (change.kind === 'roster_rebuilt') {
+      await logApprovalAudit(req, change.approval.id, 'TIMESHEET_APPROVAL_ROSTER_REBUILT', {
+        ...auditBase,
+        removed_employee_ids: change.before.filter(id => !change.after.includes(id)),
+        added_employee_ids: change.after.filter(id => !change.before.includes(id)),
+        auto_self_personal: true,
+      });
+      return true;
+    }
+
+    if (change.kind === 'recalled') {
+      await logApprovalAudit(req, change.approval.id, 'TIMESHEET_APPROVAL_RECALLED', {
+        ...auditBase,
+        from_status: change.fromStatus,
+        to_status: 'draft',
+        auto_self_personal: true,
+      });
+      void emitTimesheetApprovalChanged({
+        approvalId: change.approval.id,
+        departmentId: null,
+        submittedBy: req.user.id,
+        action: 'recall',
+      });
+      return true;
+    }
+
+    const selfDeptRow = await queryOne<{ org_department_id: string | null }>(
+      `SELECT org_department_id FROM employees WHERE id = $1 LIMIT 1`,
+      [managerEmployeeId],
+    );
+    const selfAffectedDepartmentIds = selfDeptRow?.org_department_id
+      ? [selfDeptRow.org_department_id]
+      : [];
+    await persistApprovalTransition({
+      approvalId: change.approval.id,
+      departmentId: null,
+      range,
+      fromStatus: change.fromStatus,
+      toStatus: 'submitted',
+      action: 'submitted',
+      actorUserId: req.user.id,
+    });
+    await logApprovalAudit(req, change.approval.id, 'TIMESHEET_APPROVAL_SUBMITTED', {
+      ...auditBase,
+      from_status: change.fromStatus,
+      to_status: 'submitted',
+      auto_self_personal: true,
+    });
+    const selfEmployeeCount = (await listApprovalEmployees(change.approval.id)).length;
+    void notifyHrAboutSubmittedApproval({
+      departmentId: null,
+      managerEmployeeId,
+      affectedDepartmentIds: selfAffectedDepartmentIds,
+      employeeCount: selfEmployeeCount,
+      range,
+    }).catch(notifyError => {
+      console.error('timesheet-approval.submit self-personal notify error:', notifyError);
+    });
+    return true;
+  } catch (selfErr) {
+    // Не валим основную подачу: persona-self — best-effort.
+    console.error('timesheet-approval.submit ensureManagerSelfApproval error:', selfErr);
+    return false;
+  }
+}
+
 /** Pending-корректировка появилась между внешней проверкой подачи и advisory-локом — откат. */
 class PendingCorrectionsOnSubmitError extends Error {}
 
@@ -981,6 +1120,8 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         });
       }
 
+      const selfChanged = !personal && await reconcileManagerSelfApproval(req, range);
+      if (rosterChange.changed || selfChanged) invalidateTimesheetGridCaches();
       res.json({ success: true, data: exactSame });
       return;
     }
@@ -1120,54 +1261,10 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       action: 'submit',
     });
 
-    // Если это была полная подача отдела, а сам submitter сидит вне этой бригады —
-    // его собственный табель иначе нигде не согласуется. Гарантируем persona-подачу
-    // самого руководителя, чтобы он не «терялся» в UI согласований.
-    if (!personal) {
-      try {
-        const selfResult = await ensureManagerSelfApprovalForRange(req, range);
-        if (selfResult?.transitioned && req.user.employee_id) {
-          const selfDeptRow = await queryOne<{ org_department_id: string | null }>(
-            `SELECT org_department_id FROM employees WHERE id = $1 LIMIT 1`,
-            [req.user.employee_id],
-          );
-          const selfAffectedDepartmentIds = selfDeptRow?.org_department_id
-            ? [selfDeptRow.org_department_id]
-            : [];
-          await persistApprovalTransition({
-            approvalId: selfResult.approval.id,
-            departmentId: null,
-            range,
-            fromStatus: null,
-            toStatus: 'submitted',
-            action: 'submitted',
-            actorUserId: req.user.id,
-          });
-          await logApprovalAudit(req, selfResult.approval.id, 'TIMESHEET_APPROVAL_SUBMITTED', {
-            department_id: null,
-            manager_employee_id: req.user.employee_id,
-            start_date: range.startDate,
-            end_date: range.endDate,
-            from_status: null,
-            to_status: 'submitted',
-            auto_self_personal: true,
-          });
-          const selfEmployeeCount = (await listApprovalEmployees(selfResult.approval.id)).length;
-          void notifyHrAboutSubmittedApproval({
-            departmentId: null,
-            managerEmployeeId: req.user.employee_id,
-            affectedDepartmentIds: selfAffectedDepartmentIds,
-            employeeCount: selfEmployeeCount,
-            range,
-          }).catch(notifyError => {
-            console.error('timesheet-approval.submit self-personal notify error:', notifyError);
-          });
-        }
-      } catch (selfErr) {
-        // Не валим основную подачу: persona-self — best-effort.
-        console.error('timesheet-approval.submit ensureManagerSelfApproval error:', selfErr);
-      }
-    }
+    // После полной подачи отдела сводим persona-подачу самого руководителя: его строка
+    // (если её не подаёт свой отдел) и лично назначенные подчинённые иначе нигде не
+    // согласуются; а ставшая ненужной — уходит в черновик и не держит замок.
+    if (!personal) await reconcileManagerSelfApproval(req, range);
 
     invalidateTimesheetGridCaches();
     res.json({ success: true, data: approval });
@@ -1256,27 +1353,43 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     const now = new Date().toISOString();
-    const approval = await queryOne<TimesheetApproval>(
-      // unlocked_* обнуляем здесь же: открытие не должно пережить возврат в draft
-      // (иначе CHECK timesheet_approvals_unlock_status_check отбил бы UPDATE).
-      `UPDATE timesheet_approvals
-         SET status = 'draft',
-             submitted_by = NULL,
-             submitted_at = NULL,
-             reviewed_by = NULL,
-             reviewed_at = NULL,
-             review_comment = NULL,
-             unlocked_at = NULL,
-             unlocked_by = NULL,
-             unlock_reason = NULL,
-             updated_at = $1
-         WHERE id = $2
+    // Отдел и авто-persona его автора отзываются одной транзакцией: если бы отдел ушёл
+    // в draft, а persona осталась submitted, её замок держал бы строку руководителя, а
+    // повторный отзыв отдела уже отвечал бы 409 — состояние не сошлось бы само.
+    // Guard по статусу: между чтением и записью кадры могли утвердить/отклонить подачу.
+    const { approval, cascaded } = await withTransaction(async client => {
+      const r = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals
+           SET ${RECALL_TO_DRAFT_SET_SQL}
+         WHERE id = $2 AND status = $3
          RETURNING *`,
-      [now, existing.id],
-    );
+        [now, existing.id, existing.status],
+      );
+      const row = r.rows[0] ?? null;
+      if (!row || personal || !existing.submitted_by) return { approval: row, cascaded: null };
+      // Подача отдела создала (или подтвердила) persona-подачу своего автора за тот же
+      // диапазон — отзываем её вместе с отделом, чтобы он мог исправить свою строку и
+      // строки лично назначенных. Повторная подача отдела вернёт её сама. Автор — по
+      // подаче, а не по отзывающему: админ отзывает чужую подачу, его persona ни при чём.
+      const c = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals p
+           SET ${RECALL_TO_DRAFT_SET_SQL}
+          FROM user_profiles up
+         WHERE up.id = $2
+           AND p.manager_employee_id = up.employee_id
+           AND p.start_date = $3 AND p.end_date = $4
+           AND p.status = 'submitted'
+         RETURNING p.*`,
+        [now, existing.submitted_by, range.startDate, range.endDate],
+      );
+      return { approval: row, cascaded: c.rows[0] ?? null };
+    });
 
     if (!approval) {
-      res.status(500).json({ success: false, error: 'Ошибка отзыва табеля' });
+      res.status(409).json({
+        success: false,
+        error: 'Отозвать можно только поданный или утверждённый табель',
+      });
       return;
     }
 
@@ -1296,6 +1409,25 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       reviewerUserId: existing.reviewed_by ?? req.user.id,
       action: 'recall',
     });
+
+    if (cascaded) {
+      await logApprovalAudit(req, cascaded.id, 'TIMESHEET_APPROVAL_RECALLED', {
+        department_id: null,
+        manager_employee_id: cascaded.manager_employee_id,
+        start_date: range.startDate,
+        end_date: range.endDate,
+        from_status: 'submitted',
+        to_status: 'draft',
+        auto_self_personal: true,
+        recalled_with_approval_id: approval.id,
+      });
+      void emitTimesheetApprovalChanged({
+        approvalId: cascaded.id,
+        departmentId: null,
+        submittedBy: existing.submitted_by,
+        action: 'recall',
+      });
+    }
 
     // Отзыв утверждённого табеля снимает решение HR — уведомляем прежнего проверяющего
     // и проверяющих отдела, что период вернулся в работу для переподачи.
