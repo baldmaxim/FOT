@@ -56,6 +56,13 @@ export interface IPayrollTermsRow {
   effective_from: string | null;
   effective_to: string | null;
   /**
+   * Последняя сохранённая плановая доплата, ₽/мес, и её период (может быть будущим или прошедшим).
+   * null — доплаты нет; поля нет у старого бэкенда.
+   */
+  planned_supplement_amount?: string | number | null;
+  planned_supplement_from?: string | null;
+  planned_supplement_to?: string | null;
+  /**
    * Начисления по месяцам (придут из 1С ЗУП). Сервер пока не отдаёт — источник подключается
    * отдельно; без поля ячейка «Начисления» показывает «—».
    */
@@ -102,6 +109,15 @@ export interface IAssignTermsPayload {
   deduction_amount?: number;
   staff_units?: number;
   effective_from: string;
+  /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
+  planned_supplement?: IPlannedSupplementPayload | null;
+}
+
+/** Плановая доплата: сумма ₽/мес на период «с — по» включительно. */
+export interface IPlannedSupplementPayload {
+  amount: number;
+  date_from: string;
+  date_to: string;
 }
 
 /** Изменение оклада / ставки. Суммы — текстом NUMERIC; разница — только при том же виде оплаты. */
@@ -118,6 +134,27 @@ export interface ISalaryChange {
   changed_by_name: string | null;
   changed_at: string;
 }
+
+/** Изменение плановой доплаты. Суммы — текстом NUMERIC. */
+export interface IPlannedSupplementChange {
+  id: number;
+  /** assigned — первая доплата или после снятия; changed — замена; removed — снята. */
+  action: 'assigned' | 'changed' | 'removed';
+  /** null — доплата снята. */
+  amount: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  prev_amount: string | null;
+  prev_date_from: string | null;
+  prev_date_to: string | null;
+  changed_by_name: string | null;
+  changed_at: string;
+}
+
+/** Запись истории условий: изменение оклада / ставки или плановой доплаты, новые сверху. */
+export type IPayrollTermsChange =
+  | (ISalaryChange & { kind: 'salary' })
+  | (IPlannedSupplementChange & { kind: 'supplement' });
 
 export type VacationStatus = 'vacation' | 'unpaid' | 'educational_leave';
 
@@ -281,10 +318,10 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Изменения оклада / ставки, новые сверху. */
-  getSalaryHistory: async (employeeId: number, signal?: AbortSignal): Promise<ISalaryChange[]> => {
-    const res = await apiClient.get<IApiResponse<ISalaryChange[]>>(
-      `/payroll/terms/employee/${employeeId}/salary-history`,
+  /** История условий: оклад / ставка и плановая доплата одним журналом, новые сверху. */
+  getTermsChanges: async (employeeId: number, signal?: AbortSignal): Promise<IPayrollTermsChange[]> => {
+    const res = await apiClient.get<IApiResponse<IPayrollTermsChange[]>>(
+      `/payroll/terms/employee/${employeeId}/changes`,
       { signal },
     );
     return res.data;

@@ -33,7 +33,7 @@ interface IEmployeePayrollDetailsProps {
 
 /**
  * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
- * компенсация, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
+ * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
  * отдельно, её ошибки форму не блокируют.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
@@ -51,7 +51,12 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const nameRef = useRef<HTMLHeadingElement>(null);
   // Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер).
   const canEdit = canEditPage('/salary/terms') && row.can_edit !== false;
-  const form = usePayrollTermsForm({ row, defaultDate, resolveDefaultCalcType: defaultCalcTypeFor });
+  const form = usePayrollTermsForm({
+    row,
+    defaultDate,
+    resolveDefaultCalcType: defaultCalcTypeFor,
+    plannedSupplement: true,
+  });
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.

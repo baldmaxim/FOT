@@ -10,7 +10,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { getContractorRootId } from '../config/contractor.js';
 import {
   appendPayrollColumnFilters,
@@ -36,8 +36,11 @@ import {
   assignTerms,
   assignTermsBulk,
   getSalaryChanges,
+  getTermsChanges,
   getTermsHistory,
   getTermsOnDate,
+  lockPayrollEmployee,
+  setPlannedSupplement,
   type IAssignResult,
 } from '../services/payroll/payroll-terms.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -78,6 +81,30 @@ const termsBodySchema = z.object({
   }
 });
 
+/** Календарная дата: «2026-02-31» по форме верна, но PostgreSQL отверг бы её ошибкой 500. */
+const calendarDateSchema = dateSchema.refine(value => {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}, 'Некорректная дата');
+
+/** Верх NUMERIC(12,2): больше — переполнение в БД и 500 вместо понятной ошибки. */
+const MAX_MONEY = 9_999_999_999.99;
+
+/** Плановая доплата: сумма ₽/мес на период «с — по» включительно. */
+const plannedSupplementSchema = z.object({
+  amount: moneySchema.max(MAX_MONEY, 'Слишком большая сумма доплаты'),
+  date_from: calendarDateSchema,
+  date_to: calendarDateSchema,
+}).refine(value => value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
+
+/**
+ * Назначение одному сотруднику — с плановой доплатой: не передана — доплату не трогать
+ * (старый фронт или поля не меняли), null — снять. Массовое назначение доплату не принимает.
+ */
+const assignBodySchema = termsBodySchema.and(z.object({
+  planned_supplement: plannedSupplementSchema.nullable().optional(),
+}));
+
 const bulkBodySchema = z.object({
   employee_ids: z.array(z.coerce.number().int().positive()).min(1).max(500),
 }).and(termsBodySchema);
@@ -106,7 +133,29 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
-/** GET /api/payroll/terms/employee/:empId/salary-history — изменения оклада / ставки. */
+/**
+ * GET /api/payroll/terms/employee/:empId/changes — история условий для карточки:
+ * изменения оклада / ставки и плановой доплаты одним журналом.
+ */
+const getChanges = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = Number(req.params.empId);
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+    const data = await getTermsChanges(employeeId);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('payrollTerms.getChanges error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения истории условий оплаты' });
+  }
+};
+
+/**
+ * GET /api/payroll/terms/employee/:empId/salary-history — изменения оклада / ставки.
+ * Оставлен для закэшированных клиентов: записи доплаты отдаёт только /changes.
+ */
 const getSalaryHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
@@ -240,11 +289,23 @@ const buildListSql = (options: {
     COALESCE((
       -- ORDER BY внутри json_agg: next_cursor берётся из последнего элемента массива,
       -- порядок подзапроса агрегат гарантированно не сохраняет.
+      -- Плановая доплата — только для строк порции: LATERAL после LIMIT.
       SELECT json_agg(p ORDER BY ${options.orderSql.replace(/\bk\./g, 'p.')})
-        FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
-               WHERE ${options.cursorSql}
-               ORDER BY ${options.orderSql}
-               LIMIT $9 OFFSET $10) p
+        FROM (SELECT page.*,
+                     ps.amount    AS planned_supplement_amount,
+                     ps.date_from AS planned_supplement_from,
+                     ps.date_to   AS planned_supplement_to
+                FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
+                       WHERE ${options.cursorSql}
+                       ORDER BY ${options.orderSql}
+                       LIMIT $9 OFFSET $10) page
+                LEFT JOIN LATERAL (
+                  SELECT s.amount, s.date_from, s.date_to
+                    FROM payroll_planned_supplements s
+                   WHERE s.employee_id = page.employee_id
+                   ORDER BY s.id DESC
+                   LIMIT 1
+                ) ps ON TRUE) p
     ), '[]'::json) AS rows`;
 
 /** Прежний порядок и курсор (ФИО, id): без параметра sort — как до сортировки по столбцам. */
@@ -274,6 +335,10 @@ interface IPayrollTermsListRow {
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
+  /** Последняя сохранённая плановая доплата (период может быть будущим или прошедшим). */
+  planned_supplement_amount: string | number | null;
+  planned_supplement_from: string | null;
+  planned_supplement_to: string | null;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
@@ -501,28 +566,46 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const body = termsBodySchema.parse(req.body);
-    const previous = await getTermsOnDate(employeeId, body.effective_from);
+    const body = assignBodySchema.parse(req.body);
+    const supplement = body.planned_supplement;
 
-    const termsId = await assignTerms({
-      employeeId,
-      staffCategory: body.staff_category,
-      calcType: body.calc_type,
-      monthlySalary: body.monthly_salary ?? null,
-      hourlyRate: body.hourly_rate ?? null,
-      bonusAmount: body.bonus_amount ?? null,
-      housingCompensation: body.housing_compensation ?? null,
-      travelCompensation: body.travel_compensation ?? null,
-      communicationCompensation: body.communication_compensation ?? null,
-      deductionAmount: body.deduction_amount ?? null,
-      staffUnits: body.staff_units,
-      organizationId: body.organization_id ?? null,
-      effectiveFrom: body.effective_from,
-      changeReason: body.change_reason ?? null,
-      orderNumber: body.order_number ?? null,
-      orderDate: body.order_date ?? null,
-      note: body.note ?? null,
-      createdBy: req.user.id,
+    // Условия и доплата — одной транзакцией под блокировкой сотрудника: параллельное
+    // сохранение не прочтёт ту же прежнюю версию доплаты.
+    const { termsId, previous, supplementChanged } = await withTransaction(async client => {
+      await lockPayrollEmployee(client, employeeId);
+      const previousTerms = await getTermsOnDate(employeeId, body.effective_from, client);
+      const id = await assignTerms({
+        employeeId,
+        staffCategory: body.staff_category,
+        calcType: body.calc_type,
+        monthlySalary: body.monthly_salary ?? null,
+        hourlyRate: body.hourly_rate ?? null,
+        bonusAmount: body.bonus_amount ?? null,
+        housingCompensation: body.housing_compensation ?? null,
+        travelCompensation: body.travel_compensation ?? null,
+        communicationCompensation: body.communication_compensation ?? null,
+        deductionAmount: body.deduction_amount ?? null,
+        staffUnits: body.staff_units,
+        organizationId: body.organization_id ?? null,
+        effectiveFrom: body.effective_from,
+        changeReason: body.change_reason ?? null,
+        orderNumber: body.order_number ?? null,
+        orderDate: body.order_date ?? null,
+        note: body.note ?? null,
+        createdBy: req.user.id,
+      }, client);
+      const changed = supplement === undefined
+        ? false
+        : await setPlannedSupplement(client, {
+          employeeId,
+          value: supplement && {
+            amount: supplement.amount,
+            dateFrom: supplement.date_from,
+            dateTo: supplement.date_to,
+          },
+          createdBy: req.user.id,
+        });
+      return { termsId: id, previous: previousTerms, supplementChanged: changed };
     });
 
     await auditService.logFromRequest(req, req.user.id, 'PAYROLL_TERMS_ASSIGNED', {
@@ -541,6 +624,9 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
         deduction_amount: body.deduction_amount ?? null,
+        // undefined — доплату не трогали (в аудите ключа нет), null — снята.
+        planned_supplement: supplement,
+        planned_supplement_changed: supplementChanged,
         previous_terms_id: previous?.id ?? null,
         previous_calc_type: previous?.calc_type ?? null,
       },
@@ -623,5 +709,5 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
 };
 
 export const payrollTermsController = {
-  list, columnValues, getByEmployee, getSalaryHistory, assign, assignBulk,
+  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign, assignBulk,
 };

@@ -71,6 +71,12 @@ beforeEach(() => {
   txClient.query.mockResolvedValue({ rows: [{ id: 77 }] });
 });
 
+/**
+ * Одиночное назначение в транзакции: блокировка сотрудника, прежние условия, UPDATE, DELETE, INSERT,
+ * затем (если доплату передали) запись доплаты. Массовое — UPDATE, DELETE, INSERT на каждого.
+ */
+const SINGLE_INSERT = 4;
+
 /** Параметры INSERT условий: $14 — премиальная часть, $15 — компенсация проживания. */
 const insertAmounts = (insertCallIndex: number) => {
   const params = txClient.query.mock.calls[insertCallIndex][1] as unknown[];
@@ -83,7 +89,6 @@ describe('условия оплаты: премиальная часть и ко
   };
 
   it('одиночное назначение сохраняет обе суммы и пишет их в аудит', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -92,13 +97,12 @@ describe('условия оплаты: премиальная часть и ко
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertAmounts(2)).toEqual({ bonus: 50000, housing: 25000 });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 50000, housing: 25000 });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ bonus_amount: 50000, housing_compensation: 25000 });
   });
 
   it('0 принимается как явное значение', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -107,7 +111,7 @@ describe('условия оплаты: премиальная часть и ко
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertAmounts(2)).toEqual({ bonus: 0, housing: 0 });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 0, housing: 0 });
   });
 
   it('отрицательная сумма отклоняется до записи', async () => {
@@ -124,7 +128,6 @@ describe('условия оплаты: премиальная часть и ко
   });
 
   it('без сумм в теле — NULL: ранее заполненные значения очищаются новой строкой условий', async () => {
-    pgQueryOne.mockResolvedValueOnce({ id: 5, calc_type: 'salary' });
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -132,7 +135,7 @@ describe('условия оплаты: премиальная часть и ко
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertAmounts(2)).toEqual({ bonus: null, housing: null });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: null, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ bonus_amount: null, housing_compensation: null });
   });
@@ -176,7 +179,6 @@ describe('условия оплаты: проезд, связь, удержан�
   };
 
   it('одиночное назначение сохраняет три суммы и пишет их в аудит', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -185,15 +187,14 @@ describe('условия оплаты: проезд, связь, удержан�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(2)).toEqual({ travel: 3000, communication: 500, deduction: 0 });
+    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: 3000, communication: 500, deduction: 0 });
     // Премия и проживание остаются на своих местах ($14/$15).
-    expect(insertAmounts(2)).toEqual({ bonus: null, housing: null });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: null, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ travel_compensation: 3000, communication_compensation: 500, deduction_amount: 0 });
   });
 
   it('без сумм — NULL', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -201,7 +202,7 @@ describe('условия оплаты: проезд, связь, удержан�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(2)).toEqual({ travel: null, communication: null, deduction: null });
+    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: null, communication: null, deduction: null });
   });
 
   it('отрицательное удержание отклоняется до записи', async () => {
@@ -261,7 +262,6 @@ describe('payrollTermsController.getSalaryHistory', () => {
 
 describe('payrollTermsController.assign', () => {
   it('переводит сотрудника с оклада на часы: закрывает прежние условия и вставляет новые', async () => {
-    pgQueryOne.mockResolvedValueOnce({ id: 5, calc_type: 'salary' });
 
     const req = makeReq({
       params: { empId: '42' },
@@ -280,14 +280,19 @@ describe('payrollTermsController.assign', () => {
     expect(res.body.success).toBe(true);
 
     const statements = txClient.query.mock.calls.map(call => String(call[0]));
-    // Порядок важен: сначала закрыть действующие, потом снять более поздние, потом вставить.
-    expect(statements[0]).toMatch(/UPDATE payroll_compensation_terms/i);
-    expect(statements[0]).toMatch(/effective_to/i);
-    expect(statements[1]).toMatch(/DELETE FROM payroll_compensation_terms/i);
-    expect(statements[2]).toMatch(/INSERT INTO payroll_compensation_terms/i);
+    // Порядок важен: блокировка сотрудника, прежние условия, затем закрыть действующие,
+    // снять более поздние и вставить новые.
+    expect(statements[0]).toMatch(/pg_advisory_xact_lock/i);
+    expect(statements[1]).toMatch(/FROM payroll_compensation_terms/i);
+    expect(statements[2]).toMatch(/UPDATE payroll_compensation_terms/i);
+    expect(statements[2]).toMatch(/effective_to/i);
+    expect(statements[3]).toMatch(/DELETE FROM payroll_compensation_terms/i);
+    expect(statements[4]).toMatch(/INSERT INTO payroll_compensation_terms/i);
+    // Доплату не передали — её не трогаем.
+    expect(statements.some(sql => /payroll_planned_supplements/.test(sql))).toBe(false);
 
     // Часовая ставка легла в hourly_rate, оклад остался пустым — иначе сработал бы XOR в БД.
-    const insertParams = txClient.query.mock.calls[2][1] as unknown[];
+    const insertParams = txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[];
     expect(insertParams[3]).toBe('hourly');
     expect(insertParams[4]).toBeNull();
     expect(insertParams[5]).toBe(450);
@@ -308,7 +313,6 @@ describe('payrollTermsController.assign', () => {
   });
 
   it('часовая ставка не сохраняется как оклад при calc_type=salary', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
 
     const req = makeReq({
       params: { empId: '7' },
@@ -324,7 +328,7 @@ describe('payrollTermsController.assign', () => {
 
     await payrollTermsController.assign(req, res);
 
-    const insertParams = txClient.query.mock.calls[2][1] as unknown[];
+    const insertParams = txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[];
     expect(insertParams[4]).toBe(175000);
     // hourly_rate обнуляется несмотря на то, что пришёл в теле запроса.
     expect(insertParams[5]).toBeNull();
@@ -345,6 +349,144 @@ describe('payrollTermsController.assign', () => {
 
     expect(res.statusCode).toBe(403);
     expect(pgTx).not.toHaveBeenCalled();
+  });
+});
+
+describe('payrollTermsController.assign: плановая доплата', () => {
+  const baseBody = {
+    staff_category: 'itr', calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01',
+  };
+  const supplementCall = () => txClient.query.mock.calls.find(call => /payroll_planned_supplements/.test(String(call[0])));
+
+  it('доплата пишется в той же транзакции после условий и попадает в аудит', async () => {
+    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { ...baseBody, planned_supplement: { amount: '10000', date_from: '2026-11-01', date_to: '2026-12-31' } },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(pgTx).toHaveBeenCalledTimes(1);
+    const statements = txClient.query.mock.calls.map(call => String(call[0]));
+    expect(statements[0]).toMatch(/pg_advisory_xact_lock/i);
+    expect(txClient.query.mock.calls[0][1]).toEqual([42]);
+    expect(statements[SINGLE_INSERT]).toMatch(/INSERT INTO payroll_compensation_terms/i);
+    expect(statements[SINGLE_INSERT + 1]).toMatch(/INSERT INTO payroll_planned_supplements/i);
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', '2026-12-31', 'user-1']);
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details).toMatchObject({
+      planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' },
+      planned_supplement_changed: true,
+    });
+  });
+
+  it('null снимает доплату: версия с пустыми суммой и датами', async () => {
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: null },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(supplementCall()?.[1]).toEqual([42, null, null, null, 'user-1']);
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details).toMatchObject({ planned_supplement: null });
+  });
+
+  it('доплата не изменилась (версия не вставлена) — в аудите planned_supplement_changed: false', async () => {
+    txClient.query.mockImplementation(async (sql: string) => (
+      /payroll_planned_supplements/.test(String(sql)) ? { rows: [], rowCount: 0 } : { rows: [{ id: 77 }], rowCount: 1 }
+    ));
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { ...baseBody, planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' } },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details).toMatchObject({ planned_supplement_changed: false });
+  });
+
+  it.each([
+    ['несуществующая дата', { amount: 10000, date_from: '2026-02-31', date_to: '2026-03-31' }],
+    ['окончание раньше начала', { amount: 10000, date_from: '2026-12-01', date_to: '2026-11-30' }],
+    ['сумма больше NUMERIC(12,2)', { amount: 10_000_000_000, date_from: '2026-11-01', date_to: '2026-12-31' }],
+    ['нулевая сумма', { amount: 0, date_from: '2026-11-01', date_to: '2026-12-31' }],
+    ['нет даты окончания', { amount: 10000, date_from: '2026-11-01' }],
+  ])('%s — 400 до похода в БД', async (_name, plannedSupplement) => {
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: plannedSupplement },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('массовое назначение доплату не принимает: подмешанное поле игнорируется', async () => {
+    const res = makeRes();
+
+    await payrollTermsController.assignBulk(makeReq({
+      body: {
+        ...baseBody,
+        employee_ids: [1, 2],
+        planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' },
+      },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(supplementCall()).toBeUndefined();
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details).not.toHaveProperty('planned_supplement');
+  });
+});
+
+describe('payrollTermsController.getChanges', () => {
+  it('сотрудник вне скоупа — 403, в БД не ходим', async () => {
+    scope.canAccessEmployeeInScope.mockResolvedValueOnce(false);
+    const res = makeRes();
+
+    await payrollTermsController.getChanges(makeReq({ params: { empId: '42' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('оклад и доплата одним журналом по времени изменения, новые сверху', async () => {
+    const salary = {
+      effective_from: '2026-06-01', effective_to: null, calc_type: 'salary', amount: '120000.00',
+      prev_calc_type: null, prev_amount: null, diff: null, diff_percent: null,
+      changed_by_name: 'Иванов И.И.', changed_at: '2026-05-30T10:00:00Z',
+    };
+    const supplementNew = {
+      id: 2, action: 'changed', amount: '12000.00', date_from: '2026-11-01', date_to: '2026-12-31',
+      prev_amount: '10000.00', prev_date_from: '2026-11-01', prev_date_to: '2026-12-31',
+      changed_by_name: 'Петров П.П.', changed_at: '2026-10-02T09:00:00Z',
+    };
+    const supplementOld = {
+      id: 1, action: 'assigned', amount: '10000.00', date_from: '2026-11-01', date_to: '2026-12-31',
+      prev_amount: null, prev_date_from: null, prev_date_to: null,
+      changed_by_name: 'Петров П.П.', changed_at: '2026-04-01T09:00:00Z',
+    };
+    pgQuery.mockImplementation(async (sql: string) => (
+      /payroll_planned_supplements/.test(String(sql)) ? [supplementNew, supplementOld] : [salary]
+    ));
+    const res = makeRes();
+
+    await payrollTermsController.getChanges(makeReq({ params: { empId: '42' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual([
+      { ...supplementNew, kind: 'supplement' },
+      { ...salary, kind: 'salary' },
+      { ...supplementOld, kind: 'supplement' },
+    ]);
+    pgQuery.mockReset();
   });
 });
 
@@ -625,6 +767,17 @@ describe('payrollTermsController.list', () => {
     expect(listParams().sql).toMatch(/t\.travel_compensation/);
     expect(listParams().sql).toMatch(/t\.communication_compensation/);
     expect(listParams().sql).toMatch(/t\.deduction_amount/);
+  });
+
+  it('список отдаёт последнюю плановую доплату — только для строк порции, после LIMIT', async () => {
+    const res = makeRes();
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
+
+    const { sql } = listParams();
+    expect(sql).toMatch(/planned_supplement_amount/);
+    expect(sql).toMatch(/planned_supplement_from/);
+    expect(sql).toMatch(/planned_supplement_to/);
+    expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_planned_supplements'));
   });
 
   it('список отдаёт премиальную часть и компенсацию проживания из условий', async () => {

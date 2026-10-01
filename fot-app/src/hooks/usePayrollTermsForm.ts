@@ -9,9 +9,11 @@ import type {
 import {
   firstInvalidField,
   initialPayrollTermsValues,
+  SUPPLEMENT_FIELD_KEYS,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
   type PayrollMoneyField,
+  type PayrollSupplementField,
   type PayrollTermsFieldErrors,
   type PayrollTermsFieldKey,
 } from '../utils/payrollTermsForm';
@@ -21,6 +23,8 @@ interface IUsePayrollTermsFormArgs {
   row: IPayrollTermsRow | null;
   defaultDate: string;
   resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
+  /** Секция «Плановые доплаты» — только в карточке одного сотрудника. */
+  plannedSupplement?: boolean;
 }
 
 /**
@@ -28,10 +32,17 @@ interface IUsePayrollTermsFormArgs {
  * Проверка и состав запроса — в utils/payrollTermsForm (покрыты тестом); деньги дальше
  * считает сервер. Ошибки хранятся по полям и снимаются при правке своего поля.
  */
-export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }: IUsePayrollTermsFormArgs) => {
-  const [values, setValues] = useState<IPayrollTermsFormValues>(
+export const usePayrollTermsForm = ({
+  row,
+  defaultDate,
+  resolveDefaultCalcType,
+  plannedSupplement = false,
+}: IUsePayrollTermsFormArgs) => {
+  // Начальные значения храним: доплата уходит в запрос, только если отличается от них.
+  const [initial] = useState<IPayrollTermsFormValues>(
     () => initialPayrollTermsValues(row, defaultDate, resolveDefaultCalcType),
   );
+  const [values, setValues] = useState<IPayrollTermsFormValues>(initial);
   const [fieldErrors, setFieldErrors] = useState<PayrollTermsFieldErrors>({});
 
   const clearError = (key: PayrollTermsFieldKey) => {
@@ -67,6 +78,11 @@ export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }
     clearError(field);
   };
 
+  const changeSupplement = (field: PayrollSupplementField, value: string) => {
+    setValues(prev => ({ ...prev, supplement: { ...prev.supplement, [field]: value } }));
+    clearError(SUPPLEMENT_FIELD_KEYS[field]);
+  };
+
   const setEffectiveFrom = (value: string) => {
     setValues(prev => ({ ...prev, effectiveFrom: value }));
     clearError('effectiveFrom');
@@ -74,7 +90,10 @@ export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }
 
   /** Проверяет форму: запрос сохранения или первое поле с ошибкой (для фокуса). */
   const buildPayload = (): { payload: IAssignTermsPayload | null; firstInvalid: PayrollTermsFieldKey | null } => {
-    const result = validatePayrollTerms(values);
+    const result = validatePayrollTerms(
+      values,
+      plannedSupplement ? { initialSupplement: initial.supplement } : {},
+    );
     setFieldErrors(result.errors ?? {});
     return result.payload
       ? { payload: result.payload, firstInvalid: null }
@@ -83,11 +102,13 @@ export const usePayrollTermsForm = ({ row, defaultDate, resolveDefaultCalcType }
 
   return {
     ...values,
+    plannedSupplement,
     fieldErrors,
     changeCategory,
     setCalcType,
     setAmount,
     changeMoney,
+    changeSupplement,
     setEffectiveFrom,
     buildPayload,
   };

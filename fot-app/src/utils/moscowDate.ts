@@ -12,8 +12,11 @@ const moscowFormatter = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 });
 
+/** Дата момента времени по Москве, YYYY-MM-DD. */
+export const toMoscowDateIso = (moment: Date): string => moscowFormatter.format(moment);
+
 /** YYYY-MM-DD. */
-export const moscowTodayIso = (): string => moscowFormatter.format(new Date());
+export const moscowTodayIso = (): string => toMoscowDateIso(new Date());
 
 /** YYYY-MM. */
 export const moscowCurrentMonth = (): string => moscowTodayIso().slice(0, 7);

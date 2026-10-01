@@ -1,6 +1,7 @@
 import type {
   IAssignTermsPayload,
   IPayrollTermsRow,
+  IPlannedSupplementPayload,
   PayrollCalcType,
   StaffCategory,
 } from '../services/payrollService';
@@ -10,11 +11,32 @@ export type PayrollMoneyField = 'bonus' | 'housing' | 'travel' | 'communication'
 
 export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing', 'travel', 'communication', 'deduction'];
 
+/** Плановая доплата: сумма ₽/мес, дата начала и дата окончания — строки как в полях ввода. */
+export interface IPayrollSupplementValues {
+  amount: string;
+  from: string;
+  to: string;
+}
+
+export type PayrollSupplementField = keyof IPayrollSupplementValues;
+
+/** Ключ ошибки и id поля доплаты. */
+export const SUPPLEMENT_FIELD_KEYS = {
+  amount: 'supplementAmount',
+  from: 'supplementFrom',
+  to: 'supplementTo',
+} as const satisfies Record<PayrollSupplementField, string>;
+
 /** Поля, у которых бывает ошибка проверки, — в порядке на экране (фокус на первую ошибку). */
-export type PayrollTermsFieldKey = 'effectiveFrom' | 'amount' | PayrollMoneyField;
+export type PayrollTermsFieldKey =
+  | 'effectiveFrom'
+  | 'amount'
+  | PayrollMoneyField
+  | (typeof SUPPLEMENT_FIELD_KEYS)[PayrollSupplementField];
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
-  'effectiveFrom', 'amount', 'bonus', 'housing', 'travel', 'communication', 'deduction',
+  'effectiveFrom', 'amount', 'bonus', 'housing', 'travel', 'communication',
+  'supplementAmount', 'supplementFrom', 'supplementTo', 'deduction',
 ];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
@@ -25,6 +47,7 @@ export interface IPayrollTermsFormValues {
   calcType: PayrollCalcType;
   amount: string;
   money: Record<PayrollMoneyField, string>;
+  supplement: IPayrollSupplementValues;
   effectiveFrom: string;
 }
 
@@ -35,7 +58,10 @@ export const toInputValue = (value: string | number | null | undefined): string 
   return text.includes('.') ? text.replace(/\.?0+$/, '') : text;
 };
 
-/** Начальные значения: из строки списка одного сотрудника; без условий или массово — пусто. */
+/**
+ * Начальные значения: из строки списка одного сотрудника; без условий или массово — пусто.
+ * Плановая доплата от условий не зависит: предзаполняется и у сотрудника без условий на дату.
+ */
 export const initialPayrollTermsValues = (
   row: IPayrollTermsRow | null,
   defaultDate: string,
@@ -55,6 +81,11 @@ export const initialPayrollTermsValues = (
       communication: pick(row?.communication_compensation),
       deduction: pick(row?.deduction_amount),
     },
+    supplement: {
+      amount: toInputValue(row?.planned_supplement_amount),
+      from: row?.planned_supplement_from ?? '',
+      to: row?.planned_supplement_to ?? '',
+    },
     effectiveFrom: defaultDate,
   };
 };
@@ -67,6 +98,40 @@ const parseOptionalMoney = (raw: string): number | undefined | null => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 };
 
+const isSupplementEmpty = (values: IPayrollSupplementValues): boolean =>
+  !values.amount.trim() && !values.from && !values.to;
+
+/** Доплата из полей; null — поля пустые или заполнены с ошибкой (тогда errors не пуст). */
+const parseSupplement = (
+  values: IPayrollSupplementValues,
+  errors: PayrollTermsFieldErrors,
+): IPlannedSupplementPayload | null => {
+  if (isSupplementEmpty(values)) return null;
+  const rawAmount = values.amount.trim();
+  const amount = Number(rawAmount.replace(',', '.'));
+  if (!rawAmount) errors.supplementAmount = 'Укажите сумму доплаты';
+  else if (!Number.isFinite(amount) || amount <= 0) errors.supplementAmount = 'Введите число больше нуля';
+  if (!values.from) errors.supplementFrom = 'Укажите дату начала';
+  if (!values.to) errors.supplementTo = 'Укажите дату окончания';
+  else if (values.from && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
+  if (errors.supplementAmount || errors.supplementFrom || errors.supplementTo) return null;
+  return { amount, date_from: values.from, date_to: values.to };
+};
+
+const sameSupplement = (a: IPlannedSupplementPayload | null, b: IPlannedSupplementPayload | null): boolean => (
+  a === null || b === null
+    ? a === b
+    : a.amount === b.amount && a.date_from === b.date_from && a.date_to === b.date_to
+);
+
+export interface IPayrollTermsValidateOptions {
+  /**
+   * Плановая доплата в форме (карточка одного сотрудника): начальные значения полей.
+   * Не передано — секции нет, доплата в запрос не входит (массовое назначение).
+   */
+  initialSupplement?: IPayrollSupplementValues;
+}
+
 export type PayrollTermsValidation =
   | { payload: IAssignTermsPayload; errors: null }
   | { payload: null; errors: PayrollTermsFieldErrors };
@@ -75,8 +140,14 @@ export type PayrollTermsValidation =
  * Проверка формы и запрос сохранения. Состав запроса не зависит от раскладки формы:
  * сумма уходит в monthly_salary или hourly_rate по виду оплаты, пустые необязательные суммы
  * не передаются (на сервере — NULL, а не 0).
+ *
+ * Плановая доплата уходит, только если её поменяли: равна начальной — не передаётся (чужая правка,
+ * сделанная пока карточка открыта, не затрётся), очищена — null (снять), иначе — новая доплата.
  */
-export const validatePayrollTerms = (values: IPayrollTermsFormValues): PayrollTermsValidation => {
+export const validatePayrollTerms = (
+  values: IPayrollTermsFormValues,
+  options: IPayrollTermsValidateOptions = {},
+): PayrollTermsValidation => {
   const errors: PayrollTermsFieldErrors = {};
 
   const parsed = Number(values.amount.replace(',', '.'));
@@ -89,6 +160,14 @@ export const validatePayrollTerms = (values: IPayrollTermsFormValues): PayrollTe
     const value = parseOptionalMoney(values.money[field]);
     if (value === null) errors[field] = 'Введите число не меньше нуля';
     else if (value !== undefined) optional[field] = value;
+  }
+
+  let plannedSupplement: IPlannedSupplementPayload | null | undefined;
+  if (options.initialSupplement) {
+    const next = parseSupplement(values.supplement, errors);
+    // Начальные значения пришли с сервера; если вдруг неполные — считаем, что доплаты не было.
+    const initial = parseSupplement(options.initialSupplement, {});
+    plannedSupplement = sameSupplement(next, initial) ? undefined : next;
   }
 
   if (!values.effectiveFrom) errors.effectiveFrom = 'Укажите дату «Действует с»';
@@ -108,6 +187,7 @@ export const validatePayrollTerms = (values: IPayrollTermsFormValues): PayrollTe
       communication_compensation: optional.communication,
       deduction_amount: optional.deduction,
       effective_from: values.effectiveFrom,
+      planned_supplement: plannedSupplement,
     },
   };
 };

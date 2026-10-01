@@ -43,7 +43,7 @@ const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория · Вид оплаты · Действует с,
- * компенсации и удержание; справа оклад (или ставка) с премией и «Оплачено». В узком окне и при stacked
+ * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией и «Оплачено». В узком окне и при stacked
  * половины встают друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
@@ -79,8 +79,35 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
     );
   };
 
-  const dateError = form.fieldErrors.effectiveFrom;
-  const dateId = fieldId('effectiveFrom');
+  /** Поле даты с подписью сверху и ошибкой снизу. */
+  const renderDate = (
+    key: PayrollTermsFieldKey,
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+    required = false,
+  ) => {
+    const error = form.fieldErrors[key];
+    const id = fieldId(key);
+    return (
+      <div className={styles.field} key={key}>
+        <label htmlFor={id} className={styles.label}>{label}</label>
+        <input
+          id={id}
+          type="date"
+          className={styles.control}
+          value={value}
+          disabled={readOnly}
+          required={required}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          onChange={event => onChange(event.target.value)}
+        />
+        {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
+      </div>
+    );
+  };
+
   const deductionKindId = `${idPrefix}-deduction-kind`;
   const paidLabelId = `${idPrefix}-paid`;
   const paidWithYear = paidMonths ? accrualPeriodCrossesYear(paidMonths) : false;
@@ -132,21 +159,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                 </div>
               </div>
 
-              <div className={styles.field}>
-                <label htmlFor={dateId} className={styles.label}>Действует с</label>
-                <input
-                  id={dateId}
-                  type="date"
-                  className={styles.control}
-                  value={form.effectiveFrom}
-                  disabled={readOnly}
-                  required
-                  aria-invalid={dateError ? true : undefined}
-                  aria-describedby={dateError ? `${dateId}-error` : undefined}
-                  onChange={event => form.setEffectiveFrom(event.target.value)}
-                />
-                {dateError && <p id={`${dateId}-error`} className={styles.error}>{dateError}</p>}
-              </div>
+              {renderDate('effectiveFrom', 'Действует с', form.effectiveFrom, form.setEffectiveFrom, true)}
             </div>
           </div>
 
@@ -195,6 +208,27 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Одна доплата на сотрудника: поля — последняя сохранённая, очистить и сохранить — снять. */}
+      {form.plannedSupplement && (
+        <section className={styles.section} aria-labelledby={`${idPrefix}-supplement-title`}>
+          <h3 id={`${idPrefix}-supplement-title`} className={styles.sectionTitle}>Плановые доплаты</h3>
+          <div className={styles.halves}>
+            <div className={styles.half}>
+              <div className={styles.row}>
+                {renderMoney(
+                  'supplementAmount',
+                  'Сумма, ₽/мес',
+                  form.supplement.amount,
+                  value => form.changeSupplement('amount', value),
+                )}
+                {renderDate('supplementFrom', 'Дата начала', form.supplement.from, value => form.changeSupplement('from', value))}
+                {renderDate('supplementTo', 'Дата окончания', form.supplement.to, value => form.changeSupplement('to', value))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
         <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>

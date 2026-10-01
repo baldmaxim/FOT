@@ -27,7 +27,9 @@ router.get('/terms', termsView, payrollTermsController.list);
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 router.post('/terms/bulk', termsEdit, payrollTermsController.assignBulk);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
-// Изменения оклада / ставки для карточки сотрудника («было → стало»).
+// История условий для карточки сотрудника: оклад / ставка и плановая доплата одним журналом.
+router.get('/terms/employee/:empId/changes', termsView, payrollTermsController.getChanges);
+// Только оклад / ставка — для закэшированных клиентов до /changes.
 router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsController.getSalaryHistory);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 

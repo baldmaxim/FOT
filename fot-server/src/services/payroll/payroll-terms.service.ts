@@ -179,6 +179,137 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
     [employeeId],
   );
 
+/** Плановая доплата: сумма ₽/мес на период «с — по» включительно. */
+export interface IPlannedSupplementValue {
+  amount: number;
+  dateFrom: string;
+  dateTo: string;
+}
+
+/**
+ * Записать доплату сотрудника: value — новая доплата, null — снять.
+ *
+ * Новая версия пишется, только если отличается от последней: повторное сохранение карточки
+ * без правки истории не засоряет; снятие без прежней доплаты ничего не пишет. Сравнение — в SQL
+ * (NUMERIC с NUMERIC). Вызывать в транзакции под блокировкой сотрудника (lockPayrollEmployee),
+ * иначе два параллельных сохранения прочтут одну и ту же последнюю версию.
+ *
+ * Возвращает true, если доплата изменилась.
+ */
+export const setPlannedSupplement = async (
+  exec: DbExecutor,
+  input: { employeeId: number; value: IPlannedSupplementValue | null; createdBy: string },
+): Promise<boolean> => {
+  const res = await exec.query(
+    `WITH last AS (
+       SELECT amount, date_from, date_to
+         FROM payroll_planned_supplements
+        WHERE employee_id = $1
+        ORDER BY id DESC
+        LIMIT 1
+     )
+     INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by)
+     SELECT $1, $2::numeric, $3::date, $4::date, $5
+      WHERE CASE
+              WHEN EXISTS (SELECT 1 FROM last)
+                THEN NOT EXISTS (
+                  SELECT 1 FROM last
+                   WHERE amount IS NOT DISTINCT FROM $2::numeric
+                     AND date_from IS NOT DISTINCT FROM $3::date
+                     AND date_to IS NOT DISTINCT FROM $4::date)
+              ELSE $2::numeric IS NOT NULL
+            END`,
+    [
+      input.employeeId,
+      input.value?.amount ?? null,
+      input.value?.dateFrom ?? null,
+      input.value?.dateTo ?? null,
+      input.createdBy,
+    ],
+  );
+  return (res.rowCount ?? 0) > 0;
+};
+
+/**
+ * Сериализует назначение условий и доплаты по сотруднику до конца транзакции:
+ * без неё два параллельных сохранения записали бы по версии доплаты от одной и той же прежней.
+ */
+export const lockPayrollEmployee = async (exec: DbExecutor, employeeId: number): Promise<void> => {
+  await exec.query(`SELECT pg_advisory_xact_lock(hashtext('payroll_terms:' || $1::text))`, [employeeId]);
+};
+
+/** Изменение плановой доплаты. Суммы — текстом NUMERIC. */
+export interface IPlannedSupplementChange {
+  id: number;
+  /** assigned — первая доплата или после снятия; changed — замена; removed — снята. */
+  action: 'assigned' | 'changed' | 'removed';
+  /** null — доплата снята. */
+  amount: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  prev_amount: string | null;
+  prev_date_from: string | null;
+  prev_date_to: string | null;
+  changed_by_name: string | null;
+  changed_at: string;
+}
+
+/** История плановой доплаты, новые сверху. */
+export const getPlannedSupplementChanges = async (employeeId: number): Promise<IPlannedSupplementChange[]> =>
+  query<IPlannedSupplementChange>(
+    `WITH versions AS (
+       SELECT s.id, s.amount, s.date_from, s.date_to, s.created_by, s.created_at,
+              LAG(s.amount) OVER w AS prev_amount,
+              LAG(s.date_from) OVER w AS prev_date_from,
+              LAG(s.date_to) OVER w AS prev_date_to
+         FROM payroll_planned_supplements s
+        WHERE s.employee_id = $1
+       WINDOW w AS (ORDER BY s.id)
+     )
+     SELECT v.id,
+            CASE
+              WHEN v.amount IS NULL THEN 'removed'
+              WHEN v.prev_amount IS NULL THEN 'assigned'
+              ELSE 'changed'
+            END AS action,
+            v.amount::text AS amount,
+            v.date_from,
+            v.date_to,
+            v.prev_amount::text AS prev_amount,
+            v.prev_date_from,
+            v.prev_date_to,
+            up.full_name AS changed_by_name,
+            v.created_at AS changed_at
+       FROM versions v
+       LEFT JOIN user_profiles up ON up.id = v.created_by
+      ORDER BY v.id DESC`,
+    [employeeId],
+  );
+
+/** Запись общей истории условий: изменение оклада / ставки или плановой доплаты. */
+export type ITermsChange =
+  | (ISalaryChange & { kind: 'salary' })
+  | (IPlannedSupplementChange & { kind: 'supplement' });
+
+const changedAtMs = (change: ITermsChange): number => new Date(change.changed_at).getTime();
+
+/**
+ * История условий для карточки: оклад / ставка и плановая доплата одним журналом,
+ * по времени изменения (новые сверху). Период — внутри записи: у оклада и доплаты
+ * свои даты действия, и сортировка по ним смешала бы две хронологии.
+ */
+export const getTermsChanges = async (employeeId: number): Promise<ITermsChange[]> => {
+  const [salary, supplements] = await Promise.all([
+    getSalaryChanges(employeeId),
+    getPlannedSupplementChanges(employeeId),
+  ]);
+  const merged: ITermsChange[] = [
+    ...salary.map(change => ({ ...change, kind: 'salary' as const })),
+    ...supplements.map(change => ({ ...change, kind: 'supplement' as const })),
+  ];
+  return merged.sort((a, b) => changedAtMs(b) - changedAtMs(a));
+};
+
 /** Условия, действующие на дату. null — условий на эту дату нет. */
 export const getTermsOnDate = async (
   employeeId: number,

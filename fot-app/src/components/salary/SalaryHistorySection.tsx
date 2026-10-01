@@ -5,10 +5,13 @@ import { ChevronRight } from 'lucide-react';
 import {
   CALC_TYPE_LABELS,
   payrollService,
+  type IPayrollTermsChange,
+  type IPlannedSupplementChange,
   type ISalaryChange,
   type PayrollCalcType,
 } from '../../services/payrollService';
 import { formatDate } from '../../utils/formatMoney';
+import { toMoscowDateIso } from '../../utils/moscowDate';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import styles from './PayrollDisclosure.module.css';
 
@@ -43,16 +46,69 @@ const formatPeriod = (change: ISalaryChange): string => (
     : `с ${formatDate(change.effective_from)}, действует`
 );
 
+const formatSupplement = (amount: string | null): string => {
+  const money = formatPayrollMoney(amount);
+  return money === null ? '—' : `${money} ₽/мес`;
+};
+
+const formatSupplementPeriod = (from: string | null, to: string | null): string =>
+  `с ${formatDate(from)} по ${formatDate(to)}`;
+
+/** «Изменил: ФИО · дата» — дата изменения по Москве: журнал упорядочен по ней. */
+const formatAuthor = (change: IPayrollTermsChange): string => {
+  const changedOn = formatDate(toMoscowDateIso(new Date(change.changed_at)));
+  return change.changed_by_name ? `Изменил: ${change.changed_by_name} · ${changedOn}` : changedOn;
+};
+
+/** Плановая доплата: назначена, заменена («было → стало») или снята. */
+const renderSupplementChange = (change: IPlannedSupplementChange & { kind: 'supplement' }) => {
+  const prevPeriod = formatSupplementPeriod(change.prev_date_from, change.prev_date_to);
+  const samePeriod = change.prev_date_from === change.date_from && change.prev_date_to === change.date_to;
+  return (
+    <li key={`supplement-${change.id}`} className={styles.item}>
+      <div className={styles.itemHead}>
+        <span className={styles.itemSecondary}>
+          {change.action === 'removed'
+            ? 'Плановая доплата'
+            : `Плановая доплата ${formatSupplementPeriod(change.date_from, change.date_to)}`}
+        </span>
+      </div>
+      <div className={styles.amounts}>
+        {change.action === 'assigned' && (
+          <span className={styles.amount}>назначено {formatSupplement(change.amount)}</span>
+        )}
+        {change.action === 'changed' && (
+          <>
+            <span className={styles.prevAmount}>
+              было {formatSupplement(change.prev_amount)}{samePeriod ? '' : `, ${prevPeriod}`}
+            </span>
+            <span className={styles.prevAmount} aria-hidden="true">→</span>
+            <span className={styles.amount}>стало {formatSupplement(change.amount)}</span>
+          </>
+        )}
+        {change.action === 'removed' && (
+          <>
+            <span className={styles.amount}>снята</span>
+            <span className={styles.prevAmount}>было {formatSupplement(change.prev_amount)}, {prevPeriod}</span>
+          </>
+        )}
+      </div>
+      <div className={styles.itemMeta}>{formatAuthor(change)}</div>
+    </li>
+  );
+};
+
 /**
  * «История изменений условий оплаты» — раскрываемый блок, свёрнут по умолчанию.
+ * Оклад / ставка и плановая доплата одним журналом, по времени изменения (новые сверху).
  * Было → стало; разница — только при том же виде оплаты (оклад со ставкой не сравнить).
  * Пустая история — не то же самое, что отсутствие условий: пишем нейтрально.
  */
 export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeId }) => {
   const historyQuery = useQuery({
     // Под префиксом 'payroll-terms': сохранение условий сбрасывает и эту историю.
-    queryKey: ['payroll-terms', 'salary-history', employeeId],
-    queryFn: ({ signal }) => payrollService.getSalaryHistory(employeeId, signal),
+    queryKey: ['payroll-terms', 'terms-changes', employeeId],
+    queryFn: ({ signal }) => payrollService.getTermsChanges(employeeId, signal),
     staleTime: 30_000,
   });
   const { data } = historyQuery;
@@ -90,10 +146,11 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
         {data && data.length > 0 && (
           <ul className={styles.list}>
             {data.map(change => {
+              if (change.kind === 'supplement') return renderSupplementChange(change);
               const delta = formatDelta(change);
               const calcChanged = change.prev_calc_type !== null && change.prev_calc_type !== change.calc_type;
               return (
-                <li key={change.effective_from} className={styles.item}>
+                <li key={`salary-${change.effective_from}`} className={styles.item}>
                   <div className={styles.itemHead}>
                     <span className={styles.itemSecondary}>{formatPeriod(change)}</span>
                     {delta && <span className={delta.isDown ? styles.deltaDown : styles.deltaUp}>{delta.text}</span>}
@@ -114,7 +171,7 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
                       Смена вида оплаты: {CALC_TYPE_LABELS[change.prev_calc_type]} → {CALC_TYPE_LABELS[change.calc_type]}
                     </div>
                   )}
-                  {change.changed_by_name && <div className={styles.itemMeta}>Изменил: {change.changed_by_name}</div>}
+                  <div className={styles.itemMeta}>{formatAuthor(change)}</div>
                 </li>
               );
             })}
