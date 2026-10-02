@@ -10,6 +10,7 @@ import {
   type ITimesheetOfficeEmployee,
   type ITimesheetOfficeMember,
   type ITimesheetOfficeUpdate,
+  type TimesheetOfficeAssignment,
 } from '../../services/adminService';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
@@ -17,8 +18,10 @@ import { selectableTimesheetOfficeDepartmentIds } from '../../utils/timesheetOff
 import {
   EMPTY_TIMESHEET_OFFICE_DRAFT,
   buildTimesheetOfficePayload,
+  draftAssignment,
   draftDepartmentOffice,
   isTimesheetOfficeRowChecked,
+  toggledOfficeAssignment,
   type ITimesheetOfficeDraft,
   type ITimesheetOfficeDraftSource,
 } from '../../utils/timesheetOfficeDraft';
@@ -50,9 +53,9 @@ interface IStaffTimesheetOfficeModalProps {
 }
 
 /**
- * Окно «Режим табелирования» (миграция 291): «Офис» отделу или сотруднику. Кому «Офис»
- * поставлен здесь, тому ночной пересчёт объект по часам не ставит.
- * Клики по «Офис» в таблице — отметки; записывает их одна кнопка «Сохранить» внизу.
+ * Окно «Режим табелирования» (миграция 291): «Офис» отделу, сотруднику — «Офис» или объект.
+ * Кому объект поставлен здесь, тому ночной пересчёт объект по часам не ставит.
+ * Клики по «Офис» и выбор в списке — отметки; записывает их одна кнопка «Сохранить» внизу.
  */
 export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({ deptTree, onClose }) => {
   const toast = useToast();
@@ -113,10 +116,11 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
   const rowsQuery = target === 'department' ? membersQuery : employeeQuery;
   const hasSubject = target === 'department' ? departmentId !== '' : employee !== null;
 
-  const subjectRows = useMemo<Array<ITimesheetOfficeMember & { locked?: boolean }> | undefined>(() => {
+  // Вкладка «Сотрудник» не блокируется и в отделе с «Офисом»: личное назначение главнее отдела.
+  const subjectRows = useMemo<ITimesheetOfficeMember[] | undefined>(() => {
     if (target === 'department') return membersQuery.data?.employees;
     const row = employeeQuery.data;
-    return row ? [{ ...row, locked: row.department_office }] : undefined;
+    return row ? [row] : undefined;
   }, [target, membersQuery.data, employeeQuery.data]);
 
   const source = useMemo<ITimesheetOfficeDraftSource | null>(() => {
@@ -134,7 +138,9 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
       full_name: row.full_name,
       label: row.label,
       checked: isTimesheetOfficeRowChecked(row, draft, source),
-      disabled: busy || departmentOffice || row.locked === true,
+      disabled: busy || departmentOffice,
+      assignment: draftAssignment(row, draft),
+      savedAssignment: row.personal_assignment,
     }));
   }, [source, subjectRows, draft, busy]);
 
@@ -143,12 +149,12 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
   const updateDraft = (change: (current: ITimesheetOfficeDraft) => ITimesheetOfficeDraft): void => {
     setDraftState({ key: draftKey, draft: change(draft) });
   };
+  const setAssignment = (id: number, value: TimesheetOfficeAssignment): void => {
+    updateDraft(current => ({ ...current, employees: new Map(current.employees).set(id, value) }));
+  };
   const toggleRow = (id: number): void => {
-    if (!source) return;
-    const row = source.rows.find(item => item.id === id);
-    if (!row) return;
-    const checked = isTimesheetOfficeRowChecked(row, draft, source);
-    updateDraft(current => ({ ...current, employees: new Map(current.employees).set(id, !checked) }));
+    const row = source?.rows.find(item => item.id === id);
+    if (row) setAssignment(id, toggledOfficeAssignment(row, draft));
   };
   const toggleDepartment = (): void => {
     if (!source) return;
@@ -188,8 +194,8 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     void submit({ departments: { remove: [id] } }, 'Снято');
   };
 
-  const removeEmployee = (id: number, fullName: string): void => {
-    if (!window.confirm(`Снять «Офис» с сотрудника «${fullName}»?`)) return;
+  const removeEmployee = (id: number, fullName: string, label: string): void => {
+    if (!window.confirm(`Снять «${label}» с сотрудника «${fullName}»?`)) return;
     void submit({ employees: { remove: [id] } }, 'Снято');
   };
 
@@ -264,11 +270,12 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                 ? { checked: draftDepartmentOffice(draft, source), disabled: busy, onToggle: toggleDepartment }
                 : null}
               onToggleRow={toggleRow}
+              assignment={target === 'employee' ? { objects: state?.objects ?? [], onChange: setAssignment } : undefined}
             />
           )}
 
           <section className={styles.assigned} aria-labelledby="timesheet-office-assigned">
-            <h4 id="timesheet-office-assigned" className={styles.sectionTitle}>Назначено «Офис»</h4>
+            <h4 id="timesheet-office-assigned" className={styles.sectionTitle}>Назначено</h4>
             {stateQuery.isLoading && <div className={styles.muted}>Загрузка…</div>}
             {stateQuery.isError && <div className={styles.muted}>Не удалось загрузить</div>}
             {state && assignedCount === 0 && <div className={styles.muted}>Нет назначений</div>}
@@ -283,6 +290,7 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                         {dept.name}
                         <span className={styles.muted}> · {dept.employees_count} чел.</span>
                       </span>
+                      <span className={styles.assignedLabel}>Офис</span>
                       <button
                         type="button"
                         className={styles.removeButton}
@@ -307,10 +315,11 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                         {item.full_name}
                         {item.department && <span className={styles.muted}> · {item.department}</span>}
                       </span>
+                      <span className={styles.assignedLabel}>{item.label}</span>
                       <button
                         type="button"
                         className={styles.removeButton}
-                        onClick={() => removeEmployee(item.id, item.full_name)}
+                        onClick={() => removeEmployee(item.id, item.full_name, item.label)}
                         disabled={busy}
                       >
                         Снять

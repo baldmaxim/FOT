@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
  */
 
 const modes = vi.hoisted(() => ({
-  byEmployee: new Map<number, { mode: string; pinnedObjectId: string | null; source: string }>(),
+  byEmployee: new Map<number, { mode: string; pinnedObjectId: string | null; source: string; windowPin?: boolean }>(),
   calls: [] as Array<unknown>,
 }));
 
@@ -49,6 +49,7 @@ vi.mock('./timesheet-export.service.js', () => ({
 const {
   TimesheetVersionCrossMonthError,
   buildObjectsSnapshotForVersion,
+  computeContentHash,
   mergeObjectsSnapshots,
   rebuildVersionObjects,
 } = await import('./timesheet-version.service.js');
@@ -225,6 +226,108 @@ describe('rebuildVersionObjects', () => {
 
   it('редакции без снимка объектов не трогаем (это бэкфилл)', async () => {
     store.latest = { ...store.latest!, objects_content_hash: null, objects_payload: null };
+    expect((await rebuildVersionObjects(client, APPROVAL, null)).created).toBe(false);
+  });
+});
+
+describe('rebuildVersionObjects — назначенные в окне «Режим табелирования»', () => {
+  const absent = { status: 'absent', hours: 0, corrected: false, hours_overridden: false };
+  /** Сотрудник 3 — весь период «Н»: при утверждении назначения не было, zero_activity = true. */
+  const pinPayload = (zero: boolean) => ({
+    ...PAYLOAD,
+    employees_count: 3,
+    employees: [
+      ...PAYLOAD.employees,
+      {
+        identity: { employee_id: 3, sigur_employee_id: null, tab_number: null, full_name: 'Сотрудник 3' },
+        position: null, total_hours: 0, zero_activity: zero, days: { '2026-09-03': absent }, object_rows: [],
+      },
+    ],
+  });
+  const pinObjects = (mode: 'object' | 'current_activity', objects: unknown[]) => ({
+    employees: [
+      ...STORED_OBJECTS.employees,
+      { employee_id: 3, full_name: 'Сотрудник 3', mode, total_hours: 0, objects },
+    ],
+  });
+  const zeroRow = { object_id: 'obj-a', object_key: 'obj-a', object_name: 'Объект А', object_address: 'Объект А', total_hours: 0, days: {} };
+  const latestWith = (payload: ReturnType<typeof pinPayload>, objects: ReturnType<typeof pinObjects>) => ({
+    ...store.latest!,
+    payload,
+    content_hash: computeContentHash(payload as never),
+    objects_payload: objects,
+    objects_content_hash: computeObjectsContentHash(objects as never, []),
+  });
+  const inserted = (table: string) => store.inserts.find(i => i.sql.includes(`INSERT INTO ${table}`));
+
+  beforeEach(() => {
+    // У сотрудника 1 объект не менялся — меняется только назначенный.
+    modes.byEmployee.set(1, { mode: 'object', pinnedObjectId: 'obj-a', source: 'employee_explicit' });
+    modes.byEmployee.set(3, { mode: 'object', pinnedObjectId: 'obj-a', source: 'employee_explicit', windowPin: true });
+  });
+
+  it('объект с нулём часов и zero_activity → false; хэш payload новый, остальные байт в байт', async () => {
+    store.latest = latestWith(pinPayload(true), pinObjects('object', []));
+    const result = await rebuildVersionObjects(client, APPROVAL, null);
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [3] });
+
+    const version = inserted('timesheet_versions')!;
+    const payload = JSON.parse(String(version.params[3]));
+    expect(payload.employees[2].zero_activity).toBe(false);
+    expect(payload.employees.slice(0, 2)).toEqual(PAYLOAD.employees);
+    expect(version.params[2]).toBe(computeContentHash(payload));
+    expect(version.params[2]).not.toBe(store.latest.content_hash);
+
+    const objects = JSON.parse(String(inserted('timesheet_version_objects')!.params[2]));
+    expect(objects.employees[2].objects).toEqual([zeroRow]);
+    expect(objects.employees.slice(0, 2)).toEqual(STORED_OBJECTS.employees);
+  });
+
+  it('повтор после пересборки — без новой revision', async () => {
+    store.latest = latestWith(pinPayload(false), pinObjects('object', [zeroRow]));
+    expect((await rebuildVersionObjects(client, APPROVAL, null)).created).toBe(false);
+    expect(store.inserts).toEqual([]);
+  });
+
+  it('объект прежний, меняется только zero_activity — новая revision, разбивка та же', async () => {
+    const objects = pinObjects('object', [zeroRow]);
+    store.latest = latestWith(pinPayload(true), objects);
+    const result = await rebuildVersionObjects(client, APPROVAL, null);
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [3] });
+    expect(inserted('timesheet_version_objects')!.params[1]).toBe(computeObjectsContentHash(objects as never, []));
+  });
+
+  it('личный «Офис» с нулём часов: появление строки замечается, хотя режим тот же', async () => {
+    modes.byEmployee.set(3, { mode: 'current_activity', pinnedObjectId: null, source: 'employee_explicit', windowPin: true });
+    store.latest = latestWith(pinPayload(false), pinObjects('current_activity', []));
+    const result = await rebuildVersionObjects(client, APPROVAL, null);
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [3] });
+    const objects = JSON.parse(String(inserted('timesheet_version_objects')!.params[2]));
+    expect(objects.employees[2].objects.map((o: { object_key: string; total_hours: number }) => [o.object_key, o.total_hours]))
+      .toEqual([['__current_activity__', 0]]);
+  });
+
+  it('onlyEmployeeIds: меняется только он — смена объекта у соседа ждёт фиксации', async () => {
+    modes.byEmployee.set(1, { mode: 'object', pinnedObjectId: 'obj-b', source: 'employee_explicit' });
+    store.latest = latestWith(pinPayload(true), pinObjects('object', []));
+    const result = await rebuildVersionObjects(client, APPROVAL, null, { onlyEmployeeIds: [3] });
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [3] });
+    const objects = JSON.parse(String(inserted('timesheet_version_objects')!.params[2]));
+    expect(objects.employees[0]).toEqual(STORED_OBJECTS.employees[0]);
+  });
+
+  it('назначение сняли: zero_activity снова true, нулевая строка уходит', async () => {
+    modes.byEmployee.set(3, { mode: 'object', pinnedObjectId: 'obj-a', source: 'employee_explicit' });
+    store.latest = latestWith(pinPayload(false), pinObjects('object', [zeroRow]));
+    const result = await rebuildVersionObjects(client, APPROVAL, null, { onlyEmployeeIds: [3] });
+    expect(result).toMatchObject({ created: true, changedEmployeeIds: [3] });
+    expect(JSON.parse(String(inserted('timesheet_versions')!.params[3])).employees[2].zero_activity).toBe(true);
+    expect(JSON.parse(String(inserted('timesheet_version_objects')!.params[2])).employees[2].objects).toEqual([]);
+  });
+
+  it('без onlyEmployeeIds не назначенному zero_activity не переключается (поздние события СКУД)', async () => {
+    modes.byEmployee.set(3, { mode: 'object', pinnedObjectId: 'obj-a', source: 'employee_explicit' });
+    store.latest = latestWith(pinPayload(false), pinObjects('object', []));
     expect((await rebuildVersionObjects(client, APPROVAL, null)).created).toBe(false);
   });
 });

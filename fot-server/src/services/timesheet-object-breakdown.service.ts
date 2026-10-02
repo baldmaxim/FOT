@@ -307,6 +307,14 @@ export function buildVersionObjectBreakdown(
       });
     }
 
+    // Назначенный в окне «Режим табелирования» (291) без часов — строка своего объекта с
+    // нулём: в 1С он уходит и при всех «Н» (zero_activity = false), объект — назначенный.
+    let keepEmptyKey: string | null = null;
+    if (resolved.windowPin && buckets.size === 0) {
+      if (resolved.mode === 'current_activity') keepEmptyKey = bucketOf(buckets, CURRENT_ACTIVITY_KEY, currentActivitySeed).object_key;
+      else if (resolved.mode === 'object' && pinnedSeed) keepEmptyKey = bucketOf(buckets, pinnedSeed().object_key, pinnedSeed).object_key;
+    }
+
     // Сортировка по (имя, ключ): имена объектов не уникальны, и без второго критерия
     // хэш зависел бы от порядка входных записей.
     const objects: IVersionObjectRow[] = [...buckets.values()]
@@ -328,7 +336,7 @@ export function buildVersionObjectBreakdown(
           days,
         };
       })
-      .filter(row => Object.keys(row.days).length > 0)
+      .filter(row => Object.keys(row.days).length > 0 || row.object_key === keepEmptyKey)
       .sort((left, right) => (
         left.object_name.localeCompare(right.object_name, 'ru')
         || left.object_key.localeCompare(right.object_key)

@@ -274,8 +274,9 @@ const buildRowsForDepartment = (
       employees: visibleData.employees.filter(e => includedAggregatedIds.has(e.id)),
     };
     for (const employeeRow of buildEmployeeRowsForOneC(aggregatedData)) {
-      if (isOneCRowEmpty(employeeRow)) continue;
       const empId = employeeRow.employeeId;
+      // Назначенный в окне «Режим табелирования» (291) — строкой своего объекта и при всех «Н».
+      if (isOneCRowEmpty(employeeRow) && !modeFor(empId).windowPin) continue;
       const managerName = managerFor(empId);
       const objectAddress = aggregatedAddressByEmpId.get(empId) ?? CURRENT_ACTIVITY_ADDRESS;
       rows.push({

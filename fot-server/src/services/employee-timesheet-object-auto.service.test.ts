@@ -17,7 +17,7 @@ const {
 type Row = Parameters<typeof planAutoChanges>[0][number];
 const row = (id: number, over: Partial<Row> = {}): Row => ({
   id, full_name: `Сотрудник ${id}`, mode: null, object_id: null, set_by: null,
-  office_department: false, personal_office: false, worker: false, ...over,
+  office_department: false, personal_pin: false, worker: false, ...over,
 });
 const top = (value: string, hours: number, label = value) => ({
   value, label, objectId: value === 'office' ? null : value, hours,
@@ -32,13 +32,13 @@ describe('isAutoCandidate', () => {
       { mode: 'object', set_by: 'manager' },
       { mode: 'skud', set_by: null },
       { mode: 'object', set_by: null },
-      { mode: 'current_activity', set_by: null, personal_office: false },
+      { mode: 'current_activity', set_by: null, personal_pin: false },
     ]) {
       expect(isAutoCandidate(candidate)).toBe(true);
     }
   });
-  it('личный «Офис» из окна «Режим табелирования» — никогда', () => {
-    expect(isAutoCandidate({ personal_office: true })).toBe(false);
+  it('назначение из окна «Режим табелирования» — «Офис» или объект — никогда', () => {
+    expect(isAutoCandidate({ personal_pin: true })).toBe(false);
   });
 });
 
@@ -90,8 +90,11 @@ describe('planAutoChanges', () => {
     ]);
   });
 
-  it('личный «Офис» из окна не трогаем даже при часах на объекте', () => {
-    const rows = [row(6, { mode: 'current_activity', set_by: null, personal_office: true })];
+  it('назначение из окна не трогаем даже при часах на другом объекте — и «Офис», и объект', () => {
+    const rows = [
+      row(6, { mode: 'current_activity', set_by: null, personal_pin: true }),
+      row(3, { mode: 'object', object_id: 'o-metro', set_by: null, personal_pin: true }),
+    ];
     expect(planAutoChanges(rows, tops)).toEqual([]);
   });
 
@@ -123,9 +126,9 @@ describe('planAutoChanges', () => {
     // Без изменений — 9 и 10 (нет часов).
     expect(report).toMatchObject({
       employees: 6, withHours: 4, changed: 4, toOffice: 1, toObject: 3,
-      fromNone: 1, fromSkud: 1, fromAdminObject: 1, fromChoice: 1, personalOffice: 0, unchanged: 2,
+      fromNone: 1, fromSkud: 1, fromAdminObject: 1, fromChoice: 1, personalPin: 0, unchanged: 2,
     });
-    expect(report.changed + report.unchanged + report.personalOffice).toBe(report.employees);
+    expect(report.changed + report.unchanged + report.personalPin).toBe(report.employees);
   });
 
   it('сводка: отделы с «Офисом» и личный «Офис» — отдельными строками, в «без изменений» не входят', () => {
@@ -134,14 +137,16 @@ describe('planAutoChanges', () => {
       row(2, { office_department: true }),
       row(4, { office_department: true, mode: 'object', object_id: 'o-dom', set_by: 'employee' }),
       row(5, { mode: 'object', object_id: 'o-dom', set_by: 'manager' }),
-      row(6, { mode: 'current_activity', set_by: null, personal_office: true }),
+      row(6, { mode: 'current_activity', set_by: null, personal_pin: true }),
+      // Назначен лично в отделе с «Офисом»: назначение главнее — считается назначением, не отделом.
+      row(7, { office_department: true, mode: 'object', object_id: 'o-metro', set_by: null, personal_pin: true }),
     ];
     const changes = planAutoChanges(rows, tops);
     const report = summarizeAutoChanges(rows, tops, changes);
     expect(report).toMatchObject({
-      employees: 5, changed: 2, fromNone: 1, fromChoice: 1, officeDepartment: 2, personalOffice: 1, unchanged: 0,
+      employees: 6, changed: 2, fromNone: 1, fromChoice: 1, officeDepartment: 2, personalPin: 2, unchanged: 0,
     });
-    expect(report.changed + report.unchanged + report.personalOffice + report.officeDepartment).toBe(report.employees);
+    expect(report.changed + report.unchanged + report.personalPin + report.officeDepartment).toBe(report.employees);
   });
 });
 
@@ -170,10 +175,11 @@ describe('planAutoChanges: рабочие — «По СКУД» вместо о�
     expect(planAutoChanges([row(1, { worker: true, mode: 'skud', set_by: 'auto' })], tops)).toEqual([]);
   });
 
-  it('личный «Офис» и отдел с «Офисом» главнее правила рабочих', () => {
+  it('назначение из окна («Офис» или объект) и отдел с «Офисом» главнее правила рабочих', () => {
     const rows = [
-      row(1, { worker: true, mode: 'current_activity', set_by: null, personal_office: true }),
+      row(1, { worker: true, mode: 'current_activity', set_by: null, personal_pin: true }),
       row(2, { worker: true, office_department: true, mode: 'current_activity', set_by: 'auto' }),
+      row(3, { worker: true, mode: 'object', object_id: 'o-metro', set_by: null, personal_pin: true }),
     ];
     expect(planAutoChanges(rows, tops)).toEqual([]);
   });

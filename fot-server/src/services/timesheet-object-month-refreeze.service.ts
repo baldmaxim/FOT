@@ -5,7 +5,8 @@
  * «Офисом»; правило сняли позже — ночь текущий месяц пересчитывает, а зафиксированный
  * больше не трогает. Здесь фиксация месяца ставится по тому же правилу, что дала бы
  * ночная фиксация без «Офиса» отдела: объект с наибольшими часами за весь месяц (офисы —
- * суммой, как «Офис»), нет часов — фиксация прежняя, личный «Офис» не трогается. Рабочим
+ * суммой, как «Офис»), нет часов — фиксация прежняя, назначение из окна (личный «Офис» или
+ * объект) не трогается. Рабочим
  * (timesheet-object-worker-rule.ts) — «По СКУД» (skud/auto) независимо от часов, как ночью.
  *
  * Одна транзакция под локом режимов (TIMESHEET_MODE_LOCK_KEY — его же берут ночь и окно):
@@ -30,6 +31,7 @@ import {
 import {
   TIMESHEET_MODE_LOCK_KEY,
   currentMonthStartMsk,
+  frozenPersonalPinSql,
   toMonthStart,
   type TimesheetExportMode,
 } from './timesheet-export-mode.service.js';
@@ -48,8 +50,8 @@ export interface IFrozenMonthRow {
   mode: TimesheetExportMode | null;
   object_id: string | null;
   set_by: TimesheetObjectSetBy | null;
-  /** Личный «Офис» из окна «Режим табелирования», попавший в фиксацию. */
-  personal_office: boolean;
+  /** Назначение из окна «Режим табелирования» (личный «Офис» или объект), попавшее в фиксацию. */
+  personal_pin: boolean;
   /** Рабочий: фиксация — skud, а не объект по часам. */
   worker?: boolean;
 }
@@ -76,7 +78,7 @@ export function planMonthRefreeze(
 ): IRefreezeChange[] {
   const changes: IRefreezeChange[] = [];
   for (const row of rows) {
-    if (row.personal_office) continue;
+    if (row.personal_pin) continue;
     if (row.worker) {
       if (row.mode === 'skud' && row.set_by === 'auto') continue;
       changes.push({
@@ -121,7 +123,8 @@ export interface IRefreezeResult {
   /** Их id — для пересборки подач (повтор дочиняет и упавшую пересборку). */
   employeeIds: number[];
   withHours: number;
-  personalOffice: number;
+  /** Назначенные в окне — не трогаются. */
+  personalPin: number;
   /** Сотрудники отдела без строки фиксации месяца — не трогаются. */
   withoutFreezeRow: Array<{ id: number; fullName: string | null }>;
   changes: IRefreezeChange[];
@@ -151,15 +154,13 @@ async function loadDepartmentFreezeRows(
     mode: TimesheetExportMode | null;
     object_id: string | null;
     set_by: TimesheetObjectSetBy | null;
-    personal_office: boolean;
+    personal_pin: boolean;
   }>(
     `SELECT f.employee_id,
             f.mode,
             f.object_id::text AS object_id,
             f.set_by,
-            (f.mode IS NOT DISTINCT FROM 'current_activity'
-              AND f.set_by IS NULL
-              AND f.set_at IS NOT NULL) AS personal_office
+            ${frozenPersonalPinSql('f')} AS personal_pin
        FROM employee_timesheet_object_months f
       WHERE f.month = $1::date
         AND f.employee_id = ANY($2::int[])
@@ -183,7 +184,7 @@ async function loadDepartmentFreezeRows(
       mode: row.mode,
       object_id: row.object_id,
       set_by: row.set_by,
-      personal_office: row.personal_office,
+      personal_pin: row.personal_pin,
       worker: employee.worker,
     });
   }
@@ -204,9 +205,7 @@ async function applyRefreeze(client: PoolClient, month: string, changes: readonl
        FROM unnest($2::int[], $3::text[], $4::uuid[]) AS c(id, mode, object_id)
       WHERE f.employee_id = c.id
         AND f.month = $1::date
-        AND NOT (f.mode IS NOT DISTINCT FROM 'current_activity'
-                 AND f.set_by IS NULL
-                 AND f.set_at IS NOT NULL)
+        AND NOT ${frozenPersonalPinSql('f')}
       RETURNING f.employee_id`,
     [
       month,
@@ -275,7 +274,7 @@ export async function refreezeDepartmentMonth(options: {
       employees: rows.length,
       employeeIds: rows.map(row => row.employee_id),
       withHours: rows.filter(row => (tops.get(row.employee_id)?.length ?? 0) > 0).length,
-      personalOffice: rows.filter(row => row.personal_office).length,
+      personalPin: rows.filter(row => row.personal_pin).length,
       withoutFreezeRow,
       changes,
       appliedIds: [],

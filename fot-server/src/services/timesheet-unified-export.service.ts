@@ -13,6 +13,7 @@ import {
   resolveTransferSegmentsInPeriod,
 } from './timesheet-department-assignments.service.js';
 import type { IDayWindow } from './timesheet-day-windows.service.js';
+import { listWindowPinnedEmployeeIds } from './timesheet-export-mode.service.js';
 
 /** Бакет для сотрудников без определившегося подразделения за период. */
 export const UNIFIED_EXPORT_NO_DEPARTMENT_NAME = 'Без названия';
@@ -131,10 +132,12 @@ export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promi
   // Один bulk-прогон на всех (один attendance/skud-скан). excludeZeroActivity убирает
   // не «тех, у кого нет СКУД», а тех, у кого hasRealActivity=false (учитывает
   // корректировки, статусы, ручные часы, объектную активность). exempt только
-  // сохраняет уже загруженных — ростер не расширяет.
+  // сохраняет уже загруженных — ростер не расширяет. Назначенные в окне «Режим
+  // табелирования» (291) остаются и при всех «Н» — строкой назначенного объекта.
+  const windowPinnedIds = await listWindowPinnedEmployeeIds(allEmployeeIds, month);
   const bulk = await fetchTimesheetDataForEmployees(
     month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
-    { excludeZeroActivity: true, exemptEmployeeIds },
+    { excludeZeroActivity: true, exemptEmployeeIds: new Set([...exemptEmployeeIds, ...windowPinnedIds]) },
   );
 
   const collected: IDepartmentTimesheetData[] = buckets

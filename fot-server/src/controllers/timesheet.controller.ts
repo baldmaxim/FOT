@@ -117,6 +117,7 @@ import { syncLeaveRequestOnDayRemoval, syncLeaveRequestReason } from '../service
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { loadTimesheetObjectLabels } from '../services/employee-timesheet-object.service.js';
+import { listWindowPinnedEmployeeIds } from '../services/timesheet-export-mode.service.js';
 import { firedEligibleSql } from '../services/timesheet-fired-cutoff.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
@@ -2584,13 +2585,16 @@ export const timesheetController = {
       // synthetic 'remote' для сотрудников с schedule_type='remote' — это следствие
       // явно назначенного графика, не фантом) или зачтённые travel-сегменты.
       // Больничный/отпуск/удалёнка-по-заявке — настоящие adjustment-записи (id != null),
-      // такие сотрудники под фильтр не попадают. Self-карточка руководителя и строка(и)
-      // «Начальник участка» исключены из фильтрации явно.
+      // такие сотрудники под фильтр не попадают. Self-карточка руководителя, строка(и)
+      // «Начальник участка» и назначенные в окне «Режим табелирования» (291: в выгрузках для
+      // 1С они остаются и при всех «Н») исключены из фильтрации явно.
       if ((shouldApplyDeptFilter || isDirectReportsOnlyScope) && !includeEmpty) {
         const rosterMemberIds = new Set<number>([...departmentEmployeeIds, ...directReportIds]);
+        const windowPinnedIds = await listWindowPinnedEmployeeIds([...rosterMemberIds], startDate);
         const exemptIds = new Set<number>([
           ...(selfTimesheetId != null ? [selfTimesheetId] : []),
           ...supervisorIds,
+          ...windowPinnedIds,
         ]);
 
         const idsWithRealActivity = new Set<number>();

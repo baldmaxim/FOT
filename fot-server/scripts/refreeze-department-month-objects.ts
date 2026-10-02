@@ -55,8 +55,8 @@ const main = async (): Promise<void> => {
   console.log(`${prefix}отдел «${result.departmentName}», месяц ${result.month}`);
   console.log(`${prefix}сотрудников со строкой фиксации: ${result.employees}, с часами на объектах: ${result.withHours}`);
   console.log(`${prefix}изменится: ${result.changes.length} (объект — ${result.changes.length - toOffice}, «Офис» — ${toOffice})`);
-  console.log(`${prefix}без изменений (нет часов или объект тот же): ${result.employees - result.changes.length - result.personalOffice}`);
-  console.log(`${prefix}личный «Офис» — не трогаем: ${result.personalOffice}`);
+  console.log(`${prefix}без изменений (нет часов или объект тот же): ${result.employees - result.changes.length - result.personalPin}`);
+  console.log(`${prefix}назначение из окна («Офис» или объект) — не трогаем: ${result.personalPin}`);
   if (result.withoutFreezeRow.length > 0) {
     console.log(`${prefix}без строки фиксации (не трогаем): ${result.withoutFreezeRow.map(row => `${row.id} ${row.fullName ?? ''}`).join(', ')}`);
   }

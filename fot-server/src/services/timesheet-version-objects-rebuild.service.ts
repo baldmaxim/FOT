@@ -6,6 +6,10 @@
  * новую revision (source = 'objects') — часы и content_hash прежние, разбивка по
  * зафиксированному объекту. 1С видит подачу устаревшей и перезабирает её.
  *
+ * После записи в окне «Режим табелирования» (291) — сразу, адресно: утверждённые подачи
+ * текущего месяца с изменёнными сотрудниками получают их новый объект (onlyListedEmployees —
+ * только у них, соседи по подаче ждут фиксации месяца).
+ *
  * Каждая подача — своя транзакция под теми же локами (сотрудник, месяц) и
  * FOR UPDATE, что утверждение. Сбой одной не мешает остальным; повтор — no-op.
  */
@@ -57,7 +61,12 @@ export interface IRebuildMonthResult {
  */
 export async function rebuildVersionObjectsForMonth(
   month: string,
-  options: { employeeIds?: readonly number[] } = {},
+  options: {
+    /** Только подачи с этими сотрудниками. */
+    employeeIds?: readonly number[];
+    /** Разбивку и zero_activity менять только у employeeIds. */
+    onlyListedEmployees?: boolean;
+  } = {},
 ): Promise<IRebuildMonthResult> {
   if (options.employeeIds && options.employeeIds.length === 0) return { approvals: 0, created: 0, failures: 0 };
   const approvals = await query<IApprovalRow>(
@@ -105,7 +114,12 @@ export async function rebuildVersionObjectsForMonth(
         if (!locked || !isRebuildableApproval(locked)) {
           return { created: false, revision: null, changedEmployeeIds: [] as number[] };
         }
-        return rebuildVersionObjects(client, toVersionApproval(locked), null);
+        return rebuildVersionObjects(
+          client,
+          toVersionApproval(locked),
+          null,
+          options.onlyListedEmployees && options.employeeIds ? { onlyEmployeeIds: options.employeeIds } : {},
+        );
       });
 
       if (result.created) {

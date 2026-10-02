@@ -15,6 +15,7 @@ vi.mock('../config/postgres.js', () => ({ query: pgQuery }));
 
 import {
   exportModePairKey,
+  listWindowPinnedEmployeeIds,
   resolveExportModes,
   resolveExportModesForPairs,
   resolveRow,
@@ -57,6 +58,33 @@ describe('resolveRow — приоритет источников', () => {
     expect(resolveRow(row({ emp_mode: 'skud', emp_set_by: 'auto' })).setBy).toBe('auto');
     expect(resolveRow(row({ emp_mode: 'skud', emp_set_by: null })).setBy).toBeUndefined();
     expect(resolveRow(row({ emp_set_by: 'auto' })).setBy).toBeUndefined();
+  });
+  it('назначение из окна — только у личного режима и только true', () => {
+    expect(resolveRow(row({ emp_mode: 'object', emp_object_id: 'obj-1', emp_window_pin: true })).windowPin).toBe(true);
+    expect(resolveRow(row({ emp_mode: 'object', emp_object_id: 'obj-1', emp_window_pin: false }))).not.toHaveProperty('windowPin');
+    expect(resolveRow(row({ dept_current_activity: true, emp_window_pin: true }))).not.toHaveProperty('windowPin');
+  });
+});
+
+describe('признак назначения из окна в SQL', () => {
+  it('живой режим — из employees, прошедший месяц — из строки фиксации', async () => {
+    await resolveExportModes([1]);
+    expect(String(pgQuery.mock.calls[0]?.[0])).toContain('e.timesheet_export_set_at IS NOT NULL');
+
+    pgQuery.mockClear();
+    await resolveExportModes([1], undefined, { month: '2026-08', now: new Date('2026-10-02T12:00:00+03:00') });
+    const sql = String(pgQuery.mock.calls[0]?.[0]);
+    expect(sql).toContain('CASE WHEN f.employee_id IS NOT NULL THEN (f.set_by IS NULL');
+    expect(sql).toContain('AS emp_window_pin');
+  });
+
+  it('listWindowPinnedEmployeeIds — только назначенные', async () => {
+    pgQuery.mockResolvedValue([
+      { employee_id: 1, emp_mode: 'object', emp_object_id: 'obj-1', emp_window_pin: true, dept_current_activity: false },
+      { employee_id: 2, emp_mode: 'object', emp_object_id: 'obj-1', emp_set_by: 'auto', emp_window_pin: false, dept_current_activity: false },
+      { employee_id: 3, emp_mode: 'current_activity', emp_object_id: null, emp_window_pin: true, dept_current_activity: false },
+    ]);
+    expect([...await listWindowPinnedEmployeeIds([1, 2, 3], null)]).toEqual([1, 3]);
   });
 });
 

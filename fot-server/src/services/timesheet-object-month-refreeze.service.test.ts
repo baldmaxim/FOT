@@ -17,7 +17,7 @@ const {
 type Row = Parameters<typeof planMonthRefreeze>[0][number];
 const row = (id: number, over: Partial<Row> = {}): Row => ({
   employee_id: id, full_name: `Сотрудник ${id}`, mode: 'current_activity', object_id: null, set_by: 'auto',
-  personal_office: false, ...over,
+  personal_pin: false, ...over,
 });
 const top = (value: string, hours: number, label = value) => ({
   value, label, objectId: value === 'office' ? null : value, hours,
@@ -47,8 +47,11 @@ describe('planMonthRefreeze', () => {
     expect(planMonthRefreeze([row(9)], tops)).toEqual([]);
   });
 
-  it('личный «Офис» из окна — не трогаем даже при часах на объекте', () => {
-    expect(planMonthRefreeze([row(3, { set_by: null, personal_office: true })], tops)).toEqual([]);
+  it('назначение из окна — «Офис» или объект — не трогаем даже при часах на другом объекте', () => {
+    expect(planMonthRefreeze([
+      row(3, { set_by: null, personal_pin: true }),
+      row(1, { mode: 'object', object_id: 'o-metro', set_by: null, personal_pin: true }),
+    ], tops)).toEqual([]);
   });
 
   it('объект уже тот же и источник auto — повтор no-op', () => {
@@ -66,7 +69,8 @@ describe('planMonthRefreeze', () => {
       row(1, { worker: true, mode: 'object', object_id: 'o-dom' }),
       row(9, { worker: true, mode: null, set_by: null }),
       row(5, { worker: true, mode: 'skud' }),
-      row(3, { worker: true, set_by: null, personal_office: true }),
+      row(3, { worker: true, set_by: null, personal_pin: true }),
+      row(4, { worker: true, mode: 'object', object_id: 'o-metro', set_by: null, personal_pin: true }),
     ], tops);
     expect(changes.map(c => [c.employeeId, c.toMode, c.toObjectId, c.label])).toEqual([
       [1, 'skud', null, 'По СКУД'],

@@ -2,12 +2,14 @@
  * Авторасчёт объекта табелирования и фиксация месяцев (миграция 288).
  *
  * Объект = где у своего сотрудника больше всего часов с 1-го числа месяца (офисы —
- * суммой, как «Офис»). Пересчитываются все свои работающие сотрудники, кроме «Офиса» из
- * окна «Режим табелирования» (миграция 291): личный «Офис» не трогается никогда. Нет часов
- * на объектах — объект прежний. Правило одно для ночи, фиксации месяца и скрипта.
+ * суммой, как «Офис»). Пересчитываются все свои работающие сотрудники, кроме назначенных
+ * в окне «Режим табелирования» (миграция 291): личный «Офис» или объект не трогается
+ * никогда — ни часами на других объектах, ни правилом рабочих. Нет часов на объектах —
+ * объект прежний. Правило одно для ночи, фиксации месяца и скрипта.
  *
  * Сотрудники отделов с «Офисом» (291) в расчёт по часам не идут: им правило отдела ставит
- * «Офис» при любом источнике — одинаково в пересчёте, фиксации месяца и активации.
+ * «Офис» при любом источнике, кроме личного назначения из окна (оно главнее отдела), —
+ * одинаково в пересчёте, фиксации месяца и активации.
  *
  * Рабочим (роль «Рабочий» или бригадник без учётки, timesheet-object-worker-rule.ts) объект
  * по часам не ставится: режим skud, set_by = 'auto' — разбивка по фактическим проходам, как
@@ -46,7 +48,7 @@ import {
 import {
   enforceOfficeForDepartments,
   officeRuleAuditEntries,
-  personalOfficeSql,
+  personalPinSql,
   writeOfficeAudit,
 } from './timesheet-office-rule.js';
 import { WORKER_SKUD_LABEL, loadBrigadeDepartmentIds, workerSql } from './timesheet-object-worker-rule.js';
@@ -61,8 +63,8 @@ export interface IEmployeeModeRow {
   set_by: TimesheetObjectSetBy | null;
   /** Отдел сотрудника с «Офисом» (291): объект ставит правило отдела, не часы. */
   office_department: boolean;
-  /** Личный «Офис» из окна «Режим табелирования» (291). */
-  personal_office: boolean;
+  /** Назначение из окна «Режим табелирования» (291) — личный «Офис» или объект. */
+  personal_pin: boolean;
   /** Рабочий: объект не по часам, а skud (timesheet-object-worker-rule.ts). */
   worker: boolean;
 }
@@ -79,9 +81,9 @@ export interface IAutoChange {
   hours: number;
 }
 
-/** Трогает ли расчёт строку: всех, кроме личного «Офиса» из окна «Режим табелирования». */
-export function isAutoCandidate(row: { personal_office?: boolean }): boolean {
-  return !row.personal_office;
+/** Трогает ли расчёт строку: всех, кроме назначенных в окне «Режим табелирования». */
+export function isAutoCandidate(row: { personal_pin?: boolean }): boolean {
+  return !row.personal_pin;
 }
 
 /** Цель по объекту с максимумом часов. */
@@ -143,7 +145,7 @@ export interface IAutoReport {
   employees: number;
   /** С часами на объектах — среди тех, кому объект ставится по часам (рабочих не считаем). */
   withHours: number;
-  /** Рабочие, которым расчёт ставит skud (без личного «Офиса» и отделов с «Офисом»). */
+  /** Рабочие, которым расчёт ставит skud (без назначенных в окне и отделов с «Офисом»). */
   workers: number;
   changed: number;
   toOffice: number;
@@ -158,9 +160,9 @@ export interface IAutoReport {
   fromChoice: number;
   fromAuto: number;
   unchanged: number;
-  /** Личный «Офис» из окна «Режим табелирования» — не трогается. */
-  personalOffice: number;
-  /** Сотрудники отделов с «Офисом»: объект ставит правило отдела (291). */
+  /** Назначение из окна «Режим табелирования» — «Офис» или объект, не трогается (и в отделе с «Офисом»). */
+  personalPin: number;
+  /** Сотрудники отделов с «Офисом» без личного назначения: объект ставит правило отдела (291). */
   officeDepartment: number;
 }
 
@@ -184,8 +186,8 @@ export function summarizeAutoChanges(
     fromChoice: 0,
     fromAuto: 0,
     unchanged: 0,
-    personalOffice: rows.filter(row => !row.office_department && !isAutoCandidate(row)).length,
-    officeDepartment: rows.filter(row => row.office_department).length,
+    personalPin: rows.filter(row => !isAutoCandidate(row)).length,
+    officeDepartment: rows.filter(row => row.office_department && isAutoCandidate(row)).length,
   };
   for (const change of changes) {
     if (change.fromSetBy === 'auto') report.fromAuto += 1;
@@ -196,8 +198,8 @@ export function summarizeAutoChanges(
     else report.fromAdminOffice += 1;
   }
   // Кандидаты, у которых объект остаётся (нет часов или цель совпала); вместе с изменёнными,
-  // личным «Офисом» и отделами с «Офисом» — все сотрудники.
-  report.unchanged = report.employees - report.changed - report.personalOffice - report.officeDepartment;
+  // назначенными в окне и отделами с «Офисом» — все сотрудники.
+  report.unchanged = report.employees - report.changed - report.personalPin - report.officeDepartment;
   return report;
 }
 
@@ -267,7 +269,7 @@ export async function loadOwnActiveEmployees(
             e.timesheet_export_object_id::text  AS object_id,
             e.timesheet_export_set_by           AS set_by,
             (tod.org_department_id IS NOT NULL) AS office_department,
-            ${personalOfficeSql('e')}           AS personal_office,
+            ${personalPinSql('e')}              AS personal_pin,
             ${workerSql('e', '$2')}             AS worker
        FROM employees e
        LEFT JOIN timesheet_office_departments tod ON tod.org_department_id = e.org_department_id
@@ -294,7 +296,7 @@ export async function applyChanges(client: PoolClient, changes: readonly IAutoCh
        FROM unnest($1::int[], $2::text[], $3::uuid[]) AS c(id, mode, object_id)
       WHERE e.id = c.id
         AND e.is_archived = false
-        AND NOT ${personalOfficeSql('e')}
+        AND NOT ${personalPinSql('e')}
       RETURNING e.id`,
     [
       changes.map(change => change.employeeId),

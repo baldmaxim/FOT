@@ -1,13 +1,14 @@
 /**
- * «Офис» из окна «Режим табелирования» (миграция 291) — общее правило для ночного расчёта
- * и окна.
+ * Окно «Режим табелирования» (миграция 291) — общее правило для ночного расчёта и окна.
  *
- * Личный «Офис» хранится в полях сотрудника: current_activity, set_by = NULL и автор (289).
- * «Офис» отдела — строка timesheet_office_departments: всем прямым своим работающим
- * сотрудникам отдела объект «Офис» с set_by = 'auto'. Подотделы правило не получают.
- * Отдел главнее личного: в отделе с «Офисом» личного «Офиса» не бывает — правило его
- * переводит, окно не ставит. Кому «Офис» поставлен в окне — лично или через отдел, — тому
- * ночной расчёт объект по часам не ставит.
+ * Назначение конкретному сотруднику — личный «Офис» или объект — хранится в полях
+ * сотрудника: current_activity или object + id, set_by = NULL и автор (289), признак —
+ * personalPinSql. «Офис» отдела — строка timesheet_office_departments: всем прямым своим
+ * работающим сотрудникам отдела объект «Офис» с set_by = 'auto'. Подотделы правило не
+ * получают. Личное назначение главнее отдела: правило отдела его не трогает — ни при
+ * постановке «Офиса» отделу, ни при переводе в такой отдел; снято — сотрудник получает
+ * «Офис» отдела. Кому объект поставлен в окне — лично или через отдел, — тому ночной расчёт
+ * объект по часам не ставит.
  *
  * SQL собирается функциями, а AUDIT_ACTIONS читается только внутри функций: тесты с моком
  * audit.service без новых ключей грузят этот модуль транзитивно.
@@ -15,12 +16,15 @@
 import type { Request } from 'express';
 import type { PoolClient } from 'pg';
 import { AUDIT_ACTIONS, auditService } from './audit.service.js';
-import type { TimesheetExportMode } from './timesheet-export-mode.service.js';
+import { frozenPersonalPinSql, personalPinSql, type TimesheetExportMode } from './timesheet-export-mode.service.js';
 import type { TimesheetObjectSetBy } from './employee-timesheet-object.service.js';
 
+export { frozenPersonalPinSql, personalPinSql };
+
 /**
- * Личный «Офис» из окна. По set_by_user_id не проверяем: при удалении учётки FK его
- * обнуляет, а дата остаётся. NULL-безопасно: у строки без режима — false, а не NULL.
+ * Личный «Офис» из окна — только «Офис», без объектов: для исторического скрипта
+ * apply-office-window-month. Остальным путям — personalPinSql. По set_by_user_id не
+ * проверяем: при удалении учётки FK его обнуляет, а дата остаётся. NULL-безопасно.
  */
 export function personalOfficeSql(alias: string): string {
   return `(${alias}.timesheet_export_mode IS NOT DISTINCT FROM 'current_activity'
@@ -55,9 +59,9 @@ interface IOfficeRuleRow {
 
 /**
  * «Офис» отдела: прямым своим работающим сотрудникам отделов с правилом — current_activity,
- * set_by = 'auto' (автора обнулит триггер 289). Уже «Офис» от авто не трогается; всё
- * остальное — любой источник, в том числе ручной выбор и личный «Офис», — перебивается:
- * пока сотрудник в отделе с «Офисом», другого объекта у него нет.
+ * set_by = 'auto' (автора обнулит триггер 289). Уже «Офис» от авто и личное назначение из
+ * окна («Офис» или объект) не трогаются; всё остальное — любой источник, в том числе
+ * прежний ручной выбор, — перебивается.
  *
  * Строки — FOR UPDATE по возрастанию id, условия повторены в UPDATE. Транзакция и лок
  * режимов (TIMESHEET_MODE_LOCK_KEY) — у вызывающего.
@@ -71,7 +75,8 @@ export async function enforceOfficeForDepartments(
   const eligible = `e.is_archived = false
         AND e.employment_status = 'active'
         AND NOT (e.org_department_id = ANY($1::uuid[]))
-        AND NOT ${autoOfficeSql('e')}`;
+        AND NOT ${autoOfficeSql('e')}
+        AND NOT ${personalPinSql('e')}`;
 
   const selected = (await client.query<IOfficeRuleRow>(
     `SELECT e.id,

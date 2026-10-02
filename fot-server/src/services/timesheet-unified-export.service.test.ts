@@ -100,6 +100,24 @@ describe('buildUnified1CBuffer', () => {
     expect(h.segments).toHaveBeenCalledWith([1, 2, 3], '2026-07-01', '2026-07-31');
   });
 
+  it('назначенные в окне «Режим табелирования» месяца — в exempt фильтра «пустых»', async () => {
+    h.pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('AS emp_window_pin')) {
+        return [
+          { employee_id: 2, emp_mode: 'object', emp_object_id: 'o-dom', emp_window_pin: true, dept_current_activity: false },
+          { employee_id: 3, emp_mode: 'object', emp_object_id: 'o-dom', emp_set_by: 'auto', emp_window_pin: false, dept_current_activity: false },
+        ];
+      }
+      return [{ id: 'D1', name: 'бр. Первая' }];
+    });
+    await buildUnified1CBuffer({
+      ...period,
+      memberByEmp: new Map([[1, 'D1'], [2, 'D1'], [3, 'D1']]),
+      exemptEmployeeIds: new Set([9]),
+    });
+    expect(h.fetchEmps.mock.calls[0][6]).toEqual({ excludeZeroActivity: true, exemptEmployeeIds: new Set([9, 2]) });
+  });
+
   it('сотрудники без отдела попадают в бакет «Без названия», null в SQL не уходит', async () => {
     h.pgQuery.mockResolvedValue([{ id: 'D1', name: 'бр. Первая' }]);
     await buildUnified1CBuffer({

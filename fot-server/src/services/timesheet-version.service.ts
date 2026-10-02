@@ -13,7 +13,7 @@ import type { DbExecutor } from '../config/postgres.js';
 import { canonicalJson } from '../utils/canonical-json.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
 import { buildFiredCutoffMap, isFiredHiddenForPeriod } from './timesheet-fired-cutoff.service.js';
-import { resolveExportModes } from './timesheet-export-mode.service.js';
+import { resolveExportModes, type IResolvedExportMode } from './timesheet-export-mode.service.js';
 import {
   buildVersionObjectBreakdown,
   computeObjectsContentHash,
@@ -82,7 +82,10 @@ export interface IVersionEmployee {
   };
   position: string | null;
   total_hours: number;
-  /** true — за период нет ни одного реального сигнала; 1С такие строки не переносит. */
+  /**
+   * true — за период нет ни одного реального сигнала; 1С такие строки не переносит.
+   * Начальникам участков и назначенным в окне «Режим табелирования» — false всегда.
+   */
   zero_activity: boolean;
   days: Record<string, IVersionDayValue>;
   /**
@@ -192,6 +195,22 @@ export function computeContentHash(payload: ITimesheetVersionPayload): string {
   return crypto.createHash('md5').update(canonicalJson(payload)).digest('hex');
 }
 
+/**
+ * zero_activity — одно правило для утверждения и пересборки: нет реального сигнала на своих
+ * днях, не начальник участка и не назначен в окне «Режим табелирования» (291) — назначенный
+ * уходит в 1С и при всех «Н», с объектом и нулём часов.
+ */
+export function isZeroActivity(
+  employeeId: number,
+  activeIds: ReadonlySet<number>,
+  supervisorIds: ReadonlySet<number>,
+  modeByEmployee: ReadonlyMap<number, IResolvedExportMode>,
+): boolean {
+  return !activeIds.has(employeeId)
+    && !supervisorIds.has(employeeId)
+    && modeByEmployee.get(employeeId)?.windowPin !== true;
+}
+
 /** Снимок объектной разбивки, собранный вместе с версией. */
 export interface IVersionObjectsSnapshot {
   payload: IVersionObjectsPayload;
@@ -241,6 +260,8 @@ async function collectOwnedObjectEntries(
 ): Promise<{
   objectEntries: IAttendanceObjectEntry[];
   ownsEmployeeDay: (employeeId: number, date: string) => boolean;
+  /** С реальным сигналом на своих днях — тот же критерий, что у zero_activity при утверждении. */
+  activeIds: Set<number>;
 }> {
   const ownedDays = new Map<number, Set<string>>(
     payload.employees.map(employee => [employee.identity.employee_id, new Set(Object.keys(employee.days))]),
@@ -250,6 +271,7 @@ async function collectOwnedObjectEntries(
   const employeeIds = [...ownedDays.keys()];
 
   const objectEntries: IAttendanceObjectEntry[] = [];
+  const activeIds = new Set<number>();
   for (const anchor of monthAnchorsInRange(approval.start_date, approval.end_date)) {
     const monthEnd = lastDayOfMonth(anchor);
     const bulk = await fetchTimesheetDataForEmployees(
@@ -264,13 +286,17 @@ async function collectOwnedObjectEntries(
       true,
       { rosterMode: 'snapshot', exec: client },
     );
+    for (const entry of bulk.entries) {
+      if (ownsEmployeeDay(entry.employee_id, entry.work_date) && hasRealActivity(entry)) activeIds.add(entry.employee_id);
+    }
     for (const entry of bulk.objectEntries) {
       if (!ownsEmployeeDay(entry.employee_id, entry.work_date)) continue;
       objectEntries.push(entry);
+      activeIds.add(entry.employee_id);
     }
   }
 
-  return { objectEntries, ownsEmployeeDay };
+  return { objectEntries, ownsEmployeeDay, activeIds };
 }
 
 /**
@@ -289,14 +315,16 @@ async function buildObjectsSnapshot(
   payload: ITimesheetVersionPayload,
   objectEntries: IAttendanceObjectEntry[],
   ownsEmployeeDay: (employeeId: number, date: string) => boolean,
-): Promise<IVersionObjectsSnapshot> {
-  const employeeIds = payload.employees.map(employee => employee.identity.employee_id);
+  resolvedModes?: Map<number, IResolvedExportMode>,
+): Promise<IVersionObjectsSnapshot & { modeByEmployee: Map<number, IResolvedExportMode> }> {
   // Режим — месяца подачи: для прошедшего месяца личный режим из фиксации (288).
   const { start_date: startDate, end_date: endDate } = payload.approval;
   if (startDate.slice(0, 7) !== endDate.slice(0, 7)) {
     throw new TimesheetVersionCrossMonthError(startDate, endDate);
   }
-  const modeByEmployee = await resolveExportModes(employeeIds, client, { month: startDate });
+  const modeByEmployee = resolvedModes ?? await resolveExportModes(
+    payload.employees.map(employee => employee.identity.employee_id), client, { month: startDate },
+  );
 
   // Адреса нужны и фактическим объектам, и закреплённым в режиме «объект»: без второго
   // слагаемого у сотрудника без проходов адрес не нашёлся бы и строка уехала бы в
@@ -342,6 +370,7 @@ async function buildObjectsSnapshot(
     configErrors: built.configErrors,
     employeesCount: built.employeesCount,
     totalHours: built.totalHours,
+    modeByEmployee,
   };
 }
 
@@ -631,6 +660,9 @@ export async function buildTimesheetPayload(
   const missing = snapshotIds.filter(id => !seenIds.has(id));
   if (missing.length > 0) throw new TimesheetVersionIncompleteError(missing);
 
+  // Режим — месяца подачи, один раз: нужен и zero_activity (назначенные в окне), и разбивке.
+  const modeByEmployee = await resolveExportModes(snapshotIds, client, { month: approval.start_date });
+
   const employees: IVersionEmployee[] = [...snapshotIds]
     .sort((a, b) => a - b)
     .map(employeeId => {
@@ -647,7 +679,7 @@ export async function buildTimesheetPayload(
         },
         position: info?.position ?? null,
         total_hours: Math.round(total * 100) / 100,
-        zero_activity: !activeIds.has(employeeId) && !supervisorIds.has(employeeId),
+        zero_activity: isZeroActivity(employeeId, activeIds, supervisorIds, modeByEmployee),
         days: dayMap,
         object_rows: [],
       };
@@ -673,7 +705,7 @@ export async function buildTimesheetPayload(
     employees,
   };
 
-  const objects = await buildObjectsSnapshot(client, payload, allObjectEntries, ownsEmployeeDay);
+  const objects = await buildObjectsSnapshot(client, payload, allObjectEntries, ownsEmployeeDay, modeByEmployee);
   const managers = await buildManagersSnapshot(client, approval, payload);
 
   return { payload, membershipWindows, objects, managers };
@@ -857,10 +889,12 @@ export async function materializeVersion(
 }
 
 /**
- * Что определяет строку сотрудника в разбивке: режим и, для «объекта», закреплённый
- * объект. У «объекта» без часов строк нет — признак только режим.
+ * Что определяет строку сотрудника в разбивке: режим и, для «объекта» и «Офиса», ключ
+ * строки. Без часов строк нет, кроме назначенных в окне «Режим табелирования»: у них строка
+ * с нулём часов — её появление или исчезновение тоже смена.
  */
 function objectsPinIdentity(employee: IVersionObjectsEmployee): string {
+  if (employee.mode === 'current_activity') return `current_activity:${employee.objects[0]?.object_key ?? ''}`;
   if (employee.mode !== 'object') return employee.mode;
   const pinned = employee.objects.find(row => row.object_key !== UNKNOWN_OBJECT_KEY)
     ?? employee.objects[0];
@@ -877,11 +911,13 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 export function mergeObjectsSnapshots(
   stored: { payload: IVersionObjectsPayload; configErrors: IObjectConfigError[] },
   fresh: IVersionObjectsSnapshot,
+  onlyEmployeeIds?: ReadonlySet<number>,
 ): IVersionObjectsSnapshot & { changedEmployeeIds: number[] } {
   const freshById = new Map(fresh.payload.employees.map(employee => [employee.employee_id, employee]));
   const changed = new Set<number>();
 
   const employees = stored.payload.employees.map(storedEmployee => {
+    if (onlyEmployeeIds && !onlyEmployeeIds.has(storedEmployee.employee_id)) return storedEmployee;
     const freshEmployee = freshById.get(storedEmployee.employee_id);
     if (!freshEmployee) return storedEmployee;
     if (objectsPinIdentity(storedEmployee) === objectsPinIdentity(freshEmployee)) return storedEmployee;
@@ -909,16 +945,23 @@ export function mergeObjectsSnapshots(
 /**
  * Новая редакция «только объекты» (миграция 288): после фиксации месяца подача,
  * закрытая раньше (1–15 число), получает объектную разбивку по зафиксированному
- * объекту. Payload и content_hash — прежние: часы не пересчитываются. Снимок
- * руководителей переносится из предыдущей редакции как есть.
+ * объекту; после записи в окне «Режим табелирования» (291) — сразу, по живому режиму.
+ * Часы не пересчитываются. Payload и content_hash прежние, кроме zero_activity назначенных
+ * в окне: им то же правило, что при утверждении (isZeroActivity) — назначенный уходит в 1С
+ * и при всех «Н». Снимок руководителей переносится из предыдущей редакции как есть.
+ *
+ * onlyEmployeeIds — разбивка и zero_activity меняются только у этих сотрудников (запись в
+ * окне); без него — у всех со сменой объекта, а zero_activity — у назначенных в окне. Остальные
+ * строки payload и разбивки — байт в байт: поздние события СКУД чужие строки не переключают.
  *
  * Вызывать под блокировкой подачи (SELECT … FOR UPDATE в той же транзакции), как
- * materializeVersion. Повтор — no-op: хэш совпадёт.
+ * materializeVersion. Повтор — no-op: оба хэша совпадут.
  */
 export async function rebuildVersionObjects(
   client: PoolClient,
   approval: IVersionApproval,
   actorUserId: string | null,
+  options: { onlyEmployeeIds?: readonly number[] } = {},
 ): Promise<{ created: boolean; revision: number | null; changedEmployeeIds: number[] }> {
   const latest = (await client.query<{
     id: number;
@@ -951,15 +994,38 @@ export async function rebuildVersionObjects(
     return { created: false, revision: null, changedEmployeeIds: [] };
   }
 
-  const fresh = await buildObjectsSnapshotForVersion(client, approval, latest.payload);
+  const only = options.onlyEmployeeIds ? new Set(options.onlyEmployeeIds) : undefined;
+  const { objectEntries, ownsEmployeeDay, activeIds } = await collectOwnedObjectEntries(client, approval, latest.payload);
+  const fresh = await buildObjectsSnapshot(client, latest.payload, objectEntries, ownsEmployeeDay);
   const merged = mergeObjectsSnapshots(
     {
       payload: latest.objects_payload,
       configErrors: Array.isArray(latest.config_errors) ? latest.config_errors : [],
     },
     fresh,
+    only,
   );
-  if (merged.changedEmployeeIds.length === 0 || merged.hash === latest.objects_content_hash) {
+  const objectsChanged = merged.changedEmployeeIds.length > 0 && merged.hash !== latest.objects_content_hash;
+
+  const zeroCandidates = only ?? new Set(
+    [...fresh.modeByEmployee].filter(([, resolved]) => resolved.windowPin).map(([id]) => id),
+  );
+  const supervisorIds = zeroCandidates.size > 0 && approval.department_id
+    ? await listBrigadeSupervisorEmployeeIdsForDepartments([approval.department_id], client)
+    : new Set<number>();
+  const zeroChanged: number[] = [];
+  const employees = latest.payload.employees.map(employee => {
+    const employeeId = employee.identity.employee_id;
+    if (!zeroCandidates.has(employeeId)) return employee;
+    const zeroActivity = isZeroActivity(employeeId, activeIds, supervisorIds, fresh.modeByEmployee);
+    if (zeroActivity === employee.zero_activity) return employee;
+    zeroChanged.push(employeeId);
+    return { ...employee, zero_activity: zeroActivity };
+  });
+  const payload = zeroChanged.length > 0 ? { ...latest.payload, employees } : latest.payload;
+  const contentHash = zeroChanged.length > 0 ? computeContentHash(payload) : latest.content_hash;
+
+  if (!objectsChanged && contentHash === latest.content_hash) {
     return { created: false, revision: null, changedEmployeeIds: [] };
   }
 
@@ -974,8 +1040,8 @@ export async function rebuildVersionObjects(
     [
       approval.id,
       nextRevision,
-      latest.content_hash,
-      JSON.stringify(latest.payload),
+      contentHash,
+      JSON.stringify(payload),
       latest.scope_kind,
       approval.department_id,
       approval.manager_employee_id,
@@ -1002,7 +1068,8 @@ export async function rebuildVersionObjects(
     [inserted.id, latest.id],
   );
 
-  return { created: true, revision: nextRevision, changedEmployeeIds: merged.changedEmployeeIds };
+  const changedEmployeeIds = [...new Set([...merged.changedEmployeeIds, ...zeroChanged])].sort((a, b) => a - b);
+  return { created: true, revision: nextRevision, changedEmployeeIds };
 }
 
 /** Сохранённая редакция со снимками — вход адресного удаления сотрудников. */

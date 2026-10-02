@@ -11,12 +11,28 @@ import {
   resolveAccessibleDepartmentIds,
   resolveWritableScopedDepartmentIds,
 } from './data-scope.service.js';
-import { loadContractorDepartmentIds, loadTimesheetObjectLabels } from './employee-timesheet-object.service.js';
-import { personalOfficeSql } from './timesheet-office-rule.js';
+import {
+  OFFICE_LABEL,
+  isOfficeAddress,
+  loadContractorDepartmentIds,
+  loadSkudObjects,
+  loadTimesheetObjectLabels,
+  type ISkudObjectInfo,
+} from './employee-timesheet-object.service.js';
+import { personalOfficeSql, personalPinSql } from './timesheet-office-rule.js';
 import { TimesheetOfficeError } from './timesheet-office.service.js';
 
 const SEARCH_LIMIT = 20;
 const SEARCH_MIN_LENGTH = 2;
+const collator = new Intl.Collator('ru');
+
+/** Личное назначение из окна: 'office', id объекта или null — не назначено. */
+export type TimesheetOfficeAssignment = 'office' | string | null;
+
+/** SQL личного назначения сотрудника e: 'office', id объекта или NULL. */
+const ASSIGNMENT_SQL = `CASE WHEN NOT ${personalPinSql('e')} THEN NULL
+            WHEN e.timesheet_export_mode = 'object' THEN e.timesheet_export_object_id::text
+            ELSE 'office' END`;
 
 export interface ITimesheetOfficeDepartment {
   id: string;
@@ -30,13 +46,25 @@ export interface ITimesheetOfficeEmployee {
   department: string | null;
 }
 
+export interface ITimesheetOfficeAssignedEmployee extends ITimesheetOfficeEmployee {
+  /** Что назначено: «Офис» или имя объекта. */
+  label: string;
+}
+
+export interface ITimesheetOfficeObject {
+  id: string;
+  name: string;
+}
+
 export interface ITimesheetOfficeState {
   /** Отделы, которые можно выбрать: активные, не подрядные, в скоупе записи. */
   allowed_department_ids: string[];
   /** Отделы с «Офисом». */
   departments: ITimesheetOfficeDepartment[];
-  /** Сотрудники с личным «Офисом». */
-  employees: ITimesheetOfficeEmployee[];
+  /** Сотрудники с личным назначением — «Офис» или объект. */
+  employees: ITimesheetOfficeAssignedEmployee[];
+  /** Объекты, которые можно назначить: действующие, без офисных (для них — «Офис»). */
+  objects: ITimesheetOfficeObject[];
 }
 
 export interface ITimesheetOfficeMember {
@@ -46,11 +74,13 @@ export interface ITimesheetOfficeMember {
   label: string | null;
   /** Личный «Офис» из окна. */
   personal_office: boolean;
+  /** Личное назначение из окна: 'office', id объекта или null. */
+  personal_assignment: TimesheetOfficeAssignment;
 }
 
 export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
   department: string | null;
-  /** У отдела сотрудника «Офис»: личный не ставится, отдел главнее. */
+  /** У отдела сотрудника «Офис» (справочно: личное назначение главнее отдела). */
   department_office: boolean;
 }
 
@@ -102,21 +132,39 @@ export async function getTimesheetOfficeState(req: AuthenticatedRequest): Promis
       ORDER BY d.name, d.id`,
   )).filter(row => inReadScope(row.id));
 
-  const employees = (await query<ITimesheetOfficeEmployee & { department_id: string | null }>(
-    `SELECT e.id,
-            e.full_name,
-            e.org_department_id::text AS department_id,
-            d.name AS department
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-      WHERE e.is_archived = false
-        AND ${personalOfficeSql('e')}
-      ORDER BY e.full_name, e.id`,
-  ))
+  const [assignedRows, objectsById] = await Promise.all([
+    query<ITimesheetOfficeEmployee & { department_id: string | null; object_id: string | null }>(
+      `SELECT e.id,
+              e.full_name,
+              e.org_department_id::text AS department_id,
+              d.name AS department,
+              CASE WHEN e.timesheet_export_mode = 'object' THEN e.timesheet_export_object_id::text END AS object_id
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.is_archived = false
+          AND ${personalPinSql('e')}
+        ORDER BY e.full_name, e.id`,
+    ),
+    loadSkudObjects(),
+  ]);
+  const employees = assignedRows
     .filter(row => inReadScope(row.department_id))
-    .map(row => ({ id: Number(row.id), full_name: row.full_name, department: row.department }));
+    .map(row => ({
+      id: Number(row.id),
+      full_name: row.full_name,
+      department: row.department,
+      label: row.object_id ? (objectsById.get(row.object_id)?.name ?? row.object_id) : OFFICE_LABEL,
+    }));
 
-  return { allowed_department_ids: allowed, departments, employees };
+  return { allowed_department_ids: allowed, departments, employees, objects: assignableObjects(objectsById) };
+}
+
+/** Объекты для назначения: действующие, без офисных адресов, по алфавиту. */
+function assignableObjects(objectsById: ReadonlyMap<string, ISkudObjectInfo>): ITimesheetOfficeObject[] {
+  return [...objectsById.values()]
+    .filter(object => object.is_active && !isOfficeAddress(object.alt_name))
+    .map(object => ({ id: object.id, name: object.name }))
+    .sort((a, b) => collator.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** GET /api/admin/timesheet-office/employees?search= — подсказки для «Поиска по ФИО». */
@@ -184,8 +232,13 @@ export async function getTimesheetOfficeDepartmentMembers(
     throw new TimesheetOfficeError(403, 'TIMESHEET_OFFICE_FORBIDDEN', 'Отдел вне вашего доступа', { departments: [departmentId] });
   }
 
-  const rows = (await query<{ id: number | string; full_name: string; personal_office: boolean }>(
-    `SELECT e.id, e.full_name, ${personalOfficeSql('e')} AS personal_office
+  const rows = (await query<{
+    id: number | string;
+    full_name: string;
+    personal_office: boolean;
+    personal_assignment: TimesheetOfficeAssignment;
+  }>(
+    `SELECT e.id, e.full_name, ${personalOfficeSql('e')} AS personal_office, ${ASSIGNMENT_SQL} AS personal_assignment
        FROM employees e
       WHERE e.org_department_id = $1::uuid
         AND e.is_archived = false
@@ -202,6 +255,7 @@ export async function getTimesheetOfficeDepartmentMembers(
       full_name: row.full_name,
       label: labels.get(row.id) ?? null,
       personal_office: row.personal_office === true,
+      personal_assignment: row.personal_assignment ?? null,
     })),
   };
 }
@@ -220,6 +274,7 @@ export async function getTimesheetOfficeEmployee(
       org_department_id: string | null;
       department: string | null;
       personal_office: boolean;
+      personal_assignment: TimesheetOfficeAssignment;
       department_office: boolean;
     }>(
       `SELECT e.id,
@@ -229,6 +284,7 @@ export async function getTimesheetOfficeEmployee(
               e.org_department_id::text AS org_department_id,
               d.name AS department,
               ${personalOfficeSql('e')} AS personal_office,
+              ${ASSIGNMENT_SQL} AS personal_assignment,
               EXISTS (SELECT 1 FROM timesheet_office_departments tod
                        WHERE tod.org_department_id = e.org_department_id) AS department_office
          FROM employees e
@@ -255,6 +311,7 @@ export async function getTimesheetOfficeEmployee(
     department: row.department,
     label: labels.get(id) ?? null,
     personal_office: row.personal_office === true,
+    personal_assignment: row.personal_assignment ?? null,
     department_office: row.department_office === true,
   };
 }

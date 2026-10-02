@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Окно «Режим табелирования» (миграция 291): порядок 400 → 403 → 409, запись «Офиса»
- * отделу и сотруднику, отдел главнее личного, снятие с пересчётом по часам, повтор без
- * изменений, гонки и повтор транзакции; чтение — состояние, поиск, сотрудники отдела.
+ * отделу и сотруднику, объекта сотруднику, отдел главнее личного, снятие с пересчётом по
+ * часам, повтор без изменений, пересборка подач текущего месяца, гонки и повтор транзакции;
+ * чтение — состояние, поиск, сотрудники отдела.
  */
 
 const h = vi.hoisted(() => ({
@@ -21,6 +22,8 @@ const h = vi.hoisted(() => ({
   writeAudit: vi.fn(),
   recompute: vi.fn(),
   labels: vi.fn(),
+  skudObjects: vi.fn(),
+  rebuild: vi.fn(),
   invalidateCaches: vi.fn(),
   cacheClear: vi.fn(),
 }));
@@ -38,6 +41,7 @@ vi.mock('./employee-timesheet-object.service.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./employee-timesheet-object.service.js')>()),
   loadContractorDepartmentIds: h.contractors,
   loadTimesheetObjectLabels: h.labels,
+  loadSkudObjects: h.skudObjects,
   readTimesheetObjectState: h.state,
 }));
 vi.mock('./timesheet-office-rule.js', async importOriginal => ({
@@ -46,6 +50,7 @@ vi.mock('./timesheet-office-rule.js', async importOriginal => ({
   writeOfficeAudit: h.writeAudit,
 }));
 vi.mock('./timesheet-object-recompute.service.js', () => ({ recomputeTimesheetObjectsNow: h.recompute }));
+vi.mock('./timesheet-version-objects-rebuild.service.js', () => ({ rebuildVersionObjectsForMonth: h.rebuild }));
 
 const { TimesheetOfficeError, updateTimesheetOffice } = await import('./timesheet-office.service.js');
 const {
@@ -61,17 +66,36 @@ const DEPT2 = '33333333-3333-4333-8333-333333333333';
 const CONTRACTOR_DEPT = '22222222-2222-4222-8222-222222222222';
 const req = { user: { id: 'user-1' }, ip: '1.1.1.1', headers: {}, socket: {} } as never;
 
+const O_DOM = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const O_METRO = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const O_OLD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const O_OFFICE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const SKUD_OBJECTS = new Map([
+  [O_DOM, { id: O_DOM, name: 'ЖК Дом 56', alt_name: 'Фридриха Энгельса ул., 56', is_active: true }],
+  [O_METRO, { id: O_METRO, name: 'ЖК Метрополия', alt_name: 'Волгоградский пр-т, 32', is_active: true }],
+  [O_OLD, { id: O_OLD, name: 'Старый объект', alt_name: 'Адрес', is_active: false }],
+  [O_OFFICE, { id: O_OFFICE, name: 'Офис Полковая', alt_name: 'Текущая деятельность', is_active: true }],
+]);
+
 const empty = { departments: { add: [], remove: [] }, employees: { add: [], remove: [] } };
-const input = (over: Partial<{ dAdd: string[]; dRemove: string[]; eAdd: number[]; eRemove: number[] }>) => ({
+const input = (over: Partial<{
+  dAdd: string[]; dRemove: string[]; eAdd: number[]; eRemove: number[];
+  eObjects: Array<{ id: number; object_id: string }>;
+}>) => ({
   departments: { add: over.dAdd ?? [], remove: over.dRemove ?? [] },
-  employees: { add: over.eAdd ?? [], remove: over.eRemove ?? [] },
+  employees: { add: over.eAdd ?? [], remove: over.eRemove ?? [], objects: over.eObjects ?? [] },
 });
 
 type EmployeeRow = Record<string, unknown>;
 const employee = (id: number, over: EmployeeRow = {}): EmployeeRow => ({
   id, full_name: `Сотрудник ${id}`, is_archived: false, employment_status: 'active',
-  org_department_id: DEPT, mode: 'object', object_id: 'o-dom', set_by: 'auto', personal_office: false, ...over,
+  org_department_id: DEPT, mode: 'object', object_id: O_DOM, set_by: 'auto', personal_office: false,
+  personal_pin: false, ...over,
 });
+/** Личный «Офис» из окна. */
+const officePin = { mode: 'current_activity', object_id: null, set_by: null, personal_office: true, personal_pin: true };
+/** Объект из окна. */
+const objectPin = (objectId: string) => ({ mode: 'object', object_id: objectId, set_by: null, personal_pin: true });
 
 /** Строки для проверок до транзакции и под FOR UPDATE; lockedRows — если состояние «уплыло». */
 function setup(options: {
@@ -84,6 +108,7 @@ function setup(options: {
   insertedDepartments?: string[];
   deletedDepartments?: string[];
   updatedAdd?: number[];
+  updatedObjects?: number[];
   updatedRemove?: number[];
   departmentMembers?: number[];
 } = {}) {
@@ -114,6 +139,9 @@ function setup(options: {
     if (sql.includes("SET timesheet_export_set_by = 'auto'")) {
       return { rows: (options.updatedRemove ?? []).map(id => ({ id })) };
     }
+    if (sql.includes("SET timesheet_export_mode = 'object'")) {
+      return { rows: (options.updatedObjects ?? []).map(id => ({ id })) };
+    }
     if (sql.includes('timesheet_export_set_by = NULL')) {
       return { rows: (options.updatedAdd ?? []).map(id => ({ id })) };
     }
@@ -134,6 +162,8 @@ beforeEach(() => {
   h.writeAudit.mockResolvedValue(undefined);
   h.recompute.mockResolvedValue([]);
   h.labels.mockResolvedValue(new Map());
+  h.skudObjects.mockResolvedValue(SKUD_OBJECTS);
+  h.rebuild.mockResolvedValue({ approvals: 0, created: 0, failures: 0 });
   setup();
 });
 
@@ -171,17 +201,17 @@ describe('updateTimesheetOffice — проверки до записи', () => {
     });
   });
 
-  it('отдел главнее: сотруднику отдела с «Офисом» — 400; и отделу, которому «Офис» ставят этим же запросом', async () => {
-    setup({ rules: [DEPT], employees: [employee(11)] });
-    await expect(updateTimesheetOffice(req, input({ eAdd: [11] }), NOW)).rejects.toMatchObject({
-      status: 400, code: 'TIMESHEET_OFFICE_INVALID', details: [11], message: 'Отделу сотрудника уже назначен «Офис»',
-    });
+  it('назначение главнее отдела: сотруднику отдела с «Офисом» — и «Офис», и объект; и вместе с «Офисом» отделу', async () => {
+    setup({ rules: [DEPT], employees: [employee(11), employee(12)], updatedAdd: [11], updatedObjects: [12] });
+    await expect(updateTimesheetOffice(req, input({ eAdd: [11], eObjects: [{ id: 12, object_id: O_METRO }] }), NOW))
+      .resolves.toMatchObject({ employees_added: 1, objects_assigned: 1 });
 
-    setup({ departments: [{ id: DEPT2, is_active: true, kind: 'department' }], employees: [employee(12, { org_department_id: DEPT2 })] });
-    await expect(updateTimesheetOffice(req, input({ dAdd: [DEPT2], eAdd: [12] }), NOW)).rejects.toMatchObject({
-      status: 400, details: [12],
+    setup({
+      departments: [{ id: DEPT2, is_active: true, kind: 'department' }],
+      employees: [employee(13, { org_department_id: DEPT2 })], insertedDepartments: [DEPT2], updatedObjects: [13],
     });
-    expect(h.withTransaction).not.toHaveBeenCalled();
+    await expect(updateTimesheetOffice(req, input({ dAdd: [DEPT2], eObjects: [{ id: 13, object_id: O_DOM }] }), NOW))
+      .resolves.toMatchObject({ departments_added: 1, objects_assigned: 1 });
   });
 
   it('«Офис» с отдела снимают этим же запросом — личный «Офис» его сотруднику можно', async () => {
@@ -226,14 +256,6 @@ describe('updateTimesheetOffice — транзакция', () => {
     expect(h.clientQuery.mock.calls[0]?.[0]).toContain('pg_advisory_xact_lock');
   });
 
-  it('отделу назначили «Офис» между проверкой и локом — 409, без UPDATE', async () => {
-    setup({ employees: [employee(14)], rules: [], lockedRules: [DEPT] });
-    await expect(updateTimesheetOffice(req, input({ eAdd: [14] }), NOW)).rejects.toMatchObject({
-      status: 409, code: 'TIMESHEET_OFFICE_CHANGED', details: [14],
-    });
-    expect(h.clientQuery.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE'))).toBe(false);
-  });
-
   it('сотрудника перевели между проверкой и записью — 409, без UPDATE', async () => {
     setup({ employees: [employee(7)], lockedEmployees: [employee(7, { org_department_id: DEPT2 })] });
     await expect(updateTimesheetOffice(req, input({ eAdd: [7] }), NOW)).rejects.toMatchObject({
@@ -250,8 +272,10 @@ describe('updateTimesheetOffice — транзакция', () => {
     const result = await updateTimesheetOffice(req, input({ dAdd: [DEPT] }), NOW);
     expect(result).toEqual({
       changed: true, departments_added: 1, departments_removed: 0,
-      employees_added: 0, employees_removed: 0, members_applied: 1, recomputed: 0,
+      employees_added: 0, objects_assigned: 0, employees_removed: 0, members_applied: 1, recomputed: 0,
     });
+    // «Офис» отдела — подачи ждут фиксации месяца, как раньше.
+    expect(h.rebuild).not.toHaveBeenCalled();
     const insert = h.clientQuery.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO timesheet_office_departments'));
     expect(insert?.[1]).toEqual([[DEPT], 'user-1']);
     expect(h.enforce).toHaveBeenCalledWith(expect.anything(), [DEPT], [CONTRACTOR_DEPT]);
@@ -275,7 +299,7 @@ describe('updateTimesheetOffice — транзакция', () => {
     setup({
       employees: [
         employee(8, { mode: 'current_activity', object_id: null, set_by: 'auto' }),
-        employee(9, { mode: 'current_activity', object_id: null, set_by: null, personal_office: true }),
+        employee(9, officePin),
       ],
       updatedAdd: [8],
     });
@@ -289,7 +313,7 @@ describe('updateTimesheetOffice — транзакция', () => {
 
   it('снять личный «Офис» — источник auto и сразу пересчёт по часам в той же транзакции', async () => {
     setup({
-      employees: [employee(10, { mode: 'current_activity', object_id: null, set_by: null, personal_office: true })],
+      employees: [employee(10, officePin)],
       updatedRemove: [10],
     });
     h.recompute.mockResolvedValue([10]);
@@ -300,6 +324,7 @@ describe('updateTimesheetOffice — транзакция', () => {
     expect(h.recompute).toHaveBeenCalledWith(expect.objectContaining({ query: h.clientQuery }), [10], {
       contractorIds: [CONTRACTOR_DEPT], now: NOW, userId: 'user-1', reason: 'office_removed',
     });
+    expect(h.rebuild).toHaveBeenCalledWith('2026-09-01', { employeeIds: [10], onlyListedEmployees: true });
   });
 
   it('снять «Офис» с отдела — строка правила удаляется, прямые работающие сотрудники пересчитываются', async () => {
@@ -315,7 +340,7 @@ describe('updateTimesheetOffice — транзакция', () => {
 
   it('ошибка пересчёта откатывает и снятие — наружу, без сброса кэшей', async () => {
     setup({
-      employees: [employee(15, { mode: 'current_activity', object_id: null, set_by: null, personal_office: true })],
+      employees: [employee(15, officePin)],
       updatedRemove: [15],
     });
     h.recompute.mockRejectedValue(new Error('hours down'));
@@ -348,6 +373,132 @@ describe('updateTimesheetOffice — транзакция', () => {
   });
 });
 
+describe('updateTimesheetOffice — объект сотруднику', () => {
+  const objectUpdate = () => h.clientQuery.mock.calls.find(([sql]) => String(sql).includes("SET timesheet_export_mode = 'object'"));
+
+  it('объект поверх авто: источник NULL, автор, дата, аудит; сразу пересборка подач текущего месяца', async () => {
+    setup({ employees: [employee(70, { object_id: O_METRO })], updatedObjects: [70] });
+    const result = await updateTimesheetOffice(req, input({ eObjects: [{ id: 70, object_id: O_DOM }] }), NOW);
+    expect(result).toMatchObject({ changed: true, objects_assigned: 1, employees_added: 0 });
+    const update = objectUpdate();
+    expect(update?.[1]).toEqual([[70], [O_DOM], 'user-1']);
+    const sql = String(update?.[0]);
+    expect(sql).toContain('timesheet_export_set_by = NULL');
+    expect(sql).toContain('timesheet_export_set_at = now()');
+    expect(sql).toContain('timesheet_export_set_by_user_id = $3::uuid');
+    // Точный повтор отсекается и в самом UPDATE.
+    expect(sql).toContain('e.timesheet_export_object_id = c.object_id');
+    const [, entries] = h.writeAudit.mock.calls[0];
+    expect(entries[0]).toMatchObject({
+      entityId: '70',
+      details: { via: 'personal', new_mode: 'object', new_object_id: O_DOM, new_set_by: null, old_object_id: O_METRO },
+    });
+    expect(h.rebuild).toHaveBeenCalledWith('2026-09-01', { employeeIds: [70], onlyListedEmployees: true });
+    expect(h.invalidateCaches).toHaveBeenCalled();
+  });
+
+  it('тот же объект от авто — один раз становится назначением', async () => {
+    setup({ employees: [employee(71, { object_id: O_DOM, set_by: 'auto' })], updatedObjects: [71] });
+    const result = await updateTimesheetOffice(req, input({ eObjects: [{ id: 71, object_id: O_DOM }] }), NOW);
+    expect(result).toMatchObject({ changed: true, objects_assigned: 1 });
+    expect(objectUpdate()?.[1]).toEqual([[71], [O_DOM], 'user-1']);
+  });
+
+  it('точный повтор — без UPDATE, аудита, сброса кэшей и пересборки', async () => {
+    setup({ employees: [employee(72, objectPin(O_DOM))] });
+    const result = await updateTimesheetOffice(req, input({ eObjects: [{ id: 72, object_id: O_DOM.toUpperCase() }] }), NOW);
+    expect(result).toMatchObject({ changed: false, objects_assigned: 0 });
+    expect(objectUpdate()).toBeUndefined();
+    expect(h.writeAudit.mock.calls[0]?.[1]).toEqual([]);
+    expect(h.invalidateCaches).not.toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+  });
+
+  it('«Офис» → объект и объект → другой объект', async () => {
+    setup({ employees: [employee(73, officePin), employee(74, objectPin(O_METRO))], updatedObjects: [73, 74] });
+    const result = await updateTimesheetOffice(req, input({
+      eObjects: [{ id: 74, object_id: O_DOM }, { id: 73, object_id: O_DOM }],
+    }), NOW);
+    expect(result).toMatchObject({ objects_assigned: 2 });
+    // id по возрастанию — порядок запроса на запись не влияет.
+    expect(objectUpdate()?.[1]).toEqual([[73, 74], [O_DOM, O_DOM], 'user-1']);
+  });
+
+  it('одинаковые пары схлопываются; разные объекты одному сотруднику — 400', async () => {
+    setup({ employees: [employee(75)], updatedObjects: [75] });
+    await updateTimesheetOffice(req, input({
+      eObjects: [{ id: 75, object_id: O_METRO }, { id: 75, object_id: O_METRO }],
+    }), NOW);
+    expect(objectUpdate()?.[1]).toEqual([[75], [O_METRO], 'user-1']);
+
+    await expect(updateTimesheetOffice(req, input({
+      eObjects: [{ id: 75, object_id: O_METRO }, { id: 75, object_id: O_DOM }],
+    }), NOW)).rejects.toMatchObject({ status: 400, code: 'TIMESHEET_OFFICE_INVALID', details: [75] });
+  });
+
+  it('один id в объектах и в «Офисе» или снятии — 400 до записи', async () => {
+    setup({ employees: [employee(76)] });
+    for (const request of [
+      input({ eAdd: [76], eObjects: [{ id: 76, object_id: O_DOM }] }),
+      input({ eRemove: [76], eObjects: [{ id: 76, object_id: O_DOM }] }),
+    ]) {
+      await expect(updateTimesheetOffice(req, request, NOW)).rejects.toMatchObject({ status: 400, details: ['76'] });
+    }
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('объект не найден, офисный или неактивный — 400; неактивный при точном повторе — no-op', async () => {
+    setup({ employees: [employee(77), employee(78), employee(79), employee(80, objectPin(O_OLD))] });
+    await expect(updateTimesheetOffice(req, input({
+      eObjects: [
+        { id: 77, object_id: '99999999-9999-4999-8999-999999999999' },
+        { id: 78, object_id: O_OFFICE },
+        { id: 79, object_id: O_OLD },
+      ],
+    }), NOW)).rejects.toMatchObject({ status: 400, details: [77, 78, 79] });
+    expect(h.withTransaction).not.toHaveBeenCalled();
+
+    const repeat = await updateTimesheetOffice(req, input({ eObjects: [{ id: 80, object_id: O_OLD }] }), NOW);
+    expect(repeat.changed).toBe(false);
+    expect(objectUpdate()).toBeUndefined();
+  });
+
+  it('снять назначение у сотрудника отдела с «Офисом» — правило отдела сразу, в той же транзакции', async () => {
+    setup({ rules: [DEPT], employees: [employee(81, objectPin(O_DOM))], updatedRemove: [81] });
+    h.enforce.mockResolvedValue([
+      { employeeId: 81, fullName: 'Сотрудник 81', departmentId: DEPT, fromMode: 'object', fromObjectId: O_DOM, fromSetBy: 'auto' },
+    ]);
+    const result = await updateTimesheetOffice(req, input({ eRemove: [81] }), NOW);
+    expect(result).toMatchObject({ changed: true, employees_removed: 1, members_applied: 1 });
+    expect(h.enforce).toHaveBeenCalledWith(expect.objectContaining({ query: h.clientQuery }), [DEPT], [CONTRACTOR_DEPT]);
+    const [, entries] = h.writeAudit.mock.calls[0];
+    expect(entries.map((entry: { details: { via: string } }) => entry.details.via)).toEqual(['personal', 'department']);
+    // Снятие пишется раньше правила: иначе правило не увидело бы сотрудника (назначение главнее).
+    const removal = h.clientQuery.mock.calls.findIndex(([sql]) => String(sql).includes("SET timesheet_export_set_by = 'auto'"));
+    expect(h.clientQuery.mock.invocationCallOrder[removal]).toBeLessThan(h.enforce.mock.invocationCallOrder[0]);
+  });
+
+  it('снять назначенный объект — источник auto, пересчёт по часам и пересборка подач', async () => {
+    setup({ employees: [employee(82, objectPin(O_DOM))], updatedRemove: [82] });
+    const result = await updateTimesheetOffice(req, input({ eRemove: [82] }), NOW);
+    expect(result).toMatchObject({ changed: true, employees_removed: 1 });
+    const update = h.clientQuery.mock.calls.find(([sql]) => String(sql).includes("SET timesheet_export_set_by = 'auto'"));
+    expect(update?.[1]).toEqual([[82]]);
+    expect(h.recompute).toHaveBeenCalledWith(expect.anything(), [82], expect.objectContaining({ reason: 'office_removed' }));
+    const [, entries] = h.writeAudit.mock.calls[0];
+    expect(entries[0]).toMatchObject({ details: { action: 'remove', new_set_by: 'auto', new_object_id: O_DOM } });
+    expect(h.rebuild).toHaveBeenCalledWith('2026-09-01', { employeeIds: [82], onlyListedEmployees: true });
+  });
+
+  it('сбой пересборки подач не откатывает запись окна', async () => {
+    setup({ employees: [employee(83)], updatedObjects: [83] });
+    h.rebuild.mockRejectedValue(new Error('rebuild down'));
+    await expect(updateTimesheetOffice(req, input({ eObjects: [{ id: 83, object_id: O_DOM }] }), NOW)).resolves.toMatchObject({
+      changed: true, objects_assigned: 1,
+    });
+  });
+});
+
 describe('чтение', () => {
   it('состояние: отделы — по скоупу записи (с id), списки — по скоупу чтения', async () => {
     h.accessible.mockResolvedValue([DEPT]);
@@ -370,7 +521,8 @@ describe('чтение', () => {
     expect(state).toEqual({
       allowed_department_ids: [DEPT],
       departments: [{ id: DEPT, name: 'Бухгалтерия', employees_count: 16 }],
-      employees: [{ id: 20, full_name: 'Шупта', department: 'Бухгалтерия' }],
+      employees: [{ id: 20, full_name: 'Шупта', department: 'Бухгалтерия', label: 'Офис' }],
+      objects: [{ id: O_DOM, name: 'ЖК Дом 56' }, { id: O_METRO, name: 'ЖК Метрополия' }],
     });
   });
 
@@ -411,9 +563,9 @@ describe('сотрудники отдела', () => {
   it('прямые работающие не архивные, по ФИО и id; объект на сейчас и личный «Офис»', async () => {
     h.queryOne.mockResolvedValue({ is_active: true, kind: 'department', office: true });
     h.query.mockResolvedValue([
-      { id: '50', full_name: 'Алексеев', personal_office: false },
-      { id: 51, full_name: 'Борисов', personal_office: true },
-      { id: 52, full_name: 'Васильев', personal_office: false },
+      { id: '50', full_name: 'Алексеев', personal_office: false, personal_assignment: O_METRO },
+      { id: 51, full_name: 'Борисов', personal_office: true, personal_assignment: 'office' },
+      { id: 52, full_name: 'Васильев', personal_office: false, personal_assignment: null },
     ]);
     h.labels.mockResolvedValue(new Map([[50, 'ЖК Метрополия'], [51, 'Офис']]));
 
@@ -430,9 +582,9 @@ describe('сотрудники отдела', () => {
     expect(result).toEqual({
       office: true,
       employees: [
-        { id: 50, full_name: 'Алексеев', label: 'ЖК Метрополия', personal_office: false },
-        { id: 51, full_name: 'Борисов', label: 'Офис', personal_office: true },
-        { id: 52, full_name: 'Васильев', label: null, personal_office: false },
+        { id: 50, full_name: 'Алексеев', label: 'ЖК Метрополия', personal_office: false, personal_assignment: O_METRO },
+        { id: 51, full_name: 'Борисов', label: 'Офис', personal_office: true, personal_assignment: 'office' },
+        { id: 52, full_name: 'Васильев', label: null, personal_office: false, personal_assignment: null },
       ],
     });
   });
@@ -441,7 +593,8 @@ describe('сотрудники отдела', () => {
 describe('сотрудник для вкладки «Сотрудник»', () => {
   const row = (over: Record<string, unknown> = {}) => ({
     id: '60', full_name: 'Семенов Иван', is_archived: false, employment_status: 'active',
-    org_department_id: DEPT, department: 'Бухгалтерия', personal_office: false, department_office: false, ...over,
+    org_department_id: DEPT, department: 'Бухгалтерия', personal_office: false, personal_assignment: null,
+    department_office: false, ...over,
   });
 
   it('не найден, в архиве, не работает, без отдела или подрядчик — 400 до прав', async () => {
@@ -462,7 +615,8 @@ describe('сотрудник для вкладки «Сотрудник»', () =
     h.queryOne.mockResolvedValue(row({ personal_office: false, department_office: true }));
     h.labels.mockResolvedValue(new Map([[60, 'Офис']]));
     await expect(getTimesheetOfficeEmployee(req, 60)).resolves.toEqual({
-      id: 60, full_name: 'Семенов Иван', department: 'Бухгалтерия', label: 'Офис', personal_office: false, department_office: true,
+      id: 60, full_name: 'Семенов Иван', department: 'Бухгалтерия', label: 'Офис', personal_office: false,
+      personal_assignment: null, department_office: true,
     });
     const [sql, params] = h.queryOne.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('FROM timesheet_office_departments tod');

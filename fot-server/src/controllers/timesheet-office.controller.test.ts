@@ -44,9 +44,20 @@ describe('timesheetOfficeController.update', () => {
     await timesheetOfficeController.update({ body: { departments: { add: [DEPT] } } } as never, res as never);
     expect(h.update).toHaveBeenCalledWith(expect.anything(), {
       departments: { add: [DEPT], remove: [] },
-      employees: { add: [], remove: [] },
+      employees: { add: [], remove: [], objects: [] },
     });
     expect(res.body).toEqual({ success: true, changed: true, data: { changed: true } });
+  });
+
+  it('объекты сотрудникам: id + uuid объекта уходят в сервис как есть', async () => {
+    h.update.mockResolvedValue({ changed: true });
+    const res = mockRes();
+    const objects = [{ id: 7, object_id: DEPT }];
+    await timesheetOfficeController.update({ body: { employees: { objects } } } as never, res as never);
+    expect(h.update).toHaveBeenCalledWith(expect.anything(), {
+      departments: { add: [], remove: [] },
+      employees: { add: [], remove: [], objects },
+    });
   });
 
   it('не uuid, не число или больше 500 — 400 без вызова сервиса', async () => {
@@ -54,6 +65,8 @@ describe('timesheetOfficeController.update', () => {
       { departments: { add: ['not-uuid'] } },
       { employees: { add: ['5'] } },
       { employees: { add: Array.from({ length: 501 }, (_, index) => index + 1) } },
+      { employees: { objects: [{ id: 7, object_id: 'not-uuid' }] } },
+      { employees: { objects: [{ id: 0, object_id: DEPT }] } },
     ]) {
       const res = mockRes();
       await timesheetOfficeController.update({ body } as never, res as never);

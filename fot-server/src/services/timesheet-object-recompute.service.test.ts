@@ -41,7 +41,7 @@ const BRIGADES = ['folder', 'brigade'];
 
 const row = (id: number, over: Record<string, unknown> = {}) => ({
   id, full_name: `Сотрудник ${id}`, mode: 'current_activity', object_id: null, set_by: 'auto',
-  office_department: false, personal_office: false, worker: false, ...over,
+  office_department: false, personal_pin: false, worker: false, ...over,
 });
 
 function fakeClient(rows: Array<Record<string, unknown>>, updatedIds: number[]) {
@@ -70,7 +70,7 @@ describe('recomputeTimesheetObjectsNow', () => {
     const { client, calls } = fakeClient([
       row(3),
       row(5, { mode: 'object', object_id: 'o-a', set_by: 'employee' }),
-      row(6, { set_by: null, personal_office: true }),
+      row(6, { set_by: null, personal_pin: true }),
       row(7, { office_department: true }),
     ], [3, 5]);
     h.hours.mockResolvedValue(new Map([
@@ -97,8 +97,9 @@ describe('recomputeTimesheetObjectsNow', () => {
     );
     const update = calls.find(call => call.sql.startsWith('UPDATE employees'));
     expect(update?.params).toEqual([[3, 5], ['object', 'object'], ['o-metro', 'o-metro']]);
-    // Личный «Офис» защищён и в самом UPDATE.
-    expect(update?.sql).toContain('AND NOT (e.timesheet_export_mode IS NOT DISTINCT FROM \'current_activity\'');
+    // Назначение из окна («Офис» или объект) защищено и в самом UPDATE.
+    expect(update?.sql).toContain('AND NOT (e.timesheet_export_set_by IS NULL');
+    expect(update?.sql).toContain("e.timesheet_export_mode IS NOT DISTINCT FROM 'object' AND e.timesheet_export_object_id IS NOT NULL");
     expect(h.logWithClient).toHaveBeenCalledWith(client, expect.objectContaining({
       user_id: 'user-1',
       action: 'TIMESHEET_OBJECT_AUTO_ASSIGNED',

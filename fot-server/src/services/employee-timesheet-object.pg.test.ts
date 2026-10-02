@@ -56,6 +56,9 @@ vi.mock('./data-scope.service.js', () => ({
   resolveWritableScopedDepartmentIds: vi.fn(async (_req: unknown, ids: string[] = []) => ids),
 }));
 vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: vi.fn() }));
+// Пересборка подач после записи в окне — в юнит-тестах версий; здесь только факт вызова.
+const rebuild = vi.hoisted(() => ({ fn: vi.fn(async () => ({ approvals: 0, created: 0, failures: 0 })) }));
+vi.mock('./timesheet-version-objects-rebuild.service.js', () => ({ rebuildVersionObjectsForMonth: rebuild.fn }));
 
 import { resolveExportModes, nextMonthStart } from './timesheet-export-mode.service.js';
 import { fetchEmployeeIdsPinnedToObjects } from './timesheet-objects-export.service.js';
@@ -284,6 +287,11 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
   });
 
   describe('режим за прошедший месяц', () => {
+    // Резолвер читает автора назначения (289: признак назначения из окна) — на проде она есть.
+    beforeAll(async () => {
+      await pg.pool!.query(MIGRATION_AUTHOR);
+    });
+
     beforeEach(async () => {
       await pg.pool!.query(`
         DELETE FROM employee_timesheet_object_months WHERE month <> '${baseline}'::date;
@@ -773,8 +781,8 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       await recomputeCurrentMonth(new Date(`${lastDay}T05:00:00+03:00`));
       expect(await emp(40)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
       expect(await emp(46)).toMatchObject({ mode: 'current_activity', set_by: 'auto' });
-      // Отдел главнее личного: личный «Офис» 42-го стал «Офисом» отдела — источник auto, автора нет.
-      expect(await emp(42)).toEqual({ mode: 'current_activity', object_id: null, set_by: 'auto', user_id: null });
+      // Назначение главнее отдела: личный «Офис» 42-го остался личным — без источника, с автором.
+      expect(await emp(42)).toEqual({ mode: 'current_activity', object_id: null, set_by: null, user_id: U_HR });
 
       // После пересчёта дня «Офис» с «Другого отдела» сняли — фиксация считает 46-го по часам.
       await q('DELETE FROM timesheet_office_departments WHERE org_department_id = $1', [D_OTHER]);
@@ -792,16 +800,24 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
         .toEqual({ kind: 'skipped', reason: 'already_frozen' });
     });
 
-    it('окно: личный «Офис» в отделе с «Офисом» — 400; «Вернуть» и снятие с отдела — объект по часам сразу', async () => {
+    it('окно: назначение в отделе с «Офисом» главнее отдела, снятое — снова «Офис» отдела; «Вернуть» и снятие с отдела — по часам сразу', async () => {
       const req = { user: { id: U_HR }, ip: '127.0.0.1', headers: {}, socket: {} } as never;
       const now = new Date(`${nextMonthStart(current).slice(0, 8)}10T12:00:00+03:00`);
 
       await updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [46], remove: [] } }, now);
       expect(await emp(46)).toEqual({ mode: 'current_activity', object_id: null, set_by: null, user_id: U_HR });
 
-      // 41 — в отделе с «Офисом»: личного там не бывает.
-      await expect(updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [41], remove: [] } }, now))
-        .rejects.toMatchObject({ status: 400, code: 'TIMESHEET_OFFICE_INVALID', details: [41] });
+      // 41 — в отделе с «Офисом»: назначение главнее отдела, правило отдела его не трогает.
+      const pin41 = { departments: { add: [], remove: [] }, employees: { add: [], remove: [], objects: [{ id: 41, object_id: DOM }] } };
+      expect(await updateTimesheetOffice(req, pin41, now)).toMatchObject({ changed: true, objects_assigned: 1 });
+      expect(await emp(41)).toEqual({ mode: 'object', object_id: DOM, set_by: null, user_id: U_HR });
+      expect(await enforce([D_OWN])).toEqual([]);
+      expect(await updateTimesheetOffice(req, pin41, now)).toMatchObject({ changed: false });
+      // Сняли — сразу «Офис» отдела, как дала бы ночь; повтор снятия — без изменений.
+      const unpin41 = { departments: { add: [], remove: [] }, employees: { add: [], remove: [41] } };
+      expect(await updateTimesheetOffice(req, unpin41, now)).toMatchObject({ changed: true, employees_removed: 1, members_applied: 1 });
+      expect(await emp(41)).toEqual({ mode: 'current_activity', object_id: null, set_by: 'auto', user_id: null });
+      expect(await updateTimesheetOffice(req, unpin41, now)).toMatchObject({ changed: false });
 
       hours.byEmployee = new Map([[46, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 80 }]]]);
       const back = await updateTimesheetOffice(req, { departments: { add: [], remove: [] }, employees: { add: [], remove: [46] } }, now);
@@ -856,7 +872,7 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
 
       const dry = await refreezeDepartmentMonth({ month: current, departmentId: D_OWN, dryRun: true, now });
       expect(dry.changes.map(change => change.employeeId)).toEqual([40, 43, 44]);
-      expect(dry).toMatchObject({ personalOffice: 1, appliedIds: [], withoutFreezeRow: [] });
+      expect(dry).toMatchObject({ personalPin: 1, appliedIds: [], withoutFreezeRow: [] });
       expect(dry.employeeIds).toEqual([1, 2, 3, 40, 41, 43, 44]);
       expect(await frozen()).toEqual(before);
       expect(await auditCount()).toBe(0);
@@ -1168,6 +1184,268 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
     it('отказ для незафиксированного и базового месяца', async () => {
       await expect(applyOfficeWindowToFrozenMonth({ month: nextMonthStart(month), dryRun: true })).rejects.toThrow(/не зафиксирован/);
       await expect(applyOfficeWindowToFrozenMonth({ month: baseline, dryRun: true })).rejects.toThrow(/не позже базового/);
+    });
+  });
+
+  describe('объект сотруднику из окна «Режим табелирования» (291)', () => {
+    const U_HR = '00000000-0000-0000-0000-00000000b0c1';
+    const R_WORKER = '00000000-0000-0000-0000-00000000e0c1';
+    const OLD = '00000000-0000-0000-0000-0000000000a9';
+    const req = { user: { id: U_HR }, ip: '127.0.0.1', headers: {}, socket: {} } as never;
+    let current = '';
+    let next = '';
+
+    const emp = async (id: number) => (await q(
+      `SELECT timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
+              timesheet_export_set_by AS set_by, timesheet_export_set_by_user_id::text AS user_id,
+              timesheet_export_set_at::text AS set_at, updated_at::text AS updated_at
+         FROM employees WHERE id = $1`, [id],
+    ))[0];
+    const assign = (items: Array<{ id: number; object_id: string }>) => ({
+      departments: { add: [], remove: [] }, employees: { add: [], remove: [], objects: items },
+    });
+    const auditCount = async () => (await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM audit_logs WHERE action = 'TIMESHEET_OFFICE_UPDATED'`,
+    ))[0].n;
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
+      current = shift(baseline, 1);
+      next = nextMonthStart(current);
+      hours.byEmployee = new Map();
+      rebuild.fn.mockClear();
+      await pg.pool!.query(`
+        DROP TABLE IF EXISTS employee_dismissal_events;
+        CREATE TABLE employee_dismissal_events (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(), employee_id integer NOT NULL, dismissal_date date NULL,
+          cancelled boolean NOT NULL DEFAULT false, from_department_id uuid NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        INSERT INTO system_roles (id, code, name) VALUES ('${R_WORKER}', 'worker', 'Рабочий');
+        INSERT INTO user_profiles (id, full_name) VALUES ('${U_HR}', 'Кадровый админ');
+        INSERT INTO skud_objects (id, name, alt_name, is_active) VALUES ('${OLD}', 'Старый объект', 'Адрес', false);
+        UPDATE timesheet_object_auto_state
+           SET enabled = true, frozen_month = '${baseline}', objects_rebuilt_month = '${baseline}', applied_date = NULL;
+        INSERT INTO employees (id, full_name, org_department_id, employment_status,
+                               timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (80, 'Ночь поставила ЗИЛ', '${D_OWN}', 'active', 'object', '${ZIL}', 'auto'),
+          (82, 'Рабочий', '${D_OWN}', 'active', 'skud', NULL, 'auto'),
+          (83, 'Ночь поставила Дом 56', '${D_OWN}', 'active', 'object', '${DOM}', 'auto');
+        INSERT INTO user_profiles (id, full_name, employee_id, system_role_id) VALUES
+          ('00000000-0000-0000-0000-00000000f082', 'Рабочий', 82, '${R_WORKER}');
+        INSERT INTO employees (id, full_name, org_department_id, timesheet_export_mode, timesheet_export_object_id,
+                               timesheet_export_set_by, timesheet_export_set_by_user_id, timesheet_export_set_at) VALUES
+          (84, 'Назначен объект, потом закрытый', '${D_OWN}', 'object', '${OLD}', NULL, '${U_HR}', now());
+      `);
+    });
+
+    it('объект поверх авто — назначение с автором; точный повтор не меняет дату, автора, updated_at и аудит', async () => {
+      const now = new Date(`${current.slice(0, 8)}10T12:00:00+03:00`);
+      expect(await updateTimesheetOffice(req, assign([{ id: 80, object_id: DOM }]), now))
+        .toMatchObject({ changed: true, objects_assigned: 1 });
+      const pinned = await emp(80);
+      expect(pinned).toMatchObject({ mode: 'object', object_id: DOM, set_by: null, user_id: U_HR });
+      expect(pinned.set_at).not.toBeNull();
+      expect(rebuild.fn).toHaveBeenCalledWith(current, { employeeIds: [80], onlyListedEmployees: true });
+
+      const audits = await auditCount();
+      rebuild.fn.mockClear();
+      expect(await updateTimesheetOffice(req, assign([{ id: 80, object_id: DOM }]), now)).toMatchObject({ changed: false });
+      expect(await emp(80)).toEqual(pinned);
+      expect(await auditCount()).toBe(audits);
+      expect(rebuild.fn).not.toHaveBeenCalled();
+
+      expect((await resolveExportModes([80])).get(80)).toMatchObject({ mode: 'object', pinnedObjectId: DOM, windowPin: true });
+    });
+
+    it('тот же объект от ночи — один раз становится назначением; рабочему — тоже можно', async () => {
+      const now = new Date(`${current.slice(0, 8)}10T12:00:00+03:00`);
+      const result = await updateTimesheetOffice(req, assign([{ id: 83, object_id: DOM }, { id: 82, object_id: DOM }]), now);
+      expect(result).toMatchObject({ changed: true, objects_assigned: 2 });
+      expect(await emp(83)).toMatchObject({ mode: 'object', object_id: DOM, set_by: null, user_id: U_HR });
+      expect(await emp(82)).toMatchObject({ mode: 'object', object_id: DOM, set_by: null, user_id: U_HR });
+    });
+
+    it('неактивный и офисный объект — 400; неактивный при точном повторе — no-op', async () => {
+      const now = new Date(`${current.slice(0, 8)}10T12:00:00+03:00`);
+      await expect(updateTimesheetOffice(req, assign([{ id: 83, object_id: OLD }]), now))
+        .rejects.toMatchObject({ status: 400, details: [83] });
+      await expect(updateTimesheetOffice(req, assign([{ id: 83, object_id: OFFICE }]), now))
+        .rejects.toMatchObject({ status: 400, details: [83] });
+      const before = await emp(84);
+      expect(await updateTimesheetOffice(req, assign([{ id: 84, object_id: OLD }]), now)).toMatchObject({ changed: false });
+      expect(await emp(84)).toEqual(before);
+    });
+
+    it('ночь: назначенных не трогает при часах на другом объекте, рабочего — тоже', async () => {
+      hours.byEmployee = new Map([
+        [80, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 100 }]],
+        [82, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 50 }]],
+      ]);
+      const before = [await emp(80), await emp(82)];
+      await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}11T05:00:00+03:00`));
+      expect([await emp(80), await emp(82)]).toEqual(before);
+    });
+
+    it('фиксация: объект с автором, месяц резолвится назначением; правка рабочих месяца его не трогает', async () => {
+      expect(await freezeMonth(current, new Date(`${next}T05:00:00+03:00`))).toMatchObject({ kind: 'frozen' });
+      expect(await q(`SELECT employee_id, mode, object_id::text, set_by, set_by_user_id::text AS user_id, (set_at IS NOT NULL) AS dated
+                        FROM employee_timesheet_object_months WHERE month = $1::date AND employee_id IN (80, 82) ORDER BY employee_id`, [current]))
+        .toEqual([
+          { employee_id: 80, mode: 'object', object_id: DOM, set_by: null, user_id: U_HR, dated: true },
+          { employee_id: 82, mode: 'object', object_id: DOM, set_by: null, user_id: U_HR, dated: true },
+        ]);
+      const modes = await resolveExportModes([80, 82, 83], undefined, { month: current, now: new Date(`${next.slice(0, 8)}10T12:00:00+03:00`) });
+      expect([80, 82].map(id => modes.get(id)?.windowPin)).toEqual([true, true]);
+
+      const fixed = await fixWorkersFrozenMonth({ month: current, dryRun: false });
+      expect(fixed.frozen.map(row => row.id)).not.toContain(82);
+      expect((await q(`SELECT mode FROM employee_timesheet_object_months WHERE month = $1::date AND employee_id = 82`, [current]))[0])
+        .toEqual({ mode: 'object' });
+    });
+
+    it('снятие: источник auto и сразу объект по часам; пересборка подач текущего месяца', async () => {
+      const now = new Date(`${next.slice(0, 8)}10T12:00:00+03:00`);
+      hours.byEmployee = new Map([[80, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 30 }]]]);
+      rebuild.fn.mockClear();
+      const result = await updateTimesheetOffice(req, {
+        departments: { add: [], remove: [] }, employees: { add: [], remove: [80] },
+      }, now);
+      expect(result).toMatchObject({ changed: true, employees_removed: 1, recomputed: 1 });
+      expect(await emp(80)).toMatchObject({ mode: 'object', object_id: ZIL, set_by: 'auto', user_id: null, set_at: null });
+      expect(rebuild.fn).toHaveBeenCalledWith(next, { employeeIds: [80], onlyListedEmployees: true });
+    });
+  });
+
+  describe('назначение главнее «Офиса» отдела — идемпотентно', () => {
+    const U_HR = '00000000-0000-0000-0000-00000000b0d1';
+    const D_OFF = '00000000-0000-0000-0000-00000000d0f1';
+    const D_OTHER = '00000000-0000-0000-0000-00000000d0f2';
+    const req = { user: { id: U_HR }, ip: '127.0.0.1', headers: {}, socket: {} } as never;
+    let current = '';
+    let next = '';
+
+    const state = async () => q(
+      `SELECT id, timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
+              timesheet_export_set_by AS set_by, timesheet_export_set_by_user_id::text AS user_id,
+              timesheet_export_set_at::text AS set_at, updated_at::text AS updated_at, org_department_id::text AS dept
+         FROM employees WHERE id BETWEEN 90 AND 99 ORDER BY id`,
+    );
+    const audits = async () => (await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM audit_logs WHERE action IN ('TIMESHEET_OFFICE_UPDATED', 'TIMESHEET_OBJECT_AUTO_ASSIGNED')`,
+    ))[0].n;
+    const upd = (over: { dAdd?: string[]; dRemove?: string[]; add?: number[]; remove?: number[]; objects?: Array<{ id: number; object_id: string }> }) => ({
+      departments: { add: over.dAdd ?? [], remove: over.dRemove ?? [] },
+      employees: { add: over.add ?? [], remove: over.remove ?? [], objects: over.objects ?? [] },
+    });
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
+      current = shift(baseline, 1);
+      next = nextMonthStart(current);
+      hours.byEmployee = new Map();
+      await pg.pool!.query(`
+        DROP TABLE IF EXISTS employee_dismissal_events;
+        CREATE TABLE employee_dismissal_events (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(), employee_id integer NOT NULL, dismissal_date date NULL,
+          cancelled boolean NOT NULL DEFAULT false, from_department_id uuid NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        INSERT INTO org_departments (id, name) VALUES ('${D_OFF}', 'УОК-Офис'), ('${D_OTHER}', 'ЛИНИЯ');
+        INSERT INTO user_profiles (id, full_name) VALUES ('${U_HR}', 'Кадровый админ');
+        UPDATE timesheet_object_auto_state
+           SET enabled = true, frozen_month = '${baseline}', objects_rebuilt_month = '${baseline}', applied_date = NULL;
+        INSERT INTO employees (id, full_name, org_department_id, employment_status,
+                               timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (90, 'Без назначения', '${D_OFF}', 'active', 'object', '${ZIL}', 'auto'),
+          (91, 'Будет объект', '${D_OFF}', 'active', 'object', '${ZIL}', 'auto'),
+          (92, 'Будет личный «Офис»', '${D_OFF}', 'active', 'object', '${ZIL}', 'auto'),
+          (93, 'Переведут в офисный', '${D_OTHER}', 'active', 'object', '${ZIL}', 'auto');
+      `);
+    });
+
+    it('назначения, затем «Офис» отделу: назначенных правило не трогает; точные повторы — ничего не пишут', async () => {
+      const now = new Date(`${current.slice(0, 8)}10T12:00:00+03:00`);
+      await updateTimesheetOffice(req, upd({ objects: [{ id: 91, object_id: DOM }, { id: 93, object_id: DOM }], add: [92] }), now);
+      expect(await updateTimesheetOffice(req, upd({ dAdd: [D_OFF] }), now)).toMatchObject({ changed: true, members_applied: 1 });
+
+      const after = await state();
+      expect(after.map(row => [row.id, row.mode, row.object_id, row.set_by])).toEqual([
+        [90, 'current_activity', null, 'auto'],
+        [91, 'object', DOM, null],
+        [92, 'current_activity', null, null],
+        [93, 'object', DOM, null],
+      ]);
+
+      const before = await audits();
+      for (const request of [
+        upd({ dAdd: [D_OFF] }),
+        upd({ objects: [{ id: 91, object_id: DOM }], add: [92] }),
+        upd({ dAdd: [D_OFF], objects: [{ id: 93, object_id: DOM }] }),
+      ]) {
+        expect(await updateTimesheetOffice(req, request, now)).toMatchObject({ changed: false });
+      }
+      expect(await state()).toEqual(after);
+      expect(await audits()).toBe(before);
+    });
+
+    it('ночь дважды и перевод назначенного в офисный отдел — назначения на месте, повтор — 0 изменений', async () => {
+      hours.byEmployee = new Map([
+        [91, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 100 }]],
+        [93, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 100 }]],
+      ]);
+      await q('UPDATE employees SET org_department_id = $1 WHERE id = 93', [D_OFF]);
+      const before = (await state()).map(({ updated_at: _updated, ...row }) => row);
+      expect(await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}11T05:00:00+03:00`))).toMatchObject({ kind: 'applied', changed: 0 });
+      expect(await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}12T05:00:00+03:00`))).toMatchObject({ kind: 'applied', changed: 0 });
+      expect((await state()).map(({ updated_at: _updated, ...row }) => row)).toEqual(before);
+    });
+
+    it('фиксация: назначенные — своим объектом с автором; скрипт «Офиса» окна их не трогает; повтор — no-op', async () => {
+      expect(await freezeMonth(current, new Date(`${next}T05:00:00+03:00`))).toMatchObject({ kind: 'frozen' });
+      const frozen = async () => q(
+        `SELECT employee_id, mode, object_id::text, set_by, set_by_user_id::text AS user_id
+           FROM employee_timesheet_object_months WHERE month = $1::date AND employee_id BETWEEN 90 AND 99 ORDER BY employee_id`,
+        [current],
+      );
+      const rows = await frozen();
+      expect(rows).toEqual([
+        { employee_id: 90, mode: 'current_activity', object_id: null, set_by: 'auto', user_id: null },
+        { employee_id: 91, mode: 'object', object_id: DOM, set_by: null, user_id: U_HR },
+        { employee_id: 92, mode: 'current_activity', object_id: null, set_by: null, user_id: U_HR },
+        { employee_id: 93, mode: 'object', object_id: DOM, set_by: null, user_id: U_HR },
+      ]);
+      expect(await freezeMonth(current, new Date(`${next}T06:00:00+03:00`))).toEqual({ kind: 'skipped', reason: 'already_frozen' });
+
+      const office = await applyOfficeWindowToFrozenMonth({ month: current, dryRun: false });
+      expect(office.rows.map(row => row.employeeId)).toEqual([]);
+      expect(await fixWorkersFrozenMonth({ month: current, dryRun: false })).toMatchObject({ frozen: [], live: [] });
+      expect(await frozen()).toEqual(rows);
+      expect((await resolveExportModes([91, 93], undefined, { month: current, now: new Date(`${next.slice(0, 8)}10T12:00:00+03:00`) })).get(91))
+        .toMatchObject({ mode: 'object', pinnedObjectId: DOM, windowPin: true });
+    });
+
+    it('снятие назначения в офисном отделе — сразу «Офис» отдела; снятие «Офиса» с отдела назначенных не трогает', async () => {
+      const now = new Date(`${next.slice(0, 8)}10T12:00:00+03:00`);
+      expect(await updateTimesheetOffice(req, upd({ remove: [91] }), now)).toMatchObject({ changed: true, members_applied: 1 });
+      expect(await updateTimesheetOffice(req, upd({ remove: [91] }), now)).toMatchObject({ changed: false });
+
+      hours.byEmployee = new Map([[90, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 10 }]]]);
+      expect(await updateTimesheetOffice(req, upd({ dRemove: [D_OFF] }), now)).toMatchObject({ changed: true, departments_removed: 1 });
+      expect((await state()).map(row => [row.id, row.mode, row.object_id, row.set_by])).toEqual([
+        [90, 'object', ZIL, 'auto'],
+        [91, 'current_activity', null, 'auto'],
+        [92, 'current_activity', null, null],
+        [93, 'object', DOM, null],
+      ]);
     });
   });
 });

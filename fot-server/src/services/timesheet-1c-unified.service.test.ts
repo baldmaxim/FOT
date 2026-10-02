@@ -40,6 +40,7 @@ const modeRow = (
   over: Partial<{
     emp_mode: string | null;
     emp_object_id: string | null;
+    emp_window_pin: boolean;
     dept_current_activity: boolean;
   }> = {},
 ): Record<string, unknown> => ({
@@ -367,6 +368,19 @@ describe('buildUnified1CWorkbook — явные режимы табелиров�
     expect(rows[0].address).toBe('Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»');
     expect(rows[0].total).toBe(8);
     expect(rows.some(r => r.address === 'Склад 7')).toBe(false);
+  });
+
+  it('назначенный в окне без часов и букв — строка с адресом объекта; не назначенный — нет', async () => {
+    // Нулевой рабочий день: ни часов, ни буквы — без назначения такая строка пустая.
+    const empty = (id: number, name: string): IDepartmentTimesheetData => makeDept('Отдел', 'dept-1',
+      { id, full_name: name, org_department_id: 'dept-1' }, 0, []);
+    mockModes([
+      modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin', emp_window_pin: true }),
+      modeRow(3, { emp_mode: 'object', emp_object_id: 'obj-pin' }),
+    ], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [empty(2, 'Петр Петров'), empty(3, 'Иван Иванов')])).getWorksheet(1)!);
+    expect(rows).toEqual([{ fio: 'Петр Петров', address: 'Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»', total: null }]);
   });
 
   it('режим object: закреплённый объект без единого прохода всё равно получает адрес', async () => {

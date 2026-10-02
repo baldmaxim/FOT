@@ -262,6 +262,36 @@ describe('buildVersionObjectBreakdown', () => {
     expect(result.payload.employees).toHaveLength(1);
     expect(result.payload.employees[0]!.objects).toEqual([]);
   });
+  it('назначенный в окне без часов (все «Н»): строка своего объекта с нулём', () => {
+    const result = build({
+      employees: [employeeDays(1, { '2026-08-03': 0 }), employeeDays(2, { '2026-08-03': 0 })],
+      modeByEmployee: new Map<number, IResolvedExportMode>([
+        [1, { mode: 'object', pinnedObjectId: OBJ_PINNED, source: 'employee_explicit', windowPin: true }],
+        [2, { mode: 'current_activity', pinnedObjectId: null, source: 'employee_explicit', windowPin: true }],
+      ]),
+    });
+
+    const [pinned, office] = result.payload.employees;
+    expect(pinned!.objects).toEqual([{
+      object_id: OBJ_PINNED, object_key: OBJ_PINNED, object_name: 'ЖК Дом 56', object_address: 'Дом 56, адрес',
+      total_hours: 0, days: {},
+    }]);
+    expect(pinned!.total_hours).toBe(0);
+    expect(office!.objects.map(row => [row.object_key, row.total_hours])).toEqual([[CURRENT_ACTIVITY_KEY, 0]]);
+  });
+
+  it('назначенный с часами — обычная строка, без лишней нулевой; не назначенный «объект» без часов — пусто', () => {
+    const result = build({
+      employees: [employeeDays(1, { '2026-08-03': 8 }), employeeDays(2, { '2026-08-03': 0 })],
+      modeByEmployee: new Map<number, IResolvedExportMode>([
+        [1, { mode: 'object', pinnedObjectId: OBJ_PINNED, source: 'employee_explicit', windowPin: true }],
+        [2, { mode: 'object', pinnedObjectId: OBJ_PINNED, source: 'employee_explicit' }],
+      ]),
+    });
+
+    expect(result.payload.employees[0]!.objects.map(row => [row.object_key, row.total_hours])).toEqual([[OBJ_PINNED, 8]]);
+    expect(result.payload.employees[1]!.objects).toEqual([]);
+  });
 });
 
 describe('computeObjectsContentHash', () => {

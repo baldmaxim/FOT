@@ -92,7 +92,7 @@ export interface IObjectAssignments {
   employee_objects: Record<string, string[]>;
 }
 
-// ─── Режим табелирования: «Офис» отделу или сотруднику (миграция 291) ──────
+// ─── Режим табелирования: «Офис» отделу, сотруднику — «Офис» или объект (291) ─
 
 export interface ITimesheetOfficeDepartment {
   id: string;
@@ -106,11 +106,27 @@ export interface ITimesheetOfficeEmployee {
   department: string | null;
 }
 
+/** Личное назначение из окна: 'office', id объекта или null — не назначено. */
+export type TimesheetOfficeAssignment = 'office' | string | null;
+
+export interface ITimesheetOfficeAssignedEmployee extends ITimesheetOfficeEmployee {
+  /** Что назначено: «Офис» или имя объекта. */
+  label: string;
+}
+
+export interface ITimesheetOfficeObject {
+  id: string;
+  name: string;
+}
+
 export interface ITimesheetOfficeState {
   /** Отделы, которые можно выбрать: активные, не подрядные, в доступе пользователя. */
   allowed_department_ids: string[];
   departments: ITimesheetOfficeDepartment[];
-  employees: ITimesheetOfficeEmployee[];
+  /** Сотрудники с личным назначением — «Офис» или объект. */
+  employees: ITimesheetOfficeAssignedEmployee[];
+  /** Объекты, которые можно назначить: действующие, без офисных. */
+  objects: ITimesheetOfficeObject[];
 }
 
 export interface ITimesheetOfficeMember {
@@ -120,11 +136,13 @@ export interface ITimesheetOfficeMember {
   label: string | null;
   /** Личный «Офис» из окна. */
   personal_office: boolean;
+  /** Личное назначение из окна: 'office', id объекта или null. */
+  personal_assignment: TimesheetOfficeAssignment;
 }
 
 export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
   department: string | null;
-  /** У отдела сотрудника «Офис»: личный не ставится, отдел главнее. */
+  /** У отдела сотрудника «Офис» (справочно: личное назначение главнее отдела). */
   department_office: boolean;
 }
 
@@ -136,7 +154,8 @@ export interface ITimesheetOfficeDepartmentMembers {
 
 export interface ITimesheetOfficeUpdate {
   departments?: { add?: string[]; remove?: string[] };
-  employees?: { add?: number[]; remove?: number[] };
+  /** add — «Офис», objects — объект, remove — снять личное назначение. */
+  employees?: { add?: number[]; remove?: number[]; objects?: Array<{ id: number; object_id: string }> };
 }
 
 export interface ITimesheetOfficeResult {
@@ -144,6 +163,7 @@ export interface ITimesheetOfficeResult {
   departments_added: number;
   departments_removed: number;
   employees_added: number;
+  objects_assigned: number;
   employees_removed: number;
   members_applied: number;
 }

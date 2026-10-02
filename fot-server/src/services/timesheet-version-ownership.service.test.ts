@@ -108,6 +108,47 @@ beforeEach(() => {
   hasRealActivity.mockReturnValue(true);
 });
 
+describe('buildTimesheetPayload — назначенный в окне «Режим табелирования»', () => {
+  it('весь период «Н», но назначен объект — zero_activity false: в 1С уходит с объектом', async () => {
+    hasRealActivity.mockReturnValue(false);
+    fetchBulk.mockResolvedValue({
+      employees: [{ id: EMPLOYEE, full_name: 'Ибрагимов А. М.', sigur_employee_id: 100751, position_id: null }],
+      posMap: new Map(),
+      entries: [{ employee_id: EMPLOYEE, work_date: '2026-08-20' }],
+      objectEntries: [],
+      dataMap: new Map([[EMPLOYEE, new Map([['2026-08-20', { status: 'absent', hours: 0, corrected: false, hoursOverridden: false }]])]]),
+    });
+    const client = makeClientNoHistory(activeRow);
+    const base = client.query.getMockImplementation()!;
+    client.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('AS emp_window_pin')) {
+        return { rows: [{ employee_id: EMPLOYEE, emp_mode: 'object', emp_object_id: 'obj-dom', emp_window_pin: true, dept_current_activity: false }] };
+      }
+      if (sql.includes('FROM skud_objects WHERE id = ANY')) return { rows: [{ id: 'obj-dom', name: 'ЖК Дом 56', alt_name: 'Дом 56, адрес' }] };
+      return base(sql, params as never);
+    });
+
+    const { payload, objects } = await buildTimesheetPayload(client as never, approval as never);
+    expect(payload.employees[0]!.zero_activity).toBe(false);
+    expect(objects.payload.employees[0]!.objects).toEqual([{
+      object_id: 'obj-dom', object_key: 'obj-dom', object_name: 'ЖК Дом 56', object_address: 'Дом 56, адрес', total_hours: 0, days: {},
+    }]);
+  });
+
+  it('без назначения при всех «Н» — zero_activity true, как раньше', async () => {
+    hasRealActivity.mockReturnValue(false);
+    fetchBulk.mockResolvedValue({
+      employees: [{ id: EMPLOYEE, full_name: 'Ибрагимов А. М.', sigur_employee_id: 100751, position_id: null }],
+      posMap: new Map(),
+      entries: [{ employee_id: EMPLOYEE, work_date: '2026-08-20' }],
+      objectEntries: [],
+      dataMap: new Map([[EMPLOYEE, new Map([['2026-08-20', { status: 'absent', hours: 0, corrected: false, hoursOverridden: false }]])]]),
+    });
+    const { payload } = await buildTimesheetPayload(makeClientNoHistory(activeRow) as never, approval as never);
+    expect(payload.employees[0]!.zero_activity).toBe(true);
+  });
+});
+
 describe('buildTimesheetPayload — владение днём', () => {
   it('оставляет только дни до перевода и пересчитывает total_hours', async () => {
     fetchBulk.mockResolvedValue({

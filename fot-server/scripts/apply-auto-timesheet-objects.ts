@@ -48,7 +48,7 @@ const main = async (): Promise<void> => {
     + `выбор в ЛК/табеле → по часам ${report.fromChoice}, авто ${report.fromAuto}`,
   );
   console.log(`${prefix}без изменений (нет часов или объект тот же): ${report.unchanged}`);
-  console.log(`${prefix}личный «Офис» из «Режима табелирования» — не трогаем: ${report.personalOffice}`);
+  console.log(`${prefix}назначение из «Режима табелирования» («Офис» или объект) — не трогаем: ${report.personalPin}`);
   console.log(`${prefix}в отделах с «Офисом» (объект ставит правило отдела): ${report.officeDepartment}`);
 
   if (details) {

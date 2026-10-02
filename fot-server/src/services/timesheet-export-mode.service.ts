@@ -8,7 +8,7 @@
  *
  * Приоритет источников:
  *   1) employees.timesheet_export_mode — объект табелирования (миграция 288: ночной
- *      расчёт, «Офис» из окна «Режим табелирования») → employee_explicit
+ *      расчёт, «Офис» или объект из окна «Режим табелирования») → employee_explicit
  *   2) legacy-фолбэк по объектам ОТДЕЛА        → legacy_department | legacy_default
  * Режим отдела удалён вместе с ручной настройкой «Режим табелирования» (миграция 290).
  *
@@ -49,6 +49,12 @@ export interface IResolvedExportMode {
    * рабочих (skud). Только у employee_explicit и только если известен.
    */
   setBy?: TimesheetObjectSetBy;
+  /**
+   * Назначение из окна «Режим табелирования» конкретному сотруднику (291): личный «Офис»
+   * или объект. Ни ночь, ни фиксация его не меняют, а в табеле и выгрузках для 1С сотрудник
+   * остаётся и без активности. Только у employee_explicit и только если true.
+   */
+  windowPin?: boolean;
 }
 
 export const TIMESHEET_EXPORT_MODES: readonly TimesheetExportMode[] = [
@@ -70,11 +76,38 @@ export const CURRENT_ACTIVITY_ADDRESS = 'Текущая деятельность
  */
 export const TIMESHEET_MODE_LOCK_KEY = 249_0001;
 
+const pinSql = (mode: string, objectId: string, setBy: string, setAt: string): string =>
+  `(${setBy} IS NULL
+      AND ${setAt} IS NOT NULL
+      AND ((${mode} IS NOT DISTINCT FROM 'current_activity' AND ${objectId} IS NULL)
+        OR (${mode} IS NOT DISTINCT FROM 'object' AND ${objectId} IS NOT NULL)))`;
+
+/**
+ * Назначение из окна «Режим табелирования» конкретному сотруднику (291): личный «Офис» или
+ * объект — set_by = NULL и дата автора (289). По set_by_user_id не проверяем: при удалении
+ * учётки FK его обнуляет, а дата остаётся. Старые админские объекты без даты сюда не
+ * попадают. NULL-безопасно: всегда true или false.
+ */
+export function personalPinSql(alias: string): string {
+  return pinSql(
+    `${alias}.timesheet_export_mode`,
+    `${alias}.timesheet_export_object_id`,
+    `${alias}.timesheet_export_set_by`,
+    `${alias}.timesheet_export_set_at`,
+  );
+}
+
+/** То же для строки фиксации месяца employee_timesheet_object_months (автора копирует триггер 289). */
+export function frozenPersonalPinSql(alias: string): string {
+  return pinSql(`${alias}.mode`, `${alias}.object_id`, `${alias}.set_by`, `${alias}.set_at`);
+}
+
 interface IModeRow {
   employee_id: number | string;
   emp_mode: TimesheetExportMode | null;
   emp_object_id: string | null;
   emp_set_by?: TimesheetObjectSetBy | null;
+  emp_window_pin?: boolean | null;
   dept_current_activity: boolean | null;
 }
 
@@ -174,6 +207,8 @@ export const FROZEN_PERSONAL_OBJECT_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.object_id ELSE e.timesheet_export_object_id END';
 export const FROZEN_PERSONAL_SET_BY_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.set_by ELSE e.timesheet_export_set_by END';
+const FROZEN_PERSONAL_PIN_SQL =
+  `CASE WHEN f.employee_id IS NOT NULL THEN ${frozenPersonalPinSql('f')} ELSE ${personalPinSql('e')} END`;
 
 /**
  * Параметры месяца для запроса. null — месяц не задан или некорректен: живой режим.
@@ -246,6 +281,7 @@ export async function resolveExportModes(
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
               ${FROZEN_PERSONAL_SET_BY_SQL}             AS emp_set_by,
+              ${FROZEN_PERSONAL_PIN_SQL}                AS emp_window_pin,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -282,6 +318,7 @@ export async function resolveExportModes(
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
             e.timesheet_export_set_by           AS emp_set_by,
+            ${personalPinSql('e')}              AS emp_window_pin,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM employees e
        LEFT JOIN dept_ca dc ON dc.org_department_id = e.org_department_id
@@ -293,6 +330,23 @@ export async function resolveExportModes(
     const id = Number(row.employee_id);
     if (!Number.isInteger(id)) continue;
     result.set(id, resolveRow(row));
+  }
+  return result;
+}
+
+/**
+ * Сотрудники с назначением из окна «Режим табелирования» в месяце month (любой день или
+ * YYYY-MM): прошедший месяц — из фиксации, текущий — живой режим. month = null — живой.
+ */
+export async function listWindowPinnedEmployeeIds(
+  employeeIds: number[],
+  month: string | null,
+  exec?: DbExecutor,
+): Promise<Set<number>> {
+  const modes = await resolveExportModes(employeeIds, exec, month ? { month } : undefined);
+  const result = new Set<number>();
+  for (const [id, resolved] of modes) {
+    if (resolved.windowPin) result.add(id);
   }
   return result;
 }
@@ -349,6 +403,7 @@ export async function resolveExportModesForPairs(
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
               ${FROZEN_PERSONAL_SET_BY_SQL}             AS emp_set_by,
+              ${FROZEN_PERSONAL_PIN_SQL}                AS emp_window_pin,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -395,6 +450,7 @@ export async function resolveExportModesForPairs(
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
             e.timesheet_export_set_by           AS emp_set_by,
+            ${personalPinSql('e')}              AS emp_window_pin,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM pairs p
        JOIN employees e            ON e.id = p.employee_id
@@ -418,6 +474,7 @@ export function resolveRow(row: IModeRow): IResolvedExportMode {
       pinnedObjectId: row.emp_mode === 'object' ? row.emp_object_id : null,
       source: 'employee_explicit',
       ...(row.emp_set_by ? { setBy: row.emp_set_by } : {}),
+      ...(row.emp_window_pin === true ? { windowPin: true } : {}),
     };
   }
   // Legacy: только объекты отдела. Персональные назначения сюда намеренно не входят —

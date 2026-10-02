@@ -38,7 +38,7 @@ import {
 } from './employee-timesheet-object.service.js';
 import { toMonthStart, type TimesheetExportMode } from './timesheet-export-mode.service.js';
 import { loadBrigadeDepartmentIds, workerSql } from './timesheet-object-worker-rule.js';
-import { personalOfficeSql } from './timesheet-office-rule.js';
+import { frozenPersonalPinSql, personalOfficeSql, personalPinSql } from './timesheet-office-rule.js';
 
 export class TimesheetObjectMonthFixError extends Error {
   constructor(message: string) {
@@ -136,9 +136,8 @@ async function selectFrozenRows(client: PoolClient, month: string, contractorIds
        FROM workers w
        JOIN employee_timesheet_object_months f ON f.employee_id = w.id AND f.month = $3::date
       WHERE NOT (f.mode IS NOT DISTINCT FROM 'skud' AND f.set_by IS NOT DISTINCT FROM 'auto')
-        -- личный «Офис» из окна «Режим табелирования» (291) в строке фиксации
-        AND NOT (f.mode IS NOT DISTINCT FROM 'current_activity' AND f.object_id IS NULL
-                 AND f.set_by IS NULL AND f.set_at IS NOT NULL)
+        -- назначение из окна «Режим табелирования» (291) в строке фиксации — «Офис» или объект
+        AND NOT ${frozenPersonalPinSql('f')}
         AND (w.employment_status = 'active' OR f.set_by IS NOT DISTINCT FROM 'auto')
       ORDER BY w.id`,
     [contractorIds, brigadeIds, month],
@@ -196,6 +195,7 @@ export async function fixWorkersFrozenMonth(options: { month: string; dryRun: bo
           WHERE f.month = $1::date
             AND f.employee_id = ANY($2::int[])
             AND NOT (f.mode IS NOT DISTINCT FROM 'skud' AND f.set_by IS NOT DISTINCT FROM 'auto')
+            AND NOT ${frozenPersonalPinSql('f')}
           RETURNING f.employee_id`,
         [month, frozenIds],
       )).rows.map(row => Number(row.employee_id)))
@@ -289,14 +289,15 @@ const FROZEN_IS_OFFICE_SQL = "(f.mode IS NOT DISTINCT FROM 'current_activity' AN
 
 /**
  * Кто сейчас в окне и у кого в фиксации месяца не «Офис». Отдел с «Офисом» — прямые
- * работающие не архивные сотрудники, кроме подрядчиков (как enforceOfficeForDepartments);
- * отдел главнее личного. $1 — месяц, $2 — подрядчики.
+ * работающие не архивные сотрудники, кроме подрядчиков и назначенных лично (как
+ * enforceOfficeForDepartments: личное назначение главнее отдела); личный — только «Офис»,
+ * объект из окна скрипт не переносит. $1 — месяц, $2 — подрядчики.
  */
 async function selectOfficeWindowRows(client: PoolClient, month: string, contractorIds: string[]): Promise<IOfficeFixRow[]> {
   return (await client.query<IOfficeFixRow>(
     `SELECT e.id, e.full_name, e.employment_status,
             f.mode, f.object_id::text AS object_id, f.set_by,
-            CASE WHEN tod.org_department_id IS NOT NULL THEN 'department' ELSE 'personal' END AS via,
+            CASE WHEN ${personalOfficeSql('e')} THEN 'personal' ELSE 'department' END AS via,
             d.name AS department_name
        FROM employees e
        JOIN employee_timesheet_object_months f ON f.employee_id = e.id AND f.month = $1::date
@@ -305,7 +306,7 @@ async function selectOfficeWindowRows(client: PoolClient, month: string, contrac
       WHERE e.is_archived = false
         AND e.employment_status = 'active'
         AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($2::uuid[])))
-        AND (tod.org_department_id IS NOT NULL OR ${personalOfficeSql('e')})
+        AND (${personalOfficeSql('e')} OR (tod.org_department_id IS NOT NULL AND NOT ${personalPinSql('e')}))
         AND NOT ${FROZEN_IS_OFFICE_SQL}
       ORDER BY e.id`,
     [month, contractorIds],
@@ -346,6 +347,7 @@ export async function applyOfficeWindowToFrozenMonth(options: { month: string; d
           WHERE f.month = $1::date
             AND f.employee_id = ANY($2::int[])
             AND NOT ${FROZEN_IS_OFFICE_SQL}
+            AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.id = f.employee_id AND ${personalPinSql('e')})
           RETURNING f.employee_id`,
         [month, departmentIds],
       )).rows;

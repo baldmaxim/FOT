@@ -2,6 +2,7 @@ import { departmentManagerConditionSql } from './department-managers.service.js'
 import { query } from '../config/postgres.js';
 import type { IDepartmentTimesheetData, TimesheetExportRangeArg } from './timesheet-export.service.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
+import { listWindowPinnedEmployeeIds } from './timesheet-export-mode.service.js';
 import { resolveTimesheetPeriodRange, resolveTimesheetDateRange } from './timesheet-department-assignments.service.js';
 import {
   FROZEN_PERSONAL_MODE_SQL,
@@ -282,8 +283,9 @@ export async function fetchTimesheetDataForObjectIds(
   mergeManagerIdsIntoGroups(deptGroups, managerMap);
 
   // Руководители добавлены сознательно БЕЗ СКУД-проходов — фильтр «пустых»
-  // (excludeZeroActivity ниже) не должен их выбрасывать.
-  const managerExemptIds = new Set<number>();
+  // (excludeZeroActivity ниже) не должен их выбрасывать; назначенные в окне «Режим
+  // табелирования» (291) — тоже: их строка назначенного объекта есть и при всех «Н».
+  const managerExemptIds = new Set<number>(await listWindowPinnedEmployeeIds(employeeIds, month));
   for (const ids of managerMap.values()) {
     for (const id of ids) managerExemptIds.add(id);
   }

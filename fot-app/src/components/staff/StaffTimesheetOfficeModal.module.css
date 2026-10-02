@@ -245,6 +245,16 @@
   overflow-wrap: anywhere;
 }
 
+/* Что назначено — между ФИО и «Снять». */
+.assignedLabel {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .removeButton {
   flex: 0 0 auto;
   min-height: 44px;
@@ -352,6 +362,28 @@
 /* «Назначить» — по содержимому: «Офис» с галочкой. */
 .colAssign {
   width: 1%;
+}
+
+/* Вкладка «Сотрудник»: список назначения — шире кнопки, длинные названия объектов. */
+.colAssignSelect {
+  width: 240px;
+}
+
+/* Системный select (sc-schedule-filter): тап-цель 44 px и 16 px — без автозума iOS/Android. */
+.assignSelect.assignSelect {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 44px;
+  font-size: 16px;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.assignSelect.assignSelect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* «Офис» у правого края таблицы — с тем же отступом, с каким слева начинается ФИО. */
@@ -482,6 +514,11 @@
   .officeButton {
     min-height: 30px;
   }
+
+  .assignSelect.assignSelect {
+    min-height: 34px;
+    font-size: 13px;
+  }
 }
 
 /* Узкий экран ноутбука и планшет: окно почти во всю ширину и отступы меньше — шапка таблицы
@@ -519,7 +556,8 @@
   .saveButton,
   .removeButton,
   .rowButton,
-  .officeButton {
+  .officeButton,
+  .assignSelect.assignSelect {
     min-height: 44px;
     height: auto;
   }

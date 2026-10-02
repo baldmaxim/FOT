@@ -1,6 +1,6 @@
 /**
- * Окно «Режим табелирования» в «Управлении кадрами» (миграция 291): «Офис» отделу или
- * сотруднику. Право — /staff-control/timesheet-office (admin, hr_admin); логика —
+ * Окно «Режим табелирования» в «Управлении кадрами» (миграция 291): «Офис» отделу,
+ * сотруднику — «Офис» или объект. Право — /staff-control/timesheet-office (admin, hr_admin); логика —
  * timesheet-office.service.ts (запись) и timesheet-office-read.service.ts (чтение).
  */
 import { z } from 'zod';
@@ -28,7 +28,8 @@ const updateSchema = z.object({
   employees: z.object({
     add: idList(z.number().int().positive()),
     remove: idList(z.number().int().positive()),
-  }).default({ add: [], remove: [] }),
+    objects: idList(z.object({ id: z.number().int().positive(), object_id: z.string().uuid() })),
+  }).default({ add: [], remove: [], objects: [] }),
 });
 
 const searchSchema = z.object({
@@ -104,7 +105,7 @@ export const timesheetOfficeController = {
     }
   },
 
-  /** PUT /api/admin/timesheet-office { departments: { add, remove }, employees: { add, remove } } */
+  /** PUT /api/admin/timesheet-office { departments: { add, remove }, employees: { add, remove, objects } } */
   async update(req: AuthenticatedRequest, res: Response): Promise<void> {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
