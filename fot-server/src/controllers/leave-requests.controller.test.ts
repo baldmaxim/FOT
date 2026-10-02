@@ -126,12 +126,15 @@ vi.mock('../services/timesheet-object.service.js', async (importActual) => ({
   OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
 }));
 // hrAcknowledge проверяет право по маркеру семейства заявления (отпуск/увольнение).
-const { pageAccessMock, rolePageMock } = vi.hoisted(() => ({
+const { pageAccessMock, rolePageMock, hrAdminManageMock } = vi.hoisted(() => ({
   pageAccessMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
   // Матрица роли «Заместитель» (миграция 292): для других ролей не вызывается.
   rolePageMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
+  // «Как админ» (админ или кадровый админ): по умолчанию — только is_admin, как раньше.
+  hrAdminManageMock: vi.fn(async (req: { user: { is_admin?: boolean } }, _page: string) => !!req.user.is_admin),
 }));
 vi.mock('../services/access-control.service.js', () => ({
+  canManageAsHrAdmin: hrAdminManageMock,
   resolveEffectivePageAccess: pageAccessMock,
   resolveRolePageAccess: rolePageMock,
   // Нужны hasDeputyOnlyLeaveAccess: страницу «Заявления» роль выдаёт сама.
@@ -657,6 +660,19 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
     await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
 
     expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('approved: кадровый админ (не согласовавший) проходит гард — дальше обычная проверка периода', async () => {
+    hrAdminManageMock.mockResolvedValueOnce(true);
+    pgQueryOne.mockResolvedValueOnce({ ...APPROVED_ROW, reviewer_id: 'other-uuid' });
+    pgQuery.mockResolvedValueOnce([{ ok: 1 }]); // hasLockedTimesheetDates: период сдан
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(hrAdminManageMock).toHaveBeenCalledWith(expect.anything(), '/leave-requests');
+    expect(res._status).toBe(409);
     expect(pgTx).not.toHaveBeenCalled();
   });
 
@@ -2426,6 +2442,24 @@ describe('leaveRequestsController.revokeApproval', () => {
 
     expect(res._status).toBe(200);
     expect(pgTx).toHaveBeenCalledTimes(1);
+  });
+
+  it('кадровый админ (не согласовавший) отменяет и начавшийся отпуск — как админ', async () => {
+    hrAdminManageMock.mockResolvedValueOnce(true);
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({
+      reviewer_id: 'someone-else', start_date: '2026-01-01', end_date: '2026-01-03',
+    }));
+    pgQuery.mockResolvedValueOnce([]); // гард: период не закрыт
+    mockRevokeTx();
+    const res = makeRes();
+    const hrAdminReq = makeReq({ user: { id: 'hr-admin-uuid', role_code: 'hr_admin', is_admin: false } as never });
+
+    await leaveRequestsController.revokeApproval(hrAdminReq, res);
+
+    expect(hrAdminManageMock).toHaveBeenCalledWith(expect.anything(), '/leave-requests');
+    expect(res._status).toBe(200);
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall![1]![4]).toBe('admin');
   });
 
   it('админ, который сам не согласовывал → cancel_source=admin', async () => {

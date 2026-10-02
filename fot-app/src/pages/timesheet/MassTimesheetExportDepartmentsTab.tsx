@@ -269,12 +269,16 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     return set;
   }, [approvedDeptIds, structure?.departments]);
 
+  // Табель всей организации (админ и кадровый админ) — дерево без фильтра, как на бэке
+  // (resolveTimesheetScope → 'all'). Кадровая служба (hr) там получает 'department',
+  // поэтому data.scope.all здесь не подходит.
+  const hasAllDepartments = profile?.is_admin === true || profile?.all_departments_scope === true;
   const managedDepartmentIds = useMemo(() => {
-    if (profile?.is_admin) return null;
+    if (hasAllDepartments) return null;
     const ids = new Set<string>(profile?.managed_department_ids?.filter(Boolean) ?? []);
     if (profile?.department_id) ids.add(profile.department_id);
     return ids;
-  }, [profile?.is_admin, profile?.managed_department_ids, profile?.department_id]);
+  }, [hasAllDepartments, profile?.managed_department_ids, profile?.department_id]);
 
   const scopedDepartments = useMemo(
     () => managedDepartmentIds ? filterDepartmentTreeByIds(departments, managedDepartmentIds) : departments,

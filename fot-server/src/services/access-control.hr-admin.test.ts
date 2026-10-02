@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AuthenticatedRequest, SystemRole } from '../types/index.js';
 
 /**
- * Набор страниц роли «Кадровый админ» (миграция 270) и — главное — проверка, что
+ * Набор страниц роли «Кадровый админ» (миграции 270, 296) и — главное — проверка, что
  * all_departments_scope НЕ является разрешением на действие.
  *
  * Флаг даёт только скоуп данных; право на каждое действие по-прежнему решает
@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   getRoleByCode: vi.fn(),
   getRoleById: vi.fn(),
   resolveAccessibleDepartmentIds: vi.fn(),
+  hasAllDepartmentsScope: vi.fn(),
   hasHiringAutoAccess: vi.fn(),
   isHiringRequesterRole: vi.fn(),
 }));
@@ -26,6 +27,7 @@ vi.mock('./roles-cache.service.js', () => ({
 }));
 vi.mock('./data-scope.service.js', () => ({
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
+  hasAllDepartmentsScope: h.hasAllDepartmentsScope,
   // Авто-грант заместителя (миграция 283) по умолчанию выключен.
   hasDeputyAssignment: vi.fn(async () => false),
 }));
@@ -34,7 +36,11 @@ vi.mock('./hiring-access.service.js', () => ({
   isHiringRequesterRole: h.isHiringRequesterRole,
 }));
 
-import { resolveEffectivePageAccess, invalidateRolePageAccessCache } from './access-control.service.js';
+import {
+  canManageAsHrAdmin,
+  invalidateRolePageAccessCache,
+  resolveEffectivePageAccess,
+} from './access-control.service.js';
 
 const HR_ADMIN_PAGES = [
   '/staff-control',
@@ -45,12 +51,15 @@ const HR_ADMIN_PAGES = [
   '/leave-requests',
   '/sigur',
   '/admin/users',
+  // Миграция 296: смена роли, отделы и папки табельщиц (allowlist ролей — отдельно),
+  // «Переводы и исключения».
+  '/admin/users/access',
+  '/admin/timesheet-transfers',
   '/admin/checks',
 ];
 
 const DENIED_PAGES = [
   '/skud-settings',
-  '/admin/users/access',
   '/admin/roles',
   '/admin/settings',
   '/admin/audit',
@@ -107,6 +116,7 @@ beforeEach(() => {
   h.isHiringRequesterRole.mockReset().mockReturnValue(false);
   // Флаг даёт видимость всей организации — на права страниц это влиять не должно.
   h.resolveAccessibleDepartmentIds.mockReset().mockResolvedValue('all');
+  h.hasAllDepartmentsScope.mockReset().mockResolvedValue(true);
 });
 
 describe('hr_admin: набор страниц', () => {
@@ -117,7 +127,7 @@ describe('hr_admin: набор страниц', () => {
     }
   });
 
-  it('не получает СКУД, настройку чужих доступов и системные разделы', async () => {
+  it('не получает СКУД и системные разделы', async () => {
     h.pgQuery.mockResolvedValue(grantRows(HR_ADMIN_PAGES));
     for (const page of DENIED_PAGES) {
       await expect(resolveEffectivePageAccess(req(), page, 'view')).resolves.toBe(false);
@@ -147,5 +157,32 @@ describe('all_departments_scope не заменяет page-access', () => {
     h.pgQuery.mockResolvedValue(grantRows(['/staff-control', '/employee/requests']));
     await expect(resolveEffectivePageAccess(req(), '/staff-control', 'view')).resolves.toBe(false);
     await expect(resolveEffectivePageAccess(req(), '/employee/requests', 'view')).resolves.toBe(true);
+  });
+});
+
+describe('canManageAsHrAdmin: «как админ» = глобальный скоуп И edit страницы', () => {
+  it('админ проходит без проверки страницы', async () => {
+    h.pgQuery.mockResolvedValue([]);
+    const adminReq = { user: { id: 'u-admin', role_code: 'admin', is_admin: true, employee_id: 1 } } as unknown as AuthenticatedRequest;
+    await expect(canManageAsHrAdmin(adminReq, '/leave-requests')).resolves.toBe(true);
+    expect(h.hasAllDepartmentsScope).not.toHaveBeenCalled();
+  });
+
+  it('флаг + edit страницы — да', async () => {
+    h.pgQuery.mockResolvedValue(grantRows(['/leave-requests']));
+    await expect(canManageAsHrAdmin(req(), '/leave-requests')).resolves.toBe(true);
+  });
+
+  it('флаг + только просмотр страницы — нет', async () => {
+    h.pgQuery.mockResolvedValue([
+      { role_code: 'hr_admin', page_path: '/leave-requests', can_view: true, can_edit: false },
+    ]);
+    await expect(canManageAsHrAdmin(req(), '/leave-requests')).resolves.toBe(false);
+  });
+
+  it('edit страницы без глобального скоупа — нет', async () => {
+    h.hasAllDepartmentsScope.mockResolvedValue(false);
+    h.pgQuery.mockResolvedValue(grantRows(['/leave-requests']));
+    await expect(canManageAsHrAdmin(req(), '/leave-requests')).resolves.toBe(false);
   });
 });

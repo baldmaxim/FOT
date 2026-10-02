@@ -30,6 +30,7 @@ import {
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
 import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshestroyPresenceIds, LI_OBSHESTROY_DEPARTMENT_ID, TIMEKEEPER_ROLE_CODE } from '../services/timekeeper-scope.service.js';
+import { canManageAsHrAdmin } from '../services/access-control.service.js';
 import {
   canAccessEmployeeForTimesheetPeriod,
   hasManagedTimesheetAccess,
@@ -4542,6 +4543,9 @@ export const timesheetController = {
         req,
         adjustments.map(item => ({ employeeId: item.employee_id, workDate: item.work_date })),
       );
+      // Кадровый админ (глобальный скоуп + edit табеля) правит, как админ: запись
+      // (PUT /:id) тип источника не ограничивает, флаг не должен прятать кнопку.
+      const editsLikeAdmin = await canManageAsHrAdmin(req, '/timesheet');
       const rows = await Promise.all(adjustments.map(async (item) => {
         const lockInfo = correctionLocks.get(lockKey(item.employee_id, item.work_date)) ?? null;
         const approvalLocked = Boolean(lockInfo);
@@ -4553,10 +4557,10 @@ export const timesheetController = {
         // (leave_request со статусом work/manual — по сути ручная work-правка).
         const isManualLike = item.source_type === 'manual'
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
-        // Флаг обязан совпадать с поведением записи. Админ по-прежнему не ограничен
-        // окном месяцев, скоупом и типом источника, но закрытый период не обходит
-        // никто: там правка вернёт 409, и кнопка не должна выглядеть живой.
-        const canEdit = req.user.is_admin
+        // Флаг обязан совпадать с поведением записи. Админ (и кадровый админ) по-прежнему
+        // не ограничен окном месяцев, скоупом и типом источника, но закрытый период не
+        // обходит никто: там правка вернёт 409, и кнопка не должна выглядеть живой.
+        const canEdit = editsLikeAdmin
           ? !approvalLocked
           : !approvalLocked && monthAllowed && isManualLike && isEmpEditable(item.employee_id);
         // Удаляемы: manual и ЛЮБЫЕ материализации заявления (включая отсутствия —

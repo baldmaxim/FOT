@@ -202,7 +202,7 @@ import {
 import { resolveOverlapSubmission } from '../services/timesheet-approval-overlap.service.js';
 import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import { getAllowedSubmissionRange, isRangeSubmittable, isRangeWithinCompletedPeriods } from '../services/timesheet-period.service.js';
-import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { canManageAsHrAdmin, resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
   createAttachmentRecord,
   deleteAttachmentRecord,
@@ -1335,9 +1335,10 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         );
 
     // Отозвать можно поданный (submitted) или уже утверждённый (approved) табель.
-    // Утверждённый — только админом: иначе руководитель сам снимал бы утверждение HR
-    // и правил закрытый период, обходя гард закрытого табеля в два клика. Остальным
-    // утверждённый период переоткрывает кадровая служба через return-to-rework.
+    // Утверждённый — только админом или кадровым админом (глобальный скоуп + edit
+    // «Согласований»): иначе руководитель сам снимал бы утверждение HR и правил закрытый
+    // период, обходя гард закрытого табеля в два клика. Остальным утверждённый период
+    // переоткрывает кадровая служба через return-to-rework.
     if (!existing || (existing.status !== 'submitted' && existing.status !== 'approved')) {
       res.status(409).json({
         success: false,
@@ -1346,7 +1347,7 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
     const wasApproved = existing.status === 'approved';
-    if (wasApproved && !req.user.is_admin) {
+    if (wasApproved && !(await canManageAsHrAdmin(req, '/timesheet-hr'))) {
       res.status(403).json({
         success: false,
         error: 'Утверждённый табель возвращает на доработку кадровая служба',

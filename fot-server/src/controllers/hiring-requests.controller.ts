@@ -2,7 +2,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import { r2Service } from '../services/r2.service.js';
-import { hasPageView } from '../services/access-control.service.js';
+import { canManageAsHrAdmin, hasPageView } from '../services/access-control.service.js';
 import {
   isHiringManagerByEmployee,
   isRecruiter,
@@ -30,6 +30,9 @@ const CANDIDATE_STATUSES = ['new', 'screening', 'interview', 'offer', 'accepted'
 // ===================== Права =====================
 async function canManageHiring(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin) return true;
+  // Кадровый админ ведёт подбор как админ: глобальный скоуп + edit «Управления кадрами».
+  // Ключ вкладки подбора не подходит — он только на просмотр.
+  if (await canManageAsHrAdmin(req, '/staff-control')) return true;
   return isHiringManagerByEmployee(req.user.employee_id);
 }
 

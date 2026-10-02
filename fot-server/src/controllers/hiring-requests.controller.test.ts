@@ -52,8 +52,12 @@ vi.mock('../services/recipients.service.js', () => ({ getUserIdsByEmployeeIds: u
 vi.mock('../services/notification.service.js', () => ({ notificationService: { createMany } }));
 vi.mock('../services/push.service.js', () => ({ pushService: { sendGenericNotification: sendPush } }));
 
-const { pageView } = vi.hoisted(() => ({ pageView: vi.fn(async () => false) }));
-vi.mock('../services/access-control.service.js', () => ({ hasPageView: pageView }));
+const { pageView, hrAdminManage } = vi.hoisted(() => ({
+  pageView: vi.fn(async () => false),
+  // «Как админ» для кадрового админа: по умолчанию — только is_admin, как раньше.
+  hrAdminManage: vi.fn(async (req: { user: { is_admin?: boolean } }, _page: string) => !!req.user.is_admin),
+}));
+vi.mock('../services/access-control.service.js', () => ({ hasPageView: pageView, canManageAsHrAdmin: hrAdminManage }));
 vi.mock('../services/r2.service.js', () => ({ r2Service: { isEnabledAsync: vi.fn(async () => true), generateHiringRequestKey: vi.fn(() => 'k'), uploadObject: vi.fn(), deleteObject: vi.fn(), generateDownloadUrl: vi.fn(async () => 'url') } }));
 
 import { hiringRequestsController as c } from './hiring-requests.controller.js';
@@ -79,6 +83,7 @@ beforeEach(() => {
   assignees.mockResolvedValue([]); pageView.mockResolvedValue(false);
   hrManagers.mockResolvedValue([]); userIdsByEmp.mockResolvedValue([]); empUserId.mockResolvedValue(null);
   pgQuery.mockResolvedValue([]); pgQueryOne.mockResolvedValue(null); pgExecute.mockResolvedValue(1);
+  hrAdminManage.mockImplementation(async (req: { user: { is_admin?: boolean } }) => !!req.user.is_admin);
 });
 
 describe('list', () => {
@@ -272,6 +277,34 @@ describe('addAssignee', () => {
     await new Promise(r => setImmediate(r));
     expect(empUserId).not.toHaveBeenCalled();
     expect(createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('кадровый админ: подбор как у админа (глобальный скоуп + edit «Управления кадрами»)', () => {
+  it('видит все заявки и назначает рекрутера без должности руководителя отдела кадров', async () => {
+    hrAdminManage.mockImplementation(async (_req: unknown, page: string) => page === '/staff-control');
+    recruiter.mockResolvedValue(true);
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const listRes = makeRes();
+    await c.list(makeReq({ user: { role_code: 'hr_admin' } as never }), listRes);
+    const sql = pgQuery.mock.calls[0][0] as string;
+    // Без фильтра «свои / назначенные / моего отдела» — как у админа.
+    expect(sql).not.toContain('r.author_employee_id = $1');
+    expect(hrAdminManage).toHaveBeenCalledWith(expect.anything(), '/staff-control');
+    expect(listRes._json).toMatchObject({ meta: { can_manage: true } });
+
+    const res = makeRes();
+    await c.addAssignee(makeReq({ user: { role_code: 'hr_admin' } as never, params: { id: '1' }, body: { employee_id: 77 } }), res);
+    expect(res._json).toMatchObject({ success: true });
+  });
+
+  it('без права «как админ» и не по должности — назначить рекрутера нельзя (403)', async () => {
+    recruiter.mockResolvedValue(true);
+    const res = makeRes();
+    await c.addAssignee(makeReq({ user: { role_code: 'hr' } as never, params: { id: '1' }, body: { employee_id: 77 } }), res);
+    expect(res._status).toBe(403);
+    expect(txClient.query).not.toHaveBeenCalled();
   });
 });
 

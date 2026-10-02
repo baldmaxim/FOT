@@ -96,10 +96,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   // запускаем — часть их эндпоинтов кадровой роли закрыта и вернула бы 403.
   // «Зарплата» (персональный доступ к разделу, миграция 288) — только системному админу:
   // эндпоинты за requireSystemAdmin, админ компании получил бы 403.
-  const { isSystemAdmin } = useAuth();
+  // «Выходные» — только админу: роутер weekend-approvals за requireAdmin, кадровый админ
+  // получил бы 403 на загрузке и частичное сохранение панели.
+  const { isSystemAdmin, profile } = useAuth();
+  const isAdmin = profile?.is_admin === true;
   const tabAllowed = useCallback(
-    (tab: Tab) => allowedTabs.includes(tab) && (tab !== 'salary' || isSystemAdmin),
-    [allowedTabs, isSystemAdmin],
+    (tab: Tab) => allowedTabs.includes(tab)
+      && (tab !== 'salary' || isSystemAdmin)
+      && (tab !== 'weekend' || isAdmin),
+    [allowedTabs, isSystemAdmin, isAdmin],
   );
   const toast = useToast();
   const queryClient = useQueryClient();

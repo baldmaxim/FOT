@@ -14,6 +14,8 @@ interface IUserProfileLite {
 interface IRoleWorkflowAccess {
   roleCode: string;
   isAdmin: boolean;
+  /** Не-админская роль с глобальным скоупом данных (all_departments_scope, миграция 270). */
+  allDepartments: boolean;
   page_access: Record<string, { can_view: boolean; can_edit: boolean }>;
 }
 
@@ -50,10 +52,15 @@ async function loadRoleWorkflowAccess(roleIds: string[]): Promise<Map<string, IR
   const entries = await Promise.all(unique.map(async (roleId) => {
     const role = await getRoleById(roleId);
     if (!role) {
-      return [roleId, { roleCode: roleId, isAdmin: false, page_access: {} }] as const;
+      return [roleId, { roleCode: roleId, isAdmin: false, allDepartments: false, page_access: {} }] as const;
     }
     const page_access = await getRolePageAccess(roleId);
-    return [roleId, { roleCode: role.code, isAdmin: !!role.is_admin, page_access }] as const;
+    return [roleId, {
+      roleCode: role.code,
+      isAdmin: !!role.is_admin,
+      allDepartments: !role.is_admin && !!role.all_departments_scope,
+      page_access,
+    }] as const;
   }));
 
   return new Map(entries);
@@ -108,7 +115,9 @@ export async function listTimesheetWorkflowRecipientIds(
 
     if (!kinds.some(kind => roleMatchesWorkflowKind(roleAccess, kind))) continue;
 
-    if (roleAccess.isAdmin) {
+    // Админ и кадровый админ (скоуп данных — вся организация) получают по любому отделу;
+    // остальные — только по отделам, которыми управляют.
+    if (roleAccess.isAdmin || roleAccess.allDepartments) {
       recipients.add(profile.id);
       continue;
     }

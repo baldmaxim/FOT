@@ -209,9 +209,11 @@ router.delete(
   requireCritical2FA,
   sigurAdminController.deleteDepartmentRecursive,
 );
+// Новая должность из карточки сотрудника SIGUR («Новая должность → Создать») — кадровая
+// операция, поэтому достаточно /sigur. Переименование должностей остаётся за /skud-settings.
 router.post(
   '/admin/positions',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.createPosition,
 );
@@ -473,10 +475,13 @@ router.put('/sync-filter', requirePageAccess('/skud-settings', 'edit'), sigurFil
 
 // === Card Reader (USB-считыватель) ===
 
-// GET /api/sigur/cards/lookup?uid=<sigurCard16hex> — кому принадлежит карта
+// GET /api/sigur/cards/lookup?uid=<sigurCard16hex> — кому принадлежит карта.
+// /sigur — для «Сканировать» в карточке SIGUR: сканер сначала ищет владельца, потом
+// привязывает (привязка — /admin/employees/:id/cards/binding под /sigur). Страница
+// «Пропуск» и /cards/assign по-прежнему требуют /skud-card-reader.
 router.get(
   '/cards/lookup',
-  requirePageAccess('/skud-card-reader', 'view'),
+  requireAnyPageAccess(['/skud-card-reader', '/sigur'], 'view'),
   sigurCardReaderController.lookup,
 );
 

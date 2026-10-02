@@ -15,6 +15,7 @@ import { OnlineDot } from '../ui/OnlineDot';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
+import { filterAssignableRoleOptions } from '../../utils/assignableRoleOptions';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
@@ -65,8 +66,8 @@ interface IUserRowExpandedProps {
   canManageCompanies: boolean;
   /**
    * Право настраивать ЧУЖИЕ доступы (/admin/users/access, миграция 270): роль
-   * пользователя, объекты и папки табельщицы, чужая 2FA. У кадрового админа его
-   * нет — иначе кнопки были бы видны и упирались в 403.
+   * пользователя, объекты и папки табельщицы, чужая 2FA. Кадровому админу выдано
+   * миграцией 296; роли он выдаёт только из allowlist (см. assignableRoles).
    */
   canManageAccess: boolean;
   /** Привязка подрядчика к организации: системный админ или ключ /admin/users/accounts. */
@@ -720,9 +721,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });
   };
 
+  const viewerIsAdmin = !!profile?.is_admin;
   const buildAssignableRoles = useCallback((user: IUserFromApi): IRoleOption[] => {
-    const list: IRoleOption[] = roles
-      .filter(role => role.is_active || role.code === user.position_type)
+    // Кадровому админу — только роли из allowlist (assignable), текущая — всегда.
+    const list: IRoleOption[] = filterAssignableRoleOptions(roles, user.position_type, viewerIsAdmin)
       .map(role => ({ ...role }));
     if (!list.some(role => role.code === user.position_type)) {
       list.push({
@@ -752,7 +754,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
       });
     }
     return list;
-  }, [getRoleLabel, roles]);
+  }, [getRoleLabel, roles, viewerIsAdmin]);
 
   return (
     <>

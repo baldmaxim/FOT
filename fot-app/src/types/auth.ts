@@ -27,6 +27,8 @@ export interface SystemRole {
   object_kpi_own_objects_only?: boolean;
   /** СКОУП ДАННЫХ: все отделы на чтение и запись (миграция 270). Не разрешение на действие — оно всегда за page-access. */
   all_departments_scope?: boolean;
+  /** Роль вправе назначать не-админ (кадровый админ). Считается на сервере по allowlist (GET /roles). */
+  assignable?: boolean;
   /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. */
   timesheet_months_back: number;
   /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. */

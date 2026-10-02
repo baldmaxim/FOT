@@ -155,9 +155,10 @@ export const TimesheetPage: FC = () => {
   const objectEntriesDisabled = profile?.corrections_disable_object_entries === true;
   const OBJECT_ENTRIES_DISABLED_MESSAGE = 'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».';
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
-  // «Переводы» — просмотр и откат кадровых перемещений: право даёт edit смены отдела,
-  // а не сам по себе глобальный скоуп (см. canManageAsHrAdmin).
-  const canViewTransfers = canManageAsHrAdmin('/staff-control/department');
+  // «Переводы» — просмотр и откат кадровых перемещений: тот же ключ, что у бэка
+  // (canManageTransfers) — «Переводы и исключения» вместе с глобальным скоупом, а не
+  // сам по себе глобальный скоуп (см. canManageAsHrAdmin).
+  const canViewTransfers = canManageAsHrAdmin('/admin/timesheet-transfers');
   // Флаг роли view_all_departments (миграция 237): просмотр всех отделов ТОЛЬКО в табеле.
   // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
   // обрабатываем локально, окно месяцев роли при этом остаётся включённым.

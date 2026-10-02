@@ -7,7 +7,7 @@ import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getEmployeeUserId, resolveRoutedLeaveApprovers } from '../services/recipients.service.js';
-import { hasPageView, resolveEffectivePageAccess, resolveRolePageAccess, roleHasAdminAccess } from '../services/access-control.service.js';
+import { canManageAsHrAdmin, hasPageView, resolveEffectivePageAccess, resolveRolePageAccess, roleHasAdminAccess } from '../services/access-control.service.js';
 import { isDeputyRole } from '../services/deputy-role.service.js';
 import { roleAllowsTimesheet } from '../services/timesheet-scope.service.js';
 
@@ -2386,11 +2386,10 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
     }
 
     // У согласованного заявления часы уже уехали в табель: правку допускаем только
-    // тому, кто согласовал (или админу), и только пока период не сдан.
+    // тому, кто согласовал (или админу / кадровому админу), и только пока период не сдан.
     if (request.status === 'approved') {
-      const isAdmin = !!req.user.is_admin;
       const isApprover = !!request.reviewer_id && req.user.id === request.reviewer_id;
-      if (!isAdmin && !isApprover) {
+      if (!isApprover && !(await canManageAsHrAdmin(req, '/leave-requests'))) {
         res.status(403).json({ success: false, error: 'Часы согласованной корректировки может изменить только администратор или согласовавший руководитель' });
         return;
       }
@@ -3138,7 +3137,8 @@ async function deleteLeaveRequestAdjustments(
  * Управленческая отмена СОГЛАСОВАННОГО заявления (admin или согласовавший руководитель).
  * Иной смысл, чем у самоотмены сотрудника (`cancel`): откат принятого решения.
  *  - типы: любые; статус: только approved;
- *  - право (источник истины): is_admin || reviewer_id === req.user.id;
+ *  - право (источник истины): canManageAsHrAdmin('/leave-requests') (админ или кадровый
+ *    админ) || reviewer_id === req.user.id;
  *  - для ОТПУСКОВ руководитель — только если все даты строго в будущем (Europe/Moscow):
  *    отпуск отменяют до его начала. Для корректировок/выходных это правило неприменимо
  *    (дата всегда в прошлом), их сдерживает гард закрытого табеля;
@@ -3166,7 +3166,8 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const isAdmin = !!req.user.is_admin;
+    // Админ и кадровый админ (глобальный скоуп + edit «Заявлений») — как администратор.
+    const isAdmin = await canManageAsHrAdmin(req, '/leave-requests');
     const isApprover = !!request.reviewer_id && req.user.id === request.reviewer_id;
     if (!isAdmin && !isApprover) {
       res.status(403).json({ success: false, error: 'Отменить согласование может только администратор или согласовавший руководитель' });

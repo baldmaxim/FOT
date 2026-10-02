@@ -252,10 +252,16 @@ async function persistAccessProfile(
 export const rolesController = {
   async getRoles(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const data = await query<SystemRole>(
+      const rows = await query<SystemRole>(
         `SELECT * FROM system_roles
           ORDER BY is_admin DESC, name ASC`,
       );
+      // assignable — как в getLabels: селектор роли в «Пользователях» кадровому админу
+      // показывает только роли из allowlist, иначе смена роли упиралась бы в 403.
+      const data = await Promise.all(rows.map(async row => ({
+        ...row,
+        assignable: await isRoleAssignableByNonAdmin(row.code),
+      })));
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({

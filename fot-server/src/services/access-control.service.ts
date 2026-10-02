@@ -5,7 +5,7 @@ import {
   type PageCatalogItem,
 } from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
-import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
+import { hasAllDepartmentsScope, resolveAccessibleDepartmentIds } from './data-scope.service.js';
 import { hasDeputyAssignment } from './data-scope.service.js';
 import { isDeputyRole } from './deputy-role.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
@@ -314,6 +314,21 @@ export async function resolveEffectivePageAccess(
     return hasHiringAutoAccess(req.user.employee_id, req.user.is_admin);
   }
   return false;
+}
+
+/**
+ * Действие «как у администратора» для кадрового админа — зеркало фронтового
+ * canManageAsHrAdmin (AuthContext). Админ проходит всегда, как прежняя проверка
+ * is_admin. Не-админ — только роль с глобальным скоупом данных (all_departments_scope,
+ * миграция 270) И edit страницы действия: флаг сам по себе права не даёт.
+ */
+export async function canManageAsHrAdmin(
+  req: AuthenticatedRequest,
+  pagePath: string,
+): Promise<boolean> {
+  if (req.user.is_admin) return true;
+  if (!(await hasAllDepartmentsScope(req))) return false;
+  return resolveEffectivePageAccess(req, pagePath, 'edit');
 }
 
 // Реализация переехала в utils/timesheet-lock-toggle.ts — её импортирует ещё и ответ

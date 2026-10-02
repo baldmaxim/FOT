@@ -3,8 +3,9 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
  * Отзыв табеля: руководитель возвращает в черновик только ПОДАННЫЙ период.
- * Утверждённый отзывает лишь админ — иначе руководитель снимал бы утверждение HR
- * и правил закрытый табель, обходя гард закрытого периода.
+ * Утверждённый отзывает лишь админ или кадровый админ (canManageAsHrAdmin) — иначе
+ * руководитель снимал бы утверждение HR и правил закрытый табель, обходя гард
+ * закрытого периода.
  *
  * Отзыв отдела в той же транзакции отзывает persona-подачу автора подачи за тот же
  * диапазон (кейс Карасени: отдел отозван, а persona со строкой руководителя держала замок).
@@ -34,6 +35,15 @@ vi.mock('../services/data-scope.service.js', async (importActual) => ({
   resolveEditableDepartmentIds: resolveEditableDeptsMock,
   // Отзыв табеля резолвит отдел по табельному скоупу (full + отделы заместителя).
   resolveTimesheetEditableDepartmentIds: resolveEditableDeptsMock,
+}));
+
+const { hrAdminManageMock } = vi.hoisted(() => ({
+  // «Как админ» (админ или кадровый админ): по умолчанию — только is_admin.
+  hrAdminManageMock: vi.fn(async (req: { user: { is_admin?: boolean } }, _page: string) => !!req.user.is_admin),
+}));
+vi.mock('../services/access-control.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/access-control.service.js')>()),
+  canManageAsHrAdmin: hrAdminManageMock,
 }));
 
 const { auditMock } = vi.hoisted(() => ({ auditMock: vi.fn(async () => undefined) }));
@@ -174,6 +184,20 @@ describe('recall — отзыв табеля', () => {
     expect(res._status).toBe(200);
     expect((res._json as { data: { status: string; reviewed_by: string | null } }).data.status).toBe('draft');
     expect((res._json as { data: { reviewed_by: string | null } }).data.reviewed_by).toBeNull();
+  });
+
+  it('кадровый админ отзывает утверждённый табель: 200, статус draft', async () => {
+    hrAdminManageMock.mockResolvedValueOnce(true);
+    mockApproval('approved');
+    const res = makeRes();
+    const req = makeReq(false);
+    (req.user as { role_code: string }).role_code = 'hr_admin';
+
+    await timesheetApprovalController.recall(req, res);
+
+    expect(hrAdminManageMock).toHaveBeenCalledWith(expect.anything(), '/timesheet-hr');
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { status: string } }).data.status).toBe('draft');
   });
 
   it('отзыв обнуляет открытие периода: unlock-поля не переживают возврат в draft', async () => {

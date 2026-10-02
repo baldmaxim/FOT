@@ -17,6 +17,7 @@ import { auditService } from '../services/audit.service.js';
 import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { mailerService } from '../services/mailer.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { listPasswordResetRecipientIds } from '../services/password-reset-recipients.service.js';
 import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
@@ -498,23 +499,15 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
       );
       const fullName = targetProfile?.full_name?.trim() || normalizedEmail;
 
-      const adminRows = await query<{ id: string }>(
-        `SELECT up.id
-           FROM user_profiles up
-           JOIN system_roles sr ON sr.id = up.system_role_id
-          WHERE sr.is_admin = true
-            AND up.id <> $1::uuid
-            AND NOT EXISTS (SELECT 1 FROM user_company_access uca WHERE uca.user_id = up.id)`,
-        [userRow.id],
-      );
-      const adminIds = adminRows.map(r => r.id);
+      // Системные админы и кадровые админы (см. password-reset-recipients.service).
+      const recipientIds = await listPasswordResetRecipientIds(userRow.id);
 
-      if (adminIds.length > 0) {
+      if (recipientIds.length > 0) {
         const title = 'Запрос на сброс пароля';
         const body = `${fullName} (${normalizedEmail}) запросил сброс пароля. Откройте карточку пользователя и нажмите «Сбросить пароль (ссылка)».`;
         const path = `/admin/users?openUser=${userRow.id}`;
 
-        await notificationService.createMany(adminIds.map(uid => ({
+        await notificationService.createMany(recipientIds.map(uid => ({
           userId: uid,
           type: 'password_reset_requested',
           title,
@@ -522,7 +515,7 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
           metadata: { path, targetUserId: userRow.id, targetEmail: normalizedEmail },
         })));
 
-        await pushService.sendGenericNotification(adminIds, title, body, { path });
+        await pushService.sendGenericNotification(recipientIds, title, body, { path });
       }
     } catch (notifyError) {
       console.error('Forgot password admin notification failed:', notifyError);
