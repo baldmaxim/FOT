@@ -29,6 +29,7 @@
     "scripts/merge-duplicate-department.ts",
     "scripts/sync-contractor-pass-expiry.ts",
     "scripts/apply-auto-timesheet-objects.ts",
+    "scripts/refreeze-department-month-objects.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

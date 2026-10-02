@@ -63,6 +63,7 @@ import { activateTimesheetObjects, freezeMonth, recomputeCurrentMonth } from './
 import { monthEnd } from './employee-timesheet-object.service.js';
 import { enforceOfficeForDepartments } from './timesheet-office-rule.js';
 import { updateTimesheetOffice } from './timesheet-office.service.js';
+import { refreezeDepartmentMonth } from './timesheet-object-month-refreeze.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
@@ -823,6 +824,73 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
           { user_id: U_HR, reason: 'office_removed', changed: 1 },
           { user_id: U_HR, reason: 'office_removed', changed: 2 },
         ]);
+    });
+
+    it('пересчёт фиксации месяца после снятия «Офиса» с отдела: по часам за месяц, офис-лидер и личный «Офис» — как были; повтор — no-op', async () => {
+      const now = new Date(`${nextMonthStart(current).slice(0, 8)}10T12:00:00+03:00`);
+      const frozen = async () => q(
+        `SELECT employee_id, mode, object_id::text, set_by FROM employee_timesheet_object_months
+          WHERE month = $1::date AND employee_id IN (3, 40, 41, 43, 44) ORDER BY employee_id`, [current],
+      );
+      // Месяц зафиксирован «Офисом» отдела; 3-му в фиксации — личный «Офис» окна.
+      await q(`UPDATE employee_timesheet_object_months SET set_by = NULL, set_by_user_id = $2, set_at = now()
+                WHERE month = $1::date AND employee_id = 3`, [current, U_HR]);
+      const before = await frozen();
+      expect(before).toEqual([
+        { employee_id: 3, mode: 'current_activity', object_id: null, set_by: null },
+        { employee_id: 40, mode: 'current_activity', object_id: null, set_by: 'auto' },
+        { employee_id: 41, mode: 'current_activity', object_id: null, set_by: 'auto' },
+        { employee_id: 43, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 44, mode: 'current_activity', object_id: null, set_by: 'auto' },
+      ]);
+      hours.byEmployee = new Map([
+        [3, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 90 }]],
+        [40, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }, { value: 'office', label: 'Офис', objectId: null, hours: 20 }]],
+        [41, [{ value: 'office', label: 'Офис', objectId: null, hours: 150 }, { value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 10 }]],
+        [43, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 50 }]],
+        [44, [{ value: ZIL, label: 'ЗИЛ', objectId: ZIL, hours: 60 }]],
+      ]);
+      const auditCount = async () => Number((await q<{ n: string }>(
+        `SELECT count(*) AS n FROM audit_logs WHERE details->>'reason' = 'month_refreeze'`))[0].n);
+
+      const dry = await refreezeDepartmentMonth({ month: current, departmentId: D_OWN, dryRun: true, now });
+      expect(dry.changes.map(change => change.employeeId)).toEqual([40, 43, 44]);
+      expect(dry).toMatchObject({ personalOffice: 1, appliedIds: [], withoutFreezeRow: [] });
+      expect(dry.employeeIds).toEqual([1, 2, 3, 40, 41, 43, 44]);
+      expect(await frozen()).toEqual(before);
+      expect(await auditCount()).toBe(0);
+
+      const applied = await refreezeDepartmentMonth({ month: current, departmentId: D_OWN, dryRun: false, now });
+      expect(applied.appliedIds).toEqual([40, 43, 44]);
+      expect(await frozen()).toEqual([
+        { employee_id: 3, mode: 'current_activity', object_id: null, set_by: null },
+        { employee_id: 40, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 41, mode: 'current_activity', object_id: null, set_by: 'auto' },
+        { employee_id: 43, mode: 'object', object_id: ZIL, set_by: 'auto' },
+        { employee_id: 44, mode: 'object', object_id: ZIL, set_by: 'auto' },
+      ]);
+      expect(await q(`SELECT entity_id, (details->>'changed')::int AS changed FROM audit_logs
+                       WHERE details->>'reason' = 'month_refreeze'`))
+        .toEqual([{ entity_id: `refreeze:${current}:${D_OWN}`, changed: 3 }]);
+      // Табель и 1С за прошедший месяц читают фиксацию.
+      const resolved = await resolveExportModes([40], undefined, { month: current, now });
+      expect(resolved.get(40)).toMatchObject({ mode: 'object', pinnedObjectId: DOM });
+
+      const again = await refreezeDepartmentMonth({ month: current, departmentId: D_OWN, dryRun: false, now });
+      expect(again).toMatchObject({ changes: [], appliedIds: [] });
+      expect(await auditCount()).toBe(1);
+    });
+
+    it('пересчёт фиксации: отказ, если у отдела стоит «Офис» или месяц не зафиксирован', async () => {
+      const now = new Date(`${nextMonthStart(current).slice(0, 8)}10T12:00:00+03:00`);
+      await q('INSERT INTO timesheet_office_departments (org_department_id) VALUES ($1)', [D_OTHER]);
+      await expect(refreezeDepartmentMonth({ month: current, departmentId: D_OTHER, dryRun: true, now }))
+        .rejects.toThrow(/сначала снимите/);
+      await q('DELETE FROM timesheet_office_departments WHERE org_department_id = $1', [D_OTHER]);
+
+      const later = new Date(`${shift(current, 2).slice(0, 8)}10T12:00:00+03:00`);
+      await expect(refreezeDepartmentMonth({ month: nextMonthStart(current), departmentId: D_OWN, dryRun: true, now: later }))
+        .rejects.toThrow(/ещё не зафиксирован/);
     });
   });
 });

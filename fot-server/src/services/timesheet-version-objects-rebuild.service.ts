@@ -51,20 +51,31 @@ export interface IRebuildMonthResult {
   failures: number;
 }
 
-/** Пересборка всех подач месяца. failures > 0 — месяц повторить на следующем тике. */
-export async function rebuildVersionObjectsForMonth(month: string): Promise<IRebuildMonthResult> {
+/**
+ * Пересборка всех подач месяца. failures > 0 — месяц повторить на следующем тике.
+ * employeeIds — только подачи с этими сотрудниками (пересчёт фиксации одного отдела).
+ */
+export async function rebuildVersionObjectsForMonth(
+  month: string,
+  options: { employeeIds?: readonly number[] } = {},
+): Promise<IRebuildMonthResult> {
+  if (options.employeeIds && options.employeeIds.length === 0) return { approvals: 0, created: 0, failures: 0 };
   const approvals = await query<IApprovalRow>(
     `SELECT id, department_id::text AS department_id, manager_employee_id,
             start_date::text AS start_date, end_date::text AS end_date, status,
             unlocked_at::text AS unlocked_at, version_dirty_at::text AS version_dirty_at
-       FROM timesheet_approvals
+       FROM timesheet_approvals ta
       WHERE status = 'approved'
         AND start_date >= $1::date
         AND end_date <= $2::date
         AND unlocked_at IS NULL
         AND version_dirty_at IS NULL
+        AND ($3::int[] IS NULL OR EXISTS (
+              SELECT 1 FROM timesheet_approval_employees tae
+               WHERE tae.approval_id = ta.id AND tae.employee_id = ANY($3::int[])
+            ))
       ORDER BY id`,
-    [month, monthEnd(month)],
+    [month, monthEnd(month), options.employeeIds ? [...options.employeeIds] : null],
   );
 
   let created = 0;
