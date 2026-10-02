@@ -7,7 +7,7 @@ interface ISalaryTabPlaceholderProps {
   title: string;
   /** Что появится во вкладке — чтобы было понятно, чего ждать, а не «пустая форма». */
   description: string;
-  stage: string;
+  stage?: string;
 }
 
 /**
@@ -19,6 +19,6 @@ export const SalaryTabPlaceholder: FC<ISalaryTabPlaceholderProps> = ({ title, de
     <Clock size={28} aria-hidden="true" className={styles.icon} />
     <h2 className={styles.title}>{title}</h2>
     <p className={styles.description}>{description}</p>
-    <span className={styles.stage}>{stage}</span>
+    {stage && <span className={styles.stage}>{stage}</span>}
   </div>
 );

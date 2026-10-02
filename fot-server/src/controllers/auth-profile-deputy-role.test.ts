@@ -48,8 +48,8 @@ vi.mock('../services/access-control.service.js', () => ({
   ],
   DEPUTY_ROLE_DEPARTMENT_PAGES: new Set(['/timesheet', '/timesheet-hr', '/leave-requests', '/staff-control/hiring']),
 }));
-vi.mock('../services/payroll/payroll-access.service.js', () => ({
-  PAYROLL_GRANT_PAGE: '/salary/terms',
+vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
   getPayrollAccessLevel: mocked.getPayrollAccessLevel,
 }));
 vi.mock('../services/department-access.service.js', () => ({

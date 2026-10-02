@@ -21,7 +21,8 @@ const CompensationTermsPage = lazy(() => import('./CompensationTermsPage').then(
  * Вкладка «Выплаты». Внутри экраны:
  *  - «Условия оплаты» — список сотрудников с условиями (рабочий экран, по умолчанию);
  *  - «Подробно» — карточка сотрудника, которого открыли кликом по строке списка;
- *  - «Расчёт и выплаты» — аванс, базовая и премиальная часть (этапы 2–3).
+ *  - «Расчёт и выплаты» — аванс, базовая и премиальная часть (этапы 2–3);
+ *  - «Администрирование» — подключение по API к 1С и другим системам (пока заглушка).
  *
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
  * хаба сохраняет остальные параметры. Список и карточка при смене экрана не размонтируются:
@@ -33,7 +34,8 @@ export const PaymentsTab: FC = () => {
 
   const canTerms = canViewPage('/salary/terms');
   const canCalc = canViewPage('/salary/payments');
-  const views = paymentsViewOptions(canTerms, canCalc);
+  const canAdmin = canViewPage('/salary/admin');
+  const views = paymentsViewOptions(canTerms, canCalc, canAdmin);
   const view = resolvePaymentsView(searchParams.get('view'), views);
 
   // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня» по Москве,
@@ -138,6 +140,15 @@ export const PaymentsTab: FC = () => {
               title="Расчёт и выплаты"
               description="Расчёт оклада и часов по закрытым табелям, затем аванс, базовая и премиальная часть с фактическими выплатами и остатком."
               stage="Расчёт — этап 2, выплаты — этап 3"
+            />
+          </div>
+        )}
+
+        {view === 'admin' && (
+          <div className={styles.view}>
+            <SalaryTabPlaceholder
+              title="Администрирование"
+              description="Подключение по API к 1С и другим системам."
             />
           </div>
         )}

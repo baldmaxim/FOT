@@ -11,8 +11,8 @@ import { isDeputyRole } from './deputy-role.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
 import {
-  PAYROLL_GRANT_PAGE,
   getRequestPayrollAccessLevel,
+  isPayrollGrantPage,
   payrollGrantAllows,
 } from './payroll/payroll-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -295,9 +295,9 @@ export async function resolveEffectivePageAccess(
 
   // Персональный доступ к «Зарплате» (миграция 288): даёт назначение, а не роль, поэтому
   // ветка тоже стоит ДО гейта admin_access — получатель бывает на любой роли, в том числе
-  // только с личным кабинетом. Открывает ровно /salary/terms; сравнение строк первым
-  // условием — на любой другой странице ветка не делает запроса.
-  if (pagePath === PAYROLL_GRANT_PAGE
+  // только с личным кабинетом. Открывает весь раздел (PAYROLL_GRANT_PAGES); проверка ключа
+  // первым условием — на любой другой странице ветка не делает запроса.
+  if (isPayrollGrantPage(pagePath)
     && payrollGrantAllows(await getRequestPayrollAccessLevel(req), action)) {
     return true;
   }

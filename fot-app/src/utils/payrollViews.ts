@@ -3,7 +3,7 @@
  */
 import type { IPayrollTermsRow } from '../services/payrollService';
 
-export type PaymentsView = 'terms' | 'details' | 'calc';
+export type PaymentsView = 'terms' | 'details' | 'calc' | 'admin';
 
 export interface IPaymentsViewOption {
   key: PaymentsView;
@@ -18,10 +18,17 @@ const TERMS_VIEWS: IPaymentsViewOption[] = [
 
 const CALC_VIEWS: IPaymentsViewOption[] = [{ key: 'calc', label: 'Расчёт и выплаты' }];
 
+const ADMIN_VIEWS: IPaymentsViewOption[] = [{ key: 'admin', label: 'Администрирование' }];
+
 /** Экраны по правам — в порядке переключателя. */
-export const paymentsViewOptions = (canTerms: boolean, canCalc: boolean): IPaymentsViewOption[] => [
+export const paymentsViewOptions = (
+  canTerms: boolean,
+  canCalc: boolean,
+  canAdmin: boolean,
+): IPaymentsViewOption[] => [
   ...(canTerms ? TERMS_VIEWS : []),
   ...(canCalc ? CALC_VIEWS : []),
+  ...(canAdmin ? ADMIN_VIEWS : []),
 ];
 
 /** Экран из ?view=, если он доступен по правам; иначе первый доступный. */

@@ -7,23 +7,41 @@
  * «Руководителя экономического отдела» (241): ветка в resolveEffectivePageAccess и
  * зеркало в page_access на /auth/me.
  *
- * Грант открывает ровно один ключ — /salary/terms (экран «Условия оплаты»), охват — весь
- * штат (payroll-scope.service). Будущие ключи раздела он намеренно не выдаёт: иначе
- * получатели автоматически получили бы экраны, которых ещё нет. Legacy-оклад вне раздела
- * («+ Оклад», импорт из Excel, события оклада в истории) грант тоже не открывает.
+ * Грант открывает весь раздел — ключи PAYROLL_GRANT_PAGES, охват — весь штат
+ * (payroll-scope.service): «Просмотр» — чтение, «Редактирование» — и правка. Legacy-оклад вне
+ * раздела («+ Оклад», импорт из Excel, события оклада в истории) грант не открывает.
  *
  * Администраторам грант не нужен и не учитывается: у них доступ по роли, а охват
  * админа компании ограничен его компанией — оставшийся грант его расширять не должен.
  */
 import type { PoolClient } from 'pg';
 
+import { PAGE_PATHS } from '../../config/access-control.js';
 import { query, withTransaction } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
 export type PayrollAccessLevel = 'view' | 'edit';
 
-/** Единственный ключ, который открывает персональный грант. */
-export const PAYROLL_GRANT_PAGE = '/salary/terms';
+/**
+ * Ключи, которые открывает персональный грант, — весь раздел «Зарплата». Точный список, а не
+ * префикс /salary/: новый ключ раздела попадает в грант только явным решением (контрактный
+ * тест сверяет список с каталогом).
+ */
+export const PAYROLL_GRANT_PAGES: readonly string[] = [
+  PAGE_PATHS.SALARY_PAYMENTS,
+  PAGE_PATHS.SALARY_PAYMENTS_CALCULATE,
+  PAGE_PATHS.SALARY_PAYMENTS_APPROVE,
+  PAGE_PATHS.SALARY_TERMS,
+  PAGE_PATHS.SALARY_SICK_LEAVES,
+  PAGE_PATHS.SALARY_VACATIONS,
+  PAGE_PATHS.SALARY_DEDUCTIONS,
+  PAGE_PATHS.SALARY_ADMIN,
+];
+
+const PAYROLL_GRANT_PAGE_SET = new Set(PAYROLL_GRANT_PAGES);
+
+/** Открывает ли персональный грант этот ключ. */
+export const isPayrollGrantPage = (pagePath: string): boolean => PAYROLL_GRANT_PAGE_SET.has(pagePath);
 
 const normalizeLevel = (value: unknown): PayrollAccessLevel | null => (
   value === 'view' || value === 'edit' ? value : null

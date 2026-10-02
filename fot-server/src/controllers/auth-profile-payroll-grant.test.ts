@@ -1,8 +1,8 @@
 /**
- * /auth/me и персональный доступ к «Зарплате» (миграция 288).
+ * /auth/me и персональный доступ к «Зарплате» (миграции 288, 294).
  *
- * Зеркало ветки resolveEffectivePageAccess: без ключа в page_access фронт не покажет пункт
- * «Зарплата». Объединение с правом роли — через OR. Вход в админку (has_admin_access)
+ * Зеркало ветки resolveEffectivePageAccess: без ключей в page_access фронт не покажет пункт
+ * «Зарплата» и его вкладки. Грант открывает весь раздел, объединение с правом роли — через OR. Вход в админку (has_admin_access)
  * получает и сотрудник на роли только с личным кабинетом, но админ-ключи самой роли
  * по-прежнему режутся по флагу роли.
  */
@@ -38,8 +38,8 @@ vi.mock('../services/access-control.service.js', () => ({
   getRolePageAccess: mocked.getRolePageAccess,
   listDeputyAutoAccessPages: () => [],
 }));
-vi.mock('../services/payroll/payroll-access.service.js', () => ({
-  PAYROLL_GRANT_PAGE: '/salary/terms',
+vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
   getPayrollAccessLevel: mocked.getPayrollAccessLevel,
 }));
 vi.mock('../services/department-access.service.js', () => ({
@@ -133,6 +133,21 @@ const makeRes = () => {
   return res as unknown as Response & { body?: Record<string, unknown> };
 };
 
+const SALARY_KEYS = [
+  '/salary/payments',
+  '/salary/payments/calculate',
+  '/salary/payments/approve',
+  '/salary/terms',
+  '/salary/sick-leaves',
+  '/salary/vacations',
+  '/salary/deductions',
+  '/salary/admin',
+];
+
+const salaryAccess = (canEdit: boolean): PageAccess => Object.fromEntries(
+  SALARY_KEYS.map(key => [key, { can_view: true, can_edit: canEdit }]),
+);
+
 const loadProfile = async () => {
   const res = makeRes();
   await authController.getMe(makeReq(), res);
@@ -154,20 +169,24 @@ describe('/auth/me: персональный доступ к «Зарплате�
     expect(profile.has_admin_access).toBe(false);
   });
 
-  it('«Просмотр»: /salary/terms только на чтение и вход в админку', async () => {
+  it('«Просмотр»: весь раздел только на чтение и вход в админку, посторонних ключей нет', async () => {
     mocked.getPayrollAccessLevel.mockResolvedValue('view');
     const profile = await loadProfile();
     expect(mocked.getPayrollAccessLevel).toHaveBeenCalledWith(501);
-    expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: false });
+    expect(profile.page_access).toEqual({
+      '/employee': { can_view: true, can_edit: true },
+      ...salaryAccess(false),
+    });
     expect(profile.has_admin_access).toBe(true);
   });
 
-  it('«Редактирование»: /salary/terms на запись; будущие ключи раздела не появляются', async () => {
+  it('«Редактирование»: весь раздел на запись, посторонних ключей нет', async () => {
     mocked.getPayrollAccessLevel.mockResolvedValue('edit');
     const profile = await loadProfile();
-    expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: true });
-    expect(profile.page_access['/salary/payments']).toBeUndefined();
-    expect(profile.page_access['/salary/sick-leaves']).toBeUndefined();
+    expect(profile.page_access).toEqual({
+      '/employee': { can_view: true, can_edit: true },
+      ...salaryAccess(true),
+    });
   });
 
   it('админ-ключи роли без доступа в админку режутся и при гранте', async () => {
@@ -179,14 +198,20 @@ describe('/auth/me: персональный доступ к «Зарплате�
     const profile = await loadProfile();
     expect(profile.page_access['/employees']).toBeUndefined();
     expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: false });
+    expect(profile.page_access['/salary/admin']).toEqual({ can_view: true, can_edit: false });
   });
 
   it('персональный «Просмотр» не понижает ролевую правку (OR)', async () => {
     mocked.getRoleById.mockResolvedValue(HR_ROLE);
-    mocked.getRolePageAccess.mockResolvedValue({ '/salary/terms': { can_view: true, can_edit: true } });
+    mocked.getRolePageAccess.mockResolvedValue({
+      '/salary/terms': { can_view: true, can_edit: true },
+      '/salary/admin': { can_view: true, can_edit: true },
+    });
     mocked.getPayrollAccessLevel.mockResolvedValue('view');
     const profile = await loadProfile();
     expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: true });
+    expect(profile.page_access['/salary/admin']).toEqual({ can_view: true, can_edit: true });
+    expect(profile.page_access['/salary/payments']).toEqual({ can_view: true, can_edit: false });
   });
 
   it('администратору грант не читаем', async () => {

@@ -122,6 +122,7 @@ export const PAGE_PATHS = {
   SALARY_SICK_LEAVES: '/salary/sick-leaves',
   SALARY_VACATIONS: '/salary/vacations',
   SALARY_DEDUCTIONS: '/salary/deductions',
+  SALARY_ADMIN: '/salary/admin',
   ADMIN_PATENT_RECEIPTS: '/admin/patent-receipts',
   ADMIN_TIMESHEET_TRANSFERS: '/admin/timesheet-transfers',
   ADMIN_DATA_API: '/admin/data-api',
@@ -213,7 +214,8 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   // графиков. Таблицы payslips/payments пусты, роуты сняты. Ключ оставлен: на него ссылается
   // structure.routes.ts, а удаление сломало бы выданные права.
   { key: '/admin/payslips',             label: 'Управление расчётными листками (не используется)', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'page', supports_edit: true, sort_order: 260, is_active: false },
-  // ── Зарплата ── На этапе 1 права выданы только роли admin (миграция 272).
+  // ── Зарплата ── По роли права выданы только admin (миграции 272, 275, 294). Персональный грант
+  // «Зарплата» (миграция 288) открывает весь раздел — список в PAYROLL_GRANT_PAGES (payroll-access.service).
   { key: '/salary/payments',            label: 'Зарплата — Выплаты',                   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 270, is_active: true },
   { key: '/salary/payments/calculate',  label: 'Зарплата — запуск расчёта',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 271, is_active: true },
   { key: '/salary/payments/approve',    label: 'Зарплата — проверка расчёта',          group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 272, is_active: true },
@@ -221,6 +223,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/salary/sick-leaves',         label: 'Зарплата — Больничные',                group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 275, is_active: true },
   { key: '/salary/vacations',           label: 'Зарплата — Отпуска',                   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 276, is_active: true },
   { key: '/salary/deductions',          label: 'Зарплата — Удержания',                 group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 277, is_active: true },
+  { key: '/salary/admin',               label: 'Зарплата — Администрирование',         group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 278, is_active: true },
   // Технический ключ без route-страницы
   { key: 'timesheet-team-management',   label: 'Управление составом табеля',           group_code: 'technical', group_label: 'Технические доступы', area: 'admin',  surface: 'technical', supports_edit: true, sort_order: 285, is_active: true },
 ];

@@ -34,7 +34,7 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
-import { PAYROLL_GRANT_PAGE, getPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
+import { PAYROLL_GRANT_PAGES, getPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
 import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -215,10 +215,12 @@ async function buildProfileResponse(
   // ролевую правку. Администратору грант не нужен — у него всё по роли.
   const payrollAccessLevel = role.is_admin ? null : await getPayrollAccessLevel(profile.employee_id);
   if (payrollAccessLevel) {
-    page_access[PAYROLL_GRANT_PAGE] = {
-      can_view: true,
-      can_edit: !!page_access[PAYROLL_GRANT_PAGE]?.can_edit || payrollAccessLevel === 'edit',
-    };
+    for (const key of PAYROLL_GRANT_PAGES) {
+      page_access[key] = {
+        can_view: true,
+        can_edit: !!page_access[key]?.can_edit || payrollAccessLevel === 'edit',
+      };
+    }
   }
 
   // Вход в админку: по роли либо по персональному доступу к «Зарплате» — раздел живёт

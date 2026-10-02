@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
- * Персональный доступ к «Зарплате» выдаёт НАЗНАЧЕНИЕ, а не роль (миграция 288).
+ * Персональный доступ к «Зарплате» выдаёт НАЗНАЧЕНИЕ, а не роль (миграции 288, 294).
  *
- * Бухгалтер на роли «Офисный сотрудник» (без доступа в админку) по гранту получает ровно
- * /salary/terms — экран «Условия оплаты». Будущие ключи раздела и чужие страницы грант не
- * открывает, а resolveRolePageAccess (кадровые экраны вне раздела) его не видит вовсе.
+ * Бухгалтер на роли «Офисный сотрудник» (без доступа в админку) по гранту получает весь раздел
+ * «Зарплата» — точный список PAYROLL_GRANT_PAGES. Чужие страницы и незнакомые /salary/* ключи
+ * грант не открывает, а resolveRolePageAccess (кадровые экраны вне раздела) его не видит вовсе.
  */
 
 const { hoisted } = vi.hoisted(() => ({
@@ -40,6 +40,19 @@ vi.mock('./hiring-access.service.js', () => ({
 vi.mock('./object-kpi-roles-cache.service.js', () => ({ isEconomicsHead: vi.fn(async () => false) }));
 
 const accessControl = await import('./access-control.service.js');
+const { PAYROLL_GRANT_PAGES } = await import('./payroll/payroll-access.service.js');
+const { DEFAULT_ACCESS_PAGE_CATALOG } = await import('../config/access-control.js');
+
+const SALARY_KEYS = [
+  '/salary/payments',
+  '/salary/payments/calculate',
+  '/salary/payments/approve',
+  '/salary/terms',
+  '/salary/sick-leaves',
+  '/salary/vacations',
+  '/salary/deductions',
+  '/salary/admin',
+];
 
 const makeReq = (over: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest => ({
   user: { id: 'u1', employee_id: 501, role_code: 'office', is_admin: false, ...over },
@@ -80,20 +93,35 @@ describe('resolveEffectivePageAccess: персональный доступ к �
     await expect(accessControl.resolveEffectivePageAccess(makeReq(), '/salary/terms', 'edit')).resolves.toBe(true);
   });
 
-  it('грант открывает только /salary/terms: будущие ключи раздела и чужие страницы закрыты', async () => {
+  it('«Просмотр» открывает весь раздел на чтение, правку — нигде', async () => {
+    hoisted.grantRows = [{ access_level: 'view' }];
+    for (const page of SALARY_KEYS) {
+      await expect(accessControl.resolveEffectivePageAccess(makeReq(), page, 'view')).resolves.toBe(true);
+      await expect(accessControl.resolveEffectivePageAccess(makeReq(), page, 'edit')).resolves.toBe(false);
+    }
+  });
+
+  it('«Редактирование» открывает весь раздел на чтение и правку', async () => {
     hoisted.grantRows = [{ access_level: 'edit' }];
-    for (const page of [
-      '/salary/payments',
-      '/salary/payments/calculate',
-      '/salary/payments/approve',
-      '/salary/sick-leaves',
-      '/salary/vacations',
-      '/salary/deductions',
-      '/employees',
-      '/admin/users',
-    ]) {
+    for (const page of SALARY_KEYS) {
+      await expect(accessControl.resolveEffectivePageAccess(makeReq(), page, 'view')).resolves.toBe(true);
+      await expect(accessControl.resolveEffectivePageAccess(makeReq(), page, 'edit')).resolves.toBe(true);
+    }
+  });
+
+  it('незнакомый /salary/* ключ и чужие страницы грант не открывает', async () => {
+    hoisted.grantRows = [{ access_level: 'edit' }];
+    for (const page of ['/salary/unknown', '/salary', '/employees', '/admin/users']) {
       await expect(accessControl.resolveEffectivePageAccess(makeReq(), page, 'view')).resolves.toBe(false);
     }
+  });
+
+  it('контракт: грант — ровно все /salary/* ключи каталога (новый ключ раздела — явное решение)', () => {
+    const catalogSalaryKeys = DEFAULT_ACCESS_PAGE_CATALOG
+      .map(page => page.key)
+      .filter(key => key.startsWith('/salary/'));
+    expect([...PAYROLL_GRANT_PAGES].sort()).toEqual([...catalogSalaryKeys].sort());
+    expect([...PAYROLL_GRANT_PAGES].sort()).toEqual([...SALARY_KEYS].sort());
   });
 
   it('на чужих страницах таблицу грантов не читаем', async () => {
