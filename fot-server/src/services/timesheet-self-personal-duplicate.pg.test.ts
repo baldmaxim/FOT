@@ -31,8 +31,21 @@ vi.mock('./audit.service.js', () => ({
   AUDIT_ACTIONS: new Proxy({}, { get: (_target, key) => key }),
 }));
 
+// Состав личной подачи по правилу 5f6f1c33 — заглушка: правило проверяется в своих тестах,
+// здесь важно, что делает чистка с его ответом.
+const { compositionMock } = vi.hoisted(() => ({ compositionMock: vi.fn(async () => [] as number[]) }));
+vi.mock('./timesheet-approval-employees-snapshot.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('./timesheet-approval-employees-snapshot.service.js')>()),
+  resolveManagerPersonalSnapshotIds: compositionMock,
+}));
+
 import { findApprovedDayConflicts } from './timesheet-approved-day-conflicts.service.js';
-import { listSelfPersonalDuplicates, recallSelfPersonalDuplicate } from './timesheet-self-personal-duplicate.service.js';
+import {
+  listSelfPersonalDuplicates,
+  listStaleSelfSubmissions,
+  recallSelfPersonalDuplicate,
+  recallStaleSelfSubmission,
+} from './timesheet-self-personal-duplicate.service.js';
 
 const SECRETARIAT = '00000000-0000-4000-8000-0000000000c1';
 const BRIGADE_A = '00000000-0000-4000-8000-0000000000c2';
@@ -66,6 +79,23 @@ const employeeRow = (
   days: dayMap,
   object_rows: [],
 });
+
+const HACHATUROV = 1978; // руководитель-владелец своего отдела, личная подача до 5f6f1c33
+const LINE_NU = 12; // НУ ЛИНИИ-Общестрой: у отдела нет владельца, строка — в личной
+
+const insertSubmitted = async (managerEmployeeId: number, roster: number[]): Promise<number> => {
+  const [row] = await q<{ id: number }>(
+    `INSERT INTO timesheet_approvals (department_id, manager_employee_id, start_date, end_date, status,
+       submitted_by, submitted_at)
+     VALUES (NULL, $1, '2026-09-16', '2026-09-30', 'submitted', '00000000-0000-4000-8000-0000000000f1', now())
+     RETURNING id`,
+    [managerEmployeeId],
+  );
+  for (const employeeId of roster) {
+    await q('INSERT INTO timesheet_approval_employees (approval_id, employee_id) VALUES ($1, $2)', [row.id, employeeId]);
+  }
+  return row.id;
+};
 
 const insertApproval = async (input: {
   departmentId?: string | null;
@@ -132,8 +162,12 @@ describe.skipIf(!PG_URL)('пересечения дней между утвер�
     await q(`INSERT INTO org_departments (id, name) VALUES ($1, 'Секретариат'), ($2, 'бр.А'), ($3, 'бр.Б')`,
       [SECRETARIAT, BRIGADE_A, BRIGADE_B]);
     await q(`INSERT INTO employees (id, full_name) VALUES
-      ($1, 'Душанова Елена Анатольевна'), ($2, 'Секретарь Анна Петровна'), ($3, 'Переведённый Иван'), ($4, 'Простой Пётр')`,
-    [DUSHANOVA, SECRETARY, MOVED, IDLE]);
+      ($1, 'Душанова Елена Анатольевна'), ($2, 'Секретарь Анна Петровна'), ($3, 'Переведённый Иван'), ($4, 'Простой Пётр'),
+      ($5, 'Хачатуров Самвел Александрович'), ($6, 'Абдуалимов Жамшид')`,
+    [DUSHANOVA, SECRETARY, MOVED, IDLE, HACHATUROV, LINE_NU]);
+    compositionMock.mockImplementation(async (managerEmployeeId: number) => (
+      managerEmployeeId === HACHATUROV ? [] : [managerEmployeeId]
+    ));
   });
 
   afterAll(async () => {
@@ -292,6 +326,42 @@ describe.skipIf(!PG_URL)('пересечения дней между утвер�
         approvalId: acked, manualReason: '1С уже подтвердила редакцию — снимать только вместе с 1С',
       }));
       expect((await recallSelfPersonalDuplicate(acked)).recalled).toBe(false);
+    });
+  });
+
+  describe('поданные до 5f6f1c33 личные подачи со строкой руководителя, которую подаёт отдел', () => {
+    it('уходят в пустой черновик; без владельца отдела и с подчинёнными — не трогаются; повтор — no-op', async () => {
+      const stale = await insertSubmitted(HACHATUROV, [HACHATUROV]);
+      const lineNu = await insertSubmitted(LINE_NU, [LINE_NU]);
+      const withSubordinate = await insertSubmitted(SECRETARY, [SECRETARY, IDLE]);
+      compositionMock.mockImplementation(async (managerEmployeeId: number) => (
+        managerEmployeeId === LINE_NU ? [LINE_NU] : []
+      ));
+
+      expect((await listStaleSelfSubmissions('2026-09-01')).map(item => item.approvalId)).toEqual([stale]);
+
+      expect((await recallStaleSelfSubmission(stale)).recalled).toBe(true);
+      expect((await recallStaleSelfSubmission(lineNu)).recalled).toBe(false);
+      expect((await recallStaleSelfSubmission(withSubordinate)).recalled).toBe(false);
+
+      const rows = await q<{ id: number; status: string; submitted_at: string | null }>(
+        'SELECT id, status, submitted_at FROM timesheet_approvals ORDER BY id',
+      );
+      expect(rows.map(row => [row.id, row.status])).toEqual([
+        [stale, 'draft'], [lineNu, 'submitted'], [withSubordinate, 'submitted'],
+      ]);
+      expect(rows[0].submitted_at).toBeNull();
+      expect(await q('SELECT 1 FROM timesheet_approval_employees WHERE approval_id = $1', [stale])).toHaveLength(0);
+      expect(await q('SELECT 1 FROM timesheet_approval_employees WHERE approval_id = $1', [lineNu])).toHaveLength(1);
+      expect(auditLogMock).toHaveBeenCalledTimes(1);
+      expect(auditLogMock).toHaveBeenCalledWith(expect.objectContaining({
+        entity_id: String(stale),
+        details: expect.objectContaining({ from_status: 'submitted', reason: 'self_row_belongs_to_department' }),
+      }));
+
+      expect(await listStaleSelfSubmissions('2026-09-01')).toEqual([]);
+      expect((await recallStaleSelfSubmission(stale)).recalled).toBe(false);
+      expect(auditLogMock).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -15,11 +15,21 @@
  * в отчёт «вручную». Каждая подача — своя транзакция под теми же локами (сотрудник,
  * месяц) и FOR UPDATE, что утверждение; условия проверяются ещё раз внутри неё.
  * Повтор — no-op.
+ *
+ * Вторая категория — поданные до 5f6f1c33 и ещё не утверждённые личные подачи, где в
+ * составе только сам руководитель, а его строку по текущему правилу подаёт его отдел.
+ * Утверди кадры такую подачу раньше подачи отдела — утверждение отдела упрётся в
+ * пересечение дней (assertNoApprovedDayConflicts). 5f6f1c33 сам уводит её в пустой
+ * черновик при подаче отдела; здесь то же заранее. В API её нет (не утверждена), часы
+ * руководителя подаёт отдел.
  */
 import { query, type DbExecutor } from '../config/postgres.js';
 import { AUDIT_ACTIONS, auditService } from './audit.service.js';
 import { monthEnd } from './employee-timesheet-object.service.js';
-import { snapshotApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
+import {
+  resolveManagerPersonalSnapshotIds,
+  snapshotApprovalEmployees,
+} from './timesheet-approval-employees-snapshot.service.js';
 import { findApprovedDayConflicts } from './timesheet-approved-day-conflicts.service.js';
 import { withTimesheetSnapshotTransaction } from './timesheet-snapshot-tx.js';
 import { monthAnchorsInRange } from './timesheet-version.service.js';
@@ -238,4 +248,127 @@ export async function recallSelfPersonalDuplicate(
     });
   }
   return outcome;
+}
+
+export interface IStaleSelfSubmission {
+  approvalId: number;
+  managerEmployeeId: number;
+  fullName: string | null;
+  startDate: string;
+  endDate: string;
+}
+
+interface IStaleRow {
+  id: number | string;
+  manager_employee_id: number | string;
+  full_name: string | null;
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * Поданные личные подачи, где в составе ровно сам руководитель. $1 — список подач или
+ * NULL, $2/$3 — границы месяца.
+ */
+const SUBMITTED_SELF_ONLY_SQL = `
+  SELECT a.id,
+         a.manager_employee_id,
+         e.full_name,
+         a.start_date::text AS start_date,
+         a.end_date::text AS end_date
+    FROM timesheet_approvals a
+    JOIN employees e ON e.id = a.manager_employee_id
+   WHERE a.status = 'submitted'
+     AND a.department_id IS NULL
+     AND a.manager_employee_id IS NOT NULL
+     AND ($1::bigint[] IS NULL OR a.id = ANY($1::bigint[]))
+     AND a.start_date >= $2::date
+     AND a.end_date <= $3::date
+     AND (SELECT array_agg(ae.employee_id::bigint) FROM timesheet_approval_employees ae WHERE ae.approval_id = a.id)
+         = ARRAY[a.manager_employee_id::bigint]
+   ORDER BY a.id`;
+
+const toStale = (row: IStaleRow): IStaleSelfSubmission => ({
+  approvalId: Number(row.id),
+  managerEmployeeId: Number(row.manager_employee_id),
+  fullName: row.full_name,
+  startDate: row.start_date,
+  endDate: row.end_date,
+});
+
+/** Строку руководителя по текущему правилу подаёт не личная подача (её состав пуст). */
+const selfRowBelongsToDepartment = async (stale: IStaleSelfSubmission): Promise<boolean> =>
+  (await resolveManagerPersonalSnapshotIds(stale.managerEmployeeId, stale.startDate, stale.endDate)).length === 0;
+
+/** Поданные личные подачи месяца со строкой руководителя, которую теперь подаёт его отдел. */
+export async function listStaleSelfSubmissions(
+  month: string,
+  onlyApprovalIds: number[] | null = null,
+): Promise<IStaleSelfSubmission[]> {
+  const [from, to] = monthBounds(month);
+  const rows = await query<IStaleRow>(SUBMITTED_SELF_ONLY_SQL, [onlyApprovalIds, from, to]);
+  const result: IStaleSelfSubmission[] = [];
+  for (const row of rows) {
+    const stale = toStale(row);
+    if (await selfRowBelongsToDepartment(stale)) result.push(stale);
+  }
+  return result;
+}
+
+/** Уводит такую подачу в пустой черновик — как 5f6f1c33 при подаче отдела. */
+export async function recallStaleSelfSubmission(
+  approvalId: number,
+): Promise<{ recalled: boolean; stale: IStaleSelfSubmission | null }> {
+  const head = (await query<IStaleRow>(
+    `SELECT a.id, a.manager_employee_id, e.full_name, a.start_date::text AS start_date, a.end_date::text AS end_date
+       FROM timesheet_approvals a
+       JOIN employees e ON e.id = a.manager_employee_id
+      WHERE a.id = $1`,
+    [approvalId],
+  ))[0];
+  if (!head) return { recalled: false, stale: null };
+  const [from, to] = monthBounds(`${head.start_date.slice(0, 8)}01`);
+  // Состав по правилу читается через пул — до транзакции, как и в 5f6f1c33.
+  const candidate = (await query<IStaleRow>(SUBMITTED_SELF_ONLY_SQL, [[approvalId], from, to]))[0];
+  if (!candidate) return { recalled: false, stale: null };
+  const stale = toStale(candidate);
+  if (!(await selfRowBelongsToDepartment(stale))) return { recalled: false, stale };
+
+  const lockPairs = monthAnchorsInRange(stale.startDate, stale.endDate)
+    .map(workDate => ({ employeeId: stale.managerEmployeeId, workDate }));
+  const recalled = await withTimesheetSnapshotTransaction(lockPairs, async client => {
+    const locked = await client.query('SELECT id FROM timesheet_approvals WHERE id = $1 FOR UPDATE', [approvalId]);
+    if (locked.rows.length === 0) return false;
+    const still = await client.query(SUBMITTED_SELF_ONLY_SQL, [[approvalId], from, to]);
+    if (still.rows.length === 0) return false;
+    const updated = await client.query(
+      `UPDATE timesheet_approvals
+          SET ${RECALL_TO_DRAFT_SET_SQL}
+        WHERE id = $2 AND status = 'submitted'
+        RETURNING id`,
+      [new Date().toISOString(), approvalId],
+    );
+    if (updated.rows.length === 0) return false;
+    await snapshotApprovalEmployees(client, approvalId, []);
+    return true;
+  });
+
+  if (recalled) {
+    await auditService.log({
+      user_id: null,
+      action: AUDIT_ACTIONS.TIMESHEET_APPROVAL_RECALLED,
+      entity_type: 'timesheet_approval',
+      entity_id: String(approvalId),
+      details: {
+        department_id: null,
+        manager_employee_id: stale.managerEmployeeId,
+        start_date: stale.startDate,
+        end_date: stale.endDate,
+        from_status: 'submitted',
+        to_status: 'draft',
+        reason: 'self_row_belongs_to_department',
+      },
+    });
+  }
+  return { recalled, stale };
 }
