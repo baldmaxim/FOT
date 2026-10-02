@@ -64,7 +64,7 @@ import { monthEnd } from './employee-timesheet-object.service.js';
 import { enforceOfficeForDepartments } from './timesheet-office-rule.js';
 import { updateTimesheetOffice } from './timesheet-office.service.js';
 import { refreezeDepartmentMonth } from './timesheet-object-month-refreeze.service.js';
-import { fixWorkersFrozenMonth } from './employee-timesheet-object-month-fix.service.js';
+import { applyOfficeWindowToFrozenMonth, fixWorkersFrozenMonth } from './employee-timesheet-object-month-fix.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
@@ -1081,6 +1081,93 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
     it('правка месяца: отказ для незафиксированного и базового месяца', async () => {
       await expect(fixWorkersFrozenMonth({ month: next, dryRun: true })).rejects.toThrow(/не зафиксирован/);
       await expect(fixWorkersFrozenMonth({ month: baseline, dryRun: true })).rejects.toThrow(/не позже базового/);
+    });
+  });
+  // «Офис» из окна «Режим табелирования», поставленный после фиксации месяца: правка ставит
+  // его в строках фиксации всем, кто сейчас в окне.
+  describe('«Офис» окна в зафиксированном месяце', () => {
+    const D_OFFICE = '00000000-0000-0000-0000-00000000c104';
+    const U_HR = '00000000-0000-0000-0000-00000000c0b3';
+    let month = '';
+
+    const frozen = async (ids: number[]) => q(
+      `SELECT employee_id, mode, object_id::text, set_by, set_by_user_id::text AS author, (set_at IS NOT NULL) AS has_set_at
+         FROM employee_timesheet_object_months WHERE month = $1::date AND employee_id = ANY($2::int[]) ORDER BY employee_id`,
+      [month, ids],
+    );
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
+      month = shift(baseline, 1);
+      await pg.pool!.query(`
+        INSERT INTO org_departments (id, name) VALUES ('${D_OFFICE}', 'УОК-Офис');
+        INSERT INTO user_profiles (id, full_name) VALUES ('${U_HR}', 'Кадровик');
+        INSERT INTO employees (id, full_name, org_department_id, employment_status,
+                               timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (80, 'Отдел с «Офисом», объект в фиксации', '${D_OFFICE}', 'active', 'current_activity', NULL, 'auto'),
+          (81, 'Отдел с «Офисом», уже «Офис»', '${D_OFFICE}', 'active', 'current_activity', NULL, 'auto'),
+          (84, 'Уволенный из отдела с «Офисом»', '${D_OFFICE}', 'fired', 'object', '${DOM}', 'auto'),
+          (85, 'Подрядчик в отделе с «Офисом»', '${CONTR}', 'active', 'object', '${DOM}', 'auto'),
+          (86, 'Не в окне', '${D_OWN}', 'active', 'object', '${ZIL}', 'auto');
+        INSERT INTO employees (id, full_name, org_department_id, timesheet_export_mode,
+                               timesheet_export_set_by, timesheet_export_set_by_user_id, timesheet_export_set_at) VALUES
+          (82, 'Личный «Офис», объект в фиксации', '${D_OWN}', 'current_activity', NULL, '${U_HR}', '2026-09-30T10:05:00Z'),
+          (83, 'Личный «Офис», уже «Офис»', '${D_OWN}', 'current_activity', NULL, '${U_HR}', '2026-09-30T10:06:00Z');
+        INSERT INTO timesheet_office_departments (org_department_id, created_by) VALUES ('${D_OFFICE}', '${U_HR}'), ('${CONTR}', '${U_HR}');
+        INSERT INTO employee_timesheet_object_months (employee_id, month, mode, object_id, set_by) VALUES
+          (80, '${month}', 'object', '${ZIL}', 'auto'),
+          (81, '${month}', 'current_activity', NULL, 'auto'),
+          (82, '${month}', 'object', '${DOM}', 'auto'),
+          (84, '${month}', 'object', '${DOM}', 'auto'),
+          (85, '${month}', 'object', '${DOM}', 'auto'),
+          (86, '${month}', 'object', '${ZIL}', 'auto');
+        INSERT INTO employee_timesheet_object_months (employee_id, month, mode, object_id, set_by, set_by_user_id, set_at) VALUES
+          (83, '${month}', 'current_activity', NULL, NULL, '${U_HR}', '2026-09-30T10:06:00Z');
+        UPDATE timesheet_object_auto_state
+           SET enabled = true, frozen_month = '${month}', objects_rebuilt_month = '${month}', applied_date = NULL;
+      `);
+    });
+
+    it('«Офис» отдела и личный — в строках фиксации; уже «Офис», уволенный, подрядчик и не из окна — нет; маркер пересборки только при изменениях; повтор — 0', async () => {
+      const dry = await applyOfficeWindowToFrozenMonth({ month, dryRun: true });
+      expect(dry.rows.map(row => [row.employeeId, row.via])).toEqual([[80, 'department'], [82, 'personal']]);
+      expect((await frozen([80]))[0]).toMatchObject({ mode: 'object' });
+
+      const applied = await applyOfficeWindowToFrozenMonth({ month, dryRun: false });
+      expect(applied.rows.map(row => row.employeeId)).toEqual([80, 82]);
+      expect(applied.rebuildRequested).toBe(true);
+      expect(await frozen([80, 81, 82, 83, 84, 85, 86])).toEqual([
+        { employee_id: 80, mode: 'current_activity', object_id: null, set_by: 'auto', author: null, has_set_at: false },
+        { employee_id: 81, mode: 'current_activity', object_id: null, set_by: 'auto', author: null, has_set_at: false },
+        { employee_id: 82, mode: 'current_activity', object_id: null, set_by: null, author: U_HR, has_set_at: true },
+        { employee_id: 83, mode: 'current_activity', object_id: null, set_by: null, author: U_HR, has_set_at: true },
+        { employee_id: 84, mode: 'object', object_id: DOM, set_by: 'auto', author: null, has_set_at: false },
+        { employee_id: 85, mode: 'object', object_id: DOM, set_by: 'auto', author: null, has_set_at: false },
+        { employee_id: 86, mode: 'object', object_id: ZIL, set_by: 'auto', author: null, has_set_at: false },
+      ]);
+      expect((await q<{ m: string }>('SELECT objects_rebuilt_month::text AS m FROM timesheet_object_auto_state'))[0].m)
+        .toBe(minusMonth(month));
+      expect(await q(`SELECT entity_id, (details->>'changed')::int AS changed FROM audit_logs
+                       WHERE details->>'reason' = 'office_window_month'`))
+        .toEqual([{ entity_id: `office:${month}`, changed: 2 }]);
+      // Табель и 1С за этот месяц читают фиксацию: личный «Офис» узнаётся и в ней.
+      const resolved = await resolveExportModes([80, 82], undefined, { month, now: new Date(`${nextMonthStart(month)}T12:00:00+03:00`) });
+      expect(resolved.get(80)).toMatchObject({ mode: 'current_activity' });
+      expect(resolved.get(82)).toMatchObject({ mode: 'current_activity' });
+
+      await q(`UPDATE timesheet_object_auto_state SET objects_rebuilt_month = $1::date`, [month]);
+      const again = await applyOfficeWindowToFrozenMonth({ month, dryRun: false });
+      expect(again).toMatchObject({ rows: [], rebuildRequested: false });
+      expect((await q<{ m: string }>('SELECT objects_rebuilt_month::text AS m FROM timesheet_object_auto_state'))[0].m).toBe(month);
+    });
+
+    it('отказ для незафиксированного и базового месяца', async () => {
+      await expect(applyOfficeWindowToFrozenMonth({ month: nextMonthStart(month), dryRun: true })).rejects.toThrow(/не зафиксирован/);
+      await expect(applyOfficeWindowToFrozenMonth({ month: baseline, dryRun: true })).rejects.toThrow(/не позже базового/);
     });
   });
 });

@@ -16,6 +16,13 @@
  * Если строки фиксации изменились, objects_rebuilt_month откатывается на месяц раньше —
  * планировщик пересоберёт объектную разбивку утверждённых подач месяца.
  *
+ * applyOfficeWindowToFrozenMonth — то же для «Офиса» из окна «Режим табелирования»: окно
+ * действует на незафиксированные месяцы, и «Офис», поставленный после фиксации (УОК-Офис —
+ * 1.10 10:51, сентябрь зафиксирован в 04:13), в прошлый месяц не попал. Правка ставит «Офис»
+ * в строках фиксации всем, кто сейчас в окне: прямым сотрудникам отделов с «Офисом» —
+ * current_activity/auto, личному «Офису» — current_activity без источника с автором из
+ * карточки (так строку записала бы ночная фиксация).
+ *
  * Одна транзакция под локом режимов (withModeSnapshot); повтор — 0 изменений. AUDIT_ACTIONS
  * читается только внутри функций: тесты с моком audit.service грузят модуль транзитивно.
  */
@@ -31,6 +38,7 @@ import {
 } from './employee-timesheet-object.service.js';
 import { toMonthStart, type TimesheetExportMode } from './timesheet-export-mode.service.js';
 import { loadBrigadeDepartmentIds, workerSql } from './timesheet-object-worker-rule.js';
+import { personalOfficeSql } from './timesheet-office-rule.js';
 
 export class TimesheetObjectMonthFixError extends Error {
   constructor(message: string) {
@@ -249,6 +257,148 @@ export async function fixWorkersFrozenMonth(options: { month: string; dryRun: bo
   });
 
   if (!result.dryRun && (result.frozen.length > 0 || result.live.length > 0)) {
+    employeeCache.clear();
+    invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today', 'timesheet:search');
+  }
+  return result;
+}
+
+// ── «Офис» из окна «Режим табелирования» в зафиксированном месяце ───────────────────────
+
+export interface IOfficeMonthRow extends IMonthFixRow {
+  /** department — «Офис» отдела, personal — личный «Офис» из окна. */
+  via: 'department' | 'personal';
+  departmentName: string | null;
+}
+
+export interface IOfficeMonthResult {
+  dryRun: boolean;
+  month: string;
+  rows: IOfficeMonthRow[];
+  /** Откатан objects_rebuilt_month — планировщик пересоберёт объекты подач месяца. */
+  rebuildRequested: boolean;
+}
+
+interface IOfficeFixRow extends IFixRow {
+  via: 'department' | 'personal';
+  department_name: string | null;
+}
+
+/** Уже «Офис» в строке фиксации — от отдела, ночи или личный. */
+const FROZEN_IS_OFFICE_SQL = "(f.mode IS NOT DISTINCT FROM 'current_activity' AND f.object_id IS NULL)";
+
+/**
+ * Кто сейчас в окне и у кого в фиксации месяца не «Офис». Отдел с «Офисом» — прямые
+ * работающие не архивные сотрудники, кроме подрядчиков (как enforceOfficeForDepartments);
+ * отдел главнее личного. $1 — месяц, $2 — подрядчики.
+ */
+async function selectOfficeWindowRows(client: PoolClient, month: string, contractorIds: string[]): Promise<IOfficeFixRow[]> {
+  return (await client.query<IOfficeFixRow>(
+    `SELECT e.id, e.full_name, e.employment_status,
+            f.mode, f.object_id::text AS object_id, f.set_by,
+            CASE WHEN tod.org_department_id IS NOT NULL THEN 'department' ELSE 'personal' END AS via,
+            d.name AS department_name
+       FROM employees e
+       JOIN employee_timesheet_object_months f ON f.employee_id = e.id AND f.month = $1::date
+       LEFT JOIN timesheet_office_departments tod ON tod.org_department_id = e.org_department_id
+       LEFT JOIN org_departments d ON d.id = e.org_department_id
+      WHERE e.is_archived = false
+        AND e.employment_status = 'active'
+        AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($2::uuid[])))
+        AND (tod.org_department_id IS NOT NULL OR ${personalOfficeSql('e')})
+        AND NOT ${FROZEN_IS_OFFICE_SQL}
+      ORDER BY e.id`,
+    [month, contractorIds],
+  )).rows;
+}
+
+/** «Офис» окна в строках фиксации месяца month (любой день или YYYY-MM). dryRun — только отчёт. */
+export async function applyOfficeWindowToFrozenMonth(options: { month: string; dryRun: boolean }): Promise<IOfficeMonthResult> {
+  const month = toMonthStart(options.month);
+  if (!month) throw new TimesheetObjectMonthFixError(`Некорректный месяц: ${options.month}`);
+
+  const result = await withModeSnapshot(async client => {
+    const state = await readTimesheetObjectState(client, true);
+    if (!state) throw new TimesheetObjectMonthFixError('Нет состояния timesheet_object_auto_state — примените миграцию 288');
+    if (!state.enabled) throw new TimesheetObjectMonthFixError('Расчёт объекта табелирования выключен');
+    if (state.frozen_month < month) {
+      throw new TimesheetObjectMonthFixError(`Месяц ${month} ещё не зафиксирован — «Офис» окна ему поставит ночная фиксация`);
+    }
+    if (month <= state.baseline_month) {
+      throw new TimesheetObjectMonthFixError(`Месяц ${month} не позже базового (${state.baseline_month}) — правка не нужна`);
+    }
+
+    const contractorIds = await loadContractorDepartmentIds(client);
+    const candidates = await selectOfficeWindowRows(client, month, contractorIds);
+    const toRow = (row: IOfficeFixRow): IOfficeMonthRow => ({ ...toFixRow(row), via: row.via, departmentName: row.department_name });
+    if (options.dryRun) {
+      return { dryRun: true, month, rows: candidates.map(toRow), rebuildRequested: false } satisfies IOfficeMonthResult;
+    }
+
+    // Условия выборки повторены в UPDATE: правка ровно тех строк, что в отчёте.
+    const departmentIds = candidates.filter(row => row.via === 'department').map(row => Number(row.id));
+    const personalIds = candidates.filter(row => row.via === 'personal').map(row => Number(row.id));
+    const applied = new Set<number>();
+    if (departmentIds.length > 0) {
+      const rows = (await client.query<{ employee_id: number | string }>(
+        `UPDATE employee_timesheet_object_months f
+            SET mode = 'current_activity', object_id = NULL, set_by = 'auto', set_by_user_id = NULL, set_at = NULL
+          WHERE f.month = $1::date
+            AND f.employee_id = ANY($2::int[])
+            AND NOT ${FROZEN_IS_OFFICE_SQL}
+          RETURNING f.employee_id`,
+        [month, departmentIds],
+      )).rows;
+      for (const row of rows) applied.add(Number(row.employee_id));
+    }
+    if (personalIds.length > 0) {
+      // Личный «Офис» — как его записала бы ночная фиксация: без источника, с автором из карточки.
+      const rows = (await client.query<{ employee_id: number | string }>(
+        `UPDATE employee_timesheet_object_months f
+            SET mode = 'current_activity', object_id = NULL, set_by = NULL,
+                set_by_user_id = e.timesheet_export_set_by_user_id, set_at = e.timesheet_export_set_at
+           FROM employees e
+          WHERE e.id = f.employee_id
+            AND f.month = $1::date
+            AND f.employee_id = ANY($2::int[])
+            AND ${personalOfficeSql('e')}
+            AND NOT ${FROZEN_IS_OFFICE_SQL}
+          RETURNING f.employee_id`,
+        [month, personalIds],
+      )).rows;
+      for (const row of rows) applied.add(Number(row.employee_id));
+    }
+
+    const rows = candidates.map(toRow).filter(row => applied.has(row.employeeId));
+    if (rows.length > 0) {
+      await auditService.logWithClient(client, {
+        user_id: null,
+        action: AUDIT_ACTIONS.TIMESHEET_OBJECT_AUTO_ASSIGNED,
+        entity_type: 'timesheet_object_month',
+        entity_id: `office:${month}`,
+        details: {
+          reason: 'office_window_month',
+          month,
+          changed: rows.length,
+          changes: rows.map(row => ({
+            id: row.employeeId, name: row.fullName, via: row.via, department: row.departmentName,
+            from_mode: row.fromMode, from_object_id: row.fromObjectId, from_set_by: row.fromSetBy,
+            to_mode: 'current_activity',
+          })),
+        },
+      });
+      // Объекты подач пересоберёт планировщик — только если фиксация реально изменилась.
+      await client.query(
+        `UPDATE timesheet_object_auto_state
+            SET objects_rebuilt_month = LEAST(objects_rebuilt_month, $1::date), updated_at = now()
+          WHERE singleton`,
+        [previousMonthStart(month)],
+      );
+    }
+    return { dryRun: false, month, rows, rebuildRequested: rows.length > 0 } satisfies IOfficeMonthResult;
+  });
+
+  if (!result.dryRun && result.rows.length > 0) {
     employeeCache.clear();
     invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today', 'timesheet:search');
   }

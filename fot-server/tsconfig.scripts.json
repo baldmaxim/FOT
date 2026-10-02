@@ -32,6 +32,7 @@
     "scripts/refreeze-department-month-objects.ts",
     "scripts/fix-worker-timesheet-objects-month.ts",
     "scripts/rebuild-versions-without-fired.ts",
+    "scripts/apply-office-window-month.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],
