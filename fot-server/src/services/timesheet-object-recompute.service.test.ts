@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * Пересчёт по часам сразу после снятия «Офиса» (291): правило и период ночи (по вчера),
  * строки FOR UPDATE — только у переданных сотрудников; ночной загрузчик — без блокировки.
+ * Рабочему — «По СКУД» (skud), как ночью.
  */
 
 const h = vi.hoisted(() => ({
@@ -27,21 +28,36 @@ const { loadOwnActiveEmployees } = await import('./employee-timesheet-object-aut
 const CONTRACTORS = ['22222222-2222-4222-8222-222222222222'];
 const NOW = new Date('2026-09-30T12:00:00+03:00');
 
+// Структура для раздела «Бригады»: технический корень → СУ-10 → папка «Бригады» → бригада.
+const SU10_ROOT_ID = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
+const DEPARTMENTS = [
+  { id: 'r0', parent_id: null, name: 'Объект', kind: 'object' },
+  { id: SU10_ROOT_ID, parent_id: 'r0', name: '(СУ-10) ООО СУ-10', kind: 'department' },
+  { id: 'folder', parent_id: SU10_ROOT_ID, name: 'Бригады', kind: 'department' },
+  { id: 'brigade', parent_id: 'folder', name: 'бр.Тестов Т.Т.', kind: 'brigade' },
+  { id: 'office', parent_id: SU10_ROOT_ID, name: 'Бухгалтерия', kind: 'department' },
+];
+const BRIGADES = ['folder', 'brigade'];
+
 const row = (id: number, over: Record<string, unknown> = {}) => ({
   id, full_name: `Сотрудник ${id}`, mode: 'current_activity', object_id: null, set_by: 'auto',
-  office_department: false, personal_office: false, ...over,
+  office_department: false, personal_office: false, worker: false, ...over,
 });
 
 function fakeClient(rows: Array<Record<string, unknown>>, updatedIds: number[]) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     calls.push({ sql, params });
+    if (sql.includes('FROM org_departments')) return { rows: DEPARTMENTS };
     if (sql.includes('FROM employees e') && sql.includes('LEFT JOIN timesheet_office_departments')) return { rows };
     if (sql.startsWith('UPDATE employees')) return { rows: updatedIds.map(id => ({ id })) };
     return { rows: [] };
   });
   return { client: { query } as never, calls };
 }
+
+const findLoad = (calls: Array<{ sql: string; params: unknown[] }>) =>
+  calls.find(call => call.sql.includes('FROM employees e') && call.sql.includes('LEFT JOIN timesheet_office_departments'))!;
 
 beforeEach(() => {
   Object.values(h).forEach(fn => fn.mockReset());
@@ -69,10 +85,10 @@ describe('recomputeTimesheetObjectsNow', () => {
     });
 
     expect(changed).toEqual([3, 5]);
-    const [load] = calls;
-    expect(load.sql).toContain('AND e.id = ANY($2::int[])');
+    const load = findLoad(calls);
+    expect(load.sql).toContain('AND e.id = ANY($3::int[])');
     expect(load.sql).toContain('FOR UPDATE OF e');
-    expect(load.params).toEqual([CONTRACTORS, [3, 5, 6, 7]]);
+    expect(load.params).toEqual([CONTRACTORS, BRIGADES, [3, 5, 6, 7]]);
     // Период — как у ночи: сегодняшние незакрытые часы не участвуют.
     expect(h.hours).toHaveBeenCalledWith(
       [3, 5, 6, 7],
@@ -101,6 +117,20 @@ describe('recomputeTimesheetObjectsNow', () => {
     expect(h.logWithClient).not.toHaveBeenCalled();
   });
 
+  it('рабочему — «По СКУД» без расчёта часов: skud, без объекта', async () => {
+    const { client, calls } = fakeClient([
+      row(8, { mode: 'object', object_id: 'o-a', worker: true }),
+      row(9, { mode: 'skud', worker: true }),
+    ], [8]);
+    const changed = await recomputeTimesheetObjectsNow(client, [8, 9], {
+      contractorIds: CONTRACTORS, now: NOW, userId: 'user-1', reason: 'office_removed',
+    });
+    expect(changed).toEqual([8]);
+    const update = calls.find(call => call.sql.startsWith('UPDATE employees'));
+    // 9 — уже skud/auto: повтор не пишется.
+    expect(update?.params).toEqual([[8], ['skud'], [null]]);
+  });
+
   it('пустой список — ни одного запроса', async () => {
     const { client, calls } = fakeClient([], []);
     expect(await recomputeTimesheetObjectsNow(client, [], {
@@ -114,8 +144,18 @@ describe('loadOwnActiveEmployees', () => {
   it('без списка id (ночь) — все и без блокировки строк', async () => {
     const { client, calls } = fakeClient([row(1)], []);
     await loadOwnActiveEmployees(client, CONTRACTORS);
-    expect(calls[0].sql).not.toContain('FOR UPDATE');
-    expect(calls[0].sql).not.toContain('$2');
-    expect(calls[0].params).toEqual([CONTRACTORS]);
+    const load = findLoad(calls);
+    expect(load.sql).not.toContain('FOR UPDATE');
+    expect(load.sql).not.toContain('$3');
+    expect(load.params).toEqual([CONTRACTORS, BRIGADES]);
+  });
+
+  it('признак рабочего — роль «Рабочий» или бригадник без учётки, отделы «Бригад» — параметром', async () => {
+    const { client, calls } = fakeClient([row(1)], []);
+    await loadOwnActiveEmployees(client, CONTRACTORS);
+    const load = findLoad(calls);
+    expect(load.sql).toContain("wsr.code = 'worker'");
+    expect(load.sql).toContain('e.org_department_id = ANY($2::uuid[])');
+    expect(load.sql).toContain('AS worker');
   });
 });

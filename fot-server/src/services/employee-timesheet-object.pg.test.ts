@@ -64,6 +64,7 @@ import { monthEnd } from './employee-timesheet-object.service.js';
 import { enforceOfficeForDepartments } from './timesheet-office-rule.js';
 import { updateTimesheetOffice } from './timesheet-office.service.js';
 import { refreezeDepartmentMonth } from './timesheet-object-month-refreeze.service.js';
+import { fixWorkersFrozenMonth } from './employee-timesheet-object-month-fix.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}288_employee_timesheet_object.sql`, 'utf8');
@@ -891,6 +892,195 @@ describe.skipIf(!PG_URL)('объект табелирования (288) на Pos
       const later = new Date(`${shift(current, 2).slice(0, 8)}10T12:00:00+03:00`);
       await expect(refreezeDepartmentMonth({ month: nextMonthStart(current), departmentId: D_OWN, dryRun: true, now: later }))
         .rejects.toThrow(/ещё не зафиксирован/);
+    });
+  });
+  // Рабочие (роль «Рабочий» или бригадник без учётки): «По СКУД» вместо объекта по часам —
+  // ночь, фиксация месяца и разовая правка уже зафиксированного месяца.
+  describe('рабочие — «По СКУД» (правило рабочих)', () => {
+    const TECH = '00000000-0000-0000-0000-00000000b100';
+    const SU10 = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
+    const FOLDER = '00000000-0000-0000-0000-00000000b101';
+    const BRIG = '00000000-0000-0000-0000-00000000b102';
+    const FIRED_DEPT = '00000000-0000-0000-0000-00000000b103';
+    const D_OFFICE = '00000000-0000-0000-0000-00000000b104';
+    const R_WORKER = '00000000-0000-0000-0000-00000000e0b1';
+    const R_OFFICE = '00000000-0000-0000-0000-00000000e0b2';
+    const U_HR = '00000000-0000-0000-0000-00000000e0b3';
+    let current = '';
+    let next = '';
+
+    const emp = async (id: number) => (await q(
+      `SELECT timesheet_export_mode AS mode, timesheet_export_object_id::text AS object_id,
+              timesheet_export_set_by AS set_by
+         FROM employees WHERE id = $1`, [id],
+    ))[0];
+    const frozenRows = async (ids: number[]) => q(
+      `SELECT employee_id, mode, object_id::text, set_by FROM employee_timesheet_object_months
+        WHERE month = $1::date AND employee_id = ANY($2::int[]) ORDER BY employee_id`, [current, ids],
+    );
+
+    beforeAll(async () => {
+      await resetSchema();
+      await pg.pool!.query(MIGRATION);
+      await pg.pool!.query(MIGRATION_AUTHOR);
+      await pg.pool!.query(MIGRATION_DROP_MODE);
+      await pg.pool!.query(MIGRATION_OFFICE);
+      current = shift(baseline, 1);
+      next = nextMonthStart(current);
+      hours.byEmployee = new Map();
+      await pg.pool!.query(`
+        DROP TABLE IF EXISTS employee_dismissal_events;
+        CREATE TABLE employee_dismissal_events (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(), employee_id integer NOT NULL, dismissal_date date NULL,
+          cancelled boolean NOT NULL DEFAULT false, from_department_id uuid NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        INSERT INTO org_departments (id, name, parent_id, kind) VALUES
+          ('${TECH}', 'Объект', NULL, 'object'),
+          ('${SU10}', '(СУ-10) ООО СУ-10', '${TECH}', 'department'),
+          ('${FOLDER}', 'Бригады', '${SU10}', 'department'),
+          ('${BRIG}', 'бр.Тестов Т.Т.', '${FOLDER}', 'brigade'),
+          ('${FIRED_DEPT}', 'Уволенные', '${TECH}', 'department'),
+          ('${D_OFFICE}', 'ОТиТБ', '${SU10}', 'department');
+        INSERT INTO system_roles (id, code, name) VALUES
+          ('${R_WORKER}', 'worker', 'Рабочий'), ('${R_OFFICE}', 'office', 'Офисный сотрудник');
+        UPDATE timesheet_object_auto_state
+           SET enabled = true, frozen_month = '${baseline}', objects_rebuilt_month = '${baseline}', applied_date = NULL;
+        INSERT INTO employees (id, full_name, org_department_id, employment_status,
+                               timesheet_export_mode, timesheet_export_object_id, timesheet_export_set_by) VALUES
+          (60, 'Рабочий по роли', '${D_OWN}', 'active', 'object', '${ZIL}', 'auto'),
+          (61, 'Бригадник без учётки', '${BRIG}', 'active', NULL, NULL, NULL),
+          (62, 'Энергетик в бригадах', '${BRIG}', 'active', 'object', '${ZIL}', 'auto'),
+          (64, 'Рабочий подрядчика', '${CONTR}', 'active', NULL, NULL, NULL),
+          (65, 'Уволенный рабочий', '${FIRED_DEPT}', 'fired', 'object', '${DOM}', 'auto'),
+          (66, 'Давно уволенный бригадник', '${FIRED_DEPT}', 'fired', NULL, NULL, NULL),
+          (67, 'Рабочий в отделе с «Офисом»', '${D_OFFICE}', 'active', 'object', '${DOM}', 'auto'),
+          (68, 'Рабочий, ручной «По СКУД»', '${D_OWN}', 'active', 'skud', NULL, NULL),
+          (69, 'Уволенный бригадник без учётки', '${FIRED_DEPT}', 'fired', 'object', '${DOM}', 'auto'),
+          (70, 'Уволенный не рабочий', '${FIRED_DEPT}', 'fired', 'object', '${DOM}', 'auto'),
+          (71, 'Уволенный рабочий из отдела с «Офисом»', '${FIRED_DEPT}', 'fired', 'object', '${DOM}', 'auto');
+        INSERT INTO user_profiles (id, full_name, employee_id, system_role_id) VALUES
+          ('${U_HR}', 'Кадровик', NULL, '${R_OFFICE}'),
+          ('00000000-0000-0000-0000-00000000f060', 'Рабочий по роли', 60, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f062', 'Энергетик', 62, '${R_OFFICE}'),
+          ('00000000-0000-0000-0000-00000000f063', 'Личный «Офис»', 63, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f064', 'Подрядчик', 64, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f065', 'Уволенный', 65, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f067', 'Офис отдела', 67, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f068', 'Ручной', 68, '${R_WORKER}'),
+          ('00000000-0000-0000-0000-00000000f071', 'Офис отдела, уволен', 71, '${R_WORKER}');
+        INSERT INTO employees (id, full_name, org_department_id, timesheet_export_mode,
+                               timesheet_export_set_by, timesheet_export_set_by_user_id, timesheet_export_set_at) VALUES
+          (63, 'Рабочий с личным «Офисом»', '${D_OWN}', 'current_activity', NULL, '${U_HR}', now());
+        INSERT INTO employee_dismissal_events (employee_id, dismissal_date, from_department_id) VALUES
+          (65, '${current}', '${D_OWN}'),
+          (66, '${baseline}', '${BRIG}'),
+          (69, '${current}', '${BRIG}'),
+          (70, '${current}', '${D_OWN}'),
+          (71, '${current}', '${D_OFFICE}');
+        INSERT INTO timesheet_office_departments (org_department_id, created_by) VALUES ('${D_OFFICE}', '${U_HR}');
+      `);
+    });
+
+    it('ночь: рабочим skud/auto без учёта часов; не рабочий в бригадах — по часам; личный «Офис», подрядчик и «Офис» отдела главнее', async () => {
+      hours.byEmployee = new Map([
+        [60, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 100 }]],
+        [62, [{ value: DOM, label: 'ЖК Дом 56', objectId: DOM, hours: 90 }]],
+      ]);
+      const result = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}10T05:00:00+03:00`));
+      expect(result).toMatchObject({ kind: 'applied' });
+      expect(await emp(60)).toEqual({ mode: 'skud', object_id: null, set_by: 'auto' });
+      expect(await emp(61)).toEqual({ mode: 'skud', object_id: null, set_by: 'auto' });
+      expect(await emp(68)).toEqual({ mode: 'skud', object_id: null, set_by: 'auto' });
+      expect(await emp(62)).toEqual({ mode: 'object', object_id: DOM, set_by: 'auto' });
+      expect(await emp(63)).toEqual({ mode: 'current_activity', object_id: null, set_by: null });
+      expect(await emp(64)).toEqual({ mode: null, object_id: null, set_by: null });
+      expect(await emp(67)).toEqual({ mode: 'current_activity', object_id: null, set_by: 'auto' });
+      // Уволенных ночь не трогает.
+      expect(await emp(65)).toEqual({ mode: 'object', object_id: DOM, set_by: 'auto' });
+      const audit = await q<{ changes: Array<{ id: number; to_mode: string }> }>(
+        `SELECT details->'changes' AS changes FROM audit_logs
+          WHERE action = 'TIMESHEET_OBJECT_AUTO_ASSIGNED' AND details->>'reason' = 'current_month'`,
+      );
+      expect(audit[0].changes.filter(change => change.to_mode === 'skud').map(change => change.id).sort())
+        .toEqual([60, 61, 68]);
+
+      // Повтор на следующий день — без изменений.
+      const again = await recomputeCurrentMonth(new Date(`${current.slice(0, 8)}11T05:00:00+03:00`));
+      expect(again).toMatchObject({ kind: 'applied', changed: 0 });
+      // Резолвер отдаёт источник: skud/auto — правило рабочих.
+      expect((await resolveExportModes([60, 62])).get(60)).toMatchObject({ mode: 'skud', setBy: 'auto' });
+    });
+
+    it('фиксация месяца: рабочим skud/auto, уволенному — как в карточке', async () => {
+      const frozen = await freezeMonth(current, new Date(`${next}T04:30:00+03:00`));
+      expect(frozen).toMatchObject({ kind: 'frozen', month: current });
+      expect(await frozenRows([60, 61, 62, 65, 66])).toEqual([
+        { employee_id: 60, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 61, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 62, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 65, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 66, mode: null, object_id: null, set_by: null },
+      ]);
+      const resolved = await resolveExportModes([60], undefined, { month: current, now: new Date(`${next}T12:00:00+03:00`) });
+      expect(resolved.get(60)).toMatchObject({ mode: 'skud', setBy: 'auto' });
+    });
+
+    it('правка зафиксированного месяца: рабочие → skud/auto, у уволенного отдел — до увольнения; повтор — 0, маркер пересборки — только при изменениях', async () => {
+      // Месяц как зафиксированный до правила: объект по часам, NULL, ручной «По СКУД».
+      await q(`UPDATE employee_timesheet_object_months SET mode = 'object', object_id = $2, set_by = 'auto'
+                WHERE month = $1::date AND employee_id = 60`, [current, ZIL]);
+      await q(`UPDATE employee_timesheet_object_months SET mode = NULL, set_by = NULL
+                WHERE month = $1::date AND employee_id = 61`, [current]);
+      await q(`UPDATE employee_timesheet_object_months SET mode = 'skud', set_by = NULL
+                WHERE month = $1::date AND employee_id = 68`, [current]);
+      await q(`UPDATE timesheet_object_auto_state SET objects_rebuilt_month = $1::date`, [current]);
+
+      const dry = await fixWorkersFrozenMonth({ month: current, dryRun: true });
+      // 66 — давно уволен (NULL), 70 — не рабочий, 71 — отдел до увольнения с «Офисом».
+      expect(dry.frozen.map(row => row.employeeId)).toEqual([60, 61, 65, 68, 69]);
+      expect(dry.live.map(row => row.employeeId)).toEqual([65, 69]);
+      expect(dry.rebuildRequested).toBe(false);
+      expect((await frozenRows([60]))[0]).toMatchObject({ mode: 'object' });
+
+      const applied = await fixWorkersFrozenMonth({ month: current, dryRun: false });
+      expect(applied.frozen.map(row => row.employeeId)).toEqual([60, 61, 65, 68, 69]);
+      expect(applied.rebuildRequested).toBe(true);
+      expect(await frozenRows([60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71])).toEqual([
+        { employee_id: 60, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 61, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 62, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 63, mode: 'current_activity', object_id: null, set_by: null },
+        { employee_id: 65, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 66, mode: null, object_id: null, set_by: null },
+        { employee_id: 67, mode: 'current_activity', object_id: null, set_by: 'auto' },
+        { employee_id: 68, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 69, mode: 'skud', object_id: null, set_by: 'auto' },
+        { employee_id: 70, mode: 'object', object_id: DOM, set_by: 'auto' },
+        { employee_id: 71, mode: 'object', object_id: DOM, set_by: 'auto' },
+      ]);
+      expect(await emp(65)).toEqual({ mode: 'skud', object_id: null, set_by: 'auto' });
+      expect(await emp(69)).toEqual({ mode: 'skud', object_id: null, set_by: 'auto' });
+      expect(await emp(70)).toEqual({ mode: 'object', object_id: DOM, set_by: 'auto' });
+      expect((await q<{ m: string }>('SELECT objects_rebuilt_month::text AS m FROM timesheet_object_auto_state'))[0].m)
+        .toBe(baseline);
+      expect(await q(`SELECT entity_id, (details->>'frozen_changed')::int AS f, (details->>'live_changed')::int AS l
+                        FROM audit_logs WHERE details->>'reason' = 'workers_skud'`))
+        .toEqual([{ entity_id: `workers:${current}`, f: 5, l: 2 }]);
+
+      // Повтор — 0 изменений, маркер не трогается, аудита нет.
+      await q(`UPDATE timesheet_object_auto_state SET objects_rebuilt_month = $1::date`, [current]);
+      const again = await fixWorkersFrozenMonth({ month: current, dryRun: false });
+      expect(again).toMatchObject({ frozen: [], live: [], rebuildRequested: false });
+      expect((await q<{ m: string }>('SELECT objects_rebuilt_month::text AS m FROM timesheet_object_auto_state'))[0].m)
+        .toBe(current);
+      expect(Number((await q<{ n: string }>(`SELECT count(*) AS n FROM audit_logs WHERE details->>'reason' = 'workers_skud'`))[0].n))
+        .toBe(1);
+    });
+
+    it('правка месяца: отказ для незафиксированного и базового месяца', async () => {
+      await expect(fixWorkersFrozenMonth({ month: next, dryRun: true })).rejects.toThrow(/не зафиксирован/);
+      await expect(fixWorkersFrozenMonth({ month: baseline, dryRun: true })).rejects.toThrow(/не позже базового/);
     });
   });
 });

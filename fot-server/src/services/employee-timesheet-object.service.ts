@@ -11,7 +11,7 @@ import { query, type DbExecutor } from '../config/postgres.js';
 import { getContractorRootId } from '../config/contractor.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { loadAttendanceAdjustments } from './attendance.service.js';
-import { buildObjectAttendanceData } from './timesheet-object.service.js';
+import { buildObjectAttendanceData, type IAttendanceObjectEntry } from './timesheet-object.service.js';
 import { sumObjectHoursByEmployee } from './employees-export-objects.service.js';
 import {
   CURRENT_ACTIVITY_ADDRESS,
@@ -132,17 +132,19 @@ export function compareTimesheetObjectHours(a: ITimesheetObjectHours, b: ITimesh
 }
 
 /**
- * Объекты сотрудника → объекты табелирования: только активные, офисы суммируются
- * в «Офис», в итоге — только с часами > 0, по compareTimesheetObjectHours.
+ * Объекты сотрудника → объекты табелирования: только активные (includeInactive — и
+ * неактивные: для подписи, где человек работал), офисы суммируются в «Офис», в итоге —
+ * только с часами > 0, по compareTimesheetObjectHours.
  */
 export function groupObjectHours(
   list: ReadonlyArray<{ objectId: string; hours: number }>,
   objectsById: ReadonlyMap<string, ISkudObjectInfo>,
+  options: { includeInactive?: boolean } = {},
 ): ITimesheetObjectHours[] {
   const groups = new Map<string, ITimesheetObjectHours>();
   for (const item of list) {
     const object = objectsById.get(item.objectId);
-    if (!object || !object.is_active) continue;
+    if (!object || (!object.is_active && !options.includeInactive)) continue;
     const office = isOfficeAddress(object.alt_name);
     const value = office ? OFFICE_VALUE : object.id;
     const group = groups.get(value) ?? {
@@ -212,13 +214,34 @@ export function labelForResolved(
   return null;
 }
 
+/** skud от правила рабочих (timesheet-object-worker-rule.ts): пару skud/auto пишет только оно. */
+export function isWorkerSkudMode(resolved: IResolvedExportMode): boolean {
+  return resolved.mode === 'skud' && resolved.setBy === 'auto';
+}
+
+/**
+ * Подпись рабочего: объекты с часами за период через запятую — по убыванию часов, офисы
+ * одним «Офисом», неактивные объекты тоже (человек там работал). Часов нет — null.
+ */
+export function workerObjectsLabel(
+  list: ReadonlyArray<{ objectId: string; hours: number }> | undefined,
+  objectsById: ReadonlyMap<string, ISkudObjectInfo>,
+): string | null {
+  if (!list || list.length === 0) return null;
+  const groups = groupObjectHours(list, objectsById, { includeInactive: true });
+  return groups.length > 0 ? groups.map(group => group.label).join(', ') : null;
+}
+
 /**
  * Подписи объекта табелирования для списка сотрудников. month — месяц табеля: для
- * прошедшего месяца личный режим берётся из фиксации (миграция 288).
+ * прошедшего месяца личный режим берётся из фиксации (миграция 288). objectEntries —
+ * объектные часы показанного периода (табель): рабочему подпись — его объекты через
+ * запятую. Без них у рабочего подписи нет (карточка, ЛК).
  */
 export async function loadTimesheetObjectLabels(
   employeeIds: number[],
   month?: string | null,
+  options: { objectEntries?: IAttendanceObjectEntry[] } = {},
 ): Promise<Map<number, string>> {
   const result = new Map<number, string>();
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
@@ -227,8 +250,11 @@ export async function loadTimesheetObjectLabels(
     resolveExportModes(ids, undefined, month ? { month } : undefined),
     loadSkudObjects(),
   ]);
+  const workedObjects = options.objectEntries ? sumObjectHoursByEmployee(options.objectEntries) : null;
   for (const id of ids) {
-    const label = labelForResolved(modes.get(id) ?? DEFAULT_EXPORT_MODE, objectsById);
+    const resolved = modes.get(id) ?? DEFAULT_EXPORT_MODE;
+    const label = labelForResolved(resolved, objectsById)
+      ?? (workedObjects && isWorkerSkudMode(resolved) ? workerObjectsLabel(workedObjects.get(id), objectsById) : null);
     if (label) result.set(id, label);
   }
   return result;

@@ -22,6 +22,7 @@
 import * as Sentry from '@sentry/node';
 import { query, type DbExecutor } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import type { TimesheetObjectSetBy } from './employee-timesheet-object.service.js';
 
 /** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
 async function runQuery<T extends import('pg').QueryResultRow>(
@@ -43,6 +44,11 @@ export interface IResolvedExportMode {
   /** Закреплённый объект — только для mode = 'object', иначе null. */
   pinnedObjectId: string | null;
   source: TimesheetExportModeSource;
+  /**
+   * Кто поставил личный режим (миграция 288): 'auto' — ночной расчёт, в том числе правило
+   * рабочих (skud). Только у employee_explicit и только если известен.
+   */
+  setBy?: TimesheetObjectSetBy;
 }
 
 export const TIMESHEET_EXPORT_MODES: readonly TimesheetExportMode[] = [
@@ -68,6 +74,7 @@ interface IModeRow {
   employee_id: number | string;
   emp_mode: TimesheetExportMode | null;
   emp_object_id: string | null;
+  emp_set_by?: TimesheetObjectSetBy | null;
   dept_current_activity: boolean | null;
 }
 
@@ -165,6 +172,8 @@ export const FROZEN_PERSONAL_MODE_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.mode ELSE e.timesheet_export_mode END';
 export const FROZEN_PERSONAL_OBJECT_SQL =
   'CASE WHEN f.employee_id IS NOT NULL THEN f.object_id ELSE e.timesheet_export_object_id END';
+export const FROZEN_PERSONAL_SET_BY_SQL =
+  'CASE WHEN f.employee_id IS NOT NULL THEN f.set_by ELSE e.timesheet_export_set_by END';
 
 /**
  * Параметры месяца для запроса. null — месяц не задан или некорректен: живой режим.
@@ -236,6 +245,7 @@ export async function resolveExportModes(
        SELECT e.id                                      AS employee_id,
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
+              ${FROZEN_PERSONAL_SET_BY_SQL}             AS emp_set_by,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -271,6 +281,7 @@ export async function resolveExportModes(
      SELECT e.id                                AS employee_id,
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
+            e.timesheet_export_set_by           AS emp_set_by,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM employees e
        LEFT JOIN dept_ca dc ON dc.org_department_id = e.org_department_id
@@ -337,6 +348,7 @@ export async function resolveExportModesForPairs(
               p.dept_id::text                           AS pair_dept_id,
               ${FROZEN_PERSONAL_MODE_SQL}               AS emp_mode,
               (${FROZEN_PERSONAL_OBJECT_SQL})::text     AS emp_object_id,
+              ${FROZEN_PERSONAL_SET_BY_SQL}             AS emp_set_by,
               (dc.org_department_id IS NOT NULL)        AS dept_current_activity,
               fm.month::text                            AS freeze_month,
               fm.baseline_month::text                   AS baseline_month,
@@ -382,6 +394,7 @@ export async function resolveExportModesForPairs(
             p.dept_id::text                     AS pair_dept_id,
             e.timesheet_export_mode             AS emp_mode,
             e.timesheet_export_object_id::text  AS emp_object_id,
+            e.timesheet_export_set_by           AS emp_set_by,
             (dc.org_department_id IS NOT NULL)  AS dept_current_activity
        FROM pairs p
        JOIN employees e            ON e.id = p.employee_id
@@ -404,6 +417,7 @@ export function resolveRow(row: IModeRow): IResolvedExportMode {
       mode: row.emp_mode,
       pinnedObjectId: row.emp_mode === 'object' ? row.emp_object_id : null,
       source: 'employee_explicit',
+      ...(row.emp_set_by ? { setBy: row.emp_set_by } : {}),
     };
   }
   // Legacy: только объекты отдела. Персональные назначения сюда намеренно не входят —

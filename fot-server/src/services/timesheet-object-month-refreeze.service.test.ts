@@ -60,6 +60,19 @@ describe('planMonthRefreeze', () => {
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ toMode: 'object', toObjectId: 'o-sad', fromSetBy: 'employee' });
   });
+
+  it('рабочему — «По СКУД» независимо от часов; уже skud/auto — no-op; личный «Офис» главнее', () => {
+    const changes = planMonthRefreeze([
+      row(1, { worker: true, mode: 'object', object_id: 'o-dom' }),
+      row(9, { worker: true, mode: null, set_by: null }),
+      row(5, { worker: true, mode: 'skud' }),
+      row(3, { worker: true, set_by: null, personal_office: true }),
+    ], tops);
+    expect(changes.map(c => [c.employeeId, c.toMode, c.toObjectId, c.label])).toEqual([
+      [1, 'skud', null, 'По СКУД'],
+      [9, 'skud', null, 'По СКУД'],
+    ]);
+  });
 });
 
 describe('refreezeDepartmentMonth: отказы до транзакции', () => {

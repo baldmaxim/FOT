@@ -5,7 +5,8 @@
  * «Офисом»; правило сняли позже — ночь текущий месяц пересчитывает, а зафиксированный
  * больше не трогает. Здесь фиксация месяца ставится по тому же правилу, что дала бы
  * ночная фиксация без «Офиса» отдела: объект с наибольшими часами за весь месяц (офисы —
- * суммой, как «Офис»), нет часов — фиксация прежняя, личный «Офис» не трогается.
+ * суммой, как «Офис»), нет часов — фиксация прежняя, личный «Офис» не трогается. Рабочим
+ * (timesheet-object-worker-rule.ts) — «По СКУД» (skud/auto) независимо от часов, как ночью.
  *
  * Одна транзакция под локом режимов (TIMESHEET_MODE_LOCK_KEY — его же берут ночь и окно):
  * строки фиксации FOR UPDATE, часы, запись и аудит. Редакции подач пересобирает
@@ -32,6 +33,7 @@ import {
   toMonthStart,
   type TimesheetExportMode,
 } from './timesheet-export-mode.service.js';
+import { WORKER_SKUD_LABEL, loadBrigadeDepartmentIds, workerSql } from './timesheet-object-worker-rule.js';
 
 export class MonthRefreezeError extends Error {
   constructor(message: string) {
@@ -48,6 +50,8 @@ export interface IFrozenMonthRow {
   set_by: TimesheetObjectSetBy | null;
   /** Личный «Офис» из окна «Режим табелирования», попавший в фиксацию. */
   personal_office: boolean;
+  /** Рабочий: фиксация — skud, а не объект по часам. */
+  worker?: boolean;
 }
 
 export interface IRefreezeChange {
@@ -56,15 +60,15 @@ export interface IRefreezeChange {
   fromMode: TimesheetExportMode | null;
   fromObjectId: string | null;
   fromSetBy: TimesheetObjectSetBy | null;
-  toMode: 'current_activity' | 'object';
+  toMode: 'current_activity' | 'object' | 'skud';
   toObjectId: string | null;
   label: string;
   hours: number;
 }
 
 /**
- * Изменения фиксации: цель — объект с наибольшими часами. Личный «Офис», нет часов, цель
- * совпала при источнике auto — не изменение.
+ * Изменения фиксации: цель — объект с наибольшими часами, у рабочего — skud. Личный
+ * «Офис», нет часов, цель совпала при источнике auto — не изменение.
  */
 export function planMonthRefreeze(
   rows: readonly IFrozenMonthRow[],
@@ -73,6 +77,21 @@ export function planMonthRefreeze(
   const changes: IRefreezeChange[] = [];
   for (const row of rows) {
     if (row.personal_office) continue;
+    if (row.worker) {
+      if (row.mode === 'skud' && row.set_by === 'auto') continue;
+      changes.push({
+        employeeId: row.employee_id,
+        fullName: row.full_name,
+        fromMode: row.mode,
+        fromObjectId: row.object_id,
+        fromSetBy: row.set_by,
+        toMode: 'skud',
+        toObjectId: null,
+        label: WORKER_SKUD_LABEL,
+        hours: 0,
+      });
+      continue;
+    }
     const top = topsByEmployee.get(row.employee_id)?.[0];
     if (!top) continue;
     const target = targetFromTop(top);
@@ -115,14 +134,15 @@ async function loadDepartmentFreezeRows(
   month: string,
   departmentId: string,
 ): Promise<{ rows: IFrozenMonthRow[]; withoutFreezeRow: Array<{ id: number; fullName: string | null }> }> {
-  const employees = (await client.query<{ id: number | string; full_name: string | null }>(
-    `SELECT e.id, e.full_name
+  const brigadeIds = await loadBrigadeDepartmentIds(client);
+  const employees = (await client.query<{ id: number | string; full_name: string | null; worker: boolean }>(
+    `SELECT e.id, e.full_name, ${workerSql('e', '$2')} AS worker
        FROM employees e
       WHERE e.org_department_id = $1::uuid
         AND e.is_archived = false
       ORDER BY e.id`,
-    [departmentId],
-  )).rows.map(row => ({ id: Number(row.id), fullName: row.full_name }));
+    [departmentId, brigadeIds],
+  )).rows.map(row => ({ id: Number(row.id), fullName: row.full_name, worker: row.worker === true }));
   if (employees.length === 0) return { rows: [], withoutFreezeRow: [] };
 
   // Строки фиксации — FOR UPDATE по возрастанию id (у LEFT JOIN nullable-сторону не заблокировать).
@@ -164,6 +184,7 @@ async function loadDepartmentFreezeRows(
       object_id: row.object_id,
       set_by: row.set_by,
       personal_office: row.personal_office,
+      worker: employee.worker,
     });
   }
   return { rows, withoutFreezeRow };

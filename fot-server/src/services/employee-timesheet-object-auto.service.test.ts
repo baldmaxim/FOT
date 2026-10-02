@@ -17,7 +17,7 @@ const {
 type Row = Parameters<typeof planAutoChanges>[0][number];
 const row = (id: number, over: Partial<Row> = {}): Row => ({
   id, full_name: `Сотрудник ${id}`, mode: null, object_id: null, set_by: null,
-  office_department: false, personal_office: false, ...over,
+  office_department: false, personal_office: false, worker: false, ...over,
 });
 const top = (value: string, hours: number, label = value) => ({
   value, label, objectId: value === 'office' ? null : value, hours,
@@ -142,5 +142,53 @@ describe('planAutoChanges', () => {
       employees: 5, changed: 2, fromNone: 1, fromChoice: 1, officeDepartment: 2, personalOffice: 1, unchanged: 0,
     });
     expect(report.changed + report.unchanged + report.personalOffice + report.officeDepartment).toBe(report.employees);
+  });
+});
+
+describe('planAutoChanges: рабочие — «По СКУД» вместо объекта по часам', () => {
+  const tops = new Map([
+    [1, [top('o-dom', 200, 'ЖК Дом 56'), top('o-zil', 30)]],
+    [2, [top('office', 28.5, 'Офис')]],
+  ]);
+
+  it('объект по часам, «Офис» по часам, без режима и без часов — всем skud без объекта', () => {
+    const rows = [
+      row(1, { worker: true, mode: 'object', object_id: 'o-zil', set_by: 'auto' }),
+      row(2, { worker: true, mode: 'current_activity', set_by: 'auto' }),
+      row(3, { worker: true }),
+      row(4, { worker: true, mode: 'skud', set_by: null }),
+    ];
+    expect(planAutoChanges(rows, tops).map(c => [c.employeeId, c.toMode, c.toObjectId, c.label, c.fromMode])).toEqual([
+      [1, 'skud', null, 'По СКУД', 'object'],
+      [2, 'skud', null, 'По СКУД', 'current_activity'],
+      [3, 'skud', null, 'По СКУД', null],
+      [4, 'skud', null, 'По СКУД', 'skud'],
+    ]);
+  });
+
+  it('уже skud/auto — повтор не пишется', () => {
+    expect(planAutoChanges([row(1, { worker: true, mode: 'skud', set_by: 'auto' })], tops)).toEqual([]);
+  });
+
+  it('личный «Офис» и отдел с «Офисом» главнее правила рабочих', () => {
+    const rows = [
+      row(1, { worker: true, mode: 'current_activity', set_by: null, personal_office: true }),
+      row(2, { worker: true, office_department: true, mode: 'current_activity', set_by: 'auto' }),
+    ];
+    expect(planAutoChanges(rows, tops)).toEqual([]);
+  });
+
+  it('сводка: рабочие и переход в «По СКУД» — отдельными строками', () => {
+    const rows = [
+      row(1, { worker: true, mode: 'object', object_id: 'o-dom', set_by: 'auto' }),
+      row(5, { worker: true, mode: 'skud', set_by: 'auto' }),
+      row(6, { worker: true, office_department: true }),
+      row(2),
+    ];
+    const changes = planAutoChanges(rows, tops);
+    const report = summarizeAutoChanges(rows, tops, changes);
+    expect(report).toMatchObject({
+      employees: 4, workers: 2, changed: 2, toSkud: 1, toOffice: 1, toObject: 0, fromAuto: 1, unchanged: 1,
+    });
   });
 });

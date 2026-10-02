@@ -9,7 +9,8 @@
  *   - ставит своим работающим сотрудникам объект с наибольшими часами с 1-го числа по
  *     вчера, в том числе поверх прежнего выбора в ЛК/табеле и ручного объекта админа;
  *     «Офис» из окна «Режим табелирования» (отдела и личный) не трогает, нет часов —
- *     объект прежний;
+ *     объект прежний; рабочим (роль «Рабочий» или бригадник без учётки) — «По СКУД»,
+ *     разбивка по проходам, независимо от часов;
  *   - включит ночной расчёт (enabled = true), запишет applied_date и frozen_month.
  *
  * Запуск на сервере — рабочий каталог папка сайта (там production .env):
@@ -36,7 +37,11 @@ const main = async (): Promise<void> => {
   console.log(`${prefix}период расчёта ${result.period.start}..${result.period.end}`);
   console.log(`${prefix}дозафиксировать месяцы: ${result.frozenMonths.length > 0 ? result.frozenMonths.join(', ') : 'нет'}`);
   console.log(`${prefix}своих работающих сотрудников: ${report.employees}, с часами на объектах: ${report.withHours}`);
-  console.log(`${prefix}изменится объект: ${report.changed} (Офис — ${report.toOffice}, объект — ${report.toObject})`);
+  console.log(`${prefix}рабочих (разбивка «По СКУД»): ${report.workers}`);
+  console.log(
+    `${prefix}изменится объект: ${report.changed} `
+    + `(Офис — ${report.toOffice}, объект — ${report.toObject}, рабочие → «По СКУД» — ${report.toSkud})`,
+  );
   console.log(
     `${prefix}  откуда: без режима ${report.fromNone}, «По СКУД» ${report.fromSkud}, `
     + `ручной объект ${report.fromAdminObject}, ручная «Текущая деятельность» ${report.fromAdminOffice}, `
@@ -51,7 +56,7 @@ const main = async (): Promise<void> => {
       console.log(
         `  ${change.employeeId}\t${change.fullName ?? ''}\t${change.fromSetBy ?? '—'}\t`
         + `${change.fromMode ?? '—'}${change.fromObjectId ? `:${change.fromObjectId}` : ''}`
-        + ` → ${change.label} (${change.hours} ч)`,
+        + ` → ${change.label}${change.toMode === 'skud' ? '' : ` (${change.hours} ч)`}`,
       );
     }
   }

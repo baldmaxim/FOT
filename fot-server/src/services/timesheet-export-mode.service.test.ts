@@ -52,6 +52,12 @@ describe('resolveRow — приоритет источников', () => {
     const r = resolveRow(row());
     expect(r).toMatchObject({ mode: 'skud', source: 'legacy_default' });
   });
+
+  it('источник личного режима: skud/auto — правило рабочих; у legacy источника нет', () => {
+    expect(resolveRow(row({ emp_mode: 'skud', emp_set_by: 'auto' })).setBy).toBe('auto');
+    expect(resolveRow(row({ emp_mode: 'skud', emp_set_by: null })).setBy).toBeUndefined();
+    expect(resolveRow(row({ emp_set_by: 'auto' })).setBy).toBeUndefined();
+  });
 });
 
 describe('персональные назначения объектов не влияют на режим', () => {

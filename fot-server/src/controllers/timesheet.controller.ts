@@ -2833,10 +2833,11 @@ export const timesheetController = {
         && membershipDeptId != null
         && (editableDeptIds === 'all' || editableDeptIds.includes(membershipDeptId));
       // Объект табелирования под ФИО (миграция 288): за месяц табеля — для прошедшего
-      // месяца из фиксации.
+      // месяца из фиксации. Рабочему — его объекты за показанный период через запятую.
       const timesheetObjectLabels = await loadTimesheetObjectLabels(
         (employees || []).map(e => Number(e.id)),
         startDate,
+        { objectEntries },
       );
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);

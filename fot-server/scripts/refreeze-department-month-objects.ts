@@ -65,7 +65,7 @@ const main = async (): Promise<void> => {
       console.log(
         `  ${change.employeeId}\t${change.fullName ?? ''}\t${change.fromSetBy ?? '—'}\t`
         + `${change.fromMode ?? '—'}${change.fromObjectId ? `:${change.fromObjectId}` : ''}`
-        + ` → ${change.label} (${change.hours} ч)`,
+        + ` → ${change.label}${change.toMode === 'skud' ? '' : ` (${change.hours} ч)`}`,
       );
     }
   }

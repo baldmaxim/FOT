@@ -9,6 +9,10 @@
  * Сотрудники отделов с «Офисом» (291) в расчёт по часам не идут: им правило отдела ставит
  * «Офис» при любом источнике — одинаково в пересчёте, фиксации месяца и активации.
  *
+ * Рабочим (роль «Рабочий» или бригадник без учётки, timesheet-object-worker-rule.ts) объект
+ * по часам не ставится: режим skud, set_by = 'auto' — разбивка по фактическим проходам, как
+ * до авторасчёта. Часы для этого не нужны: правило действует и без проходов.
+ *
  * Все операции — под session-локом TIMESHEET_MODE_LOCK_KEY (его же берёт окно «Режим
  * табелирования»), в одной транзакции REPEATABLE READ: часы, режимы,
  * объекты и состояние читаются одним снимком, запись, аудит и состояние — там же.
@@ -45,6 +49,7 @@ import {
   personalOfficeSql,
   writeOfficeAudit,
 } from './timesheet-office-rule.js';
+import { WORKER_SKUD_LABEL, loadBrigadeDepartmentIds, workerSql } from './timesheet-object-worker-rule.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -58,6 +63,8 @@ export interface IEmployeeModeRow {
   office_department: boolean;
   /** Личный «Офис» из окна «Режим табелирования» (291). */
   personal_office: boolean;
+  /** Рабочий: объект не по часам, а skud (timesheet-object-worker-rule.ts). */
+  worker: boolean;
 }
 
 export interface IAutoChange {
@@ -66,7 +73,7 @@ export interface IAutoChange {
   fromMode: TimesheetExportMode | null;
   fromObjectId: string | null;
   fromSetBy: TimesheetObjectSetBy | null;
-  toMode: 'current_activity' | 'object';
+  toMode: 'current_activity' | 'object' | 'skud';
   toObjectId: string | null;
   label: string;
   hours: number;
@@ -87,7 +94,7 @@ export function targetFromTop(top: ITimesheetObjectHours): { mode: 'current_acti
 /**
  * Изменения ночного расчёта. Нет часов — объект прежний. Строка без изменений режима,
  * объекта и источника — не изменение (повтор — no-op). Сотрудников отделов с «Офисом»
- * здесь нет — их ведёт enforceOfficeForDepartments.
+ * здесь нет — их ведёт enforceOfficeForDepartments. Рабочему — skud независимо от часов.
  */
 export function planAutoChanges(
   rows: readonly IEmployeeModeRow[],
@@ -96,6 +103,21 @@ export function planAutoChanges(
   const changes: IAutoChange[] = [];
   for (const row of rows) {
     if (row.office_department || !isAutoCandidate(row)) continue;
+    if (row.worker) {
+      if (row.mode === 'skud' && row.set_by === 'auto') continue;
+      changes.push({
+        employeeId: row.id,
+        fullName: row.full_name,
+        fromMode: row.mode,
+        fromObjectId: row.object_id,
+        fromSetBy: row.set_by,
+        toMode: 'skud',
+        toObjectId: null,
+        label: WORKER_SKUD_LABEL,
+        hours: 0,
+      });
+      continue;
+    }
     const top = topsByEmployee.get(row.id)?.[0];
     if (!top) continue;
     const target = targetFromTop(top);
@@ -119,10 +141,15 @@ export function planAutoChanges(
 /** Отчёт переходов для скрипта активации. */
 export interface IAutoReport {
   employees: number;
+  /** С часами на объектах — среди тех, кому объект ставится по часам (рабочих не считаем). */
   withHours: number;
+  /** Рабочие, которым расчёт ставит skud (без личного «Офиса» и отделов с «Офисом»). */
+  workers: number;
   changed: number;
   toOffice: number;
   toObject: number;
+  /** Рабочие → skud (разбивка по проходам). */
+  toSkud: number;
   fromNone: number;
   fromSkud: number;
   fromAdminObject: number;
@@ -145,9 +172,11 @@ export function summarizeAutoChanges(
   const report: IAutoReport = {
     employees: rows.length,
     withHours: rows.filter(row => (topsByEmployee.get(row.id)?.length ?? 0) > 0).length,
+    workers: rows.filter(row => row.worker && !row.office_department && isAutoCandidate(row)).length,
     changed: changes.length,
     toOffice: changes.filter(change => change.toMode === 'current_activity').length,
     toObject: changes.filter(change => change.toMode === 'object').length,
+    toSkud: changes.filter(change => change.toMode === 'skud').length,
     fromNone: 0,
     fromSkud: 0,
     fromAdminObject: 0,
@@ -177,7 +206,7 @@ export function summarizeAutoChanges(
  * возврата соединения в пул. Лок берётся ДО снимка: иначе транзакция не увидела бы
  * правку, которую ждала на локе. 40001/40P01 — повтор целиком.
  */
-async function withModeSnapshot<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withModeSnapshot<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const client = await pool().connect();
@@ -222,6 +251,7 @@ async function withModeSnapshot<T>(fn: (client: PoolClient) => Promise<T>): Prom
  * Свои работающие сотрудники с режимами. employeeIds — только эти, и строки берутся
  * FOR UPDATE по порядку id (пересчёт сразу после снятия «Офиса» в окне). Без списка —
  * все и без блокировки строк: ночь не держит всех сотрудников на время расчёта часов.
+ * Признак рабочего — тем же снимком: отделы «Бригад» читаются через client.
  */
 export async function loadOwnActiveEmployees(
   client: PoolClient,
@@ -229,6 +259,7 @@ export async function loadOwnActiveEmployees(
   employeeIds?: readonly number[],
 ): Promise<IEmployeeModeRow[]> {
   const filtered = employeeIds !== undefined;
+  const brigadeIds = await loadBrigadeDepartmentIds(client);
   const rows = (await client.query<IEmployeeModeRow>(
     `SELECT e.id,
             e.full_name,
@@ -236,16 +267,17 @@ export async function loadOwnActiveEmployees(
             e.timesheet_export_object_id::text  AS object_id,
             e.timesheet_export_set_by           AS set_by,
             (tod.org_department_id IS NOT NULL) AS office_department,
-            ${personalOfficeSql('e')}           AS personal_office
+            ${personalOfficeSql('e')}           AS personal_office,
+            ${workerSql('e', '$2')}             AS worker
        FROM employees e
        LEFT JOIN timesheet_office_departments tod ON tod.org_department_id = e.org_department_id
       WHERE e.is_archived = false
         AND e.employment_status = 'active'
         AND (e.org_department_id IS NULL OR NOT (e.org_department_id = ANY($1::uuid[])))${filtered ? `
-        AND e.id = ANY($2::int[])` : ''}
+        AND e.id = ANY($3::int[])` : ''}
       ORDER BY e.id${filtered ? `
       FOR UPDATE OF e` : ''}`,
-    filtered ? [contractorIds, [...employeeIds]] : [contractorIds],
+    filtered ? [contractorIds, brigadeIds, [...employeeIds]] : [contractorIds, brigadeIds],
   )).rows;
   return rows.map(row => ({ ...row, id: Number(row.id) }));
 }
@@ -375,8 +407,9 @@ async function computeChanges(
   const contractorIds = await loadContractorDepartmentIds(client);
   const rows = await loadOwnActiveEmployees(client, contractorIds);
   const objectsById = await loadSkudObjects(client);
+  // Рабочим объект не по часам — их часы не считаем.
   const tops = await loadTimesheetObjectHours(
-    rows.map(row => row.id),
+    rows.filter(row => !row.worker).map(row => row.id),
     period,
     { todayStr: moscowTodayIso(now), exec: client, objectsById },
   );
