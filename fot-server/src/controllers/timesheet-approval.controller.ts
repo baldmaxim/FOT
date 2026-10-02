@@ -36,6 +36,12 @@ import { lockTimesheetMonthsOnClient } from '../services/timesheet-lock.service.
 import { roleAllowsTimesheet } from '../services/timesheet-scope.service.js';
 import { withTimesheetSnapshotTransaction } from '../services/timesheet-snapshot-tx.js';
 import {
+  assertNoApprovedDayConflicts,
+  formatApprovedDayConflicts,
+  TimesheetApprovedDayConflictError,
+} from '../services/timesheet-approved-day-conflicts.service.js';
+import { RECALL_TO_DRAFT_SET_SQL } from '../services/timesheet-self-personal-duplicate.service.js';
+import {
   clearVersionDirty,
   materializeVersion,
   resolveState,
@@ -137,6 +143,16 @@ function respondVersionError(res: Response, err: unknown): boolean {
       success: false,
       error: 'Период табеля пересекает границу месяца — подайте табель по месяцам',
       code: 'CROSS_MONTH_RANGE',
+    });
+    return true;
+  }
+  if (err instanceof TimesheetApprovedDayConflictError) {
+    res.status(409).json({
+      success: false,
+      error: `Сотрудники уже утверждены в другом табеле за эти дни: ${formatApprovedDayConflicts(err.conflicts)}. `
+        + 'Верните тот табель на доработку или уберите сотрудника из этой подачи',
+      code: err.code,
+      conflicts: err.conflicts,
     });
     return true;
   }
@@ -428,22 +444,6 @@ export async function resolvePersonalSubmissionContext(
 
   return { managerEmployeeId, employeeIds, affectedDepartmentIds };
 }
-
-/**
- * Поля возврата подачи в черновик. unlocked_* обнуляем здесь же: открытие не должно
- * пережить возврат в draft (иначе CHECK timesheet_approvals_unlock_status_check отбил
- * бы UPDATE). $1 — время изменения.
- */
-const RECALL_TO_DRAFT_SET_SQL = `status = 'draft',
-             submitted_by = NULL,
-             submitted_at = NULL,
-             reviewed_by = NULL,
-             reviewed_at = NULL,
-             review_comment = NULL,
-             unlocked_at = NULL,
-             unlocked_by = NULL,
-             unlock_reason = NULL,
-             updated_at = $1`;
 
 const sortedUniqueIds = (ids: readonly (number | string)[]): number[] =>
   [...new Set(ids.map(Number))].sort((l, r) => l - r);
@@ -1754,6 +1754,11 @@ async function changeApprovalReviewState(
 
         if (needsVersion) {
           await materializeVersion(client, toVersionApproval(row), 'approve', req.user.id);
+          // День сотрудника, уже утверждённый в другой подаче, ушёл бы в 1С дважды —
+          // откатываем утверждение целиком. Закрытие периода не проверяем: состав подачи
+          // при открытии и закрытии не меняется, а старые пересечения (август) не должны
+          // оставлять период открытым.
+          await assertNoApprovedDayConflicts(client, Number(row.id));
           // Свежая версия уже включает всё, что успели поправить, — фоновой пересборке
           // тут делать нечего.
           await clearVersionDirty(client, Number(row.id));
