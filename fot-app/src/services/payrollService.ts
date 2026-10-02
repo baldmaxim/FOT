@@ -195,6 +195,25 @@ export interface IAssignResult {
   skipped: Array<{ employee_id: number; reason: string; message: string }>;
 }
 
+/** Статья «Оплачено» — столбец отчёта ЗУП «Начислено…» (подписи — utils/payrollPaid). */
+export type PayrollPaidItemCode =
+  | 'contract' | 'bonus' | 'sick_leave' | 'overtime' | 'recalc_prev' | 'severance'
+  | 'supplement' | 'loan' | 'vacation' | 'travel' | 'writ_deduction';
+
+/** Сумма ячейки «Оплачено»: месяц YYYY-MM, сумма — текстом NUMERIC. */
+export interface IPayrollPaidAmount {
+  month: string;
+  item: PayrollPaidItemCode;
+  amount: string;
+}
+
+/** Правка ячейки «Оплачено»: null — очистить. */
+export interface IPayrollPaidChange {
+  month: string;
+  item: PayrollPaidItemCode;
+  amount: number | null;
+}
+
 interface IApiResponse<T> { success: boolean; data: T }
 
 /** Итоги считаются сервером по всей отфильтрованной выборке, а не по странице. */
@@ -332,6 +351,25 @@ export const payrollService = {
     const res = await apiClient.get<IApiResponse<IEmployeeVacation>>(
       `/payroll/vacation/employee/${employeeId}`,
       { signal },
+    );
+    return res.data;
+  },
+
+  /** «Оплачено» за месяцы from — to (YYYY-MM, включительно). */
+  getPaid: async (employeeId: number, from: string, to: string, signal?: AbortSignal): Promise<IPayrollPaidAmount[]> => {
+    const search = new URLSearchParams({ from, to });
+    const res = await apiClient.get<IApiResponse<IPayrollPaidAmount[]>>(
+      `/payroll/terms/employee/${employeeId}/paid?${search.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Записать изменённые ячейки «Оплачено». */
+  savePaid: async (employeeId: number, cells: IPayrollPaidChange[]): Promise<{ changed: number }> => {
+    const res = await apiClient.put<IApiResponse<{ changed: number }>>(
+      `/payroll/terms/employee/${employeeId}/paid`,
+      { cells },
     );
     return res.data;
   },

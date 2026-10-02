@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 
@@ -32,6 +33,9 @@ router.get('/terms/employee/:empId/changes', termsView, payrollTermsController.g
 // Только оклад / ставка — для закэшированных клиентов до /changes.
 router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsController.getSalaryHistory);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
+// «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП, вносятся вручную.
+router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
+router.put('/terms/employee/:empId/paid', termsEdit, payrollPaidController.save);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

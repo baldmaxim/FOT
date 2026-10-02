@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import type { FC, ReactNode } from 'react';
 
 import {
   CALC_TYPE_LABELS,
@@ -7,7 +7,6 @@ import {
   type StaffCategory,
 } from '../../services/payrollService';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
-import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from '../../utils/payrollAccruals';
 import {
   payrollFieldId,
   type PayrollMoneyField,
@@ -23,9 +22,9 @@ interface IPayrollTermsFieldsProps {
   readOnly?: boolean;
   /** Фокус на «Категорию» при открытии карточки или окна. */
   autoFocus?: boolean;
-  /** Месяцы (YYYY-MM) блока «Оплачено» под окладом и премией; не передано или пусто — блока нет. */
-  paidMonths?: string[];
-  /** «Основная оплата» в одну колонку: сумма, премия и «Оплачено» — под «Категорией · Видом оплаты · Действует с». */
+  /** Блок «Оплачено» под окладом и премией, на всю ширину формы; не передан — блока нет. */
+  paid?: ReactNode;
+  /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
 }
 
@@ -43,15 +42,16 @@ const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория · Вид оплаты · Действует с,
- * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией и «Оплачено». В узком окне и при stacked
- * половины встают друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
+ * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
+ * «Оплачено» (только в карточке) — под ними на всю ширину формы. В узком окне и при stacked половины встают
+ * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   form,
   idPrefix,
   readOnly = false,
   autoFocus = false,
-  paidMonths,
+  paid,
   stacked = false,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
@@ -109,8 +109,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   };
 
   const deductionKindId = `${idPrefix}-deduction-kind`;
-  const paidLabelId = `${idPrefix}-paid`;
-  const paidWithYear = paidMonths ? accrualPeriodCrossesYear(paidMonths) : false;
 
   return (
     <div className={styles.form}>
@@ -174,23 +172,10 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
               )}
               {renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
             </div>
-
-            {/* Суммы по месяцам сервер пока не отдаёт — «—», как в пустой ячейке «Начислений». */}
-            {paidMonths && paidMonths.length > 0 && (
-              <div className={styles.field} role="group" aria-labelledby={paidLabelId}>
-                <span id={paidLabelId} className={styles.label}>Оплачено</span>
-                <dl className={styles.paid}>
-                  {paidMonths.map(month => (
-                    <div key={month} className={styles.paidMonth}>
-                      <dt className={styles.paidMonthName}>{formatAccrualMonthLabel(month, paidWithYear)}</dt>
-                      <dd className={styles.paidAmount}>—</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
           </div>
         </div>
+        {/* Таблица статей × месяцев шире половины — на всю ширину формы. */}
+        {paid}
       </section>
 
       <section className={styles.section} aria-labelledby={`${idPrefix}-compensation`}>

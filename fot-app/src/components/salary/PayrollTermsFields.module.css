@@ -1,6 +1,6 @@
 /*
  * Форма условий оплаты: секции через тонкий разделитель, без карточек.
- * Каждая секция — две половины (слева параметры, компенсации, удержание; справа оклад, премия, «Оплачено»).
+ * Каждая секция — две половины (слева параметры, компенсации, удержание; справа оклад и премия).
  * Ширину решают container queries: форма (payroll-form) — стоят ли половины рядом, половина (payroll-half) —
  * сколько полей в строке. Контейнеры именованные: они вложены друг в друга.
  * Высота контролов — --payroll-control-h от окна или карточки «Подробно» (44px на телефоне, 40px с 768px).
@@ -19,7 +19,7 @@
   .halves { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Карточка «Подробно»: сумма, премия и «Оплачено» — под первой строкой, в той же колонке и той же ширины. */
+/* Карточка «Подробно»: сумма и премия — под первой строкой, в той же колонке и той же ширины. */
 .halvesStacked > .half + .half { grid-column: 1; }
 
 .half { container: payroll-half / inline-size; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -135,33 +135,6 @@
   color: var(--text-secondary);
   box-shadow: none;
 }
-
-/* «Оплачено»: месяцы только для чтения — фон как у заблокированного поля, разделители — зазором сетки. */
-.paid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--border-subtle);
-}
-
-@container payroll-half (min-width: 520px) {
-  .paid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-}
-
-.paidMonth {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  padding: 6px 8px;
-  background: var(--bg-secondary);
-}
-.paidMonthName { margin: 0; font-size: 12px; line-height: 1.3; color: var(--text-secondary); overflow-wrap: anywhere; }
-.paidAmount { margin: 0; font-size: 14px; line-height: 1.3; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 @media (prefers-reduced-motion: reduce) {
   .control, .segmentLabel { transition: none; }

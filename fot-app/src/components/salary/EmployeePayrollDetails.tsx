@@ -7,11 +7,15 @@ import {
   defaultCalcTypeFor,
   payrollService,
   type IAssignTermsPayload,
+  type IPayrollPaidChange,
   type IPayrollTermsRow,
 } from '../../services/payrollService';
+import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { payrollAccrualMonths } from '../../utils/payrollAccruals';
+import { paidCellId } from '../../utils/payrollPaid';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
+import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { SalaryHistorySection } from './SalaryHistorySection';
@@ -31,10 +35,16 @@ interface IEmployeePayrollDetailsProps {
   onSaved: (employeeId: number, onScreen: boolean) => void;
 }
 
+interface ISaveVariables {
+  /** null — условия не правили: новую версию условий не создаём. */
+  terms: IAssignTermsPayload | null;
+  paid: IPayrollPaidChange[];
+}
+
 /**
  * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
  * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
- * отдельно, её ошибки форму не блокируют.
+ * отдельно, её ошибки форму не блокируют. «Сохранить» пишет и условия, и «Оплачено» — что из них правили.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -57,6 +67,8 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     resolveDefaultCalcType: defaultCalcTypeFor,
     plannedSupplement: true,
   });
+  // То же окно 6 закрытых месяцев, что у столбца «Начисления».
+  const paid = usePayrollPaid(row.employee_id, payrollAccrualMonths(defaultDate));
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
@@ -67,11 +79,15 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   }, [active]);
 
   const saveMutation = useMutation({
-    mutationFn: (payload: IAssignTermsPayload) => payrollService.assign(row.employee_id, payload),
-    onSuccess: () => {
-      // Префикс сбрасывает и список, и историю изменений условий.
+    // Сначала суммы: оба запроса идемпотентны — если условия не сохранятся, повтор ничего не задвоит.
+    mutationFn: async ({ terms, paid: cells }: ISaveVariables) => {
+      if (cells.length > 0) await payrollService.savePaid(row.employee_id, cells);
+      if (terms) await payrollService.assign(row.employee_id, terms);
+    },
+    onSuccess: (_data, { terms }) => {
+      // Префикс сбрасывает список, историю изменений условий и «Оплачено».
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
-      success('Условия оплаты назначены: 1');
+      success(terms ? 'Условия оплаты назначены: 1' : 'Оплачено сохранено');
       onSaved(row.employee_id, activeRef.current);
     },
     // Ошибку показывает карточка (ввод не теряется). Тост — если карточки на экране уже нет.
@@ -88,15 +104,28 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     if (!canEdit) nameRef.current?.focus();
   }, [canEdit]);
 
+  const focusPaidCell = (key: string) => document.getElementById(paidCellId(idPrefix, key))?.focus();
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || saveMutation.isPending) return;
-    const { payload, firstInvalid } = form.buildPayload();
-    if (payload) {
-      saveMutation.mutate(payload);
+    const paidResult = paid.buildChanges();
+    // Правили только «Оплачено»: условия не трогаем — оклад не обязателен, новая версия не создаётся.
+    if ((paidResult.changes.length > 0 || paidResult.firstInvalid) && !form.isChanged()) {
+      if (paidResult.firstInvalid) focusPaidCell(paidResult.firstInvalid);
+      else saveMutation.mutate({ terms: null, paid: paidResult.changes });
       return;
     }
-    if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
+    const { payload, firstInvalid } = form.buildPayload();
+    if (!payload) {
+      if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
+      return;
+    }
+    if (paidResult.firstInvalid) {
+      focusPaidCell(paidResult.firstInvalid);
+      return;
+    }
+    saveMutation.mutate({ terms: payload, paid: paidResult.changes });
   };
 
   return (
@@ -115,8 +144,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           idPrefix={idPrefix}
           readOnly={!canEdit}
           autoFocus={canEdit}
-          // То же окно 6 закрытых месяцев, что у столбца «Начисления».
-          paidMonths={payrollAccrualMonths(defaultDate)}
+          paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} readOnly={!canEdit} />}
           stacked
         />
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   firstInvalidField,
   initialPayrollTermsValues,
+  isPayrollTermsChanged,
   toInputValue,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
@@ -231,5 +232,21 @@ describe('toInputValue', () => {
     expect(toInputValue('0.00')).toBe('0');
     expect(toInputValue('10.50')).toBe('10.5');
     expect(toInputValue(null)).toBe('');
+  });
+});
+
+describe('isPayrollTermsChanged', () => {
+  it('без правок — false: «Сохранить» с правкой одного «Оплачено» условия не трогает', () => {
+    expect(isPayrollTermsChanged(values(), values())).toBe(false);
+  });
+
+  it('любое поле условий, компенсаций или доплаты — true; вернули как было — снова false', () => {
+    const initial = values();
+    expect(isPayrollTermsChanged(values({ amount: '180000' }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ calcType: 'hourly' }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ effectiveFrom: '2026-10-01' }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY, travel: '2730' } }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ supplement: { ...EMPTY_SUPPLEMENT, to: '2026-12-31' } }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY } }), initial)).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import type {
 import {
   firstInvalidField,
   initialPayrollTermsValues,
+  isPayrollTermsChanged,
   SUPPLEMENT_FIELD_KEYS,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
@@ -100,6 +101,9 @@ export const usePayrollTermsForm = ({
       : { payload: null, firstInvalid: firstInvalidField(result.errors) };
   };
 
+  /** Условия правили: иначе «Сохранить» с правкой одного «Оплачено» не создаёт новую версию условий. */
+  const isChanged = (): boolean => isPayrollTermsChanged(values, initial);
+
   return {
     ...values,
     plannedSupplement,
@@ -111,6 +115,7 @@ export const usePayrollTermsForm = ({
     changeSupplement,
     setEffectiveFrom,
     buildPayload,
+    isChanged,
   };
 };
 

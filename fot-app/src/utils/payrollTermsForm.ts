@@ -90,6 +90,18 @@ export const initialPayrollTermsValues = (
   };
 };
 
+const SUPPLEMENT_FIELDS = Object.keys(SUPPLEMENT_FIELD_KEYS) as PayrollSupplementField[];
+
+/** Правили ли условия: хоть одно поле отличается от начального значения. */
+export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: IPayrollTermsFormValues): boolean => (
+  values.category !== initial.category
+  || values.calcType !== initial.calcType
+  || values.amount !== initial.amount
+  || values.effectiveFrom !== initial.effectiveFrom
+  || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
+  || SUPPLEMENT_FIELDS.some(field => values.supplement[field] !== initial.supplement[field])
+);
+
 /** Необязательная сумма: пусто → undefined, некорректно или < 0 → null. */
 const parseOptionalMoney = (raw: string): number | undefined | null => {
   const trimmed = raw.trim();
