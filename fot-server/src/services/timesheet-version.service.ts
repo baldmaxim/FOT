@@ -12,7 +12,7 @@ import type { PoolClient } from 'pg';
 import type { DbExecutor } from '../config/postgres.js';
 import { canonicalJson } from '../utils/canonical-json.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
-import { buildFiredCutoffMap } from './timesheet-fired-cutoff.service.js';
+import { buildFiredCutoffMap, isFiredHiddenForPeriod } from './timesheet-fired-cutoff.service.js';
 import { resolveExportModes } from './timesheet-export-mode.service.js';
 import {
   buildVersionObjectBreakdown,
@@ -447,14 +447,37 @@ async function buildManagersSnapshot(
  * Состав — ТОЛЬКО из снимка timesheet_approval_employees, одинаково для подач отдела
  * и персональных: выгружается ровно тот ростер, который согласовали. Динамический
  * резолв по отделу здесь не используется — он нужен лишь для окон членства (дни).
+ * Исключение — уволенные в месяце периода (с 01.09.2026, isFiredHiddenForPeriod): снимок
+ * фиксируется при подаче, а увольнение может прийти позже, и в редакцию для 1С они не
+ * попадают. Уволены все — редакция без сотрудников: 1С получит пустой документ вместо
+ * устаревшего.
  */
 export async function buildTimesheetPayload(
   client: PoolClient,
   approval: IVersionApproval,
 ): Promise<IBuiltVersion> {
   const snapshot = await listApprovalEmployees(approval.id, client);
-  const snapshotIds = snapshot.map(row => Number(row.employee_id)).filter(Number.isFinite);
-  if (snapshotIds.length === 0) throw new TimesheetVersionEmptyRosterError(approval.id);
+  const rosterIds = snapshot.map(row => Number(row.employee_id)).filter(Number.isFinite);
+  if (rosterIds.length === 0) throw new TimesheetVersionEmptyRosterError(approval.id);
+
+  const tabRows = (await client.query<{
+    id: number;
+    tab_number: string | null;
+    employment_status: string | null;
+    // pg отдаёт DATE как Date; buildFiredCutoffMap принимает оба вида.
+    dismissal_date: string | Date | null;
+    excluded_from_timesheet_date: string | Date | null;
+  }>(
+    `SELECT id, tab_number, employment_status, dismissal_date, excluded_from_timesheet_date
+       FROM employees WHERE id = ANY($1::int[])`,
+    [rosterIds],
+  )).rows;
+  const tabById = new Map(tabRows.map(row => [Number(row.id), row.tab_number]));
+  // До сбора часов: иначе проверка полноты сочла бы уволенного потерянным.
+  const hiddenFiredIds = new Set(
+    tabRows.filter(row => isFiredHiddenForPeriod(row, approval.start_date)).map(row => Number(row.id)),
+  );
+  const snapshotIds = rosterIds.filter(id => !hiddenFiredIds.has(id));
 
   const isPersonal = approval.manager_employee_id != null;
   const scopeKind: 'department' | 'personal' = isPersonal ? 'personal' : 'department';
@@ -488,20 +511,6 @@ export async function buildTimesheetPayload(
     ? await listBrigadeSupervisorEmployeeIdsForDepartments([approval.department_id], client)
     : new Set<number>();
 
-  const tabRows = (await client.query<{
-    id: number;
-    tab_number: string | null;
-    employment_status: string | null;
-    // pg отдаёт DATE как Date; buildFiredCutoffMap принимает оба вида.
-    dismissal_date: string | Date | null;
-    excluded_from_timesheet_date: string | Date | null;
-  }>(
-    `SELECT id, tab_number, employment_status, dismissal_date, excluded_from_timesheet_date
-       FROM employees WHERE id = ANY($1::int[])`,
-    [snapshotIds],
-  )).rows;
-  const tabById = new Map(tabRows.map(row => [Number(row.id), row.tab_number]));
-
   // Граница увольнения — та же формула, что в Excel-выгрузке для 1С (одна реализация,
   // иначе выгрузки разойдутся), и тот же гейт: карта строится ТОЛЬКО для
   // employment_status = 'fired'. По одному наличию dismissal_date отсекать нельзя —
@@ -522,13 +531,15 @@ export async function buildTimesheetPayload(
   // Персональная подача симметрично отдаёт дни, на которые у сотрудника есть
   // действующий руководитель отдела: их выгружает подача отдела.
   const ownership = await resolveDayOwnership(
-    [{
-      approvalId: approval.id,
-      departmentId: approval.department_id,
-      managerEmployeeId: approval.manager_employee_id ?? null,
-      employeeIds: snapshotIds,
-      dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
-    }],
+    snapshotIds.length > 0
+      ? [{
+        approvalId: approval.id,
+        departmentId: approval.department_id,
+        managerEmployeeId: approval.manager_employee_id ?? null,
+        employeeIds: snapshotIds,
+        dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
+      }]
+      : [],
     client,
   );
   const ownsEmployeeDay = (employeeId: number, date: string): boolean =>
@@ -556,7 +567,9 @@ export async function buildTimesheetPayload(
   const meta = new Map<number, { full_name: string | null; sigur_employee_id: number | null; position: string | null }>();
   const seenIds = new Set<number>();
 
-  for (const anchor of monthAnchorsInRange(approval.start_date, approval.end_date)) {
+  // Уволены все — собирать нечего, редакция будет без сотрудников.
+  const anchors = snapshotIds.length > 0 ? monthAnchorsInRange(approval.start_date, approval.end_date) : [];
+  for (const anchor of anchors) {
     const month = anchor.slice(0, 7);
     const monthStart = anchor;
     const monthEnd = lastDayOfMonth(anchor);
@@ -990,6 +1003,175 @@ export async function rebuildVersionObjects(
   );
 
   return { created: true, revision: nextRevision, changedEmployeeIds: merged.changedEmployeeIds };
+}
+
+/** Сохранённая редакция со снимками — вход адресного удаления сотрудников. */
+export interface IStoredVersionSnapshots {
+  payload: ITimesheetVersionPayload;
+  membershipWindows: Record<string, unknown>;
+  objects: { payload: IVersionObjectsPayload; configErrors: IObjectConfigError[] } | null;
+  managers: { payload: IVersionManagersPayload } | null;
+}
+
+export interface IVersionWithoutEmployees {
+  /** Кого реально убрали (были в payload), по возрастанию id. */
+  removedIds: number[];
+  payload: ITimesheetVersionPayload;
+  contentHash: string;
+  membershipWindows: Record<string, unknown>;
+  objects: IVersionObjectsSnapshot | null;
+  managers: IVersionManagersSnapshot | null;
+}
+
+/**
+ * Редакция без указанных сотрудников — чистая функция. Остальные сотрудники, их дни,
+ * объектная разбивка и руководители берутся из сохранённой редакции байт в байт;
+ * пересчитываются только итоги и хэши. Нужна разовой пересборке подач без уволенных:
+ * materializeVersion заново посчитал бы и разбивку, и руководителей, и окна членства.
+ */
+export function removeEmployeesFromVersion(
+  stored: IStoredVersionSnapshots,
+  removeIds: ReadonlySet<number>,
+): IVersionWithoutEmployees {
+  const keep = (employeeId: number): boolean => !removeIds.has(Number(employeeId));
+  const removedIds = stored.payload.employees
+    .map(employee => Number(employee.identity.employee_id))
+    .filter(id => removeIds.has(id))
+    .sort((a, b) => a - b);
+
+  const employees = stored.payload.employees.filter(employee => keep(employee.identity.employee_id));
+  const payload: ITimesheetVersionPayload = {
+    ...stored.payload,
+    employees_count: employees.length,
+    total_hours: round2(employees.reduce((sum, employee) => sum + employee.total_hours, 0)),
+    employees,
+  };
+
+  const membershipWindows = Object.fromEntries(
+    Object.entries(stored.membershipWindows).filter(([employeeId]) => keep(Number(employeeId))),
+  );
+
+  let objects: IVersionObjectsSnapshot | null = null;
+  if (stored.objects) {
+    const objectEmployees = stored.objects.payload.employees.filter(employee => keep(employee.employee_id));
+    const objectsPayload: IVersionObjectsPayload = { ...stored.objects.payload, employees: objectEmployees };
+    const configErrors = stored.objects.configErrors.filter(error => keep(error.employee_id));
+    objects = {
+      payload: objectsPayload,
+      hash: computeObjectsContentHash(objectsPayload, configErrors),
+      configErrors,
+      employeesCount: objectEmployees.length,
+      totalHours: round2(objectEmployees.reduce((sum, employee) => sum + employee.total_hours, 0)),
+    };
+  }
+
+  let managers: IVersionManagersSnapshot | null = null;
+  if (stored.managers) {
+    const managerEmployees = stored.managers.payload.employees.filter(employee => keep(employee.employee_id));
+    const managersPayload: IVersionManagersPayload = { ...stored.managers.payload, employees: managerEmployees };
+    managers = {
+      payload: managersPayload,
+      hash: computeManagersContentHash(managersPayload),
+      employeesCount: managerEmployees.length,
+      withoutManager: managerEmployees.filter(employee => employee.managers.length === 0).length,
+    };
+  }
+
+  return { removedIds, payload, contentHash: computeContentHash(payload), membershipWindows, objects, managers };
+}
+
+/**
+ * Новая редакция подачи без указанных сотрудников (removeEmployeesFromVersion): revision + 1,
+ * source 'rebuild'. Вызывать под теми же локами и FOR UPDATE подачи, что утверждение.
+ * Убирать некого — редакция не создаётся.
+ */
+export async function rebuildVersionWithoutEmployees(
+  client: PoolClient,
+  approval: IVersionApproval,
+  removeIds: ReadonlySet<number>,
+): Promise<{ created: boolean; revision: number | null; removedIds: number[] }> {
+  const latest = (await client.query<{
+    id: number;
+    revision: number;
+    payload: ITimesheetVersionPayload;
+    scope_kind: string;
+    membership_windows: Record<string, unknown> | null;
+    objects_payload: IVersionObjectsPayload | null;
+    config_errors: IObjectConfigError[] | null;
+    managers_payload: IVersionManagersPayload | null;
+  }>(
+    `SELECT v.id, v.revision, v.payload, v.scope_kind, v.membership_windows,
+            vo.payload       AS objects_payload,
+            vo.config_errors,
+            vm.payload       AS managers_payload
+       FROM timesheet_versions v
+       LEFT JOIN timesheet_version_objects vo  ON vo.version_id = v.id
+       LEFT JOIN timesheet_version_managers vm ON vm.version_id = v.id
+      WHERE v.approval_id = $1
+      ORDER BY v.revision DESC
+      LIMIT 1`,
+    [approval.id],
+  )).rows[0];
+  if (!latest) return { created: false, revision: null, removedIds: [] };
+
+  const built = removeEmployeesFromVersion({
+    payload: latest.payload,
+    membershipWindows: latest.membership_windows ?? {},
+    objects: latest.objects_payload
+      ? { payload: latest.objects_payload, configErrors: Array.isArray(latest.config_errors) ? latest.config_errors : [] }
+      : null,
+    managers: latest.managers_payload ? { payload: latest.managers_payload } : null,
+  }, removeIds);
+  if (built.removedIds.length === 0) return { created: false, revision: null, removedIds: [] };
+
+  const nextRevision = Number(latest.revision) + 1;
+  const inserted = (await client.query<{ id: number }>(
+    `INSERT INTO timesheet_versions (
+       approval_id, revision, content_hash, payload, scope_kind, department_id,
+       manager_employee_id, start_date, end_date, employees_count, total_hours,
+       membership_windows, source, created_by
+     ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'rebuild',NULL)
+     RETURNING id`,
+    [
+      approval.id,
+      nextRevision,
+      built.contentHash,
+      JSON.stringify(built.payload),
+      latest.scope_kind,
+      approval.department_id,
+      approval.manager_employee_id,
+      approval.start_date,
+      approval.end_date,
+      built.payload.employees_count,
+      built.payload.total_hours,
+      JSON.stringify(built.membershipWindows),
+    ],
+  )).rows[0]!;
+
+  if (built.objects) await insertObjectsSnapshot(client, inserted.id, built.objects, 'materialize');
+  if (built.managers) {
+    // Источник и время резолва руководителей — от прежней редакции: состав руководителей не пересчитан.
+    await client.query(
+      `INSERT INTO timesheet_version_managers (
+         version_id, managers_content_hash, payload, employees_count, without_manager,
+         snapshot_source, resolved_at
+       )
+       SELECT $1, $2, $3::jsonb, $4, $5, snapshot_source, resolved_at
+         FROM timesheet_version_managers
+        WHERE version_id = $6
+       ON CONFLICT (version_id) DO NOTHING`,
+      [
+        inserted.id,
+        built.managers.hash,
+        JSON.stringify(built.managers.payload),
+        built.managers.employeesCount,
+        built.managers.withoutManager,
+        latest.id,
+      ],
+    );
+  }
+
+  return { created: true, revision: nextRevision, removedIds: built.removedIds };
 }
 
 /**

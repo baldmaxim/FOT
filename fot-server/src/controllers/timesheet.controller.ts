@@ -116,6 +116,7 @@ import { syncLeaveRequestOnDayRemoval, syncLeaveRequestReason } from '../service
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { loadTimesheetObjectLabels } from '../services/employee-timesheet-object.service.js';
+import { firedEligibleSql } from '../services/timesheet-fired-cutoff.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   isDepartmentMonthAllowed,
@@ -2438,12 +2439,12 @@ export const timesheetController = {
           ?? null;
       }
 
-      // Уволенные сотрудники с dismissal_date >= startDate должны попадать в табель,
-      // чтобы был виден их период работы до даты увольнения (cutoff применяется ниже).
+      // Уволенные: с 01.09.2026 в месяце увольнения их в табеле нет; раньше — виден период
+      // работы до даты увольнения (cutoff применяется ниже). Правило — firedEligibleSql.
       const empParams: unknown[] = [];
       empParams.push(startDate);
       const empWhere: string[] = [
-        `(employment_status = 'active' OR (employment_status = 'fired' AND dismissal_date IS NOT NULL AND dismissal_date >= $${empParams.length}::date))`,
+        firedEligibleSql(null, `$${empParams.length}`),
         `is_archived = false`,
       ];
 
@@ -3271,10 +3272,7 @@ export const timesheetController = {
            FROM employees
           WHERE full_name ILIKE $1
             AND is_archived = false
-            AND (employment_status = 'active'
-                 OR (employment_status = 'fired'
-                     AND dismissal_date IS NOT NULL
-                     AND dismissal_date >= $2::date))
+            AND ${firedEligibleSql(null, '$2')}
             AND NOT (excluded_from_timesheet = true
                      AND (excluded_from_timesheet_date IS NULL
                           OR excluded_from_timesheet_date <= $2::date))

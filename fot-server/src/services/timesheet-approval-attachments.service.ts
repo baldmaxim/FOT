@@ -1,6 +1,6 @@
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { r2Service } from './r2.service.js';
-import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
+import { listVisibleApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 
 export const APPROVAL_ATTACHMENT_ENTITY_TYPE = 'timesheet_approval';
 export const APPROVAL_ATTACHMENT_PURPOSE = 'weekend_confirmation';
@@ -192,8 +192,8 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
   // --- 1. Служебки о выходных (привязка к approval; без подписи URL — подпишем в конце). ---
   const weekendDocs = await listApprovalAttachments(approvalId);
 
-  // --- 2. Снимок состава + корректировки периода. ---
-  const snapshot = approval ? await listApprovalEmployees(approvalId) : [];
+  // --- 2. Снимок состава (без уволенных в месяце периода) + корректировки периода. ---
+  const snapshot = approval ? await listVisibleApprovalEmployees({ id: approvalId, start_date: approval.start_date }) : [];
   const employeeIds = snapshot.map(s => Number(s.employee_id)).filter(id => Number.isInteger(id) && id > 0);
   const nameById = new Map<number, string | null>(snapshot.map(s => [Number(s.employee_id), s.full_name ?? null] as const));
 

@@ -31,6 +31,7 @@
     "scripts/apply-auto-timesheet-objects.ts",
     "scripts/refreeze-department-month-objects.ts",
     "scripts/fix-worker-timesheet-objects-month.ts",
+    "scripts/rebuild-versions-without-fired.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

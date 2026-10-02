@@ -1,5 +1,6 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { collectDeptIds } from './skud-shared.service.js';
+import { firedEligibleSql } from './timesheet-fired-cutoff.service.js';
 import type { TimesheetApprovalStatus } from '../types/index.js';
 
 export type TimesheetDisplayHalf = 'H1' | 'H2' | 'FULL';
@@ -367,7 +368,8 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   }
 
   // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
-  // Уволенные сотрудники с dismissal_date >= startDate попадают в табель, чтобы был виден период до увольнения.
+  // Уволенные: с 01.09.2026 в месяце увольнения их нет (firedEligibleSql); раньше — видны до даты
+  // увольнения (dismissal_date >= startDate).
   const activeRows = await query<{
     id: number;
     excluded_from_timesheet: boolean;
@@ -377,10 +379,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
        FROM employees
       WHERE id = ANY($1::int[])
         AND is_archived = false
-        AND (employment_status = 'active'
-             OR (employment_status = 'fired'
-                 AND dismissal_date IS NOT NULL
-                 AND dismissal_date >= $2::date))`,
+        AND ${firedEligibleSql(null, '$2')}`,
     [candidateIds, startDate],
   );
 
@@ -459,10 +458,7 @@ export async function listScopedMembersByDepartment(
        JOIN employees emp ON emp.id = s.employee_id
       WHERE s.dept_id IS NOT NULL
         AND emp.is_archived = false
-        AND (emp.employment_status = 'active'
-             OR (emp.employment_status = 'fired'
-                 AND emp.dismissal_date IS NOT NULL
-                 AND emp.dismissal_date >= $2::date))
+        AND ${firedEligibleSql('emp', '$2')}
         AND NOT (emp.excluded_from_timesheet = true
                  AND (emp.excluded_from_timesheet_date IS NULL
                       OR emp.excluded_from_timesheet_date <= $2::date))
@@ -524,10 +520,7 @@ export async function resolveDepartmentIdsForEmployeesInPeriod(
        ) s
        JOIN employees emp ON emp.id = s.employee_id
       WHERE emp.is_archived = false
-        AND (emp.employment_status = 'active'
-             OR (emp.employment_status = 'fired'
-                 AND emp.dismissal_date IS NOT NULL
-                 AND emp.dismissal_date >= $2::date))
+        AND ${firedEligibleSql('emp', '$2')}
         AND NOT (emp.excluded_from_timesheet = true
                  AND (emp.excluded_from_timesheet_date IS NULL
                       OR emp.excluded_from_timesheet_date <= $2::date))

@@ -5,7 +5,7 @@ import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index
 import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from './attendance.service.js';
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
-import { buildFiredCutoffMap } from './timesheet-fired-cutoff.service.js';
+import { buildFiredCutoffMap, firedEligibleSql } from './timesheet-fired-cutoff.service.js';
 import { isDateInEmployeeWindows, type IDayWindow } from './timesheet-day-windows.service.js';
 import {
   listEmployeeIdsAssignedToDepartmentPeriod,
@@ -281,10 +281,7 @@ export async function fetchTimesheetDataForDepartment(
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
                 employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
-           WHERE (employment_status = 'active'
-                  OR (employment_status = 'fired'
-                      AND dismissal_date IS NOT NULL
-                      AND dismissal_date >= $2::date))
+           WHERE ${firedEligibleSql(null, '$2')}
              AND is_archived = false
              AND id = ANY($1::int[])
            ORDER BY full_name`,
@@ -296,10 +293,7 @@ export async function fetchTimesheetDataForDepartment(
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
                 employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
-           WHERE (employment_status = 'active'
-                  OR (employment_status = 'fired'
-                      AND dismissal_date IS NOT NULL
-                      AND dismissal_date >= $1::date))
+           WHERE ${firedEligibleSql(null, '$1')}
              AND is_archived = false
            ORDER BY full_name`,
         [startDate],
@@ -457,10 +451,11 @@ export async function fetchTimesheetDataForEmployees(
   const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   let employees: Array<Record<string, unknown>> = [];
   if (uniqueIds.length > 0) {
-    // Обычный режим фильтрует состав по актуальному статусу занятости. Для snapshot-режима
-    // (материализация официальной версии закрытого табеля) фильтр отключён: состав уже
-    // зафиксирован снимком подачи, и терять из него людей нельзя — ни архивных, ни
-    // уволенных задним числом. Отсечка дней после увольнения (cutoffByEmployeeId) при этом
+    // Обычный режим фильтрует состав по актуальному статусу занятости (уволенные с 01.09.2026 —
+    // не в месяце увольнения, firedEligibleSql). Для snapshot-режима (материализация
+    // официальной версии закрытого табеля) фильтр отключён: состав уже зафиксирован снимком
+    // подачи, а уволенных в месяце периода из него убирает сама материализация
+    // (isFiredHiddenForPeriod). Отсечка дней после увольнения (cutoffByEmployeeId) при этом
     // сохраняется: она про дни, а не про состав.
     employees = await exportRows<Record<string, unknown>>(
       exec,
@@ -469,10 +464,7 @@ export async function fetchTimesheetDataForEmployees(
          FROM employees
          WHERE id = ANY($1::int[])
            AND ($3::boolean
-                OR ((employment_status = 'active'
-                     OR (employment_status = 'fired'
-                         AND dismissal_date IS NOT NULL
-                         AND dismissal_date >= $2::date))
+                OR (${firedEligibleSql(null, '$2')}
                     AND is_archived = false))
          ORDER BY full_name`,
       [uniqueIds, startDate, isSnapshotRoster],

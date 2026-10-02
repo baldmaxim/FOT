@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { query, type DbExecutor } from '../config/postgres.js';
 import { listDirectReportIdsInPeriod } from './employee-direct-reports.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
+import { firedEligibleSql, firedHiddenSql } from './timesheet-fired-cutoff.service.js';
 
 export interface IApprovalEmployeeSnapshot {
   employee_id: number;
@@ -51,17 +52,14 @@ export async function resolvePersonalSubmissionComposition(
   const candidateIds = [...new Set([...split.owned, ...split.partiallyCovered])];
   if (candidateIds.length === 0) return { employeeIds: [], affectedDepartmentIds: [], hasDirectReports };
 
-  // Eligibility — та же, что у состава подачи отдела: уволенный внутри периода
-  // выгружается за отработанную часть, а не пропадает.
+  // Eligibility — та же, что у состава подачи отдела (firedEligibleSql): с 01.09.2026
+  // уволенного в месяце увольнения нет, раньше — выгружается за отработанную часть.
   const rows = await query<{ id: number; org_department_id: string | null }>(
     `SELECT id, org_department_id
        FROM employees
       WHERE id = ANY($1::int[])
         AND is_archived = false
-        AND (employment_status = 'active'
-             OR (employment_status = 'fired'
-                 AND dismissal_date IS NOT NULL
-                 AND dismissal_date >= $2::date))
+        AND ${firedEligibleSql(null, '$2')}
         AND NOT (excluded_from_timesheet = true
                  AND (excluded_from_timesheet_date IS NULL
                       OR excluded_from_timesheet_date <= $2::date))`,
@@ -165,4 +163,25 @@ export async function listApprovalEmployees(
        ORDER BY full_name ASC, employee_id ASC`;
   if (exec) return (await exec.query<IApprovalEmployeeSnapshot>(sql, [approvalId])).rows;
   return query<IApprovalEmployeeSnapshot>(sql, [approvalId]);
+}
+
+/**
+ * Видимый состав подачи: снимок без уволенных в месяце периода (firedHiddenSql, с
+ * 01.09.2026). Снимок фиксируется при подаче, а увольнение может прийти позже — в
+ * «Согласованиях», проверках и редакции для 1С такого сотрудника уже нет. Локи и
+ * сравнение при повторной подаче читают снимок целиком (listApprovalEmployees).
+ */
+export async function listVisibleApprovalEmployees(
+  approval: { id: number | string; start_date: string },
+  exec?: DbExecutor,
+): Promise<IApprovalEmployeeSnapshot[]> {
+  const sql = `SELECT s.employee_id, s.full_name
+       FROM timesheet_approval_employees s
+       LEFT JOIN employees e ON e.id = s.employee_id
+       WHERE s.approval_id = $1
+         AND NOT ${firedHiddenSql('e', '$2')}
+       ORDER BY s.full_name ASC, s.employee_id ASC`;
+  const params = [Number(approval.id), approval.start_date];
+  if (exec) return (await exec.query<IApprovalEmployeeSnapshot>(sql, params)).rows;
+  return query<IApprovalEmployeeSnapshot>(sql, params);
 }

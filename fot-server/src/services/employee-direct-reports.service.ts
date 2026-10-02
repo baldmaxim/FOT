@@ -1,4 +1,5 @@
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
+import { firedEligibleSql } from './timesheet-fired-cutoff.service.js';
 
 export interface IDirectReportRow {
   id: string;
@@ -98,10 +99,7 @@ export async function listDirectReportIdsInPeriod(
           AND dr.assigned_at::date <= $3::date
           AND (dr.unassigned_at IS NULL OR dr.unassigned_at::date >= $2::date)
           AND e.is_archived = false
-          AND (e.employment_status = 'active'
-               OR (e.employment_status = 'fired'
-                   AND e.dismissal_date IS NOT NULL
-                   AND e.dismissal_date >= $2::date))
+          AND ${firedEligibleSql('e', '$2')}
           AND NOT (e.excluded_from_timesheet = true
                    AND (e.excluded_from_timesheet_date IS NULL
                         OR e.excluded_from_timesheet_date <= $2::date))`,

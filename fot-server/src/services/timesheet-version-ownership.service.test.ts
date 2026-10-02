@@ -308,3 +308,77 @@ describe('buildTimesheetPayload — пустые дни после увольн�
     expect(serialized).toContain('2026-08-27');
   });
 });
+
+/**
+ * С 01.09.2026 уволенный не виден в месяце увольнения: ростер подачи зафиксирован при
+ * подаче, а увольнение пришло позже — в редакцию для 1С он не попадает, вместе с днями до
+ * увольнения. Август и раньше — как было (тесты выше).
+ */
+describe('buildTimesheetPayload — уволенный в месяце периода (с сентября 2026)', () => {
+  const COLLEAGUE = 662;
+  const september = { ...approval, start_date: '2026-09-01', end_date: '2026-09-15' };
+  const clientWith = (rows: Array<Record<string, unknown>>) => ({
+    query: vi.fn(async (sql: string) => {
+      if (sql.includes('FROM org_departments')) return { rows: [{ name: 'бр.Каримов О.М.' }] };
+      if (sql.includes('tab_number')) return { rows };
+      return { rows: [] };
+    }),
+  });
+  const colleagueBulk = () => ({
+    employees: [{ id: COLLEAGUE, full_name: 'Коллега К. К.', sigur_employee_id: 100752, position_id: null }],
+    posMap: new Map(),
+    entries: [],
+    objectEntries: [],
+    dataMap: new Map([[COLLEAGUE, new Map([['2026-09-02', day(11)]])]]),
+  });
+
+  it('уволенный в сентябре выпадает из редакции вместе с отработанными днями; коллега остаётся', async () => {
+    listApprovalEmployees.mockResolvedValue([
+      { employee_id: EMPLOYEE, full_name: 'Ибрагимов А. М.' },
+      { employee_id: COLLEAGUE, full_name: 'Коллега К. К.' },
+    ]);
+    fetchBulk.mockResolvedValue(colleagueBulk());
+
+    const { payload } = await buildTimesheetPayload(clientWith([
+      { id: EMPLOYEE, tab_number: '05123', employment_status: 'fired', dismissal_date: '2026-09-22', excluded_from_timesheet_date: null },
+      { id: COLLEAGUE, tab_number: '05124', ...activeRow },
+    ]) as never, september as never);
+
+    expect(fetchBulk.mock.calls[0]![1]).toEqual([COLLEAGUE]);
+    expect(payload.employees.map(employee => employee.identity.employee_id)).toEqual([COLLEAGUE]);
+    expect(payload).toMatchObject({ employees_count: 1, total_hours: 11 });
+  });
+
+  it('уволен в октябре — сентябрь полностью его; отложенное увольнение — тоже остаётся', async () => {
+    listApprovalEmployees.mockResolvedValue([
+      { employee_id: EMPLOYEE, full_name: 'Ибрагимов А. М.' },
+      { employee_id: COLLEAGUE, full_name: 'Коллега К. К.' },
+    ]);
+    fetchBulk.mockResolvedValue({
+      ...colleagueBulk(),
+      employees: [
+        { id: EMPLOYEE, full_name: 'Ибрагимов А. М.', sigur_employee_id: 100751, position_id: null },
+        ...colleagueBulk().employees,
+      ],
+    });
+
+    const { payload } = await buildTimesheetPayload(clientWith([
+      { id: EMPLOYEE, tab_number: '05123', employment_status: 'fired', dismissal_date: '2026-10-02', excluded_from_timesheet_date: null },
+      { id: COLLEAGUE, tab_number: '05124', ...activeRow, dismissal_date: '2026-09-10' },
+    ]) as never, september as never);
+
+    expect(payload.employees.map(employee => employee.identity.employee_id)).toEqual([EMPLOYEE, COLLEAGUE]);
+  });
+
+  it('уволены все — пустая редакция без сбора часов, а не ошибка', async () => {
+    fetchBulk.mockResolvedValue(colleagueBulk());
+
+    const built = await buildTimesheetPayload(clientWith([
+      { id: EMPLOYEE, tab_number: '05123', employment_status: 'fired', dismissal_date: '2026-09-05', excluded_from_timesheet_date: null },
+    ]) as never, september as never);
+
+    expect(fetchBulk).not.toHaveBeenCalled();
+    expect(built.payload).toMatchObject({ employees: [], employees_count: 0, total_hours: 0 });
+    expect(built.objects.payload.employees).toEqual([]);
+  });
+});

@@ -81,9 +81,10 @@ async function countPendingCorrectionsForApproval(
   approval: Pick<TimesheetApproval, 'id' | 'department_id' | 'manager_employee_id' | 'start_date' | 'end_date'>,
 ): Promise<number> {
   // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
+  // Уволенных в месяце периода в составе уже нет (с 01.09.2026) — их корректировки не мешают.
   let scope: ICorrectionValidationScope;
   if (approval.manager_employee_id != null) {
-    const snap = await listApprovalEmployees(Number(approval.id), exec);
+    const snap = await listVisibleApprovalEmployees(approval, exec);
     scope = { kind: 'personal', employeeIds: snap.map(s => s.employee_id) };
   } else if (approval.department_id) {
     scope = { kind: 'department', departmentId: approval.department_id };
@@ -210,8 +211,10 @@ import {
   relinkApprovalAttachments,
 } from '../services/timesheet-approval-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
+import { firedHiddenSql } from '../services/timesheet-fired-cutoff.service.js';
 import {
   listApprovalEmployees,
+  listVisibleApprovalEmployees,
   resolveManagerPersonalSnapshotIds,
   resolvePersonalSubmissionComposition,
   snapshotApprovalEmployees,
@@ -902,7 +905,7 @@ async function reconcileManagerSelfApproval(
       to_status: 'submitted',
       auto_self_personal: true,
     });
-    const selfEmployeeCount = (await listApprovalEmployees(change.approval.id)).length;
+    const selfEmployeeCount = (await listVisibleApprovalEmployees({ id: change.approval.id, start_date: range.startDate })).length;
     void notifyHrAboutSubmittedApproval({
       departmentId: null,
       managerEmployeeId,
@@ -1243,7 +1246,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const employeeCount = personal
       ? employeeIds.length
-      : (await listApprovalEmployees(approval.id)).length;
+      : (await listVisibleApprovalEmployees({ id: approval.id, start_date: range.startDate })).length;
     void notifyHrAboutSubmittedApproval({
       departmentId: deptId,
       managerEmployeeId,
@@ -2596,12 +2599,16 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       .filter(r => r.manager_employee_id != null)
       .map(r => r.id);
 
-    // Snapshot personal-подач — для weekend-check внутри enriched (employeeIds).
+    // Snapshot personal-подач — для weekend-check внутри enriched (employeeIds). Уволенных в
+    // месяце периода в составе нет (с 01.09.2026), как в listVisibleApprovalEmployees.
     const personalSnapshotRows = personalApprovalIds.length > 0
       ? await query<{ approval_id: number; employee_id: number }>(
-        `SELECT approval_id, employee_id
-           FROM timesheet_approval_employees
-           WHERE approval_id = ANY($1::bigint[])`,
+        `SELECT s.approval_id, s.employee_id
+           FROM timesheet_approval_employees s
+           JOIN timesheet_approvals a ON a.id = s.approval_id
+           LEFT JOIN employees e ON e.id = s.employee_id
+           WHERE s.approval_id = ANY($1::bigint[])
+             AND NOT ${firedHiddenSql('e', 'a.start_date')}`,
         [personalApprovalIds],
       )
       : [];
@@ -3317,7 +3324,10 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
   }
 };
 
-/** HR / руководитель в скоупе: состав сотрудников, поданных на согласование (снимок на момент submit). */
+/**
+ * HR / руководитель в скоупе: состав сотрудников, поданных на согласование (снимок на момент
+ * submit) — без уволенных в месяце периода (с 01.09.2026).
+ */
 const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -3330,7 +3340,7 @@ const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): 
       res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
-    const employees = await listApprovalEmployees(approval.id);
+    const employees = await listVisibleApprovalEmployees(approval);
     res.json({ success: true, data: { employees } });
   } catch (err) {
     console.error('timesheet-approval.getSubmittedEmployees error:', err);

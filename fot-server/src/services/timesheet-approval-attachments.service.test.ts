@@ -20,11 +20,11 @@ vi.mock('./r2.service.js', () => ({
   },
 }));
 vi.mock('./timesheet-approval-employees-snapshot.service.js', () => ({
-  listApprovalEmployees: vi.fn(),
+  listVisibleApprovalEmployees: vi.fn(),
 }));
 
 import { listApprovalPeriodAttachments } from './timesheet-approval-attachments.service.js';
-import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
+import { listVisibleApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 
 /**
  * Один комплексный сценарий подачи: служебка руководителя + корректировка (она же
@@ -32,7 +32,7 @@ import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.s
  * legacy-файл заявления (documents.leave_request_id, без document_links).
  */
 const setupHappyPath = (): void => {
-  vi.mocked(listApprovalEmployees).mockResolvedValue([
+  vi.mocked(listVisibleApprovalEmployees).mockResolvedValue([
     { employee_id: 100, full_name: 'Иванов Иван' },
     { employee_id: 200, full_name: 'Петров Пётр' },
   ]);
@@ -185,7 +185,7 @@ describe('listApprovalPeriodAttachments', () => {
   });
 
   it('пустой период без файлов → пустой массив', async () => {
-    vi.mocked(listApprovalEmployees).mockResolvedValue([]);
+    vi.mocked(listVisibleApprovalEmployees).mockResolvedValue([]);
     pgQueryOne.mockResolvedValue({ start_date: '2026-06-01', end_date: '2026-06-15', submitted_by: 'mgr-user' });
     pgQuery.mockResolvedValue([]);
     const result = await listApprovalPeriodAttachments(1);
