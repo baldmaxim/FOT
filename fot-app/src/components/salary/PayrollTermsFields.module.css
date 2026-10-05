@@ -68,6 +68,15 @@
 .control:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
 .control[aria-invalid='true'] { border-color: var(--error); }
 
+/* Вычисленное значение (связь из МТС): серый фон без рамки, как у заблокированного, но текст — обычный. */
+.controlComputed {
+  background: var(--bg-secondary);
+  border-color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.control.controlComputed:hover { border-color: transparent; }
+.controlComputedError { color: var(--error); }
+
 /* Заблокированное поле отличается от редактируемого: серый фон без рамки, приглушённый текст. */
 .control:disabled {
   background: var(--bg-secondary);

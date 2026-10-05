@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// «Оплачено» на настоящем PostgreSQL (миграция 295): вставка, замена, неизменённая сумма,
-// очистка, CHECK минуса и первого числа, выборка по периоду.
+// «Оплачено» на настоящем PostgreSQL (миграции 295, 297): вставка, замена, неизменённая сумма,
+// очистка, CHECK статьи, минуса и первого числа, выборка по периоду.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
 
@@ -64,13 +64,15 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
       DROP TABLE IF EXISTS payroll_paid_amounts, user_profiles, employees CASCADE;
       CREATE TABLE employees (id integer PRIMARY KEY, full_name text);
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
-      INSERT INTO employees (id, full_name) VALUES (1, 'Акимов С.Ю.'), (2, 'Борисов А.А.');
+      INSERT INTO employees (id, full_name) VALUES (1, 'Акимов С.Ю.'), (2, 'Борисов А.А.'), (3, 'Абдужабборов О.А.');
       INSERT INTO user_profiles (id, full_name) VALUES
         ('${AUTHOR}', 'Петрова А.А.'), ('${OTHER_AUTHOR}', 'Сидорова Б.Б.');
     `);
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
+    await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
     // Повторный запуск безопасен.
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
+    await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
   });
 
   afterAll(async () => {
@@ -109,6 +111,20 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
       { month: '2026-07', item: 'vacation', amount: -1 },
     ])).rejects.toThrow(/payroll_paid_amount_sign/);
     expect((await rows(2)).map(row => row.item_code)).toEqual(['recalc_prev']);
+  });
+
+  it('статьи удержаний и выплат (297) принимаются, чужой код и минус — нет', async () => {
+    expect(await save(3, [
+      { month: '2026-07', item: 'housing', amount: 160 },
+      { month: '2026-07', item: 'meals', amount: 5248 },
+      { month: '2026-07', item: 'writ_deduction', amount: 1000 },
+      { month: '2026-07', item: 'bank_transfer', amount: 81037.87 },
+    ])).toBe(4);
+
+    await expect(pg.pool!.query(
+      `INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES (3, '2026-07-01', 'kpi', 1)`,
+    )).rejects.toThrow(/payroll_paid_item_code/);
+    await expect(save(3, [{ month: '2026-07', item: 'advance', amount: -1 }])).rejects.toThrow(/payroll_paid_amount_sign/);
   });
 
   it('месяц — только первое число', async () => {

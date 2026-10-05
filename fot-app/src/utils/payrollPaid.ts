@@ -1,7 +1,8 @@
 /**
- * «Оплачено» в карточке «Зарплата → Подробно»: статьи отчёта ЗУП «Начислено…» строками,
- * месяцы столбцами. Суммы вносятся вручную; пустая ячейка — суммы нет.
- * Коды статей — те же, что в CHECK миграции 295 и в payroll-paid.service.ts на сервере.
+ * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяцы
+ * столбцами. Статьи — в трёх разделах ведомости: начислено (1), удержано (3), выплачено (8).
+ * Суммы вносятся вручную; пустая ячейка — суммы нет.
+ * Коды статей — те же, что в CHECK миграции 297 и в payroll-paid.service.ts на сервере.
  */
 import type { IPayrollPaidAmount, IPayrollPaidChange, PayrollPaidItemCode } from '../services/payrollService';
 
@@ -12,29 +13,74 @@ export interface IPayrollPaidItem {
   allowNegative?: boolean;
 }
 
-/** Основные строки — над группой «Начисления и удержания». В комментарии — столбец отчёта ЗУП. */
-export const PAYROLL_PAID_MAIN_ITEMS: readonly IPayrollPaidItem[] = [
-  { code: 'contract', label: 'По трудовому договору' }, // 1.1.1 Начислено по графику
-  { code: 'bonus', label: 'Премиальная' }, // 1.1.5 Ежемесячные доплаты и премии
-  { code: 'sick_leave', label: 'Больничный' }, // 1.1.4 Оплата больничных листов
-];
+/** Итог, в который идёт группа: раздел ведомости ЗУП. */
+export type PayrollPaidTotalKind = 'accrued' | 'deducted' | 'paid';
 
-export const PAYROLL_PAID_GROUP_LABEL = 'Начисления и удержания';
+export interface IPayrollPaidGroup {
+  /** Подзаголовок группы в таблице; null — основные строки, без подзаголовка. */
+  label: string | null;
+  kind: PayrollPaidTotalKind;
+  items: readonly IPayrollPaidItem[];
+}
 
-/** Строки группы — в порядке столбцов отчёта ЗУП. */
-export const PAYROLL_PAID_GROUP_ITEMS: readonly IPayrollPaidItem[] = [
-  { code: 'overtime', label: 'Переработано' }, // 1.1.2
-  { code: 'recalc_prev', label: 'Перерасчёт за предыдущий период', allowNegative: true }, // 1.1.6
-  { code: 'severance', label: 'Выходное пособие при увольнении' }, // 1.3.2
-  { code: 'supplement', label: 'Доплата' }, // 1.3.5
-  { code: 'loan', label: 'Займ' }, // 1.3.7
-  { code: 'vacation', label: 'Оплата отпуска' }, // 1.3.13
-  { code: 'travel', label: 'Проезд' }, // 1.3.16
-  { code: 'writ_deduction', label: 'Удержание по исп. листу' }, // 1.3.18
+/** Группы сверху вниз. В комментарии — столбец «Сводной ведомости» ЗУП. */
+export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
+  {
+    label: null,
+    kind: 'accrued',
+    items: [
+      { code: 'contract', label: 'По трудовому договору' }, // 1.1.1 Начислено по графику
+      { code: 'bonus', label: 'Премиальная' }, // 1.1.5 Ежемесячные доплаты и премии
+      { code: 'sick_leave', label: 'Больничный' }, // 1.1.4 Оплата больничных листов
+    ],
+  },
+  {
+    label: 'Доп. начисления',
+    kind: 'accrued',
+    items: [
+      { code: 'overtime', label: 'Переработано' }, // 1.1.2
+      { code: 'recalc_prev', label: 'Перерасчёт за предыдущий период', allowNegative: true }, // 1.1.6
+      { code: 'severance', label: 'Выходное пособие при увольнении' }, // 1.3.2
+      { code: 'supplement', label: 'Доплата' }, // 1.3.5
+      { code: 'loan', label: 'Займ' }, // 1.3.7
+      { code: 'vacation', label: 'Оплата отпуска' }, // 1.3.13
+      { code: 'travel', label: 'Проезд' }, // 1.3.16
+      { code: 'housing', label: 'Компенсация проживания' }, // 1.3.11 + 1.3.12 (в общежитии)
+    ],
+  },
+  {
+    label: 'Удержано',
+    kind: 'deducted',
+    items: [
+      { code: 'meals', label: 'Питание' }, // 3.13
+      { code: 'workwear', label: 'Спецодежда' }, // 3.15
+      { code: 'safety_fine', label: 'Нарушение техники безопасности' }, // 3.18
+      { code: 'mobile', label: 'Моб. телефон' }, // 3.9
+      { code: 'fines', label: 'Штрафы' }, // 3.21
+      { code: 'writ_deduction', label: 'Удержание по исп. листу' }, // 3.20
+    ],
+  },
+  {
+    label: 'Выплачено',
+    kind: 'paid',
+    items: [
+      { code: 'fss', label: 'Выплаты ФСС' }, // 8.2
+      { code: 'advance', label: 'Аванс' }, // 8.3
+      { code: 'bank_transfer', label: 'Выплачено на Р/С' }, // 8.4
+      { code: 'bonus_payout', label: 'Премии' }, // 8.5
+    ],
+  },
 ];
 
 /** Все строки сверху вниз — порядок обхода ячеек совпадает с Tab. */
-export const PAYROLL_PAID_ITEMS: readonly IPayrollPaidItem[] = [...PAYROLL_PAID_MAIN_ITEMS, ...PAYROLL_PAID_GROUP_ITEMS];
+export const PAYROLL_PAID_ITEMS: readonly IPayrollPaidItem[] = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
+
+/** Строки итогов — в порядке ведомости: начислено − удержано = выплачено (+ сальдо). */
+export const PAYROLL_PAID_TOTALS: ReadonlyArray<{ kind: PayrollPaidTotalKind; label: string }> = [
+  { kind: 'accrued', label: 'Начислено' },
+  { kind: 'deducted', label: 'Удержано' },
+  { kind: 'paid', label: 'Выплачено' },
+];
 
 export const paidCellKey = (month: string, item: PayrollPaidItemCode): string => `${month}:${item}`;
 
@@ -104,4 +150,47 @@ export const buildPaidChanges = (
     }
   }
   return { changes, invalidKeys };
+};
+
+/** Итоги: null — в группе нет ни одной суммы («—»), 0 — суммы есть и дают ноль. */
+export type PayrollPaidTotals = Record<PayrollPaidTotalKind, number | null>;
+
+const EMPTY_TOTALS: PayrollPaidTotals = { accrued: null, deducted: null, paid: null };
+
+/** В копейках: сумма дробных рублей в float копила бы ошибку («0,1 + 0,2»). */
+const addCents = (sum: number | null, value: number): number => (sum ?? 0) + Math.round(value * 100);
+
+const centsToRub = (totals: PayrollPaidTotals): PayrollPaidTotals => ({
+  accrued: totals.accrued === null ? null : totals.accrued / 100,
+  deducted: totals.deducted === null ? null : totals.deducted / 100,
+  paid: totals.paid === null ? null : totals.paid / 100,
+});
+
+/**
+ * Итоги «Начислено · Удержано · Выплачено» по месяцам и за всё окно — по тому, что сейчас в ячейках
+ * (с несохранёнными правками). Ячейка разбирается как при сохранении: с ошибкой (в том числе минус не
+ * у перерасчёта) в итог не идёт.
+ */
+export const paidTotals = (
+  months: readonly string[],
+  valueOf: (key: string) => string,
+): { byMonth: Record<string, PayrollPaidTotals>; overall: PayrollPaidTotals } => {
+  const byMonth: Record<string, PayrollPaidTotals> = {};
+  let overall: PayrollPaidTotals = { ...EMPTY_TOTALS };
+  for (const month of months) {
+    const cents: PayrollPaidTotals = { ...EMPTY_TOTALS };
+    for (const group of PAYROLL_PAID_GROUPS) {
+      for (const item of group.items) {
+        const value = parsePaidAmount(valueOf(paidCellKey(month, item.code)), item.allowNegative);
+        if (typeof value === 'number') cents[group.kind] = addCents(cents[group.kind], value);
+      }
+    }
+    byMonth[month] = centsToRub(cents);
+    overall = {
+      accrued: cents.accrued === null ? overall.accrued : (overall.accrued ?? 0) + cents.accrued,
+      deducted: cents.deducted === null ? overall.deducted : (overall.deducted ?? 0) + cents.deducted,
+      paid: cents.paid === null ? overall.paid : (overall.paid ?? 0) + cents.paid,
+    };
+  }
+  return { byMonth, overall: centsToRub(overall) };
 };

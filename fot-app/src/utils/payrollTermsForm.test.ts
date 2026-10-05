@@ -10,7 +10,7 @@ import {
 } from './payrollTermsForm';
 import { defaultCalcTypeFor, type IPayrollTermsRow } from '../services/payrollService';
 
-const EMPTY_MONEY = { bonus: '', housing: '', travel: '', communication: '', deduction: '' };
+const EMPTY_MONEY = { bonus: '', housing: '', travel: '', deduction: '' };
 const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
@@ -54,7 +54,7 @@ describe('validatePayrollTerms: состав запроса сохранения
       category: 'worker',
       calcType: 'hourly',
       amount: '450,5',
-      money: { bonus: '15000', housing: '12000', travel: '3000', communication: '500', deduction: '0' },
+      money: { bonus: '15000', housing: '12000', travel: '3000', deduction: '0' },
     }));
     expect(wire(result.payload)).toEqual({
       staff_category: 'worker',
@@ -63,7 +63,6 @@ describe('validatePayrollTerms: состав запроса сохранения
       bonus_amount: 15000,
       housing_compensation: 12000,
       travel_compensation: 3000,
-      communication_compensation: 500,
       deduction_amount: 0,
       effective_from: '2026-09-24',
     });
@@ -88,9 +87,9 @@ describe('validatePayrollTerms: состав запроса сохранения
 
   it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций, удержание последним', () => {
     expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('travel');
-    expect(firstInvalidField({ communication: 'x', deduction: 'x' })).toBe('communication');
+    expect(firstInvalidField({ travel: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
-    expect(firstInvalidField({ supplementTo: 'x', communication: 'x' })).toBe('communication');
+    expect(firstInvalidField({ supplementTo: 'x', travel: 'x' })).toBe('travel');
     expect(firstInvalidField({ deduction: 'x', supplementFrom: 'x' })).toBe('supplementFrom');
     expect(firstInvalidField({ supplementTo: 'x', supplementAmount: 'x' })).toBe('supplementAmount');
   });
@@ -178,7 +177,7 @@ describe('initialPayrollTermsValues', () => {
       category: 'worker',
       calcType: 'hourly',
       amount: '450',
-      money: { bonus: '15000', housing: '', travel: '3000.5', communication: '', deduction: '0' },
+      money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
       supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });

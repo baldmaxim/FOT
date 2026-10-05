@@ -1,13 +1,15 @@
 /**
- * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей отчёта ЗУП «Начислено…»
- * по месяцам (миграция 295). Вносятся вручную; в расчёте зарплаты не участвуют.
+ * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей «Сводной ведомости» ЗУП —
+ * начислено, удержано, выплачено — по месяцам (миграции 295, 297). Вносятся вручную;
+ * в расчёте зарплаты не участвуют.
  *
  * Пустая ячейка — строки нет: очистка удаляет строку, а не пишет 0.
  */
 import { query, type DbExecutor } from '../../config/postgres.js';
 
-/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 295 и в fot-app/src/utils/payrollPaid.ts. */
+/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 297 и в fot-app/src/utils/payrollPaid.ts. */
 export const PAYROLL_PAID_ITEM_CODES = [
+  // Начислено.
   'contract',
   'bonus',
   'sick_leave',
@@ -18,7 +20,19 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'loan',
   'vacation',
   'travel',
+  'housing',
+  // Удержано.
+  'meals',
+  'workwear',
+  'safety_fine',
+  'mobile',
+  'fines',
   'writ_deduction',
+  // Выплачено.
+  'fss',
+  'advance',
+  'bank_transfer',
+  'bonus_payout',
 ] as const;
 
 export type PayrollPaidItemCode = typeof PAYROLL_PAID_ITEM_CODES[number];

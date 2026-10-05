@@ -195,10 +195,12 @@ export interface IAssignResult {
   skipped: Array<{ employee_id: number; reason: string; message: string }>;
 }
 
-/** Статья «Оплачено» — столбец отчёта ЗУП «Начислено…» (подписи — utils/payrollPaid). */
+/** Статья «Оплачено» — столбец «Сводной ведомости» ЗУП (подписи и группы — utils/payrollPaid). */
 export type PayrollPaidItemCode =
   | 'contract' | 'bonus' | 'sick_leave' | 'overtime' | 'recalc_prev' | 'severance'
-  | 'supplement' | 'loan' | 'vacation' | 'travel' | 'writ_deduction';
+  | 'supplement' | 'loan' | 'vacation' | 'travel' | 'housing'
+  | 'meals' | 'workwear' | 'safety_fine' | 'mobile' | 'fines' | 'writ_deduction'
+  | 'fss' | 'advance' | 'bank_transfer' | 'bonus_payout';
 
 /** Сумма ячейки «Оплачено»: месяц YYYY-MM, сумма — текстом NUMERIC. */
 export interface IPayrollPaidAmount {
@@ -212,6 +214,15 @@ export interface IPayrollPaidChange {
   month: string;
   item: PayrollPaidItemCode;
   amount: number | null;
+}
+
+/** «Связь» в «Удержании» карточки: расход по МТС Бизнес за месяц. */
+export interface IPayrollCommunicationExpense {
+  month: string;
+  /** SIM, закреплённых за сотрудником; 0 — «нет SIM». */
+  sims: number;
+  /** Сумма текстом NUMERIC; null — за месяц нет данных выписки. */
+  amount: string | null;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
@@ -360,6 +371,16 @@ export const payrollService = {
     const search = new URLSearchParams({ from, to });
     const res = await apiClient.get<IApiResponse<IPayrollPaidAmount[]>>(
       `/payroll/terms/employee/${employeeId}/paid?${search.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** «Связь»: расход сотрудника по МТС Бизнес за месяц (YYYY-MM). */
+  getCommunication: async (employeeId: number, month: string, signal?: AbortSignal): Promise<IPayrollCommunicationExpense> => {
+    const search = new URLSearchParams({ month });
+    const res = await apiClient.get<IApiResponse<IPayrollCommunicationExpense>>(
+      `/payroll/terms/employee/${employeeId}/communication?${search.toString()}`,
       { signal },
     );
     return res.data;

@@ -1,10 +1,34 @@
 /*
- * «Оплачено»: статьи строками, месяцы столбцами. Узко — таблица прокручивается вбок внутри своей рамки
- * (страница вбок не едет), подписи статей закреплены слева. Поля на касание — 16px (без автозума iOS)
- * и высотой 44px; с мышью — 14px и 34px на широком экране.
+ * «Оплачено»: статьи строками, месяцы столбцами, итоги — внизу. Узко — таблица прокручивается вбок внутри
+ * своей рамки (страница вбок не едет), подписи строк закреплены слева. Поля на касание — 16px (без автозума
+ * iOS) и высотой 44px; с мышью — 14px и 34px на широком экране.
  */
 .paid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.label { font-size: 13px; color: var(--text-secondary); }
+
+/* Заголовок-переключатель: свернуть до итогов / раскрыть статьи. Шеврон — как у справки карточки. */
+.toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  align-self: flex-start;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.chevron { flex-shrink: 0; color: var(--text-tertiary); transition: transform var(--transition); }
+.toggle[aria-expanded='true'] .chevron { transform: rotate(90deg); }
+.title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.summary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .scroll {
   overflow-x: auto;
@@ -28,7 +52,7 @@
   text-align: left;
   vertical-align: middle;
 }
-.table tbody:last-child tr:last-child > * { border-bottom: none; }
+.table tfoot tr:last-child > * { border-bottom: none; }
 
 .corner,
 .monthHead {
@@ -68,6 +92,18 @@
   font-weight: 600;
 }
 .groupLabel { position: sticky; left: 8px; }
+
+/* Итоги: отделены от статей чертой, суммы — жирные, по правому краю, как ячейки. */
+.table tfoot tr:first-child > * { border-top: 1px solid var(--border); }
+.table .totalHead { font-weight: 600; }
+.table .total {
+  min-width: 5.75rem;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 
 .table .cell { min-width: 5.75rem; padding: 3px 4px; }
 
@@ -119,5 +155,5 @@
 .error { margin: 0; font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
-  .input { transition: none; }
+  .input, .chevron { transition: none; }
 }

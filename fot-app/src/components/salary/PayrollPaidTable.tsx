@@ -1,11 +1,12 @@
 import type { FC } from 'react';
+import { ChevronRight } from 'lucide-react';
 
 import type { PayrollPaidApi } from '../../hooks/usePayrollPaid';
-import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from '../../utils/payrollAccruals';
+import { accrualPeriodCrossesYear, formatAccrualMonthLabel, formatAccrualPeriodLong } from '../../utils/payrollAccruals';
 import {
-  PAYROLL_PAID_GROUP_ITEMS,
-  PAYROLL_PAID_GROUP_LABEL,
-  PAYROLL_PAID_MAIN_ITEMS,
+  formatPaidAmount,
+  PAYROLL_PAID_GROUPS,
+  PAYROLL_PAID_TOTALS,
   paidCellId,
   paidCellKey,
   type IPayrollPaidItem,
@@ -19,21 +20,37 @@ interface IPayrollPaidTableProps {
   readOnly?: boolean;
 }
 
+const formatTotal = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
+
 /**
- * «Оплачено»: статьи строками, месяцы столбцами, ячейки — поля ввода. Без права правки и пока суммы
- * не загружены — текст. Узко — таблица прокручивается вбок, подписи статей закреплены слева.
+ * «Оплачено»: месяцы столбцами. Свёрнуто (по умолчанию) — только итоги «Начислено · Удержано · Выплачено»
+ * по месяцам, общие суммы за окно — в заголовке. Раскрыто — статьи по группам ведомости ЗУП, ячейки —
+ * поля ввода; итоги остаются внизу и пересчитываются по мере ввода. Без права правки и пока суммы
+ * не загружены — текст. Узко — таблица прокручивается вбок, подписи строк закреплены слева.
  */
 export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, readOnly = false }) => {
   const labelId = `${idPrefix}-paid`;
+  const tableId = `${idPrefix}-paid-table`;
   const errorId = `${idPrefix}-paid-error`;
   const withYear = accrualPeriodCrossesYear(paid.months);
-  const editable = paid.status === 'ready' && !readOnly;
+  const ready = paid.status === 'ready';
+  const editable = ready && !readOnly;
   const hasErrors = paid.invalidKeys.size > 0;
+
+  // «апрель – сентябрь 2026 · начислено 1 234 ₽ · выплачено 1 000 ₽» — пустые итоги не называем.
+  const summary = [
+    formatAccrualPeriodLong(paid.months),
+    ...(ready
+      ? PAYROLL_PAID_TOTALS
+        .filter(({ kind }) => paid.totals.overall[kind] !== null)
+        .map(({ kind, label }) => `${label.toLowerCase()} ${formatTotal(paid.totals.overall[kind])} ₽`)
+      : []),
+  ].join(' · ');
 
   const renderCell = (item: IPayrollPaidItem, month: string) => {
     const key = paidCellKey(month, item.code);
     if (!editable) {
-      const text = paid.status === 'ready' ? paid.savedValue(key) ?? '—' : '';
+      const text = ready ? paid.savedValue(key) ?? '—' : '';
       return <td key={month} className={styles.value}>{text}</td>;
     }
     const invalid = paid.invalidKeys.has(key);
@@ -56,7 +73,7 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
     );
   };
 
-  const renderRow = (item: IPayrollPaidItem, nested = false) => (
+  const renderRow = (item: IPayrollPaidItem, nested: boolean) => (
     <tr key={item.code}>
       <th scope="row" className={nested ? `${styles.rowHead} ${styles.rowHeadNested}` : styles.rowHead}>
         {item.label}
@@ -67,9 +84,19 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
 
   return (
     <div className={styles.paid}>
-      <span id={labelId} className={styles.label}>Оплачено</span>
+      <button
+        type="button"
+        className={styles.toggle}
+        aria-expanded={paid.expanded}
+        aria-controls={tableId}
+        onClick={paid.toggleExpanded}
+      >
+        <ChevronRight size={16} className={styles.chevron} aria-hidden="true" />
+        <span id={labelId} className={styles.title}>Оплачено</span>
+        <span className={styles.summary}>{summary}</span>
+      </button>
       <div className={styles.scroll}>
-        <table className={styles.table} aria-labelledby={labelId}>
+        <table id={tableId} className={styles.table} aria-labelledby={labelId}>
           <thead>
             <tr>
               <td className={styles.corner} />
@@ -78,17 +105,30 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
               ))}
             </tr>
           </thead>
-          <tbody>
-            {PAYROLL_PAID_MAIN_ITEMS.map(item => renderRow(item))}
-          </tbody>
-          <tbody>
-            <tr>
-              <th scope="rowgroup" colSpan={paid.months.length + 1} className={styles.groupHead}>
-                <span className={styles.groupLabel}>{PAYROLL_PAID_GROUP_LABEL}</span>
-              </th>
-            </tr>
-            {PAYROLL_PAID_GROUP_ITEMS.map(item => renderRow(item, true))}
-          </tbody>
+          {paid.expanded && PAYROLL_PAID_GROUPS.map(group => (
+            <tbody key={group.label ?? 'main'}>
+              {group.label && (
+                <tr>
+                  <th scope="rowgroup" colSpan={paid.months.length + 1} className={styles.groupHead}>
+                    <span className={styles.groupLabel}>{group.label}</span>
+                  </th>
+                </tr>
+              )}
+              {group.items.map(item => renderRow(item, group.label !== null))}
+            </tbody>
+          ))}
+          <tfoot>
+            {PAYROLL_PAID_TOTALS.map(({ kind, label }) => (
+              <tr key={kind}>
+                <th scope="row" className={`${styles.rowHead} ${styles.totalHead}`}>{label}</th>
+                {paid.months.map(month => (
+                  <td key={month} className={styles.total}>
+                    {ready ? formatTotal(paid.totals.byMonth[month][kind]) : ''}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tfoot>
         </table>
       </div>
       {paid.status === 'loading' && <p className={styles.note}>Загрузка…</p>}
