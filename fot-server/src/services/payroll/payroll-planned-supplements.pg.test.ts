@@ -99,7 +99,7 @@ const makeRes = () => {
 describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS payroll_planned_supplements, payroll_settings, payroll_item_types,
+      DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_compensation_terms, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -136,6 +136,9 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
     // Повторный запуск безопасен.
     await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
+    // Список берёт «Начисления» из «Оплачено».
+    await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
+    await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
   });
 
   afterAll(async () => {
@@ -252,5 +255,30 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     expect(row).toMatchObject({
       planned_supplement_amount: null, planned_supplement_from: null, planned_supplement_to: null,
     });
+  });
+
+  it('список: «Начисления» — итог «Начислено» из «Оплачено» за 6 закрытых месяцев перед датой', async () => {
+    await pg.pool!.query(`
+      INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
+        (1, '2026-08-01', 'contract',      68095),
+        (1, '2026-08-01', 'vacation',      59245),
+        (1, '2026-08-01', 'travel',         1430),
+        (1, '2026-08-01', 'advance',       13464.19),  -- выплата — не начисление
+        (1, '2026-08-01', 'meals',          5248),     -- удержание — не начисление
+        (1, '2026-07-01', 'recalc_prev',   -1500),     -- сторно — минусом
+        (1, '2026-03-01', 'contract',     100000),     -- до окна апр – сен
+        (1, '2026-10-01', 'contract',     100000),     -- текущий месяц — не закрыт
+        (3, '2026-09-01', 'bank_transfer', 50000);     -- только выплата
+    `);
+    const res = makeRes();
+
+    await payrollTermsController.list({
+      user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01' },
+    } as unknown as AuthenticatedRequest, res);
+
+    const byId = Object.fromEntries((res.body.data as Array<Record<string, unknown>>).map(row => [row.employee_id, row.accruals]));
+    expect(byId[1]).toEqual([{ month: '2026-07', amount: -1500 }, { month: '2026-08', amount: 128770 }]);
+    expect(byId[2]).toBeNull();
+    expect(byId[3]).toBeNull();
   });
 });

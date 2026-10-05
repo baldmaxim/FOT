@@ -37,6 +37,24 @@ export const PAYROLL_PAID_ITEM_CODES = [
 
 export type PayrollPaidItemCode = typeof PAYROLL_PAID_ITEM_CODES[number];
 
+/**
+ * Статьи раздела «Начислено» — из них столбец «Начисления» в списке условий оплаты; удержания и
+ * выплаты туда не идут. Тот же состав, что у итога «Начислено» в fot-app/src/utils/payrollPaid.ts.
+ */
+export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
+  'contract',
+  'bonus',
+  'sick_leave',
+  'overtime',
+  'recalc_prev',
+  'severance',
+  'supplement',
+  'loan',
+  'vacation',
+  'travel',
+  'housing',
+];
+
 /** Минус допустим только у перерасчёта за предыдущий период (сторно). Тот же CHECK — в БД. */
 export const PAYROLL_PAID_NEGATIVE_ITEMS: ReadonlySet<PayrollPaidItemCode> = new Set(['recalc_prev']);
 

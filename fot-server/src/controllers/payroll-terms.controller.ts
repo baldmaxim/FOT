@@ -43,6 +43,7 @@ import {
   setPlannedSupplement,
   type IAssignResult,
 } from '../services/payroll/payroll-terms.service.js';
+import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
@@ -264,6 +265,9 @@ const buildBaseCtes = (columnFilterSql: string): string => `
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)${columnFilterSql ? `\n       AND ${columnFilterSql}` : ''}
   )`;
 
+/** Коды статей «Начислено» литералом SQL: константа из кода, не ввод пользователя. */
+const ACCRUAL_CODES_SQL = PAYROLL_PAID_ACCRUAL_CODES.map(code => `'${code}'`).join(', ');
+
 /**
  * Список: итоги + порция. Параметры $9 LIMIT, $10 OFFSET, $11/$12 — курсор прежнего порядка
  * (ФИО, id) для старого фронта; сортировка по столбцу и её курсор — параметры с $13.
@@ -289,12 +293,13 @@ const buildListSql = (options: {
     COALESCE((
       -- ORDER BY внутри json_agg: next_cursor берётся из последнего элемента массива,
       -- порядок подзапроса агрегат гарантированно не сохраняет.
-      -- Плановая доплата — только для строк порции: LATERAL после LIMIT.
+      -- Плановая доплата и начисления — только для строк порции: LATERAL после LIMIT.
       SELECT json_agg(p ORDER BY ${options.orderSql.replace(/\bk\./g, 'p.')})
         FROM (SELECT page.*,
                      ps.amount    AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
-                     ps.date_to   AS planned_supplement_to
+                     ps.date_to   AS planned_supplement_to,
+                     acc.accruals
                 FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
                        WHERE ${options.cursorSql}
                        ORDER BY ${options.orderSql}
@@ -305,7 +310,20 @@ const buildListSql = (options: {
                    WHERE s.employee_id = page.employee_id
                    ORDER BY s.id DESC
                    LIMIT 1
-                ) ps ON TRUE) p
+                ) ps ON TRUE
+                -- «Начисления» — итог «Начислено» из «Оплачено» по месяцам: 6 закрытых месяцев перед
+                -- датой выборки, как окно столбца на фронте (payrollAccrualMonths). Нет сумм — null («—»).
+                LEFT JOIN LATERAL (
+                  SELECT json_agg(json_build_object('month', to_char(a.month, 'YYYY-MM'), 'amount', a.amount)
+                                  ORDER BY a.month) AS accruals
+                    FROM (SELECT pa.month, SUM(pa.amount) AS amount
+                            FROM payroll_paid_amounts pa
+                           WHERE pa.employee_id = page.employee_id
+                             AND pa.month >= (date_trunc('month', $1::date) - INTERVAL '6 months')::date
+                             AND pa.month <  date_trunc('month', $1::date)::date
+                             AND pa.item_code IN (${ACCRUAL_CODES_SQL})
+                           GROUP BY pa.month) a
+                ) acc ON TRUE) p
     ), '[]'::json) AS rows`;
 
 /** Прежний порядок и курсор (ФИО, id): без параметра sort — как до сортировки по столбцам. */
@@ -339,6 +357,8 @@ interface IPayrollTermsListRow {
   planned_supplement_amount: string | number | null;
   planned_supplement_from: string | null;
   planned_supplement_to: string | null;
+  /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. */
+  accruals: Array<{ month: string; amount: number }> | null;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
