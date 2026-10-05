@@ -253,18 +253,20 @@ router.get(
   employeesController.getHistory
 );
 
-// PUT /api/employees/:id/history/:eventId - редактирование записи истории (только admin, 2FA)
+// PUT /api/employees/:id/history/:eventId - редактирование записи истории (2FA).
+// Право по типу записи — в контроллере: «Перевод/Должность» — админ и кадровый админ
+// (глобальный скоуп + edit смены отдела), «Оклад» — только админ.
 router.put(
   '/:id/history/:eventId',
-  requireAdmin,
+  requirePageAccess('/staff-control/department', 'edit'),
   requireCritical2FA,
   employeesController.updateHistoryEvent
 );
 
-// DELETE /api/employees/:id/history/:eventId - удаление записи истории (только admin, 2FA)
+// DELETE /api/employees/:id/history/:eventId - удаление записи истории (2FA), права — как у PUT.
 router.delete(
   '/:id/history/:eventId',
-  requireAdmin,
+  requirePageAccess('/staff-control/department', 'edit'),
   requireCritical2FA,
   employeesController.deleteHistoryEvent
 );

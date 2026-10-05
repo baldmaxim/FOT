@@ -328,4 +328,18 @@ describe('роуты legacy-записи оклада — только сист�
       expect(guards).not.toContain("'/staff-control'");
     },
   );
+
+  // Правка/удаление записей истории: роут пускает по смене отдела (кадровый админ), а право
+  // по типу записи решает контроллер — «Оклад» там остаётся только за админом.
+  it('история /:id/history/:eventId (PUT и DELETE) — ключ смены отдела и 2FA, без requireAdmin', () => {
+    for (const method of ['put', 'delete']) {
+      const start = routesSource.indexOf(`router.${method}(\n  '/:id/history/:eventId'`);
+      expect(start, `роут ${method} истории не найден`).toBeGreaterThan(-1);
+      const end = routesSource.indexOf(');', start);
+      const guards = routesSource.slice(start, end);
+      expect(guards).toContain("requirePageAccess('/staff-control/department', 'edit')");
+      expect(guards).toContain('requireCritical2FA');
+      expect(guards).not.toContain('requireAdmin');
+    }
+  });
 });

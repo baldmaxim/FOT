@@ -17,13 +17,16 @@ interface IHistoryPanelProps {
   employee: Employee;
   history: EmployeeHistoryEvent[];
   loading: boolean;
+  /** Правка/удаление записей «Оклад» — только админ (как на сервере). */
   canEdit: boolean;
+  /** Правка/удаление записей «Перевод/Должность» — админ и кадровый админ. */
+  canEditAssignments: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onDataChanged: () => void;
 }
 
-export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, onClose, onRefresh, onDataChanged }) => {
+export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, canEditAssignments, onClose, onRefresh, onDataChanged }) => {
   const toast = useToast();
   // Legacy «+ Оклад» (change-salary) — только системный администратор, как на сервере:
   // персональный доступ к «Зарплате» открывает сам раздел, а не кадровые карточки.
@@ -265,7 +268,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                             <span className="sc-panel-assign-sm">{title}</span>
                             {data.position ? <span className="sc-panel-pos-sm">{String(data.position)}</span> : null}
                             {data.department ? <span className="sc-panel-reason-sm">{String(data.department)}</span> : null}
-                            {canEdit && (
+                            {canEditAssignments && (
                               <span className="sc-panel-item-btns">
                                 <button className="sc-panel-act-btn" onClick={() => startEdit(editableEvent)}><Pencil size={11} /></button>
                                 <button className="sc-panel-act-btn danger" onClick={() => handleDelete(editableEvent)}><Trash2 size={11} /></button>

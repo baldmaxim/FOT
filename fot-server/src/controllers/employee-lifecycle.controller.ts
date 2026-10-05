@@ -32,7 +32,7 @@ import {
   type TLifecycleOperationSource,
 } from '../services/employee-lifecycle-operations.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import { resolveRolePageAccess } from '../services/access-control.service.js';
+import { canManageAsHrAdmin, resolveRolePageAccess } from '../services/access-control.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming, moscowTodayIso } from '../utils/date.utils.js';
 
@@ -1167,6 +1167,19 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
   }
 }
 
+/**
+ * Право на правку/удаление записи истории по её типу. «Оклад» — только админ (у кадрового
+ * админа нет раздела «Зарплата»). «Перевод/Должность» — админ и кадровый админ: глобальный
+ * скоуп + edit смены отдела, как откат переводов в «Переводах и исключениях».
+ */
+async function canManageHistoryEvent(
+  req: AuthenticatedRequest,
+  eventType: 'salary' | 'assignment',
+): Promise<boolean> {
+  if (eventType === 'salary') return !!req.user.is_admin;
+  return canManageAsHrAdmin(req, '/staff-control/department');
+}
+
 export async function updateHistoryEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const employeeId = Number(req.params.id);
@@ -1179,6 +1192,10 @@ export async function updateHistoryEvent(req: AuthenticatedRequest, res: Respons
     const eventType = req.body.event_type;
     if (eventType !== 'salary' && eventType !== 'assignment') {
       res.status(400).json({ success: false, error: 'event_type must be "salary" or "assignment"' });
+      return;
+    }
+    if (!(await canManageHistoryEvent(req, eventType))) {
+      res.status(403).json({ success: false, error: 'Недостаточно прав для правки этой записи истории' });
       return;
     }
 
@@ -1224,6 +1241,10 @@ export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Respons
     const eventType = req.query.event_type;
     if (eventType !== 'salary' && eventType !== 'assignment') {
       res.status(400).json({ success: false, error: 'event_type must be "salary" or "assignment"' });
+      return;
+    }
+    if (!(await canManageHistoryEvent(req, eventType))) {
+      res.status(403).json({ success: false, error: 'Недостаточно прав для удаления этой записи истории' });
       return;
     }
 

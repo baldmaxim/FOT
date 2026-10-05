@@ -2792,6 +2792,7 @@ export const StaffControlPage: FC = () => {
             history={panelHistory}
             loading={panelLoading}
             canEdit={isAdmin}
+            canEditAssignments={canManageAsHrAdmin('/staff-control/department')}
             onClose={closeHistory}
             onRefresh={() => openHistory(panelEmp)}
             onDataChanged={handleHistoryDataChanged}
