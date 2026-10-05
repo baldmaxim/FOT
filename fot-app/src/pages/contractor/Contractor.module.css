@@ -1154,6 +1154,12 @@ button.nameMismatch:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .historySectionTitle { margin-top: 16px; }
 
+/* «История пропуска»: на мобильном во всю ширину, с планшета — до 85% окна. */
+.historyModal { max-width: none; }
+@media (min-width: 768px) {
+  .historyModal { max-width: 85vw; }
+}
+
 @media (max-width: 768px) {
   .nameEditForm { min-width: 0; }
   .nameEditBtn,
