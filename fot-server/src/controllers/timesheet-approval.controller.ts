@@ -229,6 +229,7 @@ import {
 import { r2Service } from '../services/r2.service.js';
 import { firedHiddenSql } from '../services/timesheet-fired-cutoff.service.js';
 import {
+  type IApprovalEmployeeSnapshot,
   listApprovalEmployees,
   listVisibleApprovalEmployees,
   resolveManagerPersonalSnapshotIds,
@@ -2601,23 +2602,19 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     const managerEmpIds = [...new Set(
       rows.map(r => r.manager_employee_id).filter((id): id is number => Number.isInteger(id) && (id ?? 0) > 0),
     )];
-    const personalApprovalIds = rows
-      .filter(r => r.manager_employee_id != null)
-      .map(r => r.id);
-
-    // Snapshot personal-подач — для weekend-check внутри enriched (employeeIds). Уволенных в
-    // месяце периода в составе нет (с 01.09.2026), как в listVisibleApprovalEmployees.
-    const personalSnapshotRows = personalApprovalIds.length > 0
-      ? await query<{ approval_id: number; employee_id: number }>(
-        `SELECT s.approval_id, s.employee_id
-           FROM timesheet_approval_employees s
-           JOIN timesheet_approvals a ON a.id = s.approval_id
-           LEFT JOIN employees e ON e.id = s.employee_id
-           WHERE s.approval_id = ANY($1::bigint[])
-             AND NOT ${firedHiddenSql('e', 'a.start_date')}`,
-        [personalApprovalIds],
-      )
-      : [];
+    // Видимый состав всех подач — тот же, что listVisibleApprovalEmployees (уволенных в
+    // месяце периода нет, с 01.09.2026): по нему фронт ищет подачу по ФИО, а у personal-подач
+    // он же даёт employeeIds для weekend-check внутри enriched.
+    const snapshotRows = await query<{ approval_id: number; employee_id: number; full_name: string | null }>(
+      `SELECT s.approval_id, s.employee_id, s.full_name
+         FROM timesheet_approval_employees s
+         JOIN timesheet_approvals a ON a.id = s.approval_id
+         LEFT JOIN employees e ON e.id = s.employee_id
+         WHERE s.approval_id = ANY($1::bigint[])
+           AND NOT ${firedHiddenSql('e', 'a.start_date')}
+         ORDER BY s.full_name ASC, s.employee_id ASC`,
+      [rows.map(r => r.id)],
+    );
 
     const [deptRows, userRows, managerRows] = await Promise.all([
       deptIds.length > 0
@@ -2668,11 +2665,11 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     const supervisorFlag = new Map(userRows.map(row => [String(row.id), row.role_code === 'site_supervisor']));
     const managerNames = new Map(managerRows.map((row) => [Number(row.id), row.full_name ?? null]));
 
-    const snapshotByApproval = new Map<number, number[]>();
-    for (const s of personalSnapshotRows) {
-      const list = snapshotByApproval.get(Number(s.approval_id)) ?? [];
-      list.push(Number(s.employee_id));
-      snapshotByApproval.set(Number(s.approval_id), list);
+    const employeesByApproval = new Map<number, IApprovalEmployeeSnapshot[]>();
+    for (const s of snapshotRows) {
+      const list = employeesByApproval.get(Number(s.approval_id)) ?? [];
+      list.push({ employee_id: Number(s.employee_id), full_name: s.full_name ?? '' });
+      employeesByApproval.set(Number(s.approval_id), list);
     }
 
     // Группировка по «участку» = по начальнику участка (роль site_supervisor,
@@ -2700,7 +2697,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
 
     const enriched = await Promise.all(rows.map(async (row) => {
       const isPersonal = row.manager_employee_id != null;
-      const snapshotIds = isPersonal ? (snapshotByApproval.get(row.id) ?? []) : undefined;
+      const employees = employeesByApproval.get(Number(row.id)) ?? [];
+      const snapshotIds = isPersonal ? employees.map(e => e.employee_id) : undefined;
 
       const weekend = await checkWeekendWorkRequirement({
         departmentId: row.department_id,
@@ -2828,6 +2826,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         parent_department_id: groupInfo.parentDeptId,
         parent_department_name: groupInfo.parentDeptName,
         group_key: groupInfo.groupKey,
+        employees,
         weekend_work_dates: weekend.weekendWorkDates,
         pending_weekend_dates: pendingWeekendDates,
         approved_weekend_dates: approvedWeekendDates,

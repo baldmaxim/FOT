@@ -148,6 +148,8 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   timekeeper_checked: boolean;
   timekeeper_checked_by_name?: string | null;
   timekeeper_checked_at?: string | null;
+  /** Видимый состав подачи (снимок без уволенных в месяце периода) — для поиска по ФИО. */
+  employees?: Array<{ employee_id: number; full_name: string }>;
   weekend_work_dates: string[];
   pending_weekend_dates: string[];
   approved_weekend_dates: string[];

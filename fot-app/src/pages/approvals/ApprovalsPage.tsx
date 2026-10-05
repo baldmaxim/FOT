@@ -35,6 +35,7 @@ import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelec
 import { useStructureTree } from '../../hooks/useStructure';
 import { collectDescendantIds } from '../../utils/departmentUtils';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { matchApprovalEmployees, normalizeFio } from '../../utils/approvalEmployeeSearch';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -600,6 +601,8 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
 
 interface IApprovalCardBodyProps {
   row: IApprovalReviewItem;
+  /** Сотрудники, совпавшие с поиском по ФИО, — подсвечиваются в составе. */
+  matchedEmployeeIds: number[];
   canReview: boolean;
   isApproving: boolean;
   isRejecting: boolean;
@@ -611,6 +614,7 @@ interface IApprovalCardBodyProps {
 
 const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   row,
+  matchedEmployeeIds,
   canReview,
   isApproving,
   isRejecting,
@@ -722,7 +726,12 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
           ) : submittedQuery.data && submittedQuery.data.employees.length > 0 ? (
             <ul className="approvals-submission-employees">
               {submittedQuery.data.employees.map(e => (
-                <li key={e.employee_id}>{e.full_name}</li>
+                <li
+                  key={e.employee_id}
+                  className={matchedEmployeeIds.includes(e.employee_id) ? 'approvals-submission-employee--match' : undefined}
+                >
+                  {e.full_name}
+                </li>
               ))}
             </ul>
           ) : (
@@ -857,6 +866,9 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [commentModal, setCommentModal] = useState<{ row: IApprovalReviewItem; mode: 'rework' | 'return' } | null>(null);
   const [deptId, setDeptId] = useState('');
+  const [nameQuery, setNameQuery] = useState('');
+  const debouncedName = useDebouncedValue(nameQuery, 200);
+  const searchActive = normalizeFio(debouncedName) !== '';
 
   const structureTree = useStructureTree();
   const departments = useMemo(() => structureTree.data?.departments ?? [], [structureTree.data]);
@@ -925,11 +937,20 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   });
 
   const allRows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
+  // Совпавшие по ФИО сотрудники каждой подачи — по составу из review-list, без раскрытия карточек.
+  const matchesByApproval = useMemo(() => {
+    const map = new Map<number, Array<{ employee_id: number; full_name: string }>>();
+    for (const r of allRows) {
+      const matches = matchApprovalEmployees(r.employees, debouncedName);
+      if (matches.length > 0) map.set(r.id, matches);
+    }
+    return map;
+  }, [allRows, debouncedName]);
   const rows: IApprovalReviewItem[] = useMemo(
-    () => (allowedDeptIds
-      ? allRows.filter(r => r.department_id != null && allowedDeptIds.has(r.department_id))
-      : allRows),
-    [allRows, allowedDeptIds],
+    () => allRows.filter(r =>
+      (!allowedDeptIds || (r.department_id != null && allowedDeptIds.has(r.department_id)))
+      && (!searchActive || matchesByApproval.has(r.id))),
+    [allRows, allowedDeptIds, searchActive, matchesByApproval],
   );
 
   // Группировка карточек по «участку» (общему parent_department_id) — см. group_key с бэка.
@@ -964,14 +985,24 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
 
   return (
     <>
-      <div className="ts-filter-dept">
-        <DepartmentTreeSelect
-          departments={departments}
-          value={deptId}
-          onChange={setDeptId}
-          isLoading={structureTree.isPending}
-          isError={structureTree.isError}
-          onRetry={() => { void structureTree.refetch(); }}
+      <div className="cor-filters ts-filters">
+        <div className="cor-filter-dept">
+          <DepartmentTreeSelect
+            departments={departments}
+            value={deptId}
+            onChange={setDeptId}
+            isLoading={structureTree.isPending}
+            isError={structureTree.isError}
+            onRetry={() => { void structureTree.refetch(); }}
+          />
+        </div>
+        <input
+          type="search"
+          className="cor-filter-name"
+          value={nameQuery}
+          onChange={(e) => setNameQuery(e.target.value)}
+          placeholder="Поиск по ФИО…"
+          aria-label="Поиск по ФИО"
         />
       </div>
 
@@ -993,12 +1024,15 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
       ) : query.isError ? (
         <div className="approvals-empty">Ошибка загрузки</div>
       ) : rows.length === 0 ? (
-        <div className="approvals-empty">Нет подач в этом статусе</div>
+        <div className="approvals-empty">
+          {searchActive ? 'Сотрудник не найден в подачах этого статуса' : 'Нет подач в этом статусе'}
+        </div>
       ) : (
         <ul className="approvals-list">
           {grouped.map(group => {
             const renderCard = (row: IApprovalReviewItem, inGroup: boolean) => {
               const expanded = expandedId === row.id;
+              const matches = matchesByApproval.get(row.id) ?? [];
               // Подзаголовок секции: для personal-подачи показываем «Руководитель: ФИО»,
               // для подачи отдела — её собственное имя (отличающееся от заголовка участка).
               const sectionLabel = row.manager_employee_id != null
@@ -1014,6 +1048,9 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                     <div className="approvals-card-info">
                       <strong>{sectionLabel}</strong>
                       <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
+                      {matches.length > 0 && (
+                        <span className="approvals-card-match">{matches.map(m => m.full_name).join(', ')}</span>
+                      )}
                     </div>
                     <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
                     {row.unlocked_at && (
@@ -1069,6 +1106,7 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                   {expanded && (
                     <ApprovalCardBody
                       row={row}
+                      matchedEmployeeIds={matches.map(m => m.employee_id)}
                       canReview={canReview}
                       isApproving={approveMutation.isPending}
                       isRejecting={rejectMutation.isPending}

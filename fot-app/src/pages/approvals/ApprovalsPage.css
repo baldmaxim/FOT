@@ -224,6 +224,12 @@
   font-size: 12px;
   color: var(--text-tertiary);
 }
+.approvals-card-match {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
 .approvals-card-status {
   font-size: 12px;
   color: var(--text-secondary);
@@ -333,6 +339,13 @@
   margin: 0;
   padding: 2px 0;
   break-inside: avoid;
+}
+.approvals-submission-employees li.approvals-submission-employee--match {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-weight: 600;
 }
 @media (max-width: 600px) {
   .approvals-submission-employees {
@@ -1157,14 +1170,9 @@
   outline: none;
   border-color: var(--primary);
 }
-.ts-filter-dept {
-  margin-bottom: 8px;
-  max-width: 360px;
-}
-@media (max-width: 430px) {
-  .ts-filter-dept {
-    max-width: none;
-  }
+.ts-filters {
+  margin: 0 0 8px;
+  max-width: 728px;
 }
 .cor-settings-btn {
   display: inline-flex;

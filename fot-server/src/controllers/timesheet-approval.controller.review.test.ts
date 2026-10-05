@@ -106,6 +106,87 @@ describe('getReviewList — pending/approved выходные по окну чл
   });
 });
 
+describe('getReviewList — состав подачи для поиска по ФИО', () => {
+  it('отдаёт видимый снимок каждой подачи; у personal он же идёт в weekend-check', async () => {
+    const deptApproval = {
+      id: 521, department_id: DEPT, manager_employee_id: null,
+      start_date: '2026-09-01', end_date: '2026-09-15', status: 'approved',
+      submitted_by: 'u1', reviewed_by: null, updated_at: '2026-09-16T00:00:00Z',
+    };
+    const personalApproval = {
+      id: 600, department_id: null, manager_employee_id: 77,
+      start_date: '2026-09-01', end_date: '2026-09-15', status: 'approved',
+      submitted_by: 'u2', reviewed_by: null, updated_at: '2026-09-15T00:00:00Z',
+    };
+    checkWeekendMock.mockResolvedValue({
+      requires: false, weekendDates: [], weekendWorkDates: [], weekendWorkPairs: [],
+    });
+    listMembershipsMock.mockResolvedValue([
+      { employee_id: GAEV, transferred_out_date: null, joined_date: null, joined_via_transfer: false },
+    ]);
+
+    const snapshotCalls: Array<{ sql: string; params: unknown[] }> = [];
+    pgQuery.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (/FROM timesheet_approval_employees/i.test(sql)) {
+        snapshotCalls.push({ sql, params });
+        // Порядок — как отдаёт ORDER BY full_name.
+        return [
+          { approval_id: 521, employee_id: GAEV, full_name: 'Гаев Ислам' },
+          { approval_id: 600, employee_id: 77, full_name: 'Иванов Пётр' },
+          { approval_id: 600, employee_id: 78, full_name: 'Яковлев Олег' },
+        ];
+      }
+      if (/FROM timesheet_approvals/i.test(sql)) return [deptApproval, personalApproval];
+      return [];
+    });
+
+    const req = { query: { status: 'approved' }, user: { id: 'admin' } } as unknown as AuthenticatedRequest;
+    const res = makeRes();
+    await timesheetApprovalController.getReviewList(req, res as never);
+
+    const data = res.json.mock.calls[0][0].data;
+    expect(data.map((r: { id: number }) => r.id)).toEqual([521, 600]);
+    expect(data[0].employees).toEqual([{ employee_id: GAEV, full_name: 'Гаев Ислам' }]);
+    expect(data[1].employees).toEqual([
+      { employee_id: 77, full_name: 'Иванов Пётр' },
+      { employee_id: 78, full_name: 'Яковлев Олег' },
+    ]);
+
+    // Один запрос на все подачи, с тем же отсевом уволенных, что и в раскрытой карточке.
+    expect(snapshotCalls).toHaveLength(1);
+    expect(snapshotCalls[0].params).toEqual([[521, 600]]);
+    expect(snapshotCalls[0].sql).toMatch(/NOT \(a\.start_date::date >= DATE/);
+
+    const weekendArgs = checkWeekendMock.mock.calls.map(c => c[0]);
+    expect(weekendArgs.find(a => a.departmentId === DEPT)?.employeeIds).toBeUndefined();
+    expect(weekendArgs.find(a => a.departmentId === null)?.employeeIds).toEqual([77, 78]);
+  });
+
+  it('подача без снимка — пустой состав', async () => {
+    checkWeekendMock.mockResolvedValue({
+      requires: false, weekendDates: [], weekendWorkDates: [], weekendWorkPairs: [],
+    });
+    listMembershipsMock.mockResolvedValue([]);
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (/FROM timesheet_approval_employees/i.test(sql)) return [];
+      if (/FROM timesheet_approvals/i.test(sql)) {
+        return [{
+          id: 700, department_id: DEPT, manager_employee_id: null,
+          start_date: '2026-09-01', end_date: '2026-09-15', status: 'submitted',
+          submitted_by: 'u1', reviewed_by: null, updated_at: '2026-09-16T00:00:00Z',
+        }];
+      }
+      return [];
+    });
+
+    const req = { query: { status: 'submitted' }, user: { id: 'admin' } } as unknown as AuthenticatedRequest;
+    const res = makeRes();
+    await timesheetApprovalController.getReviewList(req, res as never);
+
+    expect(res.json.mock.calls[0][0].data[0].employees).toEqual([]);
+  });
+});
+
 describe('approve precheck — pending по окну членства', () => {
   const baseReq = { params: { id: '521' }, body: {}, user: { id: 'admin', employee_id: 1 } } as unknown as AuthenticatedRequest;
 
