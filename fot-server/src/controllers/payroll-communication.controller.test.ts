@@ -46,15 +46,16 @@ beforeEach(() => {
 });
 
 describe('«Связь» в карточке зарплаты', () => {
-  it('отдаёт сумму за месяц по всем SIM сотрудника', async () => {
+  it('отдаёт сверхтраты за месяц по всем SIM сотрудника', async () => {
     pgQueryOne.mockResolvedValue({ sims: 2, rows: 31, amount: '484.00' });
 
     const res = await request({ month: '2026-10' });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual({ month: '2026-10', sims: 2, amount: '484.00' });
-    expect(pgQueryOne.mock.calls[0][1]).toEqual([42, '2026-10']);
+    expect(pgQueryOne.mock.calls[0][1]).toEqual([42, '2026-10', ['call', 'sms', 'mms', 'traffic']]);
     expect(pgQueryOne.mock.calls[0][0]).toContain("r.category <> 'topups'");
+    expect(pgQueryOne.mock.calls[0][0]).toContain('FILTER (WHERE r.network_event = ANY($3::text[]))');
   });
 
   it('нет SIM — sims 0 и amount null', async () => {

@@ -37,7 +37,7 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП, вносятся вручную.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 router.put('/terms/employee/:empId/paid', termsEdit, payrollPaidController.save);
-// «Связь» в «Удержании» карточки: расход по МТС Бизнес за месяц (только чтение).
+// «Связь» в «Удержании» карточки: сверхтраты по МТС Бизнес за месяц (только чтение).
 router.get('/terms/employee/:empId/communication', termsView, payrollCommunicationController.getByEmployee);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────

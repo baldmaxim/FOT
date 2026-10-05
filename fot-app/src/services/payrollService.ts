@@ -216,7 +216,7 @@ export interface IPayrollPaidChange {
   amount: number | null;
 }
 
-/** «Связь» в «Удержании» карточки: расход по МТС Бизнес за месяц. */
+/** «Связь» в «Удержании» карточки: сверхтраты по МТС Бизнес за месяц (звонки, SMS, роуминг). */
 export interface IPayrollCommunicationExpense {
   month: string;
   /** SIM, закреплённых за сотрудником; 0 — «нет SIM». */
@@ -376,7 +376,7 @@ export const payrollService = {
     return res.data;
   },
 
-  /** «Связь»: расход сотрудника по МТС Бизнес за месяц (YYYY-MM). */
+  /** «Связь»: сверхтраты сотрудника по МТС Бизнес за месяц (YYYY-MM). */
   getCommunication: async (employeeId: number, month: string, signal?: AbortSignal): Promise<IPayrollCommunicationExpense> => {
     const search = new URLSearchParams({ month });
     const res = await apiClient.get<IApiResponse<IPayrollCommunicationExpense>>(

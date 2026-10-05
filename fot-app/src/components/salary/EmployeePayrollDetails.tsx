@@ -131,7 +131,8 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   };
 
   const communication: IPayrollCommunicationField = {
-    label: `Связь за ${formatAccrualPeriodLong([month])}, ₽`,
+    // «Сверх тарифа» — сумма меньше «Расхода» в панели МТС: абонплату и услуги платит компания.
+    label: `Связь сверх тарифа за ${formatAccrualPeriodLong([month])}, ₽`,
     value: '…',
   };
   if (communicationQuery.isError) {
