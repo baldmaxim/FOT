@@ -32,11 +32,12 @@ export type PayrollTermsFieldKey =
   | 'effectiveFrom'
   | 'amount'
   | PayrollMoneyField
+  | 'deductionKind'
   | (typeof SUPPLEMENT_FIELD_KEYS)[PayrollSupplementField];
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
   'effectiveFrom', 'amount', 'bonus', 'housing', 'travel',
-  'supplementAmount', 'supplementFrom', 'supplementTo', 'deduction',
+  'supplementAmount', 'supplementFrom', 'supplementTo', 'deductionKind', 'deduction',
 ];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
@@ -48,6 +49,8 @@ export interface IPayrollTermsFormValues {
   amount: string;
   money: Record<PayrollMoneyField, string>;
   supplement: IPayrollSupplementValues;
+  /** Вид удержания — id из справочника строкой, '' — не выбран. */
+  deductionKindId: string;
   effectiveFrom: string;
 }
 
@@ -85,6 +88,7 @@ export const initialPayrollTermsValues = (
       from: row?.planned_supplement_from ?? '',
       to: row?.planned_supplement_to ?? '',
     },
+    deductionKindId: hasTerms && row?.deduction_kind_id ? String(row.deduction_kind_id) : '',
     effectiveFrom: defaultDate,
   };
 };
@@ -97,6 +101,7 @@ export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: 
   || values.calcType !== initial.calcType
   || values.amount !== initial.amount
   || values.effectiveFrom !== initial.effectiveFrom
+  || values.deductionKindId !== initial.deductionKindId
   || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
   || SUPPLEMENT_FIELDS.some(field => values.supplement[field] !== initial.supplement[field])
 );
@@ -173,6 +178,12 @@ export const validatePayrollTerms = (
     else if (value !== undefined) optional[field] = value;
   }
 
+  // Вид и сумма удержания — вместе: по видам строится вкладка «Расчёты» (тот же CHECK на сервере).
+  if (values.deductionKindId && !errors.deduction && optional.deduction === undefined) {
+    errors.deduction = 'Укажите сумму удержания';
+  }
+  if (!values.deductionKindId && optional.deduction !== undefined) errors.deductionKind = 'Выберите вид удержания';
+
   let plannedSupplement: IPlannedSupplementPayload | null | undefined;
   if (options.initialSupplement) {
     const next = parseSupplement(values.supplement, errors);
@@ -196,6 +207,7 @@ export const validatePayrollTerms = (
       housing_compensation: optional.housing,
       travel_compensation: optional.travel,
       deduction_amount: optional.deduction,
+      deduction_kind_id: values.deductionKindId ? Number(values.deductionKindId) : undefined,
       effective_from: values.effectiveFrom,
       planned_supplement: plannedSupplement,
     },

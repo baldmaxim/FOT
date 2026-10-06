@@ -1,7 +1,8 @@
 import { Router } from 'express';
 
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
@@ -19,6 +20,10 @@ router.use(noStore);
 // но раздать их разным ролям можно будет в /admin/roles без миграции и деплоя.
 const termsView = requirePageAccess('/salary/terms', 'view');
 const termsEdit = requirePageAccess('/salary/terms', 'edit');
+const paymentsView = requirePageAccess('/salary/payments', 'view');
+const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
+// Справочник видов удержаний нужен и карточке («Условия оплаты»), и «Расчётам».
+const deductionKindsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
 
 // ─── Условия оплаты ──────────────────────────────────────────────────────────
 // Статические пути до параметрических: иначе '/terms/employee/:empId' перехватил бы
@@ -36,6 +41,11 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП, вносятся вручную.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 router.put('/terms/employee/:empId/paid', termsEdit, payrollPaidController.save);
+
+// ─── «Расчёты»: удержания по видам и справочник видов ────────────────────────
+router.get('/deduction-kinds', deductionKindsView, payrollDeductionsController.listKinds);
+router.post('/deduction-kinds', paymentsEdit, payrollDeductionsController.addKind);
+router.get('/deductions', paymentsView, payrollDeductionsController.list);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

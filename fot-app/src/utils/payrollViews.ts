@@ -16,7 +16,7 @@ const TERMS_VIEWS: IPaymentsViewOption[] = [
   { key: 'details', label: 'Подробно' },
 ];
 
-const CALC_VIEWS: IPaymentsViewOption[] = [{ key: 'calc', label: 'Расчёт и выплаты' }];
+const CALC_VIEWS: IPaymentsViewOption[] = [{ key: 'calc', label: 'Расчёты' }];
 
 const ADMIN_VIEWS: IPaymentsViewOption[] = [{ key: 'admin', label: 'Администрирование' }];
 

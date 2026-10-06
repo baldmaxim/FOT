@@ -244,6 +244,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
   // «Оплачено» по месяцам в карточке (миграция 295): изменённые ячейки с суммами.
   PAYROLL_PAID_AMOUNTS_SAVED: 'PAYROLL_PAID_AMOUNTS_SAVED',
+  // Справочник видов удержаний (миграция 299): добавленный вид.
+  PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
   // Персональный доступ к разделу «Зарплата» (миграция 288): было → стало (view | edit | null).
   PAYROLL_ACCESS_CHANGED: 'PAYROLL_ACCESS_CHANGED',
 } as const;

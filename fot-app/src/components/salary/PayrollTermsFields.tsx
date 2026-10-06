@@ -6,6 +6,7 @@ import {
   type PayrollCalcType,
   type StaffCategory,
 } from '../../services/payrollService';
+import { usePayrollDeductionKinds } from '../../hooks/usePayrollDeductionKinds';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
 import {
   payrollFieldId,
@@ -33,9 +34,6 @@ const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: stri
   { field: 'housing', label: 'Проживание, ₽/мес' },
   { field: 'travel', label: 'Проезд, ₽/мес' },
 ];
-
-/** Виды удержания. Пока только выбор на экране: в запрос сохранения не входит. */
-const DEDUCTION_KINDS = ['Спец.одежда', 'Штрафы'] as const;
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
@@ -107,7 +105,9 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
     );
   };
 
-  const deductionKindId = `${idPrefix}-deduction-kind`;
+  const deductionKinds = usePayrollDeductionKinds();
+  const deductionKindError = form.fieldErrors.deductionKind;
+  const deductionKindId = fieldId('deductionKind');
 
   return (
     <div className={styles.form}>
@@ -219,15 +219,24 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <div className={styles.halves}>
           <div className={styles.half}>
             <div className={styles.row}>
-              {/* Неуправляемый: выбор не хранится и не сохраняется, при новом открытии окна снова «—». */}
+              {/* Вид — из справочника «Расчётов», сохраняется вместе с суммой. */}
               <div className={styles.field}>
                 <label htmlFor={deductionKindId} className={styles.label}>Вид</label>
-                <select id={deductionKindId} className={styles.control} defaultValue="" disabled={readOnly}>
+                <select
+                  id={deductionKindId}
+                  className={styles.control}
+                  value={form.deductionKindId}
+                  disabled={readOnly}
+                  aria-invalid={deductionKindError ? true : undefined}
+                  aria-describedby={deductionKindError ? `${deductionKindId}-error` : undefined}
+                  onChange={event => form.changeDeductionKind(event.target.value)}
+                >
                   <option value="">—</option>
-                  {DEDUCTION_KINDS.map(kind => (
-                    <option key={kind} value={kind}>{kind}</option>
+                  {(deductionKinds.data ?? []).map(kind => (
+                    <option key={kind.id} value={String(kind.id)}>{kind.name}</option>
                   ))}
                 </select>
+                {deductionKindError && <p id={`${deductionKindId}-error`} className={styles.error}>{deductionKindError}</p>}
               </div>
               {renderMoney('deduction', 'Сумма, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
             </div>

@@ -15,8 +15,10 @@ const keys = (canTerms: boolean, canCalc: boolean, canAdmin: boolean) => (
 );
 
 describe('экраны вкладки «Выплаты» по правам', () => {
-  it('весь раздел: Условия оплаты · Подробно · Расчёт и выплаты · Администрирование', () => {
+  it('весь раздел: Условия оплаты · Подробно · Расчёты · Администрирование', () => {
     expect(keys(true, true, true)).toEqual(['terms', 'details', 'calc', 'admin']);
+    expect(paymentsViewOptions(true, true, true).map(option => option.label))
+      .toEqual(['Условия оплаты', 'Подробно', 'Расчёты', 'Администрирование']);
   });
 
   it('условия оплаты и расчёт без администрирования', () => {

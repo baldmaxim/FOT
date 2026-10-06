@@ -52,6 +52,8 @@ export interface IPayrollTermsRow {
   communication_compensation?: string | number | null;
   /** Ежемесячное удержание, ₽/мес. */
   deduction_amount?: string | number | null;
+  /** Вид удержания из справочника; задан вместе с суммой. Поля нет у старого бэкенда. */
+  deduction_kind_id?: number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -107,6 +109,8 @@ export interface IAssignTermsPayload {
   travel_compensation?: number;
   communication_compensation?: number;
   deduction_amount?: number;
+  /** Вид удержания — только вместе с deduction_amount. */
+  deduction_kind_id?: number;
   staff_units?: number;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
@@ -280,6 +284,18 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.cf) search.set('cf', params.cf);
 };
 
+/** Вид удержания из справочника («Расчёты»). */
+export interface IPayrollDeductionKind {
+  id: number;
+  name: string;
+}
+
+/** «Расчёты»: строка списка условий у сотрудника с видом удержания. */
+export interface IPayrollDeductionsResult {
+  rows: IPayrollTermsRow[];
+  meta: { date: string; contractors_excluded: boolean };
+}
+
 export interface IPayrollTermsListResult {
   rows: IPayrollTermsRow[];
   meta: IPayrollTermsListMeta;
@@ -372,6 +388,32 @@ export const payrollService = {
       `/payroll/terms/employee/${employeeId}/paid`,
       { cells },
     );
+    return res.data;
+  },
+
+  /** «Расчёты»: сотрудники с удержанием на дату, по ФИО. */
+  listDeductions: async (
+    params: Pick<IPayrollTermsViewParams, 'date' | 'departmentId' | 'q'>,
+    signal?: AbortSignal,
+  ): Promise<IPayrollDeductionsResult> => {
+    const search = new URLSearchParams();
+    appendViewParams(search, params);
+    const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]> & { meta: IPayrollDeductionsResult['meta'] }>(
+      `/payroll/deductions?${search.toString()}`,
+      { signal },
+    );
+    return { rows: res.data, meta: res.meta };
+  },
+
+  /** Справочник видов удержаний — в порядке столбцов «Расчётов». */
+  listDeductionKinds: async (signal?: AbortSignal): Promise<IPayrollDeductionKind[]> => {
+    const res = await apiClient.get<IApiResponse<IPayrollDeductionKind[]>>('/payroll/deduction-kinds', { signal });
+    return res.data;
+  },
+
+  /** Добавить вид удержания; такой уже есть — ApiError 409. */
+  addDeductionKind: async (name: string): Promise<IPayrollDeductionKind> => {
+    const res = await apiClient.post<IApiResponse<IPayrollDeductionKind>>('/payroll/deduction-kinds', { name });
     return res.data;
   },
 

@@ -84,6 +84,11 @@ export const usePayrollTermsForm = ({
     clearError(SUPPLEMENT_FIELD_KEYS[field]);
   };
 
+  const changeDeductionKind = (value: string) => {
+    setValues(prev => ({ ...prev, deductionKindId: value }));
+    clearError('deductionKind');
+  };
+
   const setEffectiveFrom = (value: string) => {
     setValues(prev => ({ ...prev, effectiveFrom: value }));
     clearError('effectiveFrom');
@@ -113,6 +118,7 @@ export const usePayrollTermsForm = ({
     setAmount,
     changeMoney,
     changeSupplement,
+    changeDeductionKind,
     setEffectiveFrom,
     buildPayload,
     isChanged,
