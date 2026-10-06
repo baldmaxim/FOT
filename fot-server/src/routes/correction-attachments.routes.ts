@@ -28,6 +28,13 @@ router.get(
   correctionAttachmentsController.list,
 );
 
+// GET /api/timesheet/corrections/:id/source-request — кто и когда согласовал заявление
+router.get(
+  '/:id/source-request',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/employee/requests'], 'view'),
+  correctionAttachmentsController.sourceRequest,
+);
+
 // POST /api/timesheet/corrections/:id/attachments (multipart `file`)
 router.post(
   '/:id/attachments',

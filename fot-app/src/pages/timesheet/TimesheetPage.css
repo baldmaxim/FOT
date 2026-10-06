@@ -2276,6 +2276,16 @@
   color: var(--text-tertiary);
 }
 
+/* Кто и когда согласовал заявление, из которого получена корректировка. */
+.ts-correction-view-approval {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ts-correction-view-approval__label {
+  color: var(--success, #15803d);
+}
+
 /* Бейдж статуса корректировки (страница «Корректировки», #8): эмодзи + подпись pill */
 .ts-status-badge {
   display: inline-flex;

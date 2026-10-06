@@ -23,9 +23,11 @@ vi.mock('../services/r2.service.js', () => ({ r2Service: r2Mock }));
 vi.mock('../utils/file-validation.utils.js', () => ({ sanitizeFileName: (s: string) => s }));
 vi.mock('../utils/multer-filename.utils.js', () => ({ decodeMulterFilename: (s: string) => s }));
 
-const { loadAdjustmentsByIdsMock, createForManyMock } = vi.hoisted(() => ({
+const { loadAdjustmentsByIdsMock, createForManyMock, loadByIdMock, sourceRequestMock } = vi.hoisted(() => ({
   loadAdjustmentsByIdsMock: vi.fn(),
   createForManyMock: vi.fn(),
+  loadByIdMock: vi.fn(),
+  sourceRequestMock: vi.fn(),
 }));
 vi.mock('../services/correction-attachments.service.js', () => ({
   createCorrectionAttachment: vi.fn(),
@@ -33,8 +35,11 @@ vi.mock('../services/correction-attachments.service.js', () => ({
   deleteCorrectionAttachment: vi.fn(),
   listCorrectionAttachments: vi.fn(),
   loadAdjustmentsByIds: loadAdjustmentsByIdsMock,
-  loadCorrectionAdjustmentById: vi.fn(),
+  loadCorrectionAdjustmentById: loadByIdMock,
   loadCorrectionDocumentEmployeeIds: vi.fn(),
+}));
+vi.mock('../services/correction-source-request.service.js', () => ({
+  loadCorrectionSourceRequest: sourceRequestMock,
 }));
 
 import { correctionAttachmentsController } from './correction-attachments.controller.js';
@@ -110,5 +115,54 @@ describe('correctionAttachmentsController.uploadBulk', () => {
     expect(createForManyMock).toHaveBeenCalledTimes(1);
     expect(createForManyMock.mock.calls[0][0]).toMatchObject({ adjustmentIds: [1, 2], employeeId: 10 });
     expect((res.body as { data: { id: number } }).data.id).toBe(777);
+  });
+});
+
+describe('correctionAttachmentsController.sourceRequest', () => {
+  const makeIdReq = (id: string): never => ({ params: { id }, user: { id: 'viewer' } } as never);
+
+  it('400 на некорректный id', async () => {
+    const res = makeRes();
+    await correctionAttachmentsController.sourceRequest(makeIdReq('abc'), res);
+    expect(res.statusCode).toBe(400);
+    expect(sourceRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('404, если корректировки нет', async () => {
+    loadByIdMock.mockResolvedValue(null);
+    const res = makeRes();
+    await correctionAttachmentsController.sourceRequest(makeIdReq('5'), res);
+    expect(res.statusCode).toBe(404);
+    expect(sourceRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('403 на сотрудника вне скоупа', async () => {
+    loadByIdMock.mockResolvedValue({ id: 5, employee_id: 10, work_date: '2026-08-08', source_type: 'manual_object', source_id: 'obj' });
+    accessMock.mockResolvedValue(false);
+    const res = makeRes();
+    await correctionAttachmentsController.sourceRequest(makeIdReq('5'), res);
+    expect(res.statusCode).toBe(403);
+    expect(sourceRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('отдаёт согласующего и время', async () => {
+    loadByIdMock.mockResolvedValue({ id: 5, employee_id: 10, work_date: '2026-08-08', source_type: 'manual_object', source_id: 'obj' });
+    sourceRequestMock.mockResolvedValue({ id: 6466, reviewed_at: '2026-08-17T14:08:17.964Z', reviewer_name: 'Боюкян Микаел Варужанович' });
+    const res = makeRes();
+    await correctionAttachmentsController.sourceRequest(makeIdReq('5'), res);
+    expect(res.statusCode).toBe(200);
+    expect(sourceRequestMock).toHaveBeenCalledWith(5);
+    expect(res.body).toEqual({
+      success: true,
+      data: { id: 6466, reviewed_at: '2026-08-17T14:08:17.964Z', reviewer_name: 'Боюкян Микаел Варужанович' },
+    });
+  });
+
+  it('data: null, если корректировка не из заявления', async () => {
+    loadByIdMock.mockResolvedValue({ id: 5, employee_id: 10, work_date: '2026-08-08', source_type: 'manual', source_id: 'manual' });
+    sourceRequestMock.mockResolvedValue(null);
+    const res = makeRes();
+    await correctionAttachmentsController.sourceRequest(makeIdReq('5'), res);
+    expect(res.body).toEqual({ success: true, data: null });
   });
 });

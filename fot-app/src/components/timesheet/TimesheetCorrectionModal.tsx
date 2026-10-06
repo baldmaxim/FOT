@@ -9,6 +9,7 @@ import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { TravelSegmentsPanel } from './TravelSegmentsPanel';
 import { CorrectionAttachments } from './CorrectionAttachments';
+import { CorrectionSourceRequestLine } from './CorrectionSourceRequestLine';
 import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 import {
   buildDisplayItems,
@@ -710,6 +711,13 @@ const CorrectionTab: FC<{
             ) : (
               <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
             )
+          )}
+          {correctionInfo?.adjustment_id != null && (
+            <CorrectionSourceRequestLine
+              adjustmentId={correctionInfo.adjustment_id}
+              updatedAt={correctionInfo.corrected_at}
+              formatDate={formatCorrectionDate}
+            />
           )}
 
           {/* Companion: согласованный выход в выходной (read-only), поверх которого лежит удалёнка. */}
@@ -1415,6 +1423,13 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
                   {entry.corrected_by_name && entry.corrected_at && ', '}
                   {entry.corrected_at && formatCorrectionDate(entry.corrected_at)}
                 </div>
+              )}
+              {entry.adjustment_id != null && (
+                <CorrectionSourceRequestLine
+                  adjustmentId={entry.adjustment_id}
+                  updatedAt={entry.corrected_at}
+                  formatDate={formatCorrectionDate}
+                />
               )}
             </div>
           );

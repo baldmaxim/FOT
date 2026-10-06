@@ -15,6 +15,7 @@ import {
   loadCorrectionAdjustmentById,
   loadCorrectionDocumentEmployeeIds,
 } from '../services/correction-attachments.service.js';
+import { loadCorrectionSourceRequest } from '../services/correction-source-request.service.js';
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -324,9 +325,28 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/** Согласованное заявление, из которого получена корректировка (или null). */
+const sourceRequest = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const adjustmentId = parseAdjustmentId(req.params.id);
+    if (adjustmentId == null) {
+      res.status(400).json({ success: false, error: 'Некорректный id корректировки' });
+      return;
+    }
+    const adj = await ensureAdjustmentAccess(req, res, adjustmentId);
+    if (!adj) return;
+
+    res.json({ success: true, data: await loadCorrectionSourceRequest(adj.id) });
+  } catch (err) {
+    console.error('correction-attachments.sourceRequest error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения заявления корректировки' });
+  }
+};
+
 export const correctionAttachmentsController = {
   list,
   upload,
   uploadBulk,
   remove,
+  sourceRequest,
 };

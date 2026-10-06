@@ -12,6 +12,13 @@ export interface ICorrectionAttachment {
   preview_url: string;
 }
 
+/** Согласованное заявление, из которого получена корректировка. */
+export interface ICorrectionSourceRequest {
+  id: number;
+  reviewed_at: string;
+  reviewer_name: string | null;
+}
+
 interface IApiResponse<T> {
   data?: T;
   error?: string;
@@ -24,6 +31,14 @@ export const correctionAttachmentsService = {
     );
     if (!res.data) throw new Error(res.error || 'Ошибка получения файлов');
     return res.data;
+  },
+
+  async getSourceRequest(adjustmentId: number): Promise<ICorrectionSourceRequest | null> {
+    const res = await apiClient.get<IApiResponse<ICorrectionSourceRequest | null>>(
+      `/timesheet/corrections/${adjustmentId}/source-request`,
+    );
+    if (res.error) throw new Error(res.error);
+    return res.data ?? null;
   },
 
   async upload(adjustmentId: number, file: File): Promise<ICorrectionAttachment> {
