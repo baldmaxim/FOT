@@ -38,9 +38,9 @@ describe('parsePaidAmount', () => {
 });
 
 describe('статьи', () => {
-  it('21 статья без повторов, минус только у перерасчёта', () => {
-    expect(PAYROLL_PAID_ITEMS).toHaveLength(21);
-    expect(new Set(PAYROLL_PAID_ITEMS.map(item => item.code)).size).toBe(21);
+  it('16 статей без повторов, минус только у перерасчёта', () => {
+    expect(PAYROLL_PAID_ITEMS).toHaveLength(16);
+    expect(new Set(PAYROLL_PAID_ITEMS.map(item => item.code)).size).toBe(16);
     expect(PAYROLL_PAID_ITEMS.filter(item => item.allowNegative).map(item => item.code)).toEqual(['recalc_prev']);
   });
 
@@ -49,22 +49,20 @@ describe('статьи', () => {
     expect(kindOf('writ_deduction')).toBe('deducted');
     expect(kindOf('loan')).toBe('accrued');
     expect(kindOf('housing')).toBe('accrued');
-    expect(kindOf('bank_transfer')).toBe('paid');
   });
 });
 
 describe('paidTotals', () => {
   const totals = (months: string[], values: Record<string, string>) => paidTotals(months, key => values[key] ?? '');
 
-  it('бр. Менгбоев, июль, Абдужабборов: начислено − удержано = на Л/С (остаток −0,24 — округление)', () => {
+  it('бр. Менгбоев, июль, Абдужабборов: начислено и удержано', () => {
     const { byMonth } = totals(['2026-07'], {
       [paidCellKey('2026-07', 'contract')]: '89 176,14',
       [paidCellKey('2026-07', 'housing')]: '160',
       [paidCellKey('2026-07', 'meals')]: '5 248',
       [paidCellKey('2026-07', 'workwear')]: '3 050,51',
-      [paidCellKey('2026-07', 'bank_transfer')]: '81 037,87',
     });
-    expect(byMonth['2026-07']).toEqual({ accrued: 89336.14, deducted: 8298.51, paid: 81037.87 });
+    expect(byMonth['2026-07']).toEqual({ accrued: 89336.14, deducted: 8298.51 });
   });
 
   it('Тендерный отдел, август, Карамышев: удержаний нет — «—», не 0', () => {
@@ -72,11 +70,8 @@ describe('paidTotals', () => {
       [paidCellKey('2026-08', 'contract')]: '68 095',
       [paidCellKey('2026-08', 'vacation')]: '59 245',
       [paidCellKey('2026-08', 'travel')]: '1 430',
-      [paidCellKey('2026-08', 'advance')]: '13 464,19',
-      [paidCellKey('2026-08', 'bank_transfer')]: '56 155,17',
-      [paidCellKey('2026-08', 'bonus_payout')]: '39 903',
     });
-    expect(byMonth['2026-08']).toEqual({ accrued: 128770, deducted: null, paid: 109522.36 });
+    expect(byMonth['2026-08']).toEqual({ accrued: 128770, deducted: null });
   });
 
   it('займ прибавляется, минусовой перерасчёт уменьшает, исп. лист — в удержано', () => {
@@ -86,7 +81,7 @@ describe('paidTotals', () => {
       [paidCellKey('2026-08', 'recalc_prev')]: '-1 500,50',
       [paidCellKey('2026-08', 'writ_deduction')]: '7 000',
     });
-    expect(byMonth['2026-08']).toEqual({ accrued: 118499.5, deducted: 7000, paid: null });
+    expect(byMonth['2026-08']).toEqual({ accrued: 118499.5, deducted: 7000 });
   });
 
   it('минус не у перерасчёта и кривые ячейки в итог не идут', () => {
@@ -94,19 +89,19 @@ describe('paidTotals', () => {
       [paidCellKey('2026-08', 'contract')]: '-100',
       [paidCellKey('2026-08', 'bonus')]: 'abc',
       [paidCellKey('2026-08', 'writ_deduction')]: '-100',
-      [paidCellKey('2026-08', 'advance')]: '1,005',
+      [paidCellKey('2026-08', 'meals')]: '1,005',
     });
-    expect(byMonth['2026-08']).toEqual({ accrued: null, deducted: null, paid: null });
+    expect(byMonth['2026-08']).toEqual({ accrued: null, deducted: null });
   });
 
   it('итог окна — сумма месяцев; пустые месяцы — «—»; копейки без ошибки float', () => {
     const { byMonth, overall } = totals(['2026-06', '2026-07', '2026-08'], {
-      [paidCellKey('2026-07', 'advance')]: '0,1',
-      [paidCellKey('2026-08', 'advance')]: '0,2',
-      [paidCellKey('2026-08', 'meals')]: '0',
+      [paidCellKey('2026-07', 'meals')]: '0,1',
+      [paidCellKey('2026-08', 'meals')]: '0,2',
+      [paidCellKey('2026-08', 'workwear')]: '0',
     });
-    expect(byMonth['2026-06']).toEqual({ accrued: null, deducted: null, paid: null });
-    expect(overall).toEqual({ accrued: null, deducted: 0, paid: 0.3 });
+    expect(byMonth['2026-06']).toEqual({ accrued: null, deducted: null });
+    expect(overall).toEqual({ accrued: null, deducted: 0.3 });
   });
 
   it('считает по тому, что сейчас в ячейке (несохранённая правка поверх сохранённой)', () => {

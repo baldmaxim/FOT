@@ -26,22 +26,9 @@ interface IPayrollTermsFieldsProps {
   paid?: ReactNode;
   /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
-  /**
-   * «Связь» в «Удержании» — сверхтраты по МТС за месяц, только чтение (не сохраняется).
-   * Не передан — поля нет (окно «Назначить выделенным»: сумма у каждого своя).
-   */
-  communication?: IPayrollCommunicationField;
 }
 
-export interface IPayrollCommunicationField {
-  label: string;
-  /** Сумма или состояние: «…», «нет SIM», «нет данных МТС», «ошибка загрузки». */
-  value: string;
-  /** Не удалось загрузить — текст красным. */
-  error?: boolean;
-}
-
-/** «Компенсация» в одну строку — в порядке на экране. «Связь» — в «Удержании», из МТС. */
+/** «Компенсация» в одну строку — в порядке на экране. */
 const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> = [
   { field: 'housing', label: 'Проживание, ₽/мес' },
   { field: 'travel', label: 'Проезд, ₽/мес' },
@@ -65,7 +52,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   autoFocus = false,
   paid,
   stacked = false,
-  communication,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
 
@@ -122,7 +108,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   };
 
   const deductionKindId = `${idPrefix}-deduction-kind`;
-  const communicationId = `${idPrefix}-communication`;
 
   return (
     <div className={styles.form}>
@@ -245,19 +230,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                 </select>
               </div>
               {renderMoney('deduction', 'Сумма, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
-              {communication && (
-                <div className={styles.field}>
-                  <label htmlFor={communicationId} className={styles.label}>{communication.label}</label>
-                  <input
-                    id={communicationId}
-                    className={communication.error
-                      ? `${styles.control} ${styles.controlComputed} ${styles.controlComputedError}`
-                      : `${styles.control} ${styles.controlComputed}`}
-                    value={communication.value}
-                    readOnly
-                  />
-                </div>
-              )}
             </div>
           </div>
         </div>

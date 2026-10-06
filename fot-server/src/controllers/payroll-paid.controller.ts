@@ -36,7 +36,7 @@ const cellSchema = z.object({
   amount: amountSchema.nullable(),
 });
 
-/** Таблица карточки — 21 статья × 6 месяцев; запас на случай окна шире. */
+/** Таблица карточки — 16 статей × месяц; запас на случай окна шире. */
 const MAX_CELLS = 200;
 
 const saveBodySchema = z.object({

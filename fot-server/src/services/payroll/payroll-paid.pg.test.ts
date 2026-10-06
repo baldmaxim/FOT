@@ -70,9 +70,11 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
     `);
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
+    await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
     // Повторный запуск безопасен.
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
+    await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
   });
 
   afterAll(async () => {
@@ -113,18 +115,42 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
     expect((await rows(2)).map(row => row.item_code)).toEqual(['recalc_prev']);
   });
 
-  it('статьи удержаний и выплат (297) принимаются, чужой код и минус — нет', async () => {
+  it('статьи удержаний (297) принимаются, чужой код и минус — нет', async () => {
     expect(await save(3, [
       { month: '2026-07', item: 'housing', amount: 160 },
       { month: '2026-07', item: 'meals', amount: 5248 },
       { month: '2026-07', item: 'writ_deduction', amount: 1000 },
-      { month: '2026-07', item: 'bank_transfer', amount: 81037.87 },
-    ])).toBe(4);
+    ])).toBe(3);
 
     await expect(pg.pool!.query(
       `INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES (3, '2026-07-01', 'kpi', 1)`,
     )).rejects.toThrow(/payroll_paid_item_code/);
-    await expect(save(3, [{ month: '2026-07', item: 'advance', amount: -1 }])).rejects.toThrow(/payroll_paid_amount_sign/);
+    await expect(save(3, [{ month: '2026-07', item: 'fines', amount: -1 }])).rejects.toThrow(/payroll_paid_amount_sign/);
+  });
+
+  it('298: суммы «Выплачено» и «Моб. телефон» удалены, остальные — на месте; новые не вставить', async () => {
+    // CHECK 297 — чтобы вставить строки, которые были на проде до 298.
+    await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
+    await pg.pool!.query(`
+      INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
+        (1, '2026-05-01', 'contract',      68095),
+        (1, '2026-05-01', 'meals',          5248),
+        (1, '2026-05-01', 'fss',            1000),
+        (1, '2026-05-01', 'advance',       13464.19),
+        (1, '2026-05-01', 'bank_transfer', 56155.17),
+        (1, '2026-05-01', 'bonus_payout',  39903),
+        (1, '2026-05-01', 'mobile',          610)
+    `);
+    await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
+
+    const left = await pg.pool!.query<{ item_code: string }>(
+      `SELECT item_code FROM payroll_paid_amounts WHERE employee_id = 1 AND month = '2026-05-01' ORDER BY item_code`,
+    );
+    expect(left.rows.map(row => row.item_code)).toEqual(['contract', 'meals']);
+    await expect(pg.pool!.query(
+      `INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES (1, '2026-05-01', 'advance', 1)`,
+    )).rejects.toThrow(/payroll_paid_item_code/);
+    await pg.pool!.query(`DELETE FROM payroll_paid_amounts WHERE employee_id = 1 AND month = '2026-05-01'`);
   });
 
   it('месяц — только первое число', async () => {

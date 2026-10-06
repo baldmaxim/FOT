@@ -10,7 +10,7 @@ export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
 const keyMonth = (key: string): string => key.slice(0, 7);
 
 /**
- * «Оплачено» в карточке сотрудника: сохранённые суммы за месяцы окна и правки ячеек.
+ * «Оплачено» в карточке сотрудника: сохранённые суммы за месяцы (в карточке — один выбранный) и правки ячеек.
  * Хранятся только тронутые ячейки (значение = правка ?? сохранённое): поздний ответ
  * сервера не затирает введённое. Пока суммы не загружены, править нечего — ввод недоступен.
  * Окно сдвинули (выбрали другой месяц) — правки месяцев, ушедших из окна, сбрасываются:
@@ -71,7 +71,7 @@ export const usePayrollPaid = (employeeId: number, months: string[]) => {
     return { changes: result.changes, firstInvalid: result.invalidKeys[0] ?? null };
   };
 
-  // 21 статья × 6 месяцев — пересчёт на каждый рендер дешевле мемоизации по правкам.
+  // 16 статей × месяц — пересчёт на каждый рендер дешевле мемоизации по правкам.
   const totals = paidTotals(months, cellValue);
   const expand = () => setExpanded(true);
   const toggleExpanded = () => setExpanded(prev => !prev);

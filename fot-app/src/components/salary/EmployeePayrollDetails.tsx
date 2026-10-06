@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -14,11 +14,11 @@ import {
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
-import { formatAccrualMonthLabel, formatAccrualPeriodLong, payrollAccrualMonths } from '../../utils/payrollAccruals';
-import { formatPaidAmount, paidCellId } from '../../utils/payrollPaid';
+import { formatAccrualMonthLabel } from '../../utils/payrollAccruals';
+import { paidCellId } from '../../utils/payrollPaid';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { PayrollPaidTable } from './PayrollPaidTable';
-import { PayrollTermsFields, type IPayrollCommunicationField } from './PayrollTermsFields';
+import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { SalaryHistorySection } from './SalaryHistorySection';
 import styles from './EmployeePayrollDetails.module.css';
@@ -50,7 +50,7 @@ interface ISaveVariables {
  * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
  * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
  * отдельно, её ошибки форму не блокируют. «Сохранить» пишет и условия, и «Оплачено» — что из них правили.
- * Месяц у ФИО задаёт окно «Оплачено» (6 месяцев по выбранный) и месяц «Связи»; условия от него не зависят.
+ * Месяц у ФИО задаёт месяц «Оплачено»; условия от него не зависят.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -81,14 +81,8 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     () => Array.from({ length: MONTH_OPTION_COUNT }, (_, index) => shiftMonth(currentMonth, -index)),
     [currentMonth],
   );
-  // 6 месяцев, последний — выбранный.
-  const paidMonths = useMemo(() => payrollAccrualMonths(`${shiftMonth(month, 1)}-01`), [month]);
+  const paidMonths = useMemo(() => [month], [month]);
   const paid = usePayrollPaid(row.employee_id, paidMonths);
-  // Префикс 'payroll-terms': сохранение карточки перечитает и связь.
-  const communicationQuery = useQuery({
-    queryKey: ['payroll-terms', 'communication', row.employee_id, month],
-    queryFn: ({ signal }) => payrollService.getCommunication(row.employee_id, month, signal),
-  });
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
@@ -129,21 +123,6 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     flushSync(() => paid.expand());
     document.getElementById(paidCellId(idPrefix, key))?.focus();
   };
-
-  const communication: IPayrollCommunicationField = {
-    // «Сверх тарифа» — сумма меньше «Расхода» в панели МТС: абонплату и услуги платит компания.
-    label: `Связь сверх тарифа за ${formatAccrualPeriodLong([month])}, ₽`,
-    value: '…',
-  };
-  if (communicationQuery.isError) {
-    communication.value = 'ошибка загрузки';
-    communication.error = true;
-  } else if (communicationQuery.data) {
-    const { sims, amount } = communicationQuery.data;
-    if (sims === 0) communication.value = 'нет SIM';
-    else if (amount === null) communication.value = 'нет данных МТС';
-    else communication.value = formatPaidAmount(Number(amount));
-  }
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -197,7 +176,6 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           autoFocus={canEdit}
           paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} readOnly={!canEdit} />}
           stacked
-          communication={communication}
         />
 
         <div className={styles.reference}>

@@ -1,8 +1,8 @@
 /**
- * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяцы
- * столбцами. Статьи — в трёх разделах ведомости: начислено (1), удержано (3), выплачено (8).
+ * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяц
+ * столбцом. Статьи — в двух разделах ведомости: начислено (1) и удержано (3).
  * Суммы вносятся вручную; пустая ячейка — суммы нет.
- * Коды статей — те же, что в CHECK миграции 297 и в payroll-paid.service.ts на сервере.
+ * Коды статей — те же, что в CHECK миграции 298 и в payroll-paid.service.ts на сервере.
  */
 import type { IPayrollPaidAmount, IPayrollPaidChange, PayrollPaidItemCode } from '../services/payrollService';
 
@@ -14,7 +14,7 @@ export interface IPayrollPaidItem {
 }
 
 /** Итог, в который идёт группа: раздел ведомости ЗУП. */
-export type PayrollPaidTotalKind = 'accrued' | 'deducted' | 'paid';
+export type PayrollPaidTotalKind = 'accrued' | 'deducted';
 
 export interface IPayrollPaidGroup {
   /** Подзаголовок группы в таблице; null — основные строки, без подзаголовка. */
@@ -55,19 +55,8 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'meals', label: 'Питание' }, // 3.13
       { code: 'workwear', label: 'Спецодежда' }, // 3.15
       { code: 'safety_fine', label: 'Нарушение техники безопасности' }, // 3.18
-      { code: 'mobile', label: 'Моб. телефон' }, // 3.9
       { code: 'fines', label: 'Штрафы' }, // 3.21
       { code: 'writ_deduction', label: 'Удержание по исп. листу' }, // 3.20
-    ],
-  },
-  {
-    label: 'Выплачено',
-    kind: 'paid',
-    items: [
-      { code: 'fss', label: 'Выплаты ФСС' }, // 8.2
-      { code: 'advance', label: 'Аванс' }, // 8.3
-      { code: 'bank_transfer', label: 'Выплачено на Р/С' }, // 8.4
-      { code: 'bonus_payout', label: 'Премии' }, // 8.5
     ],
   },
 ];
@@ -75,11 +64,10 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
 /** Все строки сверху вниз — порядок обхода ячеек совпадает с Tab. */
 export const PAYROLL_PAID_ITEMS: readonly IPayrollPaidItem[] = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
-/** Строки итогов — в порядке ведомости: начислено − удержано = выплачено (+ сальдо). */
+/** Строки итогов — в порядке ведомости. */
 export const PAYROLL_PAID_TOTALS: ReadonlyArray<{ kind: PayrollPaidTotalKind; label: string }> = [
   { kind: 'accrued', label: 'Начислено' },
   { kind: 'deducted', label: 'Удержано' },
-  { kind: 'paid', label: 'Выплачено' },
 ];
 
 export const paidCellKey = (month: string, item: PayrollPaidItemCode): string => `${month}:${item}`;
@@ -155,7 +143,7 @@ export const buildPaidChanges = (
 /** Итоги: null — в группе нет ни одной суммы («—»), 0 — суммы есть и дают ноль. */
 export type PayrollPaidTotals = Record<PayrollPaidTotalKind, number | null>;
 
-const EMPTY_TOTALS: PayrollPaidTotals = { accrued: null, deducted: null, paid: null };
+const EMPTY_TOTALS: PayrollPaidTotals = { accrued: null, deducted: null };
 
 /** В копейках: сумма дробных рублей в float копила бы ошибку («0,1 + 0,2»). */
 const addCents = (sum: number | null, value: number): number => (sum ?? 0) + Math.round(value * 100);
@@ -163,11 +151,10 @@ const addCents = (sum: number | null, value: number): number => (sum ?? 0) + Mat
 const centsToRub = (totals: PayrollPaidTotals): PayrollPaidTotals => ({
   accrued: totals.accrued === null ? null : totals.accrued / 100,
   deducted: totals.deducted === null ? null : totals.deducted / 100,
-  paid: totals.paid === null ? null : totals.paid / 100,
 });
 
 /**
- * Итоги «Начислено · Удержано · Выплачено» по месяцам и за всё окно — по тому, что сейчас в ячейках
+ * Итоги «Начислено · Удержано» по месяцам и за всё окно — по тому, что сейчас в ячейках
  * (с несохранёнными правками). Ячейка разбирается как при сохранении: с ошибкой (в том числе минус не
  * у перерасчёта) в итог не идёт.
  */
@@ -189,7 +176,6 @@ export const paidTotals = (
     overall = {
       accrued: cents.accrued === null ? overall.accrued : (overall.accrued ?? 0) + cents.accrued,
       deducted: cents.deducted === null ? overall.deducted : (overall.deducted ?? 0) + cents.deducted,
-      paid: cents.paid === null ? overall.paid : (overall.paid ?? 0) + cents.paid,
     };
   }
   return { byMonth, overall: centsToRub(overall) };

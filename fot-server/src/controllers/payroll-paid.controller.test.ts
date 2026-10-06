@@ -168,20 +168,26 @@ describe('«Оплачено»: сохранение', () => {
     expect(pgTx).not.toHaveBeenCalled();
   });
 
-  it('принимает статьи удержаний и выплат; минус у них — 400', async () => {
+  it('принимает статьи удержаний; минус у них — 400', async () => {
     const cells = [
       { month: '2026-07', item: 'housing', amount: 160 },
       { month: '2026-07', item: 'meals', amount: 5248 },
       { month: '2026-07', item: 'workwear', amount: 3050.51 },
-      { month: '2026-07', item: 'bank_transfer', amount: 81037.87 },
     ];
     const res = await save(cells);
     expect(res.statusCode).toBe(200);
-    expect(txClient.query.mock.calls[0][1][2]).toEqual(['housing', 'meals', 'workwear', 'bank_transfer']);
+    expect(txClient.query.mock.calls[0][1][2]).toEqual(['housing', 'meals', 'workwear']);
 
-    for (const item of ['writ_deduction', 'advance']) {
+    for (const item of ['writ_deduction', 'fines']) {
       expect((await save([{ month: '2026-07', item, amount: -100 }])).statusCode).toBe(400);
     }
+  });
+
+  it('удалённые статьи «Выплачено» и «Моб. телефон» — 400 без записи', async () => {
+    for (const item of ['fss', 'advance', 'bank_transfer', 'bonus_payout', 'mobile']) {
+      expect((await save([{ month: '2026-07', item, amount: 100 }])).statusCode).toBe(400);
+    }
+    expect(pgTx).not.toHaveBeenCalled();
   });
 
   it('текущий месяц принимается', async () => {

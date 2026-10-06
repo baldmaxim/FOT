@@ -139,6 +139,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Список берёт «Начисления» из «Оплачено».
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
+    await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
   });
 
   afterAll(async () => {
@@ -263,12 +264,11 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         (1, '2026-08-01', 'contract',      68095),
         (1, '2026-08-01', 'vacation',      59245),
         (1, '2026-08-01', 'travel',         1430),
-        (1, '2026-08-01', 'advance',       13464.19),  -- выплата — не начисление
         (1, '2026-08-01', 'meals',          5248),     -- удержание — не начисление
         (1, '2026-07-01', 'recalc_prev',   -1500),     -- сторно — минусом
         (1, '2026-03-01', 'contract',     100000),     -- до окна апр – сен
         (1, '2026-10-01', 'contract',     100000),     -- текущий месяц — не закрыт
-        (3, '2026-09-01', 'bank_transfer', 50000);     -- только выплата
+        (3, '2026-09-01', 'workwear',      50000);     -- только удержание
     `);
     const res = makeRes();
 

@@ -1,5 +1,6 @@
 /*
- * «Оплачено»: статьи строками, месяцы столбцами, итоги — внизу. Узко — таблица прокручивается вбок внутри
+ * «Оплачено»: статьи строками, месяц столбцом, итоги — внизу. Таблица по ширине содержимого, не на всю
+ * форму. Узко — таблица прокручивается вбок внутри
  * своей рамки (страница вбок не едет), подписи строк закреплены слева. Поля на касание — 16px (без автозума
  * iOS) и высотой 44px; с мышью — 14px и 34px на широком экране.
  */
@@ -31,6 +32,8 @@
 .summary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .scroll {
+  align-self: flex-start;
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border-subtle);
@@ -38,7 +41,6 @@
 }
 
 .table {
-  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -97,7 +99,7 @@
 .table tfoot tr:first-child > * { border-top: 1px solid var(--border); }
 .table .totalHead { font-weight: 600; }
 .table .total {
-  min-width: 5.75rem;
+  min-width: 10rem;
   text-align: right;
   white-space: nowrap;
   color: var(--text-primary);
@@ -105,10 +107,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-.table .cell { min-width: 5.75rem; padding: 3px 4px; }
+.table .cell { min-width: 10rem; padding: 3px 4px; }
 
 .table .value {
-  min-width: 5.75rem;
+  min-width: 10rem;
   text-align: right;
   white-space: nowrap;
   color: var(--text-primary);
