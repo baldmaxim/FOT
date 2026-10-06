@@ -52,8 +52,6 @@ export interface IPayrollTermsRow {
   communication_compensation?: string | number | null;
   /** Ежемесячное удержание, ₽/мес. */
   deduction_amount?: string | number | null;
-  /** Виды удержаний сотрудника (id справочника) — только в строках «Расчётов». */
-  deduction_kind_ids?: number[];
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -288,7 +286,7 @@ export interface IPayrollDeductionKind {
   name: string;
 }
 
-/** «Расчёты»: строки списка условий всего штата с видами удержаний. */
+/** «Расчёты»: строки списка условий у сотрудников с выбранными видами удержаний. */
 export interface IPayrollDeductionsResult {
   rows: IPayrollTermsRow[];
   meta: { date: string; contractors_excluded: boolean };
@@ -389,13 +387,13 @@ export const payrollService = {
     return res.data;
   },
 
-  /** «Расчёты»: штат на дату с видами удержаний, по ФИО. */
+  /** «Расчёты»: сотрудники хотя бы с одним из видов (kindIds не пуст), по ФИО. */
   listDeductions: async (
-    params: Pick<IPayrollTermsViewParams, 'date' | 'departmentId' | 'q'>,
+    params: { date?: string; kindIds: number[] },
     signal?: AbortSignal,
   ): Promise<IPayrollDeductionsResult> => {
-    const search = new URLSearchParams();
-    appendViewParams(search, params);
+    const search = new URLSearchParams({ kind_ids: params.kindIds.join(',') });
+    if (params.date) search.set('date', params.date);
     const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]> & { meta: IPayrollDeductionsResult['meta'] }>(
       `/payroll/deductions?${search.toString()}`,
       { signal },

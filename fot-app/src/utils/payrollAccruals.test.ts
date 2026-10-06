@@ -7,6 +7,7 @@ import {
   formatAccrualPeriodShort,
   formatAccrualsByMonth,
   payrollAccrualMonths,
+  payrollMonthOptions,
   summarizeAccruals,
 } from './payrollAccruals';
 
@@ -43,6 +44,15 @@ describe('окно начислений', () => {
   it('подпись месяца: год только в окне через границу года', () => {
     expect(formatAccrualMonthLabel('2026-05', false)).toBe('Май');
     expect(formatAccrualMonthLabel('2025-12', true)).toBe('Декабрь 2025');
+  });
+});
+
+describe('выбор месяца', () => {
+  it('текущий и 11 предыдущих, новые сверху, через границу года', () => {
+    const options = payrollMonthOptions('2026-02');
+    expect(options).toHaveLength(12);
+    expect(options.slice(0, 3)).toEqual(['2026-02', '2026-01', '2025-12']);
+    expect(options[11]).toBe('2025-03');
   });
 });
 

@@ -1,0 +1,68 @@
+/*
+ * Панель «Расчётов»: выпадающий список «Удержания» и месяц — как поиск и «Все отделы»
+ * у «Условий оплаты» (высота, рамка, шрифт). Остальное — CompensationTermsPage.module.css.
+ */
+.kindsField,
+.monthField {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.kindsButton,
+.monthSelect {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  /* ≥ 16px: Safari на телефоне не зумит список месяца при фокусе */
+  font-size: 16px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.kindsButton:hover,
+.monthSelect:hover { border-color: var(--text-muted); }
+.kindsButton:focus,
+.monthSelect:focus { outline: none; }
+.kindsButton:focus-visible,
+.monthSelect:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+
+.kindsButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  text-align: left;
+}
+.kindsValue {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kindsPlaceholder { color: var(--text-muted); }
+.chevron { flex-shrink: 0; color: var(--text-tertiary); }
+
+.monthSelect { padding: 0 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kindsButton, .monthSelect { transition: none; }
+}
+
+/* Планшет и шире: в одну строку, как поиск и подразделение у «Условий оплаты» */
+@media (min-width: 769px) {
+  .kindsField { flex: 0 0 280px; }
+  .monthField { flex: 0 0 auto; }
+  .kindsButton,
+  .monthSelect {
+    height: 36px;
+    font-size: 13px;
+  }
+  .monthSelect { min-width: 11rem; }
+}

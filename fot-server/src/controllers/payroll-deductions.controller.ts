@@ -1,10 +1,9 @@
 /**
- * «Зарплата → Расчёты»: виды удержаний сотрудников и справочник видов.
+ * «Зарплата → Расчёты»: сотрудники с выбранными видами удержаний и справочник видов.
  *
- * Список — весь штат в скоупе «Зарплаты» (как список условий оплаты: без подрядчиков, условия
- * на дату) с отмеченными видами: у каждого в столбце «Удержание» выпадающий список с галочками.
- * Строка — в формате списка условий (с плановой доплатой и can_edit): клик по ней открывает
- * ту же карточку «Подробно», где те же виды правятся в «Удержании».
+ * Список — штат в скоупе «Зарплаты» (как список условий оплаты: без подрядчиков, условия на дату),
+ * у кого отмечен хотя бы один из выбранных видов. Виды сотруднику отмечаются в карточке «Подробно».
+ * Строка — в формате списка условий (с плановой доплатой и can_edit): клик по ней открывает карточку.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -26,7 +25,13 @@ import {
 } from '../services/payroll/payroll-scope.service.js';
 import { baseQuerySchema, buildBaseCtes, buildBaseParams } from './payroll-terms.controller.js';
 
-const listQuerySchema = baseQuerySchema.pick({ date: true, department_id: true, q: true });
+/** Фильтр «Удержания»: id видов через запятую — сотрудники хотя бы с одним из них. */
+const listQuerySchema = baseQuerySchema.pick({ date: true, department_id: true, q: true }).extend({
+  kind_ids: z.string()
+    .regex(/^\d+(,\d+)*$/, 'Ожидаются id видов через запятую')
+    .transform(value => [...new Set(value.split(',').map(Number))])
+    .pipe(z.array(z.number().int().positive()).min(1).max(100)),
+});
 
 /** Пробелы внутри схлопываются: «Штраф  за мусор» и «Штраф за мусор» — один вид. */
 const addKindSchema = z.object({
@@ -39,10 +44,9 @@ const saveKindsSchema = z.object({
   kind_ids: z.array(z.coerce.number().int().positive()).max(100),
 });
 
-/** Строка «Расчётов»: колонки CTE scoped (условия на дату), доплата и виды удержаний. */
+/** Строка «Расчётов»: колонки CTE scoped (условия на дату) и последняя плановая доплата. */
 interface IPayrollDeductionRow {
   employee_id: number;
-  deduction_kind_ids: number[];
   [column: string]: unknown;
 }
 
@@ -59,18 +63,18 @@ const parseEmployeeId = (req: AuthenticatedRequest): number | null => {
   return Number.isInteger(employeeId) && employeeId > 0 ? employeeId : null;
 };
 
-/** GET /api/payroll/deductions?date&department_id&q — штат с видами удержаний, по ФИО. */
+/** GET /api/payroll/deductions?kind_ids=1,2&date — сотрудники хотя бы с одним из видов, по ФИО. */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const parsed = listQuerySchema.parse(req.query);
     const { onDate, contractorRootId, params } = await buildBaseParams(req, parsed);
+    params.push(parsed.kind_ids);
     const rows = await query<IPayrollDeductionRow>(
       `${buildBaseCtes('')}
        SELECT s.*,
               ps.amount    AS planned_supplement_amount,
               ps.date_from AS planned_supplement_from,
-              ps.date_to   AS planned_supplement_to,
-              kinds.ids    AS deduction_kind_ids
+              ps.date_to   AS planned_supplement_to
          FROM scoped s
          LEFT JOIN LATERAL (
            SELECT p.amount, p.date_from, p.date_to
@@ -79,16 +83,14 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
             ORDER BY p.id DESC
             LIMIT 1
          ) ps ON TRUE
-         CROSS JOIN LATERAL (
-           SELECT COALESCE(array_agg(d.kind_id ORDER BY k.sort_order, k.id), '{}'::int[]) AS ids
-             FROM payroll_employee_deductions d
-             JOIN payroll_deduction_kinds k ON k.id = d.kind_id
-            WHERE d.employee_id = s.employee_id
-         ) kinds
+        WHERE EXISTS (
+          SELECT 1 FROM payroll_employee_deductions d
+           WHERE d.employee_id = s.employee_id AND d.kind_id = ANY($9::int[])
+        )
         ORDER BY s.full_name ASC NULLS LAST, s.employee_id ASC`,
       params,
     );
-    // can_edit — как в списке условий: правка видов и карточки — в том же скоупе.
+    // can_edit — как в списке условий: карточка из «Расчётов» правится в том же скоупе.
     const canEditRow = await resolvePayrollEditPredicate(req);
     res.json({
       success: true,

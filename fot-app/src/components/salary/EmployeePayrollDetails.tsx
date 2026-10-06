@@ -15,7 +15,7 @@ import { usePayrollEmployeeDeductions } from '../../hooks/usePayrollEmployeeDedu
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
-import { formatAccrualMonthLabel } from '../../utils/payrollAccruals';
+import { formatAccrualMonthLabel, payrollMonthOptions } from '../../utils/payrollAccruals';
 import { paidCellId } from '../../utils/payrollPaid';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { DeductionKindsField } from './DeductionKindsField';
@@ -38,9 +38,6 @@ interface IEmployeePayrollDetailsProps {
    */
   onSaved: (employeeId: number, onScreen: boolean) => void;
 }
-
-/** Месяцев в выборе у ФИО: текущий и 11 предыдущих. */
-const MONTH_OPTION_COUNT = 12;
 
 interface ISaveVariables {
   /** null — условия не правили: новую версию условий не создаём. */
@@ -88,10 +85,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   // границу месяца без перезагрузки устарел бы. По умолчанию — прошлый, уже закрытый месяц.
   const [currentMonth] = useState(moscowCurrentMonth);
   const [month, setMonth] = useState(() => shiftMonth(currentMonth, -1));
-  const monthOptions = useMemo(
-    () => Array.from({ length: MONTH_OPTION_COUNT }, (_, index) => shiftMonth(currentMonth, -index)),
-    [currentMonth],
-  );
+  const monthOptions = useMemo(() => payrollMonthOptions(currentMonth), [currentMonth]);
   const paidMonths = useMemo(() => [month], [month]);
   const paid = usePayrollPaid(row.employee_id, paidMonths);
   const deductions = usePayrollEmployeeDeductions(row.employee_id);

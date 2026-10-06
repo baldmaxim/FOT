@@ -24,6 +24,14 @@ export const payrollAccrualMonths = (dateIso: string, count = PAYROLL_ACCRUAL_MO
   return Array.from({ length: count }, (_, index) => shiftMonth(current, index - count));
 };
 
+/** Месяцев в выборе месяца (карточка «Подробно», «Расчёты»): текущий и 11 предыдущих. */
+export const PAYROLL_MONTH_OPTION_COUNT = 12;
+
+/** Варианты выбора месяца: текущий и предыдущие, новые сверху. */
+export const payrollMonthOptions = (currentMonth: string, count = PAYROLL_MONTH_OPTION_COUNT): string[] => (
+  Array.from({ length: count }, (_, index) => shiftMonth(currentMonth, -index))
+);
+
 /** Окно захватывает два года — у каждого месяца нужен год. */
 export const accrualPeriodCrossesYear = (months: string[]): boolean => (
   months.length > 0 && monthYear(months[0]) !== monthYear(months[months.length - 1])

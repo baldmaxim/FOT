@@ -55,34 +55,29 @@ beforeEach(() => {
 });
 
 describe('payrollDeductionsController.list', () => {
-  it('весь штат в скоупе «Зарплаты» без подрядчиков, с видами удержаний и can_edit', async () => {
-    pgQuery.mockResolvedValue([
-      { employee_id: 1, deduction_kind_ids: [5, 4] },
-      { employee_id: 2, deduction_kind_ids: [] },
-    ]);
+  it('сотрудники хотя бы с одним из выбранных видов, в скоупе «Зарплаты», без подрядчиков, с can_edit', async () => {
+    pgQuery.mockResolvedValue([{ employee_id: 1 }, { employee_id: 2 }]);
     const res = makeRes();
 
-    await payrollDeductionsController.list(makeReq({ query: { date: '2026-10-06', q: '50%' } }), res);
+    await payrollDeductionsController.list(makeReq({ query: { date: '2026-10-06', kind_ids: '5,4,5' } }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual([
-      { employee_id: 1, deduction_kind_ids: [5, 4], can_edit: true },
-      { employee_id: 2, deduction_kind_ids: [], can_edit: false },
-    ]);
+    expect(res.body.data).toEqual([{ employee_id: 1, can_edit: true }, { employee_id: 2, can_edit: false }]);
     expect(res.body.meta).toEqual({ date: '2026-10-06', contractors_excluded: true });
     const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('payroll_employee_deductions');
-    expect(sql).not.toContain('deduction_kind_id IS NOT NULL');
+    expect(sql).toContain('d.kind_id = ANY($9::int[])');
     expect(params[0]).toBe('2026-10-06');
     expect(params[5]).toBe('contractor-root');
     expect(params[6]).toEqual(['dept-1']);
-    expect(params[7]).toBe('%50\\%%');
+    expect(params[8]).toEqual([5, 4]);
   });
 
-  it('кривая дата — 400 до похода в БД', async () => {
-    const res = makeRes();
-    await payrollDeductionsController.list(makeReq({ query: { date: '06.10.2026' } }), res);
-    expect(res.statusCode).toBe(400);
+  it('без видов, кривые виды или дата — 400 до похода в БД', async () => {
+    for (const query of [{}, { kind_ids: '' }, { kind_ids: 'a,b' }, { kind_ids: '0' }, { kind_ids: '5', date: '06.10.2026' }]) {
+      const res = makeRes();
+      await payrollDeductionsController.list(makeReq({ query }), res);
+      expect(res.statusCode).toBe(400);
+    }
     expect(pgQuery).not.toHaveBeenCalled();
   });
 });

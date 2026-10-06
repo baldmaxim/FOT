@@ -183,18 +183,24 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
       .rejects.toThrow(/foreign key/);
   });
 
-  it('«Расчёты» — весь штат, у каждого его виды (пусто — пустой массив)', async () => {
+  it('«Расчёты» — сотрудники хотя бы с одним из выбранных видов', async () => {
     expect((await assign(1, {})).statusCode).toBe(200);
-
-    const res = makeRes();
-    await payrollDeductionsController.list({
-      user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-06' },
-    } as unknown as AuthenticatedRequest, res);
-
-    expect(res.statusCode).toBe(200);
     const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
-    expect(res.body.data.map((row: { employee_id: number; deduction_kind_ids: number[] }) => [row.employee_id, row.deduction_kind_ids]))
-      .toEqual([[1, [byName['ТМЦ'], byName['Питание']]], [2, []], [3, []]]);
-    expect(res.body.data[0]).toMatchObject({ full_name: 'Акимов С.Ю.', calc_type: 'hourly', can_edit: true });
+    await withTransaction(client => setEmployeeDeductionKinds(client, 3, [byName['Штрафы']]));
+
+    const list = async (kindIds: number[]) => {
+      const res = makeRes();
+      await payrollDeductionsController.list({
+        user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-06', kind_ids: kindIds.join(',') },
+      } as unknown as AuthenticatedRequest, res);
+      expect(res.statusCode).toBe(200);
+      return res.body.data as Array<{ employee_id: number }>;
+    };
+
+    // У Акимова (1) — ТМЦ и Питание, у Васильева (3) — Штрафы, у Борисова (2) — ничего.
+    expect((await list([byName['Питание']])).map(row => row.employee_id)).toEqual([1]);
+    expect((await list([byName['Питание'], byName['Штрафы']])).map(row => row.employee_id)).toEqual([1, 3]);
+    expect(await list([byName['Спецодежда']])).toEqual([]);
+    expect((await list([byName['ТМЦ']]))[0]).toMatchObject({ full_name: 'Акимов С.Ю.', calc_type: 'hourly', can_edit: true });
   });
 });

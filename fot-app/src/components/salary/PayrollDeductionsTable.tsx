@@ -1,41 +1,29 @@
-import { memo, useEffect, useRef, type FC, type KeyboardEvent, type MouseEvent } from 'react';
+import { memo, useEffect, useRef, type FC, type KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown } from 'lucide-react';
 
-import type { IPayrollDeductionKind, IPayrollTermsRow } from '../../services/payrollService';
-import { formatDeductionKinds } from '../../utils/payrollDeductions';
+import type { IPayrollTermsRow } from '../../services/payrollService';
 import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollDeductionsTableProps {
   rows: IPayrollTermsRow[];
-  kinds: IPayrollDeductionKind[];
-  /** Право правки «Расчётов»; у строки ещё свой скоуп (can_edit). */
-  canEdit: boolean;
+  /** Подпись месяца под заголовком «Сумма»: «сентябрь 2026». */
+  monthLabel: string;
   /** Смена фильтра: прокрутка возвращается наверх. */
   resetKey: string;
-  /** Клик по ячейке «Удержание» — выпадающий список видов; anchor — кнопка ячейки. */
-  onOpenKinds: (row: IPayrollTermsRow, anchor: HTMLElement) => void;
   /** Клик по строке — карточка «Подробно»; не передан — строки не кликабельны (нет права на условия). */
   onOpen?: (row: IPayrollTermsRow) => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 40px, переносы ФИО и подразделения — выше. */
 const ROW_ESTIMATE = 44;
-const COLUMN_COUNT = 5;
+const COLUMN_COUNT = 4;
 
 /**
- * «Расчёты»: весь штат, у каждого в столбце «Удержание» — его виды через запятую; клик открывает
- * выпадающий список с галочками. Вид таблицы — как у «Условий оплаты» (те же стили, закреплённая
- * шапка, № и ФИО, виртуализация), без чекбоксов, сортировок и шестерёнки.
+ * «Расчёты»: сотрудники с выбранными удержаниями — ФИО, подразделение и сумма за месяц.
+ * Суммы придут из 1С, пока в столбце «—». Вид таблицы — как у «Условий оплаты» (те же стили,
+ * закреплённая шапка, № и ФИО, виртуализация), без чекбоксов, сортировок и шестерёнки.
  */
-export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({
-  rows,
-  kinds,
-  canEdit,
-  resetKey,
-  onOpenKinds,
-  onOpen,
-}) => {
+export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({ rows, monthLabel, resetKey, onOpen }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
@@ -55,19 +43,10 @@ export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({
   const lastItem = virtualItems[virtualItems.length - 1];
   const bottomSpacer = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
 
-  const openKinds = (event: MouseEvent<HTMLButtonElement>, row: IPayrollTermsRow) => {
-    // Клик по ячейке открывает список, а не карточку.
-    event.stopPropagation();
-    onOpenKinds(row, event.currentTarget);
-  };
-
   const handleRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: IPayrollTermsRow) => {
-    // Только клавиши на самой строке: Enter на кнопке «Удержания» открывает список, а не карточку.
-    if (!onOpen || event.target !== event.currentTarget) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onOpen(row);
-    }
+    if (!onOpen || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    onOpen(row);
   };
 
   return (
@@ -77,16 +56,17 @@ export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({
           <col className={styles.colNum} />
           <col className={styles.colName} />
           <col className={styles.colDept} />
-          <col className={styles.colPosition} />
-          <col className={styles.colDeductions} />
+          <col className={styles.colSum} />
         </colgroup>
         <thead>
           <tr>
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
             <th className={styles.stickyName}>Сотрудник</th>
             <th>Подразделение</th>
-            <th>Должность</th>
-            <th>Удержание</th>
+            <th>
+              Сумма
+              <span className={styles.headPeriod}>{monthLabel}</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -103,8 +83,6 @@ export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({
               )}
               {virtualItems.map(item => {
                 const row = rows[item.index];
-                const label = formatDeductionKinds(row.deduction_kind_ids ?? [], kinds);
-                const editable = canEdit && row.can_edit !== false;
                 const rowClass = [onOpen ? styles.rowClickable : '', item.index % 2 === 1 ? styles.rowEven : '']
                   .filter(Boolean).join(' ');
                 return (
@@ -123,23 +101,8 @@ export const PayrollDeductionsTable: FC<IPayrollDeductionsTableProps> = memo(({
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
                     <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>
-                    <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>
-                    <td className={styles.cellDeductions}>
-                      {editable ? (
-                        <button
-                          type="button"
-                          className={styles.kindsButton}
-                          aria-haspopup="dialog"
-                          aria-label={`Удержание: ${label || 'нет'}. Изменить`}
-                          onClick={event => openKinds(event, row)}
-                        >
-                          <span className={`${styles.kindsValue} ${styles.clamp2}`}>{label || '—'}</span>
-                          <ChevronDown size={14} className={styles.kindsChevron} aria-hidden="true" />
-                        </button>
-                      ) : (
-                        <span className={`${styles.kindsText} ${styles.clamp2}`}>{label || '—'}</span>
-                      )}
-                    </td>
+                    {/* Суммы удержаний за месяц придут из 1С. */}
+                    <td className={styles.cellNumber}>—</td>
                   </tr>
                 );
               })}

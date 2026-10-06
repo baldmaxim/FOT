@@ -204,7 +204,7 @@ router.put(
 // Отдаются только id отделов — скоуп не расширяется, дерево на клиенте всё равно режется правами.
 router.get(
   '/section-departments',
-  requireAnyPageAccess(['/staff-control', '/salary/terms', '/salary/payments', '/timesheet'], 'view'),
+  requireAnyPageAccess(['/staff-control', '/salary/terms', '/timesheet'], 'view'),
   employeesSectionDepartmentsController.getSectionDepartments
 );
 
