@@ -34,8 +34,6 @@ export interface IPayrollTerms {
   communication_compensation: number | null;
   /** Ежемесячное удержание, ₽/мес (положительное). Справочно, в расчёте пока не участвует. */
   deduction_amount: number | null;
-  /** Вид удержания из справочника (миграция 299); задан вместе с deduction_amount. */
-  deduction_kind_id: number | null;
   staff_units: number;
   time_accounting_mode: 'daily' | 'summarized';
   accounting_period_months: number | null;
@@ -64,8 +62,6 @@ export interface IAssignTermsInput {
   travelCompensation?: number | null;
   communicationCompensation?: number | null;
   deductionAmount?: number | null;
-  /** Вид удержания — вместе с суммой (CHECK payroll_terms_deduction_pair). */
-  deductionKindId?: number | null;
   staffUnits?: number;
   organizationId?: string | null;
   effectiveFrom: string;
@@ -90,7 +86,7 @@ const EXCLUSION_VIOLATION = '23P01';
 const TERMS_COLUMNS = `
   id, employee_id, organization_id, staff_category, calc_type,
   monthly_salary, hourly_rate, bonus_amount, housing_compensation,
-  travel_compensation, communication_compensation, deduction_amount, deduction_kind_id, staff_units,
+  travel_compensation, communication_compensation, deduction_amount, staff_units,
   time_accounting_mode, accounting_period_months,
   effective_from, effective_to,
   change_reason, order_number, order_date, note,
@@ -418,9 +414,9 @@ export const assignTerms = async (
           monthly_salary, hourly_rate, staff_units,
           effective_from, change_reason, order_number, order_date, note, created_by,
           bonus_amount, housing_compensation,
-          travel_compensation, communication_compensation, deduction_amount, deduction_kind_id)
+          travel_compensation, communication_compensation, deduction_amount)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 1.000), $8, $9, $10, $11, $12, $13, $14, $15,
-               $16, $17, $18, $19)
+               $16, $17, $18)
        RETURNING id`,
       [
         input.employeeId,
@@ -441,7 +437,6 @@ export const assignTerms = async (
         input.travelCompensation ?? null,
         input.communicationCompensation ?? null,
         input.deductionAmount ?? null,
-        input.deductionKindId ?? null,
       ],
     );
     return inserted.rows[0].id;

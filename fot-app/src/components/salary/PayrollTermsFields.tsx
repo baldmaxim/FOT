@@ -6,7 +6,6 @@ import {
   type PayrollCalcType,
   type StaffCategory,
 } from '../../services/payrollService';
-import { usePayrollDeductionKinds } from '../../hooks/usePayrollDeductionKinds';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
 import {
   payrollFieldId,
@@ -27,6 +26,11 @@ interface IPayrollTermsFieldsProps {
   paid?: ReactNode;
   /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
+  /**
+   * «Вид» в «Удержании» — виды удержаний сотрудника (только в карточке). Не передан — поля нет:
+   * в «Назначить выделенным» виды у каждого свои.
+   */
+  deductionKinds?: ReactNode;
 }
 
 /** «Компенсация» в одну строку — в порядке на экране. */
@@ -50,6 +54,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   autoFocus = false,
   paid,
   stacked = false,
+  deductionKinds,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
 
@@ -104,10 +109,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
       </div>
     );
   };
-
-  const deductionKinds = usePayrollDeductionKinds();
-  const deductionKindError = form.fieldErrors.deductionKind;
-  const deductionKindId = fieldId('deductionKind');
 
   return (
     <div className={styles.form}>
@@ -219,25 +220,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <div className={styles.halves}>
           <div className={styles.half}>
             <div className={styles.row}>
-              {/* Вид — из справочника «Расчётов», сохраняется вместе с суммой. */}
-              <div className={styles.field}>
-                <label htmlFor={deductionKindId} className={styles.label}>Вид</label>
-                <select
-                  id={deductionKindId}
-                  className={styles.control}
-                  value={form.deductionKindId}
-                  disabled={readOnly}
-                  aria-invalid={deductionKindError ? true : undefined}
-                  aria-describedby={deductionKindError ? `${deductionKindId}-error` : undefined}
-                  onChange={event => form.changeDeductionKind(event.target.value)}
-                >
-                  <option value="">—</option>
-                  {(deductionKinds.data ?? []).map(kind => (
-                    <option key={kind.id} value={String(kind.id)}>{kind.name}</option>
-                  ))}
-                </select>
-                {deductionKindError && <p id={`${deductionKindId}-error`} className={styles.error}>{deductionKindError}</p>}
-              </div>
+              {deductionKinds}
               {renderMoney('deduction', 'Сумма, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
             </div>
           </div>

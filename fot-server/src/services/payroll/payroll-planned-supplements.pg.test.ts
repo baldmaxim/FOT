@@ -100,7 +100,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
-        payroll_compensation_terms, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
+        payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
@@ -140,8 +140,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
     await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
-    // Список читает вид удержания.
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
+    await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
   });
 
   afterAll(async () => {

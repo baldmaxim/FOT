@@ -246,6 +246,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_PAID_AMOUNTS_SAVED: 'PAYROLL_PAID_AMOUNTS_SAVED',
   // Справочник видов удержаний (миграция 299): добавленный вид.
   PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
+  // Виды удержаний сотрудника (миграция 300): добавленные и снятые.
+  PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
   // Персональный доступ к разделу «Зарплата» (миграция 288): было → стало (view | edit | null).
   PAYROLL_ACCESS_CHANGED: 'PAYROLL_ACCESS_CHANGED',
 } as const;

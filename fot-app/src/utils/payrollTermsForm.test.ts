@@ -20,7 +20,6 @@ const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormV
   amount: '175000',
   money: EMPTY_MONEY,
   supplement: EMPTY_SUPPLEMENT,
-  deductionKindId: '',
   effectiveFrom: '2026-09-24',
   ...over,
 });
@@ -32,7 +31,7 @@ const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
   employee_id: 7, full_name: 'Иванов Иван', tab_number: null, department_id: null, department_name: null,
   position_name: null, schedule_name: null, terms_id: 5, staff_category: 'worker', calc_type: 'hourly',
   monthly_salary: null, hourly_rate: '450.0000', bonus_amount: '15000.00', housing_compensation: null,
-  travel_compensation: '3000.50', communication_compensation: null, deduction_amount: '0.00', deduction_kind_id: 4,
+  travel_compensation: '3000.50', communication_compensation: null, deduction_amount: '0.00',
   staff_units: '1.000', effective_from: '2026-07-01', effective_to: null, can_edit: true,
   ...over,
 });
@@ -56,7 +55,6 @@ describe('validatePayrollTerms: состав запроса сохранения
       calcType: 'hourly',
       amount: '450,5',
       money: { bonus: '15000', housing: '12000', travel: '3000', deduction: '0' },
-      deductionKindId: '4',
     }));
     expect(wire(result.payload)).toEqual({
       staff_category: 'worker',
@@ -66,20 +64,8 @@ describe('validatePayrollTerms: состав запроса сохранения
       housing_compensation: 12000,
       travel_compensation: 3000,
       deduction_amount: 0,
-      deduction_kind_id: 4,
       effective_from: '2026-09-24',
     });
-  });
-
-  it('удержание: вид и сумма — только вместе, ошибка у пустого из двух', () => {
-    expect(validatePayrollTerms(values({ money: { ...EMPTY_MONEY, deduction: '500' } })).errors)
-      .toEqual({ deductionKind: 'Выберите вид удержания' });
-    expect(validatePayrollTerms(values({ deductionKindId: '4' })).errors)
-      .toEqual({ deduction: 'Укажите сумму удержания' });
-    // Кривая сумма — одна ошибка формата, без второй «укажите сумму».
-    expect(validatePayrollTerms(values({ deductionKindId: '4', money: { ...EMPTY_MONEY, deduction: 'abc' } })).errors)
-      .toEqual({ deduction: 'Введите число не меньше нуля' });
-    expect(firstInvalidField({ deduction: 'x', deductionKind: 'x' })).toBe('deductionKind');
   });
 
   it('ошибки — по полям, все сразу; первая по порядку на экране', () => {
@@ -87,7 +73,6 @@ describe('validatePayrollTerms: состав запроса сохранения
       calcType: 'hourly',
       amount: '',
       money: { ...EMPTY_MONEY, travel: '-1', deduction: 'abc' },
-      deductionKindId: '4',
       effectiveFrom: '',
     }));
     expect(result.payload).toBeNull();
@@ -194,7 +179,6 @@ describe('initialPayrollTermsValues', () => {
       amount: '450',
       money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
       supplement: EMPTY_SUPPLEMENT,
-      deductionKindId: '4',
       effectiveFrom: '2026-09-24',
     });
   });
@@ -229,14 +213,14 @@ describe('initialPayrollTermsValues', () => {
     );
     expect(initial).toEqual({
       category: 'worker', calcType: 'hourly', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
-      deductionKindId: '', effectiveFrom: '2026-09-24',
+      effectiveFrom: '2026-09-24',
     });
   });
 
   it('массовое назначение: рабочие на часах, всё пусто', () => {
     expect(initialPayrollTermsValues(null, '2026-09-24', defaultCalcTypeFor)).toEqual({
       category: 'worker', calcType: 'hourly', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
-      deductionKindId: '', effectiveFrom: '2026-09-24',
+      effectiveFrom: '2026-09-24',
     });
   });
 });
@@ -262,7 +246,6 @@ describe('isPayrollTermsChanged', () => {
     expect(isPayrollTermsChanged(values({ effectiveFrom: '2026-10-01' }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY, travel: '2730' } }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ supplement: { ...EMPTY_SUPPLEMENT, to: '2026-12-31' } }), initial)).toBe(true);
-    expect(isPayrollTermsChanged(values({ deductionKindId: '4' }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY } }), initial)).toBe(false);
   });
 });

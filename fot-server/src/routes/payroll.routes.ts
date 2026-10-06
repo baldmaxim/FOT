@@ -21,9 +21,9 @@ router.use(noStore);
 const termsView = requirePageAccess('/salary/terms', 'view');
 const termsEdit = requirePageAccess('/salary/terms', 'edit');
 const paymentsView = requirePageAccess('/salary/payments', 'view');
-const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
-// Справочник видов удержаний нужен и карточке («Условия оплаты»), и «Расчётам».
-const deductionKindsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
+// Удержания сотрудника и справочник видов правятся и в карточке («Условия оплаты»), и на «Расчётах».
+const deductionsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
+const deductionsEdit = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'edit');
 
 // ─── Условия оплаты ──────────────────────────────────────────────────────────
 // Статические пути до параметрических: иначе '/terms/employee/:empId' перехватил бы
@@ -42,10 +42,12 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 router.put('/terms/employee/:empId/paid', termsEdit, payrollPaidController.save);
 
-// ─── «Расчёты»: удержания по видам и справочник видов ────────────────────────
-router.get('/deduction-kinds', deductionKindsView, payrollDeductionsController.listKinds);
-router.post('/deduction-kinds', paymentsEdit, payrollDeductionsController.addKind);
+// ─── «Расчёты»: удержания сотрудников и справочник видов ─────────────────────
+router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);
+router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addKind);
 router.get('/deductions', paymentsView, payrollDeductionsController.list);
+router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
+router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

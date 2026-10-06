@@ -43,7 +43,6 @@ import {
   setPlannedSupplement,
   type IAssignResult,
 } from '../services/payroll/payroll-terms.service.js';
-import { deductionKindExists } from '../services/payroll/payroll-deduction-kinds.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
@@ -67,7 +66,6 @@ const termsBodySchema = z.object({
   travel_compensation: optionalMoneySchema,
   communication_compensation: optionalMoneySchema,
   deduction_amount: optionalMoneySchema,
-  deduction_kind_id: z.coerce.number().int().positive().optional(),
   staff_units: z.coerce.number().positive().max(2).optional(),
   organization_id: z.string().uuid().nullable().optional(),
   effective_from: dateSchema,
@@ -81,10 +79,6 @@ const termsBodySchema = z.object({
   }
   if (value.calc_type === 'hourly' && value.hourly_rate === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Для почасовой оплаты нужна часовая ставка' });
-  }
-  // Тот же CHECK — в БД (payroll_terms_deduction_pair): по видам строится вкладка «Расчёты».
-  if ((value.deduction_kind_id === undefined) !== (value.deduction_amount === undefined)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Вид и сумма удержания задаются вместе' });
   }
 });
 
@@ -115,12 +109,6 @@ const assignBodySchema = termsBodySchema.and(z.object({
 const bulkBodySchema = z.object({
   employee_ids: z.array(z.coerce.number().int().positive()).min(1).max(500),
 }).and(termsBodySchema);
-
-/** Вида нет в справочнике — без проверки FK отдал бы 500. Виды не удаляются, проверка надёжна. */
-const UNKNOWN_DEDUCTION_KIND = 'Вид удержания не найден в справочнике';
-const isKnownDeductionKind = async (id: number | undefined): Promise<boolean> => (
-  id === undefined || deductionKindExists(id)
-);
 
 function handleZodError(error: unknown, res: Response): boolean {
   if (error instanceof z.ZodError) {
@@ -253,7 +241,6 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
            t.travel_compensation,
            t.communication_compensation,
            t.deduction_amount,
-           t.deduction_kind_id,
            t.staff_units,
            t.effective_from,
            t.effective_to
@@ -363,7 +350,6 @@ interface IPayrollTermsListRow {
   travel_compensation: string | number | null;
   communication_compensation: string | number | null;
   deduction_amount: string | number | null;
-  deduction_kind_id: number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -601,10 +587,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     const body = assignBodySchema.parse(req.body);
-    if (!(await isKnownDeductionKind(body.deduction_kind_id))) {
-      res.status(400).json({ success: false, error: UNKNOWN_DEDUCTION_KIND });
-      return;
-    }
     const supplement = body.planned_supplement;
 
     // Условия и доплата — одной транзакцией под блокировкой сотрудника: параллельное
@@ -623,7 +605,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         travelCompensation: body.travel_compensation ?? null,
         communicationCompensation: body.communication_compensation ?? null,
         deductionAmount: body.deduction_amount ?? null,
-        deductionKindId: body.deduction_kind_id ?? null,
         staffUnits: body.staff_units,
         organizationId: body.organization_id ?? null,
         effectiveFrom: body.effective_from,
@@ -663,7 +644,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
         deduction_amount: body.deduction_amount ?? null,
-        deduction_kind_id: body.deduction_kind_id ?? null,
         // undefined — доплату не трогали (в аудите ключа нет), null — снята.
         planned_supplement: supplement,
         planned_supplement_changed: supplementChanged,
@@ -689,10 +669,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const body = bulkBodySchema.parse(req.body);
-    if (!(await isKnownDeductionKind(body.deduction_kind_id))) {
-      res.status(400).json({ success: false, error: UNKNOWN_DEDUCTION_KIND });
-      return;
-    }
 
     const allowed: number[] = [];
     const skipped: IAssignResult['skipped'] = [];
@@ -711,7 +687,6 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
       travelCompensation: body.travel_compensation ?? null,
       communicationCompensation: body.communication_compensation ?? null,
       deductionAmount: body.deduction_amount ?? null,
-      deductionKindId: body.deduction_kind_id ?? null,
       staffUnits: body.staff_units,
       organizationId: body.organization_id ?? null,
       effectiveFrom: body.effective_from,
@@ -741,7 +716,6 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
         deduction_amount: body.deduction_amount ?? null,
-        deduction_kind_id: body.deduction_kind_id ?? null,
         effective_from: body.effective_from,
       },
     });

@@ -52,8 +52,8 @@ export interface IPayrollTermsRow {
   communication_compensation?: string | number | null;
   /** Ежемесячное удержание, ₽/мес. */
   deduction_amount?: string | number | null;
-  /** Вид удержания из справочника; задан вместе с суммой. Поля нет у старого бэкенда. */
-  deduction_kind_id?: number | null;
+  /** Виды удержаний сотрудника (id справочника) — только в строках «Расчётов». */
+  deduction_kind_ids?: number[];
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -109,8 +109,6 @@ export interface IAssignTermsPayload {
   travel_compensation?: number;
   communication_compensation?: number;
   deduction_amount?: number;
-  /** Вид удержания — только вместе с deduction_amount. */
-  deduction_kind_id?: number;
   staff_units?: number;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
@@ -290,7 +288,7 @@ export interface IPayrollDeductionKind {
   name: string;
 }
 
-/** «Расчёты»: строка списка условий у сотрудника с видом удержания. */
+/** «Расчёты»: строки списка условий всего штата с видами удержаний. */
 export interface IPayrollDeductionsResult {
   rows: IPayrollTermsRow[];
   meta: { date: string; contractors_excluded: boolean };
@@ -391,7 +389,7 @@ export const payrollService = {
     return res.data;
   },
 
-  /** «Расчёты»: сотрудники с удержанием на дату, по ФИО. */
+  /** «Расчёты»: штат на дату с видами удержаний, по ФИО. */
   listDeductions: async (
     params: Pick<IPayrollTermsViewParams, 'date' | 'departmentId' | 'q'>,
     signal?: AbortSignal,
@@ -409,6 +407,24 @@ export const payrollService = {
   listDeductionKinds: async (signal?: AbortSignal): Promise<IPayrollDeductionKind[]> => {
     const res = await apiClient.get<IApiResponse<IPayrollDeductionKind[]>>('/payroll/deduction-kinds', { signal });
     return res.data;
+  },
+
+  /** Виды удержаний сотрудника — для «Удержания» карточки. */
+  getEmployeeDeductions: async (employeeId: number, signal?: AbortSignal): Promise<number[]> => {
+    const res = await apiClient.get<IApiResponse<{ kind_ids: number[] }>>(
+      `/payroll/deductions/employee/${employeeId}`,
+      { signal },
+    );
+    return res.data.kind_ids;
+  },
+
+  /** Заменить виды удержаний сотрудника; ответ — сохранённый набор в порядке справочника. */
+  saveEmployeeDeductions: async (employeeId: number, kindIds: number[]): Promise<number[]> => {
+    const res = await apiClient.put<IApiResponse<{ kind_ids: number[] }>>(
+      `/payroll/deductions/employee/${employeeId}`,
+      { kind_ids: kindIds },
+    );
+    return res.data.kind_ids;
   },
 
   /** Добавить вид удержания; такой уже есть — ApiError 409. */

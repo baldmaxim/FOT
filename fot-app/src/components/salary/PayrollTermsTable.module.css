@@ -50,8 +50,8 @@
 .colBonus    { width: 180px; }
 .colHousing  { width: 180px; }
 .colAccruals { width: 230px; }
-/* «Расчёты»: виды удержаний и итог — сумма «175 000,00 ₽/мес» в одну строку */
-.colKind     { width: 160px; }
+/* «Расчёты»: виды удержаний через запятую — до двух строк */
+.colDeductions { width: 320px; }
 
 .table thead th {
   position: sticky;
@@ -206,8 +206,46 @@
   color: var(--text-muted);
 }
 
+/*
+ * «Удержание» на «Расчётах»: ячейка — кнопка выпадающего списка видов. У ячейки отступ 2px 4px,
+ * у кнопки — 4px 8px: текст на тех же 12px от края, что у соседних ячеек.
+ */
+.table td.cellDeductions { padding: 2px 4px; }
+.kindsButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.kindsButton:hover { background: var(--accent-muted); }
+.kindsButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.kindsValue { flex: 1; min-width: 0; }
+.kindsChevron { flex-shrink: 0; color: var(--text-tertiary); }
+.kindsText { display: block; padding: 0 8px; }
+
 /* Смартфоны: тап-цели ≥ 44px */
 @media (max-width: 768px) {
   .check { width: 20px; height: 20px; }
   .table td { height: 48px; }
+  .kindsButton { min-height: 44px; }
+}
+
+/* «Расчёты» на телефоне: № и ФИО уже — справа остаётся место для ячейки «Удержание» */
+@media (max-width: 768px) {
+  .tableNoCheck .colNum { width: 44px; }
+  .tableNoCheck .colName { width: 150px; }
+  .tableNoCheck .stickyName { left: 44px; }
+  .tableNoCheck .colDeductions { width: 240px; }
 }

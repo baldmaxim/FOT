@@ -167,10 +167,10 @@ describe('условия оплаты: премиальная часть и ко
   });
 });
 
-/** $16–$19 INSERT: проезд, связь, удержание и его вид. */
+/** $16–$18 INSERT: проезд, связь, удержание. */
 const insertCompensations = (insertCallIndex: number) => {
   const params = txClient.query.mock.calls[insertCallIndex][1] as unknown[];
-  return { travel: params[15], communication: params[16], deduction: params[17], deductionKind: params[18] };
+  return { travel: params[15], communication: params[16], deduction: params[17] };
 };
 
 describe('условия оплаты: проезд, связь, удержание', () => {
@@ -180,23 +180,18 @@ describe('условия оплаты: проезд, связь, удержан�
 
   it('одиночное назначение сохраняет три суммы и пишет их в аудит', async () => {
     const res = makeRes();
-    pgQueryOne.mockResolvedValueOnce({ id: 3 }); // вид удержания есть в справочнике
 
     await payrollTermsController.assign(makeReq({
       params: { empId: '42' },
-      body: {
-        ...baseBody, travel_compensation: '3000', communication_compensation: 500, deduction_amount: 0, deduction_kind_id: 3,
-      },
+      body: { ...baseBody, travel_compensation: '3000', communication_compensation: 500, deduction_amount: 0 },
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: 3000, communication: 500, deduction: 0, deductionKind: 3 });
+    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: 3000, communication: 500, deduction: 0 });
     // Премия и проживание остаются на своих местах ($14/$15).
     expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: null, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({
-      travel_compensation: 3000, communication_compensation: 500, deduction_amount: 0, deduction_kind_id: 3,
-    });
+    expect(details).toMatchObject({ travel_compensation: 3000, communication_compensation: 500, deduction_amount: 0 });
   });
 
   it('без сумм — NULL', async () => {
@@ -207,7 +202,7 @@ describe('условия оплаты: проезд, связь, удержан�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: null, communication: null, deduction: null, deductionKind: null });
+    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: null, communication: null, deduction: null });
   });
 
   it('отрицательное удержание отклоняется до записи', async () => {
@@ -215,35 +210,10 @@ describe('условия оплаты: проезд, связь, удержан�
 
     await payrollTermsController.assign(makeReq({
       params: { empId: '42' },
-      body: { ...baseBody, deduction_amount: -100, deduction_kind_id: 3 },
+      body: { ...baseBody, deduction_amount: -100 },
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(400);
-    expect(pgTx).not.toHaveBeenCalled();
-  });
-
-  it('вид и сумма удержания — только вместе: одно без другого — 400 до записи', async () => {
-    for (const extra of [{ deduction_amount: 500 }, { deduction_kind_id: 3 }]) {
-      const res = makeRes();
-      await payrollTermsController.assign(makeReq({
-        params: { empId: '42' }, body: { ...baseBody, ...extra },
-      } as Partial<AuthenticatedRequest>), res);
-      expect(res.statusCode).toBe(400);
-      expect(res.body.error).toBe('Вид и сумма удержания задаются вместе');
-    }
-    expect(pgTx).not.toHaveBeenCalled();
-  });
-
-  it('вида нет в справочнике — 400, а не 500 от FK', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
-    const res = makeRes();
-
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' }, body: { ...baseBody, deduction_amount: 500, deduction_kind_id: 999 },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe('Вид удержания не найден в справочнике');
     expect(pgTx).not.toHaveBeenCalled();
   });
 
@@ -255,8 +225,8 @@ describe('условия оплаты: проезд, связь, удержан�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(2)).toEqual({ travel: 1500, communication: 300, deduction: null, deductionKind: null });
-    expect(insertCompensations(5)).toEqual({ travel: 1500, communication: 300, deduction: null, deductionKind: null });
+    expect(insertCompensations(2)).toEqual({ travel: 1500, communication: 300, deduction: null });
+    expect(insertCompensations(5)).toEqual({ travel: 1500, communication: 300, deduction: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ travel_compensation: 1500, communication_compensation: 300, deduction_amount: null });
   });
