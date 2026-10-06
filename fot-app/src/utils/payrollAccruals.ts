@@ -93,8 +93,9 @@ const formatThousands = (value: number): string => (
 );
 
 /**
- * Ячейка «Начисления»: «апр —, май —, июл 165,2, авг 177,7» — каждый месяц окна в тыс. ₽.
- * Между месяцем и суммой неразрывный пробел: строка переносится только после запятой.
+ * Ячейка «Начисления»: «апр —; май —; июл: 165,2; авг: 177,7» — каждый месяц окна в тыс. ₽.
+ * Точка с запятой — разделитель месяцев (запятая занята дробной частью). Между месяцем и суммой
+ * неразрывный пробел: строка переносится только после «;».
  * Данных нет ни за один месяц — null.
  */
 export const formatAccrualsByMonth = (
@@ -106,7 +107,8 @@ export const formatAccrualsByMonth = (
   return months
     .map((month, index) => {
       const value = values[index];
-      return `${MONTHS_SHORT_RU[monthIndex(month)]}\u00a0${value === null ? '—' : formatThousands(value)}`;
+      const name = MONTHS_SHORT_RU[monthIndex(month)];
+      return value === null ? `${name}\u00a0—` : `${name}:\u00a0${formatThousands(value)}`;
     })
-    .join(', ');
+    .join('; ');
 };
