@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  accrualBarPercent,
   accrualPeriodCrossesYear,
   formatAccrualMonthLabel,
   formatAccrualPeriodLong,
@@ -61,7 +60,6 @@ describe('итоги начислений', () => {
     expect(summary.total).toBeCloseTo(368300.5, 2);
     expect(summary.monthsWithData).toBe(4);
     expect(summary.average).toBeCloseTo(92075.125, 3);
-    expect(summary.max).toBe(125000);
   });
 
   it('нет данных ни за один месяц — итога нет', () => {
@@ -70,7 +68,6 @@ describe('итоги начислений', () => {
       expect(summary.total).toBeNull();
       expect(summary.average).toBeNull();
       expect(summary.monthsWithData).toBe(0);
-      expect(summary.max).toBe(0);
     }
   });
 
@@ -82,17 +79,8 @@ describe('итоги начислений', () => {
     ]);
     expect(summary.values.slice(4)).toEqual([120000, -5000]);
     expect(summary.total).toBe(115000);
-    expect(summary.max).toBe(120000);
   });
 
-  it('длина столбика', () => {
-    expect(accrualBarPercent(null, 100)).toBe(0);
-    expect(accrualBarPercent(0, 100)).toBe(0);
-    expect(accrualBarPercent(-10, 100)).toBe(0);
-    expect(accrualBarPercent(10, 0)).toBe(0);
-    expect(accrualBarPercent(50, 200)).toBe(25);
-    expect(accrualBarPercent(300, 200)).toBe(100);
-  });
 
   it('итог в целых рублях', () => {
     expect(plain(formatPayrollRubles(742300.45))).toBe('742 300');

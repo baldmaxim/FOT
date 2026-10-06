@@ -5,7 +5,6 @@ import { X } from 'lucide-react';
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
-  accrualBarPercent,
   accrualPeriodCrossesYear,
   formatAccrualMonthLabel,
   formatAccrualPeriodLong,
@@ -24,7 +23,7 @@ interface IPayrollAccrualsPopoverProps {
 }
 
 /** Ширина окна — в CSS (.popover), здесь нужна для выравнивания по правому краю ячейки. */
-const POPOVER_WIDTH = 340;
+const POPOVER_WIDTH = 280;
 const ANCHOR_GAP = 6;
 const VIEWPORT_EDGE = 8;
 /** Смартфон — лист снизу, как у фильтра столбца. */
@@ -36,8 +35,8 @@ const formatAmount = (value: number | null): string => {
 };
 
 /**
- * Начисления сотрудника по месяцам — табличная расшифровка мини-графика ячейки: точные
- * суммы, итог и среднее. Закрытие — Escape, клик мимо или крестик.
+ * Начисления сотрудника по месяцам — расшифровка итога ячейки: суммы по месяцам, итог и среднее.
+ * Закрытие — Escape, клик мимо или крестик.
  */
 export const PayrollAccrualsPopover: FC<IPayrollAccrualsPopoverProps> = ({ row, months, anchor, onClose }) => {
   const titleId = useId();
@@ -76,7 +75,6 @@ export const PayrollAccrualsPopover: FC<IPayrollAccrualsPopoverProps> = ({ row, 
   const summary = summarizeAccruals(months, row.accruals);
   const withYear = accrualPeriodCrossesYear(months);
   const period = formatAccrualPeriodLong(months);
-  const lastIndex = months.length - 1;
   const averageLabel = summary.monthsWithData === months.length
     ? 'В среднем за месяц'
     : `В среднем за ${summary.monthsWithData} мес.`;
@@ -105,20 +103,11 @@ export const PayrollAccrualsPopover: FC<IPayrollAccrualsPopoverProps> = ({ row, 
           <tbody>
             {months.map((month, index) => {
               const value = summary.values[index];
-              const percent = accrualBarPercent(value, summary.max);
               return (
                 <tr key={month}>
                   <th scope="row" className={styles.month}>{formatAccrualMonthLabel(month, withYear)}</th>
                   <td className={value === null ? `${styles.amount} ${styles.muted}` : styles.amount}>
                     {formatAmount(value)}
-                  </td>
-                  <td className={styles.barCell} aria-hidden="true">
-                    {percent > 0 && (
-                      <span
-                        className={index === lastIndex ? `${styles.bar} ${styles.barLast}` : styles.bar}
-                        style={{ width: `${percent}%` }}
-                      />
-                    )}
                   </td>
                 </tr>
               );
@@ -128,12 +117,10 @@ export const PayrollAccrualsPopover: FC<IPayrollAccrualsPopoverProps> = ({ row, 
             <tr className={styles.totalRow}>
               <th scope="row" className={styles.month}>Итого</th>
               <td className={styles.amount}>{formatAmount(summary.total)}</td>
-              <td aria-hidden="true" />
             </tr>
             <tr className={styles.averageRow}>
               <th scope="row" className={styles.month}>{averageLabel}</th>
               <td className={styles.amount}>{formatAmount(summary.average)}</td>
-              <td aria-hidden="true" />
             </tr>
           </tfoot>
         </table>

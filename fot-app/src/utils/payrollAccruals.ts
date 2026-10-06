@@ -58,8 +58,6 @@ export interface IAccrualSummary {
   /** Среднее по месяцам с данными. */
   average: number | null;
   monthsWithData: number;
-  /** Наибольшая положительная сумма — масштаб столбиков; 0 — рисовать нечего. */
-  max: number;
 }
 
 const toAmount = (value: string | number | null | undefined): number | null => {
@@ -86,12 +84,5 @@ export const summarizeAccruals = (
     total,
     average: total === null ? null : total / present.length,
     monthsWithData: present.length,
-    max: Math.max(0, ...present),
   };
-};
-
-/** Длина столбика в % от максимума строки; ноль, сторно (минус) и «нет данных» — 0. */
-export const accrualBarPercent = (value: number | null, max: number): number => {
-  if (value === null || value <= 0 || max <= 0) return 0;
-  return Math.min(100, (value / max) * 100);
 };

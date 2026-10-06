@@ -249,7 +249,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     {shown('salary') && <td className={styles.cellNumber}>{formatSalary(row)}</td>}
                     {shown('bonus') && <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>}
                     {shown('housing') && <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>}
-                    {/* Без данных — «—», клик как по строке; с данными — итог и мини-график, клик открывает месяцы. */}
+                    {/* Без данных — «—», клик как по строке; с данными — итог, клик открывает месяцы. */}
                     {shown('accruals') && (
                       <td className={styles.cellAccruals}>
                         <PayrollAccrualsCell
