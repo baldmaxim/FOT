@@ -5,10 +5,10 @@ import {
   formatAccrualMonthLabel,
   formatAccrualPeriodLong,
   formatAccrualPeriodShort,
+  formatAccrualsByMonth,
   payrollAccrualMonths,
   summarizeAccruals,
 } from './payrollAccruals';
-import { formatPayrollRubles } from './payrollFormat';
 
 /** Пробелы-разделители разрядов (NBSP) → обычные: так проще сравнивать. */
 const plain = (value: string | null): string | null => (value === null ? null : value.replace(/\s/g, ' '));
@@ -80,12 +80,26 @@ describe('итоги начислений', () => {
     expect(summary.values.slice(4)).toEqual([120000, -5000]);
     expect(summary.total).toBe(115000);
   });
+});
 
+describe('начисления по месяцам в ячейке', () => {
+  it('каждый месяц окна в тыс. ₽, без данных — «—»', () => {
+    expect(plain(formatAccrualsByMonth(MAR_AUG_2026, [
+      { month: '2026-05', amount: 0 },
+      { month: '2026-07', amount: '165230.40' },
+      { month: '2026-08', amount: 177730 },
+    ]))).toBe('мар —, апр —, май 0,0, июн —, июл 165,2, авг 177,7');
+  });
 
-  it('итог в целых рублях', () => {
-    expect(plain(formatPayrollRubles(742300.45))).toBe('742 300');
-    expect(plain(formatPayrollRubles(96499.5))).toBe('96 500');
-    expect(formatPayrollRubles(null)).toBeNull();
-    expect(formatPayrollRubles(Number.NaN)).toBeNull();
+  it('миллион — с разрядами, сторно — с минусом', () => {
+    expect(plain(formatAccrualsByMonth(['2026-07', '2026-08'], [
+      { month: '2026-07', amount: 1234567 },
+      { month: '2026-08', amount: -5000 },
+    ]))).toBe('июл 1 234,6, авг -5,0');
+  });
+
+  it('нет данных ни за один месяц — null', () => {
+    expect(formatAccrualsByMonth(MAR_AUG_2026, [])).toBeNull();
+    expect(formatAccrualsByMonth(MAR_AUG_2026, [{ month: '2026-09', amount: 1000 }])).toBeNull();
   });
 });

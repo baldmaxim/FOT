@@ -31,7 +31,6 @@ import {
 import type { PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
-import { PayrollAccrualsPopover } from '../../components/salary/PayrollAccrualsPopover';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
@@ -206,17 +205,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setColumnsAnchor(null);
   };
 
-  // Суммы по месяцам из ячейки «Начисления». Закрытие возвращает фокус на ячейку, если строка
-  // ещё отрисована (виртуализация могла её убрать).
-  const [accrualsFor, setAccrualsFor] = useState<{ row: IPayrollTermsRow; anchor: HTMLElement } | null>(null);
-  const openAccruals = useCallback((row: IPayrollTermsRow, anchor: HTMLElement) => {
-    setAccrualsFor({ row, anchor });
-  }, []);
-  const closeAccruals = () => {
-    if (accrualsFor?.anchor.isConnected) accrualsFor.anchor.focus();
-    setAccrualsFor(null);
-  };
-
   // Уход со списка (другая вкладка, «Назад» браузера) закрывает всплывающие окна и массовое назначение:
   // они в портале, и visibility: hidden списка их не прячет. Выбор подразделения перемонтируется — его
   // список тоже в портале. Фильтры, выделение и прокрутка остаются. Паттерн «состояние из прошлого
@@ -228,7 +216,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     if (!active) {
       setOpenFilter(null);
       setColumnsAnchor(null);
-      setAccrualsFor(null);
       setBulkRows(null);
       setDepartmentSelectKey(key => key + 1);
     }
@@ -383,7 +370,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             columnFilters={columnFilters}
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
-            onOpenAccruals={openAccruals}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -422,15 +408,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           onToggle={setColumnVisible}
           onShowAll={showAll}
           onClose={closeColumnsMenu}
-        />
-      )}
-
-      {accrualsFor && (
-        <PayrollAccrualsPopover
-          row={accrualsFor.row}
-          months={accrualMonths}
-          anchor={accrualsFor.anchor}
-          onClose={closeAccruals}
         />
       )}
 

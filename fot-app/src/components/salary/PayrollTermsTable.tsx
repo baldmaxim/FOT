@@ -7,11 +7,10 @@ import type {
   PayrollSortDir,
   PayrollSortKey,
 } from '../../services/payrollService';
-import { formatAccrualPeriodLong, formatAccrualPeriodShort } from '../../utils/payrollAccruals';
+import { formatAccrualPeriodLong, formatAccrualPeriodShort, formatAccrualsByMonth } from '../../utils/payrollAccruals';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { PayrollAccrualsCell } from './PayrollAccrualsCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
@@ -37,8 +36,6 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
-  /** Клик по ячейке «Начисления» — суммы по месяцам; anchor — кнопка ячейки. */
-  onOpenAccruals: (row: IPayrollTermsRow, anchor: HTMLElement) => void;
 }
 
 /** Столбцы с сортировкой и фильтром — в порядке таблицы. */
@@ -102,7 +99,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   columnFilters,
   onOpenFilter,
   accrualMonths,
-  onOpenAccruals,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -172,13 +168,10 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                 filterActive={isPayrollColumnFilterActive(columnFilters, column.key)}
               />
             ))}
-            {/*
-              Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра
-              нет — начисления придут из 1С ЗУП, сервер их пока не отдаёт.
-            */}
+            {/* Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет. */}
             {shown('accruals') && (
-              <th title={`Начисления за последние полгода: ${accrualPeriodLong}`}>
-                Начисления
+              <th title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
+                Начисления, тыс. ₽
                 <span className={styles.headPeriod}>{accrualPeriodShort}</span>
               </th>
             )}
@@ -249,16 +242,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     {shown('salary') && <td className={styles.cellNumber}>{formatSalary(row)}</td>}
                     {shown('bonus') && <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>}
                     {shown('housing') && <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>}
-                    {/* Без данных — «—», клик как по строке; с данными — итог, клик открывает месяцы. */}
                     {shown('accruals') && (
-                      <td className={styles.cellAccruals}>
-                        <PayrollAccrualsCell
-                          row={row}
-                          months={accrualMonths}
-                          periodLabel={accrualPeriodLong}
-                          onOpen={onOpenAccruals}
-                        />
-                      </td>
+                      <td className={styles.cellAccruals}>{formatAccrualsByMonth(accrualMonths, row.accruals) ?? '—'}</td>
                     )}
                   </tr>
                 );

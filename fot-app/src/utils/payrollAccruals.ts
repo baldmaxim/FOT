@@ -86,3 +86,27 @@ export const summarizeAccruals = (
     monthsWithData: present.length,
   };
 };
+
+/** 177730 → «177,7»: тысячи рублей с одним знаком. */
+const formatThousands = (value: number): string => (
+  (value / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+);
+
+/**
+ * Ячейка «Начисления»: «апр —, май —, июл 165,2, авг 177,7» — каждый месяц окна в тыс. ₽.
+ * Между месяцем и суммой неразрывный пробел: строка переносится только после запятой.
+ * Данных нет ни за один месяц — null.
+ */
+export const formatAccrualsByMonth = (
+  months: string[],
+  accruals: IPayrollMonthlyAccrual[] | null | undefined,
+): string | null => {
+  const { values, total } = summarizeAccruals(months, accruals);
+  if (total === null) return null;
+  return months
+    .map((month, index) => {
+      const value = values[index];
+      return `${MONTHS_SHORT_RU[monthIndex(month)]}\u00a0${value === null ? '—' : formatThousands(value)}`;
+    })
+    .join(', ');
+};
