@@ -1,5 +1,4 @@
 import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
-import { flushSync } from 'react-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,7 +7,6 @@ import {
   defaultCalcTypeFor,
   payrollService,
   type IAssignTermsPayload,
-  type IPayrollPaidChange,
   type IPayrollTermsRow,
 } from '../../services/payrollService';
 import { usePayrollEmployeeDeductions } from '../../hooks/usePayrollEmployeeDeductions';
@@ -16,7 +14,6 @@ import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { formatAccrualMonthLabel, payrollMonthOptions } from '../../utils/payrollAccruals';
-import { paidCellId } from '../../utils/payrollPaid';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { DeductionKindsField } from './DeductionKindsField';
 import { PayrollPaidTable } from './PayrollPaidTable';
@@ -42,22 +39,15 @@ interface IEmployeePayrollDetailsProps {
 interface ISaveVariables {
   /** null — условия не правили: новую версию условий не создаём. */
   terms: IAssignTermsPayload | null;
-  paid: IPayrollPaidChange[];
   /** Виды удержаний; null — не меняли. */
   kinds: number[] | null;
 }
 
-/** Тост после сохранения: что именно сохранили. */
-const savedMessage = ({ terms, paid, kinds }: ISaveVariables): string => {
-  if (terms) return 'Условия оплаты назначены: 1';
-  if (kinds && paid.length === 0) return 'Удержания сохранены';
-  return kinds ? 'Изменения сохранены' : 'Оплачено сохранено';
-};
-
 /**
  * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
  * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
- * отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия, «Оплачено» и виды удержаний — что из них правили.
+ * отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия и виды удержаний — что из них правили.
+ * «Оплачено» — только чтение: суммы приходят из 1С.
  * Месяц у ФИО задаёт месяц «Оплачено»; условия от него не зависят.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
@@ -99,16 +89,15 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   }, [active]);
 
   const saveMutation = useMutation({
-    // Сначала суммы и виды: запросы идемпотентны — если условия не сохранятся, повтор ничего не задвоит.
-    mutationFn: async ({ terms, paid: cells, kinds }: ISaveVariables) => {
-      if (cells.length > 0) await payrollService.savePaid(row.employee_id, cells);
+    // Сначала виды: запрос идемпотентен — если условия не сохранятся, повтор ничего не задвоит.
+    mutationFn: async ({ terms, kinds }: ISaveVariables) => {
       if (kinds) await payrollService.saveEmployeeDeductions(row.employee_id, kinds);
       if (terms) await payrollService.assign(row.employee_id, terms);
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (_data, { terms }) => {
       // Префикс сбрасывает список, «Расчёты», историю изменений условий, «Оплачено» и виды удержаний.
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
-      success(savedMessage(variables));
+      success(terms ? 'Условия оплаты назначены: 1' : 'Удержания сохранены');
       onSaved(row.employee_id, activeRef.current);
     },
     // Ошибку показывает карточка (ввод не теряется). Тост — если карточки на экране уже нет.
@@ -125,21 +114,13 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     if (!canEdit) nameRef.current?.focus();
   }, [canEdit]);
 
-  // Ячейки есть в DOM только у раскрытой таблицы: раскрываем синхронно, потом фокус.
-  const focusPaidCell = (key: string) => {
-    flushSync(() => paid.expand());
-    document.getElementById(paidCellId(idPrefix, key))?.focus();
-  };
-
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || saveMutation.isPending) return;
-    const paidResult = paid.buildChanges();
     const kinds = deductions.changedKindIds();
-    // Правили только «Оплачено» и виды удержаний: условия не трогаем — оклад не обязателен, новая версия не создаётся.
-    if ((paidResult.changes.length > 0 || paidResult.firstInvalid || kinds) && !form.isChanged()) {
-      if (paidResult.firstInvalid) focusPaidCell(paidResult.firstInvalid);
-      else saveMutation.mutate({ terms: null, paid: paidResult.changes, kinds });
+    // Правили только виды удержаний: условия не трогаем — оклад не обязателен, новая версия не создаётся.
+    if (kinds && !form.isChanged()) {
+      saveMutation.mutate({ terms: null, kinds });
       return;
     }
     const { payload, firstInvalid } = form.buildPayload();
@@ -147,11 +128,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
       return;
     }
-    if (paidResult.firstInvalid) {
-      focusPaidCell(paidResult.firstInvalid);
-      return;
-    }
-    saveMutation.mutate({ terms: payload, paid: paidResult.changes, kinds });
+    saveMutation.mutate({ terms: payload, kinds });
   };
 
   return (
@@ -182,7 +159,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           idPrefix={idPrefix}
           readOnly={!canEdit}
           autoFocus={canEdit}
-          paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} readOnly={!canEdit} />}
+          paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} />}
           stacked
           deductionKinds={(
             <DeductionKindsField id={`${idPrefix}-deduction-kinds`} deductions={deductions} readOnly={!canEdit} />

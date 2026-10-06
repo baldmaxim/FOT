@@ -131,18 +131,21 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
+    await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
     // Повторный запуск безопасен: виды не задваиваются.
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
+    await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
   });
 
   afterAll(async () => {
     await pg.pool?.end();
   });
 
-  it('засев — 6 видов по порядку, повтор миграции их не задваивает', async () => {
+  it('засев — 6 видов (299) и удержания «Оплачено» (301) по порядку, повтор миграций их не задваивает', async () => {
     expect((await listDeductionKinds()).map(kind => kind.name)).toEqual([
       'Корректировка удержаний', 'ТМЦ', 'Штраф за мусор', 'Спецодежда', 'Питание', 'Штрафы',
+      'Нарушение техники безопасности', 'Удержание по исп. листу',
     ]);
   });
 
@@ -152,8 +155,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     expect(await addDeductionKind('штраф за ОПОЗДАНИЕ')).toBeNull();
     expect(await addDeductionKind(' Штрафы ')).toBeNull();
     const kinds = await listDeductionKinds();
-    expect(kinds).toHaveLength(7);
-    expect(kinds[6]).toEqual(added);
+    expect(kinds).toHaveLength(9);
+    expect(kinds[8]).toEqual(added);
   });
 
   it('300: CHECK «вид и сумма вместе» снят — сумма удержания сохраняется без вида', async () => {

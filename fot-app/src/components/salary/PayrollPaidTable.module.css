@@ -1,8 +1,7 @@
 /*
- * «Оплачено»: статьи строками, месяц столбцом, итоги — внизу. Таблица по ширине содержимого, не на всю
- * форму. Узко — таблица прокручивается вбок внутри
- * своей рамки (страница вбок не едет), подписи строк закреплены слева. Поля на касание — 16px (без автозума
- * iOS) и высотой 44px; с мышью — 14px и 34px на широком экране.
+ * «Оплачено»: статьи строками, месяц столбцом, итоги — внизу; только чтение. Таблица по ширине содержимого,
+ * не на всю форму. Узко — таблица прокручивается вбок внутри своей рамки (страница вбок не едет),
+ * подписи строк закреплены слева.
  */
 .paid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
@@ -107,8 +106,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.table .cell { min-width: 10rem; padding: 3px 4px; }
-
 .table .value {
   min-width: 10rem;
   text-align: right;
@@ -116,26 +113,6 @@
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
-
-.input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 44px;
-  padding: 0 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  transition: border-color var(--transition), box-shadow var(--transition);
-}
-.input:hover { border-color: var(--text-tertiary); }
-.input:focus { outline: none; }
-.input:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
-.input[aria-invalid='true'] { border-color: var(--error); }
 
 @media (min-width: 768px) {
   .rowHead { min-width: 8.5rem; }
@@ -145,17 +122,8 @@
   .rowHead { min-width: 13rem; }
 }
 
-@media (pointer: fine) {
-  .input { font-size: 14px; }
-}
-
-@media (min-width: 768px) and (pointer: fine) {
-  .input { height: 34px; }
-}
-
 .note { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.error { margin: 0; font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
-  .input, .chevron { transition: none; }
+  .chevron { transition: none; }
 }

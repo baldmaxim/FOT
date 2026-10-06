@@ -197,8 +197,8 @@ export interface IAssignResult {
 
 /** Статья «Оплачено» — столбец «Сводной ведомости» ЗУП (подписи и группы — utils/payrollPaid). */
 export type PayrollPaidItemCode =
-  | 'contract' | 'bonus' | 'sick_leave' | 'overtime' | 'recalc_prev' | 'severance'
-  | 'supplement' | 'loan' | 'vacation' | 'travel' | 'housing'
+  | 'contract' | 'bonus' | 'sick_leave' | 'vacation'
+  | 'housing' | 'travel' | 'overtime' | 'recalc_prev' | 'severance' | 'supplement' | 'planned_supplement' | 'loan'
   | 'meals' | 'workwear' | 'safety_fine' | 'fines' | 'writ_deduction';
 
 /** Сумма ячейки «Оплачено»: месяц YYYY-MM, сумма — текстом NUMERIC. */
@@ -206,13 +206,6 @@ export interface IPayrollPaidAmount {
   month: string;
   item: PayrollPaidItemCode;
   amount: string;
-}
-
-/** Правка ячейки «Оплачено»: null — очистить. */
-export interface IPayrollPaidChange {
-  month: string;
-  item: PayrollPaidItemCode;
-  amount: number | null;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
@@ -374,15 +367,6 @@ export const payrollService = {
     const res = await apiClient.get<IApiResponse<IPayrollPaidAmount[]>>(
       `/payroll/terms/employee/${employeeId}/paid?${search.toString()}`,
       { signal },
-    );
-    return res.data;
-  },
-
-  /** Записать изменённые ячейки «Оплачено». */
-  savePaid: async (employeeId: number, cells: IPayrollPaidChange[]): Promise<{ changed: number }> => {
-    const res = await apiClient.put<IApiResponse<{ changed: number }>>(
-      `/payroll/terms/employee/${employeeId}/paid`,
-      { cells },
     );
     return res.data;
   },

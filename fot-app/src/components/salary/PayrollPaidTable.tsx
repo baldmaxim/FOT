@@ -5,9 +5,7 @@ import type { PayrollPaidApi } from '../../hooks/usePayrollPaid';
 import { accrualPeriodCrossesYear, formatAccrualMonthLabel, formatAccrualPeriodLong } from '../../utils/payrollAccruals';
 import {
   formatPaidAmount,
-  PAYROLL_PAID_GROUPS,
   PAYROLL_PAID_TOTALS,
-  paidCellId,
   paidCellKey,
   type IPayrollPaidItem,
 } from '../../utils/payrollPaid';
@@ -15,27 +13,23 @@ import styles from './PayrollPaidTable.module.css';
 
 interface IPayrollPaidTableProps {
   paid: PayrollPaidApi;
-  /** Префикс id ячеек: по нему карточка ставит фокус на первую ячейку с ошибкой. */
+  /** Префикс id заголовка и таблицы. */
   idPrefix: string;
-  readOnly?: boolean;
 }
 
 const formatTotal = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
 
 /**
- * «Оплачено» за выбранный месяц. Свёрнуто (по умолчанию) — только итоги «Начислено · Удержано»,
- * они же — в заголовке. Раскрыто — статьи по группам ведомости ЗУП, ячейки —
- * поля ввода; итоги остаются внизу и пересчитываются по мере ввода. Без права правки и пока суммы
- * не загружены — текст. Узко — таблица прокручивается вбок, подписи строк закреплены слева.
+ * «Оплачено» за выбранный месяц, только чтение (суммы приходят из 1С). Свёрнуто (по умолчанию) —
+ * только итоги «Начислено · Удержано», они же — в заголовке. Раскрыто — статьи по группам ведомости
+ * ЗУП, но лишь те, по которым сумма есть; итоги остаются внизу. Узко — таблица прокручивается вбок,
+ * подписи строк закреплены слева.
  */
-export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, readOnly = false }) => {
+export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix }) => {
   const labelId = `${idPrefix}-paid`;
   const tableId = `${idPrefix}-paid-table`;
-  const errorId = `${idPrefix}-paid-error`;
   const withYear = accrualPeriodCrossesYear(paid.months);
   const ready = paid.status === 'ready';
-  const editable = ready && !readOnly;
-  const hasErrors = paid.invalidKeys.size > 0;
 
   // «сентябрь 2026 · начислено 1 234 ₽ · удержано 100 ₽» — пустые итоги не называем.
   const summary = [
@@ -47,38 +41,15 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
       : []),
   ].join(' · ');
 
-  const renderCell = (item: IPayrollPaidItem, month: string) => {
-    const key = paidCellKey(month, item.code);
-    if (!editable) {
-      const text = ready ? paid.savedValue(key) ?? '—' : '';
-      return <td key={month} className={styles.value}>{text}</td>;
-    }
-    const invalid = paid.invalidKeys.has(key);
-    return (
-      <td key={month} className={styles.cell}>
-        <input
-          id={paidCellId(idPrefix, key)}
-          className={styles.input}
-          // У «decimal» на iPhone нет минуса — перерасчёту нужна обычная клавиатура.
-          inputMode={item.allowNegative ? 'text' : 'decimal'}
-          autoComplete="off"
-          value={paid.cellValue(key)}
-          aria-label={`${item.label}, ${formatAccrualMonthLabel(month, true)}`}
-          aria-invalid={invalid ? true : undefined}
-          aria-describedby={invalid ? errorId : undefined}
-          onChange={event => paid.changeCell(key, event.target.value)}
-          onBlur={() => paid.normalizeCell(key, item.allowNegative)}
-        />
-      </td>
-    );
-  };
-
   const renderRow = (item: IPayrollPaidItem, nested: boolean) => (
     <tr key={item.code}>
       <th scope="row" className={nested ? `${styles.rowHead} ${styles.rowHeadNested}` : styles.rowHead}>
         {item.label}
       </th>
-      {paid.months.map(month => renderCell(item, month))}
+      {paid.months.map(month => {
+        const value = paid.amounts.get(paidCellKey(month, item.code));
+        return <td key={month} className={styles.value}>{value === undefined ? '—' : formatPaidAmount(value)}</td>;
+      })}
     </tr>
   );
 
@@ -105,7 +76,7 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
               ))}
             </tr>
           </thead>
-          {paid.expanded && PAYROLL_PAID_GROUPS.map(group => (
+          {paid.expanded && ready && paid.groups.map(group => (
             <tbody key={group.label ?? 'main'}>
               {group.label && (
                 <tr>
@@ -133,11 +104,6 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, idPrefix, r
       </div>
       {paid.status === 'loading' && <p className={styles.note}>Загрузка…</p>}
       {paid.status === 'error' && <p className={styles.note} role="alert">Не удалось загрузить суммы</p>}
-      {hasErrors && (
-        <p id={errorId} className={styles.error}>
-          Сумма — число, не больше двух знаков после запятой; минус — только у перерасчёта
-        </p>
-      )}
     </div>
   );
 };

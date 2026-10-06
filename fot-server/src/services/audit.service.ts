@@ -242,8 +242,6 @@ export const AUDIT_ACTIONS = {
   // Кадровое основание, а не секрет — суммы пишем в details.
   PAYROLL_TERMS_ASSIGNED: 'PAYROLL_TERMS_ASSIGNED',
   PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
-  // «Оплачено» по месяцам в карточке (миграция 295): изменённые ячейки с суммами.
-  PAYROLL_PAID_AMOUNTS_SAVED: 'PAYROLL_PAID_AMOUNTS_SAVED',
   // Справочник видов удержаний (миграция 299): добавленный вид.
   PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
   // Виды удержаний сотрудника (миграция 300): добавленные и снятые.

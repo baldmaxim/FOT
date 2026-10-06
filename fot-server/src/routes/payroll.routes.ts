@@ -38,9 +38,8 @@ router.get('/terms/employee/:empId/changes', termsView, payrollTermsController.g
 // Только оклад / ставка — для закэшированных клиентов до /changes.
 router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsController.getSalaryHistory);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
-// «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП, вносятся вручную.
+// «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
-router.put('/terms/employee/:empId/paid', termsEdit, payrollPaidController.save);
 
 // ─── «Расчёты»: удержания сотрудников и справочник видов ─────────────────────
 router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);

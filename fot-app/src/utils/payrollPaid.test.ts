@@ -1,157 +1,99 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildPaidChanges,
+  formatPaidAmount,
   paidCellKey,
   paidTotals,
-  parsePaidAmount,
   PAYROLL_PAID_GROUPS,
-  PAYROLL_PAID_ITEMS,
-  toPaidValues,
+  toPaidAmounts,
+  visiblePaidGroups,
 } from './payrollPaid';
 
-const MONTHS = ['2026-07', '2026-08'];
-
-describe('parsePaidAmount', () => {
-  it('вставка из отчёта: пробелы, неразрывные пробелы и запятая', () => {
-    expect(parsePaidAmount('175 000,00')).toBe(175000);
-    expect(parsePaidAmount('2\u00a0730,5')).toBe(2730.5);
-    expect(parsePaidAmount('  1430 ')).toBe(1430);
-    expect(parsePaidAmount('0')).toBe(0);
-  });
-
-  it('пусто — null (ячейку очистили)', () => {
-    expect(parsePaidAmount('')).toBeNull();
-    expect(parsePaidAmount('   ')).toBeNull();
-  });
-
-  it('ошибка — undefined: текст, три знака, две запятые, слишком много', () => {
-    for (const raw of ['abc', '1,005', '1,2,3', '12.', '.5', '10000000000']) {
-      expect(parsePaidAmount(raw)).toBeUndefined();
-    }
-  });
-
-  it('минус — только если разрешён', () => {
-    expect(parsePaidAmount('-1 500')).toBeUndefined();
-    expect(parsePaidAmount('-1 500', true)).toBe(-1500);
-  });
-});
+const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
 describe('статьи', () => {
-  it('16 статей без повторов, минус только у перерасчёта', () => {
-    expect(PAYROLL_PAID_ITEMS).toHaveLength(16);
-    expect(new Set(PAYROLL_PAID_ITEMS.map(item => item.code)).size).toBe(16);
-    expect(PAYROLL_PAID_ITEMS.filter(item => item.allowNegative).map(item => item.code)).toEqual(['recalc_prev']);
+  it('17 статей без повторов, в порядке ведомости', () => {
+    expect(ITEMS).toHaveLength(17);
+    expect(new Set(ITEMS.map(item => item.code)).size).toBe(17);
+    expect(PAYROLL_PAID_GROUPS.map(group => group.items.map(item => item.label))).toEqual([
+      ['По трудовому договору', 'Премиальная', 'Больничный', 'Отпуска'],
+      ['Компенсация проживания', 'Проезд', 'Переработка', 'Перерасчёт за предыдущий период',
+        'Выходное пособие при увольнении', 'Разовая доплата', 'Плановая доплата', 'Займ'],
+      ['Питание', 'Спецодежда', 'Нарушение техники безопасности', 'Штрафы', 'Удержание по исп. листу'],
+    ]);
   });
 
-  it('исп. лист — в удержаниях, займ — в начислениях', () => {
+  it('исп. лист — в удержаниях, займ и плановая доплата — в начислениях', () => {
     const kindOf = (code: string) => PAYROLL_PAID_GROUPS.find(group => group.items.some(item => item.code === code))?.kind;
     expect(kindOf('writ_deduction')).toBe('deducted');
     expect(kindOf('loan')).toBe('accrued');
-    expect(kindOf('housing')).toBe('accrued');
+    expect(kindOf('planned_supplement')).toBe('accrued');
   });
 });
 
-describe('paidTotals', () => {
-  const totals = (months: string[], values: Record<string, string>) => paidTotals(months, key => values[key] ?? '');
+describe('суммы с сервера', () => {
+  it('по ключу ячейки, числом', () => {
+    const amounts = toPaidAmounts([
+      { month: '2026-08', item: 'contract', amount: '175000.00' },
+      { month: '2026-08', item: 'recalc_prev', amount: '-1500.50' },
+    ]);
+    expect(amounts.get(paidCellKey('2026-08', 'contract'))).toBe(175000);
+    expect(amounts.get(paidCellKey('2026-08', 'recalc_prev'))).toBe(-1500.5);
+  });
 
+  it('сумма в ячейке: разряды, копейки только если есть', () => {
+    expect(formatPaidAmount(175000).replace(/\s/g, ' ')).toBe('175 000');
+    expect(formatPaidAmount(55057.3).replace(/\s/g, ' ')).toBe('55 057,30');
+  });
+});
+
+describe('видимые строки', () => {
+  it('только статьи с суммой; группа без сумм не показывается; порядок — как в ведомости', () => {
+    const amounts = toPaidAmounts([
+      { month: '2026-08', item: 'travel', amount: '1430.00' },
+      { month: '2026-08', item: 'contract', amount: '68095.00' },
+      { month: '2026-08', item: 'vacation', amount: '59245.00' },
+      { month: '2026-07', item: 'meals', amount: '5248.00' }, // вне окна
+    ]);
+    const groups = visiblePaidGroups(['2026-08'], amounts);
+    expect(groups.map(group => [group.label, group.items.map(item => item.code)])).toEqual([
+      [null, ['contract', 'vacation']],
+      ['Доп. начисления', ['travel']],
+    ]);
+  });
+
+  it('сумм нет — строк нет', () => {
+    expect(visiblePaidGroups(['2026-08'], toPaidAmounts([]))).toEqual([]);
+  });
+});
+
+describe('итоги', () => {
   it('бр. Менгбоев, июль, Абдужабборов: начислено и удержано', () => {
-    const { byMonth } = totals(['2026-07'], {
-      [paidCellKey('2026-07', 'contract')]: '89 176,14',
-      [paidCellKey('2026-07', 'housing')]: '160',
-      [paidCellKey('2026-07', 'meals')]: '5 248',
-      [paidCellKey('2026-07', 'workwear')]: '3 050,51',
-    });
+    const { byMonth } = paidTotals(['2026-07'], toPaidAmounts([
+      { month: '2026-07', item: 'contract', amount: '89176.14' },
+      { month: '2026-07', item: 'housing', amount: '160.00' },
+      { month: '2026-07', item: 'meals', amount: '5248.00' },
+      { month: '2026-07', item: 'workwear', amount: '3050.51' },
+    ]));
     expect(byMonth['2026-07']).toEqual({ accrued: 89336.14, deducted: 8298.51 });
   });
 
-  it('Тендерный отдел, август, Карамышев: удержаний нет — «—», не 0', () => {
-    const { byMonth } = totals(['2026-08'], {
-      [paidCellKey('2026-08', 'contract')]: '68 095',
-      [paidCellKey('2026-08', 'vacation')]: '59 245',
-      [paidCellKey('2026-08', 'travel')]: '1 430',
-    });
-    expect(byMonth['2026-08']).toEqual({ accrued: 128770, deducted: null });
-  });
-
-  it('займ прибавляется, минусовой перерасчёт уменьшает, исп. лист — в удержано', () => {
-    const { byMonth } = totals(['2026-08'], {
-      [paidCellKey('2026-08', 'contract')]: '100 000',
-      [paidCellKey('2026-08', 'loan')]: '20 000',
-      [paidCellKey('2026-08', 'recalc_prev')]: '-1 500,50',
-      [paidCellKey('2026-08', 'writ_deduction')]: '7 000',
-    });
-    expect(byMonth['2026-08']).toEqual({ accrued: 118499.5, deducted: 7000 });
-  });
-
-  it('минус не у перерасчёта и кривые ячейки в итог не идут', () => {
-    const { byMonth } = totals(['2026-08'], {
-      [paidCellKey('2026-08', 'contract')]: '-100',
-      [paidCellKey('2026-08', 'bonus')]: 'abc',
-      [paidCellKey('2026-08', 'writ_deduction')]: '-100',
-      [paidCellKey('2026-08', 'meals')]: '1,005',
-    });
-    expect(byMonth['2026-08']).toEqual({ accrued: null, deducted: null });
+  it('удержаний нет — «—», не 0; минусовой перерасчёт уменьшает начислено', () => {
+    const { byMonth } = paidTotals(['2026-08'], toPaidAmounts([
+      { month: '2026-08', item: 'contract', amount: '100000.00' },
+      { month: '2026-08', item: 'planned_supplement', amount: '20000.00' },
+      { month: '2026-08', item: 'recalc_prev', amount: '-1500.50' },
+    ]));
+    expect(byMonth['2026-08']).toEqual({ accrued: 118499.5, deducted: null });
   });
 
   it('итог окна — сумма месяцев; пустые месяцы — «—»; копейки без ошибки float', () => {
-    const { byMonth, overall } = totals(['2026-06', '2026-07', '2026-08'], {
-      [paidCellKey('2026-07', 'meals')]: '0,1',
-      [paidCellKey('2026-08', 'meals')]: '0,2',
-      [paidCellKey('2026-08', 'workwear')]: '0',
-    });
+    const { byMonth, overall } = paidTotals(['2026-06', '2026-07', '2026-08'], toPaidAmounts([
+      { month: '2026-07', item: 'meals', amount: '0.10' },
+      { month: '2026-08', item: 'meals', amount: '0.20' },
+      { month: '2026-08', item: 'workwear', amount: '0.00' },
+    ]));
     expect(byMonth['2026-06']).toEqual({ accrued: null, deducted: null });
     expect(overall).toEqual({ accrued: null, deducted: 0.3 });
-  });
-
-  it('считает по тому, что сейчас в ячейке (несохранённая правка поверх сохранённой)', () => {
-    const saved = toPaidValues([{ month: '2026-08', item: 'contract', amount: '175000.00' }]);
-    const edits: Record<string, string> = { [paidCellKey('2026-08', 'contract')]: '180 000' };
-    const { byMonth } = paidTotals(['2026-08'], key => edits[key] ?? saved[key] ?? '');
-    expect(byMonth['2026-08'].accrued).toBe(180000);
-  });
-});
-
-describe('buildPaidChanges', () => {
-  const saved = toPaidValues([
-    { month: '2026-08', item: 'contract', amount: '175000.00' },
-    { month: '2026-08', item: 'travel', amount: '2730.00' },
-  ]);
-
-  it('сохранённые суммы — в виде поля ввода', () => {
-    expect(saved).toEqual({ '2026-08:contract': '175\u00a0000', '2026-08:travel': '2\u00a0730' });
-  });
-
-  it('без правок — пусто', () => {
-    expect(buildPaidChanges(MONTHS, saved, {})).toEqual({ changes: [], invalidKeys: [] });
-  });
-
-  it('то же число в другой записи — не изменение; новая, изменённая и очищенная — изменения', () => {
-    const edits = {
-      [paidCellKey('2026-08', 'contract')]: '175 000,00',
-      [paidCellKey('2026-07', 'bonus')]: '50000',
-      [paidCellKey('2026-08', 'travel')]: '',
-      [paidCellKey('2026-07', 'loan')]: '',
-    };
-    expect(buildPaidChanges(MONTHS, saved, edits)).toEqual({
-      changes: [
-        { month: '2026-07', item: 'bonus', amount: 50000 },
-        { month: '2026-08', item: 'travel', amount: null },
-      ],
-      invalidKeys: [],
-    });
-  });
-
-  it('ошибки — в порядке обхода: строки сверху вниз, в строке месяцы слева направо', () => {
-    const edits = {
-      [paidCellKey('2026-08', 'travel')]: 'x',
-      [paidCellKey('2026-08', 'contract')]: '1,005',
-      [paidCellKey('2026-07', 'contract')]: '-5',
-      [paidCellKey('2026-07', 'recalc_prev')]: '-5',
-    };
-    expect(buildPaidChanges(MONTHS, saved, edits)).toEqual({
-      changes: [{ month: '2026-07', item: 'recalc_prev', amount: -5 }],
-      invalidKeys: ['2026-07:contract', '2026-08:contract', '2026-08:travel'],
-    });
   });
 });

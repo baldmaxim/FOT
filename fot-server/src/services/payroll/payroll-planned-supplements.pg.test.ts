@@ -142,6 +142,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('298_payroll_paid_drop_payouts.sql'));
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
+    await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
   });
 
   afterAll(async () => {

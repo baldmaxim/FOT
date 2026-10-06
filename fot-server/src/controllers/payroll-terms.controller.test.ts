@@ -788,8 +788,8 @@ describe('payrollTermsController.list', () => {
     expect(sql).toMatch(/acc\.accruals/);
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_paid_amounts'));
     expect(sql).toMatch(/pa\.month <\s+date_trunc\('month', \$1::date\)::date/);
-    expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'overtime', 'recalc_prev', 'severance', "
-      + "'supplement', 'loan', 'vacation', 'travel', 'housing')");
+    expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'vacation', 'housing', 'travel', "
+      + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan')");
   });
 
   it('список отдаёт премиальную часть и компенсацию проживания из условий', async () => {
