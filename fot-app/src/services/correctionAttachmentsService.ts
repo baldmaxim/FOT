@@ -15,6 +15,8 @@ export interface ICorrectionAttachment {
 /** Согласованное заявление, из которого получена корректировка. */
 export interface ICorrectionSourceRequest {
   id: number;
+  submitted_at: string;
+  author_name: string | null;
   reviewed_at: string;
   reviewer_name: string | null;
 }

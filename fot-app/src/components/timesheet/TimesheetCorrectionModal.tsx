@@ -10,6 +10,8 @@ import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { TravelSegmentsPanel } from './TravelSegmentsPanel';
 import { CorrectionAttachments } from './CorrectionAttachments';
 import { CorrectionSourceRequestLine } from './CorrectionSourceRequestLine';
+import { CorrectionAuthorLine } from './CorrectionAuthorLine';
+import { CorrectionAuthorBlock } from './CorrectionAuthorBlock';
 import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 import {
   buildDisplayItems,
@@ -1417,13 +1419,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
               {trimmedNotes && (
                 <div className="ts-correction-view-comment">{trimmedNotes}</div>
               )}
-              {(entry.corrected_by_name || entry.corrected_at) && (
-                <div className="ts-correction-view-author">
-                  ✎ {entry.corrected_by_name}
-                  {entry.corrected_by_name && entry.corrected_at && ', '}
-                  {entry.corrected_at && formatCorrectionDate(entry.corrected_at)}
-                </div>
-              )}
+              <CorrectionAuthorLine
+                adjustmentId={entry.adjustment_id ?? null}
+                authorName={entry.corrected_by_name ?? null}
+                correctedAt={entry.corrected_at ?? null}
+                formatDate={formatCorrectionDate}
+              />
               {entry.adjustment_id != null && (
                 <CorrectionSourceRequestLine
                   adjustmentId={entry.adjustment_id}
@@ -1712,22 +1713,17 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
 
   // Плашка «автор последней корректировки + время» — раньше висела sticky под
   // шапкой модалки. Перенесена в правую колонку, чтобы не сдвигать шапку и
-  // быть рядом с самим списком корректировок.
+  // быть рядом с самим списком корректировок. При списке объектов автор уже в
+  // каждой карточке объекта — плашка нужна только для корректировки «День целиком».
   const correctionAuthorBlock = correctionInfo?.is_correction
-    && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) ? (
-      <div className="ts-corr-card__author">
-        <span className="ts-corr-card__author-avatar" aria-hidden>
-          {(correctionInfo.corrected_by_name?.trim()?.[0] ?? '✎').toUpperCase()}
-        </span>
-        <span className="ts-corr-card__author-text">
-          <span className="ts-corr-card__author-name">
-            {correctionInfo.corrected_by_name || 'Корректировка'}
-          </span>
-          {correctionInfo.corrected_at && (
-            <span className="ts-corr-card__author-date">{formatCorrectionDate(correctionInfo.corrected_at)}</span>
-          )}
-        </span>
-      </div>
+    && (correctionInfo.corrected_by_name || correctionInfo.corrected_at)
+    && (!hasObjectsBlock || hasDayLevelCorrection) ? (
+      <CorrectionAuthorBlock
+        adjustmentId={correctionInfo.adjustment_id ?? null}
+        authorName={correctionInfo.corrected_by_name ?? null}
+        correctedAt={correctionInfo.corrected_at ?? null}
+        formatDate={formatCorrectionDate}
+      />
     ) : null;
 
   // Блок файлов корректировки. Для day-level формы передаётся слотом в CorrectionTab

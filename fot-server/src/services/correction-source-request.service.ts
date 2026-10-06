@@ -1,14 +1,19 @@
 import { queryOne } from '../config/postgres.js';
 
+const toIso = (value: Date | string): string => (value instanceof Date ? value.toISOString() : String(value));
+
 export interface ICorrectionSourceRequest {
   id: number;
+  // Подача: заявление создаёт только сам сотрудник (leave-requests.controller → create).
+  submitted_at: string;
+  author_name: string | null;
   reviewed_at: string;
   reviewer_name: string | null;
 }
 
 /**
  * Согласованное заявление «Корректировка» (time_correction), из которого получена
- * корректировка табеля, — для строки «Согласовано · кто · когда» в окне дня.
+ * корректировка табеля, — для строк «Подано» и «Согласовано» в окне дня.
  *
  * Прямой ссылки нет: при согласовании объектная корректировка пишется с
  * source_id = id объекта (leave-requests.controller → upsertAttendanceAdjustment),
@@ -27,10 +32,13 @@ export async function loadCorrectionSourceRequest(
 ): Promise<ICorrectionSourceRequest | null> {
   const row = await queryOne<{
     id: number | string;
+    submitted_at: Date | string;
+    author_name: string | null;
     reviewed_at: Date | string;
     reviewer_name: string | null;
   }>(
-    `SELECT lr.id, lr.reviewed_at, up.full_name AS reviewer_name
+    `SELECT lr.id, lr.created_at AS submitted_at, e.full_name AS author_name,
+            lr.reviewed_at, up.full_name AS reviewer_name
        FROM attendance_adjustments a
        JOIN leave_requests lr
          ON lr.employee_id = a.employee_id
@@ -44,6 +52,7 @@ export async function loadCorrectionSourceRequest(
               (a.source_type = 'manual_object' AND lr.correction_object_id::text = a.source_id)
            OR (a.source_type = 'leave_request' AND a.source_id = lr.id::text || ':time_correction')
             )
+       LEFT JOIN employees e ON e.id = lr.employee_id
        LEFT JOIN user_profiles up ON up.id = lr.reviewer_id
       WHERE a.id = $1
       ORDER BY lr.reviewed_at DESC
@@ -53,7 +62,9 @@ export async function loadCorrectionSourceRequest(
   if (!row) return null;
   return {
     id: Number(row.id),
-    reviewed_at: row.reviewed_at instanceof Date ? row.reviewed_at.toISOString() : String(row.reviewed_at),
+    submitted_at: toIso(row.submitted_at),
+    author_name: row.author_name ?? null,
+    reviewed_at: toIso(row.reviewed_at),
     reviewer_name: row.reviewer_name ?? null,
   };
 }

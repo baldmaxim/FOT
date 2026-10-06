@@ -1,6 +1,5 @@
 import { type FC } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
+import { useCorrectionSourceRequest } from '../../hooks/useCorrectionSourceRequest';
 import { formatFioShort } from '../../utils/formatFio';
 
 interface ICorrectionSourceRequestLineProps {
@@ -17,11 +16,7 @@ interface ICorrectionSourceRequestLineProps {
  * поправлены после согласования) или запрос упал — строки нет.
  */
 export const CorrectionSourceRequestLine: FC<ICorrectionSourceRequestLineProps> = ({ adjustmentId, updatedAt, formatDate }) => {
-  const { data } = useQuery({
-    queryKey: ['correction-source-request', adjustmentId, updatedAt ?? null],
-    queryFn: () => correctionAttachmentsService.getSourceRequest(adjustmentId),
-    staleTime: 60_000,
-  });
+  const { data } = useCorrectionSourceRequest(adjustmentId, updatedAt);
   if (!data) return null;
   const reviewer = formatFioShort(data.reviewer_name);
   return (

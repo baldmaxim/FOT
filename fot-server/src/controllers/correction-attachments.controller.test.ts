@@ -147,14 +147,26 @@ describe('correctionAttachmentsController.sourceRequest', () => {
 
   it('отдаёт согласующего и время', async () => {
     loadByIdMock.mockResolvedValue({ id: 5, employee_id: 10, work_date: '2026-08-08', source_type: 'manual_object', source_id: 'obj' });
-    sourceRequestMock.mockResolvedValue({ id: 6466, reviewed_at: '2026-08-17T14:08:17.964Z', reviewer_name: 'Боюкян Микаел Варужанович' });
+    sourceRequestMock.mockResolvedValue({
+      id: 6466,
+      submitted_at: '2026-08-17T13:24:42.372Z',
+      author_name: 'Исмаилов Рамиз Загирбегович',
+      reviewed_at: '2026-08-17T14:08:17.964Z',
+      reviewer_name: 'Боюкян Микаел Варужанович',
+    });
     const res = makeRes();
     await correctionAttachmentsController.sourceRequest(makeIdReq('5'), res);
     expect(res.statusCode).toBe(200);
     expect(sourceRequestMock).toHaveBeenCalledWith(5);
     expect(res.body).toEqual({
       success: true,
-      data: { id: 6466, reviewed_at: '2026-08-17T14:08:17.964Z', reviewer_name: 'Боюкян Микаел Варужанович' },
+      data: {
+        id: 6466,
+        submitted_at: '2026-08-17T13:24:42.372Z',
+        author_name: 'Исмаилов Рамиз Загирбегович',
+        reviewed_at: '2026-08-17T14:08:17.964Z',
+        reviewer_name: 'Боюкян Микаел Варужанович',
+      },
     });
   });
 
