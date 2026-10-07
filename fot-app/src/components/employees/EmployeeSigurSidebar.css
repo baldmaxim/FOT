@@ -219,6 +219,59 @@
   gap: 6px;
 }
 
+.ep-sigur-block-reason {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.ep-sigur-block-reason.error {
+  color: var(--error);
+}
+
+.ep-sigur-block-overlay {
+  padding: 16px;
+}
+
+.ep-sigur-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ep-sigur-block-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ep-sigur-block-body .ep-sigur-block-label {
+  margin-bottom: 0;
+}
+
+.ep-sigur-block-dialog .ep-sigur-block-reason {
+  margin-top: 0;
+  font-size: 13px;
+}
+
+.ep-sigur-block-dialog .ep-sigur-block-textarea {
+  font-size: 16px;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.ep-sigur-block-dialog .ep-modal-btn {
+  min-height: 44px;
+}
+
+.ep-sigur-block-dialog .ep-modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .ep-sigur-pill {
   display: inline-flex;
   align-items: center;

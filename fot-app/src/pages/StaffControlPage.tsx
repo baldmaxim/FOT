@@ -1724,7 +1724,6 @@ export const StaffControlPage: FC = () => {
     positionId: string;
     tabId: string;
     description: string;
-    blocked: boolean;
   } | null>(null);
   const [loadingSigurProfile, setLoadingSigurProfile] = useState(false);
   const [sigurEditSaving, setSigurEditSaving] = useState(false);
@@ -2394,7 +2393,6 @@ export const StaffControlPage: FC = () => {
         positionId: profile.profile.positionId != null ? String(profile.profile.positionId) : '',
         tabId: profile.profile.tabNumber ?? '',
         description: profile.profile.description ?? '',
-        blocked: profile.profile.blocked === true,
       });
       setSigurEditError(null);
     } catch (err) {
@@ -2427,7 +2425,6 @@ export const StaffControlPage: FC = () => {
         positionId: sigurEditDialog.positionId ? Number(sigurEditDialog.positionId) : null,
         tabId: sigurEditDialog.tabId.trim() || null,
         description: sigurEditDialog.description.trim() || null,
-        blocked: sigurEditDialog.blocked,
       });
       toast.success('Профиль в Sigur обновлён');
       setSigurEditDialog(null);
@@ -3055,17 +3052,6 @@ export const StaffControlPage: FC = () => {
                   rows={3}
                   disabled={sigurEditSaving}
                 />
-              </div>
-              <div className="sc-field sc-checkbox-row">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={sigurEditDialog.blocked}
-                    onChange={e => setSigurEditDialog(prev => prev ? { ...prev, blocked: e.target.checked } : prev)}
-                    disabled={sigurEditSaving}
-                  />
-                  <span>Заблокирован в Sigur</span>
-                </label>
               </div>
               {sigurEditError && <div className="sc-error" style={{ color: '#dc2626', fontSize: 13 }}>{sigurEditError}</div>}
             </div>

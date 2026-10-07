@@ -603,7 +603,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
       positionId: '',
       tabId: '',
       description: '',
-      blocked: false,
     });
     setTriedSubmitEmployee(false);
     setNewEmployeePositionName('');
@@ -644,7 +643,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
         positionId: profile.profile.positionId != null ? String(profile.profile.positionId) : '',
         tabId: profile.profile.tabNumber ?? '',
         description: profile.profile.description ?? '',
-        blocked: profile.profile.blocked === true,
       });
       setTriedSubmitEmployee(false);
       setEmployeeNameSuggestionsQuery('');
@@ -679,7 +677,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
             positionId: employeeDialog.positionId ? Number(employeeDialog.positionId) : null,
             tabId: employeeDialog.tabId.trim() || null,
             description: employeeDialog.description.trim() || null,
-            blocked: employeeDialog.blocked,
           })
         : await sigurAdminService.createEmployee({
             name: employeeDialog.name.trim(),
@@ -687,7 +684,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
             positionId: employeeDialog.positionId ? Number(employeeDialog.positionId) : null,
             tabId: employeeDialog.tabId.trim() || null,
             description: employeeDialog.description.trim() || null,
-            blocked: employeeDialog.blocked,
           });
       closeEmployeeDialog();
       setSelectedDeptId(profile.profile.departmentId ?? Number(employeeDialog.departmentId));
@@ -1610,14 +1606,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
                     onChange={event => setEmployeeDialog(prev => prev ? { ...prev, description: event.target.value } : prev)}
                     rows={4}
                   />
-                </label>
-                <label className="sigur-live-checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={employeeDialog.blocked}
-                    onChange={event => setEmployeeDialog(prev => prev ? { ...prev, blocked: event.target.checked } : prev)}
-                  />
-                  <span>Сразу создать в заблокированном состоянии</span>
                 </label>
               </div>
             </div>

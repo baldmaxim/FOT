@@ -57,6 +57,7 @@ import {
 } from '../services/sigur-bulk-cards-token.js';
 import { SigurCardLeaseBusyError, withSigurCardWriteLease } from '../services/sigur-card-lease.service.js';
 import { getSigurCardHistory } from '../services/sigur-card-history.service.js';
+import { getSigurEmployeeBlockInfo } from '../services/sigur-employee-block.service.js';
 import { withTransaction } from '../config/postgres.js';
 import { parseIsoDateOnly, moscowTodayIso } from '../utils/date.utils.js';
 import { randomUUID } from 'crypto';
@@ -86,6 +87,17 @@ const MAX_BULK_ACCESS_POINTS_EMPLOYEES = 50;
 
 /** Лимит сотрудников в одной операции массового продления карт. */
 const MAX_BULK_EXTEND_CARDS_EMPLOYEES = 500;
+
+/** Предел длины причины блокировки сотрудника. */
+const MAX_BLOCK_REASON_LENGTH = 500;
+
+/** Блокировка уже стоит: повтор не перезаписывает автора и причину. */
+class SigurEmployeeAlreadyBlockedError extends Error {
+  constructor() {
+    super('Сотрудник уже заблокирован');
+    this.name = 'SigurEmployeeAlreadyBlockedError';
+  }
+}
 
 /**
  * Разбор входа массового продления. Мусор не отбрасываем молча: список
@@ -584,8 +596,16 @@ export const sigurAdminController = {
         return;
       }
 
+      // Блокировка — только кнопкой в карточке, с причиной.
+      if (req.body.blocked != null && Boolean(req.body.blocked)) {
+        res.status(400).json({
+          success: false,
+          error: 'Сотрудник создаётся активным; заблокировать — кнопкой в карточке с указанием причины',
+        });
+        return;
+      }
+
       const positionId = req.body.positionId == null ? null : parseInteger(req.body.positionId);
-      const blocked = req.body.blocked == null ? null : Boolean(req.body.blocked);
       const tabId = typeof req.body.tabId === 'string' ? req.body.tabId.trim() : null;
       const description = typeof req.body.description === 'string' ? req.body.description : null;
       const connection = parseConnection(req.body.connection);
@@ -595,7 +615,6 @@ export const sigurAdminController = {
         name,
         departmentId,
         positionId,
-        blocked,
         tabId,
         description,
       }, connection);
@@ -603,7 +622,7 @@ export const sigurAdminController = {
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
         entityId: String(data.sigurEmployeeId),
-        details: { action: 'create', departmentId, positionId, blocked, tabId },
+        details: { action: 'create', departmentId, positionId, tabId },
       });
 
       res.status(201).json({ success: true, data });
@@ -652,7 +671,8 @@ export const sigurAdminController = {
           description: req.body.description === undefined
             ? undefined
             : (typeof req.body.description === 'string' ? req.body.description : null),
-          blocked: req.body.blocked === undefined ? undefined : Boolean(req.body.blocked),
+          // blocked не принимаем: статус меняется только через /block (с причиной)
+          // и /unblock (с проверкой чёрного списка).
         },
         connection,
       );
@@ -699,25 +719,71 @@ export const sigurAdminController = {
   async blockEmployee(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
-      if (!sigurEmployeeId) {
+      if (!sigurEmployeeId || sigurEmployeeId <= 0) {
         res.status(400).json({ success: false, error: 'Некорректный ID сотрудника' });
         return;
       }
 
-      const connection = parseConnection(req.body.connection);
-      const data = await updateSigurEmployee(sigurEmployeeId, { blocked: true }, connection);
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+      if (!reason) {
+        res.status(400).json({ success: false, error: 'Укажите причину блокировки' });
+        return;
+      }
+      if (reason.length > MAX_BLOCK_REASON_LENGTH) {
+        res.status(400).json({
+          success: false,
+          error: `Причина блокировки — не длиннее ${MAX_BLOCK_REASON_LENGTH} символов`,
+        });
+        return;
+      }
 
-      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
-        entityType: 'sigur_employee',
-        entityId: String(sigurEmployeeId),
-        details: { action: 'block' },
+      const connection = parseConnection(req.body.connection);
+      // Причина — обязательные данные, поэтому запись журнала строгая и идёт в одной
+      // транзакции с вызовом Sigur: сбой записи — Sigur не трогаем, сбой Sigur — запись
+      // откатывается. Полной атомарности нет: если Sigur заблокировал, а commit упал,
+      // клиент получит ошибку и перечитает профиль.
+      const data = await withTransaction(async client => {
+        // Тот же ключ, что у withSigurProfileGuard: блокировка и разблокировка одного
+        // профиля идут по очереди, две одновременные блокировки не задвоят запись.
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`blacklist:sigur:${sigurEmployeeId}`]);
+        const current = await getSigurEmployeeProfile(sigurEmployeeId, {}, connection);
+        if (current.profile.blocked === true) throw new SigurEmployeeAlreadyBlockedError();
+
+        await auditService.logFromRequestWithClient(client, req, req.user.id, 'UPDATE_EMPLOYEE', {
+          entityType: 'sigur_employee',
+          entityId: String(sigurEmployeeId),
+          details: { action: 'block', reason },
+        });
+
+        return updateSigurEmployee(sigurEmployeeId, { blocked: true }, connection);
       });
 
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof SigurEmployeeAlreadyBlockedError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       const status = getErrorStatus(error);
       console.error('Sigur admin blockEmployee error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка блокировки сотрудника Sigur') });
+    }
+  },
+
+  /** GET /admin/employees/:sigurEmployeeId/block-info — кто, когда и почему заблокировал через FOT. */
+  async getEmployeeBlockInfo(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
+      if (!sigurEmployeeId || sigurEmployeeId <= 0) {
+        res.status(400).json({ success: false, error: 'Некорректный ID сотрудника' });
+        return;
+      }
+
+      const data = await getSigurEmployeeBlockInfo(sigurEmployeeId);
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Sigur admin getEmployeeBlockInfo error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить причину блокировки' });
     }
   },
 

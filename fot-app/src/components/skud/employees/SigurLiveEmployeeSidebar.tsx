@@ -28,6 +28,8 @@ import type {
 } from '../../../types';
 import { AccessPointMapPreviewBadge } from '../../employees/AccessPointMapPreviewBadge';
 import { CardReaderModal } from '../CardReaderModal';
+import { SigurBlockDialog } from './SigurBlockDialog';
+import { SigurBlockReason } from './SigurBlockReason';
 import { SigurCardHistory } from './SigurCardHistory';
 import { sigurCardHistoryQueryKey } from './sigurCardHistory.helpers';
 import '../../employees/EmployeeSigurSidebar.css';
@@ -438,6 +440,8 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const [cardReaderOpen, setCardReaderOpen] = useState(false);
   const [removingCardId, setRemovingCardId] = useState<number | null>(null);
   const [historyCardId, setHistoryCardId] = useState<number | null>(null);
+  const [blockDialogMode, setBlockDialogMode] = useState<'block' | 'unblock' | null>(null);
+  const [blockDialogError, setBlockDialogError] = useState('');
   const [editingField, setEditingField] = useState<keyof IEmployeeDraft | null>(null);
   const [accessPointSearchQuery, setAccessPointSearchQuery] = useState('');
   const [accessRulesPickerOpen, setAccessRulesPickerOpen] = useState(false);
@@ -493,9 +497,11 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     setProfileError('');
   }, [sigurEmployeeId]);
 
-  // Другой сотрудник — история закрыта, иначе карта с тем же ID откроется сама.
+  // Другой сотрудник — история и окно блокировки закрыты, иначе откроются у него.
   useEffect(() => {
     setHistoryCardId(null);
+    setBlockDialogMode(null);
+    setBlockDialogError('');
   }, [sigurEmployeeId]);
 
   useEffect(() => {
@@ -556,6 +562,19 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const fullName = profile?.profile.fullName || employee?.name || '—';
   const tabNumber = profile?.profile.tabNumber || employee?.tabId || '—';
   const isBlocked = profile?.profile.blocked === true || employee?.blocked === true;
+
+  const blockInfoQuery = useQuery({
+    queryKey: ['sigur-employee-block-info', sigurEmployeeId],
+    queryFn: () => sigurAdminService.getEmployeeBlockInfo(sigurEmployeeId as number),
+    enabled: isBlocked && sigurEmployeeId != null,
+  });
+  const blockReason = (
+    <SigurBlockReason
+      isLoading={blockInfoQuery.isPending}
+      isError={blockInfoQuery.isError}
+      info={blockInfoQuery.data}
+    />
+  );
 
   const summaryBadge = tabNumber && tabNumber !== '—' ? tabNumber.slice(0, 4) : getInitials(fullName);
 
@@ -738,24 +757,34 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     }
   };
 
-  const handleToggleBlocked = async () => {
+  const handleToggleBlocked = () => {
     if (!sigurEmployeeId) return;
-    const message = isBlocked
-      ? `Разблокировать сотрудника "${fullName}" в Sigur?`
-      : `Заблокировать сотрудника "${fullName}" в Sigur?`;
-    if (!window.confirm(message)) return;
+    setBlockDialogError('');
+    setBlockDialogMode(isBlocked ? 'unblock' : 'block');
+  };
+
+  const closeBlockDialog = useCallback(() => setBlockDialogMode(null), []);
+
+  const handleConfirmBlockDialog = async (reason: string) => {
+    if (!sigurEmployeeId || !blockDialogMode) return;
+    const mode = blockDialogMode;
 
     try {
-      setRunningAction(isBlocked ? 'unblock' : 'block');
-      setProfileError('');
-      const nextProfile = isBlocked
+      setRunningAction(mode);
+      setBlockDialogError('');
+      const nextProfile = mode === 'unblock'
         ? await sigurAdminService.unblockEmployee(sigurEmployeeId)
-        : await sigurAdminService.blockEmployee(sigurEmployeeId);
+        : await sigurAdminService.blockEmployee(sigurEmployeeId, reason);
       setProfile(nextProfile);
       mergeProfileIntoEmployeesQueries(nextProfile);
+      setBlockDialogMode(null);
+      void queryClient.invalidateQueries({ queryKey: ['sigur-employee-block-info', sigurEmployeeId] });
       await onDirectoryChanged();
     } catch (error) {
-      setProfileError(error instanceof Error ? error.message : 'Не удалось изменить статус блокировки');
+      setBlockDialogError(error instanceof Error ? error.message : 'Не удалось изменить статус блокировки');
+      // Sigur мог успеть применить изменение до сбоя — сверяем профиль с ним.
+      void reloadProfile(true);
+      void queryClient.invalidateQueries({ queryKey: ['sigur-employee-block-info', sigurEmployeeId] });
     } finally {
       setRunningAction(null);
     }
@@ -1023,7 +1052,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 <button
                   type="button"
                   className={`ep-sigur-pill ep-sigur-pill--toggle ${isBlocked ? 'ep-sigur-pill--danger' : 'ep-sigur-pill--success'}`}
-                  onClick={() => void handleToggleBlocked()}
+                  onClick={handleToggleBlocked}
                   disabled={runningAction === 'block' || runningAction === 'unblock'}
                   title={isBlocked ? 'Кликните, чтобы разблокировать' : 'Кликните, чтобы заблокировать'}
                 >
@@ -1047,6 +1076,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 <span className="ep-sigur-pill-value">{tabNumber}</span>
               </span>
             </div>
+            {isBlocked && blockReason}
           </div>
         </div>
 
@@ -1500,6 +1530,18 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
             onAssigned: handleCardAssigned,
           }}
           onClose={() => setCardReaderOpen(false)}
+        />
+      )}
+
+      {blockDialogMode && (
+        <SigurBlockDialog
+          mode={blockDialogMode}
+          fullName={fullName}
+          saving={runningAction === 'block' || runningAction === 'unblock'}
+          error={blockDialogError}
+          blockReason={blockReason}
+          onConfirm={reason => void handleConfirmBlockDialog(reason)}
+          onClose={closeBlockDialog}
         />
       )}
     </aside>

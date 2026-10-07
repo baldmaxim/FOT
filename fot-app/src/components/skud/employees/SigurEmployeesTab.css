@@ -76,17 +76,6 @@
   background: rgba(148, 163, 184, 0.12);
 }
 
-.sigur-live-checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.sigur-live-checkbox-row input {
-  width: 16px;
-  height: 16px;
-}
-
 .sigur-live-inline-create {
   display: flex;
   align-items: center;

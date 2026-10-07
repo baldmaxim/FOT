@@ -3,6 +3,7 @@ import { readSseResponse } from '../components/skud/sigur-settings.utils';
 import type {
   AccessPointOption,
   SigurCardHistoryEntry,
+  SigurEmployeeBlockInfo,
   SigurConnectionScope,
   SigurDepartmentNode,
   SigurEmployeeCardAccessStatus,
@@ -137,7 +138,6 @@ export interface SigurEmployeeUpsertInput {
   positionId?: number | null;
   tabId?: string | null;
   description?: string | null;
-  blocked?: boolean | null;
   connection?: SigurConnectionScope;
 }
 
@@ -147,7 +147,6 @@ export interface SigurEmployeeUpdateInput {
   positionId?: number | null;
   tabId?: string | null;
   description?: string | null;
-  blocked?: boolean | null;
   connection?: SigurConnectionScope;
 }
 
@@ -386,10 +385,21 @@ export const sigurAdminService = {
     await apiClient.delete(endpoint);
   },
 
-  async blockEmployee(sigurEmployeeId: number, connection?: SigurConnectionScope): Promise<SigurLiveEmployeeProfile> {
+  async blockEmployee(
+    sigurEmployeeId: number,
+    reason: string,
+    connection?: SigurConnectionScope,
+  ): Promise<SigurLiveEmployeeProfile> {
     const response = await apiClient.post<ApiResponse<SigurLiveEmployeeProfile>>(
       `/sigur/admin/employees/${sigurEmployeeId}/block`,
-      { connection },
+      { reason, connection },
+    );
+    return response.data;
+  },
+
+  async getEmployeeBlockInfo(sigurEmployeeId: number): Promise<SigurEmployeeBlockInfo | null> {
+    const response = await apiClient.get<ApiResponse<SigurEmployeeBlockInfo | null>>(
+      `/sigur/admin/employees/${sigurEmployeeId}/block-info`,
     );
     return response.data;
   },

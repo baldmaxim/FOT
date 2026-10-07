@@ -55,7 +55,6 @@ export type EmployeeDialogState = {
   positionId: string;
   tabId: string;
   description: string;
-  blocked: boolean;
 } | null;
 
 export type EmployeeMoveDialogState = {

@@ -147,4 +147,19 @@ d('SIGUR: кадровый админ с ключом /sigur', () => {
     expect((await send('get', url)).status).toBe(200);
     expect(h.calls).toEqual(['sigurAdmin.getEmployeeCardHistory', 'sigurAdmin.getEmployeeCardHistory']);
   });
+
+  it('причина блокировки: просмотр по /sigur или /skud-settings, без кеша', async () => {
+    const url = '/api/sigur/admin/employees/42/block-info';
+    expect((await send('get', url)).status).toBe(403);
+
+    h.grants.add('/sigur:view');
+    const bySigur = await send('get', url);
+    expect(bySigur.status).toBe(200);
+    expect(bySigur.headers['cache-control']).toBe('no-store');
+
+    h.grants.clear();
+    h.grants.add('/skud-settings:view');
+    expect((await send('get', url)).status).toBe(200);
+    expect(h.calls).toEqual(['sigurAdmin.getEmployeeBlockInfo', 'sigurAdmin.getEmployeeBlockInfo']);
+  });
 });

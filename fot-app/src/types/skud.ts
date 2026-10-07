@@ -186,6 +186,14 @@ export interface SigurCardHistoryEntry {
   actorName: string | null;
 }
 
+/** Последняя блокировка сотрудника через FOT: кто, когда и почему. */
+export interface SigurEmployeeBlockInfo {
+  blockedAt: string;
+  blockedByName: string | null;
+  /** null — блокировка до обязательной причины. */
+  reason: string | null;
+}
+
 export interface SigurEmployeeAccessRuleSummary {
   accessRuleId: number;
   accessRuleName: string | null;

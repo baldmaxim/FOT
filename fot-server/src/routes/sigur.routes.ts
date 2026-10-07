@@ -254,6 +254,12 @@ router.post(
   requireCritical2FA,
   sigurAdminController.blockEmployee,
 );
+router.get(
+  '/admin/employees/:sigurEmployeeId/block-info',
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'),
+  noStore,
+  sigurAdminController.getEmployeeBlockInfo,
+);
 router.post(
   '/admin/employees/:sigurEmployeeId/unblock',
   requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
