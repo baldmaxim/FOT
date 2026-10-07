@@ -248,7 +248,35 @@ export async function applyCardExpirationChange(params: {
   };
 }
 
-/** Поштучное сохранение срока из сайдбара. Тонкая обёртка над ядром: сигнатура и поведение прежние. */
+export interface ISigurCardDates {
+  startDate: string | null;
+  expirationDate: string | null;
+}
+
+/**
+ * Даты привязки карты до поштучной правки — для журнала «было → стало».
+ * Заодно это диагностический дамп «до». Сбой чтения сохранение не блокирует:
+ * прежние даты просто не попадут в историю.
+ */
+export async function readSigurCardDates(
+  sigurEmployeeId: number,
+  cardId: number,
+  connection?: ConnectionType,
+): Promise<ISigurCardDates | null> {
+  try {
+    const bindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId, cardId }, connection) as Record<string, unknown>[];
+    console.log('[Sigur binding BEFORE patch] raw=', JSON.stringify(bindings));
+    const card = bindings
+      .map(rawCard => toCardSummary(rawCard))
+      .find(rawCard => rawCard?.cardId === cardId);
+    return card ? { startDate: card.startDate, expirationDate: card.expirationDate } : null;
+  } catch (error) {
+    console.warn('[Sigur binding BEFORE patch] read failed:', error);
+    return null;
+  }
+}
+
+/** Поштучное сохранение срока из сайдбара: ядро + прежние даты для журнала. */
 export async function updateSigurEmployeeCardBinding(
   sigurEmployeeId: number,
   cardId: number,
@@ -256,16 +284,17 @@ export async function updateSigurEmployeeCardBinding(
   expirationDate: string,
   connection?: ConnectionType,
   format?: string | null,
-): Promise<ISigurCardSummary> {
-  return applyCardExpirationChange({
+): Promise<{ card: ISigurCardSummary; before: ISigurCardDates | null }> {
+  const before = await readSigurCardDates(sigurEmployeeId, cardId, connection);
+  const card = await applyCardExpirationChange({
     sigurEmployeeId,
     cardId,
     startDate,
     expirationDate,
     connection,
     format,
-    logBeforeState: true,
   });
+  return { card, before };
 }
 
 export async function replaceSigurEmployeeAccessPoints(

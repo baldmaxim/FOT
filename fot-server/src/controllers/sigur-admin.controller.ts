@@ -1424,7 +1424,7 @@ export const sigurAdminController = {
 
       const connection = parseConnection(req.body.connection);
       const format = typeof req.body.format === 'string' && req.body.format ? req.body.format : undefined;
-      const data = await withSigurCardWriteLease(req.user.id, () =>
+      const { card, before } = await withSigurCardWriteLease(req.user.id, () =>
         updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection, format));
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
@@ -1433,12 +1433,14 @@ export const sigurAdminController = {
         details: {
           action: 'update_card_binding',
           cardId,
-          startDate: data.startDate,
-          expirationDate: data.expirationDate,
+          startDate: card.startDate,
+          expirationDate: card.expirationDate,
+          previousStartDate: before?.startDate ?? null,
+          previousExpirationDate: before?.expirationDate ?? null,
         },
       });
 
-      res.json({ success: true, data });
+      res.json({ success: true, data: card });
     } catch (error) {
       if (error instanceof SigurCardLeaseBusyError) {
         res.status(409).json({ success: false, error: error.message });

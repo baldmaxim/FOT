@@ -15,6 +15,7 @@ import { settingsService } from '../services/settings.service.js';
 import { getSigurMonitorStatus } from '../services/sigur-monitor.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { SigurCardLeaseBusyError, withSigurCardWriteLease } from '../services/sigur-card-lease.service.js';
+import { readSigurCardDates } from '../services/sigur-live-cards.service.js';
 import { resolveField } from '../services/sigur-sync-shared.js';
 import { createCache } from '../utils/cache.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
@@ -1405,15 +1406,19 @@ export const sigurController = {
         return;
       }
 
-      await withSigurCardWriteLease(req.user.id, () =>
-        sigurService.patchEmployeeCardBinding(
+      // Прежние даты читаем под тем же lease — для журнала «было → стало».
+      const before = await withSigurCardWriteLease(req.user.id, async () => {
+        const previous = await readSigurCardDates(employee.sigur_employee_id as number, cardId, connection);
+        await sigurService.patchEmployeeCardBinding(
           employee.sigur_employee_id as number,
           cardId,
           parsedStartDate.toISOString(),
           parsedExpirationDate.toISOString(),
           connection,
           format,
-        ));
+        );
+        return previous;
+      });
 
       const cardsRaw = await sigurService.getCardBindings(
         { employeeId: employee.sigur_employee_id },
@@ -1434,6 +1439,8 @@ export const sigurController = {
           cardId,
           startDate: parsedStartDate.toISOString(),
           expirationDate: parsedExpirationDate.toISOString(),
+          previousStartDate: before?.startDate ?? null,
+          previousExpirationDate: before?.expirationDate ?? null,
         },
       });
 

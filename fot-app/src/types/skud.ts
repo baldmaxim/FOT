@@ -181,8 +181,10 @@ export interface SigurCardHistoryEntry {
   kind: SigurCardHistoryKind;
   startDate: string | null;
   expirationDate: string | null;
-  /** Прежний срок — только у массового продления; поштучные правки его не сохраняли. */
+  /** Прежний срок: у массового продления и у поштучных правок с 07.10.2026. */
   previousExpiration: string | null;
+  /** Прежняя дата начала: только у поштучных правок с 07.10.2026. */
+  previousStartDate: string | null;
   actorName: string | null;
 }
 

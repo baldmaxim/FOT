@@ -212,11 +212,30 @@ describe('applyCardExpirationChange', () => {
     expect(sig.patchEmployeeCardBinding).not.toHaveBeenCalled();
   });
 
-  it('одиночное «Сохранить» выполняет тот же PATCH и сохраняет диагностическое чтение', async () => {
-    const card = await updateSigurEmployeeCardBinding(1, 100, START, TARGET, undefined, 'W26');
+  it('одиночное «Сохранить» выполняет тот же PATCH и возвращает прежние даты для журнала', async () => {
+    const PREVIOUS = '2026-10-09T20:59:59.000Z';
+    sig.getCardBindings = vi.fn()
+      .mockResolvedValueOnce([{ id: 100, cardId: 100, employeeId: 1, startDate: START, expirationDate: PREVIOUS, format: 'W26' }])
+      .mockResolvedValueOnce([{ id: 100, cardId: 100, employeeId: 1, startDate: START, expirationDate: TARGET, format: 'W26' }]);
+
+    const { card, before } = await updateSigurEmployeeCardBinding(1, 100, START, TARGET, undefined, 'W26');
 
     expect(sig.patchEmployeeCardBinding).toHaveBeenCalledWith(1, 100, START, TARGET, undefined, 'W26');
     expect(sig.getCardBindings).toHaveBeenCalledTimes(2);
     expect(card).toMatchObject({ cardId: 100, expirationDate: TARGET });
+    expect(before).toEqual({ startDate: START, expirationDate: PREVIOUS });
+  });
+
+  it('сбой чтения прежних дат не мешает сохранению: before = null', async () => {
+    sig.getCardBindings = vi.fn()
+      .mockRejectedValueOnce(new Error('sigur timeout'))
+      .mockResolvedValueOnce([{ id: 100, cardId: 100, employeeId: 1, startDate: START, expirationDate: TARGET, format: 'W26' }]);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const { card, before } = await updateSigurEmployeeCardBinding(1, 100, START, TARGET);
+
+    expect(sig.patchEmployeeCardBinding).toHaveBeenCalledTimes(1);
+    expect(card).toMatchObject({ cardId: 100, expirationDate: TARGET });
+    expect(before).toBeNull();
   });
 });

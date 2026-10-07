@@ -40,6 +40,8 @@ describe('getSigurCardHistory', () => {
     expect(sql).not.toContain('bulk_extend_cards_started');
     expect(sql).toContain(`item->>'status' IN ('extended', 'extended_after_retry', 'rollback_extended')`);
     expect(sql).toContain(`jsonb_typeof(a.details->'items') = 'array'`);
+    expect(sql).toContain(`a.details->>'previousExpirationDate'`);
+    expect(sql).toContain(`a.details->>'previousStartDate'`);
     expect(sql).not.toMatch(/::int\b/);
     expect(sql).toContain('ORDER BY e.created_at DESC, e.id DESC');
   });
@@ -53,6 +55,7 @@ describe('getSigurCardHistory', () => {
         start_date: null,
         expiration_date: '2026-12-31',
         previous_expiration: '2026-10-01 23:59:59',
+        previous_start_date: null,
         actor_name: 'Гладкая Наталья Васильевна',
       },
       {
@@ -61,7 +64,8 @@ describe('getSigurCardHistory', () => {
         kind: 'update_card_binding',
         start_date: '2021-05-12 21:00:00',
         expiration_date: '2026-12-11 20:59:59',
-        previous_expiration: null,
+        previous_expiration: '2026-10-09 20:59:59',
+        previous_start_date: '2021-05-12 21:00:00',
         actor_name: null,
       },
     ]);
@@ -76,6 +80,7 @@ describe('getSigurCardHistory', () => {
         startDate: null,
         expirationDate: '2026-12-31',
         previousExpiration: '2026-10-01 23:59:59',
+        previousStartDate: null,
         actorName: 'Гладкая Наталья Васильевна',
       },
       {
@@ -84,7 +89,8 @@ describe('getSigurCardHistory', () => {
         kind: 'update_card_binding',
         startDate: '2021-05-12 21:00:00',
         expirationDate: '2026-12-11 20:59:59',
-        previousExpiration: null,
+        previousExpiration: '2026-10-09 20:59:59',
+        previousStartDate: '2021-05-12 21:00:00',
         actorName: null,
       },
     ]);

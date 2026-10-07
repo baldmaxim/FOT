@@ -6,7 +6,7 @@
  *  - привязка/отвязка карты и правки из карточки сотрудника ('sigur_card_binding');
  *  - итоговые записи массового продления и его отката ('sigur_card_bulk_extend').
  *
- * Ограничения: у поштучных правок прежний срок в журнал не писался; массовая
+ * Ограничения: у поштучных правок до 07.10.2026 прежние даты в журнал не писались; массовая
  * операция без итоговой записи журнала сюда не попадёт; правки напрямую в Sigur
  * Manager не видны вовсе.
  */
@@ -27,6 +27,7 @@ export interface ISigurCardHistoryEntry {
   startDate: string | null;
   expirationDate: string | null;
   previousExpiration: string | null;
+  previousStartDate: string | null;
   actorName: string | null;
 }
 
@@ -37,6 +38,7 @@ interface ISigurCardHistoryRow {
   start_date: string | null;
   expiration_date: string | null;
   previous_expiration: string | null;
+  previous_start_date: string | null;
   actor_name: string | null;
 }
 
@@ -50,7 +52,8 @@ const SIGUR_CARD_HISTORY_SQL = `
            a.details->>'action' AS kind,
            a.details->>'startDate' AS start_date,
            a.details->>'expirationDate' AS expiration_date,
-           NULL::text AS previous_expiration
+           a.details->>'previousExpirationDate' AS previous_expiration,
+           a.details->>'previousStartDate' AS previous_start_date
       FROM audit_logs a
      WHERE a.entity_type = 'sigur_employee'
        AND a.entity_id = $1::text
@@ -68,7 +71,8 @@ const SIGUR_CARD_HISTORY_SQL = `
            ),
            a.details->>'startDate',
            a.details->>'expirationDate',
-           NULL::text
+           a.details->>'previousExpirationDate',
+           a.details->>'previousStartDate'
       FROM audit_logs a
      WHERE a.entity_type = 'sigur_card_binding'
        AND a.details->>'sigurEmployeeId' = $1::text
@@ -78,7 +82,8 @@ const SIGUR_CARD_HISTORY_SQL = `
            CASE WHEN a.details->>'action' LIKE 'bulk_extend_cards_rollback%' THEN 'bulk_rollback' ELSE 'bulk_extend' END,
            NULL::text,
            CASE WHEN item->>'status' = 'rollback_extended' THEN item->>'previousExpiration' ELSE a.details->>'expirationDate' END,
-           CASE WHEN item->>'status' = 'rollback_extended' THEN NULL ELSE item->>'previousExpiration' END
+           CASE WHEN item->>'status' = 'rollback_extended' THEN NULL ELSE item->>'previousExpiration' END,
+           NULL::text
       FROM audit_logs a
       CROSS JOIN LATERAL jsonb_array_elements(
         CASE WHEN jsonb_typeof(a.details->'items') = 'array' THEN a.details->'items' ELSE '[]'::jsonb END
@@ -95,7 +100,7 @@ const SIGUR_CARD_HISTORY_SQL = `
        AND item->>'status' IN ('extended', 'extended_after_retry', 'rollback_extended')
   )
   SELECT e.id, e.created_at, e.kind, e.start_date, e.expiration_date, e.previous_expiration,
-         up.full_name AS actor_name
+         e.previous_start_date, up.full_name AS actor_name
     FROM events e
     LEFT JOIN user_profiles up ON up.id = e.user_id
    ORDER BY e.created_at DESC, e.id DESC
@@ -117,6 +122,7 @@ export async function getSigurCardHistory(
     startDate: row.start_date,
     expirationDate: row.expiration_date,
     previousExpiration: row.previous_expiration,
+    previousStartDate: row.previous_start_date,
     actorName: row.actor_name,
   }));
 }

@@ -827,6 +827,14 @@ textarea.ep-sigur-field-input {
   color: var(--error);
 }
 
+.ep-sigur-card-history-note.warning {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ep-sigur-card-history-btn {
     transition: none;

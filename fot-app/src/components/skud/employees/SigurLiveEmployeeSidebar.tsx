@@ -1319,6 +1319,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                         sigurEmployeeId={sigurEmployeeId}
                         cardId={card.cardId}
                         panelId={historyPanelId}
+                        currentExpiration={card.expirationDate}
                       />
                     ) : null}
                   </div>
