@@ -1,54 +1,39 @@
 import type {
-  IObjectKpiExportTable,
   IObjectKpiObjectStat,
   IObjectKpiReportRow,
   IPeriod,
   IReportPremiumRow,
-  ObjectKpiExportColumnType,
 } from '../api/objectKpi';
 import { formatMoneyShort, formatMonthLabel, formatPercent } from './formatMoney';
 import { shiftMonth } from './moscowDate';
 import { PREMIUM_STATUS_SHORT, PREMIUM_STATUS_TEXT } from './premiumStatus';
+import type { ITableColumn, ITableView } from './tableView';
 
 /**
  * Таблицы вкладки «KPI объектов»: описания столбцов, сортировка, фильтры и снимок для xlsx.
  *
  * Строк не больше пары десятков (объекты или месяцы одного объекта), поэтому сортировка и
- * фильтры — на клиенте. Экран, варианты фильтра и снимок экспорта строятся из одних и тех же
- * описаний: выгрузка не может разойтись с тем, что видит пользователь. Деньги здесь не
- * считаются — только сравниваются и передаются как пришли с сервера.
+ * фильтры — на клиенте (общие функции — в tableView.ts). Деньги здесь не считаются — только
+ * сравниваются и передаются как пришли с сервера.
  */
 
-export type SortDir = 'asc' | 'desc';
+export {
+  applyTableView,
+  buildExportTable,
+  columnFilterOptions,
+  isColumnFiltered,
+  setColumnFilter,
+  toggleSort,
+} from './tableView';
+export type { IFilterOption, SortDir } from './tableView';
 
-export interface IKpiTableView {
-  sort: string;
-  dir: SortDir;
-  /** Столбец → выбранные тексты ячеек. */
-  filters: Record<string, string[]>;
-}
+export type IKpiTableView = ITableView;
 
 /** Класс ширины колонки в ObjectKpiTable.module.css. */
 export type KpiColumnWidth = 'colObject' | 'colManager' | 'colMonth' | 'colMoney' | 'colPercent' | 'colShort';
 
-export interface IKpiColumn<Row> {
-  key: string;
-  label: string;
-  type: ObjectKpiExportColumnType;
+export interface IKpiColumn<Row> extends ITableColumn<Row> {
   width: KpiColumnWidth;
-  /** Подсказка заголовка. */
-  title?: string;
-  /** Текст ячейки на экране — он же значение в фильтре столбца. */
-  text: (row: Row) => string;
-  /** Значение сортировки; null — в конце при любом направлении. */
-  sortValue: (row: Row) => number | string | null;
-  /** Точное значение для xlsx (сумма — строкой numeric, как с сервера); null — текст экрана. */
-  exportValue?: (row: Row) => string | number | null;
-}
-
-export interface IFilterOption {
-  value: string;
-  count: number;
 }
 
 const toSortNumber = (value: string | number | null | undefined): number | null => {
@@ -211,123 +196,6 @@ export const buildMonthColumns = (premium: IPremiumView): Array<IKpiColumn<IObje
   moneyColumn('plan', 'План месяца', row => row.plan_amount),
   percentColumn(row => row.completion_pct),
 ];
-
-/** Строка проходит фильтры всех столбцов, кроме skipKey (варианты самого столбца — без его фильтра). */
-const passesFilters = <Row,>(
-  row: Row,
-  columns: ReadonlyArray<IKpiColumn<Row>>,
-  filters: Record<string, string[]>,
-  skipKey?: string,
-): boolean => columns.every((column) => {
-  if (column.key === skipKey) return true;
-  const selected = filters[column.key];
-  return !selected || selected.length === 0 || selected.includes(column.text(row));
-});
-
-const compareValues = (a: number | string, b: number | string): number => (
-  typeof a === 'number' && typeof b === 'number'
-    ? a - b
-    : String(a).localeCompare(String(b), 'ru', { numeric: true, sensitivity: 'base' })
-);
-
-/** Сравнение для сортировки: пустые — в конце при любом направлении, как у кадров. */
-const compareSortEntries = (
-  a: number | string | null,
-  b: number | string | null,
-  factor: number,
-): number => {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  return compareValues(a, b) * factor;
-};
-
-/** Видимые строки: фильтры столбцов, затем сортировка (устойчивая — равные в прежнем порядке). */
-export const applyTableView = <Row,>(
-  rows: ReadonlyArray<Row>,
-  columns: ReadonlyArray<IKpiColumn<Row>>,
-  view: IKpiTableView,
-): Row[] => {
-  const filtered = rows.filter(row => passesFilters(row, columns, view.filters));
-  const column = columns.find(item => item.key === view.sort);
-  if (!column) return filtered;
-  const factor = view.dir === 'asc' ? 1 : -1;
-  return filtered
-    .map((row, index) => ({ row, index, value: column.sortValue(row) }))
-    .sort((a, b) => compareSortEntries(a.value, b.value, factor) || a.index - b.index)
-    .map(item => item.row);
-};
-
-/**
- * Варианты фильтра столбца со счётчиками — по строкам, прошедшим фильтры ОСТАЛЬНЫХ столбцов
- * (как у кадров). Выбранные значения, которых в строках больше нет (сменили месяцы), остаются
- * в списке с нулём: иначе снять такую галочку было бы нечем.
- */
-export const columnFilterOptions = <Row,>(
-  rows: ReadonlyArray<Row>,
-  columns: ReadonlyArray<IKpiColumn<Row>>,
-  filters: Record<string, string[]>,
-  key: string,
-): IFilterOption[] => {
-  const column = columns.find(item => item.key === key);
-  if (!column) return [];
-
-  const entries = new Map<string, { count: number; sort: number | string | null }>();
-  for (const row of rows) {
-    if (!passesFilters(row, columns, filters, key)) continue;
-    const text = column.text(row);
-    const entry = entries.get(text);
-    if (entry) entry.count += 1;
-    else entries.set(text, { count: 1, sort: column.sortValue(row) });
-  }
-  for (const value of filters[key] ?? []) {
-    if (!entries.has(value)) entries.set(value, { count: 0, sort: null });
-  }
-
-  return [...entries.entries()]
-    .sort(([, a], [, b]) => compareSortEntries(a.sort, b.sort, 1))
-    .map(([value, entry]) => ({ value, count: entry.count }));
-};
-
-export const isColumnFiltered = (view: IKpiTableView, key: string): boolean =>
-  (view.filters[key]?.length ?? 0) > 0;
-
-/** Повторный клик по столбцу меняет направление, другой столбец — по возрастанию. */
-export const toggleSort = (view: IKpiTableView, key: string): IKpiTableView => (
-  view.sort === key
-    ? { ...view, dir: view.dir === 'asc' ? 'desc' : 'asc' }
-    : { ...view, sort: key, dir: 'asc' }
-);
-
-/** Фильтр одного столбца; null или пустой список — снять. */
-export const setColumnFilter = (view: IKpiTableView, key: string, values: string[] | null): IKpiTableView => {
-  const filters = { ...view.filters };
-  if (values && values.length > 0) filters[key] = values;
-  else delete filters[key];
-  return { ...view, filters };
-};
-
-/** Снимок таблицы для xlsx: «№» и столбцы экрана, строки — видимые, в порядке экрана. */
-export const buildExportTable = <Row,>(params: {
-  title: string;
-  subtitle: string;
-  fileName: string;
-  columns: ReadonlyArray<IKpiColumn<Row>>;
-  rows: ReadonlyArray<Row>;
-  isMuted?: (row: Row) => boolean;
-}): IObjectKpiExportTable => ({
-  title: params.title,
-  subtitle: params.subtitle,
-  file_name: params.fileName,
-  columns: [
-    { label: '№', type: 'int' },
-    ...params.columns.map(column => ({ label: column.label, type: column.type })),
-  ],
-  rows: params.rows.map((row, index) => ({
-    cells: [index + 1, ...params.columns.map(column => column.exportValue?.(row) ?? column.text(row))],
-    ...(params.isMuted?.(row) ? { muted: true } : {}),
-  })),
-});
 
 /** Месяцы окна расчёта по порядку (YYYY-MM). */
 export const listWindowMonths = (period: IPeriod): string[] => {

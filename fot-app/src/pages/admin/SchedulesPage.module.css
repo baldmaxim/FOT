@@ -47,6 +47,20 @@
   margin-bottom: 12px;
 }
 
+/* «Шаблоны графиков»: «Экспорт» и «+ Новый шаблон» справа, как у кадров */
+.toolbarEnd {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .toolbarEnd .btn {
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
 .btn {
   padding: 8px 14px;
   background: var(--accent);

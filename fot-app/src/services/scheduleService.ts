@@ -5,6 +5,7 @@ import type {
   IEmployeeScheduleAssignment,
   IObjectScheduleAssignment,
 } from '../types/schedule';
+import type { ITableExportSnapshot } from '../utils/tableView';
 
 interface ApiResponse<T> {
   data?: T;
@@ -37,6 +38,15 @@ export const scheduleService = {
     const res = await apiClient.get<ApiResponse<IWorkSchedule[]>>('/schedules');
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки графиков');
     return res.data;
+  },
+
+  /** xlsx ровно той таблицы шаблонов, что на экране: сортировка и фильтры уже применены. */
+  async exportTemplates(table: ITableExportSnapshot): Promise<{ blob: Blob; filename: string }> {
+    return apiClient.download('/schedules/templates/export', table.file_name, {
+      method: 'POST',
+      body: JSON.stringify(table),
+      timeoutMs: 120_000,
+    });
   },
 
   /** Создать шаблон */

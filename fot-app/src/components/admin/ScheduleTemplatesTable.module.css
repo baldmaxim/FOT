@@ -1,0 +1,190 @@
+/*
+ * «Шаблоны графиков» — в стиле «Управления кадрами» (.sc-table--staff), значения — как в
+ * ObjectKpiTable.module.css. Шаблонов десятки, поэтому без виртуализации: обёртка скроллится
+ * только по горизонтали, страница на 360px вбок не уезжает.
+ */
+.wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.table {
+  width: 100%;
+  /* Название забирает остаток ширины, но не уже ~190px: дальше скроллится таблица, не страница */
+  min-width: 1040px;
+  /* separate + spacing 0: у collapse граница шапки «уезжает» при горизонтальной прокрутке */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+/*
+ * Ширины — под самое длинное слово заголовка (заглавные 12px, letter-spacing .04em) плюс стрелка
+ * и воронка (34px) и паддинги 24px, либо под самое длинное значение.
+ */
+.colNum      { width: 56px; }
+.colName     { width: auto; }
+.colRhythm   { width: 120px; }
+.colAnchor   { width: 110px; }
+.colShift    { width: 160px; }
+.colLunch    { width: 96px; }
+.colHolidays { width: 140px; }
+.colType     { width: 96px; }
+.colActions  { width: 84px; }
+
+.table thead th {
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+}
+
+.table td {
+  padding: 4px 12px;
+  height: 40px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--row-overlay), var(--row-overlay));
+}
+
+/* Цвет строки — через переменную: чередование и hover меняются одновременно */
+.table tbody tr { --row-overlay: transparent; }
+.table tbody tr.rowEven { --row-overlay: color-mix(in srgb, var(--text-primary) 2%, transparent); }
+.table tbody tr:hover { --row-overlay: var(--bg-secondary); }
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.table thead th.cellNum { text-align: center; }
+
+.cellNum {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: clip;
+}
+
+.cellValue { font-variant-numeric: tabular-nums; }
+
+/* Длинное название переносится до двух строк, как ФИО у кадров, а не режется «…» */
+.table td.cellText { white-space: normal; }
+
+.nameCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.clamp2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.badgeDefault {
+  background: var(--success-muted);
+  color: var(--success);
+}
+
+.table td.cellActions { text-overflow: clip; }
+
+.actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* Как .sc-btn-icon у кадров */
+.iconBtn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.iconBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.iconBtnDanger { color: var(--error); }
+
+.iconBtnDanger:hover:not(:disabled) {
+  background: var(--error);
+  border-color: var(--error);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.table td.empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Смартфоны и планшеты: тап-цели ≥ 44px */
+@media (max-width: 768px) {
+  .table td { height: 52px; }
+  .colActions { width: 116px; }
+  .iconBtn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iconBtn { transition: none; }
+}

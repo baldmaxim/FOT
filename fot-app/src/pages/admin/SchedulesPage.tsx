@@ -1,5 +1,6 @@
 import { Suspense, lazy, type FC, useState, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Download } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { scheduleService } from '../../services/scheduleService';
 import { travelTimeService } from '../../services/travelTimeService';
@@ -13,8 +14,11 @@ import type {
 import { WEEKDAY_LABELS } from '../../types/schedule';
 import type { ITravelObject } from '../../types/travel';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
-import { formatRhythmSummary } from '../../utils/scheduleRhythm';
+import { formatHours, SCHEDULE_TEMPLATE_COLUMNS } from '../../utils/scheduleTemplatesTable';
+import { applyTableView, buildExportTable, type ITableView } from '../../utils/tableView';
+import { triggerBlobDownload } from '../../utils/download';
 import { NumberInput } from '../../components/ui/NumberInput';
+import { ScheduleTemplatesTable } from '../../components/admin/ScheduleTemplatesTable';
 import styles from './SchedulesPage.module.css';
 
 const ProductionCalendarPage = lazy(() => import('./ProductionCalendarPage').then(module => ({
@@ -180,13 +184,6 @@ const createEmptyForm = (): IFormState => ({
   custom_cycle_days: [],
   anchor_date: nearestMondayOnOrBefore(getLocalISODate()),
 });
-
-const formatHours = (decimalHours: number): string => {
-  const total = Math.max(0, Math.round(decimalHours * 60));
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  return `${h}:${String(m).padStart(2, '0')}`;
-};
 
 const formatMinutes = (minutes: number): string => {
   const total = Math.max(0, Math.round(minutes));
@@ -385,6 +382,8 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
 };
 
 const EMPTY_TEMPLATES: IWorkSchedule[] = [];
+/** Без активной сортировки — порядок сервера: дефолтный сверху, дальше по названию. */
+const INITIAL_TEMPLATES_VIEW: ITableView = { sort: '', dir: 'asc', filters: {} };
 const EMPTY_OBJECT_ASSIGNMENTS: IObjectScheduleAssignment[] = [];
 const EMPTY_TRAVEL_OBJECTS: ITravelObject[] = [];
 
@@ -403,6 +402,8 @@ export const SchedulesPage: FC = () => {
   const [error, setError] = useState('');
 
   const [showForm, setShowForm] = useState(false);
+  const [templatesView, setTemplatesView] = useState<ITableView>(INITIAL_TEMPLATES_VIEW);
+  const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState<IFormState>(createEmptyForm());
 
   const needsTemplates = tab === 'templates' || tab === 'object-assignments';
@@ -444,6 +445,10 @@ export const SchedulesPage: FC = () => {
     || (needsObjects ? objectsQuery.error : null)
   );
   const visibleError = error || (queryError instanceof Error ? queryError.message : '');
+  const visibleTemplates = useMemo(
+    () => applyTableView(templates, SCHEDULE_TEMPLATE_COLUMNS, templatesView),
+    [templates, templatesView],
+  );
 
   /**
    * После CRUD-операции с шаблоном/назначением — сбрасываем не только локальные кэши
@@ -806,6 +811,28 @@ export const SchedulesPage: FC = () => {
     }
   };
 
+  /** «Экспорт» — ровно видимая таблица шаблонов: фильтры и сортировка столбцов. */
+  const handleExport = async () => {
+    setError('');
+    const isoDate = getLocalISODate();
+    const table = buildExportTable({
+      title: 'Шаблоны графиков',
+      subtitle: `Дата выгрузки: ${isoDate.split('-').reverse().join('.')}`,
+      fileName: `Шаблоны графиков_${isoDate}.xlsx`,
+      columns: SCHEDULE_TEMPLATE_COLUMNS,
+      rows: visibleTemplates,
+    });
+    setExporting(true);
+    try {
+      const { blob, filename } = await scheduleService.exportTemplates(table);
+      triggerBlobDownload(blob, filename);
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Не удалось выгрузить таблицу');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const activeObjectAssignments = useMemo(() => {
     // today вычисляется внутри useMemo, чтобы реакт-компилятор не ругался
     // на возможное мутирование внешнего значения. Пересчёт на каждом ре-рендере
@@ -870,7 +897,17 @@ export const SchedulesPage: FC = () => {
 
       {tab === 'templates' && (
         <>
-          <div className={styles.toolbar}>
+          <div className={`${styles.toolbar} ${styles.toolbarEnd}`}>
+            {/* Выгружается ровно видимая таблица: сортировка и фильтры столбцов. */}
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnSecondary}`}
+              onClick={() => { void handleExport(); }}
+              disabled={exporting || loading || visibleTemplates.length === 0}
+            >
+              <Download size={14} aria-hidden="true" />
+              <span>{exporting ? 'Готовим…' : 'Экспорт'}</span>
+            </button>
             <button className={styles.btn} onClick={handleStartCreate}>
               + Новый шаблон
             </button>
@@ -1425,60 +1462,15 @@ export const SchedulesPage: FC = () => {
             </div>
           )}
 
-          {loading ? (
-            <div>Загрузка...</div>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Название</th>
-                  <th>Ритм</th>
-                  <th>Смена</th>
-                  <th>Обед</th>
-                  <th>Праздники</th>
-                  <th>Тип</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map(t => (
-                  <tr key={t.id}>
-                    <td>
-                      {t.name}
-                      {t.is_default && <span className={`${styles.badge} ${styles.badgeDefault}`} style={{ marginLeft: 8 }}>дефолт</span>}
-                      {t.pattern_type !== 'cycle' && (
-                        <span className={styles.badge} style={{ marginLeft: 8 }} title="Старый формат — будет переписан в N/M при сохранении">legacy</span>
-                      )}
-                    </td>
-                    <td>
-                      {formatRhythmSummary(t)}
-                      {t.pattern_type === 'cycle' && t.anchor_date && (
-                        <div className={styles.cellHint}>якорь {t.anchor_date}</div>
-                      )}
-                    </td>
-                    <td>
-                      {t.work_start.slice(0, 5)}–{t.work_end.slice(0, 5)} ({formatHours(Number(t.work_hours))})
-                    </td>
-                    <td>{t.lunch_minutes} мин</td>
-                    <td>{t.respects_holidays ? 'учитывает' : 'игнорирует'}</td>
-                    <td>{t.schedule_type === 'remote' ? 'Удалённо' : 'Очно'}</td>
-                    <td>
-                      <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => handleStartEdit(t)}>
-                        Ред.
-                      </button>{' '}
-                      <button
-                        className={`${styles.btn} ${styles.btnDanger}`}
-                        onClick={() => handleDelete(t.id)}
-                        disabled={t.is_default}
-                      >
-                        Удалить
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <ScheduleTemplatesTable
+            rows={templates}
+            visibleRows={visibleTemplates}
+            view={templatesView}
+            onViewChange={setTemplatesView}
+            onEdit={handleStartEdit}
+            onDelete={template => { void handleDelete(template.id); }}
+            loading={loading}
+          />
         </>
       )}
 

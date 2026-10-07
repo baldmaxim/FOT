@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { scheduleController } from '../controllers/schedule.controller.js';
+import { scheduleExportController } from '../controllers/schedule-export.controller.js';
 import { authenticate, requireAnyPageAccess } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 
@@ -14,7 +15,8 @@ router.use(authenticate);
 // прежней даже после F5.
 // POST /employees — чтение (id в теле ради страницы до 1000 человек), кэши не сбрасывает:
 // иначе каждое открытие «Управления кадрами» обнуляло бы кэш табеля всем.
-const READ_ONLY_POST_PATHS = new Set(['/employees']);
+// POST /templates/export — выгрузка xlsx, тоже ничего не меняет.
+const READ_ONLY_POST_PATHS = new Set(['/employees', '/templates/export']);
 
 router.use((req, res, next) => {
   const isReadOnlyPost = req.method === 'POST' && READ_ONLY_POST_PATHS.has(req.path);
@@ -39,6 +41,8 @@ router.get('/', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/temp
 router.post('/', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.create);
 router.put('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.update);
 router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.remove);
+// «Экспорт» таблицы шаблонов: снимок экрана → xlsx, доступ — как у просмотра списка
+router.post('/templates/export', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'view'), scheduleExportController.exportTemplates);
 
 // Назначения сотрудникам / объектам — менеджеру доступны только через автодоступ /staff-control
 router.get('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeAssignments);
