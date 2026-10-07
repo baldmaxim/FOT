@@ -49,7 +49,7 @@
 .colSalary   { width: 130px; }
 .colBonus    { width: 180px; }
 .colHousing  { width: 180px; }
-.colAccruals { width: 230px; }
+.colAccruals { width: 260px; }
 /* «Расчёты»: сумма за месяц «175 000,00 ₽» */
 .colSum { width: 200px; }
 
@@ -180,7 +180,7 @@
 
 .cellOneLine { white-space: nowrap; }
 
-/* «Начисления» по месяцам: переносится только после «;» (между месяцем и суммой NBSP) */
+/* «Начисления» по месяцам: две строки по 3 месяца, между месяцем и суммой NBSP */
 .cellAccruals { font-variant-numeric: tabular-nums; }
 /* «—» пустых месяцев и «;» приглушены, суммы — основным цветом */
 .accruals { color: var(--text-muted); }

@@ -78,15 +78,16 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
   return money === null ? '—' : `${money} ₽/мес`;
 };
 
-/** «Начисления»: месяцы курсивом, суммы крупнее; между месяцем и суммой NBSP — перенос только после «;». */
+/** «Начисления»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP. */
 const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
   const parts = accrualsByMonthParts(months, row.accruals);
   if (parts === null) return '—';
+  const secondLineStart = Math.ceil(parts.length / 2);
   return (
     <span className={styles.accruals}>
       {parts.map(({ month, name, amount }, index) => (
         <Fragment key={month}>
-          {index > 0 && '; '}
+          {index === secondLineStart ? <>;<br /></> : index > 0 && '; '}
           <span className={styles.accrualMonth}>{name}</span>
           {amount === null ? '\u00a0—' : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
         </Fragment>
