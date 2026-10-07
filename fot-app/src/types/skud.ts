@@ -166,6 +166,26 @@ export interface SigurEmployeeCardSummary {
   w26: string | null;
 }
 
+export type SigurCardHistoryKind =
+  | 'update_card_expiration'
+  | 'update_card_binding'
+  | 'assign_card_binding'
+  | 'remove_card_binding'
+  | 'bulk_extend'
+  | 'bulk_rollback';
+
+/** Запись истории карты из журнала аудита: кто и когда менял сроки. */
+export interface SigurCardHistoryEntry {
+  id: string;
+  createdAt: string;
+  kind: SigurCardHistoryKind;
+  startDate: string | null;
+  expirationDate: string | null;
+  /** Прежний срок — только у массового продления; поштучные правки его не сохраняли. */
+  previousExpiration: string | null;
+  actorName: string | null;
+}
+
 export interface SigurEmployeeAccessRuleSummary {
   accessRuleId: number;
   accessRuleName: string | null;

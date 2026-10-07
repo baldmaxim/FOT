@@ -700,6 +700,86 @@ textarea.ep-sigur-field-input {
   cursor: not-allowed;
 }
 
+.ep-sigur-card-history-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s ease-out, border-color 0.15s ease-out, color 0.15s ease-out;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.ep-sigur-card-history-btn:hover,
+.ep-sigur-card-history-btn.active {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.ep-sigur-card-history {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.ep-sigur-card-history-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ep-sigur-card-history-item {
+  padding: 6px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ep-sigur-card-history-item:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.ep-sigur-card-history-item:last-child {
+  padding-bottom: 0;
+}
+
+.ep-sigur-card-history-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.ep-sigur-card-history-text {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ep-sigur-card-history-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ep-sigur-card-history-note.error {
+  color: var(--error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ep-sigur-card-history-btn {
+    transition: none;
+  }
+}
+
 .ep-sigur-inline-error {
   margin-top: 10px;
   padding: 9px 11px;
@@ -1287,8 +1367,9 @@ textarea.ep-sigur-field-input {
   }
 
   .ep-sigur-card-edit .ep-sigur-save-btn,
+  .ep-sigur-card-edit .ep-sigur-card-history-btn,
   .ep-sigur-card-edit .ep-sigur-card-trash-btn {
-    flex: 1 1 calc(50% - 3px);
+    flex: 1 1 0;
     height: 44px;
     width: auto;
   }
@@ -1308,6 +1389,7 @@ textarea.ep-sigur-field-input {
   .ep-sigur-access-add-btn,
   .ep-sigur-access-pick-btn,
   .ep-sigur-save-btn,
+  .ep-sigur-card-history-btn,
   .ep-sigur-card-trash-btn {
     min-height: 44px;
   }

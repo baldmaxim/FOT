@@ -56,6 +56,7 @@ import {
   BulkExtendTokenError,
 } from '../services/sigur-bulk-cards-token.js';
 import { SigurCardLeaseBusyError, withSigurCardWriteLease } from '../services/sigur-card-lease.service.js';
+import { getSigurCardHistory } from '../services/sigur-card-history.service.js';
 import { withTransaction } from '../config/postgres.js';
 import { parseIsoDateOnly, moscowTodayIso } from '../utils/date.utils.js';
 import { randomUUID } from 'crypto';
@@ -1274,6 +1275,24 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin saveEmployeeAccessRules error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка сохранения режимов доступа Sigur') });
+    }
+  },
+
+  /** GET /admin/employees/:sigurEmployeeId/cards/:cardId/history — кто и когда менял карту (из audit_logs). */
+  async getEmployeeCardHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
+      const cardId = parseInteger(req.params.cardId);
+      if (!sigurEmployeeId || sigurEmployeeId <= 0 || !cardId || cardId <= 0) {
+        res.status(400).json({ success: false, error: 'Некорректный ID сотрудника или карты' });
+        return;
+      }
+
+      const data = await getSigurCardHistory(sigurEmployeeId, cardId);
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Sigur admin getEmployeeCardHistory error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить историю карты' });
     }
   },
 

@@ -2,6 +2,7 @@ import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import { readSseResponse } from '../components/skud/sigur-settings.utils';
 import type {
   AccessPointOption,
+  SigurCardHistoryEntry,
   SigurConnectionScope,
   SigurDepartmentNode,
   SigurEmployeeCardAccessStatus,
@@ -606,6 +607,13 @@ export const sigurAdminService = {
     const response = await apiClient.put<ApiResponse<SigurEmployeeAccessRulesSaveResult>>(
       `/sigur/admin/employees/${sigurEmployeeId}/access-rules`,
       { accessRuleIds, connection },
+    );
+    return response.data;
+  },
+
+  async getEmployeeCardHistory(sigurEmployeeId: number, cardId: number): Promise<SigurCardHistoryEntry[]> {
+    const response = await apiClient.get<ApiResponse<SigurCardHistoryEntry[]>>(
+      `/sigur/admin/employees/${sigurEmployeeId}/cards/${cardId}/history`,
     );
     return response.data;
   },

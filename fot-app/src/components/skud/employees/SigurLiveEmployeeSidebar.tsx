@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CreditCard,
   FolderTree,
+  History,
   MoreVertical,
   Pencil,
   Plus,
@@ -27,6 +28,8 @@ import type {
 } from '../../../types';
 import { AccessPointMapPreviewBadge } from '../../employees/AccessPointMapPreviewBadge';
 import { CardReaderModal } from '../CardReaderModal';
+import { SigurCardHistory } from './SigurCardHistory';
+import { sigurCardHistoryQueryKey } from './sigurCardHistory.helpers';
 import '../../employees/EmployeeSigurSidebar.css';
 
 interface ISigurLiveEmployeeSidebarProps {
@@ -434,6 +437,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const [cardReaderOpen, setCardReaderOpen] = useState(false);
   const [removingCardId, setRemovingCardId] = useState<number | null>(null);
+  const [historyCardId, setHistoryCardId] = useState<number | null>(null);
   const [editingField, setEditingField] = useState<keyof IEmployeeDraft | null>(null);
   const [accessPointSearchQuery, setAccessPointSearchQuery] = useState('');
   const [accessRulesPickerOpen, setAccessRulesPickerOpen] = useState(false);
@@ -487,6 +491,11 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     setEditingField(null);
     setNewPositionName('');
     setProfileError('');
+  }, [sigurEmployeeId]);
+
+  // Другой сотрудник — история закрыта, иначе карта с тем же ID откроется сама.
+  useEffect(() => {
+    setHistoryCardId(null);
   }, [sigurEmployeeId]);
 
   useEffect(() => {
@@ -828,6 +837,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         ...prev,
         [card.cardId]: toDateInputValue(updatedCard.startDate),
       }));
+      void queryClient.invalidateQueries({ queryKey: sigurCardHistoryQueryKey(sigurEmployeeId, card.cardId) });
     } catch (error) {
       setCardSaveError(error instanceof Error ? error.message : 'Не удалось сохранить даты карты');
     } finally {
@@ -859,6 +869,8 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         delete next[card.cardId];
         return next;
       });
+      setHistoryCardId(prev => (prev === card.cardId ? null : prev));
+      void queryClient.invalidateQueries({ queryKey: sigurCardHistoryQueryKey(sigurEmployeeId, card.cardId) });
     } catch (error) {
       setCardSaveError(error instanceof Error ? error.message : 'Не удалось удалить карту');
     } finally {
@@ -869,6 +881,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const handleCardAssigned = () => {
     setCardReaderOpen(false);
     void reloadProfile(true);
+    // ID привязанной карты сюда не приходит — сбрасываем историю всех карт сотрудника.
+    if (sigurEmployeeId) {
+      void queryClient.invalidateQueries({ queryKey: sigurCardHistoryQueryKey(sigurEmployeeId) });
+    }
   };
 
   const persistAccessPointIds = async (nextIds: number[]) => {
@@ -1191,6 +1207,8 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 const initialExpiration = toDateInputValue(card.expirationDate);
                 const initialStart = toDateInputValue(card.startDate);
                 const changed = expirationDraft !== initialExpiration || startDraft !== initialStart;
+                const historyOpen = historyCardId === card.cardId;
+                const historyPanelId = `ep-sigur-card-history-${card.cardId}`;
 
                 return (
                   <div key={card.cardId} className="ep-sigur-card-row">
@@ -1243,6 +1261,17 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                           {savingCardId === card.cardId ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Save size={13} />}
                         </button>
                       )}
+                      <button
+                        className={`ep-sigur-card-history-btn ${historyOpen ? 'active' : ''}`}
+                        type="button"
+                        aria-label="История карты"
+                        title="История карты"
+                        aria-expanded={historyOpen}
+                        aria-controls={historyPanelId}
+                        onClick={() => setHistoryCardId(historyOpen ? null : card.cardId)}
+                      >
+                        <History size={13} />
+                      </button>
                       {canEdit && (
                         <button
                           className="ep-sigur-card-trash-btn"
@@ -1255,6 +1284,13 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                         </button>
                       )}
                     </div>
+                    {historyOpen && sigurEmployeeId ? (
+                      <SigurCardHistory
+                        sigurEmployeeId={sigurEmployeeId}
+                        cardId={card.cardId}
+                        panelId={historyPanelId}
+                      />
+                    ) : null}
                   </div>
                 );
               })}

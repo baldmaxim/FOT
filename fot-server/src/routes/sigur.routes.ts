@@ -321,6 +321,12 @@ router.put(
   requireCritical2FA,
   sigurAdminController.saveEmployeeAccessRules,
 );
+router.get(
+  '/admin/employees/:sigurEmployeeId/cards/:cardId/history',
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'),
+  noStore,
+  sigurAdminController.getEmployeeCardHistory,
+);
 router.put(
   '/admin/employees/:sigurEmployeeId/cards/:cardId/expiration',
   requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
