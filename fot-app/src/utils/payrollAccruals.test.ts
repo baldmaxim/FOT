@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  accrualLines,
   accrualPeriodCrossesYear,
+  accrualsByMonthParts,
+  accrualsCellWidth,
+  ACCRUAL_GAP_PX,
   formatAccrualMonthLabel,
   formatAccrualPeriodLong,
   formatAccrualPeriodShort,
@@ -111,5 +115,34 @@ describe('начисления по месяцам в ячейке', () => {
   it('нет данных ни за один месяц — null', () => {
     expect(formatAccrualsByMonth(MAR_AUG_2026, [])).toBeNull();
     expect(formatAccrualsByMonth(MAR_AUG_2026, [{ month: '2026-09', amount: 1000 }])).toBeNull();
+  });
+});
+
+describe('раскладка и ширина ячейки начислений', () => {
+  it('две строки поровну: 6 → 3 + 3, 1 → 1 + 0', () => {
+    expect(accrualLines([1, 2, 3, 4, 5, 6])).toEqual([[1, 2, 3], [4, 5, 6]]);
+    expect(accrualLines([1])).toEqual([[1], []]);
+  });
+
+  /** Заглушка: символ = 1 px, у сумм — 2 px. */
+  const measure = (text: string, kind: 'month' | 'amount' | 'text'): number => text.length * (kind === 'amount' ? 2 : 1);
+
+  it('ширина — по более длинной строке, с промежутками и «;» в конце первой', () => {
+    const parts = accrualsByMonthParts(MAR_AUG_2026, [{ month: '2026-07', amount: 175000 }])!;
+    // 1-я: «мар —» «апр —» «май —» = 3 × (3 + 2), 2 разделителя (2 + gap) и «;» в конце
+    const first = 3 * 5 + 2 * (2 + ACCRUAL_GAP_PX) + 1;
+    // 2-я: «июн —», «июл: 175,0» = 3 + 2 + 5 × 2, «авг —»
+    const second = 5 + (3 + 2 + 10) + 5 + 2 * (2 + ACCRUAL_GAP_PX);
+    expect(accrualsCellWidth(parts, measure)).toBe(Math.max(first, second));
+  });
+
+  it('строка с тремя суммами шире строки с прочерками', () => {
+    const sparse = accrualsByMonthParts(MAR_AUG_2026, [{ month: '2026-07', amount: 175000 }])!;
+    const full = accrualsByMonthParts(MAR_AUG_2026, [
+      { month: '2026-06', amount: 160000 },
+      { month: '2026-07', amount: 175000 },
+      { month: '2026-08', amount: 168200 },
+    ])!;
+    expect(accrualsCellWidth(full, measure)).toBeGreaterThan(accrualsCellWidth(sparse, measure));
   });
 });

@@ -49,6 +49,7 @@
 .colSalary   { width: 130px; }
 .colBonus    { width: 180px; }
 .colHousing  { width: 180px; }
+/* «Начисления»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
 /* «Расчёты»: сумма за месяц «175 000,00 ₽» */
 .colSum { width: 200px; }
@@ -184,6 +185,8 @@
 .cellAccruals { font-variant-numeric: tabular-nums; }
 /* «—» пустых месяцев и «;» приглушены, суммы — основным цветом */
 .accruals { color: var(--text-muted); }
+/* Промежуток между месяцами: «; » + ACCRUAL_GAP_PX (utils/payrollAccruals.ts) */
+.accrualSep { margin-right: 5px; }
 .accrualMonth {
   font-style: italic;
   font-size: 12px;

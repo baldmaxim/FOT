@@ -7,7 +7,14 @@ import type {
   PayrollSortDir,
   PayrollSortKey,
 } from '../../services/payrollService';
-import { accrualsByMonthParts, formatAccrualPeriodLong, formatAccrualPeriodShort } from '../../utils/payrollAccruals';
+import { usePayrollAccrualsColumnWidth } from '../../hooks/usePayrollAccrualsColumnWidth';
+import {
+  accrualLines,
+  accrualsByMonthParts,
+  formatAccrualPeriodLong,
+  formatAccrualPeriodShort,
+  type IAccrualMonthPart,
+} from '../../utils/payrollAccruals';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
@@ -78,20 +85,26 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
   return money === null ? '—' : `${money} ₽/мес`;
 };
 
-/** «Начисления»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP. */
+const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount }, index) => (
+  <Fragment key={month}>
+    {index > 0 && <span className={styles.accrualSep}>; </span>}
+    <span className={styles.accrualMonth}>{name}</span>
+    {amount === null ? '\u00a0—' : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
+  </Fragment>
+));
+
+/**
+ * «Начисления»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP.
+ * Ширину содержимого считает usePayrollAccrualsColumnWidth — разметку менять вместе с accrualsCellWidth.
+ */
 const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
   const parts = accrualsByMonthParts(months, row.accruals);
   if (parts === null) return '—';
-  const secondLineStart = Math.ceil(parts.length / 2);
+  const [first, second] = accrualLines(parts);
   return (
     <span className={styles.accruals}>
-      {parts.map(({ month, name, amount }, index) => (
-        <Fragment key={month}>
-          {index === secondLineStart ? <>;<br /></> : index > 0 && '; '}
-          <span className={styles.accrualMonth}>{name}</span>
-          {amount === null ? '\u00a0—' : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
-        </Fragment>
-      ))}
+      {renderAccrualLine(first)}
+      {second.length > 0 && <>;<br />{renderAccrualLine(second)}</>}
     </span>
   );
 };
@@ -121,6 +134,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
   const accrualPeriodLong = useMemo(() => formatAccrualPeriodLong(accrualMonths), [accrualMonths]);
+  const accrualsWidth = usePayrollAccrualsColumnWidth(rows, accrualMonths);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -158,7 +172,13 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           <col className={styles.colCheck} />
           <col className={styles.colNum} />
           <col className={styles.colName} />
-          {visibleColumns.map(column => <col key={column.key} className={styles[COL_CLASS[column.key]]} />)}
+          {visibleColumns.map(column => (
+            <col
+              key={column.key}
+              className={styles[COL_CLASS[column.key]]}
+              style={column.key === 'accruals' ? { width: accrualsWidth } : undefined}
+            />
+          ))}
         </colgroup>
         <thead>
           <tr>

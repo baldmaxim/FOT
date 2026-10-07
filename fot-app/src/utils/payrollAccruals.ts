@@ -125,6 +125,36 @@ export const accrualsByMonthParts = (
   });
 };
 
+/** Ячейка «Начисления» в две строки поровну: 6 месяцев → 3 + 3. */
+export const accrualLines = <T>(parts: T[]): [T[], T[]] => {
+  const secondLineStart = Math.ceil(parts.length / 2);
+  return [parts.slice(0, secondLineStart), parts.slice(secondLineStart)];
+};
+
+/** Добавка к «; » между месяцами, px — как margin-right у `.accrualSep` в PayrollTermsTable.module.css. */
+export const ACCRUAL_GAP_PX = 5;
+
+/** Шрифт куска ячейки: подпись месяца, сумма, остальное («: », « —», «; »). */
+export type AccrualTextKind = 'month' | 'amount' | 'text';
+
+/** Ширина текста в px. */
+export type AccrualTextMeasure = (text: string, kind: AccrualTextKind) => number;
+
+/** Ширина содержимого ячейки «Начисления» (без паддингов) — по более длинной из двух строк. */
+export const accrualsCellWidth = (parts: IAccrualMonthPart[], measure: AccrualTextMeasure): number => {
+  const separator = measure('; ', 'text') + ACCRUAL_GAP_PX;
+  const partWidth = ({ name, amount }: IAccrualMonthPart): number => measure(name, 'month') + (
+    amount === null ? measure('\u00a0—', 'text') : measure(':\u00a0', 'text') + measure(amount, 'amount')
+  );
+  const [first, second] = accrualLines(parts);
+  const lineWidth = (line: IAccrualMonthPart[]): number => line.reduce(
+    (sum, part, index) => sum + (index > 0 ? separator : 0) + partWidth(part),
+    0,
+  );
+  const firstWidth = lineWidth(first) + (second.length > 0 ? measure(';', 'text') : 0);
+  return Math.max(firstWidth, lineWidth(second));
+};
+
 /**
  * Ячейка «Начисления»: «апр —; май —; июл: 165,2; авг: 177,7» — каждый месяц окна в тыс. ₽.
  * Точка с запятой — разделитель месяцев (запятая занята дробной частью). Между месяцем и суммой
