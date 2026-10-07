@@ -110,3 +110,43 @@ describe('плановый цикл структуры', () => {
     expect(h.releaseLock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('плановый цикл: занятый lock', () => {
+  it('тик на занятом lock повторяется через минуту, а не ждёт следующего тика', async () => {
+    const { ManualSyncInProgressError } = await import('./presence-polling.service.js');
+    h.acquireLock.mockRejectedValueOnce(new ManualSyncInProgressError('busy'));
+
+    await startStructureSyncScheduler();
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(h.syncDepartments).not.toHaveBeenCalled();
+    expect(h.releaseLock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.syncDepartments).toHaveBeenCalledTimes(1);
+    expect(h.syncEmployees).toHaveBeenCalledTimes(1);
+    expect(h.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('повторы ограничены: после 5 неудач ждём следующего тика', async () => {
+    const { ManualSyncInProgressError } = await import('./presence-polling.service.js');
+    h.acquireLock.mockRejectedValue(new ManualSyncInProgressError('busy'));
+
+    await startStructureSyncScheduler();
+    await vi.advanceTimersByTimeAsync(31_000 + 10 * 60_000);
+    // Стартовый прогон + 5 повторов.
+    expect(h.acquireLock).toHaveBeenCalledTimes(6);
+  });
+
+  it('остановка планировщика снимает отложенный повтор', async () => {
+    const { ManualSyncInProgressError } = await import('./presence-polling.service.js');
+    h.acquireLock.mockRejectedValueOnce(new ManualSyncInProgressError('busy'));
+
+    await startStructureSyncScheduler();
+    await vi.advanceTimersByTimeAsync(31_000);
+    stopStructureSyncScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(h.acquireLock).toHaveBeenCalledTimes(1);
+    expect(h.syncDepartments).not.toHaveBeenCalled();
+  });
+});

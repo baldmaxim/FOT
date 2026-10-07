@@ -92,6 +92,8 @@ export const AUDIT_ACTIONS = {
   SIGUR_SYNC_FIRED_MISMATCH: 'SIGUR_SYNC_FIRED_MISMATCH',
   /** Смена карточки Sigur у одного человека: привязка перенесена без создания дубля. */
   SIGUR_SYNC_CARD_REBIND: 'SIGUR_SYNC_CARD_REBIND',
+  /** Точечный синк карточки не завёл сотрудника (тёзка в БД) — решит плановый синк. */
+  SIGUR_QUICK_SYNC_SKIPPED: 'SIGUR_QUICK_SYNC_SKIPPED',
   /** Слияние дубля, порождённого сменой карточки Sigur (скрипт merge-sigur-rebound-duplicates). */
   MERGE_SIGUR_REBOUND_DUPLICATE: 'MERGE_SIGUR_REBOUND_DUPLICATE',
   /** Разбор увольнений, откаченных синком (скрипт fix-sync-reverted-dismissals). */

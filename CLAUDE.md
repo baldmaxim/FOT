@@ -87,7 +87,8 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 Запускаются в `src/index.ts` при старте сервера:
 - **presence-polling**: incremental polling СКУД-событий по `lastId` (cursor-based seek), adaptive interval — 60 сек при активности, 30 сек idle после 5 пустых тиков подряд. Дифференцированные TTL кэшей (employees 5 мин, departments 60 мин, access points/rules 1–4 ч). Дедупликация по UNIQUE `(dedup_hash, event_date)`. См. коммит 895a196.
 - **sigur-monitor**: непрерывный мониторинг изменений структуры Sigur.
-- **sigur-structure-scheduler**: синхронизация отделов/должностей/сотрудников из Sigur (по умолчанию каждые 2 ч), задержка 30 сек при старте.
+- **sigur-structure-scheduler**: синхронизация отделов/должностей/сотрудников из Sigur (каждые 30 мин, `SIGUR_STRUCTURE_SYNC_INTERVAL_MS`), задержка 30 сек при старте; тик на занятом lock повторяется раз в минуту (до 5 раз).
+- **sigur-employee-quick-sync**: точечный синк карточек после создания/правки сотрудника в разделе SIGUR портала (`requestEmployeeQuickSync`) — debounce 15 с (max 60 с), `syncEmployeesLogic(..., { onlySigurIds })` без полной выгрузки; правки напрямую в клиенте Sigur ловит только планировщик.
 - **sigur-events-daily-scheduler**: ежедневная подгрузка СКУД-событий.
 - **timesheet-reminder**: напоминания о незакрытых табелях.
 - **patent-expiry-reminder**: уведомления об истечении патентов.

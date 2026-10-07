@@ -22,12 +22,11 @@ import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const MIN_STRUCTURE_SYNC_INTERVAL = 60_000; // 1 минута — нижний предел против самой Sigur API
-// 2 часа — структура (отделы/должности/сотрудники) меняется в основном через нашу
-// админку, при этом admin CRUD уже шлёт Socket.IO push structure_updated, и фронт
-// обновляется мгновенно. Scheduler нужен лишь чтобы подхватить редкие внешние
-// изменения непосредственно в Sigur — раз в 2 часа более чем достаточно, и это
-// освобождает слоты SigurRequestLimiter для polling.
-const DEFAULT_STRUCTURE_SYNC_INTERVAL = 2 * 60 * 60_000;
+// 30 минут (как default SIGUR_STRUCTURE_SYNC_INTERVAL_MS в env.ts) — фолбэк на
+// некорректное значение переменной. Правки сотрудников из раздела SIGUR портала
+// подхватывает точечный синк (sigur-employee-quick-sync), планировщик ловит
+// изменения, сделанные напрямую в Sigur (в т.ч. карточки из 1С).
+const DEFAULT_STRUCTURE_SYNC_INTERVAL = 30 * 60_000;
 
 function resolveStructureSyncInterval(): number {
   const parsed = Number.parseInt(env.SIGUR_STRUCTURE_SYNC_INTERVAL_MS, 10);
@@ -37,16 +36,48 @@ function resolveStructureSyncInterval(): number {
 
 const STARTUP_DELAY = 30_000; // 30 секунд после старта
 const RUN_STARTUP_SYNC = process.env.SIGUR_STRUCTURE_SYNC_ON_STARTUP === 'true' || IS_PRODUCTION;
+// Тик, попавший на занятый lock (точечный или ручной синк), иначе пропускался бы
+// до следующего тика — повторяем раз в минуту, ограниченно.
+const LOCK_RETRY_DELAY_MS = 60_000;
+const LOCK_RETRY_MAX = 5;
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;
+let lockRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let lockRetryCount = 0;
 let syncInFlight: Promise<void> | null = null;
+
+function clearLockRetry(): void {
+  if (lockRetryTimer) {
+    clearTimeout(lockRetryTimer);
+    lockRetryTimer = null;
+  }
+}
+
+function scheduleLockRetry(): void {
+  // Планировщик остановлен, пока шёл цикл, — повтор не нужен.
+  if (lockRetryTimer || !schedulerTimer) return;
+  if (lockRetryCount >= LOCK_RETRY_MAX) {
+    console.warn(`[structure-scheduler] lock busy after ${LOCK_RETRY_MAX} retries — waiting for the next tick`);
+    lockRetryCount = 0;
+    return;
+  }
+  lockRetryCount++;
+  lockRetryTimer = setTimeout(() => {
+    lockRetryTimer = null;
+    void runStructureSyncCycle();
+  }, LOCK_RETRY_DELAY_MS);
+  lockRetryTimer.unref?.();
+}
 
 async function runStructureSyncCycle(): Promise<void> {
   if (syncInFlight) return;
+  // Регулярный тик поглощает отложенный повтор.
+  clearLockRetry();
 
   syncInFlight = (async () => {
     let lockAcquired = false;
+    let skippedByLock = false;
     let cronStatus: CronRunStatus = 'ok';
     const startedAt = Date.now();
     await runWithCronMonitor(
@@ -84,6 +115,7 @@ async function runStructureSyncCycle(): Promise<void> {
           console.log(`[structure-scheduler] sync done connection=${connectionType} durationMs=${durationMs}`);
         } catch (err) {
           if (err instanceof ManualSyncInProgressError) {
+            skippedByLock = true;
             console.log('[structure-scheduler] skipped: manual or concurrent sync in progress');
           } else {
             cronStatus = 'error';
@@ -96,11 +128,13 @@ async function runStructureSyncCycle(): Promise<void> {
         return cronStatus;
       },
       {
-        schedule: { type: 'interval', value: 120, unit: 'minute' },
+        schedule: { type: 'interval', value: Math.round(resolveStructureSyncInterval() / 60_000), unit: 'minute' },
         checkinMargin: 30,
         maxRuntime: 60,
       },
     );
+    if (skippedByLock) scheduleLockRetry();
+    else lockRetryCount = 0;
     syncInFlight = null;
   })();
 
@@ -135,6 +169,8 @@ export function stopStructureSyncScheduler(): void {
     clearTimeout(startupTimeout);
     startupTimeout = null;
   }
+  clearLockRetry();
+  lockRetryCount = 0;
   if (schedulerTimer) {
     clearInterval(schedulerTimer);
     schedulerTimer = null;

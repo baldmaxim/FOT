@@ -19,11 +19,15 @@ import { upsertTechnicalDepartmentAccess } from './employee-department-access.se
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import { auditService } from './audit.service.js';
 import { syncProfileNameFromEmployee } from './user-profile-name.service.js';
+import { employeeCountsCache } from './employee-counts-cache.service.js';
+import { invalidateStructureCache } from './employee-mapper.service.js';
+import { invalidateCache } from '../middleware/cacheResponse.js';
 import {
   LifecycleOperationError,
   executeOperation,
   getLifecycleGuards,
   isLifecycleProtected,
+  isSigurNotFound,
   mapWithConcurrency,
   openDismissOperation,
   openRepairOperation,
@@ -440,7 +444,45 @@ export interface ISyncEmployeesResult {
   archive_move_skipped_protected: number;
   /** Перенос fired→архив обогнал rehire: открыта durable-компенсация (repair_sigur). */
   archive_move_compensated: number;
+  /** Только точечный режим: исход по каждой запрошенной карточке. */
+  quick_outcomes?: Map<number, TQuickSyncOutcome>;
 }
+
+/**
+ * Исход карточки в точечном режиме. Окончательные — всё, кроме `retryable`:
+ * очередь снимает такие карточки, `retryable` повторяет.
+ */
+export type TQuickSyncOutcome =
+  | 'updated'
+  | 'unchanged'
+  | 'inserted'
+  | 'linked'
+  | 'not_found'
+  | 'skipped_namesake'
+  | 'skipped_whitelist'
+  | 'skipped'
+  | 'retryable';
+
+export interface ISyncEmployeesOptions {
+  /**
+   * Точечный режим: только эти карточки Sigur (по GET /employees/:id), без полной
+   * выгрузки и без фаз, которым нужен весь список (rebind, auto-fire, fired→архив).
+   * `undefined` — полный синк; `[]` — пустой прогон.
+   */
+  onlySigurIds?: number[];
+}
+
+const emptySyncEmployeesResult = (): ISyncEmployeesResult => ({
+  imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0,
+  fired_mismatch_detected: 0, fired_mismatch_unresolved: 0, rebinded: 0,
+  archive_fired: 0, auto_fire_deferred: 0, auto_fire_skipped_present: 0,
+  auto_fire_skipped_protected: 0, auto_fire_skipped_stale: 0,
+  archive_fire_skipped_stale: 0, archive_fire_skipped_protected: 0,
+  archive_move_skipped_protected: 0, archive_move_compensated: 0,
+});
+
+/** Ключ ФИО в SQL — та же формула, что normalizeFullName(…, { collapseYo: true }). */
+const SQL_FULL_NAME_KEY = `replace(regexp_replace(lower(btrim(full_name)), '\\s+', ' ', 'g'), 'ё', 'е')`;
 
 // ─── Защита авто-fire от ложных срабатываний ───
 
@@ -607,7 +649,17 @@ export async function syncEmployeesLogic(
   onProgress?: (data: Record<string, unknown>) => void,
   context?: ISyncContext,
   autoInsert = true,
+  options: ISyncEmployeesOptions = {},
 ): Promise<ISyncEmployeesResult> {
+  // Точечный режим — по наличию списка, не по его длине: пустая пачка не должна
+  // превратиться в полный синк.
+  const quickMode = options.onlySigurIds !== undefined;
+  const quickIds = quickMode ? [...new Set(options.onlySigurIds)] : [];
+  const outcomes = new Map<number, TQuickSyncOutcome>();
+  if (quickMode && quickIds.length === 0) {
+    return { ...emptySyncEmployeesResult(), quick_outcomes: outcomes };
+  }
+
   if (!(await sigurService.isConfigured())) throw new Error('Sigur не настроен');
 
   const send = onProgress || (() => {});
@@ -619,18 +671,32 @@ export async function syncEmployeesLogic(
   if (whitelist) {
     console.log(`[syncEmployees] whitelist active: ${whitelist.size} subtree departments (applies to inserts and unmatched list)`);
   }
-  const sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
-  console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');
+  let sigurEmployeesRaw: Record<string, unknown>[];
+  if (quickMode) {
+    // Ошибка одной карточки не теряет остальные: 404 — окончательно, прочее — повтор.
+    const settled = await Promise.allSettled(quickIds.map(id => sigurService.getEmployeeById(id, connection)));
+    sigurEmployeesRaw = [];
+    settled.forEach((result, idx) => {
+      const sigurId = quickIds[idx];
+      if (result.status === 'fulfilled' && result.value) {
+        sigurEmployeesRaw.push(result.value);
+      } else if (result.status === 'rejected' && isSigurNotFound(result.reason)) {
+        outcomes.set(sigurId, 'not_found');
+      } else {
+        outcomes.set(sigurId, 'retryable');
+        console.warn(
+          `[syncEmployees] quick: card ${sigurId} fetch failed:`,
+          result.status === 'rejected' ? (result.reason as Error)?.message : 'empty response',
+        );
+      }
+    });
+  } else {
+    sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
+  }
+  console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur', quickMode ? '(quick)' : '');
 
   if (sigurEmployeesRaw.length === 0) {
-    return {
-      imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0,
-      fired_mismatch_detected: 0, fired_mismatch_unresolved: 0, rebinded: 0,
-      archive_fired: 0, auto_fire_deferred: 0, auto_fire_skipped_present: 0,
-      auto_fire_skipped_protected: 0, auto_fire_skipped_stale: 0,
-      archive_fire_skipped_stale: 0, archive_fire_skipped_protected: 0,
-      archive_move_skipped_protected: 0, archive_move_compensated: 0,
-    };
+    return { ...emptySyncEmployeesResult(), quick_outcomes: quickMode ? outcomes : undefined };
   }
 
   logSampleAndWarn('syncEmployees', sigurEmployeesRaw[0], ['id', 'name', 'departmentId', 'positionId', 'position']);
@@ -666,15 +732,18 @@ export async function syncEmployeesLogic(
   }[] = [];
   const EMP_PAGE = 1000;
   let empOffset = 0;
+  // Точечный режим читает только строки запрошенных карточек.
+  const existingFilterSql = quickMode ? ' AND sigur_employee_id = ANY($1::int[])' : '';
   while (true) {
-    const existingEmpsPage = await query<typeof existingEmps[number]>(
-      `SELECT id, sigur_employee_id, employment_status, department_locked, name_locked,
+    const existingSql = `SELECT id, sigur_employee_id, employment_status, department_locked, name_locked,
               org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name,
               dismissal_date, is_archived, lifecycle_revision
        FROM employees
-       WHERE sigur_employee_id IS NOT NULL
-       LIMIT ${EMP_PAGE} OFFSET ${empOffset}`,
-    );
+       WHERE sigur_employee_id IS NOT NULL${existingFilterSql}
+       LIMIT ${EMP_PAGE} OFFSET ${empOffset}`;
+    const existingEmpsPage = quickMode
+      ? await query<typeof existingEmps[number]>(existingSql, [quickIds])
+      : await query<typeof existingEmps[number]>(existingSql);
     if (!existingEmpsPage || existingEmpsPage.length === 0) break;
     existingEmps.push(...existingEmpsPage);
     if (existingEmpsPage.length < EMP_PAGE) break;
@@ -856,8 +925,10 @@ export async function syncEmployeesLogic(
       is_archived: e.is_archived === true,
     });
   }
+  // Точечный режим: смена карточки распознаётся только по полному снимку (старая архивная
+  // + новая рабочая в одной выгрузке) — её оставляем плановому синку.
   const rebindPlan = planSigurCardRebinds(
-    sigurEmployees
+    (quickMode ? [] : sigurEmployees)
       .filter(emp => emp.id != null && emp.name)
       .map(emp => {
         const { orgDepartmentId, isDismissalDept } = resolveCardDept(emp.departmentId);
@@ -875,6 +946,29 @@ export async function syncEmployeesLogic(
   const cardBySigurId = new Map<number, typeof sigurEmployees[number]>();
   for (const emp of sigurEmployees) {
     if (emp.id != null && !cardBySigurId.has(emp.id)) cardBySigurId.set(emp.id, emp);
+  }
+
+  // Точечный режим: тёзки по всей БД (любой статус, по full_name — last_name у старых
+  // записей бывает пустым). Связь с ними без полного снимка не решить — вставку откладываем.
+  const namesakesByKey = new Map<string, { id: number; sigur_employee_id: number | null; employment_status: string }[]>();
+  const quickNamesakeSkips: { sigurId: number; name: string; namesakeIds: number[] }[] = [];
+  if (quickMode) {
+    const nameKeys = [...new Set(
+      sigurEmployees.filter(emp => emp.name).map(emp => normalizeFullName(emp.name as string, { collapseYo: true })),
+    )];
+    if (nameKeys.length > 0) {
+      const namesakeRows = await query<{ id: number; sigur_employee_id: number | null; employment_status: string; name_key: string }>(
+        `SELECT id, sigur_employee_id, employment_status, ${SQL_FULL_NAME_KEY} AS name_key
+           FROM employees
+          WHERE full_name IS NOT NULL AND ${SQL_FULL_NAME_KEY} = ANY($1::text[])`,
+        [nameKeys],
+      );
+      for (const row of namesakeRows || []) {
+        const arr = namesakesByKey.get(row.name_key);
+        if (arr) arr.push(row);
+        else namesakesByKey.set(row.name_key, [row]);
+      }
+    }
   }
 
   let imported = 0;
@@ -903,6 +997,7 @@ export async function syncEmployeesLogic(
   }
 
   if (missingPositions.size > 0) {
+    let positionsCreated = false;
     send({ type: 'employees_progress', phase: 'positions', current: 0, total: totalEmployees, percent: 0 });
     const missingList = [...missingPositions];
     const lowerKeys = missingList.map(n => n.toLowerCase().trim());
@@ -940,6 +1035,12 @@ export async function syncEmployeesLogic(
       for (const p of created || []) {
         if (p.name) posNameToDbId.set(p.name.toLowerCase().trim(), p.id);
       }
+      if ((created || []).length > 0) positionsCreated = true;
+    }
+    if (positionsCreated) {
+      // Новые названия: кэш структуры (имена в списках сотрудников) и HTTP-кэш /structure/positions.
+      invalidateStructureCache();
+      invalidateCache('structure:positions');
     }
   }
 
@@ -995,7 +1096,20 @@ export async function syncEmployeesLogic(
   // Собираем обновления и вставки (без DB-запросов в цикле).
   // isDismissalDept — признак архивной папки ПО SIGUR department ID (не по archiveLocalDeptId:
   // локальный маппинг может отсутствовать, а распознавание увольнения обязано работать всегда).
-  const updates: { id: number; fields: Record<string, unknown>; name: string; isDismissalDept: boolean; sigurEmployeeId: number }[] = [];
+  const updates: {
+    id: number;
+    fields: Record<string, unknown>;
+    name: string;
+    isDismissalDept: boolean;
+    sigurEmployeeId: number;
+    /** Привязка portal-only записи к карточке (для исхода точечного режима). */
+    isLink?: boolean;
+  }[] = [];
+  /** Точечный режим: карточки, у которых применение упало, — их повторит очередь. */
+  const quickRetryableSigurIds = new Set<number>();
+  const markQuick = (sigurId: number | undefined | null, outcome: TQuickSyncOutcome): void => {
+    if (quickMode && sigurId != null) outcomes.set(sigurId, outcome);
+  };
   // Уволенные в ФОТ, которых Sigur отдал в рабочем отделе (см. ветку ниже — реактивации нет).
   const firedMismatch: { employeeId: number; sigurId: number; name: string; sigurDeptName: string | null }[] = [];
 
@@ -1130,7 +1244,7 @@ export async function syncEmployeesLogic(
       send({ type: 'employees_progress', phase: 'matching', current: empIdx, total: totalEmployees, percent: Math.round((empIdx / totalEmployees) * 100) });
     }
     const fullName = emp.name;
-    if (!fullName) { skipped++; continue; }
+    if (!fullName) { skipped++; markQuick(emp.id, 'skipped'); continue; }
 
     const sigurEmpId = emp.id;
     // Обе карточки уже обработанной пары «смена карточки Sigur» пропускаем целиком:
@@ -1197,11 +1311,12 @@ export async function syncEmployeesLogic(
             `[syncEmployees] skip ancestor-demotion: ${fullName} (sigurId=${sigurEmpId}) `
             + `${prev?.org_department_id} → ${orgDepartmentId}${sigurDeptName ? ` (${sigurDeptName})` : ''}`,
           );
-        } else {
+        } else if (deptChanging) {
+          // Только реальная смена: иначе каждый тик переписывал ~12 тыс. строк впустую.
           updateFields.org_department_id = orgDepartmentId;
         }
       }
-      if (positionId) {
+      if (positionId && positionId !== (prev?.position_id ?? null)) {
         updateFields.position_id = positionId;
       }
       const normalizedFullName = fullName.trim();
@@ -1235,6 +1350,7 @@ export async function syncEmployeesLogic(
         updates.push({ id: dbId, fields: updateFields, name: fullName, isDismissalDept, sigurEmployeeId: sigurEmpId });
       } else {
         skipped++;
+        markQuick(sigurEmpId, 'unchanged');
       }
       continue;
     }
@@ -1242,7 +1358,7 @@ export async function syncEmployeesLogic(
     if (autoInsert) {
       // Whitelist ограничивает только вставку новых сотрудников, не обновление существующих.
       // Вставляем только сотрудников из реально выбранных для sync отделов.
-      if (isDismissalDept) { skipped++; continue; }
+      if (isDismissalDept) { skipped++; markQuick(sigurEmpId, 'skipped'); continue; }
 
       // Похоже на смену карточки Sigur, но связь неоднозначна (несколько однофамильцев,
       // кандидат уже уволен, конфликт с department_locked) — вставку не делаем, решает HR.
@@ -1262,13 +1378,33 @@ export async function syncEmployeesLogic(
         const deptName = (sigurDeptId ? sigurDeptToName.get(sigurDeptId) : null) || `sigurDeptId=${sigurDeptId ?? 'null'}`;
         console.log(`[syncEmployees] skip insert (whitelist): ${fullName} | dept: ${deptName}`);
         skipped++;
+        markQuick(sigurEmpId, 'skipped_whitelist');
         continue;
+      }
+
+      const nameKey = normalizeFullName(fullName, { collapseYo: true });
+      if (quickMode) {
+        // Привязываем только единственного активного portal-only и только если других
+        // тёзок нет совсем. Иначе — плановому синку (rebind/unmatched по полному снимку).
+        const sameName = (namesakesByKey.get(nameKey) || []).filter(r => r.sigur_employee_id !== sigurEmpId);
+        const portalActive = sameName.filter(r => r.sigur_employee_id == null && r.employment_status === 'active');
+        if (sameName.length > portalActive.length || portalActive.length > 1) {
+          console.warn(
+            `[syncEmployees] quick: skip insert (namesake): ${fullName} (sigurId=${sigurEmpId}) — `
+            + `namesakes: ${sameName.map(r => r.id).join(',')}`,
+          );
+          skipped++;
+          markQuick(sigurEmpId, 'skipped_namesake');
+          if (sigurEmpId != null) {
+            quickNamesakeSkips.push({ sigurId: sigurEmpId, name: fullName.trim(), namesakeIds: sameName.map(r => r.id) });
+          }
+          continue;
+        }
       }
 
       // Защита от дублей: если в БД уже есть активный portal-only сотрудник с таким же ФИО
       // (например, восстановленный через rehire с auto-detach), привязываем нового Sigur-сотрудника
       // к существующей портальной записи вместо создания новой.
-      const nameKey = normalizeFullName(fullName, { collapseYo: true });
       const portalMatches = portalOnlyByName.get(nameKey);
       if (portalMatches && portalMatches.length === 1 && sigurEmpId) {
         const match = portalMatches[0];
@@ -1291,7 +1427,7 @@ export async function syncEmployeesLogic(
           linkFields.middle_name = fio.middleName || null;
         }
         // Ветка недостижима для архивной папки (isDismissalDept отсёкся выше continue'ом).
-        updates.push({ id: match.id, fields: linkFields, name: fullName, isDismissalDept: false, sigurEmployeeId: sigurEmpId });
+        updates.push({ id: match.id, fields: linkFields, name: fullName, isDismissalDept: false, sigurEmployeeId: sigurEmpId, isLink: true });
         // dbEmpById нужен для корректной обработки в batch ниже (changeDepartment / changePosition)
         dbEmpById.set(match.id, {
           org_department_id: match.org_department_id,
@@ -1347,6 +1483,7 @@ export async function syncEmployeesLogic(
         continue;
       }
 
+      markQuick(sigurEmpId, 'skipped');
       unmatchedList.push({
         sigurId: sigurEmpId,
         name: fullName.trim(),
@@ -1455,6 +1592,7 @@ export async function syncEmployeesLogic(
                 if (outcome === 'applied') archiveFired++;
                 else if (outcome === 'protected') archiveFireSkippedProtected++;
                 else if (outcome === 'stale') archiveFireSkippedStale++;
+                else quickRetryableSigurIds.add(u.sigurEmployeeId);
                 archiveHandled = true;
                 changeResult = 'skipped';
               } else if (fromArchive) {
@@ -1576,13 +1714,68 @@ export async function syncEmployeesLogic(
     for (let j = 0; j < results.length; j++) {
       if (!results[j].error) updated++;
       else errors.push(`update ${batch[j].name}: ${results[j].error!.message}`);
+      const failed = Boolean(results[j].error) || quickRetryableSigurIds.has(batch[j].sigurEmployeeId);
+      markQuick(batch[j].sigurEmployeeId, failed ? 'retryable' : (batch[j].isLink ? 'linked' : 'updated'));
     }
   }
 
   send({ type: 'employees_progress', phase: 'saving', current: totalEmployees, total: totalEmployees, percent: 100 });
 
+  /**
+   * Точечный режим, повтор после «INSERT прошёл, техдоступ упал»: строка уже есть и
+   * не меняется, поэтому доступ восстанавливаем отдельно — только если записи для
+   * текущего отдела нет совсем (выключенную вручную не трогаем).
+   */
+  const ensureQuickTechnicalAccess = async (): Promise<void> => {
+    const candidates = new Map<number, number>(); // employeeId → sigurId
+    for (const [sigurId, outcome] of outcomes) {
+      if (outcome !== 'unchanged' && outcome !== 'linked') continue;
+      const employeeId = sigurIdToDbId.get(sigurId);
+      if (employeeId != null) candidates.set(employeeId, sigurId);
+    }
+    if (candidates.size === 0) return;
+    try {
+      const rows = await query<{ id: number; org_department_id: string; has_access: boolean }>(
+        `SELECT e.id, e.org_department_id,
+                EXISTS (SELECT 1 FROM employee_department_access a
+                         WHERE a.employee_id = e.id AND a.department_id = e.org_department_id) AS has_access
+           FROM employees e
+          WHERE e.id = ANY($1::int[]) AND e.employment_status = 'active' AND e.org_department_id IS NOT NULL`,
+        [[...candidates.keys()]],
+      );
+      for (const row of rows || []) {
+        if (row.has_access) continue;
+        try {
+          await upsertTechnicalDepartmentAccess(row.id, row.org_department_id, null, 'sigur_sync');
+        } catch (accessError) {
+          errors.push(`access restore ${row.id}: ${(accessError as Error).message}`);
+          markQuick(candidates.get(row.id), 'retryable');
+        }
+      }
+    } catch (accessCheckError) {
+      errors.push(`access check: ${(accessCheckError as Error).message}`);
+      for (const sigurId of candidates.values()) markQuick(sigurId, 'retryable');
+    }
+  };
+
+  const auditQuickNamesakeSkips = async (): Promise<void> => {
+    for (const skip of quickNamesakeSkips) {
+      try {
+        await auditService.log({
+          user_id: null,
+          action: 'SIGUR_QUICK_SYNC_SKIPPED',
+          entity_type: 'sigur_employee',
+          entity_id: String(skip.sigurId),
+          details: { reason: 'namesake', name: skip.name, namesake_employee_ids: skip.namesakeIds },
+        });
+      } catch (auditErr) {
+        console.warn('[syncEmployees] quick namesake audit failed:', (auditErr as Error).message);
+      }
+    }
+  };
+
   const BATCH_SIZE = 100;
-  const insertedAccessSeeds: Array<{ id: number; org_department_id: string }> = [];
+  const insertedAccessSeeds: Array<{ id: number; org_department_id: string; sigurId: number | null }> = [];
 
   const INSERT_COLUMNS = [
     'full_name', 'last_name', 'first_name', 'middle_name', 'hire_date',
@@ -1593,9 +1786,9 @@ export async function syncEmployeesLogic(
   const insertOneRow = async (row: Record<string, unknown>) => {
     const params: unknown[] = INSERT_COLUMNS.map(col => row[col] ?? null);
     const placeholders = INSERT_COLUMNS.map((_, idx) => `$${idx + 1}`).join(', ');
-    return queryOne<{ id: number; org_department_id: string | null }>(
+    return queryOne<{ id: number; org_department_id: string | null; sigur_employee_id: number | null }>(
       `INSERT INTO employees (${INSERT_COLUMNS.join(', ')}) VALUES (${placeholders})
-       RETURNING id, org_department_id`,
+       RETURNING id, org_department_id, sigur_employee_id`,
       params,
     );
   };
@@ -1614,15 +1807,16 @@ export async function syncEmployeesLogic(
         }
         groups.push(`(${group.join(', ')})`);
       }
-      const insertedRows = await query<{ id: number; org_department_id: string | null }>(
+      const insertedRows = await query<{ id: number; org_department_id: string | null; sigur_employee_id: number | null }>(
         `INSERT INTO employees (${INSERT_COLUMNS.join(', ')}) VALUES ${groups.join(', ')}
-         RETURNING id, org_department_id`,
+         RETURNING id, org_department_id, sigur_employee_id`,
         allParams,
       );
       imported += batch.length;
       for (const row of insertedRows || []) {
+        markQuick(row.sigur_employee_id, 'inserted');
         if (row.id && row.org_department_id) {
-          insertedAccessSeeds.push({ id: row.id, org_department_id: row.org_department_id });
+          insertedAccessSeeds.push({ id: row.id, org_department_id: row.org_department_id, sigurId: row.sigur_employee_id ?? null });
         }
       }
     } catch (insertError) {
@@ -1631,11 +1825,17 @@ export async function syncEmployeesLogic(
         try {
           const singleRow = await insertOneRow(row);
           imported++;
+          markQuick(singleRow?.sigur_employee_id, 'inserted');
           if (singleRow?.id && singleRow.org_department_id) {
-            insertedAccessSeeds.push({ id: singleRow.id, org_department_id: singleRow.org_department_id });
+            insertedAccessSeeds.push({
+              id: singleRow.id,
+              org_department_id: singleRow.org_department_id,
+              sigurId: singleRow.sigur_employee_id ?? null,
+            });
           }
         } catch (singleErr) {
           errors.push(`${(row as Record<string, unknown>).full_name}: ${(singleErr as Error).message}`);
+          markQuick(row.sigur_employee_id as number | null, 'retryable');
         }
       }
     }
@@ -1646,7 +1846,18 @@ export async function syncEmployeesLogic(
       await upsertTechnicalDepartmentAccess(seed.id, seed.org_department_id, null, 'sigur_sync');
     } catch (accessError) {
       errors.push(`access insert ${seed.id}: ${(accessError as Error).message}`);
+      markQuick(seed.sigurId, 'retryable');
     }
+  }
+
+  if (imported > 0) {
+    // Вставка идёт мимо employeeCache.invalidate — счётчики «N из M» сбрасываем сами.
+    employeeCountsCache.invalidateAll();
+  }
+
+  if (quickMode) {
+    await ensureQuickTechnicalAccess();
+    await auditQuickNamesakeSkips();
   }
 
   // Авто-увольнение сотрудников, которых больше нет в SIGUR — двухтактное (миграция 261).
@@ -1657,139 +1868,143 @@ export async function syncEmployeesLogic(
   // или после недавнего rehire не трогается. Само увольнение — durable-операция с CAS.
   // Защита от инцидентов: при подозрительно тонкой выгрузке Sigur и при попытке зафаерить
   // слишком многих за один проход — auto-fire отменяется целиком (см. инцидент 17.04.2026).
-  const sigurIdSet = new Set<number>();
-  for (const emp of sigurEmployees) {
-    if (emp.id != null) sigurIdSet.add(emp.id);
-  }
-
-  const activeWithSigur = existingEmps.filter(e => e.employment_status === 'active').length;
-  // Сотрудников с уже назначенным увольнением авто-fire не трогает: их применяет
-  // dismissal-scheduler своей датой (в т.ч. просроченные после простоя сервера).
-  // Иначе увольнение «на сегодня до 23:00 МСК» или на будущую дату применялось бы раньше срока.
-  const skippedAutoFireWithDismissal = existingEmps.filter(
-    e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id) && e.dismissal_date != null,
-  ).length;
-  const toAutoFire = existingEmps.filter(
-    e => e.employment_status === 'active'
-      && !sigurIdSet.has(e.sigur_employee_id)
-      && e.dismissal_date == null,
-  );
-  if (skippedAutoFireWithDismissal > 0) {
-    console.log(`[syncEmployees] auto-fire skip (dismissal scheduled): ${skippedAutoFireWithDismissal}`);
-  }
-
-  const safety = evaluateAutoFireSafety(activeWithSigur, sigurEmployees.length, toAutoFire.length, {
-    absoluteLimit: Number(process.env.SIGUR_AUTOFIRE_MAX) || undefined,
-  });
-
+  // Точечный режим: «нет в выгрузке» ничего не значит (выгрузки нет) — auto-fire
+  // и его метки отсутствия трогать нельзя.
   let autoFired = 0;
-  // МСК-дата: UTC-срезка в окне 00:00–03:00 МСК давала вчерашнее число.
-  const today = syncTodayIso;
-  const autoFiredIds: number[] = [];
-
-  if (safety.shouldSkip) {
-    console.error(`[syncEmployees] ${safety.reason}`);
-    errors.push(safety.reason!);
-  } else {
-    // Метки отсутствия тех, кто снова в выгрузке, снимаем: страйки считаются только подряд.
-    try {
-      await execute(
-        `DELETE FROM employee_sigur_absence_marks WHERE employee_id <> ALL($1::bigint[])`,
-        [toAutoFire.map(e => e.id)],
-      );
-    } catch (marksErr) {
-      errors.push(`auto-fire marks cleanup: ${(marksErr as Error).message}`);
+  if (!quickMode) {
+    const sigurIdSet = new Set<number>();
+    for (const emp of sigurEmployees) {
+      if (emp.id != null) sigurIdSet.add(emp.id);
     }
 
-    if (toAutoFire.length > 0) {
-      const guards = await getLifecycleGuards(toAutoFire.map(e => e.id));
-      const probes = await mapWithConcurrency(toAutoFire, PROBE_CONCURRENCY, async emp => ({
-        emp,
-        probe: await probeSigurCard(emp.sigur_employee_id, archiveDepartmentId ?? null, connection),
-      }));
+    const activeWithSigur = existingEmps.filter(e => e.employment_status === 'active').length;
+    // Сотрудников с уже назначенным увольнением авто-fire не трогает: их применяет
+    // dismissal-scheduler своей датой (в т.ч. просроченные после простоя сервера).
+    // Иначе увольнение «на сегодня до 23:00 МСК» или на будущую дату применялось бы раньше срока.
+    const skippedAutoFireWithDismissal = existingEmps.filter(
+      e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id) && e.dismissal_date != null,
+    ).length;
+    const toAutoFire = existingEmps.filter(
+      e => e.employment_status === 'active'
+        && !sigurIdSet.has(e.sigur_employee_id)
+        && e.dismissal_date == null,
+    );
+    if (skippedAutoFireWithDismissal > 0) {
+      console.log(`[syncEmployees] auto-fire skip (dismissal scheduled): ${skippedAutoFireWithDismissal}`);
+    }
 
-      for (const { emp, probe } of probes) {
-        try {
-          const guard = guards.get(emp.id);
-          if (isLifecycleProtected(guard)) {
-            autoFireSkippedProtected++;
-            console.log(`[syncEmployees] auto-fire skip (lifecycle protected: ${guard?.pending_kind ?? 'recent rehire'}): id=${emp.id}`);
-            continue;
-          }
-          if (probe.state === 'working' || probe.state === 'archived') {
-            autoFireSkippedPresent++;
-            await execute(`DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1`, [emp.id]);
-            console.log(`[syncEmployees] auto-fire skip (present on point check: ${probe.state}): id=${emp.id}`);
-            continue;
-          }
-          if (probe.state === 'unknown') {
-            autoFireSkippedPresent++;
-            errors.push(`auto-fire ${emp.id}: точечная проба не удалась — ${probe.error ?? 'unknown'}`);
-            continue;
-          }
+    const safety = evaluateAutoFireSafety(activeWithSigur, sigurEmployees.length, toAutoFire.length, {
+      absoluteLimit: Number(process.env.SIGUR_AUTOFIRE_MAX) || undefined,
+    });
 
-          // probe.state === 'deleted' (404). Первый такт — метка; второй — увольнение.
-          const revision = guard?.lifecycle_revision ?? emp.lifecycle_revision;
-          const firstSeenAt = guard?.absence_first_seen_at ? new Date(guard.absence_first_seen_at).getTime() : Number.NaN;
-          const confirmed = guard?.absence_revision === revision
-            && Number.isFinite(firstSeenAt)
-            && Date.now() - firstSeenAt >= AUTO_FIRE_CONFIRM_DELAY_MS;
-          if (!confirmed) {
-            await execute(
-              `INSERT INTO employee_sigur_absence_marks (employee_id, sigur_employee_id, lifecycle_revision)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (employee_id) DO UPDATE
-                 SET strikes = CASE WHEN employee_sigur_absence_marks.lifecycle_revision = EXCLUDED.lifecycle_revision
-                                    THEN employee_sigur_absence_marks.strikes + 1 ELSE 1 END,
-                     first_seen_at = CASE WHEN employee_sigur_absence_marks.lifecycle_revision = EXCLUDED.lifecycle_revision
-                                          THEN employee_sigur_absence_marks.first_seen_at ELSE now() END,
-                     lifecycle_revision = EXCLUDED.lifecycle_revision,
-                     sigur_employee_id = EXCLUDED.sigur_employee_id`,
-              [emp.id, emp.sigur_employee_id, revision],
-            );
-            autoFireDeferred++;
-            console.log(`[syncEmployees] auto-fire deferred (first 404, waiting for confirmation): id=${emp.id} revision=${revision}`);
-            continue;
-          }
+    // МСК-дата: UTC-срезка в окне 00:00–03:00 МСК давала вчерашнее число.
+    const today = syncTodayIso;
+    const autoFiredIds: number[] = [];
 
+    if (safety.shouldSkip) {
+      console.error(`[syncEmployees] ${safety.reason}`);
+      errors.push(safety.reason!);
+    } else {
+      // Метки отсутствия тех, кто снова в выгрузке, снимаем: страйки считаются только подряд.
+      try {
+        await execute(
+          `DELETE FROM employee_sigur_absence_marks WHERE employee_id <> ALL($1::bigint[])`,
+          [toAutoFire.map(e => e.id)],
+        );
+      } catch (marksErr) {
+        errors.push(`auto-fire marks cleanup: ${(marksErr as Error).message}`);
+      }
+
+      if (toAutoFire.length > 0) {
+        const guards = await getLifecycleGuards(toAutoFire.map(e => e.id));
+        const probes = await mapWithConcurrency(toAutoFire, PROBE_CONCURRENCY, async emp => ({
+          emp,
+          probe: await probeSigurCard(emp.sigur_employee_id, archiveDepartmentId ?? null, connection),
+        }));
+
+        for (const { emp, probe } of probes) {
           try {
-            const operation = await openDismissOperation({
-              employeeId: emp.id,
-              dismissalDate: today,
-              source: 'sigur_missing',
-              createdBy: null,
-              connection,
-              expectedRevision: revision,
-              effectiveDate: today,
-              // Карточки в Sigur нет — шагов Sigur нет.
-              sigurSteps: 'none',
-            });
-            await executeOperation(operation, connection);
-            await execute(`DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1`, [emp.id]);
-            autoFired++;
-            autoFiredIds.push(emp.id);
-            employeeCache.invalidate(emp.id);
-            console.log(`[syncEmployees] auto-fired (404 confirmed twice): id=${emp.id} op=${operation.id}`);
-          } catch (fireErr) {
-            if (isStaleOperationError(fireErr)) {
-              autoFireSkippedStale++;
-              console.log(`[syncEmployees] auto-fire skip (${(fireErr as LifecycleOperationError).code}): id=${emp.id}`);
-            } else {
-              errors.push(`auto-fire ${emp.id}: ${(fireErr as Error).message}`);
+            const guard = guards.get(emp.id);
+            if (isLifecycleProtected(guard)) {
+              autoFireSkippedProtected++;
+              console.log(`[syncEmployees] auto-fire skip (lifecycle protected: ${guard?.pending_kind ?? 'recent rehire'}): id=${emp.id}`);
+              continue;
             }
+            if (probe.state === 'working' || probe.state === 'archived') {
+              autoFireSkippedPresent++;
+              await execute(`DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1`, [emp.id]);
+              console.log(`[syncEmployees] auto-fire skip (present on point check: ${probe.state}): id=${emp.id}`);
+              continue;
+            }
+            if (probe.state === 'unknown') {
+              autoFireSkippedPresent++;
+              errors.push(`auto-fire ${emp.id}: точечная проба не удалась — ${probe.error ?? 'unknown'}`);
+              continue;
+            }
+
+            // probe.state === 'deleted' (404). Первый такт — метка; второй — увольнение.
+            const revision = guard?.lifecycle_revision ?? emp.lifecycle_revision;
+            const firstSeenAt = guard?.absence_first_seen_at ? new Date(guard.absence_first_seen_at).getTime() : Number.NaN;
+            const confirmed = guard?.absence_revision === revision
+              && Number.isFinite(firstSeenAt)
+              && Date.now() - firstSeenAt >= AUTO_FIRE_CONFIRM_DELAY_MS;
+            if (!confirmed) {
+              await execute(
+                `INSERT INTO employee_sigur_absence_marks (employee_id, sigur_employee_id, lifecycle_revision)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (employee_id) DO UPDATE
+                   SET strikes = CASE WHEN employee_sigur_absence_marks.lifecycle_revision = EXCLUDED.lifecycle_revision
+                                      THEN employee_sigur_absence_marks.strikes + 1 ELSE 1 END,
+                       first_seen_at = CASE WHEN employee_sigur_absence_marks.lifecycle_revision = EXCLUDED.lifecycle_revision
+                                            THEN employee_sigur_absence_marks.first_seen_at ELSE now() END,
+                       lifecycle_revision = EXCLUDED.lifecycle_revision,
+                       sigur_employee_id = EXCLUDED.sigur_employee_id`,
+                [emp.id, emp.sigur_employee_id, revision],
+              );
+              autoFireDeferred++;
+              console.log(`[syncEmployees] auto-fire deferred (first 404, waiting for confirmation): id=${emp.id} revision=${revision}`);
+              continue;
+            }
+
+            try {
+              const operation = await openDismissOperation({
+                employeeId: emp.id,
+                dismissalDate: today,
+                source: 'sigur_missing',
+                createdBy: null,
+                connection,
+                expectedRevision: revision,
+                effectiveDate: today,
+                // Карточки в Sigur нет — шагов Sigur нет.
+                sigurSteps: 'none',
+              });
+              await executeOperation(operation, connection);
+              await execute(`DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1`, [emp.id]);
+              autoFired++;
+              autoFiredIds.push(emp.id);
+              employeeCache.invalidate(emp.id);
+              console.log(`[syncEmployees] auto-fired (404 confirmed twice): id=${emp.id} op=${operation.id}`);
+            } catch (fireErr) {
+              if (isStaleOperationError(fireErr)) {
+                autoFireSkippedStale++;
+                console.log(`[syncEmployees] auto-fire skip (${(fireErr as LifecycleOperationError).code}): id=${emp.id}`);
+              } else {
+                errors.push(`auto-fire ${emp.id}: ${(fireErr as Error).message}`);
+              }
+            }
+          } catch (candidateErr) {
+            errors.push(`auto-fire ${emp.id}: ${(candidateErr as Error).message}`);
           }
-        } catch (candidateErr) {
-          errors.push(`auto-fire ${emp.id}: ${(candidateErr as Error).message}`);
         }
       }
-    }
 
-    if (autoFiredIds.length > 0) {
-      invalidateTimekeeperScopeCache();
-    }
+      if (autoFiredIds.length > 0) {
+        invalidateTimekeeperScopeCache();
+      }
 
-    if (autoFired > 0) {
-      console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+      if (autoFired > 0) {
+        console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+      }
     }
   }
 
@@ -1801,108 +2016,111 @@ export async function syncEmployeesLogic(
   // durable-компенсацией (repair_sigur) в цель rehire-операции, а не в текущий org_department_id.
   const firedMismatchSigurIds = new Set(firedMismatch.map(m => m.sigurId));
   let firedMismatchResolved = 0;
-  try {
-    const sigurSettings = await settingsService.getSigurConnectionSettings();
-    if (!sigurSettings.archiveDepartmentId) {
-      console.warn('[syncEmployees] archive department not configured — skip fired->archive sync');
-    } else {
-      const archiveDepartmentIdForMove = sigurSettings.archiveDepartmentId;
+  // Перенос всех fired — глобальная фаза по полному снимку, точечному режиму не нужна.
+  if (!quickMode) {
+    try {
+      const sigurSettings = await settingsService.getSigurConnectionSettings();
+      if (!sigurSettings.archiveDepartmentId) {
+        console.warn('[syncEmployees] archive department not configured — skip fired->archive sync');
+      } else {
+        const archiveDepartmentIdForMove = sigurSettings.archiveDepartmentId;
 
-      const sigurDeptById = new Map<number, number | null>();
-      for (const emp of sigurEmployees) {
-        if (emp.id != null) sigurDeptById.set(emp.id, emp.departmentId ?? null);
-      }
-
-      let firedRows: { id: number; sigur_employee_id: number | null }[];
-      try {
-        firedRows = await query<{ id: number; sigur_employee_id: number | null }>(
-          `SELECT id, sigur_employee_id FROM employees
-           WHERE employment_status = 'fired' AND sigur_employee_id IS NOT NULL`,
-        );
-      } catch (firedErr) {
-        errors.push(`fired->archive select: ${(firedErr as Error).message}`);
-        firedRows = [];
-      }
-
-      {
-        const candidates: { id: number; sid: number }[] = [];
-        let skippedNotInSigur = 0;
-        let skippedAlreadyArchived = 0;
-
-        for (const row of firedRows ?? []) {
-          const sid = row.sigur_employee_id as number | null;
-          if (sid == null) continue;
-          if (!sigurDeptById.has(sid)) { skippedNotInSigur++; continue; }
-          if (sigurDeptById.get(sid) === archiveDepartmentIdForMove) { skippedAlreadyArchived++; continue; }
-          candidates.push({ id: Number(row.id), sid });
+        const sigurDeptById = new Map<number, number | null>();
+        for (const emp of sigurEmployees) {
+          if (emp.id != null) sigurDeptById.set(emp.id, emp.departmentId ?? null);
         }
 
-        // Pre-check по свежему состоянию: pending-операция (rehire в полёте) или уже не fired.
-        const toMoveEmployees: { id: number; sid: number; revision: number }[] = [];
-        if (candidates.length > 0) {
-          const preGuards = await getLifecycleGuards(candidates.map(c => c.id));
-          for (const c of candidates) {
-            const g = preGuards.get(c.id);
-            if (!g || g.employment_status !== 'fired') continue;
-            if (g.pending_kind != null) {
-              archiveMoveSkippedProtected++;
-              console.log(`[syncEmployees] fired->archive skip (pending ${g.pending_kind}): id=${c.id}`);
-              continue;
-            }
-            toMoveEmployees.push({ id: c.id, sid: c.sid, revision: g.lifecycle_revision });
-          }
-        }
-        const toMove = toMoveEmployees.map(c => c.sid);
-
-        if (toMove.length > 0) {
-          const moveResult = await batchMoveSigurEmployees(toMove, archiveDepartmentIdForMove, connection);
-          const failedSet = new Set(moveResult.failedIds);
-          firedMismatchResolved = toMove.filter(
-            sid => firedMismatchSigurIds.has(sid) && !failedSet.has(sid),
-          ).length;
-          console.log(
-            `[syncEmployees] fired->archive moved=${moveResult.moved}/${moveResult.requested} ` +
-            `failed=${moveResult.failedIds.length} skipped_not_in_sigur=${skippedNotInSigur} ` +
-            `skipped_already_archived=${skippedAlreadyArchived}`,
+        let firedRows: { id: number; sigur_employee_id: number | null }[];
+        try {
+          firedRows = await query<{ id: number; sigur_employee_id: number | null }>(
+            `SELECT id, sigur_employee_id FROM employees
+             WHERE employment_status = 'fired' AND sigur_employee_id IS NOT NULL`,
           );
-          if (moveResult.failedIds.length > 0) {
-            errors.push(`fired->archive failed ids: ${moveResult.failedIds.join(',')}`);
+        } catch (firedErr) {
+          errors.push(`fired->archive select: ${(firedErr as Error).message}`);
+          firedRows = [];
+        }
+
+        {
+          const candidates: { id: number; sid: number }[] = [];
+          let skippedNotInSigur = 0;
+          let skippedAlreadyArchived = 0;
+
+          for (const row of firedRows ?? []) {
+            const sid = row.sigur_employee_id as number | null;
+            if (sid == null) continue;
+            if (!sigurDeptById.has(sid)) { skippedNotInSigur++; continue; }
+            if (sigurDeptById.get(sid) === archiveDepartmentIdForMove) { skippedAlreadyArchived++; continue; }
+            candidates.push({ id: Number(row.id), sid });
           }
 
-          // Post-check: кого восстановили, пока шёл перенос, — компенсируем durable-операцией.
-          const moved = toMoveEmployees.filter(c => !failedSet.has(c.sid));
-          if (moved.length > 0) {
-            const postGuards = await getLifecycleGuards(moved.map(c => c.id));
-            for (const c of moved) {
-              const g = postGuards.get(c.id);
-              if (!g) continue;
-              const raced = g.employment_status === 'active'
-                || g.lifecycle_revision !== c.revision
-                || g.pending_kind === 'rehire';
-              if (!raced) continue;
-              try {
-                await compensateArchiveMove(c.id, c.sid, g);
-                archiveMoveCompensated++;
-              } catch (compErr) {
-                errors.push(`fired->archive compensation ${c.id}: ${(compErr as Error).message}`);
+          // Pre-check по свежему состоянию: pending-операция (rehire в полёте) или уже не fired.
+          const toMoveEmployees: { id: number; sid: number; revision: number }[] = [];
+          if (candidates.length > 0) {
+            const preGuards = await getLifecycleGuards(candidates.map(c => c.id));
+            for (const c of candidates) {
+              const g = preGuards.get(c.id);
+              if (!g || g.employment_status !== 'fired') continue;
+              if (g.pending_kind != null) {
+                archiveMoveSkippedProtected++;
+                console.log(`[syncEmployees] fired->archive skip (pending ${g.pending_kind}): id=${c.id}`);
+                continue;
+              }
+              toMoveEmployees.push({ id: c.id, sid: c.sid, revision: g.lifecycle_revision });
+            }
+          }
+          const toMove = toMoveEmployees.map(c => c.sid);
+
+          if (toMove.length > 0) {
+            const moveResult = await batchMoveSigurEmployees(toMove, archiveDepartmentIdForMove, connection);
+            const failedSet = new Set(moveResult.failedIds);
+            firedMismatchResolved = toMove.filter(
+              sid => firedMismatchSigurIds.has(sid) && !failedSet.has(sid),
+            ).length;
+            console.log(
+              `[syncEmployees] fired->archive moved=${moveResult.moved}/${moveResult.requested} ` +
+              `failed=${moveResult.failedIds.length} skipped_not_in_sigur=${skippedNotInSigur} ` +
+              `skipped_already_archived=${skippedAlreadyArchived}`,
+            );
+            if (moveResult.failedIds.length > 0) {
+              errors.push(`fired->archive failed ids: ${moveResult.failedIds.join(',')}`);
+            }
+
+            // Post-check: кого восстановили, пока шёл перенос, — компенсируем durable-операцией.
+            const moved = toMoveEmployees.filter(c => !failedSet.has(c.sid));
+            if (moved.length > 0) {
+              const postGuards = await getLifecycleGuards(moved.map(c => c.id));
+              for (const c of moved) {
+                const g = postGuards.get(c.id);
+                if (!g) continue;
+                const raced = g.employment_status === 'active'
+                  || g.lifecycle_revision !== c.revision
+                  || g.pending_kind === 'rehire';
+                if (!raced) continue;
+                try {
+                  await compensateArchiveMove(c.id, c.sid, g);
+                  archiveMoveCompensated++;
+                } catch (compErr) {
+                  errors.push(`fired->archive compensation ${c.id}: ${(compErr as Error).message}`);
+                }
               }
             }
+          } else if (skippedNotInSigur > 0 || skippedAlreadyArchived > 0) {
+            console.log(
+              `[syncEmployees] fired->archive moved=0 ` +
+              `skipped_not_in_sigur=${skippedNotInSigur} skipped_already_archived=${skippedAlreadyArchived}`,
+            );
           }
-        } else if (skippedNotInSigur > 0 || skippedAlreadyArchived > 0) {
-          console.log(
-            `[syncEmployees] fired->archive moved=0 ` +
-            `skipped_not_in_sigur=${skippedNotInSigur} skipped_already_archived=${skippedAlreadyArchived}`,
-          );
         }
       }
+    } catch (archiveSyncErr) {
+      errors.push(`fired->archive sync: ${(archiveSyncErr as Error).message}`);
     }
-  } catch (archiveSyncErr) {
-    errors.push(`fired->archive sync: ${(archiveSyncErr as Error).message}`);
   }
 
   const firedMismatchUnresolved = Math.max(0, firedMismatch.length - firedMismatchResolved);
 
-  if (firedMismatch.length > 0) {
+  if (!quickMode && firedMismatch.length > 0) {
     console.warn(
       `[syncEmployees] fired mismatch detected=${firedMismatch.length} unresolved=${firedMismatchUnresolved}`,
     );
@@ -1935,6 +2153,16 @@ export async function syncEmployeesLogic(
     invalidatePresencePollingEmployeeCache();
   }
 
+  if (quickMode) {
+    // Карточка без исхода — недосмотренная ветка: безопаснее повторить, чем потерять.
+    for (const sigurId of quickIds) {
+      if (!outcomes.has(sigurId)) {
+        console.warn(`[syncEmployees] quick: no outcome for card ${sigurId} — retryable`);
+        outcomes.set(sigurId, 'retryable');
+      }
+    }
+  }
+
   return {
     imported,
     updated,
@@ -1955,5 +2183,6 @@ export async function syncEmployeesLogic(
     archive_fire_skipped_protected: archiveFireSkippedProtected,
     archive_move_skipped_protected: archiveMoveSkippedProtected,
     archive_move_compensated: archiveMoveCompensated,
+    quick_outcomes: quickMode ? outcomes : undefined,
   };
 }

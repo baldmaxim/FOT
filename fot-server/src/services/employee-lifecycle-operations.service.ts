@@ -527,7 +527,7 @@ async function loadEmployeeRow(employeeId: number): Promise<EmployeeEncrypted | 
   );
 }
 
-function isSigurNotFound(error: unknown): boolean {
+export function isSigurNotFound(error: unknown): boolean {
   return error instanceof AxiosError && error.response?.status === 404;
 }
 

@@ -65,6 +65,7 @@ import {
   seedPositionsLogic,
 } from '../services/sigur-sync.service.js';
 import { readExcelRows } from '../utils/excel-reader.js';
+import { requestEmployeeQuickSync } from '../services/sigur-employee-quick-sync.service.js';
 import { normalizeFullName } from '../utils/fio.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -618,6 +619,8 @@ export const sigurAdminController = {
         tabId,
         description,
       }, connection);
+      // До аудита: мутация Sigur уже состоялась, сбой аудита не должен отменять синк в ФОТ.
+      requestEmployeeQuickSync(data.sigurEmployeeId, connection);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
@@ -676,6 +679,12 @@ export const sigurAdminController = {
         },
         connection,
       );
+      // Отдел/должность/ФИО/таб. № — поля, которые синк переносит в employees.
+      // До аудита: сбой аудита не должен отменять синк уже состоявшейся правки Sigur.
+      if (departmentId !== undefined || positionId !== undefined
+        || req.body.name !== undefined || req.body.tabId !== undefined) {
+        requestEmployeeQuickSync(sigurEmployeeId, connection);
+      }
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
