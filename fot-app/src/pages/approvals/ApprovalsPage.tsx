@@ -49,6 +49,12 @@ import {
   type ITimesheetDateRange,
 } from '../../utils/timesheetApprovalPeriod';
 import { getMonthLabel } from '../../utils/calendarUtils';
+import {
+  formatPendingDecisions,
+  formatPendingResponsibles,
+  isWaitingWeekends,
+  PENDING_WEEKENDS_LABEL,
+} from '../../utils/pendingDecisions';
 import './ApprovalsPage.css';
 
 type Tab = 'corrections' | 'timesheets';
@@ -698,7 +704,9 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     ? `${year}-${String(month).padStart(2, '0')}-${String(dayModal.day).padStart(2, '0')}`
     : null;
 
-  const hasPendingWeekend = row.pending_weekend_dates.length > 0;
+  // То же правило, что серверный HR-гейт: дни у согласующего и заявления «Работа в выходной» на 1-м этапе.
+  const hasPendingWeekend = isWaitingWeekends(row);
+  const pendingDecisions = row.pending_decisions ?? [];
 
   return (
     <div className="approvals-card-body">
@@ -743,7 +751,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
       {hasPendingWeekend && (
         <div className="approvals-flags">
           <span className="approvals-flag approvals-flag--yellow">
-            <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.map(formatDate).join(', ')}
+            <Clock size={12} /> {PENDING_WEEKENDS_LABEL}: {formatPendingDecisions(pendingDecisions)}
           </span>
         </div>
       )}
@@ -818,7 +826,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
                   periodUnlocked
                     ? 'Период открыт для правок — сначала закройте его'
                     : hasPendingWeekend
-                      ? 'Корректировки на выходных/праздниках на рассмотрении — попросите второго админа согласовать'
+                      ? `Ждёт решения по выходным: ${formatPendingResponsibles(pendingDecisions)}`
                       : undefined
                 }
               >
@@ -1052,7 +1060,16 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                         <span className="approvals-card-match">{matches.map(m => m.full_name).join(', ')}</span>
                       )}
                     </div>
-                    <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                    {isWaitingWeekends(row) ? (
+                      <span
+                        className="approvals-card-status approvals-card-status--waiting"
+                        title={formatPendingDecisions(row.pending_decisions ?? [])}
+                      >
+                        {PENDING_WEEKENDS_LABEL}
+                      </span>
+                    ) : (
+                      <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                    )}
                     {row.unlocked_at && (
                       <span
                         className="approvals-card-unlocked"

@@ -237,6 +237,11 @@
   border-radius: 4px;
   background: var(--bg-secondary);
 }
+/* Подан, но ждёт решения по выходным — утвердить пока нельзя. */
+.approvals-card-status--waiting {
+  font-weight: 600;
+  color: var(--purple-strong);
+}
 /* Период временно открыт кадровой службой: статус подачи прежний, замок снят. */
 .approvals-card-unlocked {
   display: inline-flex;

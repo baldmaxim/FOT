@@ -1,4 +1,4 @@
-import { query, type DbExecutor } from '../config/postgres.js';
+import { query } from '../config/postgres.js';
 import {
   listEmployeeMembershipsForDepartmentPeriod,
   buildMembershipWindowMap,
@@ -7,6 +7,7 @@ import {
 } from './timesheet-department-assignments.service.js';
 import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.service.js';
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
+import { listPendingWorkRequestDays, type IPendingScope } from './timesheet-pending-decisions.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
 // Заявления на отпуск/за свой счёт файл-подтверждение не требуют и подачу табеля
@@ -14,7 +15,7 @@ import type { ITimesheetDateRange } from './timesheet-range.service.js';
 // только проверка работы в выходной без корректировки).
 const ATTACHMENT_REQUIRED_LEAVE_TYPES = [] as const;
 
-export type MissingDayKind = 'leave_request' | 'weekend_no_correction' | 'pending_correction';
+export type MissingDayKind = 'leave_request' | 'weekend_no_correction';
 
 export interface IMissingDay {
   date: string;
@@ -46,70 +47,17 @@ interface ILeaveRow {
   correction_date: string | null;
 }
 
-export type ICorrectionValidationScope =
-  | { kind: 'department'; departmentId: string }
-  | { kind: 'personal'; employeeIds: number[] };
-
-export interface IPendingCorrectionDay {
-  employee_id: number;
-  work_date: string;
-}
+export type ICorrectionValidationScope = IPendingScope;
 
 /**
- * Дни с несогласованными (pending) корректировками в периоде — одно правило для подачи
- * табеля и его утверждения HR. Иначе табель подаётся с pending, период закрывается,
- * согласовать их больше нельзя, а утверждение упирается в PENDING_CORRECTIONS_EXIST.
- *
- * Отдел — по окну членства в режиме 'viaTransferOnly' (как основной грид): чужой выход
- * после перевода не блокирует, «грязный» effective_from без перевода — блокирует.
- * «По людям» — без окна. Несколько строк одного дня (разные source) → один день.
- */
-export async function listPendingCorrectionDays(
-  scope: ICorrectionValidationScope,
-  range: ITimesheetDateRange,
-  exec?: DbExecutor,
-): Promise<IPendingCorrectionDay[]> {
-  let employeeIds: number[];
-  let membershipWindow: Map<number, IMembershipWindow> | null = null;
-  if (scope.kind === 'department') {
-    const memberships = await listEmployeeMembershipsForDepartmentPeriod(
-      scope.departmentId, range.startDate, range.endDate, exec,
-    );
-    employeeIds = memberships.map(m => m.employee_id);
-    membershipWindow = buildMembershipWindowMap(memberships);
-  } else {
-    employeeIds = [...new Set(scope.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0);
-  }
-  if (employeeIds.length === 0) return [];
-
-  const sql = `SELECT employee_id, work_date::text AS work_date FROM attendance_adjustments
-             WHERE approval_status = 'pending'
-               AND employee_id = ANY($1::int[])
-               AND work_date >= $2
-               AND work_date <= $3`;
-  const params = [employeeIds, range.startDate, range.endDate];
-  const rows: Array<{ employee_id: number; work_date: string }> = exec
-    ? (await exec.query<{ employee_id: number; work_date: string }>(sql, params)).rows
-    : await query<{ employee_id: number; work_date: string }>(sql, params);
-
-  const days = new Map<string, IPendingCorrectionDay>();
-  for (const row of rows) {
-    const employeeId = Number(row.employee_id);
-    const workDate = String(row.work_date).slice(0, 10);
-    if (membershipWindow && !isWithinMembershipWindow(membershipWindow.get(employeeId), workDate, 'viaTransferOnly')) {
-      continue;
-    }
-    days.set(`${employeeId}|${workDate}`, { employee_id: employeeId, work_date: workDate });
-  }
-  return [...days.values()];
-}
-
-/**
- * Подача табеля блокируется в трёх случаях:
+ * Подача табеля блокируется в двух случаях:
  * 1) есть approved leave_requests типа remote/vacation без файла-подтверждения;
- * 2) есть работа в выходной по СКУД, для которой не создана корректировка;
- * 3) есть несогласованные (pending) корректировки — listPendingCorrectionDays.
- *    Поданный табель закрыт, решение по ним после подачи невозможно.
+ * 2) есть работа в выходной по СКУД, для которой не создана корректировка и не подано
+ *    заявление «Работа в выходной».
+ *
+ * Несогласованные выходные (pending-дни у согласующего, заявления на 1-м этапе) подаче
+ * НЕ мешают: их решают и в поданном табеле (статус «Ждёт согласования выходных»), а
+ * HR-утверждение до решения закрыто (countPendingDecisionsForApproval).
  *
  * Исключение: СКУД-активность в первые N обязательных суббот/воскресений
  * (expected_saturdays_per_month / expected_sundays_per_month) без корректировки
@@ -215,12 +163,20 @@ export async function validateCorrectionAttachments(
   }
 
   const mandatoryExemptions = await computeMandatoryExemptions(weekendSkudRows, adjustmentByEmployeeDate);
-  const pendingDays = await listPendingCorrectionDays(scope, range);
+
+  // Заявление «Работа в выходной» на 1-м этапе ещё без строк в табеле, но выход оформлен:
+  // корректировку для него не требуем — день попадёт в «Ждёт согласования выходных».
+  const requestedWorkDays = new Set<string>();
+  if (weekendSkudRows.length > 0) {
+    const requestDays = await listPendingWorkRequestDays(
+      [...new Set(weekendSkudRows.map(row => row.employee_id))], range,
+    );
+    for (const day of requestDays) requestedWorkDays.add(`${day.employee_id}|${day.work_date}`);
+  }
 
   const referencedEmployeeIds = new Set<number>();
   for (const lr of leaves) referencedEmployeeIds.add(lr.employee_id);
   for (const row of weekendSkudRows) referencedEmployeeIds.add(row.employee_id);
-  for (const day of pendingDays) referencedEmployeeIds.add(day.employee_id);
 
   let nameMap = new Map<number, string | null>();
   if (referencedEmployeeIds.size > 0) {
@@ -247,24 +203,16 @@ export async function validateCorrectionAttachments(
   }
 
   for (const row of weekendSkudRows) {
-    if (adjustmentByEmployeeDate.has(`${row.employee_id}|${row.date}`)) continue;
-    if (mandatoryExemptions.has(`${row.employee_id}|${row.date}`)) continue;
+    const key = `${row.employee_id}|${row.date}`;
+    if (adjustmentByEmployeeDate.has(key)) continue;
+    if (mandatoryExemptions.has(key)) continue;
+    if (requestedWorkDays.has(key)) continue;
     missing.push({
       date: row.date,
       employee_id: row.employee_id,
       employee_name: nameMap.get(row.employee_id) ?? null,
       kind: 'weekend_no_correction',
       reason: 'Работа в выходной без корректировки — создайте корректировку',
-    });
-  }
-
-  for (const day of pendingDays) {
-    missing.push({
-      date: day.work_date,
-      employee_id: day.employee_id,
-      employee_name: nameMap.get(day.employee_id) ?? null,
-      kind: 'pending_correction',
-      reason: 'Корректировка не согласована ответственным',
     });
   }
 

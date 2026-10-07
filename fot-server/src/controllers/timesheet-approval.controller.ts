@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { query, queryOne, withTransaction, type DbExecutor } from '../config/postgres.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import type {
   AuthenticatedRequest,
   TimesheetApproval,
@@ -72,35 +72,15 @@ function monthAnchorsInRange(startDate: string, endDate: string): string[] {
 }
 
 /**
- * Сколько дней с pending-корректировками мешает утверждению подачи.
- *
- * Одна реализация на два места: ранний precheck в approve (быстрый отказ до локов)
- * и повторная проверка ВНУТРИ транзакции под FOR UPDATE — именно она авторитетна,
- * потому что между precheck и записью статуса корректировка могла появиться.
- * Правило общее с подачей (listPendingCorrectionDays): что не пускает утвердить,
- * то не пускает и подать.
- *
- * exec: undefined — через пул (precheck), клиент транзакции — внутри неё.
+ * Нерешённые выходные подачи для ответа API: только у поданной (submitted) — у остальных
+ * статус и так не «Ждёт согласования выходных». Кто и какие дни — describePendingDecisions.
  */
-async function countPendingCorrectionsForApproval(
-  exec: DbExecutor | undefined,
-  approval: Pick<TimesheetApproval, 'id' | 'department_id' | 'manager_employee_id' | 'start_date' | 'end_date'>,
-): Promise<number> {
-  // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
-  // Уволенных в месяце периода в составе уже нет (с 01.09.2026) — их корректировки не мешают.
-  let scope: ICorrectionValidationScope;
-  if (approval.manager_employee_id != null) {
-    const snap = await listVisibleApprovalEmployees(approval, exec);
-    scope = { kind: 'personal', employeeIds: snap.map(s => s.employee_id) };
-  } else if (approval.department_id) {
-    scope = { kind: 'department', departmentId: approval.department_id };
-  } else {
-    return 0;
-  }
-  const days = await listPendingCorrectionDays(
-    scope, { startDate: approval.start_date, endDate: approval.end_date }, exec,
-  );
-  return days.length;
+async function withPendingDecisions<T extends TimesheetApproval>(
+  approval: T | null,
+): Promise<(T & { pending_decisions?: IPendingDecisionGroup[] }) | null> {
+  if (!approval || approval.status !== 'submitted') return approval;
+  const facts = await loadPendingDecisionFactsForApproval(approval);
+  return { ...approval, pending_decisions: await describePendingDecisions(facts) };
 }
 
 /** Подача в форме, которую ждёт материализация версии. */
@@ -210,11 +190,15 @@ import {
   checkWeekendWorkRequirement,
 } from '../services/timesheet-approval-weekend-check.service.js';
 import {
-  listPendingCorrectionDays,
   validateCorrectionAttachments,
-  type ICorrectionValidationScope,
   type IMissingDay,
 } from '../services/timesheet-approval-correction-validation.service.js';
+import {
+  countPendingDecisionsForApproval,
+  describePendingDecisions,
+  loadPendingDecisionFactsForApproval,
+  type IPendingDecisionGroup,
+} from '../services/timesheet-pending-decisions.service.js';
 import { resolveOverlapSubmission } from '../services/timesheet-approval-overlap.service.js';
 import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import { getAllowedSubmissionRange, isRangeSubmittable, isRangeWithinCompletedPeriods } from '../services/timesheet-period.service.js';
@@ -609,8 +593,11 @@ async function notifyHrAboutSubmittedApproval(input: {
   affectedDepartmentIds: string[];
   employeeCount: number;
   range: ITimesheetDateRange;
+  /** В периоде есть нерешённые выходные — утвердить пока нельзя. */
+  waitingWeekends: boolean;
 }): Promise<void> {
-  const { departmentId, managerEmployeeId, affectedDepartmentIds, employeeCount, range } = input;
+  const { departmentId, managerEmployeeId, affectedDepartmentIds, employeeCount, range, waitingWeekends } = input;
+  const waitingSuffix = waitingWeekends ? ' · ждёт согласования выходных' : '';
 
   // Адресация: для полной подачи — получатели отдела; для персональной — объединение
   // получателей всех отделов, в которых сидят подчинённые руководителя.
@@ -630,12 +617,12 @@ async function notifyHrAboutSubmittedApproval(input: {
 
   if (managerEmployeeId != null) {
     const managerName = (await loadEmployeeFullName(managerEmployeeId)) ?? 'руководитель';
-    body = `Персональная подача (${managerName}): табель за ${rangeLabel} — ${employeeCount} сотр. на проверке HR.`;
+    body = `Персональная подача (${managerName}): табель за ${rangeLabel} — ${employeeCount} сотр. на проверке HR${waitingSuffix}.`;
     path = buildRangeRedirectPath('/timesheet-hr', range);
     tag = `timesheet-submitted:personal:m${managerEmployeeId}:${range.startDate}:${range.endDate}`;
   } else if (departmentId) {
     const departmentName = await loadDepartmentName(departmentId);
-    body = `Отдел ${departmentName}: табель за ${rangeLabel} отправлен на проверку HR.`;
+    body = `Отдел ${departmentName}: табель за ${rangeLabel} отправлен на проверку HR${waitingSuffix}.`;
     path = buildRangeRedirectPath('/timesheet-hr', range);
     tag = `timesheet-submitted:${departmentId}:${range.startDate}:${range.endDate}`;
   } else {
@@ -907,13 +894,16 @@ async function reconcileManagerSelfApproval(
       auto_self_personal: true,
     });
     const selfEmployeeCount = (await listVisibleApprovalEmployees({ id: change.approval.id, start_date: range.startDate })).length;
-    void notifyHrAboutSubmittedApproval({
-      departmentId: null,
-      managerEmployeeId,
-      affectedDepartmentIds: selfAffectedDepartmentIds,
-      employeeCount: selfEmployeeCount,
-      range,
-    }).catch(notifyError => {
+    void countPendingDecisionsForApproval(change.approval)
+      .then(pendingCount => notifyHrAboutSubmittedApproval({
+        departmentId: null,
+        managerEmployeeId,
+        affectedDepartmentIds: selfAffectedDepartmentIds,
+        employeeCount: selfEmployeeCount,
+        range,
+        waitingWeekends: pendingCount > 0,
+      }))
+      .catch(notifyError => {
       console.error('timesheet-approval.submit self-personal notify error:', notifyError);
     });
     return true;
@@ -924,13 +914,10 @@ async function reconcileManagerSelfApproval(
   }
 }
 
-/** Pending-корректировка появилась между внешней проверкой подачи и advisory-локом — откат. */
-class PendingCorrectionsOnSubmitError extends Error {}
-
 function sendCorrectionValidationFailed(res: Response, missing: IMissingDay[]): void {
   res.status(400).json({
     success: false,
-    error: 'Есть несогласованные корректировки или незакрытые работы в выходные — подача невозможна',
+    error: 'Есть незакрытые работы в выходные — подача невозможна',
     code: 'CORRECTION_VALIDATION_FAILED',
     missing_days: missing,
   });
@@ -1147,10 +1134,8 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             monthAnchorsInRange(range.startDate, range.endDate).map(workDate => ({ employeeId, workDate })),
           ),
         );
-        // Повторно под локом: внешняя проверка могла устареть — корректировка, сохранённая
-        // между ней и локом, осталась бы pending в закрытом периоде без выхода.
-        const pendingDays = await listPendingCorrectionDays(correctionScope, range, client);
-        if (pendingDays.length > 0) throw new PendingCorrectionsOnSubmitError();
+        // Нерешённые выходные подаче не мешают: в поданном табеле их решают и дальше
+        // (статус «Ждёт согласования выходных»), а HR-утверждение до решения закрыто.
 
         let row: TimesheetApproval | null;
         if (reuseRow) {
@@ -1203,11 +1188,6 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         return row;
       });
     } catch (dbErr) {
-      if (dbErr instanceof PendingCorrectionsOnSubmitError) {
-        const recheck = await validateCorrectionAttachments(correctionScope, range);
-        sendCorrectionValidationFailed(res, recheck.ok ? [] : recheck.missing);
-        return;
-      }
       const code = (dbErr as { code?: string } | null)?.code;
       if (code === '23P01') {
         res.status(409).json({
@@ -1248,13 +1228,17 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const employeeCount = personal
       ? employeeIds.length
       : (await listVisibleApprovalEmployees({ id: approval.id, start_date: range.startDate })).length;
-    void notifyHrAboutSubmittedApproval({
-      departmentId: deptId,
-      managerEmployeeId,
-      affectedDepartmentIds,
-      employeeCount,
-      range,
-    }).catch(notifyError => {
+    const submittedApproval = approval;
+    void countPendingDecisionsForApproval(submittedApproval)
+      .then(pendingCount => notifyHrAboutSubmittedApproval({
+        departmentId: deptId,
+        managerEmployeeId,
+        affectedDepartmentIds,
+        employeeCount,
+        range,
+        waitingWeekends: pendingCount > 0,
+      }))
+      .catch(notifyError => {
       console.error('timesheet-approval.submit notify error:', notifyError);
     });
 
@@ -1497,7 +1481,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
         [req.user.employee_id, range.startDate, range.endDate],
       );
       // Персональная подача: «можно писать» = это моя подача, отдел тут ни при чём.
-      res.json({ success: true, data: await withUnlockAuthor(data), meta: { can_write: true } });
+      res.json({ success: true, data: await withPendingDecisions(await withUnlockAuthor(data)), meta: { can_write: true } });
       return;
     }
 
@@ -1531,7 +1515,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
     const roleCanEdit = await roleAllowsTimesheet(req, 'edit');
     res.json({
       success: true,
-      data: await withUnlockAuthor(data),
+      data: await withPendingDecisions(await withUnlockAuthor(data)),
       meta: { can_write: roleCanEdit && writableDepartmentId === department_id },
     });
   } catch (err) {
@@ -1618,12 +1602,19 @@ const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response)
       params.push(rangeStart);
       whereParts.push(`end_date >= $${params.length}`);
     }
-    const data = await query<TimesheetApproval>(
+    const rows = await query<TimesheetApproval>(
       `SELECT * FROM timesheet_approvals
          WHERE ${whereParts.join(' AND ')}
          ORDER BY start_date ASC`,
       params,
     );
+    // Чипы других периодов месяца: поданной подаче — число нерешённых выходных
+    // («Ждёт согласования выходных» вместо «На проверке»), без имён согласующих.
+    const data = await Promise.all(rows.map(async row => (
+      row.status === 'submitted'
+        ? { ...row, pending_decisions_count: await countPendingDecisionsForApproval(row) }
+        : row
+    )));
 
     res.json({ success: true, data });
   } catch (err) {
@@ -1725,14 +1716,14 @@ async function changeApprovalReviewState(
           return { ok: false, status: 400, error: input.invalidStatusMessage };
         }
 
-        // Повторная проверка pending-корректировок: ранний precheck (approve) сделан
-        // до локов и мог устареть.
+        // Повторная проверка нерешённых выходных (дни у согласующего и заявления «Работа в
+        // выходной» на 1-м этапе): ранний precheck (approve) сделан до локов и мог устареть.
         if (needsVersion) {
-          const pendingCount = await countPendingCorrectionsForApproval(client, current);
+          const pendingCount = await countPendingDecisionsForApproval(current, client);
           if (pendingCount > 0) {
             return {
               ok: false, status: 409,
-              error: 'Сначала согласуйте корректировки в выходные дни',
+              error: 'Табель ждёт согласования выходных — утвердить можно после решения по ним',
               code: 'PENDING_CORRECTIONS_EXIST',
               pendingCount,
             };
@@ -1854,11 +1845,11 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         return;
       }
       // Быстрый отказ до взятия локов. Авторитетна та же проверка внутри транзакции.
-      const count = await countPendingCorrectionsForApproval(undefined, approval);
+      const count = await countPendingDecisionsForApproval(approval);
       if (count > 0) {
         res.status(409).json({
           success: false,
-          error: 'Сначала согласуйте корректировки в выходные дни',
+          error: 'Табель ждёт согласования выходных — утвердить можно после решения по ним',
           code: 'PENDING_CORRECTIONS_EXIST',
           pending_count: count,
         });
@@ -2813,8 +2804,14 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         ? reviewMap.get(reviewKey(row.department_id, row.start_date, row.end_date)) ?? null
         : null;
 
+      // То же правило, что HR-гейт утверждения: кнопка «Утвердить» и баннер не расходятся с 409.
+      const pendingDecisions = row.status === 'submitted'
+        ? await describePendingDecisions(await loadPendingDecisionFactsForApproval(row))
+        : [];
+
       return {
         ...row,
+        pending_decisions: pendingDecisions,
         timekeeper_checked: review != null,
         timekeeper_checked_by_name: review?.checked_by_name ?? null,
         timekeeper_checked_at: review?.checked_at ?? null,

@@ -248,6 +248,12 @@
   color: var(--warning, #d97706);
 }
 
+/* Подан, но ждёт решения по выходным — утвердить пока нельзя. */
+.ts-header-approval-chip--waiting,
+.ts-approval-status--waiting {
+  color: var(--purple-strong);
+}
+
 .ts-header-counter {
   font-size: 13px;
   font-weight: 600;

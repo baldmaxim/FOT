@@ -45,10 +45,7 @@ vi.mock('./timesheet-weekend-days.util.js', () => ({
   listNonHolidayWeekendDays: mockListNonHolidayWeekendDays,
 }));
 
-import {
-  listPendingCorrectionDays,
-  validateCorrectionAttachments,
-} from './timesheet-approval-correction-validation.service.js';
+import { validateCorrectionAttachments } from './timesheet-approval-correction-validation.service.js';
 
 const RANGE = { startDate: '2026-05-01', endDate: '2026-05-31' };
 
@@ -68,6 +65,8 @@ type LeaveRow = {
 };
 type EmpRow = { id: number; full_name: string | null };
 type DocLinkRow = { entity_id: string };
+/** День заявления «Работа в выходной», ждущего 1-го этапа. */
+type PendingWorkRow = { request_id: number; employee_id: number; work_date: string };
 
 interface IFixture {
   adjustments?: AdjRow[];
@@ -75,10 +74,15 @@ interface IFixture {
   docLinks?: DocLinkRow[];
   skud?: SkudRow[];
   employees?: EmpRow[];
+  pendingWork?: PendingWorkRow[];
 }
 
 function setupQueries(fx: IFixture): void {
   pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+    // Заявления 1-го этапа — первыми: в их SQL есть подзапрос к attendance_adjustments.
+    if (sql.includes('FROM leave_requests') && sql.includes("lr.request_type = 'work'")) {
+      return fx.pendingWork ?? [];
+    }
     if (sql.includes('FROM attendance_adjustments')) {
       // Зеркалим SQL-фильтр approval_status = 'pending' запроса несогласованных дней.
       const rows = fx.adjustments ?? [];
@@ -511,14 +515,14 @@ describe('validateCorrectionAttachments', () => {
   });
 });
 
-describe('несогласованные (pending) корректировки блокируют подачу', () => {
+describe('несогласованные выходные подачу не блокируют', () => {
   const DEPT = { kind: 'department' as const, departmentId: 'dept-disp' };
 
   beforeEach(() => {
     mockGetOffDatesByEmployee.mockResolvedValue(new Map());
   });
 
-  it('«по людям»: pending в периоде → блок с ФИО, без окна членства', async () => {
+  it('«по людям»: pending-день у согласующего → подача проходит', async () => {
     setupQueries({
       adjustments: [{ employee_id: 523, work_date: '2026-05-02', approval_status: 'pending' }],
       employees: [{ id: 523, full_name: 'Демчук Анна Александровна' }],
@@ -526,69 +530,15 @@ describe('несогласованные (pending) корректировки б
 
     const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [523] }, RANGE);
 
-    expect(mockListMemberships).not.toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.missing).toEqual([{
-        date: '2026-05-02',
-        employee_id: 523,
-        employee_name: 'Демчук Анна Александровна',
-        kind: 'pending_correction',
-        reason: 'Корректировка не согласована ответственным',
-      }]);
-    }
-  });
-
-  it('approved / auto_approved / rejected подачу не блокируют', async () => {
-    setupQueries({
-      adjustments: [
-        { employee_id: 1, work_date: '2026-05-02', approval_status: 'approved' },
-        { employee_id: 1, work_date: '2026-05-09', approval_status: 'auto_approved' },
-        { employee_id: 1, work_date: '2026-05-16', approval_status: 'rejected' },
-      ],
-    });
-
-    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, RANGE);
-
     expect(result.ok).toBe(true);
   });
 
-  it('две pending-строки одного дня (разные source) → один день в списке', async () => {
-    setupQueries({
-      adjustments: [
-        { employee_id: 1, work_date: '2026-05-02', approval_status: 'pending' },
-        { employee_id: 1, work_date: '2026-05-02', approval_status: 'pending' },
-      ],
-      employees: [{ id: 1, full_name: 'Тест Т.Т.' }],
-    });
-
-    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, RANGE);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.missing).toHaveLength(1);
-  });
-
-  it('отдел: pending действующего члена → блок', async () => {
+  it('отдел: pending действующего члена → подача проходит', async () => {
     mockListMemberships.mockResolvedValue([
       { employee_id: 1600, joined_date: null, transferred_out_date: null, joined_via_transfer: false },
     ]);
     setupQueries({
       adjustments: [{ employee_id: 1600, work_date: '2026-05-12', approval_status: 'pending' }],
-      employees: [{ id: 1600, full_name: 'Сары Мария Петровна' }],
-    });
-
-    const result = await validateCorrectionAttachments(DEPT, RANGE);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.missing[0].kind).toBe('pending_correction');
-  });
-
-  it('отдел: pending ДО перевода в отдел (joined_via_transfer) → не блокирует', async () => {
-    mockListMemberships.mockResolvedValue([
-      { employee_id: 7, joined_date: '2026-05-10', transferred_out_date: null, joined_via_transfer: true },
-    ]);
-    setupQueries({
-      adjustments: [{ employee_id: 7, work_date: '2026-05-02', approval_status: 'pending' }],
     });
 
     const result = await validateCorrectionAttachments(DEPT, RANGE);
@@ -596,51 +546,32 @@ describe('несогласованные (pending) корректировки б
     expect(result.ok).toBe(true);
   });
 
-  it('отдел: pending до joined_date без перевода («грязный» effective_from) → блок', async () => {
-    mockListMemberships.mockResolvedValue([
-      { employee_id: 7, joined_date: '2026-05-10', transferred_out_date: null, joined_via_transfer: false },
-    ]);
+  it('СКУД в субботу + «Работа в выходной» на 1-м этапе (строк в табеле ещё нет) → подача проходит', async () => {
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[2, new Set(['2026-05-02', '2026-05-03'])]]));
     setupQueries({
-      adjustments: [{ employee_id: 7, work_date: '2026-05-02', approval_status: 'pending' }],
+      skud: [{ employee_id: 2, date: '2026-05-02', total_minutes: 360 }],
+      pendingWork: [{ request_id: 900, employee_id: 2, work_date: '2026-05-02' }],
     });
 
-    const result = await validateCorrectionAttachments(DEPT, RANGE);
-
-    expect(result.ok).toBe(false);
-  });
-
-  it('отдел: pending в день перевода из отдела (= transferred_out_date) → не блокирует', async () => {
-    mockListMemberships.mockResolvedValue([
-      { employee_id: 7, joined_date: null, transferred_out_date: '2026-05-16', joined_via_transfer: false },
-    ]);
-    setupQueries({
-      adjustments: [{ employee_id: 7, work_date: '2026-05-16', approval_status: 'pending' }],
-    });
-
-    const result = await validateCorrectionAttachments(DEPT, RANGE);
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [2] }, RANGE);
 
     expect(result.ok).toBe(true);
   });
-});
 
-describe('listPendingCorrectionDays', () => {
-  it('с клиентом транзакции читает через него (и членство, и корректировки)', async () => {
-    mockListMemberships.mockResolvedValue([
-      { employee_id: 1, joined_date: null, transferred_out_date: null, joined_via_transfer: false },
-    ]);
-    const exec = {
-      query: vi.fn().mockResolvedValue({ rows: [{ employee_id: 1, work_date: '2026-05-02' }] }),
-    };
+  it('заявление на другой день не покрывает выход в субботу → блок', async () => {
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[2, new Set(['2026-05-02', '2026-05-03'])]]));
+    setupQueries({
+      skud: [{ employee_id: 2, date: '2026-05-02', total_minutes: 360 }],
+      pendingWork: [{ request_id: 900, employee_id: 2, work_date: '2026-05-03' }],
+      employees: [{ id: 2, full_name: 'Петров П.П.' }],
+    });
 
-    const days = await listPendingCorrectionDays(
-      { kind: 'department', departmentId: 'dept-disp' },
-      RANGE,
-      exec as never,
-    );
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [2] }, RANGE);
 
-    expect(days).toEqual([{ employee_id: 1, work_date: '2026-05-02' }]);
-    expect(mockListMemberships).toHaveBeenCalledWith('dept-disp', RANGE.startDate, RANGE.endDate, exec);
-    expect(exec.query).toHaveBeenCalledTimes(1);
-    expect(pgQuery).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0]).toMatchObject({ date: '2026-05-02', kind: 'weekend_no_correction' });
+    }
   });
 });

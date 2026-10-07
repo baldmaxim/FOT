@@ -79,8 +79,9 @@ vi.mock('../services/approval-routing.service.js', () => ({
   resolveLeaveApproverEmployeeIdsByEmployee: leaveApproversMock,
 }));
 
-const { resolveApprovalMock } = vi.hoisted(() => ({
+const { resolveApprovalMock, monthTailMock } = vi.hoisted(() => ({
   resolveApprovalMock: vi.fn(async () => 'auto_approved'),
+  monthTailMock: vi.fn(async (..._args: unknown[]) => [] as unknown[]),
 }));
 vi.mock('./timesheet.controller.js', () => ({
   resolveAdjustmentApprovalStatus: resolveApprovalMock,
@@ -89,6 +90,24 @@ vi.mock('./timesheet.controller.js', () => ({
     const [y, m] = workDate.split('-');
     return [employeeId, Number(`${y}${m}`)];
   },
+  reapproveEmployeeMonthTail: monthTailMock,
+  reportQuotaTailTransitions: vi.fn(async () => undefined),
+}));
+
+// Трекинг перехода «готов к утверждению» проверяется своим тестом — здесь сквозной:
+// мутация выполняется, эффектов нет; фиксируем только, с какими месяцами он вызван.
+const { trackingMock, publishEffectsMock } = vi.hoisted(() => ({
+  trackingMock: vi.fn(async (
+    _exec: unknown,
+    _months: unknown,
+    mutate: () => Promise<{ value: unknown; changed: boolean }>,
+  ) => ({ value: (await mutate()).value, effects: { affected: [], notifications: [], pushes: [] } })),
+  publishEffectsMock: vi.fn(async () => undefined),
+}));
+vi.mock('../services/timesheet-pending-decisions-tracking.service.js', () => ({
+  NO_PENDING_DECISION_EFFECTS: { affected: [], notifications: [], pushes: [] },
+  withPendingDecisionTracking: trackingMock,
+  publishPendingDecisionEffects: publishEffectsMock,
 }));
 
 const { weekendResponsibleMock } = vi.hoisted(() => ({
@@ -346,6 +365,80 @@ describe('leaveRequestsController.approve', () => {
       work_date: '2026-06-06',
       status: 'work',
       approval_status: 'pending',
+    });
+  });
+
+  describe('«Работа в выходной» после подачи табеля', () => {
+    const txWithLock = (status: 'submitted' | 'approved') => {
+      txClient.query.mockImplementation(async (sql: string) => {
+        const text = String(sql);
+        if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+        if (text.includes('WITH RECURSIVE pairs')) {
+          return {
+            rows: [{
+              employee_id: 247, work_date: String(currentRequestRow.start_date), id: 5,
+              start_date: '2026-06-01', end_date: '2026-06-15', status,
+            }],
+          };
+        }
+        if (text.includes('UPDATE leave_requests')) {
+          return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+    };
+
+    beforeEach(() => {
+      responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    });
+    afterEach(() => {
+      responsiblesByEmpMock.mockResolvedValue(new Map());
+    });
+
+    it('табель подан → одобряется: дни к ответственному, хвост месяца в режиме decision, через трекинг', async () => {
+      resolveApprovalMock.mockResolvedValueOnce('pending');
+      mockRequestRow({
+        request_type: 'work',
+        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+      });
+      txWithLock('submitted');
+      const res = makeRes();
+
+      await leaveRequestsController.approve(makeReq(), res);
+
+      expect(res._status).toBe(200);
+      expect(upsertSpy.mock.calls[0][0]).toMatchObject({ work_date: '2026-06-06', approval_status: 'pending' });
+      expect(monthTailMock).toHaveBeenCalledWith(247, '2026-06-01', txClient, 'decision');
+      expect(trackingMock).toHaveBeenCalledWith(txClient, [{ employeeId: 247, workDate: '2026-06-01' }], expect.any(Function));
+      expect(publishEffectsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('табель утверждён → 409, заявление не согласуется', async () => {
+      mockRequestRow({
+        request_type: 'work',
+        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+      });
+      txWithLock('approved');
+      const res = makeRes();
+
+      await leaveRequestsController.approve(makeReq(), res);
+
+      expect(res._status).toBe(409);
+      expect((res._json as { code?: string }).code).toBe('TIMESHEET_PERIOD_CLOSED');
+      expect(upsertSpy).not.toHaveBeenCalled();
+      expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+    });
+
+    it('отпуск в поданном табеле → 409, как раньше (исключение только для «Работы в выходной»)', async () => {
+      mockRequestRow({ request_type: 'vacation', start_date: '2026-06-06', end_date: '2026-06-06' });
+      txWithLock('submitted');
+      const res = makeRes();
+
+      await leaveRequestsController.approve(makeReq(), res);
+
+      expect(res._status).toBe(409);
+      expect(upsertSpy).not.toHaveBeenCalled();
+      expect(trackingMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1190,7 +1283,7 @@ describe('leaveRequestsController.create', () => {
     // до этого заявка не должна попадать в очередь /approvals.
     expect(upsertSpy).not.toHaveBeenCalled();
     expect(resolveApprovalMock).not.toHaveBeenCalled();
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes("status = 'approved'"))).toBe(false);
+    expect(txClient.query.mock.calls.some(c => /UPDATE leave_requests[\s\S]*status = 'approved'/.test(String(c[0])))).toBe(false);
     expect((res._json as { data: { status: string } }).data.status).toBe('pending');
   });
 });
@@ -1207,11 +1300,12 @@ describe('leaveRequestsController.create (работа в выходной бе�
     selected_dates: ['2026-06-06', '2026-06-13'],
     reason: 'работа в выходной',
   };
-  let lockedTimesheet = false;
+  // Статус подачи табеля, закрывающей 06.06 (null — табель не подан).
+  let lockStatus: 'submitted' | 'approved' | null = null;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    lockedTimesheet = false;
+    lockStatus = null;
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
     responsiblesByEmpMock.mockResolvedValue(new Map());
     weekendResponsibleMock.mockResolvedValue(2063);
@@ -1224,11 +1318,11 @@ describe('leaveRequestsController.create (работа в выходной бе�
     txClient.query.mockImplementation(async (sql: string) => {
       const text = String(sql);
       if (text.includes('INSERT INTO leave_requests')) return { rows: [WORK_ROW], rowCount: 1 };
-      if (text.includes('WITH RECURSIVE pairs') && lockedTimesheet) {
+      if (text.includes('WITH RECURSIVE pairs') && lockStatus) {
         return {
           rows: [{
             employee_id: 247, work_date: '2026-06-06', id: 5,
-            start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
+            start_date: '2026-06-01', end_date: '2026-06-15', status: lockStatus,
           }],
         };
       }
@@ -1360,14 +1454,26 @@ describe('leaveRequestsController.create (работа в выходной бе�
     expect(upsertSpy).not.toHaveBeenCalled();
   });
 
-  it('табель за день закрыт → без записей, заявка создана', async () => {
-    lockedTimesheet = true;
+  it('табель за день утверждён → 409, заявка не создаётся', async () => {
+    lockStatus = 'approved';
+
+    const res = await submit();
+
+    expect(res._status).toBe(409);
+    expect((res._json as { code?: string }).code).toBe('TIMESHEET_PERIOD_CLOSED');
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('INSERT INTO leave_requests'))).toBe(false);
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('табель за день подан (не утверждён) → дни сразу pending у ответственного', async () => {
+    lockStatus = 'submitted';
 
     const res = await submit();
 
     expect(res._status).toBe(200);
-    expect(resolveApprovalMock).not.toHaveBeenCalled();
-    expect(upsertSpy).not.toHaveBeenCalled();
+    expect(approvalStatuses()).toEqual(['pending', 'pending']);
+    // Создание идёт через трекинг перехода — по месяцам заявления.
+    expect(trackingMock).toHaveBeenCalledWith(txClient, [{ employeeId: 247, workDate: '2026-06-01' }], expect.any(Function));
   });
 });
 
@@ -1476,9 +1582,11 @@ describe('leaveRequestsController.create (корректировка — оди�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res._status).toBe(200);
+    // Месячные локи (сотрудник, YYYYMM) числовые — сверяем только текстовые ключи.
     const lockKeys = txClient.query.mock.calls
       .filter(c => String(c[0]).includes('pg_advisory_xact_lock'))
-      .map(c => (c[1] as string[])[0]);
+      .map(c => (c[1] as unknown[])[0])
+      .filter((k): k is string => typeof k === 'string');
     expect(lockKeys.some(k => k.startsWith('leave_request:time_correction:'))).toBe(false);
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes('SELECT status FROM leave_requests'))).toBe(false);
   });
@@ -1489,9 +1597,11 @@ describe('leaveRequestsController.create (корректировка — оди�
     await leaveRequestsController.create(makeCorrectionReq(), res);
 
     expect(res._status).toBe(200);
+    // Месячные локи (сотрудник, YYYYMM) числовые — сверяем только текстовые ключи.
     const lockKeys = txClient.query.mock.calls
       .filter(c => String(c[0]).includes('pg_advisory_xact_lock'))
-      .map(c => (c[1] as string[])[0]);
+      .map(c => (c[1] as unknown[])[0])
+      .filter((k): k is string => typeof k === 'string');
     expect(lockKeys.some(k => k.startsWith('leave_request:worked_day:'))).toBe(false);
   });
 
@@ -2513,12 +2623,15 @@ describe('leaveRequestsController.cancel (самоотмена сотрудни�
     id: 708, employee_id: 7, status: 'pending', request_type: 'vacation', ...over,
   });
 
-  const okTx = () => {
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'pending', employee_id: 7 }] }) // FOR UPDATE
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] }) // UPDATE
-      // Дальше: SELECT удаляемых строк (гард закрытого табеля), сам DELETE, история.
-      .mockResolvedValue({ rows: [], rowCount: 0 });
+  // Ответы по тексту SQL, а не по порядку: гард закрытого табеля идёт ДО записи статуса.
+  const okTx = (lockedStatus = 'pending', rowCount = 0) => {
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [{ status: lockedStatus, employee_id: 7 }] };
+      if (text.includes('UPDATE leave_requests')) return { rows: [{ id: 708, status: 'cancelled' }] };
+      // SELECT удаляемых строк (гард закрытого табеля), DELETE, история.
+      return { rows: [], rowCount };
+    });
   };
 
   it('400 — отпуск без причины', async () => {
@@ -2591,10 +2704,7 @@ describe('leaveRequestsController.cancel (самоотмена сотрудни�
       status: 'approved', request_type: 'time_correction',
       correction_date: '2026-06-01', correction_object_id: 'obj-1',
     }));
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved', employee_id: 7 }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      .mockResolvedValue({ rows: [], rowCount: 1 });
+    okTx('approved', 1);
     const res = makeRes();
 
     await leaveRequestsController.cancel(makeReq(), res);
@@ -2619,11 +2729,7 @@ describe('leaveRequestsController.cancel (самоотмена сотрудни�
 
   it('отмена уже одобренного отпуска разрешена (удаляет корректировки)', async () => {
     pgQueryOne.mockResolvedValueOnce(ownRequest({ status: 'approved' }));
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved', employee_id: 7 }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      // SELECT удаляемых строк (гард закрытого табеля), затем DELETE и история.
-      .mockResolvedValue({ rows: [], rowCount: 3 });
+    okTx('approved', 3);
     const res = makeRes();
 
     await leaveRequestsController.cancel(makeReq({ body: { reason: 'заболел' } }), res);
@@ -2659,6 +2765,10 @@ describe('leaveRequestsController.cancel (самоотмена сотрудни�
     expect(res._status).toBe(409);
     const deletes = txClient.query.mock.calls.filter((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
     expect(deletes).toHaveLength(0);
+    // Результат колбэка коммитится: статус не должен записываться до гарда, иначе
+    // заявление отменилось бы вместе с ответом 409.
+    const updates = txClient.query.mock.calls.filter((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updates).toHaveLength(0);
   });
 
   it('200 — период закрыт, но удалять в нём нечего', async () => {
@@ -2770,6 +2880,32 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
     expect(res._status).toBe(409);
     expect(upsertSpy).not.toHaveBeenCalled();
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+  });
+
+  it('reject «Работы в выходной»: месячный лок и трекинг перехода «готов к утверждению»', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    pgQuery.mockResolvedValue([] as never);
+    pgQueryOne.mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'work' });
+    const workRow = {
+      id: 708, employee_id: 247, status: 'pending', request_type: 'work',
+      start_date: '2026-06-06', end_date: '2026-06-13', selected_dates: ['2026-06-06', '2026-06-13'],
+    };
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [workRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) return { rows: [{ ...workRow, status: 'rejected' }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
+
+    expect(res._status).toBe(200);
+    expect(txClient.query.mock.calls.some(c => (
+      String(c[0]).includes('pg_advisory_xact_lock') && (c[1] as unknown[])[0] === 247 && (c[1] as unknown[])[1] === 202606
+    ))).toBe(true);
+    expect(trackingMock).toHaveBeenCalledWith(txClient, [{ employeeId: 247, workDate: '2026-06-01' }], expect.any(Function));
+    expect(publishEffectsMock).toHaveBeenCalledTimes(1);
   });
 
   it('reject при параллельной смене категории → 409: тип сверяется по заблокированной строке', async () => {

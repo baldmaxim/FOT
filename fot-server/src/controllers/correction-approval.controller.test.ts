@@ -71,9 +71,36 @@ vi.mock('./timesheet.controller.js', () => {
     withQuotaLocks: vi.fn((_pairs: unknown, fn: (client: typeof txClient) => Promise<unknown>) => inTx(fn)),
   };
 });
-// Закрытых периодов нет: решение не упирается в гард табеля.
+// Закрытых периодов нет: решение не упирается в гард табеля (тест может задать замок).
+const { closedLocksMock } = vi.hoisted(() => ({
+  closedLocksMock: vi.fn(async (..._args: unknown[]) => new Map<string, unknown>()),
+}));
 vi.mock('../services/timesheet-version.service.js', () => ({
-  loadClosedTimesheetLocks: vi.fn(async () => new Map()),
+  loadClosedTimesheetLocks: closedLocksMock,
+}));
+
+// Трекинг перехода «готов к утверждению» проверяется своим тестом — здесь сквозной;
+// фиксируем, с какими месяцами он вызван и записала ли мутация что-нибудь.
+const { trackingMock, publishEffectsMock, tracked } = vi.hoisted(() => {
+  const tracked = { changed: [] as boolean[] };
+  return {
+    tracked,
+    trackingMock: vi.fn(async (
+      _exec: unknown,
+      _months: unknown,
+      mutate: () => Promise<{ value: unknown; changed: boolean }>,
+    ) => {
+      const out = await mutate();
+      tracked.changed.push(out.changed);
+      return { value: out.value, effects: { affected: [], notifications: [], pushes: [] } };
+    }),
+    publishEffectsMock: vi.fn(async () => undefined),
+  };
+});
+vi.mock('../services/timesheet-pending-decisions-tracking.service.js', () => ({
+  NO_PENDING_DECISION_EFFECTS: { affected: [], notifications: [], pushes: [] },
+  withPendingDecisionTracking: trackingMock,
+  publishPendingDecisionEffects: publishEffectsMock,
 }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({
@@ -91,6 +118,8 @@ vi.mock('../services/employee-skud-object-access.service.js', () => ({
 import { correctionApprovalController } from './correction-approval.controller.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { auditService } from '../services/audit.service.js';
+import { reapproveEmployeeMonthTail } from './timesheet.controller.js';
+import { lockKey } from '../services/timesheet-lock.service.js';
 
 function makeReq(employeeId: number): AuthenticatedRequest {
   return {
@@ -472,6 +501,110 @@ describe('решение по дню «Работы в выходной»: за�
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(emitDomainChange).not.toHaveBeenCalled();
     expect(auditService.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  describe('поданный табель ждёт решения, утверждённый — закрыт', () => {
+    const lockOf = (employeeId: number, workDate: string, status: 'submitted' | 'approved') => new Map([[
+      lockKey(employeeId, workDate),
+      { id: 1831, start_date: '2026-06-01', end_date: '2026-06-15', status },
+    ]]);
+
+    beforeEach(() => {
+      tracked.changed = [];
+    });
+
+    it('approveOne в поданном табеле проходит: хвост месяца в режиме decision, через трекинг', async () => {
+      closedLocksMock.mockResolvedValueOnce(lockOf(247, '2026-06-06', 'submitted'));
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '77' } }), res);
+
+      expect(res._status).toBe(200);
+      expect(txSql().some(s => s.includes('UPDATE attendance_adjustments'))).toBe(true);
+      expect(reapproveEmployeeMonthTail).toHaveBeenCalledWith(247, '2026-06-06', txClient, 'decision');
+      expect(trackingMock).toHaveBeenCalledWith(
+        txClient, [{ employeeId: 247, workDate: '2026-06-06' }], expect.any(Function),
+      );
+      expect(tracked.changed).toEqual([true]);
+      expect(publishEffectsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejectOne в поданном табеле тоже проходит', async () => {
+      syncedRow = { id: 900, employee_id: 247, status: 'rejected' };
+      closedLocksMock.mockResolvedValueOnce(lockOf(247, '2026-06-06', 'submitted'));
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.rejectOne(reqAs(2063, { params: { id: '77' }, body: { comment: 'нет' } }), res);
+
+      expect(res._status).toBe(200);
+      expect((res._json as { data: { approval_status: string } }).data.approval_status).toBe('rejected');
+    });
+
+    it('approveOne в утверждённом табеле → 409 TIMESHEET_PERIOD_CLOSED, день не меняется', async () => {
+      closedLocksMock.mockResolvedValueOnce(lockOf(247, '2026-06-06', 'approved'));
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '77' } }), res);
+
+      expect(res._status).toBe(409);
+      expect((res._json as { code?: string }).code).toBe('TIMESHEET_PERIOD_CLOSED');
+      expect(txSql().some(s => s.includes('UPDATE attendance_adjustments'))).toBe(false);
+      expect(reapproveEmployeeMonthTail).not.toHaveBeenCalled();
+      expect(tracked.changed).toEqual([false]);
+    });
+
+    it('повтор решения (день уже решён параллельно) → 409 ALREADY_PROCESSED без пересчёта и эффектов', async () => {
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'pending' });
+      mockApprovableEmployees();
+      txClient.query.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+      const res = makeRes();
+
+      await correctionApprovalController.approveOne(reqAs(2063, { params: { id: '77' } }), res);
+
+      expect(res._status).toBe(409);
+      expect((res._json as { code?: string }).code).toBe('ALREADY_PROCESSED');
+      expect(reapproveEmployeeMonthTail).not.toHaveBeenCalled();
+      expect(tracked.changed).toEqual([false]);
+      expect(auditService.logFromRequest).not.toHaveBeenCalled();
+    });
+
+    it('bulkApproveByIds: день поданного табеля решается, утверждённого — skipped_locked', async () => {
+      closedLocksMock.mockResolvedValueOnce(new Map([
+        ...lockOf(247, '2026-06-06', 'submitted'),
+        ...lockOf(247, '2026-06-20', 'approved'),
+      ]));
+      pgQuery.mockResolvedValueOnce([
+        { ...ADJ, approval_status: 'pending' },
+        { id: 78, employee_id: 247, work_date: '2026-06-20', approval_status: 'pending' },
+      ]);
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.bulkApproveByIds(reqAs(2063, { body: { ids: [77, 78] } }), res);
+
+      expect(res._status).toBe(200);
+      expect(res._json).toMatchObject({ data: { skipped_locked: 1, locked_ids: [78] } });
+      const update = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE attendance_adjustments'));
+      expect(update?.[1]?.[4]).toEqual([77]);
+    });
+
+    it('revertOne в поданном табеле → 409: откат решения только через «Открыть»', async () => {
+      closedLocksMock.mockResolvedValueOnce(lockOf(247, '2026-06-06', 'submitted'));
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'approved' });
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.revertOne(reqAs(2063, { params: { id: '77' } }), res);
+
+      expect(res._status).toBe(409);
+      expect(txSql().some(s => s.includes('UPDATE attendance_adjustments'))).toBe(false);
+    });
   });
 
   it('bulkApproveByIds: все обработанные дни синхронизируются внутри транзакции', async () => {

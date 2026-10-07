@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
- * Подача табеля с несогласованными корректировками запрещена: поданный табель закрыт,
- * решение по ним после подачи невозможно, а HR-утверждение упирается в
- * PENDING_CORRECTIONS_EXIST. Внешняя проверка даёт список дней, но авторитетна повторная
- * — под advisory-локом подачи: корректировка, сохранённая между ними, иначе застряла бы.
+ * Подача табеля с нерешёнными выходными разрешена: их решают и в поданном табеле
+ * (статус «Ждёт согласования выходных»), а HR-утверждение до решения закрыто
+ * (PENDING_CORRECTIONS_EXIST). Подачу блокирует только выход в выходной без
+ * корректировки и без заявления.
  */
 
 const { pgQuery, pgQueryOne, pgTx } = vi.hoisted(() => ({
@@ -20,13 +20,20 @@ vi.mock('../config/postgres.js', async (importActual) => ({
   withTransaction: pgTx,
 }));
 
-const { mockValidate, mockListPending } = vi.hoisted(() => ({
+const { mockValidate, mockCountPending } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
-  mockListPending: vi.fn(),
+  mockCountPending: vi.fn(),
 }));
 vi.mock('../services/timesheet-approval-correction-validation.service.js', () => ({
   validateCorrectionAttachments: mockValidate,
-  listPendingCorrectionDays: mockListPending,
+}));
+vi.mock('../services/timesheet-pending-decisions.service.js', () => ({
+  countPendingDecisionsForApproval: mockCountPending,
+  loadPendingDecisionFactsForApproval: vi.fn(async () => ({ days: [], requests: [] })),
+  describePendingDecisions: vi.fn(async () => []),
+}));
+vi.mock('../services/timesheet-workflow-recipients.service.js', () => ({
+  listTimesheetWorkflowRecipientIds: vi.fn(async () => ['hr-uuid']),
 }));
 
 const { mockLockMonths } = vi.hoisted(() => ({ mockLockMonths: vi.fn() }));
@@ -60,13 +67,17 @@ vi.mock('../services/audit.service.js', () => ({
   AUDIT_ACTIONS: {},
 }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
+const { mockCreateMany } = vi.hoisted(() => ({ mockCreateMany: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/notification.service.js', () => ({
-  notificationService: { createMany: vi.fn(async () => undefined) },
+  notificationService: { createMany: mockCreateMany },
 }));
 vi.mock('../services/push.service.js', () => ({
-  pushService: { sendToUsers: vi.fn(async () => undefined) },
+  pushService: { sendToUsers: vi.fn(async () => undefined), sendGenericNotification: vi.fn(async () => []) },
 }));
 vi.mock('../middleware/cacheResponse.js', () => ({ invalidateCaches: vi.fn() }));
+vi.mock('../services/timesheet-approval-history.service.js', () => ({
+  timesheetApprovalHistoryService: { appendEvent: vi.fn(async () => undefined), listByApprovalId: vi.fn(async () => []) },
+}));
 
 import { timesheetApprovalController } from './timesheet-approval.controller.js';
 
@@ -76,8 +87,8 @@ const MISSING = [{
   date: '2026-08-08',
   employee_id: 523,
   employee_name: 'Демчук Анна Александровна',
-  kind: 'pending_correction',
-  reason: 'Корректировка не согласована ответственным',
+  kind: 'weekend_no_correction',
+  reason: 'Работа в выходной без корректировки — создайте корректировку',
 }];
 
 const makeRes = () => {
@@ -107,7 +118,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   pgQuery.mockResolvedValue([]);
   pgQueryOne.mockResolvedValue(null);
-  client.query.mockResolvedValue({ rows: [] });
+  client.query.mockImplementation(async (sql: string) => (
+    /INSERT INTO timesheet_approvals/i.test(String(sql))
+      ? {
+        rows: [{
+          id: 1831, department_id: DEPT, manager_employee_id: null,
+          start_date: RANGE.startDate, end_date: RANGE.endDate, status: 'submitted',
+        }],
+      }
+      : { rows: [] }
+  ));
   pgTx.mockImplementation(async (fn: (c: typeof client) => Promise<unknown>) => fn(client));
   // Сегодня 20.08.2026 (МСК): последний завершённый период — 01–15 августа.
   vi.useFakeTimers();
@@ -118,8 +138,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('timesheet-approval.submit — несогласованные корректировки', () => {
-  it('pending найден внешней проверкой → 400 со списком дней, транзакции нет', async () => {
+describe('timesheet-approval.submit — нерешённые выходные', () => {
+  const notifiedBodies = () => mockCreateMany.mock.calls
+    .flatMap(c => (c[0] as Array<{ body: string }>).map(n => n.body));
+
+  it('выход в выходной без корректировки → 400 со списком дней, транзакции нет', async () => {
     mockValidate.mockResolvedValue({ ok: false, missing: MISSING });
     const res = makeRes();
 
@@ -131,39 +154,37 @@ describe('timesheet-approval.submit — несогласованные корр�
     expect(pgTx).not.toHaveBeenCalled();
   });
 
-  it('pending появился после внешней проверки → под локом откат, статус submitted не пишется', async () => {
-    mockValidate
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false, missing: MISSING });
-    mockListPending.mockResolvedValue([{ employee_id: 523, work_date: '2026-08-08' }]);
-    const res = makeRes();
-
-    await timesheetApprovalController.submit(req, res);
-
-    expect(mockListPending).toHaveBeenCalledWith(
-      { kind: 'department', departmentId: DEPT }, RANGE, client,
-    );
-    expect(mockLockMonths.mock.invocationCallOrder[0])
-      .toBeLessThan(mockListPending.mock.invocationCallOrder[0]);
-    const writes = client.query.mock.calls.map(c => String(c[0]));
-    expect(writes.some(sql => /timesheet_approvals/i.test(sql))).toBe(false);
-    expect(res._status).toBe(400);
-    expect(res._json.code).toBe('CORRECTION_VALIDATION_FAILED');
-    expect(res._json.missing_days).toEqual(MISSING);
-  });
-
-  it('под локом pending нет → подача пишется в той же транзакции', async () => {
+  it('нерешённые выходные подаче не мешают: подача пишется, под локом они не проверяются', async () => {
     mockValidate.mockResolvedValue({ ok: true });
-    mockListPending.mockResolvedValue([]);
+    mockCountPending.mockResolvedValue(2);
     const res = makeRes();
 
     await timesheetApprovalController.submit(req, res);
 
+    expect(res._status).toBe(200);
     const writes = client.query.mock.calls.map(c => String(c[0]));
     expect(writes.some(sql => /INSERT INTO timesheet_approvals/i.test(sql))).toBe(true);
-    expect(mockListPending.mock.invocationCallOrder[0])
-      .toBeLessThan(client.query.mock.invocationCallOrder[
-        writes.findIndex(sql => /INSERT INTO timesheet_approvals/i.test(sql))
-      ]);
+    // Счётчик нерешённых — только для текста уведомления, вне транзакции подачи.
+    for (const call of mockCountPending.mock.calls) expect(call[1]).toBeUndefined();
+  });
+
+  it('кадрам «Табель отправлен на проверку» с пометкой «ждёт согласования выходных»', async () => {
+    mockValidate.mockResolvedValue({ ok: true });
+    mockCountPending.mockResolvedValue(2);
+
+    await timesheetApprovalController.submit(req, makeRes());
+
+    await vi.waitFor(() => expect(mockCreateMany).toHaveBeenCalled());
+    expect(notifiedBodies()).toEqual([expect.stringContaining('· ждёт согласования выходных.')]);
+  });
+
+  it('без нерешённых выходных — уведомление без пометки', async () => {
+    mockValidate.mockResolvedValue({ ok: true });
+    mockCountPending.mockResolvedValue(0);
+
+    await timesheetApprovalController.submit(req, makeRes());
+
+    await vi.waitFor(() => expect(mockCreateMany).toHaveBeenCalled());
+    expect(notifiedBodies().some(body => body.includes('ждёт согласования выходных'))).toBe(false);
   });
 });

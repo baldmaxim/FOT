@@ -32,7 +32,13 @@ import {
 import { listDeputyDepartmentIdsForUser } from '../services/department-access.service.js';
 import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
-import { resolveAdjustmentApprovalStatus, quotaLockKeys } from './timesheet.controller.js';
+import {
+  quotaLockKeys,
+  reapproveEmployeeMonthTail,
+  reportQuotaTailTransitions,
+  resolveAdjustmentApprovalStatus,
+  type IReapprovalTransition,
+} from './timesheet.controller.js';
 import { auditService } from '../services/audit.service.js';
 import { TIMESHEET_PERIOD_CLOSED } from '../utils/timesheet-lock-response.js';
 import {
@@ -45,6 +51,12 @@ import {
   OBJECT_ADJUSTMENT_SOURCE_TYPE,
 } from '../services/timesheet-object.service.js';
 import { findApprovalLocksForEmployeeDates } from '../services/timesheet-lock.service.js';
+import {
+  NO_PENDING_DECISION_EFFECTS,
+  publishPendingDecisionEffects,
+  withPendingDecisionTracking,
+  type ITrackedEmployeeMonth,
+} from '../services/timesheet-pending-decisions-tracking.service.js';
 import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave', 'sick_worked', 'dismissal'] as const;
@@ -746,7 +758,7 @@ async function routeWorkRequestToWeekendApprovals(
   const isoDates = collectMaterializedLeaveDates(request);
   if (isoDates.length === 0) return null;
   await lockQuotaMonthsOnClient(client, employeeId, isoDates);
-  if (await hasLockedTimesheetDates(employeeId, isoDates, client)) return null;
+  if (await hasLockedTimesheetDates(employeeId, isoDates, client, WEEKEND_WORK_LOCK)) return null;
 
   const plannedStatuses = new Map<string, 'auto_approved' | 'pending'>();
   for (const iso of isoDates) {
@@ -935,57 +947,80 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         if (occupiedDays.length > 0) return { duplicate: false as const, occupiedDays };
       }
 
-      const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
-      const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
-      const insertCasts: string[] = ['', '', '', '', ''];
-      if (request_type === 'time_correction') {
-        insertCols.push('correction_date', 'correction_status', 'correction_hours', 'correction_object_id', 'correction_object_name');
-        insertVals.push(canonicalCorrectionDate, correction_status, correction_hours ?? null, correction_object_id, correctionObjectName);
-        insertCasts.push('', '', '', '::uuid', '');
+      // «Работа в выходной»: месячные локи общие с подачей и HR-утверждением табеля —
+      // заявление не проскочит мимо утверждения, а в утверждённый табель не подаётся
+      // (там его уже некому решить). В поданный — можно: табель ждёт решения по нему.
+      if (request_type === 'work') {
+        await lockQuotaMonthsOnClient(client, employeeId, workedDays);
+        if (await hasLockedTimesheetDates(employeeId, workedDays, client, WEEKEND_WORK_LOCK)) {
+          return { duplicate: false as const, periodClosed: true as const };
+        }
       }
-      if (normalizedSelectedDates) {
-        insertCols.push('selected_dates');
-        insertVals.push(normalizedSelectedDates);
-        insertCasts.push('::date[]');
-      }
-      const placeholders = insertVals.map((_, i) => `$${i + 1}${insertCasts[i] || ''}`).join(', ');
 
-      const insRes = await client.query(
-        `INSERT INTO leave_requests (${insertCols.join(', ')})
-         VALUES (${placeholders})
-         RETURNING *`,
-        insertVals,
+      const insertRequest = async () => {
+        const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
+        const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
+        const insertCasts: string[] = ['', '', '', '', ''];
+        if (request_type === 'time_correction') {
+          insertCols.push('correction_date', 'correction_status', 'correction_hours', 'correction_object_id', 'correction_object_name');
+          insertVals.push(canonicalCorrectionDate, correction_status, correction_hours ?? null, correction_object_id, correctionObjectName);
+          insertCasts.push('', '', '', '::uuid', '');
+        }
+        if (normalizedSelectedDates) {
+          insertCols.push('selected_dates');
+          insertVals.push(normalizedSelectedDates);
+          insertCasts.push('::date[]');
+        }
+        const placeholders = insertVals.map((_, i) => `$${i + 1}${insertCasts[i] || ''}`).join(', ');
+
+        const insRes = await client.query(
+          `INSERT INTO leave_requests (${insertCols.join(', ')})
+           VALUES (${placeholders})
+           RETURNING *`,
+          insertVals,
+        );
+        const row = insRes.rows[0];
+        if (!row) throw new Error('Failed to create leave_request');
+
+        if (attachmentIds.length > 0) {
+          const docIds = attachmentIds;
+          const entityIds = attachmentIds.map(() => String(row.id));
+          const entityTypes = attachmentIds.map(() => 'leave_request');
+          const purposes = attachmentIds.map(() => 'leave_request_attachment');
+
+          await client.query(
+            `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+             SELECT u.document_id, u.entity_type, u.entity_id, u.purpose
+               FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[])
+                 AS u(document_id, entity_type, entity_id, purpose)
+             ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+            [docIds, entityTypes, entityIds, purposes],
+          );
+
+          await client.query(
+            `UPDATE documents SET leave_request_id = $1
+              WHERE id = ANY($2::bigint[]) AND leave_request_id IS NULL`,
+            [row.id, docIds],
+          );
+        }
+
+        const weekendRoute = request_type === 'work'
+          ? await routeWorkRequestToWeekendApprovals(row, req.user.id, client)
+          : null;
+
+        return { row, weekendRoute };
+      };
+
+      if (request_type !== 'work') {
+        return { duplicate: false as const, ...(await insertRequest()), effects: NO_PENDING_DECISION_EFFECTS };
+      }
+      // Новое заявление переводит поданный табель в «Ждёт согласования выходных».
+      const tracked = await withPendingDecisionTracking(
+        client,
+        trackedMonthsOf(employeeId, workedDays),
+        async () => ({ value: await insertRequest(), changed: true }),
       );
-      const row = insRes.rows[0];
-      if (!row) throw new Error('Failed to create leave_request');
-
-      if (attachmentIds.length > 0) {
-        const docIds = attachmentIds;
-        const entityIds = attachmentIds.map(() => String(row.id));
-        const entityTypes = attachmentIds.map(() => 'leave_request');
-        const purposes = attachmentIds.map(() => 'leave_request_attachment');
-
-        await client.query(
-          `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
-           SELECT u.document_id, u.entity_type, u.entity_id, u.purpose
-             FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[])
-               AS u(document_id, entity_type, entity_id, purpose)
-           ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
-          [docIds, entityTypes, entityIds, purposes],
-        );
-
-        await client.query(
-          `UPDATE documents SET leave_request_id = $1
-            WHERE id = ANY($2::bigint[]) AND leave_request_id IS NULL`,
-          [row.id, docIds],
-        );
-      }
-
-      const weekendRoute = request_type === 'work'
-        ? await routeWorkRequestToWeekendApprovals(row, req.user.id, client)
-        : null;
-
-      return { duplicate: false as const, row, weekendRoute };
+      return { duplicate: false as const, ...tracked.value, effects: tracked.effects };
     });
 
     if (result.duplicate) {
@@ -1020,10 +1055,19 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       });
       return;
     }
+    if (result.periodClosed) {
+      res.status(409).json({
+        success: false,
+        code: TIMESHEET_PERIOD_CLOSED,
+        error: 'Табель за эти дни уже утверждён — подать заявление нельзя',
+      });
+      return;
+    }
     const data = result.row;
     const { weekendRoute } = result;
 
     broadcastPendingChanged();
+    void publishPendingDecisionEffects(result.effects);
 
     if (weekendRoute) {
       // Очередь «Согласований» ответственного и табель автора обновятся без F5.
@@ -1845,7 +1889,7 @@ async function approveLeaveRequestById(
   const nowIso = new Date().toISOString();
 
   try {
-    const row = await withTransaction(async (client) => {
+    const outcome = await withTransaction(async (client) => {
       // Блокирующее чтение — единственный источник актуальных полей: статус мог
       // смениться (самоотмена сотрудника), тип — HR'ом, часы — согласующим
       // (PATCH /:id/correction-hours) уже после предчтения.
@@ -1883,133 +1927,160 @@ async function approveLeaveRequestById(
       // в уже сданном/утверждённом периоде. Гард ДЛЯ ВСЕХ, включая is_admin — закрытый
       // табель правится только через «Открыть → правки → Закрыть». Advisory-локи берём
       // до проверки — иначе между ней и записью успевает пройти submit.
+      // «Работа в выходной» — исключение для поданного табеля: он ждёт решения по ней.
+      const isWeekendWork = String(locked.request_type) === 'work';
       const affectedDates = collectAffectedTimesheetDates(locked);
       if (affectedDates.length > 0) {
         await lockQuotaMonthsOnClient(client, locked.employee_id, affectedDates);
-        if (await hasLockedTimesheetDates(locked.employee_id, affectedDates, client)) {
+      }
+
+      const decide = async (): Promise<{
+        value: { row: Record<string, unknown>; tail: IReapprovalTransition[] };
+        changed: boolean;
+      }> => {
+        if (affectedDates.length > 0 && await hasLockedTimesheetDates(
+          locked.employee_id, affectedDates, client, isWeekendWork ? WEEKEND_WORK_LOCK : {},
+        )) {
           throw new LeaveDecisionError(
             'timesheet_locked',
             'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
           );
         }
-      }
 
-      const updated = (await client.query(
-        `UPDATE leave_requests SET
-           status = 'approved',
-           reviewer_id = $1,
-           reviewed_at = $2,
-           review_comment = $3,
-           updated_at = $2
-         WHERE id = $4 AND status = 'pending'
-         RETURNING *`,
-        [req.user.id, nowIso, comment, id],
-      )).rows[0] ?? null;
+        const updated = (await client.query(
+          `UPDATE leave_requests SET
+             status = 'approved',
+             reviewer_id = $1,
+             reviewed_at = $2,
+             review_comment = $3,
+             updated_at = $2
+           WHERE id = $4 AND status = 'pending'
+           RETURNING *`,
+          [req.user.id, nowIso, comment, id],
+        )).rows[0] ?? null;
 
-      if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+        if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
 
-      const approvedRequest = { ...locked, ...(updated as Partial<typeof locked>) };
+        const approvedRequest = { ...locked, ...(updated as Partial<typeof locked>) };
 
-      // Создаём attendance adjustments как канонический источник ручных статусов.
-      // Для work/remote в выходной approval_status считает единый резолвер.
-      await materializeLeaveRequestAdjustments(approvedRequest, authorUserId, client, weekendCollapseApproverUserId);
+        // Создаём attendance adjustments как канонический источник ручных статусов.
+        // Для work/remote в выходной approval_status считает единый резолвер.
+        await materializeLeaveRequestAdjustments(approvedRequest, authorUserId, client, weekendCollapseApproverUserId);
 
-      // Обработка корректировки табеля
-      if (approvedRequest.request_type === 'time_correction' && approvedRequest.correction_date) {
-        const rawCorrectionStatus: TimeStatus = isTimeStatus(approvedRequest.correction_status) ? approvedRequest.correction_status : 'work';
-        // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
-        // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
-        // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
-        const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (approvedRequest.correction_hours ?? 0) > 0
-          ? 'manual'
-          : rawCorrectionStatus;
-        // Если день — выходной по графику сотрудника И его отдел в whitelist
-        // настройки «Согласование выходных дней», корректировка попадает в pending
-        // и должна быть дополнительно одобрена админом на /approvals.
-        // Исключение — схлопывание: одобряющий сам ответственный за выходные.
-        await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, [approvedRequest.correction_date]);
-        const resolvedApproval = await resolveAdjustmentApprovalStatus(
-          approvedRequest.employee_id,
-          approvedRequest.correction_date,
-          correctionStatus,
-          approvedRequest.correction_hours ?? null,
-          false,
-          null,
-          client,
-        );
-        const collapsed = resolvedApproval === 'pending' && weekendCollapseApproverUserId != null;
-        const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
-        const approvedBy = collapsed ? weekendCollapseApproverUserId : undefined;
-        if (approvedRequest.correction_object_id) {
-          // Дневная корректировка с распределением по объектам — осознанная разметка дня.
-          // Удалять её нельзя (унесли бы вложения), поэтому проверяем ДО любых побочных
-          // эффектов: транзакция откатится целиком, заявление не станет approved, история
-          // и уведомления не появятся — согласующий разбирается вручную.
-          const dayAllocationRows = await client.query<{ metadata: Record<string, unknown> | null }>(
-            `SELECT metadata FROM attendance_adjustments
-              WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
-            [approvedRequest.employee_id, approvedRequest.correction_date],
+        // Обработка корректировки табеля
+        if (approvedRequest.request_type === 'time_correction' && approvedRequest.correction_date) {
+          const rawCorrectionStatus: TimeStatus = isTimeStatus(approvedRequest.correction_status) ? approvedRequest.correction_status : 'work';
+          // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
+          // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
+          // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
+          const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (approvedRequest.correction_hours ?? 0) > 0
+            ? 'manual'
+            : rawCorrectionStatus;
+          // Если день — выходной по графику сотрудника И его отдел в whitelist
+          // настройки «Согласование выходных дней», корректировка попадает в pending
+          // и должна быть дополнительно одобрена админом на /approvals.
+          // Исключение — схлопывание: одобряющий сам ответственный за выходные.
+          await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, [approvedRequest.correction_date]);
+          const resolvedApproval = await resolveAdjustmentApprovalStatus(
+            approvedRequest.employee_id,
+            approvedRequest.correction_date,
+            correctionStatus,
+            approvedRequest.correction_hours ?? null,
+            false,
+            null,
+            client,
           );
-          if (dayAllocationRows.rows.some(row => hasObjectAllocations(row.metadata))) {
-            throw new LeaveDecisionError(
-              'day_allocation_conflict',
-              'За этот день часы уже распределены по объектам в корректировке дня. Согласование заявления изменило бы её — снимите распределение в табеле.',
+          const collapsed = resolvedApproval === 'pending' && weekendCollapseApproverUserId != null;
+          const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
+          const approvedBy = collapsed ? weekendCollapseApproverUserId : undefined;
+          if (approvedRequest.correction_object_id) {
+            // Дневная корректировка с распределением по объектам — осознанная разметка дня.
+            // Удалять её нельзя (унесли бы вложения), поэтому проверяем ДО любых побочных
+            // эффектов: транзакция откатится целиком, заявление не станет approved, история
+            // и уведомления не появятся — согласующий разбирается вручную.
+            const dayAllocationRows = await client.query<{ metadata: Record<string, unknown> | null }>(
+              `SELECT metadata FROM attendance_adjustments
+                WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
+              [approvedRequest.employee_id, approvedRequest.correction_date],
             );
+            if (dayAllocationRows.rows.some(row => hasObjectAllocations(row.metadata))) {
+              throw new LeaveDecisionError(
+                'day_allocation_conflict',
+                'За этот день часы уже распределены по объектам в корректировке дня. Согласование заявления изменило бы её — снимите распределение в табеле.',
+              );
+            }
+            // Корректировка привязана к конкретному объекту → создаём manual_object
+            // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
+            // day-level записи дня (мьютекс day-level ↔ per-object).
+            await client.query(
+              `DELETE FROM attendance_adjustments
+                 WHERE employee_id = $1 AND work_date = $2
+                   AND source_type IN ('manual', 'leave_request')`,
+              [approvedRequest.employee_id, approvedRequest.correction_date],
+            );
+            await upsertAttendanceAdjustment({
+              employee_id: approvedRequest.employee_id,
+              work_date: approvedRequest.correction_date,
+              status: correctionStatus,
+              hours_override: approvedRequest.correction_hours ?? null,
+              source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+              source_id: approvedRequest.correction_object_id,
+              reason: approvedRequest.reason ?? null,
+              created_by: authorUserId,
+              approval_status: approvalStatus,
+              approved_by: approvedBy,
+              metadata: {
+                object_id: approvedRequest.correction_object_id,
+                object_name: approvedRequest.correction_object_name,
+                auto_resolved: false,
+              },
+            }, client);
+          } else {
+            // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
+            await upsertAttendanceAdjustment({
+              employee_id: approvedRequest.employee_id,
+              work_date: approvedRequest.correction_date,
+              status: correctionStatus,
+              hours_override: approvedRequest.correction_hours ?? null,
+              source_type: 'leave_request',
+              source_id: `${approvedRequest.id}:time_correction`,
+              reason: approvedRequest.reason ?? null,
+              created_by: authorUserId,
+              approval_status: approvalStatus,
+              approved_by: approvedBy,
+            }, client);
           }
-          // Корректировка привязана к конкретному объекту → создаём manual_object
-          // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
-          // day-level записи дня (мьютекс day-level ↔ per-object).
-          await client.query(
-            `DELETE FROM attendance_adjustments
-               WHERE employee_id = $1 AND work_date = $2
-                 AND source_type IN ('manual', 'leave_request')`,
-            [approvedRequest.employee_id, approvedRequest.correction_date],
-          );
-          await upsertAttendanceAdjustment({
-            employee_id: approvedRequest.employee_id,
-            work_date: approvedRequest.correction_date,
-            status: correctionStatus,
-            hours_override: approvedRequest.correction_hours ?? null,
-            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-            source_id: approvedRequest.correction_object_id,
-            reason: approvedRequest.reason ?? null,
-            created_by: authorUserId,
-            approval_status: approvalStatus,
-            approved_by: approvedBy,
-            metadata: {
-              object_id: approvedRequest.correction_object_id,
-              object_name: approvedRequest.correction_object_name,
-              auto_resolved: false,
-            },
-          }, client);
-        } else {
-          // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
-          await upsertAttendanceAdjustment({
-            employee_id: approvedRequest.employee_id,
-            work_date: approvedRequest.correction_date,
-            status: correctionStatus,
-            hours_override: approvedRequest.correction_hours ?? null,
-            source_type: 'leave_request',
-            source_id: `${approvedRequest.id}:time_correction`,
-            reason: approvedRequest.reason ?? null,
-            created_by: authorUserId,
-            approval_status: approvalStatus,
-            approved_by: approvedBy,
-          }, client);
         }
-      }
 
-      await recordLeaveRequestHistory(client, {
-        requestId: Number(id),
-        action: 'approved',
-        actorId: req.user.id,
-        comment: comment || null,
-      });
+        await recordLeaveRequestHistory(client, {
+          requestId: Number(id),
+          action: 'approved',
+          actorId: req.user.id,
+          comment: comment || null,
+        });
 
-      return updated as Record<string, unknown>;
+        // Новые дни «Работы в выходной» занимают субботнюю квоту — пересчитываем хвост
+        // месяца, включая поданный табель (утверждённый не трогается).
+        const tail: IReapprovalTransition[] = [];
+        if (isWeekendWork) {
+          for (const month of new Set(affectedDates.map(date => date.slice(0, 7)))) {
+            tail.push(...await reapproveEmployeeMonthTail(locked.employee_id, `${month}-01`, client, 'decision'));
+          }
+        }
+
+        return { value: { row: updated as Record<string, unknown>, tail }, changed: true };
+      };
+
+      if (!isWeekendWork) return { ...(await decide()).value, effects: NO_PENDING_DECISION_EFFECTS };
+      const tracked = await withPendingDecisionTracking(
+        client, trackedMonthsOf(locked.employee_id, affectedDates), decide,
+      );
+      return { ...tracked.value, effects: tracked.effects };
     });
 
-    return { ok: true, row, employeeId: preread.employee_id };
+    await reportQuotaTailTransitions(req, outcome.tail, 'leave_request_approve');
+    void publishPendingDecisionEffects(outcome.effects);
+    return { ok: true, row: outcome.row, employeeId: preread.employee_id };
   } catch (err) {
     if (err instanceof LeaveDecisionError) return { ok: false, code: err.code, error: err.message };
     throw err;
@@ -2040,11 +2111,15 @@ async function rejectLeaveRequestById(
   const nowIso = new Date().toISOString();
 
   try {
-    const row = await withTransaction(async (client) => {
+    const outcome = await withTransaction(async (client) => {
       const locked = (await client.query(
-        `SELECT id, status, request_type FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        `SELECT id, status, request_type, employee_id, start_date, end_date, selected_dates
+           FROM leave_requests WHERE id = $1 FOR UPDATE`,
         [id],
-      )).rows[0] as { id: number; status: string; request_type: string } | undefined;
+      )).rows[0] as {
+        id: number; status: string; request_type: string; employee_id: number;
+        start_date: string; end_date: string; selected_dates: string[] | null;
+      } | undefined;
 
       if (!locked) throw new LeaveDecisionError('not_found', 'Заявление не найдено');
       if (locked.status !== 'pending') {
@@ -2054,31 +2129,46 @@ async function rejectLeaveRequestById(
         throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
       }
 
-      const updated = (await client.query(
-        `UPDATE leave_requests SET
-           status = 'rejected',
-           reviewer_id = $1,
-           reviewed_at = $2,
-           review_comment = $3,
-           updated_at = $2
-         WHERE id = $4 AND status = 'pending'
-         RETURNING *`,
-        [req.user.id, nowIso, comment, id],
-      )).rows[0] ?? null;
+      const decide = async (): Promise<{ value: Record<string, unknown>; changed: boolean }> => {
+        const updated = (await client.query(
+          `UPDATE leave_requests SET
+             status = 'rejected',
+             reviewer_id = $1,
+             reviewed_at = $2,
+             review_comment = $3,
+             updated_at = $2
+           WHERE id = $4 AND status = 'pending'
+           RETURNING *`,
+          [req.user.id, nowIso, comment, id],
+        )).rows[0] ?? null;
 
-      if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+        if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
 
-      await recordLeaveRequestHistory(client, {
-        requestId: Number(id),
-        action: 'rejected',
-        actorId: req.user.id,
-        comment: comment || null,
-      });
+        await recordLeaveRequestHistory(client, {
+          requestId: Number(id),
+          action: 'rejected',
+          actorId: req.user.id,
+          comment: comment || null,
+        });
 
-      return updated as Record<string, unknown>;
+        return { value: updated as Record<string, unknown>, changed: true };
+      };
+
+      if (String(locked.request_type) !== 'work') {
+        return { row: (await decide()).value, effects: NO_PENDING_DECISION_EFFECTS };
+      }
+      // Отказ по «Работе в выходной» может закрыть последнее ожидание поданного табеля —
+      // переход «готов к утверждению» фиксируется в этой же транзакции.
+      const dates = collectMaterializedLeaveDates(locked);
+      await lockQuotaMonthsOnClient(client, Number(locked.employee_id), dates);
+      const tracked = await withPendingDecisionTracking(
+        client, trackedMonthsOf(Number(locked.employee_id), dates), decide,
+      );
+      return { row: tracked.value, effects: tracked.effects };
     });
 
-    return { ok: true, row, employeeId: preread.employee_id };
+    void publishPendingDecisionEffects(outcome.effects);
+    return { ok: true, row: outcome.row, employeeId: preread.employee_id };
   } catch (err) {
     if (err instanceof LeaveDecisionError) return { ok: false, code: err.code, error: err.message };
     throw err;
@@ -2783,17 +2873,10 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       if (current.employee_id !== req.user.employee_id) {
         return { forbidden: true as const };
       }
-      const updated = await client.query(
-        `UPDATE leave_requests SET status = 'cancelled',
-                cancelled_by = $3, cancelled_at = $1, cancel_reason = $4,
-                cancel_source = 'employee', updated_at = $1
-          WHERE id = $2
-          RETURNING *`,
-        [nowIso, id, req.user.id, reason],
-      );
       // Закрытый табель: отмена откатывает материализованные строки, поэтому в
       // сданном/утверждённом периоде запрещена ВСЕМ, включая is_admin. Проверяем и
       // pending, и approved, но блокируем ТОЛЬКО если строки в закрытом периоде есть.
+      // До записи статуса: результат колбэка коммитится, и отмена прошла бы вместе с 409.
       const removableDates = await listLeaveRequestAdjustmentDates(
         client, request, current.status === 'approved',
       );
@@ -2804,17 +2887,38 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         }
       }
 
-      // Чистим корректировки и для pending-заявок: легаси work-заявки могли
-      // материализовать pending-строки ещё при создании — без удаления они
-      // остались бы сиротами в очереди /approvals.
-      await deleteLeaveRequestAdjustments(client, request, current.status === 'approved');
-      await recordLeaveRequestHistory(client, {
-        requestId: Number(id),
-        action: 'cancelled',
-        actorId: req.user.id,
-        comment: reason,
-      });
-      return { conflict: false as const, row: updated.rows[0] ?? null };
+      const doCancel = async (): Promise<{ value: Record<string, unknown> | null; changed: boolean }> => {
+        const updated = await client.query(
+          `UPDATE leave_requests SET status = 'cancelled',
+                  cancelled_by = $3, cancelled_at = $1, cancel_reason = $4,
+                  cancel_source = 'employee', updated_at = $1
+            WHERE id = $2
+            RETURNING *`,
+          [nowIso, id, req.user.id, reason],
+        );
+        // Чистим корректировки и для pending-заявок: легаси work-заявки могли
+        // материализовать pending-строки ещё при создании — без удаления они
+        // остались бы сиротами в очереди /approvals.
+        await deleteLeaveRequestAdjustments(client, request, current.status === 'approved');
+        await recordLeaveRequestHistory(client, {
+          requestId: Number(id),
+          action: 'cancelled',
+          actorId: req.user.id,
+          comment: reason,
+        });
+        return { value: (updated.rows[0] as Record<string, unknown> | undefined) ?? null, changed: true };
+      };
+
+      if (request.request_type !== 'work') {
+        return { conflict: false as const, row: (await doCancel()).value, effects: NO_PENDING_DECISION_EFFECTS };
+      }
+      // Отмена «Работы в выходной» может закрыть последнее ожидание поданного табеля.
+      const dates = collectMaterializedLeaveDates(request);
+      await lockQuotaMonthsOnClient(client, request.employee_id, dates);
+      const tracked = await withPendingDecisionTracking(
+        client, trackedMonthsOf(request.employee_id, dates), doCancel,
+      );
+      return { conflict: false as const, row: tracked.value, effects: tracked.effects };
     });
 
     if ('forbidden' in result) {
@@ -2838,6 +2942,7 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const data = result.row ? withDecisionProfiles(result.row, profileMap) : null;
 
     broadcastPendingChanged();
+    void publishPendingDecisionEffects(result.effects);
 
     // Realtime: заявка отменена автором — синхронизируем самому автору и approvers.
     getLeaveRequestRecipients(request.employee_id, req.user.id)
@@ -3054,18 +3159,32 @@ function collectAffectedTimesheetDates(r: LeaveRequestDatesRow): string[] {
  * Делегирует единому per-employee замку: членство снапшотное (timesheet_approval_employees)
  * ИЛИ по отделу сотрудника и его предкам — иначе сотрудник, добавленный в отдел уже
  * после submit, проходил бы гард насквозь.
+ *
+ * allowSubmitted — «Работа в выходной»: в поданном табеле её подают и решают дальше
+ * (статус «Ждёт согласования выходных», HR-утверждение до решения закрыто); блокирует
+ * только утверждённый. Замок отдаётся с приоритетом approved.
  */
 async function hasLockedTimesheetDates(
   employeeId: number,
   dates: string[],
   exec?: DbExecutor,
+  opts: { allowSubmitted?: boolean } = {},
 ): Promise<boolean> {
   if (dates.length === 0) return false;
   const locks = await findApprovalLocksForEmployeeDates(
     dates.map(workDate => ({ employeeId, workDate })),
     exec,
   );
-  return locks.size > 0;
+  if (!opts.allowSubmitted) return locks.size > 0;
+  return [...locks.values()].some(lock => lock.status !== 'submitted');
+}
+
+/** «Работа в выходной» в поданном (не утверждённом) табеле разрешена — см. hasLockedTimesheetDates. */
+const WEEKEND_WORK_LOCK = { allowSubmitted: true } as const;
+
+/** Месяцы заявления для трекинга перехода «готов к утверждению». */
+function trackedMonthsOf(employeeId: number, dates: readonly string[]): ITrackedEmployeeMonth[] {
+  return [...new Set(dates.map(date => date.slice(0, 7)))].map(month => ({ employeeId, workDate: `${month}-01` }));
 }
 
 /**

@@ -1,4 +1,4 @@
-import { execute, query } from '../config/postgres.js';
+import { execute, query, type DbExecutor } from '../config/postgres.js';
 import { getIo } from '../socket/io-instance.js';
 
 export interface INotification {
@@ -12,12 +12,31 @@ export interface INotification {
   created_at: string;
 }
 
-interface ICreateNotification {
+export interface ICreateNotification {
   userId: string;
   type: string;
   title: string;
   body: string;
   metadata?: Record<string, unknown>;
+}
+
+// INSERT набора строк с RETURNING-объектом. Используем unnest, чтобы
+// не плодить $1,$2,$3,... в цикле и переносить порядок параметров
+// безопасно через массивы.
+const INSERT_MANY_SQL = `INSERT INTO notifications (user_id, type, title, body, metadata)
+         SELECT u.user_id, u.type, u.title, u.body, u.metadata::jsonb
+           FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
+             AS u(user_id, type, title, body, metadata)
+         RETURNING id, user_id, type, title, body, metadata, is_read, created_at`;
+
+function insertManyParams(items: ICreateNotification[]): unknown[] {
+  return [
+    items.map(n => n.userId),
+    items.map(n => n.type),
+    items.map(n => n.title),
+    items.map(n => n.body),
+    items.map(n => JSON.stringify(n.metadata || {})),
+  ];
 }
 
 // Шлёт получателю авторитетный счётчик непрочитанных. Вызывается после
@@ -43,31 +62,29 @@ export const notificationService = {
   async createMany(items: ICreateNotification[]): Promise<void> {
     if (items.length === 0) return;
 
-    // INSERT набора строк с RETURNING-объектом. Используем unnest, чтобы
-    // не плодить $1,$2,$3,... в цикле и переносить порядок параметров
-    // безопасно через массивы.
-    const userIds = items.map(n => n.userId);
-    const types = items.map(n => n.type);
-    const titles = items.map(n => n.title);
-    const bodies = items.map(n => n.body);
-    const metadatas = items.map(n => JSON.stringify(n.metadata || {}));
-
     let data: INotification[] = [];
     try {
-      data = await query<INotification>(
-        `INSERT INTO notifications (user_id, type, title, body, metadata)
-         SELECT u.user_id, u.type, u.title, u.body, u.metadata::jsonb
-           FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
-             AS u(user_id, type, title, body, metadata)
-         RETURNING id, user_id, type, title, body, metadata, is_read, created_at`,
-        [userIds, types, titles, bodies, metadatas],
-      );
+      data = await query<INotification>(INSERT_MANY_SQL, insertManyParams(items));
     } catch (err) {
       console.error('notifications.createMany error:', err);
       return;
     }
 
-    // Отправляем через Socket.IO каждому получателю
+    await notificationService.emitInserted(data);
+  },
+
+  /**
+   * INSERT через клиент транзакции: уведомление коммитится и откатывается вместе с
+   * изменением, которое его породило. Ошибка пробрасывается — откатывает и изменение.
+   * Socket — отдельно, после коммита (emitInserted).
+   */
+  async insertManyTx(exec: DbExecutor, items: ICreateNotification[]): Promise<INotification[]> {
+    if (items.length === 0) return [];
+    return (await exec.query<INotification>(INSERT_MANY_SQL, insertManyParams(items))).rows;
+  },
+
+  /** Socket.IO по уже записанным уведомлениям: новое уведомление + счётчик непрочитанных. */
+  async emitInserted(data: INotification[]): Promise<void> {
     const io = getIo();
     if (io && data.length > 0) {
       for (const notification of data) {

@@ -332,8 +332,8 @@ function mockReapprove(opts: {
   timekeeperIds?: string[];
   quotaCandidates?: Array<{ employee_id: number; work_date: string }>;
   skud?: Array<{ employee_id: number; date: string }>;
-  /** Закрытые (сотрудник, дата) — единый замок timesheet-lock.service. */
-  locks?: Array<{ employee_id: number; work_date: string }>;
+  /** Закрытые (сотрудник, дата) — единый замок timesheet-lock.service. По умолчанию — поданные. */
+  locks?: Array<{ employee_id: number; work_date: string; status?: 'submitted' | 'approved' }>;
 }): void {
   pgQuery.mockImplementation(async (sql: string) => {
     if (QUOTA_SQL_RE.test(sql)) return opts.quotaCandidates ?? [];
@@ -347,7 +347,7 @@ function mockReapprove(opts: {
         id: 900 + index,
         start_date: lock.work_date,
         end_date: lock.work_date,
-        status: 'submitted',
+        status: lock.status ?? 'submitted',
       }));
     }
     if (/approval_status IN \('auto_approved', 'pending'\)/i.test(sql)) return opts.rows;
@@ -594,6 +594,26 @@ describe('computeReapprovalTransitions — гард закрытых подач'
     });
     const t = await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31');
     expect(t.map(x => x.id)).toEqual([71]);
+  });
+
+  it('режим decision: поданный 1–15 пересчитывается вместе с решением, утверждённый — нет', async () => {
+    // Решение по выходному в поданном табеле: связанные строки того же поданного периода
+    // переигрываются, а утверждённый (и его версия для 1С) остаётся как был.
+    schedule.expected_saturdays_per_month = 2;
+    mockReapprove({
+      rows: [sat(70, '2026-05-02'), sat(71, '2026-05-23')],
+      quotaCandidates: [
+        { employee_id: EMP, work_date: '2026-05-02' },
+        { employee_id: EMP, work_date: '2026-05-23' },
+      ],
+      locks: [
+        { employee_id: EMP, work_date: '2026-05-02', status: 'submitted' },
+        { employee_id: EMP, work_date: '2026-05-23', status: 'approved' },
+      ],
+    });
+    expect(await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31')).toEqual([]);
+    const t = await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31', undefined, 'decision');
+    expect(t.map(x => x.id)).toEqual([70]);
   });
 
   it('замка нет → строки пересчитываются', async () => {

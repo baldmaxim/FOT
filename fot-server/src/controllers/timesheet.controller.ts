@@ -925,10 +925,18 @@ export async function resolveAdjustmentApprovalStatus(
  * Делегирует единому per-employee замку (снимок состава ИЛИ отдел сотрудника и его
  * предки). Раньше ветка «по членству отдела» применялась только к подачам без снимка,
  * и сотрудник, добавленный в отдел уже после submit, оставался незалоченным.
+ *
+ * lockMode 'decision' — пересчёт после решения по выходному в поданном табеле: строки
+ * поданного (submitted) периода пересчитываются вместе с решённой, утверждённые — нет.
+ * Замок отдаётся с приоритетом approved, поэтому 'submitted' значит, что утверждённой
+ * подачи на этот день нет.
  */
+export type ReapprovalLockMode = 'strict' | 'decision';
+
 async function loadLockedByApprovalPeriodIds(
   rows: Array<{ id: number; employee_id: number; work_date: string }>,
   exec?: DbExecutor,
+  lockMode: ReapprovalLockMode = 'strict',
 ): Promise<Set<number>> {
   const locked = new Set<number>();
   if (rows.length === 0) return locked;
@@ -939,7 +947,10 @@ async function loadLockedByApprovalPeriodIds(
   );
   if (locks.size === 0) return locked;
   for (const row of rows) {
-    if (locks.has(lockKey(row.employee_id, row.work_date))) locked.add(row.id);
+    const lock = locks.get(lockKey(row.employee_id, row.work_date));
+    if (!lock) continue;
+    if (lockMode === 'decision' && lock.status === 'submitted') continue;
+    locked.add(row.id);
   }
   return locked;
 }
@@ -958,7 +969,8 @@ export interface IReapprovalTransition {
  * Учитываются только строки в состоянии 'auto_approved'/'pending' — решения руководителя
  * ('approved'/'rejected') не пересчитываются. Строки закрытых подач табеля
  * (submitted/approved) исключаются: там редактирование уже заблокировано, переигрывать
- * статусы задним числом нельзя.
+ * статусы задним числом нельзя. Исключение — lockMode 'decision': после решения по
+ * выходному в поданном табеле пересчитывается и он, утверждённый — никогда.
  *
  * Все запросы идут через exec — под advisory-lock это обязано быть то же соединение,
  * что и запись, иначе транзакция не увидит собственные незакоммиченные изменения.
@@ -968,6 +980,7 @@ export async function computeReapprovalTransitions(
   startDate: string,
   endDate: string,
   exec?: DbExecutor,
+  lockMode: ReapprovalLockMode = 'strict',
 ): Promise<IReapprovalTransition[]> {
   const params: unknown[] = [startDate, endDate];
   let sql = `SELECT id, employee_id, work_date::text AS work_date, status, hours_override,
@@ -997,6 +1010,7 @@ export async function computeReapprovalTransitions(
       work_date: String(r.work_date).slice(0, 10),
     })),
     exec,
+    lockMode,
   );
   const rows = lockedIds.size > 0 ? allRows.filter(r => !lockedIds.has(Number(r.id))) : allRows;
   if (rows.length === 0) return [];
@@ -1204,8 +1218,9 @@ export async function reapproveAdjustmentsForRange(
   startDate: string,
   endDate: string,
   exec?: DbExecutor,
+  lockMode: ReapprovalLockMode = 'strict',
 ): Promise<IReapprovalTransition[]> {
-  const transitions = await computeReapprovalTransitions(employeeIds, startDate, endDate, exec);
+  const transitions = await computeReapprovalTransitions(employeeIds, startDate, endDate, exec, lockMode);
   if (transitions.length === 0) return [];
   await executeWith(
     exec,
@@ -1226,11 +1241,14 @@ export async function reapproveAdjustmentsForRange(
  * обеим субботам auto_approved — каждая видит ноль занятых слотов раньше себя. Обнуление
  * или удаление первой субботы, наоборот, освобождает слот, а последующие строки остаются
  * pending. Пересчёт месяца после мутации закрывает оба случая.
+ *
+ * lockMode 'decision' — решение по выходному в поданном табеле (см. loadLockedByApprovalPeriodIds).
  */
 export async function reapproveEmployeeMonthTail(
   employeeId: number,
   workDate: string,
   exec?: DbExecutor,
+  lockMode: ReapprovalLockMode = 'strict',
 ): Promise<IReapprovalTransition[]> {
   const dateObj = new Date(`${workDate}T00:00:00`);
   const year = dateObj.getFullYear();
@@ -1242,6 +1260,7 @@ export async function reapproveEmployeeMonthTail(
     `${year}-${monthStr}-01`,
     `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`,
     exec,
+    lockMode,
   );
 }
 

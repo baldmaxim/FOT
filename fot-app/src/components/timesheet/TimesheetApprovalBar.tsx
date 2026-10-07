@@ -29,6 +29,7 @@ import {
   type ISubmitProblemEmployee,
 } from './TimesheetSubmitConfirmModal';
 import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
+import { formatPendingDecisions, isWaitingWeekends, PENDING_WEEKENDS_LABEL } from '../../utils/pendingDecisions';
 
 interface IProps {
   /**
@@ -50,7 +51,7 @@ interface IMissingDay {
   date: string;
   employee_id: number;
   employee_name: string | null;
-  kind: 'leave_request' | 'weekend_no_correction' | 'pending_correction';
+  kind: 'leave_request' | 'weekend_no_correction';
   reason: string;
 }
 
@@ -180,9 +181,18 @@ const ActiveCard: FC<IActiveCardProps> = ({
           <strong className="ts-approval-period">
             {formatTimesheetRangeLabel(startDate, endDate)}
           </strong>
-          <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
-            <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
-          </span>
+          {isWaitingWeekends(approval) ? (
+            <span
+              className="ts-approval-status ts-approval-status--waiting"
+              title={formatPendingDecisions(approval?.pending_decisions ?? [])}
+            >
+              <Icon size={14} /> {PENDING_WEEKENDS_LABEL}
+            </span>
+          ) : (
+            <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
+              <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
+            </span>
+          )}
         </div>
       )}
 

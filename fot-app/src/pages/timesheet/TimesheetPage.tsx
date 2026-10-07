@@ -18,6 +18,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useDepartmentSupervisor } from '../../hooks/useDepartmentSupervisor';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { formatPendingDecisions, isWaitingWeekends, PENDING_WEEKENDS_LABEL } from '../../utils/pendingDecisions';
 import {
   COVERED_DAY_MESSAGE,
   isDayCoveredByDepartment,
@@ -2272,6 +2273,7 @@ export const TimesheetPage: FC = () => {
       : null;
     if (!showCounter && !employeeModeTitle && !headerApprovalStatus && otherApprovals.length === 0) return null;
     const StatusIcon = headerApprovalStatus ? STATUS_ICONS[headerApprovalStatus] : null;
+    const waitingWeekends = isWaitingWeekends(activeApproval);
     // Период временно открыт кадровой службой или админом: статус подачи прежний,
     // но замок снят — показываем это отдельным чипом, иначе «Утверждён» вводит в заблуждение.
     const unlockedAt = activeApproval?.unlocked_at ?? null;
@@ -2290,7 +2292,14 @@ export const TimesheetPage: FC = () => {
           </span>
         )}
         {employeeModeTitle && <span className="ts-header-counter">{employeeModeTitle}</span>}
-        {headerApprovalStatus && StatusIcon && (
+        {headerApprovalStatus && StatusIcon && (waitingWeekends ? (
+          <span
+            className="ts-header-approval-chip ts-header-approval-chip--waiting"
+            title={`${PENDING_WEEKENDS_LABEL}: ${formatPendingDecisions(activeApproval?.pending_decisions ?? [])}`}
+          >
+            <StatusIcon size={13} /> {PENDING_WEEKENDS_LABEL}
+          </span>
+        ) : (
           <span
             className="ts-header-approval-chip"
             style={{ color: STATUS_COLORS[headerApprovalStatus] }}
@@ -2298,7 +2307,7 @@ export const TimesheetPage: FC = () => {
           >
             <StatusIcon size={13} /> {APPROVAL_STATUS_LABELS[headerApprovalStatus]}
           </span>
-        )}
+        ))}
         {unlockedAt && (
           <span
             className="ts-header-approval-chip ts-header-approval-chip--unlocked"
@@ -2309,15 +2318,16 @@ export const TimesheetPage: FC = () => {
         )}
         {otherApprovals.map(a => {
           const OtherIcon = STATUS_ICONS[a.status];
+          const otherWaiting = isWaitingWeekends(a);
           return (
             <span
               key={a.id}
-              className="ts-header-other-chip"
-              style={{ color: STATUS_COLORS[a.status] }}
+              className={`ts-header-other-chip${otherWaiting ? ' ts-header-approval-chip--waiting' : ''}`}
+              style={otherWaiting ? undefined : { color: STATUS_COLORS[a.status] }}
               title="Согласование другого периода месяца"
             >
               {formatTimesheetRangeLabel(a.start_date, a.end_date)}{' '}
-              <OtherIcon size={13} /> {APPROVAL_STATUS_LABELS[a.status]}
+              <OtherIcon size={13} /> {otherWaiting ? PENDING_WEEKENDS_LABEL : APPROVAL_STATUS_LABELS[a.status]}
             </span>
           );
         })}

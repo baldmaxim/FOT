@@ -4,6 +4,18 @@ export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'reje
 export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected' | 'returned_to_rework';
 export type TimesheetResolvedApprovalStatus = 'submitted' | 'approved' | 'rejected' | 'returned';
 
+/**
+ * Нерешённые выходные поданного табеля (группа по набору согласующих): дни у ответственного
+ * (stage 'day') или заявления «Работа в выходной» на 1-м этапе (stage 'request').
+ * Пустой responsible_employee_ids — ответственный не назначен.
+ */
+export interface IPendingDecision {
+  stage: 'request' | 'day';
+  responsible_employee_ids: number[];
+  responsible_names: string[];
+  days: string[];
+}
+
 export interface ITimesheetApproval {
   id: number;
   department_id: string | null;
@@ -20,6 +32,10 @@ export interface ITimesheetApproval {
   unlocked_at?: string | null;
   unlocked_by_name?: string | null;
   unlock_reason?: string | null;
+  /** Только у поданного: статус «Ждёт согласования выходных», пока список не пуст. */
+  pending_decisions?: IPendingDecision[];
+  /** То же числом — в списке подач месяца (чипы других периодов), без имён согласующих. */
+  pending_decisions_count?: number;
   created_at: string;
   updated_at: string;
 }

@@ -29,6 +29,11 @@ import {
 } from '../services/work-leave-request-sync.service.js';
 import { listRecentSkudObjectNamesByEmployee } from '../services/employee-skud-object-access.service.js';
 import {
+  NO_PENDING_DECISION_EFFECTS,
+  publishPendingDecisionEffects,
+  withPendingDecisionTracking,
+} from '../services/timesheet-pending-decisions-tracking.service.js';
+import {
   findApprovalLocksForEmployeeDates,
   lockKey,
   type ITimesheetLockPair,
@@ -36,21 +41,37 @@ import {
 import type { IApprovalLockInfo } from '../services/timesheet-department-assignments.service.js';
 
 /**
- * Решение согласующего меняет засчитанные часы, поэтому в закрытом (поданном/
- * утверждённом) табеле оно запрещено ВСЕМ, включая is_admin: закрытый табель правится
- * только через «Открыть → правки → Закрыть». Проверять обязательно
- * внутри транзакции записи — advisory-lock (сотрудник, месяц) там уже взят.
+ * Решение согласующего меняет засчитанные часы, поэтому в закрытом табеле оно запрещено
+ * ВСЕМ, включая is_admin: закрытый табель правится только через «Открыть → правки →
+ * Закрыть». Проверять обязательно внутри транзакции записи — advisory-lock (сотрудник,
+ * месяц) там уже взят.
+ *
+ * mode:
+ *  - 'strict' — блокируют и поданный, и утверждённый табель (откат решения);
+ *  - 'decision' — согласовать/отклонить pending-день можно и в поданном табеле: его ждёт
+ *    статус «Ждёт согласования выходных», а HR-утверждение до решения закрыто. Блокирует
+ *    только утверждённый (замок отдаётся с приоритетом approved).
  */
+export type CorrectionLockMode = 'strict' | 'decision';
+
 async function loadCorrectionLocks(
   _req: AuthenticatedRequest,
   pairs: readonly ITimesheetLockPair[],
   exec?: DbExecutor,
+  mode: CorrectionLockMode = 'strict',
 ): Promise<Map<string, IApprovalLockInfo>> {
   // Внутри транзакции записи (exec передан) идём через общий метод, чтобы правило
   // закрытого периода было одним и тем же на всех путях. Без exec это pre-check —
   // он обязан оставаться без побочных эффектов.
-  if (exec) return loadClosedTimesheetLocks(pairs, exec);
-  return findApprovalLocksForEmployeeDates(pairs, exec);
+  const locks = exec
+    ? await loadClosedTimesheetLocks(pairs, exec)
+    : await findApprovalLocksForEmployeeDates(pairs, exec);
+  if (mode === 'decision') {
+    for (const [key, lock] of locks) {
+      if (lock.status === 'submitted') locks.delete(key);
+    }
+  }
+  return locks;
 }
 
 /** Отсекает из набора строки, попавшие в закрытый период. Возвращает и отсечённые id. */
@@ -58,11 +79,13 @@ async function partitionByApprovalLock(
   req: AuthenticatedRequest,
   rows: ReadonlyArray<{ id: number; employee_id: number; work_date: string }>,
   exec?: DbExecutor,
+  mode: CorrectionLockMode = 'strict',
 ): Promise<{ allowedIds: number[]; lockedIds: number[] }> {
   const locks = await loadCorrectionLocks(
     req,
     rows.map(r => ({ employeeId: Number(r.employee_id), workDate: String(r.work_date) })),
     exec,
+    mode,
   );
   const allowedIds: number[] = [];
   const lockedIds: number[] = [];
@@ -441,48 +464,68 @@ async function changeAdjustmentApproval(
 
   // Решение согласующего меняет занятость субботней квоты: pending → rejected освобождает
   // слот, → approved его занимает. Пишем и пересчитываем хвост месяца под общим локом.
+  // Поданный табель решению не мешает (статус «Ждёт согласования выходных»), утверждённый —
+  // запрещает; переход «готов к утверждению» фиксируется в той же транзакции.
   const now = new Date().toISOString();
-  const { updatedRows, tail, lock, synced } = await withEmployeeMonthQuotaLock(
+  const { value: { updatedRows, tail, lock, synced }, effects } = await withEmployeeMonthQuotaLock(
     adj.employee_id,
     adj.work_date,
-    async exec => {
-      // Закрытый табель: решение меняет засчитанные часы задним числом.
-      const locks = await loadCorrectionLocks(
-        req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec,
-      );
-      const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
-      if (lockInfo) {
+    exec => withPendingDecisionTracking(
+      exec,
+      [{ employeeId: adj.employee_id, workDate: adj.work_date }],
+      async () => {
+        // Закрытый табель: решение меняет засчитанные часы задним числом.
+        const locks = await loadCorrectionLocks(
+          req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec, 'decision',
+        );
+        const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
+        if (lockInfo) {
+          return {
+            changed: false,
+            value: {
+              updatedRows: [] as Array<{ id: number }>,
+              tail: [] as IReapprovalTransition[],
+              lock: lockInfo as IApprovalLockInfo | null,
+              synced: [] as ISyncedWorkLeaveRequest[],
+            },
+          };
+        }
+        const rows = await queryWith<{ id: number }>(
+          exec,
+          `UPDATE attendance_adjustments SET
+             approval_status = $1,
+             approved_by = $2,
+             approved_at = $3,
+             approval_comment = $4
+           WHERE id = $5 AND approval_status = 'pending'
+           RETURNING id`,
+          [nextStatus, req.user.id, now, comment, adjustmentId],
+        );
+        if (rows.length === 0) {
+          return {
+            changed: false,
+            value: {
+              updatedRows: rows,
+              tail: [] as IReapprovalTransition[],
+              lock: null as IApprovalLockInfo | null,
+              synced: [] as ISyncedWorkLeaveRequest[],
+            },
+          };
+        }
+        const monthTail = await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec, 'decision');
         return {
-          updatedRows: [] as Array<{ id: number }>,
-          tail: [] as IReapprovalTransition[],
-          lock: lockInfo,
-          synced: [] as ISyncedWorkLeaveRequest[],
+          changed: true,
+          value: {
+            updatedRows: rows,
+            tail: monthTail,
+            lock: null as IApprovalLockInfo | null,
+            synced: await syncWorkLeaveRequestsForAdjustmentIds(
+              exec, [adjustmentId], req.user.id, nextStatus === 'rejected' ? comment : null,
+            ),
+          },
         };
-      }
-      const rows = await queryWith<{ id: number }>(
-        exec,
-        `UPDATE attendance_adjustments SET
-           approval_status = $1,
-           approved_by = $2,
-           approved_at = $3,
-           approval_comment = $4
-         WHERE id = $5 AND approval_status = 'pending'
-         RETURNING id`,
-        [nextStatus, req.user.id, now, comment, adjustmentId],
-      );
-      if (rows.length === 0) {
-        return { updatedRows: rows, tail: [] as IReapprovalTransition[], lock: null, synced: [] as ISyncedWorkLeaveRequest[] };
-      }
-      const monthTail = await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec);
-      return {
-        updatedRows: rows,
-        tail: monthTail,
-        lock: null as IApprovalLockInfo | null,
-        synced: await syncWorkLeaveRequestsForAdjustmentIds(
-          exec, [adjustmentId], req.user.id, nextStatus === 'rejected' ? comment : null,
-        ),
-      };
-    },
+      },
+    ),
   );
 
   if (lock) {
@@ -501,6 +544,7 @@ async function changeAdjustmentApproval(
 
   await reportQuotaTailTransitions(req, tail, 'correction_approval_decision');
   emitWorkLeaveRequestSync(synced, req.user.id);
+  void publishPendingDecisionEffects(effects);
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -627,46 +671,58 @@ async function bulkChangeByIds(
   const bulkRows = pending
     .filter(a => allowedIds.includes(Number(a.id)))
     .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
-  const { updated, tail, lockedIds, synced } = await withQuotaLocks(lockPairs, async exec => {
-    // Закрытый табель: такие строки пропускаем, остальные обрабатываем.
-    const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, bulkRows, exec);
-    if (writableIds.length === 0) {
-      return {
-        updated: [] as Array<{ id: number }>,
-        tail: [] as IReapprovalTransition[],
-        lockedIds: skipped,
-        synced: [] as ISyncedWorkLeaveRequest[],
-      };
-    }
-    const rows = await queryWith<{ id: number }>(
-      exec,
-      `UPDATE attendance_adjustments SET
-         approval_status = $1,
-         approved_by = $2,
-         approved_at = $3,
-         approval_comment = $4
-       WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
-       RETURNING id`,
-      [nextStatus, req.user.id, now, comment, writableIds],
-    );
-    const transitions: IReapprovalTransition[] = [];
-    if (rows.length > 0) {
-      const months = new Map(lockPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
-      for (const pair of months.values()) {
-        transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+  const { value: { updated, tail, lockedIds, synced }, effects } = await withQuotaLocks(
+    lockPairs,
+    exec => withPendingDecisionTracking(exec, lockPairs, async () => {
+      // Утверждённый табель: такие строки пропускаем, остальные обрабатываем.
+      const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(
+        req, bulkRows, exec, 'decision',
+      );
+      if (writableIds.length === 0) {
+        return {
+          changed: false,
+          value: {
+            updated: [] as Array<{ id: number }>,
+            tail: [] as IReapprovalTransition[],
+            lockedIds: skipped,
+            synced: [] as ISyncedWorkLeaveRequest[],
+          },
+        };
       }
-    }
-    const syncedRequests = await syncWorkLeaveRequestsForAdjustmentIds(
-      exec, rows.map(r => Number(r.id)), req.user.id, nextStatus === 'rejected' ? comment : null,
-    );
-    return { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests };
-  });
+      const rows = await queryWith<{ id: number }>(
+        exec,
+        `UPDATE attendance_adjustments SET
+           approval_status = $1,
+           approved_by = $2,
+           approved_at = $3,
+           approval_comment = $4
+         WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
+         RETURNING id`,
+        [nextStatus, req.user.id, now, comment, writableIds],
+      );
+      const transitions: IReapprovalTransition[] = [];
+      if (rows.length > 0) {
+        const months = new Map(lockPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
+        for (const pair of months.values()) {
+          transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec, 'decision'));
+        }
+      }
+      const syncedRequests = await syncWorkLeaveRequestsForAdjustmentIds(
+        exec, rows.map(r => Number(r.id)), req.user.id, nextStatus === 'rejected' ? comment : null,
+      );
+      return {
+        changed: rows.length > 0,
+        value: { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests },
+      };
+    }),
+  );
 
   const processedCount = updated.length;
   const processedIds = updated.map((r) => Number(r.id));
 
   await reportQuotaTailTransitions(req, tail, 'correction_approval_bulk');
   emitWorkLeaveRequestSync(synced, req.user.id);
+  void publishPendingDecisionEffects(effects);
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -936,15 +992,20 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const approveRows = candidates
       .filter(a => allowedIds.includes(Number(a.id)))
       .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
-    const { updated, tail, lockedIds, synced } = allowedIds.length > 0
-      ? await withQuotaLocks(approvePairs, async exec => {
-        const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, approveRows, exec);
+    const { value: { updated, tail, lockedIds, synced }, effects } = allowedIds.length > 0
+      ? await withQuotaLocks(approvePairs, exec => withPendingDecisionTracking(exec, approvePairs, async () => {
+        const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(
+          req, approveRows, exec, 'decision',
+        );
         if (writableIds.length === 0) {
           return {
-            updated: [] as Array<{ id: number }>,
-            tail: [] as IReapprovalTransition[],
-            lockedIds: skipped,
-            synced: [] as ISyncedWorkLeaveRequest[],
+            changed: false,
+            value: {
+              updated: [] as Array<{ id: number }>,
+              tail: [] as IReapprovalTransition[],
+              lockedIds: skipped,
+              synced: [] as ISyncedWorkLeaveRequest[],
+            },
           };
         }
         const rows = await queryWith<{ id: number }>(
@@ -963,24 +1024,31 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
         if (rows.length > 0) {
           const months = new Map(approvePairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
           for (const pair of months.values()) {
-            transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+            transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec, 'decision'));
           }
         }
         const syncedRequests = await syncWorkLeaveRequestsForAdjustmentIds(
           exec, rows.map(r => Number(r.id)), req.user.id, null,
         );
-        return { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests };
-      })
+        return {
+          changed: rows.length > 0,
+          value: { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests },
+        };
+      }))
       : {
-        updated: [] as Array<{ id: number }>,
-        tail: [] as IReapprovalTransition[],
-        lockedIds: [] as number[],
-        synced: [] as ISyncedWorkLeaveRequest[],
+        value: {
+          updated: [] as Array<{ id: number }>,
+          tail: [] as IReapprovalTransition[],
+          lockedIds: [] as number[],
+          synced: [] as ISyncedWorkLeaveRequest[],
+        },
+        effects: NO_PENDING_DECISION_EFFECTS,
       };
 
     const approvedIds = updated.map((r) => Number(r.id));
     await reportQuotaTailTransitions(req, tail, 'correction_approval_department');
     emitWorkLeaveRequestSync(synced, req.user.id);
+    void publishPendingDecisionEffects(effects);
 
     const approvedCount = updated.length;
 
