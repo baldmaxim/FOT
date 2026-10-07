@@ -182,6 +182,17 @@
 
 /* «Начисления» по месяцам: переносится только после «;» (между месяцем и суммой NBSP) */
 .cellAccruals { font-variant-numeric: tabular-nums; }
+/* «—» пустых месяцев и «;» приглушены, суммы — основным цветом */
+.accruals { color: var(--text-muted); }
+.accrualMonth {
+  font-style: italic;
+  font-size: 12px;
+}
+.accrualAmount {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
 
 /* Период под заголовком «Начисления»: обычный регистр, одной строкой */
 .headPeriod {

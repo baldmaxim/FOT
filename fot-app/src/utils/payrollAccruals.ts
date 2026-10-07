@@ -100,6 +100,31 @@ const formatThousands = (value: number): string => (
   (value / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 );
 
+export interface IAccrualMonthPart {
+  month: string;
+  /** «июл» */
+  name: string;
+  /** «165,2» тыс. ₽; null — за месяц данных нет. */
+  amount: string | null;
+}
+
+/** Месяцы окна для ячейки «Начисления»; данных нет ни за один месяц — null. */
+export const accrualsByMonthParts = (
+  months: string[],
+  accruals: IPayrollMonthlyAccrual[] | null | undefined,
+): IAccrualMonthPart[] | null => {
+  const { values, total } = summarizeAccruals(months, accruals);
+  if (total === null) return null;
+  return months.map((month, index) => {
+    const value = values[index];
+    return {
+      month,
+      name: MONTHS_SHORT_RU[monthIndex(month)],
+      amount: value === null ? null : formatThousands(value),
+    };
+  });
+};
+
 /**
  * Ячейка «Начисления»: «апр —; май —; июл: 165,2; авг: 177,7» — каждый месяц окна в тыс. ₽.
  * Точка с запятой — разделитель месяцев (запятая занята дробной частью). Между месяцем и суммой
@@ -110,13 +135,9 @@ export const formatAccrualsByMonth = (
   months: string[],
   accruals: IPayrollMonthlyAccrual[] | null | undefined,
 ): string | null => {
-  const { values, total } = summarizeAccruals(months, accruals);
-  if (total === null) return null;
-  return months
-    .map((month, index) => {
-      const value = values[index];
-      const name = MONTHS_SHORT_RU[monthIndex(month)];
-      return value === null ? `${name}\u00a0—` : `${name}:\u00a0${formatThousands(value)}`;
-    })
+  const parts = accrualsByMonthParts(months, accruals);
+  if (parts === null) return null;
+  return parts
+    .map(({ name, amount }) => (amount === null ? `${name}\u00a0—` : `${name}:\u00a0${amount}`))
     .join('; ');
 };

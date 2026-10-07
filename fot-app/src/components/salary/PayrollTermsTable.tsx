@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, type FC } from 'react';
+import { Fragment, memo, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import type {
@@ -7,7 +7,7 @@ import type {
   PayrollSortDir,
   PayrollSortKey,
 } from '../../services/payrollService';
-import { formatAccrualPeriodLong, formatAccrualPeriodShort, formatAccrualsByMonth } from '../../utils/payrollAccruals';
+import { accrualsByMonthParts, formatAccrualPeriodLong, formatAccrualPeriodShort } from '../../utils/payrollAccruals';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
@@ -76,6 +76,23 @@ const formatSalary = (row: IPayrollTermsRow): string => {
 const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): string => {
   const money = row.terms_id ? formatPayrollMoney(value) : null;
   return money === null ? '—' : `${money} ₽/мес`;
+};
+
+/** «Начисления»: месяцы курсивом, суммы крупнее; между месяцем и суммой NBSP — перенос только после «;». */
+const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
+  const parts = accrualsByMonthParts(months, row.accruals);
+  if (parts === null) return '—';
+  return (
+    <span className={styles.accruals}>
+      {parts.map(({ month, name, amount }, index) => (
+        <Fragment key={month}>
+          {index > 0 && '; '}
+          <span className={styles.accrualMonth}>{name}</span>
+          {amount === null ? '\u00a0—' : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
+        </Fragment>
+      ))}
+    </span>
+  );
 };
 
 /**
@@ -243,7 +260,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     {shown('bonus') && <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>}
                     {shown('housing') && <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>}
                     {shown('accruals') && (
-                      <td className={styles.cellAccruals}>{formatAccrualsByMonth(accrualMonths, row.accruals) ?? '—'}</td>
+                      <td className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>
                     )}
                   </tr>
                 );
