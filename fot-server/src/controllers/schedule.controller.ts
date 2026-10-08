@@ -13,6 +13,7 @@ import {
 } from '../services/data-scope.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import { formatNameWithInitials } from '../utils/fio.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
@@ -818,6 +819,69 @@ const removeObjectSchedule = async (
   return true;
 };
 
+/** Сколько ФИО показать в отказе удаления шаблона; лишняя строка выборки — признак «и ещё». */
+const TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN = 5;
+
+// Назначение блокирует удаление шаблона, пока сотрудник не уволен. Fail-closed: строка без
+// карточки или с пустым статусом тоже блокирует.
+const NOT_FIRED_ASSIGNMENTS_FROM = `
+  FROM employee_schedule_assignments a
+  LEFT JOIN employees e ON e.id = a.employee_id
+ WHERE a.schedule_id = $1
+   AND e.employment_status IS DISTINCT FROM 'fired'`;
+
+type TemplateRemoveResult = { ok: true } | { ok: false; status: 404 | 409; error: string };
+
+const formatTemplateDeleteBlockers = (rows: { full_name: string | null }[]): string => {
+  const names = rows
+    .slice(0, TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN)
+    .map(row => formatNameWithInitials(row.full_name ?? ''))
+    .filter(Boolean);
+  if (names.length === 0) return 'График назначен сотрудникам, удалить нельзя';
+  const more = rows.length > TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN ? ' и ещё' : '';
+  return `График назначен сотрудникам: ${names.join(', ')}${more} — удалить нельзя`;
+};
+
+/**
+ * Удаление шаблона. Назначения уволенных уходят каскадом (их дни резолвятся по графику по
+ * умолчанию); назначение работающему или объекту блокирует удаление.
+ */
+const removeScheduleTemplate = async (db: Db, id: string): Promise<TemplateRemoveResult> => {
+  // FOR UPDATE: конкурентное назначение (FK берёт KEY SHARE на строку шаблона) дождётся
+  // конца транзакции и упадёт по FK, а не исчезнет каскадом.
+  const template = await db.queryOne<{ is_default: boolean }>(
+    'SELECT is_default FROM work_schedules WHERE id = $1 FOR UPDATE',
+    [id],
+  );
+  if (!template) return { ok: false, status: 404, error: 'График не найден' };
+  if (template.is_default) return { ok: false, status: 409, error: 'График по умолчанию удалить нельзя' };
+
+  const notFired = await db.query<{ full_name: string | null }>(
+    `SELECT DISTINCT e.full_name ${NOT_FIRED_ASSIGNMENTS_FROM}
+      ORDER BY e.full_name
+      LIMIT ${TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN + 1}`,
+    [id],
+  );
+  if (notFired.length > 0) return { ok: false, status: 409, error: formatTemplateDeleteBlockers(notFired) };
+
+  const objectRow = await db.queryOne<{ assigned: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM object_schedule_assignments WHERE schedule_id = $1) AS assigned',
+    [id],
+  );
+  if (objectRow?.assigned) return { ok: false, status: 409, error: 'График назначен объектам, удалить нельзя' };
+
+  const deleted = await db.execute(
+    `DELETE FROM work_schedules
+      WHERE id = $1
+        AND is_default = false
+        AND NOT EXISTS (SELECT 1 ${NOT_FIRED_ASSIGNMENTS_FROM})
+        AND NOT EXISTS (SELECT 1 FROM object_schedule_assignments WHERE schedule_id = $1)`,
+    [id],
+  );
+  if (deleted === 0) return { ok: false, status: 409, error: 'Удалить нельзя: график изменился, обновите страницу' };
+  return { ok: true };
+};
+
 export const scheduleController = {
   /** GET /api/schedules — шаблоны */
   async list(_req: AuthenticatedRequest, res: Response) {
@@ -952,35 +1016,15 @@ export const scheduleController = {
     }
   },
 
-  /** DELETE /api/schedules/:id — удалить шаблон (если не привязан к категории) */
+  /** DELETE /api/schedules/:id — удалить шаблон (назначенный никому или только уволенным) */
   async remove(req: AuthenticatedRequest, res: Response) {
     try {
       const { id } = req.params;
 
-      const [empCountRow, objectCountRow] = await Promise.all([
-        queryOne<{ count: string }>(
-          'SELECT COUNT(*)::int AS count FROM employee_schedule_assignments WHERE schedule_id = $1',
-          [id],
-        ),
-        queryOne<{ count: string }>(
-          'SELECT COUNT(*)::int AS count FROM object_schedule_assignments WHERE schedule_id = $1',
-          [id],
-        ),
-      ]);
-      const empCount = Number(empCountRow?.count ?? 0);
-      const objectCount = Number(objectCountRow?.count ?? 0);
-
-      if (empCount > 0) {
-        return res.status(409).json({ success: false, error: 'График назначен сотрудникам, удалить нельзя' });
+      const result = await withTransaction(client => removeScheduleTemplate(clientDb(client), id));
+      if (!result.ok) {
+        return res.status(result.status).json({ success: false, error: result.error });
       }
-      if (objectCount > 0) {
-        return res.status(409).json({ success: false, error: 'График назначен объектам, удалить нельзя' });
-      }
-
-      await execute(
-        'DELETE FROM work_schedules WHERE id = $1 AND is_default = false',
-        [id],
-      );
       emitScheduleTemplateChanged('template_delete');
       res.json({ success: true });
     } catch (err) {

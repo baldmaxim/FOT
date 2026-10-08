@@ -54,6 +54,11 @@ vi.mock('../services/skud-shared.service.js', () => ({
   collectDeptIds: vi.fn(async (id: string) => [id]),
 }));
 
+const emitDomainChangeMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/realtime-broadcast.service.js', () => ({
+  emitDomainChange: emitDomainChangeMock,
+}));
+
 const readScopeMock = vi.hoisted(() => vi.fn(async (_req: unknown, ids: number[]) => ids));
 vi.mock('../services/employee-scope-filter.service.js', () => ({
   filterEmployeeIdsByReadScope: readScopeMock,
@@ -1234,5 +1239,145 @@ describe('scheduleController.assignEmployee — коррекция даты на
     const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
       typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments'));
     expect(inserts).toHaveLength(1);
+  });
+});
+
+describe('scheduleController.remove', () => {
+  const templateDeletes = () => pgExecute.mock.calls.filter(([sql]) =>
+    typeof sql === 'string' && sql.trimStart().toLowerCase().startsWith('delete from work_schedules'));
+  const templateEmits = () => emitDomainChangeMock.mock.calls.filter(([input]) =>
+    (input as { payload?: { action?: string } }).payload?.action === 'template_delete');
+
+  // Транзакция маршрутизирует все SELECT удаления в pgQuery — отвечаем по тексту SQL.
+  const mockSelects = (opts: {
+    template?: { is_default: boolean } | null;
+    notFiredNames?: (string | null)[];
+    objectAssigned?: boolean;
+  }) => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM work_schedules') && sql.includes('FOR UPDATE')) {
+        return opts.template === null ? [] : [opts.template ?? { is_default: false }];
+      }
+      if (sql.includes('employee_schedule_assignments')) {
+        return (opts.notFiredNames ?? []).map(full_name => ({ full_name }));
+      }
+      if (sql.includes('object_schedule_assignments')) {
+        return [{ assigned: opts.objectAssigned ?? false }];
+      }
+      return [];
+    });
+  };
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    emitDomainChangeMock.mockReset();
+    installDefaultTx();
+  });
+
+  it('назначен только уволенным → удаляет и шлёт событие один раз', async () => {
+    mockSelects({});
+    pgExecute.mockResolvedValue(1);
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(templateDeletes()).toHaveLength(1);
+    expect(templateEmits()).toHaveLength(1);
+  });
+
+  it('SQL блокировки неуволенных fail-closed, DELETE проверяет и сотрудников, и объекты', async () => {
+    mockSelects({});
+    pgExecute.mockResolvedValue(1);
+
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), makeRes());
+
+    const notFiredSelect = pgQuery.mock.calls.find(([sql]) =>
+      typeof sql === 'string' && sql.includes('employee_schedule_assignments'));
+    expect(notFiredSelect?.[0]).toContain("IS DISTINCT FROM 'fired'");
+
+    const [deleteSql, deleteParams] = templateDeletes()[0];
+    expect(deleteSql).toContain('is_default = false');
+    expect(deleteSql.match(/NOT EXISTS/g)).toHaveLength(2);
+    expect(deleteSql).toContain("IS DISTINCT FROM 'fired'");
+    expect(deleteSql).toContain('object_schedule_assignments');
+    expect(deleteParams).toEqual([SCHEDULE_ID]);
+  });
+
+  it('есть неуволенные → 409 с ФИО, без удаления и события', async () => {
+    mockSelects({ notFiredNames: ['Иванов Иван Иванович', 'Петров Пётр'] });
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect((res.payload as { error: string }).error)
+      .toBe('График назначен сотрудникам: Иванов И. И., Петров П. — удалить нельзя');
+    expect(templateDeletes()).toHaveLength(0);
+    expect(templateEmits()).toHaveLength(0);
+  });
+
+  it('6 неуволенных → ровно 5 ФИО и «и ещё»', async () => {
+    mockSelects({ notFiredNames: ['Агеев А А', 'Белов Б Б', 'Волков В В', 'Гусев Г Г', 'Дёмин Д Д', 'Ершов Е Е'] });
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect((res.payload as { error: string }).error)
+      .toBe('График назначен сотрудникам: Агеев А. А., Белов Б. Б., Волков В. В., Гусев Г. Г., Дёмин Д. Д. и ещё — удалить нельзя');
+    expect(templateDeletes()).toHaveLength(0);
+  });
+
+  it('назначение без карточки сотрудника тоже блокирует', async () => {
+    mockSelects({ notFiredNames: [null] });
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect((res.payload as { error: string }).error).toBe('График назначен сотрудникам, удалить нельзя');
+    expect(templateDeletes()).toHaveLength(0);
+  });
+
+  it('назначен объекту → 409, без удаления', async () => {
+    mockSelects({ objectAssigned: true });
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect((res.payload as { error: string }).error).toBe('График назначен объектам, удалить нельзя');
+    expect(templateDeletes()).toHaveLength(0);
+  });
+
+  it('график по умолчанию → 409, отсутствующий → 404', async () => {
+    mockSelects({ template: { is_default: true } });
+    const resDefault = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), resDefault);
+    expect(resDefault.statusCode).toBe(409);
+
+    mockSelects({ template: null });
+    const resMissing = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), resMissing);
+    expect(resMissing.statusCode).toBe(404);
+
+    expect(templateDeletes()).toHaveLength(0);
+    expect(templateEmits()).toHaveLength(0);
+  });
+
+  it('DELETE ничего не удалил (гонка) → 409 без события', async () => {
+    mockSelects({});
+    pgExecute.mockResolvedValue(0);
+
+    const res = makeRes();
+    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(templateDeletes()).toHaveLength(1);
+    expect(templateEmits()).toHaveLength(0);
   });
 });
