@@ -40,7 +40,7 @@ router.use((req, res, next) => {
 router.get('/', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'view'), scheduleController.list);
 router.post('/', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.create);
 router.put('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.update);
-router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.remove);
+router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'edit'), scheduleController.archive);
 // «Экспорт» таблицы шаблонов: снимок экрана → xlsx, доступ — как у просмотра списка
 router.post('/templates/export', requireAnyPageAccess(['/admin/schedules', '/admin/schedules/templates', '/staff-control'], 'view'), scheduleExportController.exportTemplates);
 

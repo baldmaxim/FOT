@@ -640,7 +640,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                   <label>Персональный график</label>
                   <select value={scheduleVal} onChange={e => setScheduleVal(e.target.value)} autoFocus>
                     <option value="">— {defaultScheduleLabel} —</option>
-                    {templates.filter(tpl => !tpl.is_default).map(tpl => (
+                    {templates.filter(tpl => !tpl.is_default && (!tpl.archived_at || tpl.id === scheduleVal)).map(tpl => (
                       <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                     ))}
                   </select>
@@ -2544,7 +2544,7 @@ export const StaffControlPage: FC = () => {
         title="Фильтр по графику работы"
       >
         <option value="">Все графики</option>
-        {scheduleTemplates.map(tpl => (
+        {scheduleTemplates.filter(tpl => !tpl.archived_at || tpl.id === scheduleFilter).map(tpl => (
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>

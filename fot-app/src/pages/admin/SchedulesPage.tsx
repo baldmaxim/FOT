@@ -432,6 +432,8 @@ export const SchedulesPage: FC = () => {
     placeholderData: previousData => previousData,
   });
   const templates = templatesQuery.data ?? EMPTY_TEMPLATES;
+  // Архивные скрыты из таблицы, экспорта и выбора; в назначении объекта текущий остаётся видимым.
+  const activeTemplates = useMemo(() => templates.filter(template => !template.archived_at), [templates]);
   const objectAssignments = objectAssignmentsQuery.data ?? EMPTY_OBJECT_ASSIGNMENTS;
   const travelObjects = objectsQuery.data ?? EMPTY_TRAVEL_OBJECTS;
   const loading = (
@@ -446,8 +448,8 @@ export const SchedulesPage: FC = () => {
   );
   const visibleError = error || (queryError instanceof Error ? queryError.message : '');
   const visibleTemplates = useMemo(
-    () => applyTableView(templates, SCHEDULE_TEMPLATE_COLUMNS, templatesView),
-    [templates, templatesView],
+    () => applyTableView(activeTemplates, SCHEDULE_TEMPLATE_COLUMNS, templatesView),
+    [activeTemplates, templatesView],
   );
 
   /**
@@ -800,14 +802,14 @@ export const SchedulesPage: FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Удалить шаблон?')) return;
+  const handleArchive = async (id: string) => {
+    if (!confirm('Отправить шаблон в архив?')) return;
     setError('');
     try {
       await scheduleService.remove(id);
       await reloadScheduleData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка удаления');
+      setError(err instanceof Error ? err.message : 'Ошибка архивации');
     }
   };
 
@@ -1463,12 +1465,12 @@ export const SchedulesPage: FC = () => {
           )}
 
           <ScheduleTemplatesTable
-            rows={templates}
+            rows={activeTemplates}
             visibleRows={visibleTemplates}
             view={templatesView}
             onViewChange={setTemplatesView}
             onEdit={handleStartEdit}
-            onDelete={template => { void handleDelete(template.id); }}
+            onArchive={template => { void handleArchive(template.id); }}
             loading={loading}
           />
         </>
@@ -1522,7 +1524,7 @@ export const SchedulesPage: FC = () => {
                             onChange={e => handleAssignObject(objectItem.id, e.target.value)}
                           >
                             <option value="">— снять —</option>
-                            {templates.map(template => (
+                            {templates.filter(template => !template.archived_at || template.id === assignedSchedId).map(template => (
                               <option key={template.id} value={template.id}>
                                 {template.name}
                               </option>

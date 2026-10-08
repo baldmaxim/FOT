@@ -50,7 +50,7 @@ export const scheduleService = {
   },
 
   /** Создать шаблон */
-  async create(data: Omit<IWorkSchedule, 'id' | 'is_default' | 'created_at' | 'updated_at'>): Promise<IWorkSchedule> {
+  async create(data: Omit<IWorkSchedule, 'id' | 'is_default' | 'archived_at' | 'created_at' | 'updated_at'>): Promise<IWorkSchedule> {
     const res = await apiClient.post<ApiResponse<IWorkSchedule>>('/schedules', data);
     if (!res.data) throw new Error(res.error || 'Ошибка создания графика');
     return res.data;

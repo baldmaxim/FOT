@@ -1,5 +1,5 @@
 import { useMemo, useState, type FC } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Archive, Pencil } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ui/ColumnValuesFilterPopover';
 import { TableSortHeader } from '../ui/TableSortHeader';
@@ -22,7 +22,7 @@ interface IScheduleTemplatesTableProps {
   view: ITableView;
   onViewChange: (view: ITableView) => void;
   onEdit: (template: IWorkSchedule) => void;
-  onDelete: (template: IWorkSchedule) => void;
+  onArchive: (template: IWorkSchedule) => void;
   loading: boolean;
 }
 
@@ -33,7 +33,7 @@ const COLUMNS = SCHEDULE_TEMPLATE_COLUMNS;
  * сортировка и фильтр по значениям, действия иконками справа.
  */
 export const ScheduleTemplatesTable: FC<IScheduleTemplatesTableProps> = ({
-  rows, visibleRows, view, onViewChange, onEdit, onDelete, loading,
+  rows, visibleRows, view, onViewChange, onEdit, onArchive, loading,
 }) => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? COLUMNS.find(column => column.key === filterFor.key) ?? null : null;
@@ -114,12 +114,12 @@ export const ScheduleTemplatesTable: FC<IScheduleTemplatesTableProps> = ({
                   <button
                     type="button"
                     className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                    title="Удалить"
-                    aria-label={`Удалить: ${template.name}`}
-                    onClick={() => onDelete(template)}
+                    title="В архив"
+                    aria-label={`В архив: ${template.name}`}
+                    onClick={() => onArchive(template)}
                     disabled={template.is_default}
                   >
-                    <Trash2 size={14} aria-hidden="true" />
+                    <Archive size={14} aria-hidden="true" />
                   </button>
                 </span>
               </td>

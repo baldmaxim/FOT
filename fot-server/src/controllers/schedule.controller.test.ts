@@ -109,8 +109,8 @@ function makeRes() {
 /**
  * Контроллер теперь оборачивает мутации в withTransaction(client => ...).
  * Фейковый клиент маршрутизирует SQL в те же моки query/queryOne/execute,
- * что и прод-хелперы (INSERT…RETURNING и SELECT…WHERE a.id=$1 → queryOne,
- * прочие SELECT → query, UPDATE/DELETE → execute) — существующие моки и
+ * что и прод-хелперы (INSERT…RETURNING, SELECT…WHERE a.id=$1 и SELECT по work_schedules
+ * → queryOne, прочие SELECT → query, UPDATE/DELETE → execute) — существующие моки и
  * ассерты тестов остаются валидными.
  */
 function makeTxClient() {
@@ -122,7 +122,7 @@ function makeTxClient() {
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
       }
       if (lower.startsWith('select')) {
-        if (lower.includes('where a.id = $1')) {
+        if (lower.includes('where a.id = $1') || lower.includes('from work_schedules')) {
           const row = await pgQueryOne(sql, params);
           return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
         }
@@ -1242,30 +1242,43 @@ describe('scheduleController.assignEmployee — коррекция даты на
   });
 });
 
-describe('scheduleController.remove', () => {
-  const templateDeletes = () => pgExecute.mock.calls.filter(([sql]) =>
-    typeof sql === 'string' && sql.trimStart().toLowerCase().startsWith('delete from work_schedules'));
-  const templateEmits = () => emitDomainChangeMock.mock.calls.filter(([input]) =>
-    (input as { payload?: { action?: string } }).payload?.action === 'template_delete');
+describe('scheduleController.archive', () => {
+  const ARCHIVED_AT = '2026-10-08T08:00:00.000Z';
 
-  // Транзакция маршрутизирует все SELECT удаления в pgQuery — отвечаем по тексту SQL.
+  const templateArchives = () => pgExecute.mock.calls.filter(([sql]) =>
+    typeof sql === 'string' && sql.trimStart().toLowerCase().startsWith('update work_schedules'));
+  const templateDeletes = () => pgExecute.mock.calls.filter(([sql]) =>
+    typeof sql === 'string' && sql.toLowerCase().includes('delete from work_schedules'));
+  const templateEmits = () => emitDomainChangeMock.mock.calls.filter(([input]) =>
+    (input as { payload?: { action?: string } }).payload?.action === 'template_archive');
+
+  // Шаблон (FOR UPDATE) приходит через queryOne, блокеры и объекты — через query.
   const mockSelects = (opts: {
-    template?: { is_default: boolean } | null;
-    notFiredNames?: (string | null)[];
+    template?: { is_default: boolean; archived_at: string | null } | null;
+    blockerNames?: (string | null)[];
     objectAssigned?: boolean;
   }) => {
-    pgQuery.mockImplementation(async (sql: string) => {
+    pgQueryOne.mockImplementation(async (sql: string) => {
       if (sql.includes('FROM work_schedules') && sql.includes('FOR UPDATE')) {
-        return opts.template === null ? [] : [opts.template ?? { is_default: false }];
+        return opts.template === undefined ? { is_default: false, archived_at: null } : opts.template;
       }
+      return null;
+    });
+    pgQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('employee_schedule_assignments')) {
-        return (opts.notFiredNames ?? []).map(full_name => ({ full_name }));
+        return (opts.blockerNames ?? []).map(full_name => ({ full_name }));
       }
       if (sql.includes('object_schedule_assignments')) {
         return [{ assigned: opts.objectAssigned ?? false }];
       }
       return [];
     });
+  };
+
+  const archive = async () => {
+    const res = makeRes();
+    await scheduleController.archive(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    return res;
   };
 
   beforeEach(() => {
@@ -1277,107 +1290,164 @@ describe('scheduleController.remove', () => {
     installDefaultTx();
   });
 
-  it('назначен только уволенным → удаляет и шлёт событие один раз', async () => {
+  it('нет действующих назначений → архив (UPDATE, не DELETE), событие один раз', async () => {
     mockSelects({});
     pgExecute.mockResolvedValue(1);
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(200);
-    expect(templateDeletes()).toHaveLength(1);
+    expect(templateArchives()).toHaveLength(1);
+    expect(templateDeletes()).toHaveLength(0);
     expect(templateEmits()).toHaveLength(1);
   });
 
-  it('SQL блокировки неуволенных fail-closed, DELETE проверяет и сотрудников, и объекты', async () => {
+  it('UPDATE ставит archived_at и повторяет обе проверки на сегодня (МСК), fail-closed по статусу', async () => {
     mockSelects({});
     pgExecute.mockResolvedValue(1);
 
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), makeRes());
+    await archive();
 
-    const notFiredSelect = pgQuery.mock.calls.find(([sql]) =>
+    const blockersSelect = pgQuery.mock.calls.find(([sql]) =>
       typeof sql === 'string' && sql.includes('employee_schedule_assignments'));
-    expect(notFiredSelect?.[0]).toContain("IS DISTINCT FROM 'fired'");
+    expect(blockersSelect?.[0]).toContain("IS DISTINCT FROM 'fired'");
+    expect(blockersSelect?.[0]).toContain('a.effective_to >= $2');
 
-    const [deleteSql, deleteParams] = templateDeletes()[0];
-    expect(deleteSql).toContain('is_default = false');
-    expect(deleteSql.match(/NOT EXISTS/g)).toHaveLength(2);
-    expect(deleteSql).toContain("IS DISTINCT FROM 'fired'");
-    expect(deleteSql).toContain('object_schedule_assignments');
-    expect(deleteParams).toEqual([SCHEDULE_ID]);
+    const [updateSql, updateParams] = templateArchives()[0];
+    expect(updateSql).toContain('archived_at = now()');
+    expect(updateSql).toContain('archived_at IS NULL');
+    expect(updateSql).toContain('is_default = false');
+    expect(updateSql.match(/NOT EXISTS/g)).toHaveLength(2);
+    expect(updateSql).toContain("IS DISTINCT FROM 'fired'");
+    expect(updateSql).toContain('object_schedule_assignments');
+    expect(updateParams).toEqual([SCHEDULE_ID, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)]);
   });
 
-  it('есть неуволенные → 409 с ФИО, без удаления и события', async () => {
-    mockSelects({ notFiredNames: ['Иванов Иван Иванович', 'Петров Пётр'] });
+  it('действует у работающих → 409 с ФИО, без архива и события', async () => {
+    mockSelects({ blockerNames: ['Иванов Иван Иванович', 'Петров Пётр'] });
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(409);
     expect((res.payload as { error: string }).error)
-      .toBe('График назначен сотрудникам: Иванов И. И., Петров П. — удалить нельзя');
-    expect(templateDeletes()).toHaveLength(0);
+      .toBe('График назначен сотрудникам: Иванов И. И., Петров П. — в архив нельзя');
+    expect(templateArchives()).toHaveLength(0);
     expect(templateEmits()).toHaveLength(0);
   });
 
-  it('6 неуволенных → ровно 5 ФИО и «и ещё»', async () => {
-    mockSelects({ notFiredNames: ['Агеев А А', 'Белов Б Б', 'Волков В В', 'Гусев Г Г', 'Дёмин Д Д', 'Ершов Е Е'] });
+  it('6 работающих → ровно 5 ФИО и «и ещё»', async () => {
+    mockSelects({ blockerNames: ['Агеев А А', 'Белов Б Б', 'Волков В В', 'Гусев Г Г', 'Дёмин Д Д', 'Ершов Е Е'] });
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(409);
     expect((res.payload as { error: string }).error)
-      .toBe('График назначен сотрудникам: Агеев А. А., Белов Б. Б., Волков В. В., Гусев Г. Г., Дёмин Д. Д. и ещё — удалить нельзя');
-    expect(templateDeletes()).toHaveLength(0);
+      .toBe('График назначен сотрудникам: Агеев А. А., Белов Б. Б., Волков В. В., Гусев Г. Г., Дёмин Д. Д. и ещё — в архив нельзя');
+    expect(templateArchives()).toHaveLength(0);
   });
 
   it('назначение без карточки сотрудника тоже блокирует', async () => {
-    mockSelects({ notFiredNames: [null] });
+    mockSelects({ blockerNames: [null] });
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(409);
-    expect((res.payload as { error: string }).error).toBe('График назначен сотрудникам, удалить нельзя');
-    expect(templateDeletes()).toHaveLength(0);
+    expect((res.payload as { error: string }).error).toBe('График назначен сотрудникам, в архив нельзя');
+    expect(templateArchives()).toHaveLength(0);
   });
 
-  it('назначен объекту → 409, без удаления', async () => {
+  it('действует у объекта → 409, без архива', async () => {
     mockSelects({ objectAssigned: true });
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(409);
-    expect((res.payload as { error: string }).error).toBe('График назначен объектам, удалить нельзя');
-    expect(templateDeletes()).toHaveLength(0);
+    expect((res.payload as { error: string }).error).toBe('График назначен объектам, в архив нельзя');
+    expect(templateArchives()).toHaveLength(0);
   });
 
-  it('график по умолчанию → 409, отсутствующий → 404', async () => {
-    mockSelects({ template: { is_default: true } });
-    const resDefault = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), resDefault);
-    expect(resDefault.statusCode).toBe(409);
+  it('график по умолчанию → 409, отсутствующий → 404, уже в архиве → 200 без UPDATE', async () => {
+    mockSelects({ template: { is_default: true, archived_at: null } });
+    expect((await archive()).statusCode).toBe(409);
 
     mockSelects({ template: null });
-    const resMissing = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), resMissing);
-    expect(resMissing.statusCode).toBe(404);
+    expect((await archive()).statusCode).toBe(404);
 
-    expect(templateDeletes()).toHaveLength(0);
-    expect(templateEmits()).toHaveLength(0);
+    mockSelects({ template: { is_default: false, archived_at: ARCHIVED_AT } });
+    expect((await archive()).statusCode).toBe(200);
+
+    expect(templateArchives()).toHaveLength(0);
   });
 
-  it('DELETE ничего не удалил (гонка) → 409 без события', async () => {
+  it('UPDATE ничего не изменил (гонка) → 409 без события', async () => {
     mockSelects({});
     pgExecute.mockResolvedValue(0);
 
-    const res = makeRes();
-    await scheduleController.remove(makeReq({ params: { id: SCHEDULE_ID } }), res);
+    const res = await archive();
 
     expect(res.statusCode).toBe(409);
-    expect(templateDeletes()).toHaveLength(1);
+    expect(templateArchives()).toHaveLength(1);
     expect(templateEmits()).toHaveLength(0);
+  });
+});
+
+describe('архивный шаблон не назначается и не правится', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    installDefaultTx();
+    mockedState.scope = 'all';
+    pgQueryOne.mockImplementation(async (sql: string) =>
+      (sql.includes('FROM work_schedules') ? { archived_at: '2026-10-08T08:00:00.000Z' } : null));
+    pgQuery.mockResolvedValue([]);
+  });
+
+  const writes = () => [...pgExecute.mock.calls, ...pgQueryOne.mock.calls].filter(([sql]) =>
+    typeof sql === 'string' && /^\s*(insert|update)/i.test(sql));
+
+  it('сотруднику → 409', async () => {
+    const res = makeRes();
+    await scheduleController.assignEmployee(makeReq({
+      params: { employeeId: '7' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-10-08' },
+    }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect((res.payload as { error: string }).error).toBe('График в архиве, выберите другой');
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('объекту → 409', async () => {
+    const res = makeRes();
+    await scheduleController.assignObject(makeReq({
+      params: { objectId: BRIGADE_1 },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-10-08' },
+    }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('по бригадам → 409 до перебора сотрудников', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      (sql.toLowerCase().includes('from org_departments') ? [{ id: BRIGADE_1, name: 'Бр.', kind: 'brigade' }] : []));
+
+    const res = makeRes();
+    await scheduleController.bulkApplyToBrigades(makeReq({
+      body: { department_ids: [BRIGADE_1], action: 'assign', schedule_id: SCHEDULE_ID, effective_date: '2026-10-08' },
+    }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('правка шаблона → 409', async () => {
+    const res = makeRes();
+    await scheduleController.update(makeReq({ params: { id: SCHEDULE_ID }, body: { name: 'Новое имя' } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(writes()).toHaveLength(0);
   });
 });

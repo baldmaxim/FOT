@@ -343,6 +343,18 @@ const loadObjectScheduleRows = async (objectId: string): Promise<ObjectScheduleR
 /** Ошибка UNIQUE-конфликта с уже существующим фрагментом → controller отдаёт 409. */
 class AssignmentConflictError extends Error {}
 
+const SCHEDULE_ARCHIVED_ERROR = 'График в архиве, выберите другой';
+
+/** Архивный шаблон не назначается. FOR KEY SHARE дожидается параллельной архивации. */
+const assertScheduleAssignable = async (db: Db, scheduleId: string): Promise<void> => {
+  const row = await db.queryOne<{ archived_at: string | null }>(
+    'SELECT archived_at FROM work_schedules WHERE id = $1 FOR KEY SHARE',
+    [scheduleId],
+  );
+  if (row?.archived_at) throw new AssignmentConflictError(SCHEDULE_ARCHIVED_ERROR);
+};
+
+
 const assignEmployeeSchedule = async (
   db: Db,
   employeeId: number,
@@ -354,6 +366,7 @@ const assignEmployeeSchedule = async (
   anchorDate?: string | null,
   mergeIntoNext: boolean = true,
 ): Promise<unknown> => {
+  await assertScheduleAssignable(db, scheduleId);
   const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId, db);
   const nowIso = new Date().toISOString();
   const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to >= effectiveFrom)) || null;
@@ -728,6 +741,7 @@ const assignObjectSchedule = async (
   effectiveTo?: string | null,
   anchorDate?: string | null,
 ): Promise<unknown> => {
+  await assertScheduleAssignable(poolDb, scheduleId);
   const rows = await loadObjectScheduleRows(objectId);
   const nowIso = new Date().toISOString();
   const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to >= effectiveFrom)) || null;
@@ -819,66 +833,76 @@ const removeObjectSchedule = async (
   return true;
 };
 
-/** Сколько ФИО показать в отказе удаления шаблона; лишняя строка выборки — признак «и ещё». */
-const TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN = 5;
+/** Сколько ФИО показать в отказе архивации шаблона; лишняя строка выборки — признак «и ещё». */
+const TEMPLATE_ARCHIVE_BLOCKER_NAMES_SHOWN = 5;
 
-// Назначение блокирует удаление шаблона, пока сотрудник не уволен. Fail-closed: строка без
-// карточки или с пустым статусом тоже блокирует.
-const NOT_FIRED_ASSIGNMENTS_FROM = `
+// График действует у работающего сотрудника сейчас или с будущей даты ($2 — сегодня по МСК).
+// Прошлые назначения и уволенные не мешают: история остаётся. Fail-closed: строка без карточки
+// или с пустым статусом блокирует.
+const ACTIVE_EMPLOYEE_ASSIGNMENTS_FROM = `
   FROM employee_schedule_assignments a
   LEFT JOIN employees e ON e.id = a.employee_id
  WHERE a.schedule_id = $1
+   AND (a.effective_to IS NULL OR a.effective_to >= $2)
    AND e.employment_status IS DISTINCT FROM 'fired'`;
 
-type TemplateRemoveResult = { ok: true } | { ok: false; status: 404 | 409; error: string };
+const ACTIVE_OBJECT_ASSIGNMENTS_FROM = `
+  FROM object_schedule_assignments o
+ WHERE o.schedule_id = $1
+   AND (o.effective_to IS NULL OR o.effective_to >= $2)`;
 
-const formatTemplateDeleteBlockers = (rows: { full_name: string | null }[]): string => {
+type TemplateArchiveResult = { ok: true } | { ok: false; status: 404 | 409; error: string };
+
+const formatTemplateArchiveBlockers = (rows: { full_name: string | null }[]): string => {
   const names = rows
-    .slice(0, TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN)
+    .slice(0, TEMPLATE_ARCHIVE_BLOCKER_NAMES_SHOWN)
     .map(row => formatNameWithInitials(row.full_name ?? ''))
     .filter(Boolean);
-  if (names.length === 0) return 'График назначен сотрудникам, удалить нельзя';
-  const more = rows.length > TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN ? ' и ещё' : '';
-  return `График назначен сотрудникам: ${names.join(', ')}${more} — удалить нельзя`;
+  if (names.length === 0) return 'График назначен сотрудникам, в архив нельзя';
+  const more = rows.length > TEMPLATE_ARCHIVE_BLOCKER_NAMES_SHOWN ? ' и ещё' : '';
+  return `График назначен сотрудникам: ${names.join(', ')}${more} — в архив нельзя`;
 };
 
 /**
- * Удаление шаблона. Назначения уволенных уходят каскадом (их дни резолвятся по графику по
- * умолчанию); назначение работающему или объекту блокирует удаление.
+ * Архивация шаблона вместо удаления: назначения остаются, прошлые дни (и уволенных) резолвятся
+ * по нему же. Блокирует график, действующий сейчас или с будущей даты у работающего или объекта.
  */
-const removeScheduleTemplate = async (db: Db, id: string): Promise<TemplateRemoveResult> => {
-  // FOR UPDATE: конкурентное назначение (FK берёт KEY SHARE на строку шаблона) дождётся
-  // конца транзакции и упадёт по FK, а не исчезнет каскадом.
-  const template = await db.queryOne<{ is_default: boolean }>(
-    'SELECT is_default FROM work_schedules WHERE id = $1 FOR UPDATE',
+const archiveScheduleTemplate = async (db: Db, id: string, today: string): Promise<TemplateArchiveResult> => {
+  // FOR UPDATE конфликтует с KEY SHARE: параллельное назначение (FK, assertScheduleAssignable)
+  // ждёт конца транзакции и видит архив, а не проскакивает мимо проверки.
+  const template = await db.queryOne<{ is_default: boolean; archived_at: string | null }>(
+    'SELECT is_default, archived_at FROM work_schedules WHERE id = $1 FOR UPDATE',
     [id],
   );
   if (!template) return { ok: false, status: 404, error: 'График не найден' };
-  if (template.is_default) return { ok: false, status: 409, error: 'График по умолчанию удалить нельзя' };
+  if (template.is_default) return { ok: false, status: 409, error: 'График по умолчанию в архив нельзя' };
+  if (template.archived_at) return { ok: true };
 
-  const notFired = await db.query<{ full_name: string | null }>(
-    `SELECT DISTINCT e.full_name ${NOT_FIRED_ASSIGNMENTS_FROM}
+  const blockers = await db.query<{ full_name: string | null }>(
+    `SELECT DISTINCT e.full_name ${ACTIVE_EMPLOYEE_ASSIGNMENTS_FROM}
       ORDER BY e.full_name
-      LIMIT ${TEMPLATE_DELETE_BLOCKER_NAMES_SHOWN + 1}`,
-    [id],
+      LIMIT ${TEMPLATE_ARCHIVE_BLOCKER_NAMES_SHOWN + 1}`,
+    [id, today],
   );
-  if (notFired.length > 0) return { ok: false, status: 409, error: formatTemplateDeleteBlockers(notFired) };
+  if (blockers.length > 0) return { ok: false, status: 409, error: formatTemplateArchiveBlockers(blockers) };
 
   const objectRow = await db.queryOne<{ assigned: boolean }>(
-    'SELECT EXISTS (SELECT 1 FROM object_schedule_assignments WHERE schedule_id = $1) AS assigned',
-    [id],
+    `SELECT EXISTS (SELECT 1 ${ACTIVE_OBJECT_ASSIGNMENTS_FROM}) AS assigned`,
+    [id, today],
   );
-  if (objectRow?.assigned) return { ok: false, status: 409, error: 'График назначен объектам, удалить нельзя' };
+  if (objectRow?.assigned) return { ok: false, status: 409, error: 'График назначен объектам, в архив нельзя' };
 
-  const deleted = await db.execute(
-    `DELETE FROM work_schedules
+  const archived = await db.execute(
+    `UPDATE work_schedules
+        SET archived_at = now(), updated_at = now()
       WHERE id = $1
         AND is_default = false
-        AND NOT EXISTS (SELECT 1 ${NOT_FIRED_ASSIGNMENTS_FROM})
-        AND NOT EXISTS (SELECT 1 FROM object_schedule_assignments WHERE schedule_id = $1)`,
-    [id],
+        AND archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 ${ACTIVE_EMPLOYEE_ASSIGNMENTS_FROM})
+        AND NOT EXISTS (SELECT 1 ${ACTIVE_OBJECT_ASSIGNMENTS_FROM})`,
+    [id, today],
   );
-  if (deleted === 0) return { ok: false, status: 409, error: 'Удалить нельзя: график изменился, обновите страницу' };
+  if (archived === 0) return { ok: false, status: 409, error: 'В архив нельзя: график изменился, обновите страницу' };
   return { ok: true };
 };
 
@@ -946,6 +970,14 @@ export const scheduleController = {
 
       const parsed = baseScheduleSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
+
+      const archivedRow = await queryOne<{ archived_at: string | null }>(
+        'SELECT archived_at FROM work_schedules WHERE id = $1',
+        [id],
+      );
+      if (archivedRow?.archived_at) {
+        return res.status(409).json({ success: false, error: 'График в архиве, изменить нельзя' });
+      }
 
       // Если изменилось хотя бы одно из полей, влияющих на work_hours
       // (work_start / work_end / lunch_minutes / day_overrides), пересчитываем нетто.
@@ -1016,20 +1048,21 @@ export const scheduleController = {
     }
   },
 
-  /** DELETE /api/schedules/:id — удалить шаблон (назначенный никому или только уволенным) */
-  async remove(req: AuthenticatedRequest, res: Response) {
+  /** DELETE /api/schedules/:id — отправить шаблон в архив (назначения и история остаются) */
+  async archive(req: AuthenticatedRequest, res: Response) {
     try {
       const { id } = req.params;
 
-      const result = await withTransaction(client => removeScheduleTemplate(clientDb(client), id));
+      const today = moscowTodayIso();
+      const result = await withTransaction(client => archiveScheduleTemplate(clientDb(client), id, today));
       if (!result.ok) {
         return res.status(result.status).json({ success: false, error: result.error });
       }
-      emitScheduleTemplateChanged('template_delete');
+      emitScheduleTemplateChanged('template_archive');
       res.json({ success: true });
     } catch (err) {
-      console.error('[schedules] remove error:', err);
-      res.status(500).json({ success: false, error: 'Ошибка удаления графика' });
+      console.error('[schedules] archive error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка архивации графика' });
     }
   },
 
@@ -1311,6 +1344,9 @@ export const scheduleController = {
 
       res.json({ success: true, data });
     } catch (err) {
+      if (err instanceof AssignmentConflictError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('[schedules] assignObject error:', err);
       res.status(500).json({ success: false, error: 'Ошибка назначения графика объекту' });
     }
@@ -1343,6 +1379,8 @@ export const scheduleController = {
       if (departments.length !== departmentIds.length) {
         return res.status(400).json({ success: false, error: 'Переданы несуществующие бригады' });
       }
+
+      if (action === 'assign') await assertScheduleAssignable(poolDb, scheduleId!);
 
       const invalidDepartments = departments.filter(department => department.kind !== 'brigade');
       if (invalidDepartments.length > 0) {
@@ -1426,6 +1464,9 @@ export const scheduleController = {
         },
       });
     } catch (err) {
+      if (err instanceof AssignmentConflictError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('[schedules] bulkApplyToBrigades error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового назначения графика по бригадам' });
     }

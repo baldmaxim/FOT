@@ -83,7 +83,7 @@ export const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targ
               <label>Шаблон графика</label>
               <select value={scheduleId} onChange={e => setScheduleId(e.target.value)}>
                 <option value="">Выберите график</option>
-                {templates.filter(tpl => !tpl.is_default).map(tpl => (
+                {templates.filter(tpl => !tpl.is_default && !tpl.archived_at).map(tpl => (
                   <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                 ))}
               </select>
@@ -388,7 +388,7 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
                 <label>Шаблон графика</label>
                 <select value={scheduleId} onChange={e => setScheduleId(e.target.value)}>
                   <option value="">Выберите график</option>
-                  {templates.filter(tpl => !tpl.is_default).map(tpl => (
+                  {templates.filter(tpl => !tpl.is_default && !tpl.archived_at).map(tpl => (
                     <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                   ))}
                 </select>

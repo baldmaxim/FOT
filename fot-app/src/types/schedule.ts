@@ -41,6 +41,8 @@ export interface IWorkSchedule {
   cycle_length: number | null;
   cycle_days: ICycleDay[] | null;
   anchor_date: string | null;
+  /** Шаблон в архиве: скрыт из таблицы и списков выбора, но резолвится в истории назначений. */
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
