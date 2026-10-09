@@ -7,26 +7,26 @@ import {
 } from '../utils/payrollColumns';
 
 /**
- * Скрытые столбцы таблицы «Условия оплаты»: состояние и запоминание в браузере.
+ * Скрытые столбцы таблицы «Условия оплаты» («Расчётов» — под своим ключом): состояние и запоминание в браузере.
  * onHide вызывается при скрытии — страница снимает фильтр и сортировку этого столбца,
  * иначе список фильтровался бы по невидимому условию.
  */
-export const usePayrollHiddenColumns = (onHide?: (column: PayrollTableColumn) => void) => {
-  const [hidden, setHidden] = useState<Set<PayrollTableColumn>>(loadHiddenPayrollColumns);
+export const usePayrollHiddenColumns = (storageKey: string, onHide?: (column: PayrollTableColumn) => void) => {
+  const [hidden, setHidden] = useState<Set<PayrollTableColumn>>(() => loadHiddenPayrollColumns(storageKey));
 
   const setColumnVisible = (column: PayrollTableColumn, visible: boolean) => {
     const next = new Set(hidden);
     if (visible) next.delete(column);
     else next.add(column);
     setHidden(next);
-    saveHiddenPayrollColumns(next);
+    saveHiddenPayrollColumns(storageKey, next);
     if (!visible) onHide?.(column);
   };
 
   const showAll = () => {
     const next = new Set<PayrollTableColumn>();
     setHidden(next);
-    saveHiddenPayrollColumns(next);
+    saveHiddenPayrollColumns(storageKey, next);
   };
 
   return { hidden, setColumnVisible, showAll };

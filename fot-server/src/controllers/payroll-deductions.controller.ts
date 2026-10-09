@@ -1,38 +1,23 @@
 /**
- * «Зарплата → Расчёты»: сотрудники с выбранными видами удержаний и справочник видов.
+ * Удержания «Зарплаты»: справочник видов и удержания сотрудника по месяцам (месяц · вид · сумма).
  *
- * Список — штат в скоупе «Зарплаты» (как список условий оплаты: без подрядчиков, условия на дату),
- * у кого отмечен хотя бы один из выбранных видов. Виды сотруднику отмечаются в карточке «Подробно».
- * Строка — в формате списка условий (с плановой доплатой и can_edit): клик по ней открывает карточку.
+ * Удержания вносятся в карточке сотрудника («Подробно» и окно на «Расчётах») и сохраняются вместе
+ * с ней. Фильтр «Удержания» + месяц на «Расчётах» — в списке условий оплаты (payroll-terms.controller).
  */
 import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
-import { query, withTransaction } from '../config/postgres.js';
+import { withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
-import { loadStaffCategoryResolver } from '../services/payroll/payroll-staff-category.js';
 import {
   addDeductionKind,
   allDeductionKindsExist,
-  getEmployeeDeductionKindIds,
+  getEmployeeDeductionEntries,
   listDeductionKinds,
-  setEmployeeDeductionKinds,
+  setEmployeeDeductionEntries,
 } from '../services/payroll/payroll-deduction-kinds.service.js';
-import {
-  canEditPayrollEmployee,
-  canReadPayrollEmployee,
-  resolvePayrollEditPredicate,
-} from '../services/payroll/payroll-scope.service.js';
-import { baseQuerySchema, buildBaseCtes, buildBaseParams } from './payroll-terms.controller.js';
-
-/** Фильтр «Удержания»: id видов через запятую — сотрудники хотя бы с одним из них. */
-const listQuerySchema = baseQuerySchema.pick({ date: true, department_id: true, q: true }).extend({
-  kind_ids: z.string()
-    .regex(/^\d+(,\d+)*$/, 'Ожидаются id видов через запятую')
-    .transform(value => [...new Set(value.split(',').map(Number))])
-    .pipe(z.array(z.number().int().positive()).min(1).max(100)),
-});
+import { canEditPayrollEmployee, canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 
 /** Пробелы внутри схлопываются: «Штраф  за мусор» и «Штраф за мусор» — один вид. */
 const addKindSchema = z.object({
@@ -41,16 +26,23 @@ const addKindSchema = z.object({
     .pipe(z.string().min(1, 'Введите название вида').max(100, 'Не больше 100 символов')),
 });
 
-const saveKindsSchema = z.object({
-  kind_ids: z.array(z.coerce.number().int().positive()).max(100),
-});
+/** Верх NUMERIC(12,2). */
+const MAX_AMOUNT = 9_999_999_999.99;
 
-/** Строка «Расчётов»: колонки CTE scoped (условия на дату) и последняя плановая доплата. */
-interface IPayrollDeductionRow {
-  employee_id: number;
-  department_id: string | null;
-  [column: string]: unknown;
-}
+/** Удержания сотрудника целиком: один вид за месяц — одна строка. */
+const saveEntriesSchema = z.object({
+  entries: z.array(z.object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Ожидается месяц YYYY-MM'),
+    kind_id: z.coerce.number().int().positive(),
+    amount: z.coerce.number()
+      .positive('Сумма удержания должна быть больше нуля')
+      .max(MAX_AMOUNT, 'Слишком большая сумма удержания')
+      .refine(value => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Не больше двух знаков после запятой'),
+  })).max(200, 'Не больше 200 удержаний'),
+}).refine(
+  ({ entries }) => new Set(entries.map(entry => `${entry.month}|${entry.kind_id}`)).size === entries.length,
+  'Вид удержания за месяц указан дважды',
+);
 
 const handleZodError = (error: unknown, res: Response): boolean => {
   if (error instanceof z.ZodError) {
@@ -65,93 +57,46 @@ const parseEmployeeId = (req: AuthenticatedRequest): number | null => {
   return Number.isInteger(employeeId) && employeeId > 0 ? employeeId : null;
 };
 
-/** GET /api/payroll/deductions?kind_ids=1,2&date — сотрудники хотя бы с одним из видов, по ФИО. */
-const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const parsed = listQuerySchema.parse(req.query);
-    const { onDate, contractorRootId, params } = await buildBaseParams(req, parsed);
-    params.push(parsed.kind_ids);
-    const rows = await query<IPayrollDeductionRow>(
-      `${buildBaseCtes('')}
-       SELECT s.*,
-              ps.amount    AS planned_supplement_amount,
-              ps.date_from AS planned_supplement_from,
-              ps.date_to   AS planned_supplement_to
-         FROM scoped s
-         LEFT JOIN LATERAL (
-           SELECT p.amount, p.date_from, p.date_to
-             FROM payroll_planned_supplements p
-            WHERE p.employee_id = s.employee_id
-            ORDER BY p.id DESC
-            LIMIT 1
-         ) ps ON TRUE
-        WHERE EXISTS (
-          SELECT 1 FROM payroll_employee_deductions d
-           WHERE d.employee_id = s.employee_id AND d.kind_id = ANY($9::int[])
-        )
-        ORDER BY s.full_name ASC NULLS LAST, s.employee_id ASC`,
-      params,
-    );
-    // can_edit — как в списке условий: карточка из «Расчётов» правится в том же скоупе.
-    const canEditRow = await resolvePayrollEditPredicate(req);
-    // Категория по отделу — как в списке условий: карточка показывает её только для чтения.
-    const categoryOf = await loadStaffCategoryResolver();
-    res.json({
-      success: true,
-      data: rows.map(row => ({
-        ...row,
-        department_category: categoryOf(row.department_id),
-        can_edit: canEditRow(row.employee_id),
-      })),
-      meta: { date: onDate, contractors_excluded: contractorRootId !== null },
-    });
-  } catch (err) {
-    if (handleZodError(err, res)) return;
-    console.error('payrollDeductions.list error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения удержаний' });
-  }
-};
-
-/** GET /api/payroll/deductions/employee/:empId — виды удержаний сотрудника (для карточки). */
-const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** GET /api/payroll/deduction-entries/employee/:empId — удержания сотрудника по месяцам (для карточки). */
+const getEntries = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = parseEmployeeId(req);
     if (employeeId === null || !(await canReadPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    res.json({ success: true, data: { kind_ids: await getEmployeeDeductionKindIds(employeeId) } });
+    res.json({ success: true, data: { entries: await getEmployeeDeductionEntries(employeeId) } });
   } catch (err) {
-    console.error('payrollDeductions.getByEmployee error:', err);
+    console.error('payrollDeductions.getEntries error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения удержаний сотрудника' });
   }
 };
 
-/** PUT /api/payroll/deductions/employee/:empId { kind_ids } — заменить виды удержаний сотрудника. */
-const saveByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** PUT /api/payroll/deduction-entries/employee/:empId { entries } — заменить удержания сотрудника. */
+const saveEntries = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = parseEmployeeId(req);
     if (employeeId === null || !(await canEditPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    const { kind_ids: kindIds } = saveKindsSchema.parse(req.body);
-    if (!(await allDeductionKindsExist(kindIds))) {
+    const { entries } = saveEntriesSchema.parse(req.body);
+    if (!(await allDeductionKindsExist(entries.map(entry => entry.kind_id)))) {
       res.status(400).json({ success: false, error: 'Вид удержания не найден в справочнике' });
       return;
     }
-    const { added, removed } = await withTransaction(client => setEmployeeDeductionKinds(client, employeeId, kindIds));
-    if (added.length > 0 || removed.length > 0) {
-      await auditService.logFromRequest(req, req.user.id, 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED', {
-        entityType: 'payroll_employee_deductions',
+    const diff = await withTransaction(client => setEmployeeDeductionEntries(client, employeeId, entries));
+    if (diff.added.length > 0 || diff.removed.length > 0 || diff.changed.length > 0) {
+      await auditService.logFromRequest(req, req.user.id, 'PAYROLL_DEDUCTION_ENTRIES_SAVED', {
+        entityType: 'payroll_deduction_entries',
         entityId: String(employeeId),
-        details: { employee_id: employeeId, added, removed },
+        details: { employee_id: employeeId, ...diff },
       });
     }
-    res.json({ success: true, data: { kind_ids: await getEmployeeDeductionKindIds(employeeId) } });
+    res.json({ success: true, data: { entries: await getEmployeeDeductionEntries(employeeId) } });
   } catch (err) {
     if (handleZodError(err, res)) return;
-    console.error('payrollDeductions.saveByEmployee error:', err);
+    console.error('payrollDeductions.saveEntries error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения удержаний сотрудника' });
   }
 };
@@ -188,4 +133,4 @@ const addKind = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   }
 };
 
-export const payrollDeductionsController = { list, getByEmployee, saveByEmployee, listKinds, addKind };
+export const payrollDeductionsController = { getEntries, saveEntries, listKinds, addKind };

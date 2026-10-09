@@ -5,10 +5,10 @@ import type {
   PayrollCalcType,
 } from '../services/payrollService';
 
-/** Необязательные суммы условий, ₽/мес: премия, компенсации и удержание. */
-export type PayrollMoneyField = 'bonus' | 'housing' | 'travel' | 'deduction';
+/** Необязательные суммы условий, ₽/мес: премия и компенсации. Удержания — по месяцам, не в условиях. */
+export type PayrollMoneyField = 'bonus' | 'housing' | 'travel';
 
-export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing', 'travel', 'deduction'];
+export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing', 'travel'];
 
 /** Плановая доплата: сумма ₽/мес, дата начала и дата окончания — строки как в полях ввода. */
 export interface IPayrollSupplementValues {
@@ -35,7 +35,7 @@ export type PayrollTermsFieldKey =
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
   'effectiveFrom', 'amount', 'bonus', 'housing', 'travel',
-  'supplementAmount', 'supplementFrom', 'supplementTo', 'deduction',
+  'supplementAmount', 'supplementFrom', 'supplementTo',
 ];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
@@ -74,7 +74,6 @@ export const initialPayrollTermsValues = (
       bonus: pick(row?.bonus_amount),
       housing: pick(row?.housing_compensation),
       travel: pick(row?.travel_compensation),
-      deduction: pick(row?.deduction_amount),
     },
     supplement: {
       amount: toInputValue(row?.planned_supplement_amount),
@@ -189,7 +188,6 @@ export const validatePayrollTerms = (
       bonus_amount: optional.bonus,
       housing_compensation: optional.housing,
       travel_compensation: optional.travel,
-      deduction_amount: optional.deduction,
       effective_from: values.effectiveFrom,
       planned_supplement: plannedSupplement,
     },

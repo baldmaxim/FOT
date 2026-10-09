@@ -1170,3 +1170,59 @@ describe('payrollTermsController.columnValues', () => {
     expect(pgQuery).not.toHaveBeenCalled();
   });
 });
+
+describe('payrollTermsController: фильтр «Удержания» («Расчёты»)', () => {
+  beforeEach(() => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+    contractor.getContractorRootId.mockResolvedValue('contractor-root');
+    pgQueryOne.mockResolvedValue({ total: '0', without_terms_total: '0', rows: [] });
+    pgQuery.mockResolvedValue([]);
+  });
+
+  it('список: только с удержанием одного из видов за месяц, сумма — для строк порции после LIMIT', async () => {
+    const res = makeRes();
+    await payrollTermsController.list(makeReq({
+      query: { deduction_kind_ids: '5,2,5', deduction_month: '2026-09' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = pgQueryOne.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM payroll_deduction_entries de/);
+    expect(sql).toMatch(/ded\.deduction_total/);
+    expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('SUM(de.amount) AS deduction_total'));
+    expect(params).toContainEqual([5, 2]);
+    expect(params).toContain('2026-09-01');
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('без фильтра — ни условия, ни суммы', async () => {
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
+
+    const sql = String(pgQueryOne.mock.calls[0][0]);
+    expect(sql).not.toMatch(/payroll_deduction_entries/);
+  });
+
+  it('варианты фильтра столбца считаются по той же выборке с удержаниями', async () => {
+    await payrollTermsController.columnValues(makeReq({
+      query: { column: 'position', deduction_kind_ids: '5', deduction_month: '2026-09' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const [sql, params] = pgQuery.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM payroll_deduction_entries de/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('виды без месяца, месяц без видов, кривые значения — 400 до похода в БД', async () => {
+    for (const query of [
+      { deduction_kind_ids: '5' },
+      { deduction_month: '2026-09' },
+      { deduction_kind_ids: 'a', deduction_month: '2026-09' },
+      { deduction_kind_ids: '5', deduction_month: '2026-9' },
+    ]) {
+      const res = makeRes();
+      await payrollTermsController.list(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode, JSON.stringify(query)).toBe(400);
+    }
+    expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+});

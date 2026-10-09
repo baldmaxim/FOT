@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type FC } from 'react';
+import { useCallback, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
 
@@ -27,7 +27,7 @@ import {
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
 } from '../../utils/payrollColumnFilters';
-import type { PayrollTableColumn } from '../../utils/payrollColumns';
+import { PAYROLL_TERMS_COLUMNS_KEY, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
@@ -47,15 +47,31 @@ const COLUMN_LABELS: Record<PayrollSortKey, string> = {
   housing: 'Компенсация проживания',
 };
 
+/** Фильтр «Удержания» на «Расчётах»: виды (хотя бы один) за месяц YYYY-MM. */
+export interface IPayrollDeductionFilter {
+  kindIds: number[];
+  month: string;
+  /** Подпись месяца в шапке столбца «Удержание». */
+  monthLabel: string;
+}
+
 interface ICompensationTermsPageProps {
   /** Дата выборки — одна на список и карточку «Подробно» (см. PaymentsTab). */
   date: string;
   /** Список на экране. Скрытый список не размонтируется: фильтры, выделение и прокрутка сохраняются. */
   active: boolean;
-  /** Клик по строке — вкладка «Подробно» с этим сотрудником. */
+  /** Клик по строке — карточка этого сотрудника. */
   onOpenEmployee: (row: IPayrollTermsRow) => void;
   /** Массовое назначение сохранено: сотрудники, чьи условия действительно изменились. */
-  onAssigned: (employeeIds: number[]) => void;
+  onAssigned?: (employeeIds: number[]) => void;
+  /** Галочки и «Назначить выделенным»; на «Расчётах» их нет. */
+  selectable?: boolean;
+  /** Поля панели после «Все отделы» («Удержания» и месяц на «Расчётах»). */
+  toolbarExtra?: ReactNode;
+  /** Фильтр «Удержания»: только сотрудники с удержанием и столбец с суммой. */
+  deductionFilter?: IPayrollDeductionFilter;
+  /** Ключ хранилища скрытых столбцов (шестерёнка). */
+  hiddenColumnsKey?: string;
 }
 
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
@@ -63,6 +79,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   active,
   onOpenEmployee,
   onAssigned,
+  selectable = true,
+  toolbarExtra,
+  deductionFilter,
+  hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
 }) => {
   const { success, error: showError, warning } = useToast();
   const { canEditPage } = useAuth();
@@ -87,12 +107,17 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const columnFiltersKey = serializePayrollColumnFilters(columnFilters);
   const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
 
+  const deductionKindIds = deductionFilter?.kindIds.join(',') || undefined;
+  const deductionMonth = deductionKindIds ? deductionFilter?.month : undefined;
+
   const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
     date,
     departmentId: departmentId || undefined,
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey]);
+    deductionKindIds,
+    deductionMonth,
+  }), [date, departmentId, debouncedSearch, columnFiltersKey, deductionKindIds, deductionMonth]);
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir],
@@ -197,7 +222,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     }
     if (hadFilter || sort === column) setSelected(new Set());
   };
-  const { hidden: hiddenColumns, setColumnVisible, showAll } = usePayrollHiddenColumns(clearHiddenColumnConditions);
+  const { hidden: hiddenColumns, setColumnVisible, showAll } = usePayrollHiddenColumns(
+    hiddenColumnsKey,
+    clearHiddenColumnConditions,
+  );
   /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
   const closeColumnsMenu = () => {
     columnsAnchor?.focus();
@@ -238,7 +266,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       setSelected(new Set());
       setBulkRows(null);
       // Только применённые: у отклонённых (skipped) условия не менялись, их карточка остаётся.
-      onAssigned(result.applied.map(item => item.employee_id));
+      onAssigned?.(result.applied.map(item => item.employee_id));
       if (result.skipped.length > 0) {
         warning(`Применено: ${result.applied.length}. Отклонено: ${result.skipped.length} — ${result.skipped[0].message}`);
       } else {
@@ -286,7 +314,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setBulkRows(chosen);
   };
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${deductionKindIds}|${deductionMonth}`;
 
   return (
     <div className={styles.page}>
@@ -305,21 +333,24 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onRetry={() => { void structureTree.refetch(); }}
           />
         </div>
+        {toolbarExtra}
         {activeFilterCount > 0 && (
           <button type="button" className={styles.resetFilters} onClick={resetColumnFilters}>
             Сбросить фильтры ({activeFilterCount})
           </button>
         )}
         <div className={styles.actions}>
-          {selected.size > 0 && <span className={styles.selectedInfo}>Выделено: {selected.size}</span>}
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={!canEdit || selected.size === 0}
-            onClick={openBulk}
-          >
-            Назначить выделенным
-          </button>
+          {selectable && selected.size > 0 && <span className={styles.selectedInfo}>Выделено: {selected.size}</span>}
+          {selectable && (
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={!canEdit || selected.size === 0}
+              onClick={openBulk}
+            >
+              Назначить выделенным
+            </button>
+          )}
           <button
             type="button"
             className={hiddenColumns.size > 0 ? `${styles.iconButton} ${styles.iconButtonActive}` : styles.iconButton}
@@ -354,6 +385,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         <>
           <PayrollTermsTable
             rows={rows}
+            selectable={selectable}
             selected={selected}
             allSelected={allLoadedSelected}
             canEdit={canEdit}
@@ -369,6 +401,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             columnFilters={columnFilters}
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
+            deductionPeriod={deductionKindIds ? deductionFilter?.monthLabel : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

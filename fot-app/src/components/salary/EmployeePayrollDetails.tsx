@@ -6,16 +6,18 @@ import { useToast } from '../../contexts/ToastContext';
 import {
   payrollService,
   type IAssignTermsPayload,
+  type IPayrollDeductionEntryPayload,
   type IPayrollTermsRow,
 } from '../../services/payrollService';
-import { usePayrollEmployeeDeductions } from '../../hooks/usePayrollEmployeeDeductions';
+import { usePayrollDeductionEntries } from '../../hooks/usePayrollDeductionEntries';
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
+import { deductionFieldId } from '../../utils/payrollDeductionEntries';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
-import { DeductionKindsField } from './DeductionKindsField';
+import { PayrollDeductionEntries } from './PayrollDeductionEntries';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
@@ -25,6 +27,10 @@ import styles from './EmployeePayrollDetails.module.css';
 interface IEmployeePayrollDetailsProps {
   row: IPayrollTermsRow;
   defaultDate: string;
+  /** Месяц новой строки удержания (YYYY-MM); не передан — прошлый месяц. */
+  deductionMonth?: string;
+  /** Класс корня: в окне «Расчётов» — без своей рамки. */
+  className?: string;
   /** Вкладка «Подробно» открыта. Скрытая карточка остаётся смонтированной — введённое не теряется. */
   active: boolean;
   /** «Отмена» / «Закрыть»: карточка закрывается, вкладка — к списку. */
@@ -39,20 +45,23 @@ interface IEmployeePayrollDetailsProps {
 interface ISaveVariables {
   /** null — условия не правили: новую версию условий не создаём. */
   terms: IAssignTermsPayload | null;
-  /** Виды удержаний; null — не меняли. */
-  kinds: number[] | null;
+  /** Удержания по месяцам целиком; null — не меняли. */
+  entries: IPayrollDeductionEntryPayload[] | null;
 }
 
 /**
- * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
- * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
- * отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия и виды удержаний — что из них правили.
+ * Карточка сотрудника раздела «Зарплата» — вкладка «Подробно» и окно на «Расчётах»: условия оплаты (основная оплата
+ * с «Оплачено», компенсация, плановая доплата), удержания по месяцам и под ними свёрнутая справка — история изменений
+ * и отпуска. Справка грузится отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия и удержания — что
+ * из них правили.
  * «Оплачено» — только чтение: суммы приходят из 1С. Категория — только чтение: её ставит сервер по отделу.
  * Месяцы у ФИО (один или несколько) задают таблицы «Оплачено»; условия от них не зависят.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
   defaultDate,
+  deductionMonth,
+  className,
   active,
   onClose,
   onSaved,
@@ -73,7 +82,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   const paid = usePayrollPaid(row.employee_id, months);
-  const deductions = usePayrollEmployeeDeductions(row.employee_id);
+  const deductions = usePayrollDeductionEntries(row.employee_id);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
@@ -84,13 +93,13 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   }, [active]);
 
   const saveMutation = useMutation({
-    // Сначала виды: запрос идемпотентен — если условия не сохранятся, повтор ничего не задвоит.
-    mutationFn: async ({ terms, kinds }: ISaveVariables) => {
-      if (kinds) await payrollService.saveEmployeeDeductions(row.employee_id, kinds);
+    // Сначала удержания: запрос заменяет их целиком — если условия не сохранятся, повтор ничего не задвоит.
+    mutationFn: async ({ terms, entries }: ISaveVariables) => {
+      if (entries) await payrollService.saveDeductionEntries(row.employee_id, entries);
       if (terms) await payrollService.assign(row.employee_id, terms);
     },
     onSuccess: (_data, { terms }) => {
-      // Префикс сбрасывает список, «Расчёты», историю изменений условий, «Оплачено» и виды удержаний.
+      // Префикс сбрасывает списки «Условий оплаты» и «Расчётов», историю изменений условий, «Оплачено» и удержания.
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
       success(terms ? 'Условия оплаты назначены: 1' : 'Удержания сохранены');
       onSaved(row.employee_id, activeRef.current);
@@ -112,22 +121,29 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || saveMutation.isPending) return;
-    const kinds = deductions.changedKindIds();
-    // Правили только виды удержаний: условия не трогаем — оклад не обязателен, новая версия не создаётся.
-    if (kinds && !form.isChanged()) {
-      saveMutation.mutate({ terms: null, kinds });
+    const entries = deductions.isChanged() ? deductions.buildPayload() : null;
+    // Правили только удержания: условия не трогаем — оклад не обязателен, новая версия не создаётся.
+    const terms = entries && !form.isChanged() ? null : form.buildPayload();
+    // Фокус — на первую ошибку на экране: условия выше удержаний.
+    if (terms && !terms.payload) {
+      if (terms.firstInvalid) document.getElementById(payrollFieldId(idPrefix, terms.firstInvalid))?.focus();
       return;
     }
-    const { payload, firstInvalid } = form.buildPayload();
-    if (!payload) {
-      if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
+    if (entries && !entries.payload) {
+      const first = entries.firstInvalid;
+      if (first) document.getElementById(deductionFieldId(idPrefix, first.key, first.field))?.focus();
       return;
     }
-    saveMutation.mutate({ terms: payload, kinds });
+    saveMutation.mutate({ terms: terms?.payload ?? null, entries: entries?.payload ?? null });
   };
 
   return (
-    <form className={styles.details} onSubmit={handleSubmit} noValidate aria-labelledby={titleId}>
+    <form
+      className={className ? `${styles.details} ${className}` : styles.details}
+      onSubmit={handleSubmit}
+      noValidate
+      aria-labelledby={titleId}
+    >
       <header className={styles.header}>
         <div className={styles.nameRow}>
           <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
@@ -155,8 +171,13 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           autoFocus={canEdit}
           paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} />}
           stacked
-          deductionKinds={(
-            <DeductionKindsField id={`${idPrefix}-deduction-kinds`} deductions={deductions} readOnly={!canEdit} />
+          deductions={(
+            <PayrollDeductionEntries
+              entries={deductions}
+              idPrefix={idPrefix}
+              readOnly={!canEdit}
+              defaultMonth={deductionMonth ?? shiftMonth(currentMonth, -1)}
+            />
           )}
         />
 

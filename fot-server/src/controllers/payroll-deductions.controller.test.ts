@@ -20,22 +20,13 @@ vi.mock('../config/postgres.js', () => ({
 }));
 
 const scope = vi.hoisted(() => ({
-  resolvePayrollReadableDepartmentIds: vi.fn(async () => ['dept-1']),
   canReadPayrollEmployee: vi.fn(async () => true),
   canEditPayrollEmployee: vi.fn(async () => true),
-  resolvePayrollEditPredicate: vi.fn(async () => (id: number) => id !== 2),
 }));
 vi.mock('../services/payroll/payroll-scope.service.js', () => scope);
 
-vi.mock('../config/contractor.js', () => ({ getContractorRootId: vi.fn(async () => 'contractor-root') }));
-
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
-
-// Категория по отделу: структура — отдельным запросом, здесь подменяется.
-vi.mock('../services/payroll/payroll-staff-category.js', () => ({
-  loadStaffCategoryResolver: vi.fn(async () => (departmentId: string | null) => (departmentId === 'br-1' ? 'worker' : 'office')),
-}));
 
 import { payrollDeductionsController } from './payroll-deductions.controller.js';
 
@@ -59,96 +50,123 @@ beforeEach(() => {
   scope.canEditPayrollEmployee.mockResolvedValue(true);
 });
 
-describe('payrollDeductionsController.list', () => {
-  it('сотрудники хотя бы с одним из выбранных видов, в скоупе «Зарплаты», без подрядчиков, с can_edit', async () => {
-    pgQuery.mockResolvedValue([{ employee_id: 1, department_id: 'br-1' }, { employee_id: 2, department_id: null }]);
-    const res = makeRes();
-
-    await payrollDeductionsController.list(makeReq({ query: { date: '2026-10-06', kind_ids: '5,4,5' } }), res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual([
-      { employee_id: 1, department_id: 'br-1', department_category: 'worker', can_edit: true },
-      { employee_id: 2, department_id: null, department_category: 'office', can_edit: false },
-    ]);
-    expect(res.body.meta).toEqual({ date: '2026-10-06', contractors_excluded: true });
-    const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('d.kind_id = ANY($9::int[])');
-    expect(params[0]).toBe('2026-10-06');
-    expect(params[5]).toBe('contractor-root');
-    expect(params[6]).toEqual(['dept-1']);
-    expect(params[8]).toEqual([5, 4]);
-  });
-
-  it('без видов, кривые виды или дата — 400 до похода в БД', async () => {
-    for (const query of [{}, { kind_ids: '' }, { kind_ids: 'a,b' }, { kind_ids: '0' }, { kind_ids: '5', date: '06.10.2026' }]) {
-      const res = makeRes();
-      await payrollDeductionsController.list(makeReq({ query }), res);
-      expect(res.statusCode).toBe(400);
-    }
-    expect(pgQuery).not.toHaveBeenCalled();
-  });
-});
-
-describe('payrollDeductionsController: виды сотрудника', () => {
-  it('чтение — вне скоупа 403, в скоупе — виды по порядку справочника', async () => {
+describe('payrollDeductionsController: удержания сотрудника по месяцам', () => {
+  it('чтение — вне скоупа 403, в скоупе — записи месяц · вид · сумма', async () => {
     scope.canReadPayrollEmployee.mockResolvedValueOnce(false);
     const denied = makeRes();
-    await payrollDeductionsController.getByEmployee(makeReq({ params: { empId: '7' } }), denied);
+    await payrollDeductionsController.getEntries(makeReq({ params: { empId: '7' } }), denied);
     expect(denied.statusCode).toBe(403);
 
-    pgQuery.mockResolvedValue([{ kind_id: 5 }, { kind_id: 2 }]);
+    const entries = [{ month: '2026-09', kind_id: 5, amount: '3000.00' }];
+    pgQuery.mockResolvedValue(entries);
     const res = makeRes();
-    await payrollDeductionsController.getByEmployee(makeReq({ params: { empId: '7' } }), res);
-    expect(res.body.data).toEqual({ kind_ids: [5, 2] });
+    await payrollDeductionsController.getEntries(makeReq({ params: { empId: '7' } }), res);
+    expect(res.body.data).toEqual({ entries });
+    expect(pgQuery.mock.calls[0][1]).toEqual([7]);
   });
 
-  it('сохранение заменяет набор в транзакции и пишет в аудит добавленные и снятые', async () => {
+  it('сохранение заменяет записи в транзакции и пишет в аудит добавленные, удалённые и изменённые', async () => {
+    const after = [
+      { month: '2026-09', kind_id: 5, amount: '3500.00' },
+      { month: '2026-09', kind_id: 2, amount: '100.50' },
+    ];
     pgQuery
       .mockResolvedValueOnce([{ id: 2 }, { id: 5 }]) // все виды есть в справочнике
-      .mockResolvedValueOnce([{ kind_id: 2 }, { kind_id: 5 }]); // итог после сохранения
+      .mockResolvedValueOnce(after); // итог после сохранения
     txClient.query
-      .mockResolvedValueOnce({ rows: [{ kind_id: 4 }] }) // DELETE снятых
-      .mockResolvedValueOnce({ rows: [{ kind_id: 2 }] }); // INSERT новых
+      .mockResolvedValueOnce({ rows: [ // было (FOR UPDATE)
+        { month: '2026-09', kind_id: 5, amount: '3000.00' },
+        { month: '2026-08', kind_id: 4, amount: '700.00' },
+      ] })
+      .mockResolvedValueOnce({ rows: [] }) // DELETE лишних
+      .mockResolvedValueOnce({ rows: after }); // UPSERT: изменённая и новая
     const res = makeRes();
 
-    await payrollDeductionsController.saveByEmployee(makeReq({ params: { empId: '7' }, body: { kind_ids: [5, 2, 5] } }), res);
+    await payrollDeductionsController.saveEntries(makeReq({
+      params: { empId: '7' },
+      body: { entries: [{ month: '2026-09', kind_id: 5, amount: 3500 }, { month: '2026-09', kind_id: '2', amount: '100.5' }] },
+    }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ kind_ids: [2, 5] });
-    expect(txClient.query.mock.calls[0][1]).toEqual([7, [5, 2]]);
+    expect(res.body.data).toEqual({ entries: after });
+    expect(txClient.query.mock.calls[1][1]).toEqual([7, ['2026-08-01'], [4]]);
+    expect(txClient.query.mock.calls[2][1]).toEqual([7, ['2026-09-01', '2026-09-01'], [5, 2], [3500, 100.5]]);
     expect(audit.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'user-1', 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
-      expect.objectContaining({ details: { employee_id: 7, added: [2], removed: [4] } }),
+      expect.anything(), 'user-1', 'PAYROLL_DEDUCTION_ENTRIES_SAVED',
+      expect.objectContaining({
+        details: {
+          employee_id: 7,
+          added: [{ month: '2026-09', kind_id: 2, amount: '100.50' }],
+          removed: [{ month: '2026-08', kind_id: 4, amount: '700.00' }],
+          changed: [{ month: '2026-09', kind_id: 5, amount: '3500.00', prev_amount: '3000.00' }],
+        },
+      }),
     );
   });
 
-  it('без изменений — аудита нет', async () => {
-    pgQuery.mockResolvedValueOnce([{ id: 5 }]).mockResolvedValueOnce([{ kind_id: 5 }]);
-    txClient.query.mockResolvedValue({ rows: [] });
+  it('пустой набор удаляет всё без UPSERT', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ month: '2026-09', kind_id: 5, amount: '3000.00' }] })
+      .mockResolvedValueOnce({ rows: [] });
     const res = makeRes();
 
-    await payrollDeductionsController.saveByEmployee(makeReq({ params: { empId: '7' }, body: { kind_ids: [5] } }), res);
+    await payrollDeductionsController.saveEntries(makeReq({ params: { empId: '7' }, body: { entries: [] } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(txClient.query).toHaveBeenCalledTimes(2);
+    expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('без изменений — аудита нет', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: 5 }]).mockResolvedValueOnce([{ month: '2026-09', kind_id: 5, amount: '3000.00' }]);
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ month: '2026-09', kind_id: 5, amount: '3000.00' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const res = makeRes();
+
+    await payrollDeductionsController.saveEntries(makeReq({
+      params: { empId: '7' }, body: { entries: [{ month: '2026-09', kind_id: 5, amount: 3000 }] },
+    }), res);
 
     expect(res.statusCode).toBe(200);
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
-  it('вне скоупа правки — 403, неизвестный вид — 400; записи нет', async () => {
+  it('вне скоупа правки — 403, неизвестный вид, повтор месяц+вид и кривые суммы — 400; записи нет', async () => {
     scope.canEditPayrollEmployee.mockResolvedValueOnce(false);
     const denied = makeRes();
-    await payrollDeductionsController.saveByEmployee(makeReq({ params: { empId: '7' }, body: { kind_ids: [5] } }), denied);
+    await payrollDeductionsController.saveEntries(makeReq({ params: { empId: '7' }, body: { entries: [] } }), denied);
     expect(denied.statusCode).toBe(403);
 
     pgQuery.mockResolvedValueOnce([{ id: 5 }]);
     const unknown = makeRes();
-    await payrollDeductionsController.saveByEmployee(makeReq({ params: { empId: '7' }, body: { kind_ids: [5, 999] } }), unknown);
+    await payrollDeductionsController.saveEntries(makeReq({
+      params: { empId: '7' },
+      body: { entries: [{ month: '2026-09', kind_id: 5, amount: 1 }, { month: '2026-09', kind_id: 999, amount: 1 }] },
+    }), unknown);
     expect(unknown.statusCode).toBe(400);
     expect(unknown.body.error).toBe('Вид удержания не найден в справочнике');
 
-    const invalid = makeRes();
-    await payrollDeductionsController.saveByEmployee(makeReq({ params: { empId: '7' }, body: { kind_ids: 'x' } }), invalid);
-    expect(invalid.statusCode).toBe(400);
+    const duplicate = makeRes();
+    await payrollDeductionsController.saveEntries(makeReq({
+      params: { empId: '7' },
+      body: { entries: [{ month: '2026-09', kind_id: 5, amount: 1 }, { month: '2026-09', kind_id: 5, amount: 2 }] },
+    }), duplicate);
+    expect(duplicate.statusCode).toBe(400);
+    expect(duplicate.body.error).toBe('Вид удержания за месяц указан дважды');
+
+    for (const entry of [
+      { month: '2026-13', kind_id: 5, amount: 1 },
+      { month: '2026-09-01', kind_id: 5, amount: 1 },
+      { month: '2026-09', kind_id: 5, amount: 0 },
+      { month: '2026-09', kind_id: 5, amount: 1.005 },
+      { month: '2026-09', kind_id: 5, amount: 'abc' },
+    ]) {
+      const res = makeRes();
+      await payrollDeductionsController.saveEntries(makeReq({ params: { empId: '7' }, body: { entries: [entry] } }), res);
+      expect(res.statusCode).toBe(400);
+    }
     expect(pgTx).not.toHaveBeenCalled();
   });
 });

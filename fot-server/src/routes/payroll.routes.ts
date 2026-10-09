@@ -20,7 +20,6 @@ router.use(noStore);
 // но раздать их разным ролям можно будет в /admin/roles без миграции и деплоя.
 const termsView = requirePageAccess('/salary/terms', 'view');
 const termsEdit = requirePageAccess('/salary/terms', 'edit');
-const paymentsView = requirePageAccess('/salary/payments', 'view');
 // Удержания сотрудника и справочник видов правятся и в карточке («Условия оплаты»), и на «Расчётах».
 const deductionsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
 const deductionsEdit = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'edit');
@@ -41,12 +40,12 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 
-// ─── «Расчёты»: удержания сотрудников и справочник видов ─────────────────────
+// ─── Удержания: справочник видов и удержания сотрудника по месяцам ───────────
+// Фильтр «Удержания» на «Расчётах» — параметры списка условий (/terms).
 router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);
 router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addKind);
-router.get('/deductions', paymentsView, payrollDeductionsController.list);
-router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
-router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
+router.get('/deduction-entries/employee/:empId', deductionsView, payrollDeductionsController.getEntries);
+router.put('/deduction-entries/employee/:empId', deductionsEdit, payrollDeductionsController.saveEntries);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

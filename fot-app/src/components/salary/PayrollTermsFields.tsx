@@ -29,10 +29,10 @@ interface IPayrollTermsFieldsProps {
   /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
   /**
-   * «Вид» в «Удержании» — виды удержаний сотрудника (только в карточке). Не передан — поля нет:
-   * в «Назначить выделенным» виды у каждого свои.
+   * «Удержание» — строки «месяц · вид · сумма» сотрудника (только в карточке). Не передано — секции нет:
+   * в «Назначить выделенным» удержания у каждого свои.
    */
-  deductionKinds?: ReactNode;
+  deductions?: ReactNode;
 }
 
 /** «Компенсация» в одну строку — в порядке на экране. */
@@ -45,7 +45,8 @@ const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
- * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
+ * компенсации, плановая доплата и удержания (те и другие — только в карточке сотрудника); справа оклад (или ставка)
+ * с премией.
  * «Оплачено» (только в карточке) — под ними на всю ширину формы. В узком окне и при stacked половины встают
  * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
  */
@@ -57,7 +58,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   autoFocus = false,
   paid,
   stacked = false,
-  deductionKinds,
+  deductions,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
 
@@ -216,17 +217,14 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         </section>
       )}
 
-      <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
-        <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
-        <div className={styles.halves}>
-          <div className={styles.half}>
-            <div className={styles.row}>
-              {deductionKinds}
-              {renderMoney('deduction', 'Сумма, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
-            </div>
+      {deductions && (
+        <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
+          <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
+          <div className={styles.halves}>
+            <div className={styles.half}>{deductions}</div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
     </div>
   );
 };

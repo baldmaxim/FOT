@@ -22,11 +22,11 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  * Вкладка «Выплаты». Внутри экраны:
  *  - «Условия оплаты» — список сотрудников с условиями (рабочий экран, по умолчанию);
  *  - «Подробно» — карточка сотрудника, которого открыли кликом по строке списка;
- *  - «Расчёты» — сотрудники с удержаниями по видам справочника (вид и сумма — из карточки);
+ *  - «Расчёты» — тот же список без массового назначения, с фильтром «Удержания» за месяц; карточка — в окне;
  *  - «Администрирование» — подключение по API к 1С и другим системам (пока заглушка).
  *
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
- * хаба сохраняет остальные параметры. Список и карточка при смене экрана не размонтируются:
+ * хаба сохраняет остальные параметры. Списки и карточка при смене экрана не размонтируются:
  * фильтры, выделение, прокрутка и введённое в карточке сохраняются.
  */
 export const PaymentsTab: FC = () => {
@@ -34,7 +34,8 @@ export const PaymentsTab: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const canTerms = canViewPage('/salary/terms');
-  const canCalc = canViewPage('/salary/payments');
+  // «Расчёты» — список и карточка условий оплаты: нужен и ключ /salary/terms.
+  const canCalc = canTerms && canViewPage('/salary/payments');
   const canAdmin = canViewPage('/salary/admin');
   const views = paymentsViewOptions(canTerms, canCalc, canAdmin);
   const view = resolvePaymentsView(searchParams.get('view'), views);
@@ -45,8 +46,9 @@ export const PaymentsTab: FC = () => {
   const [date] = useState(moscowTodayIso);
   // Сотрудник вкладки «Подробно» — строка списка на момент клика.
   const [details, setDetails] = useState<IPayrollTermsRow | null>(null);
-  // Откуда открыли карточку: закрытие и сохранение возвращают туда же.
-  const [detailsFrom, setDetailsFrom] = useState<PaymentsView>('terms');
+  // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
+  const [calcMounted, setCalcMounted] = useState(false);
+  if (view === 'calc' && !calcMounted) setCalcMounted(true);
 
   /**
    * Клики по вкладкам пишутся в историю браузера. Открытие и закрытие карточки — нет (replace),
@@ -63,30 +65,29 @@ export const PaymentsTab: FC = () => {
   // Роутер меняет ?view= переходом (startTransition) — карточку меняем в том же переходе.
   // Иначе React отрисует её раньше экрана: пустая «Подробно» мелькнёт на кадр, а autoFocus
   // сработает на ещё скрытой карточке.
-  const openEmployeeFrom = useCallback((from: PaymentsView, row: IPayrollTermsRow) => {
-    setDetailsFrom(from);
+  const openEmployee = useCallback((row: IPayrollTermsRow) => {
     startTransition(() => setDetails(prev => openPayrollDetails(prev, row)));
     selectView('details', true);
   }, [selectView]);
-  const openEmployee = useCallback((row: IPayrollTermsRow) => openEmployeeFrom('terms', row), [openEmployeeFrom]);
-  const openEmployeeFromCalc = useCallback((row: IPayrollTermsRow) => openEmployeeFrom('calc', row), [openEmployeeFrom]);
 
   const closeDetails = useCallback(() => {
     startTransition(() => setDetails(null));
-    selectView(detailsFrom, true);
-  }, [selectView, detailsFrom]);
+    selectView('terms', true);
+  }, [selectView]);
 
   // Сохранение закрывает карточку этого сотрудника (её форма собрана до него); к списку — только
   // если она ещё на экране: вкладку могли сменить, пока шёл запрос.
   const handleSaved = useCallback((employeeId: number, onScreen: boolean) => {
     startTransition(() => setDetails(prev => dropPayrollDetails(prev, [employeeId])));
-    if (onScreen) selectView(detailsFrom, true);
-  }, [selectView, detailsFrom]);
+    if (onScreen) selectView('terms', true);
+  }, [selectView]);
 
-  // Массовое назначение идёт со списка: карточка в этот момент скрыта, экран не меняется.
+  // Массовое назначение со списка и сохранение в окне «Расчётов»: карточка «Подробно» в этот момент
+  // скрыта, экран не меняется — устаревшая карточка этих сотрудников закрывается.
   const handleAssigned = useCallback((employeeIds: number[]) => {
     setDetails(prev => dropPayrollDetails(prev, employeeIds));
   }, []);
+  const handleCalcSaved = useCallback((employeeId: number) => handleAssigned([employeeId]), [handleAssigned]);
 
   return (
     <div className={styles.tab}>
@@ -140,10 +141,10 @@ export const PaymentsTab: FC = () => {
           </div>
         )}
 
-        {view === 'calc' && (
-          <div className={styles.view}>
+        {canCalc && calcMounted && (
+          <div className={view === 'calc' ? styles.view : styles.viewHidden}>
             <Suspense fallback={<div className={styles.loading}>Загрузка…</div>}>
-              <PayrollDeductionsPage date={date} onOpenEmployee={canTerms ? openEmployeeFromCalc : undefined} />
+              <PayrollDeductionsPage date={date} active={view === 'calc'} onSaved={handleCalcSaved} />
             </Suspense>
           </div>
         )}

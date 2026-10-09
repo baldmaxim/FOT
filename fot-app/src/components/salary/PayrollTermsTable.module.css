@@ -51,8 +51,8 @@
 .colHousing  { width: 180px; }
 /* «Начисления»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
-/* «Расчёты»: сумма за месяц «175 000,00 ₽» */
-.colSum { width: 200px; }
+/* «Расчёты», фильтр «Удержания»: сумма за месяц «175 000,00 ₽» */
+.colDeduction { width: 160px; }
 
 .table thead th {
   position: sticky;
@@ -226,10 +226,10 @@
   .table td { height: 48px; }
 }
 
-/* «Расчёты» на телефоне: № и ФИО уже — подразделение и сумма видны без долгой прокрутки вбок */
+/* «Расчёты» на телефоне: № и ФИО уже — остальные столбцы видны без долгой прокрутки вбок */
 @media (max-width: 768px) {
   .tableNoCheck .colNum { width: 44px; }
   .tableNoCheck .colName { width: 150px; }
   .tableNoCheck .stickyName { left: 44px; }
-  .tableNoCheck .colSum { width: 140px; }
+  .tableNoCheck .colDeduction { width: 140px; }
 }

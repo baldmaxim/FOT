@@ -10,7 +10,7 @@ import {
 } from './payrollTermsForm';
 import type { IPayrollTermsRow } from '../services/payrollService';
 
-const EMPTY_MONEY = { bonus: '', housing: '', travel: '', deduction: '' };
+const EMPTY_MONEY = { bonus: '', housing: '', travel: '' };
 const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
@@ -51,15 +51,14 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '450,5',
-      money: { bonus: '15000', housing: '12000', travel: '3000', deduction: '0' },
+      money: { bonus: '15000', housing: '12000', travel: '0' },
     }));
     expect(wire(result.payload)).toEqual({
       calc_type: 'hourly',
       hourly_rate: 450.5,
       bonus_amount: 15000,
       housing_compensation: 12000,
-      travel_compensation: 3000,
-      deduction_amount: 0,
+      travel_compensation: 0,
       effective_from: '2026-09-24',
     });
   });
@@ -68,25 +67,23 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '',
-      money: { ...EMPTY_MONEY, travel: '-1', deduction: 'abc' },
+      money: { ...EMPTY_MONEY, travel: '-1', housing: 'abc' },
       effectiveFrom: '',
     }));
     expect(result.payload).toBeNull();
     expect(result.errors).toEqual({
       amount: 'Укажите часовую ставку',
+      housing: 'Введите число не меньше нуля',
       travel: 'Введите число не меньше нуля',
-      deduction: 'Введите число не меньше нуля',
       effectiveFrom: 'Укажите дату «Действует с»',
     });
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
   });
 
-  it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций, удержание последним', () => {
-    expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('travel');
+  it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций', () => {
     expect(firstInvalidField({ travel: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
     expect(firstInvalidField({ supplementTo: 'x', travel: 'x' })).toBe('travel');
-    expect(firstInvalidField({ deduction: 'x', supplementFrom: 'x' })).toBe('supplementFrom');
     expect(firstInvalidField({ supplementTo: 'x', supplementAmount: 'x' })).toBe('supplementAmount');
   });
 
@@ -172,7 +169,7 @@ describe('initialPayrollTermsValues', () => {
     expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
       calcType: 'hourly',
       amount: '450',
-      money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
+      money: { bonus: '15000', housing: '', travel: '3000.5' },
       supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });

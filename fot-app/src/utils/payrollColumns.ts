@@ -17,7 +17,9 @@ export const PAYROLL_TABLE_COLUMNS: ReadonlyArray<{ key: PayrollTableColumn; lab
   { key: 'accruals', label: 'Начисления за посл. полгода' },
 ];
 
-const STORAGE_KEY = 'fot:payroll-terms:hidden-columns';
+/** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */
+export const PAYROLL_TERMS_COLUMNS_KEY = 'fot:payroll-terms:hidden-columns';
+export const PAYROLL_CALC_COLUMNS_KEY = 'fot:payroll-calc:hidden-columns';
 
 const KNOWN_COLUMNS = new Set<string>(PAYROLL_TABLE_COLUMNS.map(column => column.key));
 
@@ -42,19 +44,19 @@ export const serializeHiddenPayrollColumns = (hidden: ReadonlySet<PayrollTableCo
   return ordered.length > 0 ? JSON.stringify(ordered) : null;
 };
 
-export const loadHiddenPayrollColumns = (): Set<PayrollTableColumn> => {
+export const loadHiddenPayrollColumns = (storageKey: string): Set<PayrollTableColumn> => {
   try {
-    return parseHiddenPayrollColumns(window.localStorage.getItem(STORAGE_KEY));
+    return parseHiddenPayrollColumns(window.localStorage.getItem(storageKey));
   } catch {
     return new Set();
   }
 };
 
-export const saveHiddenPayrollColumns = (hidden: ReadonlySet<PayrollTableColumn>): void => {
+export const saveHiddenPayrollColumns = (storageKey: string, hidden: ReadonlySet<PayrollTableColumn>): void => {
   try {
     const value = serializeHiddenPayrollColumns(hidden);
-    if (value === null) window.localStorage.removeItem(STORAGE_KEY);
-    else window.localStorage.setItem(STORAGE_KEY, value);
+    if (value === null) window.localStorage.removeItem(storageKey);
+    else window.localStorage.setItem(storageKey, value);
   } catch {
     // Хранилище недоступно (приватный режим, запрет) — выбор живёт до перезагрузки страницы.
   }

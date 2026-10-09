@@ -206,3 +206,31 @@ export function appendPayrollColumnFilters(
     whereParts.push(`${SORT_KEY_SQL.name.sql} ILIKE $${params.length}`);
   }
 }
+
+/** Номера параметров фильтра «Удержания»: те же — у суммы удержаний в строках списка. */
+export interface IPayrollDeductionFilterParams {
+  kindsIdx: number;
+  monthIdx: number;
+}
+
+/**
+ * Фильтр «Удержания» на «Расчётах»: у сотрудника есть удержание хотя бы одного из видов за месяц.
+ * Условие встаёт в CTE filtered (FROM scoped). Нет видов или месяца — без фильтра (null).
+ */
+export function appendPayrollDeductionFilter(
+  whereParts: string[],
+  params: unknown[],
+  kindIds: readonly number[] | undefined,
+  month: string | undefined,
+): IPayrollDeductionFilterParams | null {
+  if (!kindIds || kindIds.length === 0 || !month) return null;
+  params.push(kindIds);
+  const kindsIdx = params.length;
+  params.push(`${month}-01`);
+  const monthIdx = params.length;
+  whereParts.push(`EXISTS (SELECT 1 FROM payroll_deduction_entries de
+                            WHERE de.employee_id = scoped.employee_id
+                              AND de.month = $${monthIdx}::date
+                              AND de.kind_id = ANY($${kindsIdx}::int[]))`);
+  return { kindsIdx, monthIdx };
+}

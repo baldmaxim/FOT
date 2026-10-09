@@ -23,6 +23,8 @@ import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
   rows: IPayrollTermsRow[];
+  /** Столбец чекбоксов (массовое назначение); на «Расчётах» его нет. */
+  selectable?: boolean;
   selected: Set<number>;
   allSelected: boolean;
   /** Право правки страницы. Без него, как и у строки вне скоупа правки, выделять нечего. */
@@ -43,6 +45,8 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
+  /** Фильтр «Удержания» на «Расчётах»: столбец за «Сотрудником» — сумма отмеченных видов за месяц (подпись — месяц). */
+  deductionPeriod?: string;
 }
 
 /** Столбцы с сортировкой и фильтром — в порядке таблицы. */
@@ -58,8 +62,8 @@ const SORTABLE_COLUMNS: ReadonlyArray<{ key: PayrollSortKey; label: string; clas
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
-/** Всегда видимые столбцы: чекбокс, «№», «Сотрудник». */
-const FIXED_COLUMN_COUNT = 3;
+/** Всегда видимые столбцы: «№», «Сотрудник» (и чекбокс, если есть). */
+const FIXED_COLUMN_COUNT = 2;
 
 /** Класс ширины колонки (colgroup) для скрываемых столбцов. */
 const COL_CLASS: Record<PayrollTableColumn, string> = {
@@ -83,6 +87,11 @@ const formatSalary = (row: IPayrollTermsRow): string => {
 const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): string => {
   const money = row.terms_id ? formatPayrollMoney(value) : null;
   return money === null ? '—' : `${money} ₽/мес`;
+};
+
+const formatDeduction = (value: string | number | null | undefined): string => {
+  const money = formatPayrollMoney(value ?? null);
+  return money === null ? '—' : `${money} ₽`;
 };
 
 const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount }, index) => (
@@ -115,6 +124,7 @@ const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
  */
 export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   rows,
+  selectable = true,
   selected,
   allSelected,
   canEdit,
@@ -130,6 +140,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   columnFilters,
   onOpenFilter,
   accrualMonths,
+  deductionPeriod,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -162,16 +173,33 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   const shown = (column: PayrollTableColumn) => !hiddenColumns.has(column);
   const visibleColumns = PAYROLL_TABLE_COLUMNS.filter(column => shown(column.key));
-  const columnCount = FIXED_COLUMN_COUNT + visibleColumns.length;
-  const sortableHeaders = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
+  // «Сотрудник» всегда первый: за ним — «Удержание» на «Расчётах».
+  const [nameHeader, ...restHeaders] = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
+  const hasDeduction = deductionPeriod !== undefined;
+  const columnCount = FIXED_COLUMN_COUNT + (selectable ? 1 : 0) + (hasDeduction ? 1 : 0) + visibleColumns.length;
+
+  const renderSortHeader = (column: (typeof SORTABLE_COLUMNS)[number]) => (
+    <PayrollSortHeader
+      key={column.key}
+      sortKey={column.key}
+      label={column.label}
+      className={column.className ? styles[column.className] : undefined}
+      activeKey={sort}
+      dir={dir}
+      onSort={onSort}
+      onOpenFilter={onOpenFilter}
+      filterActive={isPayrollColumnFilterActive(columnFilters, column.key)}
+    />
+  );
 
   return (
     <div className={styles.wrap} ref={scrollRef}>
-      <table className={styles.table}>
+      <table className={selectable ? styles.table : `${styles.table} ${styles.tableNoCheck}`}>
         <colgroup>
-          <col className={styles.colCheck} />
+          {selectable && <col className={styles.colCheck} />}
           <col className={styles.colNum} />
           <col className={styles.colName} />
+          {hasDeduction && <col className={styles.colDeduction} />}
           {visibleColumns.map(column => (
             <col
               key={column.key}
@@ -182,30 +210,27 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         </colgroup>
         <thead>
           <tr>
-            <th className={`${styles.stickyCheck} ${styles.cellCheck}`}>
-              <input
-                type="checkbox"
-                className={styles.check}
-                aria-label="Выделить всех загруженных"
-                checked={allSelected}
-                disabled={!canEdit}
-                onChange={onToggleAll}
-              />
-            </th>
+            {selectable && (
+              <th className={`${styles.stickyCheck} ${styles.cellCheck}`}>
+                <input
+                  type="checkbox"
+                  className={styles.check}
+                  aria-label="Выделить всех загруженных"
+                  checked={allSelected}
+                  disabled={!canEdit}
+                  onChange={onToggleAll}
+                />
+              </th>
+            )}
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
-            {sortableHeaders.map(column => (
-              <PayrollSortHeader
-                key={column.key}
-                sortKey={column.key}
-                label={column.label}
-                className={column.className ? styles[column.className] : undefined}
-                activeKey={sort}
-                dir={dir}
-                onSort={onSort}
-                onOpenFilter={onOpenFilter}
-                filterActive={isPayrollColumnFilterActive(columnFilters, column.key)}
-              />
-            ))}
+            {renderSortHeader(nameHeader)}
+            {hasDeduction && (
+              <th>
+                Удержание
+                <span className={styles.headPeriod}>{deductionPeriod}</span>
+              </th>
+            )}
+            {restHeaders.map(renderSortHeader)}
             {/* Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет. */}
             {shown('accruals') && (
               <th title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
@@ -256,20 +281,23 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     }}
                   >
                     {/* Выделение не открывает карточку — как ячейка чекбокса у кадров. */}
-                    <td className={`${styles.stickyCheck} ${styles.cellCheck}`} onClick={event => event.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        className={styles.check}
-                        aria-label={`Выделить ${row.full_name ?? ''}`}
-                        checked={isSelected}
-                        disabled={!canEdit || row.can_edit === false}
-                        onChange={() => onToggleOne(row.employee_id)}
-                      />
-                    </td>
+                    {selectable && (
+                      <td className={`${styles.stickyCheck} ${styles.cellCheck}`} onClick={event => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className={styles.check}
+                          aria-label={`Выделить ${row.full_name ?? ''}`}
+                          checked={isSelected}
+                          disabled={!canEdit || row.can_edit === false}
+                          onChange={() => onToggleOne(row.employee_id)}
+                        />
+                      </td>
+                    )}
                     <td className={`${styles.stickyNum} ${styles.cellNum}`}>{item.index + 1}</td>
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
+                    {hasDeduction && <td className={styles.cellNumber}>{formatDeduction(row.deduction_total)}</td>}
                     {shown('department') && <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>}
                     {shown('position') && <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>}
                     {shown('schedule') && (
