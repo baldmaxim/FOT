@@ -13,16 +13,23 @@ interface IMonthsPickerProps {
   /** Месяцы окна по порядку (по возрастанию) — выбрать можно только их. */
   options: string[];
   onChange: (months: string[]) => void;
-  /**
-   * Кнопка «Весь период» (пустой выбор). false — вместо неё «Очистить»: снимает отметки в панели, следующий
-   * клик начинает выбор заново; закрыли, ничего не выбрав, — прежний выбор (пустого не бывает).
-   */
+  /** Кнопка «Весь период» (пустой выбор). false — кнопки нет, последний месяц не снять. */
   allowAll?: boolean;
+  /**
+   * Без allowAll: выбор после «Очистить» (месяц по умолчанию) — применяется сразу, панель остаётся открытой.
+   * Не передан — кнопки нет.
+   */
+  resetValue?: string[];
   /** Подпись кнопки для экранного диктора; к ней добавляется выбранный период. */
   ariaLabel?: string;
   /** Класс кнопки-триггера: размер под место, где стоит выбор. */
   className?: string;
 }
+
+/** Один и тот же набор месяцев, без учёта порядка. */
+const sameMonths = (a: readonly string[], b: readonly string[]): boolean => (
+  a.length === b.length && a.every(month => b.includes(month))
+);
 
 /** Синхронизировано с `.panel { min-width }` в MonthsPicker.module.css. */
 const PANEL_MIN_WIDTH = 260;
@@ -34,13 +41,14 @@ const MONTH_NAMES = [
 
 /**
  * Выбор одного или нескольких месяцев: клик по месяцу отмечает или снимает его, панель при этом
- * остаётся открытой. «Весь период» (если allowAll) снимает выбор; без него — «Очистить» (см. allowAll).
+ * остаётся открытой. «Весь период» (если allowAll) снимает выбор; без него — «Очистить» (см. resetValue).
  */
 export const MonthsPicker: FC<IMonthsPickerProps> = ({
   value,
   options,
   onChange,
   allowAll = true,
+  resetValue,
   ariaLabel = 'Месяцы для виджетов и таблицы',
   className,
 }) => {
@@ -50,8 +58,6 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   // Год листается только внутри открытой панели: null — год последнего выбранного месяца
   // (или последнего месяца окна).
   const [yearOverride, setYearOverride] = useState<number | null>(null);
-  // «Очистить» без allowAll: отметки сняты только в панели, родителю пустой выбор не уходит.
-  const [cleared, setCleared] = useState(false);
   const anchorMonth = value.length > 0 ? [...value].sort().at(-1) : options.at(-1);
   const year = yearOverride ?? (anchorMonth ? Number(anchorMonth.slice(0, 4)) : new Date().getFullYear());
 
@@ -61,7 +67,6 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   const close = (): void => {
     setOpen(false);
     setYearOverride(null);
-    setCleared(false);
     triggerRef.current?.focus();
   };
   const backdrop = useOverlayDismiss(close);
@@ -79,8 +84,7 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   }, [open]);
 
   const toggle = (month: string): void => {
-    onChange(cleared ? [month] : toggleMonthSelection(value, month, allowAll));
-    setCleared(false);
+    onChange(toggleMonthSelection(value, month, allowAll));
   };
 
   const label = value.length === 0 ? 'весь период' : formatMonthsLabel(value);
@@ -136,7 +140,7 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
             <div className={styles.grid}>
               {MONTH_NAMES.map((name, index) => {
                 const month = `${year}-${String(index + 1).padStart(2, '0')}`;
-                const active = !cleared && value.includes(month);
+                const active = value.includes(month);
                 return (
                   <button
                     key={month}
@@ -164,12 +168,12 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
               >
                 Весь период
               </button>
-            ) : (
+            ) : resetValue && (
               <button
                 type="button"
                 className={styles.allPeriod}
-                disabled={cleared || value.length === 0}
-                onClick={() => setCleared(true)}
+                disabled={sameMonths(value, resetValue)}
+                onClick={() => onChange(resetValue)}
               >
                 Очистить
               </button>

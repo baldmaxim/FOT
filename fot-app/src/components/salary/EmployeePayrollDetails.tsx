@@ -151,6 +151,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
             options={monthOptions}
             onChange={setMonths}
             allowAll={false}
+            resetValue={[shiftMonth(currentMonth, -1)]}
             ariaLabel="Месяцы «Оплачено»"
             className={styles.monthsTrigger}
           />
