@@ -121,6 +121,9 @@
 
 /* Итоги: суммы — жирные, по правому краю, как ячейки статей. */
 .table .totalHead { font-weight: 600; }
+/* Строка «Выплачено» чуть выше строк статей. */
+.table .totalHead,
+.table .total { padding-top: 8px; padding-bottom: 8px; }
 .table .total {
   text-align: right;
   white-space: nowrap;
@@ -139,7 +142,8 @@
 .note { margin: 0; font-size: 12px; color: var(--text-secondary); }
 
 @media (min-width: 768px) {
-  .scroll { --paid-label-w: 14rem; --paid-month-w: 8rem; }
+  /* 11.5rem — в строку помещается «Компенсация проживания»; длиннее переносятся. */
+  .scroll { --paid-label-w: 11.5rem; --paid-month-w: 8rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

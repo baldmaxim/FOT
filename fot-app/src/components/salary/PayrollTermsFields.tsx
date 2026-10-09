@@ -140,10 +140,18 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           <div className={styles.half}>
             <div className={category === undefined ? `${styles.mainRow} ${styles.mainRowNoCategory}` : styles.mainRow}>
               {/* По умолчанию категория — по отделу сотрудника; в окне сотрудника её можно сменить. */}
-              {category !== undefined && (
+              {/* «Подробно» — одной строкой текстом: значение короткое, широкое поле ни к чему. */}
+              {category !== undefined && detailsOnly && (
+                <p className={styles.inlineField}>
+                  <span className={styles.label}>Категория:</span>
+                  {' '}
+                  <span className={styles.inlineValue}>{category ? STAFF_CATEGORY_LABELS[category] : '—'}</span>
+                </p>
+              )}
+              {category !== undefined && !detailsOnly && (
                 <div className={styles.field}>
                   <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
-                  {detailsOnly || readOnly || form.staffCategory === null ? (
+                  {readOnly || form.staffCategory === null ? (
                     <input
                       id={fieldId('category')}
                       className={`${styles.control} ${styles.controlReadOnly}`}

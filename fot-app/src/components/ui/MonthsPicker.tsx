@@ -13,7 +13,10 @@ interface IMonthsPickerProps {
   /** Месяцы окна по порядку (по возрастанию) — выбрать можно только их. */
   options: string[];
   onChange: (months: string[]) => void;
-  /** Кнопка «Весь период» (пустой выбор). false — кнопки нет, последний месяц не снять. */
+  /**
+   * Кнопка «Весь период» (пустой выбор). false — вместо неё «Очистить»: снимает отметки в панели, следующий
+   * клик начинает выбор заново; закрыли, ничего не выбрав, — прежний выбор (пустого не бывает).
+   */
   allowAll?: boolean;
   /** Подпись кнопки для экранного диктора; к ней добавляется выбранный период. */
   ariaLabel?: string;
@@ -31,7 +34,7 @@ const MONTH_NAMES = [
 
 /**
  * Выбор одного или нескольких месяцев: клик по месяцу отмечает или снимает его, панель при этом
- * остаётся открытой. «Весь период» (если allowAll) снимает выбор.
+ * остаётся открытой. «Весь период» (если allowAll) снимает выбор; без него — «Очистить» (см. allowAll).
  */
 export const MonthsPicker: FC<IMonthsPickerProps> = ({
   value,
@@ -47,6 +50,8 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   // Год листается только внутри открытой панели: null — год последнего выбранного месяца
   // (или последнего месяца окна).
   const [yearOverride, setYearOverride] = useState<number | null>(null);
+  // «Очистить» без allowAll: отметки сняты только в панели, родителю пустой выбор не уходит.
+  const [cleared, setCleared] = useState(false);
   const anchorMonth = value.length > 0 ? [...value].sort().at(-1) : options.at(-1);
   const year = yearOverride ?? (anchorMonth ? Number(anchorMonth.slice(0, 4)) : new Date().getFullYear());
 
@@ -56,6 +61,7 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   const close = (): void => {
     setOpen(false);
     setYearOverride(null);
+    setCleared(false);
     triggerRef.current?.focus();
   };
   const backdrop = useOverlayDismiss(close);
@@ -73,7 +79,8 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
   }, [open]);
 
   const toggle = (month: string): void => {
-    onChange(toggleMonthSelection(value, month, allowAll));
+    onChange(cleared ? [month] : toggleMonthSelection(value, month, allowAll));
+    setCleared(false);
   };
 
   const label = value.length === 0 ? 'весь период' : formatMonthsLabel(value);
@@ -129,7 +136,7 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
             <div className={styles.grid}>
               {MONTH_NAMES.map((name, index) => {
                 const month = `${year}-${String(index + 1).padStart(2, '0')}`;
-                const active = value.includes(month);
+                const active = !cleared && value.includes(month);
                 return (
                   <button
                     key={month}
@@ -145,7 +152,7 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
               })}
             </div>
 
-            {allowAll && (
+            {allowAll ? (
               <button
                 type="button"
                 className={styles.allPeriod}
@@ -156,6 +163,15 @@ export const MonthsPicker: FC<IMonthsPickerProps> = ({
                 }}
               >
                 Весь период
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={styles.allPeriod}
+                disabled={cleared || value.length === 0}
+                onClick={() => setCleared(true)}
+              >
+                Очистить
               </button>
             )}
           </div>
