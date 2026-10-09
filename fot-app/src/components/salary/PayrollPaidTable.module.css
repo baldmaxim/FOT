@@ -1,14 +1,13 @@
 /*
- * «Оплачено»: по таблице на месяц (статьи строками, итоги — внизу), таблицы в ряд, под ними строка
- * «Оплачено»; только чтение. Таблицы по ширине содержимого, не на всю форму; не помещаются в ряд —
- * переносятся. Узко — таблица прокручивается вбок внутри своей рамки (страница вбок не едет),
- * подписи строк закреплены слева.
+ * «Оплачено», только чтение: сверху таблицы итогов месяцев в ряд, под ними строка «Оплачено», ниже —
+ * раскрытые таблицы статей. Таблицы одной ширины и с одинаковыми столбцами: статьи месяца стоят точно
+ * под его итогами, не помещаются в ряд — переносятся одинаково. Узко — на всю ширину, друг под другом.
  */
 .paid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 .tables { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; }
 
-/* Строка-переключатель под таблицами: свернуть до итогов / раскрыть статьи. Шеврон — как у справки карточки. */
+/* Строка-переключатель между итогами и статьями: раскрыть / свернуть статьи. Шеврон — как у справки карточки. */
 .toggle {
   display: flex;
   flex-wrap: wrap;
@@ -33,16 +32,20 @@
 .title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .summary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
+/* Рамка таблицы: одна ширина у итогов и статей; узко — на всю ширину. */
 .scroll {
-  align-self: flex-start;
-  max-width: 100%;
+  box-sizing: border-box;
+  width: min(100%, 24rem);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
 
+/* fixed — ширина столбцов по шапке (.corner), а не по тексту: столбцы итогов и статей совпадают. */
 .table {
+  width: 100%;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -56,7 +59,7 @@
   text-align: left;
   vertical-align: middle;
 }
-.table tfoot tr:last-child > * { border-bottom: none; }
+.table tbody:last-child tr:last-child > * { border-bottom: none; }
 
 .corner,
 .monthHead {
@@ -75,12 +78,11 @@
   z-index: 1;
   box-shadow: inset -1px 0 0 var(--border-subtle);
 }
-.corner { z-index: 2; }
+/* Ширина столбца подписей задаёт столбцы всей таблицы (table-layout: fixed). */
+.corner { z-index: 2; width: 55%; }
 
-/* Телефон — узкие подписи, чтобы рядом было видно два месяца; шире — подписи в строку. */
+/* Длинная подпись статьи переносится, сумма остаётся в строку. */
 .rowHead {
-  min-width: 8rem;
-  max-width: 14rem;
   background: var(--surface);
   color: var(--text-primary);
   font-weight: 400;
@@ -97,11 +99,9 @@
 }
 .groupLabel { position: sticky; left: 8px; }
 
-/* Итоги: отделены от статей чертой, суммы — жирные, по правому краю, как ячейки. */
-.table tfoot tr:first-child > * { border-top: 1px solid var(--border); }
+/* Итоги: суммы — жирные, по правому краю, как ячейки статей. */
 .table .totalHead { font-weight: 600; }
 .table .total {
-  min-width: 10rem;
   text-align: right;
   white-space: nowrap;
   color: var(--text-primary);
@@ -110,19 +110,10 @@
 }
 
 .table .value {
-  min-width: 10rem;
   text-align: right;
   white-space: nowrap;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-}
-
-@media (min-width: 768px) {
-  .rowHead { min-width: 8.5rem; }
-}
-
-@media (min-width: 1024px) {
-  .rowHead { min-width: 13rem; }
 }
 
 .note { margin: 0; font-size: 12px; color: var(--text-secondary); }
