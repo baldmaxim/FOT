@@ -1,8 +1,8 @@
 /**
- * Удержания «Зарплаты»: справочник видов и удержания сотрудника по месяцам (месяц · вид · сумма).
+ * Удержания «Зарплаты»: справочник видов и виды удержаний сотрудника.
  *
- * Удержания вносятся в карточке сотрудника («Подробно» и окно на «Расчётах») и сохраняются вместе
- * с ней. Фильтр «Удержания» + месяц на «Расчётах» — в списке условий оплаты (payroll-terms.controller).
+ * Виды сотруднику отмечаются в окне его карточки на «Расчётах» и сохраняются вместе с ней. Фильтр
+ * «Удержания» на «Расчётах» — параметр списка условий оплаты (payroll-terms.controller).
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -13,9 +13,9 @@ import { auditService } from '../services/audit.service.js';
 import {
   addDeductionKind,
   allDeductionKindsExist,
-  getEmployeeDeductionEntries,
+  getEmployeeDeductionKindIds,
   listDeductionKinds,
-  setEmployeeDeductionEntries,
+  setEmployeeDeductionKinds,
 } from '../services/payroll/payroll-deduction-kinds.service.js';
 import { canEditPayrollEmployee, canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 
@@ -26,23 +26,9 @@ const addKindSchema = z.object({
     .pipe(z.string().min(1, 'Введите название вида').max(100, 'Не больше 100 символов')),
 });
 
-/** Верх NUMERIC(12,2). */
-const MAX_AMOUNT = 9_999_999_999.99;
-
-/** Удержания сотрудника целиком: один вид за месяц — одна строка. */
-const saveEntriesSchema = z.object({
-  entries: z.array(z.object({
-    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Ожидается месяц YYYY-MM'),
-    kind_id: z.coerce.number().int().positive(),
-    amount: z.coerce.number()
-      .positive('Сумма удержания должна быть больше нуля')
-      .max(MAX_AMOUNT, 'Слишком большая сумма удержания')
-      .refine(value => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Не больше двух знаков после запятой'),
-  })).max(200, 'Не больше 200 удержаний'),
-}).refine(
-  ({ entries }) => new Set(entries.map(entry => `${entry.month}|${entry.kind_id}`)).size === entries.length,
-  'Вид удержания за месяц указан дважды',
-);
+const saveKindsSchema = z.object({
+  kind_ids: z.array(z.coerce.number().int().positive()).max(100),
+});
 
 const handleZodError = (error: unknown, res: Response): boolean => {
   if (error instanceof z.ZodError) {
@@ -57,46 +43,46 @@ const parseEmployeeId = (req: AuthenticatedRequest): number | null => {
   return Number.isInteger(employeeId) && employeeId > 0 ? employeeId : null;
 };
 
-/** GET /api/payroll/deduction-entries/employee/:empId — удержания сотрудника по месяцам (для карточки). */
-const getEntries = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** GET /api/payroll/deductions/employee/:empId — виды удержаний сотрудника (для окна карточки). */
+const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = parseEmployeeId(req);
     if (employeeId === null || !(await canReadPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    res.json({ success: true, data: { entries: await getEmployeeDeductionEntries(employeeId) } });
+    res.json({ success: true, data: { kind_ids: await getEmployeeDeductionKindIds(employeeId) } });
   } catch (err) {
-    console.error('payrollDeductions.getEntries error:', err);
+    console.error('payrollDeductions.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения удержаний сотрудника' });
   }
 };
 
-/** PUT /api/payroll/deduction-entries/employee/:empId { entries } — заменить удержания сотрудника. */
-const saveEntries = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** PUT /api/payroll/deductions/employee/:empId { kind_ids } — заменить виды удержаний сотрудника. */
+const saveByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = parseEmployeeId(req);
     if (employeeId === null || !(await canEditPayrollEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    const { entries } = saveEntriesSchema.parse(req.body);
-    if (!(await allDeductionKindsExist(entries.map(entry => entry.kind_id)))) {
+    const { kind_ids: kindIds } = saveKindsSchema.parse(req.body);
+    if (!(await allDeductionKindsExist(kindIds))) {
       res.status(400).json({ success: false, error: 'Вид удержания не найден в справочнике' });
       return;
     }
-    const diff = await withTransaction(client => setEmployeeDeductionEntries(client, employeeId, entries));
-    if (diff.added.length > 0 || diff.removed.length > 0 || diff.changed.length > 0) {
-      await auditService.logFromRequest(req, req.user.id, 'PAYROLL_DEDUCTION_ENTRIES_SAVED', {
-        entityType: 'payroll_deduction_entries',
+    const { added, removed } = await withTransaction(client => setEmployeeDeductionKinds(client, employeeId, kindIds));
+    if (added.length > 0 || removed.length > 0) {
+      await auditService.logFromRequest(req, req.user.id, 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED', {
+        entityType: 'payroll_employee_deductions',
         entityId: String(employeeId),
-        details: { employee_id: employeeId, ...diff },
+        details: { employee_id: employeeId, added, removed },
       });
     }
-    res.json({ success: true, data: { entries: await getEmployeeDeductionEntries(employeeId) } });
+    res.json({ success: true, data: { kind_ids: await getEmployeeDeductionKindIds(employeeId) } });
   } catch (err) {
     if (handleZodError(err, res)) return;
-    console.error('payrollDeductions.saveEntries error:', err);
+    console.error('payrollDeductions.saveByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения удержаний сотрудника' });
   }
 };
@@ -133,4 +119,4 @@ const addKind = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   }
 };
 
-export const payrollDeductionsController = { getEntries, saveEntries, listKinds, addKind };
+export const payrollDeductionsController = { getByEmployee, saveByEmployee, listKinds, addKind };

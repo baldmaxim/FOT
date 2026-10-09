@@ -1,9 +1,9 @@
 /**
- * Удержания «Зарплаты»: справочник видов (миграция 299) и удержания сотрудника по месяцам (миграция 303).
+ * Удержания «Зарплаты»: справочник видов (миграция 299) и виды сотрудника (миграция 300).
  *
- * Справочник — пункты фильтра «Удержания» на «Расчётах» и «Вида» в удержаниях карточки;
- * пополняется в фильтре, правки и удаления нет (вид в удержании сотрудника держит FK RESTRICT).
- * Удержание — месяц · вид · сумма, один вид за месяц — одна строка; это не версия условий оплаты.
+ * Справочник — пункты выпадающего списка «Удержание» на «Расчётах» и в карточке «Подробно»;
+ * пополняется там же, правки и удаления нет (вид, отмеченный у сотрудника, держит FK RESTRICT).
+ * У сотрудника видов может быть несколько; это не версия условий оплаты.
  */
 import { query, queryOne, type DbExecutor } from '../../config/postgres.js';
 
@@ -46,80 +46,40 @@ export const addDeductionKind = async (name: string): Promise<IPayrollDeductionK
   }
 };
 
-/** Удержание сотрудника за месяц: месяц YYYY-MM, сумма — текстом NUMERIC (без потери копеек). */
-export interface IPayrollDeductionEntry {
-  month: string;
-  kind_id: number;
-  amount: string;
-}
-
-/** Удержания сотрудника: месяцы от новых к старым, виды — в порядке справочника. */
-export const getEmployeeDeductionEntries = async (employeeId: number): Promise<IPayrollDeductionEntry[]> =>
-  query<IPayrollDeductionEntry>(
-    `SELECT to_char(e.month, 'YYYY-MM') AS month, e.kind_id, e.amount::text AS amount
-       FROM payroll_deduction_entries e
-       JOIN payroll_deduction_kinds k ON k.id = e.kind_id
-      WHERE e.employee_id = $1
-      ORDER BY e.month DESC, k.sort_order, k.id`,
+/** Виды удержаний сотрудника — в порядке справочника. */
+export const getEmployeeDeductionKindIds = async (employeeId: number): Promise<number[]> => (
+  await query<{ kind_id: number }>(
+    `SELECT d.kind_id
+       FROM payroll_employee_deductions d
+       JOIN payroll_deduction_kinds k ON k.id = d.kind_id
+      WHERE d.employee_id = $1
+      ORDER BY k.sort_order, k.id`,
     [employeeId],
-  );
-
-/** Ключ записи: месяц + вид (одна строка на вид за месяц). */
-const entryKey = (entry: { month: string; kind_id: number }): string => `${entry.month}|${entry.kind_id}`;
+  )
+).map(row => row.kind_id);
 
 /**
- * Заменить удержания сотрудника набором entries: лишние удаляются, новые добавляются, у прежних
- * меняется сумма. Пары месяц+вид в entries уникальны (проверяет контроллер). Вызывать в транзакции.
- * Возвращает реально добавленные, удалённые и изменённые записи (для аудита).
+ * Заменить виды сотрудника набором kindIds: лишние снимаются, новые добавляются, прежние
+ * не трогаются. Вызывать в транзакции. Возвращает реально добавленные и снятые виды.
  */
-export const setEmployeeDeductionEntries = async (
+export const setEmployeeDeductionKinds = async (
   exec: DbExecutor,
   employeeId: number,
-  entries: ReadonlyArray<{ month: string; kind_id: number; amount: number }>,
-): Promise<{
-  added: IPayrollDeductionEntry[];
-  removed: IPayrollDeductionEntry[];
-  changed: Array<IPayrollDeductionEntry & { prev_amount: string }>;
-}> => {
-  // Блокировка строк сотрудника: два одновременных сохранения не перемешают наборы.
-  const before = await exec.query<IPayrollDeductionEntry>(
-    `SELECT to_char(month, 'YYYY-MM') AS month, kind_id, amount::text AS amount
-       FROM payroll_deduction_entries
-      WHERE employee_id = $1
-      FOR UPDATE`,
-    [employeeId],
+  kindIds: readonly number[],
+): Promise<{ added: number[]; removed: number[] }> => {
+  const ids = [...new Set(kindIds)];
+  const removed = await exec.query<{ kind_id: number }>(
+    `DELETE FROM payroll_employee_deductions
+      WHERE employee_id = $1 AND NOT (kind_id = ANY($2::int[]))
+      RETURNING kind_id`,
+    [employeeId, ids],
   );
-  const prev = new Map(before.rows.map(row => [entryKey(row), row]));
-  const next = new Set(entries.map(entryKey));
-
-  const removed = before.rows.filter(row => !next.has(entryKey(row)));
-  if (removed.length > 0) {
-    await exec.query(
-      `DELETE FROM payroll_deduction_entries d
-        USING unnest($2::date[], $3::int[]) AS r(month, kind_id)
-        WHERE d.employee_id = $1 AND d.month = r.month AND d.kind_id = r.kind_id`,
-      [employeeId, removed.map(row => `${row.month}-01`), removed.map(row => row.kind_id)],
-    );
-  }
-
-  // Неизменные суммы UPSERT не трогает и не возвращает: вернулись только добавленные и изменённые.
-  const saved = entries.length === 0 ? [] : (await exec.query<IPayrollDeductionEntry>(
-    `INSERT INTO payroll_deduction_entries AS d (employee_id, month, kind_id, amount)
-     SELECT $1, r.month, r.kind_id, r.amount
-       FROM unnest($2::date[], $3::int[], $4::numeric[]) AS r(month, kind_id, amount)
-     ON CONFLICT (employee_id, month, kind_id) DO UPDATE
-        SET amount = EXCLUDED.amount, updated_at = now()
-      WHERE d.amount IS DISTINCT FROM EXCLUDED.amount
-     RETURNING to_char(d.month, 'YYYY-MM') AS month, d.kind_id, d.amount::text AS amount`,
-    [employeeId, entries.map(entry => `${entry.month}-01`), entries.map(entry => entry.kind_id), entries.map(entry => entry.amount)],
-  )).rows;
-
-  const added: IPayrollDeductionEntry[] = [];
-  const changed: Array<IPayrollDeductionEntry & { prev_amount: string }> = [];
-  for (const row of saved) {
-    const was = prev.get(entryKey(row));
-    if (was) changed.push({ ...row, prev_amount: was.amount });
-    else added.push(row);
-  }
-  return { added, removed, changed };
+  const added = await exec.query<{ kind_id: number }>(
+    `INSERT INTO payroll_employee_deductions (employee_id, kind_id)
+     SELECT $1, unnest($2::int[])
+     ON CONFLICT DO NOTHING
+     RETURNING kind_id`,
+    [employeeId, ids],
+  );
+  return { added: added.rows.map(row => row.kind_id), removed: removed.rows.map(row => row.kind_id) };
 };

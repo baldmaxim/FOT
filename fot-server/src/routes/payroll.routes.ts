@@ -40,12 +40,12 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 
-// ─── Удержания: справочник видов и удержания сотрудника по месяцам ───────────
+// ─── Удержания: справочник видов и виды удержаний сотрудника ──────────────────
 // Фильтр «Удержания» на «Расчётах» — параметры списка условий (/terms).
 router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);
 router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addKind);
-router.get('/deduction-entries/employee/:empId', deductionsView, payrollDeductionsController.getEntries);
-router.put('/deduction-entries/employee/:empId', deductionsEdit, payrollDeductionsController.saveEntries);
+router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
+router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

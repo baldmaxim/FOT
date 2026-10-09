@@ -24,8 +24,8 @@ interface IPayrollDeductionsPageProps {
 /**
  * «Зарплата → Расчёты»: таблица штата как у «Условий оплаты» (без галочек и «Назначить выделенным»),
  * в панели — «Удержания» (виды справочника галочками, там же новый вид) и месяц. Отмечены виды —
- * только сотрудники с удержанием одного из них за месяц и столбец с суммой. Клик по строке — окно
- * с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
+ * только сотрудники хотя бы с одним из них и столбец «Удержание» за месяц (суммы придут из 1С).
+ * Клик по строке — окно с карточкой сотрудника: только там вносятся компенсации, доплаты и удержания.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, active, onSaved }) => {
   const kinds = usePayrollDeductionKinds();
@@ -41,7 +41,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   const kindsLabel = formatDeductionKinds(selected, kindList);
 
   const deductionFilter = useMemo<IPayrollDeductionFilter | undefined>(() => (
-    selected.length > 0 ? { kindIds: selected, month, monthLabel: formatAccrualPeriodLong([month]) } : undefined
+    selected.length > 0 ? { kindIds: selected, monthLabel: formatAccrualPeriodLong([month]) } : undefined
   ), [selected, month]);
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает меню и окно: они в портале, скрытие
@@ -126,7 +126,6 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
           key={employee.employee_id}
           row={employee}
           defaultDate={date}
-          deductionMonth={month}
           onClose={() => setEmployee(null)}
           onSaved={onSaved}
         />

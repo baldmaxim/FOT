@@ -1,6 +1,6 @@
 /**
- * Фильтр «Удержания» на «Расчётах»: набор отмеченных видов справочника.
- * Порядок набора — как в справочнике, чтобы подпись и ключ запроса не зависели от порядка кликов.
+ * Виды удержаний сотрудника («Расчёты», «Подробно → Удержание»): набор id справочника.
+ * Порядок набора — как в справочнике, чтобы подпись и сравнение не зависели от порядка кликов.
  */
 import type { IPayrollDeductionKind } from '../services/payrollService';
 
@@ -18,7 +18,14 @@ export const toggleDeductionKind = (
   return [...next].sort((a, b) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) || a - b);
 };
 
-/** Подпись кнопки «Удержания»: «Питание, Спецодежда»; ничего не отмечено — ''. Неизвестные id пропускаются. */
+/** Один и тот же набор видов, без учёта порядка. */
+export const sameDeductionKinds = (a: readonly number[], b: readonly number[]): boolean => {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every(id => set.has(id));
+};
+
+/** Подпись ячейки: «Питание, Спецодежда»; ничего не отмечено — ''. Неизвестные id пропускаются. */
 export const formatDeductionKinds = (
   selected: readonly number[],
   kinds: readonly IPayrollDeductionKind[],

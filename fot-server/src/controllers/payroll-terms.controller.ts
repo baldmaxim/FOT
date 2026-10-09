@@ -24,7 +24,6 @@ import {
   payrollSortKeySql,
   payrollValueKeySql,
   payrollValueOrderSql,
-  type IPayrollDeductionFilterParams,
   type IPayrollSortCursor,
 } from './payroll-terms-list.helpers.js';
 import {
@@ -273,16 +272,6 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)${columnFilterSql ? `\n       AND ${columnFilterSql}` : ''}
   )`;
 
-/** «Удержание» строки на «Расчётах»: сумма отмеченных видов за месяц фильтра. */
-const buildDeductionTotalSql = ({ kindsIdx, monthIdx }: IPayrollDeductionFilterParams): string => `
-                LEFT JOIN LATERAL (
-                  SELECT SUM(de.amount) AS deduction_total
-                    FROM payroll_deduction_entries de
-                   WHERE de.employee_id = page.employee_id
-                     AND de.month = $${monthIdx}::date
-                     AND de.kind_id = ANY($${kindsIdx}::int[])
-                ) ded ON TRUE`;
-
 /** Коды статей «Начислено» литералом SQL: константа из кода, не ввод пользователя. */
 const ACCRUAL_CODES_SQL = PAYROLL_PAID_ACCRUAL_CODES.map(code => `'${code}'`).join(', ');
 
@@ -300,8 +289,6 @@ const buildListSql = (options: {
   sortKeySql: string;
   cursorSql: string;
   orderSql: string;
-  /** Фильтр «Удержания»: строки порции получают сумму удержаний отмеченных видов за месяц. */
-  deduction: IPayrollDeductionFilterParams | null;
 }): string => `${buildBaseCtes(options.columnFilterSql)},
   keyed AS (
     SELECT filtered.*, ${options.sortKeySql} AS sort_key FROM filtered
@@ -319,7 +306,7 @@ const buildListSql = (options: {
                      ps.amount    AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
                      ps.date_to   AS planned_supplement_to,
-                     acc.accruals${options.deduction ? ', ded.deduction_total' : ''}
+                     acc.accruals
                 FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
                        WHERE ${options.cursorSql}
                        ORDER BY ${options.orderSql}
@@ -343,7 +330,7 @@ const buildListSql = (options: {
                              AND pa.month <  date_trunc('month', $1::date)::date
                              AND pa.item_code IN (${ACCRUAL_CODES_SQL})
                            GROUP BY pa.month) a
-                ) acc ON TRUE${options.deduction ? buildDeductionTotalSql(options.deduction) : ''}) p
+                ) acc ON TRUE) p
     ), '[]'::json) AS rows`;
 
 /** Прежний порядок и курсор (ФИО, id): без параметра sort — как до сортировки по столбцам. */
@@ -379,8 +366,6 @@ interface IPayrollTermsListRow {
   planned_supplement_to: string | null;
   /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. */
   accruals: Array<{ month: string; amount: number }> | null;
-  /** Только с фильтром «Удержания»: сумма отмеченных видов за месяц. */
-  deduction_total?: number | null;
   /** Категория по текущему отделу — её карточка показывает и её же сервер запишет при назначении. */
   department_category?: StaffCategory;
   sort_key?: unknown;
@@ -395,21 +380,15 @@ export const baseQuerySchema = z.object({
   calc_type: z.enum(['salary', 'hourly']).optional(),
   without_terms: z.enum(['true', 'false']).optional(),
   q: z.string().trim().max(100).optional(),
-  // Фильтр «Удержания» на «Расчётах»: id видов через запятую и месяц — только парой (deductionFilterIncomplete).
+  // Фильтр «Удержания» на «Расчётах»: id видов через запятую — сотрудники хотя бы с одним из них.
   deduction_kind_ids: z.string()
     .regex(/^\d+(,\d+)*$/, 'Ожидаются id видов через запятую')
     .transform(value => [...new Set(value.split(',').map(Number))])
     .pipe(z.array(z.number().int().positive()).min(1).max(100))
     .optional(),
-  deduction_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Ожидается месяц YYYY-MM').optional(),
 });
 
 type BaseQuery = z.infer<typeof baseQuerySchema>;
-
-/** Виды удержаний без месяца или месяц без видов — ошибка: молча показать весь штат нельзя. */
-const deductionFilterIncomplete = (query: BaseQuery): boolean => (
-  (query.deduction_kind_ids === undefined) !== (query.deduction_month === undefined)
-);
 
 /** $1–$8 для buildBaseCtes. */
 export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuery) => {
@@ -461,9 +440,6 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const filtersResult = parsePayrollColumnFilters(query.cf);
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
-    if (deductionFilterIncomplete(parsed)) {
-      return badRequest(res, 'Фильтр удержаний задаётся видами и месяцем', 'INVALID_DEDUCTION_FILTER');
-    }
 
     const { onDate, contractorRootId, params } = await buildBaseParams(req, parsed);
 
@@ -496,7 +472,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters);
-    const deduction = appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids, parsed.deduction_month);
+    appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids);
 
     const sql = buildListSql({
       columnFilterSql: whereParts.join('\n       AND '),
@@ -507,7 +483,6 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         ? `$11::text IS NULL AND $12::int IS NULL AND ${sortedAfter ? buildPayrollCursorSql('k', sort, sortedAfter, params) : 'TRUE'}`
         : LEGACY_CURSOR_SQL,
       orderSql: sort ? buildPayrollOrderSql('k', sort.dir) : LEGACY_ORDER_SQL,
-      deduction,
     });
 
     const result = await queryOne<{
@@ -587,14 +562,11 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     const filtersResult = parsePayrollColumnFilters((req.query as Record<string, unknown>).cf);
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
-    if (deductionFilterIncomplete(parsed)) {
-      return badRequest(res, 'Фильтр удержаний задаётся видами и месяцем', 'INVALID_DEDUCTION_FILTER');
-    }
 
     const { params } = await buildBaseParams(req, parsed);
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters, { exclude: column });
-    appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids, parsed.deduction_month);
+    appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids);
 
     params.push(parsed.value_q ? toIlikePattern(parsed.value_q) : null);
     const valueSearchIdx = params.length;

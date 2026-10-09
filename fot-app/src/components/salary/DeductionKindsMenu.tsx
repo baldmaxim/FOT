@@ -38,10 +38,15 @@ export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subti
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // Перехват на document: Escape закрывает только меню, а не окно сотрудника под ним (оно слушает window).
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   // Позиция считается один раз при открытии: меню модальное, страница под ним не прокручивается.
@@ -82,9 +87,9 @@ export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subti
 
   return createPortal(
     <>
-      <div className={shared.backdrop} {...dismiss} />
+      <div className={`${shared.backdrop} ${styles.raisedBackdrop}`} {...dismiss} />
       <div
-        className={isSheet ? `${shared.menu} ${shared.sheet}` : shared.menu}
+        className={`${isSheet ? `${shared.menu} ${shared.sheet}` : shared.menu} ${styles.raisedMenu}`}
         style={style}
         role="dialog"
         aria-modal="true"

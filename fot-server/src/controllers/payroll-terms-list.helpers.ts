@@ -207,30 +207,18 @@ export function appendPayrollColumnFilters(
   }
 }
 
-/** Номера параметров фильтра «Удержания»: те же — у суммы удержаний в строках списка. */
-export interface IPayrollDeductionFilterParams {
-  kindsIdx: number;
-  monthIdx: number;
-}
-
 /**
- * Фильтр «Удержания» на «Расчётах»: у сотрудника есть удержание хотя бы одного из видов за месяц.
- * Условие встаёт в CTE filtered (FROM scoped). Нет видов или месяца — без фильтра (null).
+ * Фильтр «Удержания» на «Расчётах»: у сотрудника отмечен хотя бы один из видов.
+ * Условие встаёт в CTE filtered (FROM scoped). Нет видов — без фильтра.
  */
 export function appendPayrollDeductionFilter(
   whereParts: string[],
   params: unknown[],
   kindIds: readonly number[] | undefined,
-  month: string | undefined,
-): IPayrollDeductionFilterParams | null {
-  if (!kindIds || kindIds.length === 0 || !month) return null;
+): void {
+  if (!kindIds || kindIds.length === 0) return;
   params.push(kindIds);
-  const kindsIdx = params.length;
-  params.push(`${month}-01`);
-  const monthIdx = params.length;
-  whereParts.push(`EXISTS (SELECT 1 FROM payroll_deduction_entries de
-                            WHERE de.employee_id = scoped.employee_id
-                              AND de.month = $${monthIdx}::date
-                              AND de.kind_id = ANY($${kindsIdx}::int[]))`);
-  return { kindsIdx, monthIdx };
+  whereParts.push(`EXISTS (SELECT 1 FROM payroll_employee_deductions d
+                            WHERE d.employee_id = scoped.employee_id
+                              AND d.kind_id = ANY($${params.length}::int[]))`);
 }

@@ -45,7 +45,7 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
-  /** Фильтр «Удержания» на «Расчётах»: столбец за «Сотрудником» — сумма отмеченных видов за месяц (подпись — месяц). */
+  /** Фильтр «Удержания» на «Расчётах»: столбец за «Сотрудником» — удержание за месяц (подпись — месяц; суммы придут из 1С). */
   deductionPeriod?: string;
 }
 
@@ -89,10 +89,6 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
   return money === null ? '—' : `${money} ₽/мес`;
 };
 
-const formatDeduction = (value: string | number | null | undefined): string => {
-  const money = formatPayrollMoney(value ?? null);
-  return money === null ? '—' : `${money} ₽`;
-};
 
 const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount }, index) => (
   <Fragment key={month}>
@@ -297,7 +293,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
-                    {hasDeduction && <td className={styles.cellNumber}>{formatDeduction(row.deduction_total)}</td>}
+                    {/* Суммы удержаний за месяц придут из 1С. */}
+                    {hasDeduction && <td className={styles.cellNumber}>—</td>}
                     {shown('department') && <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>}
                     {shown('position') && <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>}
                     {shown('schedule') && (

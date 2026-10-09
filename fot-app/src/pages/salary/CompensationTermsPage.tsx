@@ -47,10 +47,9 @@ const COLUMN_LABELS: Record<PayrollSortKey, string> = {
   housing: 'Компенсация проживания',
 };
 
-/** Фильтр «Удержания» на «Расчётах»: виды (хотя бы один) за месяц YYYY-MM. */
+/** Фильтр «Удержания» на «Расчётах»: виды (хотя бы один) и месяц столбца «Удержание». */
 export interface IPayrollDeductionFilter {
   kindIds: number[];
-  month: string;
   /** Подпись месяца в шапке столбца «Удержание». */
   monthLabel: string;
 }
@@ -68,7 +67,7 @@ interface ICompensationTermsPageProps {
   selectable?: boolean;
   /** Поля панели после «Все отделы» («Удержания» и месяц на «Расчётах»). */
   toolbarExtra?: ReactNode;
-  /** Фильтр «Удержания»: только сотрудники с удержанием и столбец с суммой. */
+  /** Фильтр «Удержания»: только сотрудники с отмеченными видами и столбец «Удержание» за месяц. */
   deductionFilter?: IPayrollDeductionFilter;
   /** Ключ хранилища скрытых столбцов (шестерёнка). */
   hiddenColumnsKey?: string;
@@ -108,7 +107,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
 
   const deductionKindIds = deductionFilter?.kindIds.join(',') || undefined;
-  const deductionMonth = deductionKindIds ? deductionFilter?.month : undefined;
 
   const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
     date,
@@ -116,8 +114,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
     deductionKindIds,
-    deductionMonth,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey, deductionKindIds, deductionMonth]);
+  }), [date, departmentId, debouncedSearch, columnFiltersKey, deductionKindIds]);
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir],
@@ -314,7 +311,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setBulkRows(chosen);
   };
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${deductionKindIds}|${deductionMonth}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${deductionKindIds}`;
 
   return (
     <div className={styles.page}>

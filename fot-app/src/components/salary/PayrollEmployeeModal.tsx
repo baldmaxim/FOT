@@ -10,8 +10,6 @@ interface IPayrollEmployeeModalProps {
   row: IPayrollTermsRow;
   /** Дата выборки условий — предзаполняет «Действует с». */
   defaultDate: string;
-  /** Месяц новой строки удержания — выбранный на «Расчётах». */
-  deductionMonth: string;
   onClose: () => void;
   /** Сохранено: окно закрывается само, родитель закрывает устаревшую карточку «Подробно» этого сотрудника. */
   onSaved: (employeeId: number) => void;
@@ -24,7 +22,6 @@ interface IPayrollEmployeeModalProps {
 export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
   row,
   defaultDate,
-  deductionMonth,
   onClose,
   onSaved,
 }) => (
@@ -38,7 +35,7 @@ export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
       <EmployeePayrollDetails
         row={row}
         defaultDate={defaultDate}
-        deductionMonth={deductionMonth}
+        paymentSections
         className={styles.card}
         active
         onClose={requestClose}

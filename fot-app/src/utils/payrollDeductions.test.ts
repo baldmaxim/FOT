@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDeductionKinds, toggleDeductionKind } from './payrollDeductions';
+import { formatDeductionKinds, sameDeductionKinds, toggleDeductionKind } from './payrollDeductions';
 
 const KINDS = [
   { id: 3, name: 'Корректировка удержаний' },
@@ -8,7 +8,7 @@ const KINDS = [
   { id: 7, name: 'Питание' },
 ];
 
-describe('фильтр «Удержания»: виды', () => {
+describe('виды удержаний сотрудника', () => {
   it('отметка — в порядке справочника, а не кликов; повтор не задваивает', () => {
     expect(toggleDeductionKind([7], 3, true, KINDS)).toEqual([3, 7]);
     expect(toggleDeductionKind([3, 7], 1, true, KINDS)).toEqual([3, 1, 7]);
@@ -18,6 +18,12 @@ describe('фильтр «Удержания»: виды', () => {
 
   it('вид, которого ещё нет в загруженном справочнике (только что добавлен), — в конец', () => {
     expect(toggleDeductionKind([7], 42, true, KINDS)).toEqual([7, 42]);
+  });
+
+  it('сравнение наборов без учёта порядка', () => {
+    expect(sameDeductionKinds([3, 7], [7, 3])).toBe(true);
+    expect(sameDeductionKinds([3], [3, 7])).toBe(false);
+    expect(sameDeductionKinds([], [])).toBe(true);
   });
 
   it('подпись — названия через запятую; пусто — пустая строка', () => {

@@ -68,8 +68,6 @@ export interface IPayrollTermsRow {
    * отдельно; без поля ячейка «Начисления» показывает «—».
    */
   accruals?: IPayrollMonthlyAccrual[] | null;
-  /** Только с фильтром «Удержания» («Расчёты»): сумма отмеченных видов за месяц; null — удержаний нет. */
-  deduction_total?: string | number | null;
   /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
@@ -109,6 +107,7 @@ export interface IAssignTermsPayload {
   housing_compensation?: number;
   travel_compensation?: number;
   communication_compensation?: number;
+  deduction_amount?: number;
   staff_units?: number;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
@@ -266,9 +265,8 @@ export interface IPayrollTermsViewParams {
   q?: string;
   /** Фильтры столбцов, сериализованные serializePayrollColumnFilters ('' — без фильтров). */
   cf?: string;
-  /** Фильтр «Удержания» на «Расчётах»: id видов через запятую и месяц YYYY-MM — только вместе. */
+  /** Фильтр «Удержания» на «Расчётах»: id видов через запятую — сотрудники хотя бы с одним из них. */
   deductionKindIds?: string;
-  deductionMonth?: string;
 }
 
 const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewParams): void => {
@@ -276,30 +274,13 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.departmentId) search.set('department_id', params.departmentId);
   if (params.q) search.set('q', params.q);
   if (params.cf) search.set('cf', params.cf);
-  if (params.deductionKindIds && params.deductionMonth) {
-    search.set('deduction_kind_ids', params.deductionKindIds);
-    search.set('deduction_month', params.deductionMonth);
-  }
+  if (params.deductionKindIds) search.set('deduction_kind_ids', params.deductionKindIds);
 };
 
 /** Вид удержания из справочника («Расчёты»). */
 export interface IPayrollDeductionKind {
   id: number;
   name: string;
-}
-
-/** Удержание сотрудника за месяц: месяц YYYY-MM, сумма — текстом NUMERIC. */
-export interface IPayrollDeductionEntry {
-  month: string;
-  kind_id: number;
-  amount: string;
-}
-
-/** Удержание к сохранению: один вид за месяц — одна строка. */
-export interface IPayrollDeductionEntryPayload {
-  month: string;
-  kind_id: number;
-  amount: number;
 }
 
 export interface IPayrollTermsListResult {
@@ -394,25 +375,22 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Удержания сотрудника по месяцам — для «Удержания» карточки: месяцы от новых, виды по справочнику. */
-  getDeductionEntries: async (employeeId: number, signal?: AbortSignal): Promise<IPayrollDeductionEntry[]> => {
-    const res = await apiClient.get<IApiResponse<{ entries: IPayrollDeductionEntry[] }>>(
-      `/payroll/deduction-entries/employee/${employeeId}`,
+  /** Виды удержаний сотрудника — для «Удержания» в окне карточки на «Расчётах». */
+  getEmployeeDeductions: async (employeeId: number, signal?: AbortSignal): Promise<number[]> => {
+    const res = await apiClient.get<IApiResponse<{ kind_ids: number[] }>>(
+      `/payroll/deductions/employee/${employeeId}`,
       { signal },
     );
-    return res.data.entries;
+    return res.data.kind_ids;
   },
 
-  /** Заменить удержания сотрудника целиком; ответ — сохранённые записи. */
-  saveDeductionEntries: async (
-    employeeId: number,
-    entries: IPayrollDeductionEntryPayload[],
-  ): Promise<IPayrollDeductionEntry[]> => {
-    const res = await apiClient.put<IApiResponse<{ entries: IPayrollDeductionEntry[] }>>(
-      `/payroll/deduction-entries/employee/${employeeId}`,
-      { entries },
+  /** Заменить виды удержаний сотрудника; ответ — сохранённый набор в порядке справочника. */
+  saveEmployeeDeductions: async (employeeId: number, kindIds: number[]): Promise<number[]> => {
+    const res = await apiClient.put<IApiResponse<{ kind_ids: number[] }>>(
+      `/payroll/deductions/employee/${employeeId}`,
+      { kind_ids: kindIds },
     );
-    return res.data.entries;
+    return res.data.kind_ids;
   },
 
   /** Добавить вид удержания; такой уже есть — ApiError 409. */
