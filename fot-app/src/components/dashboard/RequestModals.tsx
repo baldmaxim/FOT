@@ -56,6 +56,8 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
 const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'educational_leave'];
 // Увольнение подаётся одной датой — последним рабочим днём (start_date = end_date).
 const SINGLE_DATE_TYPES: LeaveRequestType[] = ['dismissal'];
+// Типы, оригинал которых сотрудник обязан донести в отдел кадров.
+const ORIGINAL_TO_HR_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'dismissal'];
 
 interface IUnifiedRequestModalProps {
   onClose: () => void;
@@ -515,6 +517,11 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                   </div>
                 ))}
               </div>
+            )}
+            {ORIGINAL_TO_HR_TYPES.includes(requestType) && (
+              <p className={styles.reqCalHint}>
+                Оригинал заявления передать в отдел кадров. Сотрудникам, находящимся на объектах, документы передавать через табельщицу.
+              </p>
             )}
           </div>
         </div>
