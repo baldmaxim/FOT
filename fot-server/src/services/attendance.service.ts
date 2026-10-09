@@ -895,7 +895,8 @@ export async function buildAttendanceEntries(params: {
         const presence = computePresenceCoversShift({
           firstEntry: summary.first_entry,
           lastExit: summary.last_exit,
-          totalMinutes: getSummaryMinutes(summary),
+          // Засчитанный переезд между объектами — рабочее время, а не перерыв.
+          totalMinutes: getSummaryMinutes(summary) + travelCreditedMinutes,
           shiftDurationHours,
           lunchMinutes: effectiveLunchMinutes,
           workDate: summary.date,
@@ -975,7 +976,8 @@ export async function buildAttendanceEntries(params: {
             ? computePresenceCoversShift({
               firstEntry: rawSummary.first_entry,
               lastExit: rawSummary.last_exit,
-              totalMinutes: getSummaryMinutes(rawSummary),
+              // Засчитанный переезд между объектами — рабочее время, а не перерыв.
+              totalMinutes: getSummaryMinutes(rawSummary) + travelCreditedMinutes,
               shiftDurationHours,
               lunchMinutes: effectiveLunchMinutes,
               workDate,

@@ -22,6 +22,7 @@ type SummaryRow = {
   last_exit: string | null;
   total_hours: number | null;
   total_minutes?: number | null;
+  break_minutes?: number | null;
 };
 
 type AdjustmentRow = Record<string, unknown>;
@@ -40,7 +41,7 @@ const mockedState = vi.hoisted(() => ({
   isWorkingDay: true,
   needsSkudCheck: false,
   // Rows for tables consumed by buildAttendanceEntries / upsertAttendanceAdjustment
-  summaryRows: [] as Array<{ employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number | null; total_minutes?: number | null }>,
+  summaryRows: [] as Array<{ employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number | null; total_minutes?: number | null; break_minutes?: number | null }>,
   adjustmentRows: [] as Array<Record<string, unknown>>,
   userProfileRows: [] as Array<{ id: string; full_name: string }>,
   employeeRows: [] as Array<{ id: number; full_name: string }>,
@@ -753,6 +754,86 @@ describe('attendance.service', () => {
       travel_problematic_segments: 1,
     });
     expect(result.objectEntries).toEqual([]);
+  });
+
+  // День 07:38:59–16:22:44 (span 523,75 мин), в офисе 462 мин, вне турникетов 62 мин,
+  // из них 50 мин — засчитанный переезд между объектами; смена 8ч, обед 60 мин.
+  const travelBreakDay: SummaryRow = {
+    employee_id: 1,
+    date: '2026-09-25',
+    first_entry: '07:38:59',
+    last_exit: '16:22:44',
+    total_hours: 7.7,
+    total_minutes: 462,
+    break_minutes: 62,
+  };
+  const travelBreakCredit = {
+    creditedMinutes: 50,
+    delayMinutes: 0,
+    segmentsCount: 1,
+    problematicSegmentsCount: 0,
+    objectProblemSegmentsCount: 0,
+  };
+  const buildTravelBreakDay = () => buildAttendanceEntries({
+    employees: [{ id: 1, full_name: 'Иван Иванов' }],
+    startDate: '2026-09-25',
+    endDate: '2026-09-25',
+    dailySchedulesMap: new Map([
+      [1, new Map([['2026-09-25', { lunch_minutes: 60 } as IResolvedSchedule]])],
+    ]),
+    calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+    todayStr: '2026-10-09',
+  });
+
+  it('без переезда перерыв 61,75 мин сверх обеда 60 → long_break', async () => {
+    mockedState.scheduleShiftHours = 8;
+    mockedState.summaryRows = [travelBreakDay];
+
+    const result = await buildTravelBreakDay();
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      presence_covers_shift: false,
+      underwork_reason: 'long_break',
+      break_minutes: 62,
+    });
+  });
+
+  it('засчитанный переезд не считается перерывом: смена покрыта, часы прежние', async () => {
+    mockedState.scheduleShiftHours = 8;
+    mockedState.summaryRows = [travelBreakDay];
+    mockedState.travelSummary = new Map([['1_2026-09-25', travelBreakCredit]]);
+
+    const result = await buildTravelBreakDay();
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      presence_covers_shift: true,
+      underwork_reason: null,
+      hours_worked: 8.53,
+      base_hours_worked: 7.7,
+      travel_minutes_credited: 50,
+      break_minutes: 62,
+    });
+  });
+
+  it('засчитанный переезд не считается перерывом и в raw-fallback по СКУД-событиям', async () => {
+    mockedState.scheduleShiftHours = 8;
+    mockedState.needsSkudCheck = true;
+    mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
+      [1, new Map([['2026-09-25', travelBreakDay]])],
+    ]);
+    mockedState.travelSummary = new Map([['1_2026-09-25', travelBreakCredit]]);
+
+    const result = await buildTravelBreakDay();
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      status: 'work',
+      presence_covers_shift: true,
+      underwork_reason: null,
+      travel_minutes_credited: 50,
+    });
   });
 
   it('builds a work entry from raw skud events when daily summary is missing', async () => {
