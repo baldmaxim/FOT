@@ -32,6 +32,11 @@ vi.mock('../config/contractor.js', () => ({ getContractorRootId: vi.fn(async () 
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
+// Категория по отделу: структура — отдельным запросом, здесь подменяется.
+vi.mock('../services/payroll/payroll-staff-category.js', () => ({
+  loadStaffCategoryResolver: vi.fn(async () => (departmentId: string | null) => (departmentId === 'br-1' ? 'worker' : 'office')),
+}));
+
 import { payrollDeductionsController } from './payroll-deductions.controller.js';
 
 const makeRes = () => {
@@ -56,13 +61,16 @@ beforeEach(() => {
 
 describe('payrollDeductionsController.list', () => {
   it('сотрудники хотя бы с одним из выбранных видов, в скоупе «Зарплаты», без подрядчиков, с can_edit', async () => {
-    pgQuery.mockResolvedValue([{ employee_id: 1 }, { employee_id: 2 }]);
+    pgQuery.mockResolvedValue([{ employee_id: 1, department_id: 'br-1' }, { employee_id: 2, department_id: null }]);
     const res = makeRes();
 
     await payrollDeductionsController.list(makeReq({ query: { date: '2026-10-06', kind_ids: '5,4,5' } }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual([{ employee_id: 1, can_edit: true }, { employee_id: 2, can_edit: false }]);
+    expect(res.body.data).toEqual([
+      { employee_id: 1, department_id: 'br-1', department_category: 'worker', can_edit: true },
+      { employee_id: 2, department_id: null, department_category: 'office', can_edit: false },
+    ]);
     expect(res.body.meta).toEqual({ date: '2026-10-06', contractors_excluded: true });
     const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('d.kind_id = ANY($9::int[])');

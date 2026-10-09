@@ -19,12 +19,12 @@ import {
   formatMonthLabel,
   formatPercent,
 } from '../../utils/formatMoney';
+import { formatMonthsLabel } from '../../utils/monthsSelection';
 import {
   applyTableView,
   buildExportTable,
   buildMonthColumns,
   defaultMonths,
-  formatMonthsLabel,
   listWindowMonths,
   OBJECT_STAT_COLUMNS,
   premiumCell,
@@ -34,7 +34,7 @@ import {
 } from '../../utils/objectKpiTable';
 import { ObjectKpiCardModal } from '../../components/admin/ObjectKpiCardModal';
 import { ObjectKpiAssignmentModal } from '../../components/admin/ObjectKpiAssignmentModal';
-import { ObjectKpiMonthsPicker } from '../../components/admin/ObjectKpiMonthsPicker';
+import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { ObjectKpiTable } from '../../components/admin/ObjectKpiTable';
 import styles from './ObjectKpiPage.module.css';
 
@@ -271,7 +271,7 @@ export const ObjectKpiPage: FC = () => {
           <span className={styles.summaryLabel}>План за период</span>
           <strong>{tileValue(summary?.total_plan ?? null, formatMoneyShort)}</strong>
           {/* Выбор месяцев прямо в плитке: он меняет плитки и таблицу разом. */}
-          <ObjectKpiMonthsPicker value={activeMonths} options={monthOptions} onChange={setSelectedMonths} />
+          <MonthsPicker value={activeMonths} options={monthOptions} onChange={setSelectedMonths} />
         </div>
         <div className={`${styles.summaryTile} ${styles.summaryTileCompact}`}>
           <span className={styles.summaryLabel}>Факт КС-2</span>

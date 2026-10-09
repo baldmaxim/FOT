@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { query, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
+import { loadStaffCategoryResolver } from '../services/payroll/payroll-staff-category.js';
 import {
   addDeductionKind,
   allDeductionKindsExist,
@@ -47,6 +48,7 @@ const saveKindsSchema = z.object({
 /** Строка «Расчётов»: колонки CTE scoped (условия на дату) и последняя плановая доплата. */
 interface IPayrollDeductionRow {
   employee_id: number;
+  department_id: string | null;
   [column: string]: unknown;
 }
 
@@ -92,9 +94,15 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     );
     // can_edit — как в списке условий: карточка из «Расчётов» правится в том же скоупе.
     const canEditRow = await resolvePayrollEditPredicate(req);
+    // Категория по отделу — как в списке условий: карточка показывает её только для чтения.
+    const categoryOf = await loadStaffCategoryResolver();
     res.json({
       success: true,
-      data: rows.map(row => ({ ...row, can_edit: canEditRow(row.employee_id) })),
+      data: rows.map(row => ({
+        ...row,
+        department_category: categoryOf(row.department_id),
+        can_edit: canEditRow(row.employee_id),
+      })),
       meta: { date: onDate, contractors_excluded: contractorRootId !== null },
     });
   } catch (err) {

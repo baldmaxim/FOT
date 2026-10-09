@@ -4,18 +4,24 @@ import { ChevronDown } from 'lucide-react';
 
 import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { formatMonthsLabel } from '../../utils/objectKpiTable';
-import styles from './ObjectKpiMonthsPicker.module.css';
+import { formatMonthsLabel, toggleMonthSelection } from '../../utils/monthsSelection';
+import styles from './MonthsPicker.module.css';
 
-interface IObjectKpiMonthsPickerProps {
+interface IMonthsPickerProps {
   /** Выбранные месяцы (YYYY-MM); пусто — весь период. */
   value: string[];
-  /** Месяцы окна расчёта по порядку — выбрать можно только их. */
+  /** Месяцы окна по порядку (по возрастанию) — выбрать можно только их. */
   options: string[];
   onChange: (months: string[]) => void;
+  /** Кнопка «Весь период» (пустой выбор). false — кнопки нет, последний месяц не снять. */
+  allowAll?: boolean;
+  /** Подпись кнопки для экранного диктора; к ней добавляется выбранный период. */
+  ariaLabel?: string;
+  /** Класс кнопки-триггера: размер под место, где стоит выбор. */
+  className?: string;
 }
 
-/** Синхронизировано с `.panel { min-width }` в ObjectKpiMonthsPicker.module.css. */
+/** Синхронизировано с `.panel { min-width }` в MonthsPicker.module.css. */
 const PANEL_MIN_WIDTH = 260;
 
 const MONTH_NAMES = [
@@ -24,10 +30,17 @@ const MONTH_NAMES = [
 ];
 
 /**
- * Выбор одного или нескольких месяцев для плиток и таблиц вкладки: клик по месяцу отмечает
- * или снимает его, панель при этом остаётся открытой. «Весь период» снимает выбор.
+ * Выбор одного или нескольких месяцев: клик по месяцу отмечает или снимает его, панель при этом
+ * остаётся открытой. «Весь период» (если allowAll) снимает выбор.
  */
-export const ObjectKpiMonthsPicker: FC<IObjectKpiMonthsPickerProps> = ({ value, options, onChange }) => {
+export const MonthsPicker: FC<IMonthsPickerProps> = ({
+  value,
+  options,
+  onChange,
+  allowAll = true,
+  ariaLabel = 'Месяцы для виджетов и таблицы',
+  className,
+}) => {
   const [open, setOpen] = useState(false);
   const firstYear = options.length > 0 ? Number(options[0].slice(0, 4)) : null;
   const lastYear = options.length > 0 ? Number(options[options.length - 1].slice(0, 4)) : null;
@@ -60,7 +73,7 @@ export const ObjectKpiMonthsPicker: FC<IObjectKpiMonthsPickerProps> = ({ value, 
   }, [open]);
 
   const toggle = (month: string): void => {
-    onChange(value.includes(month) ? value.filter(item => item !== month) : [...value, month].sort());
+    onChange(toggleMonthSelection(value, month, allowAll));
   };
 
   const label = value.length === 0 ? 'весь период' : formatMonthsLabel(value);
@@ -70,10 +83,10 @@ export const ObjectKpiMonthsPicker: FC<IObjectKpiMonthsPickerProps> = ({ value, 
       <button
         type="button"
         ref={triggerRef}
-        className={styles.trigger}
+        className={className ? `${styles.trigger} ${className}` : styles.trigger}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Месяцы для виджетов и таблицы: ${label}`}
+        aria-label={`${ariaLabel}: ${label}`}
         title={label}
         disabled={options.length === 0}
         onClick={() => setOpen(prev => !prev)}
@@ -132,17 +145,19 @@ export const ObjectKpiMonthsPicker: FC<IObjectKpiMonthsPickerProps> = ({ value, 
               })}
             </div>
 
-            <button
-              type="button"
-              className={styles.allPeriod}
-              disabled={value.length === 0}
-              onClick={() => {
-                onChange([]);
-                close();
-              }}
-            >
-              Весь период
-            </button>
+            {allowAll && (
+              <button
+                type="button"
+                className={styles.allPeriod}
+                disabled={value.length === 0}
+                onClick={() => {
+                  onChange([]);
+                  close();
+                }}
+              >
+                Весь период
+              </button>
+            )}
           </div>
         </>,
         document.body,

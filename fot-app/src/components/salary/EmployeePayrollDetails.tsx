@@ -4,7 +4,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import {
-  defaultCalcTypeFor,
   payrollService,
   type IAssignTermsPayload,
   type IPayrollTermsRow,
@@ -13,8 +12,9 @@ import { usePayrollEmployeeDeductions } from '../../hooks/usePayrollEmployeeDedu
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
-import { formatAccrualMonthLabel, payrollMonthOptions } from '../../utils/payrollAccruals';
+import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
+import { MonthsPicker } from '../ui/MonthsPicker';
 import { DeductionKindsField } from './DeductionKindsField';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
@@ -47,8 +47,8 @@ interface ISaveVariables {
  * Вкладка «Подробно» раздела «Зарплата»: условия оплаты одного сотрудника (основная оплата с «Оплачено»,
  * компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений и отпуска. Справка грузится
  * отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия и виды удержаний — что из них правили.
- * «Оплачено» — только чтение: суммы приходят из 1С.
- * Месяц у ФИО задаёт месяц «Оплачено»; условия от него не зависят.
+ * «Оплачено» — только чтение: суммы приходят из 1С. Категория — только чтение: её ставит сервер по отделу.
+ * Месяцы у ФИО (один или несколько) задают таблицы «Оплачено»; условия от них не зависят.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -65,19 +65,14 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const nameRef = useRef<HTMLHeadingElement>(null);
   // Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер).
   const canEdit = canEditPage('/salary/terms') && row.can_edit !== false;
-  const form = usePayrollTermsForm({
-    row,
-    defaultDate,
-    resolveDefaultCalcType: defaultCalcTypeFor,
-    plannedSupplement: true,
-  });
+  const form = usePayrollTermsForm({ row, defaultDate, plannedSupplement: true });
   // «Сегодня» — на момент открытия карточки: defaultDate фиксируется при входе в раздел и через
   // границу месяца без перезагрузки устарел бы. По умолчанию — прошлый, уже закрытый месяц.
   const [currentMonth] = useState(moscowCurrentMonth);
-  const [month, setMonth] = useState(() => shiftMonth(currentMonth, -1));
-  const monthOptions = useMemo(() => payrollMonthOptions(currentMonth), [currentMonth]);
-  const paidMonths = useMemo(() => [month], [month]);
-  const paid = usePayrollPaid(row.employee_id, paidMonths);
+  const [months, setMonths] = useState<string[]>(() => [shiftMonth(currentMonth, -1)]);
+  // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
+  const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
+  const paid = usePayrollPaid(row.employee_id, months);
   const deductions = usePayrollEmployeeDeductions(row.employee_id);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
@@ -134,20 +129,18 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   return (
     <form className={styles.details} onSubmit={handleSubmit} noValidate aria-labelledby={titleId}>
       <header className={styles.header}>
-        <div className={styles.headerText}>
+        <div className={styles.nameRow}>
           <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
-          {meta && <p className={styles.meta}>{meta}</p>}
+          <MonthsPicker
+            value={months}
+            options={monthOptions}
+            onChange={setMonths}
+            allowAll={false}
+            ariaLabel="Месяцы «Оплачено»"
+            className={styles.monthsTrigger}
+          />
         </div>
-        <select
-          className={styles.monthSelect}
-          aria-label="Месяц"
-          value={month}
-          onChange={event => setMonth(event.target.value)}
-        >
-          {monthOptions.map(option => (
-            <option key={option} value={option}>{formatAccrualMonthLabel(option, true)}</option>
-          ))}
-        </select>
+        {meta && <p className={styles.meta}>{meta}</p>}
       </header>
 
       <div className={styles.body}>
@@ -158,6 +151,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           form={form}
           idPrefix={idPrefix}
           readOnly={!canEdit}
+          category={row.department_category ?? row.staff_category}
           autoFocus={canEdit}
           paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} />}
           stacked

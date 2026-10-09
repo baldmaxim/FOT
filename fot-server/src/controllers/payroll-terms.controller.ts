@@ -33,6 +33,10 @@ import {
 } from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
+  loadStaffCategoryResolver,
+  resolveEmployeeStaffCategories,
+} from '../services/payroll/payroll-staff-category.js';
+import {
   assignTerms,
   assignTermsBulk,
   getSalaryChanges,
@@ -42,6 +46,7 @@ import {
   lockPayrollEmployee,
   setPlannedSupplement,
   type IAssignResult,
+  type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -57,7 +62,8 @@ const optionalMoneySchema = z.coerce.number().min(0, 'Сумма не может
  * пользователю понятный текст, а не 500 от констрейнта.
  */
 const termsBodySchema = z.object({
-  staff_category: z.enum(['office', 'itr', 'worker']),
+  // Категория — по отделу сотрудника (сервер определяет сам); старый фронт ещё присылает поле — игнорируется.
+  staff_category: z.enum(['office', 'itr', 'worker']).optional(),
   calc_type: z.enum(['salary', 'hourly']),
   monthly_salary: moneySchema.optional(),
   hourly_rate: moneySchema.optional(),
@@ -359,6 +365,8 @@ interface IPayrollTermsListRow {
   planned_supplement_to: string | null;
   /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. */
   accruals: Array<{ month: string; amount: number }> | null;
+  /** Категория по текущему отделу — её карточка показывает и её же сервер запишет при назначении. */
+  department_category?: StaffCategory;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
@@ -490,9 +498,11 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     // can_edit — скоуп правки конкретного сотрудника (то же, что проверит assign):
     // право на страницу есть, а отдел — только на просмотр → карточка без правки.
     const canEditRow = await resolvePayrollEditPredicate(req);
+    const categoryOf = await loadStaffCategoryResolver();
     // Служебные поля ключа наружу не отдаём.
     const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, ...row }) => ({
       ...row,
+      department_category: categoryOf(row.department_id),
       can_edit: canEditRow(row.employee_id),
     }));
 
@@ -591,12 +601,14 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     // Условия и доплата — одной транзакцией под блокировкой сотрудника: параллельное
     // сохранение не прочтёт ту же прежнюю версию доплаты.
-    const { termsId, previous, supplementChanged } = await withTransaction(async client => {
+    const { termsId, previous, supplementChanged, staffCategory } = await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
+      // Категория — по отделу сотрудника на момент сохранения, а не из запроса.
+      const category = (await resolveEmployeeStaffCategories([employeeId], client)).get(employeeId) ?? 'office';
       const previousTerms = await getTermsOnDate(employeeId, body.effective_from, client);
       const id = await assignTerms({
         employeeId,
-        staffCategory: body.staff_category,
+        staffCategory: category,
         calcType: body.calc_type,
         monthlySalary: body.monthly_salary ?? null,
         hourlyRate: body.hourly_rate ?? null,
@@ -625,7 +637,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           },
           createdBy: req.user.id,
         });
-      return { termsId: id, previous: previousTerms, supplementChanged: changed };
+      return { termsId: id, previous: previousTerms, supplementChanged: changed, staffCategory: category };
     });
 
     await auditService.logFromRequest(req, req.user.id, 'PAYROLL_TERMS_ASSIGNED', {
@@ -634,7 +646,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       details: {
         employee_id: employeeId,
         effective_from: body.effective_from,
-        staff_category: body.staff_category,
+        staff_category: staffCategory,
         calc_type: body.calc_type,
         // Суммы в аудит пишем: это кадровое основание, а не секрет.
         monthly_salary: body.monthly_salary ?? null,
@@ -660,6 +672,13 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/** { worker: 12, office: 3 } — для аудита массового назначения. */
+const countCategories = (categories: StaffCategory[]): Partial<Record<StaffCategory, number>> => {
+  const counts: Partial<Record<StaffCategory, number>> = {};
+  for (const category of categories) counts[category] = (counts[category] ?? 0) + 1;
+  return counts;
+};
+
 /**
  * POST /api/payroll/terms/bulk — массовое назначение с общей датой.
  *
@@ -677,8 +696,9 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
       else skipped.push({ employee_id: employeeId, reason: 'NO_ACCESS', message: 'Нет доступа к сотруднику' });
     }
 
+    // Категория у каждого своя — по его отделу.
+    const categories = await resolveEmployeeStaffCategories(allowed);
     const result = await assignTermsBulk(allowed, {
-      staffCategory: body.staff_category,
       calcType: body.calc_type,
       monthlySalary: body.monthly_salary ?? null,
       hourlyRate: body.hourly_rate ?? null,
@@ -695,7 +715,7 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
       orderDate: body.order_date ?? null,
       note: body.note ?? null,
       createdBy: req.user.id,
-    });
+    }, employeeId => categories.get(employeeId) ?? 'office');
 
     const payload: IAssignResult = {
       applied: result.applied,
@@ -709,7 +729,8 @@ const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<voi
         requested: body.employee_ids.length,
         applied: payload.applied.length,
         skipped: payload.skipped.length,
-        staff_category: body.staff_category,
+        // Сколько назначенных получили каждую категорию: категорию ставит сервер, не пользователь.
+        category_counts: countCategories(payload.applied.map(item => categories.get(item.employee_id) ?? 'office')),
         calc_type: body.calc_type,
         bonus_amount: body.bonus_amount ?? null,
         housing_compensation: body.housing_compensation ?? null,

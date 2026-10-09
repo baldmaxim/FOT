@@ -43,6 +43,14 @@ vi.mock('../services/audit.service.js', () => ({
   auditService: audit,
 }));
 
+// Категория по отделу: структура и отделы сотрудников — отдельными запросами, здесь подменяются.
+const staffCategory = vi.hoisted(() => ({
+  loadStaffCategoryResolver: vi.fn(async () => (departmentId: string | null) => (departmentId === 'br-1' ? 'worker' : 'office')),
+  resolveEmployeeStaffCategories: vi.fn(async (ids: number[], _exec?: unknown) => new Map(ids.map(id => [id, 'office']))),
+}));
+
+vi.mock('../services/payroll/payroll-staff-category.js', () => staffCategory);
+
 import { payrollTermsController } from './payroll-terms.controller.js';
 
 const makeRes = () => {
@@ -546,6 +554,66 @@ describe('payrollTermsController.assignBulk', () => {
   });
 });
 
+describe('условия оплаты: категория по отделу', () => {
+  const body = { calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01' };
+
+  it('одиночное: категория из отдела сотрудника в транзакции, присланная в запросе игнорируется', async () => {
+    staffCategory.resolveEmployeeStaffCategories.mockResolvedValueOnce(new Map([[42, 'worker']]));
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...body, staff_category: 'itr' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(staffCategory.resolveEmployeeStaffCategories).toHaveBeenCalledWith([42], txClient);
+    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('worker');
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details.staff_category).toBe('worker');
+  });
+
+  it('одиночное: новый фронт категорию не присылает', async () => {
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({ params: { empId: '42' }, body } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('office');
+  });
+
+  it('массовое: каждому своя категория, в аудите — сколько назначено по каждой', async () => {
+    staffCategory.resolveEmployeeStaffCategories.mockResolvedValueOnce(new Map([[1, 'worker'], [2, 'itr'], [3, 'worker']]));
+    const res = makeRes();
+
+    await payrollTermsController.assignBulk(makeReq({
+      body: { ...body, employee_ids: [1, 2, 3], staff_category: 'office' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    // На каждого UPDATE, DELETE, INSERT — INSERT третьим, шестым и девятым.
+    expect([2, 5, 8].map(index => (txClient.query.mock.calls[index][1] as unknown[])[2])).toEqual(['worker', 'itr', 'worker']);
+    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
+    expect(details.category_counts).toEqual({ worker: 2, itr: 1 });
+    expect(details).not.toHaveProperty('staff_category');
+  });
+
+  it('список: категория по текущему отделу строки', async () => {
+    pgQueryOne.mockResolvedValueOnce({
+      total: '2',
+      without_terms_total: '2',
+      rows: [
+        { employee_id: 1, full_name: 'А', department_id: 'br-1', staff_category: null },
+        { employee_id: 2, full_name: 'Б', department_id: null, staff_category: null },
+      ],
+    });
+    const res = makeRes();
+
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.body.data.map((row: { department_category: string }) => row.department_category)).toEqual(['worker', 'office']);
+  });
+});
+
 describe('payrollTermsController.list', () => {
   /** Параметры запроса списка по позициям в LIST_SQL. */
   const listParams = () => {
@@ -738,8 +806,8 @@ describe('payrollTermsController.list', () => {
     expect(sql).toMatch(/ORDER BY a\.effective_from DESC, a\.id DESC/);
     expect(sql).toMatch(/WHERE w\.is_default/);
     expect(res.body.data).toEqual([
-      { employee_id: 1, full_name: 'А', position_name: 'Прораб', schedule_name: '5/2 8ч', can_edit: true },
-      { employee_id: 2, full_name: 'Б', position_name: null, schedule_name: null, can_edit: true },
+      { employee_id: 1, full_name: 'А', position_name: 'Прораб', schedule_name: '5/2 8ч', department_category: 'office', can_edit: true },
+      { employee_id: 2, full_name: 'Б', position_name: null, schedule_name: null, department_category: 'office', can_edit: true },
     ]);
   });
 

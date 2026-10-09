@@ -1,11 +1,7 @@
 import { useId, type FC, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 
-import type {
-  IAssignTermsPayload,
-  PayrollCalcType,
-  StaffCategory,
-} from '../../services/payrollService';
+import type { IAssignTermsPayload } from '../../services/payrollService';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { payrollFieldId } from '../../utils/payrollTermsForm';
 import { ModalShell } from '../ui/ModalShell';
@@ -21,12 +17,11 @@ interface IAssignTermsModalProps {
   saveError: string | null;
   onClose: () => void;
   onSubmit: (payload: IAssignTermsPayload) => void;
-  resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
 }
 
 /**
  * Массовое назначение условий выделенным сотрудникам: та же форма, что в карточке,
- * без справки (история и отпуска у каждого свои).
+ * без справки (история и отпуска у каждого свои) и без категории — сервер ставит её каждому по отделу.
  */
 export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   count,
@@ -35,11 +30,10 @@ export const AssignTermsModal: FC<IAssignTermsModalProps> = ({
   saveError,
   onClose,
   onSubmit,
-  resolveDefaultCalcType,
 }) => {
   const titleId = useId();
   const idPrefix = useId();
-  const form = usePayrollTermsForm({ row: null, defaultDate, resolveDefaultCalcType });
+  const form = usePayrollTermsForm({ row: null, defaultDate });
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();

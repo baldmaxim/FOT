@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-/** Категория персонала. Задаёт вид оплаты по умолчанию; на расчёт не влияет. */
+/** Категория персонала — по отделу сотрудника (её ставит сервер); на расчёт не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты: «по графику» (оклад) или «по часам». */
 export type PayrollCalcType = 'salary' | 'hourly';
@@ -15,10 +15,6 @@ export const CALC_TYPE_LABELS: Record<PayrollCalcType, string> = {
   salary: 'По графику (оклад)',
   hourly: 'По часам',
 };
-
-/** Офис — оклад, стройка — часы. Значение можно переопределить вручную. */
-export const defaultCalcTypeFor = (category: StaffCategory): PayrollCalcType =>
-  (category === 'office' ? 'salary' : 'hourly');
 
 /** Начислено сотруднику за месяц. */
 export interface IPayrollMonthlyAccrual {
@@ -40,6 +36,11 @@ export interface IPayrollTermsRow {
   /** null — условий на выбранную дату нет: такой сотрудник не попадёт в расчёт. */
   terms_id: number | null;
   staff_category: StaffCategory | null;
+  /**
+   * Категория по текущему отделу: бригады — рабочие, ЛИНИЯ и ЛИНИЯ-Общестрой — ИТР, остальные — офис.
+   * Её карточка показывает и её же сервер запишет при назначении. Нет у старого бэкенда.
+   */
+  department_category?: StaffCategory;
   calc_type: PayrollCalcType | null;
   monthly_salary: string | number | null;
   hourly_rate: string | number | null;
@@ -96,8 +97,8 @@ export interface IPayrollTermsHistoryRow {
   created_at: string;
 }
 
+/** Категорию сервер ставит сам — по отделу сотрудника. */
 export interface IAssignTermsPayload {
-  staff_category: StaffCategory;
   calc_type: PayrollCalcType;
   monthly_salary?: number;
   hourly_rate?: number;

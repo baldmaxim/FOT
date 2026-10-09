@@ -8,14 +8,13 @@ import {
   validatePayrollTerms,
   type IPayrollTermsFormValues,
 } from './payrollTermsForm';
-import { defaultCalcTypeFor, type IPayrollTermsRow } from '../services/payrollService';
+import type { IPayrollTermsRow } from '../services/payrollService';
 
 const EMPTY_MONEY = { bonus: '', housing: '', travel: '', deduction: '' };
 const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
-  category: 'office',
   calcType: 'salary',
   amount: '175000',
   money: EMPTY_MONEY,
@@ -37,11 +36,10 @@ const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
 });
 
 describe('validatePayrollTerms: состав запроса сохранения', () => {
-  it('оклад: сумма в monthly_salary, пустые необязательные суммы не передаются', () => {
+  it('оклад: сумма в monthly_salary, пустые необязательные суммы не передаются, категорию ставит сервер', () => {
     const result = validatePayrollTerms(values({ money: { ...EMPTY_MONEY, bonus: '20000' } }));
     expect(result.errors).toBeNull();
     expect(wire(result.payload)).toEqual({
-      staff_category: 'office',
       calc_type: 'salary',
       monthly_salary: 175000,
       bonus_amount: 20000,
@@ -51,13 +49,11 @@ describe('validatePayrollTerms: состав запроса сохранения
 
   it('часы: сумма в hourly_rate, запятая как разделитель, явный 0 уходит нулём', () => {
     const result = validatePayrollTerms(values({
-      category: 'worker',
       calcType: 'hourly',
       amount: '450,5',
       money: { bonus: '15000', housing: '12000', travel: '3000', deduction: '0' },
     }));
     expect(wire(result.payload)).toEqual({
-      staff_category: 'worker',
       calc_type: 'hourly',
       hourly_rate: 450.5,
       bonus_amount: 15000,
@@ -173,8 +169,7 @@ describe('validatePayrollTerms: плановая доплата', () => {
 
 describe('initialPayrollTermsValues', () => {
   it('из условий сотрудника: хвост нулей NUMERIC убирается, пустые суммы остаются пустыми', () => {
-    expect(initialPayrollTermsValues(row(), '2026-09-24', defaultCalcTypeFor)).toEqual({
-      category: 'worker',
+    expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
       calcType: 'hourly',
       amount: '450',
       money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
@@ -187,7 +182,6 @@ describe('initialPayrollTermsValues', () => {
     const initial = initialPayrollTermsValues(
       row({ planned_supplement_amount: '10000.00', planned_supplement_from: '2026-11-01', planned_supplement_to: '2026-12-31' }),
       '2026-09-24',
-      defaultCalcTypeFor,
     );
     expect(initial.supplement).toEqual(NOV_DEC);
   });
@@ -199,27 +193,25 @@ describe('initialPayrollTermsValues', () => {
         planned_supplement_amount: 10000, planned_supplement_from: '2026-11-01', planned_supplement_to: '2026-12-31',
       }),
       '2026-09-24',
-      defaultCalcTypeFor,
     );
     expect(initial.amount).toBe('');
     expect(initial.supplement).toEqual(NOV_DEC);
   });
 
-  it('без условий: суммы пустые, вид оплаты — по категории', () => {
+  it('без условий: суммы пустые, вид оплаты — по графику (оклад), и у рабочих тоже', () => {
     const initial = initialPayrollTermsValues(
       row({ terms_id: null, staff_category: null, calc_type: null, hourly_rate: null, bonus_amount: '1.00' }),
       '2026-09-24',
-      defaultCalcTypeFor,
     );
     expect(initial).toEqual({
-      category: 'worker', calcType: 'hourly', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });
 
-  it('массовое назначение: рабочие на часах, всё пусто', () => {
-    expect(initialPayrollTermsValues(null, '2026-09-24', defaultCalcTypeFor)).toEqual({
-      category: 'worker', calcType: 'hourly', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+  it('массовое назначение: по графику (оклад), всё пусто', () => {
+    expect(initialPayrollTermsValues(null, '2026-09-24')).toEqual({
+      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });

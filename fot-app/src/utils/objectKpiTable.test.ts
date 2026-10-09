@@ -7,7 +7,6 @@ import {
   buildMonthColumns,
   columnFilterOptions,
   defaultMonths,
-  formatMonthsLabel,
   listWindowMonths,
   OBJECT_STAT_COLUMNS,
   premiumCell,
@@ -161,12 +160,5 @@ describe('месяцы', () => {
     expect(defaultMonths(options, '2026-09')).toEqual(['2026-08']);
     expect(defaultMonths(['2026-09'], '2026-09')).toEqual([]);
     expect(defaultMonths(['2025-12', '2026-01'], '2026-01')).toEqual(['2025-12']);
-  });
-
-  it('подпись: один месяц, подряд — диапазоном, вразброс — перечнем', () => {
-    expect(formatMonthsLabel(['2026-08'])).toBe('август 2026');
-    expect(formatMonthsLabel(['2026-09', '2026-07', '2026-08'])).toBe('июль 2026 — сентябрь 2026');
-    expect(formatMonthsLabel(['2026-09', '2026-07'])).toBe('июль 2026, сентябрь 2026');
-    expect(formatMonthsLabel([])).toBe('');
   });
 });

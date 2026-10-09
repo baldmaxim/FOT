@@ -213,14 +213,3 @@ export const defaultMonths = (options: ReadonlyArray<string>, currentMonth: stri
   return options.includes(previous) ? [previous] : [];
 };
 
-/** «август 2026»; подряд — «июль 2026 — сентябрь 2026»; вразброс — «июль 2026, сентябрь 2026». */
-export const formatMonthsLabel = (months: ReadonlyArray<string>): string => {
-  const sorted = [...months].sort();
-  if (sorted.length === 0) return '';
-  const label = (month: string) => formatMonthLabel(`${month}-01`);
-  if (sorted.length === 1) return label(sorted[0]);
-  const contiguous = sorted.every((month, index) => index === 0 || shiftMonth(sorted[index - 1], 1) === month);
-  return contiguous
-    ? `${label(sorted[0])} — ${label(sorted[sorted.length - 1])}`
-    : sorted.map(label).join(', ');
-};

@@ -20,7 +20,9 @@ interface IPayrollTermsFieldsProps {
   idPrefix: string;
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
-  /** Фокус на «Категорию» при открытии карточки или окна. */
+  /** Категория по отделу сотрудника — только для чтения. Не передана — поля нет (массовое назначение). */
+  category?: StaffCategory | null;
+  /** Фокус на выбранный «Вид оплаты» при открытии карточки или окна. */
   autoFocus?: boolean;
   /** Блок «Оплачено» под окладом и премией, на всю ширину формы; не передан — блока нет. */
   paid?: ReactNode;
@@ -42,7 +44,7 @@ const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: stri
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
 /**
- * Форма условий оплаты. Секции — две половины: слева Категория · Вид оплаты · Действует с,
+ * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
  * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
  * «Оплачено» (только в карточке) — под ними на всю ширину формы. В узком окне и при stacked половины встают
  * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
@@ -51,6 +53,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   form,
   idPrefix,
   readOnly = false,
+  category,
   autoFocus = false,
   paid,
   stacked = false,
@@ -116,22 +119,19 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <h3 id={`${idPrefix}-main`} className={styles.sectionTitle}>Основная оплата</h3>
         <div className={stacked ? `${styles.halves} ${styles.halvesStacked}` : styles.halves}>
           <div className={styles.half}>
-            <div className={styles.mainRow}>
-              <div className={styles.field}>
-                <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
-                <select
-                  id={fieldId('category')}
-                  className={styles.control}
-                  value={form.category}
-                  disabled={readOnly}
-                  autoFocus={autoFocus && !readOnly}
-                  onChange={event => form.changeCategory(event.target.value as StaffCategory)}
-                >
-                  {(Object.keys(STAFF_CATEGORY_LABELS) as StaffCategory[]).map(key => (
-                    <option key={key} value={key}>{STAFF_CATEGORY_LABELS[key]}</option>
-                  ))}
-                </select>
-              </div>
+            <div className={category === undefined ? `${styles.mainRow} ${styles.mainRowNoCategory}` : styles.mainRow}>
+              {/* Категорию не выбирают: её ставит сервер по отделу сотрудника. */}
+              {category !== undefined && (
+                <div className={styles.field}>
+                  <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
+                  <input
+                    id={fieldId('category')}
+                    className={`${styles.control} ${styles.controlReadOnly}`}
+                    value={category ? STAFF_CATEGORY_LABELS[category] : '—'}
+                    readOnly
+                  />
+                </div>
+              )}
 
               <div className={styles.field}>
                 <span id={`${idPrefix}-calc-type`} className={styles.label}>Вид оплаты</span>
@@ -149,6 +149,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                         value={key}
                         checked={form.calcType === key}
                         disabled={readOnly}
+                        autoFocus={autoFocus && !readOnly && form.calcType === key}
                         onChange={() => form.setCalcType(key)}
                       />
                       <span className={styles.segmentLabel}>{CALC_TYPE_LABELS[key]}</span>

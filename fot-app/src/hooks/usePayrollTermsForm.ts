@@ -4,7 +4,6 @@ import type {
   IAssignTermsPayload,
   IPayrollTermsRow,
   PayrollCalcType,
-  StaffCategory,
 } from '../services/payrollService';
 import {
   firstInvalidField,
@@ -23,7 +22,6 @@ interface IUsePayrollTermsFormArgs {
   /** Строка одного сотрудника — предзаполнение; null — массовое назначение. */
   row: IPayrollTermsRow | null;
   defaultDate: string;
-  resolveDefaultCalcType: (category: StaffCategory) => PayrollCalcType;
   /** Секция «Плановые доплаты» — только в карточке одного сотрудника. */
   plannedSupplement?: boolean;
 }
@@ -36,13 +34,10 @@ interface IUsePayrollTermsFormArgs {
 export const usePayrollTermsForm = ({
   row,
   defaultDate,
-  resolveDefaultCalcType,
   plannedSupplement = false,
 }: IUsePayrollTermsFormArgs) => {
   // Начальные значения храним: доплата уходит в запрос, только если отличается от них.
-  const [initial] = useState<IPayrollTermsFormValues>(
-    () => initialPayrollTermsValues(row, defaultDate, resolveDefaultCalcType),
-  );
+  const [initial] = useState<IPayrollTermsFormValues>(() => initialPayrollTermsValues(row, defaultDate));
   const [values, setValues] = useState<IPayrollTermsFormValues>(initial);
   const [fieldErrors, setFieldErrors] = useState<PayrollTermsFieldErrors>({});
 
@@ -55,15 +50,7 @@ export const usePayrollTermsForm = ({
     });
   };
 
-  /**
-   * Смена категории подставляет вид оплаты по умолчанию (Офис — оклад, стройка — часы),
-   * но не запрещает выбрать другой: ИТР на окладе и офисный на часах — рабочие случаи.
-   * Введённая сумма при смене вида оплаты сохраняется.
-   */
-  const changeCategory = (next: StaffCategory) => {
-    setValues(prev => ({ ...prev, category: next, calcType: resolveDefaultCalcType(next) }));
-  };
-
+  /** Введённая сумма при смене вида оплаты сохраняется. */
   const setCalcType = (next: PayrollCalcType) => {
     setValues(prev => ({ ...prev, calcType: next }));
     clearError('amount');
@@ -108,7 +95,6 @@ export const usePayrollTermsForm = ({
     ...values,
     plannedSupplement,
     fieldErrors,
-    changeCategory,
     setCalcType,
     setAmount,
     changeMoney,

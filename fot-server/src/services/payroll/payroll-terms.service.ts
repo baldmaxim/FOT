@@ -12,7 +12,7 @@
  */
 import { query, queryOne, withTransaction, type DbExecutor } from '../../config/postgres.js';
 
-/** Категория персонала. Задаёт calc_type по умолчанию; на формулу расчёта не влияет. */
+/** Категория персонала — по отделу сотрудника (payroll-staff-category.ts); на формулу расчёта не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты. Единственное, что определяет формулу начисления. */
 export type PayrollCalcType = 'salary' | 'hourly';
@@ -91,10 +91,6 @@ const TERMS_COLUMNS = `
   effective_from, effective_to,
   change_reason, order_number, order_date, note,
   created_by, created_at, updated_at`;
-
-/** Вид оплаты по умолчанию для категории. Офис — оклад, стройка — часы. */
-export const defaultCalcTypeFor = (category: StaffCategory): PayrollCalcType =>
-  (category === 'office' ? 'salary' : 'hourly');
 
 /** Полная история условий сотрудника, новые сверху. */
 export const getTermsHistory = async (employeeId: number): Promise<IPayrollTerms[]> =>
@@ -456,18 +452,20 @@ const sqlStateOf = (err: unknown): string | null => (
  * Массовое назначение с общей датой вступления в силу.
  *
  * Каждый сотрудник — в своей транзакции: сбой на одном не отменяет всю пачку.
- * Отклонённые возвращаются списком с причиной, а не пропадают молча.
+ * Отклонённые возвращаются списком с причиной, а не пропадают молча. Категория у каждого
+ * своя — по его отделу.
  */
 export const assignTermsBulk = async (
   employeeIds: number[],
-  input: Omit<IAssignTermsInput, 'employeeId'>,
+  input: Omit<IAssignTermsInput, 'employeeId' | 'staffCategory'>,
+  staffCategoryOf: (employeeId: number) => StaffCategory,
 ): Promise<IAssignResult> => {
   const applied: IAssignResult['applied'] = [];
   const skipped: IAssignResult['skipped'] = [];
 
   for (const employeeId of employeeIds) {
     try {
-      const termsId = await assignTerms({ ...input, employeeId });
+      const termsId = await assignTerms({ ...input, employeeId, staffCategory: staffCategoryOf(employeeId) });
       applied.push({ employee_id: employeeId, terms_id: termsId });
     } catch (err) {
       if (sqlStateOf(err) === EXCLUSION_VIOLATION) {

@@ -5,7 +5,6 @@ import { Settings } from 'lucide-react';
 import {
   payrollService,
   PAYROLL_TERMS_PAGE_SIZE,
-  defaultCalcTypeFor,
   type IPayrollColumnFilters,
   type IPayrollTermsCursor,
   type IPayrollTermsRow,
@@ -422,7 +421,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             ...payload,
             ids: bulkRows.map(row => row.employee_id),
           })}
-          resolveDefaultCalcType={defaultCalcTypeFor}
         />
       )}
     </div>
