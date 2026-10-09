@@ -70,18 +70,6 @@ export const PaymentsTab: FC = () => {
     selectView('details', true);
   }, [selectView]);
 
-  const closeDetails = useCallback(() => {
-    startTransition(() => setDetails(null));
-    selectView('terms', true);
-  }, [selectView]);
-
-  // Сохранение закрывает карточку этого сотрудника (её форма собрана до него); к списку — только
-  // если она ещё на экране: вкладку могли сменить, пока шёл запрос.
-  const handleSaved = useCallback((employeeId: number, onScreen: boolean) => {
-    startTransition(() => setDetails(prev => dropPayrollDetails(prev, [employeeId])));
-    if (onScreen) selectView('terms', true);
-  }, [selectView]);
-
   // Массовое назначение со списка и сохранение в окне «Расчётов»: карточка «Подробно» в этот момент
   // скрыта, экран не меняется — устаревшая карточка этих сотрудников закрывается.
   const handleAssigned = useCallback((employeeIds: number[]) => {
@@ -129,8 +117,6 @@ export const PaymentsTab: FC = () => {
               row={details}
               defaultDate={date}
               active={view === 'details'}
-              onClose={closeDetails}
-              onSaved={handleSaved}
             />
           </div>
         )}

@@ -35,7 +35,7 @@ export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
       <EmployeePayrollDetails
         row={row}
         defaultDate={defaultDate}
-        paymentSections
+        editable
         className={styles.card}
         active
         onClose={requestClose}

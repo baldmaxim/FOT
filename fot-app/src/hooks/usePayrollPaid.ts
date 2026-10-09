@@ -2,14 +2,14 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { payrollService } from '../services/payrollService';
-import { paidTotals, toPaidAmounts, visiblePaidGroups, type IPayrollPaidGroup } from '../utils/payrollPaid';
+import { paidTotals, toPaidAmounts, visiblePaidGroups } from '../utils/payrollPaid';
 
 export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
 
 /**
  * «Оплачено» в карточке сотрудника: суммы за выбранные месяцы (по возрастанию, могут идти
- * вразброс), итоги и статьи с суммами для раскрытых таблиц — у каждого месяца своя таблица.
- * Только чтение — суммы приходят из 1С. Таблицы по умолчанию свёрнуты до итогов.
+ * вразброс), итоги и статьи с суммами для раскрытой таблицы — месяцы в ней столбцами.
+ * Только чтение — суммы приходят из 1С. По умолчанию свёрнуто до итогов.
  */
 export const usePayrollPaid = (employeeId: number, months: string[]) => {
   const from = months[0] ?? '';
@@ -25,12 +25,8 @@ export const usePayrollPaid = (employeeId: number, months: string[]) => {
 
   const amounts = useMemo(() => toPaidAmounts(query.data ?? []), [query.data]);
   const totals = useMemo(() => paidTotals(months, amounts), [months, amounts]);
-  // В таблице месяца — только статьи с суммой за этот месяц.
-  const groupsByMonth = useMemo(() => {
-    const byMonth: Record<string, IPayrollPaidGroup[]> = {};
-    for (const month of months) byMonth[month] = visiblePaidGroups([month], amounts);
-    return byMonth;
-  }, [months, amounts]);
+  // Статьи с суммой хотя бы за один из выбранных месяцев.
+  const groups = useMemo(() => visiblePaidGroups(months, amounts), [months, amounts]);
   const status: PayrollPaidStatus = query.data ? 'ready' : query.isError ? 'error' : 'loading';
 
   return {
@@ -38,7 +34,7 @@ export const usePayrollPaid = (employeeId: number, months: string[]) => {
     status,
     amounts,
     totals,
-    groupsByMonth,
+    groups,
     expanded,
     toggleExpanded: () => setExpanded(prev => !prev),
   };

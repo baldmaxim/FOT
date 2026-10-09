@@ -554,11 +554,10 @@ describe('payrollTermsController.assignBulk', () => {
   });
 });
 
-describe('условия оплаты: категория по отделу', () => {
+describe('условия оплаты: категория — выбранная или по отделу', () => {
   const body = { calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01' };
 
-  it('одиночное: категория из отдела сотрудника в транзакции, присланная в запросе игнорируется', async () => {
-    staffCategory.resolveEmployeeStaffCategories.mockResolvedValueOnce(new Map([[42, 'worker']]));
+  it('одиночное: категория, выбранная в окне, сохраняется и пишется в аудит; отдел не спрашиваем', async () => {
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -566,13 +565,24 @@ describe('условия оплаты: категория по отделу', ()
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(staffCategory.resolveEmployeeStaffCategories).toHaveBeenCalledWith([42], txClient);
-    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('worker');
+    expect(staffCategory.resolveEmployeeStaffCategories).not.toHaveBeenCalled();
+    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('itr');
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details.staff_category).toBe('worker');
+    expect(details.staff_category).toBe('itr');
   });
 
-  it('одиночное: новый фронт категорию не присылает', async () => {
+  it('одиночное: категорию не прислали — по отделу сотрудника в транзакции', async () => {
+    staffCategory.resolveEmployeeStaffCategories.mockResolvedValueOnce(new Map([[42, 'worker']]));
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({ params: { empId: '42' }, body } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(staffCategory.resolveEmployeeStaffCategories).toHaveBeenCalledWith([42], txClient);
+    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('worker');
+  });
+
+  it('одиночное: отдел без категории — офис', async () => {
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({ params: { empId: '42' }, body } as Partial<AuthenticatedRequest>), res);

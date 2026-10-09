@@ -41,11 +41,16 @@
   .row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-/* Оклад (или ставка) и премия; совсем узко — друг под другом. */
+/* Оклад (или ставка), премия и «Итого»; совсем узко — друг под другом. */
 .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px 16px; }
 
 @container payroll-half (min-width: 400px) {
   .pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* С «Итого» (окно сотрудника) — три поля в строку, когда помещаются; уже — «Итого» переносится под оклад. */
+@container payroll-half (min-width: 560px) {
+  .pairWithTotal { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

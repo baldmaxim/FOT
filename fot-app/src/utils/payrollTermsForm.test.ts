@@ -4,6 +4,8 @@ import {
   firstInvalidField,
   initialPayrollTermsValues,
   isPayrollTermsChanged,
+  payrollRowCategory,
+  payrollTermsTotal,
   toInputValue,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
@@ -15,6 +17,7 @@ const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
+  staffCategory: null,
   calcType: 'salary',
   amount: '175000',
   money: EMPTY_MONEY,
@@ -170,6 +173,7 @@ describe('validatePayrollTerms: плановая доплата', () => {
 describe('initialPayrollTermsValues', () => {
   it('из условий сотрудника: хвост нулей NUMERIC убирается, пустые суммы остаются пустыми', () => {
     expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
+      staffCategory: 'worker',
       calcType: 'hourly',
       amount: '450',
       money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
@@ -204,14 +208,14 @@ describe('initialPayrollTermsValues', () => {
       '2026-09-24',
     );
     expect(initial).toEqual({
-      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      staffCategory: 'office', calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });
 
   it('массовое назначение: по графику (оклад), всё пусто', () => {
     expect(initialPayrollTermsValues(null, '2026-09-24')).toEqual({
-      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      staffCategory: null, calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });
@@ -239,5 +243,35 @@ describe('isPayrollTermsChanged', () => {
     expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY, travel: '2730' } }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ supplement: { ...EMPTY_SUPPLEMENT, to: '2026-12-31' } }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY } }), initial)).toBe(false);
+  });
+});
+
+describe('категория в окне сотрудника', () => {
+  it('сохранённая в условиях важнее отдела; без условий — по отделу; отдела нет — офис', () => {
+    expect(payrollRowCategory(row({ staff_category: 'itr', department_category: 'worker' }))).toBe('itr');
+    expect(payrollRowCategory(row({ terms_id: null, staff_category: null, department_category: 'worker' }))).toBe('worker');
+    expect(payrollRowCategory(row({ terms_id: null, staff_category: null, department_category: undefined }))).toBe('office');
+  });
+
+  it('выбранная уходит в запрос и считается правкой условий; массовое назначение её не шлёт', () => {
+    const initial = initialPayrollTermsValues(row(), '2026-09-24');
+    const changed = { ...initial, staffCategory: 'itr' as const };
+    expect(isPayrollTermsChanged(changed, initial)).toBe(true);
+    expect(validatePayrollTerms(changed).payload?.staff_category).toBe('itr');
+    expect(wire(validatePayrollTerms(values()).payload)).not.toHaveProperty('staff_category');
+  });
+});
+
+describe('payrollTermsTotal: «Итого» = оклад + премия', () => {
+  it('сумма с запятой и копейками без ошибки float; пустое поле — 0', () => {
+    expect(payrollTermsTotal(values({ amount: '175000', money: { ...EMPTY_MONEY, bonus: '25000,10' } }))).toBe(200000.1);
+    expect(payrollTermsTotal(values({ amount: '0.1', money: { ...EMPTY_MONEY, bonus: '0.2' } }))).toBe(0.3);
+    expect(payrollTermsTotal(values({ amount: '', money: { ...EMPTY_MONEY, bonus: '15000' } }))).toBe(15000);
+  });
+
+  it('оба поля пустые, не число или почасовая оплата — «—» (null)', () => {
+    expect(payrollTermsTotal(values({ amount: '' }))).toBeNull();
+    expect(payrollTermsTotal(values({ amount: 'abc' }))).toBeNull();
+    expect(payrollTermsTotal(values({ calcType: 'hourly', amount: '450' }))).toBeNull();
   });
 });

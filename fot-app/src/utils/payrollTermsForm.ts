@@ -3,6 +3,7 @@ import type {
   IPayrollTermsRow,
   IPlannedSupplementPayload,
   PayrollCalcType,
+  StaffCategory,
 } from '../services/payrollService';
 
 /** Необязательные суммы условий, ₽/мес: премия, компенсации и удержание. */
@@ -40,8 +41,10 @@ export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
 
-/** Значения формы — строки как в полях ввода. Категории нет: её ставит сервер по отделу. */
+/** Значения формы — строки как в полях ввода. */
 export interface IPayrollTermsFormValues {
+  /** Категория в окне сотрудника; null — массовое назначение (сервер ставит по отделу каждого). */
+  staffCategory: StaffCategory | null;
   calcType: PayrollCalcType;
   amount: string;
   money: Record<PayrollMoneyField, string>;
@@ -57,6 +60,14 @@ export const toInputValue = (value: string | number | null | undefined): string 
 };
 
 /**
+ * Категория сотрудника: сохранённая в действующих условиях; условий нет — по отделу (как поставит сервер),
+ * отдел без категории — офис.
+ */
+export const payrollRowCategory = (row: IPayrollTermsRow): StaffCategory => (
+  (row.terms_id ? row.staff_category : null) ?? row.department_category ?? row.staff_category ?? 'office'
+);
+
+/**
  * Начальные значения: из строки списка одного сотрудника; без условий или массово — пусто,
  * вид оплаты — «По графику (оклад)». Плановая доплата от условий не зависит: предзаполняется
  * и у сотрудника без условий на дату.
@@ -68,6 +79,7 @@ export const initialPayrollTermsValues = (
   const hasTerms = Boolean(row?.terms_id);
   const pick = (value: string | number | null | undefined) => (hasTerms ? toInputValue(value) : '');
   return {
+    staffCategory: row ? payrollRowCategory(row) : null,
     calcType: row?.calc_type ?? 'salary',
     amount: hasTerms && row ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
     money: {
@@ -89,7 +101,8 @@ const SUPPLEMENT_FIELDS = Object.keys(SUPPLEMENT_FIELD_KEYS) as PayrollSupplemen
 
 /** Правили ли условия: хоть одно поле отличается от начального значения. */
 export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: IPayrollTermsFormValues): boolean => (
-  values.calcType !== initial.calcType
+  values.staffCategory !== initial.staffCategory
+  || values.calcType !== initial.calcType
   || values.amount !== initial.amount
   || values.effectiveFrom !== initial.effectiveFrom
   || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
@@ -183,6 +196,7 @@ export const validatePayrollTerms = (
   return {
     errors: null,
     payload: {
+      staff_category: values.staffCategory ?? undefined,
       calc_type: values.calcType,
       monthly_salary: values.calcType === 'salary' ? parsed : undefined,
       hourly_rate: values.calcType === 'hourly' ? parsed : undefined,
@@ -194,6 +208,24 @@ export const validatePayrollTerms = (
       planned_supplement: plannedSupplement,
     },
   };
+};
+
+/**
+ * «Итого» рядом с окладом и премией: их сумма, ₽/мес. Только у оклада (ставка — за час, премия — за месяц);
+ * пусто или не число в обоих полях — null («—»). Пустое поле — 0, сумма в копейках без ошибки float.
+ */
+export const payrollTermsTotal = (values: Pick<IPayrollTermsFormValues, 'calcType' | 'amount' | 'money'>): number | null => {
+  if (values.calcType !== 'salary') return null;
+  const parts = [values.amount, values.money.bonus].map(raw => raw.trim());
+  if (parts.every(raw => !raw)) return null;
+  let cents = 0;
+  for (const raw of parts) {
+    if (!raw) continue;
+    const value = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(value)) return null;
+    cents += Math.round(value * 100);
+  }
+  return cents / 100;
 };
 
 /** id поля формы: `${prefix}-amount`, `${prefix}-bonus` и т.д. — по нему ставится фокус на ошибку. */

@@ -4,6 +4,7 @@ import type {
   IAssignTermsPayload,
   IPayrollTermsRow,
   PayrollCalcType,
+  StaffCategory,
 } from '../services/payrollService';
 import {
   firstInvalidField,
@@ -48,6 +49,10 @@ export const usePayrollTermsForm = ({
       delete next[key];
       return next;
     });
+  };
+
+  const setStaffCategory = (next: StaffCategory) => {
+    setValues(prev => ({ ...prev, staffCategory: next }));
   };
 
   /** Введённая сумма при смене вида оплаты сохраняется. */
@@ -95,6 +100,7 @@ export const usePayrollTermsForm = ({
     ...values,
     plannedSupplement,
     fieldErrors,
+    setStaffCategory,
     setCalcType,
     setAmount,
     changeMoney,

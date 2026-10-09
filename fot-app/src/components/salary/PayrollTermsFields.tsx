@@ -7,8 +7,10 @@ import {
   type StaffCategory,
 } from '../../services/payrollService';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
+import { formatPaidAmount } from '../../utils/payrollPaid';
 import {
   payrollFieldId,
+  payrollTermsTotal,
   type PayrollMoneyField,
   type PayrollTermsFieldKey,
 } from '../../utils/payrollTermsForm';
@@ -20,8 +22,13 @@ interface IPayrollTermsFieldsProps {
   idPrefix: string;
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
-  /** Категория по отделу сотрудника — только для чтения. Не передана — поля нет (массовое назначение). */
+  /**
+   * Категория сотрудника (сохранённая или по отделу). Не передана — поля нет (массовое назначение). В окне сотрудника
+   * с правом правки — список (Офис, Рабочие, ИТР), сохраняется с условиями; иначе — только для чтения.
+   */
   category?: StaffCategory | null;
+  /** «Итого, ₽/мес» — сумма оклада и премии в их строке (только в окне сотрудника). */
+  total?: boolean;
   /** Фокус на выбранный «Вид оплаты» при открытии карточки или окна. */
   autoFocus?: boolean;
   /** Блок «Оплачено» под окладом и премией, на всю ширину формы; не передан — блока нет. */
@@ -34,10 +41,10 @@ interface IPayrollTermsFieldsProps {
    */
   deductionKinds?: ReactNode;
   /**
-   * Компенсация, плановая доплата и удержание. false — секций нет: в «Подробно» их не вносят
-   * (только в окне сотрудника на «Расчётах»), значения из условий в форме остаются как были.
+   * Вкладка «Подробно» — только просмотр: в «Основной оплате» лишь Категория и «Оплачено», секций Компенсация,
+   * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах» и «Назначить выделенным».
    */
-  paymentSections?: boolean;
+  detailsOnly?: boolean;
 }
 
 /** «Компенсация» в одну строку — в порядке на экране. */
@@ -48,11 +55,15 @@ const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: stri
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
+/** Категории в списке окна сотрудника — в порядке: офис, рабочие, ИТР. */
+const CATEGORY_OPTIONS: readonly StaffCategory[] = ['office', 'worker', 'itr'];
+
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
  * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
  * «Оплачено» (только в карточке) — под ними на всю ширину формы. В узком окне и при stacked половины встают
  * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
+ * detailsOnly («Подробно») — только Категория и «Оплачено».
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   form,
@@ -63,9 +74,11 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   paid,
   stacked = false,
   deductionKinds,
-  paymentSections = true,
+  detailsOnly = false,
+  total = false,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
+  const totalValue = total ? payrollTermsTotal(form) : null;
 
   /** Денежное поле с подписью сверху и ошибкой снизу. Без числовых подсказок: подсказка — не значение. */
   const renderMoney = (key: PayrollTermsFieldKey, label: string, value: string, onChange: (next: string) => void) => {
@@ -126,66 +139,94 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <div className={stacked ? `${styles.halves} ${styles.halvesStacked}` : styles.halves}>
           <div className={styles.half}>
             <div className={category === undefined ? `${styles.mainRow} ${styles.mainRowNoCategory}` : styles.mainRow}>
-              {/* Категорию не выбирают: её ставит сервер по отделу сотрудника. */}
+              {/* По умолчанию категория — по отделу сотрудника; в окне сотрудника её можно сменить. */}
               {category !== undefined && (
                 <div className={styles.field}>
                   <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
-                  <input
-                    id={fieldId('category')}
-                    className={`${styles.control} ${styles.controlReadOnly}`}
-                    value={category ? STAFF_CATEGORY_LABELS[category] : '—'}
-                    readOnly
-                  />
+                  {detailsOnly || readOnly || form.staffCategory === null ? (
+                    <input
+                      id={fieldId('category')}
+                      className={`${styles.control} ${styles.controlReadOnly}`}
+                      value={category ? STAFF_CATEGORY_LABELS[category] : '—'}
+                      readOnly
+                    />
+                  ) : (
+                    <select
+                      id={fieldId('category')}
+                      className={styles.control}
+                      value={form.staffCategory}
+                      onChange={event => form.setStaffCategory(event.target.value as StaffCategory)}
+                    >
+                      {CATEGORY_OPTIONS.map(key => <option key={key} value={key}>{STAFF_CATEGORY_LABELS[key]}</option>)}
+                    </select>
+                  )}
                 </div>
               )}
 
-              <div className={styles.field}>
-                <span id={`${idPrefix}-calc-type`} className={styles.label}>Вид оплаты</span>
-                <div
-                  role="radiogroup"
-                  aria-labelledby={`${idPrefix}-calc-type`}
-                  className={readOnly ? `${styles.segmented} ${styles.segmentedDisabled}` : styles.segmented}
-                >
-                  {CALC_TYPES.map(key => (
-                    <label key={key} className={styles.segment}>
-                      <input
-                        type="radio"
-                        className={styles.segmentInput}
-                        name={`${idPrefix}-calc-type`}
-                        value={key}
-                        checked={form.calcType === key}
-                        disabled={readOnly}
-                        autoFocus={autoFocus && !readOnly && form.calcType === key}
-                        onChange={() => form.setCalcType(key)}
-                      />
-                      <span className={styles.segmentLabel}>{CALC_TYPE_LABELS[key]}</span>
-                    </label>
-                  ))}
-                </div>
+              {!detailsOnly && (
+                <>
+                  <div className={styles.field}>
+                    <span id={`${idPrefix}-calc-type`} className={styles.label}>Вид оплаты</span>
+                    <div
+                      role="radiogroup"
+                      aria-labelledby={`${idPrefix}-calc-type`}
+                      className={readOnly ? `${styles.segmented} ${styles.segmentedDisabled}` : styles.segmented}
+                    >
+                      {CALC_TYPES.map(key => (
+                        <label key={key} className={styles.segment}>
+                          <input
+                            type="radio"
+                            className={styles.segmentInput}
+                            name={`${idPrefix}-calc-type`}
+                            value={key}
+                            checked={form.calcType === key}
+                            disabled={readOnly}
+                            autoFocus={autoFocus && !readOnly && form.calcType === key}
+                            onChange={() => form.setCalcType(key)}
+                          />
+                          <span className={styles.segmentLabel}>{CALC_TYPE_LABELS[key]}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {renderDate('effectiveFrom', 'Действует с', form.effectiveFrom, form.setEffectiveFrom, true)}
+                </>
+              )}
+            </div>
+          </div>
+
+          {!detailsOnly && (
+            <div className={styles.half}>
+              {/* Два отдельных поля: оклад (или ставка) и премия. Сохраняются раздельно; «Итого» — их сумма. */}
+              <div className={total ? `${styles.pair} ${styles.pairWithTotal}` : styles.pair}>
+                {renderMoney(
+                  'amount',
+                  form.calcType === 'salary' ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
+                  form.amount,
+                  form.setAmount,
+                )}
+                {renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
+                {total && (
+                  <div className={styles.field}>
+                    <label htmlFor={`${idPrefix}-total`} className={styles.label}>Итого, ₽/мес</label>
+                    <input
+                      id={`${idPrefix}-total`}
+                      className={`${styles.control} ${styles.controlReadOnly}`}
+                      value={totalValue === null ? '—' : formatPaidAmount(totalValue)}
+                      readOnly
+                    />
+                  </div>
+                )}
               </div>
-
-              {renderDate('effectiveFrom', 'Действует с', form.effectiveFrom, form.setEffectiveFrom, true)}
             </div>
-          </div>
-
-          <div className={styles.half}>
-            {/* Два отдельных поля: оклад (или ставка) и премия. Сохраняются раздельно. */}
-            <div className={styles.pair}>
-              {renderMoney(
-                'amount',
-                form.calcType === 'salary' ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
-                form.amount,
-                form.setAmount,
-              )}
-              {renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
-            </div>
-          </div>
+          )}
         </div>
         {/* Таблица статей × месяцев шире половины — на всю ширину формы. */}
         {paid}
       </section>
 
-      {paymentSections && (
+      {!detailsOnly && (
         <>
           <section className={styles.section} aria-labelledby={`${idPrefix}-compensation`}>
             <h3 id={`${idPrefix}-compensation`} className={styles.sectionTitle}>Компенсация</h3>

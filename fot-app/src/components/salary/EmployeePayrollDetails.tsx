@@ -13,7 +13,7 @@ import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
-import { payrollFieldId } from '../../utils/payrollTermsForm';
+import { payrollFieldId, payrollRowCategory } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
 import { DeductionKindsField } from './DeductionKindsField';
 import { PayrollPaidTable } from './PayrollPaidTable';
@@ -26,21 +26,21 @@ interface IEmployeePayrollDetailsProps {
   row: IPayrollTermsRow;
   defaultDate: string;
   /**
-   * Компенсация, плановая доплата и удержание: вносятся только в окне сотрудника на «Расчётах» (true).
-   * Во вкладке «Подробно» секций нет — суммы смотрят в «Оплачено».
+   * Окно сотрудника на «Расчётах» (true): условия, компенсация, плановая доплата и удержание вносятся и сохраняются.
+   * Вкладка «Подробно» (false) — только просмотр: Категория, «Оплачено», история, отпуска; кнопок нет.
    */
-  paymentSections?: boolean;
+  editable?: boolean;
   /** Класс корня: в окне «Расчётов» — без своей рамки. */
   className?: string;
   /** Вкладка «Подробно» открыта. Скрытая карточка остаётся смонтированной — введённое не теряется. */
   active: boolean;
-  /** «Отмена» / «Закрыть»: карточка закрывается, вкладка — к списку. */
-  onClose: () => void;
+  /** «Отмена» / «Закрыть» (только editable): карточка закрывается. */
+  onClose?: () => void;
   /**
-   * Условия сохранены. onScreen — карточка ещё на экране: тогда к списку; вкладку успели сменить
+   * Условия сохранены (только editable). onScreen — карточка ещё на экране; иначе её успели закрыть
    * или открыли другого сотрудника — только закрыть устаревшую карточку этого.
    */
-  onSaved: (employeeId: number, onScreen: boolean) => void;
+  onSaved?: (employeeId: number, onScreen: boolean) => void;
 }
 
 interface ISaveVariables {
@@ -51,17 +51,17 @@ interface ISaveVariables {
 }
 
 /**
- * Карточка сотрудника раздела «Зарплата» — вкладка «Подробно» и окно на «Расчётах»: условия оплаты (основная оплата
- * с «Оплачено»; в окне ещё компенсация, плановая доплата, удержание) и под ними свёрнутая справка — история изменений
- * и отпуска. Справка грузится отдельно, её ошибки форму не блокируют. «Сохранить» пишет условия и виды удержаний —
- * что из них правили. Скрытые в «Подробно» суммы остаются в форме из условий: сохранение оклада их не обнулит.
- * «Оплачено» — только чтение: суммы приходят из 1С. Категория — только чтение: её ставит сервер по отделу.
+ * Карточка сотрудника раздела «Зарплата» — окно на «Расчётах» (editable) и вкладка «Подробно» (только просмотр).
+ * В окне: условия оплаты (вид оплаты, оклад, премия) с «Оплачено», компенсация, плановая доплата, удержание; «Сохранить»
+ * пишет условия и виды удержаний — что из них правили. В «Подробно»: Категория и «Оплачено», без полей и кнопок.
+ * Ниже — свёрнутая справка: история изменений и отпуска; грузится отдельно, её ошибки форму не блокируют.
+ * «Оплачено» — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно сменить (сохраняется с условиями).
  * Месяцы у ФИО (один или несколько) задают таблицы «Оплачено»; условия от них не зависят.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
   defaultDate,
-  paymentSections = false,
+  editable = false,
   className,
   active,
   onClose,
@@ -74,9 +74,8 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const idPrefix = useId();
   const nameRef = useRef<HTMLHeadingElement>(null);
   // Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер).
-  const canEdit = canEditPage('/salary/terms') && row.can_edit !== false;
-  // Доплата уходит в запрос, только если её секция есть: в «Подробно» она не меняется.
-  const form = usePayrollTermsForm({ row, defaultDate, plannedSupplement: paymentSections });
+  const canEdit = editable && canEditPage('/salary/terms') && row.can_edit !== false;
+  const form = usePayrollTermsForm({ row, defaultDate, plannedSupplement: editable });
   // «Сегодня» — на момент открытия карточки: defaultDate фиксируется при входе в раздел и через
   // границу месяца без перезагрузки устарел бы. По умолчанию — прошлый, уже закрытый месяц.
   const [currentMonth] = useState(moscowCurrentMonth);
@@ -84,7 +83,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   const paid = usePayrollPaid(row.employee_id, months);
-  const deductions = usePayrollEmployeeDeductions(row.employee_id, paymentSections);
+  const deductions = usePayrollEmployeeDeductions(row.employee_id, editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
@@ -104,7 +103,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       // Префикс сбрасывает список, «Расчёты», историю изменений условий, «Оплачено» и виды удержаний.
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
       success(terms ? 'Условия оплаты назначены: 1' : 'Удержания сохранены');
-      onSaved(row.employee_id, activeRef.current);
+      onSaved?.(row.employee_id, activeRef.current);
     },
     // Ошибку показывает карточка (ввод не теряется). Тост — если карточки на экране уже нет.
     onError: (err: Error) => {
@@ -160,18 +159,19 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       </header>
 
       <div className={styles.body}>
-        {!canEdit && (
+        {editable && !canEdit && (
           <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
         )}
         <PayrollTermsFields
           form={form}
           idPrefix={idPrefix}
           readOnly={!canEdit}
-          category={row.department_category ?? row.staff_category}
+          category={payrollRowCategory(row)}
           autoFocus={canEdit}
           paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} />}
           stacked
-          paymentSections={paymentSections}
+          detailsOnly={!editable}
+          total
           deductionKinds={(
             <DeductionKindsField id={`${idPrefix}-deduction-kinds`} deductions={deductions} readOnly={!canEdit} />
           )}
@@ -183,25 +183,28 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
         </div>
       </div>
 
-      <footer className={styles.footer}>
-        {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
-        <div className={styles.actions}>
-          {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={onClose}
-            disabled={saveMutation.isPending}
-          >
-            {canEdit ? 'Отмена' : 'Закрыть'}
-          </button>
-          {canEdit && (
-            <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
-              {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+      {/* В «Подробно» вносить нечего — кнопок нет: к списку — переключателем экранов. */}
+      {editable && (
+        <footer className={styles.footer}>
+          {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
+          <div className={styles.actions}>
+            {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onClose}
+              disabled={saveMutation.isPending}
+            >
+              {canEdit ? 'Отмена' : 'Закрыть'}
             </button>
-          )}
-        </div>
-      </footer>
+            {canEdit && (
+              <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            )}
+          </div>
+        </footer>
+      )}
     </form>
   );
 };

@@ -97,8 +97,9 @@ export interface IPayrollTermsHistoryRow {
   created_at: string;
 }
 
-/** Категорию сервер ставит сам — по отделу сотрудника. */
 export interface IAssignTermsPayload {
+  /** Категория из окна сотрудника; не передано — сервер ставит по отделу (массовое назначение — всегда). */
+  staff_category?: StaffCategory;
   calc_type: PayrollCalcType;
   monthly_salary?: number;
   hourly_rate?: number;

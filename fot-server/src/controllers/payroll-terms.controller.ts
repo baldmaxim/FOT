@@ -63,7 +63,8 @@ const optionalMoneySchema = z.coerce.number().min(0, 'Сумма не может
  * пользователю понятный текст, а не 500 от констрейнта.
  */
 const termsBodySchema = z.object({
-  // Категория — по отделу сотрудника (сервер определяет сам); старый фронт ещё присылает поле — игнорируется.
+  // Категория: в окне сотрудника на «Расчётах» её выбирают — одиночное назначение берёт присланную;
+  // не прислали — по отделу. Массовое назначение всегда ставит по отделу каждого.
   staff_category: z.enum(['office', 'itr', 'worker']).optional(),
   calc_type: z.enum(['salary', 'hourly']),
   monthly_salary: moneySchema.optional(),
@@ -612,8 +613,10 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     // сохранение не прочтёт ту же прежнюю версию доплаты.
     const { termsId, previous, supplementChanged, staffCategory } = await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
-      // Категория — по отделу сотрудника на момент сохранения, а не из запроса.
-      const category = (await resolveEmployeeStaffCategories([employeeId], client)).get(employeeId) ?? 'office';
+      // Категория — выбранная в окне; не прислали — по отделу сотрудника на момент сохранения.
+      const category = body.staff_category
+        ?? (await resolveEmployeeStaffCategories([employeeId], client)).get(employeeId)
+        ?? 'office';
       const previousTerms = await getTermsOnDate(employeeId, body.effective_from, client);
       const id = await assignTerms({
         employeeId,

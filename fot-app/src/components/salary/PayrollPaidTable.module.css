@@ -1,20 +1,41 @@
 /*
- * «Оплачено», только чтение: сверху таблицы итогов месяцев в ряд, под ними строка «Оплачено», ниже —
- * раскрытые таблицы статей. Таблицы одной ширины и с одинаковыми столбцами: статьи месяца стоят точно
- * под его итогами, не помещаются в ряд — переносятся одинаково. Узко — на всю ширину, друг под другом.
+ * «Оплачено», только чтение: месяцы — столбцами. Сверху таблица итога «Выплачено», под ней строка «Оплачено»,
+ * ниже — раскрытая таблица статей. Обе таблицы одной ширины (подписи + N месяцев) и в одной прокрутке вбок:
+ * столбцы месяцев стоят точно друг под другом и сдвигаются вместе.
  */
 .paid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
-.tables { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; }
+/* Прокрутка вбок при многих месяцах; контейнер — для ширины строки «Оплачено» (cqw). */
+.scroll {
+  --paid-label-w: 9rem;
+  --paid-month-w: 6.5rem;
+  container-type: inline-size;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
 
-/* Строка-переключатель между итогами и статьями: раскрыть / свернуть статьи. Шеврон — как у справки карточки. */
+/* Ширина — по таблицам, не меньше видимой области: строка «Оплачено» не растягивает прокрутку. */
+.inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Строка-переключатель между итогами и статьями: на видимую ширину и закреплена слева при прокрутке. */
 .toggle {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 8px;
-  align-self: flex-start;
-  max-width: 100%;
+  width: 100cqw;
   min-height: 44px;
   padding: 4px 0;
   border: none;
@@ -32,22 +53,18 @@
 .title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .summary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
-/* Рамка таблицы: одна ширина у итогов и статей; узко — на всю ширину. */
-.scroll {
-  box-sizing: border-box;
-  width: min(100%, 24rem);
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-
-/* fixed — ширина столбцов по шапке (.corner), а не по тексту: столбцы итогов и статей совпадают. */
+/*
+ * fixed — ширина столбцов по шапке, а не по тексту: подписи — --paid-label-w, месяцы делят остальное поровну.
+ * Ширина таблицы — подписи + N месяцев (N — --paid-months из компонента): у итогов и статей она одна.
+ */
 .table {
-  width: 100%;
+  box-sizing: border-box;
+  width: calc(var(--paid-label-w) + var(--paid-months, 1) * var(--paid-month-w));
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   font-size: 13px;
   line-height: 1.3;
 }
@@ -60,6 +77,9 @@
   vertical-align: middle;
 }
 .table tbody:last-child tr:last-child > * { border-bottom: none; }
+/* Фон шапки не выступает за скруглённые углы рамки. */
+.table thead tr > :first-child { border-top-left-radius: calc(var(--radius-md) - 1px); }
+.table thead tr > :last-child { border-top-right-radius: calc(var(--radius-md) - 1px); }
 
 .corner,
 .monthHead {
@@ -79,7 +99,7 @@
   box-shadow: inset -1px 0 0 var(--border-subtle);
 }
 /* Ширина столбца подписей задаёт столбцы всей таблицы (table-layout: fixed). */
-.corner { z-index: 2; width: 55%; }
+.corner { z-index: 2; width: var(--paid-label-w); }
 
 /* Длинная подпись статьи переносится, сумма остаётся в строку. */
 .rowHead {
@@ -117,6 +137,10 @@
 }
 
 .note { margin: 0; font-size: 12px; color: var(--text-secondary); }
+
+@media (min-width: 768px) {
+  .scroll { --paid-label-w: 14rem; --paid-month-w: 8rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .chevron { transition: none; }
