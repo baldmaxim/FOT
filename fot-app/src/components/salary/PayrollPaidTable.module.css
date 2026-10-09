@@ -77,6 +77,12 @@
   vertical-align: middle;
 }
 .table tbody:last-child tr:last-child > * { border-bottom: none; }
+/* Линии между столбцами месяцев — как после столбца подписей; у первого месяца своей нет (её даёт подпись). */
+.table :is(.monthHead, .total, .value) + :is(.monthHead, .total, .value) { border-left: 1px solid var(--border-subtle); }
+
+/* Линии между столбцами месяцев — как после столбца подписей; у первого месяца своей нет (её даёт подпись). */
+.table :is(.monthHead, .total, .value) + :is(.monthHead, .total, .value) { border-left: 1px solid var(--border-subtle); }
+
 /* Фон шапки не выступает за скруглённые углы рамки. */
 .table thead tr > :first-child { border-top-left-radius: calc(var(--radius-md) - 1px); }
 .table thead tr > :last-child { border-top-right-radius: calc(var(--radius-md) - 1px); }
@@ -142,8 +148,8 @@
 .note { margin: 0; font-size: 12px; color: var(--text-secondary); }
 
 @media (min-width: 768px) {
-  /* 11.5rem — в строку помещается «Компенсация проживания»; длиннее переносятся. */
-  .scroll { --paid-label-w: 11.5rem; --paid-month-w: 8rem; }
+  /* 12.5rem — в строку помещается «Компенсация проживания» (171px текста + отступы); длиннее переносятся. */
+  .scroll { --paid-label-w: 12.5rem; --paid-month-w: 8rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
