@@ -139,15 +139,75 @@ const pdPool = new Pool({
   ssl: process.env.PASSDESK_DATABASE_SSL === 'false' ? undefined : { rejectUnauthorized: false },
 });
 
+/**
+ * Схема живой PassDesk отстаёт от их репозитория: так, `has_residence_permit`
+ * объявлена в модели и есть миграция, но на их прод она не накатана. Поэтому
+ * состав колонок выясняем заранее и отсутствующие подставляем как NULL —
+ * иначе перенос падает на первой же и чинится по одной колонке за прогон.
+ */
+const loadColumns = async (table: string): Promise<Set<string>> => {
+  const res = await pdPool.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`,
+    [table],
+  );
+  if (res.rows.length === 0) throw new Error(`В PassDesk нет таблицы ${table}`);
+  return new Set(res.rows.map(r => r.column_name));
+};
+
+/** Необязательные колонки employees: имя → тип для NULL-заглушки. */
+const OPTIONAL_EMPLOYEE_COLUMNS: Record<string, string> = {
+  id_all: 'uuid', middle_name: 'text', last_name_enc: 'text', last_name_key_version: 'text', gender: 'text',
+  birth_region: 'text', birth_city: 'text', birth_date: 'date', inn: 'text', snils: 'text',
+  passport_number_enc: 'text', passport_number_key_version: 'text', passport_date: 'date', passport_issuer: 'text',
+  passport_department_code: 'text', passport_type: 'text', passport_expiry_date: 'date',
+  kig_enc: 'text', kig_key_version: 'text', kig_end_date: 'date', registration_address: 'text',
+  patent_number_enc: 'text', patent_number_key_version: 'text', patent_issue_date: 'date', blank_number: 'text',
+  email: 'text', phone: 'text', insurance_policy_number: 'text', insurance_policy_date: 'date',
+  planned_exit_date: 'date', bank_account_number: 'text', bank_bik: 'text', notes: 'text',
+  is_active: 'boolean', has_residence_permit: 'boolean',
+};
+
+const OPTIONAL_FILE_COLUMNS: Record<string, string> = {
+  original_name: 'text', file_name: 'text', mime_type: 'text', file_size: 'bigint', document_type: 'text',
+  is_encrypted: 'boolean', encryption_algorithm: 'text', encryption_iv: 'text', encryption_tag: 'text',
+  encryption_key_version: 'text', created_at: 'timestamptz',
+};
+
+/** Колонки, без которых перенос бессмысленен: их отсутствие — остановка, а не NULL. */
+const REQUIRED_EMPLOYEE_COLUMNS = ['id', 'first_name', 'is_deleted', 'updated_at'];
+const REQUIRED_FILE_COLUMNS = ['id', 'employee_id', 'file_path', 'entity_type', 'is_deleted'];
+
+/** Поля, которых не оказалось в живой схеме, — в лог и в лист «Итоги». */
+const missingColumns: string[] = [];
+
+const requireColumns = (table: string, have: Set<string>, names: string[]): void => {
+  const absent = names.filter(n => !have.has(n));
+  if (absent.length > 0) throw new Error(`В PassDesk.${table} нет обязательных колонок: ${absent.join(', ')}`);
+};
+
+/** `e.foo`, если колонка есть, иначе `NULL::тип AS foo`. */
+const optionalColumn = (table: string, alias: string, have: Set<string>, name: string, type: string): string => {
+  if (have.has(name)) return `${alias}.${name}`;
+  missingColumns.push(`${table}.${name}`);
+  return `NULL::${type} AS ${name}`;
+};
+
 const loadPassdeskEmployees = async (): Promise<IPdEmployee[]> => {
+  const have = await loadColumns('employees');
+  requireColumns('employees', have, REQUIRED_EMPLOYEE_COLUMNS);
+  const optional = Object.entries(OPTIONAL_EMPLOYEE_COLUMNS)
+    .map(([name, type]) => optionalColumn('employees', 'e', have, name, type))
+    .join(', ');
+  // citizenship_id / birth_country_id участвуют в JOIN: нет колонки — нет и join.
+  const hasCitizenship = have.has('citizenship_id');
+  const hasBirthCountry = have.has('birth_country_id');
+  if (!hasCitizenship) missingColumns.push('employees.citizenship_id');
+  if (!hasBirthCountry) missingColumns.push('employees.birth_country_id');
+
   const res = await pdPool.query<IPdEmployee>(`
-    SELECT e.id, e.id_all, e.first_name, e.middle_name, e.last_name_enc, e.last_name_key_version, e.gender,
-           c.name AS citizenship_name, bc.name AS birth_country_name, e.birth_region, e.birth_city, e.birth_date,
-           e.inn, e.snils, e.passport_number_enc, e.passport_number_key_version, e.passport_date, e.passport_issuer,
-           e.passport_department_code, e.passport_type, e.passport_expiry_date, e.kig_enc, e.kig_key_version, e.kig_end_date,
-           e.registration_address, e.patent_number_enc, e.patent_number_key_version, e.patent_issue_date, e.blank_number,
-           e.email, e.phone, e.insurance_policy_number, e.insurance_policy_date, e.planned_exit_date,
-           e.bank_account_number, e.bank_bik, e.notes, e.is_active, e.has_residence_permit,
+    SELECT e.id, e.first_name, ${optional},
+           ${hasCitizenship ? 'c.name' : 'NULL::text'} AS citizenship_name,
+           ${hasBirthCountry ? 'bc.name' : 'NULL::text'} AS birth_country_name,
            (SELECT cp.name FROM employee_counterparty_mapping m JOIN counterparties cp ON cp.id = m.counterparty_id
              WHERE m.employee_id = e.id ORDER BY (m.dismissed_at IS NULL) DESC, m.updated_at DESC LIMIT 1) AS counterparty,
            e.updated_at,
@@ -160,8 +220,8 @@ const loadPassdeskEmployees = async (): Promise<IPdEmployee[]> => {
              COALESCE((SELECT max(a.created_at) FROM audit_logs a WHERE a.action = 'zup_flag_changed' AND a.entity_type = 'employee' AND a.entity_id = e.id::text), e.updated_at)
            ) AS last_change_at
       FROM employees e
-      LEFT JOIN citizenships c ON c.id = e.citizenship_id
-      LEFT JOIN citizenships bc ON bc.id = e.birth_country_id
+      ${hasCitizenship ? 'LEFT JOIN citizenships c ON c.id = e.citizenship_id' : ''}
+      ${hasBirthCountry ? 'LEFT JOIN citizenships bc ON bc.id = e.birth_country_id' : ''}
      WHERE e.is_deleted = false
      ORDER BY e.updated_at`);
   return res.rows;
@@ -170,12 +230,19 @@ const loadPassdeskEmployees = async (): Promise<IPdEmployee[]> => {
 const loadPassdeskFiles = async (employeeIds: string[]): Promise<Map<string, IPdFile[]>> => {
   const map = new Map<string, IPdFile[]>();
   if (employeeIds.length === 0) return map;
+  const have = await loadColumns('files');
+  requireColumns('files', have, REQUIRED_FILE_COLUMNS);
+  const optional = Object.entries(OPTIONAL_FILE_COLUMNS)
+    .map(([name, type]) => (name === 'document_type' && have.has(name)
+      // document_type — enum, приводим к тексту: getHrDocumentType ждёт строку.
+      ? 'document_type::text AS document_type'
+      : optionalColumn('files', 'f', have, name, type)))
+    .join(', ');
   const res = await pdPool.query<IPdFile>(`
-    SELECT id, employee_id, file_path, original_name, file_name, mime_type, file_size, document_type::text AS document_type,
-           is_encrypted, encryption_algorithm, encryption_iv, encryption_tag, encryption_key_version, created_at
-      FROM files
-     WHERE entity_type = 'employee' AND is_deleted = false AND employee_id = ANY($1::uuid[])
-     ORDER BY created_at`, [employeeIds]);
+    SELECT f.id, f.employee_id, f.file_path, ${optional}
+      FROM files f
+     WHERE f.entity_type = 'employee' AND f.is_deleted = false AND f.employee_id = ANY($1::uuid[])
+     ORDER BY f.id`, [employeeIds]);
   for (const f of res.rows) map.set(f.employee_id, [...(map.get(f.employee_id) ?? []), f]);
   return map;
 };
@@ -465,10 +532,13 @@ const main = async (): Promise<void> => {
   for (const [k, v] of Object.entries(counts)) ws3.addRow([k, v]);
   ws3.addRow(['files_total', report.reduce((s, r) => s + Number(r.files), 0)]);
   ws3.addRow(['files_bytes_total', report.reduce((s, r) => s + Number(r.files_bytes), 0)]);
+  // Колонки, которых нет в живой схеме PassDesk: в отчёте видно, что приехало пустым.
+  for (const name of missingColumns) ws3.addRow(['нет колонки в PassDesk', name]);
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   await wb.xlsx.writeFile(OUT);
 
   log('Правила сопоставления:', counts);
+  if (missingColumns.length > 0) log(`Нет в схеме PassDesk (перенесены пустыми): ${missingColumns.join(', ')}`);
   log(`Отчёт: ${OUT}`);
   if (MODE_APPLY) log('Применено:', stats);
 };
