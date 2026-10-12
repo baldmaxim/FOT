@@ -1,12 +1,17 @@
 /**
- * Резолв «каких сотрудников видит пользователь» БЕЗ фильтров экрана.
+ * Скоуп ЧТЕНИЯ «Управления кадрами»: каких сотрудников пользователь видит в списке и кого
+ * может открыть «как в списке» (карточка табельщицы, «Реквизиты», HR-документы, столбцы
+ * «Объект» и «График»).
  *
- * Буквальный перенос ветвления из employees.controller.getAll (ветка, где
- * department_id в query не задан). Вынесено отдельно, чтобы выгрузка в xlsx
- * имела ровно тот же охват, что и список на «Управлении кадрами».
+ * - resolveEmployeeListScopeFilter — базовый охват по назначенным отделам и прямым
+ *   подчинённым (ветвление исторически взято из employees.controller.getAll; сам getAll
+ *   в legacy-режиме держит собственную копию). Его напрямую берёт старая выгрузка
+ *   /employees/export — она глобальным чтением не расширяется.
+ * - resolveEmployeeListReadScope — тот же охват плюс глобальное чтение: флаг роли
+ *   view_all_departments и точечное право «Управление кадрами — все сотрудники»
+ *   (read-scope-grants.service, только роль «Табельщица»).
  *
- * ВАЖНО: getAll пока продолжает использовать собственную копию логики —
- * переключение его на этот сервис запланировано отдельным шагом.
+ * Только чтение: запись решают canAccessEmployeeInScope / canWriteEmployeeInScope.
  */
 import { query } from '../config/postgres.js';
 import {
@@ -17,6 +22,7 @@ import {
 } from './data-scope.service.js';
 import { listExplicitDepartmentIdsForUser } from './department-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
+import { hasStaffAllEmployeesGrant } from './read-scope-grants.service.js';
 import { collectDeptIds } from './skud-shared.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -103,12 +109,19 @@ export async function resolveEmployeeListScopeFilter(
  * resolveAccessibleDepartmentIds: тот скоуп решает и запись (canAccessEmployeeInScope
  * в увольнении, правке карточки, документах). globalRead=true — фильтр отдела берётся
  * из запроса как есть, без сужения до назначенных отделов.
+ *
+ * Так же действует право «Управление кадрами — все сотрудники» (табельщица). staffGrant: false
+ * отключает его для вызовов вне экрана кадров — общий список GET /employees без page
+ * (фильтр «Чеков за патент») остаётся в пределах бригад.
  */
 export async function resolveEmployeeListReadScope(
   req: AuthenticatedRequest,
+  options: { staffGrant?: boolean } = {},
 ): Promise<{ scope: Awaited<ReturnType<typeof resolveRequestDataScopeWithDirectReports>>; globalRead: boolean }> {
+  const { staffGrant = true } = options;
   const scope = await resolveRequestDataScopeWithDirectReports(req);
-  if (scope !== 'all' && await hasGlobalDepartmentReadScope(req)) {
+  if (scope === 'all') return { scope, globalRead: false };
+  if (await hasGlobalDepartmentReadScope(req) || (staffGrant && await hasStaffAllEmployeesGrant(req))) {
     return { scope: 'all', globalRead: true };
   }
   return { scope, globalRead: false };
@@ -141,7 +154,7 @@ export async function filterEmployeeIdsByReadScope(
   return rows.map(row => Number(row.id)).filter(id => Number.isInteger(id));
 }
 
-/** Фильтр списка «Управления кадрами» с учётом глобального чтения (view_all_departments). */
+/** Фильтр списка «Управления кадрами» с учётом глобального чтения (флаг роли или право «все сотрудники»). */
 async function resolveStaffListFilter(req: AuthenticatedRequest): Promise<IEmployeeScopeFilter> {
   const { globalRead } = await resolveEmployeeListReadScope(req);
   return globalRead

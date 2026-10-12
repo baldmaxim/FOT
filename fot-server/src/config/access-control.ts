@@ -81,6 +81,7 @@ export const PAGE_PATHS = {
   DISCIPLINE: '/discipline',
   DISCIPLINE_OBJECTS: '/discipline/objects',
   STAFF_CONTROL: '/staff-control',
+  STAFF_CONTROL_ALL_EMPLOYEES: '/staff-control/all-employees',
   STAFF_CONTROL_HIRING: '/staff-control/hiring',
   STAFF_CONTROL_INDUCTION: '/staff-control/induction',
   STAFF_CONTROL_HR_PROFILES: '/staff-control/hr-profiles',
@@ -165,6 +166,9 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/skud-presence/all-objects',  label: 'Сотрудники на объектах — все объекты (только просмотр)', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin', surface: 'technical', supports_edit: false, sort_order: 41, is_active: true },
   // ── Админка: управление ──
   { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
+  // Вся организация в «Управлении кадрами» на чтение. Действует только у роли «Табельщица» и
+  // только вместе с /staff-control; табель, заявления, СКУД и кадровую запись не расширяет.
+  { key: '/staff-control/all-employees', label: 'Управление кадрами — все сотрудники (только просмотр; для роли «Табельщица»)', group_code: 'work', group_label: 'Управление', area: 'admin', surface: 'technical', supports_edit: false, sort_order: 101, is_active: true },
   { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
   { key: '/timesheet/events',           label: 'Табель — события СКУД (вкладка дня)',  group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: false, sort_order: 115, is_active: true },
   { key: '/timesheet/lock-toggle',      label: 'Табель — открыть/закрыть сданный период', group_code: 'work', group_label: 'Управление',        area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 116, is_active: true },

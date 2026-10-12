@@ -6,10 +6,12 @@ import jwt from 'jsonwebtoken';
 /**
  * Гейты точечных прав на чтение:
  *  - «Сотрудники на объектах — все объекты» (/skud-presence/all-objects);
- *  - «Обзор — все отделы» (/dashboard/all-departments).
+ *  - «Обзор — все отделы» (/dashboard/all-departments);
+ *  - «Управление кадрами — все сотрудники» (/staff-control/all-employees).
  *
  * Держим:
  *  - новые эндпоинты «Обзора» закрыты без базового /dashboard, даже при наличии права;
+ *  - дерево отделов «Управления кадрами» закрыто без базового /staff-control;
  *  - права ничего не открывают на гейтах записи (табель, документы, заявления,
  *    объекты СКУД сотруднику) — результат роли security с правами и без одинаков;
  *  - «Звонки» гейтятся как раньше;
@@ -117,7 +119,7 @@ const SECURITY_BASE = [
   '/sigur/access-points:edit', '/skud-card-reader:edit', '/skud-presence:view', '/skud-settings/directory:view',
   '/staff-control:view', '/staff-control/hiring:view', '/timesheet:view', '/timesheet/events:view',
 ];
-const NEW_GRANTS = ['/skud-presence/all-objects:view', '/dashboard/all-departments:view'];
+const NEW_GRANTS = ['/skud-presence/all-objects:view', '/dashboard/all-departments:view', '/staff-control/all-employees:view'];
 
 const d = process.env.CODEX_SANDBOX ? describe.skip : describe;
 
@@ -146,6 +148,20 @@ d('точечные права на чтение — гейты', () => {
     const res = await send(method, url);
     expect(res.status).toBe(200);
     expect(h.calls).toHaveLength(1);
+  });
+
+  it('дерево «Управления кадрами» без базового /staff-control → 403 даже с правом', async () => {
+    NEW_GRANTS.forEach(grant => h.grants.add(grant));
+    const res = await send('get', '/api/structure/staff-tree');
+    expect(res.status).toBe(403);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('дерево «Управления кадрами» с базовым /staff-control → доходит до контроллера', async () => {
+    h.grants.add('/staff-control:view');
+    const res = await send('get', '/api/structure/staff-tree');
+    expect(res.status).toBe(200);
+    expect(h.calls).toEqual(['structure.getStaffTree']);
   });
 
   it('«Сотрудники на объектах» без базового /skud-presence → 403 даже с правом', async () => {

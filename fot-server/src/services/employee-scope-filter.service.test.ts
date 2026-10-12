@@ -12,6 +12,8 @@ const scope = vi.hoisted(() => ({
   managedDepartmentIds: [] as string[],
   explicitDepartmentIds: [] as string[],
   directSubordinates: [] as number[],
+  /** Право «Управление кадрами — все сотрудники» (роль и ключи проверяет сам сервис прав). */
+  staffGrant: false,
 }));
 
 vi.mock('./data-scope.service.js', () => ({
@@ -30,11 +32,18 @@ vi.mock('./employee-direct-reports.service.js', () => ({
 vi.mock('./skud-shared.service.js', () => ({
   collectDeptIds: vi.fn(async (id: string) => [id]),
 }));
+const staffGrantMock = vi.hoisted(() => vi.fn());
+vi.mock('./read-scope-grants.service.js', () => ({ hasStaffAllEmployeesGrant: staffGrantMock }));
 
 const queryMock = vi.hoisted(() => vi.fn());
 vi.mock('../config/postgres.js', () => ({ query: queryMock }));
 
-const { filterEmployeeIdsByReadScope, resolveEmployeeListReadScope } = await import('./employee-scope-filter.service.js');
+const {
+  canSeeEmployeeInStaffList,
+  filterEmployeeIdsByReadScope,
+  resolveEmployeeListReadScope,
+  resolveStaffRosterEmployeeIds,
+} = await import('./employee-scope-filter.service.js');
 
 const req = (employeeId: number | null = 10): AuthenticatedRequest =>
   ({ user: { id: 'user-1', employee_id: employeeId } } as unknown as AuthenticatedRequest);
@@ -71,6 +80,9 @@ beforeEach(() => {
   scope.managedDepartmentIds = [];
   scope.explicitDepartmentIds = [];
   scope.directSubordinates = [];
+  scope.staffGrant = false;
+  staffGrantMock.mockReset();
+  staffGrantMock.mockImplementation(async () => scope.staffGrant);
 });
 
 describe('resolveEmployeeListReadScope', () => {
@@ -83,6 +95,58 @@ describe('resolveEmployeeListReadScope', () => {
   it('без флага скоуп не меняется', async () => {
     scope.dataScope = 'department';
     expect(await resolveEmployeeListReadScope(req())).toEqual({ scope: 'department', globalRead: false });
+  });
+
+  it('право «все сотрудники» расширяет department-скоуп до глобального чтения', async () => {
+    scope.dataScope = 'department';
+    scope.staffGrant = true;
+    expect(await resolveEmployeeListReadScope(req())).toEqual({ scope: 'all', globalRead: true });
+  });
+
+  it('staffGrant: false — вне экрана кадров право не применяется и даже не спрашивается', async () => {
+    scope.dataScope = 'department';
+    scope.staffGrant = true;
+    expect(await resolveEmployeeListReadScope(req(), { staffGrant: false })).toEqual({ scope: 'department', globalRead: false });
+    expect(staffGrantMock).not.toHaveBeenCalled();
+  });
+
+  it('staffGrant: false не отменяет флаг роли view_all_departments', async () => {
+    scope.dataScope = 'department';
+    scope.globalRead = true;
+    expect(await resolveEmployeeListReadScope(req(), { staffGrant: false })).toEqual({ scope: 'all', globalRead: true });
+  });
+
+  it('scope=all — право не спрашивается, globalRead остаётся false', async () => {
+    scope.staffGrant = true;
+    expect(await resolveEmployeeListReadScope(req())).toEqual({ scope: 'all', globalRead: false });
+    expect(staffGrantMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Круг «как в списке кадров»: по нему у табельщицы открываются карточка, «Реквизиты» и
+ * HR-документы. С правом «все сотрудники» он совпадает со списком — вся организация.
+ */
+describe('право «все сотрудники» — круг «как в списке кадров»', () => {
+  beforeEach(() => {
+    scope.dataScope = 'department';
+    scope.managedDepartmentIds = ['mine'];
+  });
+
+  it('без права чужой сотрудник не виден', async () => {
+    expect(await filterEmployeeIdsByReadScope(req(), [1, 2])).toEqual([1]);
+    expect(await canSeeEmployeeInStaffList(req(), 2)).toBe(false);
+  });
+
+  it('с правом видны и чужие отделы', async () => {
+    scope.staffGrant = true;
+    expect(await filterEmployeeIdsByReadScope(req(), [1, 2, 404])).toEqual([1, 2]);
+    expect(await canSeeEmployeeInStaffList(req(), 2)).toBe(true);
+  });
+
+  it('с правом реестр не ограничен набором id', async () => {
+    scope.staffGrant = true;
+    expect(await resolveStaffRosterEmployeeIds(req())).toBe('all');
   });
 });
 

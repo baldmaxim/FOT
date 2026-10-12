@@ -6,7 +6,7 @@ import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../serv
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
-import { hasDashboardAllDepartmentsGrant } from '../services/read-scope-grants.service.js';
+import { hasDashboardAllDepartmentsGrant, hasStaffAllEmployeesGrant } from '../services/read-scope-grants.service.js';
 import { getRequestPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
 import type {
   AuthenticatedRequest,
@@ -369,9 +369,29 @@ async function loadPayrollTree(req: AuthenticatedRequest): Promise<object> {
   return loadUnscopedTree();
 }
 
+/**
+ * Дерево фильтра отделов в «Управлении кадрами». С правом «Управление кадрами — все
+ * сотрудники» (табельщица) список — вся организация, а общее /api/structure режет дерево по
+ * её бригадам: отфильтровать список по чужому отделу было бы нечем. Без права — ровно то же,
+ * что /api/structure.
+ */
+async function loadStaffTree(req: AuthenticatedRequest): Promise<object> {
+  if (!(await hasStaffAllEmployeesGrant(req))) return loadTreeForCache(req);
+  return loadUnscopedTree();
+}
+
 export const structureController = {
   loadTreeForCache,
   loadDashboardTreeForCache,
+
+  async getStaffTree(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json(await loadStaffTree(req));
+    } catch (error) {
+      console.error('Get staff structure error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения структуры' });
+    }
+  },
 
   async getDashboardTree(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {

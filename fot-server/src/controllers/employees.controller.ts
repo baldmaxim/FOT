@@ -169,7 +169,9 @@ export const employeesController = {
         await respondEmployeesPage(req, res, t0);
         return;
       }
-      const { scope, globalRead } = await resolveEmployeeListReadScope(req);
+      // Общий список без page зовут экраны вне «Управления кадрами» (фильтр «Чеков за патент»):
+      // право «все сотрудники» его не расширяет.
+      const { scope, globalRead } = await resolveEmployeeListReadScope(req, { staffGrant: false });
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
         return;

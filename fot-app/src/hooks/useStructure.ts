@@ -36,6 +36,20 @@ export const PAYROLL_STRUCTURE_QUERY_KEY = ['structure', 'payroll-tree'] as cons
 export const usePayrollStructureTree = (enabled = true) =>
   useTreeQuery(PAYROLL_STRUCTURE_QUERY_KEY, () => structureApi.getPayrollTree(), enabled);
 
+// Под префиксом ['structure'] — realtime-инвалидация структуры сбрасывает и его.
+export const STAFF_STRUCTURE_QUERY_KEY = ['structure', 'staff-tree'] as const;
+
+/**
+ * Дерево «Управления кадрами». С правом «все сотрудники» (табельщица) список — вся организация,
+ * а общее дерево режется по её бригадам, поэтому берём полное. Возвращает ОДИН выбранный
+ * запрос: отделы, id папки «Уволенные» и состояние загрузки селектора идут из одного источника.
+ */
+export const useStaffScreenTree = (allEmployees: boolean) => {
+  const commonTree = useStructureTree(!allEmployees);
+  const staffTree = useTreeQuery(STAFF_STRUCTURE_QUERY_KEY, () => structureApi.getStaffTree(), allEmployees);
+  return allEmployees ? staffTree : commonTree;
+};
+
 const useTreeQuery = (
   queryKey: readonly string[],
   fetchTree: () => ReturnType<typeof structureApi.getTree>,

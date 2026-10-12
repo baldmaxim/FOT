@@ -1,17 +1,21 @@
-// Точечные права на ЧТЕНИЕ двух экранов без расширения общего скоупа данных.
+// Точечные права на ЧТЕНИЕ отдельных экранов без расширения общего скоупа данных.
 //
 //  - /skud-presence/all-objects — «Сотрудники на объектах» и их выгрузка по всем объектам;
-//  - /dashboard/all-departments — «Обзор» по любому отделу (присутствие и статистика).
+//  - /dashboard/all-departments — «Обзор» по любому отделу (присутствие и статистика);
+//  - /staff-control/all-employees — «Управление кадрами» по всей организации, только у роли
+//    «Табельщица»: список, счётчики, выгрузка таблицы, дерево отделов экрана и круг «как в
+//    списке кадров», по которому у неё открываются карточка, «Реквизиты» и HR-документы.
 //
 // Намеренно НЕ встроено в resolveAccessibleObjectIdsForRequest / resolveAccessibleDepartmentIds /
 // resolveScopedDepartmentId: те резолверы решают табель, заявления, документы, назначения и
-// запись. Расширение применяется только в обработчиках этих двух экранов.
+// запись. Расширение применяется только в обработчиках этих экранов.
 //
 // Каждое право действует лишь вместе с базовым просмотром своей страницы. Администратор
 // сюда не попадает: у него своя логика (company scope), поведение не меняется.
 
 import { PAGE_PATHS } from '../config/access-control.js';
 import { resolveEffectivePageAccess } from './access-control.service.js';
+import { isTimekeeper } from './timekeeper-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const hasGrantWithBasePage = async (
@@ -31,3 +35,12 @@ export const hasPresenceAllObjectsGrant = (req: AuthenticatedRequest): Promise<b
 /** «Обзор — все отделы». */
 export const hasDashboardAllDepartmentsGrant = (req: AuthenticatedRequest): Promise<boolean> =>
   hasGrantWithBasePage(req, PAGE_PATHS.DASHBOARD, PAGE_PATHS.DASHBOARD_ALL_DEPARTMENTS);
+
+/**
+ * «Управление кадрами — все сотрудники». Только роль «Табельщица»: у остальных ролей карточка
+ * и «Реквизиты» идут по общему скоупу, и право дало бы список, строки которого не открываются.
+ */
+export const hasStaffAllEmployeesGrant = async (req: AuthenticatedRequest): Promise<boolean> => {
+  if (!isTimekeeper(req)) return false;
+  return hasGrantWithBasePage(req, PAGE_PATHS.STAFF_CONTROL, PAGE_PATHS.STAFF_CONTROL_ALL_EMPLOYEES);
+};

@@ -26,6 +26,11 @@ export const structureApi = {
     return this.fetchTree('/structure/payroll-tree');
   },
 
+  /** Дерево фильтра отделов в «Управлении кадрами»: с правом «все сотрудники» — полное. */
+  async getStaffTree(): Promise<ApiResponse<OrgStructureResponse>> {
+    return this.fetchTree('/structure/staff-tree');
+  },
+
   async fetchTree(path: string): Promise<ApiResponse<OrgStructureResponse>> {
     try {
       const res = await apiClient.get<ApiResponse<OrgStructureResponse>>(path);

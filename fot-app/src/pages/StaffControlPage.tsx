@@ -18,7 +18,7 @@ import type {
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
-import { useStructureTree } from '../hooks/useStructure';
+import { useStaffScreenTree } from '../hooks/useStructure';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
@@ -61,6 +61,7 @@ import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments'
 import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
 import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
 import { isHeaderDeptAllowed, resolveHeaderDeptFilter } from '../utils/staffDeptFilter';
+import { normalizeStaffStatusPeriod, resolveStaffAccessRules, STAFF_ALL_EMPLOYEES_PAGE_KEY } from '../utils/staffAccessRules';
 import { buildScheduleViews } from '../utils/staffScheduleViews';
 import { refreshStaffChunksFor } from '../utils/staffChunkInvalidation';
 import { formatDate } from '../utils/formatMoney';
@@ -1441,11 +1442,19 @@ export const StaffControlPage: FC = () => {
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
-  const restrictToManaged = isDepartmentScope;
+  // Табельщица с правом «все сотрудники» видит всю организацию на чтение: фильтр отделов не
+  // сужается, ей доступны «Уволенные» и чипы месяца (правка — по прежним правам).
+  const { hasAllEmployees, restrictToManaged, canViewFired } = resolveStaffAccessRules({
+    isAdmin,
+    roleCode: profile?.role_code,
+    hasAllEmployeesKey: canViewPage(STAFF_ALL_EMPLOYEES_PAGE_KEY),
+    canManageStaff,
+    isDepartmentScope,
+  });
   // Руководитель с одним отделом — фиксируем фильтр на этом отделе (без возможности
   // переключения). Делаем через эффект, потому что profile/managed_department_ids
   // приезжают асинхронно из useAuth.
-  const isSingleManagedDept = isDepartmentScope && managedMode === 'single' && managedDepartmentIds.length === 1;
+  const isSingleManagedDept = restrictToManaged && managedMode === 'single' && managedDepartmentIds.length === 1;
   const singleManagedDeptId = isSingleManagedDept ? managedDepartmentIds[0] : null;
   const singleManagedDeptName = singleManagedDeptId ? managedDepartmentNameById.get(singleManagedDeptId) ?? null : null;
   useEffect(() => {
@@ -1489,6 +1498,7 @@ export const StaffControlPage: FC = () => {
     period: period ?? undefined,
     cf: columnFiltersKey,
     enabled: sectionChoice !== null || scopeKnown,
+    allEmployees: hasAllEmployees,
   });
 
   // Сортировка по объекту без ночного снимка недоступна (409): возвращаемся к ФИО.
@@ -1551,11 +1561,13 @@ export const StaffControlPage: FC = () => {
     search: debouncedSearch,
     scheduleId: scheduleFilter,
     cf: columnFiltersKey,
-    enabled: (sectionChoice !== null || scopeKnown) && canManageStaff,
+    enabled: (sectionChoice !== null || scopeKnown) && canViewFired,
   });
 
 
-  const structureTree = useStructureTree();
+  // Тот же запрос дерева, что у списка (useStaffData): один источник для отделов, папки
+  // «Уволенные» и состояния селектора.
+  const structureTree = useStaffScreenTree(hasAllEmployees);
   const archiveDepartmentId = structureTree.data?.stats.archive_department_id ?? null;
 
   const today = getLocalISODate();
@@ -1866,12 +1878,14 @@ export const StaffControlPage: FC = () => {
   // Прокрутка к началу — только при смене фактических фильтров и сортировки, не при догрузке порций.
   const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}|${columnFiltersKey}`;
 
-  // «Уволенные» доступны только с правом управления кадрами: ?status=fired из чужой ссылки — сброс.
+  // «Уволенные» и период «с начала месяца» — только тем, у кого есть переключатель и чипы:
+  // ?status=fired / ?period=… из чужой ссылки сбрасываются.
   useEffect(() => {
-    if (!profile || canManageStaff || statusFilter === 'active') return;
-    setStatusFilter('active');
-    setPeriod(null);
-  }, [profile, canManageStaff, statusFilter]);
+    if (!profile) return;
+    const next = normalizeStaffStatusPeriod({ status: statusFilter, period }, canViewFired);
+    if (next.status !== statusFilter) setStatusFilter(next.status);
+    if (next.period !== period) setPeriod(next.period);
+  }, [profile, canViewFired, statusFilter, period]);
 
   // Комментарий HR: правят те, у кого edit «Управления кадрами» (скоуп проверяет сервер).
   const canEditStaffComment = isAdmin || canEditPage('/staff-control');
@@ -2551,7 +2565,7 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      {canManageStaff && (
+      {canViewFired && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
             type="button"
@@ -2625,9 +2639,9 @@ export const StaffControlPage: FC = () => {
         <SearchInput clearable value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
       {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N», фильтры столбцов. */}
-      {(canManageStaff || isMobile || activeColumnFilterCount > 0) && (
+      {(canViewFired || isMobile || activeColumnFilterCount > 0) && (
         <div className="sc-movement-row">
-          {canManageStaff && (
+          {canViewFired && (
             <StaffMonthMovement
               data={monthMovement.data}
               isError={monthMovement.isError}

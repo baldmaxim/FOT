@@ -98,6 +98,16 @@ router.get(
   structureController.getPayrollTree
 );
 
+// GET /api/structure/staff-tree - дерево фильтра отделов в «Управлении кадрами»: с правом
+// «Управление кадрами — все сотрудники» — полное, без него — то же, что /api/structure.
+// Серверного кэша нет: право снимается сразу, а дерево грузит только экран кадров.
+router.get(
+  '/staff-tree',
+  requirePageAccess('/staff-control', 'view'),
+  noBrowserCache,
+  structureController.getStaffTree
+);
+
 // GET /api/structure/positions - список должностей (worker+, кэш 15мин)
 router.get(
   '/positions',

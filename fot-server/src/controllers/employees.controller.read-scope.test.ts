@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   queryOne: vi.fn(),
   canAccessEmployeeInScope: vi.fn(),
   hasGlobalDepartmentReadScope: vi.fn(),
+  hasStaffAllEmployeesGrant: vi.fn(),
   resolveRequestDataScopeWithDirectReports: vi.fn(),
   resolveScopedDepartmentId: vi.fn(),
   resolveManagedDepartmentIds: vi.fn(),
@@ -77,6 +78,9 @@ vi.mock('../services/data-scope.service.js', () => ({
 }));
 vi.mock('../services/department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: h.listExplicitDepartmentIdsForUser,
+}));
+vi.mock('../services/read-scope-grants.service.js', () => ({
+  hasStaffAllEmployeesGrant: h.hasStaffAllEmployeesGrant,
 }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: h.listDirectSubordinates }));
 vi.mock('../services/skud-shared.service.js', () => ({ collectDeptIds: vi.fn(async (id: string) => [id]) }));
@@ -260,5 +264,93 @@ describe('getById — карточка у табельщицы', () => {
     await employeesController.getById(makeTimekeeperReq('577'), res as never);
     expect(res.statusCode).toBe(200);
     expect(staffListQuery()).toBeNull();
+  });
+});
+
+/**
+ * Право «Управление кадрами — все сотрудники» (роль «Табельщица»): экран кадров — вся
+ * организация на чтение. Общий список без page (фильтр «Чеков за патент») остаётся в бригадах.
+ * Кому право положено (роль, базовый просмотр) — решает read-scope-grants.service, здесь он
+ * подменён.
+ */
+describe('право «все сотрудники» у табельщицы', () => {
+  const makeTimekeeperReq = (query: Record<string, unknown> = {}, params: Record<string, unknown> = {}): AuthenticatedRequest => {
+    const req = makeReq(query, params);
+    (req as unknown as { user: Record<string, unknown> }).user = {
+      id: 'tk-1', role_code: 'timekeeper', is_admin: false, employee_id: 577,
+    };
+    return req;
+  };
+
+  beforeEach(() => {
+    h.hasGlobalDepartmentReadScope.mockResolvedValue(false);
+    h.hasStaffAllEmployeesGrant.mockResolvedValue(true);
+    h.listExplicitDepartmentIdsForUser.mockResolvedValue([]);
+    h.resolveManagedDepartmentIds.mockResolvedValue(['brigade-1']);
+    h.resolveScopedDepartmentId.mockResolvedValue(null);
+  });
+
+  it('постраничный список — вся организация, без сужения до бригад', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeTimekeeperReq({ page: '1', pageSize: '50' }), res as never);
+    expect(res.statusCode).toBe(200);
+    const { sql } = lastEmployeesQuery();
+    expect(sql).not.toContain('org_department_id = ANY');
+    expect(sql).not.toMatch(/\bid = ANY/);
+  });
+
+  it('вкладка «Уволенные» — тоже вся организация', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeTimekeeperReq({ page: '1', status: 'fired' }), res as never);
+    expect(res.statusCode).toBe(200);
+    const { sql } = lastEmployeesQuery();
+    expect(sql).toContain("employment_status = 'fired'");
+    expect(sql).not.toContain('org_department_id = ANY');
+  });
+
+  it('фильтр по чужому отделу принимается как есть', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeTimekeeperReq({ page: '1', department_id: 'dept-foreign' }), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(lastEmployeesQuery().params).toContainEqual(['dept-foreign']);
+    expect(h.resolveScopedDepartmentId).not.toHaveBeenCalled();
+  });
+
+  it('счётчики — без фильтра отдела', async () => {
+    const res = makeRes();
+    await employeesController.getCounts(makeTimekeeperReq(), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(lastEmployeesQuery().sql).not.toContain('org_department_id = ANY');
+  });
+
+  it('общий список без page остаётся в бригадах: право не спрашивается', async () => {
+    const res = makeRes();
+    await employeesController.getAll(makeTimekeeperReq(), res as never);
+    expect(res.statusCode).toBe(200);
+    const { sql, params } = lastEmployeesQuery();
+    expect(sql).toContain('org_department_id = ANY');
+    expect(params).toContainEqual(['brigade-1']);
+    expect(h.hasStaffAllEmployeesGrant).not.toHaveBeenCalled();
+  });
+
+  it('карточка чужого сотрудника открывается: круг списка — вся организация', async () => {
+    h.cacheGet.mockReturnValue({ etag: 'e1', data: { id: 77 } });
+    h.query.mockResolvedValue([{ id: 77 }]);
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq({}, { id: '77' }), res as never);
+    expect(res.statusCode).toBe(200);
+    const call = h.query.mock.calls.find(c => String(c[0]).includes('SELECT id FROM employees WHERE id = ANY'));
+    expect(String(call?.[0])).not.toContain('org_department_id = ANY');
+    // Общий скоуп (он шире бригад и уже списка) по-прежнему не спрашиваем.
+    expect(h.canAccessEmployeeInScope).not.toHaveBeenCalled();
+  });
+
+  it('без права карточка чужого сотрудника закрыта', async () => {
+    h.hasStaffAllEmployeesGrant.mockResolvedValue(false);
+    h.cacheGet.mockReturnValue({ etag: 'e1', data: { id: 77 } });
+    h.query.mockResolvedValue([]);
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq({}, { id: '77' }), res as never);
+    expect(res.statusCode).toBe(403);
   });
 });

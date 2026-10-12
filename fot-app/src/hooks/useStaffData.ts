@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
 import type { StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
-import { useStructureTree } from './useStructure';
+import { useStaffScreenTree } from './useStructure';
 import {
   EMPTY_EMPLOYEE_COUNTS,
   employeeCountsQueryKey,
@@ -39,12 +39,14 @@ interface IUseStaffDataParams {
   cf?: string;
   /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
   enabled?: boolean;
+  /** Право «все сотрудники»: дерево отделов — полное, а не по назначенным отделам. */
+  allEmployees?: boolean;
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, cf, enabled = true } = params;
+  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, cf, enabled = true, allEmployees = false } = params;
   const queryClient = useQueryClient();
-  const structureQuery = useStructureTree();
+  const structureQuery = useStaffScreenTree(allEmployees);
   const employeesParams = {
     pageSize: STAFF_CHUNK_SIZE,
     search: search || undefined,
