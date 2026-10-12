@@ -1,4 +1,4 @@
-import { execute, query } from '../config/postgres.js';
+import { execute, query, type DbExecutor } from '../config/postgres.js';
 import type {
   TimesheetApprovalEvent,
   TimesheetApprovalEventAction,
@@ -74,26 +74,27 @@ export const timesheetApprovalHistoryService = {
     comment?: string | null;
     metadata?: Record<string, unknown>;
     createdAt?: string;
-  }): Promise<void> {
-    await execute(
-      `INSERT INTO timesheet_approval_events
+  }, exec?: DbExecutor): Promise<void> {
+    const sql = `INSERT INTO timesheet_approval_events
          (approval_id, department_id, start_date, end_date, action,
           from_status, to_status, actor_user_id, comment, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`,
-      [
-        input.approvalId,
-        input.departmentId,
-        input.startDate,
-        input.endDate,
-        input.action,
-        input.fromStatus,
-        input.toStatus,
-        input.actorUserId,
-        input.comment ?? null,
-        JSON.stringify(input.metadata ?? {}),
-        input.createdAt ?? new Date().toISOString(),
-      ],
-    );
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`;
+    const params = [
+      input.approvalId,
+      input.departmentId,
+      input.startDate,
+      input.endDate,
+      input.action,
+      input.fromStatus,
+      input.toStatus,
+      input.actorUserId,
+      input.comment ?? null,
+      JSON.stringify(input.metadata ?? {}),
+      input.createdAt ?? new Date().toISOString(),
+    ];
+    // exec — клиент транзакции: событие и смена статуса либо есть оба, либо нет обоих.
+    if (exec) await exec.query(sql, params);
+    else await execute(sql, params);
   },
 
   async listByApprovalId(approvalId: number): Promise<TimesheetApprovalEvent[]> {

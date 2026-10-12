@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
+import { closeTimesheetMonth } from '../controllers/timesheet-month-close.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 import { registerCache } from '../middleware/cacheResponse.js';
@@ -83,6 +84,16 @@ router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprova
 // закрытого табеля. Закрытие возвращает замок.
 router.post('/:id/open', requireTimesheetLockToggle(), timesheetApprovalController.openPeriod);
 router.post('/:id/close', requireTimesheetLockToggle(), timesheetApprovalController.closePeriod);
+
+// Закрытие табелей отделов за месяц при выгрузке «Единый файл для 1С»: неподанные подачи
+// утверждаются от имени кадров, поэтому нужны оба права — утверждать (/timesheet-hr edit)
+// и снимать/ставить замок. У роли hr страницы «Табели HR» нет — ей это недоступно.
+router.post(
+  '/close-month',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  requireTimesheetLockToggle(),
+  closeTimesheetMonth,
+);
 
 // Отметка табельщицы «Проверено» по табелю бригады за период.
 // Чтение — любой со страницей табеля; запись — внутри контроллера только табельщица/админ.

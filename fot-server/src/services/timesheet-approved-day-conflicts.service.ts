@@ -140,6 +140,86 @@ export async function findApprovedDayConflicts(
 }
 
 /**
+ * По сотрудникам последней редакции подачи $1: сколько у него дней в ней и сколько из них
+ * уже лежит в последних редакциях других утверждённых подач. Дни других подач берутся
+ * DISTINCT — один день в двух чужих подачах считается один раз. Только сотрудники с
+ * пересечением.
+ */
+const APPROVED_DAY_COVERAGE_SQL = `
+  WITH self AS (
+    SELECT id, start_date, end_date FROM timesheet_approvals WHERE id = $1
+  ),
+  mine AS (
+    SELECT (emp->'identity'->>'employee_id')::int AS employee_id, d.day
+      FROM self
+      JOIN LATERAL (
+        SELECT v.payload FROM timesheet_versions v
+         WHERE v.approval_id = self.id
+         ORDER BY v.revision DESC
+         LIMIT 1
+      ) latest ON true
+     CROSS JOIN LATERAL jsonb_array_elements(latest.payload->'employees') emp
+     CROSS JOIN LATERAL jsonb_object_keys(COALESCE(emp->'days', '{}'::jsonb)) AS d(day)
+     WHERE COALESCE((emp->>'zero_activity')::boolean, false) = false
+  ),
+  others AS (
+    SELECT DISTINCT (oemp->'identity'->>'employee_id')::int AS employee_id, od.day
+      FROM self
+      JOIN timesheet_approvals a
+        ON a.status = 'approved'
+       AND a.id <> self.id
+       AND a.start_date <= self.end_date
+       AND a.end_date >= self.start_date
+      JOIN LATERAL (
+        SELECT v.payload FROM timesheet_versions v
+         WHERE v.approval_id = a.id
+         ORDER BY v.revision DESC
+         LIMIT 1
+      ) other ON true
+     CROSS JOIN LATERAL jsonb_array_elements(other.payload->'employees') oemp
+     CROSS JOIN LATERAL jsonb_object_keys(COALESCE(oemp->'days', '{}'::jsonb)) AS od(day)
+     WHERE COALESCE((oemp->>'zero_activity')::boolean, false) = false
+  )
+  SELECT m.employee_id,
+         COUNT(*)::int AS own_days,
+         COUNT(o.day)::int AS covered_days
+    FROM mine m
+    LEFT JOIN others o ON o.employee_id = m.employee_id AND o.day = m.day
+   GROUP BY m.employee_id
+  HAVING COUNT(o.day) > 0
+   ORDER BY m.employee_id`;
+
+export interface IApprovedDayCoverage {
+  employeeId: number;
+  /** Дней сотрудника в проверяемой подаче. */
+  ownDays: number;
+  /** Сколько из них уже есть в других утверждённых подачах. */
+  coveredDays: number;
+}
+
+/**
+ * Покрытие дней подачи другими утверждёнными подачами — по парам «сотрудник + день».
+ * Нужно закрытию месяца кадрами: сотрудника, чьи дни утверждены в другом табеле целиком
+ * (личная подача руководителя), в подачу отдела включать незачем, а частичное покрытие —
+ * настоящий конфликт. exec — клиент транзакции.
+ */
+export async function findApprovedDayCoverage(
+  exec: DbExecutor,
+  approvalId: number,
+): Promise<IApprovedDayCoverage[]> {
+  const rows = (await exec.query<{
+    employee_id: number | string;
+    own_days: number | string;
+    covered_days: number | string;
+  }>(APPROVED_DAY_COVERAGE_SQL, [approvalId])).rows;
+  return rows.map(row => ({
+    employeeId: Number(row.employee_id),
+    ownDays: Number(row.own_days),
+    coveredDays: Number(row.covered_days),
+  }));
+}
+
+/**
  * Вызывать в транзакции утверждения после материализации версии: ошибка откатывает и
  * версию, и смену статуса.
  */

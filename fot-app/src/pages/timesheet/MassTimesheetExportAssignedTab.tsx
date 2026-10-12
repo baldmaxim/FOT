@@ -4,6 +4,7 @@ import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { timesheetService } from '../../services/timesheetService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { collectDepartmentIdsCoveringRange } from '../../utils/timesheetApprovedCoverage';
 import { useToast } from '../../contexts/ToastContext';
 
 type TimesheetGroupingMode = 'employees' | 'objects';
@@ -63,16 +64,11 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
   const { data, isLoading, isError } = useAssignedEmployees();
   const employees = useMemo(() => data ?? [], [data]);
   const { data: approvedList } = useTimesheetApprovalReviewList('approved');
-  const approvedDeptIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of approvedList ?? []) {
-      if (item.start_date === rangeStart && item.end_date === rangeEnd) {
-        if (!item.department_id) continue;
-        ids.add(item.department_id);
-      }
-    }
-    return ids;
-  }, [approvedList, rangeStart, rangeEnd]);
+  // Утверждён за месяц = утверждённые подачи покрывают его целиком (обе половины либо весь месяц).
+  const approvedDeptIds = useMemo(
+    () => collectDepartmentIdsCoveringRange(approvedList ?? [], { startDate: rangeStart, endDate: rangeEnd }),
+    [approvedList, rangeStart, rangeEnd],
+  );
   const isAssigneeApproved = (employee: { departments?: { id: string }[] }): boolean => {
     const ids = employee.departments ?? [];
     if (ids.length === 0) return false;

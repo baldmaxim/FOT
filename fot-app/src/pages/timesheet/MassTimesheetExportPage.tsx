@@ -3,12 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
-import {
-  formatHalfLabel,
-  getCurrentHalf,
-  getHalfRange,
-  type TimesheetHalf,
-} from '../../utils/timesheetApprovalPeriod';
+import { formatHalfLabel, getHalfRange } from '../../utils/timesheetApprovalPeriod';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import { MassTimesheetExportObjectsTab } from './MassTimesheetExportObjectsTab';
@@ -48,11 +43,8 @@ export const MassTimesheetExportPage: FC = () => {
 
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [half, setHalf] = useState<TimesheetHalf>(() => {
-    const current = getCurrentHalf(now);
-    return (current.year === now.getFullYear() && current.month === now.getMonth() + 1) ? current.half : 'H1';
-  });
-  const halfRange = useMemo(() => getHalfRange(year, month, half), [year, month, half]);
+  // Раздел выгружает только месяц целиком: полупериоды 1–15 / 16–конец убраны.
+  const halfRange = useMemo(() => getHalfRange(year, month, 'FULL'), [year, month]);
   const rangeStart = halfRange.startDate;
   const rangeEnd = halfRange.endDate;
   const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
@@ -114,25 +106,7 @@ export const MassTimesheetExportPage: FC = () => {
             </button>
           </div>
           <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('H1')}
-            >
-              {formatHalfLabel(year, month, 'H1')}
-            </button>
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('H2')}
-            >
-              {formatHalfLabel(year, month, 'H2')}
-            </button>
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('FULL')}
-            >
+            <button type="button" className="mte-half-chip mte-half-chip--active" aria-pressed="true">
               {formatHalfLabel(year, month, 'FULL')}
             </button>
           </section>
@@ -175,25 +149,7 @@ export const MassTimesheetExportPage: FC = () => {
             </button>
           </div>
           <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('H1')}
-            >
-              {formatHalfLabel(year, month, 'H1')}
-            </button>
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('H2')}
-            >
-              {formatHalfLabel(year, month, 'H2')}
-            </button>
-            <button
-              type="button"
-              className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
-              onClick={() => setHalf('FULL')}
-            >
+            <button type="button" className="mte-half-chip mte-half-chip--active" aria-pressed="true">
               {formatHalfLabel(year, month, 'FULL')}
             </button>
           </section>

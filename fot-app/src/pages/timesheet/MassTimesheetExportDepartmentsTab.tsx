@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
+import { useTimesheetMonthClose } from '../../hooks/useTimesheetMonthClose';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useTimesheet1CStatus, useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { Timesheet1CBadge } from '../../components/timesheet/Timesheet1CBadge';
@@ -19,12 +21,17 @@ import { timesheetService } from '../../services/timesheetService';
 import { timesheetReviewService } from '../../services/timesheetReviewService';
 import type { OrgDepartmentNode } from '../../types';
 import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
+import { getHalfRange, isRangeWithinCompletedHalves } from '../../utils/timesheetApprovalPeriod';
+import { collectDepartmentIdsCoveringRange } from '../../utils/timesheetApprovedCoverage';
+import { MonthCloseIssuesModal } from './MonthCloseIssuesModal';
+import { UnifiedExportConfirmModal } from './UnifiedExportConfirmModal';
 
 type TimesheetGroupingMode = 'employees' | 'objects';
 type TimesheetExportPresentation = 'hr' | 'manager';
 
 const DEPARTMENTS_STORAGE_KEY = 'timesheet_export_departments_v1';
 const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -78,7 +85,7 @@ interface IDeptTreeNodeProps {
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
   approvedDeptIds: Set<string>;
-  timekeeperCheckedIds: Set<string>;
+  timekeeperCheckedIds: ReadonlySet<string>;
   oneCStateByDeptId: Map<string, Timesheet1CState>;
   oneCDirtyDeptIds: Set<string>;
 }
@@ -181,35 +188,44 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [exporting, setExporting] = useState(false);
   const [exportingApproved, setExportingApproved] = useState(false);
   const [exportingUnified, setExportingUnified] = useState(false);
+  const [unifiedConfirmOpen, setUnifiedConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { profile } = useAuth();
+  const { profile, canEditPage } = useAuth();
+  const toast = useToast();
+  const monthClose = useTimesheetMonthClose();
   const { data: structure, isLoading, isError, refetch } = useStructureTree();
 
   const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
   const { data: approvedList } = useTimesheetApprovalReviewList('approved');
-  const approvedDeptIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of approvedList ?? []) {
-      if (item.start_date === rangeStart && item.end_date === rangeEnd) {
-        if (!item.department_id) continue;
-        ids.add(item.department_id);
-      }
-    }
-    return ids;
-  }, [approvedList, rangeStart, rangeEnd]);
+  // Утверждён за месяц = утверждённые подачи покрывают его целиком (обе половины либо
+  // одна подача «весь месяц»): подачи почти всегда полумесячные.
+  const approvedDeptIds = useMemo(
+    () => collectDepartmentIdsCoveringRange(approvedList ?? [], { startDate: rangeStart, endDate: rangeEnd }),
+    [approvedList, rangeStart, rangeEnd],
+  );
 
-  // Отметки табельщицы «Проверено» по бригадам за выбранный период (без агрегации по дереву).
-  const { data: reviewedDepartments } = useQuery({
-    queryKey: ['timesheet-reviewed-departments', rangeStart, rangeEnd],
-    queryFn: () => timesheetReviewService.listReviewedDepartments(rangeStart, rangeEnd),
+  // Отметки табельщицы «Проверено» по бригадам (без агрегации по дереву). Отметка ставится
+  // на полупериод, поэтому за месяц бригада проверена, когда отмечены обе половины
+  // (либо весь месяц одной отметкой).
+  const { data: timekeeperCheckedIds = EMPTY_ID_SET } = useQuery({
+    queryKey: ['timesheet-reviewed-departments', 'month', year, month],
+    queryFn: async () => {
+      const firstHalf = getHalfRange(year, month, 'H1');
+      const secondHalf = getHalfRange(year, month, 'H2');
+      const [whole, first, second] = await Promise.all([
+        timesheetReviewService.listReviewedDepartments(rangeStart, rangeEnd),
+        timesheetReviewService.listReviewedDepartments(firstHalf.startDate, firstHalf.endDate),
+        timesheetReviewService.listReviewedDepartments(secondHalf.startDate, secondHalf.endDate),
+      ]);
+      const secondIds = new Set(second.map(d => d.department_id));
+      const ids = new Set(whole.map(d => d.department_id));
+      for (const d of first) if (secondIds.has(d.department_id)) ids.add(d.department_id);
+      return ids;
+    },
     enabled: !!rangeStart && !!rangeEnd,
     staleTime: 30_000,
   });
-  const timekeeperCheckedIds = useMemo(
-    () => new Set((reviewedDepartments ?? []).map(d => d.department_id)),
-    [reviewedDepartments],
-  );
 
   // Статус выгрузки в 1С по отделам за период. Отдельный запрос — дерево не ждёт его.
   const { data: oneCStatuses } = useTimesheet1CStatus(rangeStart, rangeEnd, !!rangeStart && !!rangeEnd);
@@ -294,6 +310,18 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     () => filterDepartmentTree(sortedDepartments, searchQuery.toLowerCase().trim()),
     [sortedDepartments, searchQuery],
   );
+
+  const departmentNameById = useMemo(() => {
+    const names = new Map<string, string>();
+    const walk = (nodes: OrgDepartmentNode[]): void => {
+      for (const node of nodes) {
+        names.set(node.id, node.name);
+        if (node.children?.length) walk(node.children);
+      }
+    };
+    walk(sortedDepartments);
+    return names;
+  }, [sortedDepartments]);
 
   const filteredIds = useMemo(() => collectAllIds(filteredDepts), [filteredDepts]);
   const filteredBrigadeIds = useMemo(() => collectBrigadeIds(filteredDepts), [filteredDepts]);
@@ -413,8 +441,9 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     }
   };
 
-  const handleExportUnified = async () => {
-    if (selectedDeptIds.length === 0) return;
+  /** Формирует и сохраняет единый файл. false — файл не получен. */
+  const exportUnified = async (): Promise<boolean> => {
+    if (selectedDeptIds.length === 0) return false;
     setExportingUnified(true);
     setError(null);
     try {
@@ -437,11 +466,48 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+      return true;
     } catch (err) {
       console.error('Mass export unified error:', err);
       setError('Ошибка единого экспорта для 1С. Попробуйте ещё раз.');
+      return false;
     } finally {
       setExportingUnified(false);
+    }
+  };
+
+  // Закрывать табели при выгрузке может тот, кто вправе и утверждать их, и ставить замок
+  // (админ, кадровый админ). Остальным кнопка просто скачивает файл.
+  const canCloseOnExport = canEditPage('/timesheet-hr') && (
+    profile?.is_admin === true
+    || profile?.role_code === 'hr'
+    || canEditPage('/timesheet/lock-toggle')
+  );
+  const monthLabel = `${MONTH_NAMES[month]} ${year}`;
+  const monthCompleted = isRangeWithinCompletedHalves({ startDate: rangeStart, endDate: rangeEnd });
+
+  const handleUnifiedClick = () => {
+    if (selectedDeptIds.length === 0) return;
+    if (canCloseOnExport) setUnifiedConfirmOpen(true);
+    else void exportUnified();
+  };
+
+  const handleUnifiedAnswer = async (closeAfterExport: boolean) => {
+    setUnifiedConfirmOpen(false);
+    // Набор фиксируем до выгрузки: пока идёт закрытие, галочки в дереве могут поменять.
+    const departmentIds = [...selectedDeptIds];
+    const exported = await exportUnified();
+    // Файл не сформирован — табели не закрываем: закрытие обещано «после выгрузки».
+    if (!exported || !closeAfterExport) return;
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const result = await monthClose.run(monthStr, departmentIds, departmentNameById);
+      if (!result.fatalError && result.issues.length === 0) {
+        toast.success(`Табели за ${monthLabel} закрыты`);
+      }
+    } catch (err) {
+      console.error('Timesheet month close error:', err);
+      setError('Ошибка закрытия табелей. Файл скачан; повторите выгрузку, чтобы закрыть табели.');
     }
   };
 
@@ -478,6 +544,8 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       setExportingApproved(false);
     }
   };
+
+  const isBusy = exporting || exportingApproved || exportingUnified || monthClose.progress !== null;
 
   return (
     <>
@@ -556,13 +624,20 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         </div>
       )}
 
+      {monthClose.progress && (
+        <div className="mte-progress" role="status">
+          <div className="mte-spinner" />
+          <span>Закрытие табелей: {monthClose.progress.done} / {monthClose.progress.total}…</span>
+        </div>
+      )}
+
       {error && <div className="mte-error">{error}</div>}
 
       <div className="mte-footer">
         <button
           className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('hr')}
-          disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
+          disabled={isBusy || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'hr'
@@ -574,7 +649,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             <button
               className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
               onClick={() => handleExport('manager')}
-              disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
+              disabled={isBusy || checkedIds.size === 0}
             >
               <Download size={16} />
               {exporting && presentation === 'manager'
@@ -584,7 +659,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             <button
               className="mte-export-btn mte-export-btn--approved"
               onClick={handleExportApproved}
-              disabled={exporting || exportingApproved || exportingUnified || approvedSelectedIds.length === 0}
+              disabled={isBusy || approvedSelectedIds.length === 0}
               title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет утверждённых табелей за этот период' : undefined}
             >
               <CheckCircle size={16} />
@@ -596,8 +671,8 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         )}
         <button
           className="mte-export-btn mte-export-btn--secondary"
-          onClick={handleExportUnified}
-          disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
+          onClick={handleUnifiedClick}
+          disabled={isBusy || checkedIds.size === 0}
           title="Один Excel-файл по выбранным отделам, с разбивкой по объектам и колонками «Отдел» и «Адрес объекта»"
         >
           <Download size={16} />
@@ -606,6 +681,22 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             : `Единый файл для 1С (${checkedIds.size})`}
         </button>
       </div>
+
+      {unifiedConfirmOpen && (
+        <UnifiedExportConfirmModal
+          monthLabel={monthLabel}
+          canCloseMonth={monthCompleted}
+          onAnswer={closeAfterExport => { void handleUnifiedAnswer(closeAfterExport); }}
+          onCancel={() => setUnifiedConfirmOpen(false)}
+        />
+      )}
+      {monthClose.outcome && (monthClose.outcome.fatalError || monthClose.outcome.issues.length > 0) && (
+        <MonthCloseIssuesModal
+          issues={monthClose.outcome.issues}
+          fatalError={monthClose.outcome.fatalError}
+          onClose={monthClose.dismissOutcome}
+        />
+      )}
     </>
   );
 };

@@ -16,6 +16,32 @@ export interface IPendingDecision {
   days: string[];
 }
 
+export type TimesheetMonthCloseStatus =
+  | 'closed'
+  | 'already_closed'
+  | 'no_employees'
+  | 'covered_elsewhere'
+  | 'skipped';
+
+export interface ITimesheetMonthCloseHalf {
+  start_date: string;
+  end_date: string;
+  status: TimesheetMonthCloseStatus;
+  reason?: string;
+  excluded_count?: number;
+}
+
+export interface ITimesheetMonthCloseDepartment {
+  department_id: string;
+  name: string | null;
+  halves: ITimesheetMonthCloseHalf[];
+}
+
+export interface ITimesheetMonthCloseResponse {
+  results: ITimesheetMonthCloseDepartment[];
+  remaining_ids: string[];
+}
+
 export interface ITimesheetApproval {
   id: number;
   department_id: string | null;
@@ -303,6 +329,20 @@ export const timesheetApprovalService = {
     const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
       `/timesheet-approvals/${approvalId}/close`,
       {},
+    );
+    return res.data;
+  },
+
+  /**
+   * Закрыть табели отделов за месяц (после выгрузки «Единый файл для 1С»): до 10 отделов
+   * за запрос, необработанные сервер возвращает в remaining_ids. Таймаут больше обычного —
+   * начатый отдел сервер доводит до конца, даже выйдя за свой бюджет.
+   */
+  closeMonth: async (month: string, departmentIds: string[]) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetMonthCloseResponse>>(
+      '/timesheet-approvals/close-month',
+      { month, department_ids: departmentIds },
+      { timeoutMs: 90_000 },
     );
     return res.data;
   },
