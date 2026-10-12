@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatPaidAmount,
   paidCellKey,
+  paidItemTotal,
   paidTotals,
   PAYROLL_PAID_GROUPS,
   toPaidAmounts,
@@ -95,5 +96,16 @@ describe('итоги', () => {
     ]));
     expect(byMonth['2026-06']).toEqual({ accrued: null, deducted: null });
     expect(overall).toEqual({ accrued: null, deducted: 0.3 });
+  });
+
+  it('«Итого» статьи — сумма выбранных месяцев; сумм нет — «—»; копейки без ошибки float', () => {
+    const amounts = toPaidAmounts([
+      { month: '2026-06', item: 'meals', amount: '9.99' },
+      { month: '2026-07', item: 'meals', amount: '0.10' },
+      { month: '2026-09', item: 'meals', amount: '0.20' },
+    ]);
+    // Месяцы вразброс: июнь и август в выбор не входят.
+    expect(paidItemTotal(['2026-07', '2026-09'], amounts, 'meals')).toBe(0.3);
+    expect(paidItemTotal(['2026-07', '2026-09'], amounts, 'contract')).toBeNull();
   });
 });

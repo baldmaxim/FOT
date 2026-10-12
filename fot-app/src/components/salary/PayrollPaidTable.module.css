@@ -1,65 +1,48 @@
 /*
- * «Оплачено», только чтение: месяцы — столбцами. Сверху таблица итога «Выплачено», под ней строка «Оплачено»,
- * ниже — раскрытая таблица статей. Обе таблицы одной ширины (подписи + N месяцев) и в одной прокрутке вбок:
- * столбцы месяцев стоят точно друг под другом и сдвигаются вместе.
+ * «Оплачено», только чтение: одна таблица, месяцы — столбцами, при нескольких месяцах справа «Итого».
+ * Сверху строка итога «Выплачено»; клик по ней раскрывает ниже статьи — в тех же столбцах.
  */
 .paid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
-/* Прокрутка вбок при многих месяцах; контейнер — для ширины строки «Оплачено» (cqw). */
+/* Прокрутка вбок при многих месяцах. */
 .scroll {
   --paid-label-w: 9rem;
   --paid-month-w: 6.5rem;
-  container-type: inline-size;
   min-width: 0;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
 }
 
-/* Ширина — по таблицам, не меньше видимой области: строка «Оплачено» не растягивает прокрутку. */
-.inner {
+/* Строка итога раскрывает статьи: клик по любой ячейке, с клавиатуры — кнопка в подписи. */
+.totalRow { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.totalToggle {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: max-content;
-  min-width: 100%;
-}
-
-/* Строка-переключатель между итогами и статьями: на видимую ширину и закреплена слева при прокрутке. */
-.toggle {
-  position: sticky;
-  left: 0;
-  box-sizing: border-box;
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 2px 8px;
-  width: 100cqw;
-  min-height: 44px;
-  padding: 4px 0;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   border: none;
   background: none;
   color: inherit;
-  font-family: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.totalToggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 .chevron { flex-shrink: 0; color: var(--text-tertiary); transition: transform var(--transition); }
-.toggle[aria-expanded='true'] .chevron { transform: rotate(90deg); }
-.title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.summary { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.totalToggle[aria-expanded='true'] .chevron { transform: rotate(90deg); }
 
 /*
- * fixed — ширина столбцов по шапке, а не по тексту: подписи — --paid-label-w, месяцы делят остальное поровну.
- * Ширина таблицы — подписи + N месяцев (N — --paid-months из компонента): у итогов и статей она одна.
+ * fixed — ширина столбцов по шапке, а не по тексту: подписи — --paid-label-w, суммы делят остальное поровну.
+ * Ширина таблицы — подписи + N столбцов сумм (N — --paid-cols из компонента: месяцы и «Итого»).
  */
 .table {
   box-sizing: border-box;
-  width: calc(var(--paid-label-w) + var(--paid-months, 1) * var(--paid-month-w));
+  width: calc(var(--paid-label-w) + var(--paid-cols, 1) * var(--paid-month-w));
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
@@ -150,6 +133,12 @@
 @media (min-width: 768px) {
   /* 12.5rem — в строку помещается «Компенсация проживания» (171px текста + отступы); длиннее переносятся. */
   .scroll { --paid-label-w: 12.5rem; --paid-month-w: 8rem; }
+}
+
+/* Тап-цель строки итога на сенсорных экранах. */
+@media (pointer: coarse) {
+  .table .totalHead,
+  .table .total { box-sizing: border-box; height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

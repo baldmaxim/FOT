@@ -61,8 +61,8 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
 ];
 
 /**
- * Строки итогов над «Оплачено»: только общая сумма начислений — «Выплачено». Удержания видны
- * в раскрытом «Оплачено» (группа «Удержано»).
+ * Строки итогов над статьями: только общая сумма начислений — «Выплачено». Удержания видны
+ * в раскрытой строке «Выплачено» (группа «Удержано»).
  */
 export const PAYROLL_PAID_TOTALS: ReadonlyArray<{ kind: PayrollPaidTotalKind; label: string }> = [
   { kind: 'accrued', label: 'Выплачено' },
@@ -110,6 +110,20 @@ const centsToRub = (totals: PayrollPaidTotals): PayrollPaidTotals => ({
   accrued: totals.accrued === null ? null : totals.accrued / 100,
   deducted: totals.deducted === null ? null : totals.deducted / 100,
 });
+
+/** «Итого» статьи за выбранные месяцы: null — сумм нет ни за один («—»). */
+export const paidItemTotal = (
+  months: readonly string[],
+  amounts: ReadonlyMap<string, number>,
+  item: PayrollPaidItemCode,
+): number | null => {
+  let cents: number | null = null;
+  for (const month of months) {
+    const value = amounts.get(paidCellKey(month, item));
+    if (value !== undefined) cents = addCents(cents, value);
+  }
+  return cents === null ? null : cents / 100;
+};
 
 /** Итоги начислений и удержаний по месяцам и за всё окно. */
 export const paidTotals = (

@@ -169,7 +169,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           readOnly={!canEdit}
           category={payrollRowCategory(row)}
           autoFocus={canEdit}
-          paid={<PayrollPaidTable paid={paid} idPrefix={idPrefix} />}
+          paid={<PayrollPaidTable paid={paid} />}
           stacked
           detailsOnly={!editable}
           total
