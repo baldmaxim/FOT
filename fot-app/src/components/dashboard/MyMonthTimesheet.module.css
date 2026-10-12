@@ -4,6 +4,7 @@
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 24px;
+  container: month-timesheet / inline-size;
 }
 
 .rootNoCard {
@@ -53,9 +54,10 @@
   cursor: not-allowed;
 }
 
+/* minmax(0, 1fr), а не 1fr: иначе подпись «9ч 38м» раздвигает колонки сетки шире шапки. */
 .weekdays {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
   margin-bottom: 6px;
 }
@@ -71,7 +73,7 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -81,6 +83,8 @@
 
 .cell {
   aspect-ratio: 1;
+  min-width: 0;
+  min-height: 0;
   border: 1.5px solid transparent;
   border-radius: 8px;
   background: var(--bg-tertiary);
@@ -124,6 +128,7 @@
   font-weight: 400;
   opacity: 0.85;
   line-height: 1;
+  text-align: center;
 }
 
 .cellToday {
@@ -294,6 +299,27 @@
   border-radius: 50%;
 }
 
+
+/* Узкий календарь с подписями часов (4-колоночный ЛК на ноутбуке): ячейка уже 42px,
+   маркеры 7px в нижних углах задевали бы подпись — ужимаем и прижимаем к углу. */
+@media (min-width: 481px) {
+  @container month-timesheet (max-width: 320px) {
+    .cellCorrectionDot,
+    .cellRequestBadge {
+      width: 5px;
+      height: 5px;
+      bottom: 2px;
+    }
+
+    .cellCorrectionDot {
+      left: 2px;
+    }
+
+    .cellRequestBadge {
+      right: 2px;
+    }
+  }
+}
 
 @media (max-width: 480px) {
   .root {
