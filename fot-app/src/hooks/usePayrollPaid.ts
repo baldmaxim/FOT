@@ -10,8 +10,9 @@ export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
  * «Оплачено» в карточке сотрудника: суммы за выбранные месяцы (по возрастанию, могут идти
  * вразброс), итоги и статьи с суммами для раскрытой таблицы — месяцы в ней столбцами.
  * Только чтение — суммы приходят из 1С. По умолчанию свёрнуто до итогов.
+ * enabled = false — «Оплачено» на экране нет (окно «Расчётов»): суммы не запрашиваются.
  */
-export const usePayrollPaid = (employeeId: number, months: string[]) => {
+export const usePayrollPaid = (employeeId: number, months: string[], enabled = true) => {
   const from = months[0] ?? '';
   const to = months[months.length - 1] ?? '';
   // Месяцы вразброс — грузим окно от первого до последнего, лишние месяцы не показываются.
@@ -19,7 +20,7 @@ export const usePayrollPaid = (employeeId: number, months: string[]) => {
   const query = useQuery({
     queryKey: ['payroll-terms', 'paid', employeeId, from, to],
     queryFn: ({ signal }) => payrollService.getPaid(employeeId, from, to, signal),
-    enabled: months.length > 0,
+    enabled: enabled && months.length > 0,
   });
   const [expanded, setExpanded] = useState(false);
 

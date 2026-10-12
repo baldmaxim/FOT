@@ -26,7 +26,8 @@ interface IEmployeePayrollDetailsProps {
   row: IPayrollTermsRow;
   defaultDate: string;
   /**
-   * Окно сотрудника на «Расчётах» (true): условия, компенсация, плановая доплата и удержание вносятся и сохраняются.
+   * Окно сотрудника на «Расчётах» (true): условия, компенсация, плановая доплата и удержание вносятся и сохраняются;
+   * «Оплачено» и выбора месяцев нет.
    * Вкладка «Подробно» (false) — только просмотр: Категория, «Оплачено», история, отпуска; кнопок нет.
    */
   editable?: boolean;
@@ -52,11 +53,11 @@ interface ISaveVariables {
 
 /**
  * Карточка сотрудника раздела «Зарплата» — окно на «Расчётах» (editable) и вкладка «Подробно» (только просмотр).
- * В окне: условия оплаты (вид оплаты, оклад, премия) с «Оплачено», компенсация, плановая доплата, удержание; «Сохранить»
+ * В окне: условия оплаты (вид оплаты, оклад, премия), компенсация, плановая доплата, удержание; «Сохранить»
  * пишет условия и виды удержаний — что из них правили. В «Подробно»: Категория и «Оплачено», без полей и кнопок.
  * Ниже — свёрнутая справка: история изменений и отпуска; грузится отдельно, её ошибки форму не блокируют.
- * «Оплачено» — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно сменить (сохраняется с условиями).
- * Месяцы у ФИО (один или несколько) задают таблицы «Оплачено»; условия от них не зависят.
+ * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
+ * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -82,7 +83,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const [months, setMonths] = useState<string[]>(() => [shiftMonth(currentMonth, -1)]);
   // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
-  const paid = usePayrollPaid(row.employee_id, months);
+  const paid = usePayrollPaid(row.employee_id, months, !editable);
   const deductions = usePayrollEmployeeDeductions(row.employee_id, editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
@@ -146,15 +147,17 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       <header className={styles.header}>
         <div className={styles.nameRow}>
           <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
-          <MonthsPicker
-            value={months}
-            options={monthOptions}
-            onChange={setMonths}
-            allowAll={false}
-            resetValue={[shiftMonth(currentMonth, -1)]}
-            ariaLabel="Месяцы «Оплачено»"
-            className={styles.monthsTrigger}
-          />
+          {!editable && (
+            <MonthsPicker
+              value={months}
+              options={monthOptions}
+              onChange={setMonths}
+              allowAll={false}
+              resetValue={[shiftMonth(currentMonth, -1)]}
+              ariaLabel="Месяцы «Оплачено»"
+              className={styles.monthsTrigger}
+            />
+          )}
         </div>
         {meta && <p className={styles.meta}>{meta}</p>}
       </header>
@@ -169,7 +172,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           readOnly={!canEdit}
           category={payrollRowCategory(row)}
           autoFocus={canEdit}
-          paid={<PayrollPaidTable paid={paid} />}
+          paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
           stacked
           detailsOnly={!editable}
           total
