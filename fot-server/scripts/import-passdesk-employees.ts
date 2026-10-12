@@ -129,7 +129,15 @@ const requireEnv = (name: string): string => {
 
 // ─── PassDesk ───────────────────────────────────────────────────────────────
 
-const pdPool = new Pool({ connectionString: requireEnv('PASSDESK_DATABASE_URL'), max: 3, ssl: process.env.PASSDESK_DATABASE_SSL === 'false' ? undefined : { rejectUnauthorized: false } });
+// К PassDesk скрипт только читает. PGOPTIONS из файла доступов тут не помогает —
+// её читает libpq, а node-pg нет, поэтому режим сессии ставим явно: случайная
+// запись в чужую БД упадёт на стороне сервера, а не останется на честном слове.
+const pdPool = new Pool({
+  connectionString: requireEnv('PASSDESK_DATABASE_URL'),
+  max: 3,
+  options: '-c default_transaction_read_only=on',
+  ssl: process.env.PASSDESK_DATABASE_SSL === 'false' ? undefined : { rejectUnauthorized: false },
+});
 
 const loadPassdeskEmployees = async (): Promise<IPdEmployee[]> => {
   const res = await pdPool.query<IPdEmployee>(`
