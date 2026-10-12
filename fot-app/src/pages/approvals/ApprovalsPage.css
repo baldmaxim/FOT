@@ -1850,7 +1850,6 @@
 
 .ts-1c-badge--compact.ts-1c-badge--ok { color: var(--success); }
 .ts-1c-badge--compact.ts-1c-badge--stale { color: var(--warning, #d97706); }
-.ts-1c-badge--compact.ts-1c-badge--none { color: var(--text-tertiary); }
 
 @media (max-width: 480px) {
   .ts-1c-badge {

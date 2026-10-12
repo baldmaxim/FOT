@@ -1,13 +1,11 @@
 import { type FC } from 'react';
-import { AlertTriangle, CheckCircle2, Circle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 import type { Timesheet1CState } from '../../services/timesheetApprovalService';
 
 interface IProps {
   state: Timesheet1CState;
   /** Табель поправили в обход штатного закрытия — версия пересобирается фоном. */
   versionDirty?: boolean;
-  /** false — официальная версия ещё не сформирована, выгружать нечего. */
-  versionAvailable?: boolean;
   ackedAt?: string | null;
   documentRef?: string | null;
   revision?: number | null;
@@ -30,12 +28,11 @@ const formatDateRu = (iso: string): string => {
  *
  * exported — 1С подтвердила приём текущей редакции;
  * stale — табель правили после выгрузки, 1С приняла более раннюю редакцию;
- * not_exported — подтверждения ещё не было.
+ * not_exported — подтверждения ещё не было: отметка не выводится.
  */
 export const Timesheet1CBadge: FC<IProps> = ({
   state,
   versionDirty = false,
-  versionAvailable = true,
   ackedAt,
   documentRef,
   revision,
@@ -59,44 +56,31 @@ export const Timesheet1CBadge: FC<IProps> = ({
     );
   }
 
-  let icon = <Circle size={iconSize} />;
-  let label = 'Не выгружен';
-  let modifier = 'none';
-  let tooltipLines: Array<string | null> = [];
+  // Подтверждения от 1С ещё не было — сообщать нечего, отметку не показываем.
+  if (state === 'not_exported') return null;
 
-  if (state === 'exported') {
-    icon = <CheckCircle2 size={iconSize} />;
-    label = 'В 1С';
-    modifier = 'ok';
-    tooltipLines = [
+  const exported = state === 'exported';
+  const label = exported ? 'В 1С' : 'Изменён';
+  const tooltip = (exported
+    ? [
       ackedText ? `Выгружено в 1С: ${ackedText}` : 'Выгружено в 1С',
       documentRef ? `Документ: ${documentRef}` : null,
       revision != null ? `Редакция: ${revision}` : null,
-    ];
-  } else if (state === 'stale') {
-    icon = <AlertTriangle size={iconSize} />;
-    label = 'Изменён';
-    modifier = 'stale';
-    tooltipLines = [
+    ]
+    : [
       'Табель изменён после выгрузки — 1С заберёт новую редакцию',
       ackedText ? `Последняя выгрузка: ${ackedText}` : null,
       documentRef ? `Документ: ${documentRef}` : null,
-    ];
-  } else if (!versionAvailable) {
-    tooltipLines = ['Версия для 1С ещё не сформирована'];
-  } else {
-    tooltipLines = ['1С ещё не забрала этот табель'];
-  }
-
-  const tooltip = tooltipLines.filter(Boolean).join('\n');
+    ]
+  ).filter(Boolean).join('\n');
 
   return (
     <span
-      className={`ts-1c-badge ts-1c-badge--${modifier}${compact ? ' ts-1c-badge--compact' : ''}`}
+      className={`ts-1c-badge ts-1c-badge--${exported ? 'ok' : 'stale'}${compact ? ' ts-1c-badge--compact' : ''}`}
       title={tooltip}
       aria-label={`Выгрузка в 1С: ${label}`}
     >
-      {icon}
+      {exported ? <CheckCircle2 size={iconSize} /> : <AlertTriangle size={iconSize} />}
       {!compact && label}
     </span>
   );

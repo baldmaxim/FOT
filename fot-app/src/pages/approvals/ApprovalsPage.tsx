@@ -1096,7 +1096,6 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                         <Timesheet1CBadge
                           state={oneC.state}
                           versionDirty={oneC.version_dirty}
-                          versionAvailable={oneC.version_available}
                           ackedAt={oneC.acked_at}
                           documentRef={oneC.document_ref}
                           revision={oneC.revision}
