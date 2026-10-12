@@ -154,6 +154,16 @@ const loadColumns = async (table: string): Promise<Set<string>> => {
   return new Set(res.rows.map(r => r.column_name));
 };
 
+/** Тип колонки или null, если её (или таблицы) нет. */
+const columnType = async (table: string, column: string): Promise<string | null> => {
+  const res = await pdPool.query<{ data_type: string }>(
+    `SELECT data_type FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return res.rows[0]?.data_type ?? null;
+};
+
 /** Необязательные колонки employees: имя → тип для NULL-заглушки. */
 const OPTIONAL_EMPLOYEE_COLUMNS: Record<string, string> = {
   id_all: 'uuid', middle_name: 'text', last_name_enc: 'text', last_name_key_version: 'text', gender: 'text',
@@ -204,20 +214,50 @@ const loadPassdeskEmployees = async (): Promise<IPdEmployee[]> => {
   if (!hasCitizenship) missingColumns.push('employees.citizenship_id');
   if (!hasBirthCountry) missingColumns.push('employees.birth_country_id');
 
+  // audit_logs нужен только для даты простановки флага ЗУП. В живой базе
+  // entity_id — uuid, хотя скрипт изначально сравнивал его с e.id::text
+  // (operator does not exist: uuid = text). Тип выясняем и сравниваем как надо;
+  // если таблицы или колонки нет — просто не спрашиваем её.
+  const entityIdType = await columnType('audit_logs', 'entity_id');
+  const zupLogMatch = entityIdType === 'uuid'
+    ? 'a.entity_id = e.id'
+    : entityIdType !== null ? 'a.entity_id = e.id::text' : null;
+  if (zupLogMatch === null) missingColumns.push('audit_logs.entity_id');
+  const zupLogWhere = `a.action = 'zup_flag_changed' AND a.entity_type = 'employee' AND ${zupLogMatch ?? 'false'}`;
+
+  // Те же грабли возможны и в остальных вспомогательных таблицах — спрашиваем их
+  // только при наличии, иначе отдаём пустое значение.
+  const hasCounterparty = (await columnType('employee_counterparty_mapping', 'counterparty_id')) !== null;
+  const hasStatuses = (await columnType('employees_statuses_mapping', 'is_upload')) !== null;
+  const hasFileUpdatedAt = (await columnType('files', 'updated_at')) !== null;
+  if (!hasCounterparty) missingColumns.push('employee_counterparty_mapping.counterparty_id');
+  if (!hasStatuses) missingColumns.push('employees_statuses_mapping.is_upload');
+  if (!hasFileUpdatedAt) missingColumns.push('files.updated_at');
+
+  const counterpartyExpr = hasCounterparty
+    ? `(SELECT cp.name FROM employee_counterparty_mapping m JOIN counterparties cp ON cp.id = m.counterparty_id
+         WHERE m.employee_id = e.id ORDER BY (m.dismissed_at IS NULL) DESC, m.updated_at DESC LIMIT 1)`
+    : 'NULL::text';
+  const zupUploadedExpr = hasStatuses
+    ? `COALESCE((SELECT bool_and(s.is_upload) FROM employees_statuses_mapping s WHERE s.employee_id = e.id AND s.is_active = true), false)`
+    : 'false';
+  const lastChangeTerms = [
+    'e.updated_at',
+    ...(hasFileUpdatedAt ? [`COALESCE((SELECT max(f.updated_at) FROM files f WHERE f.employee_id = e.id), e.updated_at)`] : []),
+    ...(hasStatuses ? [`COALESCE((SELECT max(s.updated_at) FROM employees_statuses_mapping s WHERE s.employee_id = e.id), e.updated_at)`] : []),
+    ...(zupLogMatch ? [`COALESCE((SELECT max(a.created_at) FROM audit_logs a WHERE ${zupLogWhere}), e.updated_at)`] : []),
+  ].join(',\n             ');
+
   const res = await pdPool.query<IPdEmployee>(`
     SELECT e.id, e.first_name, ${optional},
            ${hasCitizenship ? 'c.name' : 'NULL::text'} AS citizenship_name,
            ${hasBirthCountry ? 'bc.name' : 'NULL::text'} AS birth_country_name,
-           (SELECT cp.name FROM employee_counterparty_mapping m JOIN counterparties cp ON cp.id = m.counterparty_id
-             WHERE m.employee_id = e.id ORDER BY (m.dismissed_at IS NULL) DESC, m.updated_at DESC LIMIT 1) AS counterparty,
+           ${counterpartyExpr} AS counterparty,
            e.updated_at,
-           COALESCE((SELECT bool_and(s.is_upload) FROM employees_statuses_mapping s WHERE s.employee_id = e.id AND s.is_active = true), false) AS zup_uploaded,
-           (SELECT a.created_at FROM audit_logs a WHERE a.action = 'zup_flag_changed' AND a.entity_type = 'employee' AND a.entity_id = e.id::text
-              AND lower(a.details->>'to') = 'true' ORDER BY a.created_at DESC LIMIT 1) AS zup_uploaded_at,
-           GREATEST(e.updated_at,
-             COALESCE((SELECT max(f.updated_at) FROM files f WHERE f.employee_id = e.id), e.updated_at),
-             COALESCE((SELECT max(s.updated_at) FROM employees_statuses_mapping s WHERE s.employee_id = e.id), e.updated_at),
-             COALESCE((SELECT max(a.created_at) FROM audit_logs a WHERE a.action = 'zup_flag_changed' AND a.entity_type = 'employee' AND a.entity_id = e.id::text), e.updated_at)
+           ${zupUploadedExpr} AS zup_uploaded,
+           ${zupLogMatch ? `(SELECT a.created_at FROM audit_logs a WHERE ${zupLogWhere}
+              AND lower(a.details->>'to') = 'true' ORDER BY a.created_at DESC LIMIT 1)` : 'NULL::timestamptz'} AS zup_uploaded_at,
+           GREATEST(${lastChangeTerms}
            ) AS last_change_at
       FROM employees e
       ${hasCitizenship ? 'LEFT JOIN citizenships c ON c.id = e.citizenship_id' : ''}
