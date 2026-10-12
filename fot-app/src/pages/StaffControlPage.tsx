@@ -1444,7 +1444,7 @@ export const StaffControlPage: FC = () => {
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
   // Табельщица с правом «все сотрудники» видит всю организацию на чтение: фильтр отделов не
   // сужается, ей доступны «Уволенные» и чипы месяца (правка — по прежним правам).
-  const { hasAllEmployees, restrictToManaged, canViewFired } = resolveStaffAccessRules({
+  const { hasAllEmployees, restrictToManaged, canViewFired, defaultSection } = resolveStaffAccessRules({
     isAdmin,
     roleCode: profile?.role_code,
     hasAllEmployeesKey: canViewPage(STAFF_ALL_EMPLOYEES_PAGE_KEY),
@@ -1464,9 +1464,10 @@ export const StaffControlPage: FC = () => {
   }, [singleManagedDeptId, deptId]);
 
   // Дефолт раздела — только когда скоуп известен (profile загружен): руководителю отдела
-  // «СУ-10» по умолчанию дал бы пустую таблицу, если его отделы в СМ, — ему «Все».
+  // «СУ-10» по умолчанию дал бы пустую таблицу, если его отделы в СМ, — ему «Все». Кто видит
+  // всю организацию (в т.ч. табельщица с правом «все сотрудники») — открывает «СУ-10».
   const scopeKnown = profile != null;
-  const section: StaffSection = sectionChoice ?? (isDepartmentScope ? 'all' : 'su10');
+  const section: StaffSection = sectionChoice ?? defaultSection;
 
   const {
     employees,

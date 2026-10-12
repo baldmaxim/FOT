@@ -7,6 +7,8 @@
  * своя логика. Всегда проверять через resolveStaffAccessRules, а не сырой ключ.
  */
 
+import type { StaffSection } from '../components/staff/staffSections';
+
 export const STAFF_ALL_EMPLOYEES_PAGE_KEY = '/staff-control/all-employees';
 
 const TIMEKEEPER_ROLE_CODE = 'timekeeper';
@@ -29,6 +31,12 @@ export interface IStaffAccessRules {
   restrictToManaged: boolean;
   /** Переключатель «Действующие / Уволенные» и чипы «Устроены / Уволены» с начала месяца. */
   canViewFired: boolean;
+  /**
+   * Раздел, с которого открывается экран. «Все» — только тем, чей список сужен до своих
+   * отделов: их отделы могут быть в СМ, и на «СУ-10» таблица была бы пустой. Кто видит всю
+   * организацию (админ, кадровый админ, табельщица с правом) — «СУ-10».
+   */
+  defaultSection: StaffSection;
 }
 
 export const resolveStaffAccessRules = ({
@@ -39,10 +47,12 @@ export const resolveStaffAccessRules = ({
   isDepartmentScope,
 }: IStaffAccessInput): IStaffAccessRules => {
   const hasAllEmployees = !isAdmin && roleCode === TIMEKEEPER_ROLE_CODE && hasAllEmployeesKey;
+  const restrictToManaged = isDepartmentScope && !hasAllEmployees;
   return {
     hasAllEmployees,
-    restrictToManaged: isDepartmentScope && !hasAllEmployees,
+    restrictToManaged,
     canViewFired: canManageStaff || hasAllEmployees,
+    defaultSection: restrictToManaged ? 'all' : 'su10',
   };
 };
 

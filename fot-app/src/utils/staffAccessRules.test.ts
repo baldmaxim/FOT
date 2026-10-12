@@ -16,14 +16,16 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployees: false,
       restrictToManaged: true,
       canViewFired: false,
+      defaultSection: 'all',
     });
   });
 
-  it('табельщица с ключом — вся организация: фильтр отделов не сужен, «Уволенные» и чипы видны', () => {
+  it('табельщица с ключом — вся организация: фильтр отделов не сужен, «Уволенные» и чипы видны, раздел «СУ-10»', () => {
     expect(resolveStaffAccessRules({ ...TIMEKEEPER, hasAllEmployeesKey: true })).toEqual({
       hasAllEmployees: true,
       restrictToManaged: false,
       canViewFired: true,
+      defaultSection: 'su10',
     });
   });
 
@@ -32,6 +34,7 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployees: false,
       restrictToManaged: true,
       canViewFired: false,
+      defaultSection: 'all',
     });
   });
 
@@ -42,7 +45,17 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployeesKey: true,
       canManageStaff: true,
       isDepartmentScope: false,
-    })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true });
+    })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true, defaultSection: 'su10' });
+  });
+
+  it('руководитель с назначенными отделами открывает «Все»: его отделы могут быть не в СУ-10', () => {
+    expect(resolveStaffAccessRules({
+      isAdmin: false,
+      roleCode: 'manager',
+      hasAllEmployeesKey: false,
+      canManageStaff: false,
+      isDepartmentScope: true,
+    }).defaultSection).toBe('all');
   });
 
   it('кадровый админ видит «Уволенных» по своему праву управления', () => {
@@ -52,7 +65,7 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployeesKey: false,
       canManageStaff: true,
       isDepartmentScope: false,
-    })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true });
+    })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true, defaultSection: 'su10' });
   });
 });
 
