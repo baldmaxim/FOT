@@ -670,6 +670,11 @@ export const upsertIdentityClaims = async (
   }
 };
 
+export interface IProfileCreateResult extends IProfileWriteResult {
+  /** Профиль вставлен именно этим вызовом (false — уже был, в том числе у параллельного запроса). */
+  created: boolean;
+}
+
 /** Создать пустой профиль (idempotent) + сразу применить input, если есть. */
 export const createProfile = async (
   employeeId: number,
@@ -677,20 +682,25 @@ export const createProfile = async (
   actor: IHrActor,
   source: HrChangeSource,
   extra?: { passdeskId?: string | null; passdeskIdAll?: string | null; matchRule?: string | null; client?: PoolClient },
-): Promise<IProfileWriteResult> => {
-  const run = async (client: PoolClient): Promise<IProfileWriteResult> => {
+): Promise<IProfileCreateResult> => {
+  const run = async (client: PoolClient): Promise<IProfileCreateResult> => {
     const existing = await client.query<{ employee_id: number }>(`SELECT employee_id FROM employee_hr_profiles WHERE employee_id = $1`, [employeeId]);
+    let created = false;
     if (existing.rows.length === 0) {
-      await client.query(
+      // «Создан» решает сам INSERT, а не проверка выше: из двух параллельных запросов строку
+      // вставит один, и только он пишет событие истории.
+      const inserted = await client.query<{ employee_id: number }>(
         `INSERT INTO employee_hr_profiles (employee_id, created_by, updated_by, passdesk_id, passdesk_id_all, match_rule, snils_hash)
          SELECT $1, $2, $2, $3, $4, $5, $6
-         ON CONFLICT (employee_id) DO NOTHING`,
+         ON CONFLICT (employee_id) DO NOTHING
+         RETURNING employee_id`,
         [employeeId, actor.userId, extra?.passdeskId ?? null, extra?.passdeskIdAll ?? null, extra?.matchRule ?? null,
           hashForSearch('snils', (await client.query<{ pension_number: string | null }>(`SELECT pension_number FROM employees WHERE id = $1`, [employeeId])).rows[0]?.pension_number ?? null)],
       );
-      await recordHistory(client, employeeId, 'created', { actor, source });
+      created = inserted.rows.length > 0;
+      if (created) await recordHistory(client, employeeId, 'created', { actor, source });
     }
-    return applyProfilePatch(client, employeeId, input, actor, source);
+    return { ...(await applyProfilePatch(client, employeeId, input, actor, source)), created };
   };
   return extra?.client ? run(extra.client) : withTransaction(run);
 };

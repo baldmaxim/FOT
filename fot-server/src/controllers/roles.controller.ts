@@ -724,6 +724,9 @@ export const rolesController = {
       await persistAccessProfile(code, page_access);
       invalidateRoleListCache();
       invalidateRolePageAccessCache();
+      // Строго ПОСЛЕ сброса кешей: по событию клиент тут же тянет /auth/me, и со старым
+      // кешем прав получил бы прежнюю матрицу — и больше не перечитал бы её.
+      await emitRoleAccessChanged(role.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({

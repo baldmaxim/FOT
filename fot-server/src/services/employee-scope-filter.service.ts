@@ -129,30 +129,75 @@ export async function filterEmployeeIdsByReadScope(
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return [];
 
-  const { globalRead } = await resolveEmployeeListReadScope(req);
-  const filter: IEmployeeScopeFilter = globalRead
-    ? { mode: 'all', departmentIds: [], directEmployeeIds: [], selfEmployeeId: null }
-    : await resolveEmployeeListScopeFilter(req);
+  const filter = await resolveStaffListFilter(req);
   if (filter.mode === 'none') return [];
 
   const params: unknown[] = [ids];
-  let condition = 'TRUE';
-  if (filter.mode === 'self') {
-    params.push(filter.selfEmployeeId);
-    condition = `id = $${params.length}::int`;
-  } else if (filter.mode === 'departments') {
-    params.push(filter.departmentIds);
-    const deptIdx = params.length;
-    params.push(filter.directEmployeeIds);
-    condition = `(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`;
-  } else if (filter.mode === 'employees') {
-    params.push(filter.directEmployeeIds);
-    condition = `id = ANY($${params.length}::int[])`;
-  }
-
+  const condition = buildStaffListCondition(filter, params);
   const rows = await query<{ id: number | string }>(
     `SELECT id FROM employees WHERE id = ANY($1::int[]) AND (${condition})`,
     params,
   );
   return rows.map(row => Number(row.id)).filter(id => Number.isInteger(id));
+}
+
+/** Фильтр списка «Управления кадрами» с учётом глобального чтения (view_all_departments). */
+async function resolveStaffListFilter(req: AuthenticatedRequest): Promise<IEmployeeScopeFilter> {
+  const { globalRead } = await resolveEmployeeListReadScope(req);
+  return globalRead
+    ? { mode: 'all', departmentIds: [], directEmployeeIds: [], selfEmployeeId: null }
+    : resolveEmployeeListScopeFilter(req);
+}
+
+/**
+ * SQL-условие охвата списка. Одно на проверку «видит ли сотрудника» и на выборку всех
+ * видимых — чтобы они не разошлись. Статус и архив не учитываются: это правило по отделу,
+ * ровно то, что список отдаёт с фильтрами «Уволенные» и «Архив».
+ */
+function buildStaffListCondition(filter: IEmployeeScopeFilter, params: unknown[]): string {
+  if (filter.mode === 'self') {
+    params.push(filter.selfEmployeeId);
+    return `id = $${params.length}::int`;
+  }
+  if (filter.mode === 'departments') {
+    params.push(filter.departmentIds);
+    const deptIdx = params.length;
+    params.push(filter.directEmployeeIds);
+    return `(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`;
+  }
+  if (filter.mode === 'employees') {
+    params.push(filter.directEmployeeIds);
+    return `id = ANY($${params.length}::int[])`;
+  }
+  return 'TRUE';
+}
+
+/** Виден ли сотрудник в списке «Управления кадрами» этого пользователя. Только чтение. */
+export async function canSeeEmployeeInStaffList(
+  req: AuthenticatedRequest,
+  employeeId: number,
+): Promise<boolean> {
+  return (await filterEmployeeIdsByReadScope(req, [employeeId])).length === 1;
+}
+
+/**
+ * Все сотрудники, видимые в списке «Управления кадрами»; 'all' — без ограничений.
+ * Нужен реестрам, где скоуп задаётся набором id (реквизиты, поиск): общий
+ * resolveAccessibleEmployeeIds шире списка — табельщице он добавляет всех, кто проходит
+ * на её объекты, включая людей вне её папок.
+ */
+export async function resolveStaffRosterEmployeeIds(
+  req: AuthenticatedRequest,
+): Promise<Set<number> | 'all'> {
+  const filter = await resolveStaffListFilter(req);
+  if (filter.mode === 'all') return 'all';
+  if (filter.mode === 'none') return new Set();
+
+  const params: unknown[] = [];
+  const condition = buildStaffListCondition(filter, params);
+  const rows = await query<{ id: number | string }>(
+    `SELECT id FROM employees WHERE ${condition}`,
+    params,
+  );
+  return new Set(rows.map(row => Number(row.id)).filter(id => Number.isInteger(id)));
 }

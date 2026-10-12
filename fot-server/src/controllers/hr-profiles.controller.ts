@@ -15,6 +15,9 @@ import {
 } from '../services/data-scope.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { auditService } from '../services/audit.service.js';
+import { canSeeEmployeeInStaffList, resolveStaffRosterEmployeeIds } from '../services/employee-scope-filter.service.js';
+import { canUseHrDocumentsForEmployee, resolveHrDocumentsAccess } from '../services/hr-documents-access.service.js';
+import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import {
   HR_DOCUMENT_PROFILES,
@@ -61,6 +64,27 @@ const ensureConfigured = (res: Response): boolean => {
 };
 
 const canEdit = (req: AuthenticatedRequest): Promise<boolean> => resolveEffectivePageAccess(req, PAGE_KEY_HR_PROFILES, 'edit');
+
+/**
+ * Чьи реквизиты читает запрос. Табельщице — только те, кого она видит в списке
+ * «Управления кадрами»: общий скоуп добавляет ей всех, кто проходит на её объекты,
+ * включая людей вне её папок.
+ */
+const canReadHrEmployee = (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => (
+  isTimekeeper(req) ? canSeeEmployeeInStaffList(req, employeeId) : canAccessEmployeeInScope(req, employeeId)
+);
+
+/** То же правило для реестра и поиска — набором id. */
+const resolveReadableHrEmployeeIds = (req: AuthenticatedRequest): Promise<Set<number> | 'all'> => (
+  isTimekeeper(req) ? resolveStaffRosterEmployeeIds(req) : resolveAccessibleEmployeeIds(req)
+);
+
+/** Роуты, открытые и правке реквизитов, и ключу документов: полные номера сотрудника. */
+const canOpenHrSensitive = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
+  const access = await resolveHrDocumentsAccess(req);
+  if (access === 'full') return canReadHrEmployee(req, employeeId);
+  return access === 'documents' && canSeeEmployeeInStaffList(req, employeeId);
+};
 
 const fail = (res: Response, err: unknown, fallback: string): void => {
   if (err instanceof z.ZodError) {
@@ -169,7 +193,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const params: unknown[] = [];
     const add = (v: unknown): number => { params.push(v); return params.length; };
 
-    const scope = await resolveAccessibleEmployeeIds(req);
+    const scope = await resolveReadableHrEmployeeIds(req);
     if (scope !== 'all') {
       if (scope.size === 0) {
         res.json({ success: true, data: [], meta: { total: 0, page, pageSize } });
@@ -264,7 +288,7 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    const scope = await resolveAccessibleEmployeeIds(req);
+    const scope = await resolveReadableHrEmployeeIds(req);
     const params: unknown[] = [`%${escapeLike(q)}%`];
     let scopeSql = '';
     if (scope !== 'all') {
@@ -306,7 +330,7 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -314,7 +338,9 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     if (!row) {
       const emp = await queryOne<{ id: number; full_name: string }>(`SELECT id, full_name FROM employees WHERE id = $1`, [employeeId]);
       if (!emp) { res.status(404).json({ success: false, error: 'Сотрудник не найден' }); return; }
-      res.status(404).json({ success: false, error: 'Реквизиты не заведены', code: 'HR_PROFILE_MISSING', data: { employee_id: emp.id, full_name: emp.full_name, can_create: await canEdit(req) } });
+      // Завести реквизиты может и держатель ключа документов — иначе ему некуда загружать сканы.
+      const canCreate = await canEdit(req) || await canUseHrDocumentsForEmployee(req, employeeId);
+      res.status(404).json({ success: false, error: 'Реквизиты не заведены', code: 'HR_PROFILE_MISSING', data: { employee_id: emp.id, full_name: emp.full_name, can_create: canCreate } });
       return;
     }
     res.json({ success: true, data: await buildProfileView(row, { unmask: false }), meta: { can_edit: await canEdit(req) } });
@@ -327,7 +353,7 @@ const sensitive = async (req: AuthenticatedRequest, res: Response): Promise<void
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canOpenHrSensitive(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -345,18 +371,28 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
+    const access = await resolveHrDocumentsAccess(req);
+    const documentsOnly = access === 'documents';
+    const allowed = !!employeeId && (documentsOnly
+      ? await canSeeEmployeeInStaffList(req, employeeId)
+      : access === 'full' && await canWriteEmployeeInScope(req, employeeId));
+    if (!employeeId || !allowed) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
     const emp = await queryOne<{ id: number }>(`SELECT id FROM employees WHERE id = $1`, [employeeId]);
     if (!emp) { res.status(404).json({ success: false, error: 'Сотрудник не найден' }); return; }
-    const input = hrProfileInputSchema.parse(req.body ?? {}) as IHrProfileInput;
-    const existed = await loadProfileRow(employeeId);
-    await createProfile(employeeId, input, { userId: req.user.id }, 'admin');
-    await auditService.logFromRequest(req, req.user.id, existed ? 'HR_PROFILE_UPDATE' : 'HR_PROFILE_CREATE', { entityType: 'employee', entityId: String(employeeId) });
+    // Ключ документов заводит только ПУСТЫЕ реквизиты: тело запроса не читаем, иначе этим
+    // же роутом правились бы поля.
+    const input = documentsOnly ? {} : hrProfileInputSchema.parse(req.body ?? {}) as IHrProfileInput;
+    const result = await createProfile(employeeId, input, { userId: req.user.id }, 'admin');
+    if (documentsOnly && !result.created) {
+      res.status(409).json({ success: false, error: 'Реквизиты уже заведены', code: 'HR_PROFILE_EXISTS' });
+      return;
+    }
+    await auditService.logFromRequest(req, req.user.id, result.created ? 'HR_PROFILE_CREATE' : 'HR_PROFILE_UPDATE', { entityType: 'employee', entityId: String(employeeId) });
     const row = await loadProfileRow(employeeId);
-    res.status(existed ? 200 : 201).json({ success: true, data: row ? await buildProfileView(row, { unmask: true }) : null });
+    res.status(result.created ? 201 : 200).json({ success: true, data: row ? await buildProfileView(row, { unmask: !documentsOnly }) : null });
   } catch (err) {
     fail(res, err, 'Ошибка создания профиля');
   }
@@ -389,7 +425,7 @@ const history = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -481,7 +517,7 @@ const conflicts = async (req: AuthenticatedRequest, res: Response): Promise<void
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

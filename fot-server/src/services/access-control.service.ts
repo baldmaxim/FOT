@@ -10,6 +10,7 @@ import { hasDeputyAssignment } from './data-scope.service.js';
 import { isDeputyRole } from './deputy-role.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
+import { isTimekeeper } from './timekeeper-scope.service.js';
 import {
   getRequestPayrollAccessLevel,
   isPayrollGrantPage,
@@ -215,6 +216,14 @@ export async function hasPageEdit(roleRef: string, pagePath: string): Promise<bo
 async function hasManagerAutoAccess(req: AuthenticatedRequest, pagePath: string): Promise<boolean> {
   if (req.user.is_admin) return false;
   if (!MANAGER_AUTO_ACCESS_PAGES.has(pagePath)) return false;
+  // Табельщица — не руководитель: её «отделы» — это бригады объектов, которые она табелирует.
+  // «Управление кадрами» ей даёт только матрица роли (зеркало buildProfileResponse в
+  // auth.controller) — иначе просмотр в матрице молча превращался в правку.
+  if (isTimekeeper(req)) return false;
+  // Матрица роли уже описывает страницу — авто-доступ к ней ничего не добавляет. Иначе
+  // «Просмотр» в матрице плюс назначенный отдел давали правку: права складывались по «ИЛИ»,
+  // хотя интерфейс (тот же buildProfileResponse) показывает такой роли только просмотр.
+  if (await resolveRolePageAccess(req, pagePath, 'view')) return false;
   const accessible = await resolveAccessibleDepartmentIds(req);
   return accessible !== 'all' && accessible.length > 0;
 }

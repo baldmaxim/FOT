@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import type { NextFunction, Request, Response } from 'express';
-import { authenticate, require2FA, requireAdmin, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, require2FA, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 // Персональные данные — никакого кэширования ни в браузере, ни в прокси.
 const noStore = (_req: Request, res: Response, next: NextFunction): void => {
@@ -26,6 +26,13 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: HR_
 
 const view = requirePageAccess('/staff-control/hr-profiles', 'view');
 const edit = [requirePageAccess('/staff-control/hr-profiles', 'edit'), require2FA] as const;
+// Правка реквизитов ИЛИ ключ «документы без правки полей» (загрузка, сканы, полные номера,
+// пустые реквизиты). Роут только пропускает; что именно разрешено и по каким сотрудникам,
+// решает контроллер (hr-documents-access.service).
+const editOrDocuments = [
+  requireAnyPageAccess(['/staff-control/hr-profiles', '/staff-control/hr-documents'], 'edit'),
+  require2FA,
+] as const;
 
 router.use(authenticate);
 router.use(noStore);
@@ -55,9 +62,9 @@ router.post('/drafts/:draftId/attach', ...edit, hrDraftsController.attach);
 router.post('/drafts/:draftId/mark-created', ...edit, hrDraftsController.markCreated);
 
 // Документы (по id) — только через HR API
-router.get('/documents/:id/content', ...edit, hrDocumentsController.content);
-router.delete('/documents/:id', ...edit, hrDocumentsController.remove);
-router.post('/documents/:id/recognize', ...edit, hrDocumentsController.recognize);
+router.get('/documents/:id/content', ...editOrDocuments, hrDocumentsController.content);
+router.delete('/documents/:id', ...editOrDocuments, hrDocumentsController.remove);
+router.post('/documents/:id/recognize', ...editOrDocuments, hrDocumentsController.recognize);
 
 // Конфликты OCR
 router.post('/ocr-conflicts/:id/apply', ...edit, hrProfilesController.applyConflict);
@@ -70,12 +77,12 @@ router.post('/staging/:id/link', requireAdmin, require2FA, hrStagingController.l
 
 // Профиль сотрудника
 router.get('/:employeeId', view, hrProfilesController.getOne);
-router.get('/:employeeId/sensitive', ...edit, hrProfilesController.sensitive);
-router.post('/:employeeId', ...edit, hrProfilesController.create);
+router.get('/:employeeId/sensitive', ...editOrDocuments, hrProfilesController.sensitive);
+router.post('/:employeeId', ...editOrDocuments, hrProfilesController.create);
 router.put('/:employeeId', ...edit, hrProfilesController.update);
 router.get('/:employeeId/history', view, hrProfilesController.history);
 router.get('/:employeeId/documents', view, hrDocumentsController.listForEmployee);
-router.post('/:employeeId/documents', ...edit, upload.single('file'), hrDocumentsController.uploadForEmployee);
+router.post('/:employeeId/documents', ...editOrDocuments, upload.single('file'), hrDocumentsController.uploadForEmployee);
 router.get('/:employeeId/ocr-conflicts', view, hrProfilesController.conflicts);
 router.patch('/:employeeId/zup', ...edit, hrProfilesController.zupToggle);
 

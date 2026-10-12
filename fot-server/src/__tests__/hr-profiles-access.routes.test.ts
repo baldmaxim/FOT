@@ -100,13 +100,17 @@ vi.mock('../services/hr-profile.service.js', () => ({
 
 const app = (await import('../app.js')).default;
 
-/** Токен без 2FA — типичный кадровик на проде. */
+/**
+ * Токен без 2FA — типичный кадровик на проде. Роль именно кадровая: у табельщицы круг
+ * сотрудников в реквизитах свой (список «Управления кадрами»), он проверяется отдельно —
+ * hr-documents.access.test.ts.
+ */
 const token = (): string => jwt.sign(
   {
     sub: 'hr-access-user',
     email: 'hr@example.com',
     system_role_id: 'role-uuid',
-    role_code: 'timekeeper',
+    role_code: 'hr',
     is_admin: false,
     employee_variant: 'office',
     employee_id: null,

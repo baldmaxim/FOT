@@ -38,7 +38,8 @@ import {
   resolveScopedDepartmentId,
   resolveWritableScopedDepartmentId,
 } from '../services/data-scope.service.js';
-import { resolveEmployeeListReadScope } from '../services/employee-scope-filter.service.js';
+import { canSeeEmployeeInStaffList, resolveEmployeeListReadScope } from '../services/employee-scope-filter.service.js';
+import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import {
   buildSectionConditionSql,
   parseSectionParam,
@@ -425,7 +426,12 @@ export const employeesController = {
         return;
       }
       // Чтение карточки: скоуп отделов ИЛИ «все отделы на чтение» (view_all_departments).
-      if (!(await canAccessEmployeeRecordsInScope(req, idNum)) && !(await hasGlobalDepartmentReadScope(req))) {
+      // Табельщице — только те, кого она видит в списке «Управления кадрами», и она сама:
+      // общий скоуп добавляет ей всех, кто проходит на её объекты, включая людей вне её папок.
+      const canRead = isTimekeeper(req)
+        ? idNum === req.user.employee_id || await canSeeEmployeeInStaffList(req, idNum)
+        : await canAccessEmployeeRecordsInScope(req, idNum) || await hasGlobalDepartmentReadScope(req);
+      if (!canRead) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

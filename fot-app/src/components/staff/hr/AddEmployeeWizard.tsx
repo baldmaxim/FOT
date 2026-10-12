@@ -367,7 +367,7 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
                   </label>
                   <span className={styles.muted}>Загрузите сканы — поля заполнятся автоматически. Шаг можно пропустить.</span>
                 </div>
-                <HrDocumentsGrid slots={slots} canEdit canView uploading={uploading} onUpload={(t, f) => void upload(t, f)} onDelete={d => void removeDoc(d)} onRecognize={d => void recognize(d)} />
+                <HrDocumentsGrid slots={slots} canUpload canView canManageDoc={() => true} uploading={uploading} onUpload={(t, f) => void upload(t, f)} onDelete={d => void removeDoc(d)} onRecognize={d => void recognize(d)} />
               </div>
             )}
 

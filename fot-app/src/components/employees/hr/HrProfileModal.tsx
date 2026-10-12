@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Edit3, Eye, EyeOff, Save, X } from 'lucide-react';
 import { ModalShell } from '../../ui/ModalShell';
@@ -11,6 +11,7 @@ import { HrDocumentsGrid } from './HrDocumentsGrid';
 import { HrProfileHistory } from './HrProfileHistory';
 import { HrOcrConflictsPanel } from './HrOcrConflictsPanel';
 import { displayFieldValue, fmtDate, visibleFields } from './hrFormat';
+import { resolveHrDocumentPermissions } from '../../../utils/hrDocumentPermissions';
 import styles from './HrProfileModal.module.css';
 
 interface IHrProfileModalProps {
@@ -26,10 +27,16 @@ type Tab = 'info' | 'files';
  * история изменений, сверху — расхождения OCR. Без профиля — «Завести реквизиты».
  */
 export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }) => {
-  const { isAdmin, canEditPage } = useAuth();
+  const { isAdmin, canEditPage, canViewPage, user } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const canEdit = isAdmin || canEditPage('/staff-control/hr-profiles');
+  const { canDocs, autoUnmask, afterCreate, canManageDoc } = useMemo(() => resolveHrDocumentPermissions({
+    canEdit,
+    canViewProfiles: canViewPage('/staff-control/hr-profiles'),
+    hasDocumentsKey: canEditPage('/staff-control/hr-documents'),
+    userId: user?.id ?? null,
+  }), [canEdit, canViewPage, canEditPage, user?.id]);
 
   const [tab, setTab] = useState<Tab>('info');
   const [editing, setEditing] = useState(false);
@@ -66,6 +73,16 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
       void hrProfileService.getSensitive(employeeId).then(setUnmasked).catch(() => setUnmasked(null));
     }
   }, [profileQuery.data, unmasked, employeeId]);
+
+  // Ключ документов без правки полей: полные номера показываем сразу, один раз за открытие.
+  // Повтор после ошибки не делаем — иначе отказ сервера зациклил бы запросы.
+  const autoUnmaskRequested = useRef(false);
+  const hasProfile = !!profileQuery.data?.profile;
+  useEffect(() => {
+    if (!autoUnmask || !hasProfile || autoUnmaskRequested.current) return;
+    autoUnmaskRequested.current = true;
+    void hrProfileService.getSensitive(employeeId).then(setUnmasked).catch(() => undefined);
+  }, [autoUnmask, hasProfile, employeeId]);
 
   const startEdit = async () => {
     try {
@@ -106,9 +123,14 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
   const createProfile = async () => {
     try {
       const full = await hrProfileService.create(employeeId, {});
-      setUnmasked(full);
-      setDraft({ ...full.fields });
-      setEditing(true);
+      if (afterCreate === 'edit') {
+        setUnmasked(full);
+        setDraft({ ...full.fields });
+        setEditing(true);
+      } else {
+        // Поля не правим — сразу к загрузке документов.
+        setTab('files');
+      }
       refreshAll();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось завести реквизиты');
@@ -189,7 +211,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
             {!profileQuery.isPending && !profile && !profileQuery.isError && (
               <div className={styles.emptyState}>
                 <p>Реквизиты для этого сотрудника ещё не заведены.</p>
-                {canEdit ? <button type="button" className={styles.btnPrimary} onClick={() => void createProfile()}>Завести реквизиты</button>
+                {canDocs ? <button type="button" className={styles.btnPrimary} onClick={() => void createProfile()}>Завести реквизиты</button>
                   : <p className={styles.muted}>Заводит отдел кадров или табельщица.</p>}
               </div>
             )}
@@ -257,8 +279,9 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                       )}
                       <HrDocumentsGrid
                         slots={docsQuery.data?.slots ?? []}
-                        canEdit={canEdit}
-                        canView={canEdit}
+                        canUpload={canDocs}
+                        canView={canDocs}
+                        canManageDoc={canManageDoc}
                         uploading={uploading}
                         onUpload={(t, f) => void upload(t, f)}
                         onDelete={d => void removeDoc(d)}

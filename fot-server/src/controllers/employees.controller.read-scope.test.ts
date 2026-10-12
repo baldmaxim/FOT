@@ -196,3 +196,69 @@ describe('getById — карточка', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+/**
+ * Табельщица открывает карточку только тех, кого видит в списке «Управления кадрами».
+ * Общий скоуп (canAccessEmployeeRecordsInScope) шире: он добавляет всех, кто проходит на её
+ * объекты, включая людей вне её папок — по прямой ссылке они открываться не должны.
+ */
+describe('getById — карточка у табельщицы', () => {
+  const makeTimekeeperReq = (id: string): AuthenticatedRequest => {
+    const req = makeReq({}, { id });
+    (req as unknown as { user: Record<string, unknown> }).user = {
+      id: 'tk-1', role_code: 'timekeeper', is_admin: false, employee_id: 577,
+    };
+    return req;
+  };
+
+  /** Запрос «виден ли сотрудник в списке кадров». */
+  const staffListQuery = (): { sql: string; params: unknown[] } | null => {
+    const call = h.query.mock.calls.find(c => String(c[0]).includes('SELECT id FROM employees WHERE id = ANY'));
+    return call ? { sql: String(call[0]), params: call[1] as unknown[] } : null;
+  };
+
+  beforeEach(() => {
+    h.hasGlobalDepartmentReadScope.mockResolvedValue(false);
+    h.cacheGet.mockReturnValue({ etag: 'e1', data: { id: 77 } });
+    h.listExplicitDepartmentIdsForUser.mockResolvedValue([]);
+    h.resolveManagedDepartmentIds.mockResolvedValue(['brigade-1']);
+  });
+
+  it('сотрудник её бригады → карточка отдаётся', async () => {
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.query.mockResolvedValue([{ id: 77 }]);
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq('77'), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(staffListQuery()?.params).toContainEqual(['brigade-1']);
+  });
+
+  it('человек её объекта вне папок → 403, хотя общий скоуп его пускает', async () => {
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.query.mockResolvedValue([]);
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq('77'), res as never);
+    expect(res.statusCode).toBe(403);
+    // Решает список кадров, общий скоуп не спрашиваем вовсе.
+    expect(h.canAccessEmployeeInScope).not.toHaveBeenCalled();
+  });
+
+  it('правило по бригаде, а не по статусу: уволенные и архивные её бригады тоже открываются', async () => {
+    h.query.mockResolvedValue([{ id: 77 }]);
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq('77'), res as never);
+    expect(res.statusCode).toBe(200);
+    const sql = staffListQuery()?.sql ?? '';
+    expect(sql).toContain('org_department_id = ANY');
+    expect(sql).not.toMatch(/is_archived|employment_status|dismissal/);
+  });
+
+  it('свой профиль (личный кабинет) → отдаётся без проверки списка', async () => {
+    h.query.mockResolvedValue([]);
+    h.cacheGet.mockReturnValue({ etag: 'e1', data: { id: 577 } });
+    const res = makeRes();
+    await employeesController.getById(makeTimekeeperReq('577'), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(staffListQuery()).toBeNull();
+  });
+});

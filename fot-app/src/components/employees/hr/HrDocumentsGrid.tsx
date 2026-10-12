@@ -8,13 +8,16 @@ import styles from './HrProfileModal.module.css';
 
 interface IHrDocumentsGridProps {
   slots: IHrDocumentSlot[];
-  canEdit: boolean;
+  /** Загрузка сканов. */
+  canUpload: boolean;
   uploading: string | null;
   onUpload: (typeCode: string, file: File) => void;
   onDelete: (doc: IHrDocument) => void;
   onRecognize: (doc: IHrDocument) => void;
-  /** Просмотр/скачивание доступны только с правом edit (PII). */
+  /** Просмотр/скачивание (PII): правка реквизитов или ключ документов. */
   canView: boolean;
+  /** Удаление и повторное распознавание: с ключом документов — только свои файлы. */
+  canManageDoc: (doc: IHrDocument) => boolean;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -34,7 +37,7 @@ const statusClass = (s: IHrDocument['recognition_status']): string => {
 };
 
 /** Сетка слотов по типам документов (как панель «Документы» в PassDesk). */
-export const HrDocumentsGrid: FC<IHrDocumentsGridProps> = ({ slots, canEdit, uploading, onUpload, onDelete, onRecognize, canView }) => {
+export const HrDocumentsGrid: FC<IHrDocumentsGridProps> = ({ slots, canUpload, uploading, onUpload, onDelete, onRecognize, canView, canManageDoc }) => {
   const inputs = useRef<Record<string, HTMLInputElement | null>>({});
   const [preview, setPreview] = useState<IHrDocument | null>(null);
 
@@ -77,14 +80,14 @@ export const HrDocumentsGrid: FC<IHrDocumentsGridProps> = ({ slots, canEdit, upl
               <div className={styles.docActions}>
                 {canView && <button type="button" className={styles.iconBtn} title="Просмотр" onClick={() => setPreview(doc)}><Eye size={15} /></button>}
                 {canView && <button type="button" className={styles.iconBtn} title="Скачать" onClick={() => void download(doc)}><Download size={15} /></button>}
-                {canEdit && doc.ocr_supported && (
+                {canManageDoc(doc) && doc.ocr_supported && (
                   <button type="button" className={styles.iconBtn} title="Распознать повторно" onClick={() => onRecognize(doc)} disabled={doc.recognition_status === 'processing'}><RefreshCw size={15} /></button>
                 )}
-                {canEdit && <button type="button" className={`${styles.iconBtn} ${styles.iconDanger}`} title="Удалить" onClick={() => onDelete(doc)}><Trash2 size={15} /></button>}
+                {canManageDoc(doc) && <button type="button" className={`${styles.iconBtn} ${styles.iconDanger}`} title="Удалить" onClick={() => onDelete(doc)}><Trash2 size={15} /></button>}
               </div>
             </div>
           ))}
-          {canEdit && (
+          {canUpload && (
             <>
               <input
                 ref={el => { inputs.current[slot.code] = el; }}

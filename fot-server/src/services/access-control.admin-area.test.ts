@@ -90,6 +90,97 @@ describe('resolveEffectivePageAccess: админ-область и авто-до
     await expect(resolveEffectivePageAccess(req(), '/staff-control', 'view')).resolves.toBe(true);
   });
 
+  describe('табельщица: «Управление кадрами» только из матрицы роли', () => {
+    const timekeeperReq = (): AuthenticatedRequest => ({
+      user: { id: 'u-tk', role_code: 'timekeeper', is_admin: false, employee_id: 577 },
+    } as unknown as AuthenticatedRequest);
+
+    it('без строки в матрице нет ни просмотра, ни правки — бригады объектов не делают её руководителем', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'timekeeper', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([]);
+
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control', 'view')).resolves.toBe(false);
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control', 'edit')).resolves.toBe(false);
+    });
+
+    it('«Просмотр» в матрице остаётся просмотром: авто-доступ не добавляет правку', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'timekeeper', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([
+        { role_code: 'timekeeper', page_path: '/staff-control', can_view: true, can_edit: false },
+      ]);
+
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control', 'view')).resolves.toBe(true);
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control', 'edit')).resolves.toBe(false);
+    });
+
+    it('руководитель без строки в матрице по-прежнему получает просмотр и правку', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'manager', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([]);
+      const managerReq = {
+        user: { id: 'u-m', role_code: 'manager', is_admin: false, employee_id: 900 },
+      } as unknown as AuthenticatedRequest;
+
+      await expect(resolveEffectivePageAccess(managerReq, '/staff-control', 'view')).resolves.toBe(true);
+      await expect(resolveEffectivePageAccess(managerReq, '/staff-control', 'edit')).resolves.toBe(true);
+    });
+
+    it('авто-просмотр «Заявок на поиск» табельщице-рекрутеру не затронут', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'timekeeper', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([]);
+      h.hasHiringAutoAccess.mockResolvedValue(true);
+
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control/hiring', 'view')).resolves.toBe(true);
+      await expect(resolveEffectivePageAccess(timekeeperReq(), '/staff-control/hiring', 'edit')).resolves.toBe(false);
+    });
+  });
+
+  describe('«Просмотр» в матрице + назначенные отделы: авто-доступ не добавляет правку', () => {
+    const supervisorReq = (): AuthenticatedRequest => ({
+      user: { id: 'u-ss', role_code: 'site_supervisor', is_admin: false, employee_id: 901 },
+    } as unknown as AuthenticatedRequest);
+
+    it('начальник участка с «Просмотром»: просмотр есть, правки нет', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'site_supervisor', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([
+        { role_code: 'site_supervisor', page_path: '/staff-control', can_view: true, can_edit: false },
+      ]);
+
+      await expect(resolveEffectivePageAccess(supervisorReq(), '/staff-control', 'view')).resolves.toBe(true);
+      await expect(resolveEffectivePageAccess(supervisorReq(), '/staff-control', 'edit')).resolves.toBe(false);
+    });
+
+    it('«Редактирование» в матрице по-прежнему даёт правку', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'site_supervisor', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([
+        { role_code: 'site_supervisor', page_path: '/staff-control', can_view: true, can_edit: true },
+      ]);
+
+      await expect(resolveEffectivePageAccess(supervisorReq(), '/staff-control', 'edit')).resolves.toBe(true);
+    });
+
+    it('строка матрицы без просмотра (всё снято) не мешает авто-доступу', async () => {
+      h.getRoleByCode.mockResolvedValue(role({ code: 'site_supervisor', manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([
+        { role_code: 'site_supervisor', page_path: '/staff-control', can_view: false, can_edit: false },
+      ]);
+
+      await expect(resolveEffectivePageAccess(supervisorReq(), '/staff-control', 'edit')).resolves.toBe(true);
+    });
+
+    it('роль без доступа в админку: её строка матрицы не действует, авто-доступ работает как раньше', async () => {
+      // admin_access=false режет админ-строки роли — значит «Просмотр» из матрицы не считается.
+      h.getRoleByCode.mockResolvedValue(role({ code: 'office', admin_access: false, manager_auto_access: true }));
+      h.pgQuery.mockResolvedValue([
+        { role_code: 'office', page_path: '/staff-control', can_view: true, can_edit: false },
+      ]);
+      const officeReq = {
+        user: { id: 'u-of', role_code: 'office', is_admin: false, employee_id: 902 },
+      } as unknown as AuthenticatedRequest;
+
+      await expect(resolveEffectivePageAccess(officeReq, '/staff-control', 'edit')).resolves.toBe(true);
+    });
+  });
+
   it('admin_access=false: админ-ключи роли режутся, личный кабинет остаётся', async () => {
     h.getRoleByCode.mockResolvedValue(role({ admin_access: false, manager_auto_access: false }));
     h.pgQuery.mockResolvedValue([

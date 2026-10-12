@@ -11,7 +11,10 @@ import {
   canWriteEmployeeInScope,
 } from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
+import { canSeeEmployeeInStaffList } from '../services/employee-scope-filter.service.js';
 import { isHrCryptoConfigured } from '../services/hr-crypto.service.js';
+import { resolveHrDocumentsAccess } from '../services/hr-documents-access.service.js';
+import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import {
   HrDocumentError,
   countCompleteness,
@@ -53,8 +56,29 @@ const handleError = (res: Response, err: unknown, fallback: string): void => {
   res.status(500).json({ success: false, error: fallback });
 };
 
-/** Доступ к документу: сотрудник в скоупе или свой черновик. */
-const authorizeDocument = async (req: AuthenticatedRequest, doc: IHrDocumentRow): Promise<boolean> => {
+/**
+ * Доступ к документу.
+ *
+ * Правка реквизитов — как раньше: сотрудник в скоупе или свой черновик.
+ *
+ * Ключ документов (/staff-control/hr-documents) — только файлы сотрудников из списка
+ * «Управления кадрами»; черновики мастера ему не принадлежат. Просмотр и скачивание —
+ * любой такой файл; удаление и повторное распознавание ('manage') — только загруженный им самим.
+ */
+const authorizeDocument = async (
+  req: AuthenticatedRequest,
+  doc: IHrDocumentRow,
+  action: 'read' | 'manage',
+): Promise<boolean> => {
+  const access = await resolveHrDocumentsAccess(req);
+  if (access === 'none') return false;
+
+  if (access === 'documents') {
+    if (action === 'manage' && doc.uploaded_by !== req.user.id) return false;
+    const employeeId = doc.employee_id ?? (await resolveHrDocumentOwner(doc.id)).employeeId;
+    return !!employeeId && canSeeEmployeeInStaffList(req, employeeId);
+  }
+
   if (doc.employee_id) return canAccessEmployeeInScope(req, doc.employee_id);
   const owner = await resolveHrDocumentOwner(doc.id);
   if (owner.employeeId) return canAccessEmployeeInScope(req, owner.employeeId);
@@ -69,7 +93,11 @@ const uploadForEmployee = async (req: MulterRequest, res: Response): Promise<voi
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = Number(req.params.employeeId);
-    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
+    const access = await resolveHrDocumentsAccess(req);
+    const allowed = !!employeeId && (access === 'documents'
+      ? await canSeeEmployeeInStaffList(req, employeeId)
+      : access === 'full' && await canWriteEmployeeInScope(req, employeeId));
+    if (!allowed) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -137,7 +165,13 @@ const listForEmployee = async (req: AuthenticatedRequest, res: Response): Promis
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = Number(req.params.employeeId);
-    if (!employeeId || !(await canWriteEmployeeInScope(req, employeeId))) {
+    // Табельщице и держателю ключа документов — круг списка «Управления кадрами»:
+    // общий скоуп записи добавляет табельщице всех, кто проходит на её объекты.
+    const byStaffList = isTimekeeper(req) || (await resolveHrDocumentsAccess(req)) === 'documents';
+    const allowed = !!employeeId && (byStaffList
+      ? await canSeeEmployeeInStaffList(req, employeeId)
+      : await canWriteEmployeeInScope(req, employeeId));
+    if (!allowed) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -180,7 +214,7 @@ const content = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (!(await authorizeDocument(req, doc))) {
+    if (!(await authorizeDocument(req, doc, 'read'))) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }
@@ -209,7 +243,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (!(await authorizeDocument(req, doc))) {
+    if (!(await authorizeDocument(req, doc, 'manage'))) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }
@@ -231,7 +265,7 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (!(await authorizeDocument(req, doc))) {
+    if (!(await authorizeDocument(req, doc, 'manage'))) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }

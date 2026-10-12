@@ -1435,6 +1435,9 @@ export const StaffControlPage: FC = () => {
   // «Режим табелирования»: «Офис» отделу или сотруднику (миграция 291) — администратор и кадровый админ.
   const canEditTimesheetOffice = isAdmin || canEditPage('/staff-control/timesheet-office');
   const canOpenCard = isAdmin || canViewPage('/employees');
+  // «Вернуть в табель» — то же право, что у управления составом в табеле (сервер требует его же):
+  // без него кнопка только отвечала отказом.
+  const canReturnToTimesheet = isAdmin || canEditPage('timesheet-team-management');
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -2721,7 +2724,7 @@ export const StaffControlPage: FC = () => {
           onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
+          onReturn={statusFilter === 'active' && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
           onEditComment={commentEditHandler}
         />
       ) : (
@@ -2747,7 +2750,7 @@ export const StaffControlPage: FC = () => {
           onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
           onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
           onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'active' ? handleReturnToTimesheet : undefined}
+          onReturn={statusFilter === 'active' && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
           onEditComment={commentEditHandler}
           sort={sortKey}
           dir={sortDir}
