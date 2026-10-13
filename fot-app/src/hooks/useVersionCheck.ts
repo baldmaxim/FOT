@@ -7,8 +7,19 @@ import { useEffect, useState } from 'react';
 
 const POLL_INTERVAL_MS = 10 * 60_000;
 
-export const useVersionCheck = (): { updateAvailable: boolean } => {
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+interface IVersionCheck {
+  updateAvailable: boolean;
+  // buildId сборки с сервера; null, пока расхождения нет.
+  latestBuildId: string | null;
+  // Когда расхождение замечено (Date.now()); null, пока его нет.
+  detectedAt: number | null;
+}
+
+const UP_TO_DATE: IVersionCheck = { updateAvailable: false, latestBuildId: null, detectedAt: null };
+
+export const useVersionCheck = (): IVersionCheck => {
+  const [version, setVersion] = useState<IVersionCheck>(UP_TO_DATE);
+  const { updateAvailable } = version;
 
   useEffect(() => {
     // В dev version.json не эмитится — проверка не нужна.
@@ -24,7 +35,7 @@ export const useVersionCheck = (): { updateAvailable: boolean } => {
         if (!res.ok) return;
         const data: { buildId?: string } = await res.json();
         if (!cancelled && data.buildId && data.buildId !== __BUILD_ID__) {
-          setUpdateAvailable(true);
+          setVersion({ updateAvailable: true, latestBuildId: data.buildId, detectedAt: Date.now() });
           window.clearInterval(timer);
         }
       } catch {
@@ -49,5 +60,5 @@ export const useVersionCheck = (): { updateAvailable: boolean } => {
     };
   }, [updateAvailable]);
 
-  return { updateAvailable };
+  return version;
 };
