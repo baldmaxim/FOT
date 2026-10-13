@@ -366,9 +366,16 @@ const buildProfileInput = async (e: IPdEmployee): Promise<IHrProfileInput & { ci
 
 interface IFotEmployeeLite { id: number; full_name: string; birth_date: string | null; pension_number: string | null; email: string | null; patent_issue_date: string | null; patent_expiry_date: string | null; country: string | null }
 
-const readMappingFile = async (): Promise<Map<string, number>> => {
+/**
+ * Файл сопоставления. Помимо пар «passdesk_id → employee_id» возвращает всех,
+ * кто в файле присутствует: пустой employee_id там означает осознанное «не
+ * переносим» (уволен, нет в FOT), и держать персональные данные такого человека
+ * в hr_profile_import_staging незачем — причина уже зафиксирована в отчёте.
+ */
+const readMappingFile = async (): Promise<{ map: Map<string, number>; reviewed: Set<string> }> => {
   const map = new Map<string, number>();
-  if (!MAPPING) return map;
+  const reviewed = new Set<string>();
+  if (!MAPPING) return { map, reviewed };
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(MAPPING);
   const ws = wb.worksheets[0];
@@ -379,10 +386,12 @@ const readMappingFile = async (): Promise<Map<string, number>> => {
   ws.eachRow((row, n) => {
     if (n === 1) return;
     const pd = String(row.getCell(idxPd).value ?? '').trim();
+    if (!pd) return;
+    reviewed.add(pd);
     const emp = Number(row.getCell(idxEmp).value);
-    if (pd && Number.isInteger(emp) && emp > 0) map.set(pd, emp);
+    if (Number.isInteger(emp) && emp > 0) map.set(pd, emp);
   });
-  return map;
+  return { map, reviewed };
 };
 
 const matchEmployee = async (e: IPdEmployee, profile: IHrProfileInput, fullName: string, mapping: Map<string, number>): Promise<IMatch> => {
@@ -520,7 +529,7 @@ const main = async (): Promise<void> => {
   if (!isPassdeskCryptoConfigured()) throw new Error('PASSDESK_FIELD_ENCRYPTION_KEYS не задан');
   if (MODE_APPLY) migrationUserId();
 
-  const mapping = await readMappingFile();
+  const { map: mapping, reviewed } = await readMappingFile();
   const all = await loadPassdeskEmployees();
   const employees = SINCE ? all.filter(e => new Date(e.last_change_at) > new Date(SINCE)) : all;
   log(`PassDesk: сотрудников ${all.length}${SINCE ? `, изменённых после ${SINCE}: ${employees.length}` : ''}`);
@@ -528,7 +537,8 @@ const main = async (): Promise<void> => {
 
   const report: Array<Record<string, unknown>> = [];
   const counts: Record<string, number> = {};
-  const stats = { profilesCreated: 0, profilesSkipped: 0, staged: 0, filesCopied: 0, filesSkipped: 0, filesFailed: 0 };
+  const stats = { profilesCreated: 0, profilesSkipped: 0, profilesFailed: 0, staged: 0, reviewedNotTransferred: 0, filesCopied: 0, filesSkipped: 0, filesFailed: 0 };
+  const failures: Array<{ passdesk_id: string; employee_id: number; reason: string }> = [];
 
   for (const e of employees) {
     const fullName = fullNameOf(e);
@@ -545,9 +555,22 @@ const main = async (): Promise<void> => {
 
     if (!MODE_APPLY) continue;
     if (AUTO_RULES.has(match.rule) && match.employeeId) {
-      const r = await applyProfile(e, profile, match);
-      if (r === 'created') stats.profilesCreated += 1; else stats.profilesSkipped += 1;
-      if (WITH_FILES) await transferFiles(match.employeeId, files, stats);
+      // Один человек не должен ронять весь прогон: запись профиля может упасть
+      // на чёрном списке (документы принадлежат другому) или на конфликте
+      // идентификаторов. Причину пишем без значений полей, идём дальше —
+      // повтор идемпотентен по hr_external_refs.
+      try {
+        const r = await applyProfile(e, profile, match);
+        if (r === 'created') stats.profilesCreated += 1; else stats.profilesSkipped += 1;
+        if (WITH_FILES) await transferFiles(match.employeeId, files, stats);
+      } catch (err) {
+        stats.profilesFailed += 1;
+        failures.push({ passdesk_id: e.id, employee_id: match.employeeId, reason: err instanceof Error ? err.message : String(err) });
+        log(`  профиль ${e.id} → #${match.employeeId} не создан: ${err instanceof Error ? err.message : err}`);
+      }
+    } else if (reviewed.has(e.id)) {
+      // Решение принято в файле сопоставления — ПДн в staging не кладём.
+      stats.reviewedNotTransferred += 1;
     } else {
       await upsertStaging(e, profile, fullName, match, files);
       stats.staged += 1;
@@ -580,6 +603,12 @@ const main = async (): Promise<void> => {
   ws3.addRow(['files_bytes_total', report.reduce((s, r) => s + Number(r.files_bytes), 0)]);
   // Колонки, которых нет в живой схеме PassDesk: в отчёте видно, что приехало пустым.
   for (const name of missingColumns) ws3.addRow(['нет колонки в PassDesk', name]);
+  if (failures.length > 0) {
+    const ws4 = wb.addWorksheet('Ошибки');
+    ws4.addRow(['passdesk_id', 'employee_id', 'причина']).font = { bold: true };
+    for (const f of failures) ws4.addRow([f.passdesk_id, f.employee_id, f.reason]);
+    ws4.columns.forEach(c => { c.width = 40; });
+  }
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   await wb.xlsx.writeFile(OUT);
 
