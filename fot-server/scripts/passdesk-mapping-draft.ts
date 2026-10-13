@@ -29,8 +29,19 @@ const OUT = argValue('--out') ?? 'temp/passdesk-mapping-draft.xlsx';
 
 const log = (...a: unknown[]): void => console.log('[mapping-draft]', ...a);
 
-/** Как получено значение employee_id — видно при проверке, что машинное, а что нет. */
-type MatchKind = 'один кандидат' | 'нужно выбрать' | 'нет кандидата' | 'уже сопоставлен';
+/**
+ * Как получено значение employee_id — видно при проверке, что машинное, а что нет.
+ * Реквизиты переносим только действующим сотрудникам, поэтому «не переносим…» —
+ * это тоже результат разметки, а не незаполненная строка.
+ */
+type MatchKind =
+  | 'уже сопоставлен'
+  | 'один кандидат, активен'
+  | 'один активный из нескольких'
+  | 'больше истории СКУД'
+  | 'не переносим: уволен в FOT'
+  | 'не переносим: все кандидаты уволены'
+  | 'нет в FOT';
 
 interface IRow {
   values: Record<string, unknown>;
@@ -44,8 +55,16 @@ interface ICandidate {
   position: string | null;
   employment_status: string | null;
   hire_date: string | null;
+  dismissal_date: string | null;
+  tab_number: string | null;
   is_archived: boolean | null;
+  /** Проходы СКУД — по ним видно, по какой карточке человек реально работал. */
+  skud: number;
 }
+
+/** Действующий = не уволен и не в архиве: таким и переносим. */
+const isActive = (c: ICandidate | undefined): boolean =>
+  !!c && !c.is_archived && c.employment_status !== 'fired';
 
 const readPreview = async (file: string): Promise<{ columns: string[]; rows: IRow[] }> => {
   const wb = new ExcelJS.Workbook();
@@ -70,14 +89,18 @@ const loadCandidates = async (ids: number[]): Promise<Map<number, ICandidate>> =
   if (ids.length === 0) return new Map();
   const rows = await query<ICandidate>(
     `SELECT e.id, e.full_name, d.name AS department, p.name AS position,
-            e.employment_status, e.hire_date::text AS hire_date, e.is_archived
+            e.employment_status, e.hire_date::text AS hire_date,
+            e.dismissal_date::text AS dismissal_date, e.tab_number, e.is_archived,
+            COALESCE(s.cnt, 0)::int AS skud
        FROM employees e
        LEFT JOIN org_departments d ON d.id = e.org_department_id
        LEFT JOIN positions p ON p.id = e.position_id
+       LEFT JOIN (SELECT employee_id, count(*) AS cnt FROM skud_events
+                   WHERE employee_id = ANY($1::int[]) GROUP BY employee_id) s ON s.employee_id = e.id
       WHERE e.id = ANY($1::int[])`,
     [ids],
   );
-  return new Map(rows.map(r => [Number(r.id), r]));
+  return new Map(rows.map(r => [Number(r.id), { ...r, skud: Number(r.skud) }]));
 };
 
 const describe = (c: ICandidate | undefined, id: number): string => {
@@ -89,6 +112,9 @@ const describe = (c: ICandidate | undefined, id: number): string => {
     c.position ?? 'без должности',
     c.is_archived ? 'в архиве' : c.employment_status === 'fired' ? 'уволен' : 'активен',
     c.hire_date ? `принят ${c.hire_date}` : 'без даты найма',
+    ...(c.dismissal_date ? [`уволен ${c.dismissal_date}`] : []),
+    ...(c.tab_number ? [`табель ${c.tab_number}`] : []),
+    `проходов ${c.skud}`,
   ];
   return parts.join(' · ');
 };
@@ -103,7 +129,13 @@ const main = async (): Promise<void> => {
   log(`Кандидатов в FOT запрошено: ${allIds.length}, найдено: ${cards.size}`);
 
   const stats: Record<MatchKind, number> = {
-    'один кандидат': 0, 'нужно выбрать': 0, 'нет кандидата': 0, 'уже сопоставлен': 0,
+    'уже сопоставлен': 0,
+    'один кандидат, активен': 0,
+    'один активный из нескольких': 0,
+    'больше истории СКУД': 0,
+    'не переносим: уволен в FOT': 0,
+    'не переносим: все кандидаты уволены': 0,
+    'нет в FOT': 0,
   };
 
   const wb = new ExcelJS.Workbook();
@@ -113,19 +145,27 @@ const main = async (): Promise<void> => {
 
   for (const row of rows) {
     const already = Number(row.values.employee_id);
+    const active = row.candidates.filter(id => isActive(cards.get(id)));
     let kind: MatchKind;
     let employeeId: number | '' = '';
 
     if (Number.isInteger(already) && already > 0) {
       kind = 'уже сопоставлен';
       employeeId = already;
-    } else if (row.candidates.length === 1) {
-      kind = 'один кандидат';
-      employeeId = row.candidates[0];
-    } else if (row.candidates.length > 1) {
-      kind = 'нужно выбрать';
+    } else if (row.candidates.length === 0) {
+      kind = 'нет в FOT';
+    } else if (active.length === 0) {
+      // Реквизиты уволенным не нужны: оставляем строку пустой с явной причиной.
+      kind = row.candidates.length === 1 ? 'не переносим: уволен в FOT' : 'не переносим: все кандидаты уволены';
+    } else if (active.length === 1) {
+      kind = row.candidates.length === 1 ? 'один кандидат, активен' : 'один активный из нескольких';
+      employeeId = active[0];
     } else {
-      kind = 'нет кандидата';
+      // Несколько действующих однофамильцев: берём карточку, по которой человек
+      // реально работал, — с наибольшим числом проходов СКУД.
+      kind = 'больше истории СКУД';
+      employeeId = active.reduce((best, id) =>
+        (cards.get(id)?.skud ?? 0) > (cards.get(best)?.skud ?? 0) ? id : best, active[0]);
     }
     stats[kind] += 1;
 
@@ -137,8 +177,8 @@ const main = async (): Promise<void> => {
       return row.values[c] ?? '';
     });
     const added = ws.addRow(out);
-    // Спорные подсвечиваем и разрешаем перенос строк: кандидатов бывает несколько.
-    if (kind === 'нужно выбрать') {
+    // Строки с несколькими кандидатами подсвечиваем: там решение проверяемое.
+    if (kind === 'больше истории СКУД' || kind === 'один активный из нескольких') {
       added.getCell(outColumns.indexOf('как_сопоставлено') + 1).font = { bold: true };
       added.alignment = { vertical: 'top', wrapText: true };
     }
@@ -157,9 +197,13 @@ const main = async (): Promise<void> => {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   await wb.xlsx.writeFile(OUT);
 
+  const filled = Object.entries(stats)
+    .filter(([k]) => !k.startsWith('не переносим') && k !== 'нет в FOT')
+    .reduce((s2, [, v]) => s2 + v, 0);
   log('Разметка:', stats);
+  log(`Заполнено employee_id: ${filled} из ${rows.length}`);
   log(`Черновик: ${OUT}`);
-  log('Проверить выборочно «один кандидат» и разобрать «нужно выбрать», затем запускать --apply --mapping.');
+  log('Проверить строки «больше истории СКУД» и «один активный из нескольких», затем --apply --mapping.');
 };
 
 main()
