@@ -51,8 +51,6 @@
 .colHousing  { width: 180px; }
 /* «Начисления»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
-/* «Расчёты», фильтр «Удержания»: сумма за месяц «175 000,00 ₽» */
-.colDeduction { width: 160px; }
 
 .table thead th {
   position: sticky;
@@ -231,5 +229,4 @@
   .tableNoCheck .colNum { width: 44px; }
   .tableNoCheck .colName { width: 150px; }
   .tableNoCheck .stickyName { left: 44px; }
-  .tableNoCheck .colDeduction { width: 140px; }
 }

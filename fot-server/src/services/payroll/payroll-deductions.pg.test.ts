@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
-// Справочник видов удержаний (миграция 299) и виды сотрудника (миграция 300) на настоящем
-// PostgreSQL: засев и повторный запуск, уникальность названия, несколько видов у сотрудника,
-// удаление вида из условий оплаты, выборка «Расчётов».
+// Справочник видов удержаний (миграция 299), виды сотрудника (миграция 300) и справочник ставок
+// (миграция 306) на настоящем PostgreSQL: засев и повторный запуск, уникальность названия,
+// несколько видов у сотрудника, переименование и удаление вида, ставки.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -59,12 +59,14 @@ vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async ()
 import { withTransaction } from '../../config/postgres.js';
 import {
   addDeductionKind,
+  deleteDeductionKind,
   getEmployeeDeductionKindIds,
   listDeductionKinds,
+  renameDeductionKind,
   setEmployeeDeductionKinds,
 } from './payroll-deduction-kinds.service.js';
+import { addRate, deleteRate, listRates, updateRate } from './payroll-rates.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
-import { payrollDeductionsController } from '../../controllers/payroll-deductions.controller.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -96,7 +98,7 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
-        payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
+        payroll_rates, payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
@@ -132,10 +134,12 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
     await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
+    await pg.pool!.query(migration('306_payroll_rates.sql'));
     // Повторный запуск безопасен: виды не задваиваются.
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
     await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
+    await pg.pool!.query(migration('306_payroll_rates.sql'));
   });
 
   afterAll(async () => {
@@ -186,24 +190,77 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
       .rejects.toThrow(/foreign key/);
   });
 
-  it('«Расчёты» — сотрудники хотя бы с одним из выбранных видов', async () => {
-    expect((await assign(1, {})).statusCode).toBe(200);
+  it('переименование: новое название и прежнее для аудита; занятое — дубль; вида нет — null', async () => {
     const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
-    await withTransaction(client => setEmployeeDeductionKinds(client, 3, [byName['Штрафы']]));
+    const id = byName['Штраф за мусор'];
 
-    const list = async (kindIds: number[]) => {
-      const res = makeRes();
-      await payrollDeductionsController.list({
-        user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-06', kind_ids: kindIds.join(',') },
-      } as unknown as AuthenticatedRequest, res);
-      expect(res.statusCode).toBe(200);
-      return res.body.data as Array<{ employee_id: number }>;
-    };
+    expect(await renameDeductionKind(id, 'Штраф за мусор на объекте'))
+      .toEqual({ kind: { id, name: 'Штраф за мусор на объекте' }, previousName: 'Штраф за мусор' });
+    // Свой же вид в другом регистре — не дубль.
+    expect(await renameDeductionKind(id, 'ШТРАФ за мусор на объекте'))
+      .toEqual({ kind: { id, name: 'ШТРАФ за мусор на объекте' }, previousName: 'Штраф за мусор на объекте' });
+    expect(await renameDeductionKind(id, ' питание')).toBe('duplicate');
+    expect(await renameDeductionKind(9999, 'Нет такого')).toBeNull();
 
-    // У Акимова (1) — ТМЦ и Питание, у Васильева (3) — Штрафы, у Борисова (2) — ничего.
-    expect((await list([byName['Питание']])).map(row => row.employee_id)).toEqual([1]);
-    expect((await list([byName['Питание'], byName['Штрафы']])).map(row => row.employee_id)).toEqual([1, 3]);
-    expect(await list([byName['Спецодежда']])).toEqual([]);
-    expect((await list([byName['ТМЦ']]))[0]).toMatchObject({ full_name: 'Акимов С.Ю.', calc_type: 'hourly', can_edit: true });
+    // Порядок списка от названия не зависит, отметки у сотрудников переименование не трогает.
+    expect((await listDeductionKinds())[2]).toEqual({ id, name: 'ШТРАФ за мусор на объекте' });
+    expect(await getEmployeeDeductionKindIds(1)).toEqual([byName['ТМЦ'], byName['Питание']]);
+  });
+
+  it('удаление: свободный вид уходит, отмеченный у сотрудников — остаётся с их числом', async () => {
+    const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
+    await withTransaction(client => setEmployeeDeductionKinds(client, 3, [byName['Питание']]));
+
+    // «Питание» — у Акимова (1) и Васильева (3).
+    expect(await deleteDeductionKind(byName['Питание'])).toEqual({ inUse: 2 });
+    expect(await deleteDeductionKind(byName['ТМЦ'])).toEqual({ inUse: 1 });
+    expect(await deleteDeductionKind(byName['Спецодежда'])).toEqual({ id: byName['Спецодежда'], name: 'Спецодежда' });
+    expect(await deleteDeductionKind(byName['Спецодежда'])).toBeNull();
+
+    const names = (await listDeductionKinds()).map(kind => kind.name);
+    expect(names).toContain('Питание');
+    expect(names).not.toContain('Спецодежда');
+
+    // Сняли вид у всех — теперь удаляется.
+    await withTransaction(client => setEmployeeDeductionKinds(client, 1, [byName['Питание']]));
+    expect(await deleteDeductionKind(byName['ТМЦ'])).toEqual({ id: byName['ТМЦ'], name: 'ТМЦ' });
+  });
+
+  it('306: ставки — порядок добавления, значение можно не задать, название уникально', async () => {
+    expect(await listRates()).toEqual([]);
+
+    const fitter = await addRate('Монтажник 3 разряда', 450.5);
+    const welder = await addRate('Сварщик', null);
+    expect(fitter).toEqual({ id: expect.any(Number), name: 'Монтажник 3 разряда', amount: '450.50' });
+    expect(welder).toEqual({ id: expect.any(Number), name: 'Сварщик', amount: null });
+    expect(await addRate(' сварщик', 1)).toBeNull();
+    expect(await addRate('Подсобный', 0)).toMatchObject({ amount: '0.00' });
+    expect((await listRates()).map(rate => rate.name)).toEqual(['Монтажник 3 разряда', 'Сварщик', 'Подсобный']);
+
+    await expect(pg.pool!.query(`INSERT INTO payroll_rates (name, amount) VALUES ('Минус', -1)`))
+      .rejects.toThrow(/payroll_rate_amount/);
+    await expect(pg.pool!.query(`INSERT INTO payroll_rates (name) VALUES ('  ')`))
+      .rejects.toThrow(/payroll_rate_name/);
+  });
+
+  it('306: правка ставки отдаёт «было» и «стало»; занятое название — дубль; удаление', async () => {
+    const [fitter, welder] = await listRates();
+
+    expect(await updateRate(welder.id, 'Сварщик 5 разряда', 520)).toEqual({
+      before: { id: welder.id, name: 'Сварщик', amount: null },
+      after: { id: welder.id, name: 'Сварщик 5 разряда', amount: '520.00' },
+    });
+    // Значение снимается — снова «не задано».
+    expect(await updateRate(welder.id, 'Сварщик 5 разряда', null)).toMatchObject({
+      before: { amount: '520.00' }, after: { amount: null },
+    });
+    expect(await updateRate(welder.id, 'монтажник 3 разряда', 1)).toBe('duplicate');
+    expect(await updateRate(9999, 'Нет такой', 1)).toBeNull();
+    // Порядок списка — по добавлению, не по правке.
+    expect((await listRates()).map(rate => rate.id).slice(0, 2)).toEqual([fitter.id, welder.id]);
+
+    expect(await deleteRate(fitter.id)).toEqual(fitter);
+    expect(await deleteRate(fitter.id)).toBeNull();
+    expect((await listRates()).map(rate => rate.name)).toEqual(['Сварщик 5 разряда', 'Подсобный']);
   });
 });

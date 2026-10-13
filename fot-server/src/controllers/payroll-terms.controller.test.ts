@@ -1181,7 +1181,7 @@ describe('payrollTermsController.columnValues', () => {
   });
 });
 
-describe('payrollTermsController: фильтр «Удержания» («Расчёты»)', () => {
+describe('payrollTermsController: фильтр «Удержания» убран', () => {
   beforeEach(() => {
     scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
     contractor.getContractorRootId.mockResolvedValue('contractor-root');
@@ -1189,41 +1189,16 @@ describe('payrollTermsController: фильтр «Удержания» («Рас�
     pgQuery.mockResolvedValue([]);
   });
 
-  it('список: только сотрудники хотя бы с одним из отмеченных видов', async () => {
+  it('прежний клиент с deduction_kind_ids получает полный список — параметр не участвует в выборке', async () => {
     const res = makeRes();
     await payrollTermsController.list(makeReq({
-      query: { deduction_kind_ids: '5,2,5' },
+      query: { deduction_kind_ids: '5,2' },
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
     const [sql, params] = pgQueryOne.mock.calls[0] as unknown as [string, unknown[]];
-    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM payroll_employee_deductions d/);
-    expect(params).toContainEqual([5, 2]);
+    expect(sql).not.toMatch(/payroll_employee_deductions/);
+    expect(params).not.toContainEqual([5, 2]);
     expectPlaceholdersMatch(sql, params);
-  });
-
-  it('без фильтра — условия нет', async () => {
-    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
-
-    expect(String(pgQueryOne.mock.calls[0][0])).not.toMatch(/payroll_employee_deductions/);
-  });
-
-  it('варианты фильтра столбца считаются по той же выборке с удержаниями', async () => {
-    await payrollTermsController.columnValues(makeReq({
-      query: { column: 'position', deduction_kind_ids: '5' },
-    } as Partial<AuthenticatedRequest>), makeRes());
-
-    const [sql, params] = pgQuery.mock.calls[0] as unknown as [string, unknown[]];
-    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM payroll_employee_deductions d/);
-    expectPlaceholdersMatch(sql, params);
-  });
-
-  it('кривые виды — 400 до похода в БД', async () => {
-    for (const ids of ['', 'a', '0', '5,']) {
-      const res = makeRes();
-      await payrollTermsController.list(makeReq({ query: { deduction_kind_ids: ids } } as Partial<AuthenticatedRequest>), res);
-      expect(res.statusCode, ids).toBe(400);
-    }
-    expect(pgQueryOne).not.toHaveBeenCalled();
   });
 });

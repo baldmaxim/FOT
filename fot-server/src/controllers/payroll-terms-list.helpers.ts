@@ -206,19 +206,3 @@ export function appendPayrollColumnFilters(
     whereParts.push(`${SORT_KEY_SQL.name.sql} ILIKE $${params.length}`);
   }
 }
-
-/**
- * Фильтр «Удержания» на «Расчётах»: у сотрудника отмечен хотя бы один из видов.
- * Условие встаёт в CTE filtered (FROM scoped). Нет видов — без фильтра.
- */
-export function appendPayrollDeductionFilter(
-  whereParts: string[],
-  params: unknown[],
-  kindIds: readonly number[] | undefined,
-): void {
-  if (!kindIds || kindIds.length === 0) return;
-  params.push(kindIds);
-  whereParts.push(`EXISTS (SELECT 1 FROM payroll_employee_deductions d
-                            WHERE d.employee_id = scoped.employee_id
-                              AND d.kind_id = ANY($${params.length}::int[]))`);
-}

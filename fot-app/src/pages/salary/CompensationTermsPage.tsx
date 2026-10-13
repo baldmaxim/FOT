@@ -47,13 +47,6 @@ const COLUMN_LABELS: Record<PayrollSortKey, string> = {
   housing: 'Компенсация проживания',
 };
 
-/** Фильтр «Удержания» на «Расчётах»: виды (хотя бы один) и месяц столбца «Удержание». */
-export interface IPayrollDeductionFilter {
-  kindIds: number[];
-  /** Подпись месяца в шапке столбца «Удержание». */
-  monthLabel: string;
-}
-
 interface ICompensationTermsPageProps {
   /** Дата выборки — одна на список и карточку «Подробно» (см. PaymentsTab). */
   date: string;
@@ -65,10 +58,8 @@ interface ICompensationTermsPageProps {
   onAssigned?: (employeeIds: number[]) => void;
   /** Галочки и «Назначить выделенным»; на «Расчётах» их нет. */
   selectable?: boolean;
-  /** Поля панели после «Все отделы» («Удержания» и месяц на «Расчётах»). */
-  toolbarExtra?: ReactNode;
-  /** Фильтр «Удержания»: только сотрудники с отмеченными видами и столбец «Удержание» за месяц. */
-  deductionFilter?: IPayrollDeductionFilter;
+  /** Кнопки панели перед шестерёнкой («Справочник» на «Расчётах»). */
+  actionsExtra?: ReactNode;
   /** Ключ хранилища скрытых столбцов (шестерёнка). */
   hiddenColumnsKey?: string;
 }
@@ -79,8 +70,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   onOpenEmployee,
   onAssigned,
   selectable = true,
-  toolbarExtra,
-  deductionFilter,
+  actionsExtra,
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
 }) => {
   const { success, error: showError, warning } = useToast();
@@ -106,15 +96,12 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const columnFiltersKey = serializePayrollColumnFilters(columnFilters);
   const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
 
-  const deductionKindIds = deductionFilter?.kindIds.join(',') || undefined;
-
   const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
     date,
     departmentId: departmentId || undefined,
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
-    deductionKindIds,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey, deductionKindIds]);
+  }), [date, departmentId, debouncedSearch, columnFiltersKey]);
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir],
@@ -311,7 +298,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setBulkRows(chosen);
   };
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${deductionKindIds}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
 
   return (
     <div className={styles.page}>
@@ -330,7 +317,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onRetry={() => { void structureTree.refetch(); }}
           />
         </div>
-        {toolbarExtra}
         {activeFilterCount > 0 && (
           <button type="button" className={styles.resetFilters} onClick={resetColumnFilters}>
             Сбросить фильтры ({activeFilterCount})
@@ -348,6 +334,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
               Назначить выделенным
             </button>
           )}
+          {actionsExtra}
           <button
             type="button"
             className={hiddenColumns.size > 0 ? `${styles.iconButton} ${styles.iconButtonActive}` : styles.iconButton}
@@ -398,7 +385,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             columnFilters={columnFilters}
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
-            deductionPeriod={deductionKindIds ? deductionFilter?.monthLabel : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

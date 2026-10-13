@@ -4,6 +4,7 @@ import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middle
 import { noStore } from '../middleware/noStore.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
+import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 
@@ -20,7 +21,8 @@ router.use(noStore);
 // но раздать их разным ролям можно будет в /admin/roles без миграции и деплоя.
 const termsView = requirePageAccess('/salary/terms', 'view');
 const termsEdit = requirePageAccess('/salary/terms', 'edit');
-// Удержания сотрудника и справочник видов правятся и в карточке («Условия оплаты»), и на «Расчётах».
+// Удержания сотрудника и справочники (виды удержаний, ставки) правятся и в карточке («Условия оплаты»),
+// и на «Расчётах».
 const deductionsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
 const deductionsEdit = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'edit');
 
@@ -41,11 +43,18 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 
 // ─── Удержания: справочник видов и виды удержаний сотрудника ──────────────────
-// Фильтр «Удержания» на «Расчётах» — параметры списка условий (/terms).
 router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);
 router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addKind);
+router.patch('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.renameKind);
+router.delete('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.deleteKind);
 router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
 router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
+
+// ─── Справочник ставок (окно «Справочник» на «Расчётах») ─────────────────────
+router.get('/rates', deductionsView, payrollRatesController.list);
+router.post('/rates', deductionsEdit, payrollRatesController.add);
+router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
+router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

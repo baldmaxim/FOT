@@ -266,8 +266,6 @@ export interface IPayrollTermsViewParams {
   q?: string;
   /** Фильтры столбцов, сериализованные serializePayrollColumnFilters ('' — без фильтров). */
   cf?: string;
-  /** Фильтр «Удержания» на «Расчётах»: id видов через запятую — сотрудники хотя бы с одним из них. */
-  deductionKindIds?: string;
 }
 
 const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewParams): void => {
@@ -275,13 +273,25 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.departmentId) search.set('department_id', params.departmentId);
   if (params.q) search.set('q', params.q);
   if (params.cf) search.set('cf', params.cf);
-  if (params.deductionKindIds) search.set('deduction_kind_ids', params.deductionKindIds);
 };
 
 /** Вид удержания из справочника («Расчёты»). */
 export interface IPayrollDeductionKind {
   id: number;
   name: string;
+}
+
+/** Ставка из справочника («Расчёты» → «Справочник»). Значение — текстом NUMERIC; не задано — null. */
+export interface IPayrollRate {
+  id: number;
+  name: string;
+  amount: string | number | null;
+}
+
+/** Название и значение ставки при добавлении и правке. */
+export interface IPayrollRatePayload {
+  name: string;
+  amount: number | null;
 }
 
 export interface IPayrollTermsListResult {
@@ -398,6 +408,39 @@ export const payrollService = {
   addDeductionKind: async (name: string): Promise<IPayrollDeductionKind> => {
     const res = await apiClient.post<IApiResponse<IPayrollDeductionKind>>('/payroll/deduction-kinds', { name });
     return res.data;
+  },
+
+  /** Переименовать вид удержания; название занято — ApiError 409. */
+  renameDeductionKind: async (kindId: number, name: string): Promise<IPayrollDeductionKind> => {
+    const res = await apiClient.patch<IApiResponse<IPayrollDeductionKind>>(`/payroll/deduction-kinds/${kindId}`, { name });
+    return res.data;
+  },
+
+  /** Удалить вид удержания; отмечен у сотрудников — ApiError 409. */
+  deleteDeductionKind: async (kindId: number): Promise<void> => {
+    await apiClient.delete<IApiResponse<IPayrollDeductionKind>>(`/payroll/deduction-kinds/${kindId}`);
+  },
+
+  /** Справочник ставок — в порядке добавления. */
+  listRates: async (signal?: AbortSignal): Promise<IPayrollRate[]> => {
+    const res = await apiClient.get<IApiResponse<IPayrollRate[]>>('/payroll/rates', { signal });
+    return res.data;
+  },
+
+  /** Добавить ставку; такая уже есть — ApiError 409. */
+  addRate: async (payload: IPayrollRatePayload): Promise<IPayrollRate> => {
+    const res = await apiClient.post<IApiResponse<IPayrollRate>>('/payroll/rates', payload);
+    return res.data;
+  },
+
+  /** Изменить название и значение ставки; название занято — ApiError 409. */
+  updateRate: async (rateId: number, payload: IPayrollRatePayload): Promise<IPayrollRate> => {
+    const res = await apiClient.patch<IApiResponse<IPayrollRate>>(`/payroll/rates/${rateId}`, payload);
+    return res.data;
+  },
+
+  deleteRate: async (rateId: number): Promise<void> => {
+    await apiClient.delete<IApiResponse<IPayrollRate>>(`/payroll/rates/${rateId}`);
   },
 
   assign: async (employeeId: number, payload: IAssignTermsPayload): Promise<{ terms_id: number }> => {

@@ -148,3 +148,111 @@ describe('payrollDeductionsController.addKind', () => {
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 });
+
+describe('payrollDeductionsController.renameKind', () => {
+  it('пробелы схлопываются, название меняется, в аудит — было и стало', async () => {
+    pgQueryOne.mockResolvedValue({ id: 7, name: 'Штраф за опоздание', previous_name: 'Штрафы' });
+    const res = makeRes();
+
+    await payrollDeductionsController.renameKind(
+      makeReq({ params: { id: '7' }, body: { name: ' Штраф  за опоздание ' } }), res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual({ id: 7, name: 'Штраф за опоздание' });
+    expect(pgQueryOne.mock.calls[0][1]).toEqual([7, 'Штраф за опоздание']);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_DEDUCTION_KIND_RENAMED',
+      expect.objectContaining({ entityId: '7', details: { from: 'Штрафы', to: 'Штраф за опоздание' } }),
+    );
+  });
+
+  it('название не изменилось — аудита нет', async () => {
+    pgQueryOne.mockResolvedValue({ id: 7, name: 'Штрафы', previous_name: 'Штрафы' });
+    const res = makeRes();
+
+    await payrollDeductionsController.renameKind(makeReq({ params: { id: '7' }, body: { name: 'Штрафы' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('название занято другим видом — 409; вида нет или id кривой — 404; пустое название — 400', async () => {
+    pgQueryOne.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+    const duplicate = makeRes();
+    await payrollDeductionsController.renameKind(makeReq({ params: { id: '7' }, body: { name: 'Питание' } }), duplicate);
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.body.code).toBe('DUPLICATE_KIND');
+
+    pgQueryOne.mockResolvedValueOnce(null);
+    const missing = makeRes();
+    await payrollDeductionsController.renameKind(makeReq({ params: { id: '99' }, body: { name: 'Питание' } }), missing);
+    expect(missing.statusCode).toBe(404);
+
+    const callsBefore = pgQueryOne.mock.calls.length;
+    const badId = makeRes();
+    await payrollDeductionsController.renameKind(makeReq({ params: { id: 'abc' }, body: { name: 'Питание' } }), badId);
+    expect(badId.statusCode).toBe(404);
+
+    const empty = makeRes();
+    await payrollDeductionsController.renameKind(makeReq({ params: { id: '7' }, body: { name: '  ' } }), empty);
+    expect(empty.statusCode).toBe(400);
+
+    expect(pgQueryOne.mock.calls.length).toBe(callsBefore);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('payrollDeductionsController.deleteKind', () => {
+  it('свободный вид удаляется и пишется в аудит', async () => {
+    pgQueryOne.mockResolvedValue({ id: 7, name: 'Штраф за мусор' });
+    const res = makeRes();
+
+    await payrollDeductionsController.deleteKind(makeReq({ params: { id: '7' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(String(pgQueryOne.mock.calls[0][0])).toMatch(/DELETE FROM payroll_deduction_kinds/);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_DEDUCTION_KIND_DELETED',
+      expect.objectContaining({ entityId: '7', details: { name: 'Штраф за мусор' } }),
+    );
+  });
+
+  // 23503 — код внешнего ключа до PostgreSQL 18, 23001 — код ON DELETE RESTRICT с 18-й версии.
+  it.each(['23503', '23001'])('вид отмечен у сотрудников (код %s) — 409 с их числом, аудита нет', async code => {
+    pgQueryOne
+      .mockRejectedValueOnce(Object.assign(new Error('violates foreign key constraint'), { code }))
+      .mockResolvedValueOnce({ total: 3 });
+    const res = makeRes();
+
+    await payrollDeductionsController.deleteKind(makeReq({ params: { id: '7' } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'KIND_IN_USE', employees: 3, error: 'Вид отмечен у сотрудников: 3' });
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('прочая ошибка БД — 500, а не «вид занят»', async () => {
+    pgQueryOne.mockRejectedValueOnce(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+    const res = makeRes();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await payrollDeductionsController.deleteKind(makeReq({ params: { id: '7' } }), res);
+    consoleError.mockRestore();
+
+    expect(res.statusCode).toBe(500);
+    expect(pgQueryOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('вида нет или id кривой — 404', async () => {
+    pgQueryOne.mockResolvedValueOnce(null);
+    const missing = makeRes();
+    await payrollDeductionsController.deleteKind(makeReq({ params: { id: '99' } }), missing);
+    expect(missing.statusCode).toBe(404);
+
+    const badId = makeRes();
+    await payrollDeductionsController.deleteKind(makeReq({ params: { id: '0' } }), badId);
+    expect(badId.statusCode).toBe(404);
+    expect(pgQueryOne).toHaveBeenCalledTimes(1);
+  });
+});

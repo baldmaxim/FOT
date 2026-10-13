@@ -45,8 +45,6 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
-  /** Фильтр «Удержания» на «Расчётах»: столбец за «Сотрудником» — удержание за месяц (подпись — месяц; суммы придут из 1С). */
-  deductionPeriod?: string;
 }
 
 /** Столбцы с сортировкой и фильтром — в порядке таблицы. */
@@ -136,7 +134,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   columnFilters,
   onOpenFilter,
   accrualMonths,
-  deductionPeriod,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -169,10 +166,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   const shown = (column: PayrollTableColumn) => !hiddenColumns.has(column);
   const visibleColumns = PAYROLL_TABLE_COLUMNS.filter(column => shown(column.key));
-  // «Сотрудник» всегда первый: за ним — «Удержание» на «Расчётах».
-  const [nameHeader, ...restHeaders] = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
-  const hasDeduction = deductionPeriod !== undefined;
-  const columnCount = FIXED_COLUMN_COUNT + (selectable ? 1 : 0) + (hasDeduction ? 1 : 0) + visibleColumns.length;
+  const sortHeaders = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
+  const columnCount = FIXED_COLUMN_COUNT + (selectable ? 1 : 0) + visibleColumns.length;
 
   const renderSortHeader = (column: (typeof SORTABLE_COLUMNS)[number]) => (
     <PayrollSortHeader
@@ -195,7 +190,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           {selectable && <col className={styles.colCheck} />}
           <col className={styles.colNum} />
           <col className={styles.colName} />
-          {hasDeduction && <col className={styles.colDeduction} />}
           {visibleColumns.map(column => (
             <col
               key={column.key}
@@ -219,14 +213,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
               </th>
             )}
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
-            {renderSortHeader(nameHeader)}
-            {hasDeduction && (
-              <th>
-                Удержание
-                <span className={styles.headPeriod}>{deductionPeriod}</span>
-              </th>
-            )}
-            {restHeaders.map(renderSortHeader)}
+            {sortHeaders.map(renderSortHeader)}
             {/* Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет. */}
             {shown('accruals') && (
               <th title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
@@ -293,8 +280,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
-                    {/* Суммы удержаний за месяц придут из 1С. */}
-                    {hasDeduction && <td className={styles.cellNumber}>—</td>}
                     {shown('department') && <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>}
                     {shown('position') && <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>}
                     {shown('schedule') && (

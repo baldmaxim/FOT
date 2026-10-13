@@ -1,0 +1,63 @@
+/*
+ * Поле с крестиком «Очистить». Mobile-first: 44px и шрифт 16px (Safari и Chrome на телефоне не зумят
+ * поле при фокусе); с 769px — компактное, как остальные поля панелей.
+ */
+.wrapper {
+  position: relative;
+  min-width: 0;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  /* Место под крестик занято всегда: текст не прыгает, когда он появляется. */
+  padding: 0 44px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.input::placeholder { color: var(--text-tertiary); }
+.input:focus { outline: none; }
+.input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+.input[aria-invalid='true'] { border-color: var(--error); }
+.input:disabled { opacity: 0.6; cursor: default; }
+
+.clear {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease-out;
+}
+.clear:hover { color: var(--text-primary); }
+.clear:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+@media (min-width: 769px) {
+  .input {
+    height: 36px;
+    padding: 0 32px 0 10px;
+    font-size: 13px;
+  }
+  .clear { width: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input, .clear { transition: none; }
+}

@@ -1,11 +1,12 @@
 /**
  * Удержания «Зарплаты»: справочник видов (миграция 299) и виды сотрудника (миграция 300).
  *
- * Справочник — пункты выпадающего списка «Удержание» на «Расчётах» и в карточке «Подробно»;
- * пополняется там же, правки и удаления нет (вид, отмеченный у сотрудника, держит FK RESTRICT).
+ * Справочник — пункты списка «Вид» в «Удержании» окна сотрудника; пополняется там же, правится
+ * и чистится в окне «Справочник» на «Расчётах». Вид, отмеченный у сотрудника, не удалить — FK RESTRICT.
  * У сотрудника видов может быть несколько; это не версия условий оплаты.
  */
 import { query, queryOne, type DbExecutor } from '../../config/postgres.js';
+import { hasPgCode, isPgReferencedRow, PG_UNIQUE_VIOLATION } from './payroll-pg-errors.js';
 
 export interface IPayrollDeductionKind {
   id: number;
@@ -15,14 +16,12 @@ export interface IPayrollDeductionKind {
 /** Новый вид — в конец списка, после стартовых. */
 const NEW_KIND_SORT_ORDER = 1000;
 
-const UNIQUE_VIOLATION = '23505';
-
 export const listDeductionKinds = async (): Promise<IPayrollDeductionKind[]> =>
   query<IPayrollDeductionKind>(
     `SELECT id, name FROM payroll_deduction_kinds ORDER BY sort_order, id`,
   );
 
-/** Все ли виды есть в справочнике (повторы не в счёт). Виды не удаляются — проверка надёжна. */
+/** Все ли виды есть в справочнике (повторы не в счёт). Вид, удалённый следом, остановит FK при записи. */
 export const allDeductionKindsExist = async (ids: readonly number[]): Promise<boolean> => {
   const unique = [...new Set(ids)];
   if (unique.length === 0) return true;
@@ -41,8 +40,54 @@ export const addDeductionKind = async (name: string): Promise<IPayrollDeductionK
       [name, NEW_KIND_SORT_ORDER],
     );
   } catch (err) {
-    if (typeof err === 'object' && err !== null && 'code' in err && err.code === UNIQUE_VIOLATION) return null;
+    if (hasPgCode(err, PG_UNIQUE_VIOLATION)) return null;
     throw err;
+  }
+};
+
+/**
+ * Переименовать вид. Вида нет — null; название занято другим видом — 'duplicate'.
+ * Прежнее название возвращается для аудита («было → стало»).
+ */
+export const renameDeductionKind = async (
+  id: number,
+  name: string,
+): Promise<{ kind: IPayrollDeductionKind; previousName: string } | 'duplicate' | null> => {
+  try {
+    const row = await queryOne<IPayrollDeductionKind & { previous_name: string }>(
+      `UPDATE payroll_deduction_kinds k
+          SET name = $2
+         FROM (SELECT id, name FROM payroll_deduction_kinds WHERE id = $1 FOR UPDATE) prev
+        WHERE k.id = prev.id
+        RETURNING k.id, k.name, prev.name AS previous_name`,
+      [id, name],
+    );
+    return row ? { kind: { id: row.id, name: row.name }, previousName: row.previous_name } : null;
+  } catch (err) {
+    if (hasPgCode(err, PG_UNIQUE_VIOLATION)) return 'duplicate';
+    throw err;
+  }
+};
+
+/**
+ * Удалить вид. Вида нет — null; отмечен у сотрудников — { inUse: сколько их } (FK RESTRICT:
+ * отдельной проверки перед удалением нет, гонку с отметкой решает сама БД).
+ */
+export const deleteDeductionKind = async (
+  id: number,
+): Promise<IPayrollDeductionKind | { inUse: number } | null> => {
+  try {
+    return await queryOne<IPayrollDeductionKind>(
+      `DELETE FROM payroll_deduction_kinds WHERE id = $1 RETURNING id, name`,
+      [id],
+    );
+  } catch (err) {
+    if (!isPgReferencedRow(err)) throw err;
+    const used = await queryOne<{ total: number }>(
+      `SELECT count(*)::int AS total FROM payroll_employee_deductions WHERE kind_id = $1`,
+      [id],
+    );
+    return { inUse: used?.total ?? 0 };
   }
 };
 

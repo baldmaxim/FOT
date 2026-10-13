@@ -14,7 +14,6 @@ import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { getContractorRootId } from '../config/contractor.js';
 import {
   appendPayrollColumnFilters,
-  appendPayrollDeductionFilter,
   buildPayrollCursorSql,
   buildPayrollOrderSql,
   isPayrollValueFilterColumn,
@@ -381,12 +380,6 @@ export const baseQuerySchema = z.object({
   calc_type: z.enum(['salary', 'hourly']).optional(),
   without_terms: z.enum(['true', 'false']).optional(),
   q: z.string().trim().max(100).optional(),
-  // Фильтр «Удержания» на «Расчётах»: id видов через запятую — сотрудники хотя бы с одним из них.
-  deduction_kind_ids: z.string()
-    .regex(/^\d+(,\d+)*$/, 'Ожидаются id видов через запятую')
-    .transform(value => [...new Set(value.split(',').map(Number))])
-    .pipe(z.array(z.number().int().positive()).min(1).max(100))
-    .optional(),
 });
 
 type BaseQuery = z.infer<typeof baseQuerySchema>;
@@ -473,7 +466,6 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters);
-    appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids);
 
     const sql = buildListSql({
       columnFilterSql: whereParts.join('\n       AND '),
@@ -567,7 +559,6 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     const { params } = await buildBaseParams(req, parsed);
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters, { exclude: column });
-    appendPayrollDeductionFilter(whereParts, params, parsed.deduction_kind_ids);
 
     params.push(parsed.value_q ? toIlikePattern(parsed.value_q) : null);
     const valueSearchIdx = params.length;

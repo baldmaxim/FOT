@@ -247,8 +247,14 @@ export const AUDIT_ACTIONS = {
   // Кадровое основание, а не секрет — суммы пишем в details.
   PAYROLL_TERMS_ASSIGNED: 'PAYROLL_TERMS_ASSIGNED',
   PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
-  // Справочник видов удержаний (миграция 299): добавленный вид.
+  // Справочник видов удержаний (миграция 299): добавленный, переименованный (было → стало), удалённый вид.
   PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
+  PAYROLL_DEDUCTION_KIND_RENAMED: 'PAYROLL_DEDUCTION_KIND_RENAMED',
+  PAYROLL_DEDUCTION_KIND_DELETED: 'PAYROLL_DEDUCTION_KIND_DELETED',
+  // Справочник ставок (миграция 306): название и значение, правка — было → стало.
+  PAYROLL_RATE_ADDED: 'PAYROLL_RATE_ADDED',
+  PAYROLL_RATE_UPDATED: 'PAYROLL_RATE_UPDATED',
+  PAYROLL_RATE_DELETED: 'PAYROLL_RATE_DELETED',
   // Виды удержаний сотрудника (миграция 300): добавленные и снятые.
   PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
   // Персональный доступ к разделу «Зарплата» (миграция 288): было → стало (view | edit | null).
