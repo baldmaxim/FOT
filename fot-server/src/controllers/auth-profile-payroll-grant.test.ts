@@ -141,7 +141,6 @@ const SALARY_KEYS = [
   '/salary/sick-leaves',
   '/salary/vacations',
   '/salary/deductions',
-  '/salary/admin',
 ];
 
 const salaryAccess = (canEdit: boolean): PageAccess => Object.fromEntries(
@@ -198,19 +197,19 @@ describe('/auth/me: персональный доступ к «Зарплате�
     const profile = await loadProfile();
     expect(profile.page_access['/employees']).toBeUndefined();
     expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: false });
-    expect(profile.page_access['/salary/admin']).toEqual({ can_view: true, can_edit: false });
+    expect(profile.page_access['/salary/deductions']).toEqual({ can_view: true, can_edit: false });
   });
 
   it('персональный «Просмотр» не понижает ролевую правку (OR)', async () => {
     mocked.getRoleById.mockResolvedValue(HR_ROLE);
     mocked.getRolePageAccess.mockResolvedValue({
       '/salary/terms': { can_view: true, can_edit: true },
-      '/salary/admin': { can_view: true, can_edit: true },
+      '/salary/deductions': { can_view: true, can_edit: true },
     });
     mocked.getPayrollAccessLevel.mockResolvedValue('view');
     const profile = await loadProfile();
     expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: true });
-    expect(profile.page_access['/salary/admin']).toEqual({ can_view: true, can_edit: true });
+    expect(profile.page_access['/salary/deductions']).toEqual({ can_view: true, can_edit: true });
     expect(profile.page_access['/salary/payments']).toEqual({ can_view: true, can_edit: false });
   });
 

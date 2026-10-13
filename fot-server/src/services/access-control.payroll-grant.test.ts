@@ -51,7 +51,6 @@ const SALARY_KEYS = [
   '/salary/sick-leaves',
   '/salary/vacations',
   '/salary/deductions',
-  '/salary/admin',
 ];
 
 const makeReq = (over: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest => ({

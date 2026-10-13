@@ -16,9 +16,8 @@ export const SalaryHubPage: FC = () => {
     {
       key: 'payments',
       label: 'Выплаты',
-      // Условия оплаты и «Администрирование» живут внутри «Выплат»: роль только с /salary/terms
-      // или /salary/admin тоже должна попасть сюда.
-      accessPath: ['/salary/payments', '/salary/terms', '/salary/admin'],
+      // Условия оплаты живут внутри «Выплат»: роль только с /salary/terms тоже должна попасть сюда.
+      accessPath: ['/salary/payments', '/salary/terms'],
       icon: Wallet,
       render: () => <PaymentsTab />,
     },

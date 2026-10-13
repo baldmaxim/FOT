@@ -10,41 +10,36 @@ const row = (employeeId: number): IPayrollTermsRow => ({
   staff_units: null, effective_from: null, effective_to: null, can_edit: true,
 });
 
-const keys = (canTerms: boolean, canCalc: boolean, canAdmin: boolean) => (
-  paymentsViewOptions(canTerms, canCalc, canAdmin).map(option => option.key)
+const keys = (canTerms: boolean, canCalc: boolean) => (
+  paymentsViewOptions(canTerms, canCalc).map(option => option.key)
 );
 
 describe('экраны вкладки «Выплаты» по правам', () => {
-  it('весь раздел: Условия оплаты · Подробно · Расчёты · Администрирование', () => {
-    expect(keys(true, true, true)).toEqual(['terms', 'details', 'calc', 'admin']);
-    expect(paymentsViewOptions(true, true, true).map(option => option.label))
-      .toEqual(['Условия оплаты', 'Подробно', 'Расчёты', 'Администрирование']);
-  });
-
-  it('условия оплаты и расчёт без администрирования', () => {
-    expect(keys(true, true, false)).toEqual(['terms', 'details', 'calc']);
+  it('весь раздел: Условия оплаты · Подробно · Расчёты', () => {
+    expect(keys(true, true)).toEqual(['terms', 'details', 'calc']);
+    expect(paymentsViewOptions(true, true).map(option => option.label))
+      .toEqual(['Условия оплаты', 'Подробно', 'Расчёты']);
   });
 
   it('только условия оплаты: список и «Подробно»', () => {
-    expect(keys(true, false, false)).toEqual(['terms', 'details']);
+    expect(keys(true, false)).toEqual(['terms', 'details']);
   });
 
   it('только расчёт: без списка и карточки', () => {
-    expect(keys(false, true, false)).toEqual(['calc']);
+    expect(keys(false, true)).toEqual(['calc']);
   });
 
-  it('только администрирование', () => {
-    expect(keys(false, false, true)).toEqual(['admin']);
+  it('без прав экранов нет', () => {
+    expect(keys(false, false)).toEqual([]);
   });
 });
 
 describe('экран из ?view=', () => {
-  const all = paymentsViewOptions(true, true, true);
+  const all = paymentsViewOptions(true, true);
 
   it('доступный экран открывается, в том числе «Подробно» без выбранного сотрудника', () => {
     expect(resolvePaymentsView('details', all)).toBe('details');
     expect(resolvePaymentsView('calc', all)).toBe('calc');
-    expect(resolvePaymentsView('admin', all)).toBe('admin');
   });
 
   it('пусто или неизвестное значение — первый экран', () => {
@@ -52,11 +47,15 @@ describe('экран из ?view=', () => {
     expect(resolvePaymentsView('payments', all)).toBe('terms');
   });
 
+  it('старая ссылка на убранное «Администрирование» (?view=admin) — первый доступный экран', () => {
+    expect(resolvePaymentsView('admin', all)).toBe('terms');
+    expect(resolvePaymentsView('admin', paymentsViewOptions(false, true))).toBe('calc');
+  });
+
   it('экран без права — первый доступный', () => {
-    expect(resolvePaymentsView('calc', paymentsViewOptions(true, false, false))).toBe('terms');
-    expect(resolvePaymentsView('details', paymentsViewOptions(false, true, false))).toBe('calc');
-    expect(resolvePaymentsView('terms', paymentsViewOptions(false, true, false))).toBe('calc');
-    expect(resolvePaymentsView('admin', paymentsViewOptions(true, true, false))).toBe('terms');
+    expect(resolvePaymentsView('calc', paymentsViewOptions(true, false))).toBe('terms');
+    expect(resolvePaymentsView('details', paymentsViewOptions(false, true))).toBe('calc');
+    expect(resolvePaymentsView('terms', paymentsViewOptions(false, true))).toBe('calc');
   });
 });
 

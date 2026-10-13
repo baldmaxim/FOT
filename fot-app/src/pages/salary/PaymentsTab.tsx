@@ -12,7 +12,6 @@ import {
   type PaymentsView,
 } from '../../utils/payrollViews';
 import { EmployeePayrollDetails } from '../../components/salary/EmployeePayrollDetails';
-import { SalaryTabPlaceholder } from '../../components/salary/SalaryTabPlaceholder';
 import styles from './PaymentsTab.module.css';
 
 const CompensationTermsPage = lazy(() => import('./CompensationTermsPage').then(m => ({ default: m.CompensationTermsPage })));
@@ -22,8 +21,7 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  * Вкладка «Выплаты». Внутри экраны:
  *  - «Условия оплаты» — список сотрудников с условиями (рабочий экран, по умолчанию);
  *  - «Подробно» — карточка сотрудника, которого открыли кликом по строке списка;
- *  - «Расчёты» — тот же список без массового назначения, со «Справочником» удержаний и ставок; карточка — в окне;
- *  - «Администрирование» — подключение по API к 1С и другим системам (пока заглушка).
+ *  - «Расчёты» — тот же список без массового назначения, со «Справочником» удержаний и ставок; карточка — в окне.
  *
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
  * хаба сохраняет остальные параметры. Списки и карточка при смене экрана не размонтируются:
@@ -36,8 +34,7 @@ export const PaymentsTab: FC = () => {
   const canTerms = canViewPage('/salary/terms');
   // «Расчёты» — список и карточка условий оплаты: нужен и ключ /salary/terms.
   const canCalc = canTerms && canViewPage('/salary/payments');
-  const canAdmin = canViewPage('/salary/admin');
-  const views = paymentsViewOptions(canTerms, canCalc, canAdmin);
+  const views = paymentsViewOptions(canTerms, canCalc);
   const view = resolvePaymentsView(searchParams.get('view'), views);
 
   // Дата выборки фиксируется на открытии экрана: условия и графики — «на сегодня» по Москве,
@@ -132,15 +129,6 @@ export const PaymentsTab: FC = () => {
             <Suspense fallback={<div className={styles.loading}>Загрузка…</div>}>
               <PayrollDeductionsPage date={date} active={view === 'calc'} onSaved={handleCalcSaved} />
             </Suspense>
-          </div>
-        )}
-
-        {view === 'admin' && (
-          <div className={styles.view}>
-            <SalaryTabPlaceholder
-              title="Администрирование"
-              description="Подключение по API к 1С и другим системам."
-            />
           </div>
         )}
       </div>
