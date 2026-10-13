@@ -3,6 +3,7 @@
  */
 import { query } from '../config/postgres.js';
 import { normalizeMatchName } from './name-match.utils.js';
+import { buildInternalPoints, type IAccessPointZonePeriod, type IInternalPoints } from '../utils/accessPointZones.js';
 
 /**
  * Типы неуспешных СКУД-событий (skud_event_failures), означающих ФИЗИЧЕСКОЕ
@@ -314,9 +315,40 @@ export async function getInternalAccessPoints(): Promise<Set<string>> {
   return points;
 }
 
-/** Инвалидация кэша внутренних точек доступа */
+// ─── История типа зоны — только для расчёта часов в табеле ───
+
+let internalPointsHistoryCache: { data: IInternalPoints; expiresAt: number } | null = null;
+
+/**
+ * Внутренние точки с историей типа зоны (skud_access_point_zone_periods, миграция 305):
+ * тип спрашивают по РАБОЧЕМУ ДНЮ — `has(точка, день)`. TTL 10 мин.
+ *
+ * Это источник ТОЛЬКО для расчёта часов (timesheet-object.service, skud-travel.service):
+ * точка могла быть внутренней в сентябре и внешней в октябре, и часы закрытых месяцев не
+ * должны меняться от сегодняшней настройки. Экраны портала (присутствие, списки проходов,
+ * выгрузки СКУД) по-прежнему берут тип «на сегодня» — getInternalAccessPoints() выше.
+ */
+export async function getInternalPointsByWorkDate(): Promise<IInternalPoints> {
+  const now = Date.now();
+  if (internalPointsHistoryCache && internalPointsHistoryCache.expiresAt > now) {
+    return internalPointsHistoryCache.data;
+  }
+
+  const data = await query<IAccessPointZonePeriod>(
+    `SELECT access_point_name, is_internal, effective_from::text AS effective_from
+       FROM skud_access_point_zone_periods
+      ORDER BY access_point_name, effective_from`,
+  );
+
+  const points = buildInternalPoints(data || []);
+  internalPointsHistoryCache = { data: points, expiresAt: now + AP_CACHE_TTL };
+  return points;
+}
+
+/** Инвалидация кэшей внутренних точек доступа: и «на сегодня», и истории. */
 export function invalidateInternalPointsCache(): void {
   internalPointsCache = null;
+  internalPointsHistoryCache = null;
 }
 
 export function setAccessPointCacheEntry(key: string, data: string[]): void {

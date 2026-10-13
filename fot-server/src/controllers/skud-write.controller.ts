@@ -1,10 +1,11 @@
 import { Response } from 'express';
+import { z } from 'zod';
 import { query, execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-import { invalidateInternalPointsCache } from '../services/skud-shared.service.js';
+import { AccessPointZoneError, changeAccessPointZone } from '../services/access-point-zone.service.js';
 import {
   importFromExcel,
   syncEmployee as syncEmployeeService,
@@ -17,84 +18,59 @@ import {
 } from '../services/skud-shared.service.js';
 import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 
+const zoneChangeSchema = z.object({
+  access_point_name: z.string().trim().min(1, 'Не указана точка доступа').max(300),
+  is_internal: z.boolean({ invalid_type_error: 'Не указан тип зоны', required_error: 'Не указан тип зоны' }),
+  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Некорректная дата'),
+});
+
 export interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
 }
 
 export const skudWriteController = {
   /**
-   * PUT /api/skud/access-point-settings
+   * POST /api/skud/access-point-settings/zone — смена типа зоны точки с датой начала.
    */
-  async saveAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
+  async changeAccessPointZone(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { department_id, settings } = req.body as {
-        department_id?: string;
-        settings: { access_point_name: string; is_internal: boolean }[];
-      };
-
-      if (!Array.isArray(settings)) {
-        res.status(400).json({ success: false, error: 'settings обязательны' });
+      if (!req.user) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
         return;
       }
-
-      let targetDeptId = department_id || null;
-
-      if (!targetDeptId) {
-        const rootDepts = await query<{ id: string }>(
-          'SELECT id FROM org_departments WHERE parent_id IS NULL LIMIT 1',
-        );
-        if (!rootDepts || rootDepts.length === 0) {
-          res.status(400).json({ success: false, error: 'Корневой отдел не найден' });
-          return;
-        }
-        targetDeptId = rootDepts[0].id;
-      }
-
-      // Дедупликация по trimmed name
-      const internalMap = new Map<string, boolean>();
-      for (const s of settings) {
-        const name = s.access_point_name.trim();
-        if (s.is_internal) internalMap.set(name, true);
-      }
-      const uniqueInternalNames = [...internalMap.keys()];
-
-      try {
-        await execute(
-          'DELETE FROM skud_access_point_settings WHERE department_id = $1',
-          [targetDeptId],
-        );
-      } catch (deleteError) {
-        console.error('Delete access point settings error:', deleteError);
-        res.status(500).json({ success: false, error: 'Ошибка удаления старых настроек' });
-        return;
-      }
-
-      if (uniqueInternalNames.length > 0) {
-        const params: unknown[] = [];
-        const placeholders: string[] = [];
-        for (const name of uniqueInternalNames) {
-          params.push(targetDeptId, name, true);
-          placeholders.push(`($${params.length - 2}, $${params.length - 1}, $${params.length})`);
-        }
-        try {
-          await execute(
-            `INSERT INTO skud_access_point_settings (department_id, access_point_name, is_internal)
-             VALUES ${placeholders.join(', ')}`,
-            params,
-          );
-        } catch (error) {
-          console.error('Save access point settings error:', error);
-          res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
-          return;
-        }
-      }
-
-      invalidateInternalPointsCache();
-      res.json({ success: true, message: 'Настройки сохранены' });
+      const input = zoneChangeSchema.parse(req.body);
+      const result = await changeAccessPointZone(
+        { accessPointName: input.access_point_name, isInternal: input.is_internal, effectiveFrom: input.effective_from },
+        { req, userId: req.user.id },
+      );
+      res.json({ success: true, data: { changed: result.changed } });
     } catch (error) {
-      console.error('Save access point settings error:', error);
-      res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      if (error instanceof AccessPointZoneError) {
+        res.status(error.status).json({ success: false, error: error.message });
+        return;
+      }
+      console.error('Change access point zone error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка смены типа зоны' });
     }
+  },
+
+  /**
+   * PUT /api/skud/access-point-settings — прежнее сохранение списком, без дат.
+   *
+   * Отключено: оно меняло тип зоны сразу для всех прошлых дат, и часы в табелях
+   * пересчитывались за закрытые месяцы (инцидент 12.10.2026). Тип зоны меняется только
+   * через changeAccessPointZone. Роут оставлен, чтобы ещё не обновившаяся вкладка получила
+   * понятный отказ, а не 404.
+   */
+  async saveAccessPointSettings(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    res.status(409).json({
+      success: false,
+      error: 'Тип зоны теперь меняется с датой начала. Обновите страницу',
+    });
   },
 
   /**

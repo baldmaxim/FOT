@@ -1,7 +1,8 @@
 import { query, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
 import type { TimeStatus } from '../types/index.js';
-import { getInternalAccessPoints, PRESENCE_FAILURE_TYPE_IDS } from './skud-shared.service.js';
+import { getInternalPointsByWorkDate, PRESENCE_FAILURE_TYPE_IDS } from './skud-shared.service.js';
+import type { IInternalPoints } from '../utils/accessPointZones.js';
 import {
   listObjectIdsForEmployees,
   listSelectableObjectsForEmployee,
@@ -237,11 +238,6 @@ const nowEpochSeconds = (dateStr: string): number =>
 const dayKey = (employeeId: number, workDate: string): string => `${employeeId}_${workDate}`;
 const objectEntryKey = (employeeId: number, workDate: string, objectKey: string): string => `${employeeId}_${workDate}_${objectKey}`;
 
-const getNormalizedInternalPoints = async (): Promise<Set<string>> => {
-  const internalPoints = await getInternalAccessPoints();
-  return new Set([...internalPoints].map(point => point.trim()).filter(Boolean));
-};
-
 const isMissingTableError = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: string; message?: string | null; details?: string | null };
@@ -253,7 +249,7 @@ const isMissingTableError = (error: unknown): boolean => {
 
 // Внешний поток событий сотрудника в хронологическом порядке (по epoch, не по времени суток —
 // иначе ночные смены сортируются неверно). Внутренние точки исключаются из парного расчёта.
-const getExternalStreamChrono = (events: IRawEventRow[], internalPoints: Set<string>): IRawEventRow[] => {
+const getExternalStreamChrono = (events: IRawEventRow[], internalPoints: ReadonlySet<string>): IRawEventRow[] => {
   const external = events.filter(event => {
     const point = normalizeAccessPoint(event.access_point);
     return !point || !internalPoints.has(point);
@@ -272,6 +268,26 @@ const collectShiftStartDays = (stream: IRawEventRow[], startDate: string, endDat
     if (day >= startDate && day <= endDate) days.add(day);
   }
   return [...days].sort();
+};
+
+// Дни-начала смены вместе с потоком, по которому считать их окно. Тип зоны точки определяется
+// по РАБОЧЕМУ ДНЮ (миграция 305): период режется на отрезки с постоянным набором внутренних
+// точек, у каждого отрезка свой внешний поток. Так проход D+1, закрывающий смену дня D,
+// оценивается по правилу дня D. Обычно отрезок один — поведение прежнее.
+const shiftStartDaysByZone = (
+  events: IRawEventRow[],
+  internalPoints: IInternalPoints,
+  startDate: string,
+  endDate: string,
+): Array<{ externalStream: IRawEventRow[]; startDay: string }> => {
+  const result: Array<{ externalStream: IRawEventRow[]; startDay: string }> = [];
+  for (const range of internalPoints.ranges(startDate, endDate)) {
+    const externalStream = getExternalStreamChrono(events, range.internal);
+    for (const startDay of collectShiftStartDays(externalStream, range.from, range.to)) {
+      result.push({ externalStream, startDay });
+    }
+  }
+  return result;
 };
 
 // Окно смены [первый вход дня; начало следующей смены | +32ч). Калька
@@ -913,10 +929,10 @@ export async function resolveDayAllocationSuggestion(params: {
     return empty;
   }
 
-  const internalPoints = await getNormalizedInternalPoints();
+  const internalPoints = await getInternalPointsByWorkDate();
   const events = rows.filter(row => {
     const point = normalizeAccessPoint(row.access_point);
-    return point !== null && !internalPoints.has(point);
+    return point !== null && !internalPoints.has(point, workDate);
   });
 
   const nameById = new Map<string, string>();
@@ -1134,7 +1150,7 @@ export async function buildObjectAttendanceData(params: {
 
   const [internalPoints, objectMappings, rawEvents, assignedObjectsByEmployee] = await runMaybeParallel(
     exec,
-    () => getNormalizedInternalPoints(),
+    () => getInternalPointsByWorkDate(),
     () => (includeObjectDetails
       ? fetchObjectMappings()
       : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() })),
@@ -1197,10 +1213,7 @@ export async function buildObjectAttendanceData(params: {
   }
 
   for (const [employeeId, employeeEvents] of eventsByEmployee) {
-    const externalStream = getExternalStreamChrono(employeeEvents, internalPoints);
-    if (externalStream.length === 0) continue;
-
-    for (const startDay of collectShiftStartDays(externalStream, startDate, endDate)) {
+    for (const { externalStream, startDay } of shiftStartDaysByZone(employeeEvents, internalPoints, startDate, endDate)) {
       const daySchedule = schedulesByEmployeeDate.get(employeeId)?.get(startDay);
       const isNight = daySchedule
         ? isNightShiftDay(daySchedule, new Date(`${startDay}T00:00:00`))

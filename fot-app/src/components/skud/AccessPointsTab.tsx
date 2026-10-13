@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { FC } from 'react';
-import { Search, Save, Check, RefreshCw } from 'lucide-react';
+import { Search, RefreshCw } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import type { AccessPointOption, IAccessPointSetting } from '../../types';
+import type { AccessPointOption } from '../../types';
+import { AccessPointZoneModal } from './AccessPointZoneModal';
 
 interface IAccessPointsTabProps {
   connected: boolean | null;
@@ -20,8 +21,8 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
   const [accessPoints, setAccessPoints] = useState<AccessPointOption[]>([]);
   const [apLoading, setApLoading] = useState(false);
   const [apSettings, setApSettings] = useState<Map<string, boolean>>(new Map());
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsSaved, setSettingsSaved] = useState(false);
+  // Тип зоны меняется только через окно с датой начала (AccessPointZoneModal).
+  const [zoneTarget, setZoneTarget] = useState<AccessPointOption | null>(null);
   const [syncingAP, setSyncingAP] = useState(false);
   const [syncAPResult, setSyncAPResult] = useState<{ added: number; removed: number } | null>(null);
   const [apSearch, setApSearch] = useState('');
@@ -53,31 +54,13 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
     });
   }, [accessPoints, apSearch]);
 
-  const toggleApInternal = (apName: string) => {
+  const handleZoneSaved = (apName: string, isInternal: boolean) => {
     const key = apName.trim();
     setApSettings(prev => {
       const next = new Map(prev);
-      next.set(key, !next.get(key));
+      next.set(key, isInternal);
       return next;
     });
-    setSettingsSaved(false);
-  };
-
-  const handleSaveApSettings = async () => {
-    setSavingSettings(true);
-    try {
-      const settings: IAccessPointSetting[] = accessPoints.map(ap => ({
-        access_point_name: ap.name,
-        is_internal: apSettings.get(ap.name.trim()) || false,
-      }));
-      await skudService.saveAccessPointSettings(settings);
-      setSettingsSaved(true);
-      setTimeout(() => setSettingsSaved(false), 3000);
-    } catch {
-      setError('Ошибка сохранения настроек');
-    } finally {
-      setSavingSettings(false);
-    }
   };
 
   const handleSyncAccessPoints = async () => {
@@ -132,13 +115,6 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
             <RefreshCw size={14} className={syncingAP ? 'sigur-spin' : ''} />
             {syncingAP ? 'Обновление...' : 'Обновить'}
           </button>
-          <button
-            className={`sigur-btn sigur-btn-primary ${settingsSaved ? 'sigur-btn-saved' : ''}`}
-            onClick={handleSaveApSettings}
-            disabled={savingSettings}
-          >
-            {settingsSaved ? <><Check size={14} /> Сохранено</> : <><Save size={14} /> Сохранить</>}
-          </button>
         </>)}
       </div>
 
@@ -188,7 +164,7 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
                       {canEdit ? (
                         <button
                           className={`sigur-ap-type-btn ${isInternal ? 'internal' : 'external'}`}
-                          onClick={() => toggleApInternal(ap.name)}
+                          onClick={() => setZoneTarget(ap)}
                         >
                           {isInternal ? 'Внутренняя' : 'Внешняя'}
                         </button>
@@ -204,6 +180,16 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
             </tbody>
           </table>
         </div>
+      )}
+
+      {zoneTarget && (
+        <AccessPointZoneModal
+          pointName={zoneTarget.name}
+          label={zoneTarget.id == null ? zoneTarget.name : `${zoneTarget.name} (${zoneTarget.id})`}
+          isInternal={apSettings.get(zoneTarget.name.trim()) || false}
+          onClose={() => setZoneTarget(null)}
+          onSaved={handleZoneSaved}
+        />
       )}
     </div>
   );

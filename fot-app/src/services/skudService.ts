@@ -465,11 +465,18 @@ export const skudService = {
     return response.data || [];
   },
 
-  async saveAccessPointSettings(settings: IAccessPointSetting[], departmentId?: string): Promise<void> {
-    await apiClient.put<ApiResponse<null>>('/skud/access-point-settings', {
-      ...(departmentId ? { department_id: departmentId } : {}),
-      settings,
+  /** Смена типа зоны точки с даты (не раньше 1-го числа текущего месяца, не позже сегодня). */
+  async changeAccessPointZone(input: {
+    accessPointName: string;
+    isInternal: boolean;
+    effectiveFrom: string;
+  }): Promise<{ changed: boolean }> {
+    const response = await apiClient.post<ApiResponse<{ changed: boolean }>>('/skud/access-point-settings/zone', {
+      access_point_name: input.accessPointName,
+      is_internal: input.isInternal,
+      effective_from: input.effectiveFrom,
     });
+    return response.data;
   },
 
   async syncAccessPoints(connection?: 'internal' | 'external'): Promise<{ accessPoints: string[]; removed: string[]; settingsRemoved: number }> {

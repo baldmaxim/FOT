@@ -353,7 +353,14 @@ router.post(
   skudController.rejectTravelSegment
 );
 
-// PUT /api/skud/access-point-settings - сохранение настроек точек доступа (admin+)
+// POST /api/skud/access-point-settings/zone - смена типа зоны точки с датой начала (admin+)
+router.post(
+  '/access-point-settings/zone',
+  requirePageAccess('/skud-settings', 'edit'),
+  skudController.changeAccessPointZone
+);
+
+// PUT /api/skud/access-point-settings - прежнее сохранение без дат, отключено (409)
 router.put(
   '/access-point-settings',
   requirePageAccess('/skud-settings', 'edit'),

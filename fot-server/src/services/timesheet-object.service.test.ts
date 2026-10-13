@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { alwaysInternalPoints, buildInternalPoints } from '../utils/accessPointZones.js';
 
 const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
   pgQuery: vi.fn(),
@@ -16,6 +17,8 @@ vi.mock('../config/postgres.js', () => ({
 
 const mockedState = vi.hoisted(() => ({
   internalPoints: new Set<string>(),
+  // История типа зоны (миграция 305). null → точки из internalPoints внутренние «всегда».
+  zonePeriods: null as Array<{ access_point_name: string; is_internal: boolean; effective_from: string }> | null,
   // Ночной гейт окна (миграция 168): резолв графика мокается ниже. true → у сотрудника
   // ночная смена (пара может пересекать полночь); false → дневная (окно режется полночью).
   isNightShift: false,
@@ -33,13 +36,15 @@ const mockedState = vi.hoisted(() => ({
   },
 }));
 
-// Подменяем только getInternalAccessPoints; остальное берём из настоящего модуля,
+// Подменяем только getInternalPointsByWorkDate; остальное берём из настоящего модуля,
 // иначе теряется PRESENCE_FAILURE_TYPE_IDS (whitelist типов отказов живёт там же).
 vi.mock('./skud-shared.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./skud-shared.service.js')>();
   return {
     ...actual,
-    getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
+    getInternalPointsByWorkDate: vi.fn(async () => (mockedState.zonePeriods
+      ? buildInternalPoints(mockedState.zonePeriods)
+      : alwaysInternalPoints(mockedState.internalPoints))),
   };
 });
 
@@ -124,6 +129,7 @@ describe('timesheet-object.service', () => {
     pgTx.mockReset();
 
     mockedState.internalPoints = new Set();
+    mockedState.zonePeriods = null;
     mockedState.isNightShift = false;
     mockedState.tables.skud_object_access_points = [
       { object_id: 'obj-a', access_point_name: 'КПП A' },
@@ -239,6 +245,67 @@ describe('timesheet-object.service', () => {
     ]);
     expect(result.objectEntries.some(entry => entry.work_date === '2026-04-11')).toBe(false);
     expect(result.employeeDistinctObjectKeys.get(1)).toEqual(new Set(['obj-a', 'obj-b']));
+  });
+
+  it('тип зоны — по рабочему дню: проход 01.10, закрывающий ночную смену 30.09, считается по правилу 30.09', async () => {
+    // «КПП B» внутренняя по 30.09 и внешняя с 01.10 (как «кпп ASTERUS» после инцидента 12.10.2026).
+    // Ночная смена 30.09: вход через A, утренний выход 01.10 через B. Для рабочего дня 30.09 точка B
+    // внутренняя — выход не учитывается, пары нет, как и было до смены типа. Если бы тип брался по
+    // дате прохода, смена 30.09 внезапно получила бы 10 часов.
+    mockedState.isNightShift = true;
+    mockedState.zonePeriods = [
+      { access_point_name: 'КПП B', is_internal: true, effective_from: '2000-01-01' },
+      { access_point_name: 'КПП B', is_internal: false, effective_from: '2026-10-01' },
+    ];
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-09-30', event_time: '20:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-10-01', event_time: '06:00:00', access_point: 'КПП B', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-10-01', event_time: '20:00:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-10-02', event_time: '06:00:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-09-30',
+      endDate: '2026-10-01',
+      todayStr: '2026-10-15',
+      adjustments: [],
+    });
+
+    // 30.09: вход остался незакрытым — объект виден, часов нет. 01.10: точка уже внешняя —
+    // пара 20:00→06:00 = 10ч.
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ work_date: '2026-09-30', object_id: 'obj-a', hours_worked: 0 }),
+      expect.objectContaining({ work_date: '2026-10-01', object_id: 'obj-b', hours_worked: 10 }),
+    ]);
+    expect(result.rawFallbackSummaries.get(1)?.get('2026-09-30')?.total_minutes).toBe(0);
+    expect(result.rawFallbackSummaries.get(1)?.get('2026-10-01')?.total_minutes).toBe(600);
+  });
+
+  it('тип зоны — по рабочему дню: до даты смены проходы через точку не дают часов, после — дают', async () => {
+    mockedState.zonePeriods = [
+      { access_point_name: 'КПП B', is_internal: true, effective_from: '2000-01-01' },
+      { access_point_name: 'КПП B', is_internal: false, effective_from: '2026-10-01' },
+    ];
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-09-30', event_time: '09:00:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-09-30', event_time: '18:00:00', access_point: 'КПП B', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-10-01', event_time: '09:00:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-10-01', event_time: '18:00:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-09-01',
+      endDate: '2026-10-31',
+      todayStr: '2026-11-15',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ work_date: '2026-10-01', object_id: 'obj-b', hours_worked: 9 }),
+    ]);
+    expect(result.rawFallbackSummaries.get(1)?.has('2026-09-30')).toBe(false);
   });
 
   it('discards orphan entry on repeated entry without exit (strict closed-pairs policy)', async () => {
@@ -1250,6 +1317,7 @@ describe('resolveDayAllocationSuggestion', () => {
     suggestionState.events = [];
     suggestionState.failures = [];
     mockedState.internalPoints = new Set();
+    mockedState.zonePeriods = null;
     pgQuery.mockImplementation(async (sql: string) => {
       const text = sql.toLowerCase();
       if (text.includes('from skud_events se')) return suggestionState.events;

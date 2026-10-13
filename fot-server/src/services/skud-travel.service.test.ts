@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { alwaysInternalPoints } from '../utils/accessPointZones.js';
 
 const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
   pgQuery: vi.fn(),
@@ -28,7 +29,7 @@ const mockedState = vi.hoisted(() => ({
 }));
 
 vi.mock('./skud-shared.service.js', () => ({
-  getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
+  getInternalPointsByWorkDate: vi.fn(async () => alwaysInternalPoints(mockedState.internalPoints)),
 }));
 
 vi.mock('./settings.service.js', () => ({

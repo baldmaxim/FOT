@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { alwaysInternalPoints } from '../utils/accessPointZones.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 
 const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
@@ -76,7 +77,7 @@ vi.mock('./schedule.service.js', () => ({
 }));
 
 vi.mock('./skud-shared.service.js', () => ({
-  getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
+  getInternalPointsByWorkDate: vi.fn(async () => alwaysInternalPoints(mockedState.internalPoints)),
 }));
 
 vi.mock('./timesheet-object.service.js', () => ({

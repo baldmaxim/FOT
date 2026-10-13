@@ -1,7 +1,8 @@
 import { query, queryOne, execute, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
-import { getInternalAccessPoints } from './skud-shared.service.js';
+import { getInternalPointsByWorkDate } from './skud-shared.service.js';
+import type { IInternalPoints } from '../utils/accessPointZones.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
 import { SKUD_OBJECT_MAPS_BUCKET, objectMapStorageService } from './object-map-storage.service.js';
@@ -674,7 +675,7 @@ const buildTravelSegments = ({
   limitMinutes,
 }: {
   events: ITravelEventRow[];
-  internalPoints: Set<string>;
+  internalPoints: IInternalPoints;
   accessPointToObjectId: Map<string, string>;
   limitMinutes: number;
 }): ICalculatedTravelSegment[] => {
@@ -697,7 +698,7 @@ const buildTravelSegments = ({
       if (event.direction === 'exit') {
         const exitAccessPoint = normalizeAccessPoint(event.access_point);
         if (!exitAccessPoint) continue;
-        if (internalPoints.has(exitAccessPoint)) continue;
+        if (internalPoints.has(exitAccessPoint, event.event_date)) continue;
         pendingExits.push(event);
         continue;
       }
@@ -706,7 +707,7 @@ const buildTravelSegments = ({
 
       const toAccessPoint = normalizeAccessPoint(event.access_point);
       if (!toAccessPoint) continue;
-      if (internalPoints.has(toAccessPoint)) continue;
+      if (internalPoints.has(toAccessPoint, event.event_date)) continue;
 
       const toObjectId = accessPointToObjectId.get(toAccessPoint) || null;
 
@@ -966,7 +967,7 @@ export const calculateAndSyncTravelSegments = async ({
 
   const [internalPoints, mappings, events, decidedSegments] = await runMaybeParallel(
     exec,
-    () => getInternalAccessPoints(),
+    () => getInternalPointsByWorkDate(),
     () => fetchTravelMappingsRaw(),
     () => fetchEventsForEmployees({ employeeIds, startDate, endDate, exec }),
     () => fetchExistingDecidedSegments({ employeeIds, startDate, endDate, exec }),
