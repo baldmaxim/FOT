@@ -2596,6 +2596,38 @@ describe('leaveRequestsController.revokeApproval', () => {
     expect(updateCall![1]![4]).toBe('manager');
   });
 
+  it('«Работа в выходной»: отмена согласования идёт через трекинг — она может снять последнее ожидание табеля', async () => {
+    // Согласованная заявка материализовала день, который ещё ждёт согласующего 2-го этапа:
+    // отмена удаляет его мимо очереди «Согласований».
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({
+      request_type: 'work',
+      start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+    }));
+    pgQuery.mockResolvedValueOnce([]); // табель не сдан
+    mockRevokeTx();
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(adminReq({ body: { reason: 'не выходил' } }), res);
+
+    expect(res._status).toBe(200);
+    expect(trackingMock).toHaveBeenCalledWith(txClient, [{ employeeId: 247, workDate: '2026-06-01' }], expect.any(Function));
+    expect(publishEffectsMock).toHaveBeenCalledTimes(1);
+    // Мутация выполнена внутри трекинга: статус, точечный DELETE и история.
+    const sql = txClient.query.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(sql.some(text => text.includes('UPDATE leave_requests'))).toBe(true);
+    expect(sql.some(text => text.includes('DELETE FROM attendance_adjustments'))).toBe(true);
+  });
+
+  it('отмена отпуска нерешённых выходных не меняет — трекинг не вызывается', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation());
+    pgQuery.mockResolvedValueOnce([]);
+    mockRevokeTx();
+
+    await leaveRequestsController.revokeApproval(makeReq(), makeRes());
+
+    expect(trackingMock).not.toHaveBeenCalled();
+  });
+
   it('ответ содержит ФИО отменившего (canceller)', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation());
     pgQuery

@@ -49,6 +49,7 @@ import {
   type ITimesheetDateRange,
 } from '../../utils/timesheetApprovalPeriod';
 import { getMonthLabel } from '../../utils/calendarUtils';
+import { formatCorrectionBulkSummary } from '../../utils/correctionBulkSummary';
 import {
   formatPendingDecisions,
   formatPendingResponsibles,
@@ -73,12 +74,6 @@ const formatDate = (iso: string): string => {
 const formatDateWithWeekday = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
   return `${formatDate(iso)} (${WEEKDAY_SHORT_RU[d.getDay()]})`;
-};
-
-const formatBulkToast = (verb: 'Утверждено' | 'Отклонено' | 'Возвращено', data: IBulkResult): string => {
-  const skipped = data.skipped_not_pending + data.skipped_no_access;
-  if (skipped > 0) return `${verb}: ${data.processed_count} (пропущено: ${skipped})`;
-  return `${verb}: ${data.processed_count}`;
 };
 
 interface ICorrectionsTabProps {
@@ -156,12 +151,19 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     });
   };
 
+  // Ничего не записано — это не успех: согласующий должен увидеть причину пропуска.
+  const showBulkResult = (verb: 'Утверждено' | 'Отклонено' | 'Возвращено', data: IBulkResult) => {
+    const message = formatCorrectionBulkSummary(verb, data);
+    if (data.processed_count === 0) toast.error?.(message);
+    else toast.success?.(message);
+  };
+
   const bulkApproveSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkApproveByIds(ids),
     onSuccess: async (data, variables) => {
       optimisticallyRemove(variables);
       await invalidate();
-      toast.success?.(formatBulkToast('Утверждено', data));
+      showBulkResult('Утверждено', data);
       clearProcessedIds(variables);
     },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового согласования'),
@@ -172,7 +174,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     onSuccess: async (data, variables) => {
       optimisticallyRemove(variables);
       await invalidate();
-      toast.success?.(formatBulkToast('Отклонено', data));
+      showBulkResult('Отклонено', data);
       clearProcessedIds(variables);
     },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового отклонения'),
@@ -183,7 +185,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     onSuccess: async (data, variables) => {
       optimisticallyRemove(variables);
       await invalidate();
-      toast.success?.(formatBulkToast('Возвращено', data));
+      showBulkResult('Возвращено', data);
       clearProcessedIds(variables);
     },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового отката'),

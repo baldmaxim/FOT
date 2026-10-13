@@ -5,7 +5,8 @@
  * двумя полупериодами — подачи почти всегда полумесячные; строка «весь месяц» покрывает
  * оба и обрабатывается один раз. По каждому полупериоду:
  *  - утверждена и закрыта → ничего не делаем;
- *  - утверждена, но открыта → возвращаем замок, как штатное «Закрыть табель»;
+ *  - утверждена, но открыта → возвращаем замок, как штатное «Закрыть табель» (с нерешёнными
+ *    выходными — пропускаем, как и неутверждённую);
  *  - подана → утверждаем со своим составом и штатными проверками;
  *  - не подана / черновик / отклонена / возвращена → утверждаем от имени кадров.
  *
@@ -213,6 +214,11 @@ async function relockApproved(
     )).rows[0];
     if (!current || current.status !== 'approved') throw new MonthCloseAbort('skipped', CHANGED_REASON);
     if (current.unlocked_at == null) return null;
+
+    // Пока табель открыт, в нём могли появиться нерешённые выходные: под замком их уже не
+    // согласовать, и часы не попали бы в редакцию для 1С.
+    const pending = await countPendingDecisionsForApproval(current, client);
+    if (pending > 0) throw new MonthCloseAbort('skipped', pendingReason(pending));
 
     const row = (await client.query<TimesheetApproval>(
       `UPDATE timesheet_approvals

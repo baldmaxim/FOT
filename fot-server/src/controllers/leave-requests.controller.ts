@@ -3339,23 +3339,37 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       }
       // Источник отмены: согласовавший — 'manager', иначе (админ, который не согласовывал) — 'admin'.
       const cancelSource = isApprover ? 'manager' : 'admin';
-      const updated = await client.query(
-        `UPDATE leave_requests SET status = 'cancelled',
-                cancelled_by = $1, cancelled_at = $2, cancel_reason = $3,
-                cancel_source = $5, updated_at = $2
-          WHERE id = $4
-          RETURNING *`,
-        [req.user.id, nowIso, reason, id, cancelSource],
+      const doRevoke = async (): Promise<{ value: Record<string, unknown> | null; changed: boolean }> => {
+        const updated = await client.query(
+          `UPDATE leave_requests SET status = 'cancelled',
+                  cancelled_by = $1, cancelled_at = $2, cancel_reason = $3,
+                  cancel_source = $5, updated_at = $2
+            WHERE id = $4
+            RETURNING *`,
+          [req.user.id, nowIso, reason, id, cancelSource],
+        );
+        // Точечный откат табеля — ровно строки этого заявления (как в cancel). Шире не трогаем.
+        await deleteLeaveRequestAdjustments(client, request, true); // revoke бывает только у approved
+        await recordLeaveRequestHistory(client, {
+          requestId: Number(id),
+          action: 'revoked',
+          actorId: req.user.id,
+          comment: reason,
+        });
+        return { value: (updated.rows[0] as Record<string, unknown> | undefined) ?? null, changed: true };
+      };
+
+      if (request.request_type !== 'work') {
+        return { conflict: false as const, row: (await doRevoke()).value, effects: NO_PENDING_DECISION_EFFECTS };
+      }
+      // Отмена согласованной «Работы в выходной» удаляет её дни, в т.ч. ждущие согласующего:
+      // это может закрыть последнее ожидание табеля — как и самоотмена в cancel.
+      const trackedDates = collectMaterializedLeaveDates(request);
+      await lockQuotaMonthsOnClient(client, request.employee_id, trackedDates);
+      const tracked = await withPendingDecisionTracking(
+        client, trackedMonthsOf(request.employee_id, trackedDates), doRevoke,
       );
-      // Точечный откат табеля — ровно строки этого заявления (как в cancel). Шире не трогаем.
-      await deleteLeaveRequestAdjustments(client, request, true); // revoke бывает только у approved
-      await recordLeaveRequestHistory(client, {
-        requestId: Number(id),
-        action: 'revoked',
-        actorId: req.user.id,
-        comment: reason,
-      });
-      return { conflict: false as const, row: updated.rows[0] ?? null };
+      return { conflict: false as const, row: tracked.value, effects: tracked.effects };
     });
 
     if ('timesheetLocked' in result && result.timesheetLocked) {
@@ -3372,6 +3386,7 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
     }
 
     broadcastPendingChanged();
+    void publishPendingDecisionEffects(result.effects);
 
     // Realtime: автор, его руководитель и инициатор отмены.
     getLeaveRequestRecipients(request.employee_id, req.user.id)

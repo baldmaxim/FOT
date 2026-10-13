@@ -47,6 +47,8 @@ export interface IBulkResult {
   processed_count: number;
   skipped_not_pending: number;
   skipped_no_access: number;
+  /** Строки закрытого (утверждённого) табеля: решение по ним не записано. */
+  skipped_locked: number;
 }
 
 export interface ICorrectionApprovalSettings {
@@ -101,7 +103,7 @@ export const correctionApprovalService = {
       '/correction-approvals/bulk-approve-by-ids',
       { ids },
     );
-    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0, skipped_locked: 0 };
   },
 
   async bulkRejectByIds(ids: number[], comment?: string): Promise<IBulkResult> {
@@ -109,7 +111,7 @@ export const correctionApprovalService = {
       '/correction-approvals/bulk-reject-by-ids',
       comment ? { ids, comment } : { ids },
     );
-    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0, skipped_locked: 0 };
   },
 
   async bulkRevertByIds(ids: number[]): Promise<IBulkResult> {
@@ -117,7 +119,7 @@ export const correctionApprovalService = {
       '/correction-approvals/bulk-revert-by-ids',
       { ids },
     );
-    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0, skipped_locked: 0 };
   },
 
   async getHistoryByDepartment(

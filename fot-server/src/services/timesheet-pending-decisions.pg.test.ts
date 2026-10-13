@@ -38,6 +38,12 @@ vi.mock('./skud-shared.service.js', async (importActual) => ({
   ...(await importActual<typeof import('./skud-shared.service.js')>()),
   collectDeptIds: vi.fn(async (departmentId: string) => [departmentId]),
 }));
+// Завершённость месяца зависит от сегодняшней даты — фиксируем: сентябрь 2026 завершён,
+// октябрь ещё идёт.
+vi.mock('./timesheet-period.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('./timesheet-period.service.js')>()),
+  isRangeWithinCompletedPeriods: vi.fn((startDate: string) => startDate < '2026-10-01'),
+}));
 const HR_USER = '44444444-4444-4444-4444-444444444444';
 vi.mock('./timesheet-workflow-recipients.service.js', () => ({
   listTimesheetWorkflowRecipientIds: vi.fn(async () => [HR_USER]),
@@ -48,9 +54,10 @@ vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
 
 import { countPendingDecisionsForApproval } from './timesheet-pending-decisions.service.js';
 import {
-  lockAffectedSubmittedApprovals,
+  lockAffectedApprovals,
   withPendingDecisionTracking,
 } from './timesheet-pending-decisions-tracking.service.js';
+import { listTimesheetWorkflowRecipientIds } from './timesheet-workflow-recipients.service.js';
 
 const PARENT = '00000000-0000-4000-8000-0000000000a1';
 const DISPATCH = '00000000-0000-4000-8000-0000000000a2';
@@ -118,9 +125,11 @@ async function inTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   }
 }
 
+const monthKey = (workDate: string): number => Number(workDate.slice(0, 4)) * 100 + Number(workDate.slice(5, 7));
+
 /** Решение по дню у согласующего — под месячным локом сотрудника и трекингом, как в контроллере. */
 const decideDay = (adjustmentId: number, employeeId: number, workDate: string) => inTx(async client => {
-  await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [employeeId, 202609]);
+  await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [employeeId, monthKey(workDate)]);
   return withPendingDecisionTracking(client, [{ employeeId, workDate }], async () => {
     const updated = await client.query(
       `UPDATE attendance_adjustments SET approval_status = 'approved'
@@ -134,6 +143,17 @@ const decideDay = (adjustmentId: number, employeeId: number, workDate: string) =
 const readyCount = async (): Promise<number> => Number((await q<{ n: string }>(
   `SELECT count(*) AS n FROM notifications WHERE type = 'timesheet_approval_ready'`,
 ))[0].n);
+
+interface INote {
+  type: string;
+  user_id: string;
+  body: string;
+  metadata: { approvalId?: number; departmentId?: string; start_date: string; end_date: string };
+}
+const notesOf = (type: string) => q<INote>(
+  'SELECT type, user_id, body, metadata FROM notifications WHERE type = $1 ORDER BY created_at, id', [type],
+);
+const closeReadyNotes = () => notesOf('timesheet_close_ready');
 
 describeIf('нерешённые выходные: переход «готов к утверждению» (реальный PG)', () => {
   let personalId: number;
@@ -240,13 +260,16 @@ describeIf('нерешённые выходные: переход «готов �
     ))[0].id);
     const dispatchId = await insertApproval(DISPATCH, 'submitted');
     const parentOpenedId = await insertApproval(PARENT, 'submitted', true); // отдел-предок, открыт для правок
-    await insertApproval(DISPATCH, 'approved');
+    await insertApproval(DISPATCH, 'approved'); // закрыт: решений по нему нет
+    const approvedOpenedId = await insertApproval(DISPATCH, 'approved', true); // утверждён, открыт на правки
 
-    const affected = await inTx(client => lockAffectedSubmittedApprovals(
+    const affected = await inTx(client => lockAffectedApprovals(
       client, [{ employeeId: DEMCHUK, workDate: '2026-09-05' }],
     ));
 
-    expect(affected.map(a => a.id)).toEqual([personalId, dispatchId, parentOpenedId].sort((a, b) => a - b));
+    expect(affected.map(a => [a.id, a.status])).toEqual([
+      [personalId, 'submitted'], [dispatchId, 'submitted'], [parentOpenedId, 'submitted'], [approvedOpenedId, 'approved'],
+    ].sort((a, b) => Number(a[0]) - Number(b[0])));
   });
 
   it('новое заявление, закоммиченное во время HR-утверждения, выбивает его в повтор (40001)', async () => {
@@ -281,5 +304,159 @@ describeIf('нерешённые выходные: переход «готов �
     expect(await countPendingDecisionsForApproval(
       { id: personalId, department_id: null, manager_employee_id: CHEPIKOV, start_date: PERIOD.start, end_date: PERIOD.end },
     )).toBe(3);
+  });
+
+  describe('неподанный табель завершённого месяца → «Табель можно закрыть»', () => {
+    const insertDeptApproval = async (
+      status: string, start: string, end: string, unlocked = false,
+    ) => Number((await q<{ id: string }>(
+      `INSERT INTO timesheet_approvals (department_id, start_date, end_date, status, unlocked_at)
+       VALUES ($1, $2, $3, $4, ${unlocked ? 'now()' : 'NULL'}) RETURNING id`,
+      [DISPATCH, start, end, status],
+    ))[0].id);
+
+    beforeEach(async () => {
+      // Табель отдела никто не подавал: ни персональной, ни отделовой подачи.
+      await q('TRUNCATE timesheet_approval_employees, timesheet_approvals RESTART IDENTITY');
+      vi.mocked(listTimesheetWorkflowRecipientIds).mockClear();
+    });
+
+    it('решён 1–15, в 16–30 ещё ждёт → уведомления нет; решён последний → ровно одно за весь месяц', async () => {
+      await q(`UPDATE attendance_adjustments SET work_date = '2026-09-19' WHERE id = $1`, [daySary]);
+
+      await decideDay(dayDemchuk, DEMCHUK, '2026-09-05');
+      expect(await closeReadyNotes()).toEqual([]);
+
+      await decideDay(daySary, SARY, '2026-09-19');
+      const notes = await closeReadyNotes();
+      expect(notes).toHaveLength(1);
+      expect(notes[0].user_id).toBe(HR_USER);
+      expect(notes[0].body).toBe(
+        'Отдел Диспетчерская служба: табель за 1–30 сен 2026 — выходные согласованы. '
+        + 'Выгрузите единый файл для 1С и закройте табель.',
+      );
+      expect(notes[0].metadata).toMatchObject({ departmentId: DISPATCH, start_date: '2026-09-01', end_date: '2026-09-30' });
+      // Только тем, кто закрывает табель: наблюдателям (табельщицам) не шлём.
+      expect(vi.mocked(listTimesheetWorkflowRecipientIds).mock.calls).toEqual([[DISPATCH, ['review']]]);
+      expect(await readyCount()).toBe(0);
+    });
+
+    it('два параллельных «последних» решения по разным сотрудникам → ровно одно уведомление', async () => {
+      await Promise.all([
+        decideDay(dayDemchuk, DEMCHUK, '2026-09-05'),
+        decideDay(daySary, SARY, '2026-09-06'),
+      ]);
+
+      expect(await closeReadyNotes()).toHaveLength(1);
+    });
+
+    it('параллельно откат по одному сотруднику и «последнее» решение по другому → ложного уведомления нет', async () => {
+      // День Демчук уже решён; ждёт только Сары. Откат Демчук возвращает её день в ожидание.
+      await q(`UPDATE attendance_adjustments SET approval_status = 'approved' WHERE id = $1`, [dayDemchuk]);
+
+      const reverter = await pg.pool!.connect();
+      let decision: Promise<unknown>;
+      try {
+        await reverter.query('BEGIN');
+        await reverter.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [DEMCHUK, 202609]);
+        await withPendingDecisionTracking(reverter, [{ employeeId: DEMCHUK, workDate: '2026-09-05' }], async () => {
+          const updated = await reverter.query(
+            `UPDATE attendance_adjustments SET approval_status = 'pending'
+              WHERE id = $1 AND approval_status = 'approved'`,
+            [dayDemchuk],
+          );
+          return { value: null, changed: (updated.rowCount ?? 0) > 0 };
+        });
+
+        // «Последнее» решение стартует, пока откат не закоммичен, и ждёт лок отдела.
+        decision = decideDay(daySary, SARY, '2026-09-06');
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await reverter.query('COMMIT');
+      } catch (error) {
+        await reverter.query('ROLLBACK');
+        throw error;
+      } finally {
+        reverter.release();
+      }
+      await decision;
+
+      // День Демчук снова ждёт решения — закрывать нечего.
+      expect(await closeReadyNotes()).toEqual([]);
+      expect(await q(`SELECT id FROM attendance_adjustments WHERE approval_status = 'pending'`))
+        .toEqual([{ id: dayDemchuk }]);
+    });
+
+    it('1–15 подан, 16–30 не подан → два уведомления о своих периодах', async () => {
+      const submittedId = await insertDeptApproval('submitted', '2026-09-01', '2026-09-15');
+      await q('DELETE FROM attendance_adjustments WHERE id = $1', [daySary]);
+
+      await decideDay(dayDemchuk, DEMCHUK, '2026-09-05');
+
+      const ready = await notesOf('timesheet_approval_ready');
+      expect(ready).toHaveLength(1);
+      expect(ready[0].metadata).toMatchObject({ approvalId: submittedId, start_date: '2026-09-01', end_date: '2026-09-15' });
+      const closeReady = await closeReadyNotes();
+      expect(closeReady).toHaveLength(1);
+      expect(closeReady[0].metadata).toMatchObject({ start_date: '2026-09-16', end_date: '2026-09-30' });
+      expect(closeReady[0].body).toContain('табель за 16–30 сен 2026');
+    });
+
+    it('утверждённый открытый 1–15 → «можно закрыть» по подаче с напоминанием о файле; 16–30 не подан — своё уведомление', async () => {
+      const openedId = await insertDeptApproval('approved', '2026-09-01', '2026-09-15', true);
+      await q('DELETE FROM attendance_adjustments WHERE id = $1', [daySary]);
+
+      await decideDay(dayDemchuk, DEMCHUK, '2026-09-05');
+
+      const notes = await closeReadyNotes();
+      expect(notes.map(note => [note.metadata.approvalId ?? null, note.metadata.start_date, note.metadata.end_date]).sort())
+        .toEqual([[null, '2026-09-16', '2026-09-30'], [openedId, '2026-09-01', '2026-09-15']].sort());
+      expect(notes.find(note => note.metadata.approvalId === openedId)?.body).toBe(
+        'Отдел Диспетчерская служба: табель за 1–15 сен 2026 — выходные согласованы. '
+        + 'Закройте табель и выгрузите единый файл для 1С заново.',
+      );
+    });
+
+    it('выходной, застрявший в уже закрытой половине, закрытию остального не мешает', async () => {
+      await insertDeptApproval('approved', '2026-09-01', '2026-09-15'); // закрыт, в нём ждёт день Демчук
+      await q(`UPDATE attendance_adjustments SET work_date = '2026-09-19' WHERE id = $1`, [daySary]);
+
+      await decideDay(daySary, SARY, '2026-09-19');
+
+      const notes = await closeReadyNotes();
+      expect(notes).toHaveLength(1);
+      expect(notes[0].metadata).toMatchObject({ start_date: '2026-09-16', end_date: '2026-09-30' });
+    });
+
+    it('возвращённая подача нестандартного диапазона — её закрывают вручную, уведомления нет', async () => {
+      await insertDeptApproval('returned', '2026-09-10', '2026-09-20');
+
+      await decideDay(dayDemchuk, DEMCHUK, '2026-09-05');
+      await decideDay(daySary, SARY, '2026-09-06');
+
+      expect(await closeReadyNotes()).toEqual([]);
+    });
+
+    it('оба полупериода поданы → только «готов к утверждению», месячного уведомления нет', async () => {
+      await insertDeptApproval('submitted', '2026-09-01', '2026-09-15');
+      await insertDeptApproval('submitted', '2026-09-16', '2026-09-30');
+
+      await decideDay(dayDemchuk, DEMCHUK, '2026-09-05');
+      await decideDay(daySary, SARY, '2026-09-06');
+
+      expect(await readyCount()).toBe(1);
+      expect(await closeReadyNotes()).toEqual([]);
+    });
+
+    it('последний выходной решён до конца месяца → уведомления нет: закрывать ещё нечего', async () => {
+      const [october] = await q<{ id: string }>(
+        `INSERT INTO attendance_adjustments (employee_id, work_date, approval_status)
+         VALUES (${DEMCHUK}, '2026-10-10', 'pending') RETURNING id`,
+      );
+
+      const result = await decideDay(Number(october.id), DEMCHUK, '2026-10-10');
+
+      expect(result.value).toBe(1);
+      expect(await closeReadyNotes()).toEqual([]);
+    });
   });
 });

@@ -3442,6 +3442,17 @@ const openPeriod = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
+/** Штатный отказ «Закрыть табель»: в утверждённом табеле остались нерешённые выходные. */
+class ClosePendingDecisionsError extends Error {
+  readonly pendingCount: number;
+
+  constructor(pendingCount: number) {
+    super('pending weekend decisions');
+    this.name = 'ClosePendingDecisionsError';
+    this.pendingCount = pendingCount;
+  }
+}
+
 /**
  * Закрыть период обратно. Берём те же advisory-локи (сотрудник, месяц), что и пишущие пути
  * табеля: иначе правка, начатая до закрытия, успела бы закоммититься уже после него.
@@ -3481,6 +3492,14 @@ const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<vo
         const current = locked.rows[0];
         if (!current || current.unlocked_at == null) return null;
 
+        // Утверждённый табель с нерешёнными выходными под замок не возвращаем: решение
+        // осталось бы за замком, и часы выходного не дошли бы до редакции для 1С.
+        // Поданный закрывается свободно — решать выходные в нём замок не мешает.
+        if (current.status === 'approved') {
+          const pendingCount = await countPendingDecisionsForApproval(current, client);
+          if (pendingCount > 0) throw new ClosePendingDecisionsError(pendingCount);
+        }
+
         const result = await client.query<TimesheetApproval>(
           `UPDATE timesheet_approvals
               SET unlocked_at = NULL,
@@ -3504,6 +3523,15 @@ const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<vo
         return row;
       });
     } catch (err) {
+      if (err instanceof ClosePendingDecisionsError) {
+        res.status(409).json({
+          success: false,
+          error: 'Табель ждёт согласования выходных — закрыть можно после решения по ним',
+          code: 'PENDING_CORRECTIONS_EXIST',
+          pending_count: err.pendingCount,
+        });
+        return;
+      }
       const handled = respondVersionError(res, err);
       if (handled) return;
       throw err;

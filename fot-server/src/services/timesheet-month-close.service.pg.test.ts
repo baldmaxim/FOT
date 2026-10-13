@@ -515,6 +515,32 @@ describe.skipIf(!PG_URL)('закрытие табелей отдела за ме
     expect(await eventsOf(BRIGADE_A)).toEqual([]);
   });
 
+  it('утверждённая открытая с нерешёнными выходными: замок не возвращается, редакции нет', async () => {
+    // Пока табель был открыт, в нём появился выходной на согласовании: под замком его уже
+    // не решить, и часы не дошли бы до 1С.
+    const approvalId = await insertApproval({
+      departmentId: BRIGADE_A, startDate: '2026-09-01', endDate: '2026-09-15', status: 'approved',
+      roster: [IVANOV, PETROV], unlocked: true,
+    });
+    await insertApproval({
+      departmentId: BRIGADE_A, startDate: '2026-09-16', endDate: '2026-09-30', status: 'approved',
+      roster: [IVANOV, PETROV],
+    });
+    pending.inTransaction = 1;
+
+    const result = await closeDepartmentMonth(HR_USER, BRIGADE_A, MONTH);
+
+    expect(result.halves.map(half => [half.status, half.reason])).toEqual([
+      ['skipped', 'Ждёт согласования выходных (дней: 1)'],
+      ['already_closed', undefined],
+    ]);
+    expect(result.changes).toEqual([]);
+    const [row] = await approvalsOf(BRIGADE_A);
+    expect([row.id, row.status]).toEqual([approvalId, 'approved']);
+    expect(row.unlocked_at).not.toBeNull();
+    expect(await q('SELECT 1 FROM timesheet_versions WHERE approval_id = $1', [approvalId])).toEqual([]);
+  });
+
   it('поданная и открытая: утверждается со своим составом, замок возвращён, автор подачи сохранён', async () => {
     const approvalId = await insertApproval({
       departmentId: BRIGADE_A, startDate: '2026-09-01', endDate: '2026-09-15', status: 'submitted',

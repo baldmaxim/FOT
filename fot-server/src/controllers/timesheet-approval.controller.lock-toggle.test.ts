@@ -39,7 +39,7 @@ vi.mock('../services/timesheet-snapshot-tx.js', () => ({
           // Пустой txRows моделирует «UPDATE ничего не обновил», то есть период
           // уже закрыт — значит и под FOR UPDATE строка идёт без unlocked_at.
           const row = txRows.value.length > 0
-            ? approvalRow({ unlocked_at: UNLOCKED_AT })
+            ? approvalRow({ ...(txRows.value[0] as Record<string, unknown>), unlocked_at: UNLOCKED_AT })
             : approvalRow();
           return { rows: [row], rowCount: 1 };
         }
@@ -57,6 +57,13 @@ vi.mock('../services/timesheet-snapshot-tx.js', () => ({
 vi.mock('../services/timesheet-version.service.js', async (importActual) => ({
   ...(await importActual<typeof import('../services/timesheet-version.service.js')>()),
   materializeVersion: materializeMock,
+}));
+
+// Нерешённые выходные подачи — счётчик HR-гейта; по умолчанию ждать нечего.
+const { pendingCountMock } = vi.hoisted(() => ({ pendingCountMock: vi.fn(async () => 0) }));
+vi.mock('../services/timesheet-pending-decisions.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/timesheet-pending-decisions.service.js')>()),
+  countPendingDecisionsForApproval: pendingCountMock,
 }));
 
 const { resolveScopedDeptMock } = vi.hoisted(() => ({
@@ -134,6 +141,7 @@ beforeEach(() => {
       : []
   ));
   pgQueryOne.mockResolvedValue(null);
+  pendingCountMock.mockResolvedValue(0);
   resolveScopedDeptMock.mockImplementation(async (_req: unknown, deptId: string | null) => deptId);
 });
 
@@ -281,6 +289,42 @@ describe('closePeriod', () => {
     // Закрытие утверждённого периода порождает официальную версию для 1С.
     expect(materializeMock).toHaveBeenCalledTimes(1);
     expect(materializeMock.mock.calls[0]![2]).toBe('close');
+  });
+
+  it('утверждённый табель с нерешёнными выходными — 409, замок не возвращён, версии нет', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ unlocked_at: UNLOCKED_AT }));
+    txRows.value = [approvalRow()];
+    pendingCountMock.mockResolvedValueOnce(2);
+    const res = makeRes();
+
+    await timesheetApprovalController.closePeriod(makeReq(), res);
+
+    expect(res._status).toBe(409);
+    expect(res._json).toMatchObject({
+      code: 'PENDING_CORRECTIONS_EXIST',
+      pending_count: 2,
+      error: 'Табель ждёт согласования выходных — закрыть можно после решения по ним',
+    });
+    // Счётчик читается внутри транзакции закрытия, по заблокированной строке подачи.
+    expect(pendingCountMock).toHaveBeenCalledTimes(1);
+    expect((pendingCountMock.mock.calls[0] as unknown[])[0]).toMatchObject({ id: 521, status: 'approved' });
+    expect(txQueries.some(q => /UPDATE timesheet_approvals/i.test(q.sql))).toBe(false);
+    expect(materializeMock).not.toHaveBeenCalled();
+  });
+
+  it('поданный табель закрывается и с нерешёнными выходными — решать их замок не мешает', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ status: 'submitted', unlocked_at: UNLOCKED_AT }));
+    txRows.value = [approvalRow({ status: 'submitted' })];
+    pendingCountMock.mockResolvedValue(3);
+    const res = makeRes();
+
+    await timesheetApprovalController.closePeriod(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(pendingCountMock).not.toHaveBeenCalled();
+    expect(txQueries.some(q => /UPDATE timesheet_approvals/i.test(q.sql))).toBe(true);
+    // Версия для 1С — только у утверждённого.
+    expect(materializeMock).not.toHaveBeenCalled();
   });
 
   it('период уже закрыт — 409 ALREADY_LOCKED', async () => {

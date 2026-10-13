@@ -852,45 +852,58 @@ async function bulkRevertByIdsImpl(
   const revertRows = revertable
     .filter(a => allowedIds.includes(Number(a.id)))
     .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
-  const { updated, tail, lockedIds, synced } = await withQuotaLocks(revertPairs, async exec => {
-    const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, revertRows, exec);
-    if (writableIds.length === 0) {
-      return {
-        updated: [] as Array<{ id: number }>,
-        tail: [] as IReapprovalTransition[],
-        lockedIds: skipped,
-        synced: [] as ISyncedWorkLeaveRequest[],
-      };
-    }
-    const rows = await queryWith<{ id: number }>(
-      exec,
-      `UPDATE attendance_adjustments SET
-         approval_status = 'pending',
-         approved_by = NULL,
-         approved_at = NULL,
-         approval_comment = NULL
-       WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
-       RETURNING id`,
-      [writableIds, ['approved', 'rejected']],
-    );
-    const transitions: IReapprovalTransition[] = [];
-    if (rows.length > 0) {
-      const months = new Map(revertPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
-      for (const pair of months.values()) {
-        transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+  // Откат создаёт новое ожидание. Уведомлений он не даёт, но обязан идти через общий
+  // трекинг: иначе параллельное «последнее» решение по другому сотруднику не увидело бы
+  // его и сообщило бы кадрам, что выходные согласованы.
+  const { value: { updated, tail, lockedIds, synced }, effects } = await withQuotaLocks(
+    revertPairs,
+    exec => withPendingDecisionTracking(exec, revertPairs, async () => {
+      const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, revertRows, exec);
+      if (writableIds.length === 0) {
+        return {
+          changed: false,
+          value: {
+            updated: [] as Array<{ id: number }>,
+            tail: [] as IReapprovalTransition[],
+            lockedIds: skipped,
+            synced: [] as ISyncedWorkLeaveRequest[],
+          },
+        };
       }
-    }
-    const syncedRequests = await syncWorkLeaveRequestsForAdjustmentIds(
-      exec, rows.map(r => Number(r.id)), req.user.id, null,
-    );
-    return { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests };
-  });
+      const rows = await queryWith<{ id: number }>(
+        exec,
+        `UPDATE attendance_adjustments SET
+           approval_status = 'pending',
+           approved_by = NULL,
+           approved_at = NULL,
+           approval_comment = NULL
+         WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
+         RETURNING id`,
+        [writableIds, ['approved', 'rejected']],
+      );
+      const transitions: IReapprovalTransition[] = [];
+      if (rows.length > 0) {
+        const months = new Map(revertPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
+        for (const pair of months.values()) {
+          transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+        }
+      }
+      const syncedRequests = await syncWorkLeaveRequestsForAdjustmentIds(
+        exec, rows.map(r => Number(r.id)), req.user.id, null,
+      );
+      return {
+        changed: rows.length > 0,
+        value: { updated: rows, tail: transitions, lockedIds: skipped, synced: syncedRequests },
+      };
+    }),
+  );
 
   const processedCount = updated.length;
   const processedIds = updated.map((r) => Number(r.id));
 
   await reportQuotaTailTransitions(req, tail, 'correction_approval_bulk_revert');
   emitWorkLeaveRequestSync(synced, req.user.id);
+  void publishPendingDecisionEffects(effects);
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -1579,44 +1592,64 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
     // Заявка «Работа в выходной» возвращается в pending в той же транзакции — как при
     // массовом откате: день снова ждёт решения, и заявка вместе с ним.
     const prevStatus = adj.approval_status;
-    const { updatedRows, tail, lock, synced } = await withEmployeeMonthQuotaLock(
+    // Через общий трекинг — как массовый откат: новое ожидание должно быть видно
+    // параллельному «последнему» решению по другому сотруднику.
+    const { value: { updatedRows, tail, lock, synced }, effects } = await withEmployeeMonthQuotaLock(
       adj.employee_id,
       adj.work_date,
-      async exec => {
-        const locks = await loadCorrectionLocks(
-          req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec,
-        );
-        const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
-        if (lockInfo) {
+      exec => withPendingDecisionTracking(
+        exec,
+        [{ employeeId: adj.employee_id, workDate: adj.work_date }],
+        async () => {
+          const locks = await loadCorrectionLocks(
+            req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec,
+          );
+          const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
+          if (lockInfo) {
+            return {
+              changed: false,
+              value: {
+                updatedRows: [] as Array<{ id: number }>,
+                tail: [] as IReapprovalTransition[],
+                lock: lockInfo as IApprovalLockInfo | null,
+                synced: [] as ISyncedWorkLeaveRequest[],
+              },
+            };
+          }
+          const rows = await queryWith<{ id: number }>(
+            exec,
+            `UPDATE attendance_adjustments SET
+               approval_status = 'pending',
+               approved_by = NULL,
+               approved_at = NULL,
+               approval_comment = NULL
+             WHERE id = $1 AND approval_status = ANY($2::text[])
+             RETURNING id`,
+            [id, ['approved', 'rejected']],
+          );
+          if (rows.length === 0) {
+            return {
+              changed: false,
+              value: {
+                updatedRows: rows,
+                tail: [] as IReapprovalTransition[],
+                lock: null as IApprovalLockInfo | null,
+                synced: [] as ISyncedWorkLeaveRequest[],
+              },
+            };
+          }
+          const monthTail = await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec);
           return {
-            updatedRows: [] as Array<{ id: number }>,
-            tail: [] as IReapprovalTransition[],
-            lock: lockInfo,
-            synced: [] as ISyncedWorkLeaveRequest[],
+            changed: true,
+            value: {
+              updatedRows: rows,
+              tail: monthTail,
+              lock: null as IApprovalLockInfo | null,
+              synced: await syncWorkLeaveRequestsForAdjustmentIds(exec, [id], req.user.id, null),
+            },
           };
-        }
-        const rows = await queryWith<{ id: number }>(
-          exec,
-          `UPDATE attendance_adjustments SET
-             approval_status = 'pending',
-             approved_by = NULL,
-             approved_at = NULL,
-             approval_comment = NULL
-           WHERE id = $1 AND approval_status = ANY($2::text[])
-           RETURNING id`,
-          [id, ['approved', 'rejected']],
-        );
-        if (rows.length === 0) {
-          return { updatedRows: rows, tail: [] as IReapprovalTransition[], lock: null, synced: [] as ISyncedWorkLeaveRequest[] };
-        }
-        const monthTail = await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec);
-        return {
-          updatedRows: rows,
-          tail: monthTail,
-          lock: null as IApprovalLockInfo | null,
-          synced: await syncWorkLeaveRequestsForAdjustmentIds(exec, [id], req.user.id, null),
-        };
-      },
+        },
+      ),
     );
 
     if (lock) {
@@ -1634,6 +1667,7 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
     }
     await reportQuotaTailTransitions(req, tail, 'correction_approval_revert');
     emitWorkLeaveRequestSync(synced, req.user.id);
+    void publishPendingDecisionEffects(effects);
 
     await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
       entityType: 'attendance_adjustment',

@@ -637,6 +637,55 @@ describe('решение по дню «Работы в выходной»: за�
     expect(syncCommitsSeen).toEqual([0]);
   });
 
+  describe('откат решения идёт через общий трекинг нерешённых выходных', () => {
+    // Откат создаёт новое ожидание: без общих локов параллельное «последнее» решение по
+    // другому сотруднику не увидело бы его и сообщило бы кадрам, что табель можно закрыть.
+    beforeEach(() => {
+      tracked.changed = [];
+    });
+
+    it('revertOne: месяц сотрудника в трекинге, мутация записала, эффекты опубликованы', async () => {
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'approved' });
+      mockApprovableEmployees();
+
+      await correctionApprovalController.revertOne(reqAs(2063, { params: { id: '77' } }), makeRes());
+
+      expect(trackingMock).toHaveBeenCalledTimes(1);
+      expect(trackingMock.mock.calls[0][0]).toBe(txClient);
+      expect(trackingMock.mock.calls[0][1]).toEqual([{ employeeId: 247, workDate: '2026-06-06' }]);
+      expect(tracked.changed).toEqual([true]);
+      expect(publishEffectsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('revertOne в закрытом периоде ничего не записал — трекинг видит changed = false', async () => {
+      closedLocksMock.mockResolvedValueOnce(new Map([[
+        lockKey(247, '2026-06-06'),
+        { id: 1831, start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved' },
+      ]]));
+      pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'approved' });
+      mockApprovableEmployees();
+      const res = makeRes();
+
+      await correctionApprovalController.revertOne(reqAs(2063, { params: { id: '77' } }), res);
+
+      expect(res._status).toBe(409);
+      expect(tracked.changed).toEqual([false]);
+      expect(publishEffectsMock).not.toHaveBeenCalled();
+    });
+
+    it('bulkRevertByIds: месяцы всех строк в трекинге, эффекты опубликованы', async () => {
+      pgQuery.mockResolvedValueOnce([{ ...ADJ, approval_status: 'approved' }]);
+      mockApprovableEmployees();
+
+      await correctionApprovalController.bulkRevertByIds(reqAs(2063, { body: { ids: [77] } }), makeRes());
+
+      expect(trackingMock).toHaveBeenCalledTimes(1);
+      expect(trackingMock.mock.calls[0][1]).toEqual([{ employeeId: 247, workDate: '2026-06-06' }]);
+      expect(tracked.changed).toEqual([true]);
+      expect(publishEffectsMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('revertOne: одиночный откат тоже синхронизирует заявку (раньше не синхронизировал вовсе)', async () => {
     syncedRow = { id: 900, employee_id: 247, status: 'pending' };
     pgQueryOne.mockResolvedValueOnce({ ...ADJ, approval_status: 'approved' });
