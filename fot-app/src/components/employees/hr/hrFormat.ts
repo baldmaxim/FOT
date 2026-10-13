@@ -20,6 +20,10 @@ export const fmtBytes = (n: number): string => {
   return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
 };
 
+/** СНИЛС читается по группам: 11 цифр → 123-456-789 00. Маскированное (•) не трогаем. */
+export const fmtSnils = (v: string): string =>
+  /^\d{11}$/.test(v) ? `${v.slice(0, 3)}-${v.slice(3, 6)}-${v.slice(6, 9)} ${v.slice(9)}` : v;
+
 export const DATE_FIELDS = new Set(['birth_date', 'passport_date', 'passport_expiry_date', 'kig_end_date', 'patent_issue_date', 'patent_expiry_date', 'insurance_policy_date', 'planned_exit_date']);
 
 export const GENDER_LABEL: Record<string, string> = { male: 'Мужской', female: 'Женский' };
@@ -30,6 +34,7 @@ export const displayFieldValue = (key: string, value: unknown, catalog: IHrCatal
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Да' : 'Нет';
   if (DATE_FIELDS.has(key)) return fmtDate(String(value));
+  if (key === 'snils') return fmtSnils(String(value));
   if (key === 'gender') return GENDER_LABEL[String(value)] ?? String(value);
   if (key === 'passport_type') return PASSPORT_TYPE_LABEL[String(value)] ?? String(value);
   if (key === 'citizenship_id' || key === 'birth_country_id') {

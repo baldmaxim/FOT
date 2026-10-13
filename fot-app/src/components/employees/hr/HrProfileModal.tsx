@@ -254,7 +254,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                         <div className={styles.infoGrid}>
                           <div className={styles.infoCell}><span>ФИО</span><b>{profile.full_name}</b></div>
                           <div className={styles.infoCell}><span>Гражданство</span><b>{profile.citizenship?.name ?? '—'}</b></div>
-                          <div className={styles.infoCell}><span>Дата выхода</span><b>{fmtDate(profile.hire_date)}</b></div>
+                          <div className={styles.infoCell}><span>Дата приёма</span><b>{fmtDate(profile.hire_date)}</b></div>
                           <div className={styles.infoCell}><span>Табельный №</span><b>{profile.tab_number ?? '—'}</b></div>
                           {fieldsToShow.filter(f => f.key !== 'citizenship_id').map(f => (
                             <div key={f.key} className={`${styles.infoCell} ${f.key === 'registration_address' || f.key === 'notes' || f.key === 'passport_issuer' ? styles.infoWide : ''}`}>
