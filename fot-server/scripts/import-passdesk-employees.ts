@@ -34,6 +34,9 @@ import { loadDecryptedBytes, loadHrDocument, uploadHrDocument } from '../src/ser
 import { getHrDocumentType } from '../src/config/hr-documents.js';
 import { decryptPassdeskField, decryptPassdeskFile, isPassdeskCryptoConfigured } from './lib/passdesk-crypto.js';
 
+/** Самый крупный скан в PassDesk — 36,5 МБ; берём с запасом. */
+const MIGRATION_FILE_MAX_BYTES = 40 * 1024 * 1024;
+
 type MatchRule = 'external_ref' | 'manual' | 'snils' | 'inn' | 'passport_birth' | 'name_birth' | 'ambiguous' | 'unmatched';
 const AUTO_RULES = new Set<MatchRule>(['external_ref', 'manual', 'snils', 'inn', 'passport_birth']);
 
@@ -488,6 +491,9 @@ const transferFiles = async (employeeId: number, files: IPdFile[], stats: { file
         skipOcr: true,
         historySource: 'migration',
         createdAt: f.created_at,
+        // В PassDesk 31 скан крупнее штатных 10 МБ (до 36,5 МБ) — исторические
+        // документы переносим как есть, лимит ручной загрузки в UI не меняется.
+        maxBytes: MIGRATION_FILE_MAX_BYTES,
       });
       // Обратная проверка: скачать из R2, расшифровать, сверить sha256.
       const stored = await loadHrDocument(row.id);

@@ -127,6 +127,12 @@ export interface IUploadInput {
   historySource?: 'admin' | 'migration';
   /** Дата загрузки в источнике (перенос) — сохраняем как created_at. */
   createdAt?: string | null;
+  /**
+   * Предел размера для этой загрузки. Нужен переносу из PassDesk: там 31 скан
+   * крупнее 10 МБ (военные билеты, многостраничные «иные»), и обычный лимит их
+   * отбрасывал. Ручная загрузка через UI его не передаёт и остаётся на 10 МБ.
+   */
+  maxBytes?: number;
 }
 
 /** Загрузка скана: валидация → sha256 → строка documents → шифрование (AAD=id) → R2 → метаданные → линк → OCR. */
@@ -136,7 +142,10 @@ export const uploadHrDocument = async (target: IUploadTarget, input: IUploadInpu
   if (!type) throw new HrDocumentError('Недопустимый тип документа', 400);
   if (!(await r2Service.isEnabledAsync())) throw new HrDocumentError('Хранилище файлов не настроено', 503);
   if (input.buffer.length === 0) throw new HrDocumentError('Пустой файл', 400);
-  if (input.buffer.length > HR_FILE_MAX_BYTES) throw new HrDocumentError('Файл больше 10 МБ', 413);
+  const maxBytes = input.maxBytes ?? HR_FILE_MAX_BYTES;
+  if (input.buffer.length > maxBytes) {
+    throw new HrDocumentError(`Файл больше ${Math.round(maxBytes / (1024 * 1024))} МБ`, 413);
+  }
 
   let buffer = input.buffer;
   let mimeType = detectMime(buffer, input.mimeType);
