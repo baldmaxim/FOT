@@ -37,6 +37,24 @@ import { decryptPassdeskField, decryptPassdeskFile, isPassdeskCryptoConfigured }
 /** Самый крупный скан в PassDesk — 36,5 МБ; берём с запасом. */
 const MIGRATION_FILE_MAX_BYTES = 40 * 1024 * 1024;
 
+/**
+ * 36 сканов в PassDesk лежат офисными файлами (банковские реквизиты, карточки
+ * воинского учёта). Их mime в таблице files бывает пуст, поэтому выводим из
+ * расширения и разрешаем точечно: белый список ручной загрузки не меняется.
+ */
+const OFFICE_MIME_BY_EXT: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+};
+const OFFICE_MIMES = Object.values(OFFICE_MIME_BY_EXT);
+
+const officeMimeFor = (name: string | null | undefined): string | null => {
+  const ext = /\.([A-Za-z0-9]{1,5})$/.exec((name ?? '').trim())?.[1]?.toLowerCase();
+  return ext ? OFFICE_MIME_BY_EXT[ext] ?? null : null;
+};
+
 type MatchRule = 'external_ref' | 'manual' | 'snils' | 'inn' | 'passport_birth' | 'name_birth' | 'ambiguous' | 'unmatched';
 const AUTO_RULES = new Set<MatchRule>(['external_ref', 'manual', 'snils', 'inn', 'passport_birth']);
 
@@ -490,10 +508,11 @@ const transferFiles = async (employeeId: number, files: IPdFile[], stats: { file
     try {
       const plain = await downloadPassdeskFile(f);
       const sha = sha256Hex(plain);
+      const originalName = f.original_name ?? f.file_name ?? `${f.id}.bin`;
       const row = await uploadHrDocument({ employeeId }, {
         buffer: plain,
-        mimeType: f.mime_type ?? 'application/octet-stream',
-        originalName: f.original_name ?? f.file_name ?? `${f.id}.bin`,
+        mimeType: officeMimeFor(originalName) ?? f.mime_type ?? 'application/octet-stream',
+        originalName,
         typeCode,
         uploadedBy: migrationUserId(),
         actorName: 'Перенос из PassDesk',
@@ -503,6 +522,7 @@ const transferFiles = async (employeeId: number, files: IPdFile[], stats: { file
         // В PassDesk 31 скан крупнее штатных 10 МБ (до 36,5 МБ) — исторические
         // документы переносим как есть, лимит ручной загрузки в UI не меняется.
         maxBytes: MIGRATION_FILE_MAX_BYTES,
+        extraMimes: OFFICE_MIMES,
       });
       // Обратная проверка: скачать из R2, расшифровать, сверить sha256.
       const stored = await loadHrDocument(row.id);

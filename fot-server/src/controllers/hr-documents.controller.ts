@@ -17,6 +17,7 @@ import { resolveHrDocumentsAccess } from '../services/hr-documents-access.servic
 import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import {
   HrDocumentError,
+  RECOGNIZABLE_MIME,
   countCompleteness,
   groupIntoSlots,
   listDraftHrDocumentRows,
@@ -271,6 +272,13 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
     }
     if (!toPublic(doc).ocr_supported) {
       res.status(400).json({ success: false, error: 'Этот тип документа не распознаётся' });
+      return;
+    }
+    // Перенос из PassDesk принёс 36 сканов офисными файлами: по типу документа
+    // они распознаваемы, но модель получит .docx как картинку и трижды упадёт,
+    // тратя квоту прокси — общую с распознаванием чеков за патент.
+    if (!RECOGNIZABLE_MIME.has(doc.mime_type)) {
+      res.status(400).json({ success: false, error: 'Распознаётся только изображение или PDF' });
       return;
     }
     await enqueueHrOcr(doc.id);

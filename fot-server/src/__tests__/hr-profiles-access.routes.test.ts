@@ -72,6 +72,7 @@ const recognizeCalls = vi.hoisted(() => ({ calls: 0 }));
 vi.mock('../services/hr-documents.service.js', () => ({
   HrDocumentError: class extends Error { constructor(msg: string, readonly status = 400) { super(msg); } },
   HR_FILE_MAX_BYTES: 20 * 1024 * 1024,
+  RECOGNIZABLE_MIME: new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
   uploadHrDocument: vi.fn(async () => { uploaded.calls += 1; return docRow; }),
   loadHrDocument: vi.fn(async () => docRow),
   loadDecryptedBytes: vi.fn(async () => Buffer.from('scan')),

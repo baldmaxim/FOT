@@ -19,6 +19,8 @@ import type { IOcrNormalized } from './hr-ocr/normalize.js';
 
 export const HR_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+/** Что модель умеет читать: HEIC на загрузке уже сконвертирован в JPEG. */
+export const RECOGNIZABLE_MIME: ReadonlySet<string> = ALLOWED_MIME;
 
 export interface IHrDocumentRow {
   id: number;
@@ -89,6 +91,18 @@ const detectMime = (buffer: Buffer, declared: string): string | null => {
   return ALLOWED_MIME.has(declared) ? null : null;
 };
 
+/**
+ * Тип файла: сигнатура важнее объявленного типа. Объявленному верим только
+ * когда сигнатуры нет и тип разрешён явно через extraMimes — это форточка для
+ * переноса из PassDesk, где 36 сканов лежат как .docx/.xlsx/.doc (у них ZIP и
+ * OLE вместо сигнатуры содержимого). Ручная загрузка extraMimes не передаёт.
+ */
+export const resolveUploadMime = (buffer: Buffer, declared: string, extraMimes?: ReadonlySet<string>): string | null => {
+  const sniffed = detectMime(buffer, declared);
+  if (sniffed) return sniffed;
+  return extraMimes?.has(declared) ? declared : null;
+};
+
 export const toPublic = (row: IHrDocumentRow): IHrDocumentPublic => {
   const type = getHrDocumentType(row.category);
   return {
@@ -133,6 +147,8 @@ export interface IUploadInput {
    * отбрасывал. Ручная загрузка через UI его не передаёт и остаётся на 10 МБ.
    */
   maxBytes?: number;
+  /** Дополнительно разрешённые типы для этой загрузки (перенос: офисные файлы). */
+  extraMimes?: string[];
 }
 
 /** Загрузка скана: валидация → sha256 → строка documents → шифрование (AAD=id) → R2 → метаданные → линк → OCR. */
@@ -148,7 +164,8 @@ export const uploadHrDocument = async (target: IUploadTarget, input: IUploadInpu
   }
 
   let buffer = input.buffer;
-  let mimeType = detectMime(buffer, input.mimeType);
+  const extraMimes = input.extraMimes?.length ? new Set(input.extraMimes) : undefined;
+  let mimeType = resolveUploadMime(buffer, input.mimeType, extraMimes);
   let fileName = sanitizeFileName(input.originalName);
   if (mimeType === 'image/heic') {
     const normalized = await ensureBrowserFriendlyImage(buffer, 'image/heic', fileName);
@@ -157,7 +174,7 @@ export const uploadHrDocument = async (target: IUploadTarget, input: IUploadInpu
     mimeType = 'image/jpeg';
     fileName = normalized.fileName;
   }
-  if (!mimeType || !ALLOWED_MIME.has(mimeType)) {
+  if (!mimeType || !(ALLOWED_MIME.has(mimeType) || extraMimes?.has(mimeType))) {
     throw new HrDocumentError('Допустимы только JPEG, PNG, WebP, HEIC и PDF', 415);
   }
 

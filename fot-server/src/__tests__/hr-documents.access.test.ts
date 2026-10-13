@@ -88,6 +88,7 @@ vi.mock('../services/audit.service.js', () => ({
 vi.mock('../services/hr-documents.service.js', () => ({
   HrDocumentError: class extends Error { constructor(msg: string, readonly status = 400) { super(msg); } },
   HR_FILE_MAX_BYTES: 20 * 1024 * 1024,
+  RECOGNIZABLE_MIME: new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
   uploadHrDocument: s.uploadHrDocument,
   loadHrDocument: vi.fn(async () => s.doc),
   loadDecryptedBytes: vi.fn(async () => Buffer.from('scan')),
@@ -313,6 +314,17 @@ d('ключ документов: удаление и повторное рас�
     const res = await call(method, url, TIMEKEEPER);
     expect(res.status).toBe(403);
     expect(s.softDeleteHrDocument).not.toHaveBeenCalled();
+    expect(s.enqueueHrOcr).not.toHaveBeenCalled();
+  });
+
+  it('свой офисный файл: распознавание → 400, в очередь не ставится', async () => {
+    s.doc = makeDoc({
+      uploaded_by: TIMEKEEPER_USER,
+      file_name: 'реквизиты.docx',
+      mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    const res = await call('post', '/api/hr-profiles/documents/42/recognize', TIMEKEEPER);
+    expect(res.status).toBe(400);
     expect(s.enqueueHrOcr).not.toHaveBeenCalled();
   });
 
