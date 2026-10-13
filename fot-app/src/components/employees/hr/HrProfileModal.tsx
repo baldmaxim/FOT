@@ -9,6 +9,7 @@ import type { HrProfileInput, IHrDocument, IHrProfileView } from '../../../types
 import { HrProfileForm } from './HrProfileForm';
 import { HrDocumentsGrid } from './HrDocumentsGrid';
 import { HrProfileHistory } from './HrProfileHistory';
+import { HrDocumentViewerPanel } from './HrDocumentViewerPanel';
 import { HrOcrConflictsPanel } from './HrOcrConflictsPanel';
 import { displayFieldValue, fmtDate, visibleFields } from './hrFormat';
 import { resolveHrDocumentPermissions } from '../../../utils/hrDocumentPermissions';
@@ -20,6 +21,8 @@ interface IHrProfileModalProps {
 }
 
 type Tab = 'info' | 'files';
+/** Что показывать справа: оригинал скана или историю изменений. */
+type SidePanel = 'preview' | 'history';
 
 /**
  * «Реквизиты» — большая модалка по образцу карточки сотрудника PassDesk:
@@ -39,6 +42,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
   }), [canEdit, canViewPage, canEditPage, user?.id]);
 
   const [tab, setTab] = useState<Tab>('info');
+  const [sidePanel, setSidePanel] = useState<SidePanel>('preview');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<HrProfileInput>({});
   const [saving, setSaving] = useState(false);
@@ -170,6 +174,9 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
     }
   };
 
+  // Сканы смотрит только тот, кому открыт их просмотр; остальным — прежняя история.
+  const showPreview = canDocs && sidePanel === 'preview';
+
   const fieldsToShow = useMemo(() => (catalog && profile ? visibleFields(catalog.fields, profile.requires_patent) : []), [catalog, profile]);
 
   const zupToggle = async () => {
@@ -291,7 +298,15 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                   )}
                 </div>
                 <aside className={styles.side}>
-                  <HrProfileHistory items={historyQuery.data ?? []} catalog={catalog} loading={historyQuery.isPending} />
+                  {canDocs && (
+                    <div className={styles.sideTabs}>
+                      <button type="button" className={`${styles.tab} ${showPreview ? styles.tabActive : ''}`} onClick={() => setSidePanel('preview')}>Оригинал</button>
+                      <button type="button" className={`${styles.tab} ${showPreview ? '' : styles.tabActive}`} onClick={() => setSidePanel('history')}>История</button>
+                    </div>
+                  )}
+                  {showPreview
+                    ? <HrDocumentViewerPanel slots={docsQuery.data?.slots ?? []} loading={docsQuery.isPending} />
+                    : <HrProfileHistory items={historyQuery.data ?? []} catalog={catalog} loading={historyQuery.isPending} />}
                 </aside>
               </div>
             )}
