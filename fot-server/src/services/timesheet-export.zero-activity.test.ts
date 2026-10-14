@@ -213,6 +213,20 @@ describe('fetchTimesheetDataForEmployees (bulk unified) + нарезка по о
     expect(employeeIdsOf(sliceB)).toEqual([1]);
   });
 
+  it('trace журнала выгрузок: не загруженные по статусу и отсеянные «пустые»; состав тот же', async () => {
+    h.buildAttendance.mockResolvedValue(attendanceResult([skudEntry(1), emptyStubEntry(4)]));
+    const trace = { ineligibleIds: [] as number[], zeroActivityIds: [] as number[] };
+    // 99 нет в выборке employees — не прошёл фильтр статуса (уволен вне периода / архивный).
+    const bulk = await fetchTimesheetDataForEmployees(
+      MONTH, [1, 4, 5, 99], 'Сводный 1С', 'FULL', 'actual', true,
+      { excludeZeroActivity: true, trace },
+    );
+
+    expect(employeeIdsOf(bulk)).toEqual([1]);
+    expect(trace.ineligibleIds).toEqual([99]);
+    expect([...trace.zeroActivityIds].sort((a, b) => a - b)).toEqual([4, 5]);
+  });
+
   it('все выбранные отделы пустые → пустой bulk и пустые срезы (unified-файл без строк)', async () => {
     h.buildAttendance.mockResolvedValue(attendanceResult([emptyStubEntry(4)]));
     const bulk = await fetchTimesheetDataForEmployees(

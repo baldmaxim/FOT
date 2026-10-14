@@ -14,7 +14,7 @@ vi.mock('./timesheet-export.service.js', () => ({
   fetchTimesheetDataForEmployees: h.fetchEmps,
   sliceTimesheetDataByEmployees: h.slice,
 }));
-vi.mock('./timesheet-1c-unified.service.js', () => ({ buildUnified1CWorkbook: h.buildWorkbook }));
+vi.mock('./timesheet-1c-unified.service.js', () => ({ buildUnified1CWorkbookWithRows: h.buildWorkbook }));
 vi.mock('./timesheet-excel.service.js', () => ({ writeTimesheetWorkbookBuffer: h.writeBuffer }));
 vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./timesheet-department-assignments.service.js')>();
@@ -29,6 +29,7 @@ vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) 
 import { buildTransferSegments } from './timesheet-department-assignments.service.js';
 import {
   buildUnified1CBuffer,
+  buildUnified1CExport,
   groupEmployeesByDepartment,
   parseStrictExportPeriod,
 } from './timesheet-unified-export.service.js';
@@ -37,8 +38,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.pgQuery.mockResolvedValue([{ id: 'D1', name: 'бр. Первая' }]);
   h.fetchEmps.mockResolvedValue({ bulk: true });
-  h.slice.mockImplementation((_bulk: unknown, ids: number[], name: string, deptId: string | null) => ({ ids, name, deptId }));
-  h.buildWorkbook.mockResolvedValue({});
+  h.slice.mockImplementation((_bulk: unknown, ids: number[], name: string, deptId: string | null) => ({
+    ids, name, deptId, employees: ids.map(id => ({ id })),
+  }));
+  h.buildWorkbook.mockResolvedValue({ workbook: {}, rows: [] });
   h.writeBuffer.mockResolvedValue(Buffer.from('xlsx'));
   h.segments.mockResolvedValue(new Map());
 });
@@ -189,6 +192,35 @@ describe('buildUnified1CBuffer', () => {
     h.slice.mockClear();
     await buildUnified1CBuffer(params);
     expect(h.slice.mock.calls.map(call => call.slice(1))).toEqual(first);
+  });
+});
+
+describe('buildUnified1CExport — составы для журнала выгрузок', () => {
+  const base = {
+    month: '2026-07',
+    rangeArg: { startDate: '2026-07-01', endDate: '2026-07-31' } as const,
+    exemptEmployeeIds: new Set<number>(),
+    personOriginEmployeeIds: new Set<number>(),
+  };
+
+  it('отдаёт строки файла, разложенных по отделам и сотрудников данных; trace уходит в bulk-загрузку', async () => {
+    const rows = [{ oneCRow: { employeeId: 1 } }];
+    h.buildWorkbook.mockResolvedValue({ workbook: {}, rows });
+    // 7 переведён целиком в отдел вне выгрузки — ни в один срез не попадает.
+    h.segments.mockResolvedValue(new Map([[7, [{ deptId: 'X', from: null, toExclusive: null }]]]));
+    const trace = { ineligibleIds: [], zeroActivityIds: [] };
+
+    const result = await buildUnified1CExport({
+      ...base,
+      memberByEmp: new Map([[1, 'D1'], [2, 'D1'], [7, 'D1']]),
+      scopeDeptIds: ['D1'],
+    }, trace);
+
+    expect(result.rows).toBe(rows);
+    expect(result.buffer).toEqual(Buffer.from('xlsx'));
+    expect([...result.bucketedEmployeeIds].sort()).toEqual([1, 2]);
+    expect([...result.dataEmployeeIds].sort()).toEqual([1, 2]);
+    expect(h.fetchEmps.mock.calls[0][6].trace).toBe(trace);
   });
 });
 

@@ -96,7 +96,8 @@ const COL_FIO = 2;
 const COL_TAB = 3;
 const COL_SOURCE = 4;
 const COL_DAY_START = 5;
-const ONE_C_DATA_START_ROW = 4;
+/** Первая строка данных шаблона 1С (1–3 — шапка). Журнал выгрузок пишет номер строки Excel от неё. */
+export const ONE_C_DATA_START_ROW = 4;
 const ONE_C_DAY_START_COLUMN = 3;
 const ONE_C_TOTAL_COLUMN = 34;
 const ONE_C_MAX_DAY_COLUMNS = 31;
@@ -543,6 +544,34 @@ export const buildObjectRowsForOneC = (
     });
 };
 
+// Значения ячеек строки 1С. Общие для файла и журнала выгрузок (timesheet-1c-export-log):
+// журнал обязан хранить ровно то, что в ячейке, поэтому писатель и журнал берут их отсюда.
+
+/** Пустой выходной календаря: ячейка без значения, только серая заливка. */
+const isEmptyOneCWeekendCell = (dayValue: IOneCDisplayDayValue): boolean =>
+  Boolean(dayValue.isWeekend && !dayValue.label && !dayValue.hours);
+
+/** Значение ячейки дня; null — ячейка пустая. */
+export const oneCDayCellValue = (dayValue: IOneCDisplayDayValue): string | number | null =>
+  isEmptyOneCWeekendCell(dayValue) ? null : (dayValue.label ?? dayValue.hours);
+
+/** Ячейки дней строки, как они попадают в файл: день → значение, пустые не включены. */
+export const oneCRowDayCells = (rowData: IOneCExportRow): Record<string, string | number> => {
+  const cells: Record<string, string | number> = {};
+  for (const [day, dayValue] of rowData.dayValues) {
+    if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
+    const value = oneCDayCellValue(dayValue);
+    if (value !== null) cells[String(day)] = value;
+  }
+  return cells;
+};
+
+/** ФИО в ячейке: с защитой от формулы в начале строки. */
+export const oneCFullNameCell = (fullName: string): string => defangCsvCell(fullName);
+
+/** Итог часов и «Дни»: ноль не пишем — ячейка пустая. */
+export const oneCPositiveOrNull = (value: number): number | null => (value > 0 ? value : null);
+
 const writeOneCRow = (
   worksheet: ExcelJS.Worksheet,
   rowNumber: number,
@@ -550,24 +579,25 @@ const writeOneCRow = (
   rowData: IOneCExportRow,
 ): void => {
   worksheet.getCell(rowNumber, COL_NUM).value = index + 1;
-  worksheet.getCell(rowNumber, COL_FIO).value = defangCsvCell(rowData.fullName);
+  worksheet.getCell(rowNumber, COL_FIO).value = oneCFullNameCell(rowData.fullName);
 
   for (const [day, dayValue] of rowData.dayValues) {
     if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
     const cell = worksheet.getCell(rowNumber, ONE_C_DAY_START_COLUMN + day - 1);
-    if (dayValue.isWeekend && !dayValue.label && !dayValue.hours) {
+    if (isEmptyOneCWeekendCell(dayValue)) {
       cell.value = null;
       cell.fill = cloneExcelValue(weekendFill);
       continue;
     }
-    cell.value = dayValue.label ?? dayValue.hours;
+    cell.value = oneCDayCellValue(dayValue);
     if (!dayValue.label && dayValue.isUnderwork) {
       cell.fill = cloneExcelValue(underworkFill);
     }
   }
 
-  if (rowData.totalHours > 0) {
-    worksheet.getCell(rowNumber, ONE_C_TOTAL_COLUMN).value = rowData.totalHours;
+  const totalHours = oneCPositiveOrNull(rowData.totalHours);
+  if (totalHours !== null) {
+    worksheet.getCell(rowNumber, ONE_C_TOTAL_COLUMN).value = totalHours;
   }
 };
 
@@ -663,7 +693,7 @@ export async function buildUnified1CWorkbookFromTemplate(
     const daysCell = worksheet.getCell(rowNumber, UNIFIED_COL_DAYS);
     daysCell.style = cloneExcelValue(totalBodyStyle) || {};
     // Как и итог часов: ноль не пишем, ячейка остаётся пустой.
-    daysCell.value = row.oneCRow.workedDays > 0 ? row.oneCRow.workedDays : null;
+    daysCell.value = oneCPositiveOrNull(row.oneCRow.workedDays);
 
     const deptCell = worksheet.getCell(rowNumber, UNIFIED_COL_DEPARTMENT);
     deptCell.style = cloneExcelValue(bodyStyle) || {};

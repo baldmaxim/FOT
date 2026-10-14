@@ -271,6 +271,58 @@ describe('timesheet-objects-export.service', () => {
       expect(exportMocks.fetchEmps).toHaveBeenCalledTimes(1);
       expect([...(exportMocks.fetchEmps.mock.calls[0][1] as number[])].sort()).toEqual([1, 2]);
     });
+
+    it('trace журнала: источники, отдел группы, фильтр отделов; отсев загрузки уходит в trace.roster', async () => {
+      exportMocks.fetchEmps.mockReset();
+      exportMocks.fetchEmps.mockResolvedValue({ objectEntries: [] });
+      pgQuery.mockImplementation(async (sql: string) => {
+        if (/FROM skud_events/.test(sql)) return [{ employee_id: 1 }, { employee_id: 3 }, { employee_id: 4 }];
+        if (/timesheet_export_object_id/.test(sql)) return [{ employee_id: 2 }];
+        // 4 — архивный/исключённый: в группы не попадает.
+        if (/GROUP BY COALESCE\(e\.org_department_id/.test(sql)) {
+          return [
+            { org_department_id: 'D1', org_department_name: 'Отдел 1', employee_ids: [1, 2] },
+            { org_department_id: 'D2', org_department_name: 'Отдел 2', employee_ids: [3] },
+            { org_department_id: '00000000-0000-0000-0000-000000000000', org_department_name: 'Без отдела', employee_ids: [] },
+          ];
+        }
+        if (/WITH RECURSIVE ancestry/.test(sql)) return [{ department_id: 'D1', employee_ids: [5] }];
+        throw new Error(`Unexpected query SQL: ${sql}`);
+      });
+
+      const { createObjectsExportTrace } = await import('./timesheet-objects-export.service.js');
+      const trace = createObjectsExportTrace();
+      await fetchTimesheetDataForObjectIds('2026-08', ['O1'], 'FULL', ['D1'], trace);
+
+      expect(Object.fromEntries([...trace.sourcesByEmployee].map(([id, s]) => [id, [...s].sort()]))).toEqual({
+        1: ['object_events'],
+        2: ['object_pinned'],
+        3: ['object_events'],
+        4: ['object_events'],
+        5: ['department_manager'],
+      });
+      expect(Object.fromEntries(trace.departmentByEmployee)).toEqual({ 1: 'D1', 2: 'D1', 3: 'D2', 5: 'D1' });
+      expect(trace.departmentFilteredIds).toEqual([3]);
+      expect(exportMocks.fetchEmps).toHaveBeenCalledTimes(1);
+      expect(exportMocks.fetchEmps.mock.calls[0][6].trace).toBe(trace.roster);
+    });
+
+    it('без trace состав и вызовы прежние', async () => {
+      exportMocks.fetchEmps.mockReset();
+      exportMocks.fetchEmps.mockResolvedValue({ objectEntries: [] });
+      pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+        if (/FROM skud_events/.test(sql)) return [{ employee_id: 1 }];
+        if (/timesheet_export_object_id/.test(sql)) return [];
+        if (/GROUP BY COALESCE\(e\.org_department_id/.test(sql)) {
+          return [{ org_department_id: 'D1', org_department_name: 'Отдел', employee_ids: params[0] }];
+        }
+        if (/WITH RECURSIVE ancestry/.test(sql)) return [];
+        throw new Error(`Unexpected query SQL: ${sql}`);
+      });
+
+      await fetchTimesheetDataForObjectIds('2026-08', ['O1']);
+      expect(exportMocks.fetchEmps.mock.calls[0][6].trace).toBeUndefined();
+    });
   });
 });
 

@@ -3,9 +3,10 @@ import {
   fetchTimesheetDataForEmployees,
   sliceTimesheetDataByEmployees,
   type IDepartmentTimesheetData,
+  type IExportRosterTrace,
   type TimesheetExportRangeArg,
 } from './timesheet-export.service.js';
-import { buildUnified1CWorkbook } from './timesheet-1c-unified.service.js';
+import { buildUnified1CWorkbookWithRows, type IUnifiedRow } from './timesheet-1c-unified.service.js';
 import { writeTimesheetWorkbookBuffer } from './timesheet-excel.service.js';
 import {
   resolveTimesheetDateRange,
@@ -103,12 +104,27 @@ export function groupEmployeesByDepartment(
   return [...buckets.values()];
 }
 
+export interface IUnified1CExportResult {
+  buffer: Buffer;
+  /** Строки файла в порядке листа — для журнала выгрузок. */
+  rows: IUnifiedRow[];
+  /** Попали хотя бы в один отдел после раскладки переводов внутри периода. */
+  bucketedEmployeeIds: Set<number>;
+  /** Есть в данных файла после всех фильтров загрузки (строки у них может не оказаться). */
+  dataEmployeeIds: Set<number>;
+}
+
 /**
  * Единый файл для 1С по готовой карте «сотрудник → подразделение».
  * Один bulk-прогон посещаемости на всех сотрудников, затем нарезка по отделам —
  * формат файла и правила отбора те же, что у выгрузки из «Табели HR».
+ * Вместе с файлом отдаёт его строки и промежуточные составы — для журнала выгрузок;
+ * rosterTrace (если передан) получает отсеянных при загрузке данных.
  */
-export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promise<Buffer> {
+export async function buildUnified1CExport(
+  params: IUnified1CBuildParams,
+  rosterTrace?: IExportRosterTrace,
+): Promise<IUnified1CExportResult> {
   const { month, rangeArg, memberByEmp, exemptEmployeeIds, scopeDeptIds, personOriginEmployeeIds } = params;
   const year = Number.parseInt(month.slice(0, 4), 10);
   const mon = Number.parseInt(month.slice(5, 7), 10);
@@ -137,7 +153,11 @@ export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promi
   const windowPinnedIds = await listWindowPinnedEmployeeIds(allEmployeeIds, month);
   const bulk = await fetchTimesheetDataForEmployees(
     month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
-    { excludeZeroActivity: true, exemptEmployeeIds: new Set([...exemptEmployeeIds, ...windowPinnedIds]) },
+    {
+      excludeZeroActivity: true,
+      exemptEmployeeIds: new Set([...exemptEmployeeIds, ...windowPinnedIds]),
+      trace: rosterTrace,
+    },
   );
 
   const collected: IDepartmentTimesheetData[] = buckets
@@ -150,8 +170,16 @@ export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promi
       bucket.windows.size > 0 ? bucket.windows : undefined,
     ));
 
-  const workbook = await buildUnified1CWorkbook(mon, year, collected);
-  return writeTimesheetWorkbookBuffer(workbook);
+  const { workbook, rows } = await buildUnified1CWorkbookWithRows(mon, year, collected);
+  const buffer = await writeTimesheetWorkbookBuffer(workbook);
+  const bucketedEmployeeIds = new Set(buckets.flatMap(bucket => bucket.employeeIds));
+  const dataEmployeeIds = new Set(collected.flatMap(data => data.employees.map(employee => employee.id)));
+  return { buffer, rows, bucketedEmployeeIds, dataEmployeeIds };
+}
+
+/** Только файл — для выгрузок без журнала (страница «Табель»). */
+export async function buildUnified1CBuffer(params: IUnified1CBuildParams): Promise<Buffer> {
+  return (await buildUnified1CExport(params)).buffer;
 }
 
 export interface IStrictExportPeriod {

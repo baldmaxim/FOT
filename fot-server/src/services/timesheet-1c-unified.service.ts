@@ -24,6 +24,14 @@ import {
 } from './timesheet-excel.service.js';
 
 export interface IUnifiedRow extends IUnifiedOneCRow {
+  /**
+   * Отдел строки — тот, по которому резолвятся руководитель и режим (rowDepartmentId):
+   * отдел набора данных, иначе текущий отдел сотрудника (выгрузка по объектам).
+   * Бизнес-поле для журнала выгрузок; *Sort-поля ниже — только порядок.
+   */
+  departmentId: string | null;
+  /** Объект строки: объектная — объект разбивки, «объект» — закреплённый, статусная и ТД — null. */
+  objectId: string | null;
   departmentNameSort: string;
   departmentIdSort: string;
   fullNameSort: string;
@@ -234,6 +242,8 @@ const buildRowsForDepartment = (
       const managerName = managerFor(empId);
       rows.push({
         ...sortKeysFor(empId, oneCRow.fullName, target.object_name, target.object_id ?? ''),
+        departmentId: deptIdByEmpId.get(empId) ?? null,
+        objectId: target.object_id ?? null,
         oneCRow,
         departmentName: data.departmentName,
         objectAddress,
@@ -252,6 +262,8 @@ const buildRowsForDepartment = (
     const managerName = managerFor(empId);
     rows.push({
       ...sortKeysFor(empId, employeeRow.fullName, '', ''),
+      departmentId: deptIdByEmpId.get(empId) ?? null,
+      objectId: null,
       oneCRow: employeeRow,
       departmentName: data.departmentName,
       objectAddress: '',
@@ -279,8 +291,11 @@ const buildRowsForDepartment = (
       if (isOneCRowEmpty(employeeRow) && !modeFor(empId).windowPin) continue;
       const managerName = managerFor(empId);
       const objectAddress = aggregatedAddressByEmpId.get(empId) ?? CURRENT_ACTIVITY_ADDRESS;
+      const resolvedMode = modeFor(empId);
       rows.push({
-        ...sortKeysFor(empId, employeeRow.fullName, objectAddress, modeFor(empId).pinnedObjectId ?? ''),
+        ...sortKeysFor(empId, employeeRow.fullName, objectAddress, resolvedMode.pinnedObjectId ?? ''),
+        departmentId: deptIdByEmpId.get(empId) ?? null,
+        objectId: resolvedMode.mode === 'object' ? resolvedMode.pinnedObjectId : null,
         oneCRow: employeeRow,
         departmentName: data.departmentName,
         objectAddress,
@@ -372,17 +387,31 @@ export async function buildUnified1CRows(
   return rows;
 }
 
+/**
+ * Единый файл вместе с его строками — в том порядке, в каком они записаны в лист
+ * (строка Excel = ONE_C_DATA_START_ROW + индекс). Строки нужны журналу выгрузок.
+ */
+export async function buildUnified1CWorkbookWithRows(
+  month: number,
+  year: number,
+  departmentsData: IDepartmentTimesheetData[],
+  policy: AggregatedModesPolicy = 'all',
+): Promise<{ workbook: ExcelJS.Workbook; rows: IUnifiedRow[] }> {
+  const monthStart = Number.isInteger(month) && month >= 1 && month <= 12 && Number.isInteger(year)
+    ? `${year}-${String(month).padStart(2, '0')}-01`
+    : null;
+  const rows = await buildUnified1CRows(departmentsData, policy, monthStart);
+  const workbook = await buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
+  return { workbook, rows };
+}
+
 export async function buildUnified1CWorkbook(
   month: number,
   year: number,
   departmentsData: IDepartmentTimesheetData[],
   policy: AggregatedModesPolicy = 'all',
 ): Promise<ExcelJS.Workbook> {
-  const monthStart = Number.isInteger(month) && month >= 1 && month <= 12 && Number.isInteger(year)
-    ? `${year}-${String(month).padStart(2, '0')}-01`
-    : null;
-  const rows = await buildUnified1CRows(departmentsData, policy, monthStart);
-  return buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
+  return (await buildUnified1CWorkbookWithRows(month, year, departmentsData, policy)).workbook;
 }
 
 export { writeTimesheetWorkbookBuffer };

@@ -10,8 +10,12 @@ const h = vi.hoisted(() => ({
   fetchDept: vi.fn(),
   fetchEmps: vi.fn(),
   supervisorsBulk: vi.fn(),
-  buildUnified: vi.fn(async () => ({})),
+  buildUnified: vi.fn(),
   segments: vi.fn(async () => new Map()),
+  candidates: vi.fn(),
+  record: vi.fn(),
+  classifyDept: vi.fn(),
+  classifyObj: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({ query: h.pgQuery, queryOne: vi.fn() }));
@@ -35,6 +39,7 @@ vi.mock('../services/timesheet-export.service.js', () => ({
 }));
 vi.mock('../services/timesheet-department-assignments.service.js', () => ({
   listScopedMembersByDepartment: vi.fn(async () => new Map([[1, 'D1']])),
+  listScopedMembershipCandidates: h.candidates,
   resolveTransferSegmentsInPeriod: h.segments,
   resolveTimesheetDateRange: vi.fn(),
   resolveTimesheetPeriodRange: vi.fn(() => ({
@@ -55,10 +60,16 @@ vi.mock('../services/timesheet-excel.service.js', () => ({
   writeTimesheetWorkbookBuffer: vi.fn(async () => Buffer.from('xlsx')),
 }));
 vi.mock('../services/timesheet-1c-unified.service.js', () => ({
-  buildUnified1CWorkbook: h.buildUnified,
+  buildUnified1CWorkbookWithRows: h.buildUnified,
 }));
 vi.mock('../services/timesheet-objects-export.service.js', () => ({
+  createObjectsExportTrace: vi.fn(() => ({ marker: 'objects-trace' })),
   fetchTimesheetDataForObjectIds: vi.fn(async () => []),
+}));
+vi.mock('../services/timesheet-1c-export-log.service.js', () => ({
+  recordUnified1CExport: h.record,
+  classifyDepartmentCandidates: h.classifyDept,
+  classifyObjectCandidates: h.classifyObj,
 }));
 vi.mock('./timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: h.supervisorsBulk,
@@ -92,6 +103,8 @@ const deptData = {
   cutoffByEmployeeId: new Map(),
 };
 
+const UNIFIED_ROWS = [{ oneCRow: { employeeId: 1 } }];
+
 function makeReq(body: Record<string, unknown>): AuthenticatedRequest {
   return {
     params: {},
@@ -117,6 +130,11 @@ beforeEach(() => {
   h.fetchDept.mockResolvedValue(deptData);
   h.fetchEmps.mockResolvedValue(deptData);
   h.supervisorsBulk.mockResolvedValue(new Set([9]));
+  h.buildUnified.mockResolvedValue({ workbook: {}, rows: UNIFIED_ROWS });
+  h.candidates.mockResolvedValue([{ employeeId: 1, departmentId: 'D1', source: 'assignment' }]);
+  h.record.mockResolvedValue('export-id');
+  h.classifyDept.mockReturnValue([{ employee_id: 1, drop_stage: null }]);
+  h.classifyObj.mockReturnValue([{ employee_id: 5, drop_stage: 'zero_activity' }]);
 });
 
 describe('exportTimesheetMass — опция excludeZeroActivity только при «Как в 1С»', () => {
@@ -159,7 +177,75 @@ describe('exportTimesheetMassUnified — фильтр всегда активе�
     expect(call[6]).toEqual({
       excludeZeroActivity: true,
       exemptEmployeeIds: new Set([9]),
+      trace: { ineligibleIds: [], zeroActivityIds: [] },
     });
+  });
+});
+
+describe('журнал выгрузок «Единый файл для 1С»', () => {
+  it('«По отделам»: журнал пишется до заголовков ответа — с периодом, отделами и кандидатами', async () => {
+    const res = makeRes();
+    await exportTimesheetMassUnified(makeReq({}), res);
+
+    expect(h.candidates).toHaveBeenCalledWith(['D1'], '2026-07-01', '2026-07-31');
+    expect(h.classifyDept).toHaveBeenCalledWith(expect.objectContaining({
+      candidates: [{ employeeId: 1, departmentId: 'D1', source: 'assignment' }],
+      memberByEmp: new Map([[1, 'D1']]),
+      rowEmployeeIds: new Set([1]),
+      roster: { ineligibleIds: [], zeroActivityIds: [] },
+    }));
+    expect(h.record).toHaveBeenCalledTimes(1);
+    const [, userId, entry] = h.record.mock.calls[0];
+    expect(userId).toBe('admin');
+    expect(entry).toMatchObject({
+      source: 'hr_departments',
+      month: '2026-07',
+      periodStart: '2026-07-01',
+      periodEnd: '2026-07-31',
+      departmentIds: ['D1'],
+      rows: UNIFIED_ROWS,
+      candidates: [{ employee_id: 1, drop_stage: null }],
+    });
+    expect(entry.fileName).toMatch(/^Единый_1С_Июль_2026/);
+    expect(Buffer.isBuffer(entry.buffer)).toBe(true);
+
+    const setHeader = vi.mocked(res.setHeader);
+    expect(h.record.mock.invocationCallOrder[0]).toBeLessThan(setHeader.mock.invocationCallOrder[0]);
+    expect(res.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('«По объектам»: журнал с объектами, фильтром отделов и снимком отбора', async () => {
+    const res = makeRes();
+    await exportTimesheetObjectsUnified(makeReq({ object_ids: ['O1', 'O2', 'O1'] }), res);
+
+    expect(h.classifyObj).toHaveBeenCalledWith({
+      trace: { marker: 'objects-trace' },
+      rowEmployeeIds: new Set([1]),
+    });
+    const [, , entry] = h.record.mock.calls[0];
+    expect(entry).toMatchObject({
+      source: 'hr_objects',
+      month: '2026-07',
+      periodStart: '2026-07-01',
+      periodEnd: '2026-07-31',
+      objectIds: ['O1', 'O2'],
+      departmentFilterIds: ['D1'],
+      candidates: [{ employee_id: 5, drop_stage: 'zero_activity' }],
+    });
+    expect(h.record.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(res.setHeader).mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    ['«По отделам»', () => exportTimesheetMassUnified],
+    ['«По объектам»', () => exportTimesheetObjectsUnified],
+  ])('%s: журнал не записался → 500, файл и заголовки не отдаются', async (_label, handler) => {
+    h.record.mockRejectedValue(new Error('db down'));
+    const res = makeRes();
+    await handler()(makeReq({ object_ids: ['O1'] }), res);
+
+    expect(res.setHeader).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
   });
 });
 

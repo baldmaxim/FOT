@@ -13,6 +13,7 @@ import {
 } from '../services/timesheet-export.service.js';
 import {
   listScopedMembersByDepartment,
+  listScopedMembershipCandidates,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
 } from '../services/timesheet-department-assignments.service.js';
@@ -25,9 +26,15 @@ import {
   sanitizeSheetName,
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
-import { buildUnified1CWorkbook } from '../services/timesheet-1c-unified.service.js';
-import { buildUnified1CBuffer } from '../services/timesheet-unified-export.service.js';
-import { fetchTimesheetDataForObjectIds } from '../services/timesheet-objects-export.service.js';
+import { buildUnified1CWorkbookWithRows } from '../services/timesheet-1c-unified.service.js';
+import { buildUnified1CExport } from '../services/timesheet-unified-export.service.js';
+import { createObjectsExportTrace, fetchTimesheetDataForObjectIds } from '../services/timesheet-objects-export.service.js';
+import {
+  classifyDepartmentCandidates,
+  classifyObjectCandidates,
+  recordUnified1CExport,
+} from '../services/timesheet-1c-export-log.service.js';
+import type { IExportRosterTrace } from '../services/timesheet-export.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
 import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
@@ -274,24 +281,51 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
     // Снимает O(числа отделов) N+1 (прежде ~5 запросов на отдел) и дубли строк
     // (сотрудник под каждым предком). Тяжёлая посещаемость — тоже один раз ниже.
     const tMembers = Date.now();
-    const memberByEmp = await listScopedMembersByDepartment(scopedDepartmentIds, startDate, endDate);
+    // Снимок членства без фильтра допуска — только для журнала выгрузок: состав файла
+    // по-прежнему задаёт listScopedMembersByDepartment.
+    const [memberByEmp, membershipCandidates] = await Promise.all([
+      listScopedMembersByDepartment(scopedDepartmentIds, startDate, endDate),
+      listScopedMembershipCandidates(scopedDepartmentIds, startDate, endDate),
+    ]);
 
     // Сборка файла — общий helper (тот же код обслуживает экспорт со страницы «Табель»).
     // exempt — объединение начальников участков ВСЕХ выбранных бригад (до нарезки по
     // отделам, иначе «пустой» начальник выпал бы из среза своей бригады).
     const tFetch = Date.now();
-    const buffer = await buildUnified1CBuffer({
+    const rosterTrace: IExportRosterTrace = { ineligibleIds: [], zeroActivityIds: [] };
+    const built = await buildUnified1CExport({
       month,
       rangeArg,
       memberByEmp,
       exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
       scopeDeptIds: scopedDepartmentIds,
       personOriginEmployeeIds: new Set<number>(),
-    });
+    }, rosterTrace);
+    const { buffer, rows } = built;
     console.log(`[export-mass-unified] depts=${scopedDepartmentIds.length} emp=${memberByEmp.size} bytes=${buffer.length} | members=${tFetch - tMembers}ms build=${Date.now() - tFetch}ms total=${Date.now() - tMembers}ms`);
 
     const fileName = `Единый_1С_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
       .replace(/[\/\\?%*:|"<>]/g, '_');
+
+    // Журнал выгрузок (миграция 308) — до заголовков ответа: не записался — файла нет.
+    await recordUnified1CExport(req, req.user.id, {
+      source: 'hr_departments',
+      month,
+      periodStart: startDate,
+      periodEnd: endDate,
+      departmentIds: scopedDepartmentIds,
+      fileName,
+      buffer,
+      rows,
+      candidates: classifyDepartmentCandidates({
+        candidates: membershipCandidates,
+        memberByEmp,
+        bucketedEmployeeIds: built.bucketedEmployeeIds,
+        roster: rosterTrace,
+        dataEmployeeIds: built.dataEmployeeIds,
+        rowEmployeeIds: new Set(rows.map(row => row.oneCRow.employeeId)),
+      }),
+    });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',
@@ -356,17 +390,26 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
       segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
     }
 
+    // Период — тот же расчёт, что внутри fetchTimesheetDataForObjectIds; нужен журналу выгрузок.
+    const periodRange = hasRange
+      ? resolveTimesheetDateRange(month, from as string, to as string)
+      : resolveTimesheetPeriodRange(month, exportHalf);
+    if (!periodRange) {
+      return res.status(400).json({ success: false, error: 'Некорректный период экспорта' });
+    }
+
     const deptIdFilter = Array.isArray(department_ids) && department_ids.length > 0
       ? [...new Set(department_ids.filter((v): v is string => typeof v === 'string'))]
       : undefined;
 
-    const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg, deptIdFilter);
+    const exportTrace = createObjectsExportTrace();
+    const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg, deptIdFilter, exportTrace);
 
     // Политика агрегированных режимов: закреплённые за запрошенными объектами (режим
     // «object») идут одной строкой с адресом объекта — их часы принадлежат ему независимо
     // от проходов; «текущая деятельность» и закреплённые за другими объектами исключаются,
     // иначе человек, попавший в выборку по одному проходу, получил бы все месячные часы.
-    const workbook = await buildUnified1CWorkbook(mon, year, collected, {
+    const { workbook, rows } = await buildUnified1CWorkbookWithRows(mon, year, collected, {
       pinnedObjectIds: new Set(requestedObjectIds),
     });
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
@@ -393,6 +436,23 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
     const objectNamePart = objectNames ? `_${objectNames}` : '';
     const fileName = `Единый_1С_по_объектам${objectNamePart}_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
       .replace(/[\/\\?%*:|"<>]/g, '_');
+
+    // Журнал выгрузок (миграция 308) — до заголовков ответа: не записался — файла нет.
+    await recordUnified1CExport(req, req.user.id, {
+      source: 'hr_objects',
+      month,
+      periodStart: periodRange.startDate,
+      periodEnd: periodRange.endDate,
+      departmentFilterIds: deptIdFilter ?? [],
+      objectIds: requestedObjectIds,
+      fileName,
+      buffer,
+      rows,
+      candidates: classifyObjectCandidates({
+        trace: exportTrace,
+        rowEmployeeIds: new Set(rows.map(row => row.oneCRow.employeeId)),
+      }),
+    });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',

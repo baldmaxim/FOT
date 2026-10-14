@@ -1,6 +1,6 @@
 import { departmentManagerConditionSql } from './department-managers.service.js';
 import { query } from '../config/postgres.js';
-import type { IDepartmentTimesheetData, TimesheetExportRangeArg } from './timesheet-export.service.js';
+import type { IDepartmentTimesheetData, IExportRosterTrace, TimesheetExportRangeArg } from './timesheet-export.service.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
 import { listWindowPinnedEmployeeIds } from './timesheet-export-mode.service.js';
 import { resolveTimesheetPeriodRange, resolveTimesheetDateRange } from './timesheet-department-assignments.service.js';
@@ -244,11 +244,46 @@ export function mergeManagerIdsIntoGroups(
   }
 }
 
+export type ObjectsExportCandidateSource = 'object_events' | 'object_pinned' | 'department_manager';
+
+/**
+ * Этапы отбора выгрузки по объектам — для журнала «Единого файла для 1С». Только наблюдение:
+ * передан объект — функция дописывает в него, состав и файл не меняются.
+ */
+export interface IObjectsExportTrace {
+  /** Кандидаты и откуда взялись (проходы/объектные правки, закрепление, руководитель отдела). */
+  sourcesByEmployee: Map<number, Set<ObjectsExportCandidateSource>>;
+  /** Текущий отдел группы, в которую попал кандидат (без отдела — null). */
+  departmentByEmployee: Map<number, string | null>;
+  /** Отсеяны фильтром отделов выгрузки. */
+  departmentFilteredIds: number[];
+  /** Отсеяны при загрузке данных (статус, нет активности). */
+  roster: IExportRosterTrace;
+}
+
+export const createObjectsExportTrace = (): IObjectsExportTrace => ({
+  sourcesByEmployee: new Map(),
+  departmentByEmployee: new Map(),
+  departmentFilteredIds: [],
+  roster: { ineligibleIds: [], zeroActivityIds: [] },
+});
+
+const addTraceSource = (
+  trace: IObjectsExportTrace,
+  employeeId: number,
+  source: ObjectsExportCandidateSource,
+): void => {
+  const sources = trace.sourcesByEmployee.get(employeeId) ?? new Set<ObjectsExportCandidateSource>();
+  sources.add(source);
+  trace.sourcesByEmployee.set(employeeId, sources);
+};
+
 export async function fetchTimesheetDataForObjectIds(
   month: string,
   objectIds: string[],
   rangeArg: TimesheetExportRangeArg = 'FULL',
   departmentIdFilter?: string[],
+  trace?: IObjectsExportTrace,
 ): Promise<IDepartmentTimesheetData[]> {
   if (objectIds.length === 0) return [];
 
@@ -268,6 +303,10 @@ export async function fetchTimesheetDataForObjectIds(
     fetchEmployeeIdsPinnedToObjects(objectIds, month),
   ]);
   const employeeIds = [...new Set([...eventEmployeeIds, ...pinnedEmployeeIds])];
+  if (trace) {
+    for (const id of eventEmployeeIds) addTraceSource(trace, Number(id), 'object_events');
+    for (const id of pinnedEmployeeIds) addTraceSource(trace, Number(id), 'object_pinned');
+  }
 
   if (employeeIds.length === 0) {
     return [];
@@ -281,6 +320,18 @@ export async function fetchTimesheetDataForObjectIds(
   );
   const managerMap = await fetchManagerIdsForDepartments(appearingDeptIds);
   mergeManagerIdsIntoGroups(deptGroups, managerMap);
+
+  if (trace) {
+    for (const [key, group] of deptGroups) {
+      const deptId = key === SYNTHETIC_NO_DEPARTMENT_ID || key === '__unknown__' ? null : key;
+      for (const rawId of group.ids) {
+        const id = Number(rawId);
+        // В группы, кроме кандидатов, добавлены только руководители появившихся отделов.
+        if (!trace.sourcesByEmployee.has(id)) addTraceSource(trace, id, 'department_manager');
+        trace.departmentByEmployee.set(id, deptId);
+      }
+    }
+  }
 
   // Руководители добавлены сознательно БЕЗ СКУД-проходов — фильтр «пустых»
   // (excludeZeroActivity ниже) не должен их выбрасывать; назначенные в окне «Режим
@@ -297,6 +348,8 @@ export async function fetchTimesheetDataForObjectIds(
     for (const [key, group] of deptGroups) {
       if (allowedDeptIds.has(key)) {
         filtered.set(key, group);
+      } else if (trace) {
+        trace.departmentFilteredIds.push(...group.ids.map(Number));
       }
     }
     deptGroups = filtered;
@@ -316,7 +369,7 @@ export async function fetchTimesheetDataForObjectIds(
       rangeArg,
       'actual',
       true,
-      { excludeZeroActivity: true, exemptEmployeeIds: managerExemptIds },
+      { excludeZeroActivity: true, exemptEmployeeIds: managerExemptIds, trace: trace?.roster },
     );
 
     // Фильтруем objectEntries только к выбранным объектам

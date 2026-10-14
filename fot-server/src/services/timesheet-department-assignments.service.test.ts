@@ -24,6 +24,7 @@ import {
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeMembershipsForDepartmentPeriod,
   listScopedMembersByDepartment,
+  listScopedMembershipCandidates,
   resolveDepartmentIdsForEmployeesInPeriod,
   resolveTimesheetPeriodRange,
   buildMembershipWindowMap,
@@ -241,6 +242,46 @@ describe('timesheet-department-assignments.service', () => {
       expect(pgQuery).toHaveBeenCalledTimes(1);
       expect(pgQuery.mock.calls[0][1]).toEqual([['d1', 'd2'], '2026-05-01', '2026-05-31']);
       expect([...res.entries()]).toEqual([[10, 'd1'], [11, 'd1'], [12, 'd2']]);
+    });
+  });
+
+  describe('listScopedMembershipCandidates — снимок членства для журнала выгрузок', () => {
+    it('пустой scope → пустой список, без обращения к БД', async () => {
+      pgQuery.mockClear();
+      expect(await listScopedMembershipCandidates([], '2026-05-01', '2026-05-31')).toEqual([]);
+      expect(pgQuery).not.toHaveBeenCalled();
+    });
+
+    it('те же источники и выбор отдела, допуск — флагами вместо фильтра', async () => {
+      pgQuery.mockReset();
+      pgQuery
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { employee_id: 10, dept_id: 'd1', prio: 1, not_archived: true, fired_eligible: true, not_excluded: true },
+          { employee_id: 11, dept_id: 'd2', prio: 3, not_archived: true, fired_eligible: false, not_excluded: true },
+          { employee_id: 12, dept_id: 'd1', prio: 2, not_archived: false, fired_eligible: null, not_excluded: true },
+        ]);
+
+      await listScopedMembersByDepartment(['d1', 'd2'], '2026-05-01', '2026-05-31');
+      const res = await listScopedMembershipCandidates(['d1', 'd2'], '2026-05-01', '2026-05-31');
+
+      expect(pgQuery.mock.calls[1][1]).toEqual([['d1', 'd2'], '2026-05-01', '2026-05-31']);
+      expect(res).toEqual([
+        { employeeId: 10, departmentId: 'd1', source: 'assignment', notArchived: true, firedEligible: true, notExcluded: true },
+        { employeeId: 11, departmentId: 'd2', source: 'dismissal', notArchived: true, firedEligible: false, notExcluded: true },
+        { employeeId: 12, departmentId: 'd1', source: 'snapshot', notArchived: false, firedEligible: false, notExcluded: true },
+      ]);
+
+      const membersSql = String(pgQuery.mock.calls[0][0]);
+      const candidatesSql = String(pgQuery.mock.calls[1][0]);
+      // Источники (подзапрос s) и порядок выбора отдела — один и тот же текст.
+      const sourcesOf = (sql: string): string => sql.slice(sql.indexOf('FROM ('), sql.indexOf(') s'));
+      expect(sourcesOf(candidatesSql)).toBe(sourcesOf(membersSql));
+      expect(candidatesSql).toContain('ORDER BY s.employee_id, s.prio, s.eff_from DESC NULLS LAST, s.dept_id NULLS LAST');
+      // Предикаты допуска: в составе — фильтр WHERE, в снимке — колонки.
+      expect(membersSql).toContain('AND emp.is_archived = false');
+      expect(candidatesSql).toContain('COALESCE(emp.is_archived = false, false) AS not_archived');
+      expect(candidatesSql).not.toContain('AND emp.is_archived = false');
     });
   });
 

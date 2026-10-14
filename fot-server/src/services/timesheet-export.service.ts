@@ -98,6 +98,17 @@ export interface IDepartmentTimesheetData {
 }
 
 
+/**
+ * Кого отсеяла загрузка данных — для журнала выгрузок «Единого файла для 1С».
+ * Только наблюдение: передан объект — функция дописывает в него id, состав не меняется.
+ */
+export interface IExportRosterTrace {
+  /** Не прошли фильтр статуса (уволен вне периода / архивный) при загрузке состава. */
+  ineligibleIds: number[];
+  /** Отброшены фильтром «ни одного сигнала за период» (excludeZeroActivity). */
+  zeroActivityIds: number[];
+}
+
 export interface IExportRosterOptions {
   // Исключить из выгрузки сотрудников без единого реального сигнала за период
   // (критерий hasRealActivity по entries + любая объектная запись). Используется
@@ -117,6 +128,8 @@ export interface IExportRosterOptions {
   // Клиент транзакции: все чтения расчёта идут по ОДНОМУ соединению, иначе payload
   // официальной версии соберётся из разных снимков БД.
   exec?: DbExecutor;
+  // Журнал выгрузок: кого отсеяли фильтры состава (см. IExportRosterTrace).
+  trace?: IExportRosterTrace;
 }
 
 /**
@@ -140,6 +153,12 @@ function applyZeroActivityFilter(
   const keptIds = data.employees
     .map(e => e.id)
     .filter(id => active.has(id) || exempt.has(id));
+  if (options.trace) {
+    const kept = new Set(keptIds);
+    for (const employee of data.employees) {
+      if (!kept.has(employee.id)) options.trace.zeroActivityIds.push(employee.id);
+    }
+  }
   if (keptIds.length === data.employees.length) return data;
   return sliceTimesheetDataByEmployees(data, keptIds, data.departmentName, data.departmentId);
 }
@@ -469,6 +488,12 @@ export async function fetchTimesheetDataForEmployees(
          ORDER BY full_name`,
       [uniqueIds, startDate, isSnapshotRoster],
     );
+  }
+  if (options?.trace && !isSnapshotRoster) {
+    const loadedIds = new Set(employees.map(e => Number(e.id)));
+    for (const id of uniqueIds) {
+      if (!loadedIds.has(id)) options.trace.ineligibleIds.push(id);
+    }
   }
   const empArr: IExportEmployee[] = employees.map(e => ({
     id: e.id as number,
