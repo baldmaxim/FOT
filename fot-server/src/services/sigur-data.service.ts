@@ -47,11 +47,23 @@ export class SigurDataService extends SigurServiceBase {
    * устаревшую выгрузку (карточка ещё в «Уволенные») поверх сброшенного кэша.
    */
   private employeeCacheGeneration = 0;
+  /** Поколение кэша счётчиков: ответ, снятый до перевода, не кэшируется после него. */
+  private employeeCountGeneration = 0;
 
   invalidateEmployeeCache(): void {
     this.employeeCacheGeneration += 1;
     this.employeeCache = null;
     this.employeeFetchPromise = null;
+    this.invalidateEmployeeCountCache();
+  }
+
+  /**
+   * Счётчики «сотрудников в отделе» (дерево и шапка раздела SIGUR, TTL 30 мин).
+   * Сбрасываются любой записью в Sigur, меняющей состав отделов, иначе после
+   * перевода дерево полчаса показывает старое число при уже пустом списке.
+   */
+  invalidateEmployeeCountCache(): void {
+    this.employeeCountGeneration += 1;
     this.employeeCountCache = null;
     this.employeeCountFetchPromise = null;
   }
@@ -76,8 +88,7 @@ export class SigurDataService extends SigurServiceBase {
     this.departmentListCache = null;
     this.departmentFetchPromise = null;
     this.departmentCache = null;
-    this.employeeCountCache = null;
-    this.employeeCountFetchPromise = null;
+    this.invalidateEmployeeCountCache();
   }
 
   invalidateAccessPointCache(): void {
@@ -195,17 +206,24 @@ export class SigurDataService extends SigurServiceBase {
       return new Map(await this.employeeCountFetchPromise);
     }
 
-    this.employeeCountFetchPromise = this.getEmployeesCount({ groupBy: 'departmentId' }, connection)
+    const generation = this.employeeCountGeneration;
+    const fetchPromise: Promise<Map<number, number>> = this.getEmployeesCount({ groupBy: 'departmentId' }, connection)
       .then(rawCounts => {
         const map = this.normalizeEmployeeCountGroups(rawCounts);
-        this.employeeCountCache = { map: new Map(map), fetchedAt: Date.now() };
+        // Перевод во время запроса: ответ мог быть снят до него — на 30 мин его не кладём.
+        if (generation === this.employeeCountGeneration) {
+          this.employeeCountCache = { map: new Map(map), fetchedAt: Date.now() };
+        }
         return map;
       })
       .finally(() => {
-        this.employeeCountFetchPromise = null;
+        if (this.employeeCountFetchPromise === fetchPromise) {
+          this.employeeCountFetchPromise = null;
+        }
       });
+    this.employeeCountFetchPromise = fetchPromise;
 
-    return new Map(await this.employeeCountFetchPromise);
+    return new Map(await fetchPromise);
   }
 
   private async fetchEmployeesForDepartment(
@@ -1255,18 +1273,31 @@ export class SigurDataService extends SigurServiceBase {
     body: Record<string, unknown>,
     connection?: ConnectionType,
   ): Promise<Record<string, unknown>> {
-    return this.mutate<Record<string, unknown>>('put', `/api/v1/employees/${id}`, body, undefined, connection);
+    try {
+      return await this.mutate<Record<string, unknown>>('put', `/api/v1/employees/${id}`, body, undefined, connection);
+    } finally {
+      // finally: таймаут мог прийти уже после того, как Sigur применил перевод.
+      if (body.departmentId !== undefined) this.invalidateEmployeeCountCache();
+    }
   }
 
   async createEmployee(
     body: Record<string, unknown>,
     connection?: ConnectionType,
   ): Promise<Record<string, unknown>> {
-    return this.mutate<Record<string, unknown>>('post', '/api/v1/employees', body, undefined, connection);
+    try {
+      return await this.mutate<Record<string, unknown>>('post', '/api/v1/employees', body, undefined, connection);
+    } finally {
+      this.invalidateEmployeeCountCache();
+    }
   }
 
   async deleteEmployee(id: number, connection?: ConnectionType): Promise<void> {
-    await this.mutate<void>('delete', `/api/v1/employees/${id}`, undefined, undefined, connection);
+    try {
+      await this.mutate<void>('delete', `/api/v1/employees/${id}`, undefined, undefined, connection);
+    } finally {
+      this.invalidateEmployeeCountCache();
+    }
   }
 
   /**

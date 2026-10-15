@@ -49,6 +49,98 @@ describe('SigurDataService.getEmployeesCached — generation-token', () => {
   });
 });
 
+/**
+ * Счётчики «сотрудников в отделе» (дерево SIGUR, TTL 30 мин): запись, меняющая состав
+ * отделов, обязана их сбросить — иначе после перевода дерево полчаса показывало
+ * старое число при уже пустом списке («Отдел ИД/офис», 15.10.2026).
+ */
+describe('SigurDataService.getEmployeeCountByDepartmentCached — сброс после записи', () => {
+  type TMutable = { mutate: (...args: unknown[]) => Promise<unknown> };
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>(r => { resolve = r; });
+    return { promise, resolve };
+  };
+  const groups = (count: number) => [{ groupByField: 142603, employeeCount: count }];
+
+  it('смена отдела → следующий запрос перечитывает счётчики из Sigur', async () => {
+    const svc = new SigurDataService();
+    const getCount = vi.spyOn(svc, 'getEmployeesCount')
+      .mockResolvedValueOnce(groups(3))
+      .mockResolvedValueOnce(groups(0));
+    vi.spyOn(svc as unknown as TMutable, 'mutate').mockResolvedValue({});
+
+    expect((await svc.getEmployeeCountByDepartmentCached()).get(142603)).toBe(3);
+    await svc.updateEmployee(26025, { departmentId: 142604 });
+
+    expect((await svc.getEmployeeCountByDepartmentCached()).get(142603)).toBe(0);
+    expect(getCount).toHaveBeenCalledTimes(2);
+  });
+
+  it('правка без смены отдела (ФИО) → кэш счётчиков живёт', async () => {
+    const svc = new SigurDataService();
+    const getCount = vi.spyOn(svc, 'getEmployeesCount').mockResolvedValue(groups(3));
+    vi.spyOn(svc as unknown as TMutable, 'mutate').mockResolvedValue({});
+
+    await svc.getEmployeeCountByDepartmentCached();
+    await svc.updateEmployee(26025, { name: 'Бондарук Г. А.' });
+    await svc.getEmployeeCountByDepartmentCached();
+
+    expect(getCount).toHaveBeenCalledTimes(1);
+  });
+
+  it('ошибка записи (таймаут мог прийти после применения) → кэш всё равно сброшен', async () => {
+    const svc = new SigurDataService();
+    const getCount = vi.spyOn(svc, 'getEmployeesCount').mockResolvedValue(groups(3));
+    vi.spyOn(svc as unknown as TMutable, 'mutate').mockRejectedValue(new Error('timeout'));
+
+    await svc.getEmployeeCountByDepartmentCached();
+    await expect(svc.updateEmployee(26025, { departmentId: 142604 })).rejects.toThrow('timeout');
+    await svc.getEmployeeCountByDepartmentCached();
+
+    expect(getCount).toHaveBeenCalledTimes(2);
+  });
+
+  it('создание и удаление сотрудника → кэш счётчиков сброшен', async () => {
+    const svc = new SigurDataService();
+    const getCount = vi.spyOn(svc, 'getEmployeesCount').mockResolvedValue(groups(3));
+    vi.spyOn(svc as unknown as TMutable, 'mutate').mockResolvedValue({});
+
+    await svc.getEmployeeCountByDepartmentCached();
+    await svc.createEmployee({ name: 'Новый', departmentId: 142603 });
+    await svc.getEmployeeCountByDepartmentCached();
+    await svc.deleteEmployee(1);
+    await svc.getEmployeeCountByDepartmentCached();
+
+    expect(getCount).toHaveBeenCalledTimes(3);
+  });
+
+  it('ответ, снятый до перевода и пришедший после, не кэшируется и не рвёт новый запрос', async () => {
+    const svc = new SigurDataService();
+    const stale = deferred<unknown>();
+    const fresh = deferred<unknown>();
+    const getCount = vi.spyOn(svc, 'getEmployeesCount')
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise)
+      .mockResolvedValue(groups(99));
+    vi.spyOn(svc as unknown as TMutable, 'mutate').mockResolvedValue({});
+
+    const p1 = svc.getEmployeeCountByDepartmentCached();
+    await svc.updateEmployee(26025, { departmentId: 142604 });
+    const p2 = svc.getEmployeeCountByDepartmentCached();
+
+    stale.resolve(groups(3)); // снят до перевода
+    expect((await p1).get(142603)).toBe(3);
+    // Третий вызов ждёт идущий свежий запрос, а не стартует свой.
+    const p3 = svc.getEmployeeCountByDepartmentCached();
+    fresh.resolve(groups(0));
+    expect((await p2).get(142603)).toBe(0);
+    expect((await p3).get(142603)).toBe(0);
+    expect((await svc.getEmployeeCountByDepartmentCached()).get(142603)).toBe(0);
+    expect(getCount).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('SigurDataService.buildCardNumberVariants', () => {
   it('matches W26 "fac,num" with hex equivalent', () => {
     const a = SigurDataService.buildCardNumberVariants('123,45678');

@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   openDismiss: vi.fn(),
   openRehire: vi.fn(),
   executeOp: vi.fn(),
+  refreshSigurAdminViews: vi.fn(),
   DismissalSigurError: class DismissalSigurError extends Error {
     status: number;
     code: string;
@@ -65,6 +66,9 @@ vi.mock('../services/sigur.service.js', () => ({
     getDepartmentById: vi.fn(),
   },
 }));
+vi.mock('../services/sigur-admin-views.service.js', () => ({
+  refreshSigurAdminViews: h.refreshSigurAdminViews,
+}));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
   canAccessDepartmentInScope: vi.fn().mockResolvedValue(true),
@@ -88,7 +92,15 @@ vi.mock('../services/employee-lifecycle-operations.service.js', () => ({
   executeOperation: h.executeOp,
 }));
 
-import { applyDismissalImmediately, cancelDismissal, fire, rehire } from './employee-lifecycle.controller.js';
+import {
+  applyDismissalImmediately,
+  batchMoveEmployees,
+  cancelDismissal,
+  fire,
+  moveDepartment,
+  rehire,
+} from './employee-lifecycle.controller.js';
+import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const makeRes = () => {
@@ -598,5 +610,69 @@ describe('rehire — дата восстановления (effective_date)', ()
       expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
       expect.objectContaining({ details: expect.objectContaining({ pending: true, effective_date: '2026-09-15' }) }),
     );
+  });
+});
+
+/**
+ * Перевод вне раздела SIGUR (кадры, табель) обязан сразу обновить его экраны:
+ * иначе дерево до 30 мин показывает старое число при уже пустом списке
+ * («Отдел ИД/офис», 15.10.2026).
+ */
+describe('перевод в другой отдел — экраны SIGUR обновляются сразу', () => {
+  beforeEach(() => {
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
+    vi.mocked(sigurService.updateEmployee).mockReset();
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.resolveScope.mockResolvedValue('all');
+    h.isConfigured.mockResolvedValue(true);
+    routeQueryOne();
+  });
+
+  it('массовый перевод Sigur-сотрудников → один сброс и одно оповещение на всю пачку', async () => {
+    const res = makeRes();
+    await batchMoveEmployees(makeReq({ employee_ids: [77, 78], org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ data: { moved_count: 2, failed_count: 0 } });
+    expect(sigurService.updateEmployee).toHaveBeenCalledTimes(2);
+    expect(h.refreshSigurAdminViews).toHaveBeenCalledTimes(1);
+    expect(h.refreshSigurAdminViews).toHaveBeenCalledWith({ source: 'employee_move', scope: 'employees' });
+  });
+
+  it('одиночный перевод Sigur-сотрудника → сброс и оповещение', async () => {
+    const res = makeRes();
+    await moveDepartment(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.refreshSigurAdminViews).toHaveBeenCalledTimes(1);
+    expect(h.refreshSigurAdminViews).toHaveBeenCalledWith({ source: 'employee_move', scope: 'employees' });
+  });
+
+  it('сотрудник без карточки Sigur → экраны SIGUR не трогаются', async () => {
+    routeQueryOne({ ...ACTIVE_EMPLOYEE, sigur_employee_id: null });
+    const res = makeRes();
+    await batchMoveEmployees(makeReq({ employee_ids: [77], org_department_id: 'dept-2' }), res as never);
+
+    expect(res.body).toMatchObject({ data: { moved_count: 1 } });
+    expect(sigurService.updateEmployee).not.toHaveBeenCalled();
+    expect(h.refreshSigurAdminViews).not.toHaveBeenCalled();
+  });
+
+  it('уже в целевом отделе (noop) → без оповещения', async () => {
+    routeQueryOne({ ...ACTIVE_EMPLOYEE, org_department_id: 'dept-2' });
+    const res = makeRes();
+    await batchMoveEmployees(makeReq({ employee_ids: [77], org_department_id: 'dept-2' }), res as never);
+
+    expect(res.body).toMatchObject({ data: { moved_count: 0, skipped_count: 1 } });
+    expect(h.refreshSigurAdminViews).not.toHaveBeenCalled();
+  });
+
+  it('Sigur отказал всем → перевода нет, оповещения нет', async () => {
+    vi.mocked(sigurService.updateEmployee).mockRejectedValue(new Error('Sigur down'));
+    const res = makeRes();
+    await batchMoveEmployees(makeReq({ employee_ids: [77, 78], org_department_id: 'dept-2' }), res as never);
+
+    expect(res.body).toMatchObject({ data: { moved_count: 0, failed_count: 2 } });
+    expect(h.refreshSigurAdminViews).not.toHaveBeenCalled();
   });
 });

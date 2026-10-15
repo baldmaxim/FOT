@@ -8,12 +8,13 @@ import { sigurFilterController } from '../controllers/sigur-filter.controller.js
 import { sigurCardReaderController } from '../controllers/sigur-card-reader.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
-import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { registerCache } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
-import { notifySigurStructureChanged } from '../services/skud-realtime.service.js';
+import { refreshSigurAdminViews } from '../services/sigur-admin-views.service.js';
+import { buildSigurAdminEmployeesCacheKey } from './sigur-cache-keys.js';
 
 const router = Router();
 
@@ -78,8 +79,7 @@ const sigurAdminPositionsCache = registerCache(
 );
 const sigurAdminEmployeesCache = registerCache(
   'sigur:admin:employees',
-  (req) =>
-    `sae:${req.query.departmentId ?? ''}:${req.query.search ?? ''}:${req.query.page ?? 1}:${req.query.pageSize ?? ''}`,
+  buildSigurAdminEmployeesCacheKey,
   60_000,
   500,
 );
@@ -114,17 +114,6 @@ const sigurAdminAccessPointOptionsCache = registerCache(
   5 * 60_000,
 );
 
-const SIGUR_ADMIN_CACHES = [
-  'sigur:admin:departments',
-  'sigur:admin:departments-tree',
-  'sigur:admin:departments-counts',
-  'sigur:admin:positions',
-  'sigur:admin:employees',
-  'sigur:admin:card-statuses',
-  'sigur:admin:employee-profile',
-  'sigur:admin:access-point-options',
-];
-
 // Write-through invalidation: любой POST/PUT/DELETE/PATCH на /admin/* и /sync* сбрасывает кэши
 // и пушит structure_updated через Socket.IO, чтобы все клиенты сразу инвалидировали React Query
 // без ожидания истечения staleTime.
@@ -132,8 +121,7 @@ router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        invalidateCaches(...SIGUR_ADMIN_CACHES);
-        notifySigurStructureChanged({ source: 'admin_crud' });
+        refreshSigurAdminViews({ source: 'admin_crud' });
       }
     });
   }

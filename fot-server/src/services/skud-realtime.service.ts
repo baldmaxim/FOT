@@ -72,7 +72,9 @@ export type SigurStructureSource =
   /** Целевая деактивация зеркала после удаления отдела в Sigur. */
   | 'sigur_delete'
   /** Детектор внешних правок: структура изменилась прямо в Sigur, мимо ФОТ. */
-  | 'sigur_watch';
+  | 'sigur_watch'
+  /** Перевод сотрудника в другой отдел вне раздела SIGUR (кадры, табель). */
+  | 'employee_move';
 
 export interface ISigurStructureNotification {
   source: SigurStructureSource;

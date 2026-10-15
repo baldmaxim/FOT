@@ -39,6 +39,7 @@ import {
   moveEmployeeToDepartmentInternal,
 } from './employee-lifecycle.controller.js';
 import { loadAssignableTargetDepartment } from '../services/department-assignability.service.js';
+import { refreshSigurAdminViews } from '../services/sigur-admin-views.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadDepartmentName as loadDepartmentNameForAudit,
@@ -386,6 +387,9 @@ export const timesheetTeamManagementController = {
       }
 
       employeeCache.invalidate(parsed.employee_id);
+      if (moveResult === 'sigur') {
+        refreshSigurAdminViews({ source: 'employee_move', scope: 'employees' });
+      }
 
       await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
         entityType: 'employee',

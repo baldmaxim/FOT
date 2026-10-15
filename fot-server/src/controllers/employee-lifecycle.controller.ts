@@ -15,6 +15,7 @@ import {
 import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { syncLinkedEmployeeFromSigur } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
+import { refreshSigurAdminViews } from '../services/sigur-admin-views.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
   canAccessEmployeeRecordsInScope,
@@ -905,6 +906,9 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
     });
 
     employeeCache.invalidate(id);
+    if (source === 'sigur') {
+      refreshSigurAdminViews({ source: 'employee_move', scope: 'employees' });
+    }
 
     await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
       entityType: 'employee',
@@ -988,6 +992,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
     const failures: Array<{ employee_id: number; error: string }> = [];
     const movedIds: number[] = [];
     const skippedIds: number[] = [];
+    let movedInSigur = false;
 
     for (const employeeId of employeeIds) {
       if (!(await canWriteEmployeeInScope(req, employeeId))) {
@@ -1022,6 +1027,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
         }
 
         movedIds.push(employeeId);
+        if (source === 'sigur') movedInSigur = true;
         await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
           entityType: 'employee',
           entityId: String(employeeId),
@@ -1045,6 +1051,10 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
 
     if (movedIds.length > 0) {
       void emitEmployeeChangedBatch(movedIds, 'batch_transfer');
+    }
+    // Один раз на пачку: по сокету на каждого — волна перезапросов дерева у всех клиентов.
+    if (movedInSigur) {
+      refreshSigurAdminViews({ source: 'employee_move', scope: 'employees' });
     }
 
     res.json({
