@@ -80,6 +80,18 @@ export function firedEligibleSql(alias: string | null, startParam: string): stri
 }
 
 /**
+ * SQL: состав для ПРОСМОТРА в портале (табель, поиск, карточка) — уволенный виден и в месяце
+ * увольнения, до даты увольнения (правило до 09.2026). Подача, «Согласования» и 1С — firedEligibleSql.
+ */
+export function firedPortalEligibleSql(alias: string | null, startParam: string): string {
+  const a = alias ? `${alias}.` : '';
+  return `(${a}employment_status = 'active'
+             OR (${a}employment_status = 'fired'
+                 AND ${a}dismissal_date IS NOT NULL
+                 AND ${a}dismissal_date >= ${startParam}::date))`;
+}
+
+/**
  * SQL: уволенный, скрытый в периоде (для ростера подачи — он зафиксирован при подаче, а
  * увольнение могло случиться позже). До 01.09.2026 — никого: там ростер выгружается целиком.
  */

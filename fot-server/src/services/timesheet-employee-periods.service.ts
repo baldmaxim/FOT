@@ -254,10 +254,13 @@ export async function listEmployeeDepartmentPeriods(
 
   const confirmed: IEmployeeDepartmentPeriod[] = [];
   for (const candidate of candidates) {
+    // Список строк «По сотруднику» — просмотр в портале: уволенный виден и в месяце увольнения.
     const memberships = await listEmployeeMembershipsForDepartmentPeriod(
       candidate.org_department_id,
       candidate.from,
       candidate.to,
+      undefined,
+      { firedInDismissalMonth: true },
     );
     if (!memberships.some(m => m.employee_id === employeeId)) continue;
     confirmed.push({ ...candidate, department_name: null });

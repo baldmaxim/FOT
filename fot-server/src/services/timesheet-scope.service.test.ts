@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Скоуп табеля для глобального read-флага (view_all_departments, миграция 237):
@@ -58,9 +58,13 @@ import {
   hasGlobalDepartmentReadScope,
   resolveAccessibleDepartmentIds,
   resolveEffectiveDirectSubordinates,
+  resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
+  resolveTimesheetEditableDepartmentIds,
 } from './data-scope.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
+import { hasPageView } from './access-control.service.js';
+import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -197,6 +201,45 @@ describe('canAccessEmployeeForTimesheetPeriod — передаёт viewerEmploye
 
     expect(splitDirectReportsByCoverage).toHaveBeenCalledWith(
       [SUB], '2026-09-01', '2026-09-15', undefined, undefined,
+    );
+  });
+});
+
+/**
+ * Уволенный в месяце увольнения (Холодов, 13.10): руководитель отдела его видит и правит дни
+ * до увольнения, как до 02.10 — доступ по составу табеля; в подачу и 1С он при этом не идёт.
+ */
+describe('canAccessEmployeeForTimesheetPeriod — уволенный в месяце увольнения', () => {
+  const DEPT = 'D1';
+  const FIRED = 2005;
+
+  beforeEach(() => {
+    vi.mocked(hasPageView).mockResolvedValue(true);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue([DEPT]);
+    vi.mocked(resolveTimesheetEditableDepartmentIds).mockResolvedValue([DEPT]);
+    vi.mocked(listEmployeeIdsAssignedToDepartmentPeriod).mockReset().mockResolvedValue([FIRED]);
+  });
+
+  afterEach(() => {
+    vi.mocked(hasPageView).mockResolvedValue(false);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue([]);
+    vi.mocked(resolveTimesheetEditableDepartmentIds).mockResolvedValue([]);
+    vi.mocked(listEmployeeIdsAssignedToDepartmentPeriod).mockReset().mockResolvedValue([]);
+  });
+
+  it('просмотр → членство по составу табеля', async () => {
+    const ok = await canAccessEmployeeForTimesheetPeriod(buildReq(), FIRED, '2026-10-01', '2026-10-31', false);
+    expect(ok).toBe(true);
+    expect(listEmployeeIdsAssignedToDepartmentPeriod).toHaveBeenCalledWith(
+      DEPT, '2026-10-01', '2026-10-31', { firedInDismissalMonth: true },
+    );
+  });
+
+  it('правка → тоже по составу табеля', async () => {
+    const ok = await canAccessEmployeeForTimesheetPeriod(buildReq(), FIRED, '2026-10-01', '2026-10-31', true);
+    expect(ok).toBe(true);
+    expect(listEmployeeIdsAssignedToDepartmentPeriod).toHaveBeenCalledWith(
+      DEPT, '2026-10-01', '2026-10-31', { firedInDismissalMonth: true },
     );
   });
 });

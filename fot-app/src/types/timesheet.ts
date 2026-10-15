@@ -198,6 +198,8 @@ export interface TimesheetEmployee {
   source?: TimesheetEmployeeSource;
   /** false → сотрудник виден, но не редактируем (view-отдел, миграция 167). По умолчанию true. */
   editable?: boolean;
+  /** Уволен в месяце периода: виден в портале (show_fired), но в подачу и 1С не идёт. */
+  excluded_from_submission?: boolean;
   /**
    * Даты, за которые табель ведёт руководитель отдела сотрудника, а не текущий
    * пользователь. У полностью покрытых строка и так `editable: false`; массив нужен

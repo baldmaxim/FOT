@@ -118,7 +118,12 @@ import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { loadTimesheetObjectLabels } from '../services/employee-timesheet-object.service.js';
 import { listWindowPinnedEmployeeIds } from '../services/timesheet-export-mode.service.js';
-import { firedEligibleSql } from '../services/timesheet-fired-cutoff.service.js';
+import {
+  buildFiredCutoffMap,
+  firedEligibleSql,
+  firedPortalEligibleSql,
+  isFiredHiddenForPeriod,
+} from '../services/timesheet-fired-cutoff.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   isDepartmentMonthAllowed,
@@ -2210,6 +2215,9 @@ export const timesheetController = {
       // Скоуп уже ограничен resolveTimesheetScope — флаг лишь управляет
       // пост-фильтрацией внутри уже авторизованного набора.
       const includeEmpty = req.query.include_empty !== '0';
+      // show_fired=1 — просмотр в портале (грид, «По сотруднику», карточка): уволенный виден и в месяце
+      // увольнения, до даты увольнения. «Согласования» флаг не шлют — их состав как у подачи.
+      const showFiredInDismissalMonth = req.query.show_fired === '1';
       const compactSchedulePayload = req.query.schedule_payload === 'compact';
       const scope = await resolveTimesheetScope(req);
       if (!scope) {
@@ -2374,7 +2382,10 @@ export const timesheetController = {
       const isTimekeeperLiDeptView = shouldApplyDeptFilter && !hasPeriodDeptFilter && isTimekeeper(req)
         && department_id === LI_OBSHESTROY_DEPARTMENT_ID;
       let departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
-        ? await listEmployeeMembershipsForDepartmentPeriod(membershipDeptId as string, startDate, endDate)
+        ? await listEmployeeMembershipsForDepartmentPeriod(
+          membershipDeptId as string, startDate, endDate, undefined,
+          { firedInDismissalMonth: showFiredInDismissalMonth },
+        )
         : [];
       if (hasPeriodDeptFilter) {
         departmentMemberships = departmentMemberships.filter(m => m.employee_id === requestedEmployeeId);
@@ -2461,13 +2472,20 @@ export const timesheetController = {
       }
 
       // Уволенные: с 01.09.2026 в месяце увольнения их в табеле нет; раньше — виден период
-      // работы до даты увольнения (cutoff применяется ниже). Правило — firedEligibleSql.
+      // работы до даты увольнения (cutoff применяется ниже). Правило — firedEligibleSql;
+      // при show_fired — firedPortalEligibleSql (виден до даты увольнения и в месяце увольнения).
       const empParams: unknown[] = [];
       empParams.push(startDate);
+      const startDateParam = `$${empParams.length}`;
       const empWhere: string[] = [
-        firedEligibleSql(null, `$${empParams.length}`),
+        showFiredInDismissalMonth
+          ? firedPortalEligibleSql(null, startDateParam)
+          : firedEligibleSql(null, startDateParam),
         `is_archived = false`,
       ];
+      // Карточка сотрудника (show_fired без отдела, без списка и не «Мои сотрудники»).
+      const isCardRequest = showFiredInDismissalMonth
+        && !hasEmployeeIdsFilter && !shouldApplyDeptFilter && !isDirectReportsOnlyScope;
 
       if (hasEmployeeIdsFilter) {
         // HR-режим: список сотрудников передан явно (например, для просмотра табеля
@@ -2487,6 +2505,12 @@ export const timesheetController = {
         // Руководитель без managed-отделов: только прямые подчинённые + он сам.
         empParams.push(additionalEmployeeIds);
         empWhere.push(`id = ANY($${empParams.length}::int[])`);
+      } else if (isCardRequest) {
+        // Карточка: уволенному при увольнении ставится excluded_from_timesheet с датой
+        // увольнение+1 — он виден за периоды до неё. Прочие исключённые — как раньше.
+        empWhere.push(`(excluded_from_timesheet = false
+                        OR (employment_status = 'fired'
+                            AND excluded_from_timesheet_date > ${startDateParam}::date))`);
       } else {
         // Без deptFilter (self/employee-filter) сохраняем прежнее поведение: исключённые не видны.
         empWhere.push(`excluded_from_timesheet = false`);
@@ -2635,6 +2659,20 @@ export const timesheetController = {
         }
       }
       mark('zero_activity_filter');
+
+      // Карточка: дни после выхода уволенного грид гасит на фронте, а карточка — нет, поэтому
+      // заглушки «Н» после увольнения убираем здесь (cutoff — как в выгрузке, только уволенные).
+      if (isCardRequest) {
+        const firedCutoff = buildFiredCutoffMap(employees, startDate);
+        if (firedCutoff.size > 0) {
+          const isBeforeExit = (employeeId: number, workDate: string): boolean => {
+            const cutoff = firedCutoff.get(employeeId);
+            return !cutoff || workDate < cutoff;
+          };
+          entries = entries.filter(e => isBeforeExit(e.employee_id, e.work_date));
+          objectEntries = objectEntries.filter(e => isBeforeExit(e.employee_id, e.work_date));
+        }
+      }
 
       const startDay = Number.parseInt(startDate.slice(-2), 10);
       const endDay = Number.parseInt(endDate.slice(-2), 10);
@@ -2876,6 +2914,9 @@ export const timesheetController = {
           coveredDirectReportSet,
         });
         const coveredDates = coveredDatesByEmployee.get(empId) ?? null;
+        // Уволенный в месяце периода (show_fired): в табеле правится как до 02.10, но в подачу
+        // и 1С не идёт — фронт не считает его строку проблемой подачи.
+        const excludedFromSubmission = isFiredHiddenForPeriod(e, startDate);
         return {
           ...e,
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,
@@ -2895,6 +2936,7 @@ export const timesheetController = {
           editable: (source === 'supervisor' || source === 'direct_report_covered')
             ? false
             : (isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable)),
+          ...(excludedFromSubmission ? { excluded_from_submission: true } : {}),
         };
       });
 
@@ -3296,7 +3338,7 @@ export const timesheetController = {
            FROM employees
           WHERE full_name ILIKE $1
             AND is_archived = false
-            AND ${firedEligibleSql(null, '$2')}
+            AND ${firedPortalEligibleSql(null, '$2')}
             AND NOT (excluded_from_timesheet = true
                      AND (excluded_from_timesheet_date IS NULL
                           OR excluded_from_timesheet_date <= $2::date))
@@ -4522,7 +4564,10 @@ export const timesheetController = {
           roleCanEditTimesheet && (editableDeptIds === 'all' || editableDeptIds.includes(id));
         const ids = new Set<number>();
         for (const deptId of departmentIds) {
-          const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
+          // Состав табеля, а не подачи: правки уволенного в месяце увольнения видны, как в гриде.
+          const list = await listEmployeeIdsAssignedToDepartmentPeriod(
+            deptId, startDate, endDate, { firedInDismissalMonth: true },
+          );
           const deptEditable = isDeptEditable(deptId);
           for (const id of list) {
             ids.add(id);
@@ -4531,7 +4576,9 @@ export const timesheetController = {
         }
         employeeIds = [...ids];
       } else if (requestedDepartmentId) {
-        employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(requestedDepartmentId, startDate, endDate);
+        employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(
+          requestedDepartmentId, startDate, endDate, { firedInDismissalMonth: true },
+        );
       } else {
         const data = await query<{ id: number | string }>(`SELECT id FROM employees`);
         employeeIds = data.map((row) => Number(row.id));

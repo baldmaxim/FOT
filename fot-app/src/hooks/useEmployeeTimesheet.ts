@@ -32,7 +32,7 @@ export const useEmployeeTimesheetMonth = (
     queryKey: employeeId && monthKey
       ? getEmployeeTimesheetMonthQueryKey(employeeId, monthKey)
       : ['employee-timesheet-summary', 'disabled'],
-    queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId!, include_objects: true }),
+    queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId!, include_objects: true, show_fired: true }),
     enabled: Boolean(employeeId && monthKey && enabled),
     staleTime: isCurrentMonth ? 60_000 : 5 * 60_000,
     gcTime: 15 * 60_000,
@@ -55,7 +55,7 @@ export const useEmployeeTimesheetMonths = (
   const results = useQueries({
     queries: monthKeys.map(monthKey => ({
       queryKey: getEmployeeTimesheetMonthQueryKey(employeeId!, monthKey),
-      queryFn: () => timesheetService.getAll({ month: monthKey, employee_id: employeeId!, include_objects: true }),
+      queryFn: () => timesheetService.getAll({ month: monthKey, employee_id: employeeId!, include_objects: true, show_fired: true }),
       enabled: Boolean(employeeId && enabled),
       staleTime: 5 * 60_000,
   gcTime: 15 * 60_000,

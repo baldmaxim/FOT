@@ -327,7 +327,9 @@ describe('getAll — режим «По сотруднику»', () => {
   it('period_department_id включает membership-путь по этому отделу', async () => {
     await getAllWithPeriod();
 
-    expect(h.memberships).toHaveBeenCalledWith(DEPT_A, `${MONTH}-01`, `${MONTH}-31`);
+    expect(h.memberships).toHaveBeenCalledWith(
+      DEPT_A, `${MONTH}-01`, `${MONTH}-31`, undefined, { firedInDismissalMonth: false },
+    );
   });
 
   it('строка начальника участка в персональном режиме не подмешивается', async () => {
@@ -551,6 +553,19 @@ describe('searchEmployeesForTimesheet', () => {
 
     expect(res._json.data).toHaveLength(2);
     expect(scope.canAccess).not.toHaveBeenCalled();
+  });
+
+  it('уволенный в месяце увольнения ищется по составу табеля (до даты увольнения)', async () => {
+    scope.resolveTimesheetScope.mockResolvedValue('all');
+    h.pgQuery.mockImplementation(async (sql: string) => (
+      sql.includes('FROM employees') ? candidates : []
+    ));
+
+    await call({ q: 'Иванов', from: '2026-10-01', to: '2026-10-31' });
+
+    const searchSql = String(h.pgQuery.mock.calls.find(([sql]) => String(sql).includes('FROM employees'))?.[0]);
+    expect(searchSql).toContain('dismissal_date >= $2::date');
+    expect(searchSql).not.toContain('date_trunc');
   });
 });
 

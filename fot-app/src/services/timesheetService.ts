@@ -36,6 +36,9 @@ interface TimesheetFilters {
   // include_empty: показывать членов ростера без активности за период (тумблер
   // «Все сотрудники»). undefined — параметр не шлём, бэкенд по умолчанию показывает всех.
   include_empty?: boolean;
+  // show_fired: просмотр в портале — уволенный виден и в месяце увольнения (до даты
+  // увольнения, только чтение). «Согласования» не шлют: их состав как у подачи.
+  show_fired?: boolean;
   schedule_payload?: 'full' | 'compact';
 }
 
@@ -265,6 +268,7 @@ export const timesheetService = {
     if (filters.include_empty !== undefined) {
       params.append('include_empty', filters.include_empty ? '1' : '0');
     }
+    if (filters.show_fired) params.append('show_fired', '1');
     params.append('schedule_payload', filters.schedule_payload ?? 'compact');
     const res = await apiClient.get<ApiResponse<TimesheetResponse> & {
       meta?: { department_writable?: boolean };

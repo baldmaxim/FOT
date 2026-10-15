@@ -326,6 +326,109 @@ describe('getAll — инверсия дефолта include_empty', () => {
   });
 });
 
+describe('getAll — show_fired: уволенный в месяце увольнения виден в портале', () => {
+  const FIRED_MONTH = '2026-10';
+  // Как у Холодова: при увольнении ставится исключение из табеля с даты увольнение+1.
+  const firedRow = {
+    ...employeeRow(3, 'Уволенный У.'),
+    employment_status: 'fired',
+    dismissal_date: '2026-10-13',
+    excluded_from_timesheet: true,
+    excluded_from_timesheet_date: '2026-10-14',
+  };
+  const firedEntry = (workDate: string) => ({
+    ...activeEntry(3),
+    work_date: workDate,
+  });
+
+  beforeEach(() => {
+    h.memberships.mockResolvedValue([
+      membership(1),
+      { ...membership(3), transferred_out_date: '2026-10-14', joined_date: '2026-01-01' },
+    ]);
+    h.buildAttendance.mockResolvedValue({ entries: [activeEntry(1)], objectEntries: [] });
+    h.pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employees')) return [employeeRow(1, 'Активный А.'), firedRow];
+      return [];
+    });
+  });
+
+  const employeesSql = (): string => {
+    const call = h.pgQuery.mock.calls.find(([sql]) => String(sql).includes('FROM employees'));
+    return String(call?.[0] ?? '');
+  };
+
+  it('show_fired=1 → членство и выборка по составу табеля; строка правится, но вне подачи', async () => {
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: FIRED_MONTH, show_fired: '1' }), res);
+
+    expect(res._status).toBe(200);
+    expect(h.memberships).toHaveBeenCalledWith(
+      DEPT, `${FIRED_MONTH}-01`, `${FIRED_MONTH}-31`, undefined, { firedInDismissalMonth: true },
+    );
+    expect(employeesSql()).not.toContain('date_trunc');
+    const employees = (res._json as {
+      data: { employees: Array<{ id: number; editable?: boolean; excluded_from_submission?: boolean }> };
+    }).data.employees;
+    const fired = employees.find(e => Number(e.id) === 3);
+    const active = employees.find(e => Number(e.id) === 1);
+    expect(fired?.editable).toBe(true);
+    expect(fired?.excluded_from_submission).toBe(true);
+    expect(active?.editable).toBe(true);
+    expect(active?.excluded_from_submission).toBeUndefined();
+  });
+
+  it('карточка (employee_id + show_fired): исключённый при увольнении виден, дни после выхода убраны', async () => {
+    h.buildAttendance.mockResolvedValue({
+      entries: [firedEntry(`${FIRED_MONTH}-13`), firedEntry(`${FIRED_MONTH}-14`)],
+      objectEntries: [],
+    });
+    h.pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employees')) return [firedRow];
+      return [];
+    });
+    const res = makeRes();
+    await timesheetController.getAll(
+      makeReq({ month: FIRED_MONTH, department_id: '', employee_id: '3', show_fired: '1' }),
+      res,
+    );
+
+    expect(res._status).toBe(200);
+    expect(h.memberships).not.toHaveBeenCalled();
+    const sql = employeesSql();
+    expect(sql).toContain("employment_status = 'fired'");
+    expect(sql).toContain('excluded_from_timesheet_date > $1::date');
+    const data = (res._json as {
+      data: { employees: Array<{ id: number }>; entries: Array<{ employee_id: number; work_date: string }> };
+    }).data;
+    expect(data.employees.map(e => Number(e.id))).toEqual([3]);
+    expect(data.entries.map(e => e.work_date)).toEqual([`${FIRED_MONTH}-13`]);
+  });
+
+  it('карточка без show_fired → исключённые не видны (прежнее поведение)', async () => {
+    const res = makeRes();
+    await timesheetController.getAll(
+      makeReq({ month: FIRED_MONTH, department_id: '', employee_id: '3' }),
+      res,
+    );
+
+    const sql = employeesSql();
+    expect(sql).toContain('excluded_from_timesheet = false');
+    expect(sql).not.toContain('excluded_from_timesheet_date > $1::date');
+  });
+
+  it('без show_fired («Согласования») → правило подачи: месяц увольнения скрыт', async () => {
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: FIRED_MONTH }), res);
+
+    expect(res._status).toBe(200);
+    expect(h.memberships).toHaveBeenCalledWith(
+      DEPT, `${FIRED_MONTH}-01`, `${FIRED_MONTH}-31`, undefined, { firedInDismissalMonth: false },
+    );
+    expect(employeesSql()).toContain('date_trunc');
+  });
+});
+
 describe('кэш-ключи timesheet — include_empty и employee_ids', () => {
   const keyReq = (query: Record<string, string>) => ({
     query: { month: MONTH, department_id: DEPT, ...query },
@@ -360,6 +463,13 @@ describe('кэш-ключи timesheet — include_empty и employee_ids', () => 
       .not.toBe(buildTimesheetCacheKey(keyReq({ employee_ids: '1,2,4' })));
     expect(buildTimesheetCacheKey(keyReq({ employee_ids: '1,2,3' })))
       .not.toBe(buildTimesheetCacheKey(keyReq({})));
+  });
+
+  it('show_fired (портал) и без него («Согласования») → разные ключи', () => {
+    expect(buildTimesheetCacheKey(keyReq({ show_fired: '1' })))
+      .not.toBe(buildTimesheetCacheKey(keyReq({})));
+    expect(buildTimesheetTodayCacheKey(keyReq({ show_fired: '1' })))
+      .not.toBe(buildTimesheetTodayCacheKey(keyReq({})));
   });
 
   it('ключи ts и ts-today не пересекаются', () => {

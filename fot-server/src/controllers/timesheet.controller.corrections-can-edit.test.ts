@@ -61,6 +61,7 @@ vi.mock('../services/skud-realtime.service.js', () => ({
 }));
 
 import { timesheetController } from './timesheet.controller.js';
+import { listEmployeeIdsAssignedToDepartmentPeriod } from '../services/timesheet-department-assignments.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const ROW_BASE = {
@@ -130,5 +131,18 @@ describe('listCorrections: can_edit', () => {
     await timesheetController.listCorrections(req('hr_admin'), res);
 
     expect(canEditBySource(res._json)).toEqual({ manual: false, leave_request: false });
+  });
+});
+
+describe('listCorrections: состав табеля, а не подачи', () => {
+  it('отдел берётся с уволенными в месяце увольнения — их правки видны, как в гриде', async () => {
+    const res = makeRes();
+
+    await timesheetController.listCorrections(req('manager'), res);
+
+    expect(listEmployeeIdsAssignedToDepartmentPeriod).toHaveBeenCalledWith(
+      'D1', '2026-09-01', '2026-09-15', { firedInDismissalMonth: true },
+    );
+    expect((res._json as { data: unknown[] }).data).toHaveLength(2);
   });
 });

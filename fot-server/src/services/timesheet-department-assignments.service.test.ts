@@ -221,6 +221,36 @@ describe('timesheet-department-assignments.service', () => {
         { employee_id: 700, transferred_out_date: null, joined_date: null, joined_via_transfer: false },
       ]);
     });
+
+    // Уволенный 13.10 из отдела: закрытое назначение до 13.10 + событие увольнения.
+    const mockFiredInOctober = (): void => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        .mockResolvedValueOnce([{ employee_id: 2005, effective_from: '2026-01-01', effective_to: '2026-10-13', org_department_id: DEPT }])
+        .mockResolvedValueOnce([{ employee_id: 2005, dismissal_date: '2026-10-13' }]) // firedFromDept
+        .mockResolvedValueOnce([])                     // transferredInAfter
+        .mockResolvedValueOnce([])                     // snapshotEmployees — snapshot уже «Уволенные»
+        .mockResolvedValueOnce([])                     // transferJoins
+        .mockResolvedValueOnce([]);                    // activeRows
+    };
+    const activeRowsSql = (): string => String(pgQuery.mock.calls[5][0]);
+
+    it('по умолчанию (подача, 1С) — уволенный в месяце увольнения отсекается правилом подачи', async () => {
+      mockFiredInOctober();
+      await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-10-01', '2026-10-31');
+      expect(activeRowsSql()).toContain('date_trunc');
+    });
+
+    it('firedInDismissalMonth (портал) — уволенный виден до даты увольнения', async () => {
+      mockFiredInOctober();
+      await listEmployeeMembershipsForDepartmentPeriod(
+        DEPT, '2026-10-01', '2026-10-31', undefined, { firedInDismissalMonth: true },
+      );
+      const sql = activeRowsSql();
+      expect(sql).not.toContain('date_trunc');
+      expect(sql).toContain('dismissal_date >= $2::date');
+    });
   });
 
   describe('listScopedMembersByDepartment — bulk-членство', () => {

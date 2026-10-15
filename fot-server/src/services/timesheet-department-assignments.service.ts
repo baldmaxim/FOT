@@ -1,6 +1,6 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { collectDeptIds } from './skud-shared.service.js';
-import { firedEligibleSql } from './timesheet-fired-cutoff.service.js';
+import { firedEligibleSql, firedPortalEligibleSql } from './timesheet-fired-cutoff.service.js';
 import type { TimesheetApprovalStatus } from '../types/index.js';
 
 export type TimesheetDisplayHalf = 'H1' | 'H2' | 'FULL';
@@ -189,12 +189,21 @@ export function isWithinMembershipWindow(
   return true;
 }
 
+/**
+ * firedInDismissalMonth — состав для ПРОСМОТРА в портале: уволенный виден и в месяце увольнения
+ * (firedPortalEligibleSql). По умолчанию — состав подачи/1С (firedEligibleSql).
+ */
+export interface IMembershipOptions {
+  firedInDismissalMonth?: boolean;
+}
+
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
   departmentId: string,
   startDate: string,
   endDate: string,
+  options?: IMembershipOptions,
 ): Promise<number[]> {
-  const memberships = await listEmployeeMembershipsForDepartmentPeriod(departmentId, startDate, endDate);
+  const memberships = await listEmployeeMembershipsForDepartmentPeriod(departmentId, startDate, endDate, undefined, options);
   return memberships.map(m => m.employee_id);
 }
 
@@ -222,6 +231,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   startDate: string,
   endDate: string,
   exec?: DbExecutor,
+  options?: IMembershipOptions,
 ): Promise<IDepartmentEmployeeMembership[]> {
   // Дерево отделов — справочник за in-memory кэшем, читается как обычно.
   const deptIds = await collectDeptIds(departmentId);
@@ -369,7 +379,10 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
 
   // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
   // Уволенные: с 01.09.2026 в месяце увольнения их нет (firedEligibleSql); раньше — видны до даты
-  // увольнения (dismissal_date >= startDate).
+  // увольнения (dismissal_date >= startDate). Просмотр в портале — до даты увольнения всегда.
+  const firedSql = options?.firedInDismissalMonth
+    ? firedPortalEligibleSql(null, '$2')
+    : firedEligibleSql(null, '$2');
   const activeRows = await query<{
     id: number;
     excluded_from_timesheet: boolean;
@@ -379,7 +392,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
        FROM employees
       WHERE id = ANY($1::int[])
         AND is_archived = false
-        AND ${firedEligibleSql(null, '$2')}`,
+        AND ${firedSql}`,
     [candidateIds, startDate],
   );
 

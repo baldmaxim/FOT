@@ -444,6 +444,7 @@ export const TimesheetPage: FC = () => {
       to: rangeEnd,
       include_objects: includeObjectDetails,
       include_empty: includeEmptyEmployees,
+      show_fired: true,
       schedule_payload: 'compact',
     }),
     enabled: Boolean(activeGridDeptId) && !isEmployeeMode,
@@ -498,6 +499,7 @@ export const TimesheetPage: FC = () => {
         from: rangeStart,
         to: rangeEnd,
         include_objects: true,
+        show_fired: true,
         schedule_payload: 'compact' as const,
       }),
       enabled: isEmployeeMode && selectedEmployeeModeId != null && period.accessible,
@@ -2217,6 +2219,8 @@ export const TimesheetPage: FC = () => {
     if (dates.length === 0) return [];
     const result: ISubmitProblemEmployee[] = [];
     for (const emp of employees) {
+      // Уволенный в месяце периода в подачу не входит — проблемой подачи не считается.
+      if (emp.excluded_from_submission) continue;
       const a = emp.transferred_out_date ?? null;
       const b = emp.excluded_from_timesheet_date ?? null;
       const cutoff = a && b ? (a < b ? a : b) : (a || b || null);

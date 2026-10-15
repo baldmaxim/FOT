@@ -206,8 +206,12 @@ export async function canAccessEmployeeForTimesheetPeriod(
     ? await resolveTimesheetEditableDepartmentIds(req)
     : await resolveManagedDepartmentIds(req);
   if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
+    // Табель (просмотр и правка) — портальный состав: уволенный и в месяце увольнения
+    // доступен до даты увольнения, как до 02.10. В подачу и 1С он при этом не идёт.
     const employeeIdsByDepartment = await Promise.all(
-      managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)),
+      managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(
+        departmentId, startDate, endDate, { firedInDismissalMonth: true },
+      )),
     );
     if (employeeIdsByDepartment.flat().includes(employeeId)) {
       return true;

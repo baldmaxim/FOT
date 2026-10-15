@@ -29,6 +29,9 @@ const buildKey = (prefix: string, req: Request): string =>
     req.query.half ?? '',
     req.query.include_objects ?? '',
     normalizeIncludeEmpty(req),
+    // show_fired: портал видит уволенных в месяце увольнения, «Согласования» — нет;
+    // при тех же отделе и датах это разные ответы.
+    req.query.show_fired === '1' ? 'f1' : 'f0',
     req.query.schedule_payload ?? '',
     req.user.id,
     req.user.show_actual_hours ? '1' : '0',

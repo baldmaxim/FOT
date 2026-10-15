@@ -495,6 +495,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
+  // Бейдж «Пер.» — только в периоде, куда попадает дата перевода: в прошлом месяце
+  // (дни ещё не серые) он лишь путает.
+  const lastVisibleDate = `${year}-${String(month).padStart(2, '0')}-${String(Math.max(...days)).padStart(2, '0')}`;
+  const showTransferBadge = (employee: TimesheetEmployee): boolean =>
+    Boolean(employee.transferred_out_date) && (employee.transferred_out_date as string) <= lastVisibleDate;
 
   // Объект табелирования под ФИО (миграция 288) — только показ: объект ставит ночной
   // расчёт по часам, «Офис» — окно «Режим табелирования».
@@ -1194,7 +1199,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       <div className="ts-mobile-card-name" title={row.employee.full_name}>{displayName}</div>
                       {renderTimesheetObject(row.employee)}
                     </div>
-                    {row.employee.transferred_out_date && (
+                    {row.employee.transferred_out_date && showTransferBadge(row.employee) && (
                       <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
                         Переведён {formatBadgeDate(row.employee.transferred_out_date)}
                       </span>
@@ -1609,7 +1614,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </div>
                           {renderTimesheetObject(row.employee)}
                         </div>
-                        {row.employee.transferred_out_date && (
+                        {row.employee.transferred_out_date && showTransferBadge(row.employee) && (
                           <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
                             Пер. {formatBadgeDate(row.employee.transferred_out_date)}
                           </span>

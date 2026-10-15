@@ -136,6 +136,30 @@ describe('buildEmployeeDepartmentPeriods', () => {
     expect(periods).toContainEqual({ org_department_id: DEPT_B, from: '2026-08-01', to: '2026-08-11' });
   });
 
+  it('уволен в месяце (Холодов, 13.10): одна строка реального отдела до даты увольнения', () => {
+    const periods = build(
+      [
+        assignment('a0', DEPT_A, '2025-12-31', '2025-12-31'),
+        assignment('a1', DEPT_A, '2026-01-01', '2026-10-13'),
+        assignment('a2', DEPT_B, '2026-10-14', null), // папка «Уволенные»
+      ],
+      employee({
+        org_department_id: DEPT_B,
+        employment_status: 'fired',
+        dismissal_date: '2026-10-13',
+        excluded_from_timesheet: true,
+        excluded_from_timesheet_date: '2026-10-14',
+      }),
+      DEPT_A,
+      '2026-10-01',
+      '2026-10-31',
+    );
+
+    expect(periods).toEqual([
+      { org_department_id: DEPT_A, from: '2026-10-01', to: '2026-10-13' },
+    ]);
+  });
+
   it('дата приёма обрезает период снизу', () => {
     const periods = build(
       [assignment('a1', DEPT_A, '2020-01-01', null)],
