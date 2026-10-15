@@ -142,7 +142,10 @@ export const setColumnFilter = (view: ITableView, key: string, values: string[] 
   return { ...view, filters };
 };
 
-/** Снимок таблицы для xlsx: «№» и столбцы экрана, строки — видимые, в порядке экрана. */
+/**
+ * Снимок таблицы для xlsx: «№» и столбцы экрана, строки — видимые, в порядке экрана.
+ * totals — строка итогов экрана (ключ — column.key), идёт последней, без номера.
+ */
 export const buildExportTable = <Row,>(params: {
   title: string;
   subtitle: string;
@@ -150,16 +153,25 @@ export const buildExportTable = <Row,>(params: {
   columns: ReadonlyArray<ITableColumn<Row>>;
   rows: ReadonlyArray<Row>;
   isMuted?: (row: Row) => boolean;
-}): ITableExportSnapshot => ({
-  title: params.title,
-  subtitle: params.subtitle,
-  file_name: params.fileName,
-  columns: [
-    { label: '№', type: 'int' },
-    ...params.columns.map(column => ({ label: column.label, type: column.type })),
-  ],
-  rows: params.rows.map((row, index) => ({
-    cells: [index + 1, ...params.columns.map(column => column.exportValue?.(row) ?? column.text(row))],
-    ...(params.isMuted?.(row) ? { muted: true } : {}),
-  })),
-});
+  totals?: Readonly<Record<string, string | number | null>>;
+}): ITableExportSnapshot => {
+  const { totals } = params;
+  return {
+    title: params.title,
+    subtitle: params.subtitle,
+    file_name: params.fileName,
+    columns: [
+      { label: '№', type: 'int' },
+      ...params.columns.map(column => ({ label: column.label, type: column.type })),
+    ],
+    rows: [
+      ...params.rows.map((row, index) => ({
+        cells: [index + 1, ...params.columns.map(column => column.exportValue?.(row) ?? column.text(row))],
+        ...(params.isMuted?.(row) ? { muted: true } : {}),
+      })),
+      ...(totals && params.rows.length > 0
+        ? [{ cells: [null, ...params.columns.map(column => totals[column.key] ?? null)] }]
+        : []),
+    ],
+  };
+};

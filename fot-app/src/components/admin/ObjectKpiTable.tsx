@@ -10,6 +10,7 @@ import {
   type IKpiColumn,
   type IKpiTableView,
 } from '../../utils/objectKpiTable';
+import { formatMoneyShort } from '../../utils/formatMoney';
 import styles from './ObjectKpiTable.module.css';
 
 interface IObjectKpiTableProps<Row> {
@@ -28,6 +29,8 @@ interface IObjectKpiTableProps<Row> {
   rowTone?: (row: Row) => 'current' | 'forecast' | undefined;
   /** Своя ячейка (подсказка премии, пометка ручного плана); undefined — текст столбца. */
   renderCell?: (column: IKpiColumn<Row>, row: Row) => ReactNode | undefined;
+  /** Строка «Итого» под видимыми строками: ключ — column.key, суммы — строкой numeric; нет ключа — пустая ячейка. */
+  totals?: Readonly<Record<string, string | null>>;
   loading: boolean;
   emptyText: string;
 }
@@ -51,6 +54,7 @@ export const ObjectKpiTable = <Row,>({
   onRowClick,
   rowTone,
   renderCell,
+  totals,
   loading,
   emptyText,
 }: IObjectKpiTableProps<Row>): ReactElement => {
@@ -134,6 +138,21 @@ export const ObjectKpiTable = <Row,>({
             );
           })}
         </tbody>
+        {totals && !loading && visibleRows.length > 0 && (
+          <tfoot>
+            <tr>
+              <td className={styles.cellNum} />
+              {columns.map(column => {
+                const value = totals[column.key];
+                return (
+                  <td key={column.key} className={column.type === 'text' ? styles.cellText : styles.cellNumber}>
+                    {value === undefined ? null : column.type === 'money' ? formatMoneyShort(value) : value}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        )}
       </table>
 
       {filterFor && filterColumn && (

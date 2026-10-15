@@ -11,6 +11,7 @@ import {
   OBJECT_STAT_COLUMNS,
   premiumCell,
   setColumnFilter,
+  sumMoneyColumns,
   toggleSort,
   type IKpiTableView,
   type IPremiumView,
@@ -96,6 +97,61 @@ describe('buildExportTable', () => {
     expect(table.rows[0].cells).toEqual([1, 'ЖК Alia', 'Иванов И. И.', '1000.00', '100.00', '900.00', 50, 100, 147.5]);
     expect(table.rows[3].cells.slice(0, 3)).toEqual([4, 'База Химки', '—']);
     expect(table.rows[3].cells.at(-1)).toBe('—');
+  });
+
+  it('«Итого» — последней строкой без номера, те же суммы, что на экране', () => {
+    const table = buildExportTable({
+      title: 't',
+      subtitle: 's',
+      fileName: 'f',
+      columns: OBJECT_STAT_COLUMNS,
+      rows,
+      totals: { object: 'Итого', ...sumMoneyColumns(rows, OBJECT_STAT_COLUMNS) },
+    });
+    expect(table.rows).toHaveLength(5);
+    expect(table.rows[4]).toEqual({
+      cells: [null, 'Итого', null, '4000.00', '400.00', '3600.00', '200.00', '400.00', null],
+    });
+    // Без видимых строк итогов нет — в файле только шапка.
+    expect(buildExportTable({ title: 't', subtitle: 's', fileName: 'f', columns: OBJECT_STAT_COLUMNS, rows: [], totals: { object: 'Итого' } }).rows)
+      .toEqual([]);
+  });
+});
+
+describe('sumMoneyColumns: строка «Итого»', () => {
+  it('только денежные столбцы, суммы — строкой numeric', () => {
+    expect(sumMoneyColumns(rows, OBJECT_STAT_COLUMNS)).toEqual({
+      contract: '4000.00',
+      ks6: '400.00',
+      remainder: '3600.00',
+      ks2: '200.00',
+      plan: '400.00',
+    });
+  });
+
+  it('копейки без ошибок float на суммах в сотни миллиардов, отрицательный остаток', () => {
+    const big = [
+      stat({ contract_total: '117412437610.99', remainder: '-100.50', fact_amount: 0.1 }),
+      stat({ contract_total: '0.02', remainder: '50.25', fact_amount: 0.2 }),
+    ];
+    expect(sumMoneyColumns(big, OBJECT_STAT_COLUMNS)).toMatchObject({
+      contract: '117412437611.01',
+      remainder: '-50.25',
+      ks2: '0.30',
+    });
+  });
+
+  it('пустые значения пропускаются; столбец без значений и пустой список — null', () => {
+    const partial = [stat({ plan_amount: null, contract_total: null }), stat({ plan_amount: null })];
+    expect(sumMoneyColumns(partial, OBJECT_STAT_COLUMNS)).toMatchObject({ contract: '1000.00', plan: null });
+    expect(sumMoneyColumns([], OBJECT_STAT_COLUMNS)).toEqual({
+      contract: null, ks6: null, remainder: null, ks2: null, plan: null,
+    });
+  });
+
+  it('по видимым строкам: фильтр столбца меняет итоги', () => {
+    const visible = applyTableView(rows, OBJECT_STAT_COLUMNS, view({ filters: { manager: ['Иванов И. И.'] } }));
+    expect(sumMoneyColumns(visible, OBJECT_STAT_COLUMNS)).toMatchObject({ contract: '2000.00', plan: '200.00' });
   });
 });
 

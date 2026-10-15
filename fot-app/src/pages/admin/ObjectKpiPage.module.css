@@ -227,9 +227,32 @@
   color: var(--text-secondary);
 }
 
-/* «Факт КС-2» и «Выполнение» — по ширине содержимого: в строке остаётся место под «Экспорт». */
+/* «Факт КС-2» — по ширине содержимого: в строке остаётся место под «Экспорт». */
 .summaryTileCompact {
   flex: 0 1 auto;
+}
+
+/* «Период» — отдельным полем справа от плана, размером и видом как «Объект». */
+.monthsField {
+  min-width: 180px;
+}
+
+/* Триггер — из общего MonthsPicker; вложенный селектор перекрывает его размер и рамку. */
+.monthsField .monthsTrigger {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 0;
+  padding: 8px 14px 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  /* Как у селекта «Объект» (≥16px — без авто-зума на смартфонах). */
+  font-size: 16px;
+}
+
+.monthsField .monthsTrigger:hover:not(:disabled),
+.monthsField .monthsTrigger:focus-visible {
+  border-color: var(--accent);
 }
 
 .objectCell {

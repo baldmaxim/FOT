@@ -13,8 +13,8 @@ import type { ITableColumn, ITableView } from './tableView';
  * Таблицы вкладки «KPI объектов»: описания столбцов, сортировка, фильтры и снимок для xlsx.
  *
  * Строк не больше пары десятков (объекты или месяцы одного объекта), поэтому сортировка и
- * фильтры — на клиенте (общие функции — в tableView.ts). Деньги здесь не считаются — только
- * сравниваются и передаются как пришли с сервера.
+ * фильтры — на клиенте (общие функции — в tableView.ts). Деньги здесь сравниваются и передаются
+ * как пришли с сервера; складывается только строка «Итого» (sumMoneyColumns) — в копейках.
  */
 
 export {
@@ -40,6 +40,34 @@ const toSortNumber = (value: string | number | null | undefined): number | null 
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+};
+
+/** Строка numeric «-123.45» из целых копеек — без float-деления. */
+const formatKopecks = (kopecks: number): string => {
+  const abs = Math.abs(kopecks);
+  return `${kopecks < 0 ? '-' : ''}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
+};
+
+/**
+ * Итоги денежных столбцов по переданным (видимым) строкам: ключ — column.key, сумма — строкой
+ * numeric, как суммы с сервера; null — в столбце нет ни одного значения. Складываем целыми
+ * копейками: сумма сотни миллиардов с дробями во float накопила бы ошибку округления.
+ */
+export const sumMoneyColumns = <Row,>(
+  rows: ReadonlyArray<Row>,
+  columns: ReadonlyArray<IKpiColumn<Row>>,
+): Record<string, string | null> => {
+  const totals: Record<string, string | null> = {};
+  for (const column of columns) {
+    if (column.type !== 'money' || !column.exportValue) continue;
+    let kopecks: number | null = null;
+    for (const row of rows) {
+      const value = toSortNumber(column.exportValue(row));
+      if (value !== null) kopecks = (kopecks ?? 0) + Math.round(value * 100);
+    }
+    totals[column.key] = kopecks === null ? null : formatKopecks(kopecks);
+  }
+  return totals;
 };
 
 const moneyColumn = <Row,>(

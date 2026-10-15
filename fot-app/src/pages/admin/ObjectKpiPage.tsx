@@ -17,7 +17,6 @@ import {
   formatDate,
   formatMoneyShort,
   formatMonthLabel,
-  formatPercent,
 } from '../../utils/formatMoney';
 import { formatMonthsLabel } from '../../utils/monthsSelection';
 import {
@@ -28,6 +27,7 @@ import {
   listWindowMonths,
   OBJECT_STAT_COLUMNS,
   premiumCell,
+  sumMoneyColumns,
   type IKpiColumn,
   type IKpiTableView,
   type IPremiumView,
@@ -178,6 +178,11 @@ export const ObjectKpiPage: FC = () => {
     () => applyTableView(objectRows, OBJECT_STAT_COLUMNS, objectsView),
     [objectRows, objectsView],
   );
+  // «Итого» — по видимым строкам: фильтр столбца меняет и суммы; в экспорт уходит та же строка.
+  const objectTotals = useMemo(
+    () => ({ object: 'Итого', ...sumMoneyColumns(visibleObjectRows, OBJECT_STAT_COLUMNS) }),
+    [visibleObjectRows],
+  );
 
   // ─── Таблица объекта по месяцам ─────────────────────────────────────────────
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
@@ -251,7 +256,7 @@ export const ObjectKpiPage: FC = () => {
         rows: visibleMonthRows,
         isMuted: row => Boolean(row.is_forecast),
       })
-      : buildExportTable({ ...base, columns: OBJECT_STAT_COLUMNS, rows: visibleObjectRows });
+      : buildExportTable({ ...base, columns: OBJECT_STAT_COLUMNS, rows: visibleObjectRows, totals: objectTotals });
 
     setExporting(true);
     try {
@@ -270,23 +275,26 @@ export const ObjectKpiPage: FC = () => {
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>План за период</span>
           <strong>{tileValue(summary?.total_plan ?? null, formatMoneyShort)}</strong>
-          {/* Выбор месяцев прямо в плитке: он меняет плитки и таблицу разом. */}
-          <MonthsPicker value={activeMonths} options={monthOptions} onChange={setSelectedMonths} />
+        </div>
+        {/* Выбор месяцев — отдельным полем справа от плана: меняет плитки и таблицу разом. */}
+        <div className={`${styles.field} ${styles.monthsField}`}>
+          <span>Период</span>
+          <MonthsPicker
+            value={activeMonths}
+            options={monthOptions}
+            onChange={setSelectedMonths}
+            className={styles.monthsTrigger}
+          />
         </div>
         <div className={`${styles.summaryTile} ${styles.summaryTileCompact}`}>
           <span className={styles.summaryLabel}>Факт КС-2</span>
           <strong>{tileValue(summary?.total_fact ?? null, formatMoneyShort)}</strong>
-          {/* Факт месяцев без плана в «Выполнение» не входит, но и потеряться не должен. */}
+          {/* Факт месяцев без плана в процент выполнения не входит, но и потеряться не должен. */}
           {Boolean(summary?.total_fact_unplanned) && (
             <span className={styles.tileHint} title="Месяцы без плана в процент выполнения не входят">
               + {formatMoneyShort(summary?.total_fact_unplanned ?? null)} по месяцам без плана
             </span>
           )}
-        </div>
-        <div className={`${styles.summaryTile} ${styles.summaryTileCompact}`}>
-          <span className={styles.summaryLabel}>Выполнение</span>
-          {/* Σфакт / Σплан, а не среднее процентов по месяцам (п. 3.5). */}
-          <strong>{tileValue(summary?.completion_pct ?? null, formatPercent)}</strong>
         </div>
 
         <label className={styles.field}>
@@ -354,6 +362,7 @@ export const ObjectKpiPage: FC = () => {
           rowKey={row => row.skud_object_id}
           rowLabel={row => `Открыть объект: ${row.object_name}`}
           onRowClick={row => setObjectFilter(row.skud_object_id)}
+          totals={objectTotals}
           loading={objectsLoading}
           emptyText="Нет объектов с договором за выбранные месяцы"
         />

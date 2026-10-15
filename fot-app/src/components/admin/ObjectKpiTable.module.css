@@ -73,6 +73,15 @@
 
 .table tbody tr:last-child td { border-bottom: none; }
 
+/* «Итого» по видимым строкам — фоном шапки, отделено границей */
+.table tfoot tr { --row-overlay: transparent; }
+.table tfoot td {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  font-weight: 600;
+  background-color: var(--bg-secondary);
+}
+
 /* Прогноз: месяцы после текущего при выполнении плана на 100 % */
 .table tbody tr.rowForecast td { color: var(--text-secondary); }
 
