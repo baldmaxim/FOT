@@ -1180,6 +1180,19 @@ export const TimesheetPage: FC = () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
     if (isModalWriteBlocked()) return;
     try {
+      // «Эхо» корректировки на весь день: объектной строки за ним нет, снимаем саму
+      // дневную запись по id — как корзиной в «По сотрудникам».
+      if (modalObjectEntry.from_day_level) {
+        await timesheetService.delete(modalObjectEntry.adjustment_id);
+        closeModal();
+        await Promise.all([
+          invalidateTimesheetCaches(modalEmployee.id),
+          // День мог быть из заявления — оно синхронно изменилось на бэке.
+          queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+          queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        ]);
+        return;
+      }
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       await timesheetService.deleteObjectEntry({
         employee_id: modalEmployee.id,
@@ -1194,7 +1207,7 @@ export const TimesheetPage: FC = () => {
       console.error('Delete object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, modalObjectEntry?.from_day_level, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches, isModalWriteBlocked]);
 
   // Сохранение/удаление per-object из «День»-модалки (modalMode='day'): таргет приходит из аргументов,
   // а не из modalObjectTarget — позволяет редактировать любой объект в списке.

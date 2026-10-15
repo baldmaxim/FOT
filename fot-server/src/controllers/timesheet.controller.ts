@@ -59,6 +59,7 @@ import {
   OBJECT_ADJUSTMENT_SOURCE_TYPE,
   OBJECT_ALLOCATIONS_KEY,
   hasObjectAllocations,
+  isMigratedDayLevelAdjustment,
   readObjectAllocations,
   resolveDayAllocationSuggestion,
   validateRequestedAllocations,
@@ -197,6 +198,9 @@ class DayAllocationConflictError extends Error {
     this.name = 'DayAllocationConflictError';
   }
 }
+
+const DAY_LEVEL_DELETE_VIA_OBJECT_MESSAGE =
+  'Эта корректировка задана на весь день. Обновите страницу или удалите её в режиме «По сотрудникам».';
 
 /** Конфликт «дневное распределение ↔ объектные строки того же дня». */
 class ObjectAdjustmentsConflictError extends Error {
@@ -4456,7 +4460,7 @@ export const timesheetController = {
 
       // Удаление освобождает субботний слот — делаем его и пересчёт хвоста месяца под
       // общим advisory-lock, иначе параллельное сохранение увидит слот занятым.
-      const { removedIds, tail } = await withEmployeeMonthQuotaLock(
+      const { removedIds, tail, dayLevelExists } = await withEmployeeMonthQuotaLock(
         parsed.employee_id,
         parsed.work_date,
         async exec => {
@@ -4469,12 +4473,40 @@ export const timesheetController = {
             source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
             source_id: parsed.object_key,
           }, exec);
+          if (ids.length === 0) {
+            // Ничего не удалено — хвост месяца не трогаем. Строка объекта могла быть «эхом»
+            // корректировки на весь день (старая вкладка слала сюда её корзину): такую
+            // снимает DELETE /timesheet/:id, а тихий «успех» оставлял часы на месте.
+            const dayRows = await queryWith<{ id: number | string }>(
+              exec,
+              `SELECT id FROM attendance_adjustments
+                WHERE employee_id = $1 AND work_date = $2
+                  AND (source_type IN ('manual', 'leave_request')
+                    OR (source_type = $3 AND metadata->>'migrated_from_day_level' = 'true'))
+                LIMIT 1`,
+              [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+            );
+            return { removedIds: ids, tail: [] as IReapprovalTransition[], dayLevelExists: dayRows.length > 0 };
+          }
           return {
             removedIds: ids,
             tail: await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec),
+            dayLevelExists: false,
           };
         },
       );
+
+      if (removedIds.length === 0) {
+        if (dayLevelExists) {
+          return res.status(409).json({
+            success: false,
+            code: 'DAY_LEVEL_CORRECTION',
+            error: DAY_LEVEL_DELETE_VIA_OBJECT_MESSAGE,
+          });
+        }
+        // Повторный клик по уже снятой строке — идемпотентный no-op без аудита.
+        return res.json({ success: true, data: null });
+      }
 
       try {
         const r2Keys = (await Promise.all(removedIds.map(id => purgeCorrectionAttachments(id)))).flat();
@@ -4686,8 +4718,14 @@ export const timesheetController = {
       if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       const sourceType = String(existing.source_type ?? '');
+      // Мигрированная из day-level строка формально manual_object, но по смыслу — итог дня:
+      // «По объектам» показывает её «эхом» на весь день, и корзина снимает её здесь.
+      const isMigratedDayLevel = isMigratedDayLevelAdjustment({
+        source_type: sourceType,
+        metadata: existing.metadata as Record<string, unknown> | null,
+      });
       // Объектные строки снимаются во вкладке «По объектам»: дневная форма их не создаёт.
-      if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
+      if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE && !isMigratedDayLevel) {
         return res.status(409).json({
           success: false,
           error: 'Часы за этот день заданы корректировкой по объекту. Удалите часы в детализации по объектам.',
@@ -4696,7 +4734,7 @@ export const timesheetController = {
       // Удаляемы: ручные корректировки (manual), объектные строки дневной формы и любые
       // материализации заявления (leave_request — включая отсутствия отпуск/больничный/
       // удалёнка/за свой счёт). Для leave_request день синхронно убирается из заявления (см. ниже).
-      const isDeletableSource = sourceType === 'manual' || sourceType === 'leave_request';
+      const isDeletableSource = sourceType === 'manual' || sourceType === 'leave_request' || isMigratedDayLevel;
       if (!isDeletableSource) {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
       }

@@ -15,14 +15,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const {
-  pgQuery, pgExecute, txQueries, upsertMock, deleteBySourceMock, getByIdMock,
+  pgQuery, pgExecute, txQueries, upsertMock, deleteBySourceMock, getByIdMock, auditLogMock, purgeMock,
 } = vi.hoisted(() => ({
   pgQuery: vi.fn(async () => [] as Array<Record<string, unknown>>),
   pgExecute: vi.fn(async () => 0),
   txQueries: [] as Array<{ sql: string; params: unknown[] }>,
   upsertMock: vi.fn(),
   deleteBySourceMock: vi.fn(async () => [] as number[]),
-  getByIdMock: vi.fn(async () => null),
+  getByIdMock: vi.fn(async (): Promise<Record<string, unknown> | null> => null),
+  auditLogMock: vi.fn(async () => undefined),
+  purgeMock: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock('../config/postgres.js', async (importActual) => ({
@@ -94,7 +96,7 @@ vi.mock('../services/correction-restrictions.service.js', async (importActual) =
 
 vi.mock('../services/audit.service.js', () => ({
   AUDIT_ACTIONS: { UPDATE_TIMESHEET_ENTRY: 'UPDATE_TIMESHEET_ENTRY' },
-  auditService: { logFromRequest: vi.fn(async () => undefined) },
+  auditService: { logFromRequest: auditLogMock },
 }));
 
 vi.mock('../services/r2.service.js', () => ({
@@ -103,7 +105,7 @@ vi.mock('../services/r2.service.js', () => ({
 
 vi.mock('../services/correction-attachments.service.js', async (importActual) => ({
   ...(await importActual<typeof import('../services/correction-attachments.service.js')>()),
-  purgeCorrectionAttachments: vi.fn(async () => [] as string[]),
+  purgeCorrectionAttachments: purgeMock,
 }));
 
 vi.mock('../services/audit-context.helpers.js', () => ({
@@ -146,12 +148,23 @@ const buildRes = () => {
 let existingRow: Record<string, unknown> | null = null;
 /** Уже отработанные субботы месяца — кандидаты квоты (loadWorkedSaturdaysForQuota). */
 let workedSaturdays: string[] = [];
+/** Запись «на весь день» на (EMP, DATE), которую найдёт проверка в deleteObjectEntry. */
+let dayLevelRow: Record<string, unknown> | null = null;
+/** Строка, которую вернёт `DELETE ... WHERE id = $1 RETURNING id` в deleteEntry. */
+let deletedById: Record<string, unknown> | null = null;
+
+/** Пересчёт хвоста месяца (computeReapprovalTransitions) — выборка корректировок за месяц. */
+const isTailReapprovalSql = (sql: string): boolean =>
+  /work_date >= \$1 AND work_date <= \$2/.test(sql);
+const tailReapprovalCalls = () => pgQuery.mock.calls.filter(c => isTailReapprovalSql(String(c[0])));
 
 beforeEach(() => {
   vi.clearAllMocks();
   txQueries.length = 0;
   existingRow = null;
   workedSaturdays = [];
+  dayLevelRow = null;
+  deletedById = null;
   schedule.expected_saturdays_per_month = 1;
   upsertMock.mockImplementation(async (input: Record<string, unknown>) => ({
     id: 1085379, ...input, approval_status: input.approval_status ?? 'auto_approved',
@@ -159,6 +172,8 @@ beforeEach(() => {
   deleteBySourceMock.mockResolvedValue([]);
   pgQuery.mockImplementation(async (sql: string) => {
     if (/FOR UPDATE/i.test(sql)) return existingRow ? [existingRow] : [];
+    if (/source_type IN \('manual', 'leave_request'\)/i.test(sql)) return dayLevelRow ? [dayLevelRow] : [];
+    if (/DELETE FROM attendance_adjustments WHERE id = \$1/i.test(sql)) return deletedById ? [deletedById] : [];
     // Замок закрытого периода: период открыт. Ветку держим ПЕРЕД проверкой на
     // employees — SQL замка содержит подзапрос «FROM employees e», и без этого
     // условия он получил бы чужую строку и был бы прочитан как закрытый период.
@@ -244,5 +259,86 @@ describe('upsertObjectEntry — резолвер согласования и adv
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ removed: true }) }),
     );
+  });
+});
+
+/**
+ * DELETE /api/timesheet/object-entry. Кейс Костроминой (Бозоров 13.10): корзина «эха»
+ * корректировки на весь день слала сюда запрос, сервер удалял 0 строк manual_object
+ * и отвечал «успехом» с аудитом — часы оставались на месте.
+ */
+describe('deleteObjectEntry — пустое удаление не выдаётся за успех', () => {
+  const deleteBody = { employee_id: EMP, work_date: DATE, object_key: OBJECT_KEY };
+
+  it.each(['manual', 'leave_request'])(
+    'ничего не удалено, на день есть запись %s → 409, без аудита и пересчёта хвоста',
+    async () => {
+      dayLevelRow = { id: 1129176 };
+      const res = buildRes();
+      await timesheetController.deleteObjectEntry(buildReq(deleteBody), res as never);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false, code: 'DAY_LEVEL_CORRECTION',
+      }));
+      expect(auditLogMock).not.toHaveBeenCalled();
+      expect(purgeMock).not.toHaveBeenCalled();
+      expect(tailReapprovalCalls()).toHaveLength(0);
+    },
+  );
+
+  it('ничего не удалено и дневной записи нет → 200 без аудита (повторный клик)', async () => {
+    const res = buildRes();
+    await timesheetController.deleteObjectEntry(buildReq(deleteBody), res as never);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: null });
+    expect(auditLogMock).not.toHaveBeenCalled();
+    expect(tailReapprovalCalls()).toHaveLength(0);
+  });
+
+  it('удалена строка manual_object → 200, чистка файлов, пересчёт хвоста и один аудит', async () => {
+    deleteBySourceMock.mockResolvedValue([1085379]);
+    const res = buildRes();
+    await timesheetController.deleteObjectEntry(buildReq(deleteBody), res as never);
+
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: null });
+    expect(purgeMock).toHaveBeenCalledWith(1085379);
+    expect(tailReapprovalCalls().length).toBeGreaterThan(0);
+    expect(auditLogMock).toHaveBeenCalledTimes(1);
+    expect(auditLogMock.mock.calls[0]![2]).toBe('UPDATE_TIMESHEET_ENTRY');
+  });
+});
+
+describe('deleteEntry — мигрированная дневная строка manual_object', () => {
+  const buildDeleteEntryReq = (id: number): AuthenticatedRequest => ({
+    ...buildReq({}),
+    params: { id: String(id) },
+  } as unknown as AuthenticatedRequest);
+
+  it('migrated_from_day_level → удаляется как дневная', async () => {
+    getByIdMock.mockResolvedValue({
+      id: 777, employee_id: EMP, work_date: DATE, source_type: 'manual_object', source_id: OBJECT_KEY,
+      metadata: { migrated_from_day_level: true, object_id: OBJECT_KEY },
+    });
+    deletedById = { id: 777 };
+    const res = buildRes();
+    await timesheetController.deleteEntry(buildDeleteEntryReq(777), res as never);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ success: true });
+    expect(auditLogMock.mock.calls[0]![2]).toBe('DELETE_TIMESHEET_ENTRY');
+  });
+
+  it('обычная manual_object → прежний 409', async () => {
+    getByIdMock.mockResolvedValue({
+      id: 778, employee_id: EMP, work_date: DATE, source_type: 'manual_object', source_id: OBJECT_KEY,
+      metadata: { object_id: OBJECT_KEY },
+    });
+    const res = buildRes();
+    await timesheetController.deleteEntry(buildDeleteEntryReq(778), res as never);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(auditLogMock).not.toHaveBeenCalled();
   });
 });
