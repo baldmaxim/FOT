@@ -29,7 +29,7 @@ interface IHistoryPanelProps {
 export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, canEditAssignments, onClose, onRefresh, onDataChanged }) => {
   const toast = useToast();
   // Legacy «+ Оклад» (change-salary) — только системный администратор, как на сервере:
-  // персональный доступ к «Зарплате» открывает сам раздел, а не кадровые карточки.
+  // список доступа к «Зарплате» открывает сам раздел, а не кадровые карточки.
   const { isSystemAdmin } = useAuth();
   const canEditSalary = isSystemAdmin;
   const [editingId, setEditingId] = useState<string | null>(null);

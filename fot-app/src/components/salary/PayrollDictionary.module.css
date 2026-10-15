@@ -1,7 +1,8 @@
 /*
- * Окно «Справочник» на «Расчётах»: виды удержаний и ставки. Оверлей, шапка и прокручиваемое тело —
- * из PayrollModal.module.css. Mobile-first: колонки одна под другой, поля и кнопки 44px;
- * с 769px — две колонки и компактные поля.
+ * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и доступ к разделу. Оверлей, шапка и
+ * прокручиваемое тело — из PayrollModal.module.css. Mobile-first: колонки одна под другой, поля и
+ * кнопки 44px; с 769px — удержания и ставки рядом, доступ под ними во всю ширину, компактные поля;
+ * с 1100px — три колонки.
  */
 .container {
   --dict-control-h: 44px;
@@ -145,10 +146,18 @@
   }
   /* Ставкам шире: в строке правки три элемента — название, значение, кнопки. */
   .columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 32px; }
+  .accessSection { grid-column: 1 / -1; }
   .formWithAmount .formName,
   .formAdd .formName { flex-basis: 0; }
   .formAdd .addButton { flex-grow: 0; }
   .formAmount { flex: 0 0 116px; }
+}
+
+/* Третья колонка — только когда ставкам остаётся место под строку правки. */
+@media (min-width: 1100px) {
+  .container { width: min(1040px, 100%); }
+  .columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.85fr); }
+  .accessSection { grid-column: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

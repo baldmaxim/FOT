@@ -7,7 +7,7 @@ import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
 import { hasDashboardAllDepartmentsGrant, hasStaffAllEmployeesGrant } from '../services/read-scope-grants.service.js';
-import { getRequestPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
+import { getRequestPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -360,12 +360,13 @@ async function loadUnscopedTree(): Promise<object> {
 }
 
 /**
- * Дерево фильтра «Все отделы» в «Зарплате». С персональным доступом к разделу (миграция 288)
- * охват — весь штат, а общее /api/structure режет дерево по отделам человека: у бухгалтера
- * без назначенных отделов фильтр был бы пуст. Без гранта — ровно то же, что /api/structure.
+ * Дерево фильтра «Все отделы» в «Зарплате». У не-админа из списка доступа к разделу
+ * (миграция 310) охват — весь штат, а общее /api/structure режет дерево по отделам человека:
+ * у бухгалтера без назначенных отделов фильтр был бы пуст. Администратору — ровно то же, что
+ * /api/structure: его охват — своя компания (payroll-scope.service).
  */
 async function loadPayrollTree(req: AuthenticatedRequest): Promise<object> {
-  if (!(await getRequestPayrollAccessLevel(req))) return loadTreeForCache(req);
+  if (req.user.is_admin || !(await getRequestPayrollSectionAccess(req))) return loadTreeForCache(req);
   return loadUnscopedTree();
 }
 

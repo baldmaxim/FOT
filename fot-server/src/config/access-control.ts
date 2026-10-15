@@ -219,8 +219,8 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   // графиков. Таблицы payslips/payments пусты, роуты сняты. Ключ оставлен: на него ссылается
   // structure.routes.ts, а удаление сломало бы выданные права.
   { key: '/admin/payslips',             label: 'Управление расчётными листками (не используется)', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'page', supports_edit: true, sort_order: 260, is_active: false },
-  // ── Зарплата ── По роли права выданы только admin (миграции 272, 275). Персональный грант
-  // «Зарплата» (миграция 288) открывает весь раздел — список в PAYROLL_GRANT_PAGES (payroll-access.service).
+  // ── Зарплата ── Роль эти ключи не даёт (и админу тоже): раздел открыт только учёткам из списка
+  // payroll_section_access (миграция 310), ключи — PAYROLL_SECTION_PAGES (payroll-access.service).
   { key: '/salary/payments',            label: 'Зарплата — Выплаты',                   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 270, is_active: true },
   { key: '/salary/payments/calculate',  label: 'Зарплата — запуск расчёта',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 271, is_active: true },
   { key: '/salary/payments/approve',    label: 'Зарплата — проверка расчёта',          group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 272, is_active: true },

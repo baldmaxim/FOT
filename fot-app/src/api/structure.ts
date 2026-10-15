@@ -21,7 +21,7 @@ export const structureApi = {
     return this.fetchTree('/structure/dashboard-tree');
   },
 
-  /** Дерево фильтра «Все отделы» в «Зарплате»: с персональным доступом к разделу — полное. */
+  /** Дерево фильтра «Все отделы» в «Зарплате»: не-админу из списка доступа к разделу — полное. */
   async getPayrollTree(): Promise<ApiResponse<OrgStructureResponse>> {
     return this.fetchTree('/structure/payroll-tree');
   },

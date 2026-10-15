@@ -54,7 +54,7 @@ describe('requireSystemAdmin', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('не-админ (в том числе с персональным доступом к «Зарплате») — 403 без запроса скоупа', async () => {
+  it('не-админ (в том числе из списка доступа к «Зарплате») — 403 без запроса скоупа', async () => {
     const { res, next } = await run({ id: 'u', is_admin: false });
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(403);

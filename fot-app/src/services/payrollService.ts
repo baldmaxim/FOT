@@ -288,6 +288,12 @@ export interface IPayrollRate {
   amount: string | number | null;
 }
 
+/** Учётка из списка доступа к разделу «Зарплата» (миграция 310) — окно «Справочник», только чтение. */
+export interface IPayrollSectionUser {
+  user_id: string;
+  full_name: string | null;
+}
+
 /** Название и значение ставки при добавлении и правке. */
 export interface IPayrollRatePayload {
   name: string;
@@ -441,6 +447,12 @@ export const payrollService = {
 
   deleteRate: async (rateId: number): Promise<void> => {
     await apiClient.delete<IApiResponse<IPayrollRate>>(`/payroll/rates/${rateId}`);
+  },
+
+  /** Кому доступен раздел «Зарплата» — по алфавиту. Список ведётся в БД. */
+  listSectionAccess: async (signal?: AbortSignal): Promise<IPayrollSectionUser[]> => {
+    const res = await apiClient.get<IApiResponse<IPayrollSectionUser[]>>('/payroll/section-access', { signal });
+    return res.data;
   },
 
   assign: async (employeeId: number, payload: IAssignTermsPayload): Promise<{ terms_id: number }> => {

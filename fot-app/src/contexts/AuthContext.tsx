@@ -13,6 +13,7 @@ import { wsService } from '../services/websocket';
 import { presenceByObjectQueryKey } from '../hooks/useEmployeeDirectory';
 import { useRealtimeQueryInvalidation } from '../hooks/useRealtimeQueryInvalidation';
 import type { RoleLabel } from '../services/rolesService';
+import { profileCanEditPage, profileCanViewPage } from '../utils/pageAccess';
 import type {
   User,
   UserProfile,
@@ -43,13 +44,13 @@ interface AuthContextType extends AuthState {
   isAdmin: boolean;
   /**
    * Системный администратор: is_admin без ограничения компанией. Админ компании обходит
-   * page-access по is_admin, поэтому действия по всей организации (legacy-оклад, выдача
-   * доступа к «Зарплате») сверяются с этим флагом — как requireSystemAdmin на сервере.
+   * page-access по is_admin, поэтому действия по всей организации (legacy-оклад) сверяются
+   * с этим флагом — как requireSystemAdmin на сервере.
    */
   isSystemAdmin: boolean;
   /**
-   * true → есть вход в админку (не только личный кабинет): по роли либо по персональному
-   * доступу к «Зарплате». Заменяет прежнюю проверку canViewPage('/dashboard').
+   * true → есть вход в админку (не только личный кабинет): по роли либо по списку доступа
+   * к «Зарплате» (миграция 310). Заменяет прежнюю проверку canViewPage('/dashboard').
    */
   hasAdminAccess: boolean;
   employeeVariant: EmployeeVariant | null;
@@ -363,21 +364,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const ready = state.isAuthenticated && state.isApproved && (!state.isTwoFactorEnabled || state.isTwoFactorVerified);
 
-  const canViewPage = useCallback((pagePath: string): boolean => {
-    if (!ready) return false;
-    if (state.profile?.is_admin) return true;
-    // Defense in depth: edit без view невозможен по семантике, но если
-    // в page_access вдруг просочится {can_view:false, can_edit:true} —
-    // считаем доступ есть. Сервер нормализует это в access-control.service.ts.
-    const perm = state.profile?.page_access?.[pagePath];
-    return perm?.can_view === true || perm?.can_edit === true;
-  }, [ready, state.profile]);
+  // Раздел «Зарплата» (миграция 310) — по page_access и у администратора: см. utils/pageAccess.
+  const canViewPage = useCallback((pagePath: string): boolean => (
+    ready && profileCanViewPage(state.profile, pagePath)
+  ), [ready, state.profile]);
 
-  const canEditPage = useCallback((pagePath: string): boolean => {
-    if (!ready) return false;
-    if (state.profile?.is_admin) return true;
-    return state.profile?.page_access?.[pagePath]?.can_edit === true;
-  }, [ready, state.profile]);
+  const canEditPage = useCallback((pagePath: string): boolean => (
+    ready && profileCanEditPage(state.profile, pagePath)
+  ), [ready, state.profile]);
 
   const canManageAsHrAdmin = useCallback((pagePath: string): boolean => {
     if (!ready) return false;

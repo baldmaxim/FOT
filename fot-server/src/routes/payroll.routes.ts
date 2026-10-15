@@ -5,6 +5,7 @@ import { noStore } from '../middleware/noStore.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
+import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 
@@ -17,8 +18,8 @@ router.use(authenticate);
 router.use(noStore);
 
 // Гарды именованными алиасами — их распознаёт `npm run audit:routes`.
-// Ключи разведены заранее: на этапе 1 все выданы только роли admin (миграция 272),
-// но раздать их разным ролям можно будет в /admin/roles без миграции и деплоя.
+// Ключи раздела роль не даёт: их решает только список payroll_section_access (миграция 310),
+// и администраторов тоже — см. resolveEffectivePageAccess.
 const termsView = requirePageAccess('/salary/terms', 'view');
 const termsEdit = requirePageAccess('/salary/terms', 'edit');
 // Удержания сотрудника и справочники (виды удержаний, ставки) правятся и в карточке («Условия оплаты»),
@@ -55,6 +56,9 @@ router.get('/rates', deductionsView, payrollRatesController.list);
 router.post('/rates', deductionsEdit, payrollRatesController.add);
 router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
 router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
+
+// ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
+router.get('/section-access', deductionsView, payrollSectionAccessController.list);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);

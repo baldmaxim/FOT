@@ -80,7 +80,6 @@ describe('shouldBypassHttpCache — панель назначений', () => {
     '/direct-reports?manager_employee_id=1532',
     '/admin/employees/department-access',
     '/admin/employees/1532/skud-objects',
-    '/admin/employees/1532/payroll-access',
     '/admin/weekend-approvals/1532',
     '/admin/weekend-approvals/eligible',
   ])('%s идёт мимо HTTP-кэша', async (endpoint) => {

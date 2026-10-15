@@ -79,8 +79,8 @@ export interface UserProfile {
   position_type: EmployeePositionType;
   is_admin: boolean;
   /**
-   * true → есть вход в админку (страницы вне личного кабинета): по роли либо по персональному
-   * доступу к «Зарплате» (миграция 288). Может отсутствовать в старом JWT.
+   * true → есть вход в админку (страницы вне личного кабинета): по роли либо по списку доступа
+   * к «Зарплате» (миграция 310). Может отсутствовать в старом JWT.
    */
   has_admin_access?: boolean;
   employee_variant: EmployeeVariant | null;

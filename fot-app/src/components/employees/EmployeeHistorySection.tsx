@@ -35,7 +35,7 @@ const getAssignmentTitle = (data: Record<string, unknown>): string => {
 
 export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ employeeId, history, loading, onRefresh }) => {
   // Legacy «+ Оклад» (change-salary) — только системный администратор, как на сервере:
-  // персональный доступ к «Зарплате» открывает сам раздел, а не кадровые карточки.
+  // список доступа к «Зарплате» открывает сам раздел, а не кадровые карточки.
   const { isSystemAdmin } = useAuth();
   const canEditSalary = isSystemAdmin;
   const [editingId, setEditingId] = useState<string | null>(null);

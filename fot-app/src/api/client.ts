@@ -239,7 +239,7 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // висел несохранённым, «Сохранить» оставалась активной, и его назначали по 2–4 раза.
     || path === '/direct-reports'
     || path === '/admin/employees/department-access'
-    || /^\/admin\/employees\/\d+\/(skud-objects|payroll-access)$/.test(path)
+    || /^\/admin\/employees\/\d+\/skud-objects$/.test(path)
     || path.startsWith('/admin/weekend-approvals/')
     // Окно «Режим табелирования»: после «Сохранить» и «Снять» список «Назначено» обязан
     // перечитаться с сервера — max-age=30 показал бы состояние до правки.

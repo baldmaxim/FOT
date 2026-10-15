@@ -45,7 +45,7 @@ vi.mock('../services/read-scope-grants.service.js', () => ({
   hasStaffAllEmployeesGrant: vi.fn(async () => h.grant),
 }));
 vi.mock('../services/payroll/payroll-access.service.js', () => ({
-  getRequestPayrollAccessLevel: vi.fn(async () => null),
+  getRequestPayrollSectionAccess: vi.fn(async () => false),
 }));
 
 import { structureController } from './structure.controller.js';

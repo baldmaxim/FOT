@@ -12,9 +12,9 @@ import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.serv
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
 import { isTimekeeper } from './timekeeper-scope.service.js';
 import {
-  getRequestPayrollAccessLevel,
-  isPayrollGrantPage,
-  payrollGrantAllows,
+  PAYROLL_SECTION_PAGES,
+  getRequestPayrollSectionAccess,
+  isPayrollSectionPage,
 } from './payroll/payroll-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -159,6 +159,10 @@ function mergePageCatalog(dbPages: PageCatalogItem[] | null): PageCatalogItem[] 
   for (const page of dbPages || []) {
     merged.set(page.key, { ...page });
   }
+  // Ключи раздела «Зарплата» роль не даёт — их решает список payroll_section_access
+  // (миграция 310). Каталог — это матрица «Роли»: без них ключ нельзя ни показать, ни
+  // сохранить ролью («Неизвестная страница»). На проверку доступа каталог не влияет.
+  for (const key of PAYROLL_SECTION_PAGES) merged.delete(key);
   // Область (ЛК / админка) считаем в коде, а не берём из БД: от неё зависит гейт
   // admin_access, и она не должна расходиться с ключом страницы.
   return [...merged.values()]
@@ -282,6 +286,12 @@ export async function resolveEffectivePageAccess(
   pagePath: string,
   action: 'view' | 'edit',
 ): Promise<boolean> {
+  // Раздел «Зарплата» (миграция 310) — только учёткам из списка payroll_section_access, и
+  // администраторам тоже: проверка стоит до обхода is_admin. Роль, назначения и авто-доступ
+  // ключи раздела не открывают. Сравнение ключа первым условием — на других страницах
+  // ветка не делает запроса.
+  if (isPayrollSectionPage(pagePath)) return getRequestPayrollSectionAccess(req);
+
   if (req.user.is_admin) return true;
 
   if (await isDeputyRoleDepartmentPageBlocked(req, pagePath)) return false;
@@ -299,15 +309,6 @@ export async function resolveEffectivePageAccess(
   // любой (в т.ч. узкой, с выключенным авто-доступом), а право даёт назначение.
   const deputyGrant = await resolveDeputyPageAccess(req, pagePath);
   if (deputyGrant && (action === 'edit' ? deputyGrant.can_edit : deputyGrant.can_view)) {
-    return true;
-  }
-
-  // Персональный доступ к «Зарплате» (миграция 288): даёт назначение, а не роль, поэтому
-  // ветка тоже стоит ДО гейта admin_access — получатель бывает на любой роли, в том числе
-  // только с личным кабинетом. Открывает весь раздел (PAYROLL_GRANT_PAGES); проверка ключа
-  // первым условием — на любой другой странице ветка не делает запроса.
-  if (isPayrollGrantPage(pagePath)
-    && payrollGrantAllows(await getRequestPayrollAccessLevel(req), action)) {
     return true;
   }
 

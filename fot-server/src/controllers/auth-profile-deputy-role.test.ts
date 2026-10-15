@@ -27,7 +27,7 @@ type PageAccess = Record<string, { can_view: boolean; can_edit: boolean }>;
 const mocked = vi.hoisted(() => ({
   getRoleById: vi.fn(),
   getRolePageAccess: vi.fn(async (): Promise<PageAccess> => ({})),
-  getPayrollAccessLevel: vi.fn(async (): Promise<'view' | 'edit' | null> => null),
+  hasPayrollSectionAccess: vi.fn(async (): Promise<boolean> => false),
   listManaged: vi.fn(async () => [] as string[]),
   listNonDeputy: vi.fn(async () => [] as string[]),
   hasDeputyAssignment: vi.fn(async () => false),
@@ -50,7 +50,7 @@ vi.mock('../services/access-control.service.js', () => ({
 }));
 vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
-  getPayrollAccessLevel: mocked.getPayrollAccessLevel,
+  hasPayrollSectionAccess: mocked.hasPayrollSectionAccess,
 }));
 vi.mock('../services/department-access.service.js', () => ({
   listManagedDepartmentIdsForUser: mocked.listManaged,
@@ -170,7 +170,7 @@ beforeEach(() => {
   pgQueryOne.mockResolvedValue(PROFILE_ROW);
   mocked.getRoleById.mockResolvedValue(DEPUTY_ROLE);
   mocked.getRolePageAccess.mockResolvedValue({ ...MATRIX });
-  mocked.getPayrollAccessLevel.mockResolvedValue(null);
+  mocked.hasPayrollSectionAccess.mockResolvedValue(false);
   mocked.listManaged.mockResolvedValue([]);
   mocked.listNonDeputy.mockResolvedValue([]);
   mocked.hasDeputyAssignment.mockResolvedValue(true);

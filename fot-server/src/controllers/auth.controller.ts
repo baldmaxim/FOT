@@ -35,7 +35,7 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
-import { PAYROLL_GRANT_PAGES, getPayrollAccessLevel } from '../services/payroll/payroll-access.service.js';
+import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
 import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -210,24 +210,19 @@ async function buildProfileResponse(
     page_access['/discipline/objects'] = { can_view: true, can_edit: true };
   }
 
-  // Персональный доступ к «Зарплате» (миграция 288) — зеркало ветки в
-  // resolveEffectivePageAccess: без него бэк запрос пропустит, а фронт пункт «Зарплата»
-  // не покажет. С правом роли объединяем через OR: персональный «Просмотр» не понижает
-  // ролевую правку. Администратору грант не нужен — у него всё по роли.
-  const payrollAccessLevel = role.is_admin ? null : await getPayrollAccessLevel(profile.employee_id);
-  if (payrollAccessLevel) {
-    for (const key of PAYROLL_GRANT_PAGES) {
-      page_access[key] = {
-        can_view: true,
-        can_edit: !!page_access[key]?.can_edit || payrollAccessLevel === 'edit',
-      };
-    }
+  // Раздел «Зарплата» (миграция 310) — зеркало ветки в resolveEffectivePageAccess: ключи
+  // раздела решает только список payroll_section_access, роль их не даёт (и админу тоже).
+  // Фронт смотрит эти ключи в page_access и у администратора.
+  const payrollSectionAccess = await hasPayrollSectionAccess(profile.id);
+  for (const key of PAYROLL_SECTION_PAGES) {
+    if (payrollSectionAccess) page_access[key] = { can_view: true, can_edit: true };
+    else delete page_access[key];
   }
 
-  // Вход в админку: по роли либо по персональному доступу к «Зарплате» — раздел живёт
-  // в админке, и получателю на роли только с личным кабинетом иначе в него не попасть.
-  // Админ-ключи роли выше режутся по-прежнему только флагом роли.
-  const has_admin_access = roleHasAdminArea || payrollAccessLevel !== null;
+  // Вход в админку: по роли либо по списку «Зарплаты» — раздел живёт в админке, и человеку
+  // на роли только с личным кабинетом иначе в него не попасть. Админ-ключи роли выше
+  // режутся по-прежнему только флагом роли.
+  const has_admin_access = roleHasAdminArea || payrollSectionAccess;
 
   const response: UserProfileResponse = {
     id: profile.id,

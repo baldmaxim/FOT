@@ -38,6 +38,7 @@ const OWNERSHIP = new Set<string>([
   'public.contractor_activation_batches.created_by',
   'public.contractor_org_access.user_id',
   'public.employee_hr_drafts.created_by',
+  'public.payroll_section_access.user_id',
   'public.push_subscriptions.user_id',
   'public.timekeeper_folder_access.timekeeper_user_id',
   'public.timekeeper_object_access.timekeeper_user_id',

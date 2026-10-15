@@ -58,10 +58,10 @@ vi.mock('../services/hiring-access.service.js', () => ({
   isHiringRequesterRole: vi.fn(() => false),
 }));
 vi.mock('../services/object-kpi-roles-cache.service.js', () => ({ isEconomicsHead: vi.fn(async () => false) }));
-vi.mock('../services/payroll/payroll-access.service.js', () => ({
-  getRequestPayrollAccessLevel: vi.fn(async () => null),
-  isPayrollGrantPage: vi.fn(() => false),
-  payrollGrantAllows: vi.fn(() => false),
+vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
+  getRequestPayrollSectionAccess: vi.fn(async () => false),
+  isPayrollSectionPage: vi.fn(() => false),
 }));
 
 vi.mock('../controllers/employees.controller.js', () => ({ employeesController: h.stubController('employees') }));

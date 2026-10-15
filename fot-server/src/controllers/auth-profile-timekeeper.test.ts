@@ -58,6 +58,12 @@ vi.mock('../services/hiring-access.service.js', () => ({
   hasHiringAutoAccess: mocked.hasHiringAutoAccess,
   isHiringRequesterRole: mocked.isHiringRequesterRole,
 }));
+// Список доступа к «Зарплате» (миграция 310) — свой запрос, здесь не участвует. Константа ключей
+// раздела — настоящая: её перебирает buildProfileResponse.
+vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
+  hasPayrollSectionAccess: vi.fn(async () => false),
+}));
 
 // Побочные зависимости модуля auth.controller — в этом тесте не участвуют.
 vi.mock('../services/local-auth.service.js', () => ({

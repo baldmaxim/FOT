@@ -1,10 +1,10 @@
 /**
- * /auth/me и персональный доступ к «Зарплате» (миграции 288, 294).
+ * /auth/me и раздел «Зарплата» по списку payroll_section_access (миграция 310).
  *
- * Зеркало ветки resolveEffectivePageAccess: без ключей в page_access фронт не покажет пункт
- * «Зарплата» и его вкладки. Грант открывает весь раздел, объединение с правом роли — через OR. Вход в админку (has_admin_access)
- * получает и сотрудник на роли только с личным кабинетом, но админ-ключи самой роли
- * по-прежнему режутся по флагу роли.
+ * Зеркало ветки resolveEffectivePageAccess: ключи раздела в page_access решает только список —
+ * из списка весь раздел с правкой, не из списка ключей нет, даже если их дала роль (и у
+ * администратора). Вход в админку (has_admin_access) получает и человек из списка на роли только
+ * с личным кабинетом, но админ-ключи самой роли по-прежнему режутся по флагу роли.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
@@ -27,7 +27,7 @@ type PageAccess = Record<string, { can_view: boolean; can_edit: boolean }>;
 const mocked = vi.hoisted(() => ({
   getRoleById: vi.fn(),
   getRolePageAccess: vi.fn(async (): Promise<PageAccess> => ({})),
-  getPayrollAccessLevel: vi.fn(async (): Promise<'view' | 'edit' | null> => null),
+  hasPayrollSectionAccess: vi.fn(async (): Promise<boolean> => false),
 }));
 
 vi.mock('../services/roles-cache.service.js', () => ({
@@ -40,7 +40,7 @@ vi.mock('../services/access-control.service.js', () => ({
 }));
 vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
-  getPayrollAccessLevel: mocked.getPayrollAccessLevel,
+  hasPayrollSectionAccess: mocked.hasPayrollSectionAccess,
 }));
 vi.mock('../services/department-access.service.js', () => ({
   listManagedDepartmentIdsForUser: vi.fn(async () => [] as string[]),
@@ -158,66 +158,62 @@ beforeEach(() => {
   pgQueryOne.mockResolvedValue(PROFILE_ROW);
   mocked.getRoleById.mockResolvedValue(OFFICE_ROLE);
   mocked.getRolePageAccess.mockResolvedValue({ '/employee': { can_view: true, can_edit: true } });
-  mocked.getPayrollAccessLevel.mockResolvedValue(null);
+  mocked.hasPayrollSectionAccess.mockResolvedValue(false);
 });
 
-describe('/auth/me: персональный доступ к «Зарплате»', () => {
-  it('без гранта у офисного сотрудника нет ни «Зарплаты», ни входа в админку', async () => {
+describe('/auth/me: раздел «Зарплата» по списку', () => {
+  it('не из списка у офисного сотрудника нет ни «Зарплаты», ни входа в админку', async () => {
     const profile = await loadProfile();
     expect(profile.page_access['/salary/terms']).toBeUndefined();
     expect(profile.has_admin_access).toBe(false);
   });
 
-  it('«Просмотр»: весь раздел только на чтение и вход в админку, посторонних ключей нет', async () => {
-    mocked.getPayrollAccessLevel.mockResolvedValue('view');
+  it('из списка: весь раздел с правкой и вход в админку, посторонних ключей нет', async () => {
+    mocked.hasPayrollSectionAccess.mockResolvedValue(true);
     const profile = await loadProfile();
-    expect(mocked.getPayrollAccessLevel).toHaveBeenCalledWith(501);
-    expect(profile.page_access).toEqual({
-      '/employee': { can_view: true, can_edit: true },
-      ...salaryAccess(false),
-    });
-    expect(profile.has_admin_access).toBe(true);
-  });
-
-  it('«Редактирование»: весь раздел на запись, посторонних ключей нет', async () => {
-    mocked.getPayrollAccessLevel.mockResolvedValue('edit');
-    const profile = await loadProfile();
+    expect(mocked.hasPayrollSectionAccess).toHaveBeenCalledWith('user-1');
     expect(profile.page_access).toEqual({
       '/employee': { can_view: true, can_edit: true },
       ...salaryAccess(true),
     });
+    expect(profile.has_admin_access).toBe(true);
   });
 
-  it('админ-ключи роли без доступа в админку режутся и при гранте', async () => {
-    mocked.getPayrollAccessLevel.mockResolvedValue('view');
+  it('админ-ключи роли без доступа в админку режутся и у человека из списка', async () => {
+    mocked.hasPayrollSectionAccess.mockResolvedValue(true);
     mocked.getRolePageAccess.mockResolvedValue({
       '/employee': { can_view: true, can_edit: true },
       '/employees': { can_view: true, can_edit: true },
     });
     const profile = await loadProfile();
     expect(profile.page_access['/employees']).toBeUndefined();
-    expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: false });
-    expect(profile.page_access['/salary/deductions']).toEqual({ can_view: true, can_edit: false });
+    expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: true });
   });
 
-  it('персональный «Просмотр» не понижает ролевую правку (OR)', async () => {
+  it('ключи раздела от роли не из списка убираются', async () => {
     mocked.getRoleById.mockResolvedValue(HR_ROLE);
     mocked.getRolePageAccess.mockResolvedValue({
+      '/employees': { can_view: true, can_edit: true },
       '/salary/terms': { can_view: true, can_edit: true },
-      '/salary/deductions': { can_view: true, can_edit: true },
+      '/salary/deductions': { can_view: true, can_edit: false },
     });
-    mocked.getPayrollAccessLevel.mockResolvedValue('view');
     const profile = await loadProfile();
-    expect(profile.page_access['/salary/terms']).toEqual({ can_view: true, can_edit: true });
-    expect(profile.page_access['/salary/deductions']).toEqual({ can_view: true, can_edit: true });
-    expect(profile.page_access['/salary/payments']).toEqual({ can_view: true, can_edit: false });
+    expect(profile.page_access).toEqual({ '/employees': { can_view: true, can_edit: true } });
   });
 
-  it('администратору грант не читаем', async () => {
+  it('администратор не из списка: ключей раздела нет, вход в админку по роли', async () => {
     mocked.getRoleById.mockResolvedValue(ADMIN_ROLE);
-    mocked.getPayrollAccessLevel.mockResolvedValue('view');
+    mocked.getRolePageAccess.mockResolvedValue(salaryAccess(true));
     const profile = await loadProfile();
-    expect(mocked.getPayrollAccessLevel).not.toHaveBeenCalled();
+    expect(profile.page_access).toEqual({});
     expect(profile.has_admin_access).toBe(true);
+  });
+
+  it('администратор из списка: весь раздел', async () => {
+    mocked.getRoleById.mockResolvedValue(ADMIN_ROLE);
+    mocked.getRolePageAccess.mockResolvedValue({});
+    mocked.hasPayrollSectionAccess.mockResolvedValue(true);
+    const profile = await loadProfile();
+    expect(profile.page_access).toEqual(salaryAccess(true));
   });
 });

@@ -5,6 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ModalShell } from '../ui/ModalShell';
 import { DeductionKindsEditor } from './DeductionKindsEditor';
 import { PayrollRatesEditor } from './PayrollRatesEditor';
+import { PayrollSectionAccessList } from './PayrollSectionAccessList';
 import modal from './PayrollModal.module.css';
 import styles from './PayrollDictionary.module.css';
 
@@ -13,8 +14,9 @@ interface IPayrollDictionaryModalProps {
 }
 
 /**
- * Окно «Справочник» на «Расчётах»: виды удержаний и ставки. Каждая правка сохраняется сразу —
- * общей кнопки «Сохранить» нет. Без права правки списки только показываются.
+ * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
+ * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
+ * «Доступ к разделу» — всегда только просмотр.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
@@ -43,6 +45,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
           <div className={`${modal.body} ${styles.columns}`}>
             <DeductionKindsEditor canEdit={canEdit} />
             <PayrollRatesEditor canEdit={canEdit} />
+            <PayrollSectionAccessList />
           </div>
         </>
       )}

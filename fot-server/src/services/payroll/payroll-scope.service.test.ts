@@ -2,20 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
 /**
- * Охват «Зарплаты»: персональный грант (миграция 288) открывает не-админу весь штат, свои
- * условия оплаты не-админ не правит, а админ компании с оставшимся грантом не выходит
- * за свою компанию.
+ * Охват «Зарплаты»: список доступа к разделу (миграция 310) открывает не-админу весь штат, свои
+ * условия оплаты не-админ не правит, а админ компании из списка не выходит за свою компанию.
  */
 
 const h = vi.hoisted(() => ({
-  grant: vi.fn(async (): Promise<'view' | 'edit' | null> => null),
+  inList: vi.fn(async (): Promise<boolean> => false),
   resolveAccessibleDepartmentIds: vi.fn(async (): Promise<string[] | 'all'> => ['own-dept']),
   canAccessEmployeeInScope: vi.fn(async () => false),
   canEditEmployeeInScope: vi.fn(async () => false),
   resolveEditableEmployeeIds: vi.fn(async (): Promise<Set<number> | 'all'> => new Set<number>()),
 }));
 
-vi.mock('./payroll-access.service.js', () => ({ getRequestPayrollAccessLevel: h.grant }));
+vi.mock('./payroll-access.service.js', () => ({ getRequestPayrollSectionAccess: h.inList }));
 vi.mock('../data-scope.service.js', () => ({
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
@@ -39,16 +38,16 @@ const makeReq = (isAdmin = false): AuthenticatedRequest => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.grant.mockResolvedValue(null);
+  h.inList.mockResolvedValue(false);
   h.resolveAccessibleDepartmentIds.mockResolvedValue(['own-dept']);
   h.canAccessEmployeeInScope.mockResolvedValue(false);
   h.canEditEmployeeInScope.mockResolvedValue(false);
   h.resolveEditableEmployeeIds.mockResolvedValue(new Set<number>());
 });
 
-describe('персональный грант: весь штат', () => {
-  it('«Просмотр» — список по всему штату и карточка любого сотрудника', async () => {
-    h.grant.mockResolvedValue('view');
+describe('не-админ из списка: весь штат', () => {
+  it('список по всему штату и карточка любого сотрудника', async () => {
+    h.inList.mockResolvedValue(true);
     const req = makeReq();
 
     await expect(resolvePayrollReadableDepartmentIds(req)).resolves.toBe('all');
@@ -56,17 +55,8 @@ describe('персональный грант: весь штат', () => {
     expect(h.resolveAccessibleDepartmentIds).not.toHaveBeenCalled();
   });
 
-  it('«Просмотр» правку не даёт: решает обычный скоуп (здесь пустой)', async () => {
-    h.grant.mockResolvedValue('view');
-    const req = makeReq();
-
-    await expect(canEditPayrollEmployee(req, OTHER)).resolves.toBe(false);
-    const canEditRow = await resolvePayrollEditPredicate(req);
-    expect(canEditRow(OTHER)).toBe(false);
-  });
-
-  it('«Редактирование» — правка любого сотрудника, кроме себя', async () => {
-    h.grant.mockResolvedValue('edit');
+  it('правка любого сотрудника, кроме себя', async () => {
+    h.inList.mockResolvedValue(true);
     const req = makeReq();
 
     await expect(canEditPayrollEmployee(req, OTHER)).resolves.toBe(true);
@@ -77,7 +67,7 @@ describe('персональный грант: весь штат', () => {
   });
 });
 
-describe('без гранта — как раньше, но без правки себя', () => {
+describe('не из списка — как раньше, но без правки себя', () => {
   it('список и карточки — по отделам пользователя', async () => {
     h.canAccessEmployeeInScope.mockResolvedValue(true);
     const req = makeReq();
@@ -101,15 +91,15 @@ describe('без гранта — как раньше, но без правки 
 });
 
 describe('администратор', () => {
-  it('админ компании с оставшимся грантом не выходит за свою компанию', async () => {
-    h.grant.mockResolvedValue('edit');
+  it('админ компании из списка не выходит за свою компанию', async () => {
+    h.inList.mockResolvedValue(true);
     h.resolveAccessibleDepartmentIds.mockResolvedValue(['company-dept']);
     const req = makeReq(true);
 
     await expect(resolvePayrollReadableDepartmentIds(req)).resolves.toEqual(['company-dept']);
     await expect(canReadPayrollEmployee(req, OTHER)).resolves.toBe(false);
     await expect(canEditPayrollEmployee(req, OTHER)).resolves.toBe(false);
-    expect(h.grant).not.toHaveBeenCalled();
+    expect(h.inList).not.toHaveBeenCalled();
   });
 
   it('системный админ правит и свою запись — как раньше', async () => {

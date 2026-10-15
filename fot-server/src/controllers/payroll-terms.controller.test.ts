@@ -51,6 +51,12 @@ const staffCategory = vi.hoisted(() => ({
 
 vi.mock('../services/payroll/payroll-staff-category.js', () => staffCategory);
 
+// Список доступа к «Зарплате» (миграция 310): здесь пользователь не из списка — охват решает скоуп.
+vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
+  getRequestPayrollSectionAccess: vi.fn(async () => false),
+}));
+
 import { payrollTermsController } from './payroll-terms.controller.js';
 
 const makeRes = () => {

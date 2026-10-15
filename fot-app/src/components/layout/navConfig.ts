@@ -88,9 +88,8 @@ export const navGroups: INavGroup[] = [
     area: 'admin',
     items: [
       { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: ClockIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
-      // Раздел «Зарплата». Доступ — по роли через role_page_access (по умолчанию только admin,
-      // миграции 272/275) или персональным грантом «Зарплата» в «Назначениях сотрудников»
-      // (288, весь раздел). НЕ systemAdminOnly: флаг скрыл бы пункт от админа со скоупом компании.
+      // Раздел «Зарплата». Доступ — только по списку payroll_section_access (миграция 310), и у
+      // администратора тоже: canViewPage смотрит эти ключи в page_access (utils/pageAccess).
       { id: 'salary', path: '/salary', label: 'Зарплата', icon: DollarIcon, requiredPage: ['/salary/payments', '/salary/terms', '/salary/sick-leaves', '/salary/vacations', '/salary/deductions'] },
       { id: 'patent-receipts', path: '/admin/patent-receipts', label: 'Чеки за патент', icon: FileTextIcon, requiredPage: '/admin/patent-receipts' },
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },

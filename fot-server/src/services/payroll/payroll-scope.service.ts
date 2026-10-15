@@ -1,16 +1,17 @@
 /**
- * Охват раздела «Зарплата»: чьи условия оплаты пользователь видит и правит.
+ * Охват раздела «Зарплата»: чьи условия оплаты пользователь видит и правит. Пустит ли в сам
+ * раздел — решает список payroll_section_access в page-гейте (миграция 310).
  *
  * Порядок веток важен:
  *  1. Администратор — как раньше, общими резолверами скоупа. Админ компании видит только
- *     свою компанию; оставшийся у него персональный грант охват не расширяет.
- *  2. Персональный доступ к «Зарплате» (миграция 288) у не-админа — весь штат: получатель
- *     (обычно бухгалтер) отделов не ведёт, и по ним список был бы пуст.
+ *     свою компанию: список охват не расширяет.
+ *  2. Не-админ из списка — весь штат: он (обычно бухгалтер) отделов не ведёт, и по ним
+ *     список был бы пуст.
  *  3. Остальные — как раньше: отделы и подчинённые пользователя.
  *
  * Свои условия оплаты не-админ не правит ни при каком доступе: раньше canEditEmployeeInScope
- * пускал к себе всегда, но правка «Зарплаты» была только у администраторов. С персональным
- * грантом без этого запрета бухгалтер менял бы себе оклад.
+ * пускал к себе всегда, но правка «Зарплаты» была только у администраторов. Без этого
+ * запрета бухгалтер из списка менял бы себе оклад.
  */
 import type { AuthenticatedRequest } from '../../types/index.js';
 import {
@@ -19,7 +20,7 @@ import {
   resolveAccessibleDepartmentIds,
   resolveEditableEmployeeIds,
 } from '../data-scope.service.js';
-import { getRequestPayrollAccessLevel } from './payroll-access.service.js';
+import { getRequestPayrollSectionAccess } from './payroll-access.service.js';
 
 const isSelf = (req: AuthenticatedRequest, employeeId: number): boolean => (
   req.user.employee_id != null && req.user.employee_id === employeeId
@@ -30,7 +31,7 @@ export async function resolvePayrollReadableDepartmentIds(
   req: AuthenticatedRequest,
 ): Promise<string[] | 'all'> {
   if (req.user.is_admin) return resolveAccessibleDepartmentIds(req);
-  if (await getRequestPayrollAccessLevel(req)) return 'all';
+  if (await getRequestPayrollSectionAccess(req)) return 'all';
   return resolveAccessibleDepartmentIds(req);
 }
 
@@ -41,7 +42,7 @@ export async function canReadPayrollEmployee(
 ): Promise<boolean> {
   if (!employeeId) return false;
   if (req.user.is_admin) return canAccessEmployeeInScope(req, employeeId);
-  if (await getRequestPayrollAccessLevel(req)) return true;
+  if (await getRequestPayrollSectionAccess(req)) return true;
   return canAccessEmployeeInScope(req, employeeId);
 }
 
@@ -53,7 +54,7 @@ export async function canEditPayrollEmployee(
   if (!employeeId) return false;
   if (req.user.is_admin) return canEditEmployeeInScope(req, employeeId);
   if (isSelf(req, employeeId)) return false;
-  if ((await getRequestPayrollAccessLevel(req)) === 'edit') return true;
+  if (await getRequestPayrollSectionAccess(req)) return true;
   return canEditEmployeeInScope(req, employeeId);
 }
 
@@ -68,7 +69,7 @@ export async function resolvePayrollEditPredicate(
     const editable = await resolveEditableEmployeeIds(req);
     return (employeeId) => editable === 'all' || editable.has(employeeId);
   }
-  if ((await getRequestPayrollAccessLevel(req)) === 'edit') {
+  if (await getRequestPayrollSectionAccess(req)) {
     return (employeeId) => !isSelf(req, employeeId);
   }
   const editable = await resolveEditableEmployeeIds(req);

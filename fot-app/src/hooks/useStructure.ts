@@ -30,7 +30,7 @@ export const useDashboardStructureTree = (enabled = true) =>
 export const PAYROLL_STRUCTURE_QUERY_KEY = ['structure', 'payroll-tree'] as const;
 
 /**
- * Дерево фильтра «Все отделы» в «Зарплате». С персональным доступом к разделу охват — весь
+ * Дерево фильтра «Все отделы» в «Зарплате». У не-админа из списка доступа к разделу охват — весь
  * штат, а общее дерево режется по отделам человека: у бухгалтера фильтр был бы пуст.
  */
 export const usePayrollStructureTree = (enabled = true) =>
