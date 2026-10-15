@@ -2,6 +2,7 @@ import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { timesheetOfficeController } from '../controllers/timesheet-office.controller.js';
+import { timesheetViewAccessController } from '../controllers/timesheet-view-access.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
@@ -157,6 +158,11 @@ router.put('/employees/:id/department-access', requirePageAccess('/admin/users/a
 router.get('/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.listSkudObjectsForAssignment);
 router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'view'), noStore, adminController.getEmployeeSkudObjects);
 router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeSkudObjectAccess);
+
+// «Просмотр табеля» (миграция 309, вкладка в панели назначений): чей табель сотрудник видит
+// только на чтение. Права — как у «Объектов».
+router.get('/employees/:id/timesheet-view-employees', requirePageAccess('/admin/users/access', 'view'), noStore, timesheetViewAccessController.list);
+router.put('/employees/:id/timesheet-view-employees', requirePageAccess('/admin/users/access', 'edit'), timesheetViewAccessController.replace);
 
 // «Режим табелирования» в «Управлении кадрами»: «Офис» отделу или сотруднику с блокировкой
 // выбора объекта (миграция 291). Отдельное право — только администратор и кадровый админ.

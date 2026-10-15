@@ -205,6 +205,7 @@ const getSectionLabel = (
   if (source === 'self') return 'Руководитель';
   if (source === 'direct_report') return 'Мои сотрудники';
   if (source === 'direct_report_covered') return 'Подаёт руководитель отдела';
+  if (source === 'view_only') return 'Только просмотр';
   if (source === 'skud_presence') return 'ЛИНИЯ-Общестрой';
   return departmentName ?? 'Сотрудники отдела';
 };

@@ -38,6 +38,7 @@ import type { TimesheetResponse, IEmployeeApprovalLock, IEmployeeAssignmentPerio
 import type { IResolvedSchedule } from '../../types/schedule';
 import { decideModalRefresh, pickModalDayData } from '../../utils/timesheetModalRefresh';
 import { canUseBulkCorrections } from '../../utils/timesheetBulkAccess';
+import { sortTimesheetRows } from '../../utils/timesheetRowOrder';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
 import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
@@ -307,7 +308,8 @@ export const TimesheetPage: FC = () => {
   const modalObjectsQuery = useQuery({
     queryKey: ['timesheet-employee-objects', modalEmployee?.id ?? null, modalDayIso, modalEntry?.id ?? null],
     queryFn: () => timesheetService.listEmployeeObjects(modalEmployee!.id, modalDayIso, modalEntry?.id ?? null),
-    enabled: modalOpen && !!modalEmployee && !!modalDay,
+    // «Просмотр табеля»: объекты нужны только для правки — в окне только на чтение не грузим.
+    enabled: modalOpen && !!modalEmployee && !!modalDay && !modalEmployee.view_only,
     staleTime: 60_000,
   });
 
@@ -424,6 +426,10 @@ export const TimesheetPage: FC = () => {
     ? assignedExpandedDeptId
     : (effectiveSelectedDeptId || (isDirectReportsOnly && !selectedDeptId ? DIRECT_REPORTS_DEPT : null));
   const isDirectReportsMarker = activeGridDeptId === DIRECT_REPORTS_DEPT;
+  // «Мои сотрудники» только из «Просмотра табеля» (миграция 309): своих людей нет — подавать
+  // и выгружать нечего (подача вернула бы 403, экспорт — 422), панель согласования и
+  // «Экспорт» скрыты.
+  const isViewOnlyGrid = isDirectReportsMarker && profile?.has_direct_reports !== true;
   // Начальник участка для выбранной бригады (read-only поле в шапке, только для бригад).
   const supervisorQuery = useDepartmentSupervisor(
     activeGridDeptId && !isDirectReportsMarker ? activeGridDeptId : null,
@@ -544,21 +550,8 @@ export const TimesheetPage: FC = () => {
     // Персональный режим: строки уже собраны по периодам и упорядочены по дате входа —
     // пересортировка по source схлопнула бы порядок отделов.
     if (isEmployeeMode) return employeeModeData.employees;
-    const raw = deferredTimesheetData?.employees || [];
-    // Группировка строк табеля: supervisor → self → direct_report → department →
-    // skud_presence → direct_report_covered. Начальник участка (supervisor) — первой
-    // секцией. Сотрудники, чей табель ведёт руководитель их отдела, — самой последней:
-    // они только для просмотра. Внутри группы сохраняем порядок ответа (бэк сортирует
-    // по full_name).
-    const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
-      supervisor: 0,
-      self: 1,
-      direct_report: 2,
-      department: 3,
-      skud_presence: 4,
-      direct_report_covered: 5,
-    };
-    return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
+    // Группировка строк по секциям — utils/timesheetRowOrder.
+    return sortTimesheetRows(deferredTimesheetData?.employees || []);
   }, [deferredTimesheetData, isEmployeeMode, employeeModeData]);
   const canBulkEdit = canUseBulkCorrections({
     canWriteActiveDept,
@@ -867,7 +860,8 @@ export const TimesheetPage: FC = () => {
     // View-отдел (миграция 167): сотрудник виден, но не редактируем — редактор не открываем.
     // Роль без права правки вообще (hr) — модалка всё равно открывается, но в режиме
     // просмотра (hideCorrectionTab, см. рендер модалки ниже), поэтому её не блокируем здесь.
-    if (emp.editable === false && canEditTimesheet) {
+    // «Просмотр табеля» (миграция 309) — окно открывается, но только на чтение (modalViewOnly).
+    if (emp.editable === false && canEditTimesheet && !emp.view_only) {
       toast.info?.(resolveReadOnlyReason(emp));
       return;
     }
@@ -905,7 +899,7 @@ export const TimesheetPage: FC = () => {
       toast.info?.(OBJECT_ENTRIES_DISABLED_MESSAGE);
       return;
     }
-    if (emp.editable === false && canEditTimesheet) {
+    if (emp.editable === false && canEditTimesheet && !emp.view_only) {
       toast.info?.(resolveReadOnlyReason(emp));
       return;
     }
@@ -2485,6 +2479,8 @@ export const TimesheetPage: FC = () => {
   ) : null;
 
   const modalWorkDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+  // «Просмотр табеля» (миграция 309): окно дня только на чтение — без правки и без файлов.
+  const modalViewOnly = modalEmployee?.view_only === true;
 
   return (
     <div className="ts-page">
@@ -2506,7 +2502,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isAssignedMode && !isEmployeeMode && (
+                {!isAssignedMode && !isEmployeeMode && !isViewOnlyGrid && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
@@ -2516,7 +2512,7 @@ export const TimesheetPage: FC = () => {
                   </button>
                 )}
                 {/* Экспорт и согласование — операции над отделом, в персональном режиме их нет. */}
-                {!hasGlobalTimesheetRead && !isEmployeeMode && (
+                {!hasGlobalTimesheetRead && !isEmployeeMode && !isViewOnlyGrid && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--icon"
@@ -2544,7 +2540,7 @@ export const TimesheetPage: FC = () => {
               )}
             </div>
             {modeControl}
-            {mobileApprovalVisible && !isAssignedMode && !isEmployeeMode && (
+            {mobileApprovalVisible && !isAssignedMode && !isEmployeeMode && !isViewOnlyGrid && (
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
                   submissionMode={approvalSubmissionMode}
@@ -2579,7 +2575,7 @@ export const TimesheetPage: FC = () => {
                     canToggle={isTimekeeperRole}
                   />
                 )}
-                {!isEmployeeMode && (
+                {!isEmployeeMode && !isViewOnlyGrid && (
                   <TimesheetApprovalBar
                     submissionMode={approvalSubmissionMode}
                     departmentId={approvalBarDeptId}
@@ -2600,7 +2596,7 @@ export const TimesheetPage: FC = () => {
               <div className="ts-header-toolbar-right">
                 {/* Экспорт скрыт для глобального read-флага: экспорт-эндпоинты работают
                     в старом скоупе и вернули бы 403 (follow-up: расширить read-scope). */}
-                {!hasGlobalTimesheetRead && !isEmployeeMode && (
+                {!hasGlobalTimesheetRead && !isEmployeeMode && !isViewOnlyGrid && (
                   <button
                     type="button"
                     className="ts-btn"
@@ -2927,10 +2923,13 @@ export const TimesheetPage: FC = () => {
             onClose={closeModal}
             onSave={handleSaveModalCorrection}
             // Роль без права правки (hr): только события СКУД, без блока корректировок.
-            hideCorrectionTab={!canEditTimesheet}
+            // «Просмотр табеля»: корректировки видны и такой роли — только на чтение.
+            hideCorrectionTab={!canEditTimesheet && !modalViewOnly}
             allowAttachmentsOnCreate
+            viewOnly={modalViewOnly}
             onDelete={
-              modalMode === 'object' && modalObjectEntry?.adjustment_id
+              modalViewOnly ? undefined
+              : modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? handleDeleteObjectCorrection
                 : (modalEntry?.is_correction
                     && modalEntry?.id != null
@@ -2946,8 +2945,8 @@ export const TimesheetPage: FC = () => {
                 ? lockMessage(lockStatusFor(modalEmployee.id, modalWorkDate))
                 : null
             }
-            readOnly={isDayLocked(modalEmployee?.id, modalWorkDate)}
-            canEditReasonText={canEditTimesheet}
+            readOnly={modalViewOnly || isDayLocked(modalEmployee?.id, modalWorkDate)}
+            canEditReasonText={canEditTimesheet && !modalViewOnly}
             onUpdateReason={handleUpdateReason}
             allowedStatuses={
               // После выхода на работу (день уже = work по СКУД/согласованной правке)

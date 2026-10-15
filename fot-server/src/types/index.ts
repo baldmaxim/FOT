@@ -91,6 +91,8 @@ export interface UserProfileResponse {
   department_id: string | null;
   managed_department_ids: string[];
   has_direct_reports?: boolean;
+  /** «Просмотр табеля» (миграция 309): есть люди, чей табель открыт только на чтение. */
+  has_timesheet_view_employees?: boolean;
   /** Назначен ответственным за согласование выходных хотя бы по одному таргету. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;
@@ -158,6 +160,8 @@ export interface AuthenticatedRequest extends Request {
     __direct_subordinates?: Set<number>;
     /** Прямые подчинённые за вычетом ведомых руководителями их отделов (запись). */
     __editable_direct_subordinates?: number[];
+    /** «Просмотр табеля» (миграция 309): чей табель пользователь видит только на чтение. */
+    __timesheet_view_only_ids?: Set<number>;
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
     /** Один снимок скоупа табельщицы на HTTP-запрос: seeds и direct из одного SQL. */
     __timekeeper_scope_snapshot?: { readonly departmentSeeds: readonly string[]; readonly directEmployeeIds: readonly number[] };

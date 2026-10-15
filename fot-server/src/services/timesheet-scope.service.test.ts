@@ -46,6 +46,11 @@ vi.mock('./direct-report-coverage.service.js', () => ({
   })),
 }));
 
+// «Просмотр табеля» (миграция 309) — здесь пустой; его ветки — timesheet-scope.view-only.test.ts.
+vi.mock('./employee-timesheet-view-access.service.js', () => ({
+  resolveTimesheetViewOnlyEmployeeIds: vi.fn(async () => new Set<number>()),
+}));
+
 import {
   canAccessEmployeeForTimesheetPeriod,
   filterAdditionalEmployeeIdsForTimesheetPeriod,

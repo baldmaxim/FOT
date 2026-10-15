@@ -32,6 +32,7 @@ import {
 } from '../services/department-access.service.js';
 import { isDeputyRole, loadDeputyHeadDepartmentIds } from '../services/deputy-role.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { listTimesheetViewEmployeeIds } from '../services/employee-timesheet-view-access.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
@@ -139,6 +140,13 @@ async function buildProfileResponse(
   const has_direct_reports = timekeeperScope
     ? timekeeperScope.directEmployeeIds.length > 0
     : (profile.employee_id != null && (await listDirectSubordinates(profile.employee_id)).length > 0);
+
+  // «Просмотр табеля» (миграция 309): есть ли люди, чей табель открыт только на чтение.
+  // Фронту — чтобы показать грид «Мои сотрудники» и без прямых подчинённых. Страницу
+  // табеля флаг не выдаёт: её даёт роль. Табельщице не нужен (её скоуп бригадный).
+  const has_timesheet_view_employees = !timekeeperScope
+    && profile.employee_id != null
+    && (await listTimesheetViewEmployeeIds(profile.employee_id)).length > 0;
 
   // Назначен ли ответственным за согласование выходных — для доступа к «Согласованиям»
   // без общего права /timesheet-hr (decision 10).
@@ -248,6 +256,7 @@ async function buildProfileResponse(
     department_id: departmentId,
     managed_department_ids,
     has_direct_reports,
+    has_timesheet_view_employees,
     is_weekend_responsible,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',

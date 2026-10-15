@@ -257,6 +257,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_RATE_DELETED: 'PAYROLL_RATE_DELETED',
   // Виды удержаний сотрудника (миграция 300): добавленные и снятые.
   PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
+  // «Просмотр табеля» (миграция 309): кого добавили и кого сняли у смотрящего.
+  EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED: 'EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

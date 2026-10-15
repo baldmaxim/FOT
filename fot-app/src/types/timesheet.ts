@@ -177,7 +177,8 @@ export interface IEmployeeStats {
 }
 
 export type TimesheetEmployeeSource =
-  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence';
+  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence'
+  | 'view_only';
 
 export interface TimesheetEmployee {
   id: number;
@@ -198,6 +199,11 @@ export interface TimesheetEmployee {
   source?: TimesheetEmployeeSource;
   /** false → сотрудник виден, но не редактируем (view-отдел, миграция 167). По умолчанию true. */
   editable?: boolean;
+  /**
+   * «Просмотр табеля» (миграция 309): табель открыт пользователю только на чтение. Окно дня
+   * открывается без правки и без файлов, выгрузки детализации нет.
+   */
+  view_only?: boolean;
   /** Уволен в месяце периода: виден в портале (show_fired), но в подачу и 1С не идёт. */
   excluded_from_submission?: boolean;
   /**

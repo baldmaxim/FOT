@@ -264,7 +264,8 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
         <div className="ts-panel-header">
           <h3 className="ts-panel-title">Детализация</h3>
           <div className="ts-panel-header-actions">
-            {canViewSkud && (
+            {/* «Просмотр табеля»: только смотреть — выгрузки нет (сервер её и не отдаст). */}
+            {canViewSkud && !employee.view_only && (
               <button
                 className="ts-panel-export"
                 onClick={handleExport}

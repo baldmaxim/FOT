@@ -102,6 +102,8 @@ export interface UserProfile {
   department_id: string | null;
   managed_department_ids: string[];
   has_direct_reports?: boolean;
+  /** «Просмотр табеля» (миграция 309): есть люди, чей табель открыт только на чтение. */
+  has_timesheet_view_employees?: boolean;
   /** Назначен ответственным за согласование выходных — доступ к «Согласованиям» без /timesheet-hr. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;

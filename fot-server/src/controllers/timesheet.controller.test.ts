@@ -377,4 +377,20 @@ describe('resolveEmployeeTimesheetSource — приоритет секции с�
     sets.directReportSet.add(14);
     expect(resolveEmployeeTimesheetSource({ empId: 14, isSelf: false, ...sets })).toBe('skud_presence');
   });
+
+  it('view_only («Просмотр табеля») — когда больше ни в одном наборе', () => {
+    const sets = emptySets();
+    expect(resolveEmployeeTimesheetSource({
+      empId: 15, isSelf: false, ...sets, viewOnlySet: new Set([15]),
+    })).toBe('view_only');
+  });
+
+  it('view_only самый младший: отдел и прямой подчинённый его побеждают', () => {
+    const sets = emptySets();
+    sets.departmentMembershipSet.add(16);
+    sets.directReportSet.add(17);
+    const viewOnlySet = new Set([16, 17]);
+    expect(resolveEmployeeTimesheetSource({ empId: 16, isSelf: false, ...sets, viewOnlySet })).toBe('department');
+    expect(resolveEmployeeTimesheetSource({ empId: 17, isSelf: false, ...sets, viewOnlySet })).toBe('direct_report');
+  });
 });

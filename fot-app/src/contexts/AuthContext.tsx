@@ -309,6 +309,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       void queryClient.invalidateQueries({ queryKey: ['admin-direct-reports'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-employee-skud-objects'] });
       void queryClient.invalidateQueries({ queryKey: employeesKeys.departmentAccess() });
+      // «Просмотр табеля» (миграция 309): выданные/снятые люди сразу появляются и пропадают
+      // в гриде «Мои сотрудники» и в поиске «По сотруднику» (оба держатся до 5 мин).
+      void queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
+      void queryClient.invalidateQueries({ queryKey: ['timesheet-employee-search'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-timesheet-view-employees'] });
     };
 
     const unsubscribe = wsService.on('profile:access_changed', applyAccessChanged);

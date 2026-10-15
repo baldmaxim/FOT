@@ -543,6 +543,23 @@ describe('searchEmployeesForTimesheet', () => {
     expect(res._json.data).toEqual([]);
   });
 
+  it('«Просмотр табеля»: назначенные — первыми в запросе (лимит 40), выдача — по ФИО', async () => {
+    h.pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('employee_timesheet_view_access')) return [{ employee_id: 2 }];
+      // БД отдаёт назначенного первым — по ORDER BY с приоритетом.
+      if (sql.includes('FROM employees')) return [candidates[1], candidates[0]];
+      return [];
+    });
+    scope.canAccess.mockResolvedValue(true);
+
+    const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
+
+    const searchCall = h.pgQuery.mock.calls.find(([sql]) => String(sql).includes('FROM employees'));
+    expect(String(searchCall?.[0])).toContain('ORDER BY (id = ANY($3::int[])) DESC, full_name');
+    expect(searchCall?.[1]).toEqual(['%Иванов%', `${MONTH}-01`, [2]]);
+    expect(res._json.data.map((row: { id: number }) => row.id)).toEqual([1, 2]);
+  });
+
   it('глобальный скоуп не делает поштучных проверок', async () => {
     scope.resolveTimesheetScope.mockResolvedValue('all');
     h.pgQuery.mockImplementation(async (sql: string) => (

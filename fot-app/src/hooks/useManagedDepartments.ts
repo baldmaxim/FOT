@@ -13,11 +13,16 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
   const isAdminLike = isAdmin || hasPermission('data.scope.all');
   const hasManagedDepartmentsRaw = (profile?.managed_department_ids?.filter(Boolean).length ?? 0) > 0;
   const hasDirectReports = profile?.has_direct_reports === true;
+  // «Просмотр табеля» (миграция 309): грид «Мои сотрудники» нужен и без прямых подчинённых.
+  const hasTimesheetViewEmployees = profile?.has_timesheet_view_employees === true;
   // Руководитель = не-админ и не рядовой сотрудник (employee_variant null у ролей head/hr/etc).
   // Даже если у него СЕЙЧАС нет назначенных отделов (например, админ снял назначение),
   // scope должен оставаться включённым — иначе UI рисует ему «всё» как суперадмину.
   const isManagerRole = !isAdminLike && !profile?.is_admin && profile?.employee_variant == null;
-  const isDepartmentScope = !isAdminLike && (hasPermission('data.scope.department') || hasManagedDepartmentsRaw || hasDirectReports || isManagerRole);
+  const isDepartmentScope = !isAdminLike && (
+    hasPermission('data.scope.department') || hasManagedDepartmentsRaw || hasDirectReports
+    || hasTimesheetViewEmployees || isManagerRole
+  );
   const structureQuery = useStructureTree(options?.enabled ?? true);
 
   const managedDepartmentIds = useMemo(() => {
@@ -56,7 +61,8 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
 
   return {
     isDepartmentScope,
-    isDirectReportsOnly: isDepartmentScope && managedDepartmentIds.length === 0 && hasDirectReports,
+    isDirectReportsOnly: isDepartmentScope && managedDepartmentIds.length === 0
+      && (hasDirectReports || hasTimesheetViewEmployees),
     managedDepartmentIds,
     managedDepartments,
     managedDepartmentNameById,

@@ -18,6 +18,7 @@ import { isTimekeeper, resolveTimekeeperEditableLiIds, LI_OBSHESTROY_DEPARTMENT_
 import { isDeputyRole } from './deputy-role.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
+import { resolveTimesheetViewOnlyEmployeeIds } from './employee-timesheet-view-access.service.js';
 
 
 /**
@@ -99,6 +100,14 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
   // getAll и canAccessEmployeeForTimesheet* ограничивают выборку строго этим набором.
   const directSubs = await resolveEffectiveDirectSubordinates(req);
   if (directSubs.length > 0) {
+    return 'department';
+  }
+
+  // «Просмотр табеля» (миграция 309): та же псевдо-ячейка, но только на чтение — запись
+  // для этих людей закрыта в canAccessEmployeeForTimesheet* (ветка под !requireEdit).
+  // Нужна роль с табелем: назначение не выдаёт страницу, только открывает людей в ней.
+  if ((await resolveTimesheetViewOnlyEmployeeIds(req)).size > 0
+    && await hasManagedTimesheetAccess(req, 'view')) {
     return 'department';
   }
 
@@ -184,6 +193,12 @@ export async function canAccessEmployeeForTimesheetPeriod(
   }
 
   if (scope === 'department' && req.user.employee_id === employeeId) {
+    return true;
+  }
+
+  // «Просмотр табеля» (миграция 309): только чтение. Стоит ДО объектного view-скоупа —
+  // тот возвращает ответ сразу и отрезал бы назначенного у руководителя с отделами.
+  if (!requireEdit && scope === 'department' && (await resolveTimesheetViewOnlyEmployeeIds(req)).has(employeeId)) {
     return true;
   }
 

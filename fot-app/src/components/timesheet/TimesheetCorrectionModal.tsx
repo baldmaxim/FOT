@@ -129,6 +129,10 @@ interface ICorrectionModalProps {
   // в режиме «только просмотр»: скрыты все кнопки правки/удаления/добавления,
   // события СКУД и текст заявки остаются видны.
   readOnly?: boolean;
+  // «Просмотр табеля» (миграция 309): чужой табель только на чтение (вместе с readOnly).
+  // Файлы корректировки и заявление-источник не запрашиваются: их сервер отдаёт лишь
+  // тем, кто ведёт табель сотрудника, — смотрящий получил бы 403.
+  viewOnly?: boolean;
   // Разрешить точечную правку текста заявки «работа в выходной/праздник»
   // (initialNotes при initialStatus='work' и companionWorkRequest.reason),
   // не открывая полную форму редактирования корректировки.
@@ -490,6 +494,8 @@ const CorrectionTab: FC<{
   // Создаёт ОТДЕЛЬНУЮ remote-корректировку (через create, не update заявки).
   onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
   readOnly?: boolean;
+  /** «Просмотр табеля»: заявление-источник не запрашивается (403 для смотрящего). */
+  viewOnly?: boolean;
   canEditReasonText?: boolean;
   onUpdateReason?: (id: number, reason: string) => Promise<void>;
 }> = ({
@@ -513,6 +519,7 @@ const CorrectionTab: FC<{
   remoteDefaultHours,
   onAddRemote,
   readOnly,
+  viewOnly = false,
   canEditReasonText,
   onUpdateReason,
 }) => {
@@ -714,7 +721,7 @@ const CorrectionTab: FC<{
               <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
             )
           )}
-          {correctionInfo?.adjustment_id != null && (
+          {correctionInfo?.adjustment_id != null && !viewOnly && (
             <CorrectionSourceRequestLine
               adjustmentId={correctionInfo.adjustment_id}
               updatedAt={correctionInfo.corrected_at}
@@ -1056,6 +1063,8 @@ interface IObjectCorrectionsListProps {
   // только «Корректировка табеля» (manual).
   allowedStatuses?: TimesheetStatus[];
   readOnly?: boolean;
+  /** «Просмотр табеля»: заявление-источник не запрашивается (403 для смотрящего). */
+  viewOnly?: boolean;
 }
 
 // Серая скруглённая карточка для inline-форм (единый стиль с «День целиком»/«Удалёнка»).
@@ -1081,6 +1090,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   initialMode,
   allowedStatuses,
   readOnly,
+  viewOnly = false,
 }) => {
   const addStatusOptions = useMemo(
     () => CREATABLE_STATUS_META.filter(meta => !allowedStatuses || allowedStatuses.includes(meta.status)),
@@ -1420,12 +1430,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
                 <div className="ts-correction-view-comment">{trimmedNotes}</div>
               )}
               <CorrectionAuthorLine
-                adjustmentId={entry.adjustment_id ?? null}
+                adjustmentId={viewOnly ? null : (entry.adjustment_id ?? null)}
                 authorName={entry.corrected_by_name ?? null}
                 correctedAt={entry.corrected_at ?? null}
                 formatDate={formatCorrectionDate}
               />
-              {entry.adjustment_id != null && (
+              {entry.adjustment_id != null && !viewOnly && (
                 <CorrectionSourceRequestLine
                   adjustmentId={entry.adjustment_id}
                   updatedAt={entry.corrected_at}
@@ -1622,6 +1632,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   remoteDefaultHours,
   onAddRemote,
   readOnly,
+  viewOnly = false,
   canEditReasonText,
   onUpdateReason,
   dataRefreshState = null,
@@ -1719,7 +1730,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     && (correctionInfo.corrected_by_name || correctionInfo.corrected_at)
     && (!hasObjectsBlock || hasDayLevelCorrection) ? (
       <CorrectionAuthorBlock
-        adjustmentId={correctionInfo.adjustment_id ?? null}
+        adjustmentId={viewOnly ? null : (correctionInfo.adjustment_id ?? null)}
         authorName={correctionInfo.corrected_by_name ?? null}
         correctedAt={correctionInfo.corrected_at ?? null}
         formatDate={formatCorrectionDate}
@@ -1729,7 +1740,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   // Блок файлов корректировки. Для day-level формы передаётся слотом в CorrectionTab
   // (рендерится перед футером → «Сохранить» в самом низу, #1). Для objects-блока —
   // рендерится отдельно после списка.
-  const attachmentsNode = adjustmentId ? (
+  const attachmentsNode = adjustmentId && !viewOnly ? (
     <CorrectionAttachments
       adjustmentId={adjustmentId}
       variant="modal"
@@ -1825,6 +1836,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           remoteDefaultHours={remoteDefaultHours}
           onAddRemote={onAddRemote}
           readOnly={readOnly}
+          viewOnly={viewOnly}
           canEditReasonText={canEditReasonText}
           onUpdateReason={onUpdateReason}
         />
@@ -1848,6 +1860,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           initialMode={initialMode}
           allowedStatuses={allowedStatuses}
           readOnly={readOnly}
+          viewOnly={viewOnly}
         />
       )}
       {hasObjectsBlock && attachmentsNode}

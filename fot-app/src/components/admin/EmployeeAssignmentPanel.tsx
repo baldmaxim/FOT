@@ -21,8 +21,10 @@ import { correctionApprovalService } from '../../services/correctionApprovalServ
 import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { useTimesheetViewEmployeesDraft } from '../../hooks/useTimesheetViewEmployeesDraft';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDate } from '../../utils/formatMoney';
+import { TimesheetViewEmployeesTab } from './TimesheetViewEmployeesTab';
 import styles from '../../pages/admin/Admin.module.css';
 
 const AUTO_EXPAND_ALL_THRESHOLD = 40;
@@ -41,9 +43,9 @@ interface IEmployeeAssignmentPanelProps {
   allowedTabs?: readonly Tab[];
 }
 
-type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend';
+type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'timesheet_view';
 
-const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend'];
+const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend', 'timesheet_view'];
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -166,6 +168,12 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     queryFn: () => weekendApprovalService.listEligible(false),
     enabled: isOpen && tabAllowed('weekend'),
     staleTime: 60_000,
+  });
+
+  // Вкладка «Просмотр табеля» (миграция 309): чей табель сотрудник видит только на чтение.
+  const timesheetView = useTimesheetViewEmployeesDraft({
+    employeeId: employee?.employee_id ?? null,
+    enabled: isOpen && tabAllowed('timesheet_view'),
   });
 
   const initialDepartmentIds = useMemo(
@@ -328,7 +336,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const hasWeekendChanges = !arraysEqual(draftWeekendDeptIds, initialWeekendDeptIds)
     || !numbersEqual(draftWeekendEmpIds, initialWeekendEmpIds);
   const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDeputyChanges || hasDirectChanges
-    || hasObjectChanges || hasWeekendChanges;
+    || hasObjectChanges || hasWeekendChanges || timesheetView.hasChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -400,6 +408,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     setDraftObjectIds(initialObjectIds);
     setDraftWeekendDeptIds(initialWeekendDeptIds);
     setDraftWeekendEmpIds(initialWeekendEmpIds);
+    timesheetView.reset();
     setSearchQuery('');
   };
 
@@ -465,6 +474,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         if (conflicts.length > 0) {
           toast.error(`Часть назначений уже закреплена за другим ответственным (${conflicts.length}) — пропущены`);
         }
+      }
+      // 5) «Просмотр табеля» — полная замена списка, только если он изменён (и уже был загружен).
+      if (timesheetView.hasChanges) {
+        await timesheetView.save();
       }
       toast.success('Назначения сохранены');
       // Панель не закрываем: сбрасываем только поиск, добавленный человек остаётся
@@ -589,6 +602,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               Выходные ({draftWeekendDeptIds.length + draftWeekendEmpIds.length})
             </button>
           )}
+          {tabAllowed('timesheet_view') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'timesheet_view' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('timesheet_view'); setSearchQuery(''); }}
+            >
+              Просмотр табеля ({timesheetView.ids.length})
+            </button>
+          )}
         </nav>
 
         <div className={styles.assignmentPanelBody}>
@@ -624,7 +646,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           )}
           <input
             type="text"
-            placeholder={activeTab === 'person' || (activeTab === 'weekend' && weekendMode === 'employee')
+            placeholder={activeTab === 'person' || activeTab === 'timesheet_view'
+              || (activeTab === 'weekend' && weekendMode === 'employee')
               ? 'Поиск по ФИО, должности, отделу...'
               : 'Поиск...'}
             value={searchQuery}
@@ -700,6 +723,19 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               onToggle={toggleWeekendEmp}
               loading={weekendEligibleQuery.isLoading}
               showFree={weekendShowFree}
+            />
+          )}
+
+          {activeTab === 'timesheet_view' && employee && (
+            <TimesheetViewEmployeesTab
+              allEmployees={allEmployees}
+              selfId={employee.employee_id}
+              search={searchQuery}
+              selectedIds={timesheetView.ids}
+              assigned={timesheetView.assigned}
+              onToggle={timesheetView.toggle}
+              loading={timesheetView.isLoading}
+              error={timesheetView.isError}
             />
           )}
         </div>

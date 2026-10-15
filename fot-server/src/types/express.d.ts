@@ -23,6 +23,8 @@ declare global {
         __direct_subordinates?: Set<number>;
         /** Прямые подчинённые за вычетом ведомых руководителями их отделов (запись). */
         __editable_direct_subordinates?: number[];
+        /** «Просмотр табеля» (миграция 309): чей табель пользователь видит только на чтение. */
+        __timesheet_view_only_ids?: Set<number>;
         /** Один снимок скоупа табельщицы на HTTP-запрос: seeds и direct из одного SQL. */
         __timekeeper_scope_snapshot?: { readonly departmentSeeds: readonly string[]; readonly directEmployeeIds: readonly number[] };
         __timekeeper_dept_seeds?: string[];

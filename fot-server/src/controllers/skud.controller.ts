@@ -46,6 +46,8 @@ import {
   normalizeUuidParam,
 } from '../services/data-scope.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { resolveTimesheetViewOnlyEmployeeIds } from '../services/employee-timesheet-view-access.service.js';
+import { resolveTimesheetScope } from '../services/timesheet-scope.service.js';
 import { hasDashboardAllDepartmentsGrant, hasPresenceAllObjectsGrant } from '../services/read-scope-grants.service.js';
 import {
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
@@ -349,12 +351,18 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
  *    обычного scope ИЛИ глобального read-флага. Даты обязательны, обе границы —
  *    в окне месяцев роли (timesheet_months_back/forward).
  * Сотрудник ВНЕ обычного scope доступен только через timesheet-путь при флаге.
+ *
+ * allowTimesheetViewer — «Просмотр табеля» (миграция 309): человек из списка смотрящего
+ * доступен по timesheet-пути (те же '/timesheet' + '/timesheet/events' и окно месяцев), хотя
+ * в обычный scope не входит. Включает его только просмотр событий (окно дня, боковая
+ * панель); выгрузки этим путём не открываются.
  */
 async function ensureEmployeeEventsAccess(
   req: AuthenticatedRequest,
   employeeId: number,
   startDateRaw: unknown,
   endDateRaw: unknown,
+  options: { allowTimesheetViewer?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const isSelf = req.user.employee_id === employeeId;
   const existingScopeAllowed = await canAccessEmployeeInScope(req, employeeId);
@@ -369,7 +377,10 @@ async function ensureEmployeeEventsAccess(
 
   const viaTimesheet = await resolveEffectivePageAccess(req, '/timesheet', 'view')
     && await resolveEffectivePageAccess(req, '/timesheet/events', 'view');
-  if (viaTimesheet && (existingScopeAllowed || await hasGlobalDepartmentReadScope(req))) {
+  const isTimesheetViewerOf = async (): Promise<boolean> => options.allowTimesheetViewer === true
+    && (await resolveTimesheetViewOnlyEmployeeIds(req)).has(employeeId)
+    && await resolveTimesheetScope(req) === 'department';
+  if (viaTimesheet && (existingScopeAllowed || await hasGlobalDepartmentReadScope(req) || await isTimesheetViewerOf())) {
     const startDate = typeof startDateRaw === 'string' ? startDateRaw : '';
     const endDate = typeof endDateRaw === 'string' ? endDateRaw : '';
     if (!ISO_DATE_PATTERN.test(startDate) || !ISO_DATE_PATTERN.test(endDate) || endDate < startDate) {
@@ -761,7 +772,9 @@ const skudReadController = {
         return;
       }
 
-      const gate = await ensureEmployeeEventsAccess(req, employeeId, req.query.startDate, req.query.endDate);
+      const gate = await ensureEmployeeEventsAccess(
+        req, employeeId, req.query.startDate, req.query.endDate, { allowTimesheetViewer: true },
+      );
       if (!gate.ok) {
         res.status(gate.status).json({ success: false, error: gate.error });
         return;

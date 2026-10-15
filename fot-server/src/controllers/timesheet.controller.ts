@@ -92,6 +92,7 @@ import {
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { splitDirectReportsByCoverage } from '../services/direct-report-coverage.service.js';
+import { resolveTimesheetViewOnlyEmployeeIds } from '../services/employee-timesheet-view-access.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import {
@@ -454,17 +455,20 @@ export const guardsRestriction = (status: TimeStatus, explicitHours: number | nu
 };
 
 export type TimesheetEmployeeSource =
-  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence';
+  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence'
+  | 'view_only';
 
 /**
  * Приоритет источника строки сотрудника в гриде Табеля:
- * self > supervisor > department > skud_presence > direct_report_covered > direct_report.
+ * self > supervisor > department > skud_presence > direct_report_covered > direct_report > view_only.
  * Начальник участка (supervisor) — секция «Начальник участка», первой.
  * skud_presence (ЛИНИЯ-Общестрой по факту присутствия на объектах табельщицы) —
  * секцией после department (см. sourceOrder на фронте), НЕ должна перетягивать
  * на себя реального члена выбранного отдела — department проверяется раньше.
  * direct_report_covered (весь период ведёт руководитель отдела) проверяется ДО
  * direct_report — иначе ветка была бы недостижима.
+ * view_only («Просмотр табеля», миграция 309) — самый младший: человек, которого
+ * руководитель ведёт сам (отдел, прямой подчинённый), не становится «только просмотром».
  */
 export const resolveEmployeeTimesheetSource = (params: {
   empId: number;
@@ -474,10 +478,11 @@ export const resolveEmployeeTimesheetSource = (params: {
   liPresenceSet: Set<number>;
   directReportSet: Set<number>;
   coveredDirectReportSet?: Set<number>;
+  viewOnlySet?: Set<number>;
 }): TimesheetEmployeeSource => {
   const {
     empId, isSelf, supervisorSet, departmentMembershipSet, liPresenceSet,
-    directReportSet, coveredDirectReportSet,
+    directReportSet, coveredDirectReportSet, viewOnlySet,
   } = params;
   if (isSelf) return 'self';
   if (supervisorSet.has(empId)) return 'supervisor';
@@ -485,6 +490,7 @@ export const resolveEmployeeTimesheetSource = (params: {
   if (liPresenceSet.has(empId)) return 'skud_presence';
   if (coveredDirectReportSet?.has(empId)) return 'direct_report_covered';
   if (directReportSet.has(empId)) return 'direct_report';
+  if (viewOnlySet?.has(empId)) return 'view_only';
   return 'department';
 };
 
@@ -1527,6 +1533,12 @@ async function canAccessEmployeeForTimesheetDate(
     return true;
   }
 
+  // «Просмотр табеля» (миграция 309): только чтение, ДО объектного view-скоупа — как в
+  // canAccessEmployeeForTimesheetPeriod.
+  if (!requireEdit && scope === 'department' && (await resolveTimesheetViewOnlyEmployeeIds(req)).has(employeeId)) {
+    return true;
+  }
+
   // Глобальный read-scope (hr / флаг view_all_departments): ПРОСМОТР любого сотрудника.
   // Short-circuit ДО resolveAccessibleEmployeeIds — у flagged-роли без назначений набор
   // узкий. Для записи (requireEdit) идём по editable-ветке ниже (read-only сохранён).
@@ -2359,10 +2371,23 @@ export const timesheetController = {
           }
         }
       }
-      const isDirectReportsOnlyScope =
-        scope === 'department' && !hasDeptFilter && !hasEmployeeFilter && directReportIds.length > 0;
+      // «Просмотр табеля» (миграция 309): люди, чей табель руководителю открыт только на
+      // чтение, — в гриде «Мои сотрудники» (без отдела и без сотрудника), секцией «Только
+      // просмотр». В грид отдела они не подмешиваются; в «По сотруднику» доступ к ним даёт
+      // canAccessEmployeeForTimesheetPeriod. Прямые подчинённые и сам — своими секциями.
+      let viewOnlyIds: number[] = [];
+      if (scope === 'department' && !hasDeptFilter && !hasEmployeeFilter) {
+        const ownRows = new Set<number>([
+          ...directReportIds,
+          ...(req.user.employee_id != null ? [req.user.employee_id] : []),
+        ]);
+        viewOnlyIds = [...await resolveTimesheetViewOnlyEmployeeIds(req)].filter(id => !ownRows.has(id));
+      }
+      const isDirectReportsOnlyScope = scope === 'department' && !hasDeptFilter && !hasEmployeeFilter
+        && (directReportIds.length > 0 || viewOnlyIds.length > 0);
       const additionalEmployeeIds = [...new Set([
         ...directReportIds,
+        ...viewOnlyIds,
         ...(selfTimesheetId != null ? [selfTimesheetId] : []),
       ])];
 
@@ -2636,7 +2661,7 @@ export const timesheetController = {
       // «Начальник участка» и назначенные в окне «Режим табелирования» (291: в выгрузках для
       // 1С они остаются и при всех «Н») исключены из фильтрации явно.
       if ((shouldApplyDeptFilter || isDirectReportsOnlyScope) && !includeEmpty) {
-        const rosterMemberIds = new Set<number>([...departmentEmployeeIds, ...directReportIds]);
+        const rosterMemberIds = new Set<number>([...departmentEmployeeIds, ...directReportIds, ...viewOnlyIds]);
         const windowPinnedIds = await listWindowPinnedEmployeeIds([...rosterMemberIds], startDate);
         const exemptIds = new Set<number>([
           ...(selfTimesheetId != null ? [selfTimesheetId] : []),
@@ -2906,6 +2931,12 @@ export const timesheetController = {
         startDate,
         { objectEntries },
       );
+      // «Просмотр табеля» (миграция 309): весь список смотрящего — и для секции «Только
+      // просмотр» в «Мои сотрудники», и для признака view_only в «По сотруднику», где строка
+      // приходит с source 'department' (членство в отделе периода).
+      const viewOnlySet = scope === 'department'
+        ? await resolveTimesheetViewOnlyEmployeeIds(req)
+        : new Set<number>();
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
         const source = resolveEmployeeTimesheetSource({
@@ -2916,11 +2947,18 @@ export const timesheetController = {
           liPresenceSet,
           directReportSet,
           coveredDirectReportSet,
+          viewOnlySet,
         });
         const coveredDates = coveredDatesByEmployee.get(empId) ?? null;
         // Уволенный в месяце периода (show_fired): в табеле правится как до 02.10, но в подачу
         // и 1С не идёт — фронт не считает его строку проблемой подачи.
         const excludedFromSubmission = isFiredHiddenForPeriod(e, startDate);
+        // Строка начальника участка — только для показа: его табель ведётся в его участке.
+        // direct_report_covered — то же самое, но причина другая: весь период ведёт
+        // руководитель отдела сотрудника. view_only — «Просмотр табеля»: правки нет вовсе.
+        const editable = (source === 'supervisor' || source === 'direct_report_covered' || source === 'view_only')
+          ? false
+          : (isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable));
         return {
           ...e,
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,
@@ -2934,12 +2972,9 @@ export const timesheetController = {
           // Даты, которые ведёт руководитель отдела: фронт гасит их у частично
           // покрытых (клик и bulk). У полностью покрытых строка и так read-only.
           covered_dates: coveredDates,
-          // Строка начальника участка — только для показа: его табель ведётся в его участке.
-          // direct_report_covered — то же самое, но причина другая: весь период ведёт
-          // руководитель отдела сотрудника.
-          editable: (source === 'supervisor' || source === 'direct_report_covered')
-            ? false
-            : (isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable)),
+          editable,
+          // Окно дня для такой строки открывается только на просмотр (без правки и файлов).
+          ...(!editable && viewOnlySet.has(empId) ? { view_only: true } : {}),
           ...(excludedFromSubmission ? { excluded_from_submission: true } : {}),
         };
       });
@@ -3332,6 +3367,11 @@ export const timesheetController = {
         return res.json({ success: true, data: [] });
       }
 
+      // «Просмотр табеля» (миграция 309): назначенных — первыми, иначе при частой фамилии
+      // они терялись бы за первыми 40 совпадениями до поштучной проверки доступа ниже.
+      const viewOnlyIds = scope === 'department'
+        ? [...await resolveTimesheetViewOnlyEmployeeIds(req)]
+        : [];
       const candidates = await query<{
         id: number | string;
         full_name: string | null;
@@ -3346,9 +3386,9 @@ export const timesheetController = {
             AND NOT (excluded_from_timesheet = true
                      AND (excluded_from_timesheet_date IS NULL
                           OR excluded_from_timesheet_date <= $2::date))
-          ORDER BY full_name
+          ORDER BY (id = ANY($3::int[])) DESC, full_name
           LIMIT 40`,
-        [`%${escapeLike(q)}%`, from],
+        [`%${escapeLike(q)}%`, from, viewOnlyIds],
       );
 
       // Доступ проверяем поштучно во ВСЕХ неглобальных скоупах: filterEmployeeIdsByTimesheetScope
@@ -3361,6 +3401,10 @@ export const timesheetController = {
         if (!Number.isFinite(empId)) continue;
         if (!isGlobal && !(await canAccessEmployeeForTimesheetPeriod(req, empId, from, to))) continue;
         visible.push(candidate);
+      }
+      // Назначенные шли первыми только ради лимита — в выдаче прежний порядок по ФИО.
+      if (viewOnlyIds.length > 0) {
+        visible.sort((left, right) => String(left.full_name || '').localeCompare(String(right.full_name || ''), 'ru'));
       }
 
       const deptIds = [...new Set(visible
