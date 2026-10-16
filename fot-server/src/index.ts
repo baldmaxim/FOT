@@ -47,6 +47,9 @@ import { startHrOcrWorker, stopHrOcrWorker } from './services/hr-ocr/worker.js';
 import {
   startAccessPointZoneReconcileWorker, stopAccessPointZoneReconcileWorker,
 } from './services/access-point-zone-reconcile.service.js';
+import {
+  startCorrectionLeaveReconcileWorker, stopCorrectionLeaveReconcileWorker,
+} from './services/correction-leave-reconcile.service.js';
 import { startHrMaintenance, stopHrMaintenance } from './services/hr-maintenance.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
@@ -176,6 +179,9 @@ httpServer.listen(PORT, HOST, () => {
   // Смена типа зоны точки доступа (миграция 305): пересборка сводки и «Дороги» из очереди.
   // Задачи, не доведённые до рестарта, подхватываются здесь же.
   startAccessPointZoneReconcileWorker();
+  // Отпуск корректировкой табеля (миграция 311): уведомления кадрам по разнице
+  // «видно во вкладке ↔ о чём уже сообщили» — ловит любой путь правки дня.
+  startCorrectionLeaveReconcileWorker();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
   // «Срок» пропусков подрядчиков в «Мониторинге» — ночью подтягивается из Sigur.
@@ -255,6 +261,7 @@ const gracefulShutdown = (signal: string): void => {
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopAccessPointZoneReconcileWorker,
+    stopCorrectionLeaveReconcileWorker,
     stopDismissalScheduler,
     stopContractorPassSyncScheduler, stopContractorPassExpirySyncScheduler, stopBlacklistSigurScheduler,
     stopObjectKpiPlanFreezer,

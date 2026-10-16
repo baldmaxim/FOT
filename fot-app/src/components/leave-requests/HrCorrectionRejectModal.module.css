@@ -1,0 +1,144 @@
+/* Окно «Отказать» по отпуску, поставленному корректировкой табеля (вкладка «Отпуска»).
+   Mobile-first: базовые стили — под 360 px, кнопки во всю ширину; с 600px — компактно. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 90dvh;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.closeBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.summary {
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.error {
+  font-size: 13px;
+  color: var(--error);
+}
+
+.footer {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+}
+
+.btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btnSecondary {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.btnDanger {
+  border: none;
+  background: var(--error);
+  color: var(--surface);
+}
+
+@media (min-width: 600px) {
+  .overlay {
+    align-items: center;
+    padding: 20px;
+  }
+
+  .modal {
+    max-width: 480px;
+    border-radius: 12px;
+  }
+
+  .footer {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+}
