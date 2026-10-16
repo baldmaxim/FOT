@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { leaveRequestsController } from '../controllers/leave-requests.controller.js';
-import { correctionLeavesController } from '../controllers/correction-leaves.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -50,34 +49,6 @@ router.get(
   '/vacations',
   requirePageAccess('/leave-vacations', 'view'),
   leaveRequestsController.getVacations
-);
-
-// Отпуска, поставленные корректировкой табеля (миграция 311), — во вкладке «Отпуска».
-// Тоже ДО /:id. Право — маркер вкладки, файлы отдаются только видимых карточек.
-router.get(
-  '/vacations/corrections',
-  requirePageAccess('/leave-vacations', 'view'),
-  correctionLeavesController.list
-);
-router.get(
-  '/vacations/corrections/files/:documentId/url',
-  requirePageAccess('/leave-vacations', 'view'),
-  correctionLeavesController.fileUrl
-);
-router.post(
-  '/vacations/corrections/acknowledge',
-  requirePageAccess('/leave-vacations', 'edit'),
-  correctionLeavesController.acknowledge
-);
-router.post(
-  '/vacations/corrections/removed/acknowledge',
-  requirePageAccess('/leave-vacations', 'edit'),
-  correctionLeavesController.acknowledgeRemoved
-);
-router.post(
-  '/vacations/corrections/reject',
-  requirePageAccess('/leave-vacations', 'edit'),
-  correctionLeavesController.reject
 );
 
 // GET /api/leave-requests/dismissals — заявления на увольнение всей организации (admin/hr)

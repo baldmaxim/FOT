@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { documentService } from '../services/documentService';
 import { leaveRequestService, type LeaveRequestStatus } from '../services/leaveRequestService';
-import { correctionLeaveService } from '../services/correctionLeaveService';
 import { employeeService } from '../services/employeeService';
 import { dailyTaskService } from '../services/dailyTaskService';
 import { testsService } from '../services/testsService';
@@ -15,8 +14,6 @@ export const getDismissalLeaveRequestsQueryKey = () => ['leave-requests-dismissa
 export type HrAckRequestsVariant = 'vacations' | 'dismissals';
 export const getHrAckLeaveRequestsQueryKey = (variant: HrAckRequestsVariant) =>
   (variant === 'vacations' ? getVacationLeaveRequestsQueryKey() : getDismissalLeaveRequestsQueryKey());
-/** Отпуска, поставленные корректировкой табеля (вкладка «Отпуска», миграция 311). */
-export const getHrCorrectionLeavesQueryKey = () => ['leave-requests-vacations-corrections'] as const;
 export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['employee-history', employeeId] as const;
 export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
 export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
@@ -63,14 +60,6 @@ export const useHrAckLeaveRequests = (variant: HrAckRequestsVariant) => useQuery
 });
 
 export const useVacationLeaveRequests = () => useHrAckLeaveRequests('vacations');
-
-export const useHrCorrectionLeaves = (enabled: boolean) => useQuery({
-  queryKey: getHrCorrectionLeavesQueryKey(),
-  queryFn: () => correctionLeaveService.list(),
-  enabled,
-  staleTime: 30_000,
-  placeholderData: previousData => previousData,
-});
 
 export const useMyDailyTasks = () => useQuery({
   queryKey: getMyDailyTasksQueryKey(),
