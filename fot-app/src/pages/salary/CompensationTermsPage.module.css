@@ -18,7 +18,7 @@
   gap: 8px;
 }
 
-/* Смартфон: поиск и подразделение — каждое на всю ширину, кнопка — ниже */
+/* Смартфон: поиск и подразделение — каждое на всю ширину, кнопки — ниже */
 .search,
 .department {
   flex: 1 1 100%;
@@ -50,38 +50,7 @@
 }
 .resetFilters:hover { border-color: var(--primary); }
 
-.selectedInfo {
-  font-size: 13px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.primaryButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--primary);
-  border-radius: var(--radius-sm);
-  background: var(--primary);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  font-family: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s ease-out, border-color 0.15s ease-out;
-}
-.primaryButton:hover:not(:disabled) {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
-}
-.primaryButton:disabled { opacity: 0.5; cursor: default; }
-
-/* Шестерёнка «Столбцы таблицы» — квадратная, высотой с соседнюю кнопку. */
+/* Шестерёнка «Столбцы таблицы» — квадратная, высотой с соседними кнопками. */
 .iconButton {
   display: inline-flex;
   align-items: center;
@@ -158,11 +127,7 @@
   font-size: 14px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .primaryButton { transition: none; }
-}
-
-/* Планшет и шире: всё в одну строку, как у кадров — поиск, подразделение, справа кнопка */
+/* Планшет и шире: всё в одну строку, как у кадров — поиск, подразделение, справа кнопки */
 @media (min-width: 769px) {
   .search,
   .department {
@@ -176,7 +141,6 @@
     margin-left: auto;
   }
 
-  .primaryButton,
   .retryButton,
   .resetFilters {
     min-height: 36px;

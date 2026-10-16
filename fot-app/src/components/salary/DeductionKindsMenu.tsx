@@ -1,10 +1,8 @@
-import { useEffect, useId, useMemo, useState, type CSSProperties, type FC, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FC } from 'react';
 import { createPortal } from 'react-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { PAYROLL_DEDUCTION_KINDS_KEY } from '../../hooks/usePayrollDeductionKinds';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { payrollService, type IPayrollDeductionKind } from '../../services/payrollService';
+import type { IPayrollDeductionKind } from '../../services/payrollService';
 import shared from './PayrollColumnsMenu.module.css';
 import styles from './DeductionKindsMenu.module.css';
 
@@ -27,16 +25,12 @@ const VIEWPORT_GAP = 8;
 const SHEET_MEDIA = '(max-width: 768px)';
 
 /**
- * Выпадающий список «Удержание»: виды справочника галочками (несколько сразу) и добавление
- * нового вида — он попадает в справочник и сразу отмечается. Галочка применяется сразу;
- * закрытие — Escape, клик мимо или «Готово».
+ * Выпадающий список «Удержание»: виды справочника галочками (несколько сразу). Новые виды
+ * добавляются в «Справочнике» на «Расчётах». Галочка применяется сразу; закрытие — Escape,
+ * клик мимо или «Готово».
  */
 export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subtitle, kinds, selected, onToggle, onClose }) => {
   const dismiss = useOverlayDismiss(onClose);
-  const queryClient = useQueryClient();
-  const inputId = useId();
-  const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
 
   // Перехват на document: Escape закрывает только меню, а не окно сотрудника под ним (оно слушает window).
   useEffect(() => {
@@ -63,25 +57,6 @@ export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subti
     }
     return { bottom: window.innerHeight - rect.top + 6, left, width: MENU_WIDTH, maxHeight: spaceAbove };
   }, [anchor, isSheet]);
-
-  const addMutation = useMutation({
-    mutationFn: (value: string) => payrollService.addDeductionKind(value),
-    onSuccess: kind => {
-      setName('');
-      onToggle(kind.id, true);
-      void queryClient.invalidateQueries({ queryKey: PAYROLL_DEDUCTION_KINDS_KEY });
-    },
-    onError: (err: Error) => setError(err.message || 'Не удалось добавить вид'),
-  });
-
-  const handleAdd = (event: FormEvent) => {
-    event.preventDefault();
-    // События портала идут по дереву React: без этого submit дошёл бы до формы карточки.
-    event.stopPropagation();
-    const value = name.replace(/\s+/g, ' ').trim();
-    if (!value || addMutation.isPending) return;
-    addMutation.mutate(value);
-  };
 
   const selectedSet = new Set(selected);
 
@@ -114,29 +89,6 @@ export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subti
             </li>
           ))}
         </ul>
-
-        {/* Отдельная форма: Enter в поле добавляет вид, а не отправляет форму карточки под меню. */}
-        <form className={styles.addRow} onSubmit={handleAdd} noValidate>
-          <input
-            id={inputId}
-            className={styles.addInput}
-            value={name}
-            maxLength={100}
-            autoComplete="off"
-            placeholder="Новый вид удержания"
-            aria-label="Новый вид удержания"
-            aria-invalid={error ? true : undefined}
-            aria-describedby={error ? `${inputId}-error` : undefined}
-            onChange={event => {
-              setName(event.target.value);
-              setError(null);
-            }}
-          />
-          <button type="submit" className={styles.addButton} disabled={!name.trim() || addMutation.isPending}>
-            {addMutation.isPending ? '…' : 'Добавить'}
-          </button>
-        </form>
-        {error && <p id={`${inputId}-error`} className={styles.addError} role="alert">{error}</p>}
 
         <div className={shared.footer}>
           <span />

@@ -80,11 +80,4 @@ describe('сотрудник вкладки «Подробно»', () => {
     const second = row(2);
     expect(dropPayrollDetails(second, [1])).toBe(second);
   });
-
-  it('частичное массовое назначение: закрывается только карточка применённого', () => {
-    // applied — 1 и 3; сотрудник 2 отклонён (skipped), его условия не менялись.
-    const skipped = row(2);
-    expect(dropPayrollDetails(skipped, [1, 3])).toBe(skipped);
-    expect(dropPayrollDetails(row(3), [1, 3])).toBeNull();
-  });
 });

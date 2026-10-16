@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
-import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
 
 import {
@@ -12,8 +12,6 @@ import {
   type PayrollSortDir,
   type PayrollSortKey,
 } from '../../services/payrollService';
-import { useAuth } from '../../contexts/AuthContext';
-import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
@@ -29,7 +27,6 @@ import {
 } from '../../utils/payrollColumnFilters';
 import { PAYROLL_TERMS_COLUMNS_KEY, type PayrollTableColumn } from '../../utils/payrollColumns';
 import { SearchInput } from '../../components/ui/SearchInput';
-import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
@@ -54,10 +51,6 @@ interface ICompensationTermsPageProps {
   active: boolean;
   /** Клик по строке — карточка этого сотрудника. */
   onOpenEmployee: (row: IPayrollTermsRow) => void;
-  /** Массовое назначение сохранено: сотрудники, чьи условия действительно изменились. */
-  onAssigned?: (employeeIds: number[]) => void;
-  /** Галочки и «Назначить выделенным»; на «Расчётах» их нет. */
-  selectable?: boolean;
   /** Кнопки панели перед шестерёнкой («Справочник» на «Расчётах»). */
   actionsExtra?: ReactNode;
   /** Ключ хранилища скрытых столбцов (шестерёнка). */
@@ -68,16 +61,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   date,
   active,
   onOpenEmployee,
-  onAssigned,
-  selectable = true,
   actionsExtra,
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
 }) => {
-  const { success, error: showError, warning } = useToast();
-  const { canEditPage } = useAuth();
-  const queryClient = useQueryClient();
-  const canEdit = canEditPage('/salary/terms');
-
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [departmentId, setDepartmentId] = useState('');
@@ -86,8 +72,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const [dir, setDir] = useState<PayrollSortDir>('asc');
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
   const [openFilter, setOpenFilter] = useState<{ column: PayrollSortKey; anchor: HTMLElement } | null>(null);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [bulkRows, setBulkRows] = useState<IPayrollTermsRow[] | null>(null);
 
   // Поиск идёт на сервере по всему штату, а не по загруженным порциям.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -164,22 +148,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
   };
 
-  // Смена фильтра меняет выборку: снимаем выделение, иначе можно назначить условия
-  // строкам, которых на экране уже нет.
-  const changeSearch = (value: string) => {
-    setSearch(value);
-    setSelected(new Set());
-  };
-  const changeDepartment = (id: string) => {
-    setDepartmentId(id);
-    setSelected(new Set());
-  };
-
   /** Тот же столбец — смена направления, другой — по возрастанию. */
   const handleSort = useCallback((key: PayrollSortKey) => {
     setDir(prevDir => (key === sort ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'));
     setSort(key);
-    setSelected(new Set());
   }, [sort]);
 
   const handleOpenFilter = useCallback((column: PayrollSortKey, anchor: HTMLElement) => {
@@ -188,7 +160,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 
   const applyColumnFilter = useCallback((column: PayrollSortKey, value: (string | null)[] | string | null) => {
     setColumnFilters(prev => setPayrollColumnFilter(prev, column, value));
-    setSelected(new Set());
   }, []);
 
   const closeFilter = useCallback(() => setOpenFilter(null), []);
@@ -198,13 +169,13 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
     if (column === 'accruals') return;
-    const hadFilter = isPayrollColumnFilterActive(columnFilters, column);
-    if (hadFilter) setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
+    if (isPayrollColumnFilterActive(columnFilters, column)) {
+      setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
+    }
     if (sort === column) {
       setSort('name');
       setDir('asc');
     }
-    if (hadFilter || sort === column) setSelected(new Set());
   };
   const { hidden: hiddenColumns, setColumnVisible, showAll } = usePayrollHiddenColumns(
     hiddenColumnsKey,
@@ -216,9 +187,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setColumnsAnchor(null);
   };
 
-  // Уход со списка (другая вкладка, «Назад» браузера) закрывает всплывающие окна и массовое назначение:
-  // они в портале, и visibility: hidden списка их не прячет. Выбор подразделения перемонтируется — его
-  // список тоже в портале. Фильтры, выделение и прокрутка остаются. Паттерн «состояние из прошлого
+  // Уход со списка (другая вкладка, «Назад» браузера) закрывает всплывающие окна: они в портале,
+  // и visibility: hidden списка их не прячет. Выбор подразделения перемонтируется — его
+  // список тоже в портале. Фильтры и прокрутка остаются. Паттерн «состояние из прошлого
   // рендера» вместо setState-в-effect (react.dev «You Might Not Need an Effect»).
   const [wasActive, setWasActive] = useState(active);
   const [departmentSelectKey, setDepartmentSelectKey] = useState(0);
@@ -227,76 +198,11 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     if (!active) {
       setOpenFilter(null);
       setColumnsAnchor(null);
-      setBulkRows(null);
       setDepartmentSelectKey(key => key + 1);
     }
   }
 
-  const resetColumnFilters = () => {
-    setColumnFilters({});
-    setSelected(new Set());
-  };
-
-  const assignMutation = useMutation({
-    mutationFn: async (payload: Parameters<typeof payrollService.assignBulk>[1] & { ids: number[] }) => {
-      const { ids, ...rest } = payload;
-      return ids.length === 1
-        ? payrollService.assign(ids[0], rest).then(() => ({ applied: [{ employee_id: ids[0], terms_id: 0 }], skipped: [] }))
-        : payrollService.assignBulk(ids, rest);
-    },
-    onSuccess: (result) => {
-      // Префикс сбрасывает и список, и историю зарплаты в карточке.
-      queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
-      setSelected(new Set());
-      setBulkRows(null);
-      // Только применённые: у отклонённых (skipped) условия не менялись, их карточка остаётся.
-      onAssigned?.(result.applied.map(item => item.employee_id));
-      if (result.skipped.length > 0) {
-        warning(`Применено: ${result.applied.length}. Отклонено: ${result.skipped.length} — ${result.skipped[0].message}`);
-      } else {
-        success(`Условия оплаты назначены: ${result.applied.length}`);
-      }
-    },
-    // Ошибку сохранения показывает само окно (ввод не теряется). Тост — только если окно
-    // успели закрыть, пока шёл запрос.
-    onError: (err: Error) => {
-      if (!bulkRows) showError(err.message || 'Не удалось назначить условия');
-    },
-  });
-  const { reset: resetAssign } = assignMutation;
-  const saveError = assignMutation.isError
-    ? (assignMutation.error?.message || 'Не удалось назначить условия')
-    : null;
-
-  const toggleOne = useCallback((employeeId: number) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(employeeId)) next.delete(employeeId);
-      else next.add(employeeId);
-      return next;
-    });
-  }, []);
-
-  /** Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер). */
-  const isRowEditable = useCallback(
-    (row: IPayrollTermsRow) => canEdit && row.can_edit !== false,
-    [canEdit],
-  );
-
-  // Выделяются только редактируемые строки: назначить условия остальным всё равно нельзя.
-  const editableRows = useMemo(() => rows.filter(isRowEditable), [rows, isRowEditable]);
-  const allLoadedSelected = editableRows.length > 0 && editableRows.every(row => selected.has(row.employee_id));
-  const toggleAll = useCallback(() => {
-    setSelected(allLoadedSelected ? new Set() : new Set(editableRows.map(row => row.employee_id)));
-  }, [allLoadedSelected, editableRows]);
-
-  // Ошибка прошлого сохранения не должна всплыть в новом окне.
-  const openBulk = () => {
-    const chosen = editableRows.filter(row => selected.has(row.employee_id));
-    if (chosen.length === 0) return;
-    resetAssign();
-    setBulkRows(chosen);
-  };
+  const resetColumnFilters = () => setColumnFilters({});
 
   const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
 
@@ -304,14 +210,14 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     <div className={styles.page}>
       <div className={styles.toolbar}>
         <div className={styles.search}>
-          <SearchInput clearable value={search} onValueChange={changeSearch} placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
+          <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
         </div>
         <div className={styles.department}>
           <DepartmentTreeSelect
             key={departmentSelectKey}
             departments={departments}
             value={departmentId}
-            onChange={changeDepartment}
+            onChange={setDepartmentId}
             isLoading={structureTree.isPending}
             isError={structureTree.isError}
             onRetry={() => { void structureTree.refetch(); }}
@@ -323,17 +229,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           </button>
         )}
         <div className={styles.actions}>
-          {selectable && selected.size > 0 && <span className={styles.selectedInfo}>Выделено: {selected.size}</span>}
-          {selectable && (
-            <button
-              type="button"
-              className={styles.primaryButton}
-              disabled={!canEdit || selected.size === 0}
-              onClick={openBulk}
-            >
-              Назначить выделенным
-            </button>
-          )}
           {actionsExtra}
           <button
             type="button"
@@ -369,13 +264,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         <>
           <PayrollTermsTable
             rows={rows}
-            selectable={selectable}
-            selected={selected}
-            allSelected={allLoadedSelected}
-            canEdit={canEdit}
             hiddenColumns={hiddenColumns}
-            onToggleOne={toggleOne}
-            onToggleAll={toggleAll}
             onEdit={onOpenEmployee}
             onLoadMore={loadMore}
             resetKey={resetKey}
@@ -423,20 +312,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           onToggle={setColumnVisible}
           onShowAll={showAll}
           onClose={closeColumnsMenu}
-        />
-      )}
-
-      {bulkRows && (
-        <AssignTermsModal
-          count={bulkRows.length}
-          defaultDate={date}
-          isSaving={assignMutation.isPending}
-          saveError={saveError}
-          onClose={() => setBulkRows(null)}
-          onSubmit={(payload) => assignMutation.mutate({
-            ...payload,
-            ids: bulkRows.map(row => row.employee_id),
-          })}
         />
       )}
     </div>

@@ -1,10 +1,9 @@
 /**
- * Условия оплаты сотрудников: чтение истории и назначение (в т.ч. массовое).
+ * Условия оплаты сотрудников: чтение истории и назначение.
  *
  * Скоуп проверяется по каждому сотруднику отдельно (canEditPayrollEmployee):
  * ролевого права на страницу мало — бухгалтер подразделения не должен править
- * условия чужих людей. Массовое назначение возвращает отчёт «применено / отклонено»,
- * а не молча пропускает недоступных.
+ * условия чужих людей.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -38,14 +37,12 @@ import {
 } from '../services/payroll/payroll-staff-category.js';
 import {
   assignTerms,
-  assignTermsBulk,
   getSalaryChanges,
   getTermsChanges,
   getTermsHistory,
   getTermsOnDate,
   lockPayrollEmployee,
   setPlannedSupplement,
-  type IAssignResult,
   type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
@@ -106,16 +103,12 @@ const plannedSupplementSchema = z.object({
 }).refine(value => value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
 
 /**
- * Назначение одному сотруднику — с плановой доплатой: не передана — доплату не трогать
- * (старый фронт или поля не меняли), null — снять. Массовое назначение доплату не принимает.
+ * Назначение сотруднику — с плановой доплатой: не передана — доплату не трогать
+ * (старый фронт или поля не меняли), null — снять.
  */
 const assignBodySchema = termsBodySchema.and(z.object({
   planned_supplement: plannedSupplementSchema.nullable().optional(),
 }));
-
-const bulkBodySchema = z.object({
-  employee_ids: z.array(z.coerce.number().int().positive()).min(1).max(500),
-}).and(termsBodySchema);
 
 function handleZodError(error: unknown, res: Response): boolean {
   if (error instanceof z.ZodError) {
@@ -675,83 +668,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** { worker: 12, office: 3 } — для аудита массового назначения. */
-const countCategories = (categories: StaffCategory[]): Partial<Record<StaffCategory, number>> => {
-  const counts: Partial<Record<StaffCategory, number>> = {};
-  for (const category of categories) counts[category] = (counts[category] ?? 0) + 1;
-  return counts;
-};
-
-/**
- * POST /api/payroll/terms/bulk — массовое назначение с общей датой.
- *
- * Недоступные по скоупу не выбрасываются молча, а попадают в skipped: иначе
- * пользователь решит, что применил условия ко всем выделенным.
- */
-const assignBulk = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const body = bulkBodySchema.parse(req.body);
-
-    const allowed: number[] = [];
-    const skipped: IAssignResult['skipped'] = [];
-    for (const employeeId of body.employee_ids) {
-      if (await canEditPayrollEmployee(req, employeeId)) allowed.push(employeeId);
-      else skipped.push({ employee_id: employeeId, reason: 'NO_ACCESS', message: 'Нет доступа к сотруднику' });
-    }
-
-    // Категория у каждого своя — по его отделу.
-    const categories = await resolveEmployeeStaffCategories(allowed);
-    const result = await assignTermsBulk(allowed, {
-      calcType: body.calc_type,
-      monthlySalary: body.monthly_salary ?? null,
-      hourlyRate: body.hourly_rate ?? null,
-      bonusAmount: body.bonus_amount ?? null,
-      housingCompensation: body.housing_compensation ?? null,
-      travelCompensation: body.travel_compensation ?? null,
-      communicationCompensation: body.communication_compensation ?? null,
-      deductionAmount: body.deduction_amount ?? null,
-      staffUnits: body.staff_units,
-      organizationId: body.organization_id ?? null,
-      effectiveFrom: body.effective_from,
-      changeReason: body.change_reason ?? null,
-      orderNumber: body.order_number ?? null,
-      orderDate: body.order_date ?? null,
-      note: body.note ?? null,
-      createdBy: req.user.id,
-    }, employeeId => categories.get(employeeId) ?? 'office');
-
-    const payload: IAssignResult = {
-      applied: result.applied,
-      skipped: [...skipped, ...result.skipped],
-    };
-
-    await auditService.logFromRequest(req, req.user.id, 'PAYROLL_TERMS_BULK_ASSIGNED', {
-      entityType: 'payroll_compensation_terms',
-      entityId: body.effective_from,
-      details: {
-        requested: body.employee_ids.length,
-        applied: payload.applied.length,
-        skipped: payload.skipped.length,
-        // Сколько назначенных получили каждую категорию: категорию ставит сервер, не пользователь.
-        category_counts: countCategories(payload.applied.map(item => categories.get(item.employee_id) ?? 'office')),
-        calc_type: body.calc_type,
-        bonus_amount: body.bonus_amount ?? null,
-        housing_compensation: body.housing_compensation ?? null,
-        travel_compensation: body.travel_compensation ?? null,
-        communication_compensation: body.communication_compensation ?? null,
-        deduction_amount: body.deduction_amount ?? null,
-        effective_from: body.effective_from,
-      },
-    });
-
-    res.json({ success: true, data: payload });
-  } catch (err) {
-    if (handleZodError(err, res)) return;
-    console.error('payrollTerms.assignBulk error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка массового назначения условий' });
-  }
-};
-
 export const payrollTermsController = {
-  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign, assignBulk,
+  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign,
 };

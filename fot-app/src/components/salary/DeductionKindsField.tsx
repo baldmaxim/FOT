@@ -16,7 +16,7 @@ interface IDeductionKindsFieldProps {
 
 /**
  * «Вид» в «Удержании» карточки: несколько видов из справочника, как в столбце «Удержание»
- * на «Расчётах». Новый вид добавляется в том же меню. Сохраняется с карточкой.
+ * на «Расчётах». Новый вид добавляется в «Справочнике». Сохраняется с карточкой.
  */
 export const DeductionKindsField: FC<IDeductionKindsFieldProps> = ({ id, deductions, readOnly = false }) => {
   const kinds = usePayrollDeductionKinds();

@@ -23,16 +23,8 @@ import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
   rows: IPayrollTermsRow[];
-  /** Столбец чекбоксов (массовое назначение); на «Расчётах» его нет. */
-  selectable?: boolean;
-  selected: Set<number>;
-  allSelected: boolean;
-  /** Право правки страницы. Без него, как и у строки вне скоупа правки, выделять нечего. */
-  canEdit: boolean;
-  /** Скрытые шестерёнкой столбцы; чекбокс, «№» и «Сотрудник» видны всегда. */
+  /** Скрытые шестерёнкой столбцы; «№» и «Сотрудник» видны всегда. */
   hiddenColumns: ReadonlySet<PayrollTableColumn>;
-  onToggleOne: (employeeId: number) => void;
-  onToggleAll: () => void;
   onEdit: (row: IPayrollTermsRow) => void;
   /** Вызывается с индексом последней отрисованной строки — решение о догрузке у родителя. */
   onLoadMore: (lastVisibleIndex: number) => void;
@@ -118,13 +110,7 @@ const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
  */
 export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   rows,
-  selectable = true,
-  selected,
-  allSelected,
-  canEdit,
   hiddenColumns,
-  onToggleOne,
-  onToggleAll,
   onEdit,
   onLoadMore,
   resetKey,
@@ -167,7 +153,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const shown = (column: PayrollTableColumn) => !hiddenColumns.has(column);
   const visibleColumns = PAYROLL_TABLE_COLUMNS.filter(column => shown(column.key));
   const sortHeaders = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
-  const columnCount = FIXED_COLUMN_COUNT + (selectable ? 1 : 0) + visibleColumns.length;
+  const columnCount = FIXED_COLUMN_COUNT + visibleColumns.length;
 
   const renderSortHeader = (column: (typeof SORTABLE_COLUMNS)[number]) => (
     <PayrollSortHeader
@@ -185,9 +171,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   return (
     <div className={styles.wrap} ref={scrollRef}>
-      <table className={selectable ? styles.table : `${styles.table} ${styles.tableNoCheck}`}>
+      <table className={styles.table}>
         <colgroup>
-          {selectable && <col className={styles.colCheck} />}
           <col className={styles.colNum} />
           <col className={styles.colName} />
           {visibleColumns.map(column => (
@@ -200,18 +185,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         </colgroup>
         <thead>
           <tr>
-            {selectable && (
-              <th className={`${styles.stickyCheck} ${styles.cellCheck}`}>
-                <input
-                  type="checkbox"
-                  className={styles.check}
-                  aria-label="Выделить всех загруженных"
-                  checked={allSelected}
-                  disabled={!canEdit}
-                  onChange={onToggleAll}
-                />
-              </th>
-            )}
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
             {sortHeaders.map(renderSortHeader)}
             {/* Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет. */}
@@ -237,13 +210,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
               )}
               {virtualItems.map(item => {
                 const row = rows[item.index];
-                const isSelected = selected.has(row.employee_id);
                 // Чередование — по индексу строки, а не :nth-child: spacer-строка виртуализации
                 // сдвигала бы чётность, и полосы «прыгали» при прокрутке.
-                const rowClass = [
-                  item.index % 2 === 1 ? styles.rowEven : '',
-                  isSelected ? styles.rowSelected : '',
-                ].filter(Boolean).join(' ');
+                const rowClass = item.index % 2 === 1 ? styles.rowEven : '';
                 return (
                   // Строка кликабельна, как в «Текущих сотрудниках»: открывает карточку во вкладке «Подробно».
                   <tr
@@ -255,7 +224,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     aria-label={`Условия оплаты: ${row.full_name ?? 'сотрудник'}`}
                     onClick={() => onEdit(row)}
                     onKeyDown={event => {
-                      // Только клавиши на самой строке: пробел на чекбоксе внутри должен выделять, а не открывать карточку.
+                      // Только клавиши на самой строке, а не на элементах внутри неё.
                       if (event.target !== event.currentTarget) return;
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
@@ -263,19 +232,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                       }
                     }}
                   >
-                    {/* Выделение не открывает карточку — как ячейка чекбокса у кадров. */}
-                    {selectable && (
-                      <td className={`${styles.stickyCheck} ${styles.cellCheck}`} onClick={event => event.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          className={styles.check}
-                          aria-label={`Выделить ${row.full_name ?? ''}`}
-                          checked={isSelected}
-                          disabled={!canEdit || row.can_edit === false}
-                          onChange={() => onToggleOne(row.employee_id)}
-                        />
-                      </td>
-                    )}
                     <td className={`${styles.stickyNum} ${styles.cellNum}`}>{item.index + 1}</td>
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>

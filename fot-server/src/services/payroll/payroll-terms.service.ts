@@ -72,17 +72,6 @@ export interface IAssignTermsInput {
   createdBy: string;
 }
 
-/** Причина, по которой сотрудник не получил условия при массовом назначении. */
-export type AssignSkipReason = 'NO_ACCESS' | 'OVERLAPS_EXISTING';
-
-export interface IAssignResult {
-  applied: Array<{ employee_id: number; terms_id: number }>;
-  skipped: Array<{ employee_id: number; reason: AssignSkipReason; message: string }>;
-}
-
-/** SQLSTATE 23P01 — нарушение EXCLUDE (пересечение периодов условий). */
-const EXCLUSION_VIOLATION = '23P01';
-
 const TERMS_COLUMNS = `
   id, employee_id, organization_id, staff_category, calc_type,
   monthly_salary, hourly_rate, bonus_amount, housing_compensation,
@@ -439,46 +428,4 @@ export const assignTerms = async (
   };
 
   return exec ? run(exec) : withTransaction(run);
-};
-
-/** SQLSTATE ошибки pg. */
-const sqlStateOf = (err: unknown): string | null => (
-  typeof err === 'object' && err !== null && 'code' in err
-    ? String((err as { code?: unknown }).code ?? '')
-    : null
-);
-
-/**
- * Массовое назначение с общей датой вступления в силу.
- *
- * Каждый сотрудник — в своей транзакции: сбой на одном не отменяет всю пачку.
- * Отклонённые возвращаются списком с причиной, а не пропадают молча. Категория у каждого
- * своя — по его отделу.
- */
-export const assignTermsBulk = async (
-  employeeIds: number[],
-  input: Omit<IAssignTermsInput, 'employeeId' | 'staffCategory'>,
-  staffCategoryOf: (employeeId: number) => StaffCategory,
-): Promise<IAssignResult> => {
-  const applied: IAssignResult['applied'] = [];
-  const skipped: IAssignResult['skipped'] = [];
-
-  for (const employeeId of employeeIds) {
-    try {
-      const termsId = await assignTerms({ ...input, employeeId, staffCategory: staffCategoryOf(employeeId) });
-      applied.push({ employee_id: employeeId, terms_id: termsId });
-    } catch (err) {
-      if (sqlStateOf(err) === EXCLUSION_VIOLATION) {
-        skipped.push({
-          employee_id: employeeId,
-          reason: 'OVERLAPS_EXISTING',
-          message: 'Условия на эту дату пересекаются с существующими',
-        });
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  return { applied, skipped };
 };

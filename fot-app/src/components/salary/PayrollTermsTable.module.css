@@ -40,7 +40,6 @@
  * Уже — слово рвалось посередине («ПОДРАЗДЕЛЕНИ / Е»). «Начисления» — шесть месяцев в две строки:
  * «июл: 165,2; авг: 177,7; сен —» (~200px) и паддинги 24px.
  */
-.colCheck    { width: 44px; }
 .colNum      { width: 60px; }
 .colName     { width: 220px; }
 .colDept     { width: 200px; }
@@ -89,13 +88,11 @@
 /*
  * Цвет строки — через переменную: закреплённые слева ячейки должны быть непрозрачными
  * (под ними прокручивается остальная строка), и тот же цвет получают все ячейки строки —
- * чередование, hover и выделение меняются одновременно.
+ * чередование и hover меняются одновременно.
  */
 .table tbody tr { --row-overlay: transparent; }
 .table tbody tr.rowEven { --row-overlay: color-mix(in srgb, var(--text-primary) 2%, transparent); }
 .table tbody tr:hover { --row-overlay: var(--bg-secondary); }
-.table tbody tr.rowSelected,
-.table tbody tr.rowSelected:hover { --row-overlay: color-mix(in srgb, var(--primary) 12%, transparent); }
 
 .table tbody tr:last-child td { border-bottom: none; }
 
@@ -112,47 +109,26 @@
 .rowClickable:focus-visible td:first-child { box-shadow: inset 2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
 .rowClickable:focus-visible td:last-child { box-shadow: inset -2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
 
-/* Ячейка чекбокса только выделяет — курсор обычный */
-.table tbody td.cellCheck { cursor: default; }
-
 .spacer td {
   padding: 0;
   border: none;
   background: none;
 }
 
-/* ── Закреплённые слева: чекбокс, №, ФИО ── */
-.stickyCheck,
+/* ── Закреплённые слева: № у края, ФИО за ним ── */
 .stickyNum,
 .stickyName {
   position: sticky;
 }
-.table td.stickyCheck,
 .table td.stickyNum,
 .table td.stickyName { z-index: 1; }
-.table thead th.stickyCheck,
 .table thead th.stickyNum,
 .table thead th.stickyName { z-index: 3; }
 
-.stickyCheck { left: 0; }
-.stickyNum { left: 44px; }
-.stickyName { left: 104px; }
-/* Таблица без чекбоксов («Расчёты»): № — у края, ФИО — за ним */
-.tableNoCheck .stickyNum { left: 0; }
-.tableNoCheck .stickyName { left: 60px; }
+.stickyNum { left: 0; }
+.stickyName { left: 60px; }
 
-.cellCheck { text-align: center; }
-.table thead th.cellCheck,
 .table thead th.cellNum { text-align: center; }
-
-.check {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  cursor: pointer;
-  accent-color: var(--primary);
-  vertical-align: middle;
-}
 
 .cellNum {
   text-align: center;
@@ -218,15 +194,10 @@
   color: var(--text-muted);
 }
 
-/* Смартфоны: тап-цели ≥ 44px */
+/* Смартфоны: тап-цели ≥ 44px; № и ФИО уже — остальные столбцы видны без долгой прокрутки вбок */
 @media (max-width: 768px) {
-  .check { width: 20px; height: 20px; }
   .table td { height: 48px; }
-}
-
-/* «Расчёты» на телефоне: № и ФИО уже — остальные столбцы видны без долгой прокрутки вбок */
-@media (max-width: 768px) {
-  .tableNoCheck .colNum { width: 44px; }
-  .tableNoCheck .colName { width: 150px; }
-  .tableNoCheck .stickyName { left: 44px; }
+  .colNum { width: 44px; }
+  .colName { width: 150px; }
+  .stickyName { left: 44px; }
 }

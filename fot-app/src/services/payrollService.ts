@@ -98,7 +98,7 @@ export interface IPayrollTermsHistoryRow {
 }
 
 export interface IAssignTermsPayload {
-  /** Категория из окна сотрудника; не передано — сервер ставит по отделу (массовое назначение — всегда). */
+  /** Категория из окна сотрудника; не передано — сервер ставит по отделу. */
   staff_category?: StaffCategory;
   calc_type: PayrollCalcType;
   monthly_salary?: number;
@@ -190,11 +190,6 @@ export interface IVacationPeriod {
 export interface IEmployeeVacation {
   summary: IVacationSummary;
   history: IVacationPeriod[];
-}
-
-export interface IAssignResult {
-  applied: Array<{ employee_id: number; terms_id: number }>;
-  skipped: Array<{ employee_id: number; reason: string; message: string }>;
 }
 
 /** Статья «Оплачено» — столбец «Сводной ведомости» ЗУП (подписи и группы — utils/payrollPaid). */
@@ -460,14 +455,6 @@ export const payrollService = {
       `/payroll/terms/employee/${employeeId}`,
       payload,
     );
-    return res.data;
-  },
-
-  assignBulk: async (employeeIds: number[], payload: IAssignTermsPayload): Promise<IAssignResult> => {
-    const res = await apiClient.post<IApiResponse<IAssignResult>>('/payroll/terms/bulk', {
-      employee_ids: employeeIds,
-      ...payload,
-    });
     return res.data;
   },
 };

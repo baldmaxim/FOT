@@ -43,7 +43,7 @@ export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, strin
 
 /** Значения формы — строки как в полях ввода. */
 export interface IPayrollTermsFormValues {
-  /** Категория в окне сотрудника; null — массовое назначение (сервер ставит по отделу каждого). */
+  /** Категория в окне сотрудника; null — не передаётся (сервер ставит по отделу). */
   staffCategory: StaffCategory | null;
   calcType: PayrollCalcType;
   amount: string;
@@ -68,30 +68,30 @@ export const payrollRowCategory = (row: IPayrollTermsRow): StaffCategory => (
 );
 
 /**
- * Начальные значения: из строки списка одного сотрудника; без условий или массово — пусто,
+ * Начальные значения: из строки списка сотрудника; без условий — пусто,
  * вид оплаты — «По графику (оклад)». Плановая доплата от условий не зависит: предзаполняется
  * и у сотрудника без условий на дату.
  */
 export const initialPayrollTermsValues = (
-  row: IPayrollTermsRow | null,
+  row: IPayrollTermsRow,
   defaultDate: string,
 ): IPayrollTermsFormValues => {
-  const hasTerms = Boolean(row?.terms_id);
+  const hasTerms = Boolean(row.terms_id);
   const pick = (value: string | number | null | undefined) => (hasTerms ? toInputValue(value) : '');
   return {
-    staffCategory: row ? payrollRowCategory(row) : null,
-    calcType: row?.calc_type ?? 'salary',
-    amount: hasTerms && row ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
+    staffCategory: payrollRowCategory(row),
+    calcType: row.calc_type ?? 'salary',
+    amount: hasTerms ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
     money: {
-      bonus: pick(row?.bonus_amount),
-      housing: pick(row?.housing_compensation),
-      travel: pick(row?.travel_compensation),
-      deduction: pick(row?.deduction_amount),
+      bonus: pick(row.bonus_amount),
+      housing: pick(row.housing_compensation),
+      travel: pick(row.travel_compensation),
+      deduction: pick(row.deduction_amount),
     },
     supplement: {
-      amount: toInputValue(row?.planned_supplement_amount),
-      from: row?.planned_supplement_from ?? '',
-      to: row?.planned_supplement_to ?? '',
+      amount: toInputValue(row.planned_supplement_amount),
+      from: row.planned_supplement_from ?? '',
+      to: row.planned_supplement_to ?? '',
     },
     effectiveFrom: defaultDate,
   };
@@ -145,8 +145,8 @@ const sameSupplement = (a: IPlannedSupplementPayload | null, b: IPlannedSuppleme
 
 export interface IPayrollTermsValidateOptions {
   /**
-   * Плановая доплата в форме (карточка одного сотрудника): начальные значения полей.
-   * Не передано — секции нет, доплата в запрос не входит (массовое назначение).
+   * Плановая доплата в форме (редактируемая карточка): начальные значения полей.
+   * Не передано — секции нет, доплата в запрос не входит.
    */
   initialSupplement?: IPayrollSupplementValues;
 }

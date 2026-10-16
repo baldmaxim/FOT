@@ -21,11 +21,11 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  * Вкладка «Выплаты». Внутри экраны:
  *  - «Условия оплаты» — список сотрудников с условиями (рабочий экран, по умолчанию);
  *  - «Подробно» — карточка сотрудника, которого открыли кликом по строке списка;
- *  - «Расчёты» — тот же список без массового назначения, со «Справочником» удержаний и ставок; карточка — в окне.
+ *  - «Расчёты» — тот же список со «Справочником» удержаний и ставок; карточка — в окне.
  *
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
  * хаба сохраняет остальные параметры. Списки и карточка при смене экрана не размонтируются:
- * фильтры, выделение, прокрутка и введённое в карточке сохраняются.
+ * фильтры, прокрутка и введённое в карточке сохраняются.
  */
 export const PaymentsTab: FC = () => {
   const { canViewPage } = useAuth();
@@ -67,12 +67,11 @@ export const PaymentsTab: FC = () => {
     selectView('details', true);
   }, [selectView]);
 
-  // Массовое назначение со списка и сохранение в окне «Расчётов»: карточка «Подробно» в этот момент
-  // скрыта, экран не меняется — устаревшая карточка этих сотрудников закрывается.
-  const handleAssigned = useCallback((employeeIds: number[]) => {
-    setDetails(prev => dropPayrollDetails(prev, employeeIds));
+  // Сохранение в окне «Расчётов»: карточка «Подробно» в этот момент скрыта, экран не меняется —
+  // устаревшая карточка этого сотрудника закрывается.
+  const handleCalcSaved = useCallback((employeeId: number) => {
+    setDetails(prev => dropPayrollDetails(prev, [employeeId]));
   }, []);
-  const handleCalcSaved = useCallback((employeeId: number) => handleAssigned([employeeId]), [handleAssigned]);
 
   return (
     <div className={styles.tab}>
@@ -101,7 +100,6 @@ export const PaymentsTab: FC = () => {
                 date={date}
                 active={view === 'terms'}
                 onOpenEmployee={openEmployee}
-                onAssigned={handleAssigned}
               />
             </Suspense>
           </div>

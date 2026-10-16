@@ -29,8 +29,6 @@
 
 @container payroll-half (min-width: 680px) {
   .mainRow { grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr); }
-  /* Без категории (массовое назначение) — «Вид оплаты · Действует с», без пустой колонки. */
-  .mainRowNoCategory { grid-template-columns: max-content minmax(0, 1fr); }
   .mainRow .segmentLabel { white-space: nowrap; }
 }
 

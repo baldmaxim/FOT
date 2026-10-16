@@ -23,10 +23,10 @@ interface IPayrollTermsFieldsProps {
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
   /**
-   * Категория сотрудника (сохранённая или по отделу). Не передана — поля нет (массовое назначение). В окне сотрудника
-   * с правом правки — список (Офис, Рабочие, ИТР), сохраняется с условиями; иначе — только для чтения.
+   * Категория сотрудника (сохранённая или по отделу). В окне сотрудника с правом правки — список
+   * (Офис, Рабочие, ИТР), сохраняется с условиями; иначе — только для чтения.
    */
-  category?: StaffCategory | null;
+  category: StaffCategory;
   /** «Итого, ₽/мес» — сумма оклада и премии в их строке (только в окне сотрудника). */
   total?: boolean;
   /** Фокус на выбранный «Вид оплаты» при открытии карточки или окна. */
@@ -35,14 +35,11 @@ interface IPayrollTermsFieldsProps {
   paid?: ReactNode;
   /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
-  /**
-   * «Вид» в «Удержании» — виды удержаний сотрудника (только в карточке). Не передан — поля нет:
-   * в «Назначить выделенным» виды у каждого свои.
-   */
+  /** «Вид» в «Удержании» — виды удержаний сотрудника. Не передан — поля нет. */
   deductionKinds?: ReactNode;
   /**
    * Вкладка «Подробно» — только просмотр: в «Основной оплате» лишь Категория и «Оплачено», секций Компенсация,
-   * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах» и «Назначить выделенным».
+   * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах».
    */
   detailsOnly?: boolean;
 }
@@ -138,24 +135,24 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <h3 id={`${idPrefix}-main`} className={styles.sectionTitle}>Основная оплата</h3>
         <div className={stacked ? `${styles.halves} ${styles.halvesStacked}` : styles.halves}>
           <div className={styles.half}>
-            <div className={category === undefined ? `${styles.mainRow} ${styles.mainRowNoCategory}` : styles.mainRow}>
+            <div className={styles.mainRow}>
               {/* По умолчанию категория — по отделу сотрудника; в окне сотрудника её можно сменить. */}
               {/* «Подробно» — одной строкой текстом: значение короткое, широкое поле ни к чему. */}
-              {category !== undefined && detailsOnly && (
+              {detailsOnly && (
                 <p className={styles.inlineField}>
                   <span className={styles.label}>Категория:</span>
                   {' '}
-                  <span className={styles.inlineValue}>{category ? STAFF_CATEGORY_LABELS[category] : '—'}</span>
+                  <span className={styles.inlineValue}>{STAFF_CATEGORY_LABELS[category]}</span>
                 </p>
               )}
-              {category !== undefined && !detailsOnly && (
+              {!detailsOnly && (
                 <div className={styles.field}>
                   <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
                   {readOnly || form.staffCategory === null ? (
                     <input
                       id={fieldId('category')}
                       className={`${styles.control} ${styles.controlReadOnly}`}
-                      value={category ? STAFF_CATEGORY_LABELS[category] : '—'}
+                      value={STAFF_CATEGORY_LABELS[category]}
                       readOnly
                     />
                   ) : (

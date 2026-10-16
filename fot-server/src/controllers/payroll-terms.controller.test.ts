@@ -86,8 +86,8 @@ beforeEach(() => {
 });
 
 /**
- * Одиночное назначение в транзакции: блокировка сотрудника, прежние условия, UPDATE, DELETE, INSERT,
- * затем (если доплату передали) запись доплаты. Массовое — UPDATE, DELETE, INSERT на каждого.
+ * Назначение в транзакции: блокировка сотрудника, прежние условия, UPDATE, DELETE, INSERT,
+ * затем (если доплату передали) запись доплаты.
  */
 const SINGLE_INSERT = 4;
 
@@ -153,32 +153,6 @@ describe('условия оплаты: премиальная часть и ко
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ bonus_amount: null, housing_compensation: null });
   });
-
-  it('массовое назначение сохраняет обе суммы каждому и пишет их в аудит', async () => {
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(makeReq({
-      body: { ...baseBody, employee_ids: [1, 2], bonus_amount: 10000, housing_compensation: 0 },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(200);
-    // На каждого сотрудника UPDATE, DELETE, INSERT — INSERT третьим и шестым.
-    expect(insertAmounts(2)).toEqual({ bonus: 10000, housing: 0 });
-    expect(insertAmounts(5)).toEqual({ bonus: 10000, housing: 0 });
-    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ bonus_amount: 10000, housing_compensation: 0 });
-  });
-
-  it('массовое назначение с отрицательной суммой отклоняется', async () => {
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(makeReq({
-      body: { ...baseBody, employee_ids: [1], bonus_amount: -5 },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(400);
-    expect(pgTx).not.toHaveBeenCalled();
-  });
 });
 
 /** $16–$18 INSERT: проезд, связь, удержание. */
@@ -229,20 +203,6 @@ describe('условия оплаты: проезд, связь, удержан�
 
     expect(res.statusCode).toBe(400);
     expect(pgTx).not.toHaveBeenCalled();
-  });
-
-  it('массовое назначение сохраняет три суммы каждому и пишет их в аудит', async () => {
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(makeReq({
-      body: { ...baseBody, employee_ids: [1, 2], travel_compensation: 1500, communication_compensation: 300 },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(200);
-    expect(insertCompensations(2)).toEqual({ travel: 1500, communication: 300, deduction: null });
-    expect(insertCompensations(5)).toEqual({ travel: 1500, communication: 300, deduction: null });
-    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ travel_compensation: 1500, communication_compensation: 300, deduction_amount: null });
   });
 });
 
@@ -441,23 +401,6 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     expect(res.statusCode).toBe(400);
     expect(pgTx).not.toHaveBeenCalled();
   });
-
-  it('массовое назначение доплату не принимает: подмешанное поле игнорируется', async () => {
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(makeReq({
-      body: {
-        ...baseBody,
-        employee_ids: [1, 2],
-        planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' },
-      },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(200);
-    expect(supplementCall()).toBeUndefined();
-    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).not.toHaveProperty('planned_supplement');
-  });
 });
 
 describe('payrollTermsController.getChanges', () => {
@@ -504,62 +447,6 @@ describe('payrollTermsController.getChanges', () => {
   });
 });
 
-describe('payrollTermsController.assignBulk', () => {
-  it('недоступные сотрудники попадают в skipped, а не пропадают молча', async () => {
-    scope.canEditEmployeeInScope.mockImplementation(async (_req: unknown, id: number) => id !== 2);
-
-    const req = makeReq({
-      body: {
-        employee_ids: [1, 2, 3],
-        staff_category: 'worker',
-        calc_type: 'hourly',
-        hourly_rate: 400,
-        effective_from: '2026-07-01',
-      },
-    } as Partial<AuthenticatedRequest>);
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(req, res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data.applied).toHaveLength(2);
-    expect(res.body.data.skipped).toEqual([
-      { employee_id: 2, reason: 'NO_ACCESS', message: 'Нет доступа к сотруднику' },
-    ]);
-  });
-
-  it('пересечение периодов (SQLSTATE 23P01) не роняет всю пачку', async () => {
-    let call = 0;
-    pgTx.mockImplementation(async (fn: (c: unknown) => unknown) => {
-      call += 1;
-      if (call === 2) {
-        const err = new Error('conflicting key value violates exclusion constraint');
-        (err as Error & { code: string }).code = '23P01';
-        throw err;
-      }
-      return fn(txClient);
-    });
-
-    const req = makeReq({
-      body: {
-        employee_ids: [10, 11, 12],
-        staff_category: 'office',
-        calc_type: 'salary',
-        monthly_salary: 120000,
-        effective_from: '2026-03-01',
-      },
-    } as Partial<AuthenticatedRequest>);
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(req, res);
-
-    expect(res.body.data.applied.map((r: { employee_id: number }) => r.employee_id)).toEqual([10, 12]);
-    expect(res.body.data.skipped).toEqual([
-      { employee_id: 11, reason: 'OVERLAPS_EXISTING', message: 'Условия на эту дату пересекаются с существующими' },
-    ]);
-  });
-});
-
 describe('условия оплаты: категория — выбранная или по отделу', () => {
   const body = { calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01' };
 
@@ -595,22 +482,6 @@ describe('условия оплаты: категория — выбранная
 
     expect(res.statusCode).toBe(200);
     expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[2]).toBe('office');
-  });
-
-  it('массовое: каждому своя категория, в аудите — сколько назначено по каждой', async () => {
-    staffCategory.resolveEmployeeStaffCategories.mockResolvedValueOnce(new Map([[1, 'worker'], [2, 'itr'], [3, 'worker']]));
-    const res = makeRes();
-
-    await payrollTermsController.assignBulk(makeReq({
-      body: { ...body, employee_ids: [1, 2, 3], staff_category: 'office' },
-    } as Partial<AuthenticatedRequest>), res);
-
-    expect(res.statusCode).toBe(200);
-    // На каждого UPDATE, DELETE, INSERT — INSERT третьим, шестым и девятым.
-    expect([2, 5, 8].map(index => (txClient.query.mock.calls[index][1] as unknown[])[2])).toEqual(['worker', 'itr', 'worker']);
-    const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details.category_counts).toEqual({ worker: 2, itr: 1 });
-    expect(details).not.toHaveProperty('staff_category');
   });
 
   it('список: категория по текущему отделу строки', async () => {

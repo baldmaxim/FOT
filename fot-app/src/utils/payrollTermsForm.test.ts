@@ -101,7 +101,7 @@ describe('validatePayrollTerms: состав запроса сохранения
 describe('validatePayrollTerms: плановая доплата', () => {
   const withSupplement = (initial = EMPTY_SUPPLEMENT) => ({ initialSupplement: initial });
 
-  it('без опции (массовое назначение) доплата в запрос не входит, даже если поля заполнены', () => {
+  it('без опции (секции доплаты нет) доплата в запрос не входит, даже если поля заполнены', () => {
     const result = validatePayrollTerms(values({ supplement: NOV_DEC }));
     expect(result.errors).toBeNull();
     expect(wire(result.payload)).not.toHaveProperty('planned_supplement');
@@ -212,13 +212,6 @@ describe('initialPayrollTermsValues', () => {
       effectiveFrom: '2026-09-24',
     });
   });
-
-  it('массовое назначение: по графику (оклад), всё пусто', () => {
-    expect(initialPayrollTermsValues(null, '2026-09-24')).toEqual({
-      staffCategory: null, calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
-      effectiveFrom: '2026-09-24',
-    });
-  });
 });
 
 describe('toInputValue', () => {
@@ -253,7 +246,7 @@ describe('категория в окне сотрудника', () => {
     expect(payrollRowCategory(row({ terms_id: null, staff_category: null, department_category: undefined }))).toBe('office');
   });
 
-  it('выбранная уходит в запрос и считается правкой условий; массовое назначение её не шлёт', () => {
+  it('выбранная уходит в запрос и считается правкой условий; без категории (null) поле не шлётся', () => {
     const initial = initialPayrollTermsValues(row(), '2026-09-24');
     const changed = { ...initial, staffCategory: 'itr' as const };
     expect(isPayrollTermsChanged(changed, initial)).toBe(true);

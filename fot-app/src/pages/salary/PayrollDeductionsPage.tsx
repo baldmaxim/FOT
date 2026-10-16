@@ -17,7 +17,7 @@ interface IPayrollDeductionsPageProps {
 }
 
 /**
- * «Зарплата → Расчёты»: таблица штата как у «Условий оплаты» (без галочек и «Назначить выделенным»).
+ * «Зарплата → Расчёты»: таблица штата как у «Условий оплаты».
  * Рядом с шестерёнкой — «Справочник»: виды удержаний и ставки. Клик по строке — окно с карточкой
  * сотрудника: только там вносятся компенсации, доплаты и удержания.
  */
@@ -49,7 +49,6 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         date={date}
         active={active}
         onOpenEmployee={setEmployee}
-        selectable={false}
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         actionsExtra={(
           <button
