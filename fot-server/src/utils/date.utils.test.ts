@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getMoscowDismissalTiming, moscowTodayIso } from './date.utils.js';
+import { getMoscowDismissalTiming, moscowNowHms, moscowTodayIso } from './date.utils.js';
 
 describe('moscowTodayIso', () => {
   it('returns Moscow calendar date in YYYY-MM-DD', () => {
@@ -64,5 +64,16 @@ describe('getMoscowDismissalTiming', () => {
 
   it('h23: полночь возвращается как 00:xx, а не 24:xx', () => {
     expect(getMoscowDismissalTiming(atMsk('2026-05-20T00:45:00')).timeHm).toBe('00:45');
+  });
+});
+
+describe('moscowNowHms', () => {
+  it('returns Moscow wall-clock time regardless of process TZ', () => {
+    // 03:38:06 UTC = 06:38:06 MSK: на UTC-проде getHours() дал бы 03.
+    expect(moscowNowHms(new Date('2026-10-16T03:38:06Z'))).toBe('06:38:06');
+  });
+
+  it('h23: после полуночи МСК — 00:xx, а не 24:xx', () => {
+    expect(moscowNowHms(new Date('2026-10-15T21:30:00Z'))).toBe('00:30:00');
   });
 });

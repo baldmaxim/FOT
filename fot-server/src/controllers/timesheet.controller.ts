@@ -51,7 +51,7 @@ import {
   updateAttendanceAdjustmentById,
   upsertAttendanceAdjustment,
 } from '../services/attendance.service.js';
-import { formatDateToISO } from '../utils/date.utils.js';
+import { formatDateToISO, moscowTodayIso } from '../utils/date.utils.js';
 import {
   ALLOCATION_SOURCE_KEY,
   allocationsEqual,
@@ -2289,7 +2289,7 @@ export const timesheetController = {
       })) {
         return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
       }
-      const todayStr = formatDateToISO(today);
+      const todayStr = moscowTodayIso(today);
 
       const hasDeptFilter = department_id && typeof department_id === 'string';
       const hasEmployeeFilter = Number.isInteger(requestedEmployeeId) && (requestedEmployeeId as number) > 0;

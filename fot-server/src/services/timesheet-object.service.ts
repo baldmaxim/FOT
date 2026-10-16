@@ -15,7 +15,7 @@ import {
   type IAttributionRow,
 } from './employee-object-attribution.service.js';
 import { resolveSchedule, resolveSchedulesBulk, resolveSchedulesForPeriod, isNightShiftDay } from './schedule.service.js';
-import { formatDateToISO } from '../utils/date.utils.js';
+import { formatDateToISO, moscowNowHms, moscowTodayIso } from '../utils/date.utils.js';
 import {
   getAdjustmentPriority,
   NON_WORK_ADJUSTMENT_STATUSES,
@@ -209,10 +209,6 @@ const timeToSeconds = (value: string): number => {
   return hours * 3600 + minutes * 60 + seconds;
 };
 
-const formatTimeValue = (date: Date): string => (
-  `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
-);
-
 const NIGHT_WINDOW_SECONDS = 32 * 3600;
 
 // Метка времени события как epoch-секунды (дата 'YYYY-MM-DD' + время суток). Нужна для
@@ -232,8 +228,9 @@ const eventEpochSeconds = (event: IRawEventRow): number => {
   eventEpochCache.set(event, epoch);
   return epoch;
 };
+// «Сейчас» по МСК, как и время событий СКУД: часы процесса на проде идут в UTC.
 const nowEpochSeconds = (dateStr: string): number =>
-  dateStrToEpochDay(dateStr) * 86_400 + timeToSeconds(formatTimeValue(new Date()));
+  dateStrToEpochDay(dateStr) * 86_400 + timeToSeconds(moscowNowHms());
 
 const dayKey = (employeeId: number, workDate: string): string => `${employeeId}_${workDate}`;
 const objectEntryKey = (employeeId: number, workDate: string, objectKey: string): string => `${employeeId}_${workDate}_${objectKey}`;
@@ -1131,7 +1128,7 @@ export async function buildObjectAttendanceData(params: {
   rawFallbackSummaries: Map<number, Map<string, IRawFallbackSummary>>;
 }> {
   const { employeeIds, startDate, endDate, adjustments, exec } = params;
-  const todayStr = params.todayStr ?? formatDateToISO(new Date());
+  const todayStr = params.todayStr ?? moscowTodayIso();
   const includeObjectDetails = params.includeObjectDetails ?? true;
   // Тянем события на 2 дня вперёд за пределы периода: утреннее закрытие ночной смены
   // последних дней периода приходит уже следующей датой (см. sliceShiftWindow / миграция 161).

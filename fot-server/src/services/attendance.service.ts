@@ -26,7 +26,7 @@ async function sqlOne<T extends import('pg').QueryResultRow = import('pg').Query
 }
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
-import { formatDateToISO } from '../utils/date.utils.js';
+import { moscowNowHms, moscowTodayIso } from '../utils/date.utils.js';
 import {
   ABSENCE_STATUSES_AS_WORKED,
   getAdjustmentPriority,
@@ -345,10 +345,6 @@ function parseTimeToSeconds(value: string): number {
   return hours * 3600 + minutes * 60 + (seconds || 0);
 }
 
-function formatNowHMS(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
-}
-
 function computePresenceCoversShift(params: {
   firstEntry: string | null;
   lastExit: string | null;
@@ -566,13 +562,13 @@ export async function buildAttendanceEntries(params: {
   exec?: DbExecutor;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
-  const todayStr = params.todayStr ?? formatDateToISO(new Date());
+  const todayStr = params.todayStr ?? moscowTodayIso();
   const displayMode = params.displayMode ?? 'actual';
   const includeObjectDetails = params.includeObjectDetails ?? true;
   const synthesizeObjectOnlyDays = params.synthesizeObjectOnlyDays ?? false;
   const synthesizeObjectOnlyDaysUpTo = params.synthesizeObjectOnlyDaysUpTo ?? null;
   const persistTravelSegments = params.persistTravelSegments ?? true;
-  const nowHMS = formatNowHMS(new Date());
+  const nowHMS = moscowNowHms();
   const employeeIds = employees.map((employee) => employee.id);
 
   const exec = params.exec;

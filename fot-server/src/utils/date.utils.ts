@@ -137,6 +137,25 @@ export function moscowTodayIso(now: Date = new Date()): string {
 }
 
 /**
+ * Текущее время суток Europe/Moscow, HH:mm:ss.
+ *
+ * Время СКУД хранится по МСК, а процесс на проде работает в UTC: `getHours()` отставал
+ * на 3 часа, и открытый вход «сегодня» в табеле давал 0 ч в первые 3 часа после входа.
+ */
+export function moscowNowHms(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find(p => p.type === type)?.value ?? '00';
+  return `${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
+/**
  * Конец календарного дня Europe/Moscow (23:59:59) в виде ISO-строки.
  *
  * Смещение +03:00 задано явно: `new Date('2026-09-30T23:59:59')` трактуется в зоне
