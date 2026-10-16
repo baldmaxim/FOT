@@ -1,6 +1,6 @@
 import { lazy, useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Users, Briefcase, UserPlus } from 'lucide-react';
+import { Users, Briefcase, UserPlus, BedDouble } from 'lucide-react';
 import { HubShell, type IHubTab } from '../components/hub/HubShell';
 import { useAuth } from '../contexts/AuthContext';
 import { hrProfileService } from '../services/hrProfileService';
@@ -11,6 +11,7 @@ import '../styles/FilterBar.css';
 const StaffControlPage = lazy(() => import('./StaffControlPage').then(m => ({ default: m.StaffControlPage })));
 const HiringRequestsBoard = lazy(() => import('../components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));
 const NewEmployeeTab = lazy(() => import('../components/staff/hr/NewEmployeeTab').then(m => ({ default: m.NewEmployeeTab })));
+const DormitoryTab = lazy(() => import('../components/staff/dormitory/DormitoryTab').then(m => ({ default: m.DormitoryTab })));
 
 export const StaffControlHubPage: FC = () => {
   const { isAdmin, canEditPage, canViewPage } = useAuth();
@@ -55,6 +56,13 @@ export const StaffControlHubPage: FC = () => {
       icon: UserPlus,
       render: () => <NewEmployeeTab />,
     } satisfies IHubTab] : []),
+    {
+      key: 'dormitory',
+      label: 'Общежитие',
+      accessPath: '/staff-control/dormitory',
+      icon: BedDouble,
+      render: () => <DormitoryTab />,
+    },
   ], [newEmployeeTabAvailable]);
 
   // persistInUrl={false}: StaffControlPage перезаписывает query string (dept/q/schedule)

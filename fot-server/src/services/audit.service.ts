@@ -259,6 +259,10 @@ export const AUDIT_ACTIONS = {
   PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
   // «Просмотр табеля» (миграция 309): кого добавили и кого сняли у смотрящего.
   EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED: 'EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED',
+  // «Общежитие» (миграция 314): проживание сотрудника — добавлено, изменено (было → стало), удалено.
+  DORMITORY_STAY_ADDED: 'DORMITORY_STAY_ADDED',
+  DORMITORY_STAY_UPDATED: 'DORMITORY_STAY_UPDATED',
+  DORMITORY_STAY_DELETED: 'DORMITORY_STAY_DELETED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

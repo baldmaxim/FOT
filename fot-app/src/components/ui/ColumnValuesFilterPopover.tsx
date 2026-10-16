@@ -23,6 +23,8 @@ interface IColumnValuesFilterPopoverProps {
   /** Выбранные значения; null — снять фильтр столбца. */
   onApply: (values: string[] | null) => void;
   onClose: () => void;
+  /** Таблица внутри модального окна: подложка и окно фильтра — над ним. */
+  raised?: boolean;
 }
 
 /**
@@ -30,7 +32,7 @@ interface IColumnValuesFilterPopoverProps {
  * серверу: все строки таблицы уже на клиенте. Применяется только по «Применить».
  */
 export const ColumnValuesFilterPopover: FC<IColumnValuesFilterPopoverProps> = ({
-  label, options, selected: initialSelected, anchor, onApply, onClose,
+  label, options, selected: initialSelected, anchor, onApply, onClose, raised = false,
 }) => {
   const [selected, setSelected] = useState<string[]>(initialSelected);
   const [search, setSearch] = useState('');
@@ -76,9 +78,9 @@ export const ColumnValuesFilterPopover: FC<IColumnValuesFilterPopoverProps> = ({
 
   return createPortal(
     <>
-      <div className={styles.backdrop} {...dismiss} />
+      <div className={`${styles.backdrop}${raised ? ` ${styles.raised}` : ''}`} {...dismiss} />
       <div
-        className={`${styles.popover}${isSheet ? ` ${styles.sheet}` : ''}`}
+        className={`${styles.popover}${isSheet ? ` ${styles.sheet}` : ''}${raised ? ` ${styles.raisedPopover}` : ''}`}
         style={style}
         role="dialog"
         aria-modal="true"

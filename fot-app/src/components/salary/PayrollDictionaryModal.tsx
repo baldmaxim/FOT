@@ -1,9 +1,10 @@
-import { useId, type FC } from 'react';
+import { useId, useState, type FC } from 'react';
 import { X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { ModalShell } from '../ui/ModalShell';
 import { DeductionKindsEditor } from './DeductionKindsEditor';
+import { PayrollDormitoryModal } from './PayrollDormitoryModal';
 import { PayrollRatesEditor } from './PayrollRatesEditor';
 import { PayrollSectionAccessList } from './PayrollSectionAccessList';
 import modal from './PayrollModal.module.css';
@@ -16,19 +17,22 @@ interface IPayrollDictionaryModalProps {
 /**
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
  * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
- * «Доступ к разделу» — всегда только просмотр.
+ * «Доступ к разделу» — всегда только просмотр. У «Проживания общежития» — окно проживающих поверх.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
   const { canEditPage } = useAuth();
   // Те же ключи, что у сервера (payroll.routes: deductionsEdit).
   const canEdit = canEditPage('/salary/terms') || canEditPage('/salary/payments');
+  // Открыто окно проживающих — Escape закрывает его, а не «Справочник».
+  const [dormitoryOpen, setDormitoryOpen] = useState(false);
 
   return (
     <ModalShell
       onClose={onClose}
       overlayClassName={modal.overlay}
       containerClassName={styles.container}
+      closeOnEscape={!dormitoryOpen}
       aria-labelledby={titleId}
     >
       {({ requestClose }) => (
@@ -44,9 +48,11 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
 
           <div className={`${modal.body} ${styles.columns}`}>
             <DeductionKindsEditor canEdit={canEdit} />
-            <PayrollRatesEditor canEdit={canEdit} />
+            <PayrollRatesEditor canEdit={canEdit} onOpenDormitory={() => setDormitoryOpen(true)} />
             <PayrollSectionAccessList />
           </div>
+
+          {dormitoryOpen && <PayrollDormitoryModal onClose={() => setDormitoryOpen(false)} />}
         </>
       )}
     </ModalShell>

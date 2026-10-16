@@ -1,0 +1,99 @@
+/*
+ * Таблица «Общежитие» с панелью (вкладка кадров и окно «Справочника»): поиск по ФИО, «Экспорт»,
+ * «Добавить сотрудника»; ошибка загрузки — с «Повторить». Кнопки — как .sc-btn у «Текущих сотрудников»
+ * (их CSS грузится только с той вкладкой). Mobile-first: поиск строкой во всю ширину, кнопки под ним,
+ * тап-цели 44px; с 769px — одна строка.
+ */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 8px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out, opacity 150ms ease-out;
+}
+.button:disabled { opacity: 0.5; cursor: not-allowed; }
+.button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.buttonSecondary {
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.buttonSecondary:hover:not(:disabled) { background: var(--bg-secondary); color: var(--text-primary); }
+
+.buttonPrimary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.buttonPrimary:hover:not(:disabled) { opacity: 0.9; }
+
+.state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 24px 0;
+  font-size: 14px;
+  color: var(--error);
+}
+
+.retry {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+@media (min-width: 769px) {
+  .search { flex: 0 1 320px; }
+  .retry { min-height: 36px; }
+  .actions { flex: 0 0 auto; margin-left: auto; }
+  .button { flex: 0 0 auto; min-height: 36px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button { transition: none; }
+}

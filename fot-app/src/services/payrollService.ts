@@ -281,7 +281,12 @@ export interface IPayrollRate {
   id: number;
   name: string;
   amount: string | number | null;
+  /** Ставка, привязанная к функционалу (миграция 313): название не меняется, удалить нельзя. */
+  code: string | null;
 }
+
+/** Код ставки «Проживание общежития» — у неё кнопка с таблицей проживающих. */
+export const DORMITORY_RATE_CODE = 'dormitory';
 
 /** Учётка из списка доступа к разделу «Зарплата» (миграция 310) — окно «Справочник», только чтение. */
 export interface IPayrollSectionUser {
@@ -289,7 +294,7 @@ export interface IPayrollSectionUser {
   full_name: string | null;
 }
 
-/** Название и значение ставки при добавлении и правке. */
+/** Название и значение ставки при правке. */
 export interface IPayrollRatePayload {
   name: string;
   amount: number | null;
@@ -428,13 +433,7 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Добавить ставку; такая уже есть — ApiError 409. */
-  addRate: async (payload: IPayrollRatePayload): Promise<IPayrollRate> => {
-    const res = await apiClient.post<IApiResponse<IPayrollRate>>('/payroll/rates', payload);
-    return res.data;
-  },
-
-  /** Изменить название и значение ставки; название занято — ApiError 409. */
+  /** Изменить название и значение ставки; название занято или у ставки с кодом сменили название — ApiError 409. */
   updateRate: async (rateId: number, payload: IPayrollRatePayload): Promise<IPayrollRate> => {
     const res = await apiClient.patch<IApiResponse<IPayrollRate>>(`/payroll/rates/${rateId}`, payload);
     return res.data;

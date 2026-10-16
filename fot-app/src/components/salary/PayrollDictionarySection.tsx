@@ -1,4 +1,4 @@
-import { useId, useState, type FC } from 'react';
+import { useId, useState, type FC, type ReactNode } from 'react';
 
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
@@ -11,17 +11,22 @@ interface IPayrollDictionarySectionProps {
   items: readonly IPayrollDictionaryItem[] | undefined;
   isError: boolean;
   onRetry: () => void;
-  /** Что такое запись: «Вид удержания», «Ставка» — подпись полей и шапка столбца у ставок. */
+  /** Что такое запись: «Вид удержания», «Ставка» — подпись полей правки. */
   nameLabel: string;
   /** Подпись значения. Передана — у записей есть значение (ставки). */
   amountLabel?: string;
-  /** Подсказка в поле новой записи: «Новая ставка». */
-  addLabel: string;
+  /** Подсказка в поле новой записи: «Новый вид удержания». */
+  addLabel?: string;
   canEdit: boolean;
   deleteQuestion: (name: string) => string;
-  onAdd: (payload: IPayrollDictionaryPayload) => Promise<void>;
+  /** Не передан — поля новой записи нет (ставки заводятся миграцией). */
+  onAdd?: (payload: IPayrollDictionaryPayload) => Promise<void>;
   onUpdate: (id: number, payload: IPayrollDictionaryPayload) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
+  isLocked?: (item: IPayrollDictionaryItem) => boolean;
+  /** Своя кнопка записи — перед «Изменить» (у «Проживания общежития» — таблица проживающих). */
+  renderExtraAction?: (item: IPayrollDictionaryItem) => ReactNode;
 }
 
 /** Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу. */
@@ -38,6 +43,8 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onAdd,
   onUpdate,
   onDelete,
+  isLocked,
+  renderExtraAction,
 }) => {
   const titleId = useId();
   // Правится одна строка: открытие другой закрывает прежнюю без сохранения.
@@ -57,38 +64,31 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
       {items && items.length === 0 && <p className={styles.state}>Список пуст</p>}
 
       {items && items.length > 0 && (
-        <>
-          {amountLabel !== undefined && (
-            <div className={styles.listHead} aria-hidden="true">
-              <span className={styles.rowName}>{nameLabel}</span>
-              <span className={styles.rowAmount}>{amountLabel}</span>
-              {canEdit && <span className={styles.actionsSpacer} />}
-            </div>
-          )}
-          <ul className={styles.list}>
-            {items.map(item => (
-              <PayrollDictionaryRow
-                key={item.id}
-                item={item}
-                nameLabel={nameLabel}
-                amountLabel={amountLabel}
-                canEdit={canEdit}
-                isEditing={editingId === item.id}
-                deleteQuestion={deleteQuestion(item.name)}
-                onStartEdit={() => setEditingId(item.id)}
-                onCancelEdit={() => setEditingId(null)}
-                onSave={async payload => {
-                  await onUpdate(item.id, payload);
-                  setEditingId(null);
-                }}
-                onDelete={() => onDelete(item.id)}
-              />
-            ))}
-          </ul>
-        </>
+        <ul className={styles.list}>
+          {items.map(item => (
+            <PayrollDictionaryRow
+              key={item.id}
+              item={item}
+              nameLabel={nameLabel}
+              amountLabel={amountLabel}
+              canEdit={canEdit}
+              locked={isLocked?.(item) ?? false}
+              extraAction={renderExtraAction?.(item)}
+              isEditing={editingId === item.id}
+              deleteQuestion={deleteQuestion(item.name)}
+              onStartEdit={() => setEditingId(item.id)}
+              onCancelEdit={() => setEditingId(null)}
+              onSave={async payload => {
+                await onUpdate(item.id, payload);
+                setEditingId(null);
+              }}
+              onDelete={() => onDelete(item.id)}
+            />
+          ))}
+        </ul>
       )}
 
-      {canEdit && items && (
+      {canEdit && items && onAdd && addLabel && (
         <PayrollDictionaryForm mode="add" nameLabel={addLabel} amountLabel={amountLabel} onSubmit={onAdd} />
       )}
     </section>

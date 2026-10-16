@@ -5,6 +5,7 @@ import { noStore } from '../middleware/noStore.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
+import { dormitoryStaysController } from '../controllers/dormitory-stays.controller.js';
 import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
@@ -53,6 +54,8 @@ router.get('/rates', deductionsView, payrollRatesController.list);
 router.post('/rates', deductionsEdit, payrollRatesController.add);
 router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
 router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
+// Кто живёт в общежитии — по кнопке у ставки «Проживание общежития»; ведётся в «Управлении кадрами».
+router.get('/dormitory-stays', deductionsView, dormitoryStaysController.listForPayroll);
 
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);

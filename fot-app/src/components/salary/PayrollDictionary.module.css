@@ -1,17 +1,18 @@
 /*
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и доступ к разделу. Оверлей, шапка и
- * прокручиваемое тело — из PayrollModal.module.css. Mobile-first: колонки одна под другой, поля и
- * кнопки 44px; с 769px — удержания и ставки рядом, доступ под ними во всю ширину, компактные поля;
- * с 1100px — три колонки.
+ * прокручиваемое тело — из PayrollModal.module.css. Размер — как у окна сотрудника
+ * (PayrollEmployeeModal.module.css): на телефоне вся область, с 768px — 85% ширины и высоты.
+ * Mobile-first: колонки одна под другой, поля и кнопки 44px; с 769px — удержания и ставки рядом,
+ * доступ под ними во всю ширину, компактные поля; с 1100px — три колонки.
  */
 .container {
   --dict-control-h: 44px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  /* 100% — область оверлея за вычетом отступов и safe-area. Высота — по содержимому, не выше области. */
+  /* 100% — область оверлея за вычетом отступов и safe-area. */
   width: 100%;
-  max-height: 100%;
+  height: 100%;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -40,20 +41,11 @@
 
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 
-.listHead,
 .row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
-}
-.listHead {
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.row {
   min-height: var(--dict-control-h);
   padding: 2px 0;
   border-bottom: 1px solid var(--border);
@@ -70,8 +62,6 @@
   white-space: nowrap;
 }
 .rowActions { display: inline-flex; flex-shrink: 0; gap: 4px; }
-/* Шапка столбцов: место под кнопки строки, чтобы «Значение» стояло над числами. */
-.actionsSpacer { flex: 0 0 calc(var(--dict-control-h) * 2 + 4px); }
 
 .iconButton {
   display: inline-flex;
@@ -108,6 +98,16 @@
 }
 .formName,
 .formAmount { flex: 1 1 0; }
+/* Название, которое не меняется (ставка с кодом), — текстом на месте поля. */
+.formFixedName {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--dict-control-h);
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
 /* Телефон: название ставки и поле новой записи — отдельной строкой (подсказка в поле видна целиком),
    значение и кнопки — под ним. */
 .formWithAmount .formName,
@@ -138,11 +138,16 @@
 
 .error { flex: 1 1 100%; margin: 0; font-size: 12px; line-height: 1.4; color: var(--error); overflow-wrap: anywhere; }
 
+@media (min-width: 768px) {
+  .container {
+    width: min(85vw, 100%);
+    height: min(85dvh, 100%);
+  }
+}
+
 @media (min-width: 769px) {
   .container {
     --dict-control-h: 36px;
-    width: min(840px, 100%);
-    max-height: min(85dvh, 100%);
   }
   /* Ставкам шире: в строке правки три элемента — название, значение, кнопки. */
   .columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 32px; }
@@ -155,7 +160,6 @@
 
 /* Третья колонка — только когда ставкам остаётся место под строку правки. */
 @media (min-width: 1100px) {
-  .container { width: min(1040px, 100%); }
   .columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.85fr); }
   .accessSection { grid-column: auto; }
 }

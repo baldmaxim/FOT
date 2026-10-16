@@ -30,6 +30,9 @@ const rateSchema = z.object({
 
 const NOT_FOUND = { success: false, error: 'Ставка не найдена' };
 const DUPLICATE = { success: false, error: 'Такая ставка уже есть', code: 'DUPLICATE_RATE' };
+// Ставка с кодом (миграция 313) привязана к функционалу: меняется только значение.
+const SYSTEM_NAME = { success: false, error: 'Название этой ставки не меняется', code: 'SYSTEM_RATE' };
+const SYSTEM_DELETE = { success: false, error: 'Эту ставку удалить нельзя', code: 'SYSTEM_RATE' };
 
 /** GET /api/payroll/rates — справочник ставок в порядке добавления. */
 const list = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -63,7 +66,10 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   }
 };
 
-/** PATCH /api/payroll/rates/:id { name, amount? } — название и значение целиком; название занято — 409. */
+/**
+ * PATCH /api/payroll/rates/:id { name, amount? } — название и значение целиком; название занято — 409;
+ * у ставки с кодом сменили название — 409.
+ */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const id = parsePayrollDictionaryId(req);
@@ -79,6 +85,10 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     if (updated === 'duplicate') {
       res.status(409).json(DUPLICATE);
+      return;
+    }
+    if (updated === 'system_name') {
+      res.status(409).json(SYSTEM_NAME);
       return;
     }
     const { before, after } = updated;
@@ -97,13 +107,17 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** DELETE /api/payroll/rates/:id — удалить ставку. */
+/** DELETE /api/payroll/rates/:id — удалить ставку; ставку с кодом — нельзя (409). */
 const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const id = parsePayrollDictionaryId(req);
     const deleted = id === null ? null : await deleteRate(id);
     if (id === null || deleted === null) {
       res.status(404).json(NOT_FOUND);
+      return;
+    }
+    if (deleted === 'system') {
+      res.status(409).json(SYSTEM_DELETE);
       return;
     }
     await auditService.logFromRequest(req, req.user.id, 'PAYROLL_RATE_DELETED', {

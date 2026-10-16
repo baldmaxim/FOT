@@ -111,7 +111,7 @@ describe('payrollRatesController.update', () => {
     await payrollRatesController.update(makeReq({ params: { id: '3' }, body: { name: 'Сварщик', amount: 520 } }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ id: 3, name: 'Сварщик', amount: '520.00' });
+    expect(res.body.data).toEqual({ id: 3, name: 'Сварщик', amount: '520.00', code: null });
     expect(pgQueryOne.mock.calls[0][1]).toEqual([3, 'Сварщик', 520]);
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'PAYROLL_RATE_UPDATED',
@@ -154,6 +154,43 @@ describe('payrollRatesController.update', () => {
     expect(invalid.statusCode).toBe(400);
 
     expect(pgQueryOne.mock.calls.length).toBe(callsBefore);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('ставка с кодом («Проживание общежития», миграция 313)', () => {
+  it('значение меняется; название — нет: 409 без аудита', async () => {
+    pgQueryOne.mockResolvedValueOnce({
+      id: 1, name: 'Проживание общежития', amount: '700.00', code: 'dormitory',
+      prev_name: 'Проживание общежития', prev_amount: '630.00', prev_code: 'dormitory',
+    });
+    const res = makeRes();
+    await payrollRatesController.update(
+      makeReq({ params: { id: '1' }, body: { name: 'Проживание общежития', amount: 700 } }), res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual({ id: 1, name: 'Проживание общежития', amount: '700.00', code: 'dormitory' });
+
+    // UPDATE не прошёл (prev.code задан, название другое): строка prev есть, upd пуст.
+    pgQueryOne.mockResolvedValueOnce({
+      id: null, name: null, amount: null, code: null,
+      prev_name: 'Проживание общежития', prev_amount: '700.00', prev_code: 'dormitory',
+    });
+    const renamed = makeRes();
+    await payrollRatesController.update(
+      makeReq({ params: { id: '1' }, body: { name: 'Общежитие', amount: 700 } }), renamed,
+    );
+    expect(renamed.statusCode).toBe(409);
+    expect(renamed.body.code).toBe('SYSTEM_RATE');
+    expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('удалить нельзя — 409 без аудита', async () => {
+    pgQueryOne.mockResolvedValueOnce({ id: null, name: null, amount: null, code: null, target_code: 'dormitory' });
+    const res = makeRes();
+    await payrollRatesController.remove(makeReq({ params: { id: '1' } }), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('Эту ставку удалить нельзя');
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 });

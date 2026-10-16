@@ -1,0 +1,27 @@
+/*
+ * Окно «Проживание общежития» поверх «Справочника»: оверлей, шапка и тело — из PayrollModal.module.css,
+ * размер — как у окна сотрудника (PayrollEmployeeModal.module.css): на телефоне вся область,
+ * с 768px — 85% ширины и высоты. Оверлей выше «Справочника» (1000), фильтр столбца — выше него (1110).
+ */
+.overlay.overlay { z-index: 1100; }
+
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+@media (min-width: 768px) {
+  .container {
+    width: min(85vw, 100%);
+    height: min(85dvh, 100%);
+  }
+}

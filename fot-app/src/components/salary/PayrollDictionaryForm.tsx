@@ -17,6 +17,8 @@ interface IPayrollDictionaryFormProps {
   /** Подпись поля значения (ставки). Не передана — поля значения нет. */
   amountLabel?: string;
   initialName?: string;
+  /** Название не меняется (ставка, привязанная к функционалу): вместо поля — текст. */
+  fixedName?: boolean;
   initialAmount?: string;
   /** Отклонённый промис — ошибка сохранения: её текст показывается под полями, ввод не теряется. */
   onSubmit: (payload: IPayrollDictionaryPayload) => Promise<void>;
@@ -32,6 +34,7 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
   nameLabel,
   amountLabel,
   initialName = '',
+  fixedName = false,
   initialAmount = '',
   onSubmit,
   onCancel,
@@ -92,27 +95,32 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
       onKeyDown={handleKeyDown}
       noValidate
     >
-      <ClearableInput
-        id={nameId}
-        className={styles.formName}
-        value={name}
-        onValueChange={value => {
-          setName(value);
-          setError(null);
-        }}
-        maxLength={MAX_NAME_LENGTH}
-        autoComplete="off"
-        autoFocus={mode === 'edit'}
-        placeholder={mode === 'add' ? nameLabel : undefined}
-        aria-label={nameLabel}
-        aria-invalid={error && error.field !== 'amount' ? true : undefined}
-        aria-describedby={describedBy}
-        clearLabel="Очистить название"
-      />
+      {fixedName ? (
+        <span className={`${styles.formName} ${styles.formFixedName}`}>{name}</span>
+      ) : (
+        <ClearableInput
+          id={nameId}
+          className={styles.formName}
+          value={name}
+          onValueChange={value => {
+            setName(value);
+            setError(null);
+          }}
+          maxLength={MAX_NAME_LENGTH}
+          autoComplete="off"
+          autoFocus={mode === 'edit'}
+          placeholder={mode === 'add' ? nameLabel : undefined}
+          aria-label={nameLabel}
+          aria-invalid={error && error.field !== 'amount' ? true : undefined}
+          aria-describedby={describedBy}
+          clearLabel="Очистить название"
+        />
+      )}
       {withAmount && (
         <ClearableInput
           id={amountId}
           className={styles.formAmount}
+          autoFocus={fixedName}
           value={amount}
           onValueChange={value => {
             setAmount(value);

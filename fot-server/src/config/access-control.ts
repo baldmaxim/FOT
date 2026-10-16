@@ -91,6 +91,7 @@ export const PAGE_PATHS = {
   STAFF_CONTROL_POSITION: '/staff-control/position',
   STAFF_CONTROL_SCHEDULE: '/staff-control/schedule',
   STAFF_CONTROL_TIMESHEET_OFFICE: '/staff-control/timesheet-office',
+  STAFF_CONTROL_DORMITORY: '/staff-control/dormitory',
   EMPLOYEES_CARD: '/employees',
   TIMESHEET_EVENTS: '/timesheet/events',
   TIMESHEET_LOCK_TOGGLE: '/timesheet/lock-toggle',
@@ -181,6 +182,8 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/staff-control/induction',    label: 'Управление кадрами — Вводный инструктаж (вкладка)', group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 106, is_active: true },
   { key: '/staff-control/hr-profiles',  label: 'Управление кадрами — Реквизиты (кадровые данные)',   group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 107, is_active: true },
   { key: '/staff-control/hr-documents', label: 'Управление кадрами — Реквизиты: документы без правки полей (загрузка, сканы, полные номера)', group_code: 'work', group_label: 'Управление', area: 'admin', surface: 'technical', supports_edit: true, sort_order: 107, is_active: true },
+  // Вкладка «Общежитие» (миграция 314): кто живёт в общежитии; правка — «Редактирование».
+  { key: '/staff-control/dormitory',    label: 'Управление кадрами — Общежитие',       group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 109, is_active: true },
   { key: '/staff-control/direct-reports', label: 'Управление кадрами — Прямые подчинённые',           group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 108, is_active: true },
   { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
   { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },

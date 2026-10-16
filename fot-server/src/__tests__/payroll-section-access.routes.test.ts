@@ -59,6 +59,7 @@ vi.mock('../controllers/payroll-rates.controller.js', () => ({ payrollRatesContr
 vi.mock('../controllers/payroll-section-access.controller.js', () => ({ payrollSectionAccessController: h.stubController('sectionAccess') }));
 vi.mock('../controllers/payroll-terms.controller.js', () => ({ payrollTermsController: h.stubController('terms') }));
 vi.mock('../controllers/payroll-vacation.controller.js', () => ({ payrollVacationController: h.stubController('vacation') }));
+vi.mock('../controllers/dormitory-stays.controller.js', () => ({ dormitoryStaysController: h.stubController('dormitory') }));
 
 const app = express();
 app.use(express.json());
@@ -87,7 +88,7 @@ const tokenFor = (userId: string, roleCode: string): string => jwt.sign(
 const get = (url: string, userId: string, roleCode: string): request.Test =>
   request(app).get(url).set('Authorization', `Bearer ${tokenFor(userId, roleCode)}`);
 
-const ROUTES = ['/api/payroll/terms', '/api/payroll/section-access', '/api/payroll/rates'];
+const ROUTES = ['/api/payroll/terms', '/api/payroll/section-access', '/api/payroll/rates', '/api/payroll/dormitory-stays'];
 
 beforeEach(() => {
   h.calls.length = 0;
@@ -110,7 +111,7 @@ describe('раздел «Зарплата» по списку', () => {
       const res = await get(url, 'admin-listed', 'admin');
       expect(res.status, url).toBe(200);
     }
-    expect(h.calls).toEqual(['terms.list', 'sectionAccess.list', 'rates.list']);
+    expect(h.calls).toEqual(['terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll']);
   });
 
   it('офисный сотрудник из списка — проходит, не из списка — 403', async () => {

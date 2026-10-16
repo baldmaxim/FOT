@@ -135,11 +135,15 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
     await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
     await pg.pool!.query(migration('306_payroll_rates.sql'));
+    await pg.pool!.query(migration('313_payroll_rate_code.sql'));
     // Повторный запуск безопасен: виды не задваиваются.
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));
     await pg.pool!.query(migration('301_payroll_paid_order_kinds.sql'));
     await pg.pool!.query(migration('306_payroll_rates.sql'));
+    await pg.pool!.query(migration('313_payroll_rate_code.sql'));
+    // Ставка «Проживание общежития» из 313 проверяется в dormitory-stays.pg.test.ts; здесь — обычные ставки.
+    await pg.pool!.query(`DELETE FROM payroll_rates WHERE code = 'dormitory'`);
   });
 
   afterAll(async () => {
@@ -231,8 +235,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
 
     const fitter = await addRate('Монтажник 3 разряда', 450.5);
     const welder = await addRate('Сварщик', null);
-    expect(fitter).toEqual({ id: expect.any(Number), name: 'Монтажник 3 разряда', amount: '450.50' });
-    expect(welder).toEqual({ id: expect.any(Number), name: 'Сварщик', amount: null });
+    expect(fitter).toEqual({ id: expect.any(Number), name: 'Монтажник 3 разряда', amount: '450.50', code: null });
+    expect(welder).toEqual({ id: expect.any(Number), name: 'Сварщик', amount: null, code: null });
     expect(await addRate(' сварщик', 1)).toBeNull();
     expect(await addRate('Подсобный', 0)).toMatchObject({ amount: '0.00' });
     expect((await listRates()).map(rate => rate.name)).toEqual(['Монтажник 3 разряда', 'Сварщик', 'Подсобный']);
@@ -247,8 +251,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     const [fitter, welder] = await listRates();
 
     expect(await updateRate(welder.id, 'Сварщик 5 разряда', 520)).toEqual({
-      before: { id: welder.id, name: 'Сварщик', amount: null },
-      after: { id: welder.id, name: 'Сварщик 5 разряда', amount: '520.00' },
+      before: { id: welder.id, name: 'Сварщик', amount: null, code: null },
+      after: { id: welder.id, name: 'Сварщик 5 разряда', amount: '520.00', code: null },
     });
     // Значение снимается — снова «не задано».
     expect(await updateRate(welder.id, 'Сварщик 5 разряда', null)).toMatchObject({
