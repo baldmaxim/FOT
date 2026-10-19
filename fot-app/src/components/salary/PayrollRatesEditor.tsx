@@ -2,13 +2,12 @@ import type { FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { PAYROLL_RATES_KEY, usePayrollRates } from '../../hooks/usePayrollRates';
-import { HOUSING_RATE_CODE, payrollService, type IPayrollRate } from '../../services/payrollService';
+import { payrollService, type IPayrollRate } from '../../services/payrollService';
 import { PayrollDictionarySection } from './PayrollDictionarySection';
-import { PayrollEmployeesButton } from './PayrollEmployeesButton';
 
 interface IPayrollRatesEditorProps {
   canEdit: boolean;
-  /** Название и кнопка «Сотрудники» у «Доплаты за проживание»: таблица сотрудников с доплатой. */
+  /** Кнопка «Сотрудники» у заголовка «Ставки»: таблица «Доплата за проживание» (ставка одна). */
   onOpenHousing: () => void;
 }
 
@@ -34,6 +33,8 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
   return (
     <PayrollDictionarySection
       title="Ставки"
+      onOpenList={onOpenHousing}
+      listLabel="Сотрудники с доплатой за проживание"
       items={rates.data}
       isError={rates.isError}
       onRetry={() => { void rates.refetch(); }}
@@ -42,10 +43,6 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
       canEdit={canEdit}
       deleteQuestion={name => `Удалить ставку «${name}»?`}
       isLocked={item => Boolean(item.code)}
-      renderExtraAction={item => (item.code === HOUSING_RATE_CODE ? (
-        <PayrollEmployeesButton onClick={onOpenHousing} ariaLabel="Сотрудники с доплатой за проживание" />
-      ) : null)}
-      getItemOpener={item => (item.code === HOUSING_RATE_CODE ? onOpenHousing : null)}
       onUpdate={(id, payload) => apply(async () => {
         const updated = await payrollService.updateRate(id, payload);
         return list => list.map(rate => (rate.id === id ? updated : rate));

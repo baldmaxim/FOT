@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FC, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FC } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import { rateAmountInputValue, type IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
@@ -23,10 +23,6 @@ interface IPayrollDictionaryRowProps {
   canEdit: boolean;
   /** Привязана к функционалу: правится только значение, удалить нельзя (сервер стережёт тоже). */
   locked: boolean;
-  /** Своя кнопка записи — перед «Изменить»; видна и без права правки. */
-  extraAction?: ReactNode;
-  /** Передан — название кнопкой (видна и без права правки): открыть таблицу записи, как кнопка в extraAction. */
-  onOpen?: () => void;
   isEditing: boolean;
   /** Вопрос перед удалением: «Удалить ставку «Сварщик»?». */
   deleteQuestion: string;
@@ -44,8 +40,6 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   amountLabel,
   canEdit,
   locked,
-  extraAction,
-  onOpen,
   isEditing,
   deleteQuestion,
   onStartEdit,
@@ -95,36 +89,26 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
 
   return (
     <li className={styles.row}>
-      {onOpen ? (
-        // Мышью — по названию; с клавиатуры одна остановка — на кнопке «Сотрудники» (extraAction).
-        <button type="button" className={`${styles.rowName} ${styles.rowNameButton}`} onClick={onOpen} tabIndex={-1}>
-          {item.name}
-        </button>
-      ) : (
-        <span className={styles.rowName}>{item.name}</span>
-      )}
+      <span className={styles.rowName}>{item.name}</span>
       {amountLabel !== undefined && (
         <span className={styles.rowAmount}>{formatPayrollMoney(item.amount) ?? '—'}</span>
       )}
-      {(canEdit || extraAction) && (
+      {canEdit && (
         <span className={styles.rowActions}>
-          {extraAction}
-          {canEdit && (
-            <button
-              ref={editButtonRef}
-              type="button"
-              className={styles.iconButton}
-              disabled={deleting}
-              onClick={() => {
-                setDeleteError(null);
-                onStartEdit();
-              }}
-              aria-label={`Изменить: ${item.name}`}
-            >
-              <Pencil size={16} aria-hidden="true" />
-            </button>
-          )}
-          {canEdit && !locked && (
+          <button
+            ref={editButtonRef}
+            type="button"
+            className={styles.iconButton}
+            disabled={deleting}
+            onClick={() => {
+              setDeleteError(null);
+              onStartEdit();
+            }}
+            aria-label={`Изменить: ${item.name}`}
+          >
+            <Pencil size={16} aria-hidden="true" />
+          </button>
+          {!locked && (
             <button
               type="button"
               className={`${styles.iconButton} ${styles.iconButtonDanger}`}

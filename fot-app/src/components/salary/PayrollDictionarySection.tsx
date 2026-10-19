@@ -1,4 +1,4 @@
-import { useId, useState, type FC, type ReactNode } from 'react';
+import { useId, useState, type FC } from 'react';
 
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
@@ -26,19 +26,15 @@ interface IPayrollDictionarySectionProps {
   onDelete: (id: number) => Promise<void>;
   /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
-  /** Своя кнопка записи — перед «Изменить» (у «Доплаты за проживание» — таблица доплат). */
-  renderExtraAction?: (item: IPayrollDictionaryItem) => ReactNode;
-  /** Название записи — кнопка (у «Доплаты за проживание» — та же таблица); null — обычный текст. */
-  getItemOpener?: (item: IPayrollDictionaryItem) => (() => void) | null;
-  /** Передан — рядом с заголовком кнопка «Сотрудники»: таблица сотрудников («Удержания»). */
+  /** Передан — рядом с заголовком кнопка «Сотрудники»: таблица сотрудников («Удержания», «Ставки»). */
   onOpenList?: () => void;
   /** Что за таблица — для экранного диктора: «Сотрудники с удержаниями». */
   listLabel?: string;
 }
 
 /**
- * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний»
- * рядом с заголовком кнопка «Сотрудники» — таблица сотрудников.
+ * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний» и
+ * «Ставок» рядом с заголовком кнопка «Сотрудники» — таблица сотрудников.
  */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
@@ -54,8 +50,6 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onUpdate,
   onDelete,
   isLocked,
-  renderExtraAction,
-  getItemOpener,
   onOpenList,
   listLabel,
 }) => {
@@ -67,12 +61,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
     <section className={styles.section} aria-labelledby={titleId}>
       {onOpenList ? (
         <div className={styles.sectionHead}>
-          <h3 id={titleId} className={styles.sectionTitle}>
-            {/* Заголовок тоже открывает таблицу — мышью; с клавиатуры одна остановка, на кнопке «Сотрудники». */}
-            <button type="button" className={styles.sectionTitleButton} onClick={onOpenList} tabIndex={-1}>
-              {title}
-            </button>
-          </h3>
+          <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
           <PayrollEmployeesButton onClick={onOpenList} ariaLabel={listLabel ?? `${title}: сотрудники`} />
         </div>
       ) : (
@@ -98,8 +87,6 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
               amountLabel={amountLabel}
               canEdit={canEdit}
               locked={isLocked?.(item) ?? false}
-              extraAction={renderExtraAction?.(item)}
-              onOpen={getItemOpener?.(item) ?? undefined}
               isEditing={editingId === item.id}
               deleteQuestion={deleteQuestion(item.name)}
               onStartEdit={() => setEditingId(item.id)}

@@ -81,27 +81,16 @@
   min-width: 0;
 }
 .sectionTitle { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
+/* Заголовок без кнопки — той же высоты, что с кнопкой «Сотрудники»: первые строки колонок на одном уровне. */
+.section > .sectionTitle { display: flex; align-items: center; min-height: var(--dict-control-h); }
 
-/* Заголовок раздела с кнопкой «Сотрудники» рядом («Удержания»). */
+/* Заголовок раздела с кнопкой «Сотрудники» рядом («Удержания», «Ставки»). */
 .sectionHead {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
 }
-
-/* Заголовок «Удержания» тоже открывает таблицу (мышью): как текст, по наведению — ссылка. */
-.sectionTitleButton {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.sectionTitleButton:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
 
 /* «Сотрудники» — как кнопки шапки, по высоте полей раздела: видно без наведения, что открывается список. */
 .employeesButton {
@@ -150,23 +139,6 @@
 /* Название не уже ~9 слов-символов: на телефоне значение и кнопки («Сотрудники», ✎) переносятся строкой ниже,
    а не сжимают название в столбик букв. */
 .rowName { flex: 1 1 0; min-width: min(100%, 9em); overflow-wrap: anywhere; }
-/* Название записи кнопкой (у «Доплаты за проживание» — таблица доплат, как кнопка «Сотрудники»): как текст,
-   по наведению — ссылка. */
-.rowNameButton {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
-.rowNameButton:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
 .rowAmount {
   flex: 0 0 auto;
   text-align: right;
