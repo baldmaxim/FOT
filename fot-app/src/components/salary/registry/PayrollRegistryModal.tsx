@@ -14,15 +14,19 @@ interface IPayrollRegistryModalProps {
    * Escape не закрывается.
    */
   closeOnEscape: boolean;
+  /** Подпись стрелки «Назад» для экранного диктора: к какому окну она возвращает. */
+  backLabel?: string;
   children: ReactNode;
 }
 
 /**
- * Окно таблицы поверх «Справочника» («Общежитие», «Доплата за проживание», «Не выплачивать», «Доплата»,
- * «Удержания»): стрелка «Назад» и ✕ закрывают только его. Через портал: внутри окна с transform и
+ * Окно таблицы поверх «Справочника» («Общежитие», «Доплата за проживание», «Без проезда», «Доплата»,
+ * «Удержания») и «Свода» (сотрудники объекта): стрелка «Назад» и ✕ закрывают только его. Через портал: внутри окна с transform и
  * overflow: hidden fixed-слой обрезался бы.
  */
-export const PayrollRegistryModal: FC<IPayrollRegistryModalProps> = ({ title, onClose, closeOnEscape, children }) => {
+export const PayrollRegistryModal: FC<IPayrollRegistryModalProps> = ({
+  title, onClose, closeOnEscape, backLabel = 'Назад к справочнику', children,
+}) => {
   const titleId = useId();
 
   return createPortal(
@@ -36,7 +40,7 @@ export const PayrollRegistryModal: FC<IPayrollRegistryModalProps> = ({ title, on
       {({ requestClose }) => (
         <>
           <header className={`${modal.header} ${styles.header}`}>
-            <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Назад к справочнику">
+            <button type="button" className={modal.closeButton} onClick={requestClose} aria-label={backLabel}>
               <ArrowLeft size={20} aria-hidden="true" />
             </button>
             <div className={modal.headerText}>

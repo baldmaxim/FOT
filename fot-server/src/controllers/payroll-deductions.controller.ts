@@ -20,6 +20,7 @@ import {
   setEmployeeDeductionKinds,
 } from '../services/payroll/payroll-deduction-kinds.service.js';
 import { canEditPayrollEmployee, canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
+import { lockPayrollEmployee } from '../services/payroll/payroll-terms.service.js';
 import { handlePayrollZodError, parsePayrollDictionaryId, payrollDictionaryNameSchema } from './payroll-dictionary.helpers.js';
 
 const kindNameSchema = z.object({ name: payrollDictionaryNameSchema('Введите название вида') });
@@ -61,7 +62,11 @@ const saveByEmployee = async (req: AuthenticatedRequest, res: Response): Promise
       res.status(400).json({ success: false, error: 'Вид удержания не найден в справочнике' });
       return;
     }
-    const { added, removed } = await withTransaction(client => setEmployeeDeductionKinds(client, employeeId, kindIds));
+    // Та же блокировка, что у «Удержаний» «Справочника»: правка видов из окна и из таблицы не перемешивается.
+    const { added, removed } = await withTransaction(async client => {
+      await lockPayrollEmployee(client, employeeId);
+      return setEmployeeDeductionKinds(client, employeeId, kindIds);
+    });
     if (added.length > 0 || removed.length > 0) {
       await auditService.logFromRequest(req, req.user.id, 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED', {
         entityType: 'payroll_employee_deductions',

@@ -1,16 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IDeductionRegistryRow, IPayrollSupplementRow } from '../services/payrollRegistryService';
+import type { ICompensationStop, IDeductionRegistryRow, IPayrollSupplementRow } from '../services/payrollRegistryService';
 import {
+  buildCompensationStopExport,
   buildDeductionExport,
   DEDUCTION_COLUMNS,
   HOUSING_COLUMNS,
+  periodIntersectsMonths,
+  registryMonthOptions,
+  registryMonthsParam,
+  stopInMonths,
   SUPPLEMENT_COLUMNS,
+  supplementInMonths,
   supplementPeriod,
   supplementRowKey,
 } from './payrollRegistries';
 import {
   oneTimeMonthOptions,
+  parseDeductionForm,
   parseHousingForm,
   parseOneTimeForm,
   parsePlannedForm,
@@ -19,7 +26,8 @@ import {
 import { applyTableView, columnFilterOptions, fitRegistryColumnWidths, matchesNameSearch } from './tableView';
 
 const deduction = (employeeId: number, kinds: string[], amount: string | null = null): IDeductionRegistryRow => ({
-  employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, department: null, position: null, kinds, amount,
+  employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, department: null, position: null, kinds,
+  kind_ids: kinds.map((_, index) => index + 1), amount, can_edit: true,
 });
 
 const supplement = (over: Partial<IPayrollSupplementRow>): IPayrollSupplementRow => ({
@@ -105,12 +113,29 @@ describe('формы', () => {
       .toEqual({ ok: true, payload: { month: '2026-10', amount: 100, reason: 'Премия за объект' } });
   });
 
-  it('«Не выплачивать»: «по» пусто — бессрочно, один день — можно', () => {
+  it('«Без проезда»: «по» пусто — бессрочно, один день — можно', () => {
     expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '' }))
       .toEqual({ ok: true, payload: { date_from: '2026-08-01', date_to: null } });
     expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '2026-08-01' })).toMatchObject({ ok: true });
     expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '2026-07-31' }))
       .toMatchObject({ ok: false, field: 'date_to' });
+  });
+
+  it('удержание: нужен вид или сумма; сумма без оклада — нельзя; при правке пусто — снять', () => {
+    const base = { selected: true, isEdit: false, hasTerms: true, kindIds: [] as number[], amount: '', effectiveFrom: '2026-10-19' };
+    expect(parseDeductionForm(base)).toMatchObject({ ok: false, field: 'kinds' });
+    expect(parseDeductionForm({ ...base, kindIds: [2, 2, 5] }))
+      .toEqual({ ok: true, payload: { kind_ids: [2, 5], amount: null, effective_from: '2026-10-19' } });
+    expect(parseDeductionForm({ ...base, amount: '1 500,5' }))
+      .toEqual({ ok: true, payload: { kind_ids: [], amount: 1500.5, effective_from: '2026-10-19' } });
+    expect(parseDeductionForm({ ...base, amount: '1500', hasTerms: false }))
+      .toMatchObject({ ok: false, field: 'amount', message: 'Сначала внесите оклад в окне сотрудника' });
+    // Без оклада виды — можно: сумма не задана.
+    expect(parseDeductionForm({ ...base, hasTerms: false, kindIds: [1] })).toMatchObject({ ok: true });
+    expect(parseDeductionForm({ ...base, amount: '0', kindIds: [1] })).toMatchObject({ ok: false, field: 'amount' });
+    expect(parseDeductionForm({ ...base, kindIds: [1], effectiveFrom: '2026-02-31' })).toMatchObject({ ok: false, field: 'date_from' });
+    expect(parseDeductionForm({ ...base, isEdit: true }))
+      .toEqual({ ok: true, payload: { kind_ids: [], amount: null, effective_from: '2026-10-19' } });
   });
 
   it('месяцы разовой доплаты: следующий, текущий и 11 прошлых', () => {
@@ -140,5 +165,51 @@ describe('ширины столбцов: подпись в одну строку
 
   it('запаса ровно на расширение — расширяется', () => {
     expect(fit(878 + 26)).toEqual([undefined, 140, 148, 154, 160]);
+  });
+});
+
+describe('выбор месяца в таблицах «Справочника»', () => {
+  it('варианты: 24 месяца назад и 12 вперёд по возрастанию', () => {
+    const options = registryMonthOptions('2026-10');
+    expect(options).toHaveLength(37);
+    expect(options[0]).toBe('2024-10');
+    expect(options[24]).toBe('2026-10');
+    expect(options.at(-1)).toBe('2027-10');
+  });
+
+  it('параметр сервера: «Весь период» — all, иначе месяцы по порядку', () => {
+    expect(registryMonthsParam([])).toBe('all');
+    expect(registryMonthsParam(['2026-10', '2026-09'])).toBe('2026-09,2026-10');
+  });
+
+  it('период задевает месяц: границы включительно, пусто — без границы, «Весь период» — любой', () => {
+    expect(periodIntersectsMonths('2026-10-31', null, ['2026-10'])).toBe(true);
+    expect(periodIntersectsMonths('2026-11-01', null, ['2026-10'])).toBe(false);
+    expect(periodIntersectsMonths('2026-08-01', '2026-09-01', ['2026-09'])).toBe(true);
+    expect(periodIntersectsMonths('2026-08-01', '2026-08-31', ['2026-09'])).toBe(false);
+    expect(periodIntersectsMonths('2024-02-29', '2024-02-29', ['2024-02'])).toBe(true);
+    expect(periodIntersectsMonths('2026-08-01', '2026-08-31', ['2026-07', '2026-08'])).toBe(true);
+    expect(periodIntersectsMonths('2030-01-01', null, [])).toBe(true);
+  });
+
+  it('«Доплата»: разовая — по своему месяцу, плановая — по периоду', () => {
+    const once = supplement({ kind: 'one_time', id: 5, month: '2026-11', date_from: null, date_to: null });
+    expect(supplementInMonths(once, ['2026-11'])).toBe(true);
+    expect(supplementInMonths(once, ['2026-10'])).toBe(false);
+    expect(supplementInMonths(once, [])).toBe(true);
+    expect(supplementInMonths(supplement({}), ['2026-12'])).toBe(true);
+    expect(supplementInMonths(supplement({}), ['2027-01'])).toBe(false);
+  });
+
+  it('«Без проезда»: бессрочный период — во всех следующих месяцах', () => {
+    const stop: ICompensationStop = {
+      id: 1, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
+      date_from: '2026-08-15', date_to: null, can_edit: true,
+    };
+    expect(stopInMonths(stop, ['2026-07'])).toBe(false);
+    expect(stopInMonths(stop, ['2026-08'])).toBe(true);
+    expect(stopInMonths(stop, ['2027-05'])).toBe(true);
+    expect(buildCompensationStopExport([stop]).columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Без проезда с', 'По']);
   });
 });

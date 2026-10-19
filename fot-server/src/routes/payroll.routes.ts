@@ -10,6 +10,7 @@ import { payrollRatesController } from '../controllers/payroll-rates.controller.
 import { payrollRegistryController } from '../controllers/payroll-registry.controller.js';
 import { dormitoryStaysController } from '../controllers/dormitory-stays.controller.js';
 import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
+import { payrollSummaryController } from '../controllers/payroll-summary.controller.js';
 import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
@@ -73,15 +74,20 @@ router.delete('/supplements/planned/employee/:empId', termsEdit, payrollSuppleme
 router.post('/supplements/one-time', termsEdit, payrollSupplementsController.addOneTime);
 router.patch('/supplements/one-time/:id', termsEdit, payrollSupplementsController.updateOneTime);
 router.delete('/supplements/one-time/:id', termsEdit, payrollSupplementsController.removeOneTime);
-// «Не выплачивать» компенсацию: периоды «с — по».
+// «Без проезда»: кому не выплачивать проезд, периоды «с — по».
 router.get('/compensation-stops', deductionsView, payrollCompensationStopsController.list);
 router.post('/compensation-stops', deductionsEdit, payrollCompensationStopsController.add);
 router.patch('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.update);
 router.delete('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.remove);
-// «Удержания» — только просмотр, вносят в окне сотрудника.
+// «Удержания»: виды и сумма ₽/мес — те же, что «Удержание» окна сотрудника. Сумма — условия оплаты (termsEdit).
 router.get('/deduction-registry', deductionsView, payrollRegistryController.listDeductions);
-// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, deductions).
+router.put('/deduction-registry/employee/:empId', termsEdit, payrollRegistryController.saveDeductions);
+// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
+
+// ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──
+router.get('/summary/months', termsView, payrollSummaryController.months);
+router.get('/summary', termsView, payrollSummaryController.get);
 
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);

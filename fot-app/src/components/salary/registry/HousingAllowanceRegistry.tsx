@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
 import { usePayrollRates } from '../../../hooks/usePayrollRates';
+import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import { HOUSING_RATE_CODE } from '../../../services/payrollService';
 import {
   PAYROLL_REGISTRY_KEYS,
@@ -31,20 +32,21 @@ const rowName = (row: IHousingAllowanceRow): string => row.full_name;
 const canEditRow = (row: IHousingAllowanceRow): boolean => row.can_edit;
 
 /**
- * «Справочник» → «Ставки» → «Доплата за проживание»: у кого в условиях оплаты на сегодня есть доплата за
- * проживание. Те же данные, что «Компенсация → Проживание» окна сотрудника: правка здесь видна там, и наоборот.
+ * «Справочник» → «Ставки» → «Доплата за проживание»: у кого в условиях оплаты выбранных месяцев есть доплата
+ * за проживание (последняя версия условий в них). Те же данные, что «Компенсация → Проживание» окна сотрудника: правка здесь видна там, и наоборот.
  */
 export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const rates = usePayrollRates();
+  const months = useRegistryMonths();
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [busyKey, setBusyKey] = useState<number | null>(null);
 
   const query = useQuery({
-    queryKey: PAYROLL_REGISTRY_KEYS.housing,
-    queryFn: ({ signal }) => payrollRegistryService.listHousing(signal),
+    queryKey: [...PAYROLL_REGISTRY_KEYS.housing, months.param],
+    queryFn: ({ signal }) => payrollRegistryService.listHousing(months.param, signal),
     staleTime: 0,
   });
   const defaultAmount = rates.data?.find(rate => rate.code === HOUSING_RATE_CODE)?.amount ?? null;
@@ -80,6 +82,7 @@ export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ c
         searchText={rowName}
         buildExport={buildHousingExport}
         sendExport={sendExport}
+        months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
         onDelete={canEdit ? row => { void handleRemove(row); } : undefined}

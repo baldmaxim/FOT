@@ -1,12 +1,13 @@
 /**
  * Общее для справочников «Зарплаты» (виды удержаний, ставки) и таблиц окна «Справочник»
- * («Доплата за проживание», «Доплата», «Не выплачивать»): схемы названия, дат и сумм, id из пути,
- * ответ на ошибку проверки.
+ * («Доплата за проживание», «Доплата», «Без проезда», «Удержания»): схемы названия, дат, месяцев и сумм,
+ * id из пути, ответ на ошибку проверки.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
+import type { PayrollTermsPeriod } from '../services/payroll/payroll-terms-amount.service.js';
 
 /** Пробелы внутри схлопываются: «Штраф  за мусор» и «Штраф за мусор» — одно название. */
 export const payrollDictionaryNameSchema = (emptyMessage: string) => z.string()
@@ -45,6 +46,38 @@ export const payrollDateSchema = (message: string) => z.string({ required_error:
 /** Месяц YYYY-MM (1900–2100). */
 export const payrollMonthSchema = (message: string) => z.string({ required_error: message, invalid_type_error: message })
   .regex(/^(19\d{2}|20\d{2}|2100)-(0[1-9]|1[0-2])$/, message);
+
+/** Больше месяцев в ?months= не принимаем: выбор пикера — до трёх лет. */
+export const PAYROLL_REGISTRY_MAX_MONTHS = 36;
+
+/**
+ * ?months= таблиц «Справочника» и «Свода»: параметра нет — null (прежнее «на сегодня» у старого клиента),
+ * 'all' — весь период, иначе — список YYYY-MM через запятую (без повторов, по возрастанию).
+ */
+export type PayrollMonthsSelection = null | 'all' | string[];
+
+const monthsListSchema = z.string()
+  .transform(value => value.split(',').map(month => month.trim()).filter(Boolean))
+  .pipe(z.array(payrollMonthSchema('Месяц — в формате ГГГГ-ММ'))
+    .min(1, 'Выберите месяц')
+    .max(PAYROLL_REGISTRY_MAX_MONTHS, 'Слишком много месяцев'));
+
+/** Разбор ?months=; неверное значение — ZodError (400 через handlePayrollZodError). */
+export const parsePayrollMonthsQuery = (raw: unknown): PayrollMonthsSelection => {
+  if (raw === undefined) return null;
+  if (raw === 'all') return 'all';
+  return [...new Set(monthsListSchema.parse(raw))].sort();
+};
+
+/** Первые числа месяцев для SQL (date[]): '2026-10' → '2026-10-01'. */
+export const payrollMonthStarts = (months: readonly string[]): string[] => months.map(month => `${month}-01`);
+
+/** Период версий условий для таблиц «Справочника»: без ?months= — на дату today, иначе — месяцы. */
+export const payrollRegistryTermsPeriod = (raw: unknown, today: string): PayrollTermsPeriod => {
+  const selection = parsePayrollMonthsQuery(raw);
+  if (selection === null) return { onDate: today };
+  return { monthStarts: selection === 'all' ? null : payrollMonthStarts(selection) };
+};
 
 /** Сумма больше нуля, без coerce: '' и false не должны превращаться в число. */
 export const payrollPositiveMoneySchema = (message: string) => z.number({ required_error: message, invalid_type_error: message })

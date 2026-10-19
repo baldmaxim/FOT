@@ -8,6 +8,7 @@
 import { query, queryOne, type DbExecutor } from '../../config/postgres.js';
 import { hasPgCode, isPgReferencedRow, PG_UNIQUE_VIOLATION } from './payroll-pg-errors.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll-registry-scope.service.js';
+import { termsPeriodParams, termsPeriodSql, type PayrollTermsPeriod } from './payroll-terms-amount.service.js';
 
 export interface IPayrollDeductionKind {
   id: number;
@@ -22,14 +23,15 @@ export const listDeductionKinds = async (): Promise<IPayrollDeductionKind[]> =>
     `SELECT id, name FROM payroll_deduction_kinds ORDER BY sort_order, id`,
   );
 
-/** Все ли виды есть в справочнике (повторы не в счёт). Вид, удалённый следом, остановит FK при записи. */
-export const allDeductionKindsExist = async (ids: readonly number[]): Promise<boolean> => {
+/**
+ * Все ли виды есть в справочнике (повторы не в счёт). Вид, удалённый следом, остановит FK при записи.
+ * exec — клиент транзакции записи: проверка тем же снимком, что и запись.
+ */
+export const allDeductionKindsExist = async (ids: readonly number[], exec?: DbExecutor): Promise<boolean> => {
   const unique = [...new Set(ids)];
   if (unique.length === 0) return true;
-  const rows = await query<{ id: number }>(
-    `SELECT id FROM payroll_deduction_kinds WHERE id = ANY($1::int[])`,
-    [unique],
-  );
+  const sql = `SELECT id FROM payroll_deduction_kinds WHERE id = ANY($1::int[])`;
+  const rows = exec ? (await exec.query<{ id: number }>(sql, [unique])).rows : await query<{ id: number }>(sql, [unique]);
   return rows.length === unique.length;
 };
 
@@ -135,47 +137,54 @@ export interface IDeductionRegistryRow {
   full_name: string;
   department: string | null;
   position: string | null;
-  /** Виды в порядке справочника; пусто — только сумма. */
+  /** Виды в порядке справочника; пусто — только сумма. Датой не хранятся — всегда текущий набор. */
   kinds: string[];
-  /** «Сумма, ₽/мес» удержания из условий на дату; numeric строкой, null — не задана. */
+  /** id тех же видов — для правки строки. */
+  kind_ids: number[];
+  /** «Сумма, ₽/мес» удержания из условий периода; numeric строкой, null — не задана. */
   amount: string | null;
 }
 
 /**
  * Таблица «Удержания» окна «Справочник»: сотрудники «штата зарплаты» с видом удержания или
- * суммой удержания > 0 в условиях на дату onDate (то же, что «Удержание» окна сотрудника).
+ * суммой удержания > 0 в условиях периода (то же, что «Удержание» окна сотрудника). Сумма — из
+ * последней такой версии периода (на дату — действующей).
  */
 export const listDeductionRegistry = async (scope: {
   contractorRootId: string | null;
   departmentIds: string[] | null;
-  onDate: string;
+  period: PayrollTermsPeriod;
 }): Promise<IDeductionRegistryRow[]> => {
   if (scope.departmentIds?.length === 0) return [];
   return query<IDeductionRegistryRow>(
     `WITH ${payrollContractorDeptsCte('$1')},
      kinds AS (
-       SELECT ed.employee_id, array_agg(k.name ORDER BY k.sort_order, k.id) AS kinds
+       SELECT ed.employee_id,
+              array_agg(k.name ORDER BY k.sort_order, k.id) AS kinds,
+              array_agg(k.id ORDER BY k.sort_order, k.id) AS kind_ids
          FROM payroll_employee_deductions ed
          JOIN payroll_deduction_kinds k ON k.id = ed.kind_id
         GROUP BY ed.employee_id
      ),
      terms AS (
-       SELECT t.employee_id, t.deduction_amount
+       SELECT DISTINCT ON (t.employee_id) t.employee_id, t.deduction_amount
          FROM payroll_compensation_terms t
-        WHERE t.effective_from <= $3::date
-          AND (t.effective_to IS NULL OR t.effective_to >= $3::date)
+        WHERE t.deduction_amount > 0
+          AND ${termsPeriodSql('t', '$3', '$4')}
+        ORDER BY t.employee_id, t.effective_from DESC
      )
      SELECT e.id AS employee_id, e.full_name, d.name AS department, p.name AS position,
             COALESCE(kinds.kinds, '{}'::text[]) AS kinds,
+            COALESCE(kinds.kind_ids, '{}'::int[]) AS kind_ids,
             terms.deduction_amount::text AS amount
        FROM employees e
        LEFT JOIN kinds ON kinds.employee_id = e.id
        LEFT JOIN terms ON terms.employee_id = e.id
        LEFT JOIN org_departments d ON d.id = e.org_department_id
        LEFT JOIN positions p ON p.id = e.position_id
-      WHERE (kinds.employee_id IS NOT NULL OR terms.deduction_amount > 0)
+      WHERE (kinds.employee_id IS NOT NULL OR terms.employee_id IS NOT NULL)
         AND ${payrollStaffWhereSql('e', '$2')}
       ORDER BY e.full_name, e.id`,
-    [scope.contractorRootId, scope.departmentIds, scope.onDate],
+    [scope.contractorRootId, scope.departmentIds, ...termsPeriodParams(scope.period)],
   );
 };

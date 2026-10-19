@@ -1,8 +1,9 @@
-import { useState, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import {
   PAYROLL_REGISTRY_KEYS,
   PAYROLL_TERMS_PREFIX,
@@ -12,6 +13,7 @@ import {
 import {
   buildSupplementExport,
   SUPPLEMENT_COLUMNS,
+  supplementInMonths,
   supplementPeriod,
   supplementRowKey,
 } from '../../../utils/payrollRegistries';
@@ -32,8 +34,8 @@ const rowName = (row: IPayrollSupplementRow): string => row.full_name;
 const canEditRow = (row: IPayrollSupplementRow): boolean => row.can_edit;
 
 /**
- * «Справочник» → «Доплата»: плановые (текущие — те же, что в окне сотрудника) и разовые доплаты. Ввод —
- * здесь: плановая одна на сотрудника, разовых за месяц — сколько угодно, у каждой основание.
+ * «Справочник» → «Доплата»: плановые (текущие — те же, что в окне сотрудника) и разовые доплаты выбранных
+ * месяцев. Ввод — здесь: плановая одна на сотрудника, разовых за месяц — сколько угодно, у каждой основание.
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -41,12 +43,18 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const months = useRegistryMonths();
 
   const query = useQuery({
     queryKey: PAYROLL_REGISTRY_KEYS.supplements,
     queryFn: ({ signal }) => payrollRegistryService.listSupplements(signal),
     staleTime: 0,
   });
+  // Приходят все доплаты: разовые — за свой месяц, плановая — если её период задевает выбранные месяцы.
+  const rows = useMemo(
+    () => query.data?.filter(row => supplementInMonths(row, months.value)),
+    [query.data, months.value],
+  );
 
   // Плановая — та же, что в окне сотрудника: перечитать и список «Расчётов», и окно.
   const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
@@ -75,7 +83,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
       <RegistryPanel
         label="Доплата"
         columns={SUPPLEMENT_COLUMNS}
-        rows={query.data}
+        rows={rows}
         isLoading={query.isLoading}
         isError={query.isError}
         onRetry={() => { void query.refetch(); }}
@@ -84,6 +92,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
         searchText={rowName}
         buildExport={buildSupplementExport}
         sendExport={sendExport}
+        months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
         onDelete={canEdit ? row => { void handleDelete(row); } : undefined}

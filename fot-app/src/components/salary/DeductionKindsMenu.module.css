@@ -7,3 +7,7 @@
    Класс удвоен: специфичность выше общих стилей меню независимо от порядка CSS. */
 .raisedBackdrop.raisedBackdrop { z-index: 1001; }
 .raisedMenu.raisedMenu { z-index: 1002; }
+
+/* Из формы «Удержания» в «Справочнике» (оверлей формы — z-index 1120): ещё выше. */
+.aboveForm.aboveForm { z-index: 1130; }
+.aboveFormMenu.aboveFormMenu { z-index: 1131; }

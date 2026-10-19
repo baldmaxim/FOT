@@ -22,6 +22,7 @@ import {
   parsePayrollEmployeeIdParam,
   payrollDateSchema,
   payrollPositiveMoneySchema,
+  payrollRegistryTermsPeriod,
   withCanEdit,
 } from './payroll-dictionary.helpers.js';
 
@@ -38,13 +39,18 @@ const NO_TERMS = {
   code: 'NO_TERMS',
 };
 
-/** GET /api/payroll/housing-allowances — у кого доплата за проживание в условиях на сегодня. */
+/**
+ * GET /api/payroll/housing-allowances[?months=…] — у кого доплата за проживание: без months — в условиях
+ * на сегодня (старый клиент), months=all — за весь период, список — в этих месяцах.
+ */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const period = payrollRegistryTermsPeriod(req.query.months, moscowTodayIso());
     const [scope, canEdit] = await Promise.all([resolvePayrollStaffScope(req), resolvePayrollEditPredicate(req)]);
-    const rows = await listHousingAllowances({ ...scope, onDate: moscowTodayIso() });
+    const rows = await listHousingAllowances({ ...scope, period });
     res.json({ success: true, data: withCanEdit(rows, canEdit) });
   } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
     console.error('payrollHousing.list error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения списка' });
   }

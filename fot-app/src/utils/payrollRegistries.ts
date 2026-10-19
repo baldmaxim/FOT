@@ -5,7 +5,7 @@ import type {
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import { formatDate, formatMonthLabel } from './formatMoney';
-import { moscowTodayIso } from './moscowDate';
+import { moscowTodayIso, shiftMonth } from './moscowDate';
 import { formatPayrollMoney } from './payrollFormat';
 import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
 
@@ -100,8 +100,8 @@ export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollSupplemen
 
 export const COMPENSATION_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationStop>> = [
   ...employeeColumns<ICompensationStop>(),
-  // Заголовок одной строкой: «НЕ ВЫПЛАЧИВАТЬ С» + стрелка и воронка.
-  dateColumn<ICompensationStop>('date_from', 'Не выплачивать с', row => row.date_from, 196),
+  // Заголовок одной строкой: «БЕЗ ПРОЕЗДА С» + стрелка и воронка.
+  dateColumn<ICompensationStop>('date_from', 'Без проезда с', row => row.date_from, 170),
   {
     // Пусто — бессрочно: выплату ещё не возобновили.
     key: 'date_to', label: 'По', type: 'text', width: 112, nowrap: true,
@@ -139,10 +139,58 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
 
 export const buildHousingExport = buildSnapshot('Доплата за проживание', HOUSING_COLUMNS);
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
-export const buildCompensationStopExport = buildSnapshot('Не выплачивать', COMPENSATION_STOP_COLUMNS);
+export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildDeductionExport = buildSnapshot('Удержания', DEDUCTION_COLUMNS);
 
 /** Ключ строки «Доплаты»: у плановой — сотрудник (она одна), у разовой — её id. */
 export const supplementRowKey = (row: IPayrollSupplementRow): string => (
   row.kind === 'planned' ? `planned-${row.employee_id}` : `once-${row.id}`
+);
+
+/** Выбор месяца в таблицах «Справочника»: 24 месяца назад и 12 вперёд (доплаты и «Без проезда» бывают будущими). */
+const REGISTRY_MONTHS_BACK = 24;
+const REGISTRY_MONTHS_AHEAD = 12;
+
+export const registryMonthOptions = (currentMonth: string): string[] => (
+  Array.from(
+    { length: REGISTRY_MONTHS_BACK + REGISTRY_MONTHS_AHEAD + 1 },
+    (_, index) => shiftMonth(currentMonth, index - REGISTRY_MONTHS_BACK),
+  )
+);
+
+/** ?months= сервера: пустой выбор («Весь период») — 'all', иначе месяцы через запятую. */
+export const registryMonthsParam = (months: ReadonlyArray<string>): string => (
+  months.length === 0 ? 'all' : [...months].sort().join(',')
+);
+
+/** Последний день месяца YYYY-MM: «2026-02» → «2026-02-28». */
+const monthEnd = (month: string): string => {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const day = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return `${month}-${String(day).padStart(2, '0')}`;
+};
+
+/**
+ * Период «с — по» (даты YYYY-MM-DD включительно; null — без границы) задевает хоть один из месяцев.
+ * Пустой выбор — «Весь период»: подходит любой.
+ */
+export const periodIntersectsMonths = (
+  from: string | null,
+  to: string | null,
+  months: ReadonlyArray<string>,
+): boolean => (
+  months.length === 0
+  || months.some(month => (from === null || from <= monthEnd(month)) && (to === null || to >= `${month}-01`))
+);
+
+/** «Доплата» в месяцах: разовая — её месяц выбран, плановая — её период задевает выбранные месяцы. */
+export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyArray<string>): boolean => (
+  row.kind === 'one_time'
+    ? months.length === 0 || (row.month !== null && months.includes(row.month))
+    : periodIntersectsMonths(row.date_from, row.date_to, months)
+);
+
+/** «Без проезда» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */
+export const stopInMonths = (stop: ICompensationStop, months: ReadonlyArray<string>): boolean => (
+  periodIntersectsMonths(stop.date_from, stop.date_to, months)
 );

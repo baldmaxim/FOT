@@ -15,6 +15,8 @@ interface IDeductionKindsMenuProps {
   selected: readonly number[];
   onToggle: (kindId: number, checked: boolean) => void;
   onClose: () => void;
+  /** Меню из формы таблицы «Удержания» — слой над окном формы. */
+  aboveForm?: boolean;
 }
 
 const MENU_WIDTH = 300;
@@ -29,7 +31,9 @@ const SHEET_MEDIA = '(max-width: 768px)';
  * добавляются в «Справочнике» на «Расчётах». Галочка применяется сразу; закрытие — Escape,
  * клик мимо или «Готово».
  */
-export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subtitle, kinds, selected, onToggle, onClose }) => {
+export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({
+  anchor, subtitle, kinds, selected, onToggle, onClose, aboveForm = false,
+}) => {
   const dismiss = useOverlayDismiss(onClose);
 
   // Перехват на document: Escape закрывает только меню, а не окно сотрудника под ним (оно слушает window).
@@ -62,9 +66,9 @@ export const DeductionKindsMenu: FC<IDeductionKindsMenuProps> = ({ anchor, subti
 
   return createPortal(
     <>
-      <div className={`${shared.backdrop} ${styles.raisedBackdrop}`} {...dismiss} />
+      <div className={`${shared.backdrop} ${aboveForm ? styles.aboveForm : styles.raisedBackdrop}`} {...dismiss} />
       <div
-        className={`${isSheet ? `${shared.menu} ${shared.sheet}` : shared.menu} ${styles.raisedMenu}`}
+        className={`${isSheet ? `${shared.menu} ${shared.sheet}` : shared.menu} ${aboveForm ? styles.aboveFormMenu : styles.raisedMenu}`}
         style={style}
         role="dialog"
         aria-modal="true"

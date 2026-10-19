@@ -1,15 +1,16 @@
-import { useState, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import {
   PAYROLL_REGISTRY_KEYS,
   payrollRegistryService,
   type ICompensationStop,
 } from '../../../services/payrollRegistryService';
 import { formatDate } from '../../../utils/formatMoney';
-import { buildCompensationStopExport, COMPENSATION_STOP_COLUMNS } from '../../../utils/payrollRegistries';
+import { buildCompensationStopExport, COMPENSATION_STOP_COLUMNS, stopInMonths } from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { CompensationStopForm } from './CompensationStopForm';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
@@ -28,8 +29,8 @@ const rowName = (stop: ICompensationStop): string => stop.full_name;
 const canEditRow = (stop: ICompensationStop): boolean => stop.can_edit;
 
 /**
- * «Справочник» → «Не выплачивать»: кому не выплачивать компенсацию, период «с — по» (все периоды —
- * история). Возобновили выплату — ✎ и дата «по»; 🗑 — только ошибочная строка.
+ * «Справочник» → «Без проезда»: кому не выплачивать проезд, период «с — по» (все периоды — история;
+ * показываются задевающие выбранные месяцы). Возобновили выплату — ✎ и дата «по»; 🗑 — только ошибочная строка.
  */
 export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -37,12 +38,14 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [busyKey, setBusyKey] = useState<number | null>(null);
+  const months = useRegistryMonths();
 
   const query = useQuery({
     queryKey: PAYROLL_REGISTRY_KEYS.stops,
     queryFn: ({ signal }) => payrollRegistryService.listStops(signal),
     staleTime: 0,
   });
+  const rows = useMemo(() => query.data?.filter(stop => stopInMonths(stop, months.value)), [query.data, months.value]);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_REGISTRY_KEYS.stops });
 
@@ -61,11 +64,11 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
   };
 
   return (
-    <PayrollRegistryModal title="Не выплачивать" onClose={onClose} closeOnEscape={!filterOpen && !editor}>
+    <PayrollRegistryModal title="Без проезда" onClose={onClose} closeOnEscape={!filterOpen && !editor}>
       <RegistryPanel
-        label="Не выплачивать"
+        label="Без проезда"
         columns={COMPENSATION_STOP_COLUMNS}
-        rows={query.data}
+        rows={rows}
         isLoading={query.isLoading}
         isError={query.isError}
         onRetry={() => { void query.refetch(); }}
@@ -74,6 +77,7 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
         searchText={rowName}
         buildExport={buildCompensationStopExport}
         sendExport={sendExport}
+        months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? stop => setEditor({ mode: 'edit', stop }) : undefined}
         onDelete={canEdit ? stop => { void handleDelete(stop); } : undefined}

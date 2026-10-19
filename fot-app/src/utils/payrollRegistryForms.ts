@@ -1,9 +1,10 @@
 /**
- * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за проживание», «Доплата», «Не выплачивать»):
+ * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за проживание», «Доплата», «Без проезда», «Удержания»):
  * разбор полей повторяет проверку сервера — ошибка видна до запроса, а не ответом 400.
  */
 import type {
   ICompensationStopFields,
+  IDeductionRegistryPayload,
   IHousingAllowancePayload,
   IOneTimeSupplementFields,
   IPlannedSupplementFields,
@@ -12,7 +13,7 @@ import { isCalendarDate } from './dormitoryStayForm';
 import { shiftMonth } from './moscowDate';
 import { parseRateAmount } from './payrollDictionary';
 
-export type RegistryFormField = 'employee' | 'amount' | 'date_from' | 'date_to' | 'month' | 'reason';
+export type RegistryFormField = 'employee' | 'kinds' | 'amount' | 'date_from' | 'date_to' | 'month' | 'reason';
 
 export type RegistryFormParse<T> =
   | { ok: true; payload: T }
@@ -95,16 +96,46 @@ export const parseOneTimeForm = (draft: {
   return { ok: true, payload: { month: draft.month, amount: amount.amount, reason } };
 };
 
-/** «Не выплачивать»: с — обязательно, по — включительно, пусто — бессрочно. */
+/** «Без проезда»: с — обязательно, по — включительно, пусто — бессрочно. */
 export const parseStopForm = (draft: {
   selected: boolean;
   dateFrom: string;
   dateTo: string;
 }): RegistryFormParse<ICompensationStopFields> => {
   if (!draft.selected) return fail('employee', 'Выберите сотрудника');
-  const fromError = parseDate(draft.dateFrom, 'date_from', 'Укажите дату «Не выплачивать с»');
+  const fromError = parseDate(draft.dateFrom, 'date_from', 'Укажите дату «Без проезда с»');
   if (fromError) return fromError;
   if (draft.dateTo && !isCalendarDate(draft.dateTo)) return fail('date_to', 'Такой даты нет');
   if (draft.dateTo && draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата «по» раньше даты «с»');
   return { ok: true, payload: { date_from: draft.dateFrom, date_to: draft.dateTo || null } };
+};
+
+/**
+ * «Удержания»: виды и/или сумма ₽/мес с даты «Действует с». При добавлении нужен вид или сумма; при правке
+ * пусто в обоих — снять. Сумма без оклада — нельзя (hasTerms — подсказка на сегодня, решает сервер).
+ */
+export const parseDeductionForm = (draft: {
+  selected: boolean;
+  isEdit: boolean;
+  hasTerms: boolean;
+  kindIds: ReadonlyArray<number>;
+  amount: string;
+  effectiveFrom: string;
+}): RegistryFormParse<IDeductionRegistryPayload> => {
+  if (!draft.selected) return fail('employee', 'Выберите сотрудника');
+  const amountText = draft.amount.trim();
+  let amount: number | null = null;
+  if (amountText) {
+    const parsed = parsePositiveAmount(amountText);
+    if ('error' in parsed) return fail('amount', parsed.error);
+    amount = parsed.amount;
+  }
+  if (!draft.isEdit && draft.kindIds.length === 0 && amount === null) return fail('kinds', 'Выберите вид удержания или укажите сумму');
+  if (amount !== null && !draft.hasTerms) return fail('amount', 'Сначала внесите оклад в окне сотрудника');
+  const dateError = parseDate(draft.effectiveFrom, 'date_from', 'Укажите дату «Действует с»');
+  if (dateError) return dateError;
+  return {
+    ok: true,
+    payload: { kind_ids: [...new Set(draft.kindIds)], amount, effective_from: draft.effectiveFrom },
+  };
 };

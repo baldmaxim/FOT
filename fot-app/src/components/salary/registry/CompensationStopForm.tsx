@@ -23,7 +23,7 @@ interface ICompensationStopFormProps {
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ в «Не выплачивать»: сотрудник и период «с — по». «По» пусто — бессрочно;
+ * «Добавить сотрудника» / ✎ в «Без проезда»: сотрудник и период «с — по». «По» пусто — бессрочно;
  * возобновили выплату — ставят «по» (строка остаётся историей).
  */
 export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onClose, onSaved }) => {
@@ -60,7 +60,7 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
 
   return (
     <RegistryFormModal
-      title={isEdit ? 'Не выплачивать' : 'Добавить сотрудника'}
+      title={isEdit ? 'Без проезда' : 'Добавить сотрудника'}
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
       saving={saving}
@@ -92,7 +92,7 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
       {/* Не <label>: внутри поля даты — кнопка календаря, клик по подписи открыл бы её. */}
       <div className={styles.dates}>
         <div className={styles.field}>
-          <span className={styles.label}>Не выплачивать с</span>
+          <span className={styles.label}>Без проезда с</span>
           <DateInput
             value={dateFrom}
             onChange={value => { setDateFrom(value); clearError(); }}

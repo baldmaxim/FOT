@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ColumnValuesFilterPopover';
@@ -52,6 +52,10 @@ export interface IRegistryTableProps<Row> {
   raisedFilters?: boolean;
   /** Открыт ли фильтр столбца: окно вокруг таблицы на это время не закрывается по Escape. */
   onFilterOpenChange?: (open: boolean) => void;
+  /** Передан — строка кликабельна (и Enter / пробел с клавиатуры): «Свод» → сотрудники объекта. */
+  onRowClick?: (row: Row) => void;
+  /** Строка итогов под таблицей: текст по ключу столбца (первый столбец — «Итого»). */
+  footer?: Readonly<Record<string, string>> | null;
 }
 
 /**
@@ -63,6 +67,7 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
+  onRowClick, footer = null,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
@@ -166,7 +171,20 @@ export const RegistryTable = <Row,>({
             const editable = canEditRow ? canEditRow(row) : true;
             return (
               // Чередование — по индексу видимой строки: после фильтра полосы не «слипаются».
-              <tr key={key} className={index % 2 === 1 ? styles.rowEven : undefined}>
+              <tr
+                key={key}
+                className={[index % 2 === 1 ? styles.rowEven : '', onRowClick ? styles.rowClickable : ''].filter(Boolean).join(' ') || undefined}
+                {...(onRowClick ? {
+                  tabIndex: 0,
+                  title: `Открыть: ${rowLabel(row)}`,
+                  onClick: () => onRowClick(row),
+                  onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    event.preventDefault();
+                    onRowClick(row);
+                  },
+                } : {})}
+              >
                 <td className={styles.cellNum}>{index + 1}</td>
                 {columns.map(column => (
                   column.nowrap ? (
@@ -215,6 +233,22 @@ export const RegistryTable = <Row,>({
             );
           })}
         </tbody>
+        {footer && !loading && visibleRows.length > 0 && (
+          <tfoot>
+            <tr>
+              <td className={styles.cellNum} />
+              {columns.map(column => (
+                <td
+                  key={column.key}
+                  className={column.numeric ? `${styles.cellValue} ${styles.cellNumeric}` : styles.cellValue}
+                >
+                  {footer[column.key] ?? ''}
+                </td>
+              ))}
+              {withActions && <td />}
+            </tr>
+          </tfoot>
+        )}
       </table>
 
       {filterFor && filterColumn && (

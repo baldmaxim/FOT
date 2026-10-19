@@ -28,7 +28,9 @@
 .actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  /* На «Расчётах» кнопок четыре («Свод», месяцы, «Справочник», шестерёнка): на 360px — в две строки. */
+  flex-wrap: wrap;
+  gap: 8px 12px;
   flex: 1 1 100%;
   justify-content: flex-end;
 }

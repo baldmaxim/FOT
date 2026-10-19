@@ -1,6 +1,6 @@
 /*
- * Панель таблицы-реестра (RegistryPanel — общежитие, таблицы «Справочника» «Зарплаты»): поиск по ФИО,
- * «Экспорт», «Добавить сотрудника»; ошибка загрузки — с «Повторить». Кнопки — как .sc-btn у «Текущих
+ * Панель таблицы-реестра (RegistryPanel — общежитие, таблицы «Справочника» и «Свод» «Зарплаты»): поиск,
+ * выбор месяцев, «Экспорт», «Добавить сотрудника»; ошибка загрузки — с «Повторить». Кнопки — как .sc-btn у «Текущих
  * сотрудников» (их CSS грузится только с той вкладкой). Mobile-first: поиск строкой во всю ширину, кнопки
  * под ним, тап-цели 44px; с 769px — одна строка.
  */
@@ -59,6 +59,32 @@
 }
 .buttonSecondary:hover:not(:disabled) { background: var(--bg-secondary); color: var(--text-primary); }
 
+/*
+ * Выбор месяцев (MonthsPicker) — той же высоты и рамки, что «Экспорт». Через .actions: перебивает
+ * компактный триггер пикера (.trigger в MonthsPicker.module.css).
+ */
+.actions .monthsButton {
+  flex: 1 1 auto;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.actions .monthsButton:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.actions .monthsButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.actions .monthsButton:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .buttonPrimary {
   border-color: var(--primary);
   background: var(--primary);
@@ -94,8 +120,10 @@
   .retry { min-height: 36px; }
   .actions { flex: 0 0 auto; margin-left: auto; }
   .button { flex: 0 0 auto; min-height: 36px; }
+  .actions .monthsButton { flex: 0 0 auto; min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button { transition: none; }
+  .button,
+  .actions .monthsButton { transition: none; }
 }

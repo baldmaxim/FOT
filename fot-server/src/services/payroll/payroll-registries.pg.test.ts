@@ -5,7 +5,7 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
 // Таблицы окна «Справочник» (миграция 315) на настоящем PostgreSQL: переименование ставки, «Доплата за
-// проживание» (разрез версии условий, «с D и дальше», без оклада), плановая и разовые доплаты, «Не выплачивать»,
+// проживание» (разрез версии условий, «с D и дальше», без оклада), плановая и разовые доплаты, «Без проезда»,
 // «Удержания», «штат зарплаты» (подрядчики, уволенные, архив).
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются). Гонять отдельно от
 // других *.pg.test.ts: они дропают те же таблицы.
@@ -76,6 +76,7 @@ import {
 import { listDeductionRegistry, setEmployeeDeductionKinds } from './payroll-deduction-kinds.service.js';
 import { canWritePayrollRegistryEmployee, isPayrollStaffEmployee } from './payroll-registry-scope.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
+import { payrollRegistryController } from '../../controllers/payroll-registry.controller.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -233,12 +234,12 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     });
 
     it('таблица: на сегодня, «Действует с» — начало цепочки с той же суммой', async () => {
-      const rows = await listHousingAllowances({ ...SCOPE, onDate: '2026-12-05' });
+      const rows = await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-12-05' } });
       expect(rows).toEqual([{
         employee_id: 1, full_name: 'Акимов С.Ю.', department: 'ЛИНИЯ', position: null,
         amount: '700.00', effective_from: '2026-10-19',
       }]);
-      expect(await listHousingAllowances({ ...SCOPE, onDate: '2026-10-01' })).toEqual([]);
+      expect(await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-10-01' } })).toEqual([]);
     });
 
     it('снять — null с даты; в списке условий — та же сумма, что в таблице', async () => {
@@ -250,6 +251,17 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       const row = res.body.data.find((r: { employee_id: number }) => r.employee_id === 1);
       // json_agg списка отдаёт суммы числом.
       expect(Number(row.housing_compensation)).toBe(700);
+    });
+
+    it('месяцы: последняя версия с доплатой, пересекающая месяцы; весь период — null', async () => {
+      // Версии: сентябрь — без доплаты, 19.10–30.11 — 700, с 01.12 — снята.
+      const amounts = async (monthStarts: string[] | null) =>
+        (await listHousingAllowances({ ...SCOPE, period: { monthStarts } })).map(row => [row.amount, row.effective_from]);
+      expect(await amounts(['2026-10-01'])).toEqual([['700.00', '2026-10-19']]);
+      expect(await amounts(['2026-09-01', '2026-11-01'])).toEqual([['700.00', '2026-10-19']]);
+      expect(await amounts(['2026-09-01'])).toEqual([]);
+      expect(await amounts(['2026-12-01'])).toEqual([]);
+      expect(await amounts(null)).toEqual([['700.00', '2026-10-19']]);
     });
   });
 
@@ -293,7 +305,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     });
   });
 
-  describe('«Не выплачивать»', () => {
+  describe('«Без проезда»', () => {
     it('периоды не пересекаются; стык — можно; «по» закрывает бессрочный', async () => {
       const first = await addCompensationStop(1, { date_from: '2026-08-01', date_to: null });
       if (first === 'overlap') throw new Error('первый период не добавился');
@@ -319,11 +331,78 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         INSERT INTO payroll_compensation_terms (employee_id, staff_category, calc_type, hourly_rate, effective_from, deduction_amount)
         VALUES (6, 'worker', 'hourly', 450, '2026-10-01', 1500)
       `);
-      const rows = await listDeductionRegistry({ ...SCOPE, onDate: '2026-10-19' });
-      expect(rows.map(row => [row.employee_id, row.kinds, row.amount])).toEqual([
-        [2, ['Корректировка удержаний', 'ТМЦ'], null],
-        [6, [], '1500.00'],
+      const rows = await listDeductionRegistry({ ...SCOPE, period: { onDate: '2026-10-19' } });
+      expect(rows.map(row => [row.employee_id, row.kinds, row.kind_ids, row.amount])).toEqual([
+        [2, ['Корректировка удержаний', 'ТМЦ'], [1, 2], null],
+        [6, [], [], '1500.00'],
       ]);
+    });
+
+    it('месяцы: сумма — из версии месяца; виды без дат — в любом месяце', async () => {
+      const rows = async (monthStarts: string[] | null) =>
+        (await listDeductionRegistry({ ...SCOPE, period: { monthStarts } })).map(row => [row.employee_id, row.amount]);
+      expect(await rows(['2026-09-01'])).toEqual([[2, null]]);
+      expect(await rows(['2026-10-01'])).toEqual([[2, null], [6, '1500.00']]);
+      expect(await rows(null)).toEqual([[2, null], [6, '1500.00']]);
+    });
+
+    describe('сохранение из таблицы', () => {
+      const save = async (employeeId: number, body: Record<string, unknown>) => {
+        const res = makeRes();
+        await payrollRegistryController.saveDeductions(req({ params: { empId: String(employeeId) }, body }), res);
+        return res;
+      };
+      const kindsOf = async (employeeId: number) => (await run(
+        'SELECT kind_id FROM payroll_employee_deductions WHERE employee_id = $1 ORDER BY kind_id', [employeeId],
+      )).rows.map(row => row.kind_id);
+      const deductionVersions = async (employeeId: number) => (await run(
+        `SELECT to_char(effective_from, 'YYYY-MM-DD') AS from, to_char(effective_to, 'YYYY-MM-DD') AS to,
+                deduction_amount::text AS amount, hourly_rate::text AS rate
+           FROM payroll_compensation_terms WHERE employee_id = $1 ORDER BY effective_from`,
+        [employeeId],
+      )).rows;
+
+      it('сумма без условий на дату — 409, виды тоже не сохранились', async () => {
+        const res = await save(2, { kind_ids: [3], amount: 900, effective_from: '2026-10-19' });
+        expect(res.statusCode).toBe(409);
+        expect(res.body.code).toBe('NO_TERMS');
+        expect(await kindsOf(2)).toEqual([1, 2]);
+      });
+
+      it('сумма null без условий — сохраняются только виды', async () => {
+        const res = await save(2, { kind_ids: [3], amount: null, effective_from: '2026-10-19' });
+        expect(res.statusCode).toBe(200);
+        expect(res.body.data).toEqual({ changed: true });
+        expect(await kindsOf(2)).toEqual([3]);
+      });
+
+      it('сумма с даты — разрез версии, ставка сохраняется', async () => {
+        const res = await save(6, { kind_ids: [1], amount: 2000, effective_from: '2026-11-01' });
+        expect(res.statusCode).toBe(200);
+        expect(await deductionVersions(6)).toEqual([
+          { from: '2026-10-01', to: '2026-10-31', amount: '1500.00', rate: '450.0000' },
+          { from: '2026-11-01', to: null, amount: '2000.00', rate: '450.0000' },
+        ]);
+        expect(await kindsOf(6)).toEqual([1]);
+      });
+
+      it('два параллельных сохранения — итог целиком одного из них', async () => {
+        const [first, second] = await Promise.all([
+          save(6, { kind_ids: [1], amount: 3000, effective_from: '2026-12-01' }),
+          save(6, { kind_ids: [2], amount: 4000, effective_from: '2026-12-01' }),
+        ]);
+        expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+        const amount = (await deductionVersions(6)).at(-1)?.amount;
+        const kinds = await kindsOf(6);
+        expect([[[1], '3000.00'], [[2], '4000.00']]).toContainEqual([kinds, amount]);
+      });
+
+      it('снять — пустые виды и сумма null с даты', async () => {
+        const res = await save(6, { kind_ids: [], amount: null, effective_from: '2027-01-01' });
+        expect(res.statusCode).toBe(200);
+        expect(await kindsOf(6)).toEqual([]);
+        expect((await deductionVersions(6)).at(-1)).toMatchObject({ from: '2027-01-01', amount: null });
+      });
     });
   });
 });

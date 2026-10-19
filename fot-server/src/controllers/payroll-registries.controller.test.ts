@@ -33,8 +33,20 @@ const stops = vi.hoisted(() => ({
 }));
 vi.mock('../services/payroll/payroll-compensation-stops.service.js', () => stops);
 
-const deductionKinds = vi.hoisted(() => ({ listDeductionRegistry: vi.fn() }));
+const deductionKinds = vi.hoisted(() => ({
+  listDeductionRegistry: vi.fn(),
+  allDeductionKindsExist: vi.fn(),
+  setEmployeeDeductionKinds: vi.fn(),
+}));
 vi.mock('../services/payroll/payroll-deduction-kinds.service.js', () => deductionKinds);
+
+const termsAmount = vi.hoisted(() => ({ setTermsAmountFrom: vi.fn() }));
+vi.mock('../services/payroll/payroll-terms-amount.service.js', () => termsAmount);
+
+// Порядок вызовов в транзакции «Удержаний»: блокировка, проверка видов, виды, сумма.
+const calls = vi.hoisted(() => [] as string[]);
+const terms = vi.hoisted(() => ({ lockPayrollEmployee: vi.fn() }));
+vi.mock('../services/payroll/payroll-terms.service.js', () => terms);
 
 // Транзакция в тесте — вызов колбэка с фиктивным клиентом: запросы делает замоканный сервис.
 vi.mock('../config/postgres.js', () => ({ withTransaction: vi.fn(async (fn: (client: unknown) => unknown) => fn({})) }));
@@ -65,8 +77,19 @@ const SCOPE = { contractorRootId: 'contractor-root', departmentIds: ['d-1'] };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  calls.length = 0;
   registryScope.resolvePayrollStaffScope.mockResolvedValue(SCOPE);
   payrollScope.resolvePayrollEditPredicate.mockResolvedValue((employeeId: number) => employeeId !== 99);
+  terms.lockPayrollEmployee.mockImplementation(async () => { calls.push('lock'); });
+  deductionKinds.allDeductionKindsExist.mockImplementation(async () => { calls.push('kinds-exist'); return true; });
+  deductionKinds.setEmployeeDeductionKinds.mockImplementation(async () => {
+    calls.push('kinds');
+    return { added: [], removed: [] };
+  });
+  termsAmount.setTermsAmountFrom.mockImplementation(async () => {
+    calls.push('amount');
+    return { status: 'unchanged' };
+  });
 });
 
 describe('списки', () => {
@@ -81,13 +104,143 @@ describe('списки', () => {
     expect(res.body.data.map((row: { can_edit: boolean }) => row.can_edit)).toEqual([true, false]);
   });
 
-  it('«Удержания» и «Не выплачивать» — в том же охвате', async () => {
-    deductionKinds.listDeductionRegistry.mockResolvedValue([]);
+  it('«Удержания» и «Без проезда» — в том же охвате; у «Удержаний» can_edit по строке', async () => {
+    deductionKinds.listDeductionRegistry.mockResolvedValue([
+      { employee_id: 42, full_name: 'Каримов Акмал', kinds: ['ТМЦ'], kind_ids: [2], amount: null },
+      { employee_id: 99, full_name: 'Сам Себе', kinds: [], kind_ids: [], amount: '1500.00' },
+    ]);
     stops.listCompensationStops.mockResolvedValue([]);
-    await registryC.listDeductions(makeReq(), makeRes());
+    const res = makeRes();
+    await registryC.listDeductions(makeReq(), res);
     await stopsC.list(makeReq(), makeRes());
     expect(deductionKinds.listDeductionRegistry).toHaveBeenCalledWith(expect.objectContaining(SCOPE));
     expect(stops.listCompensationStops).toHaveBeenCalledWith(SCOPE);
+    expect(res.body.data.map((row: { can_edit: boolean }) => row.can_edit)).toEqual([true, false]);
+  });
+});
+
+describe('месяцы в «Доплате за проживание» и «Удержаниях»', () => {
+  const periodOf = (mock: { mock: { calls: unknown[][] } }) => (mock.mock.calls[0][0] as { period: unknown }).period;
+
+  it('старый клиент без months — на сегодня (МСК), как до выбора месяца', async () => {
+    housing.listHousingAllowances.mockResolvedValue([]);
+    deductionKinds.listDeductionRegistry.mockResolvedValue([]);
+    await housingC.list(makeReq(), makeRes());
+    await registryC.listDeductions(makeReq(), makeRes());
+    expect(periodOf(housing.listHousingAllowances)).toEqual({ onDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(periodOf(deductionKinds.listDeductionRegistry)).toEqual({ onDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+  });
+
+  it('список месяцев — первые числа без повторов по возрастанию; all — весь период', async () => {
+    housing.listHousingAllowances.mockResolvedValue([]);
+    await housingC.list(makeReq({ query: { months: '2026-10,2026-09,2026-10' } }), makeRes());
+    await housingC.list(makeReq({ query: { months: 'all' } }), makeRes());
+    expect((housing.listHousingAllowances.mock.calls[0][0] as { period: unknown }).period)
+      .toEqual({ monthStarts: ['2026-09-01', '2026-10-01'] });
+    expect((housing.listHousingAllowances.mock.calls[1][0] as { period: unknown }).period).toEqual({ monthStarts: null });
+  });
+
+  it('неверный месяц — 400, список не читается', async () => {
+    for (const months of ['2026-13', '', '2026-1', ['2026-09', '2026-10']]) {
+      const res = makeRes();
+      await registryC.listDeductions(makeReq({ query: { months } as never }), res);
+      expect(res.statusCode, JSON.stringify(months)).toBe(400);
+    }
+    expect(deductionKinds.listDeductionRegistry).not.toHaveBeenCalled();
+  });
+});
+
+describe('«Удержания»: сохранение из таблицы', () => {
+  const body = { kind_ids: [2, 5], amount: 1500, effective_from: '2026-10-19' };
+  const save = async (over: Record<string, unknown> = {}) => {
+    const res = makeRes();
+    await registryC.saveDeductions(makeReq({ params: { empId: '42' }, body: { ...body, ...over } }), res);
+    return res;
+  };
+
+  it('не «штат зарплаты» или чужой — 403, транзакции нет', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
+    const res = await save();
+    expect(res.statusCode).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  it('блокировка сотрудника — первой, затем виды, затем сумма', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    const res = await save();
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual(['lock', 'kinds-exist', 'kinds', 'amount']);
+    expect(deductionKinds.allDeductionKindsExist).toHaveBeenCalledWith([2, 5], {});
+    expect(termsAmount.setTermsAmountFrom).toHaveBeenCalledWith({}, {
+      column: 'deduction_amount', employeeId: 42, amount: 1500, from: '2026-10-19', createdBy: 'user-1',
+    });
+  });
+
+  it('неизвестный вид — 400, ничего не пишется', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    deductionKinds.allDeductionKindsExist.mockResolvedValue(false);
+    const res = await save();
+    expect(res.statusCode).toBe(400);
+    expect(deductionKinds.setEmployeeDeductionKinds).not.toHaveBeenCalled();
+    expect(termsAmount.setTermsAmountFrom).not.toHaveBeenCalled();
+  });
+
+  it('сумма без условий на дату — 409 NO_TERMS (транзакция откатывается), аудита нет', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    deductionKinds.setEmployeeDeductionKinds.mockResolvedValue({ added: [2, 5], removed: [] });
+    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'no_terms' });
+    const res = await save();
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('NO_TERMS');
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('сумма null без условий — сохраняются только виды, аудит видов', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    deductionKinds.setEmployeeDeductionKinds.mockResolvedValue({ added: [2], removed: [7] });
+    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'no_terms' });
+    const res = await save({ amount: null });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual({ changed: true });
+    expect(audit.logFromRequest.mock.calls.map(call => call[2])).toEqual(['PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED']);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
+      expect.objectContaining({ details: { source: 'deduction_registry', employee_id: 42, added: [2], removed: [7] } }),
+    );
+  });
+
+  it('аудит — только изменившиеся части: сумма с source deduction_registry', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    termsAmount.setTermsAmountFrom.mockResolvedValue({
+      status: 'saved', termsId: 21, previousTermsId: 20, previousAmount: '1000.00', laterUpdated: 0,
+    });
+    const res = await save();
+    expect(res.body.data).toEqual({ changed: true });
+    expect(audit.logFromRequest.mock.calls.map(call => call[2])).toEqual(['PAYROLL_TERMS_ASSIGNED']);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_TERMS_ASSIGNED',
+      expect.objectContaining({
+        entityId: '21',
+        details: expect.objectContaining({
+          source: 'deduction_registry', deduction_amount: 1500, previous_deduction_amount: '1000.00',
+        }),
+      }),
+    );
+
+    audit.logFromRequest.mockClear();
+    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'unchanged' });
+    const same = await save();
+    expect(same.body.data).toEqual({ changed: false });
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('сумма 0, строкой, вид не массивом, дата 31.02 — 400', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    for (const patch of [{ amount: 0 }, { amount: '1500' }, { kind_ids: 'x' }, { effective_from: '2026-02-31' }]) {
+      const res = await save(patch);
+      expect(res.statusCode, JSON.stringify(patch)).toBe(400);
+    }
+    expect(calls).toEqual([]);
   });
 });
 
@@ -240,7 +393,7 @@ describe('«Доплата»: разовая', () => {
   });
 });
 
-describe('«Не выплачивать»', () => {
+describe('«Без проезда»', () => {
   const STOP = {
     id: 3, employee_id: 42, full_name: 'Каримов Акмал', department: null, position: null,
     date_from: '2026-08-01', date_to: null,

@@ -71,6 +71,22 @@
 
 .table tbody tr:last-child td { border-bottom: none; }
 
+/* Кликабельная строка («Свод» → сотрудники объекта) */
+.table tbody tr.rowClickable { cursor: pointer; }
+.table tbody tr.rowClickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Строка «Итого» — под таблицей, отделена чертой */
+.table tfoot td {
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  background-color: var(--bg-secondary);
+  background-image: none;
+}
+
 .table thead th.cellNum { text-align: center; }
 
 .cellNum {

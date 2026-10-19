@@ -1,11 +1,17 @@
-import { useRef, useState, type FC } from 'react';
+import { lazy, Suspense, useRef, useState, type FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import type { IPayrollTermsRow } from '../../services/payrollService';
+import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
 import { PAYROLL_CALC_COLUMNS_KEY } from '../../utils/payrollColumns';
+import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
 import { CompensationTermsPage } from './CompensationTermsPage';
 import styles from './PayrollDeductionsPage.module.css';
+
+const PayrollSummaryModal = lazy(() => import('../../components/salary/summary/PayrollSummaryModal')
+  .then(m => ({ default: m.PayrollSummaryModal })));
 
 interface IPayrollDeductionsPageProps {
   /** Дата выборки условий — та же, что у «Условий оплаты». */
@@ -18,13 +24,28 @@ interface IPayrollDeductionsPageProps {
 
 /**
  * «Зарплата → Расчёты»: таблица штата как у «Условий оплаты».
- * Рядом с шестерёнкой — «Справочник»: виды удержаний и ставки. Клик по строке — окно с карточкой
- * сотрудника: только там вносятся компенсации, доплаты и удержания.
+ * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
+ * ставки и таблицы. Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, active, onSaved }) => {
   const [employee, setEmployee] = useState<IPayrollTermsRow | null>(null);
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const dictionaryButtonRef = useRef<HTMLButtonElement>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const summaryButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Месяцы «Свода» — те, за которые есть «Оплачено». Пока не загружены, выбора нет и «Свод» неактивен:
+  // пустой выбор значит «весь период», и окно не должно успеть запросить его до месяца по умолчанию.
+  const monthsQuery = useQuery({
+    queryKey: PAYROLL_SUMMARY_KEYS.months,
+    queryFn: ({ signal }) => payrollSummaryService.listMonths(signal),
+    enabled: active,
+    staleTime: 60_000,
+  });
+  const monthOptions = monthsQuery.data ?? [];
+  const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
+  // Не выбирали — последний месяц с данными.
+  const summaryMonths = chosenMonths ?? (monthsQuery.data ? monthOptions.slice(-1) : null);
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие
   // экрана их не прячет. Паттерн «состояние из прошлого рендера» вместо setState-в-effect.
@@ -33,6 +54,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
     setWasActive(active);
     if (!active) {
       setDictionaryOpen(false);
+      setSummaryOpen(false);
       setEmployee(null);
     }
   }
@@ -41,6 +63,10 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   const closeDictionary = () => {
     setDictionaryOpen(false);
     dictionaryButtonRef.current?.focus();
+  };
+  const closeSummary = () => {
+    setSummaryOpen(false);
+    summaryButtonRef.current?.focus();
   };
 
   return (
@@ -51,19 +77,44 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         onOpenEmployee={setEmployee}
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         actionsExtra={(
-          <button
-            ref={dictionaryButtonRef}
-            type="button"
-            className={styles.dictionaryButton}
-            aria-haspopup="dialog"
-            onClick={() => setDictionaryOpen(true)}
-          >
-            Справочник
-          </button>
+          <>
+            <button
+              ref={summaryButtonRef}
+              type="button"
+              className={styles.dictionaryButton}
+              aria-haspopup="dialog"
+              disabled={summaryMonths === null}
+              onClick={() => setSummaryOpen(true)}
+            >
+              Свод
+            </button>
+            <MonthsPicker
+              value={summaryMonths ?? []}
+              options={monthOptions}
+              onChange={setChosenMonths}
+              ariaLabel="Месяцы «Свода»"
+              className={styles.monthsButton}
+            />
+            <button
+              ref={dictionaryButtonRef}
+              type="button"
+              className={styles.dictionaryButton}
+              aria-haspopup="dialog"
+              onClick={() => setDictionaryOpen(true)}
+            >
+              Справочник
+            </button>
+          </>
         )}
       />
 
       {dictionaryOpen && <PayrollDictionaryModal onClose={closeDictionary} />}
+
+      {summaryOpen && summaryMonths !== null && (
+        <Suspense fallback={null}>
+          <PayrollSummaryModal months={summaryMonths} onClose={closeSummary} />
+        </Suspense>
+      )}
 
       {employee && (
         <PayrollEmployeeModal

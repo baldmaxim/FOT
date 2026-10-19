@@ -1,0 +1,87 @@
+/*
+ * Окно «Свод» на «Расчётах»: оверлей, шапка и тело — из PayrollModal.module.css. Размер — как у «Справочника»
+ * (PayrollDictionary.module.css): на телефоне вся область, с 768px — 90% ширины и высоты.
+ * Шапка: на телефоне заголовок с крестиком, под ними переключатель категорий во всю ширину (тап-цели 44px);
+ * с 769px — переключатель справа от заголовка, 36px.
+ */
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+/* Двойной класс: перебивает align-items: flex-start общей шапки при любом порядке CSS. */
+.header.header {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 10px;
+}
+
+.categories {
+  order: 3;
+  flex: 1 1 100%;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.category {
+  min-width: 0;
+  min-height: 44px;
+  /* На 360px четыре кнопки в ряд: «Рабочие» должно влезть целиком. */
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.category:hover { color: var(--text-primary); }
+.category:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.categoryActive,
+.categoryActive:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+@media (min-width: 768px) {
+  .container {
+    width: min(90vw, 100%);
+    height: min(90dvh, 100%);
+  }
+}
+
+@media (min-width: 769px) {
+  .categories {
+    order: 0;
+    flex: 0 0 auto;
+    grid-auto-columns: auto;
+  }
+  .category { min-height: 32px; padding: 0 12px; font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .category { transition: none; }
+}

@@ -9,9 +9,10 @@ import { sanitizeExportFileName } from '../services/skud-export.service.js';
 
 /**
  * Лимиты снимка: клиентские таблицы — десятки строк, запас — на рост справочника, но не на
- * «выгрузку произвольной таблицы».
+ * «выгрузку произвольной таблицы». Самая широкая — сотрудники объекта в «Своде» «Зарплаты»: №, ФИО,
+ * отдел, должность, категория, 17 статей «Оплачено», «Начислено», «Удержано» — 24 столбца.
  */
-export const TABLE_SNAPSHOT_MAX_COLUMNS = 20;
+export const TABLE_SNAPSHOT_MAX_COLUMNS = 30;
 export const TABLE_SNAPSHOT_MAX_ROWS = 1000;
 
 const cellSchema = z.union([z.string().max(300), z.number().finite(), z.null()]);

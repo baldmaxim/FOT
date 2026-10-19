@@ -24,15 +24,15 @@ type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'housing' | 'deduc
 /**
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
  * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
- * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие», «Не выплачивать», «Доплата»;
+ * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие», «Без проезда», «Доплата»;
  * «Доплата за проживание» и заголовок «Удержания» открывают свои таблицы — окном поверх.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
   const { canEditPage } = useAuth();
-  // Справочники и «Не выплачивать» — те же ключи, что у сервера (payroll.routes: deductionsEdit).
+  // Справочники и «Без проезда» — те же ключи, что у сервера (payroll.routes: deductionsEdit).
   const canEdit = canEditPage('/salary/terms') || canEditPage('/salary/payments');
-  // Проживание и доплаты — это условия оплаты (termsEdit).
+  // Проживание, доплаты и сумма удержания — это условия оплаты (termsEdit).
   const canEditTerms = canEditPage('/salary/terms');
   // Открыто окно таблицы — Escape закрывает его, а не «Справочник».
   const [opened, setOpened] = useState<RegistryWindow | null>(null);
@@ -59,7 +59,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
               </button>
               <button type="button" className={styles.headerButton} onClick={() => setOpened('stops')}>
                 <Ban size={16} aria-hidden="true" />
-                <span>Не выплачивать</span>
+                <span>Без проезда</span>
               </button>
               <button type="button" className={styles.headerButton} onClick={() => setOpened('supplements')}>
                 <CirclePlus size={16} aria-hidden="true" />
@@ -81,7 +81,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
           {opened === 'stops' && <CompensationStopRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'supplements' && <SupplementRegistry canEdit={canEditTerms} onClose={close} />}
           {opened === 'housing' && <HousingAllowanceRegistry canEdit={canEditTerms} onClose={close} />}
-          {opened === 'deductions' && <DeductionRegistry onClose={close} />}
+          {opened === 'deductions' && <DeductionRegistry canEdit={canEditTerms} onClose={close} />}
         </>
       )}
     </ModalShell>

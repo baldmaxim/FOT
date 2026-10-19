@@ -68,6 +68,7 @@ describe('payrollDeductionsController: виды сотрудника', () => {
       .mockResolvedValueOnce([{ id: 2 }, { id: 5 }]) // все виды есть в справочнике
       .mockResolvedValueOnce([{ kind_id: 2 }, { kind_id: 5 }]); // итог после сохранения
     txClient.query
+      .mockResolvedValueOnce({ rows: [] }) // блокировка сотрудника
       .mockResolvedValueOnce({ rows: [{ kind_id: 4 }] }) // DELETE снятых
       .mockResolvedValueOnce({ rows: [{ kind_id: 2 }] }); // INSERT новых
     const res = makeRes();
@@ -76,7 +77,8 @@ describe('payrollDeductionsController: виды сотрудника', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual({ kind_ids: [2, 5] });
-    expect(txClient.query.mock.calls[0][1]).toEqual([7, [5, 2]]);
+    expect(txClient.query.mock.calls[0][0]).toContain('pg_advisory_xact_lock');
+    expect(txClient.query.mock.calls[1][1]).toEqual([7, [5, 2]]);
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
       expect.objectContaining({ details: { employee_id: 7, added: [2], removed: [4] } }),
