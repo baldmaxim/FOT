@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -20,6 +21,7 @@ import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { SalaryHistorySection } from './SalaryHistorySection';
+import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
 
 interface IEmployeePayrollDetailsProps {
@@ -145,21 +147,35 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       aria-labelledby={titleId}
     >
       <header className={styles.header}>
-        <div className={styles.nameRow}>
-          <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
-          {!editable && (
-            <MonthsPicker
-              value={months}
-              options={monthOptions}
-              onChange={setMonths}
-              allowAll={false}
-              resetValue={[shiftMonth(currentMonth, -1)]}
-              ariaLabel="Месяцы «Оплачено»"
-              className={styles.monthsTrigger}
-            />
-          )}
+        <div className={styles.headerMain}>
+          <div className={styles.nameRow}>
+            <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
+            {!editable && (
+              <MonthsPicker
+                value={months}
+                options={monthOptions}
+                onChange={setMonths}
+                allowAll={false}
+                resetValue={[shiftMonth(currentMonth, -1)]}
+                ariaLabel="Месяцы «Оплачено»"
+                className={styles.monthsTrigger}
+              />
+            )}
+          </div>
+          {meta && <p className={styles.meta}>{meta}</p>}
         </div>
-        {meta && <p className={styles.meta}>{meta}</p>}
+        {/* Крестик — как «Отмена»: пока идёт сохранение, не закрыть. */}
+        {editable && onClose && (
+          <button
+            type="button"
+            className={modal.closeButton}
+            onClick={onClose}
+            disabled={saveMutation.isPending}
+            aria-label="Закрыть"
+          >
+            <X size={20} aria-hidden="true" />
+          </button>
+        )}
       </header>
 
       <div className={styles.body}>

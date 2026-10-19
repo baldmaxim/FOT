@@ -1,7 +1,7 @@
 import { useId, useState, type FC } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 
 import { dormitoryService, PAYROLL_DORMITORY_STAYS_KEY } from '../../services/dormitoryService';
 import { DormitoryStaysPanel } from '../staff/dormitory/DormitoryStaysPanel';
@@ -39,7 +39,10 @@ export const PayrollDormitoryModal: FC<IPayrollDormitoryModalProps> = ({ onClose
     >
       {({ requestClose }) => (
         <>
-          <header className={modal.header}>
+          <header className={`${modal.header} ${styles.header}`}>
+            <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Назад к справочнику">
+              <ArrowLeft size={20} aria-hidden="true" />
+            </button>
             <div className={modal.headerText}>
               <h2 id={titleId} className={modal.title}>Проживание общежития</h2>
             </div>

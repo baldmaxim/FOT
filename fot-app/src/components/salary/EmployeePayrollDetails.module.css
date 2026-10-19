@@ -16,11 +16,18 @@
   background: var(--surface);
 }
 
-/* ФИО и сразу за ним выбор месяцев «Оплачено»; узко — выбор переносится под ФИО. Ниже — отдел и должность. */
+/*
+ * ФИО и сразу за ним выбор месяцев «Оплачено»; узко — выбор переносится под ФИО. Ниже — отдел и должность.
+ * В окне «Расчётов» справа — крестик.
+ */
 .header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
 }
+.headerMain { flex: 1; min-width: 0; }
 .nameRow { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; }
 /* Триггер выбора месяцев — из общего MonthsPicker; вложенный селектор перекрывает его размер. */
 .nameRow .monthsTrigger { margin-top: 0; min-height: 44px; font-size: 14px; }
