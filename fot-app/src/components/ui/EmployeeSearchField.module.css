@@ -1,0 +1,91 @@
+/*
+ * Поиск сотрудника по ФИО (EmployeeSearchField) в формах «Добавить сотрудника»: подсказки под полем,
+ * выбранный — строкой с крестиком. Тап-цели 44px.
+ */
+.search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.resultButton {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.resultButton:hover:not(:disabled) { background: var(--bg-secondary); }
+.resultButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.resultButton .muted { font-size: 12px; }
+.resultButton:disabled { cursor: default; }
+.resultButton:disabled > :first-child { color: var(--text-muted); }
+
+.muted { color: var(--text-muted); }
+
+.hint {
+  padding: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.picked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.pickedText {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.iconButton {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.iconButton:hover:not(:disabled) { color: var(--text-primary); }
+.iconButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

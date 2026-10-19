@@ -2,11 +2,15 @@ import { Router } from 'express';
 
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
+import { payrollHousingController } from '../controllers/payroll-housing.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
+import { payrollRegistryController } from '../controllers/payroll-registry.controller.js';
 import { dormitoryStaysController } from '../controllers/dormitory-stays.controller.js';
 import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
+import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 
@@ -54,8 +58,30 @@ router.get('/rates', deductionsView, payrollRatesController.list);
 router.post('/rates', deductionsEdit, payrollRatesController.add);
 router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
 router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
-// Кто живёт в общежитии — по кнопке у ставки «Проживание общежития»; ведётся в «Управлении кадрами».
+// Кто живёт в общежитии — кнопка «Общежитие» в шапке «Справочника»; ведётся в «Управлении кадрами».
 router.get('/dormitory-stays', deductionsView, dormitoryStaysController.listForPayroll);
+
+// ─── Таблицы окна «Справочник» (миграция 315) ────────────────────────────────
+// «Доплата за проживание» — housing_compensation условий оплаты, тот же источник, что окно сотрудника.
+router.get('/housing-allowances', termsView, payrollHousingController.list);
+router.put('/housing-allowances/employee/:empId', termsEdit, payrollHousingController.set);
+// «Доплата»: плановая (журнал окна сотрудника) и разовая.
+router.get('/supplements', termsView, payrollSupplementsController.list);
+router.post('/supplements/planned', termsEdit, payrollSupplementsController.addPlanned);
+router.put('/supplements/planned/employee/:empId', termsEdit, payrollSupplementsController.setPlanned);
+router.delete('/supplements/planned/employee/:empId', termsEdit, payrollSupplementsController.removePlanned);
+router.post('/supplements/one-time', termsEdit, payrollSupplementsController.addOneTime);
+router.patch('/supplements/one-time/:id', termsEdit, payrollSupplementsController.updateOneTime);
+router.delete('/supplements/one-time/:id', termsEdit, payrollSupplementsController.removeOneTime);
+// «Не выплачивать» компенсацию: периоды «с — по».
+router.get('/compensation-stops', deductionsView, payrollCompensationStopsController.list);
+router.post('/compensation-stops', deductionsEdit, payrollCompensationStopsController.add);
+router.patch('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.update);
+router.delete('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.remove);
+// «Удержания» — только просмотр, вносят в окне сотрудника.
+router.get('/deduction-registry', deductionsView, payrollRegistryController.listDeductions);
+// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, deductions).
+router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);

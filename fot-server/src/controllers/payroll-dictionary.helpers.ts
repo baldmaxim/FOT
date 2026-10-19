@@ -1,5 +1,6 @@
 /**
- * Общее для справочников «Зарплаты» (виды удержаний, ставки): схема названия, id из пути,
+ * Общее для справочников «Зарплаты» (виды удержаний, ставки) и таблиц окна «Справочник»
+ * («Доплата за проживание», «Доплата», «Не выплачивать»): схемы названия, дат и сумм, id из пути,
  * ответ на ошибку проверки.
  */
 import type { Response } from 'express';
@@ -25,3 +26,43 @@ export const handlePayrollZodError = (error: unknown, res: Response): boolean =>
   }
   return false;
 };
+
+/** Верх NUMERIC(12,2): больше — переполнение в БД и 500 вместо понятной ошибки. */
+export const PAYROLL_MAX_MONEY = 9_999_999_999.99;
+
+/** YYYY-MM-DD, и такая дата есть в календаре: 31.02 — 400, а не ошибка PostgreSQL (500). */
+const isCalendarDate = (value: string): boolean => {
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return year >= 1900 && year <= 2100
+    && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
+
+export const payrollDateSchema = (message: string) => z.string({ required_error: message, invalid_type_error: message })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, message)
+  .refine(isCalendarDate, message);
+
+/** Месяц YYYY-MM (1900–2100). */
+export const payrollMonthSchema = (message: string) => z.string({ required_error: message, invalid_type_error: message })
+  .regex(/^(19\d{2}|20\d{2}|2100)-(0[1-9]|1[0-2])$/, message);
+
+/** Сумма больше нуля, без coerce: '' и false не должны превращаться в число. */
+export const payrollPositiveMoneySchema = (message: string) => z.number({ required_error: message, invalid_type_error: message })
+  .finite(message)
+  .positive('Сумма должна быть больше нуля')
+  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма');
+
+export const payrollEmployeeIdSchema = z.number({ required_error: 'Выберите сотрудника', invalid_type_error: 'Выберите сотрудника' })
+  .int('Выберите сотрудника').positive('Выберите сотрудника');
+
+/** :empId в пути; не целое положительное — null. */
+export const parsePayrollEmployeeIdParam = (req: AuthenticatedRequest): number | null => {
+  const employeeId = Number(req.params.empId);
+  return Number.isInteger(employeeId) && employeeId > 0 ? employeeId : null;
+};
+
+/** Строка таблицы «Справочника» с признаком правки (скоуп считается один раз на запрос). */
+export const withCanEdit = <Row extends { employee_id: number }>(
+  rows: Row[],
+  canEdit: (employeeId: number) => boolean,
+): Array<Row & { can_edit: boolean }> => rows.map(row => ({ ...row, can_edit: canEdit(row.employee_id) }));

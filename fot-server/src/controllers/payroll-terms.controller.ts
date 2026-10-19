@@ -46,6 +46,7 @@ import {
   type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
+import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
@@ -192,18 +193,15 @@ const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, c
  * сотрудники без условий в выборку не попадают по определению, и счётчик показал бы 0,
  * хотя люди, которые не попадут в расчёт, есть.
  *
- * Подрядчики исключаются через NOT EXISTS, а не NOT IN: у сотрудника без отдела
- * `NULL IN (...)` даёт NULL, и он молча выпал бы из списка.
+ * Штат (работает, не в архиве, без подрядчиков, в охвате) — общие фрагменты payroll-registry-scope:
+ * те же, что у таблиц окна «Справочник» и проверки перед записью в них.
  *
  * График — имя графика на дату выборки, как у «Текущих сотрудников»: последнее действующее
  * назначение по дате начала, иначе график по умолчанию. Считается в SQL, чтобы ячейка,
  * сортировка и фильтр по графику совпадали.
  */
 export const buildBaseCtes = (columnFilterSql: string): string => `
-  WITH contractor_depts AS (
-    SELECT id FROM public.get_descendant_department_ids(ARRAY[$6::uuid])
-     WHERE $6::uuid IS NOT NULL
-  ),
+  WITH ${payrollContractorDeptsCte('$6')},
   -- Фильтр подразделения — поддерево: выбрали департамент, видны все его бригады.
   filter_depts AS (
     SELECT id FROM public.get_descendant_department_ids(ARRAY[$2::uuid])
@@ -251,11 +249,8 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
              ON t.employee_id = e.id
             AND t.effective_from <= $1::date
             AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
-     WHERE e.employment_status = 'active'
-       AND e.is_archived IS NOT TRUE
+     WHERE ${payrollStaffWhereSql('e', '$7')}
        AND ($2::uuid IS NULL OR e.org_department_id IN (SELECT id FROM filter_depts))
-       AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
-       AND ($7::uuid[] IS NULL OR e.org_department_id = ANY($7::uuid[]))
        AND ($8::text IS NULL OR e.full_name ILIKE $8::text OR e.tab_number ILIKE $8::text)
   ),
   filtered AS (
@@ -659,6 +654,19 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         previous_calc_type: previous?.calc_type ?? null,
       },
     });
+
+    // Плановая доплата — тем же событием, что из таблицы «Доплата» «Справочника».
+    if (supplementChanged) {
+      await auditService.logFromRequest(req, req.user.id, 'PAYROLL_PLANNED_SUPPLEMENT_SET', {
+        entityType: 'payroll_planned_supplements',
+        entityId: String(employeeId),
+        details: {
+          source: 'employee_card',
+          employee_id: employeeId,
+          planned_supplement: supplement ?? null,
+        },
+      });
+    }
 
     res.json({ success: true, data: { terms_id: termsId } });
   } catch (err) {

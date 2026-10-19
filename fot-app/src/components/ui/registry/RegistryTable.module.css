@@ -1,7 +1,7 @@
 /*
- * «Общежитие» — в стиле «Управления кадрами» (.sc-table--staff), образец — ScheduleTemplatesTable.module.css.
- * Строк десятки–сотни, без виртуализации: обёртка скроллится только по горизонтали, страница на
- * 360px вбок не уезжает.
+ * Таблица-реестр (RegistryTable) в стиле «Управления кадрами» (.sc-table--staff), образец —
+ * ScheduleTemplatesTable.module.css: «Общежитие» и таблицы «Справочника» «Зарплаты». Строк десятки–
+ * сотни, без виртуализации: обёртка скроллится только по горизонтали, страница на 360px вбок не уезжает.
  */
 .wrap {
   overflow-x: auto;
@@ -14,10 +14,11 @@
 .table {
   width: 100%;
   /*
-   * ФИО забирает остаток ширины, но не уже ~170px: дальше скроллится таблица, не страница. 966 = сумма
-   * остальных колонок (796) + 170 — влезает в контент при 1280 с раскрытым меню и полосой прокрутки.
+   * ФИО забирает остаток ширины, но не уже ~170px: дальше скроллится таблица, не страница. Минимум
+   * считает компонент — сумма колонок с шириной + 170 (у «Общежития» 966 — влезает в контент при 1280
+   * с раскрытым меню и полосой прокрутки).
    */
-  min-width: 966px;
+  min-width: var(--registry-min-width);
   /* separate + spacing 0: у collapse граница шапки «уезжает» при горизонтальной прокрутке */
   border-collapse: separate;
   border-spacing: 0;
@@ -26,15 +27,10 @@
 }
 
 /*
- * Ширины — под самое длинное слово заголовка (заглавные 12px, letter-spacing .04em) плюс стрелка
- * и воронка (34px) и паддинги 24px, либо под типичное значение.
+ * Ширины столбцов — в описании столбца (px): под самое длинное слово заголовка (заглавные 12px,
+ * letter-spacing .04em) плюс стрелка и воронка (34px) и паддинги 24px, либо под типичное значение.
  */
 .colNum        { width: 48px; }
-.colName       { width: auto; }
-.colDepartment { width: 140px; }
-.colPosition   { width: 148px; }
-.colDate       { width: 112px; }
-.colAddress    { width: 152px; }
 .colActions    { width: 84px; }
 
 .table thead th {
@@ -86,6 +82,7 @@
 }
 
 .cellValue { font-variant-numeric: tabular-nums; }
+.table td.cellNumeric { text-align: right; }
 
 .table td.cellText { white-space: normal; }
 
@@ -157,7 +154,7 @@
 /* Смартфоны и планшеты: тап-цели ≥ 44px */
 @media (max-width: 768px) {
   /* Кнопки 44px — колонка действий шире, ФИО по-прежнему не уже ~170px. */
-  .table { min-width: 1000px; }
+  .table { min-width: var(--registry-min-width-touch); }
   .table td { height: 52px; }
   .colActions { width: 116px; }
   .iconBtn {

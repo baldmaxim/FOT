@@ -60,6 +60,12 @@ vi.mock('../controllers/payroll-section-access.controller.js', () => ({ payrollS
 vi.mock('../controllers/payroll-terms.controller.js', () => ({ payrollTermsController: h.stubController('terms') }));
 vi.mock('../controllers/payroll-vacation.controller.js', () => ({ payrollVacationController: h.stubController('vacation') }));
 vi.mock('../controllers/dormitory-stays.controller.js', () => ({ dormitoryStaysController: h.stubController('dormitory') }));
+vi.mock('../controllers/payroll-housing.controller.js', () => ({ payrollHousingController: h.stubController('housing') }));
+vi.mock('../controllers/payroll-supplements.controller.js', () => ({ payrollSupplementsController: h.stubController('supplements') }));
+vi.mock('../controllers/payroll-compensation-stops.controller.js', () => ({
+  payrollCompensationStopsController: h.stubController('stops'),
+}));
+vi.mock('../controllers/payroll-registry.controller.js', () => ({ payrollRegistryController: h.stubController('registry') }));
 
 const app = express();
 app.use(express.json());
@@ -88,7 +94,16 @@ const tokenFor = (userId: string, roleCode: string): string => jwt.sign(
 const get = (url: string, userId: string, roleCode: string): request.Test =>
   request(app).get(url).set('Authorization', `Bearer ${tokenFor(userId, roleCode)}`);
 
-const ROUTES = ['/api/payroll/terms', '/api/payroll/section-access', '/api/payroll/rates', '/api/payroll/dormitory-stays'];
+const ROUTES = [
+  '/api/payroll/terms',
+  '/api/payroll/section-access',
+  '/api/payroll/rates',
+  '/api/payroll/dormitory-stays',
+  '/api/payroll/housing-allowances',
+  '/api/payroll/supplements',
+  '/api/payroll/compensation-stops',
+  '/api/payroll/deduction-registry',
+];
 
 beforeEach(() => {
   h.calls.length = 0;
@@ -111,7 +126,10 @@ describe('раздел «Зарплата» по списку', () => {
       const res = await get(url, 'admin-listed', 'admin');
       expect(res.status, url).toBe(200);
     }
-    expect(h.calls).toEqual(['terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll']);
+    expect(h.calls).toEqual([
+      'terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll',
+      'housing.list', 'supplements.list', 'stops.list', 'registry.listDeductions',
+    ]);
   });
 
   it('офисный сотрудник из списка — проходит, не из списка — 403', async () => {

@@ -257,6 +257,16 @@ export const AUDIT_ACTIONS = {
   PAYROLL_RATE_DELETED: 'PAYROLL_RATE_DELETED',
   // Виды удержаний сотрудника (миграция 300): добавленные и снятые.
   PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
+  // Плановая доплата (миграция 293) изменена — из окна сотрудника и из таблицы «Доплата»; null — снята.
+  PAYROLL_PLANNED_SUPPLEMENT_SET: 'PAYROLL_PLANNED_SUPPLEMENT_SET',
+  // Разовая доплата (миграция 315): месяц, сумма, основание — добавлена, изменена (было → стало), удалена.
+  PAYROLL_ONE_TIME_SUPPLEMENT_ADDED: 'PAYROLL_ONE_TIME_SUPPLEMENT_ADDED',
+  PAYROLL_ONE_TIME_SUPPLEMENT_UPDATED: 'PAYROLL_ONE_TIME_SUPPLEMENT_UPDATED',
+  PAYROLL_ONE_TIME_SUPPLEMENT_DELETED: 'PAYROLL_ONE_TIME_SUPPLEMENT_DELETED',
+  // «Не выплачивать» (миграция 315): период «с — по» — добавлен, изменён (было → стало), удалён.
+  PAYROLL_COMPENSATION_STOP_ADDED: 'PAYROLL_COMPENSATION_STOP_ADDED',
+  PAYROLL_COMPENSATION_STOP_UPDATED: 'PAYROLL_COMPENSATION_STOP_UPDATED',
+  PAYROLL_COMPENSATION_STOP_DELETED: 'PAYROLL_COMPENSATION_STOP_DELETED',
   // «Просмотр табеля» (миграция 309): кого добавили и кого сняли у смотрящего.
   EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED: 'EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED',
   // «Общежитие» (миграция 314): проживание сотрудника — добавлено, изменено (было → стало), удалено.

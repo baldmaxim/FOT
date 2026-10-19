@@ -1,15 +1,8 @@
-import { useMemo, useState, type FC } from 'react';
-import { Download, UserPlus } from 'lucide-react';
+import type { FC } from 'react';
 
-import { useDormitoryExport } from '../../../hooks/useDormitoryExport';
-import type { IDormitoryStay } from '../../../services/dormitoryService';
-import { DORMITORY_COLUMNS, matchesDormitorySearch } from '../../../utils/dormitoryTable';
-import { applyTableView, type ITableView } from '../../../utils/tableView';
-import { SearchInput } from '../../ui/SearchInput';
-import { DormitoryStaysTable } from './DormitoryStaysTable';
-import styles from './DormitoryStaysPanel.module.css';
-
-const INITIAL_VIEW: ITableView = { sort: 'full_name', dir: 'asc', filters: {} };
+import { dormitoryService, type IDormitoryStay } from '../../../services/dormitoryService';
+import { buildDormitoryExport, DORMITORY_COLUMNS } from '../../../utils/dormitoryTable';
+import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 
 interface IDormitoryStaysPanelProps {
   /** undefined — ещё не загружены. */
@@ -27,65 +20,33 @@ interface IDormitoryStaysPanelProps {
   onFilterOpenChange?: (open: boolean) => void;
 }
 
+const stayKey = (stay: IDormitoryStay): number => stay.id;
+const stayName = (stay: IDormitoryStay): string => stay.full_name;
+
 /**
  * Таблица «Общежитие» с панелью — вкладка «Управления кадрами» и окно «Справочника» «Зарплаты»:
  * поиск по ФИО, «Экспорт» ровно видимых строк, при праве правки — «Добавить сотрудника».
  */
 export const DormitoryStaysPanel: FC<IDormitoryStaysPanelProps> = ({
   rows, isLoading, isError, onRetry, onAdd, onEdit, onDelete, busyId = null, raisedFilters = false, onFilterOpenChange,
-}) => {
-  const [search, setSearch] = useState('');
-  const [view, setView] = useState<ITableView>(INITIAL_VIEW);
-  const { exporting, exportRows } = useDormitoryExport();
-
-  const searchedRows = useMemo(() => (rows ?? []).filter(stay => matchesDormitorySearch(stay, search)), [rows, search]);
-  const visibleRows = useMemo(() => applyTableView(searchedRows, DORMITORY_COLUMNS, view), [searchedRows, view]);
-
-  return (
-    <div className={styles.panel}>
-      <div className={styles.toolbar}>
-        <div className={styles.search}>
-          <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
-        </div>
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={`${styles.button} ${styles.buttonSecondary}`}
-            // Выгружается ровно видимая таблица: поиск, фильтры и сортировка столбцов.
-            onClick={() => { void exportRows(visibleRows); }}
-            disabled={exporting || isLoading || visibleRows.length === 0}
-          >
-            <Download size={14} aria-hidden="true" />
-            <span>{exporting ? 'Готовим…' : 'Экспорт'}</span>
-          </button>
-          {onAdd && (
-            <button type="button" className={`${styles.button} ${styles.buttonPrimary}`} onClick={onAdd}>
-              <UserPlus size={14} aria-hidden="true" />
-              <span>Добавить сотрудника</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {isError && !rows ? (
-        <p className={styles.state}>
-          Не удалось загрузить
-          <button type="button" className={styles.retry} onClick={onRetry}>Повторить</button>
-        </p>
-      ) : (
-        <DormitoryStaysTable
-          rows={searchedRows}
-          visibleRows={visibleRows}
-          view={view}
-          onViewChange={setView}
-          loading={isLoading}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          busyId={busyId}
-          raisedFilters={raisedFilters}
-          onFilterOpenChange={onFilterOpenChange}
-        />
-      )}
-    </div>
-  );
-};
+}) => (
+  <RegistryPanel
+    label="Общежитие"
+    columns={DORMITORY_COLUMNS}
+    rows={rows}
+    isLoading={isLoading}
+    isError={isError}
+    onRetry={onRetry}
+    rowKey={stayKey}
+    rowLabel={stayName}
+    searchText={stayName}
+    buildExport={buildDormitoryExport}
+    sendExport={dormitoryService.exportTable}
+    onAdd={onAdd}
+    onEdit={onEdit}
+    onDelete={onDelete}
+    busyKey={busyId}
+    raisedFilters={raisedFilters}
+    onFilterOpenChange={onFilterOpenChange}
+  />
+);

@@ -1,4 +1,5 @@
 import { useId, useState, type FC, type ReactNode } from 'react';
+import { Users } from 'lucide-react';
 
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
@@ -25,11 +26,20 @@ interface IPayrollDictionarySectionProps {
   onDelete: (id: number) => Promise<void>;
   /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
-  /** Своя кнопка записи — перед «Изменить» (у «Проживания общежития» — таблица проживающих). */
+  /** Своя кнопка записи — перед «Изменить» (у «Доплаты за проживание» — таблица доплат). */
   renderExtraAction?: (item: IPayrollDictionaryItem) => ReactNode;
+  /** Название записи — кнопка (у «Доплаты за проживание» — та же таблица); null — обычный текст. */
+  getItemOpener?: (item: IPayrollDictionaryItem) => (() => void) | null;
+  /** Передан — заголовок раздела кнопкой и 👥 рядом: таблица сотрудников («Удержания»). */
+  onOpenList?: () => void;
+  /** Подпись кнопки таблицы для экранного диктора: «Сотрудники с удержаниями». */
+  listLabel?: string;
 }
 
-/** Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу. */
+/**
+ * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний»
+ * заголовок открывает таблицу сотрудников.
+ */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
   items,
@@ -45,6 +55,9 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onDelete,
   isLocked,
   renderExtraAction,
+  getItemOpener,
+  onOpenList,
+  listLabel,
 }) => {
   const titleId = useId();
   // Правится одна строка: открытие другой закрывает прежнюю без сохранения.
@@ -52,7 +65,22 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
 
   return (
     <section className={styles.section} aria-labelledby={titleId}>
-      <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
+      {onOpenList ? (
+        <h3 id={titleId} className={styles.sectionTitle}>
+          <button
+            type="button"
+            className={styles.sectionTitleButton}
+            onClick={onOpenList}
+            title={listLabel}
+            aria-label={listLabel ? `${title}: ${listLabel.toLowerCase()}` : undefined}
+          >
+            <span>{title}</span>
+            <Users size={16} aria-hidden="true" />
+          </button>
+        </h3>
+      ) : (
+        <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
+      )}
 
       {!items && !isError && <p className={styles.state}>Загрузка…</p>}
       {!items && isError && (
@@ -74,6 +102,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
               canEdit={canEdit}
               locked={isLocked?.(item) ?? false}
               extraAction={renderExtraAction?.(item)}
+              onOpen={getItemOpener?.(item) ?? undefined}
               isEditing={editingId === item.id}
               deleteQuestion={deleteQuestion(item.name)}
               onStartEdit={() => setEditingId(item.id)}

@@ -31,6 +31,21 @@ export interface ITableColumn<Row> {
   sortValue: (row: Row) => number | string | null;
   /** Точное значение для xlsx (сумма — строкой numeric, как с сервера); null — текст экрана. */
   exportValue?: (row: Row) => string | number | null;
+  /**
+   * Значения фильтра, если в ячейке их несколько («ТМЦ, Питание»): строка проходит, когда выбрано хоть
+   * одно из них, а в списке фильтра — отдельные значения, не склейки. Не задано — текст ячейки.
+   */
+  filterValues?: (row: Row) => string[];
+}
+
+/** Столбец таблицы-реестра (RegistryTable): ширина и перенос. */
+export interface IRegistryColumn<Row> extends ITableColumn<Row> {
+  /** Ширина в px; не задана — остаток ширины таблицы (ФИО). */
+  width?: number;
+  /** Одной строкой (даты, суммы); иначе текст переносится до двух строк. */
+  nowrap?: boolean;
+  /** Число — по правому краю. */
+  numeric?: boolean;
 }
 
 export interface IFilterOption {
@@ -47,6 +62,11 @@ export interface ITableExportSnapshot {
   rows: Array<{ cells: Array<string | number | null>; muted?: boolean }>;
 }
 
+/** Значения ячейки для фильтра: отдельные (filterValues) или текст ячейки. */
+const cellFilterValues = <Row,>(row: Row, column: ITableColumn<Row>): string[] => (
+  column.filterValues ? column.filterValues(row) : [column.text(row)]
+);
+
 /** Строка проходит фильтры всех столбцов, кроме skipKey (варианты самого столбца — без его фильтра). */
 const passesFilters = <Row,>(
   row: Row,
@@ -56,7 +76,8 @@ const passesFilters = <Row,>(
 ): boolean => columns.every((column) => {
   if (column.key === skipKey) return true;
   const selected = filters[column.key];
-  return !selected || selected.length === 0 || selected.includes(column.text(row));
+  if (!selected || selected.length === 0) return true;
+  return cellFilterValues(row, column).some(value => selected.includes(value));
 });
 
 const compareValues = (a: number | string, b: number | string): number => (
@@ -110,10 +131,12 @@ export const columnFilterOptions = <Row,>(
   const entries = new Map<string, { count: number; sort: number | string | null }>();
   for (const row of rows) {
     if (!passesFilters(row, columns, filters, key)) continue;
-    const text = column.text(row);
-    const entry = entries.get(text);
-    if (entry) entry.count += 1;
-    else entries.set(text, { count: 1, sort: column.sortValue(row) });
+    for (const text of new Set(cellFilterValues(row, column))) {
+      const entry = entries.get(text);
+      if (entry) entry.count += 1;
+      // У отдельных значений своя сортировка — по тексту, а не по ключу строки.
+      else entries.set(text, { count: 1, sort: column.filterValues ? text : column.sortValue(row) });
+    }
   }
   for (const value of filters[key] ?? []) {
     if (!entries.has(value)) entries.set(value, { count: 0, sort: null });
@@ -174,4 +197,11 @@ export const buildExportTable = <Row,>(params: {
         : []),
     ],
   };
+};
+
+/** Поиск по ФИО над таблицей: без учёта регистра и «ё». */
+export const matchesNameSearch = (name: string | null | undefined, search: string): boolean => {
+  const needle = search.trim().toLocaleLowerCase('ru').replace(/ё/g, 'е');
+  if (!needle) return true;
+  return (name ?? '').toLocaleLowerCase('ru').replace(/ё/g, 'е').includes(needle);
 };

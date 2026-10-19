@@ -42,7 +42,7 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** «Зарплата» → «Справочник» → «Проживание общежития»: охват условий оплаты. */
+  /** «Зарплата» → «Справочник» → «Общежитие» (кнопка в шапке): охват условий оплаты. */
   listForPayroll: async (signal?: AbortSignal): Promise<IDormitoryStay[]> => {
     const res = await apiClient.get<IApiResponse<IDormitoryStay[]>>('/payroll/dormitory-stays', { signal });
     return res.data;

@@ -285,8 +285,11 @@ export interface IPayrollRate {
   code: string | null;
 }
 
-/** Код ставки «Проживание общежития» — у неё кнопка с таблицей проживающих. */
-export const DORMITORY_RATE_CODE = 'dormitory';
+/**
+ * Код ставки «Доплата за проживание» (миграция 315): у неё кнопка с таблицей доплат, значение — сумма
+ * по умолчанию при добавлении сотрудника в эту таблицу.
+ */
+export const HOUSING_RATE_CODE = 'housing';
 
 /** Учётка из списка доступа к разделу «Зарплата» (миграция 310) — окно «Справочник», только чтение. */
 export interface IPayrollSectionUser {

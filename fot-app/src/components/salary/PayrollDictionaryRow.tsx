@@ -11,7 +11,7 @@ export interface IPayrollDictionaryItem {
   id: number;
   name: string;
   amount?: string | number | null;
-  /** Ставка, привязанная к функционалу (миграция 313: dormitory). */
+  /** Ставка, привязанная к функционалу (миграция 315: housing — «Доплата за проживание»). */
   code?: string | null;
 }
 
@@ -25,6 +25,8 @@ interface IPayrollDictionaryRowProps {
   locked: boolean;
   /** Своя кнопка записи — перед «Изменить»; видна и без права правки. */
   extraAction?: ReactNode;
+  /** Передан — название кнопкой (видна и без права правки): открыть таблицу записи. */
+  onOpen?: () => void;
   isEditing: boolean;
   /** Вопрос перед удалением: «Удалить ставку «Сварщик»?». */
   deleteQuestion: string;
@@ -43,6 +45,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   canEdit,
   locked,
   extraAction,
+  onOpen,
   isEditing,
   deleteQuestion,
   onStartEdit,
@@ -92,7 +95,13 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
 
   return (
     <li className={styles.row}>
-      <span className={styles.rowName}>{item.name}</span>
+      {onOpen ? (
+        <button type="button" className={`${styles.rowName} ${styles.rowNameButton}`} onClick={onOpen}>
+          {item.name}
+        </button>
+      ) : (
+        <span className={styles.rowName}>{item.name}</span>
+      )}
       {amountLabel !== undefined && (
         <span className={styles.rowAmount}>{formatPayrollMoney(item.amount) ?? '—'}</span>
       )}

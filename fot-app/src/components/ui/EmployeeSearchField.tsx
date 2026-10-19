@@ -1,34 +1,46 @@
-import { useEffect, useState, type FC } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { X } from 'lucide-react';
 
-import { dormitoryService, type IDormitoryCandidate } from '../../../services/dormitoryService';
-import { ClearableInput } from '../../ui/ClearableInput';
-import styles from './DormitoryStayModal.module.css';
+import { ClearableInput } from './ClearableInput';
+import styles from './EmployeeSearchField.module.css';
 
 const SEARCH_MIN_LENGTH = 2;
 const SEARCH_DELAY_MS = 300;
 
-interface IDormitoryEmployeeSearchProps {
-  value: IDormitoryCandidate | null;
-  onChange: (employee: IDormitoryCandidate | null) => void;
+/** Кандидат в подсказке: ФИО, отдел и должность — подпись под ФИО. */
+export interface IEmployeeSearchCandidate {
+  id: number;
+  full_name: string | null;
+  department?: string | null;
+  position?: string | null;
+}
+
+interface IEmployeeSearchFieldProps<T extends IEmployeeSearchCandidate> {
+  value: T | null;
+  onChange: (employee: T | null) => void;
+  /** Поиск на сервере (охват фильтрует сервер); term — от 2 символов. */
+  search: (term: string, signal: AbortSignal) => Promise<T[]>;
+  /** Кандидата нельзя выбрать (нет права на сотрудника): строка неактивна. */
+  isDisabled?: (employee: T) => boolean;
   disabled?: boolean;
   invalid?: boolean;
 }
 
 /**
- * Поиск сотрудника по ФИО для «Добавить сотрудника» (образец — TimesheetOfficeEmployeeSearch):
- * работающие в охвате пользователя (фильтрует сервер). Подсказки — списком под полем,
- * выбранный — строкой с крестиком.
+ * Поиск сотрудника по ФИО для «Добавить сотрудника» (образец — TimesheetOfficeEmployeeSearch): общежитие
+ * и таблицы «Справочника» «Зарплаты». Подсказки — списком под полем, выбранный — строкой с крестиком.
  */
-export const DormitoryEmployeeSearch: FC<IDormitoryEmployeeSearchProps> = ({
+export const EmployeeSearchField = <T extends IEmployeeSearchCandidate>({
   value,
   onChange,
+  search,
+  isDisabled,
   disabled = false,
   invalid = false,
-}) => {
+}: IEmployeeSearchFieldProps<T>): ReactElement => {
   const [query, setQuery] = useState('');
   // Ответ сервера вместе с запросом, на который он пришёл: устаревший не показываем.
-  const [fetched, setFetched] = useState<{ term: string; rows: IDormitoryCandidate[] } | null>(null);
+  const [fetched, setFetched] = useState<{ term: string; rows: T[] } | null>(null);
   const term = query.trim();
   const active = term.length >= SEARCH_MIN_LENGTH;
 
@@ -36,7 +48,7 @@ export const DormitoryEmployeeSearch: FC<IDormitoryEmployeeSearchProps> = ({
     if (!active) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      dormitoryService.searchEmployees(term, controller.signal)
+      search(term, controller.signal)
         .then(rows => { if (!controller.signal.aborted) setFetched({ term, rows }); })
         .catch(() => { if (!controller.signal.aborted) setFetched({ term, rows: [] }); });
     }, SEARCH_DELAY_MS);
@@ -44,7 +56,7 @@ export const DormitoryEmployeeSearch: FC<IDormitoryEmployeeSearchProps> = ({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [active, term]);
+  }, [active, term, search]);
 
   const loading = active && fetched?.term !== term;
   const results = active && fetched?.term === term ? fetched.rows : [];
@@ -95,7 +107,7 @@ export const DormitoryEmployeeSearch: FC<IDormitoryEmployeeSearchProps> = ({
                   onChange(employee);
                   setQuery('');
                 }}
-                disabled={disabled}
+                disabled={disabled || (isDisabled?.(employee) ?? false)}
               >
                 <span>{employee.full_name}</span>
                 {(employee.department || employee.position) && (

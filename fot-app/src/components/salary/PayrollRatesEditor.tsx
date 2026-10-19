@@ -1,24 +1,24 @@
 import type { FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { BedDouble } from 'lucide-react';
+import { Users } from 'lucide-react';
 
 import { PAYROLL_RATES_KEY, usePayrollRates } from '../../hooks/usePayrollRates';
-import { DORMITORY_RATE_CODE, payrollService, type IPayrollRate } from '../../services/payrollService';
+import { HOUSING_RATE_CODE, payrollService, type IPayrollRate } from '../../services/payrollService';
 import { PayrollDictionarySection } from './PayrollDictionarySection';
 import styles from './PayrollDictionary.module.css';
 
 interface IPayrollRatesEditorProps {
   canEdit: boolean;
-  /** Кнопка у «Проживания общежития»: окно с теми, кто живёт в общежитии. */
-  onOpenDormitory: () => void;
+  /** Название и 👥 у «Доплаты за проживание»: таблица сотрудников с доплатой. */
+  onOpenHousing: () => void;
 }
 
 /**
- * «Ставки» в окне «Справочник»: значение ставки — изменить. Новых ставок здесь не заводят (миграция 313);
- * у ставки с кодом название не меняется и удалить её нельзя. Ставка только хранится: в окно сотрудника
- * и в расчёты не подставляется.
+ * «Ставки» в окне «Справочник»: значение ставки — изменить. Новых ставок здесь не заводят (миграции 313/315);
+ * у ставки с кодом название не меняется и удалить её нельзя. Значение «Доплаты за проживание» — сумма по
+ * умолчанию при добавлении сотрудника в её таблицу; в окно сотрудника и в расчёты не подставляется.
  */
-export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOpenDormitory }) => {
+export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOpenHousing }) => {
   const rates = usePayrollRates();
   const queryClient = useQueryClient();
 
@@ -43,17 +43,18 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
       canEdit={canEdit}
       deleteQuestion={name => `Удалить ставку «${name}»?`}
       isLocked={item => Boolean(item.code)}
-      renderExtraAction={item => (item.code === DORMITORY_RATE_CODE ? (
+      renderExtraAction={item => (item.code === HOUSING_RATE_CODE ? (
         <button
           type="button"
           className={styles.iconButton}
-          onClick={onOpenDormitory}
-          title="Проживающие в общежитии"
-          aria-label="Проживающие в общежитии"
+          onClick={onOpenHousing}
+          title="Сотрудники с доплатой за проживание"
+          aria-label="Сотрудники с доплатой за проживание"
         >
-          <BedDouble size={16} aria-hidden="true" />
+          <Users size={16} aria-hidden="true" />
         </button>
       ) : null)}
+      getItemOpener={item => (item.code === HOUSING_RATE_CODE ? onOpenHousing : null)}
       onUpdate={(id, payload) => apply(async () => {
         const updated = await payrollService.updateRate(id, payload);
         return list => list.map(rate => (rate.id === id ? updated : rate));

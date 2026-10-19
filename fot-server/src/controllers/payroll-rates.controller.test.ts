@@ -158,27 +158,27 @@ describe('payrollRatesController.update', () => {
   });
 });
 
-describe('ставка с кодом («Проживание общежития», миграция 313)', () => {
+describe('ставка с кодом («Доплата за проживание», миграции 313/315)', () => {
   it('значение меняется; название — нет: 409 без аудита', async () => {
     pgQueryOne.mockResolvedValueOnce({
-      id: 1, name: 'Проживание общежития', amount: '700.00', code: 'dormitory',
-      prev_name: 'Проживание общежития', prev_amount: '630.00', prev_code: 'dormitory',
+      id: 1, name: 'Доплата за проживание', amount: '700.00', code: 'housing',
+      prev_name: 'Доплата за проживание', prev_amount: '630.00', prev_code: 'housing',
     });
     const res = makeRes();
     await payrollRatesController.update(
-      makeReq({ params: { id: '1' }, body: { name: 'Проживание общежития', amount: 700 } }), res,
+      makeReq({ params: { id: '1' }, body: { name: 'Доплата за проживание', amount: 700 } }), res,
     );
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ id: 1, name: 'Проживание общежития', amount: '700.00', code: 'dormitory' });
+    expect(res.body.data).toEqual({ id: 1, name: 'Доплата за проживание', amount: '700.00', code: 'housing' });
 
     // UPDATE не прошёл (prev.code задан, название другое): строка prev есть, upd пуст.
     pgQueryOne.mockResolvedValueOnce({
       id: null, name: null, amount: null, code: null,
-      prev_name: 'Проживание общежития', prev_amount: '700.00', prev_code: 'dormitory',
+      prev_name: 'Доплата за проживание', prev_amount: '700.00', prev_code: 'housing',
     });
     const renamed = makeRes();
     await payrollRatesController.update(
-      makeReq({ params: { id: '1' }, body: { name: 'Общежитие', amount: 700 } }), renamed,
+      makeReq({ params: { id: '1' }, body: { name: 'Проживание', amount: 700 } }), renamed,
     );
     expect(renamed.statusCode).toBe(409);
     expect(renamed.body.code).toBe('SYSTEM_RATE');
@@ -186,7 +186,7 @@ describe('ставка с кодом («Проживание общежития�
   });
 
   it('удалить нельзя — 409 без аудита', async () => {
-    pgQueryOne.mockResolvedValueOnce({ id: null, name: null, amount: null, code: null, target_code: 'dormitory' });
+    pgQueryOne.mockResolvedValueOnce({ id: null, name: null, amount: null, code: null, target_code: 'housing' });
     const res = makeRes();
     await payrollRatesController.remove(makeReq({ params: { id: '1' } }), res);
     expect(res.statusCode).toBe(409);
