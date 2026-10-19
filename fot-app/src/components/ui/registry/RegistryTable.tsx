@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ColumnValuesFilterPopover';
 import { TableSortHeader } from '../TableSortHeader';
 import {
   columnFilterOptions,
+  fitRegistryColumnWidths,
   isColumnFiltered,
+  REGISTRY_ACTIONS_WIDTH,
+  REGISTRY_ACTIONS_WIDTH_TOUCH,
+  REGISTRY_NAME_MIN_WIDTH,
+  REGISTRY_NUM_WIDTH,
   setColumnFilter,
   toggleSort,
   type IRegistryColumn,
@@ -13,12 +18,12 @@ import {
 } from '../../../utils/tableView';
 import styles from './RegistryTable.module.css';
 
-/** Ширины, которые таблица держит до горизонтальной прокрутки: «№», ФИО не уже 170px, действия. */
-const NUM_WIDTH = 48;
-const NAME_MIN_WIDTH = 170;
-const ACTIONS_WIDTH = 84;
-/** На телефоне кнопки 44px — колонка действий шире. */
-const ACTIONS_WIDTH_TOUCH = 116;
+/** Подпись заголовка: 12px, 600, ПРОПИСНЫЕ, letter-spacing 0.04em (RegistryTable.module.css). */
+const HEADER_FONT = '600 12px';
+const HEADER_LETTER_SPACING = 0.48;
+/** Запас на расхождение замера canvas и вёрстки. */
+const HEADER_MEASURE_SLACK = 4;
+const TOUCH_QUERY = '(max-width: 768px)';
 
 export interface IRegistryTableProps<Row> {
   columns: ReadonlyArray<IRegistryColumn<Row>>;
@@ -52,7 +57,8 @@ export interface IRegistryTableProps<Row> {
 /**
  * Таблица-реестр в стиле «Управления кадрами» (общежитие, таблицы «Справочника» «Зарплаты»): «№», у
  * каждого столбца — сортировка и фильтр по значениям; при праве правки — ✎ и 🗑 справа. Строк десятки–
- * сотни, без виртуализации: таблица скроллится по горизонтали внутри своего блока, страница — нет.
+ * сотни, без виртуализации: таблица скроллится по горизонтали внутри своего блока, страница — нет. На широком
+ * экране подписи столбцов — в одну строку (fitRegistryColumnWidths).
  */
 export const RegistryTable = <Row,>({
   columns, rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
@@ -69,12 +75,44 @@ export const RegistryTable = <Row,>({
 
   // Минимальная ширина: сумма колонок с шириной + ФИО не уже 170px — уже неё скроллится таблица.
   const tableStyle = useMemo((): CSSProperties => {
-    const fixed = NUM_WIDTH + NAME_MIN_WIDTH + columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
+    const fixed = REGISTRY_NUM_WIDTH + REGISTRY_NAME_MIN_WIDTH + columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
     return {
-      '--registry-min-width': `${fixed + (withActions ? ACTIONS_WIDTH : 0)}px`,
-      '--registry-min-width-touch': `${fixed + (withActions ? ACTIONS_WIDTH_TOUCH : 0)}px`,
+      '--registry-min-width': `${fixed + (withActions ? REGISTRY_ACTIONS_WIDTH : 0)}px`,
+      '--registry-min-width-touch': `${fixed + (withActions ? REGISTRY_ACTIONS_WIDTH_TOUCH : 0)}px`,
     } as CSSProperties;
   }, [columns, withActions]);
+
+  // Широкий экран: столбцы с переносящейся подписью расширяются, пока есть запас, — подпись в одну строку,
+  // остаток по-прежнему у ФИО. Пока не замерили (первый кадр) — компактные ширины, как в описании столбцов.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [fitted, setFitted] = useState<Array<number | undefined> | null>(null);
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const context = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+    if (!wrap || !context || typeof ResizeObserver === 'undefined') return undefined;
+    const touch = window.matchMedia(TOUCH_QUERY);
+    const measure = () => {
+      context.font = `${HEADER_FONT} ${getComputedStyle(wrap).fontFamily}`;
+      const next = fitRegistryColumnWidths({
+        columns,
+        containerWidth: wrap.clientWidth,
+        labelWidth: label => context.measureText(label.toLocaleUpperCase('ru')).width
+          + HEADER_LETTER_SPACING * label.length + HEADER_MEASURE_SLACK,
+        actionsWidth: withActions ? (touch.matches ? REGISTRY_ACTIONS_WIDTH_TOUCH : REGISTRY_ACTIONS_WIDTH) : 0,
+      });
+      setFitted(prev => (prev && prev.length === next.length && prev.every((width, index) => width === next[index]) ? prev : next));
+    };
+    // Первый вызов — сразу при observe; шрифт мог догрузиться позже — пересчёт после него.
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrap);
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) measure(); });
+    return () => {
+      alive = false;
+      observer.disconnect();
+    };
+  }, [columns, withActions]);
+  const columnWidth = (index: number): number | undefined => (fitted ? fitted[index] : columns[index].width);
 
   const filterOpen = filterFor !== null;
   useEffect(() => {
@@ -82,13 +120,14 @@ export const RegistryTable = <Row,>({
   }, [filterOpen, onFilterOpenChange]);
 
   return (
-    <div className={styles.wrap}>
+    <div ref={wrapRef} className={styles.wrap}>
       <table className={styles.table} style={tableStyle} aria-label={label}>
         <colgroup>
           <col className={styles.colNum} />
-          {columns.map(column => (
-            <col key={column.key} style={column.width ? { width: `${column.width}px` } : undefined} />
-          ))}
+          {columns.map((column, index) => {
+            const width = columnWidth(index);
+            return <col key={column.key} style={width ? { width: `${width}px` } : undefined} />;
+          })}
           {withActions && <col className={styles.colActions} />}
         </colgroup>
         <thead>

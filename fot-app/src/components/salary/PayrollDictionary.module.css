@@ -82,16 +82,18 @@
 }
 .sectionTitle { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
 
-/* Заголовок «Удержания» — кнопкой с 👥: таблица сотрудников с удержаниями. Тап-цель — высота поля. */
-.sectionTitleButton {
-  display: inline-flex;
+/* Заголовок раздела с кнопкой «Сотрудники» рядом («Удержания»). */
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  min-height: var(--dict-control-h);
-  margin: calc((var(--dict-control-h) - 20px) / -2) 0;
-  padding: 0 8px 0 0;
+  gap: 8px 12px;
+}
+
+/* Заголовок «Удержания» тоже открывает таблицу (мышью): как текст, по наведению — ссылка. */
+.sectionTitleButton {
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -99,10 +101,34 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.sectionTitleButton svg { color: var(--text-secondary); transition: color 0.15s ease-out; }
-.sectionTitleButton:hover svg { color: var(--primary); }
-.sectionTitleButton:hover span { text-decoration: underline; text-underline-offset: 3px; }
-.sectionTitleButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sectionTitleButton:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+
+/* «Сотрудники» — как кнопки шапки, по высоте полей раздела: видно без наведения, что открывается список. */
+.employeesButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 6px;
+  min-height: var(--dict-control-h);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out, color 0.15s ease-out;
+}
+.employeesButton svg { flex-shrink: 0; color: var(--text-secondary); transition: color 0.15s ease-out; }
+.employeesButton:hover { border-color: var(--primary); color: var(--primary); }
+.employeesButton:hover svg { color: var(--primary); }
+.employeesButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .state { margin: 0; padding: 8px 0; font-size: 13px; color: var(--text-secondary); }
 .stateError { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--error); }
@@ -121,8 +147,11 @@
   color: var(--text-primary);
 }
 
-.rowName { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-/* Название записи кнопкой (у «Доплаты за проживание» — таблица доплат): как текст, по наведению — ссылка. */
+/* Название не уже ~9 слов-символов: на телефоне значение и кнопки («Сотрудники», ✎) переносятся строкой ниже,
+   а не сжимают название в столбик букв. */
+.rowName { flex: 1 1 0; min-width: min(100%, 9em); overflow-wrap: anywhere; }
+/* Название записи кнопкой (у «Доплаты за проживание» — таблица доплат, как кнопка «Сотрудники»): как текст,
+   по наведению — ссылка. */
 .rowNameButton {
   align-self: stretch;
   display: flex;
@@ -138,15 +167,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 .rowNameButton:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
-.rowNameButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 .rowAmount {
   flex: 0 0 auto;
-  min-width: 80px;
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rowActions { display: inline-flex; flex-shrink: 0; gap: 4px; }
+.rowActions { display: inline-flex; flex-shrink: 0; gap: 4px; margin-left: auto; }
 
 .iconButton {
   display: inline-flex;
@@ -258,5 +285,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .iconButton, .addButton, .retryButton, .headerButton, .sectionTitleButton svg { transition: none; }
+  .iconButton, .addButton, .retryButton, .headerButton, .employeesButton, .employeesButton svg { transition: none; }
 }

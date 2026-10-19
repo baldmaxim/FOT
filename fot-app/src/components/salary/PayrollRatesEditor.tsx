@@ -1,15 +1,14 @@
 import type { FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Users } from 'lucide-react';
 
 import { PAYROLL_RATES_KEY, usePayrollRates } from '../../hooks/usePayrollRates';
 import { HOUSING_RATE_CODE, payrollService, type IPayrollRate } from '../../services/payrollService';
 import { PayrollDictionarySection } from './PayrollDictionarySection';
-import styles from './PayrollDictionary.module.css';
+import { PayrollEmployeesButton } from './PayrollEmployeesButton';
 
 interface IPayrollRatesEditorProps {
   canEdit: boolean;
-  /** Название и 👥 у «Доплаты за проживание»: таблица сотрудников с доплатой. */
+  /** Название и кнопка «Сотрудники» у «Доплаты за проживание»: таблица сотрудников с доплатой. */
   onOpenHousing: () => void;
 }
 
@@ -44,15 +43,7 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
       deleteQuestion={name => `Удалить ставку «${name}»?`}
       isLocked={item => Boolean(item.code)}
       renderExtraAction={item => (item.code === HOUSING_RATE_CODE ? (
-        <button
-          type="button"
-          className={styles.iconButton}
-          onClick={onOpenHousing}
-          title="Сотрудники с доплатой за проживание"
-          aria-label="Сотрудники с доплатой за проживание"
-        >
-          <Users size={16} aria-hidden="true" />
-        </button>
+        <PayrollEmployeesButton onClick={onOpenHousing} ariaLabel="Сотрудники с доплатой за проживание" />
       ) : null)}
       getItemOpener={item => (item.code === HOUSING_RATE_CODE ? onOpenHousing : null)}
       onUpdate={(id, payload) => apply(async () => {

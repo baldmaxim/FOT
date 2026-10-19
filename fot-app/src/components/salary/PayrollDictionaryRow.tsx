@@ -25,7 +25,7 @@ interface IPayrollDictionaryRowProps {
   locked: boolean;
   /** Своя кнопка записи — перед «Изменить»; видна и без права правки. */
   extraAction?: ReactNode;
-  /** Передан — название кнопкой (видна и без права правки): открыть таблицу записи. */
+  /** Передан — название кнопкой (видна и без права правки): открыть таблицу записи, как кнопка в extraAction. */
   onOpen?: () => void;
   isEditing: boolean;
   /** Вопрос перед удалением: «Удалить ставку «Сварщик»?». */
@@ -96,7 +96,8 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   return (
     <li className={styles.row}>
       {onOpen ? (
-        <button type="button" className={`${styles.rowName} ${styles.rowNameButton}`} onClick={onOpen}>
+        // Мышью — по названию; с клавиатуры одна остановка — на кнопке «Сотрудники» (extraAction).
+        <button type="button" className={`${styles.rowName} ${styles.rowNameButton}`} onClick={onOpen} tabIndex={-1}>
           {item.name}
         </button>
       ) : (

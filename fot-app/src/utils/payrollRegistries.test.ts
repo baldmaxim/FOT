@@ -4,6 +4,7 @@ import type { IDeductionRegistryRow, IPayrollSupplementRow } from '../services/p
 import {
   buildDeductionExport,
   DEDUCTION_COLUMNS,
+  HOUSING_COLUMNS,
   SUPPLEMENT_COLUMNS,
   supplementPeriod,
   supplementRowKey,
@@ -15,7 +16,7 @@ import {
   parsePlannedForm,
   parseStopForm,
 } from './payrollRegistryForms';
-import { applyTableView, columnFilterOptions, matchesNameSearch } from './tableView';
+import { applyTableView, columnFilterOptions, fitRegistryColumnWidths, matchesNameSearch } from './tableView';
 
 const deduction = (employeeId: number, kinds: string[], amount: string | null = null): IDeductionRegistryRow => ({
   employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, department: null, position: null, kinds, amount,
@@ -117,5 +118,27 @@ describe('формы', () => {
     expect(options).toHaveLength(13);
     expect(options.slice(0, 3)).toEqual(['2026-02', '2026-01', '2025-12']);
     expect(options[12]).toBe('2025-02');
+  });
+});
+
+describe('ширины столбцов: подпись в одну строку, когда хватает места', () => {
+  // ФИО, Отдел 140, Должность 148, Сумма 128, Действует с 160; подпись — 8px на символ.
+  const labelWidth = (label: string): number => label.length * 8;
+  const fit = (containerWidth: number) => fitRegistryColumnWidths({
+    columns: HOUSING_COLUMNS, containerWidth, labelWidth, actionsWidth: 84,
+  });
+
+  it('места много — «Сумма, ₽/мес» расширяется (12 × 8 + 58 = 154), остальные уже влезают', () => {
+    expect(fit(1700)).toEqual([undefined, 140, 148, 154, 160]);
+  });
+
+  it('места нет (как на 1280 с семью столбцами) — компактные ширины', () => {
+    // 48 + 170 + 84 + 576 = 878 — запаса нет.
+    expect(fit(878)).toEqual([undefined, 140, 148, 128, 160]);
+    expect(fit(900)).toEqual([undefined, 140, 148, 128, 160]);
+  });
+
+  it('запаса ровно на расширение — расширяется', () => {
+    expect(fit(878 + 26)).toEqual([undefined, 140, 148, 154, 160]);
   });
 });

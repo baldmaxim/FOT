@@ -1,9 +1,9 @@
 import { useId, useState, type FC, type ReactNode } from 'react';
-import { Users } from 'lucide-react';
 
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
 import { PayrollDictionaryRow, type IPayrollDictionaryItem } from './PayrollDictionaryRow';
+import { PayrollEmployeesButton } from './PayrollEmployeesButton';
 import styles from './PayrollDictionary.module.css';
 
 interface IPayrollDictionarySectionProps {
@@ -30,15 +30,15 @@ interface IPayrollDictionarySectionProps {
   renderExtraAction?: (item: IPayrollDictionaryItem) => ReactNode;
   /** Название записи — кнопка (у «Доплаты за проживание» — та же таблица); null — обычный текст. */
   getItemOpener?: (item: IPayrollDictionaryItem) => (() => void) | null;
-  /** Передан — заголовок раздела кнопкой и 👥 рядом: таблица сотрудников («Удержания»). */
+  /** Передан — рядом с заголовком кнопка «Сотрудники»: таблица сотрудников («Удержания»). */
   onOpenList?: () => void;
-  /** Подпись кнопки таблицы для экранного диктора: «Сотрудники с удержаниями». */
+  /** Что за таблица — для экранного диктора: «Сотрудники с удержаниями». */
   listLabel?: string;
 }
 
 /**
  * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний»
- * заголовок открывает таблицу сотрудников.
+ * рядом с заголовком кнопка «Сотрудники» — таблица сотрудников.
  */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
@@ -66,18 +66,15 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   return (
     <section className={styles.section} aria-labelledby={titleId}>
       {onOpenList ? (
-        <h3 id={titleId} className={styles.sectionTitle}>
-          <button
-            type="button"
-            className={styles.sectionTitleButton}
-            onClick={onOpenList}
-            title={listLabel}
-            aria-label={listLabel ? `${title}: ${listLabel.toLowerCase()}` : undefined}
-          >
-            <span>{title}</span>
-            <Users size={16} aria-hidden="true" />
-          </button>
-        </h3>
+        <div className={styles.sectionHead}>
+          <h3 id={titleId} className={styles.sectionTitle}>
+            {/* Заголовок тоже открывает таблицу — мышью; с клавиатуры одна остановка, на кнопке «Сотрудники». */}
+            <button type="button" className={styles.sectionTitleButton} onClick={onOpenList} tabIndex={-1}>
+              {title}
+            </button>
+          </h3>
+          <PayrollEmployeesButton onClick={onOpenList} ariaLabel={listLabel ?? `${title}: сотрудники`} />
+        </div>
       ) : (
         <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
       )}

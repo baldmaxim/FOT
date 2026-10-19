@@ -48,6 +48,40 @@ export interface IRegistryColumn<Row> extends ITableColumn<Row> {
   numeric?: boolean;
 }
 
+/** «№», минимум ФИО и столбец ✎ / 🗑 таблицы-реестра (RegistryTable.module.css); на телефоне кнопки 44px. */
+export const REGISTRY_NUM_WIDTH = 48;
+export const REGISTRY_NAME_MIN_WIDTH = 170;
+export const REGISTRY_ACTIONS_WIDTH = 84;
+export const REGISTRY_ACTIONS_WIDTH_TOUCH = 116;
+/** Заголовку столбца кроме подписи: паддинги 24 + стрелка 16 (12 и зазор 4) + зазор 2 + воронка 16. */
+export const REGISTRY_HEADER_EXTRA = 58;
+
+/**
+ * Ширины столбцов таблицы-реестра под ширину контейнера. width столбца — компактная ширина (подпись может
+ * переноситься); если запас позволяет, столбец расширяется так, чтобы подпись встала в одну строку. Жадно, по
+ * порядку столбцов: не влез один — следующие ещё пробуем. Запас — контейнер минус «№», ФИО не уже минимума,
+ * действия и компактные ширины. undefined — столбец без ширины (ФИО, остаток).
+ */
+export const fitRegistryColumnWidths = <Row,>(params: {
+  columns: ReadonlyArray<IRegistryColumn<Row>>;
+  containerWidth: number;
+  /** Ширина подписи одной строкой, px. */
+  labelWidth: (label: string) => number;
+  /** Столбец действий; 0 — его нет. */
+  actionsWidth: number;
+}): Array<number | undefined> => {
+  const compactTotal = params.columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
+  let spare = params.containerWidth - REGISTRY_NUM_WIDTH - REGISTRY_NAME_MIN_WIDTH - params.actionsWidth - compactTotal;
+  return params.columns.map((column) => {
+    if (column.width === undefined) return undefined;
+    const oneLine = Math.ceil(params.labelWidth(column.label)) + REGISTRY_HEADER_EXTRA;
+    const extra = oneLine - column.width;
+    if (extra <= 0 || extra > spare) return column.width;
+    spare -= extra;
+    return oneLine;
+  });
+};
+
 export interface IFilterOption {
   value: string;
   count: number;
