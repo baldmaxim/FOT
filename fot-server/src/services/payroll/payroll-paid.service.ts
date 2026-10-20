@@ -50,6 +50,18 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'loan',
 ];
 
+/**
+ * Статьи раздела «Удержано» — столбец «Удержания» на «Расчётах». Тот же состав, что у группы
+ * «Удержано» в fot-app/src/utils/payrollPaid.ts.
+ */
+export const PAYROLL_PAID_DEDUCTION_CODES: readonly PayrollPaidItemCode[] = [
+  'meals',
+  'workwear',
+  'safety_fine',
+  'fines',
+  'writ_deduction',
+];
+
 /** Сумма ячейки: месяц YYYY-MM, сумма — текстом NUMERIC. */
 export interface IPayrollPaidAmount {
   month: string;

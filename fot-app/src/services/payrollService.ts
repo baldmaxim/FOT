@@ -69,6 +69,15 @@ export interface IPayrollTermsRow {
    */
   accruals?: IPayrollMonthlyAccrual[] | null;
   /**
+   * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽; null — сумм нет («—»).
+   * «К выплате» — итог «Начислено», как «Выплачено» в «Подробно» (удержания не вычитаются).
+   */
+  paid_total?: number | null;
+  /** Итог «Удержано»; 0 — суммы есть и дают ноль. */
+  paid_deductions_total?: number | null;
+  /** Статьи «Удержано» по месяцам — для окна удержаний. */
+  paid_deductions?: IPayrollPaidAmount[] | null;
+  /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
    */
@@ -311,6 +320,9 @@ export interface IPayrollTermsListResult {
 /** Порция подгрузки при прокрутке — максимум, который принимает сервер. */
 export const PAYROLL_TERMS_PAGE_SIZE = 500;
 
+/** Месяцы сумм «Расчётов» (YYYY-MM); пусто или 'all' — весь период, как у «Свода». */
+export type PayrollPaidMonths = string[] | 'all';
+
 export const payrollService = {
   listTerms: async (params: IPayrollTermsViewParams & {
     sort: PayrollSortKey;
@@ -318,12 +330,18 @@ export const payrollService = {
     pageSize?: number;
     /** Курсор порции; без него — первая порция. */
     cursor?: IPayrollTermsCursor | null;
+    /** «Расчёты»: суммы «Оплачено» за эти месяцы вместо «Начислений». */
+    paidMonths?: PayrollPaidMonths;
   }, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();
     appendViewParams(search, params);
     search.set('sort', params.sort);
     search.set('dir', params.dir);
     search.set('page_size', String(params.pageSize ?? PAYROLL_TERMS_PAGE_SIZE));
+    if (params.paidMonths) {
+      const { paidMonths } = params;
+      search.set('paid_months', paidMonths === 'all' || paidMonths.length === 0 ? 'all' : paidMonths.join(','));
+    }
     if (params.cursor) {
       search.set('after_null', params.cursor.isNull ? '1' : '0');
       if (!params.cursor.isNull && params.cursor.key !== null) search.set('after_key', params.cursor.key);

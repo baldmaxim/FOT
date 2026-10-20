@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState, type CSSProperties, type FC } from 'react
 import { createPortal } from 'react-dom';
 
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
+import type { PayrollTableColumn, PayrollTableColumns } from '../../utils/payrollColumns';
 import styles from './PayrollColumnsMenu.module.css';
 
 interface IPayrollColumnsMenuProps {
   /** Кнопка-шестерёнка: меню открывается под ней, выровненным по её правому краю. */
   anchor: HTMLElement;
+  /** Столбцы этой таблицы по порядку. */
+  columns: PayrollTableColumns;
   hidden: ReadonlySet<PayrollTableColumn>;
   onToggle: (column: PayrollTableColumn, visible: boolean) => void;
   onShowAll: () => void;
@@ -19,10 +21,10 @@ const MENU_WIDTH = 280;
 const SHEET_MEDIA = '(max-width: 768px)';
 
 /**
- * Выбор видимых столбцов таблицы условий оплаты. Галочка применяется сразу;
+ * Выбор видимых столбцов таблицы «Условий оплаты» или «Расчётов». Галочка применяется сразу;
  * закрытие — Escape, клик мимо или «Готово».
  */
-export const PayrollColumnsMenu: FC<IPayrollColumnsMenuProps> = ({ anchor, hidden, onToggle, onShowAll, onClose }) => {
+export const PayrollColumnsMenu: FC<IPayrollColumnsMenuProps> = ({ anchor, columns, hidden, onToggle, onShowAll, onClose }) => {
   const dismiss = useOverlayDismiss(onClose);
 
   useEffect(() => {
@@ -54,7 +56,7 @@ export const PayrollColumnsMenu: FC<IPayrollColumnsMenuProps> = ({ anchor, hidde
         <p className={styles.fixed}>«Сотрудник» показывается всегда</p>
 
         <ul className={styles.list}>
-          {PAYROLL_TABLE_COLUMNS.map((column, index) => (
+          {columns.map((column, index) => (
             <li key={column.key}>
               <label className={styles.option}>
                 <input

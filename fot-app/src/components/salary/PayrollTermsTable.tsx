@@ -16,13 +16,16 @@ import {
   type IAccrualMonthPart,
 } from '../../utils/payrollAccruals';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
-import { PAYROLL_TABLE_COLUMNS, type PayrollTableColumn } from '../../utils/payrollColumns';
+import type { PayrollTableColumn, PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { formatPaidAmount } from '../../utils/payrollPaid';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
   rows: IPayrollTermsRow[];
+  /** Столбцы таблицы по порядку («Условия оплаты» или «Расчёты»), кроме «№» и «Сотрудника». */
+  columns: PayrollTableColumns;
   /** Скрытые шестерёнкой столбцы; «№» и «Сотрудник» видны всегда. */
   hiddenColumns: ReadonlySet<PayrollTableColumn>;
   onEdit: (row: IPayrollTermsRow) => void;
@@ -37,18 +40,18 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
+  /** Период сумм «К выплате» и «Удержаний» — тех, что пришли в строках. */
+  paidPeriod?: string;
+  /** Клик по сумме удержаний: окно со статьями; trigger — куда вернуть фокус. */
+  onOpenDeductions?: (row: IPayrollTermsRow, trigger: HTMLButtonElement) => void;
 }
 
-/** Столбцы с сортировкой и фильтром — в порядке таблицы. */
-const SORTABLE_COLUMNS: ReadonlyArray<{ key: PayrollSortKey; label: string; className?: string }> = [
-  { key: 'name', label: 'Сотрудник', className: 'stickyName' },
-  { key: 'department', label: 'Подразделение' },
-  { key: 'position', label: 'Должность' },
-  { key: 'schedule', label: 'График работы' },
-  { key: 'salary', label: 'Оклад' },
-  { key: 'bonus', label: 'Премиальная часть' },
-  { key: 'housing', label: 'Компенсация проживания' },
-];
+/** Столбцы с сортировкой и фильтром (подпись шапки — из набора столбцов). */
+const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollSortKey & PayrollTableColumn>([
+  'department', 'position', 'schedule', 'salary', 'bonus', 'housing',
+]);
+
+const isSortableColumn = (key: PayrollTableColumn): key is PayrollSortKey & PayrollTableColumn => SORTABLE_COLUMNS.has(key);
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
@@ -64,6 +67,8 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   bonus: 'colBonus',
   housing: 'colHousing',
   accruals: 'colAccruals',
+  payout: 'colPayout',
+  deductions: 'colDeductions',
 };
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
@@ -78,6 +83,11 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
   const money = row.terms_id ? formatPayrollMoney(value) : null;
   return money === null ? '—' : `${money} ₽/мес`;
 };
+
+/** Сумма «Оплачено» строки «Расчётов»: нет — «—». */
+const formatPaid = (value: number | null | undefined): string => (
+  value === null || value === undefined ? '—' : formatPaidAmount(Number(value))
+);
 
 
 const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount }, index) => (
@@ -110,6 +120,7 @@ const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
  */
 export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   rows,
+  columns,
   hiddenColumns,
   onEdit,
   onLoadMore,
@@ -120,6 +131,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   columnFilters,
   onOpenFilter,
   accrualMonths,
+  paidPeriod,
+  onOpenDeductions,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -150,24 +163,91 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const lastItem = virtualItems[virtualItems.length - 1];
   const bottomSpacer = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
 
-  const shown = (column: PayrollTableColumn) => !hiddenColumns.has(column);
-  const visibleColumns = PAYROLL_TABLE_COLUMNS.filter(column => shown(column.key));
-  const sortHeaders = SORTABLE_COLUMNS.filter(column => column.key === 'name' || shown(column.key));
+  // Один список видимых столбцов — для colgroup, шапки, ячеек и colSpan.
+  const visibleColumns = columns.filter(column => !hiddenColumns.has(column.key));
   const columnCount = FIXED_COLUMN_COUNT + visibleColumns.length;
 
-  const renderSortHeader = (column: (typeof SORTABLE_COLUMNS)[number]) => (
+  const renderSortHeader = (key: PayrollSortKey, label: string, className?: string) => (
     <PayrollSortHeader
-      key={column.key}
-      sortKey={column.key}
-      label={column.label}
-      className={column.className ? styles[column.className] : undefined}
+      key={key}
+      sortKey={key}
+      label={label}
+      className={className}
       activeKey={sort}
       dir={dir}
       onSort={onSort}
       onOpenFilter={onOpenFilter}
-      filterActive={isPayrollColumnFilterActive(columnFilters, column.key)}
+      filterActive={isPayrollColumnFilterActive(columnFilters, key)}
     />
   );
+
+  /** Шапка столбца; у сумм «Оплачено» — период под подписью, без сортировки и фильтра. */
+  const renderHeader = (column: PayrollTableColumns[number]): ReactNode => {
+    if (isSortableColumn(column.key)) return renderSortHeader(column.key, column.label);
+    if (column.key === 'accruals') {
+      // Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет.
+      return (
+        <th key={column.key} title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
+          Начисления, тыс. ₽
+          <span className={styles.headPeriod}>{accrualPeriodShort}</span>
+        </th>
+      );
+    }
+    return (
+      <th key={column.key}>
+        {column.label}
+        {paidPeriod && <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>}
+      </th>
+    );
+  };
+
+  const renderCell = (column: PayrollTableColumn, row: IPayrollTermsRow): ReactNode => {
+    switch (column) {
+      case 'department':
+        return <td key={column}><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>;
+      case 'position':
+        return <td key={column}><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>;
+      case 'schedule':
+        return (
+          <td key={column} className={styles.cellOneLine} title={row.schedule_name ?? undefined}>
+            {row.schedule_name ?? '—'}
+          </td>
+        );
+      case 'salary':
+        return <td key={column} className={styles.cellNumber}>{formatSalary(row)}</td>;
+      case 'bonus':
+        return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>;
+      case 'housing':
+        return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>;
+      case 'accruals':
+        return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
+      case 'payout':
+        return <td key={column} className={styles.cellNumber}>{formatPaid(row.paid_total)}</td>;
+      case 'deductions': {
+        const total = row.paid_deductions_total;
+        const hasDetails = total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0;
+        return (
+          <td key={column} className={styles.cellNumber}>
+            {hasDetails && onOpenDeductions ? (
+              // Своя кнопка: клик открывает окно удержаний, а не карточку строки.
+              <button
+                type="button"
+                className={styles.deductionsButton}
+                aria-haspopup="dialog"
+                aria-label={`Удержания: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
+                onClick={event => {
+                  event.stopPropagation();
+                  onOpenDeductions(row, event.currentTarget);
+                }}
+              >
+                {formatPaid(total)}
+              </button>
+            ) : formatPaid(total)}
+          </td>
+        );
+      }
+    }
+  };
 
   return (
     <div className={styles.wrap} ref={scrollRef}>
@@ -186,14 +266,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         <thead>
           <tr>
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
-            {sortHeaders.map(renderSortHeader)}
-            {/* Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет. */}
-            {shown('accruals') && (
-              <th title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
-                Начисления, тыс. ₽
-                <span className={styles.headPeriod}>{accrualPeriodShort}</span>
-              </th>
-            )}
+            {renderSortHeader('name', 'Сотрудник', styles.stickyName)}
+            {visibleColumns.map(renderHeader)}
           </tr>
         </thead>
         <tbody>
@@ -236,19 +310,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
-                    {shown('department') && <td><span className={styles.clamp3}>{row.department_name ?? '—'}</span></td>}
-                    {shown('position') && <td><span className={styles.clamp3}>{row.position_name ?? '—'}</span></td>}
-                    {shown('schedule') && (
-                      <td className={styles.cellOneLine} title={row.schedule_name ?? undefined}>
-                        {row.schedule_name ?? '—'}
-                      </td>
-                    )}
-                    {shown('salary') && <td className={styles.cellNumber}>{formatSalary(row)}</td>}
-                    {shown('bonus') && <td className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>}
-                    {shown('housing') && <td className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>}
-                    {shown('accruals') && (
-                      <td className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>
-                    )}
+                    {visibleColumns.map(column => renderCell(column.key, row))}
                   </tr>
                 );
               })}

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseHiddenPayrollColumns, serializeHiddenPayrollColumns } from './payrollColumns';
+import {
+  keepPayrollTableColumns,
+  parseHiddenPayrollColumns,
+  PAYROLL_CALC_TABLE_COLUMNS,
+  PAYROLL_TERMS_TABLE_COLUMNS,
+  serializeHiddenPayrollColumns,
+} from './payrollColumns';
 
 describe('скрытые столбцы таблицы условий оплаты', () => {
   it('пусто или нет значения — все столбцы видны', () => {
@@ -25,5 +31,27 @@ describe('скрытые столбцы таблицы условий оплат
   it('туда и обратно без потерь', () => {
     const hidden = new Set(['position', 'housing'] as const);
     expect([...parseHiddenPayrollColumns(serializeHiddenPayrollColumns(hidden))]).toEqual(['position', 'housing']);
+  });
+});
+
+describe('столбцы «Расчётов»', () => {
+  it('вместо оклада, премии, проживания и «Начислений» — «К выплате» и «Удержания»', () => {
+    expect(PAYROLL_CALC_TABLE_COLUMNS.map(column => column.label)).toEqual([
+      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Удержания',
+    ]);
+    expect(PAYROLL_TERMS_TABLE_COLUMNS.map(column => column.key)).toEqual([
+      'department', 'position', 'schedule', 'salary', 'bonus', 'housing', 'accruals',
+    ]);
+  });
+
+  it('скрытые в ключе «Расчётов» оклад, премия, проживание и «Начисления» не считаются', () => {
+    const stored = parseHiddenPayrollColumns('["salary","bonus","housing","accruals","position","deductions"]');
+    expect([...keepPayrollTableColumns(stored, PAYROLL_CALC_TABLE_COLUMNS)]).toEqual(['position', 'deductions']);
+    expect(keepPayrollTableColumns(parseHiddenPayrollColumns('["salary","accruals"]'), PAYROLL_CALC_TABLE_COLUMNS).size).toBe(0);
+  });
+
+  it('сохраняются в порядке таблицы', () => {
+    expect(serializeHiddenPayrollColumns(new Set(['deductions', 'payout', 'schedule'] as const)))
+      .toBe('["schedule","payout","deductions"]');
   });
 });

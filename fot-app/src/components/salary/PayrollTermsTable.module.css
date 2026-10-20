@@ -50,6 +50,9 @@
 .colHousing  { width: 180px; }
 /* «Начисления»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
+/* «Расчёты»: сумма до «12 345 678,90» и период под заголовком в две строки */
+.colPayout     { width: 150px; }
+.colDeductions { width: 150px; }
 
 .table thead th {
   position: sticky;
@@ -182,6 +185,8 @@
   white-space: nowrap;
   color: var(--text-muted);
 }
+/* Период «К выплате» и «Удержаний» — выбор месяцев может быть длинным: переносится между словами */
+.headPeriodWrap { white-space: normal; }
 
 .cellNumber {
   white-space: nowrap;
@@ -195,8 +200,37 @@
 }
 
 /* Смартфоны: тап-цели ≥ 44px; № и ФИО уже — остальные столбцы видны без долгой прокрутки вбок */
+/* Сумма удержаний открывает окно со статьями: выглядит как ссылка, строку не открывает */
+.deductionsButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out;
+}
+.deductionsButton:hover { background: var(--surface-hover); }
+.deductionsButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .deductionsButton { transition: none; }
+}
+
 @media (max-width: 768px) {
   .table td { height: 48px; }
+  .deductionsButton { min-height: 44px; }
   .colNum { width: 44px; }
   .colName { width: 150px; }
   .stickyName { left: 44px; }

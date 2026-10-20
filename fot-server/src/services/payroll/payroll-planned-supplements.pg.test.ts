@@ -103,7 +103,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
-      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
+      -- parent_id и kind читает категория по отделу (payroll-staff-category.ts).
+      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid, kind text);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
       CREATE TABLE employees (
         id integer PRIMARY KEY,
@@ -283,5 +284,48 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     expect(byId[1]).toEqual([{ month: '2026-07', amount: -1500 }, { month: '2026-08', amount: 128770 }]);
     expect(byId[2]).toBeNull();
     expect(byId[3]).toBeNull();
+  });
+
+  it('«Расчёты»: «К выплате» и «Удержания» за выбранные месяцы — удержания не вычитаются', async () => {
+    // Суммы предыдущего теста + явный ноль удержания у 4.
+    await pg.pool!.query(`
+      INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
+        (1, '2026-07-01', 'fines',         2000),
+        (4, '2026-08-01', 'fines',            0);
+    `);
+    const list = async (paidMonths: string) => {
+      const res = makeRes();
+      await payrollTermsController.list({
+        user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', paid_months: paidMonths },
+      } as unknown as AuthenticatedRequest, res);
+      expect(res.statusCode).toBe(200);
+      return Object.fromEntries((res.body.data as Array<Record<string, unknown>>).map(row => [row.employee_id, row]));
+    };
+
+    // Июль и август: сторно минусом входит в начисления, мартовский и октябрьский договор — нет.
+    const julAug = await list('2026-07,2026-08');
+    expect(julAug[1]).toMatchObject({
+      paid_total: 127270,
+      paid_deductions_total: 7248,
+      paid_deductions: [
+        { month: '2026-07', item: 'fines', amount: '2000.00' },
+        { month: '2026-08', item: 'meals', amount: '5248.00' },
+      ],
+    });
+    expect(julAug[1]).not.toHaveProperty('accruals');
+    expect(julAug[2]).toMatchObject({ paid_total: null, paid_deductions_total: null, paid_deductions: null });
+    // Только удержание — «К выплате» пусто; удержание вне выбранных месяцев не попадает.
+    expect(julAug[3]).toMatchObject({ paid_total: null, paid_deductions_total: null, paid_deductions: null });
+    // Явный ноль — 0, а не «нет данных».
+    expect(julAug[4]).toMatchObject({ paid_total: null, paid_deductions_total: 0 });
+
+    // Исключённый месяц не попадает.
+    const aug = await list('2026-08');
+    expect(aug[1]).toMatchObject({ paid_total: 128770, paid_deductions_total: 5248 });
+
+    // Весь период — все месяцы, включая текущий.
+    const all = await list('all');
+    expect(all[1]).toMatchObject({ paid_total: 327270, paid_deductions_total: 7248 });
+    expect(all[3]).toMatchObject({ paid_total: null, paid_deductions_total: 50000 });
   });
 });

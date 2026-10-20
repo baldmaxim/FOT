@@ -1,0 +1,29 @@
+/*
+ * Окно удержаний сотрудника на «Расчётах» — небольшое: по ширине таблицы, но не шире 720px и экрана
+ * (два месяца и «Итого» помещаются целиком, больше — таблица прокручивается вбок).
+ * Оверлей, шапка и прокручиваемое тело — из PayrollModal.module.css, таблица — из PayrollPaidTable.module.css.
+ */
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  min-width: min(320px, 100%);
+  max-width: min(720px, 100%);
+  max-height: min(80dvh, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+/* ФИО и период под заголовком: длинное ФИО переносится, а не уезжает под крестик */
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

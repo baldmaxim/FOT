@@ -9,6 +9,7 @@ import {
   type IPayrollTermsCursor,
   type IPayrollTermsRow,
   type IPayrollTermsViewParams,
+  type PayrollPaidMonths,
   type PayrollSortDir,
   type PayrollSortKey,
 } from '../../services/payrollService';
@@ -25,7 +26,13 @@ import {
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
 } from '../../utils/payrollColumnFilters';
-import { PAYROLL_TERMS_COLUMNS_KEY, type PayrollTableColumn } from '../../utils/payrollColumns';
+import {
+  PAYROLL_TERMS_COLUMNS_KEY,
+  PAYROLL_TERMS_TABLE_COLUMNS,
+  type PayrollTableColumn,
+  type PayrollTableColumns,
+} from '../../utils/payrollColumns';
+import { formatPaidPeriod } from '../../utils/payrollPaid';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
@@ -55,6 +62,15 @@ interface ICompensationTermsPageProps {
   actionsExtra?: ReactNode;
   /** Ключ хранилища скрытых столбцов (шестерёнка). */
   hiddenColumnsKey?: string;
+  /** Столбцы таблицы; по умолчанию — «Условия оплаты». */
+  columns?: PayrollTableColumns;
+  /**
+   * «Расчёты»: месяцы сумм «К выплате» и «Удержаний»; null — месяцы ещё грузятся, список ждёт.
+   * Не передан — «Условия оплаты», сумм нет.
+   */
+  paidMonths?: PayrollPaidMonths | null;
+  /** Клик по сумме удержаний: строка, кнопка (вернуть фокус) и период сумм строки. */
+  onOpenDeductions?: (row: IPayrollTermsRow, trigger: HTMLButtonElement, period: string) => void;
 }
 
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
@@ -63,6 +79,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   onOpenEmployee,
   actionsExtra,
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
+  columns = PAYROLL_TERMS_TABLE_COLUMNS,
+  paidMonths,
+  onOpenDeductions,
 }) => {
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
@@ -88,16 +107,23 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   }), [date, departmentId, debouncedSearch, columnFiltersKey]);
 
   const termsQuery = useInfiniteQuery({
-    queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir],
-    queryFn: ({ pageParam, signal }) => payrollService.listTerms({
-      ...viewParams,
-      sort,
-      dir,
-      pageSize: PAYROLL_TERMS_PAGE_SIZE,
-      cursor: pageParam,
-    }, signal),
+    queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir, paidMonths ?? null],
+    // Порция помнит месяцы, с которыми запрошена: пока грузится новый период, на экране прежние
+    // строки (keepPreviousData) — и подпись периода должна оставаться их, а не уже выбранной.
+    queryFn: async ({ pageParam, signal }) => ({
+      ...await payrollService.listTerms({
+        ...viewParams,
+        sort,
+        dir,
+        pageSize: PAYROLL_TERMS_PAGE_SIZE,
+        cursor: pageParam,
+        paidMonths: paidMonths ?? undefined,
+      }, signal),
+      paidMonths: paidMonths ?? null,
+    }),
     initialPageParam: null as IPayrollTermsCursor | null,
     getNextPageParam: last => last.meta.next_cursor ?? undefined,
+    enabled: paidMonths !== null,
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
@@ -109,6 +135,13 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const rows = useMemo(() => data?.pages.flatMap(page => page.rows) ?? [], [data]);
   const meta = data?.pages[0]?.meta;
   const total = meta?.total ?? 0;
+  // Период сумм «Расчётов» — тех строк, что на экране.
+  const shownPaidMonths = data?.pages[0]?.paidMonths ?? null;
+  const paidPeriod = shownPaidMonths === null ? undefined : formatPaidPeriod(shownPaidMonths);
+
+  const handleOpenDeductions = useCallback((row: IPayrollTermsRow, trigger: HTMLButtonElement) => {
+    onOpenDeductions?.(row, trigger, paidPeriod ?? '');
+  }, [onOpenDeductions, paidPeriod]);
 
   const structureTree = usePayrollStructureTree();
   const sectionDepartments = useStaffSectionDepartments();
@@ -168,7 +201,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   // его фильтр и сортировка снимаются вместе со скрытием.
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
-    if (column === 'accruals') return;
+    // Без сортировки и фильтра.
+    if (column === 'accruals' || column === 'payout' || column === 'deductions') return;
     if (isPayrollColumnFilterActive(columnFilters, column)) {
       setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
     }
@@ -179,6 +213,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   };
   const { hidden: hiddenColumns, setColumnVisible, showAll } = usePayrollHiddenColumns(
     hiddenColumnsKey,
+    columns,
     clearHiddenColumnConditions,
   );
   /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
@@ -264,6 +299,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         <>
           <PayrollTermsTable
             rows={rows}
+            columns={columns}
             hiddenColumns={hiddenColumns}
             onEdit={onOpenEmployee}
             onLoadMore={loadMore}
@@ -274,6 +310,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             columnFilters={columnFilters}
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
+            paidPeriod={paidPeriod}
+            onOpenDeductions={onOpenDeductions ? handleOpenDeductions : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -308,6 +346,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       {columnsAnchor && (
         <PayrollColumnsMenu
           anchor={columnsAnchor}
+          columns={columns}
           hidden={hiddenColumns}
           onToggle={setColumnVisible}
           onShowAll={showAll}

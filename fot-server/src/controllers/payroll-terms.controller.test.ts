@@ -1079,3 +1079,105 @@ describe('payrollTermsController: фильтр «Удержания» убран
     expectPlaceholdersMatch(sql, params);
   });
 });
+
+describe('payrollTermsController.list: «К выплате» и «Удержания» (paid_months)', () => {
+  const lastListCall = () => {
+    const [sql, params] = pgQueryOne.mock.calls[0] as unknown as [string, unknown[]];
+    return { sql, params };
+  };
+
+  beforeEach(() => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+    contractor.getContractorRootId.mockResolvedValue('contractor-root');
+    pgQueryOne.mockResolvedValue({ total: '0', without_terms_total: '0', rows: [] });
+  });
+
+  it('без paid_months — прежний список: «Начисления» есть, сумм «Расчётов» нет', async () => {
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    expect(sql).toMatch(/acc\.accruals/);
+    expect(sql).not.toMatch(/paid_total|paid_deductions/);
+    expect(params).toHaveLength(12);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('список месяцев — первые числа последним параметром; «Начислений» нет, читается одна выборка «Оплачено»', async () => {
+    await payrollTermsController.list(makeReq({
+      query: { paid_months: '2026-08,2026-07,2026-08' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    expect(params).toHaveLength(13);
+    expect(params[12]).toEqual(['2026-07-01', '2026-08-01']);
+    expect(sql).toMatch(/pa\.month = ANY\(\$13::date\[\]\)/);
+    expect(sql).not.toMatch(/accruals/);
+    expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
+    // «К выплате» — только начисления: удержания не вычитаются.
+    expect(sql).toMatch(/SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan'\)\) AS paid_total/);
+    expect(sql).toMatch(/SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction'\)\) AS paid_deductions_total/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('all — весь период: параметр месяцев NULL', async () => {
+    await payrollTermsController.list(makeReq({ query: { paid_months: 'all' } } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    expect(params[12]).toBeNull();
+    expect(sql).toMatch(/\$13::date\[\] IS NULL OR/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('с фильтрами столбцов и курсором сортировки — параметр месяцев после них, номера сходятся', async () => {
+    await payrollTermsController.list(makeReq({
+      query: {
+        sort: 'department',
+        dir: 'asc',
+        after_null: '0',
+        after_key: 'Бухгалтерия',
+        after_id: '7',
+        cf: JSON.stringify({ values: { position: ['Монтажник'] }, text: { name: 'Абд' } }),
+        paid_months: '2026-07',
+      },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const { sql, params } = lastListCall();
+    const monthsIndex = params.length;
+    expect(params[monthsIndex - 1]).toEqual(['2026-07-01']);
+    expect(sql).toMatch(new RegExp(`pa\\.month = ANY\\(\\$${monthsIndex}::date\\[\\]\\)`));
+    // Курсор и фильтры — свои параметры перед месяцами.
+    expect(params).toContain('Бухгалтерия');
+    expect(params).toContainEqual(['Монтажник']);
+    expectPlaceholdersMatch(sql, params);
+  });
+
+  it('неверный paid_months — 400 до похода в БД', async () => {
+    for (const paidMonths of ['2026-13', '07.2026', '', 'all,2026-07']) {
+      const res = makeRes();
+      await payrollTermsController.list(makeReq({ query: { paid_months: paidMonths } } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode, paidMonths).toBe(400);
+    }
+    expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+
+  it('суммы строки уходят на фронт как есть', async () => {
+    pgQueryOne.mockResolvedValueOnce({
+      total: '1', without_terms_total: '1',
+      rows: [{
+        employee_id: 5,
+        full_name: 'А',
+        paid_total: 141900,
+        paid_deductions_total: 8500,
+        paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.00' }],
+      }],
+    });
+    const res = makeRes();
+    await payrollTermsController.list(makeReq({ query: { paid_months: '2026-07' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.body.data[0]).toMatchObject({
+      paid_total: 141900,
+      paid_deductions_total: 8500,
+      paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.00' }],
+    });
+  });
+});

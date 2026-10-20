@@ -1,27 +1,48 @@
 /**
- * Видимость столбцов таблицы «Условия оплаты». Выбор — удобство конкретного браузера,
+ * Видимость столбцов таблиц «Условия оплаты» и «Расчёты». Выбор — удобство конкретного браузера,
  * поэтому хранится в localStorage; недоступное или битое хранилище = все столбцы видны.
  */
 
 /** Столбцы, которые можно скрыть. Чекбокс выбора, «№» и «Сотрудник» видны всегда. */
-export type PayrollTableColumn = 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals';
+export type PayrollTableColumn =
+  | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
+  | 'payout' | 'deductions';
 
-/** В порядке таблицы. */
-export const PAYROLL_TABLE_COLUMNS: ReadonlyArray<{ key: PayrollTableColumn; label: string }> = [
+/** Набор столбцов таблицы в её порядке; подпись — для шестерёнки и шапки сортируемых столбцов. */
+export type PayrollTableColumns = ReadonlyArray<{ key: PayrollTableColumn; label: string }>;
+
+const COMMON_COLUMNS: PayrollTableColumns = [
   { key: 'department', label: 'Подразделение' },
   { key: 'position', label: 'Должность' },
   { key: 'schedule', label: 'График работы' },
+];
+
+/** «Условия оплаты». */
+export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
+  ...COMMON_COLUMNS,
   { key: 'salary', label: 'Оклад' },
   { key: 'bonus', label: 'Премиальная часть' },
   { key: 'housing', label: 'Компенсация проживания' },
   { key: 'accruals', label: 'Начисления за посл. полгода' },
 ];
 
+/** «Расчёты»: вместо условий и «Начислений» — суммы «Оплачено» за выбранные месяцы. */
+export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
+  ...COMMON_COLUMNS,
+  { key: 'payout', label: 'К выплате' },
+  { key: 'deductions', label: 'Удержания' },
+];
+
 /** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */
 export const PAYROLL_TERMS_COLUMNS_KEY = 'fot:payroll-terms:hidden-columns';
 export const PAYROLL_CALC_COLUMNS_KEY = 'fot:payroll-calc:hidden-columns';
 
-const KNOWN_COLUMNS = new Set<string>(PAYROLL_TABLE_COLUMNS.map(column => column.key));
+/** Все известные столбцы по порядку: «Условия оплаты», затем свои столбцы «Расчётов». */
+const ALL_COLUMN_KEYS: PayrollTableColumn[] = [
+  ...new Set([...PAYROLL_TERMS_TABLE_COLUMNS, ...PAYROLL_CALC_TABLE_COLUMNS].map(column => column.key)),
+];
+
+const KNOWN_COLUMNS = new Set<string>(ALL_COLUMN_KEYS);
 
 const isPayrollTableColumn = (value: unknown): value is PayrollTableColumn => (
   typeof value === 'string' && KNOWN_COLUMNS.has(value)
@@ -40,13 +61,22 @@ export const parseHiddenPayrollColumns = (raw: string | null): Set<PayrollTableC
 
 /** Строка для хранилища в порядке таблицы; null — ничего не скрыто (ключ удаляется). */
 export const serializeHiddenPayrollColumns = (hidden: ReadonlySet<PayrollTableColumn>): string | null => {
-  const ordered = PAYROLL_TABLE_COLUMNS.map(column => column.key).filter(key => hidden.has(key));
+  const ordered = ALL_COLUMN_KEYS.filter(key => hidden.has(key));
   return ordered.length > 0 ? JSON.stringify(ordered) : null;
 };
 
-export const loadHiddenPayrollColumns = (storageKey: string): Set<PayrollTableColumn> => {
+/**
+ * Только столбцы этой таблицы: в ключе «Расчётов» могли остаться оклад, премия и «Начисления» —
+ * их больше нет на экране, и шестерёнка не должна считать их скрытыми.
+ */
+export const keepPayrollTableColumns = (
+  hidden: ReadonlySet<PayrollTableColumn>,
+  columns: PayrollTableColumns,
+): Set<PayrollTableColumn> => new Set(columns.map(column => column.key).filter(key => hidden.has(key)));
+
+export const loadHiddenPayrollColumns = (storageKey: string, columns: PayrollTableColumns): Set<PayrollTableColumn> => {
   try {
-    return parseHiddenPayrollColumns(window.localStorage.getItem(storageKey));
+    return keepPayrollTableColumns(parseHiddenPayrollColumns(window.localStorage.getItem(storageKey)), columns);
   } catch {
     return new Set();
   }

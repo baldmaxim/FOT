@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatPaidAmount,
+  formatPaidPeriod,
+  paidAmountMonths,
   paidCellKey,
   paidItemTotal,
   paidTotals,
@@ -107,5 +109,35 @@ describe('итоги', () => {
     // Месяцы вразброс: июнь и август в выбор не входят.
     expect(paidItemTotal(['2026-07', '2026-09'], amounts, 'meals')).toBe(0.3);
     expect(paidItemTotal(['2026-07', '2026-09'], amounts, 'contract')).toBeNull();
+  });
+});
+
+describe('«Расчёты»: месяцы и период сумм', () => {
+  it('месяцы окна удержаний — из самих сумм: по возрастанию, без повторов (работает и для «весь период»)', () => {
+    expect(paidAmountMonths([
+      { month: '2026-08', item: 'meals', amount: '5248.00' },
+      { month: '2026-07', item: 'fines', amount: '2000.00' },
+      { month: '2026-08', item: 'fines', amount: '0.00' },
+    ])).toEqual(['2026-07', '2026-08']);
+    expect(paidAmountMonths([])).toEqual([]);
+  });
+
+  it('период: выбранные месяцы — как у пикера, пусто или all — «весь период»', () => {
+    expect(formatPaidPeriod(['2026-08'])).toBe('август 2026');
+    expect(formatPaidPeriod(['2026-07', '2026-08'])).toBe('июль 2026 — август 2026');
+    expect(formatPaidPeriod(['2026-05', '2026-08'])).toBe('май 2026, август 2026');
+    expect(formatPaidPeriod([])).toBe('весь период');
+    expect(formatPaidPeriod('all')).toBe('весь период');
+  });
+
+  it('удержания в окне: явный ноль — сумма 0, а не «нет данных»; итог в копейках', () => {
+    const months = ['2026-07', '2026-08'];
+    const amounts = toPaidAmounts([
+      { month: '2026-07', item: 'fines', amount: '0.10' },
+      { month: '2026-08', item: 'fines', amount: '0.20' },
+      { month: '2026-08', item: 'meals', amount: '0.00' },
+    ]);
+    expect(paidItemTotal(months, amounts, 'meals')).toBe(0);
+    expect(paidTotals(months, amounts).overall).toEqual({ accrued: null, deducted: 0.3 });
   });
 });

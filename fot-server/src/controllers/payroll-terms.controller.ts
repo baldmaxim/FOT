@@ -45,7 +45,8 @@ import {
   setPlannedSupplement,
   type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
-import { PAYROLL_PAID_ACCRUAL_CODES } from '../services/payroll/payroll-paid.service.js';
+import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
+import { parsePayrollMonthsQuery, payrollMonthStarts } from './payroll-dictionary.helpers.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
@@ -260,8 +261,48 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)${columnFilterSql ? `\n       AND ${columnFilterSql}` : ''}
   )`;
 
-/** Коды статей «Начислено» литералом SQL: константа из кода, не ввод пользователя. */
+/** Коды статей «Начислено» и «Удержано» литералом SQL: константы из кода, не ввод пользователя. */
 const ACCRUAL_CODES_SQL = PAYROLL_PAID_ACCRUAL_CODES.map(code => `'${code}'`).join(', ');
+const DEDUCTION_CODES_SQL = PAYROLL_PAID_DEDUCTION_CODES.map(code => `'${code}'`).join(', ');
+
+/**
+ * «Начисления» — итог «Начислено» из «Оплачено» по месяцам: 6 закрытых месяцев перед
+ * датой выборки, как окно столбца на фронте (payrollAccrualMonths). Нет сумм — null («—»).
+ */
+const ACCRUALS_SELECT_SQL = 'acc.accruals';
+const ACCRUALS_JOIN_SQL = `
+                LEFT JOIN LATERAL (
+                  SELECT json_agg(json_build_object('month', to_char(a.month, 'YYYY-MM'), 'amount', a.amount)
+                                  ORDER BY a.month) AS accruals
+                    FROM (SELECT pa.month, SUM(pa.amount) AS amount
+                            FROM payroll_paid_amounts pa
+                           WHERE pa.employee_id = page.employee_id
+                             AND pa.month >= (date_trunc('month', $1::date) - INTERVAL '6 months')::date
+                             AND pa.month <  date_trunc('month', $1::date)::date
+                             AND pa.item_code IN (${ACCRUAL_CODES_SQL})
+                           GROUP BY pa.month) a
+                ) acc ON TRUE`;
+
+const PAID_SELECT_SQL = 'paid.paid_total, paid.paid_deductions_total, paid.paid_deductions';
+
+/**
+ * «Расчёты»: «К выплате» — итог «Начислено» (как «Выплачено» в «Подробно», удержания не вычитаются),
+ * «Удержания» — итог «Удержано» и его статьи по месяцам для окна. monthsParam — date[] первых чисел
+ * месяцев, NULL — весь период. Нет сумм группы — null («—»).
+ */
+const paidJoinSql = (monthsParam: string): string => `
+                LEFT JOIN LATERAL (
+                  SELECT SUM(pa.amount) FILTER (WHERE pa.item_code IN (${ACCRUAL_CODES_SQL})) AS paid_total,
+                         SUM(pa.amount) FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})) AS paid_deductions_total,
+                         json_agg(json_build_object('month', to_char(pa.month, 'YYYY-MM'),
+                                                    'item', pa.item_code,
+                                                    'amount', pa.amount::text)
+                                  ORDER BY pa.month, pa.item_code)
+                           FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})) AS paid_deductions
+                    FROM payroll_paid_amounts pa
+                   WHERE pa.employee_id = page.employee_id
+                     AND (${monthsParam}::date[] IS NULL OR pa.month = ANY(${monthsParam}::date[]))
+                ) paid ON TRUE`;
 
 /**
  * Список: итоги + порция. Параметры $9 LIMIT, $10 OFFSET, $11/$12 — курсор прежнего порядка
@@ -277,6 +318,8 @@ const buildListSql = (options: {
   sortKeySql: string;
   cursorSql: string;
   orderSql: string;
+  /** Параметр месяцев «Расчётов» ($N): с ним вместо «Начислений» — «К выплате» и «Удержания». */
+  paidMonthsParam?: string;
 }): string => `${buildBaseCtes(options.columnFilterSql)},
   keyed AS (
     SELECT filtered.*, ${options.sortKeySql} AS sort_key FROM filtered
@@ -288,13 +331,13 @@ const buildListSql = (options: {
     COALESCE((
       -- ORDER BY внутри json_agg: next_cursor берётся из последнего элемента массива,
       -- порядок подзапроса агрегат гарантированно не сохраняет.
-      -- Плановая доплата и начисления — только для строк порции: LATERAL после LIMIT.
+      -- Плановая доплата и суммы «Оплачено» — только для строк порции: LATERAL после LIMIT.
       SELECT json_agg(p ORDER BY ${options.orderSql.replace(/\bk\./g, 'p.')})
         FROM (SELECT page.*,
                      ps.amount    AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
                      ps.date_to   AS planned_supplement_to,
-                     acc.accruals
+                     ${options.paidMonthsParam ? PAID_SELECT_SQL : ACCRUALS_SELECT_SQL}
                 FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
                        WHERE ${options.cursorSql}
                        ORDER BY ${options.orderSql}
@@ -305,20 +348,7 @@ const buildListSql = (options: {
                    WHERE s.employee_id = page.employee_id
                    ORDER BY s.id DESC
                    LIMIT 1
-                ) ps ON TRUE
-                -- «Начисления» — итог «Начислено» из «Оплачено» по месяцам: 6 закрытых месяцев перед
-                -- датой выборки, как окно столбца на фронте (payrollAccrualMonths). Нет сумм — null («—»).
-                LEFT JOIN LATERAL (
-                  SELECT json_agg(json_build_object('month', to_char(a.month, 'YYYY-MM'), 'amount', a.amount)
-                                  ORDER BY a.month) AS accruals
-                    FROM (SELECT pa.month, SUM(pa.amount) AS amount
-                            FROM payroll_paid_amounts pa
-                           WHERE pa.employee_id = page.employee_id
-                             AND pa.month >= (date_trunc('month', $1::date) - INTERVAL '6 months')::date
-                             AND pa.month <  date_trunc('month', $1::date)::date
-                             AND pa.item_code IN (${ACCRUAL_CODES_SQL})
-                           GROUP BY pa.month) a
-                ) acc ON TRUE) p
+                ) ps ON TRUE${options.paidMonthsParam ? paidJoinSql(options.paidMonthsParam) : ACCRUALS_JOIN_SQL}) p
     ), '[]'::json) AS rows`;
 
 /** Прежний порядок и курсор (ФИО, id): без параметра sort — как до сортировки по столбцам. */
@@ -352,8 +382,12 @@ interface IPayrollTermsListRow {
   planned_supplement_amount: string | number | null;
   planned_supplement_from: string | null;
   planned_supplement_to: string | null;
-  /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. */
-  accruals: Array<{ month: string; amount: number }> | null;
+  /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. Нет при paid_months. */
+  accruals?: Array<{ month: string; amount: number }> | null;
+  /** Только при paid_months («Расчёты»): итоги «Начислено» и «Удержано» за месяцы, статьи удержаний. */
+  paid_total?: number | null;
+  paid_deductions_total?: number | null;
+  paid_deductions?: Array<{ month: string; item: string; amount: string }> | null;
   /** Категория по текущему отделу — её карточка показывает и её же сервер запишет при назначении. */
   department_category?: StaffCategory;
   sort_key?: unknown;
@@ -405,6 +439,9 @@ const badRequest = (res: Response, error: string, code: string): void => {
  *
  * Поиск, фильтры столбцов, сортировка и порции — на сервере: список больше одной порции,
  * и сортировка в браузере переставляла бы только загруженные строки.
+ *
+ * ?paid_months=2026-07,2026-08 | all («Расчёты») — вместо «Начислений» строки несут paid_total,
+ * paid_deductions_total и paid_deductions за эти месяцы; без параметра этих полей нет.
  */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -422,6 +459,9 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const filtersResult = parsePayrollColumnFilters(query.cf);
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
+
+    // «Расчёты»: месяцы «К выплате» и «Удержаний». Без параметра — прежний список с «Начислениями».
+    const paidMonths = parsePayrollMonthsQuery(query.paid_months);
 
     const { onDate, contractorRootId, params } = await buildBaseParams(req, parsed);
 
@@ -455,15 +495,25 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters);
 
+    // $11/$12 при сортировке по столбцу всегда NULL, но упомянуты в SQL: неиспользованный
+    // параметр PostgreSQL отвергает («could not determine data type of parameter»).
+    // Курсор пушит свои параметры — строится до параметра месяцев, иначе номера разъедутся.
+    const cursorSql = sort
+      ? `$11::text IS NULL AND $12::int IS NULL AND ${sortedAfter ? buildPayrollCursorSql('k', sort, sortedAfter, params) : 'TRUE'}`
+      : LEGACY_CURSOR_SQL;
+
+    let paidMonthsParam: string | undefined;
+    if (paidMonths !== null) {
+      params.push(paidMonths === 'all' ? null : payrollMonthStarts(paidMonths));
+      paidMonthsParam = `$${params.length}`;
+    }
+
     const sql = buildListSql({
       columnFilterSql: whereParts.join('\n       AND '),
       sortKeySql: sort ? payrollSortKeySql(sort.key).sql : LEGACY_SORT_KEY_SQL,
-      // $11/$12 при сортировке по столбцу всегда NULL, но упомянуты в SQL: неиспользованный
-      // параметр PostgreSQL отвергает («could not determine data type of parameter»).
-      cursorSql: sort
-        ? `$11::text IS NULL AND $12::int IS NULL AND ${sortedAfter ? buildPayrollCursorSql('k', sort, sortedAfter, params) : 'TRUE'}`
-        : LEGACY_CURSOR_SQL,
+      cursorSql,
       orderSql: sort ? buildPayrollOrderSql('k', sort.dir) : LEGACY_ORDER_SQL,
+      paidMonthsParam,
     });
 
     const result = await queryOne<{

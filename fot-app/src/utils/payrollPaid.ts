@@ -4,7 +4,8 @@
  * суммы приходят из 1С (API или выгрузка); показываются лишь статьи, по которым сумма есть.
  * Коды статей — те же, что в CHECK миграции 301 и в payroll-paid.service.ts на сервере.
  */
-import type { IPayrollPaidAmount, PayrollPaidItemCode } from '../services/payrollService';
+import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
+import { formatMonthsLabel } from './monthsSelection';
 
 export interface IPayrollPaidItem {
   code: PayrollPaidItemCode;
@@ -146,3 +147,13 @@ export const paidTotals = (
   }
   return { byMonth, overall: centsToRub(overall) };
 };
+
+/** Месяцы, за которые есть суммы, — по возрастанию, без повторов (окно удержаний на «Расчётах», и для «весь период»). */
+export const paidAmountMonths = (rows: readonly IPayrollPaidAmount[]): string[] => (
+  [...new Set(rows.map(row => row.month))].sort()
+);
+
+/** Период сумм «Расчётов»: 'all' или пусто — «весь период», как у «Свода». */
+export const formatPaidPeriod = (months: PayrollPaidMonths): string => (
+  months === 'all' || months.length === 0 ? 'весь период' : formatMonthsLabel(months)
+);
