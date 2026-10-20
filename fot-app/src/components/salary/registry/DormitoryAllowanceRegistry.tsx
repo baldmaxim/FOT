@@ -10,10 +10,12 @@ import {
   type IDormitoryAllowanceRow,
 } from '../../../services/payrollRegistryService';
 import { formatDate } from '../../../utils/formatMoney';
+import { moscowTodayIso } from '../../../utils/moscowDate';
 import {
   buildDormitoryAllowanceExport,
   DORMITORY_ALLOWANCE_COLUMNS,
   dormitoryAllowanceInMonths,
+  registryRemoval,
 } from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
@@ -35,7 +37,8 @@ const canEditRow = (row: IDormitoryAllowanceRow): boolean => row.can_edit;
 /**
  * «Справочник» → «Ставки» → «Общежитие»: кому платят за то, что не живёт в общежитии компании, период «с — по»
  * (все периоды — история; показываются задевающие выбранные месяцы, кроме месяцев проживания в общежитии).
- * Сумма — значение ставки «Доплата за общежитие», одна на всех. Прекратили — ✎ и дата «по»; 🗑 — только ошибочная строка.
+ * Сумма — значение ставки «Доплата за общежитие», одна на всех. 🗑 «Убрать» — с 1-го числа текущего месяца: период
+ * закрывается датой «по», прошлые месяцы остаются; не начавшийся или прошлый период — ошибочная строка, удаляется.
  */
 export const DormitoryAllowanceRegistry: FC<IDormitoryAllowanceRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -59,12 +62,21 @@ export const DormitoryAllowanceRegistry: FC<IDormitoryAllowanceRegistryProps> = 
 
   const handleDelete = async (row: IDormitoryAllowanceRow) => {
     if (busyKey !== null) return;
-    if (!window.confirm(`Удалить ошибочную строку: ${row.full_name}, с ${formatDate(row.date_from)}?`)) return;
+    // Убран с 1-го числа: прошлые месяцы остаются историей; не начавшийся или прошлый период — ошибочный.
+    const removal = registryRemoval(row, moscowTodayIso());
+    const question = removal.action === 'close'
+      ? `Убрать ${row.full_name} из «Доплата за общежитие» с ${formatDate(removal.cutoff)}? По ${formatDate(removal.dateTo)} строка останется в истории.`
+      : `Удалить ошибочную строку: ${row.full_name}, с ${formatDate(row.date_from)}?`;
+    if (!window.confirm(question)) return;
     setBusyKey(row.id);
     try {
-      await payrollRegistryService.removeDormitoryAllowance(row.id);
+      if (removal.action === 'close') {
+        await payrollRegistryService.updateDormitoryAllowance(row.id, { date_from: row.date_from, date_to: removal.dateTo });
+      } else {
+        await payrollRegistryService.removeDormitoryAllowance(row.id);
+      }
     } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось удалить');
+      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось убрать');
     } finally {
       setBusyKey(null);
       void refresh();
@@ -89,6 +101,7 @@ export const DormitoryAllowanceRegistry: FC<IDormitoryAllowanceRegistryProps> = 
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
         onDelete={canEdit ? row => { void handleDelete(row); } : undefined}
+        deleteLabel="Убрать"
         canEditRow={canEditRow}
         busyKey={busyKey}
         raisedFilters

@@ -10,7 +10,13 @@ import {
   type ICompensationStop,
 } from '../../../services/payrollRegistryService';
 import { formatDate } from '../../../utils/formatMoney';
-import { buildCompensationStopExport, COMPENSATION_STOP_COLUMNS, stopInMonths } from '../../../utils/payrollRegistries';
+import { moscowTodayIso } from '../../../utils/moscowDate';
+import {
+  buildCompensationStopExport,
+  COMPENSATION_STOP_COLUMNS,
+  registryRemoval,
+  stopInMonths,
+} from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
 import { RegistryPeriodForm } from './RegistryPeriodForm';
@@ -30,7 +36,8 @@ const canEditRow = (stop: ICompensationStop): boolean => stop.can_edit;
 
 /**
  * «Справочник» → «Без проезда»: кому не выплачивать проезд, период «с — по» (все периоды — история;
- * показываются задевающие выбранные месяцы). Возобновили выплату — ✎ и дата «по»; 🗑 — только ошибочная строка.
+ * показываются задевающие выбранные месяцы). 🗑 «Убрать» — с 1-го числа текущего месяца: период закрывается
+ * датой «по», прошлые месяцы остаются; не начавшийся или прошлый период — ошибочная строка, удаляется.
  */
 export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -51,12 +58,21 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
 
   const handleDelete = async (stop: ICompensationStop) => {
     if (busyKey !== null) return;
-    if (!window.confirm(`Удалить ошибочную строку: ${stop.full_name}, с ${formatDate(stop.date_from)}?`)) return;
+    // Убран с 1-го числа: прошлые месяцы остаются историей; не начавшийся или прошлый период — ошибочный.
+    const removal = registryRemoval(stop, moscowTodayIso());
+    const question = removal.action === 'close'
+      ? `Убрать ${stop.full_name} из «Без проезда» с ${formatDate(removal.cutoff)}? По ${formatDate(removal.dateTo)} строка останется в истории.`
+      : `Удалить ошибочную строку: ${stop.full_name}, с ${formatDate(stop.date_from)}?`;
+    if (!window.confirm(question)) return;
     setBusyKey(stop.id);
     try {
-      await payrollRegistryService.removeStop(stop.id);
+      if (removal.action === 'close') {
+        await payrollRegistryService.updateStop(stop.id, { date_from: stop.date_from, date_to: removal.dateTo });
+      } else {
+        await payrollRegistryService.removeStop(stop.id);
+      }
     } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось удалить');
+      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось убрать');
     } finally {
       setBusyKey(null);
       void refresh();
@@ -81,6 +97,7 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? stop => setEditor({ mode: 'edit', stop }) : undefined}
         onDelete={canEdit ? stop => { void handleDelete(stop); } : undefined}
+        deleteLabel="Убрать"
         canEditRow={canEditRow}
         busyKey={busyKey}
         raisedFilters

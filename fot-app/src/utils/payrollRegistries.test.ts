@@ -16,6 +16,7 @@ import {
   periodIntersectsMonths,
   registryMonthOptions,
   registryMonthsParam,
+  registryRemoval,
   stopInMonths,
   SUPPLEMENT_COLUMNS,
   supplementInMonths,
@@ -75,8 +76,9 @@ describe('«Доплата»', () => {
       .toBe('октябрь 2026');
   });
 
-  it('ключ строки: плановая — по сотруднику, разовая — по id', () => {
+  it('ключ строки: плановая — по версии журнала (старый бэкенд — по сотруднику), разовая — по id', () => {
     expect(supplementRowKey(supplement({}))).toBe('planned-1');
+    expect(supplementRowKey(supplement({ id: 7 }))).toBe('planned-7');
     expect(supplementRowKey(supplement({ kind: 'one_time', id: 5 }))).toBe('once-5');
   });
 
@@ -241,5 +243,32 @@ describe('выбор месяца в таблицах «Справочника»
     expect(dormitoryAllowanceInMonths(living, ['2030-01'])).toBe(false);
     expect(buildDormitoryAllowanceExport([{ ...row, amount: null }]).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Доплата с', 'По', 'Сумма, ₽/мес']);
+  });
+});
+
+describe('🗑 в таблицах периодов: убрать с 1-го числа или удалить ошибочную', () => {
+  const TODAY = '2026-10-20';
+
+  it('идёт через 1-е число — закрыть последним днём прошлого месяца', () => {
+    expect(registryRemoval({ date_from: '2026-07-01', date_to: null }, TODAY))
+      .toEqual({ action: 'close', cutoff: '2026-10-01', dateTo: '2026-09-30' });
+    expect(registryRemoval({ date_from: '2026-07-15', date_to: '2026-12-31' }, TODAY))
+      .toEqual({ action: 'close', cutoff: '2026-10-01', dateTo: '2026-09-30' });
+    expect(registryRemoval({ date_from: '2026-02-10', date_to: '2026-03-01' }, '2026-03-05'))
+      .toEqual({ action: 'close', cutoff: '2026-03-01', dateTo: '2026-02-28' });
+  });
+
+  it('начинается в этом месяце или позже — удалить', () => {
+    expect(registryRemoval({ date_from: '2026-10-01', date_to: null }, TODAY)).toEqual({ action: 'delete' });
+    expect(registryRemoval({ date_from: '2026-12-01', date_to: '2026-12-31' }, TODAY)).toEqual({ action: 'delete' });
+  });
+
+  it('целиком в прошлом — удалить', () => {
+    expect(registryRemoval({ date_from: '2026-07-01', date_to: '2026-09-30' }, TODAY)).toEqual({ action: 'delete' });
+  });
+
+  it('январь: прошлый месяц — декабрь прошлого года', () => {
+    expect(registryRemoval({ date_from: '2026-11-01', date_to: null }, '2027-01-10'))
+      .toEqual({ action: 'close', cutoff: '2027-01-01', dateTo: '2026-12-31' });
   });
 });

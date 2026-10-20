@@ -10,8 +10,12 @@ import {
   payrollRegistryService,
   type IPayrollSupplementRow,
 } from '../../../services/payrollRegistryService';
+import { formatDate } from '../../../utils/formatMoney';
+import { moscowTodayIso } from '../../../utils/moscowDate';
 import {
   buildSupplementExport,
+  registryRemoval,
+  type RegistryRemoval,
   SUPPLEMENT_COLUMNS,
   supplementInMonths,
   supplementPeriod,
@@ -31,11 +35,21 @@ type EditorState = { mode: 'add' } | { mode: 'edit'; row: IPayrollSupplementRow 
 
 const sendExport = payrollRegistryService.exportTable('supplements');
 const rowName = (row: IPayrollSupplementRow): string => row.full_name;
-const canEditRow = (row: IPayrollSupplementRow): boolean => row.can_edit;
+// Прошлый период плановой — история: эндпоинты меняют только текущую версию.
+const canEditRow = (row: IPayrollSupplementRow): boolean => row.can_edit && row.is_current !== false;
+
+/** 🗑 у плановой: убрать с 1-го числа (период закрывается) или снять ошибочную; у разовой — удалить. */
+const plannedRemoval = (row: IPayrollSupplementRow): RegistryRemoval | null => (
+  row.kind === 'planned' && row.date_from !== null
+    ? registryRemoval({ date_from: row.date_from, date_to: row.date_to }, moscowTodayIso())
+    : null
+);
 
 /**
- * «Справочник» → «Доплата»: плановые (текущие — те же, что в окне сотрудника) и разовые доплаты выбранных
- * месяцев. Ввод — здесь: плановая одна на сотрудника, разовых за месяц — сколько угодно, у каждой основание.
+ * «Справочник» → «Доплата»: плановые (текущая — та же, что в окне сотрудника, и прошлые периоды) и разовые
+ * доплаты выбранных месяцев. Ввод — здесь: текущая плановая одна на сотрудника, разовых за месяц — сколько угодно,
+ * у каждой основание. 🗑 у плановой — «убрать» с 1-го числа текущего месяца: период закрывается, прошлые месяцы
+ * остаются; не начавшаяся или прошлая — снимается как ошибочная.
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -61,17 +75,33 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
 
   const handleDelete = async (row: IPayrollSupplementRow) => {
     if (busyKey !== null) return;
-    const question = row.kind === 'planned'
-      ? `Снять плановую доплату у ${row.full_name} (${supplementPeriod(row)})?`
-      : `Удалить разовую доплату у ${row.full_name} за ${supplementPeriod(row)}?`;
+    const removal = plannedRemoval(row);
+    let question: string;
+    if (removal?.action === 'close') {
+      question = `Убрать плановую доплату у ${row.full_name} с ${formatDate(removal.cutoff)}? `
+        + `Период ${formatDate(row.date_from)} – ${formatDate(removal.dateTo)} останется в истории.`;
+    } else if (row.kind === 'planned') {
+      question = `Снять плановую доплату у ${row.full_name} (${supplementPeriod(row)})?`;
+    } else {
+      question = `Удалить разовую доплату у ${row.full_name} за ${supplementPeriod(row)}?`;
+    }
     if (!window.confirm(question)) return;
     const key = supplementRowKey(row);
     setBusyKey(key);
     try {
-      if (row.kind === 'planned') await payrollRegistryService.removePlanned(row.employee_id);
-      else if (row.id !== null) await payrollRegistryService.removeOneTime(row.id);
+      if (removal?.action === 'close' && row.date_from !== null) {
+        await payrollRegistryService.setPlanned(row.employee_id, {
+          amount: Number(row.amount),
+          date_from: row.date_from,
+          date_to: removal.dateTo,
+        });
+      } else if (row.kind === 'planned') {
+        await payrollRegistryService.removePlanned(row.employee_id);
+      } else if (row.id !== null) {
+        await payrollRegistryService.removeOneTime(row.id);
+      }
     } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось удалить');
+      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось убрать');
     } finally {
       setBusyKey(null);
       void refresh();
@@ -96,6 +126,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
         onDelete={canEdit ? row => { void handleDelete(row); } : undefined}
+        deleteLabel="Убрать"
         canEditRow={canEditRow}
         busyKey={busyKey}
         raisedFilters

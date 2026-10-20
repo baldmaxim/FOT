@@ -26,7 +26,7 @@ export type PayrollSupplementKind = 'planned' | 'one_time';
 /** Плановая (одна на сотрудника, та же, что в окне сотрудника) или разовая доплата. */
 export interface IPayrollSupplementRow {
   kind: PayrollSupplementKind;
-  /** id разовой; у плановой — null. */
+  /** id разовой; у плановой — id версии журнала (старый бэкенд — null). */
   id: number | null;
   employee_id: number;
   full_name: string;
@@ -40,6 +40,8 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
+  /** Плановая: последняя версия журнала (false — прошлый период, только история). Нет у старого бэкенда. */
+  is_current?: boolean;
   can_edit: boolean;
 }
 

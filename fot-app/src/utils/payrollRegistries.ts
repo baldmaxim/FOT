@@ -160,9 +160,12 @@ export const buildCompensationStopExport = buildSnapshot('Без проезда'
 export const buildDeductionExport = buildSnapshot('Удержания', DEDUCTION_COLUMNS);
 export const buildDormitoryAllowanceExport = buildSnapshot('Доплата за общежитие', DORMITORY_ALLOWANCE_COLUMNS);
 
-/** Ключ строки «Доплаты»: у плановой — сотрудник (она одна), у разовой — её id. */
+/**
+ * Ключ строки «Доплаты»: у плановой — версия журнала (у сотрудника бывают прошлые периоды; старый бэкенд
+ * id не отдаёт — тогда сотрудник), у разовой — её id.
+ */
 export const supplementRowKey = (row: IPayrollSupplementRow): string => (
-  row.kind === 'planned' ? `planned-${row.employee_id}` : `once-${row.id}`
+  row.kind === 'planned' ? `planned-${row.id ?? row.employee_id}` : `once-${row.id}`
 );
 
 /** Выбор месяца в таблицах «Справочника»: 24 месяца назад и 12 вперёд (доплаты и «Без проезда» бывают будущими). */
@@ -186,6 +189,27 @@ const monthEnd = (month: string): string => {
   const [year, monthNumber] = month.split('-').map(Number);
   const day = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   return `${month}-${String(day).padStart(2, '0')}`;
+};
+
+/** Что делает 🗑 с периодом: закрыть датой «по» (прошлые месяцы остаются историей) или удалить строку. */
+export type RegistryRemoval =
+  // cutoff — с этого дня убран (1-е число текущего месяца), dateTo — новая дата «по».
+  | { action: 'close'; cutoff: string; dateTo: string }
+  | { action: 'delete' };
+
+/**
+ * 🗑 в таблицах периодов «Справочника» убирает сотрудника с 1-го числа текущего месяца: период закрывается
+ * последним днём прошлого месяца — в прошлых месяцах строка остаётся. Период, который к этому дню ещё не
+ * начался или уже целиком позади, — ошибочная строка: удаляется.
+ */
+export const registryRemoval = (
+  period: { date_from: string; date_to: string | null },
+  todayIso: string,
+): RegistryRemoval => {
+  const month = todayIso.slice(0, 7);
+  const cutoff = `${month}-01`;
+  if (period.date_from >= cutoff || (period.date_to !== null && period.date_to < cutoff)) return { action: 'delete' };
+  return { action: 'close', cutoff, dateTo: monthEnd(shiftMonth(month, -1)) };
 };
 
 /**

@@ -3,7 +3,8 @@
  *
  * Плановая — прежний журнал payroll_planned_supplements (миграция 293), тот же, что в окне сотрудника:
  * текущая — ПОСЛЕДНЯЯ строка журнала по id; если у неё amount NULL, доплата снята. Пишется только
- * через setPlannedSupplement под блокировкой сотрудника — как из окна сотрудника.
+ * через setPlannedSupplement под блокировкой сотрудника — как из окна сотрудника. «Убрали» в таблице —
+ * новая версия с укороченным периодом; добавили потом новый период — прежний остаётся в таблице историей.
  * Разовая — payroll_one_time_supplements: месяц, сумма, основание; за месяц — сколько угодно.
  */
 import type { PoolClient } from 'pg';
@@ -20,8 +21,8 @@ export type PayrollSupplementKind = 'planned' | 'one_time';
 
 export interface IPayrollSupplementRow {
   kind: PayrollSupplementKind;
-  /** id разовой доплаты; у плановой — null (она одна на сотрудника). */
-  id: number | null;
+  /** id разовой доплаты; у плановой — id версии журнала. */
+  id: number;
   employee_id: number;
   full_name: string;
   department: string | null;
@@ -34,6 +35,8 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
+  /** Плановая: последняя версия журнала (false — прошлый период, только история); у разовой — null. */
+  is_current: boolean | null;
 }
 
 export interface IOneTimeSupplement {
@@ -53,7 +56,11 @@ export interface IOneTimeSupplementInput {
   reason: string;
 }
 
-/** Плановые (текущие, не снятые) и разовые доплаты «штата зарплаты». */
+/**
+ * Плановые и разовые доплаты «штата зарплаты». Плановые — текущая (не снятая) версия журнала и прошлые
+ * периоды: версия, после которой доплату не сняли и чей период не пересекается ни с одной более поздней
+ * ненулевой версией. Пересекается — это правка (сумма, даты), прежняя версия не показывается.
+ */
 export const listSupplements = async (scope: {
   contractorRootId: string | null;
   departmentIds: string[] | null;
@@ -69,23 +76,31 @@ export const listSupplements = async (scope: {
         WHERE ${payrollStaffWhereSql('e', '$2')}
      )
      SELECT * FROM (
-       SELECT 'planned'::text AS kind, NULL::int AS id, s.id AS employee_id, s.full_name, s.department, s.position,
-              ps.amount::text AS amount,
-              to_char(ps.date_from, 'YYYY-MM-DD') AS date_from,
-              to_char(ps.date_to, 'YYYY-MM-DD') AS date_to,
-              NULL::text AS month, NULL::text AS reason
+       SELECT 'planned'::text AS kind, v.id::int AS id, s.id AS employee_id, s.full_name, s.department, s.position,
+              v.amount::text AS amount,
+              to_char(v.date_from, 'YYYY-MM-DD') AS date_from,
+              to_char(v.date_to, 'YYYY-MM-DD') AS date_to,
+              NULL::text AS month, NULL::text AS reason, v.is_current
          FROM staff s
-         -- Сначала последняя версия журнала, потом отсев снятых: снятая не «оживает» прежней.
-         JOIN LATERAL (
-           SELECT x.amount, x.date_from, x.date_to
+         -- Окна — по всему журналу сотрудника, отсев — после: снятая не «оживает» прежней версией.
+         JOIN (
+           SELECT x.id, x.employee_id, x.amount, x.date_from, x.date_to,
+                  x.id = max(x.id) OVER (PARTITION BY x.employee_id) AS is_current,
+                  lead(x.amount IS NULL) OVER (PARTITION BY x.employee_id ORDER BY x.id) AS next_removed
              FROM payroll_planned_supplements x
-            WHERE x.employee_id = s.id
-            ORDER BY x.id DESC
-            LIMIT 1
-         ) ps ON ps.amount IS NOT NULL
+         ) v ON v.employee_id = s.id
+        WHERE v.amount IS NOT NULL
+          AND (v.is_current OR (
+                v.next_removed IS NOT TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM payroll_planned_supplements y
+                   WHERE y.employee_id = v.employee_id
+                     AND y.id > v.id
+                     AND y.amount IS NOT NULL
+                     AND daterange(y.date_from, y.date_to, '[]') && daterange(v.date_from, v.date_to, '[]'))))
        UNION ALL
        SELECT 'one_time'::text, o.id, s.id, s.full_name, s.department, s.position,
-              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason
+              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, NULL
          FROM staff s
          JOIN payroll_one_time_supplements o ON o.employee_id = s.id
      ) rows
@@ -115,9 +130,15 @@ export type PlannedSetResult =
   | { status: 'unchanged' }
   | { status: 'saved'; previous: IPlannedSupplementValue | null };
 
+/** Периоды «с — по» (YYYY-MM-DD включительно) пересекаются. */
+const plannedOverlap = (a: IPlannedSupplementValue, b: IPlannedSupplementValue): boolean => (
+  a.dateFrom <= b.dateTo && b.dateFrom <= a.dateTo
+);
+
 /**
- * Записать плановую доплату (null — снять). onlyIfNone — добавление из таблицы: текущая есть — 'exists'
- * (не затираем молча чужую). Новая версия журнала — только при отличии (setPlannedSupplement).
+ * Записать плановую доплату (null — снять). onlyIfNone — добавление из таблицы: текущая пересекается с новым
+ * периодом — 'exists' (не затираем молча чужую); не пересекается (прежнюю «убрали») — новая версия, прежний
+ * период остаётся в таблице историей. Новая версия журнала — только при отличии (setPlannedSupplement).
  */
 export const savePlannedSupplement = async (input: {
   employeeId: number;
@@ -127,7 +148,9 @@ export const savePlannedSupplement = async (input: {
 }): Promise<PlannedSetResult> => withTransaction(async client => {
   await lockPayrollEmployee(client, input.employeeId);
   const previous = await readPlanned(client, input.employeeId);
-  if (input.onlyIfNone && previous) return { status: 'exists' };
+  if (input.onlyIfNone && previous && (input.value === null || plannedOverlap(previous, input.value))) {
+    return { status: 'exists' };
+  }
   const changed = await setPlannedSupplement(client, {
     employeeId: input.employeeId,
     value: input.value,

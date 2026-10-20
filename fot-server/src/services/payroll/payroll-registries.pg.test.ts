@@ -296,6 +296,35 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         .toMatchObject({ status: 'saved', previous: null });
     });
 
+    it('плановая: «убрали» укороченной версией, потом новый период — прежний остаётся историей; правка — нет', async () => {
+      const planned6 = () => listSupplements(SCOPE)
+        .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 6));
+      const julDec = { amount: 3000, dateFrom: '2026-07-01', dateTo: '2026-12-31' };
+      await savePlannedSupplement({ employeeId: 6, value: julDec, createdBy: AUTHOR, onlyIfNone: true });
+      // Правка суммы на том же периоде — исправление: видна только новая версия.
+      await savePlannedSupplement({ employeeId: 6, value: { ...julDec, amount: 3500 }, createdBy: AUTHOR });
+      expect(await planned6()).toEqual([expect.objectContaining({ amount: '3500.00', is_current: true })]);
+
+      // «Убрали» с 01.10 — версия по 30.09.
+      await savePlannedSupplement({ employeeId: 6, value: { amount: 3500, dateFrom: '2026-07-01', dateTo: '2026-09-30' }, createdBy: AUTHOR });
+      // Новый период: пересекается с текущей — exists, не пересекается — новая версия.
+      expect(await savePlannedSupplement({
+        employeeId: 6, value: { amount: 4000, dateFrom: '2026-09-15', dateTo: '2026-12-31' }, createdBy: AUTHOR, onlyIfNone: true,
+      })).toEqual({ status: 'exists' });
+      expect(await savePlannedSupplement({
+        employeeId: 6, value: { amount: 4000, dateFrom: '2026-12-01', dateTo: '2027-02-28' }, createdBy: AUTHOR, onlyIfNone: true,
+      })).toMatchObject({ status: 'saved', previous: { amount: 3500, dateTo: '2026-09-30' } });
+      expect(await planned6()).toEqual([
+        expect.objectContaining({ amount: '3500.00', date_from: '2026-07-01', date_to: '2026-09-30', is_current: false }),
+        expect.objectContaining({ amount: '4000.00', date_from: '2026-12-01', date_to: '2027-02-28', is_current: true }),
+      ]);
+      expect((await planned6()).every(row => typeof row.id === 'number')).toBe(true);
+
+      // Новую сняли как ошибочную — прошлый период остаётся.
+      await savePlannedSupplement({ employeeId: 6, value: null, createdBy: AUTHOR });
+      expect(await planned6()).toEqual([expect.objectContaining({ date_to: '2026-09-30', is_current: false })]);
+    });
+
     it('разовые: несколько за месяц; подрядчик в таблицу не попадает', async () => {
       await addOneTimeSupplement(2, { month: '2026-10', amount: 10000, reason: 'Премия за объект' });
       await addOneTimeSupplement(2, { month: '2026-10', amount: 2500.5, reason: 'Переработка' });

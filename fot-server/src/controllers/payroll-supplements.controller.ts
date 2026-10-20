@@ -61,7 +61,7 @@ const NO_ACCESS = { success: false, error: 'Нет доступа к сотру�
 const NOT_FOUND = { success: false, error: 'Доплата не найдена' };
 const EXISTS = {
   success: false,
-  error: 'У сотрудника уже есть плановая доплата — измените её в таблице',
+  error: 'У сотрудника уже есть плановая доплата в эти даты — измените её в таблице',
   code: 'SUPPLEMENT_EXISTS',
 };
 
@@ -85,7 +85,7 @@ const oneTimeAudit = (row: IOneTimeSupplement) => ({
   reason: row.reason,
 });
 
-/** GET /api/payroll/supplements — плановые (текущие) и разовые доплаты «штата зарплаты». */
+/** GET /api/payroll/supplements — плановые (текущие и прошлые периоды) и разовые доплаты «штата зарплаты». */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const [scope, canEdit] = await Promise.all([resolvePayrollStaffScope(req), resolvePayrollEditPredicate(req)]);
