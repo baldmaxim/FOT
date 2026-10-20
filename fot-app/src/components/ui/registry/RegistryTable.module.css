@@ -89,6 +89,10 @@
 
 .table thead th.cellNum { text-align: center; }
 
+/* Числовой столбец: подпись со стрелкой и воронкой — над числами, по правому краю (и в переносе). */
+.table thead th.headNumeric { text-align: right; }
+.table thead th.headNumeric button { text-align: right; }
+
 .cellNum {
   text-align: center;
   color: var(--text-muted);

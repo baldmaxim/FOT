@@ -144,6 +144,8 @@ export const RegistryTable = <Row,>({
                 sortKey={column.key}
                 label={column.label}
                 title={column.title}
+                // Подпись числового столбца — над числами, по правому краю.
+                className={column.numeric ? styles.headNumeric : undefined}
                 activeKey={view.sort}
                 dir={view.dir}
                 onSort={key => onViewChange(toggleSort(view, key))}
@@ -176,7 +178,6 @@ export const RegistryTable = <Row,>({
                 className={[index % 2 === 1 ? styles.rowEven : '', onRowClick ? styles.rowClickable : ''].filter(Boolean).join(' ') || undefined}
                 {...(onRowClick ? {
                   tabIndex: 0,
-                  title: `Открыть: ${rowLabel(row)}`,
                   onClick: () => onRowClick(row),
                   onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
                     if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
