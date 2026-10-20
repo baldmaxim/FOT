@@ -6,7 +6,7 @@
 /** Столбцы, которые можно скрыть. Чекбокс выбора, «№» и «Сотрудник» видны всегда. */
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
-  | 'payout' | 'deductions';
+  | 'payout' | 'accrued' | 'deductions';
 
 /** Набор столбцов таблицы в её порядке; подпись — для шестерёнки и шапки сортируемых столбцов. */
 export type PayrollTableColumns = ReadonlyArray<{ key: PayrollTableColumn; label: string }>;
@@ -30,6 +30,7 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
   { key: 'payout', label: 'К выплате' },
+  { key: 'accrued', label: 'Начислено' },
   { key: 'deductions', label: 'Удержания' },
 ];
 

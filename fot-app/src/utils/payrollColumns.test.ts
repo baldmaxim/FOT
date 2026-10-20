@@ -35,9 +35,9 @@ describe('скрытые столбцы таблицы условий оплат
 });
 
 describe('столбцы «Расчётов»', () => {
-  it('вместо оклада, премии, проживания и «Начислений» — «К выплате» и «Удержания»', () => {
+  it('вместо оклада, премии, проживания и «Начислений» — «К выплате», «Начислено» и «Удержания»', () => {
     expect(PAYROLL_CALC_TABLE_COLUMNS.map(column => column.label)).toEqual([
-      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Удержания',
+      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Начислено', 'Удержания',
     ]);
     expect(PAYROLL_TERMS_TABLE_COLUMNS.map(column => column.key)).toEqual([
       'department', 'position', 'schedule', 'salary', 'bonus', 'housing', 'accruals',
@@ -51,7 +51,7 @@ describe('столбцы «Расчётов»', () => {
   });
 
   it('сохраняются в порядке таблицы', () => {
-    expect(serializeHiddenPayrollColumns(new Set(['deductions', 'payout', 'schedule'] as const)))
-      .toBe('["schedule","payout","deductions"]');
+    expect(serializeHiddenPayrollColumns(new Set(['deductions', 'accrued', 'payout', 'schedule'] as const)))
+      .toBe('["schedule","payout","accrued","deductions"]');
   });
 });

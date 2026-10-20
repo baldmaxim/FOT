@@ -202,7 +202,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
     // Без сортировки и фильтра.
-    if (column === 'accruals' || column === 'payout' || column === 'deductions') return;
+    if (column === 'accruals' || column === 'payout' || column === 'accrued' || column === 'deductions') return;
     if (isPayrollColumnFilterActive(columnFilters, column)) {
       setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
     }

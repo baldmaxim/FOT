@@ -52,6 +52,7 @@
 .colAccruals { width: 260px; }
 /* «Расчёты»: сумма до «12 345 678,90» и период под заголовком в две строки */
 .colPayout     { width: 150px; }
+.colAccrued    { width: 150px; }
 .colDeductions { width: 150px; }
 
 .table thead th {
@@ -185,7 +186,7 @@
   white-space: nowrap;
   color: var(--text-muted);
 }
-/* Период «К выплате» и «Удержаний» — выбор месяцев может быть длинным: переносится между словами */
+/* Период «К выплате», «Начислено» и «Удержаний» — выбор месяцев может быть длинным: переносится между словами */
 .headPeriodWrap { white-space: normal; }
 
 .cellNumber {

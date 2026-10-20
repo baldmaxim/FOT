@@ -40,7 +40,7 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
   accrualMonths: string[];
-  /** Период сумм «К выплате» и «Удержаний» — тех, что пришли в строках. */
+  /** Период сумм «К выплате», «Начислено» и «Удержаний» — тех, что пришли в строках. */
   paidPeriod?: string;
   /** Клик по сумме удержаний: окно со статьями; trigger — куда вернуть фокус. */
   onOpenDeductions?: (row: IPayrollTermsRow, trigger: HTMLButtonElement) => void;
@@ -68,6 +68,7 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   housing: 'colHousing',
   accruals: 'colAccruals',
   payout: 'colPayout',
+  accrued: 'colAccrued',
   deductions: 'colDeductions',
 };
 
@@ -228,6 +229,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
             {formatPaid(paidPayout({ accrued: row.paid_total ?? null, deducted: row.paid_deductions_total ?? null }))}
           </td>
         );
+      case 'accrued':
+        return <td key={column} className={styles.cellNumber}>{formatPaid(row.paid_total)}</td>;
       case 'deductions': {
         const total = row.paid_deductions_total;
         const hasDetails = total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0;
