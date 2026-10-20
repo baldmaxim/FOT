@@ -1,8 +1,9 @@
 /**
  * «Свод» на «Расчётах»: строки сервера (сотрудник × объект × категория) → таблица объектов и таблица
  * сотрудников объекта. Суммы складываются в копейках; столбцы статей — только с ненулевыми суммами в
- * выбранной категории, в порядке и с подписями «Оплачено» (PAYROLL_PAID_GROUPS). Экран и xlsx строятся из
- * одних описаний столбцов (tableView.ts).
+ * выбранной категории, в порядке и с подписями «Оплачено» (PAYROLL_PAID_GROUPS; «По трудовому договору» —
+ * здесь «Зарплата»). Перед статьями — «К выплате», после — «Всего начислено» и «Всего удержано».
+ * Экран и xlsx строятся из одних описаний столбцов (tableView.ts).
  */
 import type { PayrollPaidItemCode, StaffCategory } from '../services/payrollService';
 import type { IPayrollSummaryRow } from '../services/payrollSummaryService';
@@ -26,8 +27,10 @@ export const SUMMARY_CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'И
 const ITEM_KIND = new Map<PayrollPaidItemCode, PayrollPaidTotalKind>(
   PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, group.kind] as const)),
 );
+/** Подписи «Свода», отличные от «Оплачено». */
+const SUMMARY_ITEM_LABELS: Partial<Record<PayrollPaidItemCode, string>> = { contract: 'Зарплата' };
 const ITEM_LABEL = new Map<PayrollPaidItemCode, string>(
-  PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, item.label] as const)),
+  PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, SUMMARY_ITEM_LABELS[item.code] ?? item.label] as const)),
 );
 const ITEM_ORDER: PayrollPaidItemCode[] = PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => item.code));
 
@@ -63,6 +66,13 @@ const kindTotal = (cents: SummaryCents, kind: PayrollPaidTotalKind): number | nu
     if (ITEM_KIND.get(item) === kind) total = (total ?? 0) + value;
   }
   return total;
+};
+
+/** «К выплате» — «Всего начислено» + «Всего удержано»; null — сумм нет ни в одном разделе. */
+const payoutTotal = (cents: SummaryCents): number | null => {
+  const accrued = kindTotal(cents, 'accrued');
+  const deducted = kindTotal(cents, 'deducted');
+  return accrued === null && deducted === null ? null : (accrued ?? 0) + (deducted ?? 0);
 };
 
 /** Строка таблицы сотрудников объекта. */
@@ -166,9 +176,10 @@ const moneyColumn = <Row extends { cents: SummaryCents },>(
 });
 
 const amountColumns = <Row extends { cents: SummaryCents },>(items: ReadonlyArray<PayrollPaidItemCode>): Array<IRegistryColumn<Row>> => [
+  moneyColumn<Row>('payout', 'К выплате', row => payoutTotal(row.cents)),
   ...items.map(item => moneyColumn<Row>(item, ITEM_LABEL.get(item) ?? item, row => row.cents[item])),
-  moneyColumn<Row>('accrued', 'Начислено', row => kindTotal(row.cents, 'accrued')),
-  moneyColumn<Row>('deducted', 'Удержано', row => kindTotal(row.cents, 'deducted')),
+  moneyColumn<Row>('accrued', 'Всего начислено', row => kindTotal(row.cents, 'accrued')),
+  moneyColumn<Row>('deducted', 'Всего удержано', row => kindTotal(row.cents, 'deducted')),
 ];
 
 export const summaryObjectColumns = (items: ReadonlyArray<PayrollPaidItemCode>): Array<IRegistryColumn<ISummaryObjectRow>> => [
@@ -225,6 +236,9 @@ const amountTotals = <Row extends { cents: SummaryCents },>(
     display[kind] = money(total);
     exported[kind] = moneyExport(total);
   }
+  const payout = payoutTotal(sum);
+  display.payout = money(payout);
+  exported.payout = moneyExport(payout);
   return { display, export: exported };
 };
 

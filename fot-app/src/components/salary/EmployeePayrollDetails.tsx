@@ -20,6 +20,7 @@ import { DeductionKindsField } from './DeductionKindsField';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
+import { PaidHistorySection } from './PaidHistorySection';
 import { SalaryHistorySection } from './SalaryHistorySection';
 import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
@@ -57,7 +58,7 @@ interface ISaveVariables {
  * Карточка сотрудника раздела «Зарплата» — окно на «Расчётах» (editable) и вкладка «Подробно» (только просмотр).
  * В окне: условия оплаты (вид оплаты, оклад, премия), компенсация, плановая доплата, удержание; «Сохранить»
  * пишет условия и виды удержаний — что из них правили. В «Подробно»: Категория и «Оплачено», без полей и кнопок.
- * Ниже — свёрнутая справка: история изменений и отпуска; грузится отдельно, её ошибки форму не блокируют.
+ * Ниже — свёрнутая справка: история изменений, история выплат и отпуска; грузится отдельно, её ошибки форму не блокируют.
  * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
  * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
  */
@@ -199,6 +200,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
 
         <div className={styles.reference}>
           <SalaryHistorySection employeeId={row.employee_id} />
+          <PaidHistorySection employeeId={row.employee_id} />
           <EmployeeVacationSection employeeId={row.employee_id} />
         </div>
       </div>

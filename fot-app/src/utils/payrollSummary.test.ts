@@ -51,8 +51,8 @@ describe('«Свод»: объекты', () => {
   it('статьи-столбцы: только ненулевые, в порядке «Оплачено»; сторно (0) — нет', () => {
     expect(summaryItems(ROWS)).toEqual(['contract', 'travel', 'recalc_prev', 'meals']);
     expect(summaryObjectColumns(summaryItems(ROWS)).map(column => column.label)).toEqual([
-      'Объект', 'Чел.', 'По трудовому договору', 'Проезд', 'Перерасчёт за предыдущий период', 'Питание',
-      'Начислено', 'Удержано',
+      'Объект', 'Чел.', 'К выплате', 'Зарплата', 'Проезд', 'Перерасчёт за предыдущий период', 'Питание',
+      'Всего начислено', 'Всего удержано',
     ]);
   });
 
@@ -68,6 +68,19 @@ describe('«Свод»: объекты', () => {
     expect(text('accrued', 'mytishchi')).toMatch(/^47\s499,75$/);
     expect(text('deducted', 'mytishchi')).toBe('—');
     expect(text('deducted', 'khimki')).toMatch(/^1\s200$/);
+  });
+
+  it('«К выплате» — «Всего начислено» + «Всего удержано»; удержаний нет — равно начисленному', () => {
+    const items = summaryItems(ROWS);
+    const columns = summaryObjectColumns(items);
+    const payout = columns.find(column => column.key === 'payout')!;
+    const objects = groupSummaryByObject(ROWS);
+    const byKey = (key: string) => objects.find(object => object.object_key === key)!;
+    expect(payout.text(byKey('khimki'))).toMatch(/^149\s200,50$/);
+    expect(payout.exportValue?.(byKey('khimki'))).toBe(149200.5);
+    expect(payout.text(byKey('mytishchi'))).toMatch(/^47\s499,75$/);
+    expect(payout.text({ object_key: 'x', object_name: 'X', employee_ids: [], cents: {} })).toBe('—');
+    expect(summaryObjectTotals(items)(objects)?.export.payout).toBe(296700.25);
   });
 
   it('итог — по видимым строкам (после поиска и фильтра столбца); человек на двух объектах — один', () => {
@@ -108,9 +121,9 @@ describe('«Свод»: сотрудники объекта и xlsx', () => {
     const snapshot = buildSummarySnapshot({ title: 'Свод', subject: 'ЖК Химки', periodLabel: 'июль 2026', categoryLabel: 'Все', columns })(
       rows, summaryEmployeeTotals(items)(rows)?.export,
     );
-    expect(snapshot.columns).toHaveLength(24);
+    expect(snapshot.columns).toHaveLength(25);
     expect(snapshot.columns.length).toBeLessThanOrEqual(30);
-    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(24);
+    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(25);
     expect(snapshot.rows).toHaveLength(2);
     expect(snapshot.rows[1].cells[0]).toBeNull();
     expect(snapshot.rows[1].cells[1]).toBe('Итого');

@@ -234,7 +234,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                 type="button"
                 className={styles.deductionsButton}
                 aria-haspopup="dialog"
-                aria-label={`Удержания: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
+                aria-label={`Удержания и доплаты: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
                 onClick={event => {
                   event.stopPropagation();
                   onOpenDeductions(row, event.currentTarget);

@@ -5,7 +5,9 @@ import {
   formatPaidPeriod,
   paidAmountMonths,
   paidCellKey,
+  paidHistory,
   paidItemTotal,
+  paidPayout,
   paidTotals,
   PAYROLL_PAID_GROUPS,
   toPaidAmounts,
@@ -139,5 +141,33 @@ describe('«Расчёты»: месяцы и период сумм', () => {
     ]);
     expect(paidItemTotal(months, amounts, 'meals')).toBe(0);
     expect(paidTotals(months, amounts).overall).toEqual({ accrued: null, deducted: 0.3 });
+  });
+});
+
+describe('«История выплат»', () => {
+  it('месяцы новые сверху; «К выплате» — начислено + удержано; статьи — только с суммой за месяц', () => {
+    const history = paidHistory([
+      { month: '2026-07', item: 'contract', amount: '129630.00' },
+      { month: '2026-07', item: 'housing', amount: '4000.00' },
+      { month: '2026-07', item: 'travel', amount: '2528.00' },
+      { month: '2026-07', item: 'fines', amount: '37.66' },
+      { month: '2026-08', item: 'contract', amount: '100000.10' },
+      { month: '2026-08', item: 'recalc_prev', amount: '-0.20' },
+    ]);
+    expect(history.months.map(entry => entry.month)).toEqual(['2026-08', '2026-07']);
+    expect(history.months[1].totals).toEqual({ accrued: 136158, deducted: 37.66 });
+    expect(history.months[1].payout).toBe(136195.66);
+    expect(history.months[0].totals).toEqual({ accrued: 99999.9, deducted: null });
+    expect(history.months[0].payout).toBe(99999.9);
+    expect(history.months[0].groups.flatMap(group => group.items.map(item => item.code))).toEqual(['contract', 'recalc_prev']);
+    expect(history.overall).toEqual({ accrued: 236157.9, deducted: 37.66 });
+    expect(history.overallPayout).toBe(236195.56);
+  });
+
+  it('сумм нет — пусто, «К выплате» — «—»', () => {
+    const history = paidHistory([]);
+    expect(history.months).toEqual([]);
+    expect(history.overallPayout).toBeNull();
+    expect(paidPayout({ accrued: null, deducted: 0 })).toBe(0);
   });
 });

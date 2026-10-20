@@ -157,3 +157,44 @@ export const paidAmountMonths = (rows: readonly IPayrollPaidAmount[]): string[] 
 export const formatPaidPeriod = (months: PayrollPaidMonths): string => (
   months === 'all' || months.length === 0 ? 'весь период' : formatMonthsLabel(months)
 );
+
+/** «К выплате» — начислено + удержано, как в «Своде»; null — сумм нет ни в одном разделе. */
+export const paidPayout = (totals: PayrollPaidTotals): number | null => (
+  totals.accrued === null && totals.deducted === null
+    ? null
+    : (Math.round((totals.accrued ?? 0) * 100) + Math.round((totals.deducted ?? 0) * 100)) / 100
+);
+
+/** Месяц «Истории выплат»: итоги разделов, «К выплате» и статьи с суммами. */
+export interface IPaidHistoryMonth {
+  month: string;
+  totals: PayrollPaidTotals;
+  payout: number | null;
+  groups: IPayrollPaidGroup[];
+}
+
+export interface IPaidHistory {
+  /** Месяцы с суммами, новые сверху. */
+  months: IPaidHistoryMonth[];
+  amounts: ReadonlyMap<string, number>;
+  overall: PayrollPaidTotals;
+  overallPayout: number | null;
+}
+
+/** «История выплат» в карточке: все месяцы, за которые из 1С пришли суммы. */
+export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory => {
+  const months = paidAmountMonths(rows);
+  const amounts = toPaidAmounts(rows);
+  const { byMonth, overall } = paidTotals(months, amounts);
+  return {
+    months: [...months].reverse().map(month => ({
+      month,
+      totals: byMonth[month],
+      payout: paidPayout(byMonth[month]),
+      groups: visiblePaidGroups([month], amounts),
+    })),
+    amounts,
+    overall,
+    overallPayout: paidPayout(overall),
+  };
+};
