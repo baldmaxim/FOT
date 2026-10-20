@@ -1,0 +1,43 @@
+/*
+ * «Адрес / номер» окна «Общежития» (DormitoryAddressField): сохранённые адреса — списком под полем,
+ * как подсказки EmployeeSearchField. Тап-цели 44px.
+ */
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.option {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.option:hover { background: var(--bg-secondary); }
+.option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isCalendarDate, parseDormitoryStay } from './dormitoryStayForm';
+import {
+  dormitoryAddressOptions,
+  filterDormitoryAddresses,
+  isCalendarDate,
+  parseDormitoryStay,
+} from './dormitoryStayForm';
 
 const draft = { checkIn: '2026-10-01', checkOut: '', address: '  Общежитие №2,  комн. 14 ' };
 const picked = { required: true, selected: true };
@@ -39,5 +44,29 @@ describe('parseDormitoryStay', () => {
     expect(parseDormitoryStay({ ...draft, checkOut: '2026-11-31' }, picked)).toMatchObject({ field: 'check_out' });
     expect(parseDormitoryStay({ ...draft, address: '   ' }, picked)).toMatchObject({ field: 'address' });
     expect(parseDormitoryStay({ ...draft, address: 'а'.repeat(201) }, picked)).toMatchObject({ field: 'address' });
+  });
+});
+
+describe('dormitoryAddressOptions', () => {
+  it('без повторов: регистр и пробелы не в счёт, остаётся самое частое написание', () => {
+    expect(dormitoryAddressOptions(['общ1', ' Общ1 ', 'Общ1', 'Абай  5', '  '])).toEqual(['Абай 5', 'Общ1']);
+  });
+
+  it('числа по значению: Общ2 раньше Общ10', () => {
+    expect(dormitoryAddressOptions(['Общ10', 'Общ2', 'Абай 5'])).toEqual(['Абай 5', 'Общ2', 'Общ10']);
+  });
+});
+
+describe('filterDormitoryAddresses', () => {
+  const options = ['Общ1', 'Общ10', 'Абай 5'];
+
+  it('пусто — все; иначе содержащие введённое без учёта регистра', () => {
+    expect(filterDormitoryAddresses(options, '  ')).toEqual(options);
+    expect(filterDormitoryAddresses(options, 'абай')).toEqual(['Абай 5']);
+    expect(filterDormitoryAddresses(options, 'Общ2')).toEqual([]);
+  });
+
+  it('ровно введённый адрес не показываем', () => {
+    expect(filterDormitoryAddresses(options, 'общ1 ')).toEqual(['Общ10']);
   });
 });

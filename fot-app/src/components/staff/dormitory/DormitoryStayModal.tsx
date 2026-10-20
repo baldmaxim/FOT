@@ -11,25 +11,29 @@ import {
   parseDormitoryStay,
   type DormitoryStayField,
 } from '../../../utils/dormitoryStayForm';
-import { ClearableInput } from '../../ui/ClearableInput';
 import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
+import { DormitoryAddressField } from './DormitoryAddressField';
 
 interface IDormitoryStayModalProps {
   /** Передано — правка этого проживания (сотрудник не меняется); нет — добавление. */
   stay?: IDormitoryStay;
+  /** Сохранённые адреса — подсказки под полем «Адрес / номер». */
+  addresses: readonly string[];
   onClose: () => void;
   onSaved: (stay: IDormitoryStay) => void;
 }
 
 /**
  * «Добавить сотрудника» и ✎ во вкладке «Общежитие»: сотрудник (поиск по ФИО), дата въезда, дата
- * выезда (пусто — живёт), адрес или номер общежития. Ошибка сервера — под полями, ввод не теряется.
+ * выезда (пусто — живёт), адрес или номер общежития (сохранённые — списком под полем). Ошибка сервера —
+ * под полями, ввод не теряется.
  */
-export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, onClose, onSaved }) => {
+export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, addresses, onClose, onSaved }) => {
   const errorId = useId();
+  const addressId = useId();
   const isEdit = stay !== undefined;
   const [employee, setEmployee] = useState<IDormitoryCandidate | null>(null);
   const [checkIn, setCheckIn] = useState(stay?.check_in ?? '');
@@ -118,19 +122,21 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, onClose
         </div>
       </div>
 
-      <label className={styles.field}>
-        <span className={styles.label}>Адрес / номер</span>
-        <ClearableInput
+      {/* Не обёрткой <label>: в её текст попали бы адреса списка. */}
+      <div className={styles.field}>
+        <label htmlFor={addressId} className={styles.label}>Адрес / номер</label>
+        <DormitoryAddressField
+          id={addressId}
+          options={addresses}
           value={address}
           onValueChange={value => { setAddress(value); clearError(); }}
           maxLength={DORMITORY_ADDRESS_MAX_LENGTH}
-          autoComplete="off"
           disabled={saving}
           aria-invalid={invalid('address')}
           aria-describedby={error ? errorId : undefined}
           clearLabel="Очистить адрес"
         />
-      </label>
+      </div>
     </RegistryFormModal>
   );
 };

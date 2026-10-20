@@ -1,10 +1,11 @@
-import { useState, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import { DORMITORY_STAYS_KEY, dormitoryService, type IDormitoryStay } from '../../../services/dormitoryService';
+import { dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
 import { formatDate } from '../../../utils/formatMoney';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import { DormitoryStaysPanel } from './DormitoryStaysPanel';
@@ -29,6 +30,10 @@ export const DormitoryTab: FC = () => {
     queryFn: ({ signal }) => dormitoryService.list(signal),
     staleTime: 0,
   });
+  const addresses = useMemo(
+    () => dormitoryAddressOptions((staysQuery.data ?? []).map(stay => stay.address)),
+    [staysQuery.data],
+  );
 
   // Префикс общий с таблицей «Справочника» «Зарплаты» — она тоже перечитается.
   const refresh = () => queryClient.invalidateQueries({ queryKey: DORMITORY_STAYS_KEY });
@@ -64,6 +69,7 @@ export const DormitoryTab: FC = () => {
       {editor && (
         <DormitoryStayModal
           stay={editor.mode === 'edit' ? editor.stay : undefined}
+          addresses={addresses}
           onClose={() => setEditor(null)}
           onSaved={() => { void refresh(); }}
         />
