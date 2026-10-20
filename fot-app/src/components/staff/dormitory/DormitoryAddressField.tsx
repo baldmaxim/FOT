@@ -5,7 +5,7 @@ import { ClearableInput } from '../../ui/ClearableInput';
 import styles from './DormitoryAddressField.module.css';
 
 interface IDormitoryAddressFieldProps extends Omit<ComponentProps<typeof ClearableInput>, 'className' | 'onFocus' | 'onBlur'> {
-  /** Адреса уже сохранённых проживаний (dormitoryAddressOptions). */
+  /** Общежития компании и адреса сохранённых проживаний (dormitoryAddressOptions). */
   options: readonly string[];
 }
 

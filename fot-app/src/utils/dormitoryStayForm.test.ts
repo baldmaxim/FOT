@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DORMITORY_PRESET_ADDRESSES,
   dormitoryAddressOptions,
   filterDormitoryAddresses,
   isCalendarDate,
@@ -54,6 +55,12 @@ describe('dormitoryAddressOptions', () => {
 
   it('числа по значению: Общ2 раньше Общ10', () => {
     expect(dormitoryAddressOptions(['Общ10', 'Общ2', 'Абай 5'])).toEqual(['Абай 5', 'Общ2', 'Общ10']);
+  });
+
+  it('общежития компании без проживаний — все; совпавший сохранённый адрес не повторяется', () => {
+    expect(dormitoryAddressOptions(DORMITORY_PRESET_ADDRESSES)).toHaveLength(DORMITORY_PRESET_ADDRESSES.length);
+    expect(dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, 'общ. база химки', 'Общ1']))
+      .toHaveLength(DORMITORY_PRESET_ADDRESSES.length + 1);
   });
 });
 

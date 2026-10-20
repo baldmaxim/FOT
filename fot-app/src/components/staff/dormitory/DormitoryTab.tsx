@@ -5,7 +5,7 @@ import { ApiError } from '../../../api/client';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import { DORMITORY_STAYS_KEY, dormitoryService, type IDormitoryStay } from '../../../services/dormitoryService';
-import { dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
+import { DORMITORY_PRESET_ADDRESSES, dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
 import { formatDate } from '../../../utils/formatMoney';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import { DormitoryStaysPanel } from './DormitoryStaysPanel';
@@ -31,7 +31,10 @@ export const DormitoryTab: FC = () => {
     staleTime: 0,
   });
   const addresses = useMemo(
-    () => dormitoryAddressOptions((staysQuery.data ?? []).map(stay => stay.address)),
+    () => dormitoryAddressOptions([
+      ...DORMITORY_PRESET_ADDRESSES,
+      ...(staysQuery.data ?? []).map(stay => stay.address),
+    ]),
     [staysQuery.data],
   );
 
