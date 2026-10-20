@@ -201,8 +201,8 @@
 }
 
 /* Смартфоны: тап-цели ≥ 44px; № и ФИО уже — остальные столбцы видны без долгой прокрутки вбок */
-/* Сумма удержаний открывает окно со статьями: выглядит как ссылка, строку не открывает */
-.deductionsButton {
+/* Суммы «Начислено» и «Удержания» открывают окно со статьями: выглядят как ссылка, строку не открывают */
+.paidButton {
   display: inline-flex;
   align-items: center;
   min-height: 32px;
@@ -222,16 +222,16 @@
   -webkit-tap-highlight-color: transparent;
   transition: background-color 150ms ease-out;
 }
-.deductionsButton:hover { background: var(--surface-hover); }
-.deductionsButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.paidButton:hover { background: var(--surface-hover); }
+.paidButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .deductionsButton { transition: none; }
+  .paidButton { transition: none; }
 }
 
 @media (max-width: 768px) {
   .table td { height: 48px; }
-  .deductionsButton { min-height: 44px; }
+  .paidButton { min-height: 44px; }
   .colNum { width: 44px; }
   .colName { width: 150px; }
   .stickyName { left: 44px; }

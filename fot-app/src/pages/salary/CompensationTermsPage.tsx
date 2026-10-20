@@ -32,7 +32,7 @@ import {
   type PayrollTableColumn,
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
-import { formatPaidPeriod } from '../../utils/payrollPaid';
+import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
@@ -65,12 +65,12 @@ interface ICompensationTermsPageProps {
   /** Столбцы таблицы; по умолчанию — «Условия оплаты». */
   columns?: PayrollTableColumns;
   /**
-   * «Расчёты»: месяцы сумм «К выплате» и «Удержаний»; null — месяцы ещё грузятся, список ждёт.
+   * «Расчёты»: месяцы сумм «К выплате», «Начислено» и «Удержаний»; null — месяцы ещё грузятся, список ждёт.
    * Не передан — «Условия оплаты», сумм нет.
    */
   paidMonths?: PayrollPaidMonths | null;
-  /** Клик по сумме удержаний: строка, кнопка (вернуть фокус) и период сумм строки. */
-  onOpenDeductions?: (row: IPayrollTermsRow, trigger: HTMLButtonElement, period: string) => void;
+  /** Клик по сумме «Начислено» или «Удержания»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
+  onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
 }
 
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
@@ -81,7 +81,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
   columns = PAYROLL_TERMS_TABLE_COLUMNS,
   paidMonths,
-  onOpenDeductions,
+  onOpenPaidItems,
 }) => {
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
@@ -139,9 +139,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const shownPaidMonths = data?.pages[0]?.paidMonths ?? null;
   const paidPeriod = shownPaidMonths === null ? undefined : formatPaidPeriod(shownPaidMonths);
 
-  const handleOpenDeductions = useCallback((row: IPayrollTermsRow, trigger: HTMLButtonElement) => {
-    onOpenDeductions?.(row, trigger, paidPeriod ?? '');
-  }, [onOpenDeductions, paidPeriod]);
+  const handleOpenPaidItems = useCallback((row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => {
+    // Кнопки сумм есть только у строк с суммами — месяцы к этому времени известны.
+    if (shownPaidMonths !== null) onOpenPaidItems?.(row, kind, trigger, shownPaidMonths);
+  }, [onOpenPaidItems, shownPaidMonths]);
 
   const structureTree = usePayrollStructureTree();
   const sectionDepartments = useStaffSectionDepartments();
@@ -311,7 +312,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
             paidPeriod={paidPeriod}
-            onOpenDeductions={onOpenDeductions ? handleOpenDeductions : undefined}
+            onOpenPaidItems={onOpenPaidItems ? handleOpenPaidItems : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

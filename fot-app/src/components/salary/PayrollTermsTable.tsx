@@ -18,7 +18,7 @@ import {
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import type { PayrollTableColumn, PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { formatPaidAmount, paidPayout } from '../../utils/payrollPaid';
+import { formatPaidAmount, paidPayout, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
@@ -42,8 +42,8 @@ interface IPayrollTermsTableProps {
   accrualMonths: string[];
   /** Период сумм «К выплате», «Начислено» и «Удержаний» — тех, что пришли в строках. */
   paidPeriod?: string;
-  /** Клик по сумме удержаний: окно со статьями; trigger — куда вернуть фокус. */
-  onOpenDeductions?: (row: IPayrollTermsRow, trigger: HTMLButtonElement) => void;
+  /** Клик по сумме «Начислено» или «Удержания»: окно со статьями; trigger — куда вернуть фокус. */
+  onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
 }
 
 /** Столбцы с сортировкой и фильтром (подпись шапки — из набора столбцов). */
@@ -84,6 +84,9 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
   const money = row.terms_id ? formatPayrollMoney(value) : null;
   return money === null ? '—' : `${money} ₽/мес`;
 };
+
+/** Подпись кнопки суммы для экранного диктора. */
+const PAID_KIND_LABELS: Record<PayrollPaidTotalKind, string> = { accrued: 'Начислено', deducted: 'Удержания' };
 
 /** Сумма «Оплачено» строки «Расчётов»: нет — «—». */
 const formatPaid = (value: number | null | undefined): string => (
@@ -133,7 +136,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onOpenFilter,
   accrualMonths,
   paidPeriod,
-  onOpenDeductions,
+  onOpenPaidItems,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -182,6 +185,33 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     />
   );
 
+  /** Сумма «Начислено» / «Удержания»: со статьями — кнопка, открывающая окно со статьями. */
+  const renderPaidCell = (
+    column: PayrollTableColumn,
+    row: IPayrollTermsRow,
+    kind: PayrollPaidTotalKind,
+    total: number | null | undefined,
+    hasDetails: boolean,
+  ): ReactNode => (
+    <td key={column} className={styles.cellNumber}>
+      {hasDetails && onOpenPaidItems ? (
+        // Своя кнопка: клик открывает окно статей, а не карточку строки.
+        <button
+          type="button"
+          className={styles.paidButton}
+          aria-haspopup="dialog"
+          aria-label={`${PAID_KIND_LABELS[kind]}: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
+          onClick={event => {
+            event.stopPropagation();
+            onOpenPaidItems(row, kind, event.currentTarget);
+          }}
+        >
+          {formatPaid(total)}
+        </button>
+      ) : formatPaid(total)}
+    </td>
+  );
+
   /** Шапка столбца; у сумм «Оплачено» — период под подписью, без сортировки и фильтра. */
   const renderHeader = (column: PayrollTableColumns[number]): ReactNode => {
     if (isSortableColumn(column.key)) return renderSortHeader(column.key, column.label);
@@ -223,36 +253,20 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       case 'accruals':
         return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
       case 'payout':
-        // «К выплате» — начислено + удержано, как в «Своде».
+        // «К выплате» — начислено минус удержано, как в «Своде».
         return (
           <td key={column} className={styles.cellNumber}>
             {formatPaid(paidPayout({ accrued: row.paid_total ?? null, deducted: row.paid_deductions_total ?? null }))}
           </td>
         );
-      case 'accrued':
-        return <td key={column} className={styles.cellNumber}>{formatPaid(row.paid_total)}</td>;
+      case 'accrued': {
+        // Статей начислений в строке нет — окно загрузит их само.
+        const total = row.paid_total;
+        return renderPaidCell(column, row, 'accrued', total, total !== null && total !== undefined);
+      }
       case 'deductions': {
         const total = row.paid_deductions_total;
-        const hasDetails = total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0;
-        return (
-          <td key={column} className={styles.cellNumber}>
-            {hasDetails && onOpenDeductions ? (
-              // Своя кнопка: клик открывает окно удержаний, а не карточку строки.
-              <button
-                type="button"
-                className={styles.deductionsButton}
-                aria-haspopup="dialog"
-                aria-label={`Удержания: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
-                onClick={event => {
-                  event.stopPropagation();
-                  onOpenDeductions(row, event.currentTarget);
-                }}
-              >
-                {formatPaid(total)}
-              </button>
-            ) : formatPaid(total)}
-          </td>
-        );
+        return renderPaidCell(column, row, 'deducted', total, total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0);
       }
     }
   };

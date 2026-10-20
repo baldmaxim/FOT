@@ -68,11 +68,11 @@ const kindTotal = (cents: SummaryCents, kind: PayrollPaidTotalKind): number | nu
   return total;
 };
 
-/** «К выплате» — «Всего начислено» + «Всего удержано»; null — сумм нет ни в одном разделе. */
+/** «К выплате» — «Всего начислено» минус «Всего удержано»; null — сумм нет ни в одном разделе. */
 const payoutTotal = (cents: SummaryCents): number | null => {
   const accrued = kindTotal(cents, 'accrued');
   const deducted = kindTotal(cents, 'deducted');
-  return accrued === null && deducted === null ? null : (accrued ?? 0) + (deducted ?? 0);
+  return accrued === null && deducted === null ? null : (accrued ?? 0) - (deducted ?? 0);
 };
 
 /** Строка таблицы сотрудников объекта. */

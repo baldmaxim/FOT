@@ -1,5 +1,5 @@
 /*
- * Окно удержаний сотрудника на «Расчётах» — небольшое: по ширине таблицы, но не шире 720px и экрана
+ * Окно «Начислено» / «Удержания» сотрудника на «Расчётах» — небольшое: по ширине таблицы, но не шире 720px и экрана
  * (два месяца и «Итого» помещаются целиком, больше — таблица прокручивается вбок).
  * Оверлей, шапка и прокручиваемое тело — из PayrollModal.module.css, таблица — из PayrollPaidTable.module.css.
  */
@@ -26,4 +26,26 @@
   line-height: 1.35;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+/* Загрузка статей «Начислено» (грузятся по клику) и её ошибка */
+.state { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.stateError { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--error); }
+.retryButton {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.retryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 768px) {
+  .retryButton { min-height: 36px; }
 }

@@ -1,13 +1,15 @@
 import { lazy, Suspense, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import type { IPayrollTermsRow } from '../../services/payrollService';
+import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
 import { PAYROLL_CALC_COLUMNS_KEY, PAYROLL_CALC_TABLE_COLUMNS } from '../../utils/payrollColumns';
+import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
-import { PayrollPaidDeductionsModal } from '../../components/salary/PayrollPaidDeductionsModal';
+import { PayrollPaidAccrualsModal } from '../../components/salary/PayrollPaidAccrualsModal';
+import { PayrollPaidItemsModal } from '../../components/salary/PayrollPaidItemsModal';
 import { CompensationTermsPage } from './CompensationTermsPage';
 import styles from './PayrollDeductionsPage.module.css';
 
@@ -23,17 +25,18 @@ interface IPayrollDeductionsPageProps {
   onSaved: (employeeId: number) => void;
 }
 
-/** Окно удержаний: строка, кнопка-сумма (вернуть фокус) и период сумм строки. */
-interface IDeductionsWindow {
+/** Окно статей «Начислено» / «Удержания»: строка, раздел, кнопка-сумма (вернуть фокус) и месяцы сумм строки. */
+interface IPaidItemsWindow {
   row: IPayrollTermsRow;
+  kind: PayrollPaidTotalKind;
   trigger: HTMLButtonElement;
-  period: string;
+  months: PayrollPaidMonths;
 }
 
 /**
- * «Зарплата → Расчёты»: текущий штат, как у «Условий оплаты», но вместо условий — «К выплате» и «Удержания»
- * («Оплачено» ЗУП) за месяцы, выбранные рядом со «Сводом»; «К выплате» — начислено + удержано, как в «Своде».
- * Клик по сумме удержаний — окно со статьями.
+ * «Зарплата → Расчёты»: текущий штат, как у «Условий оплаты», но вместо условий — «К выплате», «Начислено» и
+ * «Удержания» («Оплачено» ЗУП) за месяцы, выбранные рядом со «Сводом»; «К выплате» — начислено минус удержано,
+ * как в «Своде». Клик по сумме «Начислено» или «Удержания» — окно со статьями.
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
  * ставки и таблицы. Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
@@ -43,7 +46,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   const dictionaryButtonRef = useRef<HTMLButtonElement>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const summaryButtonRef = useRef<HTMLButtonElement>(null);
-  const [deductions, setDeductions] = useState<IDeductionsWindow | null>(null);
+  const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
   // Месяцы «Свода» — те, за которые есть «Оплачено». Пока не загружены, выбора нет и «Свод» неактивен:
   // пустой выбор значит «весь период», и окно не должно успеть запросить его до месяца по умолчанию.
@@ -70,7 +73,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
       setDictionaryOpen(false);
       setSummaryOpen(false);
       setEmployee(null);
-      setDeductions(null);
+      setPaidItems(null);
     }
   }
 
@@ -84,9 +87,9 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
     summaryButtonRef.current?.focus();
   };
   // Строку с кнопкой могла убрать виртуализация или новая выборка — тогда фокус некуда вернуть.
-  const closeDeductions = () => {
-    if (deductions?.trigger.isConnected) deductions.trigger.focus();
-    setDeductions(null);
+  const closePaidItems = () => {
+    if (paidItems?.trigger.isConnected) paidItems.trigger.focus();
+    setPaidItems(null);
   };
 
   return (
@@ -98,7 +101,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         columns={PAYROLL_CALC_TABLE_COLUMNS}
         paidMonths={paidMonths}
-        onOpenDeductions={(row, trigger, period) => setDeductions({ row, trigger, period })}
+        onOpenPaidItems={(row, kind, trigger, months) => setPaidItems({ row, kind, trigger, months })}
         actionsExtra={(
           <>
             <button
@@ -139,8 +142,22 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         </Suspense>
       )}
 
-      {deductions && (
-        <PayrollPaidDeductionsModal row={deductions.row} period={deductions.period} onClose={closeDeductions} />
+      {paidItems?.kind === 'deducted' && (
+        <PayrollPaidItemsModal
+          kind="deducted"
+          row={paidItems.row}
+          period={formatPaidPeriod(paidItems.months)}
+          amounts={paidItems.row.paid_deductions ?? []}
+          onClose={closePaidItems}
+        />
+      )}
+      {paidItems?.kind === 'accrued' && (
+        <PayrollPaidAccrualsModal
+          row={paidItems.row}
+          months={paidItems.months}
+          period={formatPaidPeriod(paidItems.months)}
+          onClose={closePaidItems}
+        />
       )}
 
       {employee && (

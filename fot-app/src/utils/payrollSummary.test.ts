@@ -70,17 +70,17 @@ describe('«Свод»: объекты', () => {
     expect(text('deducted', 'khimki')).toMatch(/^1\s200$/);
   });
 
-  it('«К выплате» — «Всего начислено» + «Всего удержано»; удержаний нет — равно начисленному', () => {
+  it('«К выплате» — «Всего начислено» минус «Всего удержано»; удержаний нет — равно начисленному', () => {
     const items = summaryItems(ROWS);
     const columns = summaryObjectColumns(items);
     const payout = columns.find(column => column.key === 'payout')!;
     const objects = groupSummaryByObject(ROWS);
     const byKey = (key: string) => objects.find(object => object.object_key === key)!;
-    expect(payout.text(byKey('khimki'))).toMatch(/^149\s200,50$/);
-    expect(payout.exportValue?.(byKey('khimki'))).toBe(149200.5);
+    expect(payout.text(byKey('khimki'))).toMatch(/^146\s800,50$/);
+    expect(payout.exportValue?.(byKey('khimki'))).toBe(146800.5);
     expect(payout.text(byKey('mytishchi'))).toMatch(/^47\s499,75$/);
     expect(payout.text({ object_key: 'x', object_name: 'X', employee_ids: [], cents: {} })).toBe('—');
-    expect(summaryObjectTotals(items)(objects)?.export.payout).toBe(296700.25);
+    expect(summaryObjectTotals(items)(objects)?.export.payout).toBe(294300.25);
   });
 
   it('итог — по видимым строкам (после поиска и фильтра столбца); человек на двух объектах — один', () => {

@@ -158,11 +158,11 @@ export const formatPaidPeriod = (months: PayrollPaidMonths): string => (
   months === 'all' || months.length === 0 ? 'весь период' : formatMonthsLabel(months)
 );
 
-/** «К выплате» — начислено + удержано, как в «Своде»; null — сумм нет ни в одном разделе. */
+/** «К выплате» — начислено минус удержано, как в «Своде»; null — сумм нет ни в одном разделе. */
 export const paidPayout = (totals: PayrollPaidTotals): number | null => (
   totals.accrued === null && totals.deducted === null
     ? null
-    : (Math.round((totals.accrued ?? 0) * 100) + Math.round((totals.deducted ?? 0) * 100)) / 100
+    : (Math.round((totals.accrued ?? 0) * 100) - Math.round((totals.deducted ?? 0) * 100)) / 100
 );
 
 /** Месяц «Истории выплат»: итоги разделов, «К выплате» и статьи с суммами. */
@@ -198,3 +198,33 @@ export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory =
     overallPayout: paidPayout(overall),
   };
 };
+
+/** Начало окна «за всё время» — раньше любых сумм ЗУП. */
+export const PAYROLL_PAID_ALL_FROM = '2000-01';
+
+/**
+ * Окно запроса сумм для месяцев «Расчётов»: выбранные — от первого до последнего (лишние месяцы
+ * отсекает pickPaidRows), 'all' или пусто — за всё время по текущий месяц.
+ */
+export const paidMonthsRange = (months: PayrollPaidMonths, currentMonth: string): { from: string; to: string } => {
+  if (months === 'all' || months.length === 0) return { from: PAYROLL_PAID_ALL_FROM, to: currentMonth };
+  const sorted = [...months].sort();
+  return { from: sorted[0], to: sorted[sorted.length - 1] };
+};
+
+/** Суммы только выбранных месяцев (выбор может идти вразброс); 'all' или пусто — все. */
+export const pickPaidRows = (rows: readonly IPayrollPaidAmount[], months: PayrollPaidMonths): IPayrollPaidAmount[] => {
+  if (months === 'all' || months.length === 0) return [...rows];
+  const selected = new Set(months);
+  return rows.filter(row => selected.has(row.month));
+};
+
+const KIND_CODES: Record<PayrollPaidTotalKind, ReadonlySet<PayrollPaidItemCode>> = {
+  accrued: new Set(PAYROLL_PAID_GROUPS.filter(group => group.kind === 'accrued').flatMap(group => group.items.map(item => item.code))),
+  deducted: new Set(PAYROLL_PAID_GROUPS.filter(group => group.kind === 'deducted').flatMap(group => group.items.map(item => item.code))),
+};
+
+/** Суммы статей одного раздела ведомости: начисления или удержания. */
+export const pickPaidKind = (rows: readonly IPayrollPaidAmount[], kind: PayrollPaidTotalKind): IPayrollPaidAmount[] => (
+  rows.filter(row => KIND_CODES[kind].has(row.item))
+);

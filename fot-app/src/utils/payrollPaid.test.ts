@@ -8,8 +8,12 @@ import {
   paidHistory,
   paidItemTotal,
   paidPayout,
+  paidMonthsRange,
   paidTotals,
+  PAYROLL_PAID_ALL_FROM,
   PAYROLL_PAID_GROUPS,
+  pickPaidKind,
+  pickPaidRows,
   toPaidAmounts,
   visiblePaidGroups,
 } from './payrollPaid';
@@ -145,7 +149,7 @@ describe('«Расчёты»: месяцы и период сумм', () => {
 });
 
 describe('«История выплат»', () => {
-  it('месяцы новые сверху; «К выплате» — начислено + удержано; статьи — только с суммой за месяц', () => {
+  it('месяцы новые сверху; «К выплате» — начислено минус удержано; статьи — только с суммой за месяц', () => {
     const history = paidHistory([
       { month: '2026-07', item: 'contract', amount: '129630.00' },
       { month: '2026-07', item: 'housing', amount: '4000.00' },
@@ -156,12 +160,12 @@ describe('«История выплат»', () => {
     ]);
     expect(history.months.map(entry => entry.month)).toEqual(['2026-08', '2026-07']);
     expect(history.months[1].totals).toEqual({ accrued: 136158, deducted: 37.66 });
-    expect(history.months[1].payout).toBe(136195.66);
+    expect(history.months[1].payout).toBe(136120.34);
     expect(history.months[0].totals).toEqual({ accrued: 99999.9, deducted: null });
     expect(history.months[0].payout).toBe(99999.9);
     expect(history.months[0].groups.flatMap(group => group.items.map(item => item.code))).toEqual(['contract', 'recalc_prev']);
     expect(history.overall).toEqual({ accrued: 236157.9, deducted: 37.66 });
-    expect(history.overallPayout).toBe(236195.56);
+    expect(history.overallPayout).toBe(236120.24);
   });
 
   it('сумм нет — пусто, «К выплате» — «—»', () => {
@@ -169,5 +173,32 @@ describe('«История выплат»', () => {
     expect(history.months).toEqual([]);
     expect(history.overallPayout).toBeNull();
     expect(paidPayout({ accrued: null, deducted: 0 })).toBe(0);
+    expect(paidPayout({ accrued: null, deducted: 1800 })).toBe(-1800);
+  });
+});
+
+describe('окно «Начислено» на «Расчётах»', () => {
+  const ROWS = [
+    { month: '2026-05', item: 'contract' as const, amount: '1.00' },
+    { month: '2026-07', item: 'contract' as const, amount: '89176.14' },
+    { month: '2026-07', item: 'housing' as const, amount: '160.00' },
+    { month: '2026-07', item: 'meals' as const, amount: '5248.00' },
+    { month: '2026-08', item: 'travel' as const, amount: '100.00' },
+  ];
+
+  it('окно запроса: выбранные — от первого до последнего, «весь период» — с начала по текущий месяц', () => {
+    expect(paidMonthsRange(['2026-08', '2026-05'], '2026-10')).toEqual({ from: '2026-05', to: '2026-08' });
+    expect(paidMonthsRange('all', '2026-10')).toEqual({ from: PAYROLL_PAID_ALL_FROM, to: '2026-10' });
+    expect(paidMonthsRange([], '2026-10')).toEqual({ from: PAYROLL_PAID_ALL_FROM, to: '2026-10' });
+  });
+
+  it('месяцы вразброс — лишние отсекаются; «весь период» — все', () => {
+    expect(pickPaidRows(ROWS, ['2026-05', '2026-08']).map(row => row.month)).toEqual(['2026-05', '2026-08']);
+    expect(pickPaidRows(ROWS, 'all')).toHaveLength(5);
+  });
+
+  it('раздел: начисления без удержаний и наоборот', () => {
+    expect(pickPaidKind(ROWS, 'accrued').map(row => row.item)).toEqual(['contract', 'contract', 'housing', 'travel']);
+    expect(pickPaidKind(ROWS, 'deducted').map(row => row.item)).toEqual(['meals']);
   });
 });

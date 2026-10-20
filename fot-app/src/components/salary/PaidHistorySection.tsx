@@ -9,6 +9,7 @@ import {
   formatPaidAmount,
   paidCellKey,
   paidHistory,
+  PAYROLL_PAID_ALL_FROM,
   type IPaidHistoryMonth,
   type PayrollPaidTotalKind,
 } from '../../utils/payrollPaid';
@@ -18,9 +19,6 @@ import paidTable from './PayrollPaidTable.module.css';
 interface IPaidHistorySectionProps {
   employeeId: number;
 }
-
-/** Начало окна запроса — раньше любых сумм ЗУП: история «за всё время». */
-const PAID_HISTORY_FROM = '2000-01';
 
 const SUM_COLUMNS: ReadonlyArray<{ kind: PayrollPaidTotalKind | 'payout'; label: string }> = [
   { kind: 'accrued', label: 'Начислено' },
@@ -39,7 +37,7 @@ const monthValue = (entry: IPaidHistoryMonth, kind: PayrollPaidTotalKind | 'payo
 
 /**
  * «История выплат» — раскрываемый блок карточки, свёрнут по умолчанию. Все месяцы, за которые из 1С
- * пришли суммы «Оплачено», новые сверху: «Начислено», «Удержано» и «К выплате» (начислено + удержано,
+ * пришли суммы «Оплачено», новые сверху: «Начислено», «Удержано» и «К выплате» (начислено минус удержано,
  * как в «Своде»). Клик по месяцу раскрывает его статьи — сумма в столбце своего раздела. Только чтение.
  */
 export const PaidHistorySection: FC<IPaidHistorySectionProps> = ({ employeeId }) => {
@@ -48,7 +46,7 @@ export const PaidHistorySection: FC<IPaidHistorySectionProps> = ({ employeeId })
   const historyQuery = useQuery({
     // Под префиксом 'payroll-terms': сохранение карточки перечитывает и суммы.
     queryKey: ['payroll-terms', 'paid-history', employeeId, toMonth],
-    queryFn: ({ signal }) => payrollService.getPaid(employeeId, PAID_HISTORY_FROM, toMonth, signal),
+    queryFn: ({ signal }) => payrollService.getPaid(employeeId, PAYROLL_PAID_ALL_FROM, toMonth, signal),
     staleTime: 30_000,
   });
   const history = useMemo(() => (historyQuery.data ? paidHistory(historyQuery.data) : null), [historyQuery.data]);
