@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 
@@ -140,10 +140,16 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     saveMutation.mutate({ terms: payload, kinds });
   };
 
+  // Enter в поле не отправляет форму: окно сохраняется и закрывается только кнопками.
+  const handleKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
+  };
+
   return (
     <form
       className={className ? `${styles.details} ${className}` : styles.details}
       onSubmit={handleSubmit}
+      onKeyDown={handleKeyDown}
       noValidate
       aria-labelledby={titleId}
     >

@@ -17,7 +17,7 @@ interface IPayrollEmployeeModalProps {
 
 /**
  * Окно «Расчётов»: карточка сотрудника с вводом — оклад, компенсация, доплата, удержания; «Оплачено» — в «Подробно».
- * Закрывается «Отменой», Escape и кликом мимо окна; после сохранения — само.
+ * Закрывается только крестиком и «Отменой»; после сохранения — само. Enter, Escape и клик мимо окна не закрывают.
  */
 export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
   row,
@@ -27,6 +27,8 @@ export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
 }) => (
   <ModalShell
     onClose={onClose}
+    closeOnEscape={false}
+    closeOnOverlayClick={false}
     overlayClassName={modal.overlay}
     containerClassName={styles.container}
     aria-label={row.full_name ?? 'Сотрудник'}

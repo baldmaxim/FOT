@@ -41,6 +41,8 @@ export const PaymentsTab: FC = () => {
   // как на сервере. Дата браузера в другом поясе давала бы соседний день. Ею же карточка
   // предзаполняет «Действует с».
   const [date] = useState(moscowTodayIso);
+  // Поиск по ФИО — один на «Условия оплаты» и «Расчёты».
+  const [search, setSearch] = useState('');
   // Сотрудник вкладки «Подробно» — строка списка на момент клика.
   const [details, setDetails] = useState<IPayrollTermsRow | null>(null);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
@@ -99,6 +101,8 @@ export const PaymentsTab: FC = () => {
               <CompensationTermsPage
                 date={date}
                 active={view === 'terms'}
+                search={search}
+                onSearchChange={setSearch}
                 onOpenEmployee={openEmployee}
               />
             </Suspense>
@@ -125,7 +129,13 @@ export const PaymentsTab: FC = () => {
         {canCalc && calcMounted && (
           <div className={view === 'calc' ? styles.view : styles.viewHidden}>
             <Suspense fallback={<div className={styles.loading}>Загрузка…</div>}>
-              <PayrollDeductionsPage date={date} active={view === 'calc'} onSaved={handleCalcSaved} />
+              <PayrollDeductionsPage
+                date={date}
+                active={view === 'calc'}
+                search={search}
+                onSearchChange={setSearch}
+                onSaved={handleCalcSaved}
+              />
             </Suspense>
           </div>
         )}

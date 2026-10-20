@@ -22,6 +22,8 @@ interface IModalShellProps {
   containerStyle?: CSSProperties;
   /** Закрывать по Escape. По умолчанию true. */
   closeOnEscape?: boolean;
+  /** Закрывать кликом мимо окна. По умолчанию true. */
+  closeOnOverlayClick?: boolean;
   'aria-label'?: string;
   'aria-labelledby'?: string;
   children: ReactNode | ((api: IModalShellApi) => ReactNode);
@@ -41,6 +43,7 @@ export const ModalShell: FC<IModalShellProps> = ({
   overlayStyle,
   containerStyle,
   closeOnEscape = true,
+  closeOnOverlayClick = true,
   children,
   ...aria
 }) => {
@@ -78,7 +81,7 @@ export const ModalShell: FC<IModalShellProps> = ({
       className={cx(styles.overlay, overlayClassName)}
       style={overlayStyle}
       data-state={phase}
-      {...overlayHandlers}
+      {...(closeOnOverlayClick ? overlayHandlers : {})}
     >
       <div
         className={cx(styles.modal, containerClassName)}

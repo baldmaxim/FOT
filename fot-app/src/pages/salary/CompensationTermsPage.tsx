@@ -56,6 +56,9 @@ interface ICompensationTermsPageProps {
   date: string;
   /** Список на экране. Скрытый список не размонтируется: фильтры, выделение и прокрутка сохраняются. */
   active: boolean;
+  /** Поиск по ФИО — общий у «Условий оплаты» и «Расчётов»: крестик на одном экране чистит оба. */
+  search: string;
+  onSearchChange: (value: string) => void;
   /** Клик по строке — карточка этого сотрудника. */
   onOpenEmployee: (row: IPayrollTermsRow) => void;
   /** Кнопки панели перед шестерёнкой («Справочник» на «Расчётах»). */
@@ -76,6 +79,8 @@ interface ICompensationTermsPageProps {
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   date,
   active,
+  search,
+  onSearchChange,
   onOpenEmployee,
   actionsExtra,
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
@@ -86,7 +91,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [departmentId, setDepartmentId] = useState('');
-  const [search, setSearch] = useState('');
   const [sort, setSort] = useState<PayrollSortKey>('name');
   const [dir, setDir] = useState<PayrollSortDir>('asc');
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
@@ -246,7 +250,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     <div className={styles.page}>
       <div className={styles.toolbar}>
         <div className={styles.search}>
-          <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
+          <SearchInput clearable value={search} onValueChange={onSearchChange}placeholder="Поиск по ФИО..." aria-label="Поиск по ФИО" />
         </div>
         <div className={styles.department}>
           <DepartmentTreeSelect
