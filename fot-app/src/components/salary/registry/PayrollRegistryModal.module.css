@@ -9,6 +9,12 @@
 /* Стрелка «Назад» слева от заголовка — на одной линии с ним. */
 .header { align-items: center; }
 
+/* Тело — колонка: таблица занимает остаток высоты и прокручивается внутри (data-registry-fill). */
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
 .container {
   box-sizing: border-box;
   display: flex;

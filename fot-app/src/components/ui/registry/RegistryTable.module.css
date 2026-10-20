@@ -11,6 +11,16 @@
   background: var(--surface);
 }
 
+/*
+ * В окне с data-registry-fill таблица прокручивается сама в обе стороны: высота — по строкам, но не выше
+ * окна, поэтому полоса прокрутки вбок всегда у нижнего края окна, а шапка закреплена (ниже, у thead th).
+ */
+[data-registry-fill] .wrap {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .table {
   width: 100%;
   /*
@@ -88,6 +98,13 @@
 }
 
 .table thead th.cellNum { text-align: center; }
+
+/* Шапка закреплена при прокрутке таблицы вниз (фон у th непрозрачный, border-collapse: separate). */
+[data-registry-fill] .table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 
 /* Числовой столбец: подпись со стрелкой и воронкой — над числами, по правому краю (и в переносе). */
 .table thead th.headNumeric { text-align: right; }

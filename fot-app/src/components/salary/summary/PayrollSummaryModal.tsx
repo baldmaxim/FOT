@@ -105,7 +105,8 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
             </button>
           </header>
 
-          <div className={modal.body}>
+          {/* data-registry-fill: таблица прокручивается внутри окна, шапка закреплена (RegistryTable.module.css). */}
+          <div className={`${modal.body} ${styles.body}`} data-registry-fill>
             <RegistryPanel
               label="Свод по объектам"
               columns={columns}

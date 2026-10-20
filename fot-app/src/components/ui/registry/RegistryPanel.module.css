@@ -11,6 +11,12 @@
   min-width: 0;
 }
 
+/* В окне с data-registry-fill (тело — колонка) панель занимает его высоту; таблица прокручивается внутри. */
+[data-registry-fill] > .panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

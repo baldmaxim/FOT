@@ -18,6 +18,12 @@
   font-family: var(--font-primary);
 }
 
+/* Тело — колонка: таблица занимает остаток высоты и прокручивается внутри (data-registry-fill). */
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
 /* Двойной класс: перебивает align-items: flex-start общей шапки при любом порядке CSS. */
 .header.header {
   flex-wrap: wrap;

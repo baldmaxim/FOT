@@ -51,7 +51,8 @@ export const PayrollRegistryModal: FC<IPayrollRegistryModalProps> = ({
             </button>
           </header>
 
-          <div className={modal.body}>{children}</div>
+          {/* data-registry-fill: таблица прокручивается внутри окна, шапка закреплена (RegistryTable.module.css). */}
+          <div className={`${modal.body} ${styles.body}`} data-registry-fill>{children}</div>
         </>
       )}
     </ModalShell>,
