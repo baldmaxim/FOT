@@ -42,7 +42,15 @@ vi.mock('../config/postgres.js', async () => {
   };
 });
 
-import { addStay, deleteStay, listStays, searchCandidates, updateStay } from './dormitory-stays.service.js';
+const CONTRACTORS = '00000000-0000-0000-0000-0000000000c0';
+vi.mock('../config/contractor.js', () => ({
+  CONTRACTOR_ROOT_NAME: 'подрядные организации',
+  getContractorRootId: async () => CONTRACTORS,
+}));
+
+import {
+  addStay, deleteStay, getEmployeeState, listStays, searchCandidates, updateStay,
+} from './dormitory-stays.service.js';
 import { deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
@@ -57,7 +65,8 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     await run(`
       DROP TABLE IF EXISTS employee_dormitory_stays, payroll_rates, role_page_access, access_pages,
         employees, positions, org_departments CASCADE;
-      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
+      DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
+      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
       CREATE TABLE employees (
         id integer PRIMARY KEY,
@@ -80,13 +89,22 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
         id serial PRIMARY KEY, role_code text, page_path text NOT NULL, can_view boolean, can_edit boolean,
         UNIQUE (role_code, page_path)
       );
-      INSERT INTO org_departments (id, name) VALUES ('${D1}', 'бр.Менгбоев Г.И.'), ('${D2}', 'Архив');
+      CREATE FUNCTION public.get_descendant_department_ids(uuid[]) RETURNS TABLE(id uuid)
+        LANGUAGE sql AS $$
+          SELECT d.id FROM org_departments d WHERE d.id = ANY($1) OR d.parent_id = ANY($1)
+        $$;
+      INSERT INTO org_departments (id, name, parent_id) VALUES
+        ('${D1}', 'бр.Менгбоев Г.И.', NULL), ('${D2}', 'Архив', NULL),
+        ('${CONTRACTORS}', 'Подрядные организации', NULL),
+        ('00000000-0000-0000-0000-0000000000c1', 'Смарт ПСК ООО', '${CONTRACTORS}');
       INSERT INTO positions (id, name) VALUES ('00000000-0000-0000-0000-0000000000a1', 'Монтажник');
       INSERT INTO employees (id, full_name, org_department_id, position_id, employment_status, is_archived) VALUES
         (1, 'Каримов Акмал', '${D1}', '00000000-0000-0000-0000-0000000000a1', 'active', false),
         (2, 'Борисов Антон', '${D1}', NULL, 'active', false),
         (3, 'Карпов Уволенный', '${D2}', NULL, 'dismissed', false),
-        (4, 'Карасёв Архивный', '${D1}', NULL, 'active', true);
+        (4, 'Карасёв Архивный', '${D1}', NULL, 'active', true),
+        (5, 'Карпенко Подрядчик', '00000000-0000-0000-0000-0000000000c1', NULL, 'active', false),
+        (6, 'Карелин Безотдельный', NULL, NULL, 'active', false);
     `);
   });
 
@@ -189,8 +207,12 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await listStays({})).toHaveLength(2);
   });
 
-  it('поиск: только работающие и не в архиве, в охвате', async () => {
-    expect((await searchCandidates('Кар', null)).map(row => row.full_name)).toEqual(['Каримов Акмал']);
+  it('поиск: только работающие, не в архиве, не подрядчики, в охвате', async () => {
+    expect((await searchCandidates('Кар', null)).map(row => row.full_name))
+      .toEqual(['Карелин Безотдельный', 'Каримов Акмал']);
+    expect(await getEmployeeState(5)).toMatchObject({ is_contractor: true });
+    expect(await getEmployeeState(6)).toMatchObject({ is_contractor: false });
+    expect(await getEmployeeState(1)).toMatchObject({ is_contractor: false, is_archived: false });
     expect(await searchCandidates('Кар', [2])).toEqual([]);
     expect(await searchCandidates('Кар', [])).toEqual([]);
     expect((await searchCandidates('_', null))).toEqual([]);

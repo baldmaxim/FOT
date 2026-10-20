@@ -2,13 +2,15 @@
  * Окно формы таблицы-реестра (RegistryFormModal): «Добавить сотрудника» / ✎ «Общежития» и таблиц
  * «Справочника» «Зарплаты». Mobile-first: окно на всю область оверлея, поля и кнопки 44px, шрифт полей
  * 16px (iOS и Android-Chrome не зумят форму); с 769px — окно 520px, компактные поля.
+ * Окно прижато к верху, а не по центру: подсказки поиска сотрудника меняют его высоту, и центрированное
+ * окно прыгало бы на каждой букве; так растёт только вниз.
  */
 .overlay {
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding:
     max(16px, env(safe-area-inset-top))
@@ -220,6 +222,7 @@
 .secondaryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (min-width: 769px) {
+  .overlay { padding-top: max(48px, 10dvh, env(safe-area-inset-top)); }
   .container { width: min(520px, 100%); }
   .dates { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .dateInput.dateInput { height: 36px; }

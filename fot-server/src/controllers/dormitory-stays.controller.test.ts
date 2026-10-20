@@ -58,8 +58,8 @@ const STAY = {
   address: 'Общежитие №2, комн. 14',
 };
 
-const ACTIVE = { id: 42, employment_status: 'active', is_archived: false };
-const DISMISSED = { id: 42, employment_status: 'dismissed', is_archived: false };
+const ACTIVE = { id: 42, employment_status: 'active', is_archived: false, is_contractor: false };
+const DISMISSED = { id: 42, employment_status: 'dismissed', is_archived: false, is_contractor: false };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -146,10 +146,11 @@ describe('добавление', () => {
     expect(svc.addStay).not.toHaveBeenCalled();
   });
 
-  it('уволенного, архивного, несуществующего, чужого — не добавить', async () => {
+  it('уволенного, архивного, подрядчика, несуществующего, чужого — не добавить', async () => {
     const cases: Array<[unknown, boolean, number]> = [
       [DISMISSED, true, 400],
       [{ ...ACTIVE, is_archived: true }, true, 400],
+      [{ ...ACTIVE, is_contractor: true }, true, 400],
       [null, true, 404],
       [ACTIVE, false, 403],
     ];

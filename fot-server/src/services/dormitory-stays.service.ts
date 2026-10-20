@@ -7,9 +7,11 @@
  */
 import type { PoolClient } from 'pg';
 
+import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
+import { payrollContractorDeptsCte } from './payroll/payroll-registry-scope.service.js';
 
 /** Нарушение EXCLUDE: у сотрудника уже есть проживание в эти даты. */
 const PG_EXCLUSION_VIOLATION = '23P01';
@@ -40,11 +42,12 @@ export interface IDormitoryStayInput {
   address: string;
 }
 
-/** Сотрудник для проверки перед записью: работает ли и не в архиве. */
+/** Сотрудник для проверки перед записью: работает ли, не в архиве, не подрядчик. */
 export interface IDormitoryEmployeeState {
   id: number;
   employment_status: string | null;
   is_archived: boolean;
+  is_contractor: boolean;
 }
 
 const STAY_SELECT = `
@@ -85,31 +88,40 @@ const readStay = async (client: PoolClient, id: number, lock: boolean): Promise<
   (await client.query<IDormitoryStay>(`${STAY_SELECT} WHERE s.id = $1${lock ? ' FOR UPDATE OF s' : ''}`, [id]))
     .rows[0] ?? null;
 
-/** Кого можно добавить: работающие, не в архиве, по части ФИО; employeeIds — охват (null — все). */
+/**
+ * Кого можно добавить: работающие, не в архиве, не из ветки подрядных организаций, по части ФИО;
+ * employeeIds — охват (null — все).
+ */
 export const searchCandidates = async (
   search: string,
   employeeIds: number[] | null,
 ): Promise<IDormitoryCandidate[]> => {
   if (employeeIds?.length === 0) return [];
   return query<IDormitoryCandidate>(
-    `SELECT e.id, e.full_name, d.name AS department, p.name AS position
+    `WITH ${payrollContractorDeptsCte('$3')}
+     SELECT e.id, e.full_name, d.name AS department, p.name AS position
        FROM employees e
        LEFT JOIN org_departments d ON d.id = e.org_department_id
        LEFT JOIN positions p ON p.id = e.position_id
       WHERE e.full_name ILIKE $1
         AND e.employment_status = 'active'
         AND e.is_archived IS NOT TRUE
+        AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
         AND ($2::int[] IS NULL OR e.id = ANY($2::int[]))
       ORDER BY e.full_name
       LIMIT 20`,
-    [`%${escapeLike(search)}%`, employeeIds],
+    [`%${escapeLike(search)}%`, employeeIds, await getContractorRootId()],
   );
 };
 
 export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEmployeeState | null> =>
   queryOne<IDormitoryEmployeeState>(
-    `SELECT id, employment_status, (is_archived IS TRUE) AS is_archived FROM employees WHERE id = $1`,
-    [employeeId],
+    `WITH ${payrollContractorDeptsCte('$2')}
+     SELECT e.id, e.employment_status, (e.is_archived IS TRUE) AS is_archived,
+            EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id) AS is_contractor
+       FROM employees e
+      WHERE e.id = $1`,
+    [employeeId, await getContractorRootId()],
   );
 
 /** Добавить проживание; пересекается с другим проживанием сотрудника — 'overlap'. */

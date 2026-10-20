@@ -59,7 +59,8 @@ export const EmployeeSearchField = <T extends IEmployeeSearchCandidate>({
   }, [active, term, search]);
 
   const loading = active && fetched?.term !== term;
-  const results = active && fetched?.term === term ? fetched.rows : [];
+  // Пока ищется новый запрос — прежний список: на каждой букве он не схлопывается в «Поиск…».
+  const results = active && fetched ? fetched.rows : [];
 
   if (value) {
     return (
@@ -95,10 +96,10 @@ export const EmployeeSearchField = <T extends IEmployeeSearchCandidate>({
         clearLabel="Очистить поиск"
       />
       {active && (
-        <ul className={styles.results} aria-label="Сотрудники">
-          {loading && <li className={styles.hint}>Поиск…</li>}
+        <ul className={styles.results} aria-label="Сотрудники" aria-busy={loading}>
+          {loading && results.length === 0 && <li className={styles.hint}>Поиск…</li>}
           {!loading && results.length === 0 && <li className={styles.hint}>Не найдено</li>}
-          {!loading && results.map(employee => (
+          {results.map(employee => (
             <li key={employee.id}>
               <button
                 type="button"

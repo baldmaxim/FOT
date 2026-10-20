@@ -149,7 +149,7 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId, ...input } = addSchema.parse(req.body);
-    // Поиск отдаёт только работающих, но тело запроса могут собрать и руками.
+    // Поиск отдаёт только работающих и не подрядчиков, но тело запроса могут собрать и руками.
     const employee = await getEmployeeState(employeeId);
     if (!employee) {
       res.status(404).json({ success: false, error: 'Сотрудник не найден' });
@@ -157,6 +157,10 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     }
     if (employee.employment_status !== 'active' || employee.is_archived) {
       res.status(400).json({ success: false, error: 'Добавить можно только работающего сотрудника' });
+      return;
+    }
+    if (employee.is_contractor) {
+      res.status(400).json({ success: false, error: 'Подрядчика добавить нельзя' });
       return;
     }
     if (!(await canWriteEmployeeInScope(req, employeeId))) {
