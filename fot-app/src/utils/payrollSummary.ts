@@ -2,7 +2,7 @@
  * «Свод» на «Расчётах»: строки сервера (сотрудник × объект × категория) → таблица объектов и таблица
  * сотрудников объекта. Суммы складываются в копейках; столбцы статей — только с ненулевыми суммами в
  * выбранной категории, в порядке и с подписями «Оплачено» (PAYROLL_PAID_GROUPS; «По трудовому договору» —
- * здесь «Зарплата»). Перед статьями — «Всего начислено», «К выплате» и «Всего удержано».
+ * здесь «Зарплата»). Перед статьями — «К выплате», «Всего начислено» и «Всего удержано».
  * Экран и xlsx строятся из одних описаний столбцов (tableView.ts).
  */
 import type { PayrollPaidItemCode, StaffCategory } from '../services/payrollService';
@@ -176,8 +176,8 @@ const moneyColumn = <Row extends { cents: SummaryCents },>(
 });
 
 const amountColumns = <Row extends { cents: SummaryCents },>(items: ReadonlyArray<PayrollPaidItemCode>): Array<IRegistryColumn<Row>> => [
-  moneyColumn<Row>('accrued', 'Всего начислено', row => kindTotal(row.cents, 'accrued')),
   moneyColumn<Row>('payout', 'К выплате', row => payoutTotal(row.cents)),
+  moneyColumn<Row>('accrued', 'Всего начислено', row => kindTotal(row.cents, 'accrued')),
   moneyColumn<Row>('deducted', 'Всего удержано', row => kindTotal(row.cents, 'deducted')),
   ...items.map(item => moneyColumn<Row>(item, ITEM_LABEL.get(item) ?? item, row => row.cents[item])),
 ];
