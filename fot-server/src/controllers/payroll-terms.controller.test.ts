@@ -116,6 +116,36 @@ describe('условия оплаты: премиальная часть и ко
     expect(details).toMatchObject({ bonus_amount: 50000, housing_compensation: 25000 });
   });
 
+  it('проживание > 0, а в эти дни доплата за общежитие — 409, аудита нет; 0 и пусто — без проверки', async () => {
+    txClient.query.mockImplementation(async (sql: string) => (
+      /payroll_dormitory_allowances/.test(sql) ? { rows: [{ day: '2026-11-01' }] } : { rows: [{ id: 77 }] }
+    ));
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { ...baseBody, housing_compensation: 630 },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE', error: expect.stringContaining('01.11.2026') });
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+    // Окно проверки — с даты условий и бессрочно.
+    const check = txClient.query.mock.calls.find(call => /payroll_dormitory_allowances/.test(String(call[0])));
+    expect(check?.[1]).toEqual([42, '2026-09-01', null, null, null]);
+
+    for (const housing of [0, undefined]) {
+      txClient.query.mockClear();
+      const ok = makeRes();
+      await payrollTermsController.assign(makeReq({
+        params: { empId: '42' },
+        body: { ...baseBody, housing_compensation: housing },
+      } as Partial<AuthenticatedRequest>), ok);
+      expect(ok.statusCode, String(housing)).toBe(200);
+      expect(txClient.query.mock.calls.some(call => /payroll_dormitory_allowances/.test(String(call[0])))).toBe(false);
+    }
+  });
+
   it('0 принимается как явное значение', async () => {
     const res = makeRes();
 

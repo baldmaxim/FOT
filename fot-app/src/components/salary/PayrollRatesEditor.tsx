@@ -7,16 +7,19 @@ import { PayrollDictionarySection } from './PayrollDictionarySection';
 
 interface IPayrollRatesEditorProps {
   canEdit: boolean;
-  /** Кнопка «Сотрудники» у заголовка «Ставки»: таблица «Доплата за проживание» (ставка одна). */
+  /** «Проживание» у заголовка: таблица «Доплата за проживание». */
   onOpenHousing: () => void;
+  /** «Общежитие» у заголовка: таблица «Доплата за общежитие». */
+  onOpenDormitoryAllowance: () => void;
 }
 
 /**
- * «Ставки» в окне «Справочник»: значение ставки — изменить. Новых ставок здесь не заводят (миграции 313/315);
+ * «Ставки» в окне «Справочник»: значение ставки — изменить. Новых ставок здесь не заводят (миграции 313/315/317);
  * у ставки с кодом название не меняется и удалить её нельзя. Значение «Доплаты за проживание» — сумма по
- * умолчанию при добавлении сотрудника в её таблицу; в окно сотрудника и в расчёты не подставляется.
+ * умолчанию при добавлении сотрудника в её таблицу; в окно сотрудника и в расчёты не подставляется. Значение
+ * «Доплаты за общежитие» — сумма всем из её таблицы.
  */
-export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOpenHousing }) => {
+export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOpenHousing, onOpenDormitoryAllowance }) => {
   const rates = usePayrollRates();
   const queryClient = useQueryClient();
 
@@ -33,8 +36,10 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
   return (
     <PayrollDictionarySection
       title="Ставки"
-      onOpenList={onOpenHousing}
-      listLabel="Сотрудники с доплатой за проживание"
+      lists={[
+        { label: 'Проживание', ariaLabel: 'Сотрудники с доплатой за проживание', onOpen: onOpenHousing },
+        { label: 'Общежитие', ariaLabel: 'Сотрудники с доплатой за общежитие', onOpen: onOpenDormitoryAllowance },
+      ]}
       items={rates.data}
       isError={rates.isError}
       onRetry={() => { void rates.refetch(); }}

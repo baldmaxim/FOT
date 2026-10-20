@@ -1,6 +1,8 @@
 import type {
   ICompensationStop,
   IDeductionRegistryRow,
+  IDormitoryAllowanceRow,
+  IDormitoryStayPeriod,
   IHousingAllowanceRow,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
@@ -110,6 +112,21 @@ export const COMPENSATION_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensat
   },
 ];
 
+/** Шесть столбцов: отдел и должность уже, как у «Доплаты», — без прокрутки в окне на 1280px. */
+export const DORMITORY_ALLOWANCE_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryAllowanceRow>> = [
+  ...employeeColumns<IDormitoryAllowanceRow>({ department: 112, position: 144 }),
+  // Заголовок одной строкой: «ДОПЛАТА С» + стрелка и воронка.
+  dateColumn<IDormitoryAllowanceRow>('date_from', 'Доплата с', row => row.date_from, 150),
+  {
+    // Пусто — бессрочно: доплату ещё не прекратили.
+    key: 'date_to', label: 'По', type: 'text', width: 112, nowrap: true,
+    text: row => (row.date_to ? formatDate(row.date_to) : 'бессрочно'),
+    sortValue: row => row.date_to,
+  },
+  // Значение ставки «Доплата за общежитие» — одно на всех; не задано — «—».
+  moneyColumn<IDormitoryAllowanceRow>('Сумма, ₽/мес', row => row.amount),
+];
+
 const NO_KINDS = '—';
 
 export const DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IDeductionRegistryRow>> = [
@@ -141,6 +158,7 @@ export const buildHousingExport = buildSnapshot('Доплата за прожи�
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildDeductionExport = buildSnapshot('Удержания', DEDUCTION_COLUMNS);
+export const buildDormitoryAllowanceExport = buildSnapshot('Доплата за общежитие', DORMITORY_ALLOWANCE_COLUMNS);
 
 /** Ключ строки «Доплаты»: у плановой — сотрудник (она одна), у разовой — её id. */
 export const supplementRowKey = (row: IPayrollSupplementRow): string => (
@@ -193,4 +211,21 @@ export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyA
 /** «Без проезда» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */
 export const stopInMonths = (stop: ICompensationStop, months: ReadonlyArray<string>): boolean => (
   periodIntersectsMonths(stop.date_from, stop.date_to, months)
+);
+
+/** Проживание [въезд, выезд) задевает месяц: в день выезда сотрудник в общежитии уже не живёт. */
+const stayTouchesMonth = (stay: IDormitoryStayPeriod, month: string): boolean => (
+  stay.check_in <= monthEnd(month) && (stay.check_out === null || stay.check_out > `${month}-01`)
+);
+
+/**
+ * «Доплата за общежитие» в месяцах: «Весь период» — все строки; иначе есть выбранный месяц, который задевает
+ * период доплаты и в котором сотрудник не жил в общежитии (заселили позже — в месяцах проживания строки нет).
+ */
+export const dormitoryAllowanceInMonths = (row: IDormitoryAllowanceRow, months: ReadonlyArray<string>): boolean => (
+  months.length === 0
+  || months.some(month => (
+    periodIntersectsMonths(row.date_from, row.date_to, [month])
+    && !row.dormitory_stays.some(stay => stayTouchesMonth(stay, month))
+  ))
 );

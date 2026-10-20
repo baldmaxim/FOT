@@ -3,8 +3,8 @@ import type { ITableExportSnapshot } from '../utils/tableView';
 import { payrollService } from './payrollService';
 
 /**
- * Таблицы окна «Справочник» на «Расчётах» (миграция 315): «Доплата за проживание», «Доплата»,
- * «Без проезда», «Удержания». Строки — «штат зарплаты» (как список условий оплаты), can_edit — охват
+ * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата за проживание», «Доплата за общежитие»,
+ * «Доплата», «Без проезда», «Удержания». Строки — «штат зарплаты» (как список условий оплаты), can_edit — охват
  * правки этого сотрудника (сервер проверит то же при записи).
  */
 
@@ -52,6 +52,28 @@ export interface ICompensationStop {
   position: string | null;
   date_from: string;
   date_to: string | null;
+  can_edit: boolean;
+}
+
+/** Проживание в общежитии, задевающее период доплаты: выезд — день выезда (в нём уже не живёт), null — живёт. */
+export interface IDormitoryStayPeriod {
+  check_in: string;
+  check_out: string | null;
+}
+
+/** «Доплата за общежитие» — кому платят за то, что не живёт в общежитии: период «с — по» (по включительно, null — бессрочно). */
+export interface IDormitoryAllowanceRow {
+  id: number;
+  employee_id: number;
+  full_name: string;
+  department: string | null;
+  position: string | null;
+  date_from: string;
+  date_to: string | null;
+  /** ₽/мес, numeric строкой — значение ставки «Доплата за общежитие», одно на всех; не задано — null. */
+  amount: string | null;
+  /** В месяцах проживания строка не показывается. */
+  dormitory_stays: IDormitoryStayPeriod[];
   can_edit: boolean;
 }
 
@@ -107,12 +129,14 @@ export interface IOneTimeSupplementFields {
   reason: string;
 }
 
-export interface ICompensationStopFields {
+/** Период «с — по» строки «Без проезда» и «Доплаты за общежитие». */
+export interface IRegistryPeriodFields {
   date_from: string;
   date_to: string | null;
 }
 
-export type PayrollRegistryTable = 'housing' | 'supplements' | 'compensation-stops' | 'deductions' | 'summary';
+export type PayrollRegistryTable =
+  | 'housing' | 'supplements' | 'compensation-stops' | 'dormitory-allowances' | 'deductions' | 'summary';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
@@ -124,6 +148,7 @@ export const PAYROLL_REGISTRY_KEYS = {
   housing: ['payroll-terms', 'registry', 'housing'],
   supplements: ['payroll-terms', 'registry', 'supplements'],
   stops: ['payroll-terms', 'registry', 'compensation-stops'],
+  dormitoryAllowances: ['payroll-terms', 'registry', 'dormitory-allowances'],
   deductions: ['payroll-terms', 'registry', 'deductions'],
 } as const;
 export const PAYROLL_TERMS_PREFIX = ['payroll-terms'] as const;
@@ -176,16 +201,35 @@ export const payrollRegistryService = {
   listStops: (signal?: AbortSignal) => list<ICompensationStop>('/payroll/compensation-stops', signal),
 
   /** Пересечение с другим периодом сотрудника — ApiError 409 STOP_OVERLAP. */
-  addStop: async (employeeId: number, fields: ICompensationStopFields): Promise<void> => {
+  addStop: async (employeeId: number, fields: IRegistryPeriodFields): Promise<void> => {
     await apiClient.post('/payroll/compensation-stops', { employee_id: employeeId, ...fields });
   },
 
-  updateStop: async (id: number, fields: ICompensationStopFields): Promise<void> => {
+  updateStop: async (id: number, fields: IRegistryPeriodFields): Promise<void> => {
     await apiClient.patch(`/payroll/compensation-stops/${id}`, fields);
   },
 
   removeStop: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/compensation-stops/${id}`);
+  },
+
+  listDormitoryAllowances: (signal?: AbortSignal) =>
+    list<IDormitoryAllowanceRow>('/payroll/dormitory-allowances', signal),
+
+  /**
+   * Тот же период уже есть — ответ им же, второй строки нет. ApiError 409: ALLOWANCE_OVERLAP — пересечение,
+   * LIVES_IN_DORMITORY — дни проживания в общежитии, HAS_HOUSING — в эти дни доплата за проживание.
+   */
+  addDormitoryAllowance: async (employeeId: number, fields: IRegistryPeriodFields): Promise<void> => {
+    await apiClient.post('/payroll/dormitory-allowances', { employee_id: employeeId, ...fields });
+  },
+
+  updateDormitoryAllowance: async (id: number, fields: IRegistryPeriodFields): Promise<void> => {
+    await apiClient.patch(`/payroll/dormitory-allowances/${id}`, fields);
+  },
+
+  removeDormitoryAllowance: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/dormitory-allowances/${id}`);
   },
 
   /** months — registryMonthsParam выбора. */

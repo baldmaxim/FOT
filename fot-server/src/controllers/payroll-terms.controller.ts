@@ -32,6 +32,10 @@ import {
 } from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
+  assertHousingWithoutDormitoryAllowance,
+  DormitoryAllowanceConflictError,
+} from '../services/payroll/payroll-dormitory-allowances.service.js';
+import {
   loadStaffCategoryResolver,
   resolveEmployeeStaffCategories,
 } from '../services/payroll/payroll-staff-category.js';
@@ -667,6 +671,10 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         note: body.note ?? null,
         createdBy: req.user.id,
       }, client);
+      // Одна доплата из двух: проживание с D — в эти дни не должно быть доплаты за общежитие (иначе откат).
+      if ((body.housing_compensation ?? 0) > 0) {
+        await assertHousingWithoutDormitoryAllowance(client, employeeId, body.effective_from);
+      }
       const changed = supplement === undefined
         ? false
         : await setPlannedSupplement(client, {
@@ -721,6 +729,10 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true, data: { terms_id: termsId } });
   } catch (err) {
     if (handleZodError(err, res)) return;
+    if (err instanceof DormitoryAllowanceConflictError) {
+      res.status(409).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     console.error('payrollTerms.assign error:', err);
     res.status(500).json({ success: false, error: 'Ошибка назначения условий оплаты' });
   }

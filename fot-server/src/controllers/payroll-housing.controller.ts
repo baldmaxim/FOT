@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
+import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { listHousingAllowances, setHousingFrom } from '../services/payroll/payroll-housing.service.js';
 import {
   canWritePayrollRegistryEmployee,
@@ -98,6 +99,11 @@ const set = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     res.json({ success: true, data: { changed: result.status === 'saved' } });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
+    // Одна доплата из двух: в эти дни у сотрудника доплата за общежитие (запись откачена).
+    if (err instanceof DormitoryAllowanceConflictError) {
+      res.status(409).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     console.error('payrollHousing.set error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения доплаты' });
   }

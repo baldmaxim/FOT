@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ICompensationStop, IDeductionRegistryRow, IPayrollSupplementRow } from '../services/payrollRegistryService';
+import type {
+  ICompensationStop,
+  IDeductionRegistryRow,
+  IDormitoryAllowanceRow,
+  IPayrollSupplementRow,
+} from '../services/payrollRegistryService';
 import {
   buildCompensationStopExport,
   buildDeductionExport,
+  buildDormitoryAllowanceExport,
+  dormitoryAllowanceInMonths,
   DEDUCTION_COLUMNS,
   HOUSING_COLUMNS,
   periodIntersectsMonths,
@@ -20,8 +27,8 @@ import {
   parseDeductionForm,
   parseHousingForm,
   parseOneTimeForm,
+  parsePeriodForm,
   parsePlannedForm,
-  parseStopForm,
 } from './payrollRegistryForms';
 import { applyTableView, columnFilterOptions, fitRegistryColumnWidths, matchesNameSearch } from './tableView';
 
@@ -113,12 +120,14 @@ describe('формы', () => {
       .toEqual({ ok: true, payload: { month: '2026-10', amount: 100, reason: 'Премия за объект' } });
   });
 
-  it('«Без проезда»: «по» пусто — бессрочно, один день — можно', () => {
-    expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '' }))
-      .toEqual({ ok: true, payload: { date_from: '2026-08-01', date_to: null } });
-    expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '2026-08-01' })).toMatchObject({ ok: true });
-    expect(parseStopForm({ selected: true, dateFrom: '2026-08-01', dateTo: '2026-07-31' }))
-      .toMatchObject({ ok: false, field: 'date_to' });
+  it('период «с — по»: «по» пусто — бессрочно, один день — можно; подпись «с» — в сообщении', () => {
+    const period = (dateFrom: string, dateTo: string) =>
+      parsePeriodForm({ selected: true, dateFrom, dateTo, fromLabel: 'Без проезда с' });
+    expect(period('2026-08-01', '')).toEqual({ ok: true, payload: { date_from: '2026-08-01', date_to: null } });
+    expect(period('2026-08-01', '2026-08-01')).toMatchObject({ ok: true });
+    expect(period('2026-08-01', '2026-07-31')).toMatchObject({ ok: false, field: 'date_to' });
+    expect(parsePeriodForm({ selected: true, dateFrom: '', dateTo: '', fromLabel: 'Доплата с' }))
+      .toEqual({ ok: false, field: 'date_from', message: 'Укажите дату «Доплата с»' });
   });
 
   it('удержание: нужен вид или сумма; сумма без оклада — нельзя; при правке пусто — снять', () => {
@@ -211,5 +220,26 @@ describe('выбор месяца в таблицах «Справочника»
     expect(stopInMonths(stop, ['2027-05'])).toBe(true);
     expect(buildCompensationStopExport([stop]).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Без проезда с', 'По']);
+  });
+
+  it('«Доплата за общежитие»: месяцы проживания скрыты, в день выезда уже не живёт; «Весь период» — все', () => {
+    const row: IDormitoryAllowanceRow = {
+      id: 1, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
+      date_from: '2026-11-01', date_to: null, amount: '500.00', can_edit: true,
+      // Заселили позже: живёт с 10.12 по 31.01 (выезд 01.02).
+      dormitory_stays: [{ check_in: '2026-12-10', check_out: '2027-02-01' }],
+    };
+    expect(dormitoryAllowanceInMonths(row, ['2026-10'])).toBe(false);
+    expect(dormitoryAllowanceInMonths(row, ['2026-11'])).toBe(true);
+    expect(dormitoryAllowanceInMonths(row, ['2026-12'])).toBe(false);
+    expect(dormitoryAllowanceInMonths(row, ['2027-01'])).toBe(false);
+    expect(dormitoryAllowanceInMonths(row, ['2027-02'])).toBe(true);
+    expect(dormitoryAllowanceInMonths(row, ['2026-12', '2027-02'])).toBe(true);
+    expect(dormitoryAllowanceInMonths(row, [])).toBe(true);
+    // Живёт и сейчас (выезда нет) — дальше не показывается.
+    const living = { ...row, dormitory_stays: [{ check_in: '2026-12-10', check_out: null }] };
+    expect(dormitoryAllowanceInMonths(living, ['2030-01'])).toBe(false);
+    expect(buildDormitoryAllowanceExport([{ ...row, amount: null }]).columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Доплата с', 'По', 'Сумма, ₽/мес']);
   });
 });

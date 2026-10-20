@@ -1,13 +1,14 @@
 /**
- * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за проживание», «Доплата», «Без проезда», «Удержания»):
+ * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за проживание», «Доплата за общежитие», «Доплата», «Без проезда»,
+ * «Удержания»):
  * разбор полей повторяет проверку сервера — ошибка видна до запроса, а не ответом 400.
  */
 import type {
-  ICompensationStopFields,
   IDeductionRegistryPayload,
   IHousingAllowancePayload,
   IOneTimeSupplementFields,
   IPlannedSupplementFields,
+  IRegistryPeriodFields,
 } from '../services/payrollRegistryService';
 import { isCalendarDate } from './dormitoryStayForm';
 import { shiftMonth } from './moscowDate';
@@ -96,14 +97,18 @@ export const parseOneTimeForm = (draft: {
   return { ok: true, payload: { month: draft.month, amount: amount.amount, reason } };
 };
 
-/** «Без проезда»: с — обязательно, по — включительно, пусто — бессрочно. */
-export const parseStopForm = (draft: {
+/**
+ * Период «с — по» («Без проезда», «Доплата за общежитие»): с — обязательно, по — включительно, пусто — бессрочно.
+ * fromLabel — подпись даты начала в сообщении: «Без проезда с», «Доплата с».
+ */
+export const parsePeriodForm = (draft: {
   selected: boolean;
   dateFrom: string;
   dateTo: string;
-}): RegistryFormParse<ICompensationStopFields> => {
+  fromLabel: string;
+}): RegistryFormParse<IRegistryPeriodFields> => {
   if (!draft.selected) return fail('employee', 'Выберите сотрудника');
-  const fromError = parseDate(draft.dateFrom, 'date_from', 'Укажите дату «Без проезда с»');
+  const fromError = parseDate(draft.dateFrom, 'date_from', `Укажите дату «${draft.fromLabel}»`);
   if (fromError) return fromError;
   if (draft.dateTo && !isCalendarDate(draft.dateTo)) return fail('date_to', 'Такой даты нет');
   if (draft.dateTo && draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата «по» раньше даты «с»');

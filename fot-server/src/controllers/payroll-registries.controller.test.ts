@@ -54,6 +54,7 @@ vi.mock('../config/postgres.js', () => ({ withTransaction: vi.fn(async (fn: (cli
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
+import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { payrollHousingController as housingC } from './payroll-housing.controller.js';
 import { payrollSupplementsController as supplementsC } from './payroll-supplements.controller.js';
 import { payrollCompensationStopsController as stopsC } from './payroll-compensation-stops.controller.js';
@@ -289,6 +290,20 @@ describe('«Доплата за проживание»', () => {
     await housingC.set(makeReq({ params: { empId: '42' }, body }), same);
     expect(same.body.data).toEqual({ changed: false });
     expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('в эти дни доплата за общежитие — 409 с текстом, без аудита', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    housing.setHousingFrom.mockRejectedValue(new DormitoryAllowanceConflictError(
+      'HAS_DORMITORY_ALLOWANCE', 'С 01.11.2026 у сотрудника доплата за общежитие',
+    ));
+    const res = makeRes();
+    await housingC.set(makeReq({ params: { empId: '42' }, body }), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({
+      success: false, error: 'С 01.11.2026 у сотрудника доплата за общежитие', code: 'HAS_DORMITORY_ALLOWANCE',
+    });
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
   it('снять — amount null; сумма 0 или строкой — 400', async () => {

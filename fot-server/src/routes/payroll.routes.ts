@@ -4,6 +4,7 @@ import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middle
 import { noStore } from '../middleware/noStore.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
+import { payrollDormitoryAllowancesController } from '../controllers/payroll-dormitory-allowances.controller.js';
 import { payrollHousingController } from '../controllers/payroll-housing.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
@@ -79,10 +80,15 @@ router.get('/compensation-stops', deductionsView, payrollCompensationStopsContro
 router.post('/compensation-stops', deductionsEdit, payrollCompensationStopsController.add);
 router.patch('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.update);
 router.delete('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.remove);
+// «Доплата за общежитие» (миграция 317): кому платят за то, что не живёт в общежитии, периоды «с — по».
+router.get('/dormitory-allowances', deductionsView, payrollDormitoryAllowancesController.list);
+router.post('/dormitory-allowances', deductionsEdit, payrollDormitoryAllowancesController.add);
+router.patch('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.update);
+router.delete('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.remove);
 // «Удержания»: виды и сумма ₽/мес — те же, что «Удержание» окна сотрудника. Сумма — условия оплаты (termsEdit).
 router.get('/deduction-registry', deductionsView, payrollRegistryController.listDeductions);
 router.put('/deduction-registry/employee/:empId', termsEdit, payrollRegistryController.saveDeductions);
-// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, deductions, summary).
+// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, dormitory-allowances, deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 
 // ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──

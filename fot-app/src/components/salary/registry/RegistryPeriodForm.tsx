@@ -3,19 +3,34 @@ import { useId, useState, type FC } from 'react';
 import { ApiError } from '../../../api/client';
 import {
   payrollRegistryService,
-  type ICompensationStop,
   type IPayrollRegistryCandidate,
+  type IRegistryPeriodFields,
 } from '../../../services/payrollRegistryService';
 import { moscowTodayIso } from '../../../utils/moscowDate';
-import { parseStopForm, type RegistryFormField } from '../../../utils/payrollRegistryForms';
+import { parsePeriodForm, type RegistryFormField } from '../../../utils/payrollRegistryForms';
 import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 
-interface ICompensationStopFormProps {
+/** Строка таблицы с периодом «с — по»: «Без проезда», «Доплата за общежитие». */
+interface IRegistryPeriodRow {
+  id: number;
+  full_name: string;
+  department: string | null;
+  date_from: string;
+  date_to: string | null;
+}
+
+interface IRegistryPeriodFormProps {
+  /** Заголовок окна правки: «Без проезда», «Доплата за общежитие». */
+  title: string;
+  /** Подпись даты начала: «Без проезда с», «Доплата с». */
+  fromLabel: string;
   /** Передано — ✎ этого периода (сотрудник не меняется); нет — «Добавить сотрудника». */
-  stop?: ICompensationStop;
+  row?: IRegistryPeriodRow;
+  onAdd: (employeeId: number, fields: IRegistryPeriodFields) => Promise<void>;
+  onUpdate: (id: number, fields: IRegistryPeriodFields) => Promise<void>;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -23,15 +38,23 @@ interface ICompensationStopFormProps {
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ в «Без проезда»: сотрудник и период «с — по». «По» пусто — бессрочно;
- * возобновили выплату — ставят «по» (строка остаётся историей).
+ * «Добавить сотрудника» / ✎ в таблице с периодами: сотрудник и период «с — по». «По» пусто — бессрочно;
+ * прекратили — ставят «по» (строка остаётся историей). Отказ сервера (пересечение и др.) — его текстом.
  */
-export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onClose, onSaved }) => {
+export const RegistryPeriodForm: FC<IRegistryPeriodFormProps> = ({
+  title,
+  fromLabel,
+  row,
+  onAdd,
+  onUpdate,
+  onClose,
+  onSaved,
+}) => {
   const errorId = useId();
-  const isEdit = stop !== undefined;
+  const isEdit = row !== undefined;
   const [employee, setEmployee] = useState<IPayrollRegistryCandidate | null>(null);
-  const [dateFrom, setDateFrom] = useState(stop?.date_from ?? moscowTodayIso());
-  const [dateTo, setDateTo] = useState(stop?.date_to ?? '');
+  const [dateFrom, setDateFrom] = useState(row?.date_from ?? moscowTodayIso());
+  const [dateTo, setDateTo] = useState(row?.date_to ?? '');
   const [error, setError] = useState<{ field: RegistryFormField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -40,7 +63,7 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
     (error?.field === field ? `${styles.dateInput} ${styles.dateInvalid}` : styles.dateInput);
 
   const handleSubmit = async (requestClose: () => void) => {
-    const parsed = parseStopForm({ selected: isEdit || employee !== null, dateFrom, dateTo });
+    const parsed = parsePeriodForm({ selected: isEdit || employee !== null, dateFrom, dateTo, fromLabel });
     if (!parsed.ok) {
       setError({ field: parsed.field, message: parsed.message });
       return;
@@ -48,8 +71,8 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
     setSaving(true);
     setError(null);
     try {
-      if (isEdit) await payrollRegistryService.updateStop(stop.id, parsed.payload);
-      else await payrollRegistryService.addStop(employee!.id, parsed.payload);
+      if (isEdit) await onUpdate(row.id, parsed.payload);
+      else await onAdd(employee!.id, parsed.payload);
       onSaved();
       requestClose();
     } catch (err) {
@@ -60,7 +83,7 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
 
   return (
     <RegistryFormModal
-      title={isEdit ? 'Без проезда' : 'Добавить сотрудника'}
+      title={isEdit ? title : 'Добавить сотрудника'}
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
       saving={saving}
@@ -73,8 +96,8 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
         {isEdit ? (
           <div className={styles.fixed}>
             <span>
-              {stop.full_name}
-              {stop.department && <span className={styles.muted}> — {stop.department}</span>}
+              {row.full_name}
+              {row.department && <span className={styles.muted}> — {row.department}</span>}
             </span>
           </div>
         ) : (
@@ -92,7 +115,7 @@ export const CompensationStopForm: FC<ICompensationStopFormProps> = ({ stop, onC
       {/* Не <label>: внутри поля даты — кнопка календаря, клик по подписи открыл бы её. */}
       <div className={styles.dates}>
         <div className={styles.field}>
-          <span className={styles.label}>Без проезда с</span>
+          <span className={styles.label}>{fromLabel}</span>
           <DateInput
             value={dateFrom}
             onChange={value => { setDateFrom(value); clearError(); }}

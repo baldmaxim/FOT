@@ -116,7 +116,7 @@ const setHousing = (employeeId: number, amount: number | null, from: string) =>
 describe.skipIf(!PG_URL)('таблицы «Справочника» на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
+      DROP TABLE IF EXISTS payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rates, payroll_compensation_terms,
         payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
@@ -158,6 +158,10 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         (5, 'Дмитриев Архивный', '${D1}', 'active', true),
         (6, 'Егоров Без оклада', '${D1}', 'active', false);
       INSERT INTO user_profiles (id, full_name) VALUES ('${AUTHOR}', 'Петрова А.А.');
+      -- «Доплата за общежитие» (317) — пустая: «Доплата за проживание» сверяется с ней (одна доплата из двух).
+      CREATE TABLE payroll_dormitory_allowances (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, date_from date NOT NULL, date_to date
+      );
     `);
     for (const name of [
       '271_payroll_terms.sql', '282_payroll_terms_bonus_housing.sql', '286_payroll_terms_compensations.sql',

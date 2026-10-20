@@ -3,7 +3,8 @@
  *
  * Ведётся в окне «Справочник» на «Расчётах». Ставка только хранится: в окно сотрудника и в расчёты
  * не подставляется, с видами удержаний не связана. Значение можно не задавать.
- * Ставка с кодом (миграции 313/315: housing — «Доплата за проживание») не удаляется и не переименовывается.
+ * Ставка с кодом (миграции 313/315/317: housing — «Доплата за проживание», dormitory_allowance — «Доплата за
+ * общежитие») не удаляется и не переименовывается.
  */
 import { query, queryOne } from '../../config/postgres.js';
 import { hasPgCode, PG_UNIQUE_VIOLATION } from './payroll-pg-errors.js';
@@ -22,6 +23,9 @@ export interface IPayrollRate {
  * по умолчанию при добавлении сотрудника в эту таблицу.
  */
 export const HOUSING_RATE_CODE = 'housing';
+
+/** Код ставки «Доплата за общежитие» (миграция 317): её значение — сумма всем из одноимённой таблицы. */
+export const DORMITORY_ALLOWANCE_RATE_CODE = 'dormitory_allowance';
 
 const RATE_COLUMNS = `id, name, amount::text AS amount, code`;
 

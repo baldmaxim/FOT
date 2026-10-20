@@ -7,6 +7,7 @@
 import type { PoolClient } from 'pg';
 
 import { query } from '../../config/postgres.js';
+import { assertHousingWithoutDormitoryAllowance } from './payroll-dormitory-allowances.service.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll-registry-scope.service.js';
 import {
   setTermsAmountFrom,
@@ -77,8 +78,19 @@ export const listHousingAllowances = async (scope: {
 
 export type HousingSetResult = TermsAmountSetResult;
 
-/** Проживание amount (null — снять) с даты from — см. setTermsAmountFrom. Вызывать в транзакции. */
-export const setHousingFrom = (
+/**
+ * Проживание amount (null — снять) с даты from — см. setTermsAmountFrom. Вызывать в транзакции.
+ * Сумма задана — после записи проверка «одна доплата из двух»: в эти дни у сотрудника не должно быть
+ * доплаты за общежитие (иначе DormitoryAllowanceConflictError — откат). setTermsAmountFrom первым берёт
+ * lockPayrollEmployee, так что проверка идёт под той же блокировкой, что и запись доплаты за общежитие.
+ */
+export const setHousingFrom = async (
   client: PoolClient,
   input: { employeeId: number; amount: number | null; from: string; createdBy: string },
-): Promise<HousingSetResult> => setTermsAmountFrom(client, { ...input, column: 'housing_compensation' });
+): Promise<HousingSetResult> => {
+  const result = await setTermsAmountFrom(client, { ...input, column: 'housing_compensation' });
+  if (result.status === 'saved' && input.amount !== null) {
+    await assertHousingWithoutDormitoryAllowance(client, input.employeeId, input.from);
+  }
+  return result;
+};

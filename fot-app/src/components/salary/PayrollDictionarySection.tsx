@@ -26,15 +26,22 @@ interface IPayrollDictionarySectionProps {
   onDelete: (id: number) => Promise<void>;
   /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
-  /** Передан — рядом с заголовком кнопка «Сотрудники»: таблица сотрудников («Удержания», «Ставки»). */
-  onOpenList?: () => void;
+  /** Кнопки таблиц сотрудников рядом с заголовком: у «Удержаний» — одна, у «Ставок» — по таблице на ставку. */
+  lists?: ReadonlyArray<IPayrollDictionaryList>;
+}
+
+/** Кнопка таблицы сотрудников у заголовка колонки. */
+export interface IPayrollDictionaryList {
+  /** Подпись на кнопке: «Сотрудники», «Проживание», «Общежитие». */
+  label: string;
   /** Что за таблица — для экранного диктора: «Сотрудники с удержаниями». */
-  listLabel?: string;
+  ariaLabel: string;
+  onOpen: () => void;
 }
 
 /**
  * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний» и
- * «Ставок» рядом с заголовком кнопка «Сотрудники» — таблица сотрудников.
+ * «Ставок» рядом с заголовком кнопки таблиц сотрудников.
  */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
@@ -50,8 +57,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onUpdate,
   onDelete,
   isLocked,
-  onOpenList,
-  listLabel,
+  lists,
 }) => {
   const titleId = useId();
   // Правится одна строка: открытие другой закрывает прежнюю без сохранения.
@@ -59,10 +65,12 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
 
   return (
     <section className={styles.section} aria-labelledby={titleId}>
-      {onOpenList ? (
+      {lists && lists.length > 0 ? (
         <div className={styles.sectionHead}>
           <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
-          <PayrollEmployeesButton onClick={onOpenList} ariaLabel={listLabel ?? `${title}: сотрудники`} />
+          {lists.map(list => (
+            <PayrollEmployeesButton key={list.label} label={list.label} onClick={list.onOpen} ariaLabel={list.ariaLabel} />
+          ))}
         </div>
       ) : (
         <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>

@@ -12,8 +12,8 @@ import {
 import { formatDate } from '../../../utils/formatMoney';
 import { buildCompensationStopExport, COMPENSATION_STOP_COLUMNS, stopInMonths } from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
-import { CompensationStopForm } from './CompensationStopForm';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
+import { RegistryPeriodForm } from './RegistryPeriodForm';
 
 interface ICompensationStopRegistryProps {
   /** Право правки «Справочника» (/salary/terms или /salary/payments). */
@@ -88,8 +88,12 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
       />
 
       {editor && (
-        <CompensationStopForm
-          stop={editor.mode === 'edit' ? editor.stop : undefined}
+        <RegistryPeriodForm
+          title="Без проезда"
+          fromLabel="Без проезда с"
+          row={editor.mode === 'edit' ? editor.stop : undefined}
+          onAdd={payrollRegistryService.addStop}
+          onUpdate={payrollRegistryService.updateStop}
           onClose={() => setEditor(null)}
           onSaved={() => { void refresh(); }}
         />

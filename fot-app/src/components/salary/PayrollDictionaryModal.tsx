@@ -9,6 +9,7 @@ import { PayrollRatesEditor } from './PayrollRatesEditor';
 import { PayrollSectionAccessList } from './PayrollSectionAccessList';
 import { CompensationStopRegistry } from './registry/CompensationStopRegistry';
 import { DeductionRegistry } from './registry/DeductionRegistry';
+import { DormitoryAllowanceRegistry } from './registry/DormitoryAllowanceRegistry';
 import { HousingAllowanceRegistry } from './registry/HousingAllowanceRegistry';
 import { SupplementRegistry } from './registry/SupplementRegistry';
 import modal from './PayrollModal.module.css';
@@ -19,13 +20,14 @@ interface IPayrollDictionaryModalProps {
 }
 
 /** Окно таблицы поверх «Справочника»; открыто одно. */
-type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'housing' | 'deductions';
+type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'housing' | 'dormitory-allowance' | 'deductions';
 
 /**
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
  * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
- * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие», «Без проезда», «Доплата»;
- * «Доплата за проживание» и заголовок «Удержания» открывают свои таблицы — окном поверх.
+ * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие» (кто живёт), «Без проезда», «Доплата»;
+ * у заголовков «Удержания» («Сотрудники») и «Ставки» («Проживание», «Общежитие» — кому доплата) — свои таблицы
+ * окном поверх.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
@@ -73,7 +75,11 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
 
           <div className={`${modal.body} ${styles.columns}`}>
             <DeductionKindsEditor canEdit={canEdit} onOpenList={() => setOpened('deductions')} />
-            <PayrollRatesEditor canEdit={canEdit} onOpenHousing={() => setOpened('housing')} />
+            <PayrollRatesEditor
+              canEdit={canEdit}
+              onOpenHousing={() => setOpened('housing')}
+              onOpenDormitoryAllowance={() => setOpened('dormitory-allowance')}
+            />
             <PayrollSectionAccessList />
           </div>
 
@@ -81,6 +87,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
           {opened === 'stops' && <CompensationStopRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'supplements' && <SupplementRegistry canEdit={canEditTerms} onClose={close} />}
           {opened === 'housing' && <HousingAllowanceRegistry canEdit={canEditTerms} onClose={close} />}
+          {opened === 'dormitory-allowance' && <DormitoryAllowanceRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'deductions' && <DeductionRegistry canEdit={canEditTerms} onClose={close} />}
         </>
       )}
