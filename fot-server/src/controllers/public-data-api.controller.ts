@@ -53,8 +53,8 @@ export const publicDataApiController = {
    *   &from=YYYY-MM-DD&to=YYYY-MM-DD            — период, обязателен (до 366 дней)
    *   &limit=1..1000&offset=0                   — пагинация
    *
-   * Возвращает только безопасную часть СКУД-событий: время, направление и точку
-   * доступа. ФИО и номер карты намеренно не входят в контракт. Авторизация —
+   * Возвращает только безопасную часть СКУД-событий: время, направление, точку
+   * доступа и её тип (is_internal). ФИО и номер карты намеренно не входят в контракт. Авторизация —
    * data-api Bearer токен; ключу должна быть открыта таблица skud_events.
    */
   async getEmployeeEvents(req: Request, res: Response): Promise<void> {
@@ -136,8 +136,12 @@ export const publicDataApiController = {
         event_time: string;
         access_point: string | null;
         direction: 'entry' | 'exit' | null;
+        is_internal: boolean;
       }>(
-        `SELECT id, employee_id, event_at, event_date, event_time, access_point, direction
+        // is_internal — тип точки на дату события (миграция 305): внутренние проходы
+        // не открывают и не закрывают пару в расчёте посещаемости.
+        `SELECT id, employee_id, event_at, event_date, event_time, access_point, direction,
+                public.is_access_point_internal(COALESCE(access_point, ''), event_date) AS is_internal
            FROM skud_events
           WHERE employee_id = $1
             AND event_date >= $2
