@@ -18,7 +18,7 @@ import {
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import type { PayrollTableColumn, PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { formatPaidAmount } from '../../utils/payrollPaid';
+import { formatPaidAmount, paidPayout } from '../../utils/payrollPaid';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
@@ -222,7 +222,12 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       case 'accruals':
         return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
       case 'payout':
-        return <td key={column} className={styles.cellNumber}>{formatPaid(row.paid_total)}</td>;
+        // «К выплате» — начислено + удержано, как в «Своде».
+        return (
+          <td key={column} className={styles.cellNumber}>
+            {formatPaid(paidPayout({ accrued: row.paid_total ?? null, deducted: row.paid_deductions_total ?? null }))}
+          </td>
+        );
       case 'deductions': {
         const total = row.paid_deductions_total;
         const hasDetails = total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0;
@@ -234,7 +239,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                 type="button"
                 className={styles.deductionsButton}
                 aria-haspopup="dialog"
-                aria-label={`Удержания и доплаты: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
+                aria-label={`Удержания: ${row.full_name ?? 'сотрудник'}, ${formatPaid(total)} ₽`}
                 onClick={event => {
                   event.stopPropagation();
                   onOpenDeductions(row, event.currentTarget);

@@ -37,7 +37,7 @@ describe('скрытые столбцы таблицы условий оплат
 describe('столбцы «Расчётов»', () => {
   it('вместо оклада, премии, проживания и «Начислений» — «К выплате» и «Удержания»', () => {
     expect(PAYROLL_CALC_TABLE_COLUMNS.map(column => column.label)).toEqual([
-      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Удержания и доплаты',
+      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Удержания',
     ]);
     expect(PAYROLL_TERMS_TABLE_COLUMNS.map(column => column.key)).toEqual([
       'department', 'position', 'schedule', 'salary', 'bonus', 'housing', 'accruals',

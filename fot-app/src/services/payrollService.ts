@@ -70,7 +70,7 @@ export interface IPayrollTermsRow {
   accruals?: IPayrollMonthlyAccrual[] | null;
   /**
    * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽; null — сумм нет («—»).
-   * «К выплате» — итог «Начислено», как «Выплачено» в «Подробно» (удержания не вычитаются).
+   * Итог «Начислено»; «К выплате» — он плюс paid_deductions_total, как в «Своде».
    */
   paid_total?: number | null;
   /** Итог «Удержано»; 0 — суммы есть и дают ноль. */

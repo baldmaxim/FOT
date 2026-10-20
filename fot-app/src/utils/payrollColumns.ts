@@ -30,7 +30,7 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
   { key: 'payout', label: 'К выплате' },
-  { key: 'deductions', label: 'Удержания и доплаты' },
+  { key: 'deductions', label: 'Удержания' },
 ];
 
 /** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */

@@ -19,7 +19,7 @@ import styles from './PayrollPaidDeductionsModal.module.css';
 
 interface IPayrollPaidDeductionsModalProps {
   row: IPayrollTermsRow;
-  /** Период сумм строки — тот же, что под заголовком столбца «Удержания и доплаты». */
+  /** Период сумм строки — тот же, что под заголовком столбца «Удержания». */
   period: string;
   onClose: () => void;
 }
@@ -63,7 +63,7 @@ export const PayrollPaidDeductionsModal: FC<IPayrollPaidDeductionsModalProps> = 
         <>
           <header className={modal.header}>
             <div className={modal.headerText}>
-              <h2 id={titleId} className={modal.title}>Удержания и доплаты</h2>
+              <h2 id={titleId} className={modal.title}>Удержания</h2>
               <p className={styles.subtitle}>{row.full_name ?? '—'} · {period}</p>
             </div>
             <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Закрыть">
