@@ -11,6 +11,7 @@ vi.mock('../services/data-scope.service.js', () => scope);
 const vacation = vi.hoisted(() => ({
   getVacationSummary: vi.fn(),
   getVacationHistory: vi.fn(),
+  getVacationBalance: vi.fn(),
 }));
 
 vi.mock('../services/payroll/payroll-vacation.service.js', () => vacation);
@@ -49,6 +50,7 @@ describe('payrollVacationController.getByEmployee', () => {
     expect(res.statusCode).toBe(403);
     expect(vacation.getVacationSummary).not.toHaveBeenCalled();
     expect(vacation.getVacationHistory).not.toHaveBeenCalled();
+    expect(vacation.getVacationBalance).not.toHaveBeenCalled();
   });
 
   it('некорректный id — 403 без проверки скоупа', async () => {
@@ -60,25 +62,29 @@ describe('payrollVacationController.getByEmployee', () => {
     expect(scope.canAccessEmployeeInScope).not.toHaveBeenCalled();
   });
 
-  it('отдаёт сводку на сегодня по Москве и историю', async () => {
+  it('отдаёт сводку, остаток на сегодня по Москве и историю', async () => {
     const summary = { year: 2026, today: '2026-09-24', used_days: 9, planned_days: 5, unpaid_days: 3 };
+    const balance = { source: '1c', as_of: '2026-09-30', current_days: '7.21' };
     vacation.getVacationSummary.mockResolvedValueOnce(summary);
     vacation.getVacationHistory.mockResolvedValueOnce([]);
+    vacation.getVacationBalance.mockResolvedValueOnce(balance);
     const res = makeRes();
 
     await payrollVacationController.getByEmployee(makeReq('42'), res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ summary, history: [] });
+    expect(res.body.data).toEqual({ summary, history: [], balance });
     const [employeeId, today] = vacation.getVacationSummary.mock.calls[0];
     expect(employeeId).toBe(42);
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(vacation.getVacationBalance).toHaveBeenCalledWith(42, today);
     expect(vacation.getVacationHistory).toHaveBeenCalledWith(42);
   });
 
   it('ошибка БД — 500 с понятным текстом', async () => {
     vacation.getVacationSummary.mockRejectedValueOnce(new Error('db down'));
     vacation.getVacationHistory.mockResolvedValueOnce([]);
+    vacation.getVacationBalance.mockResolvedValueOnce(null);
     const res = makeRes();
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 

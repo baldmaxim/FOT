@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // Отпуск и история зарплаты в карточке «Условия оплаты» на настоящем PostgreSQL:
-// приоритеты дня как в табеле, праздники ст. 112, склейка изменений оклада, миграция 286.
+// приоритеты дня как в табеле, праздники ст. 112, перемычки выходных, остаток от 1С (миграция 323),
+// склейка изменений оклада, миграция 286.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
 
@@ -29,7 +30,7 @@ vi.mock('../../config/postgres.js', async () => {
   };
 });
 
-import { getVacationHistory, getVacationSummary } from './payroll-vacation.service.js';
+import { getVacationBalance, getVacationHistory, getVacationSummary } from './payroll-vacation.service.js';
 import { getSalaryChanges } from './payroll-terms.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
@@ -84,12 +85,39 @@ const DAYS: DayRow[] = [
   ...range('2026-08-01', '2026-08-03', date => day(date, 'unpaid', 'manual')),
 ];
 
+// Сотрудник 3 — перемычки: руководитель отметил отпуск только по рабочим дням.
+const BRIDGE_DAYS: DayRow[] = [
+  // Пн–Пт, Пн–Чт, 12.06 (Пт) — праздник, Пн–Пт: Сб/Вс и 12–14.06 — перемычки, один период 01–19.06.
+  ...range('2026-06-01', '2026-06-05', date => day(date, 'vacation', 'manual')),
+  ...range('2026-06-08', '2026-06-11', date => day(date, 'vacation', 'manual')),
+  ...range('2026-06-15', '2026-06-19', date => day(date, 'vacation', 'manual')),
+  // Работал в субботу 04.07 — выходные 04–05.07 не отпуск.
+  day('2026-07-03', 'vacation', 'manual'),
+  day('2026-07-04', 'work', 'manual'),
+  day('2026-07-06', 'vacation', 'manual'),
+  // Проход по СКУД в субботу 11.07 — тоже не отпуск.
+  day('2026-07-10', 'vacation', 'manual'),
+  day('2026-07-13', 'vacation', 'manual'),
+  // Отпуск через 30.09: по остатку 1С списан по 30.09, октябрьские 9 дней — в ФОТ.
+  ...range('2026-09-28', '2026-10-09', date => day(date, 'vacation', 'leave_request', '300')),
+];
+
 describe.skipIf(!PG_URL)('отпуск и история зарплаты на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_settings, payroll_item_types, payroll_compensation_terms,
+        payroll_vacation_balances, production_calendar, skud_daily_summary,
         attendance_adjustments, leave_requests, user_profiles, org_departments, employees CASCADE;
-      CREATE TABLE employees (id integer PRIMARY KEY);
+      CREATE TABLE employees (id integer PRIMARY KEY, hire_date date, dismissal_date date);
+      -- Колонки производственного календаря и СКУД, которые читает перемычка.
+      CREATE TABLE production_calendar (
+        year integer NOT NULL, month integer NOT NULL, holidays date[], mandatory_holidays date[],
+        UNIQUE (year, month)
+      );
+      CREATE TABLE skud_daily_summary (
+        employee_id bigint NOT NULL, date date NOT NULL, total_minutes integer, is_present boolean,
+        UNIQUE (employee_id, date)
+      );
       CREATE TABLE org_departments (id uuid PRIMARY KEY);
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE leave_requests (
@@ -111,7 +139,12 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
         metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
         UNIQUE (employee_id, work_date, source_type, source_id)
       );
-      INSERT INTO employees (id) VALUES (1), (2);
+      INSERT INTO employees (id, hire_date) VALUES
+        (1, '2020-01-01'), (2, '2020-01-01'), (3, '2025-12-15'), (4, '2026-10-15'), (5, '2026-05-01');
+      INSERT INTO production_calendar (year, month, holidays, mandatory_holidays) VALUES
+        (2026, 6, '{2026-06-12}', '{2026-06-12}');
+      INSERT INTO skud_daily_summary (employee_id, date, total_minutes, is_present) VALUES
+        (3, '2026-07-11', 240, true);
       INSERT INTO user_profiles (id, full_name) VALUES
         ('${REVIEWER}', 'Иванов И.И.'), ('${AUTHOR}', 'Петрова А.А.');
       INSERT INTO leave_requests (id, employee_id, reviewer_id, reviewed_at) VALUES
@@ -119,15 +152,19 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
         (101, 1, '${REVIEWER}', '2026-04-20T09:00:00Z'),
         (102, 1, NULL, NULL),
         (103, 1, '${REVIEWER}', '2026-09-01T09:00:00Z'),
-        (104, 1, NULL, NULL);
+        (104, 1, NULL, NULL),
+        (300, 3, '${REVIEWER}', '2026-09-20T09:00:00Z');
     `);
-    for (const [date, status, source, sourceId, approval, updatedAt, metadata] of DAYS) {
-      await pg.pool!.query(
-        `INSERT INTO attendance_adjustments
-           (employee_id, work_date, status, source_type, source_id, approval_status, updated_at, metadata)
-         VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb)`,
-        [date, status, source, sourceId, approval, updatedAt, metadata],
-      );
+    const unpaidNovember = range('2026-11-02', '2026-11-21', date => day(date, 'unpaid', 'manual'));
+    for (const [employeeId, rows] of [[1, DAYS], [3, BRIDGE_DAYS], [4, unpaidNovember]] as const) {
+      for (const [date, status, source, sourceId, approval, updatedAt, metadata] of rows) {
+        await pg.pool!.query(
+          `INSERT INTO attendance_adjustments
+             (employee_id, work_date, status, source_type, source_id, approval_status, updated_at, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+          [employeeId, date, status, source, sourceId, approval, updatedAt, metadata],
+        );
+      }
     }
     // Чужой отпуск в тот же день не должен попасть в сводку сотрудника 1.
     await pg.pool!.query(
@@ -138,6 +175,10 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
     await pg.pool!.query(migration('271_payroll_terms.sql'));
     await pg.pool!.query(migration('282_payroll_terms_bonus_housing.sql'));
     await pg.pool!.query(migration('286_payroll_terms_compensations.sql'));
+    await pg.pool!.query(migration('323_payroll_vacation_balances.sql'));
+    await pg.pool!.query(
+      `INSERT INTO payroll_vacation_balances (employee_id, as_of_date, days) VALUES (3, '2026-09-30', 6.95)`,
+    );
   });
 
   afterAll(async () => {
@@ -166,6 +207,52 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
       { start: '2026-03-11', end: '2026-03-11', status: 'vacation', days: 1, holidays: 0, source: 'timesheet', request: null, reviewer: null },
       { start: '2025-12-29', end: '2026-01-12', status: 'vacation', days: 15, holidays: 8, source: 'leave_request', request: 102, reviewer: null },
     ]);
+  });
+
+  it('перемычки: выходные и праздник между днями отпуска — отпуск, рабочая суббота и хвост — нет', async () => {
+    const history = await getVacationHistory(3);
+
+    expect(history.map(p => ({ start: p.start_date, end: p.end_date, days: p.calendar_days, holidays: p.holiday_days })))
+      .toEqual([
+        { start: '2026-09-28', end: '2026-10-09', days: 12, holidays: 0 },
+        { start: '2026-07-13', end: '2026-07-13', days: 1, holidays: 0 },
+        { start: '2026-07-10', end: '2026-07-10', days: 1, holidays: 0 },
+        { start: '2026-07-06', end: '2026-07-06', days: 1, holidays: 0 },
+        { start: '2026-07-03', end: '2026-07-03', days: 1, holidays: 0 },
+        // 01–19.06 одним периодом: 6–7.06 и 12–14.06 добавлены, 12.06 — праздник; 20–21.06 — хвост, нет.
+        { start: '2026-06-01', end: '2026-06-19', days: 19, holidays: 1 },
+      ]);
+
+    // 18 дней июня + 4 дня июля + 28–30.09; 1–9.10 — запланированы.
+    const summary = await getVacationSummary(3, '2026-09-30');
+    expect(summary.used_days).toBe(25);
+    expect(summary.planned_days).toBe(9);
+  });
+
+  it('остаток: 1С на 30.09 минус отпуск после 30.09, месяц начисляется по окончании', async () => {
+    expect(await getVacationBalance(3, '2026-10-21')).toEqual({
+      source: '1c', as_of: '2026-09-30', opening_days: '6.95', until: '2026-10-21',
+      accrued_months: 0, accrued_days: '0.00', used_days: 9, unpaid_excess_days: 0, current_days: '-2.05',
+    });
+    expect((await getVacationBalance(3, '2026-10-31'))?.current_days).toBe('0.28');
+  });
+
+  it('остаток нового сотрудника — с даты приёма, «без сохранения» сверх 14 дней сдвигает начисление', async () => {
+    // Принят 15.10 (после выгрузки 30.09). К 31.12 без ст. 121 было бы 3 мес. (хвост 17 дней), 6 дней сверх 14 — 2.
+    expect(await getVacationBalance(4, '2026-12-31')).toEqual({
+      source: 'hire', as_of: '2026-10-15', opening_days: '0.00', until: '2026-12-31',
+      accrued_months: 2, accrued_days: '4.66', used_days: 0, unpaid_excess_days: 6, current_days: '4.66',
+    });
+  });
+
+  it('принятый до выгрузки без строки 1С — остатка нет', async () => {
+    expect(await getVacationBalance(5, '2026-10-21')).toBeNull();
+  });
+
+  it('миграция 323 повторно применяется без ошибок', async () => {
+    await pg.pool!.query(migration('323_payroll_vacation_balances.sql'));
+    const { rows } = await pg.pool!.query('SELECT count(*)::int AS n FROM payroll_vacation_balances');
+    expect(rows[0].n).toBe(1);
   });
 
   it('миграция 286 повторно применяется без ошибок и не пускает отрицательные суммы', async () => {

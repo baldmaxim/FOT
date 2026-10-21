@@ -195,9 +195,27 @@ export interface IVacationPeriod {
   reviewed_at: string | null;
 }
 
+/**
+ * Остаток ежегодного отпуска на сегодня: 1С на as_of (или 0 с даты приёма) + 2,33 за месяц − отгулено.
+ * Дни — строкой до сотых, как NUMERIC.
+ */
+export interface IVacationBalance {
+  source: '1c' | 'hire';
+  as_of: string;
+  opening_days: string;
+  until: string;
+  accrued_months: number;
+  accrued_days: string;
+  used_days: number;
+  unpaid_excess_days: number;
+  current_days: string;
+}
+
 export interface IEmployeeVacation {
   summary: IVacationSummary;
   history: IVacationPeriod[];
+  /** null — остатка 1С нет и принят не после выгрузки: не с чего считать. */
+  balance: IVacationBalance | null;
 }
 
 /** Статья «Оплачено» — столбец «Сводной ведомости» ЗУП (подписи и группы — utils/payrollPaid). */
@@ -408,7 +426,7 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Сколько дней отпуска использовано в текущем году и история отпусков по табелю. */
+  /** Сколько дней отпуска использовано в текущем году, остаток и история отпусков по табелю. */
   getVacation: async (employeeId: number, signal?: AbortSignal): Promise<IEmployeeVacation> => {
     const res = await apiClient.get<IApiResponse<IEmployeeVacation>>(
       `/payroll/vacation/employee/${employeeId}`,

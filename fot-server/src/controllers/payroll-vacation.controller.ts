@@ -6,10 +6,14 @@ import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
-import { getVacationHistory, getVacationSummary } from '../services/payroll/payroll-vacation.service.js';
+import {
+  getVacationBalance,
+  getVacationHistory,
+  getVacationSummary,
+} from '../services/payroll/payroll-vacation.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
-/** GET /api/payroll/vacation/employee/:empId — сколько отгулено и история отпусков. */
+/** GET /api/payroll/vacation/employee/:empId — сколько отгулено, остаток и история отпусков. */
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
@@ -17,11 +21,13 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    const [summary, history] = await Promise.all([
-      getVacationSummary(employeeId, moscowTodayIso()),
+    const today = moscowTodayIso();
+    const [summary, history, balance] = await Promise.all([
+      getVacationSummary(employeeId, today),
       getVacationHistory(employeeId),
+      getVacationBalance(employeeId, today),
     ]);
-    res.json({ success: true, data: { summary, history } });
+    res.json({ success: true, data: { summary, history, balance } });
   } catch (err) {
     console.error('payrollVacation.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения отпусков сотрудника' });
