@@ -110,6 +110,11 @@ interface IBulkCellCoord {
 
 const EMPTY_CELL_SELECTION = new Set<string>();
 
+// Группа «по объектам» для сотрудников без единой объектной записи за период
+// (например, все дни «Н»). Только экран: в выгрузки 1С не идёт.
+const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
+const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
+
 const getEmployeeBulkRowKey = (employeeId: number): string => `employee:${employeeId}`;
 const getObjectBulkRowKey = (employeeId: number, objectKey: string): string => `object:${employeeId}:${encodeURIComponent(objectKey)}`;
 const getEmployeeBulkCellKey = (employeeId: number, day: number): string => `${getEmployeeBulkRowKey(employeeId)}:${day}`;
@@ -656,6 +661,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       });
     }
 
+    // Сотрудники без объектных записей в видимых днях — синтетической группой внизу:
+    // клетки берут дневной статус (Н/От/Б) из dailyEntries, часы 0.
+    const presentedEmployeeIds = new Set<number>();
+    for (const group of groups.values()) {
+      for (const row of group.rows) presentedEmployeeIds.add(row.employee.id);
+    }
+    for (const employee of employees) {
+      if (presentedEmployeeIds.has(employee.id)) continue;
+      presentedEmployeeIds.add(employee.id);
+      const group = ensureGroup(UNASSIGNED_OBJECT_KEY, null, UNASSIGNED_OBJECT_NAME, true);
+      ensureRow(group, employee, true);
+    }
+
     return [...groups.values()]
       .map(group => {
         const rows = [...group.rows].sort((left, right) => compareEmployeeNames(left.employee, right.employee));
@@ -668,7 +686,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         }
         return { ...group, rows, totalHours };
       })
-      .sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru'));
+      .sort((left, right) => {
+        const leftUnassigned = left.object_key === UNASSIGNED_OBJECT_KEY ? 1 : 0;
+        const rightUnassigned = right.object_key === UNASSIGNED_OBJECT_KEY ? 1 : 0;
+        if (leftUnassigned !== rightUnassigned) return leftUnassigned - rightUnassigned;
+        return left.object_name.localeCompare(right.object_name, 'ru');
+      });
     // showActualHours влияет на getObjectVisibleHours внутри getObjectCellHours.
   }, [days, employees, employeeRows, objectEntries, year, month, showActualHours]);
 
