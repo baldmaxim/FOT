@@ -25,5 +25,7 @@ router.post('/stays', dormitoryEdit, c.add);
 router.patch('/stays/:id', dormitoryEdit, c.update);
 router.delete('/stays/:id', dormitoryEdit, c.remove);
 router.get('/employees/search', dormitoryEdit, c.searchEmployees);
+// Подсказки «Адрес / номер» — только окну добавления и правки.
+router.get('/addresses', dormitoryEdit, c.listAddresses);
 
 export default router;

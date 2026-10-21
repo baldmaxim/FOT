@@ -4,7 +4,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../../api/client';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
-import { DORMITORY_STAYS_KEY, dormitoryService, type IDormitoryStay } from '../../../services/dormitoryService';
+import {
+  DORMITORY_ADDRESSES_KEY,
+  DORMITORY_STAYS_KEY,
+  dormitoryService,
+  type IDormitoryStay,
+} from '../../../services/dormitoryService';
 import { DORMITORY_PRESET_ADDRESSES, dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
 import { formatDate } from '../../../utils/formatMoney';
 import { DormitoryStayModal } from './DormitoryStayModal';
@@ -30,15 +35,19 @@ export const DormitoryTab: FC = () => {
     queryFn: ({ signal }) => dormitoryService.list(signal),
     staleTime: 0,
   });
+  // Подсказки «Адрес / номер»: 9 общежитий и все когда-либо сохранённые адреса — нужны только окну правки.
+  const addressesQuery = useQuery({
+    queryKey: DORMITORY_ADDRESSES_KEY,
+    queryFn: ({ signal }) => dormitoryService.listAddresses(signal),
+    enabled: canEdit,
+    staleTime: 0,
+  });
   const addresses = useMemo(
-    () => dormitoryAddressOptions([
-      ...DORMITORY_PRESET_ADDRESSES,
-      ...(staysQuery.data ?? []).map(stay => stay.address),
-    ]),
-    [staysQuery.data],
+    () => dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, ...(addressesQuery.data ?? [])]),
+    [addressesQuery.data],
   );
 
-  // Префикс общий с таблицей «Справочника» «Зарплаты» — она тоже перечитается.
+  // Префикс общий с таблицей «Справочника» «Зарплаты» и подсказками адресов — они тоже перечитаются.
   const refresh = () => queryClient.invalidateQueries({ queryKey: DORMITORY_STAYS_KEY });
 
   const handleDelete = async (stay: IDormitoryStay) => {

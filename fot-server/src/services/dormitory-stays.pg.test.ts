@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 // «Общежитие» (миграция 314) и ставка «Проживание общежития» с кодом (миграция 313) на настоящем
 // PostgreSQL: чистая БД и БД с уже заведённой ставкой, повторный запуск, пересечение периодов,
 // въезд в день выезда, сервис общежития и запрет удалить/переименовать ставку с кодом.
+// Сохранённые адреса (миграция 319): перенос из проживаний, запоминание при записи, удаление их не трогает.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -49,7 +50,7 @@ vi.mock('../config/contractor.js', () => ({
 }));
 
 import {
-  addStay, deleteStay, getEmployeeState, listStays, searchCandidates, updateStay,
+  addStay, deleteStay, getEmployeeState, listAddresses, listStays, searchCandidates, updateStay,
 } from './dormitory-stays.service.js';
 import { deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 
@@ -63,7 +64,7 @@ const D2 = '00000000-0000-0000-0000-0000000000d2';
 describe.skipIf(!PG_URL)('общежитие и ставка с кодом на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS employee_dormitory_stays, payroll_rates, role_page_access, access_pages,
+      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rates, role_page_access, access_pages,
         employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
@@ -162,6 +163,19 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     ]);
   });
 
+  it('319: адреса прежних проживаний переносятся (регистр — один адрес, первое написание); повтор безопасен', async () => {
+    await run(`INSERT INTO employee_dormitory_stays (employee_id, check_in, check_out, address) VALUES
+      (6, '2025-01-01', '2025-02-01', 'Общ1'), (6, '2025-03-01', '2025-04-01', 'общ1'), (6, '2025-05-01', '2025-06-01', 'Общ. Свободы 35')`);
+    await run(migration('319_dormitory_addresses.sql'));
+    await run(migration('319_dormitory_addresses.sql'));
+    expect((await listAddresses()).sort()).toEqual(['Общ. Свободы 35', 'Общ1']);
+    // Записи удалили — адреса остаются.
+    await run(`DELETE FROM employee_dormitory_stays`);
+    expect(await listAddresses()).toHaveLength(2);
+    await expect(run(`INSERT INTO dormitory_addresses (address) VALUES ('  ')`)).rejects.toThrow(/dormitory_address_text/);
+    await run(`DELETE FROM dormitory_addresses`);
+  });
+
   it('периоды не пересекаются; въезд в день выезда — можно; выезд = въезд — нельзя', async () => {
     const first = await addStay(1, { check_in: '2026-09-01', check_out: '2026-10-10', address: 'Общежитие №2, комн. 14' });
     expect(first).toMatchObject({
@@ -205,6 +219,22 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await deleteStay(open.id)).toMatchObject({ id: open.id, check_out: '2026-11-30' });
     expect(await deleteStay(open.id)).toBeNull();
     expect(await listStays({})).toHaveLength(2);
+  });
+
+  it('адреса: запоминаются при добавлении и правке, без повторов; пересечение адрес не пишет; удаление не стирает', async () => {
+    // Из прошлых тестов: «Общежитие №2, комн. 14» (добавление), «Общежитие №3» (добавление, удалено выше),
+    // «Общежитие №2» (добавление); «Общежитие №4» и «Внутри» — отказ по пересечению.
+    expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2']);
+
+    const [stay] = await listStays({ employeeIds: [2] });
+    await updateStay(stay.id, { check_in: stay.check_in, check_out: stay.check_out, address: 'Общ. Нагатинская 34' });
+    await updateStay(stay.id, { check_in: stay.check_in, check_out: stay.check_out, address: 'ОБЩ. НАГАТИНСКАЯ 34' });
+    expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2', 'Общ. Нагатинская 34']);
+    expect(await addStay(2, { check_in: '2026-09-16', check_out: '2026-09-18', address: 'Пересечение' })).toBe('overlap');
+    expect(await listAddresses()).not.toContain('Пересечение');
+
+    await deleteStay(stay.id);
+    expect(await listAddresses()).toContain('Общ. Нагатинская 34');
   });
 
   it('поиск: только работающие, не в архиве, не подрядчики, в охвате', async () => {

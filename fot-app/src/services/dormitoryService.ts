@@ -34,6 +34,8 @@ interface IApiResponse<T> { success: boolean; data: T }
 /** Общий префикс: правка во вкладке кадров перечитывает и таблицу «Справочника». */
 export const DORMITORY_STAYS_KEY = ['dormitory-stays'] as const;
 export const PAYROLL_DORMITORY_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'payroll'] as const;
+/** Под тем же префиксом: сохранение проживания перечитывает и подсказки адресов. */
+export const DORMITORY_ADDRESSES_KEY = [...DORMITORY_STAYS_KEY, 'addresses'] as const;
 
 export const dormitoryService = {
   /** «Управление кадрами» → «Общежитие»: охват списка кадров. */
@@ -53,6 +55,12 @@ export const dormitoryService = {
       `/dormitory/employees/search?q=${encodeURIComponent(search)}`,
       { signal },
     );
+    return res.data;
+  },
+
+  /** Сохранённые адреса (миграция 319) — подсказки «Адрес / номер»; не пропадают вместе с проживаниями. */
+  listAddresses: async (signal?: AbortSignal): Promise<string[]> => {
+    const res = await apiClient.get<IApiResponse<string[]>>('/dormitory/addresses', { signal });
     return res.data;
   },
 

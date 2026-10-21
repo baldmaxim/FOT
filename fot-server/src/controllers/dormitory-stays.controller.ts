@@ -17,6 +17,7 @@ import {
   deleteStay,
   getEmployeeState,
   getStay,
+  listAddresses,
   listStays,
   searchCandidates,
   updateStay,
@@ -142,6 +143,16 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
   } catch (err) {
     console.error('dormitory.searchEmployees error:', err);
     res.status(500).json({ success: false, error: 'Ошибка поиска' });
+  }
+};
+
+/** GET /api/dormitory/addresses — сохранённые адреса для подсказок «Адрес / номер» (миграция 319). */
+const listSavedAddresses = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ success: true, data: await listAddresses() });
+  } catch (err) {
+    console.error('dormitory.listAddresses error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения адресов' });
   }
 };
 
@@ -276,6 +287,7 @@ export const dormitoryStaysController = {
   list,
   listForPayroll,
   searchEmployees,
+  listAddresses: listSavedAddresses,
   add,
   update,
   remove,

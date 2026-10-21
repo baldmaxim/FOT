@@ -6,6 +6,7 @@ const svc = vi.hoisted(() => ({
   listStays: vi.fn(),
   getStay: vi.fn(),
   searchCandidates: vi.fn(),
+  listAddresses: vi.fn(),
   getEmployeeState: vi.fn(),
   addStay: vi.fn(),
   updateStay: vi.fn(),
@@ -88,6 +89,13 @@ describe('список', () => {
     scope.resolvePayrollReadableDepartmentIds.mockResolvedValueOnce('all');
     await c.listForPayroll(makeReq(), makeRes());
     expect(svc.listStays).toHaveBeenLastCalledWith({ departmentIds: null });
+  });
+
+  it('сохранённые адреса — списком для подсказок', async () => {
+    svc.listAddresses.mockResolvedValue(['Общ. База Мытищи', 'Общежитие №2']);
+    const res = makeRes();
+    await c.listAddresses(makeReq(), res);
+    expect(res.body).toEqual({ success: true, data: ['Общ. База Мытищи', 'Общежитие №2'] });
   });
 
   it('поиск — от 2 символов, в охвате списка кадров', async () => {

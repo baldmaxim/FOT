@@ -4,6 +4,8 @@
  * Ведётся во вкладке «Управления кадрами», только чтение — в «Зарплате» («Справочник» → кнопка
  * «Общежитие»). Строка — одно проживание; периоды одного сотрудника не пересекаются
  * (EXCLUDE в БД, диапазон [въезд, выезд)). Отдел и должность — текущие, как в списке кадров.
+ * Адрес добавленного или исправленного проживания запоминается в dormitory_addresses (миграция 319) — подсказки
+ * поля «Адрес / номер»; удаление проживания адрес не трогает.
  */
 import type { PoolClient } from 'pg';
 
@@ -124,15 +126,30 @@ export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEm
     [employeeId, await getContractorRootId()],
   );
 
-/** Добавить проживание; пересекается с другим проживанием сотрудника — 'overlap'. */
+/** Запомнить адрес для подсказок; такой уже есть (без учёта регистра) — остаётся прежнее написание. */
+const REMEMBER_ADDRESS_SQL = `INSERT INTO dormitory_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING`;
+
+/** Сохранённые адреса — подсказки поля «Адрес / номер», в порядке добавления. */
+export const listAddresses = async (): Promise<string[]> =>
+  (await query<{ address: string }>(`SELECT address FROM dormitory_addresses ORDER BY id`)).map(row => row.address);
+
+/**
+ * Добавить проживание и запомнить его адрес — одним запросом: пересечение с другим проживанием
+ * сотрудника ('overlap') отменяет и адрес.
+ */
 export const addStay = async (
   employeeId: number,
   input: IDormitoryStayInput,
 ): Promise<IDormitoryStay | 'overlap'> => {
   try {
     const row = await queryOne<{ id: number }>(
-      `INSERT INTO employee_dormitory_stays (employee_id, check_in, check_out, address)
-       VALUES ($1, $2::date, $3::date, $4) RETURNING id`,
+      `WITH stay AS (
+         INSERT INTO employee_dormitory_stays (employee_id, check_in, check_out, address)
+         VALUES ($1, $2::date, $3::date, $4) RETURNING id
+       ), remembered AS (
+         INSERT INTO dormitory_addresses (address) VALUES ($4) ON CONFLICT DO NOTHING
+       )
+       SELECT id FROM stay`,
       [employeeId, input.check_in, input.check_out, input.address],
     );
     const stay = row ? await getStay(row.id) : null;
@@ -162,6 +179,7 @@ export const updateStay = async (
           WHERE id = $1`,
         [id, input.check_in, input.check_out, input.address],
       );
+      await client.query(REMEMBER_ADDRESS_SQL, [input.address]);
       const after = await readStay(client, id, false);
       return after ? { before, after } : null;
     });
@@ -171,7 +189,7 @@ export const updateStay = async (
   }
 };
 
-/** Удалить проживание; его нет — null. */
+/** Удалить проживание (адрес в подсказках остаётся); его нет — null. */
 export const deleteStay = async (id: number): Promise<IDormitoryStay | null> =>
   withTransaction(async client => {
     const before = await readStay(client, id, true);

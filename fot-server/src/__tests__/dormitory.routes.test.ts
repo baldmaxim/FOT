@@ -84,6 +84,7 @@ const send = (method: 'get' | 'post' | 'patch' | 'delete', url: string, roleCode
 const READS: Array<['get' | 'post', string]> = [['get', '/api/dormitory/stays'], ['post', '/api/dormitory/stays/export']];
 const WRITES: Array<['get' | 'post' | 'patch' | 'delete', string]> = [
   ['get', '/api/dormitory/employees/search?q=Кар'],
+  ['get', '/api/dormitory/addresses'],
   ['post', '/api/dormitory/stays'],
   ['patch', '/api/dormitory/stays/7'],
   ['delete', '/api/dormitory/stays/7'],
@@ -95,7 +96,7 @@ beforeEach(() => {
 });
 
 describe('права вкладки «Общежитие»', () => {
-  it('«Просмотр»: список и выгрузка — да, добавление, правка, удаление и поиск — 403', async () => {
+  it('«Просмотр»: список и выгрузка — да, добавление, правка, удаление, поиск и адреса — 403', async () => {
     for (const [method, url] of READS) {
       expect((await send(method, url, 'hr')).status, `${method} ${url}`).toBe(200);
     }
@@ -110,7 +111,7 @@ describe('права вкладки «Общежитие»', () => {
       expect((await send(method, url, 'hr_admin')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual([
-      'dormitory.list', 'dormitory.exportTable', 'dormitory.searchEmployees',
+      'dormitory.list', 'dormitory.exportTable', 'dormitory.searchEmployees', 'dormitory.listAddresses',
       'dormitory.add', 'dormitory.update', 'dormitory.remove',
     ]);
   });
