@@ -6,14 +6,14 @@ import { formatPayrollMoney } from './payrollFormat';
 import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
 
 /**
- * Таблица проживаний: «Проживание» «Управления кадрами» (общежития и квартиры — с видом и суммой) и «Общежитие»
- * в «Справочнике» «Зарплаты» (только общежития). Столбцы для экрана, сортировки, фильтров и выгрузки в xlsx
- * (общие функции — в tableView.ts).
+ * Таблица проживаний «Проживание» «Управления кадрами» (общежития и квартиры — с видом и суммой): столбцы для
+ * экрана, сортировки, фильтров и выгрузки в xlsx (общие функции — в tableView.ts). «Общежитие» «Справочника»
+ * «Зарплаты» — своя таблица (payrollRegistries.ts).
  */
 
 const orDash = (value: string | null): string => value || '—';
 
-export const DORMITORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryStay>> = [
+const DORMITORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryStay>> = [
   {
     key: 'full_name',
     label: 'ФИО',
@@ -103,5 +103,4 @@ const buildExport = (title: string, columns: ReadonlyArray<IRegistryColumn<IDorm
     });
   };
 
-export const buildDormitoryExport = buildExport('Общежитие', DORMITORY_COLUMNS);
 export const buildHousingStaysExport = buildExport('Проживание', HOUSING_STAY_COLUMNS);

@@ -1,3 +1,4 @@
+import type { IDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
@@ -121,19 +122,47 @@ export const COMPENSATION_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensat
   },
 ];
 
-/** Шесть столбцов: отдел и должность уже, как у «Доплаты», — без прокрутки в окне на 1280px. */
-export const DORMITORY_ALLOWANCE_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryAllowanceRow>> = [
-  ...employeeColumns<IDormitoryAllowanceRow>({ department: 112, position: 144 }),
-  // Заголовок одной строкой: «ДОПЛАТА С» + стрелка и воронка.
-  dateColumn<IDormitoryAllowanceRow>('date_from', 'Доплата с', row => row.date_from, 150),
+/**
+ * Строка таблицы «Общежитие»: проживание в общежитии (ведут кадры, здесь только просмотр) или «Доплата за
+ * общежитие» — общежитие не назначено, платят значение ставки.
+ */
+export interface IDormitoryRegistryRow {
+  /** stay:<id> / allowance:<id> — id двух таблиц могут совпасть. */
+  key: string;
+  full_name: string;
+  department: string | null;
+  position: string | null;
+  /** Адрес общежития; у доплаты — null. */
+  address: string | null;
+  /** Въезд или «доплата с». */
+  date_from: string;
+  /** Выезд (в этот день уже не живёт) или «по» доплаты включительно; null — живёт / бессрочно. */
+  date_to: string | null;
+  /** Только у доплаты: значение ставки «Доплата за общежитие», не задано — null. */
+  amount: string | null;
+  /** Строка доплаты — её правят и убирают; у проживания null. */
+  allowance: IDormitoryAllowanceRow | null;
+}
+
+const NOT_ASSIGNED = 'Не назначено';
+
+/** Семь столбцов: отдел и должность уже, как у «Доплаты», — без прокрутки в окне на 1280px. */
+export const DORMITORY_REGISTRY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryRegistryRow>> = [
+  ...employeeColumns<IDormitoryRegistryRow>({ department: 112, position: 144 }),
   {
-    // Пусто — бессрочно: доплату ещё не прекратили.
+    key: 'address', label: 'Общежитие', type: 'text', width: 152,
+    text: row => (row.allowance ? NOT_ASSIGNED : orDash(row.address)),
+    sortValue: row => (row.allowance ? NOT_ASSIGNED : row.address),
+  },
+  dateColumn<IDormitoryRegistryRow>('date_from', 'С', row => row.date_from),
+  {
+    // Пусто: живёт — «—», доплату ещё не прекратили — «бессрочно».
     key: 'date_to', label: 'По', type: 'text', width: 112, nowrap: true,
-    text: row => (row.date_to ? formatDate(row.date_to) : 'бессрочно'),
+    text: row => (row.date_to ? formatDate(row.date_to) : (row.allowance ? 'бессрочно' : '—')),
     sortValue: row => row.date_to,
   },
-  // Значение ставки «Доплата за общежитие» — одно на всех; не задано — «—».
-  moneyColumn<IDormitoryAllowanceRow>('Сумма, ₽/мес', row => row.amount),
+  // Значение ставки — одно на всех; у живущих и пока ставка не задана — «—».
+  moneyColumn<IDormitoryRegistryRow>('Доплата, ₽/мес', row => row.amount),
 ];
 
 /** Снимок xlsx таблицы: «Название_2026-10-19.xlsx», подзаголовок — дата выгрузки. */
@@ -152,7 +181,7 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
 export const buildHousingExport = buildSnapshot('Доплата за проживание', HOUSING_COLUMNS);
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
-export const buildDormitoryAllowanceExport = buildSnapshot('Доплата за общежитие', DORMITORY_ALLOWANCE_COLUMNS);
+export const buildDormitoryRegistryExport = buildSnapshot('Общежитие', DORMITORY_REGISTRY_COLUMNS);
 
 /**
  * Ключ строки «Доплаты»: у плановой — версия журнала (у сотрудника бывают прошлые периоды; старый бэкенд
@@ -269,3 +298,40 @@ export const dormitoryAllowanceInMonths = (row: IDormitoryAllowanceRow, months: 
     && !row.dormitory_stays.some(stay => stayTouchesMonth(stay, month))
   ))
 );
+
+/**
+ * Строки таблицы «Общежитие» в выбранных месяцах: кто живёт в общежитии (проживание задевает месяц) и кому
+ * «Доплата за общежитие» (правило dormitoryAllowanceInMonths). «Весь период» — все строки.
+ */
+export const buildDormitoryRegistryRows = (
+  stays: ReadonlyArray<IDormitoryStay>,
+  allowances: ReadonlyArray<IDormitoryAllowanceRow>,
+  months: ReadonlyArray<string>,
+): IDormitoryRegistryRow[] => [
+  ...stays
+    .filter(stay => months.length === 0 || months.some(month => stayTouchesMonth(stay, month)))
+    .map(stay => ({
+      key: `stay:${stay.id}`,
+      full_name: stay.full_name,
+      department: stay.department,
+      position: stay.position,
+      address: stay.address,
+      date_from: stay.check_in,
+      date_to: stay.check_out,
+      amount: null,
+      allowance: null,
+    })),
+  ...allowances
+    .filter(row => dormitoryAllowanceInMonths(row, months))
+    .map(row => ({
+      key: `allowance:${row.id}`,
+      full_name: row.full_name,
+      department: row.department,
+      position: row.position,
+      address: null,
+      date_from: row.date_from,
+      date_to: row.date_to,
+      amount: row.amount,
+      allowance: row,
+    })),
+];

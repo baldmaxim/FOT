@@ -87,7 +87,6 @@ export const DormitoryTab: FC = () => {
         onEdit={canEdit ? stay => setEditor({ mode: 'edit', stay }) : undefined}
         onDelete={canEdit ? stay => { void handleDelete(stay); } : undefined}
         busyId={deletingId}
-        withApartments
       />
 
       {editor && (

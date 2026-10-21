@@ -28,7 +28,7 @@ interface IPayrollDictionarySectionProps {
   onDelete: (id: number) => Promise<void>;
   /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
-  /** Кнопки таблиц сотрудников рядом с заголовком: у «Удержаний» — одна, у «Ставок» — по таблице на ставку. */
+  /** Кнопки таблиц сотрудников рядом с заголовком: у «Удержаний» и «Ставок» — по одной. */
   lists?: ReadonlyArray<IPayrollDictionaryList>;
   /** Передан — у каждой строки «+», раскрывающий под ней этот блок (подвиды вида удержания, миграция 321). */
   renderDetails?: (item: IPayrollDictionaryItem) => ReactNode;
@@ -40,7 +40,7 @@ interface IPayrollDictionarySectionProps {
 
 /** Кнопка таблицы сотрудников у заголовка колонки. */
 export interface IPayrollDictionaryList {
-  /** Подпись на кнопке: «Сотрудники», «Проживание», «Общежитие». */
+  /** Подпись на кнопке: «Сотрудники», «Проживание». */
   label: string;
   /** Что за таблица — для экранного диктора: «Сотрудники с удержаниями». */
   ariaLabel: string;

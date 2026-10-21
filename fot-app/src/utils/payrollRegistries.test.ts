@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { IDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
@@ -8,7 +9,9 @@ import type {
 import {
   apartmentRemoval,
   buildCompensationStopExport,
-  buildDormitoryAllowanceExport,
+  buildDormitoryRegistryExport,
+  buildDormitoryRegistryRows,
+  DORMITORY_REGISTRY_COLUMNS,
   dormitoryAllowanceInMonths,
   periodIntersectsMonths,
   registryMonthOptions,
@@ -202,8 +205,29 @@ describe('выбор месяца в таблицах «Справочника»
     // Живёт и сейчас (выезда нет) — дальше не показывается.
     const living = { ...row, dormitory_stays: [{ check_in: '2026-12-10', check_out: null }] };
     expect(dormitoryAllowanceInMonths(living, ['2030-01'])).toBe(false);
-    expect(buildDormitoryAllowanceExport([{ ...row, amount: null }]).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Доплата с', 'По', 'Сумма, ₽/мес']);
+  });
+
+  it('«Общежитие»: в одной таблице живущие (адрес, без доплаты) и «Не назначено» с доплатой', () => {
+    const stay: IDormitoryStay = {
+      id: 7, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null, kind: 'dormitory',
+      check_in: '2026-09-01', check_out: '2026-10-01', address: 'Общ. Мал.Почтовая 2\\2', amount: null,
+    };
+    // Выехал 01.10 — с октября доплата; id совпадает с проживанием, ключи разные.
+    const allowance: IDormitoryAllowanceRow = {
+      id: 7, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
+      date_from: '2026-10-01', date_to: null, amount: '160.00', can_edit: true, dormitory_stays: [],
+    };
+    const text = (months: string[]) => buildDormitoryRegistryRows([stay], [allowance], months)
+      .map(row => DORMITORY_REGISTRY_COLUMNS.slice(3).map(column => column.text(row)));
+
+    expect(text(['2026-09'])).toEqual([['Общ. Мал.Почтовая 2\\2', '01.09.2026', '01.10.2026', '—']]);
+    // В день выезда уже не живёт.
+    expect(text(['2026-10'])).toEqual([['Не назначено', '01.10.2026', 'бессрочно', '160,00']]);
+    const all = buildDormitoryRegistryRows([stay], [allowance], []);
+    expect(all.map(row => row.key)).toEqual(['stay:7', 'allowance:7']);
+    expect(all.map(row => row.allowance)).toEqual([null, allowance]);
+    expect(buildDormitoryRegistryExport(all).columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Общежитие', 'С', 'По', 'Доплата, ₽/мес']);
   });
 });
 
