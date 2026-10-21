@@ -46,9 +46,12 @@ interface IPayrollTermsFieldsProps {
   detailsOnly?: boolean;
 }
 
-/** «Компенсация» в одну строку — в порядке на экране. */
-const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string }> = [
-  { field: 'housing', label: 'Проживание, ₽/мес' },
+/**
+ * «Компенсация» в одну строку — в порядке на экране. Проживание — квартира «Проживания» (миграция 320): только
+ * показ, вносят в «Доплате за проживание» и во вкладке кадров.
+ */
+const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string; locked?: boolean }> = [
+  { field: 'housing', label: 'Проживание, ₽/мес', locked: true },
   { field: 'travel', label: 'Проезд, ₽/мес' },
 ];
 
@@ -81,7 +84,13 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   const totalValue = total ? payrollTermsTotal(form) : null;
 
   /** Денежное поле с подписью сверху и ошибкой снизу. Без числовых подсказок: подсказка — не значение. */
-  const renderMoney = (key: PayrollTermsFieldKey, label: string, value: string, onChange: (next: string) => void) => {
+  const renderMoney = (
+    key: PayrollTermsFieldKey,
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+    locked = false,
+  ) => {
     const error = form.fieldErrors[key];
     const id = fieldId(key);
     return (
@@ -93,7 +102,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           inputMode="decimal"
           autoComplete="off"
           value={value}
-          disabled={readOnly}
+          disabled={readOnly || locked}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           onChange={event => onChange(event.target.value)}
@@ -241,11 +250,12 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
             <div className={styles.halves}>
               <div className={styles.half}>
                 <div className={styles.row}>
-                  {COMPENSATION_FIELDS.map(({ field, label }) => renderMoney(
+                  {COMPENSATION_FIELDS.map(({ field, label, locked }) => renderMoney(
                     field,
                     label,
                     form.money[field],
                     value => form.changeMoney(field, value),
+                    locked,
                   ))}
                 </div>
               </div>

@@ -70,9 +70,8 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { withTransaction } from '../../config/postgres.js';
 import { listRates, updateRate } from './payroll-rates.service.js';
-import { setHousingFrom } from './payroll-housing.service.js';
+import { addStay, updateStay } from '../dormitory-stays.service.js';
 import { DormitoryAllowanceConflictError, listDormitoryAllowances } from './payroll-dormitory-allowances.service.js';
 import { payrollDormitoryAllowancesController as controller } from '../../controllers/payroll-dormitory-allowances.controller.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
@@ -110,8 +109,15 @@ const patch = async (id: number, dateFrom: string, dateTo: string | null) => {
   return res;
 };
 
-const setHousing = (employeeId: number, amount: number | null, from: string) =>
-  withTransaction(client => setHousingFrom(client, { employeeId, amount, from, createdBy: AUTHOR }));
+/** Квартира (доплата за проживание, миграция 320) — через сервис проживаний, как пишут кадры и «Зарплата». */
+const addApartment = (employeeId: number, checkIn: string, checkOut: string | null = null) =>
+  addStay(employeeId, { kind: 'apartment', check_in: checkIn, check_out: checkOut, address: null, amount: 630 });
+
+const stays = async (employeeId: number) => (await run(
+  `SELECT kind, to_char(check_in, 'YYYY-MM-DD') AS in, to_char(check_out, 'YYYY-MM-DD') AS out
+     FROM employee_dormitory_stays WHERE employee_id = $1 ORDER BY check_in`,
+  [employeeId],
+)).rows.map(row => [row.kind, row.in, row.out]);
 
 const periods = async (employeeId: number) => (await run(
   `SELECT to_char(date_from, 'YYYY-MM-DD') AS from, to_char(date_to, 'YYYY-MM-DD') AS to
@@ -198,7 +204,10 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     }
     // Ставку «Доплата за общежитие» завели руками до 317 — миграция должна взять её, а не создать вторую.
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Проживание общежития', 630), (' Доплата за общежитие', 450)`);
-    for (const name of ['313_payroll_rate_code.sql', '314_employee_dormitory_stays.sql', '315_payroll_dictionary_registries.sql']) {
+    for (const name of [
+      '313_payroll_rate_code.sql', '314_employee_dormitory_stays.sql', '315_payroll_dictionary_registries.sql',
+      '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql',
+    ]) {
       await run(migration(name));
     }
     await run(`
@@ -281,79 +290,65 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_UPDATED')).toBe(2);
   });
 
-  describe('одна доплата из двух', () => {
-    it('есть доплата за проживание — за общежитие в эти дни нельзя; до неё и со стыка — можно', async () => {
-      expect(await setHousing(3, 630, '2026-10-01')).toMatchObject({ status: 'saved' });
+  describe('одна доплата из двух: квартира или доплата за общежитие (миграция 320)', () => {
+    it('есть квартира — доплату за общежитие в эти дни нельзя; до неё и со дня выезда — можно', async () => {
+      expect(await addApartment(3, '2026-10-01', '2026-12-01')).toMatchObject({ kind: 'apartment', amount: '630.00' });
       const conflict = await add(3, '2026-11-01');
       expect(conflict.statusCode).toBe(409);
       expect(conflict.body).toMatchObject({ code: 'HAS_HOUSING' });
       expect(conflict.body.error).toContain('С 01.11.2026');
 
       expect((await add(3, '2026-09-01', '2026-09-30')).statusCode).toBe(200);
-      expect(await setHousing(3, null, '2026-12-01')).toMatchObject({ status: 'saved' });
+      // День выезда из квартиры (01.12) — уже не в ней.
       expect((await add(3, '2026-12-01')).statusCode).toBe(200);
       expect(await periods(3)).toEqual([['2026-09-01', '2026-09-30'], ['2026-12-01', null]]);
     });
 
-    it('«Доплата за проживание» поверх доплаты за общежитие — отказ, условия не тронуты', async () => {
-      const before = await housingVersions(3);
-      expect(before).toEqual([
-        ['2026-09-01', '2026-09-30', null],
-        ['2026-10-01', '2026-11-30', '630.00'],
-        ['2026-12-01', null, null],
-      ]);
-      // Таблица ставит сумму «с даты и дальше» — с 01.10 она легла бы и на декабрь, где доплата за общежитие.
-      for (const from of ['2026-10-01', '2026-11-15', '2026-12-10']) {
-        await expect(setHousing(3, 700, from)).rejects.toBeInstanceOf(DormitoryAllowanceConflictError);
-      }
-      await expect(setHousing(3, 700, '2026-09-15')).rejects.toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE' });
-      expect(await housingVersions(3)).toEqual(before);
-      // Снять проживание — без проверки.
-      expect(await setHousing(3, null, '2026-11-01')).toMatchObject({ status: 'saved' });
+    it('квартира в днях доплаты за общежитие — отказ и откат; сократить можно, расширить в доплату — нет', async () => {
+      await expect(addApartment(3, '2026-12-10')).rejects.toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE' });
+      await expect(addApartment(3, '2026-08-01', '2026-09-15')).rejects.toBeInstanceOf(DormitoryAllowanceConflictError);
+      expect(await stays(3)).toEqual([['apartment', '2026-10-01', '2026-12-01']]);
+
+      const [{ id }] = (await run(`SELECT id FROM employee_dormitory_stays WHERE employee_id = 3`)).rows;
+      const fields = { address: null, amount: 630 };
+      await expect(updateStay(id, { check_in: '2026-10-01', check_out: null, ...fields }))
+        .rejects.toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE' });
+      await expect(updateStay(id, { check_in: '2026-09-20', check_out: '2026-12-01', ...fields }))
+        .rejects.toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE' });
+      expect(await updateStay(id, { check_in: '2026-10-01', check_out: '2026-11-15', ...fields, amount: 700 }))
+        .toMatchObject({ after: { check_out: '2026-11-15', amount: '700.00' } });
     });
 
-    it('условия закончились раньше доплаты за общежитие — проживание до их конца без отказа', async () => {
-      expect((await add(4, '2026-11-01')).statusCode).toBe(200);
-      expect(await setHousing(4, 630, '2026-10-01')).toMatchObject({ status: 'saved' });
-      expect(await housingVersions(4)).toEqual([
-        ['2026-09-01', '2026-09-30', null],
-        ['2026-10-01', '2026-10-31', '630.00'],
-      ]);
+    it('в один день — одно место: общежитие поверх квартиры — пересечение', async () => {
+      expect(await addStay(3, { kind: 'dormitory', check_in: '2026-11-01', check_out: '2026-11-10', address: 'Общ3', amount: null }))
+        .toBe('overlap');
+      // Со дня выезда из квартиры — можно.
+      expect(await addStay(3, { kind: 'dormitory', check_in: '2026-11-15', check_out: '2026-11-20', address: 'Общ3', amount: null }))
+        .toMatchObject({ kind: 'dormitory' });
     });
 
-    it('окно сотрудника: проживание поверх доплаты за общежитие — 409 и откат; без проживания — сохраняется', async () => {
-      const before = await housingVersions(3);
-      const assign = async (housing: number | null) => {
-        const res = makeRes();
-        await payrollTermsController.assign(req({
-          params: { empId: '3' },
-          body: {
-            staff_category: 'worker', calc_type: 'salary', monthly_salary: 95000,
-            housing_compensation: housing, effective_from: '2027-01-01',
-          },
-        }), res);
-        return res;
-      };
-      const conflict = await assign(630);
-      expect(conflict.statusCode).toBe(409);
-      expect(conflict.body).toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE' });
-      expect(await housingVersions(3)).toEqual(before);
-
-      expect((await assign(null)).statusCode).toBe(200);
-      const [from, to, amount] = (await housingVersions(3)).at(-1)!;
-      expect([from, to, Number(amount ?? 0)]).toEqual(['2027-01-01', null, 0]);
+    it('окно сотрудника: проживание в теле не пишется и доплату за общежитие не проверяет', async () => {
+      const res = makeRes();
+      await payrollTermsController.assign(req({
+        params: { empId: '3' },
+        body: {
+          staff_category: 'worker', calc_type: 'salary', monthly_salary: 95000,
+          housing_compensation: 630, effective_from: '2027-01-01',
+        },
+      }), res);
+      expect(res.statusCode).toBe(200);
+      expect((await housingVersions(3)).at(-1)).toEqual(['2027-01-01', null, null]);
     });
 
-    it('параллельно «Доплата за проживание» и «за общежитие» одному сотруднику — проходит ровно одна', async () => {
-      const [housing, allowance] = await Promise.allSettled([
-        setHousing(5, 630, '2026-10-01'),
+    it('параллельно квартира и доплата за общежитие одному сотруднику — проходит ровно одна', async () => {
+      const [apartment, allowance] = await Promise.allSettled([
+        addApartment(5, '2026-10-01'),
         add(5, '2026-10-01'),
       ]);
-      const housingSaved = housing.status === 'fulfilled';
+      const apartmentSaved = apartment.status === 'fulfilled';
       const allowanceSaved = allowance.status === 'fulfilled' && allowance.value.statusCode === 200;
-      expect(housingSaved !== allowanceSaved).toBe(true);
-      const hasHousing = (await housingVersions(5)).some(([, , amount]) => amount !== null);
-      expect(hasHousing).toBe(housingSaved);
+      expect(apartmentSaved !== allowanceSaved).toBe(true);
+      expect((await stays(5)).length).toBe(apartmentSaved ? 1 : 0);
       expect((await periods(5)).length).toBe(allowanceSaved ? 1 : 0);
     });
   });

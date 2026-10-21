@@ -11,8 +11,12 @@ vi.mock('../services/payroll/payroll-registry-scope.service.js', () => registryS
 const payrollScope = vi.hoisted(() => ({ resolvePayrollEditPredicate: vi.fn() }));
 vi.mock('../services/payroll/payroll-scope.service.js', () => payrollScope);
 
-const housing = vi.hoisted(() => ({ listHousingAllowances: vi.fn(), setHousingFrom: vi.fn() }));
+const housing = vi.hoisted(() => ({ listHousingAllowances: vi.fn() }));
 vi.mock('../services/payroll/payroll-housing.service.js', () => housing);
+
+// «Доплата за проживание» пишет квартиры «Проживания» (миграция 320).
+const stays = vi.hoisted(() => ({ getStay: vi.fn(), addStay: vi.fn(), updateStay: vi.fn(), deleteStay: vi.fn() }));
+vi.mock('../services/dormitory-stays.service.js', () => stays);
 
 const supplements = vi.hoisted(() => ({
   listSupplements: vi.fn(),
@@ -245,81 +249,97 @@ describe('«Удержания»: сохранение из таблицы', () 
   });
 });
 
-describe('«Доплата за проживание»', () => {
-  const body = { amount: 630, effective_from: '2026-10-19' };
+describe('«Доплата за проживание»: квартиры «Проживания»', () => {
+  const body = { employee_id: 42, check_in: '2026-10-01', check_out: null, amount: 630, address: '  ул. Рабочая,  5 ' };
+  const APARTMENT = {
+    id: 7, employee_id: 42, full_name: 'Каримов Акмал', department: null, position: null, kind: 'apartment',
+    check_in: '2026-10-01', check_out: null, address: 'ул. Рабочая, 5', amount: '630.00',
+  };
 
-  it('не «штат зарплаты» (подрядчик, уволенный, чужой) — 403, ничего не пишется', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
-    const res = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body }), res);
-    expect(res.statusCode).toBe(403);
-    expect(housing.setHousingFrom).not.toHaveBeenCalled();
-  });
-
-  it('без условий на дату — 409 NO_TERMS', async () => {
+  it('добавить: квартира с суммой, адрес без лишних пробелов; аудит проживания с source', async () => {
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    housing.setHousingFrom.mockResolvedValue({ status: 'no_terms' });
+    stays.addStay.mockResolvedValue(APARTMENT);
     const res = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body }), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.body.code).toBe('NO_TERMS');
-    expect(audit.logFromRequest).not.toHaveBeenCalled();
-  });
-
-  it('сохранено — событие условий с source; без изменений — без аудита', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    housing.setHousingFrom.mockResolvedValueOnce({
-      status: 'saved', termsId: 12, previousTermsId: 11, previousAmount: null, laterUpdated: 1,
-    });
-    const res = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body }), res);
-    expect(res.body.data).toEqual({ changed: true });
-    expect(housing.setHousingFrom).toHaveBeenCalledWith({}, {
-      employeeId: 42, amount: 630, from: '2026-10-19', createdBy: 'user-1',
+    await housingC.add(makeReq({ body }), res);
+    expect(res.statusCode).toBe(200);
+    expect(stays.addStay).toHaveBeenCalledWith(42, {
+      kind: 'apartment', check_in: '2026-10-01', check_out: null, amount: 630, address: 'ул. Рабочая, 5',
     });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'user-1', 'PAYROLL_TERMS_ASSIGNED',
-      expect.objectContaining({
-        entityId: '12',
-        details: expect.objectContaining({ source: 'housing_registry', housing_compensation: 630, previous_terms_id: 11 }),
-      }),
+      expect.anything(), 'user-1', 'DORMITORY_STAY_ADDED',
+      expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'housing_registry', kind: 'apartment' }) }),
     );
-
-    housing.setHousingFrom.mockResolvedValueOnce({ status: 'unchanged' });
-    const same = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body }), same);
-    expect(same.body.data).toEqual({ changed: false });
-    expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
   });
 
-  it('в эти дни доплата за общежитие — 409 с текстом, без аудита', async () => {
+  it('добавить: не «штат зарплаты» — 403; пересечение — 409; доплата за общежитие — 409 с текстом', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValueOnce(false);
+    const denied = makeRes();
+    await housingC.add(makeReq({ body }), denied);
+    expect(denied.statusCode).toBe(403);
+    expect(stays.addStay).not.toHaveBeenCalled();
+
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    housing.setHousingFrom.mockRejectedValue(new DormitoryAllowanceConflictError(
+    stays.addStay.mockResolvedValueOnce('overlap');
+    const overlap = makeRes();
+    await housingC.add(makeReq({ body }), overlap);
+    expect(overlap.statusCode).toBe(409);
+    expect(overlap.body.code).toBe('DORMITORY_OVERLAP');
+
+    stays.addStay.mockRejectedValueOnce(new DormitoryAllowanceConflictError(
       'HAS_DORMITORY_ALLOWANCE', 'С 01.11.2026 у сотрудника доплата за общежитие',
     ));
-    const res = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body }), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.body).toEqual({
+    const conflict = makeRes();
+    await housingC.add(makeReq({ body }), conflict);
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.body).toEqual({
       success: false, error: 'С 01.11.2026 у сотрудника доплата за общежитие', code: 'HAS_DORMITORY_ALLOWANCE',
     });
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
-  it('снять — amount null; сумма 0 или строкой — 400', async () => {
+  it('добавить: без суммы, сумма 0 или строкой, выезд не позже въезда, без сотрудника — 400', async () => {
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    housing.setHousingFrom.mockResolvedValue({ status: 'unchanged' });
-    await housingC.set(makeReq({ params: { empId: '42' }, body: { amount: null, effective_from: '2026-10-19' } }), makeRes());
-    expect(housing.setHousingFrom).toHaveBeenCalledWith({}, expect.objectContaining({ amount: null }));
-
-    for (const amount of [0, '630', -5]) {
+    const bodies = [
+      { ...body, amount: undefined }, { ...body, amount: 0 }, { ...body, amount: '630' },
+      { ...body, check_out: '2026-10-01' }, { ...body, check_in: '2026-02-31' }, { ...body, employee_id: undefined },
+    ];
+    for (const bad of bodies) {
       const res = makeRes();
-      await housingC.set(makeReq({ params: { empId: '42' }, body: { amount, effective_from: '2026-10-19' } }), res);
-      expect(res.statusCode, String(amount)).toBe(400);
+      await housingC.add(makeReq({ body: bad }), res);
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
     }
-    const badDate = makeRes();
-    await housingC.set(makeReq({ params: { empId: '42' }, body: { amount: 630, effective_from: '2026-02-31' } }), badDate);
-    expect(badDate.statusCode).toBe(400);
+    expect(stays.addStay).not.toHaveBeenCalled();
+  });
+
+  it('изменить и удалить — только квартиру «штата зарплаты»; общежитие — 404', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    stays.getStay.mockResolvedValue(APARTMENT);
+    stays.updateStay.mockResolvedValueOnce({ before: APARTMENT, after: { ...APARTMENT, check_out: '2026-11-01' } });
+    const res = makeRes();
+    await housingC.update(makeReq({ params: { id: '7' }, body: { ...body, check_out: '2026-11-01' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(stays.updateStay).toHaveBeenCalledWith(7, expect.objectContaining({ check_out: '2026-11-01', amount: 630 }));
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED', expect.objectContaining({ entityId: '7' }),
+    );
+
+    stays.deleteStay.mockResolvedValueOnce(APARTMENT);
+    const removed = makeRes();
+    await housingC.remove(makeReq({ params: { id: '7' } }), removed);
+    expect(removed.statusCode).toBe(200);
+
+    stays.getStay.mockResolvedValue({ ...APARTMENT, kind: 'dormitory', amount: null });
+    const dormitory = makeRes();
+    await housingC.remove(makeReq({ params: { id: '7' } }), dormitory);
+    expect(dormitory.statusCode).toBe(404);
+
+    stays.getStay.mockResolvedValue(APARTMENT);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
+    const foreign = makeRes();
+    await housingC.update(makeReq({ params: { id: '7' }, body }), foreign);
+    expect(foreign.statusCode).toBe(403);
+    expect(stays.updateStay).toHaveBeenCalledTimes(1);
+    expect(stays.deleteStay).toHaveBeenCalledTimes(1);
   });
 });
 

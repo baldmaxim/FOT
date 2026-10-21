@@ -1,11 +1,10 @@
 /**
- * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за проживание», «Доплата за общежитие», «Доплата», «Без проезда»,
- * «Удержания»):
+ * Формы таблиц окна «Справочник» на «Расчётах» («Доплата за общежитие», «Доплата», «Без проезда», «Удержания»;
+ * «Доплата за проживание» — разбор квартиры из dormitoryStayForm.ts):
  * разбор полей повторяет проверку сервера — ошибка видна до запроса, а не ответом 400.
  */
 import type {
   IDeductionRegistryPayload,
-  IHousingAllowancePayload,
   IOneTimeSupplementFields,
   IPlannedSupplementFields,
   IRegistryPeriodFields,
@@ -44,22 +43,6 @@ const parseDate = (value: string, field: RegistryFormField, emptyMessage: string
   if (!value) return fail(field, emptyMessage);
   if (!isCalendarDate(value)) return fail(field, 'Такой даты нет');
   return null;
-};
-
-/** «Доплата за проживание»: сотрудник с окладом, сумма, «Действует с». */
-export const parseHousingForm = (draft: {
-  selected: boolean;
-  hasTerms: boolean;
-  amount: string;
-  effectiveFrom: string;
-}): RegistryFormParse<IHousingAllowancePayload> => {
-  if (!draft.selected) return fail('employee', 'Выберите сотрудника');
-  if (!draft.hasTerms) return fail('employee', 'Сначала внесите оклад в окне сотрудника');
-  const amount = parsePositiveAmount(draft.amount);
-  if ('error' in amount) return fail('amount', amount.error);
-  const dateError = parseDate(draft.effectiveFrom, 'date_from', 'Укажите дату «Действует с»');
-  if (dateError) return dateError;
-  return { ok: true, payload: { amount: amount.amount, effective_from: draft.effectiveFrom } };
 };
 
 /** Плановая доплата: сумма ₽/мес, «с — по» включительно. */

@@ -1,17 +1,25 @@
 /**
- * Окно «Добавить сотрудника» / ✎ во вкладке «Общежитие»: разбор полей повторяет проверку сервера
- * (dormitory-stays.controller) — ошибка видна до запроса, а не ответом 400.
+ * Окно «Добавить сотрудника» / ✎ во вкладке «Проживание» и в «Доплате за проживание» «Зарплаты»: разбор полей
+ * повторяет проверку сервера (dormitory-stay-input.ts) — ошибка видна до запроса, а не ответом 400.
  */
-import type { IDormitoryStayPayload } from '../services/dormitoryService';
+import type { DormitoryStayKind, IDormitoryStayPayload } from '../services/dormitoryService';
+import { parseRateAmount } from './payrollDictionary';
 
 export interface IDormitoryStayDraft {
   /** YYYY-MM-DD или '' (поле не заполнено целиком). */
   checkIn: string;
   checkOut: string;
   address: string;
+  /** Только у квартиры: сумма ₽/мес как в поле («1 250,5»). */
+  amount?: string;
 }
 
-export type DormitoryStayField = 'employee' | 'check_in' | 'check_out' | 'address';
+export type DormitoryStayField = 'employee' | 'check_in' | 'check_out' | 'address' | 'amount';
+
+export const DORMITORY_STAY_KIND_LABELS: Record<DormitoryStayKind, string> = {
+  dormitory: 'Общежитие',
+  apartment: 'Квартира',
+};
 
 export type DormitoryStayParse =
   | { ok: true; payload: IDormitoryStayPayload }
@@ -44,9 +52,14 @@ export const isCalendarDate = (value: string): boolean => {
     && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 };
 
+/**
+ * Общежитие: адрес обязателен, суммы нет. Квартира: сумма ₽/мес больше нуля обязательна, адрес — по желанию
+ * (пусто — null). Даты у обоих: въезд обязателен, выезд позже въезда или пусто (живёт).
+ */
 export const parseDormitoryStay = (
   draft: IDormitoryStayDraft,
   employee: { required: boolean; selected: boolean },
+  kind: DormitoryStayKind = 'dormitory',
 ): DormitoryStayParse => {
   if (employee.required && !employee.selected) return { ok: false, field: 'employee', message: 'Выберите сотрудника' };
   if (!draft.checkIn) return { ok: false, field: 'check_in', message: 'Укажите дату въезда' };
@@ -56,11 +69,21 @@ export const parseDormitoryStay = (
     return { ok: false, field: 'check_out', message: 'Дата выезда должна быть позже даты въезда' };
   }
   const address = normalizeAddress(draft.address);
-  if (!address) return { ok: false, field: 'address', message: 'Укажите адрес или номер общежития' };
   if (address.length > DORMITORY_ADDRESS_MAX_LENGTH) {
     return { ok: false, field: 'address', message: 'Адрес — не больше 200 символов' };
   }
-  return { ok: true, payload: { check_in: draft.checkIn, check_out: draft.checkOut || null, address } };
+  const dates = { check_in: draft.checkIn, check_out: draft.checkOut || null };
+  if (kind === 'dormitory') {
+    if (!address) return { ok: false, field: 'address', message: 'Укажите адрес или номер общежития' };
+    return { ok: true, payload: { ...dates, address, amount: null } };
+  }
+  const parsed = parseRateAmount(draft.amount ?? '');
+  if (parsed.error !== null) {
+    return { ok: false, field: 'amount', message: 'Сумма — число больше нуля, до двух знаков после запятой' };
+  }
+  if (parsed.amount === null) return { ok: false, field: 'amount', message: 'Укажите сумму доплаты' };
+  if (parsed.amount <= 0) return { ok: false, field: 'amount', message: 'Сумма должна быть больше нуля' };
+  return { ok: true, payload: { ...dates, address: address || null, amount: parsed.amount } };
 };
 
 /**

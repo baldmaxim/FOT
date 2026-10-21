@@ -32,10 +32,6 @@ import {
 } from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
-  assertHousingWithoutDormitoryAllowance,
-  DormitoryAllowanceConflictError,
-} from '../services/payroll/payroll-dormitory-allowances.service.js';
-import {
   loadStaffCategoryResolver,
   resolveEmployeeStaffCategories,
 } from '../services/payroll/payroll-staff-category.js';
@@ -72,6 +68,7 @@ const termsBodySchema = z.object({
   monthly_salary: moneySchema.optional(),
   hourly_rate: moneySchema.optional(),
   bonus_amount: optionalMoneySchema,
+  // Прежний клиент ещё присылает — принимаем и не пишем: проживание с миграции 320 — квартиры «Проживания».
   housing_compensation: optionalMoneySchema,
   travel_compensation: optionalMoneySchema,
   communication_compensation: optionalMoneySchema,
@@ -240,7 +237,14 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
            t.monthly_salary,
            t.hourly_rate,
            t.bonus_amount,
-           t.housing_compensation,
+           -- Доплата за проживание — квартира «Проживания» на дату выборки (миграция 320), не условия оплаты.
+           (SELECT s.amount
+              FROM employee_dormitory_stays s
+             WHERE s.employee_id = e.id
+               AND s.kind = 'apartment'
+               AND s.check_in <= $1::date
+               AND (s.check_out IS NULL OR s.check_out > $1::date)
+             LIMIT 1) AS housing_compensation,
            t.travel_compensation,
            t.communication_compensation,
            t.deduction_amount,
@@ -658,7 +662,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         monthlySalary: body.monthly_salary ?? null,
         hourlyRate: body.hourly_rate ?? null,
         bonusAmount: body.bonus_amount ?? null,
-        housingCompensation: body.housing_compensation ?? null,
+        // Доплата за проживание с миграции 320 — квартиры «Проживания»: окно её только показывает.
+        housingCompensation: null,
         travelCompensation: body.travel_compensation ?? null,
         communicationCompensation: body.communication_compensation ?? null,
         deductionAmount: body.deduction_amount ?? null,
@@ -671,10 +676,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         note: body.note ?? null,
         createdBy: req.user.id,
       }, client);
-      // Одна доплата из двух: проживание с D — в эти дни не должно быть доплаты за общежитие (иначе откат).
-      if ((body.housing_compensation ?? 0) > 0) {
-        await assertHousingWithoutDormitoryAllowance(client, employeeId, body.effective_from);
-      }
       const changed = supplement === undefined
         ? false
         : await setPlannedSupplement(client, {
@@ -701,7 +702,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         monthly_salary: body.monthly_salary ?? null,
         hourly_rate: body.hourly_rate ?? null,
         bonus_amount: body.bonus_amount ?? null,
-        housing_compensation: body.housing_compensation ?? null,
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
         deduction_amount: body.deduction_amount ?? null,
@@ -729,10 +729,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true, data: { terms_id: termsId } });
   } catch (err) {
     if (handleZodError(err, res)) return;
-    if (err instanceof DormitoryAllowanceConflictError) {
-      res.status(409).json({ success: false, error: err.message, code: err.code });
-      return;
-    }
     console.error('payrollTerms.assign error:', err);
     res.status(500).json({ success: false, error: 'Ошибка назначения условий оплаты' });
   }

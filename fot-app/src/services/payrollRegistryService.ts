@@ -8,16 +8,24 @@ import { payrollService } from './payrollService';
  * правки этого сотрудника (сервер проверит то же при записи).
  */
 
-/** Доплата за проживание — housing_compensation условий оплаты на сегодня (то же, что в окне сотрудника). */
+/**
+ * Доплата за проживание — квартира «Проживания» (миграция 320): те же записи, что во вкладке кадров
+ * «Проживание». Строка — одно проживание в квартире.
+ */
 export interface IHousingAllowanceRow {
+  /** id проживания: ✎ и 🗑 работают с ним. */
+  id: number;
   employee_id: number;
   full_name: string;
   department: string | null;
   position: string | null;
   /** ₽/мес, numeric строкой. */
   amount: string;
-  /** YYYY-MM-DD: с какой даты действует эта сумма. */
-  effective_from: string;
+  /** YYYY-MM-DD. */
+  check_in: string;
+  /** YYYY-MM-DD — день выезда (в нём уже не живёт); живёт — null. */
+  check_out: string | null;
+  address: string | null;
   can_edit: boolean;
 }
 
@@ -112,10 +120,12 @@ export interface IPayrollRegistryCandidate {
   can_edit: boolean;
 }
 
+/** Квартира: въезд, выезд (null — живёт), сумма ₽/мес, адрес (необязателен). */
 export interface IHousingAllowancePayload {
-  /** null — снять с даты. */
+  check_in: string;
+  check_out: string | null;
   amount: number | null;
-  effective_from: string;
+  address: string | null;
 }
 
 export interface IPlannedSupplementFields {
@@ -168,9 +178,17 @@ export const payrollRegistryService = {
   listHousing: (months: string, signal?: AbortSignal) =>
     list<IHousingAllowanceRow>(withMonths('/payroll/housing-allowances', months), signal),
 
-  /** Без условий на дату — ApiError 409 NO_TERMS. */
-  setHousing: async (employeeId: number, payload: IHousingAllowancePayload): Promise<void> => {
-    await apiClient.put(`/payroll/housing-allowances/employee/${employeeId}`, payload);
+  /** Пересечение с другим проживанием или «Доплатой за общежитие» — ApiError 409. */
+  addHousing: async (employeeId: number, payload: IHousingAllowancePayload): Promise<void> => {
+    await apiClient.post('/payroll/housing-allowances', { employee_id: employeeId, ...payload });
+  },
+
+  updateHousing: async (id: number, payload: IHousingAllowancePayload): Promise<void> => {
+    await apiClient.patch(`/payroll/housing-allowances/${id}`, payload);
+  },
+
+  removeHousing: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/housing-allowances/${id}`);
   },
 
   listSupplements: (signal?: AbortSignal) => list<IPayrollSupplementRow>('/payroll/supplements', signal),

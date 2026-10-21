@@ -66,9 +66,11 @@ router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
 router.get('/dormitory-stays', deductionsView, dormitoryStaysController.listForPayroll);
 
 // ─── Таблицы окна «Справочник» (миграция 315) ────────────────────────────────
-// «Доплата за проживание» — housing_compensation условий оплаты, тот же источник, что окно сотрудника.
+// «Доплата за проживание» — квартиры «Проживания» (миграция 320): те же записи, что во вкладке кадров.
 router.get('/housing-allowances', termsView, payrollHousingController.list);
-router.put('/housing-allowances/employee/:empId', termsEdit, payrollHousingController.set);
+router.post('/housing-allowances', termsEdit, payrollHousingController.add);
+router.patch('/housing-allowances/:id', termsEdit, payrollHousingController.update);
+router.delete('/housing-allowances/:id', termsEdit, payrollHousingController.remove);
 // «Доплата»: плановая (журнал окна сотрудника) и разовая.
 router.get('/supplements', termsView, payrollSupplementsController.list);
 router.post('/supplements/planned', termsEdit, payrollSupplementsController.addPlanned);

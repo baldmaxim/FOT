@@ -60,7 +60,7 @@ describe('validatePayrollTerms: состав запроса сохранения
       calc_type: 'hourly',
       hourly_rate: 450.5,
       bonus_amount: 15000,
-      housing_compensation: 12000,
+      // Проживание — только показ (квартира «Проживания», миграция 320): в условия не уходит.
       travel_compensation: 3000,
       deduction_amount: 0,
       effective_from: '2026-09-24',

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 // PostgreSQL: чистая БД и БД с уже заведённой ставкой, повторный запуск, пересечение периодов,
 // въезд в день выезда, сервис общежития и запрет удалить/переименовать ставку с кодом.
 // Сохранённые адреса (миграция 319): перенос из проживаний, запоминание при записи, удаление их не трогает.
+// Квартира (миграция 320): вид, сумма, адрес по желанию; в один день — одно место.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -65,10 +66,15 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
   beforeAll(async () => {
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rates, role_page_access, access_pages,
-        employees, positions, org_departments CASCADE;
+        payroll_compensation_terms, payroll_dormitory_allowances, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
+      -- Для миграции 320 и проверки квартиры: доплата в условиях оплаты и «Доплата за общежитие» (317).
+      CREATE TABLE payroll_compensation_terms (id serial PRIMARY KEY, employee_id integer, housing_compensation numeric(12,2));
+      CREATE TABLE payroll_dormitory_allowances (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, date_from date NOT NULL, date_to date
+      );
       CREATE TABLE employees (
         id integer PRIMARY KEY,
         full_name text,
@@ -176,20 +182,51 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     await run(`DELETE FROM dormitory_addresses`);
   });
 
+  it('320: повтор безопасен; CHECK вида, суммы и адреса; доплата в условиях оплаты — миграция останавливается', async () => {
+    await run(`INSERT INTO payroll_compensation_terms (employee_id, housing_compensation) VALUES (1, 630)`);
+    // Отдельное соединение: ошибка внутри BEGIN миграции оставляет его в прерванной транзакции — откатываем сами.
+    const client = await pg.pool!.connect();
+    try {
+      await expect(client.query(migration('320_dormitory_stays_apartment.sql'))).rejects.toThrow(/housing_compensation/);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    expect((await run(`SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'employee_dormitory_stays' AND column_name = 'kind'`)).rowCount).toBe(0);
+    await run(`DELETE FROM payroll_compensation_terms`);
+    await run(migration('320_dormitory_stays_apartment.sql'));
+    await run(migration('320_dormitory_stays_apartment.sql'));
+
+    const insert = (values: string) => run(
+      `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, address, amount) VALUES ${values}`,
+    );
+    await expect(insert(`(1, 'apartment', '2030-01-01', NULL, NULL)`)).rejects.toThrow(/employee_dormitory_stay_amount/);
+    await expect(insert(`(1, 'apartment', '2030-01-01', NULL, 0)`)).rejects.toThrow(/employee_dormitory_stay_amount/);
+    await expect(insert(`(1, 'dormitory', '2030-01-01', 'Общ1', 630)`)).rejects.toThrow(/employee_dormitory_stay_amount/);
+    await expect(insert(`(1, 'dormitory', '2030-01-01', NULL, NULL)`)).rejects.toThrow(/employee_dormitory_stay_address/);
+    await expect(insert(`(1, 'apartment', '2030-01-01', '  ', 630)`)).rejects.toThrow(/employee_dormitory_stay_address/);
+    await expect(insert(`(1, 'flat', '2030-01-01', 'Общ1', NULL)`)).rejects.toThrow(/employee_dormitory_stay_(kind|amount)/);
+    // Прежний бэкенд пишет без вида — общежитие.
+    await run(`INSERT INTO employee_dormitory_stays (employee_id, check_in, address) VALUES (1, '2030-01-01', 'Общ1')`);
+    expect((await run(`SELECT kind, amount FROM employee_dormitory_stays`)).rows).toEqual([{ kind: 'dormitory', amount: null }]);
+    await run(`DELETE FROM employee_dormitory_stays`);
+  });
+
   it('периоды не пересекаются; въезд в день выезда — можно; выезд = въезд — нельзя', async () => {
-    const first = await addStay(1, { check_in: '2026-09-01', check_out: '2026-10-10', address: 'Общежитие №2, комн. 14' });
+    const first = await addStay(1, { kind: 'dormitory', amount: null, check_in: '2026-09-01', check_out: '2026-10-10', address: 'Общежитие №2, комн. 14' });
     expect(first).toMatchObject({
       employee_id: 1, full_name: 'Каримов Акмал', department: 'бр.Менгбоев Г.И.', position: 'Монтажник',
       check_in: '2026-09-01', check_out: '2026-10-10',
     });
     // Переселение: выезд 10-го и въезд 10-го.
-    const second = await addStay(1, { check_in: '2026-10-10', check_out: null, address: 'Общежитие №3' });
+    const second = await addStay(1, { kind: 'dormitory', amount: null, check_in: '2026-10-10', check_out: null, address: 'Общежитие №3' });
     expect(second).toMatchObject({ check_in: '2026-10-10', check_out: null });
     // Открытое проживание пересекается с любым будущим.
-    expect(await addStay(1, { check_in: '2027-01-01', check_out: null, address: 'Общежитие №4' })).toBe('overlap');
-    expect(await addStay(1, { check_in: '2026-09-15', check_out: '2026-09-20', address: 'Внутри' })).toBe('overlap');
+    expect(await addStay(1, { kind: 'dormitory', amount: null, check_in: '2027-01-01', check_out: null, address: 'Общежитие №4' })).toBe('overlap');
+    expect(await addStay(1, { kind: 'dormitory', amount: null, check_in: '2026-09-15', check_out: '2026-09-20', address: 'Внутри' })).toBe('overlap');
     // У другого сотрудника те же даты — можно.
-    expect(await addStay(2, { check_in: '2026-09-15', check_out: '2026-09-20', address: 'Общежитие №2' })).toMatchObject({ employee_id: 2 });
+    expect(await addStay(2, { kind: 'dormitory', amount: null, check_in: '2026-09-15', check_out: '2026-09-20', address: 'Общежитие №2' })).toMatchObject({ employee_id: 2 });
 
     await expect(run(`INSERT INTO employee_dormitory_stays (employee_id, check_in, check_out, address)
                       VALUES (2, '2026-12-01', '2026-12-01', 'Пусто')`)).rejects.toThrow(/employee_dormitory_stay_dates/);
@@ -206,10 +243,10 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     ]);
     const open = stays[2];
 
-    const closed = await updateStay(open.id, { check_in: open.check_in, check_out: '2026-11-30', address: open.address });
+    const closed = await updateStay(open.id, { amount: null, check_in: open.check_in, check_out: '2026-11-30', address: open.address });
     expect(closed).toMatchObject({ before: { check_out: null }, after: { check_out: '2026-11-30' } });
-    expect(await updateStay(open.id, { check_in: '2026-09-05', check_out: '2026-11-30', address: open.address })).toBe('overlap');
-    expect(await updateStay(9999, { check_in: '2026-09-05', check_out: null, address: 'x' })).toBeNull();
+    expect(await updateStay(open.id, { amount: null, check_in: '2026-09-05', check_out: '2026-11-30', address: open.address })).toBe('overlap');
+    expect(await updateStay(9999, { amount: null, check_in: '2026-09-05', check_out: null, address: 'x' })).toBeNull();
 
     expect((await listStays({ employeeIds: [2] })).map(stay => stay.employee_id)).toEqual([2]);
     expect(await listStays({ employeeIds: [] })).toEqual([]);
@@ -227,10 +264,10 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2']);
 
     const [stay] = await listStays({ employeeIds: [2] });
-    await updateStay(stay.id, { check_in: stay.check_in, check_out: stay.check_out, address: 'Общ. Нагатинская 34' });
-    await updateStay(stay.id, { check_in: stay.check_in, check_out: stay.check_out, address: 'ОБЩ. НАГАТИНСКАЯ 34' });
+    await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'Общ. Нагатинская 34' });
+    await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'ОБЩ. НАГАТИНСКАЯ 34' });
     expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2', 'Общ. Нагатинская 34']);
-    expect(await addStay(2, { check_in: '2026-09-16', check_out: '2026-09-18', address: 'Пересечение' })).toBe('overlap');
+    expect(await addStay(2, { kind: 'dormitory', amount: null, check_in: '2026-09-16', check_out: '2026-09-18', address: 'Пересечение' })).toBe('overlap');
     expect(await listAddresses()).not.toContain('Пересечение');
 
     await deleteStay(stay.id);
@@ -246,5 +283,22 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await searchCandidates('Кар', [2])).toEqual([]);
     expect(await searchCandidates('Кар', [])).toEqual([]);
     expect((await searchCandidates('_', null))).toEqual([]);
+  });
+  it('квартира: сумма и адрес по желанию; в один день — одно место; «Общежитие» «Зарплаты» её не видит', async () => {
+    const flat = await addStay(6, { kind: 'apartment', check_in: '2026-10-01', check_out: null, address: null, amount: 630.5 });
+    expect(flat).toMatchObject({ kind: 'apartment', address: null, amount: '630.50' });
+    expect(await addStay(6, { kind: 'dormitory', check_in: '2026-12-01', check_out: null, address: 'Общ. Свободы 35', amount: null }))
+      .toBe('overlap');
+    if (flat === 'overlap') throw new Error('квартира не добавлена');
+    expect(await updateStay(flat.id, { check_in: '2026-10-01', check_out: '2026-12-01', address: 'ул. Рабочая, 5', amount: 700 }))
+      .toMatchObject({ before: { amount: '630.50' }, after: { check_out: '2026-12-01', address: 'ул. Рабочая, 5', amount: '700.00' } });
+    // Со дня выезда из квартиры — в общежитие можно.
+    expect(await addStay(6, { kind: 'dormitory', check_in: '2026-12-01', check_out: null, address: 'Общ. Свободы 35', amount: null }))
+      .toMatchObject({ kind: 'dormitory' });
+
+    expect((await listStays({ employeeIds: [6] })).map(stay => stay.kind)).toEqual(['apartment', 'dormitory']);
+    expect((await listStays({ employeeIds: [6], kind: 'dormitory' })).map(stay => stay.kind)).toEqual(['dormitory']);
+    // Адрес квартиры в подсказки общежитий не попадает.
+    expect(await listAddresses()).not.toContain('ул. Рабочая, 5');
   });
 });

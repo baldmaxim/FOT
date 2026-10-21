@@ -1,22 +1,33 @@
 /**
- * «Общежитие» (миграция 314): кто из сотрудников живёт в общежитии — въезд, выезд, адрес или номер.
+ * «Проживание» (миграции 314, 320): где живёт сотрудник — въезд, выезд и вид:
+ * - общежитие компании (dormitory) — адрес или номер обязателен;
+ * - квартира (apartment) — сумма доплаты за проживание ₽/мес, адрес необязателен.
  *
- * Ведётся во вкладке «Управления кадрами», только чтение — в «Зарплате» («Справочник» → кнопка
- * «Общежитие»). Строка — одно проживание; периоды одного сотрудника не пересекаются
- * (EXCLUDE в БД, диапазон [въезд, выезд)). Отдел и должность — текущие, как в списке кадров.
- * Адрес добавленного или исправленного проживания запоминается в dormitory_addresses (миграция 319) — подсказки
- * поля «Адрес / номер»; удаление проживания адрес не трогает.
+ * Ведётся во вкладке «Управления кадрами»; квартиры — те же записи, что «Доплата за проживание» «Зарплаты»
+ * (её таблица пишет сюда же), общежития «Зарплата» видит только для чтения («Справочник» → «Общежитие»).
+ * Строка — одно проживание; периоды одного сотрудника не пересекаются ни в каком виде (EXCLUDE в БД,
+ * диапазон [въезд, выезд)). Отдел и должность — текущие, как в списке кадров.
+ * Запись — под lockPayrollEmployee (тот же замок, что у доплат «Зарплаты»): квартира в днях «Доплаты за
+ * общежитие» — DormitoryAllowanceConflictError (одна доплата из двух).
+ * Адрес общежития запоминается в dormitory_addresses (миграция 319) — подсказки поля «Адрес / номер»;
+ * удаление проживания адрес не трогает.
  */
 import type { PoolClient } from 'pg';
 
 import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
+import { HOUSING_RATE_CODE } from './payroll/payroll-rates.service.js';
 import { payrollContractorDeptsCte } from './payroll/payroll-registry-scope.service.js';
+import { lockPayrollEmployee } from './payroll/payroll-terms.service.js';
 
 /** Нарушение EXCLUDE: у сотрудника уже есть проживание в эти даты. */
 const PG_EXCLUSION_VIOLATION = '23P01';
+
+/** Общежитие компании или квартира (доплата за проживание). */
+export type DormitoryStayKind = 'dormitory' | 'apartment';
 
 export interface IDormitoryStay {
   id: number;
@@ -24,11 +35,15 @@ export interface IDormitoryStay {
   full_name: string;
   department: string | null;
   position: string | null;
+  kind: DormitoryStayKind;
   /** YYYY-MM-DD. */
   check_in: string;
   /** YYYY-MM-DD; живёт — null. */
   check_out: string | null;
-  address: string;
+  /** У общежития — всегда; у квартиры — если указали. */
+  address: string | null;
+  /** Только у квартиры: ₽/мес, numeric строкой. */
+  amount: string | null;
 }
 
 export interface IDormitoryCandidate {
@@ -38,10 +53,17 @@ export interface IDormitoryCandidate {
   position: string | null;
 }
 
-export interface IDormitoryStayInput {
+/** Даты, адрес и сумма; вид задаётся при добавлении и при правке не меняется. */
+export interface IDormitoryStayFields {
   check_in: string;
   check_out: string | null;
-  address: string;
+  address: string | null;
+  /** Только у квартиры. */
+  amount: number | null;
+}
+
+export interface IDormitoryStayInput extends IDormitoryStayFields {
+  kind: DormitoryStayKind;
 }
 
 /** Сотрудник для проверки перед записью: работает ли, не в архиве, не подрядчик. */
@@ -54,9 +76,11 @@ export interface IDormitoryEmployeeState {
 
 const STAY_SELECT = `
   SELECT s.id, s.employee_id, e.full_name, d.name AS department, p.name AS position,
+         s.kind,
          to_char(s.check_in, 'YYYY-MM-DD') AS check_in,
          to_char(s.check_out, 'YYYY-MM-DD') AS check_out,
-         s.address
+         s.address,
+         s.amount::text AS amount
     FROM employee_dormitory_stays s
     JOIN employees e ON e.id = s.employee_id
     LEFT JOIN org_departments d ON d.id = e.org_department_id
@@ -64,11 +88,12 @@ const STAY_SELECT = `
 
 /**
  * Проживания в порядке ФИО и въезда. employeeIds / departmentIds — охват (null — без ограничения);
- * пустой массив — пустой ответ без запроса.
+ * пустой массив — пустой ответ без запроса. kind — только этот вид («Справочник» → «Общежитие»).
  */
 export const listStays = async (scope: {
   employeeIds?: number[] | null;
   departmentIds?: string[] | null;
+  kind?: DormitoryStayKind;
 }): Promise<IDormitoryStay[]> => {
   const employeeIds = scope.employeeIds ?? null;
   const departmentIds = scope.departmentIds ?? null;
@@ -77,8 +102,9 @@ export const listStays = async (scope: {
     `${STAY_SELECT}
       WHERE ($1::int[] IS NULL OR s.employee_id = ANY($1::int[]))
         AND ($2::uuid[] IS NULL OR e.org_department_id = ANY($2::uuid[]))
+        AND ($3::text IS NULL OR s.kind = $3)
       ORDER BY e.full_name, s.check_in, s.id`,
-    [employeeIds, departmentIds],
+    [employeeIds, departmentIds, scope.kind ?? null],
   );
 };
 
@@ -126,35 +152,55 @@ export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEm
     [employeeId, await getContractorRootId()],
   );
 
-/** Запомнить адрес для подсказок; такой уже есть (без учёта регистра) — остаётся прежнее написание. */
+/** Запомнить адрес общежития для подсказок; такой уже есть (без учёта регистра) — остаётся прежнее написание. */
 const REMEMBER_ADDRESS_SQL = `INSERT INTO dormitory_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING`;
 
-/** Сохранённые адреса — подсказки поля «Адрес / номер», в порядке добавления. */
+/** Сохранённые адреса общежитий — подсказки поля «Адрес / номер», в порядке добавления. */
 export const listAddresses = async (): Promise<string[]> =>
   (await query<{ address: string }>(`SELECT address FROM dormitory_addresses ORDER BY id`)).map(row => row.address);
 
+/** Сумма по умолчанию для квартиры — значение ставки «Доплата за проживание» (code housing); не задана — null. */
+export const getHousingRateAmount = async (): Promise<string | null> =>
+  (await queryOne<{ amount: string | null }>(
+    `SELECT amount::text AS amount FROM payroll_rates WHERE code = $1`,
+    [HOUSING_RATE_CODE],
+  ))?.amount ?? null;
+
+/** После записи: адрес общежития — в подсказки; квартира — без доплаты за общежитие в добавленных днях. */
+const afterWrite = async (
+  client: PoolClient,
+  stay: { employee_id: number; kind: DormitoryStayKind } & IDormitoryStayFields,
+  previous: { check_in: string; check_out: string | null } | null,
+): Promise<void> => {
+  if (stay.kind === 'dormitory' && stay.address) {
+    await client.query(REMEMBER_ADDRESS_SQL, [stay.address]);
+  }
+  if (stay.kind === 'apartment') {
+    await assertApartmentWithoutDormitoryAllowance(client, stay.employee_id, stay, previous);
+  }
+};
+
 /**
- * Добавить проживание и запомнить его адрес — одним запросом: пересечение с другим проживанием
- * сотрудника ('overlap') отменяет и адрес.
+ * Добавить проживание. Пересечение с другим проживанием сотрудника — 'overlap'; квартира в днях доплаты
+ * за общежитие — DormitoryAllowanceConflictError (запись откатывается).
  */
 export const addStay = async (
   employeeId: number,
   input: IDormitoryStayInput,
 ): Promise<IDormitoryStay | 'overlap'> => {
   try {
-    const row = await queryOne<{ id: number }>(
-      `WITH stay AS (
-         INSERT INTO employee_dormitory_stays (employee_id, check_in, check_out, address)
-         VALUES ($1, $2::date, $3::date, $4) RETURNING id
-       ), remembered AS (
-         INSERT INTO dormitory_addresses (address) VALUES ($4) ON CONFLICT DO NOTHING
-       )
-       SELECT id FROM stay`,
-      [employeeId, input.check_in, input.check_out, input.address],
-    );
-    const stay = row ? await getStay(row.id) : null;
-    if (!stay) throw new Error('Проживание не найдено после добавления');
-    return stay;
+    return await withTransaction(async client => {
+      await lockPayrollEmployee(client, employeeId);
+      const row = (await client.query<{ id: number }>(
+        `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount)
+         VALUES ($1, $2, $3::date, $4::date, $5, $6) RETURNING id`,
+        [employeeId, input.kind, input.check_in, input.check_out, input.address, input.amount],
+      )).rows[0];
+      await afterWrite(client, { employee_id: employeeId, ...input }, null);
+      const stay = await readStay(client, row.id, false);
+      if (!stay) throw new Error('Проживание не найдено после добавления');
+      return stay;
+    });
   } catch (err) {
     if (hasPgCode(err, PG_EXCLUSION_VIOLATION)) return 'overlap';
     throw err;
@@ -162,24 +208,29 @@ export const addStay = async (
 };
 
 /**
- * Изменить даты и адрес. Проживания нет — null; пересечение — 'overlap'.
+ * Изменить даты, адрес и сумму (вид не меняется). Проживания нет — null; пересечение — 'overlap';
+ * квартира в добавленных днях доплаты за общежитие — DormitoryAllowanceConflictError.
  * Возвращает прежнюю и новую строки: аудит пишет «было → стало».
  */
 export const updateStay = async (
   id: number,
-  input: IDormitoryStayInput,
+  input: IDormitoryStayFields,
 ): Promise<{ before: IDormitoryStay; after: IDormitoryStay } | 'overlap' | null> => {
   try {
     return await withTransaction(async client => {
+      const current = await readStay(client, id, false);
+      if (!current) return null;
+      // Замок сотрудника — до чтения под FOR UPDATE: тот же порядок, что у доплат «Зарплаты».
+      await lockPayrollEmployee(client, current.employee_id);
       const before = await readStay(client, id, true);
       if (!before) return null;
       await client.query(
         `UPDATE employee_dormitory_stays
-            SET check_in = $2::date, check_out = $3::date, address = $4, updated_at = now()
+            SET check_in = $2::date, check_out = $3::date, address = $4, amount = $5, updated_at = now()
           WHERE id = $1`,
-        [id, input.check_in, input.check_out, input.address],
+        [id, input.check_in, input.check_out, input.address, input.amount],
       );
-      await client.query(REMEMBER_ADDRESS_SQL, [input.address]);
+      await afterWrite(client, { employee_id: before.employee_id, kind: before.kind, ...input }, before);
       const after = await readStay(client, id, false);
       return after ? { before, after } : null;
     });

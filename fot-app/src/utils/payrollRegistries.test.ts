@@ -7,12 +7,12 @@ import type {
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import {
+  apartmentRemoval,
   buildCompensationStopExport,
   buildDeductionExport,
   buildDormitoryAllowanceExport,
   dormitoryAllowanceInMonths,
   DEDUCTION_COLUMNS,
-  HOUSING_COLUMNS,
   periodIntersectsMonths,
   registryMonthOptions,
   registryMonthsParam,
@@ -26,12 +26,17 @@ import {
 import {
   oneTimeMonthOptions,
   parseDeductionForm,
-  parseHousingForm,
   parseOneTimeForm,
   parsePeriodForm,
   parsePlannedForm,
 } from './payrollRegistryForms';
-import { applyTableView, columnFilterOptions, fitRegistryColumnWidths, matchesNameSearch } from './tableView';
+import {
+  applyTableView,
+  columnFilterOptions,
+  fitRegistryColumnWidths,
+  matchesNameSearch,
+  type IRegistryColumn,
+} from './tableView';
 
 const deduction = (employeeId: number, kinds: string[], amount: string | null = null): IDeductionRegistryRow => ({
   employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, department: null, position: null, kinds,
@@ -101,13 +106,15 @@ describe('поиск по ФИО', () => {
 });
 
 describe('формы', () => {
-  it('проживание: без оклада и без суммы — ошибки, сумма с запятой и пробелами', () => {
-    expect(parseHousingForm({ selected: true, hasTerms: false, amount: '630', effectiveFrom: '2026-10-19' }))
-      .toMatchObject({ ok: false, field: 'employee', message: 'Сначала внесите оклад в окне сотрудника' });
-    expect(parseHousingForm({ selected: true, hasTerms: true, amount: '0', effectiveFrom: '2026-10-19' }))
-      .toMatchObject({ ok: false, field: 'amount' });
-    expect(parseHousingForm({ selected: true, hasTerms: true, amount: '1 250,5', effectiveFrom: '2026-10-19' }))
-      .toEqual({ ok: true, payload: { amount: 1250.5, effective_from: '2026-10-19' } });
+  it('квартира (🗑): выезд — 1-е число месяца; не начавшаяся или прошедшая — удаляется', () => {
+    // Живёт с июля — убрана с 01.10: выезд 01.10 (по 30.09 включительно).
+    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: null }, '2026-10-20'))
+      .toEqual({ action: 'close', checkOut: '2026-10-01' });
+    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: '2026-12-01' }, '2026-10-20'))
+      .toEqual({ action: 'close', checkOut: '2026-10-01' });
+    // Выехала 01.10 — в октябре уже не жила: прошедшее проживание.
+    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: '2026-10-01' }, '2026-10-20')).toEqual({ action: 'delete' });
+    expect(apartmentRemoval({ check_in: '2026-10-05', check_out: null }, '2026-10-20')).toEqual({ action: 'delete' });
   });
 
   it('плановая: окончание раньше начала', () => {
@@ -159,9 +166,15 @@ describe('формы', () => {
 
 describe('ширины столбцов: подпись в одну строку, когда хватает места', () => {
   // ФИО, Отдел 140, Должность 148, Сумма 128, Действует с 160; подпись — 8px на символ.
+  const column = (label: string, width?: number): IRegistryColumn<object> => ({
+    key: label, label, type: 'text', width, text: () => '', sortValue: () => null,
+  });
+  const COLUMNS = [
+    column('ФИО'), column('Отдел', 140), column('Должность', 148), column('Сумма, ₽/мес', 128), column('Действует с', 160),
+  ];
   const labelWidth = (label: string): number => label.length * 8;
   const fit = (containerWidth: number) => fitRegistryColumnWidths({
-    columns: HOUSING_COLUMNS, containerWidth, labelWidth, actionsWidth: 84,
+    columns: COLUMNS, containerWidth, labelWidth, actionsWidth: 84,
   });
 
   it('места много — «Сумма, ₽/мес» расширяется (12 × 8 + 58 = 154), остальные уже влезают', () => {

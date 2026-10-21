@@ -97,12 +97,12 @@ const insertAmounts = (insertCallIndex: number) => {
   return { bonus: params[13], housing: params[14] };
 };
 
-describe('условия оплаты: премиальная часть и компенсация проживания', () => {
+describe('условия оплаты: премиальная часть; проживание — не из окна (миграция 320)', () => {
   const baseBody = {
     staff_category: 'itr', calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-09-01',
   };
 
-  it('одиночное назначение сохраняет обе суммы и пишет их в аудит', async () => {
+  it('премиальная часть сохраняется; присланное проживание не пишется и в аудит не попадает', async () => {
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -111,42 +111,24 @@ describe('условия оплаты: премиальная часть и ко
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 50000, housing: 25000 });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 50000, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ bonus_amount: 50000, housing_compensation: 25000 });
+    expect(details).toMatchObject({ bonus_amount: 50000 });
+    expect(details).not.toHaveProperty('housing_compensation');
   });
 
-  it('проживание > 0, а в эти дни доплата за общежитие — 409, аудита нет; 0 и пусто — без проверки', async () => {
-    txClient.query.mockImplementation(async (sql: string) => (
-      /payroll_dormitory_allowances/.test(sql) ? { rows: [{ day: '2026-11-01' }] } : { rows: [{ id: 77 }] }
-    ));
+  it('проживание в теле — без проверки доплаты за общежитие (её делают квартиры «Проживания»)', async () => {
     const res = makeRes();
-
     await payrollTermsController.assign(makeReq({
       params: { empId: '42' },
       body: { ...baseBody, housing_compensation: 630 },
     } as Partial<AuthenticatedRequest>), res);
 
-    expect(res.statusCode).toBe(409);
-    expect(res.body).toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE', error: expect.stringContaining('01.11.2026') });
-    expect(audit.logFromRequest).not.toHaveBeenCalled();
-    // Окно проверки — с даты условий и бессрочно.
-    const check = txClient.query.mock.calls.find(call => /payroll_dormitory_allowances/.test(String(call[0])));
-    expect(check?.[1]).toEqual([42, '2026-09-01', null, null, null]);
-
-    for (const housing of [0, undefined]) {
-      txClient.query.mockClear();
-      const ok = makeRes();
-      await payrollTermsController.assign(makeReq({
-        params: { empId: '42' },
-        body: { ...baseBody, housing_compensation: housing },
-      } as Partial<AuthenticatedRequest>), ok);
-      expect(ok.statusCode, String(housing)).toBe(200);
-      expect(txClient.query.mock.calls.some(call => /payroll_dormitory_allowances/.test(String(call[0])))).toBe(false);
-    }
+    expect(res.statusCode).toBe(200);
+    expect(txClient.query.mock.calls.some(call => /payroll_dormitory_allowances/.test(String(call[0])))).toBe(false);
   });
 
-  it('0 принимается как явное значение', async () => {
+  it('0 премиальной части принимается как явное значение', async () => {
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -155,7 +137,7 @@ describe('условия оплаты: премиальная часть и ко
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 0, housing: 0 });
+    expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: 0, housing: null });
   });
 
   it('отрицательная сумма отклоняется до записи', async () => {
@@ -181,7 +163,7 @@ describe('условия оплаты: премиальная часть и ко
     expect(res.statusCode).toBe(200);
     expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: null, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ bonus_amount: null, housing_compensation: null });
+    expect(details).toMatchObject({ bonus_amount: null });
   });
 });
 
@@ -777,12 +759,14 @@ describe('payrollTermsController.list', () => {
       + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan')");
   });
 
-  it('список отдаёт премиальную часть и компенсацию проживания из условий', async () => {
+  it('список: премиальная часть — из условий, проживание — квартира «Проживания» на дату выборки', async () => {
     const res = makeRes();
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
 
-    expect(listParams().sql).toMatch(/t\.bonus_amount/);
-    expect(listParams().sql).toMatch(/t\.housing_compensation/);
+    const { sql } = listParams();
+    expect(sql).toMatch(/t\.bonus_amount/);
+    expect(sql).not.toMatch(/t\.housing_compensation/);
+    expect(sql).toMatch(/FROM employee_dormitory_stays s[\s\S]*s\.kind = 'apartment'[\s\S]*AS housing_compensation/);
   });
 
   describe('подгрузка по курсору (ФИО, id)', () => {

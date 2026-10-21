@@ -1,6 +1,7 @@
 /**
- * «Общежитие» (миграция 314): вкладка «Управления кадрами» (право /staff-control/dormitory) и таблица
- * только для чтения в «Зарплате» («Справочник» → кнопка «Общежитие»).
+ * «Проживание» (миграции 314, 320): вкладка «Управления кадрами» (право /staff-control/dormitory) — общежития
+ * и квартиры; общежития только для чтения — в «Зарплате» («Справочник» → кнопка «Общежитие»). Квартиры — те же
+ * записи, что «Доплата за проживание» «Зарплаты» (payroll-housing.controller.ts).
  *
  * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — как условия оплаты
  * (resolvePayrollReadableDepartmentIds). Запись — canWriteEmployeeInScope; уволенному (его назначения
@@ -12,62 +13,51 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { canWriteEmployeeInScope } from '../services/data-scope.service.js';
+import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import {
   addStay,
   deleteStay,
   getEmployeeState,
+  getHousingRateAmount,
   getStay,
   listAddresses,
   listStays,
   searchCandidates,
   updateStay,
-  type IDormitoryStay,
 } from '../services/dormitory-stays.service.js';
 import {
   canSeeEmployeeInStaffList,
   resolveStaffRosterEmployeeIds,
 } from '../services/employee-scope-filter.service.js';
 import { resolvePayrollReadableDepartmentIds } from '../services/payroll/payroll-scope.service.js';
+import {
+  dormitoryStayAuditDetails,
+  dormitoryStayChanged,
+  parseStayFields,
+  stayEmployeeIdSchema,
+  stayKindSchema,
+} from './dormitory-stay-input.js';
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
-const DORMITORY_SHEET = { sheetName: 'Общежитие', tableName: 'Dormitory' } as const;
-
-/** YYYY-MM-DD, и такая дата есть в календаре: 31.02 — 400, а не ошибка PostgreSQL (500). */
-const isCalendarDate = (value: string): boolean => {
-  const [year, month, day] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return year >= 1900 && year <= 2100
-    && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-};
-
-const dateSchema = (message: string) => z.string({ required_error: message, invalid_type_error: message })
-  .regex(/^\d{4}-\d{2}-\d{2}$/, message)
-  .refine(isCalendarDate, message);
-
-const stayFields = {
-  check_in: dateSchema('Укажите дату въезда'),
-  check_out: dateSchema('Неверная дата выезда').nullable().optional().transform(value => value ?? null),
-  address: z.string({ required_error: 'Укажите адрес или номер общежития' })
-    .transform(value => value.replace(/\s+/g, ' ').trim())
-    .pipe(z.string().min(1, 'Укажите адрес или номер общежития').max(200, 'Адрес — не больше 200 символов')),
-};
-
-/** Выезд строго позже въезда: в день выезда можно въехать снова (переселение). */
-const checkOutAfterCheckIn = (value: { check_in: string; check_out: string | null }): boolean =>
-  value.check_out === null || value.check_out > value.check_in;
-const DATES_ORDER = { message: 'Дата выезда должна быть позже даты въезда', path: ['check_out'] };
-
-const addSchema = z.object({
-  employee_id: z.number({ required_error: 'Выберите сотрудника', invalid_type_error: 'Выберите сотрудника' })
-    .int('Выберите сотрудника').positive('Выберите сотрудника'),
-  ...stayFields,
-}).refine(checkOutAfterCheckIn, DATES_ORDER);
-
-const updateSchema = z.object(stayFields).refine(checkOutAfterCheckIn, DATES_ORDER);
+const DORMITORY_SHEET = { sheetName: 'Проживание', tableName: 'Housing' } as const;
 
 const NOT_FOUND = { success: false, error: 'Запись не найдена' };
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
-const OVERLAP = { success: false, error: 'Сотрудник уже живёт в общежитии в эти даты', code: 'DORMITORY_OVERLAP' };
+const OVERLAP = {
+  success: false,
+  error: 'В эти даты у сотрудника уже есть проживание — в общежитии или квартире',
+  code: 'DORMITORY_OVERLAP',
+};
+
+/** Ошибка проверки или правило «одна доплата из двух» — ответ отправлен. */
+const handleStayError = (error: unknown, res: Response): boolean => {
+  if (handleZodError(error, res)) return true;
+  if (error instanceof DormitoryAllowanceConflictError) {
+    res.status(409).json({ success: false, error: error.message, code: error.code });
+    return true;
+  }
+  return false;
+};
 
 const handleZodError = (error: unknown, res: Response): boolean => {
   if (error instanceof z.ZodError) {
@@ -99,15 +89,7 @@ const canWriteStay = async (req: AuthenticatedRequest, employeeId: number): Prom
   return canSeeEmployeeInStaffList(req, employeeId);
 };
 
-const auditDetails = (stay: IDormitoryStay) => ({
-  employee_id: stay.employee_id,
-  full_name: stay.full_name,
-  check_in: stay.check_in,
-  check_out: stay.check_out,
-  address: stay.address,
-});
-
-/** GET /api/dormitory/stays — все проживания в охвате списка кадров. */
+/** GET /api/dormitory/stays — все проживания (общежития и квартиры) в охвате списка кадров. */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     res.json({ success: true, data: await listStays({ employeeIds: await rosterEmployeeIds(req) }) });
@@ -117,13 +99,13 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
   }
 };
 
-/** GET /api/payroll/dormitory-stays — та же таблица в «Зарплате», охват условий оплаты. */
+/** GET /api/payroll/dormitory-stays — общежития в «Зарплате» («Справочник» → «Общежитие»), охват условий оплаты. */
 const listForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const departments = await resolvePayrollReadableDepartmentIds(req);
     res.json({
       success: true,
-      data: await listStays({ departmentIds: departments === 'all' ? null : departments }),
+      data: await listStays({ departmentIds: departments === 'all' ? null : departments, kind: 'dormitory' }),
     });
   } catch (err) {
     console.error('dormitory.listForPayroll error:', err);
@@ -156,10 +138,25 @@ const listSavedAddresses = async (_req: AuthenticatedRequest, res: Response): Pr
   }
 };
 
-/** POST /api/dormitory/stays { employee_id, check_in, check_out?, address } — добавить проживание. */
+/** GET /api/dormitory/housing-rate — сумма по умолчанию для квартиры (ставка «Доплата за проживание»). */
+const housingRate = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ success: true, data: { amount: await getHousingRateAmount() } });
+  } catch (err) {
+    console.error('dormitory.housingRate error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения ставки' });
+  }
+};
+
+/**
+ * POST /api/dormitory/stays { employee_id, kind?, check_in, check_out?, address?, amount? } — добавить проживание:
+ * общежитие (адрес обязателен) или квартиру (сумма обязательна, адрес — по желанию).
+ */
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { employee_id: employeeId, ...input } = addSchema.parse(req.body);
+    const { employee_id: employeeId } = stayEmployeeIdSchema.parse(req.body);
+    const { kind } = stayKindSchema.parse(req.body);
+    const input = { kind, ...parseStayFields(kind, req.body) };
     // Поиск отдаёт только работающих и не подрядчиков, но тело запроса могут собрать и руками.
     const employee = await getEmployeeState(employeeId);
     if (!employee) {
@@ -186,17 +183,20 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_ADDED', {
       entityType: 'employee_dormitory_stays',
       entityId: String(stay.id),
-      details: auditDetails(stay),
+      details: dormitoryStayAuditDetails(stay),
     });
     res.json({ success: true, data: stay });
   } catch (err) {
-    if (handleZodError(err, res)) return;
+    if (handleStayError(err, res)) return;
     console.error('dormitory.add error:', err);
     res.status(500).json({ success: false, error: 'Ошибка добавления' });
   }
 };
 
-/** PATCH /api/dormitory/stays/:id { check_in, check_out?, address } — даты и адрес; сотрудник не меняется. */
+/**
+ * PATCH /api/dormitory/stays/:id { check_in, check_out?, address?, amount? } — даты, адрес и (у квартиры) сумма;
+ * сотрудник и вид не меняются.
+ */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const id = parseId(req);
@@ -204,12 +204,12 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
-    const input = updateSchema.parse(req.body);
     const current = await getStay(id);
     if (!current) {
       res.status(404).json(NOT_FOUND);
       return;
     }
+    const input = parseStayFields(current.kind, req.body);
     if (!(await canWriteStay(req, current.employee_id))) {
       res.status(403).json(NO_ACCESS);
       return;
@@ -224,16 +224,16 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
     const { before, after } = updated;
-    if (before.check_in !== after.check_in || before.check_out !== after.check_out || before.address !== after.address) {
+    if (dormitoryStayChanged(before, after)) {
       await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_UPDATED', {
         entityType: 'employee_dormitory_stays',
         entityId: String(id),
-        details: { from: auditDetails(before), to: auditDetails(after) },
+        details: { from: dormitoryStayAuditDetails(before), to: dormitoryStayAuditDetails(after) },
       });
     }
     res.json({ success: true, data: after });
   } catch (err) {
-    if (handleZodError(err, res)) return;
+    if (handleStayError(err, res)) return;
     console.error('dormitory.update error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения' });
   }
@@ -260,7 +260,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_DELETED', {
       entityType: 'employee_dormitory_stays',
       entityId: String(id),
-      details: auditDetails(deleted),
+      details: dormitoryStayAuditDetails(deleted),
     });
     res.json({ success: true, data: deleted });
   } catch (err) {
@@ -288,6 +288,7 @@ export const dormitoryStaysController = {
   listForPayroll,
   searchEmployees,
   listAddresses: listSavedAddresses,
+  housingRate,
   add,
   update,
   remove,

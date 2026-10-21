@@ -62,7 +62,8 @@ vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async ()
 
 import { withTransaction } from '../../config/postgres.js';
 import { listRates } from './payroll-rates.service.js';
-import { listHousingAllowances, setHousingFrom } from './payroll-housing.service.js';
+import { listHousingAllowances } from './payroll-housing.service.js';
+import { addStay } from '../dormitory-stays.service.js';
 import {
   addOneTimeSupplement,
   listSupplements,
@@ -110,13 +111,15 @@ const versions = async (employeeId: number) => (await run(
   [employeeId],
 )).rows;
 
-const setHousing = (employeeId: number, amount: number | null, from: string) =>
-  withTransaction(client => setHousingFrom(client, { employeeId, amount, from, createdBy: AUTHOR }));
+/** Квартира (доплата за проживание, миграция 320) — через сервис проживаний. */
+const addApartment = (employeeId: number, checkIn: string, checkOut: string | null, amount: number, address: string | null = null) =>
+  addStay(employeeId, { kind: 'apartment', check_in: checkIn, check_out: checkOut, address, amount });
 
 describe.skipIf(!PG_URL)('таблицы «Справочника» на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
+      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
+        payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rates, payroll_compensation_terms,
         payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
@@ -162,6 +165,19 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       CREATE TABLE payroll_dormitory_allowances (
         id serial PRIMARY KEY, employee_id integer NOT NULL, date_from date NOT NULL, date_to date
       );
+      -- Права для миграции 314 (проживание): столбцы и ключи — как на проде.
+      CREATE TABLE access_pages (
+        key text PRIMARY KEY, label text NOT NULL, group_code text NOT NULL, group_label text NOT NULL,
+        surface text NOT NULL, supports_edit boolean NOT NULL DEFAULT true,
+        requires_data_scope boolean NOT NULL DEFAULT false, requires_employee_variant boolean NOT NULL DEFAULT false,
+        sort_order integer NOT NULL DEFAULT 0, is_active boolean NOT NULL DEFAULT true, is_system boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+        area text NOT NULL DEFAULT 'admin'
+      );
+      CREATE TABLE role_page_access (
+        id serial PRIMARY KEY, role_code text, page_path text NOT NULL, can_view boolean, can_edit boolean,
+        UNIQUE (role_code, page_path)
+      );
     `);
     for (const name of [
       '271_payroll_terms.sql', '282_payroll_terms_bonus_housing.sql', '286_payroll_terms_compensations.sql',
@@ -172,6 +188,9 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     }
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Сварщик', 520), ('Проживание общежития', 630)`);
     await run(migration('313_payroll_rate_code.sql'));
+    for (const name of ['314_employee_dormitory_stays.sql', '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql']) {
+      await run(migration(name));
+    }
   });
 
   afterAll(async () => {
@@ -197,75 +216,53 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     expect(await isPayrollStaffEmployee(1, { ...SCOPE, departmentIds: [] })).toBe(false);
   });
 
-  describe('«Доплата за проживание»', () => {
+  describe('«Доплата за проживание» — квартиры «Проживания» (миграция 320)', () => {
     beforeAll(async () => {
-      // Версия с учётом времени «суммированный» и примечанием — разрез обязан их сохранить; и уже
-      // запланированная смена оклада с 01.12.
+      // Оклад нужен только Акимову — Егорову (без условий) квартиру вносят так же.
       await run(`
         INSERT INTO payroll_compensation_terms
-          (employee_id, staff_category, calc_type, monthly_salary, time_accounting_mode, accounting_period_months,
-           effective_from, effective_to, note, bonus_amount, travel_compensation, created_by)
-        VALUES
-          (1, 'itr', 'salary', 150000, 'summarized', 3, '2026-09-01', '2026-11-30', 'Приказ 12', 20000, 3000, '${AUTHOR}'),
-          (1, 'itr', 'salary', 170000, 'summarized', 3, '2026-12-01', NULL, 'Приказ 40', 20000, 3000, '${AUTHOR}');
+          (employee_id, staff_category, calc_type, monthly_salary, effective_from, effective_to, created_by)
+        VALUES (1, 'itr', 'salary', 150000, '2026-09-01', NULL, '${AUTHOR}');
       `);
+      expect(await addApartment(1, '2026-09-01', '2026-10-01', 630)).toMatchObject({ kind: 'apartment' });
+      expect(await addApartment(6, '2026-10-19', '2026-12-01', 700, 'ул. Рабочая, 5')).toMatchObject({ kind: 'apartment' });
+      expect(await addApartment(3, '2026-10-01', null, 630)).toMatchObject({ kind: 'apartment' });
+      expect(await addStay(2, { kind: 'dormitory', check_in: '2026-10-01', check_out: null, address: 'Общ1', amount: null }))
+        .toMatchObject({ kind: 'dormitory' });
     });
 
-    it('без условий на дату — no_terms, ничего не пишется', async () => {
-      expect(await setHousing(6, 630, '2026-10-19')).toEqual({ status: 'no_terms' });
-      expect(await setHousing(1, 630, '2026-08-01')).toEqual({ status: 'no_terms' });
-      expect(await versions(6)).toEqual([]);
-    });
-
-    it('разрез версии: все столбцы и прежний effective_to; поздняя версия получает ту же сумму', async () => {
-      const result = await setHousing(1, 630, '2026-10-19');
-      expect(result).toMatchObject({ status: 'saved', previousAmount: null, laterUpdated: 1 });
-      expect(await versions(1)).toEqual([
-        { from: '2026-09-01', to: '2026-10-18', salary: '150000.00', bonus: '20000.00', housing: null, travel: '3000.00', mode: 'summarized', months: 3, note: 'Приказ 12' },
-        { from: '2026-10-19', to: '2026-11-30', salary: '150000.00', bonus: '20000.00', housing: '630.00', travel: '3000.00', mode: 'summarized', months: 3, note: 'Приказ 12' },
-        { from: '2026-12-01', to: null, salary: '170000.00', bonus: '20000.00', housing: '630.00', travel: '3000.00', mode: 'summarized', months: 3, note: 'Приказ 40' },
-      ]);
-    });
-
-    it('повтор той же суммы — unchanged; правка в день начала версии — без нового разреза', async () => {
-      expect(await setHousing(1, 630, '2026-10-19')).toEqual({ status: 'unchanged' });
-      expect(await setHousing(1, 700, '2026-10-19')).toMatchObject({ status: 'saved', previousAmount: '630.00' });
-      expect((await versions(1)).map(v => [v.from, v.to, v.housing])).toEqual([
-        ['2026-09-01', '2026-10-18', null],
-        ['2026-10-19', '2026-11-30', '700.00'],
-        ['2026-12-01', null, '700.00'],
-      ]);
-    });
-
-    it('таблица: на сегодня, «Действует с» — начало цепочки с той же суммой', async () => {
-      const rows = await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-12-05' } });
-      expect(rows).toEqual([{
-        employee_id: 1, full_name: 'Акимов С.Ю.', department: 'ЛИНИЯ', position: null,
-        amount: '700.00', effective_from: '2026-10-19',
+    it('на дату: квартира, в которой живёт в этот день; без оклада — тоже; общежитие и подрядчик — нет', async () => {
+      expect(await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-11-05' } })).toEqual([{
+        id: expect.any(Number), employee_id: 6, full_name: 'Егоров Без оклада', department: 'ЛИНИЯ', position: null,
+        amount: '700.00', check_in: '2026-10-19', check_out: '2026-12-01', address: 'ул. Рабочая, 5',
       }]);
-      expect(await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-10-01' } })).toEqual([]);
+      // День выезда — уже не живёт.
+      expect(await listHousingAllowances({ ...SCOPE, period: { onDate: '2026-12-01' } })).toEqual([]);
     });
 
-    it('снять — null с даты; в списке условий — та же сумма, что в таблице', async () => {
-      expect(await setHousing(1, null, '2026-12-01')).toMatchObject({ status: 'saved' });
-      expect((await versions(1)).map(v => v.housing)).toEqual([null, '700.00', null]);
-
-      const res = makeRes();
-      await payrollTermsController.list(req({ query: { date: '2026-11-01' } }), res);
-      const row = res.body.data.find((r: { employee_id: number }) => r.employee_id === 1);
-      // json_agg списка отдаёт суммы числом.
-      expect(Number(row.housing_compensation)).toBe(700);
+    it('месяцы: задевающие хоть один месяц; выезд 1-го числа — в этом месяце уже нет; весь период — все', async () => {
+      const names = async (monthStarts: string[] | null) =>
+        (await listHousingAllowances({ ...SCOPE, period: { monthStarts } })).map(row => [row.employee_id, row.amount]);
+      expect(await names(['2026-09-01'])).toEqual([[1, '630.00']]);
+      expect(await names(['2026-10-01'])).toEqual([[6, '700.00']]);
+      expect(await names(['2026-09-01', '2026-11-01'])).toEqual([[1, '630.00'], [6, '700.00']]);
+      expect(await names(['2026-12-01'])).toEqual([]);
+      expect(await names(null)).toEqual([[1, '630.00'], [6, '700.00']]);
+      expect(await listHousingAllowances({ ...SCOPE, departmentIds: [], period: { monthStarts: null } })).toEqual([]);
     });
 
-    it('месяцы: последняя версия с доплатой, пересекающая месяцы; весь период — null', async () => {
-      // Версии: сентябрь — без доплаты, 19.10–30.11 — 700, с 01.12 — снята.
-      const amounts = async (monthStarts: string[] | null) =>
-        (await listHousingAllowances({ ...SCOPE, period: { monthStarts } })).map(row => [row.amount, row.effective_from]);
-      expect(await amounts(['2026-10-01'])).toEqual([['700.00', '2026-10-19']]);
-      expect(await amounts(['2026-09-01', '2026-11-01'])).toEqual([['700.00', '2026-10-19']]);
-      expect(await amounts(['2026-09-01'])).toEqual([]);
-      expect(await amounts(['2026-12-01'])).toEqual([]);
-      expect(await amounts(null)).toEqual([['700.00', '2026-10-19']]);
+    it('список условий: «Компенсация проживания» — сумма квартиры на дату выборки, не условия оплаты', async () => {
+      const housingOn = async (date: string) => {
+        const res = makeRes();
+        await payrollTermsController.list(req({ query: { date } }), res);
+        const byId = new Map<number, unknown>(res.body.data.map(
+          (r: { employee_id: number; housing_compensation: unknown }) => [r.employee_id, r.housing_compensation],
+        ));
+        return [1, 6].map(id => (byId.get(id) === null ? null : Number(byId.get(id))));
+      };
+      expect(await housingOn('2026-09-15')).toEqual([630, null]);
+      expect(await housingOn('2026-11-01')).toEqual([null, 700]);
+      expect((await versions(1)).map(v => v.housing)).toEqual([null]);
     });
   });
 

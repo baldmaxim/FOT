@@ -26,8 +26,24 @@ describe('parseDormitoryStay', () => {
   it('без выезда — живёт (null); адрес без лишних пробелов', () => {
     expect(parseDormitoryStay(draft, picked)).toEqual({
       ok: true,
-      payload: { check_in: '2026-10-01', check_out: null, address: 'Общежитие №2, комн. 14' },
+      payload: { check_in: '2026-10-01', check_out: null, address: 'Общежитие №2, комн. 14', amount: null },
     });
+  });
+
+  it('квартира: сумма обязательна и больше нуля, адрес — по желанию (пусто — null)', () => {
+    const flat = { checkIn: '2026-10-01', checkOut: '', address: '  ', amount: '1 250,5' };
+    expect(parseDormitoryStay(flat, picked, 'apartment')).toEqual({
+      ok: true,
+      payload: { check_in: '2026-10-01', check_out: null, address: null, amount: 1250.5 },
+    });
+    expect(parseDormitoryStay({ ...flat, address: ' ул. Рабочая,  5 ' }, picked, 'apartment'))
+      .toMatchObject({ ok: true, payload: { address: 'ул. Рабочая, 5' } });
+    for (const amount of ['', '0', '-5', '10,555', 'abc']) {
+      expect(parseDormitoryStay({ ...flat, amount }, picked, 'apartment'), amount).toMatchObject({ ok: false, field: 'amount' });
+    }
+    expect(parseDormitoryStay({ ...flat, address: 'а'.repeat(201) }, picked, 'apartment')).toMatchObject({ field: 'address' });
+    // У общежития сумма не читается.
+    expect(parseDormitoryStay({ ...draft, amount: '999' }, picked)).toMatchObject({ ok: true, payload: { amount: null } });
   });
 
   it('выезд строго позже въезда; день в день — нельзя', () => {

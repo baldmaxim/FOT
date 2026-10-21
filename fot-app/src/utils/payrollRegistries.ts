@@ -61,11 +61,21 @@ const dateColumn = <Row,>(key: string, label: string, value: (row: Row) => strin
   sortValue: row => value(row),
 });
 
+/** Квартиры «Проживания»: семь столбцов — отдел и должность уже, как у «Доплаты», без прокрутки в окне на 1280px. */
 export const HOUSING_COLUMNS: ReadonlyArray<IRegistryColumn<IHousingAllowanceRow>> = [
-  ...employeeColumns<IHousingAllowanceRow>(),
+  ...employeeColumns<IHousingAllowanceRow>({ department: 112, position: 144 }),
   moneyColumn<IHousingAllowanceRow>('Сумма, ₽/мес', row => row.amount),
-  // Заголовок одной строкой: «ДЕЙСТВУЕТ С» + стрелка и воронка.
-  dateColumn<IHousingAllowanceRow>('effective_from', 'Действует с', row => row.effective_from, 160),
+  dateColumn<IHousingAllowanceRow>('check_in', 'Въезд', row => row.check_in),
+  {
+    // Пусто — живёт.
+    key: 'check_out', label: 'Выезд', type: 'text', width: 112, nowrap: true,
+    text: row => (row.check_out ? formatDate(row.check_out) : '—'),
+    sortValue: row => row.check_out,
+  },
+  {
+    key: 'address', label: 'Адрес', type: 'text', width: 152,
+    text: row => orDash(row.address), sortValue: row => row.address,
+  },
 ];
 
 /** Период доплаты: плановая — «01.10.2026 – 31.12.2026», разовая — «октябрь 2026». */
@@ -210,6 +220,28 @@ export const registryRemoval = (
   const cutoff = `${month}-01`;
   if (period.date_from >= cutoff || (period.date_to !== null && period.date_to < cutoff)) return { action: 'delete' };
   return { action: 'close', cutoff, dateTo: monthEnd(shiftMonth(month, -1)) };
+};
+
+/** День до даты YYYY-MM-DD: «2026-12-01» → «2026-11-30». */
+const dayBefore = (iso: string): string => {
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+};
+
+/**
+ * 🗑 у квартиры в «Доплате за проживание» — то же правило, что у периодов «Справочника»: выезд ставится 1-м числом
+ * текущего месяца (в прошлых месяцах строка остаётся), не начавшееся или прошедшее проживание удаляется.
+ * Выезд — день, когда уже не живёт, поэтому «по» периода = день до выезда.
+ */
+export const apartmentRemoval = (
+  stay: { check_in: string; check_out: string | null },
+  todayIso: string,
+): { action: 'close'; checkOut: string } | { action: 'delete' } => {
+  const removal = registryRemoval(
+    { date_from: stay.check_in, date_to: stay.check_out === null ? null : dayBefore(stay.check_out) },
+    todayIso,
+  );
+  return removal.action === 'close' ? { action: 'close', checkOut: removal.cutoff } : removal;
 };
 
 /**

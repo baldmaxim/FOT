@@ -84,7 +84,8 @@ export const initialPayrollTermsValues = (
     amount: hasTerms ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
     money: {
       bonus: pick(row.bonus_amount),
-      housing: pick(row.housing_compensation),
+      // Проживание — квартира «Проживания» на дату (миграция 320), не условия: есть и без оклада, только показ.
+      housing: toInputValue(row.housing_compensation),
       travel: pick(row.travel_compensation),
       deduction: pick(row.deduction_amount),
     },
@@ -201,7 +202,6 @@ export const validatePayrollTerms = (
       monthly_salary: values.calcType === 'salary' ? parsed : undefined,
       hourly_rate: values.calcType === 'hourly' ? parsed : undefined,
       bonus_amount: optional.bonus,
-      housing_compensation: optional.housing,
       travel_compensation: optional.travel,
       deduction_amount: optional.deduction,
       effective_from: values.effectiveFrom,

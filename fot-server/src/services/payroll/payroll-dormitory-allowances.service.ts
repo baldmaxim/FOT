@@ -5,8 +5,8 @@
  * dormitory_allowance на момент чтения. Отдел и должность — текущие.
  *
  * Правила записи — под lockPayrollEmployee, одной транзакцией с записью (и аудитом у вызывающего):
- * - в дни проживания в общежитии (employee_dormitory_stays, [въезд, выезд)) доплату не назначить;
- * - у сотрудника одна доплата из двух: «за проживание» (housing_compensation условий оплаты) или эта.
+ * - в дни проживания в общежитии (employee_dormitory_stays kind = dormitory, [въезд, выезд)) доплату не назначить;
+ * - у сотрудника одна доплата из двух: «за проживание» (квартира — kind = apartment, миграция 320) или эта.
  * Правка проверяет только добавленные дни: сократить период или поставить «по» можно всегда, даже если
  * проживание в общежитии появилось позже.
  */
@@ -68,6 +68,7 @@ const ALLOWANCE_SELECT = `
                   ) ORDER BY s.check_in)
              FROM employee_dormitory_stays s
             WHERE s.employee_id = a.employee_id
+              AND s.kind = 'dormitory'
               AND daterange(s.check_in, s.check_out, '[)') && daterange(a.date_from, a.date_to, '[]')
          ), '[]'::json) AS dormitory_stays
     FROM payroll_dormitory_allowances a
@@ -119,59 +120,64 @@ const windowParams = (employeeId: number, window: ICheckWindow): unknown[] => [
 
 const formatRu = (iso: string): string => iso.split('-').reverse().join('.');
 
-/** Проживание в общежитии в днях окна — первое по дате; нет — null. */
+/** Проживание (общежитие или квартира) в днях окна доплаты — первое по дате; day — первый общий день. */
+interface IStayInWindow extends IDormitoryStayPeriod {
+  kind: 'dormitory' | 'apartment';
+  day: string;
+}
+
 const findStayInWindow = async (
   client: PoolClient,
   employeeId: number,
   window: ICheckWindow,
-): Promise<IDormitoryStayPeriod | null> => (await client.query<IDormitoryStayPeriod>(
-  `WITH ${WINDOW_CTE}
-   SELECT to_char(s.check_in, 'YYYY-MM-DD') AS check_in, to_char(s.check_out, 'YYYY-MM-DD') AS check_out
-     FROM win
-     JOIN employee_dormitory_stays s ON s.employee_id = $1
-    WHERE win.days && daterange(s.check_in, s.check_out, '[)')
-    ORDER BY s.check_in
-    LIMIT 1`,
-  windowParams(employeeId, window),
-)).rows[0] ?? null;
-
-/**
- * Первый день окна, в который у сотрудника одновременно доплата за проживание (версия условий с
- * housing_compensation > 0) и доплата за общежитие — по тому, что уже записано в транзакции; нет — null.
- * Общая проверка всех трёх путей: таблица «Доплата за общежитие», таблица «Доплата за проживание» и окно сотрудника.
- */
-export const findHousingAllowanceConflict = async (
-  client: PoolClient,
-  employeeId: number,
-  window: ICheckWindow,
-): Promise<string | null> => (await client.query<{ day: string }>(
+): Promise<IStayInWindow | null> => (await client.query<IStayInWindow>(
   `WITH ${WINDOW_CTE},
    hits AS (
-     SELECT win.days
-            * datemultirange(daterange(v.effective_from, v.effective_to, '[]'))
-            * datemultirange(daterange(a.date_from, a.date_to, '[]')) AS days
+     SELECT s.kind, s.check_in, s.check_out,
+            win.days * datemultirange(daterange(s.check_in, s.check_out, '[)')) AS days
        FROM win
-       JOIN payroll_compensation_terms v ON v.employee_id = $1 AND v.housing_compensation > 0
-       JOIN payroll_dormitory_allowances a ON a.employee_id = $1
+       JOIN employee_dormitory_stays s ON s.employee_id = $1
    )
-   SELECT to_char(lower(days), 'YYYY-MM-DD') AS day
+   SELECT kind,
+          to_char(check_in, 'YYYY-MM-DD') AS check_in,
+          to_char(check_out, 'YYYY-MM-DD') AS check_out,
+          to_char(lower(days), 'YYYY-MM-DD') AS day
      FROM hits
     WHERE NOT isempty(days)
     ORDER BY lower(days)
     LIMIT 1`,
   windowParams(employeeId, window),
-)).rows[0]?.day ?? null;
+)).rows[0] ?? null;
 
 /**
- * Доплата за проживание записана с даты from (таблица или окно сотрудника): в эти дни не должно быть доплаты
- * за общежитие. Вызывать в транзакции после записи, под lockPayrollEmployee — иначе бросает (откат).
+ * Квартира (доплата за проживание) записана — в её добавленных днях не должно быть доплаты за общежитие.
+ * Окно — дни [въезд, выезд) минус прежний период той же записи (у добавления прежнего нет): сократить можно всегда.
+ * Вызывать в транзакции после записи, под lockPayrollEmployee — иначе бросает (откат).
  */
-export const assertHousingWithoutDormitoryAllowance = async (
+export const assertApartmentWithoutDormitoryAllowance = async (
   client: PoolClient,
   employeeId: number,
-  from: string,
+  period: { check_in: string; check_out: string | null },
+  previous: { check_in: string; check_out: string | null } | null,
 ): Promise<void> => {
-  const day = await findHousingAllowanceConflict(client, employeeId, { from, to: null, previous: null });
+  const day = (await client.query<{ day: string }>(
+    `WITH win AS (
+       SELECT datemultirange(daterange($2::date, $3::date, '[)'))
+              - CASE WHEN $4::date IS NULL THEN '{}'::datemultirange
+                     ELSE datemultirange(daterange($4::date, $5::date, '[)')) END AS days
+     ),
+     hits AS (
+       SELECT win.days * datemultirange(daterange(a.date_from, a.date_to, '[]')) AS days
+         FROM win
+         JOIN payroll_dormitory_allowances a ON a.employee_id = $1
+     )
+     SELECT to_char(lower(days), 'YYYY-MM-DD') AS day
+       FROM hits
+      WHERE NOT isempty(days)
+      ORDER BY lower(days)
+      LIMIT 1`,
+    [employeeId, period.check_in, period.check_out, previous?.check_in ?? null, previous?.check_out ?? null],
+  )).rows[0]?.day;
   if (day) {
     throw new DormitoryAllowanceConflictError(
       'HAS_DORMITORY_ALLOWANCE',
@@ -180,23 +186,24 @@ export const assertHousingWithoutDormitoryAllowance = async (
   }
 };
 
-/** Проверки доплаты за общежитие в добавленных днях; запись уже сделана (проверка доплаты за проживание — по ней). */
+/**
+ * Проверки доплаты за общежитие в добавленных днях: живёт в общежитии — нельзя; живёт в квартире (доплата
+ * за проживание) — одна доплата из двух.
+ */
 const assertAllowanceDays = async (client: PoolClient, employeeId: number, window: ICheckWindow): Promise<void> => {
   const stay = await findStayInWindow(client, employeeId, window);
-  if (stay) {
+  if (!stay) return;
+  if (stay.kind === 'dormitory') {
     const until = stay.check_out ? `, выезд ${formatRu(stay.check_out)}` : '';
     throw new DormitoryAllowanceConflictError(
       'LIVES_IN_DORMITORY',
       `В эти даты сотрудник живёт в общежитии (въезд ${formatRu(stay.check_in)}${until}) — доплату за общежитие назначить нельзя`,
     );
   }
-  const day = await findHousingAllowanceConflict(client, employeeId, window);
-  if (day) {
-    throw new DormitoryAllowanceConflictError(
-      'HAS_HOUSING',
-      `С ${formatRu(day)} у сотрудника доплата за проживание — одновременно с ней доплату за общежитие назначить нельзя`,
-    );
-  }
+  throw new DormitoryAllowanceConflictError(
+    'HAS_HOUSING',
+    `С ${formatRu(stay.day)} у сотрудника доплата за проживание — одновременно с ней доплату за общежитие назначить нельзя`,
+  );
 };
 
 export type DormitoryAllowanceSaveResult = { status: 'saved' | 'unchanged'; allowance: IDormitoryAllowance };

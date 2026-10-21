@@ -85,6 +85,7 @@ const READS: Array<['get' | 'post', string]> = [['get', '/api/dormitory/stays'],
 const WRITES: Array<['get' | 'post' | 'patch' | 'delete', string]> = [
   ['get', '/api/dormitory/employees/search?q=Кар'],
   ['get', '/api/dormitory/addresses'],
+  ['get', '/api/dormitory/housing-rate'],
   ['post', '/api/dormitory/stays'],
   ['patch', '/api/dormitory/stays/7'],
   ['delete', '/api/dormitory/stays/7'],
@@ -111,7 +112,7 @@ describe('права вкладки «Общежитие»', () => {
       expect((await send(method, url, 'hr_admin')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual([
-      'dormitory.list', 'dormitory.exportTable', 'dormitory.searchEmployees', 'dormitory.listAddresses',
+      'dormitory.list', 'dormitory.exportTable', 'dormitory.searchEmployees', 'dormitory.listAddresses', 'dormitory.housingRate',
       'dormitory.add', 'dormitory.update', 'dormitory.remove',
     ]);
   });

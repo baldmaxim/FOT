@@ -1,18 +1,25 @@
 import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
 
-/** Проживание сотрудника в общежитии (миграция 314). Отдел и должность — текущие. */
+/** Общежитие компании или квартира — «Доплата за проживание» «Зарплаты» (миграция 320). */
+export type DormitoryStayKind = 'dormitory' | 'apartment';
+
+/** Проживание сотрудника (миграции 314, 320). Отдел и должность — текущие. */
 export interface IDormitoryStay {
   id: number;
   employee_id: number;
   full_name: string;
   department: string | null;
   position: string | null;
+  kind: DormitoryStayKind;
   /** YYYY-MM-DD. */
   check_in: string;
   /** YYYY-MM-DD; живёт — null. */
   check_out: string | null;
-  address: string;
+  /** У общежития — всегда; у квартиры — если указали. */
+  address: string | null;
+  /** Только у квартиры: ₽/мес, numeric строкой. */
+  amount: string | null;
 }
 
 /** Работающий сотрудник для «Добавить сотрудника». */
@@ -26,7 +33,9 @@ export interface IDormitoryCandidate {
 export interface IDormitoryStayPayload {
   check_in: string;
   check_out: string | null;
-  address: string;
+  address: string | null;
+  /** Только у квартиры. */
+  amount: number | null;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
@@ -36,15 +45,16 @@ export const DORMITORY_STAYS_KEY = ['dormitory-stays'] as const;
 export const PAYROLL_DORMITORY_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'payroll'] as const;
 /** Под тем же префиксом: сохранение проживания перечитывает и подсказки адресов. */
 export const DORMITORY_ADDRESSES_KEY = [...DORMITORY_STAYS_KEY, 'addresses'] as const;
+export const DORMITORY_HOUSING_RATE_KEY = [...DORMITORY_STAYS_KEY, 'housing-rate'] as const;
 
 export const dormitoryService = {
-  /** «Управление кадрами» → «Общежитие»: охват списка кадров. */
+  /** «Управление кадрами» → «Проживание»: общежития и квартиры, охват списка кадров. */
   list: async (signal?: AbortSignal): Promise<IDormitoryStay[]> => {
     const res = await apiClient.get<IApiResponse<IDormitoryStay[]>>('/dormitory/stays', { signal });
     return res.data;
   },
 
-  /** «Зарплата» → «Справочник» → «Общежитие» (кнопка в шапке): охват условий оплаты. */
+  /** «Зарплата» → «Справочник» → «Общежитие» (кнопка в шапке): только общежития, охват условий оплаты. */
   listForPayroll: async (signal?: AbortSignal): Promise<IDormitoryStay[]> => {
     const res = await apiClient.get<IApiResponse<IDormitoryStay[]>>('/payroll/dormitory-stays', { signal });
     return res.data;
@@ -64,9 +74,20 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** Пересечение с другим проживанием сотрудника — ApiError 409. */
-  add: async (employeeId: number, payload: IDormitoryStayPayload): Promise<IDormitoryStay> => {
-    const res = await apiClient.post<IApiResponse<IDormitoryStay>>('/dormitory/stays', { employee_id: employeeId, ...payload });
+  /** Сумма по умолчанию для квартиры — ставка «Доплата за проживание»; не задана — null. */
+  housingRate: async (signal?: AbortSignal): Promise<string | null> => {
+    const res = await apiClient.get<IApiResponse<{ amount: string | null }>>('/dormitory/housing-rate', { signal });
+    return res.data.amount;
+  },
+
+  /**
+   * Пересечение с другим проживанием сотрудника — ApiError 409; квартира в днях «Доплаты за общежитие» — тоже 409.
+   */
+  add: async (employeeId: number, kind: DormitoryStayKind, payload: IDormitoryStayPayload): Promise<IDormitoryStay> => {
+    const res = await apiClient.post<IApiResponse<IDormitoryStay>>(
+      '/dormitory/stays',
+      { employee_id: employeeId, kind, ...payload },
+    );
     return res.data;
   },
 
