@@ -3,6 +3,8 @@
  *
  * Виды сотруднику отмечаются в окне его карточки на «Расчётах» и сохраняются вместе с ней.
  * Справочник правится в окне «Справочник» на «Расчётах»: добавить, переименовать, удалить вид.
+ * Удержания, внесённые кадрами («Управление кадрами» → «Удержания», миграция 318), окно сотрудника показывает
+ * только для чтения.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -21,6 +23,7 @@ import {
 } from '../services/payroll/payroll-deduction-kinds.service.js';
 import { canEditPayrollEmployee, canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 import { lockPayrollEmployee } from '../services/payroll/payroll-terms.service.js';
+import { listDeductions } from '../services/staff-deductions.service.js';
 import { handlePayrollZodError, parsePayrollDictionaryId, payrollDictionaryNameSchema } from './payroll-dictionary.helpers.js';
 
 const kindNameSchema = z.object({ name: payrollDictionaryNameSchema('Введите название вида') });
@@ -46,6 +49,24 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
   } catch (err) {
     console.error('payrollDeductions.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения удержаний сотрудника' });
+  }
+};
+
+/**
+ * GET /api/payroll/deductions/employee/:empId/staff — удержания сотрудника, внесённые кадрами (вид, месяц, сумма):
+ * в окне сотрудника на «Расчётах» только для чтения.
+ */
+const getStaffByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = parseEmployeeId(req);
+    if (employeeId === null || !(await canReadPayrollEmployee(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+    res.json({ success: true, data: await listDeductions({ employeeIds: [employeeId] }) });
+  } catch (err) {
+    console.error('payrollDeductions.getStaffByEmployee error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения удержаний из кадров' });
   }
 };
 
@@ -177,4 +198,12 @@ const deleteKind = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-export const payrollDeductionsController = { getByEmployee, saveByEmployee, listKinds, addKind, renameKind, deleteKind };
+export const payrollDeductionsController = {
+  getByEmployee,
+  getStaffByEmployee,
+  saveByEmployee,
+  listKinds,
+  addKind,
+  renameKind,
+  deleteKind,
+};

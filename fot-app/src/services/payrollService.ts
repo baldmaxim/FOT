@@ -1,4 +1,5 @@
 import { apiClient } from '../api/client';
+import type { IStaffDeduction } from './staffDeductionService';
 
 /** Категория персонала — по отделу сотрудника (её ставит сервер); на расчёт не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
@@ -414,6 +415,15 @@ export const payrollService = {
   },
 
   /** Виды удержаний сотрудника — для «Удержания» в окне карточки на «Расчётах». */
+  /** Удержания сотрудника, внесённые кадрами («Управление кадрами» → «Удержания»), — только чтение. */
+  getEmployeeStaffDeductions: async (employeeId: number, signal?: AbortSignal): Promise<IStaffDeduction[]> => {
+    const res = await apiClient.get<IApiResponse<IStaffDeduction[]>>(
+      `/payroll/deductions/employee/${employeeId}/staff`,
+      { signal },
+    );
+    return res.data;
+  },
+
   getEmployeeDeductions: async (employeeId: number, signal?: AbortSignal): Promise<number[]> => {
     const res = await apiClient.get<IApiResponse<{ kind_ids: number[] }>>(
       `/payroll/deductions/employee/${employeeId}`,

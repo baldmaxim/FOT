@@ -22,6 +22,7 @@ import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { PaidHistorySection } from './PaidHistorySection';
 import { SalaryHistorySection } from './SalaryHistorySection';
+import { StaffDeductionsList } from './StaffDeductionsList';
 import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
 
@@ -202,6 +203,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           deductionKinds={(
             <DeductionKindsField id={`${idPrefix}-deduction-kinds`} deductions={deductions} readOnly={!canEdit} />
           )}
+          staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
         />
 
         <div className={styles.reference}>

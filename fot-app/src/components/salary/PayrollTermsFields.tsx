@@ -37,6 +37,8 @@ interface IPayrollTermsFieldsProps {
   stacked?: boolean;
   /** «Вид» в «Удержании» — виды удержаний сотрудника. Не передан — поля нет. */
   deductionKinds?: ReactNode;
+  /** Под «Видом» и «Суммой» в «Удержании» — удержания, внесённые кадрами (только чтение). */
+  staffDeductions?: ReactNode;
   /**
    * Вкладка «Подробно» — только просмотр: в «Основной оплате» лишь Категория и «Оплачено», секций Компенсация,
    * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах».
@@ -71,6 +73,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   paid,
   stacked = false,
   deductionKinds,
+  staffDeductions,
   detailsOnly = false,
   total = false,
 }) => {
@@ -280,6 +283,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                 </div>
               </div>
             </div>
+            {staffDeductions}
           </section>
         </>
       )}

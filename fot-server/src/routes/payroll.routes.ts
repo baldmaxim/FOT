@@ -53,6 +53,8 @@ router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addK
 router.patch('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.renameKind);
 router.delete('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.deleteKind);
 router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
+// Удержания из «Управления кадрами» (миграция 318) — в окне сотрудника только для чтения.
+router.get('/deductions/employee/:empId/staff', deductionsView, payrollDeductionsController.getStaffByEmployee);
 router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
 
 // ─── Справочник ставок (окно «Справочник» на «Расчётах») ─────────────────────

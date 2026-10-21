@@ -115,6 +115,28 @@ describe('payrollDeductionsController: виды сотрудника', () => {
   });
 });
 
+describe('payrollDeductionsController.getStaffByEmployee: удержания из кадров', () => {
+  it('вне скоупа — 403 без запроса; в скоупе — строки только этого сотрудника', async () => {
+    scope.canReadPayrollEmployee.mockResolvedValueOnce(false);
+    const denied = makeRes();
+    await payrollDeductionsController.getStaffByEmployee(makeReq({ params: { empId: '7' } }), denied);
+    expect(denied.statusCode).toBe(403);
+    expect(pgQuery).not.toHaveBeenCalled();
+
+    const bad = makeRes();
+    await payrollDeductionsController.getStaffByEmployee(makeReq({ params: { empId: 'x' } }), bad);
+    expect(bad.statusCode).toBe(403);
+
+    const row = { id: 1, employee_id: 7, kind_name: 'Штраф за мусор', month: '2026-10', amount: '5000.00' };
+    pgQuery.mockResolvedValueOnce([row]);
+    const res = makeRes();
+    await payrollDeductionsController.getStaffByEmployee(makeReq({ params: { empId: '7' } }), res);
+    expect(res.body.data).toEqual([row]);
+    expect(pgQuery.mock.calls[0][0]).toContain('FROM staff_deductions');
+    expect(pgQuery.mock.calls[0][1]).toEqual([[7]]);
+  });
+});
+
 describe('payrollDeductionsController.addKind', () => {
   it('пробелы схлопываются, вид добавляется и пишется в аудит', async () => {
     pgQueryOne.mockResolvedValue({ id: 7, name: 'Штраф за опоздание' });
