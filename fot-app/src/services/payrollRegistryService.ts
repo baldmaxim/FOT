@@ -1,6 +1,7 @@
 import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
 import { payrollService } from './payrollService';
+import type { IStaffDeduction, IStaffDeductionPayload } from './staffDeductionService';
 
 /**
  * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата за проживание», «Доплата за общежитие»,
@@ -87,24 +88,12 @@ export interface IDormitoryAllowanceRow {
   can_edit: boolean;
 }
 
-/** Удержания сотрудника: виды (текущий набор, датой не хранятся) и «Сумма, ₽/мес» из условий периода. */
-export interface IDeductionRegistryRow {
-  employee_id: number;
-  full_name: string;
-  department: string | null;
-  position: string | null;
-  kinds: string[];
-  /** id тех же видов — для правки строки. */
-  kind_ids: number[];
-  amount: string | null;
+/**
+ * Удержание (миграция 321): та же запись, что во вкладке кадров «Удержания» (вид, подвид, месяц, сумма), с правом
+ * правки строки.
+ */
+export interface IDeductionRegistryRow extends IStaffDeduction {
   can_edit: boolean;
-}
-
-/** Удержание из таблицы: виды целиком (пусто — снять все), сумма ₽/мес с даты (null — снять). */
-export interface IDeductionRegistryPayload {
-  kind_ids: number[];
-  amount: number | null;
-  effective_from: string;
 }
 
 /** Кандидат в «Добавить сотрудника» — строка списка условий оплаты («штат зарплаты»). */
@@ -254,11 +243,19 @@ export const payrollRegistryService = {
 
   /** months — registryMonthsParam выбора. */
   listDeductions: (months: string, signal?: AbortSignal) =>
-    list<IDeductionRegistryRow>(withMonths('/payroll/deduction-registry', months), signal),
+    list<IDeductionRegistryRow>(withMonths('/payroll/staff-deductions', months), signal),
 
-  /** Сумма без условий на дату — ApiError 409 NO_TERMS (виды тогда тоже не сохраняются). */
-  saveDeduction: async (employeeId: number, payload: IDeductionRegistryPayload): Promise<void> => {
-    await apiClient.put(`/payroll/deduction-registry/employee/${employeeId}`, payload);
+  /** Вида или подвида уже нет — ApiError 409. */
+  addDeduction: async (employeeId: number, payload: IStaffDeductionPayload): Promise<void> => {
+    await apiClient.post('/payroll/staff-deductions', { employee_id: employeeId, ...payload });
+  },
+
+  updateDeduction: async (id: number, payload: IStaffDeductionPayload): Promise<void> => {
+    await apiClient.patch(`/payroll/staff-deductions/${id}`, payload);
+  },
+
+  removeDeduction: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/staff-deductions/${id}`);
   },
 
   /** xlsx ровно той таблицы, что на экране: сортировка и фильтры уже применены. */

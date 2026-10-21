@@ -1,6 +1,5 @@
 import type {
   ICompensationStop,
-  IDeductionRegistryRow,
   IDormitoryAllowanceRow,
   IDormitoryStayPeriod,
   IHousingAllowanceRow,
@@ -137,20 +136,6 @@ export const DORMITORY_ALLOWANCE_COLUMNS: ReadonlyArray<IRegistryColumn<IDormito
   moneyColumn<IDormitoryAllowanceRow>('Сумма, ₽/мес', row => row.amount),
 ];
 
-const NO_KINDS = '—';
-
-export const DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IDeductionRegistryRow>> = [
-  ...employeeColumns<IDeductionRegistryRow>(),
-  {
-    key: 'kinds', label: 'Вид удержания', type: 'text', width: 220,
-    text: row => (row.kinds.length > 0 ? row.kinds.join(', ') : NO_KINDS),
-    sortValue: row => (row.kinds.length > 0 ? row.kinds.join(', ') : null),
-    // Фильтр — по отдельным видам: «ТМЦ» находит и «ТМЦ, Питание».
-    filterValues: row => (row.kinds.length > 0 ? row.kinds : [NO_KINDS]),
-  },
-  moneyColumn<IDeductionRegistryRow>('Сумма, ₽/мес', row => row.amount),
-];
-
 /** Снимок xlsx таблицы: «Название_2026-10-19.xlsx», подзаголовок — дата выгрузки. */
 const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColumn<Row>>) =>
   (rows: ReadonlyArray<Row>): ITableExportSnapshot => {
@@ -167,7 +152,6 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
 export const buildHousingExport = buildSnapshot('Доплата за проживание', HOUSING_COLUMNS);
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
-export const buildDeductionExport = buildSnapshot('Удержания', DEDUCTION_COLUMNS);
 export const buildDormitoryAllowanceExport = buildSnapshot('Доплата за общежитие', DORMITORY_ALLOWANCE_COLUMNS);
 
 /**

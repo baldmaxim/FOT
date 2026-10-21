@@ -35,9 +35,10 @@ interface IPayrollTermsFieldsProps {
   paid?: ReactNode;
   /** «Основная оплата» в одну колонку: сумма и премия — под «Категорией · Видом оплаты · Действует с». */
   stacked?: boolean;
-  /** «Вид» в «Удержании» — виды удержаний сотрудника. Не передан — поля нет. */
-  deductionKinds?: ReactNode;
-  /** Под «Видом» и «Суммой» в «Удержании» — удержания, внесённые кадрами (только чтение). */
+  /**
+   * «Удержание» — удержания сотрудника (вид, подвид, месяц, сумма; только чтение — вносят в «Справочнике» и у кадров,
+   * миграция 321). Не передан — секции нет.
+   */
   staffDeductions?: ReactNode;
   /**
    * Вкладка «Подробно» — только просмотр: в «Основной оплате» лишь Категория и «Оплачено», секций Компенсация,
@@ -75,7 +76,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   autoFocus = false,
   paid,
   stacked = false,
-  deductionKinds,
   staffDeductions,
   detailsOnly = false,
   total = false,
@@ -283,18 +283,12 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
             </section>
           )}
 
-          <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
-            <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
-            <div className={styles.halves}>
-              <div className={styles.half}>
-                <div className={styles.row}>
-                  {deductionKinds}
-                  {renderMoney('deduction', 'Сумма, ₽/мес', form.money.deduction, value => form.changeMoney('deduction', value))}
-                </div>
-              </div>
-            </div>
-            {staffDeductions}
-          </section>
+          {staffDeductions && (
+            <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
+              <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
+              {staffDeductions}
+            </section>
+          )}
         </>
       )}
     </div>

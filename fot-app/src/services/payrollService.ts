@@ -1,5 +1,10 @@
 import { apiClient } from '../api/client';
-import type { IStaffDeduction } from './staffDeductionService';
+import type {
+  IDeductionSubkind,
+  IDeductionSubkindsApi,
+  IStaffDeduction,
+  IStaffDeductionKind,
+} from './staffDeductionService';
 
 /** Категория персонала — по отделу сотрудника (её ставит сервер); на расчёт не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
@@ -52,8 +57,6 @@ export interface IPayrollTermsRow {
   /** Компенсации проезда и связи, ₽/мес. */
   travel_compensation?: string | number | null;
   communication_compensation?: string | number | null;
-  /** Ежемесячное удержание, ₽/мес. */
-  deduction_amount?: string | number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -96,7 +99,6 @@ export interface IPayrollTermsHistoryRow {
   housing_compensation: string | number | null;
   travel_compensation: string | number | null;
   communication_compensation: string | number | null;
-  deduction_amount: string | number | null;
   staff_units: string | number;
   effective_from: string;
   effective_to: string | null;
@@ -118,7 +120,6 @@ export interface IAssignTermsPayload {
   housing_compensation?: number;
   travel_compensation?: number;
   communication_compensation?: number;
-  deduction_amount?: number;
   staff_units?: number;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
@@ -280,7 +281,7 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.cf) search.set('cf', params.cf);
 };
 
-/** Вид удержания из справочника («Расчёты»). */
+/** Вид удержания — ответ на добавление и переименование в «Справочнике» (список — с подвидами, IStaffDeductionKind). */
 export interface IPayrollDeductionKind {
   id: number;
   name: string;
@@ -408,37 +409,19 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Справочник видов удержаний — в порядке списка. */
-  listDeductionKinds: async (signal?: AbortSignal): Promise<IPayrollDeductionKind[]> => {
-    const res = await apiClient.get<IApiResponse<IPayrollDeductionKind[]>>('/payroll/deduction-kinds', { signal });
+  /** Справочник видов удержаний с подвидами — в порядке списка; то же дерево, что у кадров. */
+  listDeductionKinds: async (signal?: AbortSignal): Promise<IStaffDeductionKind[]> => {
+    const res = await apiClient.get<IApiResponse<IStaffDeductionKind[]>>('/payroll/deduction-kinds', { signal });
     return res.data;
   },
 
-  /** Виды удержаний сотрудника — для «Удержания» в окне карточки на «Расчётах». */
-  /** Удержания сотрудника, внесённые кадрами («Управление кадрами» → «Удержания»), — только чтение. */
+  /** Удержания сотрудника (вид, подвид, месяц, сумма) — в его окне на «Расчётах» только чтение. */
   getEmployeeStaffDeductions: async (employeeId: number, signal?: AbortSignal): Promise<IStaffDeduction[]> => {
     const res = await apiClient.get<IApiResponse<IStaffDeduction[]>>(
       `/payroll/deductions/employee/${employeeId}/staff`,
       { signal },
     );
     return res.data;
-  },
-
-  getEmployeeDeductions: async (employeeId: number, signal?: AbortSignal): Promise<number[]> => {
-    const res = await apiClient.get<IApiResponse<{ kind_ids: number[] }>>(
-      `/payroll/deductions/employee/${employeeId}`,
-      { signal },
-    );
-    return res.data.kind_ids;
-  },
-
-  /** Заменить виды удержаний сотрудника; ответ — сохранённый набор в порядке справочника. */
-  saveEmployeeDeductions: async (employeeId: number, kindIds: number[]): Promise<number[]> => {
-    const res = await apiClient.put<IApiResponse<{ kind_ids: number[] }>>(
-      `/payroll/deductions/employee/${employeeId}`,
-      { kind_ids: kindIds },
-    );
-    return res.data.kind_ids;
   },
 
   /** Добавить вид удержания; такой уже есть — ApiError 409. */
@@ -453,10 +436,25 @@ export const payrollService = {
     return res.data;
   },
 
-  /** Удалить вид удержания; отмечен у сотрудников — ApiError 409. */
+  /** Удалить вид удержания; назначен сотрудникам — ApiError 409. */
   deleteDeductionKind: async (kindId: number): Promise<void> => {
     await apiClient.delete<IApiResponse<IPayrollDeductionKind>>(`/payroll/deduction-kinds/${kindId}`);
   },
+
+  /** Подвиды видов — тот же справочник, что у кадров, через API «Зарплаты». */
+  deductionSubkinds: {
+    add: async (kindId, payload) => {
+      const res = await apiClient.post<IApiResponse<IDeductionSubkind>>(`/payroll/deduction-kinds/${kindId}/subkinds`, payload);
+      return res.data;
+    },
+    update: async (subkindId, payload) => {
+      const res = await apiClient.patch<IApiResponse<IDeductionSubkind>>(`/payroll/deduction-subkinds/${subkindId}`, payload);
+      return res.data;
+    },
+    remove: async subkindId => {
+      await apiClient.delete<IApiResponse<IDeductionSubkind>>(`/payroll/deduction-subkinds/${subkindId}`);
+    },
+  } satisfies IDeductionSubkindsApi,
 
   /** Справочник ставок — в порядке добавления. */
   listRates: async (signal?: AbortSignal): Promise<IPayrollRate[]> => {

@@ -60,7 +60,6 @@ vi.mock('../../config/contractor.js', () => ({
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
-import { withTransaction } from '../../config/postgres.js';
 import { listRates } from './payroll-rates.service.js';
 import { listHousingAllowances } from './payroll-housing.service.js';
 import { addStay } from '../dormitory-stays.service.js';
@@ -74,10 +73,11 @@ import {
   listCompensationStops,
   updateCompensationStop,
 } from './payroll-compensation-stops.service.js';
-import { listDeductionRegistry, setEmployeeDeductionKinds } from './payroll-deduction-kinds.service.js';
+import { listDeductionKindTree } from './payroll-deduction-subkinds.service.js';
+import { deleteDeduction, listDeductions } from '../staff-deductions.service.js';
 import { canWritePayrollRegistryEmployee, isPayrollStaffEmployee } from './payroll-registry-scope.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
-import { payrollRegistryController } from '../../controllers/payroll-registry.controller.js';
+import { payrollStaffDeductionsController } from '../../controllers/payroll-staff-deductions.controller.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -121,7 +121,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
         payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rates, payroll_compensation_terms,
-        payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
+        staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
+        employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid, kind text);
@@ -188,7 +189,10 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     }
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Сварщик', 520), ('Проживание общежития', 630)`);
     await run(migration('313_payroll_rate_code.sql'));
-    for (const name of ['314_employee_dormitory_stays.sql', '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql']) {
+    for (const name of [
+      '314_employee_dormitory_stays.sql', '318_staff_deductions.sql', '319_dormitory_addresses.sql',
+      '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql',
+    ]) {
       await run(migration(name));
     }
   });
@@ -354,85 +358,54 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     });
   });
 
-  describe('«Удержания»', () => {
-    it('по виду или по сумме в условиях на дату', async () => {
-      await withTransaction(client => setEmployeeDeductionKinds(client, 2, [2, 1]));
-      await run(`
-        INSERT INTO payroll_compensation_terms (employee_id, staff_category, calc_type, hourly_rate, effective_from, deduction_amount)
-        VALUES (6, 'worker', 'hourly', 450, '2026-10-01', 1500)
-      `);
-      const rows = await listDeductionRegistry({ ...SCOPE, period: { onDate: '2026-10-19' } });
-      expect(rows.map(row => [row.employee_id, row.kinds, row.kind_ids, row.amount])).toEqual([
-        [2, ['Корректировка удержаний', 'ТМЦ'], [1, 2], null],
-        [6, [], [], '1500.00'],
+  describe('«Удержания» — те же записи, что во вкладке кадров (миграция 321)', () => {
+    const call = async (
+      handler: 'add' | 'update' | 'remove' | 'list',
+      over: Record<string, unknown>,
+    ) => {
+      const res = makeRes();
+      await payrollStaffDeductionsController[handler](req(over), res);
+      return res;
+    };
+    const kinds = async () => Object.fromEntries((await listDeductionKindTree()).map(kind => [kind.name, kind.id]));
+
+    it('добавили в «Зарплате» — видно кадрам; удалили у кадров — нет и в «Зарплате»', async () => {
+      const { Спецодежда: workwear } = await kinds();
+      const added = await call('add', { body: { employee_id: 2, kind_id: workwear, month: '2026-10', amount: 800 } });
+      expect(added.statusCode).toBe(200);
+      expect(added.body.data).toMatchObject({ employee_id: 2, kind_name: 'Спецодежда', subkind_id: null, amount: '800.00' });
+      expect((await listDeductions({ employeeIds: [2] })).map(row => row.id)).toEqual([added.body.data.id]);
+
+      const listed = await call('list', { query: { months: '2026-10' } });
+      expect(listed.body.data).toEqual([{ ...added.body.data, can_edit: true }]);
+
+      await deleteDeduction(added.body.data.id);
+      expect((await call('list', { query: { months: 'all' } })).body.data).toEqual([]);
+    });
+
+    it('правка в «Зарплате» видна кадрам; подрядчику, уволенному, архивному — не добавить; чужое — 403', async () => {
+      const { Штрафы: fines, Питание: meals } = await kinds();
+      const added = await call('add', { body: { employee_id: 1, kind_id: fines, month: '2026-10', amount: 1000 } });
+      const updated = await call('update', {
+        params: { id: String(added.body.data.id) },
+        body: { kind_id: meals, month: '2026-11', amount: 500 },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(await listDeductions({ employeeIds: [1] })).toEqual([
+        expect.objectContaining({ kind_name: 'Питание', month: '2026-11', amount: '500.00' }),
       ]);
-    });
 
-    it('месяцы: сумма — из версии месяца; виды без дат — в любом месяце', async () => {
-      const rows = async (monthStarts: string[] | null) =>
-        (await listDeductionRegistry({ ...SCOPE, period: { monthStarts } })).map(row => [row.employee_id, row.amount]);
-      expect(await rows(['2026-09-01'])).toEqual([[2, null]]);
-      expect(await rows(['2026-10-01'])).toEqual([[2, null], [6, '1500.00']]);
-      expect(await rows(null)).toEqual([[2, null], [6, '1500.00']]);
-    });
+      for (const [employeeId, status] of [[3, 400], [4, 400], [5, 400], [999, 404]]) {
+        const res = await call('add', { body: { employee_id: employeeId, kind_id: meals, month: '2026-10', amount: 1 } });
+        expect(res.statusCode, String(employeeId)).toBe(status);
+      }
 
-    describe('сохранение из таблицы', () => {
-      const save = async (employeeId: number, body: Record<string, unknown>) => {
-        const res = makeRes();
-        await payrollRegistryController.saveDeductions(req({ params: { empId: String(employeeId) }, body }), res);
-        return res;
-      };
-      const kindsOf = async (employeeId: number) => (await run(
-        'SELECT kind_id FROM payroll_employee_deductions WHERE employee_id = $1 ORDER BY kind_id', [employeeId],
-      )).rows.map(row => row.kind_id);
-      const deductionVersions = async (employeeId: number) => (await run(
-        `SELECT to_char(effective_from, 'YYYY-MM-DD') AS from, to_char(effective_to, 'YYYY-MM-DD') AS to,
-                deduction_amount::text AS amount, hourly_rate::text AS rate
-           FROM payroll_compensation_terms WHERE employee_id = $1 ORDER BY effective_from`,
-        [employeeId],
-      )).rows;
-
-      it('сумма без условий на дату — 409, виды тоже не сохранились', async () => {
-        const res = await save(2, { kind_ids: [3], amount: 900, effective_from: '2026-10-19' });
-        expect(res.statusCode).toBe(409);
-        expect(res.body.code).toBe('NO_TERMS');
-        expect(await kindsOf(2)).toEqual([1, 2]);
-      });
-
-      it('сумма null без условий — сохраняются только виды', async () => {
-        const res = await save(2, { kind_ids: [3], amount: null, effective_from: '2026-10-19' });
-        expect(res.statusCode).toBe(200);
-        expect(res.body.data).toEqual({ changed: true });
-        expect(await kindsOf(2)).toEqual([3]);
-      });
-
-      it('сумма с даты — разрез версии, ставка сохраняется', async () => {
-        const res = await save(6, { kind_ids: [1], amount: 2000, effective_from: '2026-11-01' });
-        expect(res.statusCode).toBe(200);
-        expect(await deductionVersions(6)).toEqual([
-          { from: '2026-10-01', to: '2026-10-31', amount: '1500.00', rate: '450.0000' },
-          { from: '2026-11-01', to: null, amount: '2000.00', rate: '450.0000' },
-        ]);
-        expect(await kindsOf(6)).toEqual([1]);
-      });
-
-      it('два параллельных сохранения — итог целиком одного из них', async () => {
-        const [first, second] = await Promise.all([
-          save(6, { kind_ids: [1], amount: 3000, effective_from: '2026-12-01' }),
-          save(6, { kind_ids: [2], amount: 4000, effective_from: '2026-12-01' }),
-        ]);
-        expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
-        const amount = (await deductionVersions(6)).at(-1)?.amount;
-        const kinds = await kindsOf(6);
-        expect([[[1], '3000.00'], [[2], '4000.00']]).toContainEqual([kinds, amount]);
-      });
-
-      it('снять — пустые виды и сумма null с даты', async () => {
-        const res = await save(6, { kind_ids: [], amount: null, effective_from: '2027-01-01' });
-        expect(res.statusCode).toBe(200);
-        expect(await kindsOf(6)).toEqual([]);
-        expect((await deductionVersions(6)).at(-1)).toMatchObject({ from: '2027-01-01', amount: null });
-      });
+      // Строку уволенного «Зарплата» не правит: её правят кадры.
+      await run(`INSERT INTO staff_deductions (employee_id, kind_id, month, amount) VALUES (4, $1, '2026-09-01', 300)`, [meals]);
+      const dismissedRow = (await listDeductions({ employeeIds: [4] }))[0];
+      const denied = await call('remove', { params: { id: String(dismissedRow.id) } });
+      expect(denied.statusCode).toBe(403);
+      expect(await listDeductions({ employeeIds: [4] })).toHaveLength(1);
     });
   });
 });

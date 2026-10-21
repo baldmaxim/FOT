@@ -12,7 +12,7 @@ import {
 } from './payrollTermsForm';
 import type { IPayrollTermsRow } from '../services/payrollService';
 
-const EMPTY_MONEY = { bonus: '', housing: '', travel: '', deduction: '' };
+const EMPTY_MONEY = { bonus: '', housing: '', travel: '' };
 const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
@@ -33,7 +33,7 @@ const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
   employee_id: 7, full_name: 'Иванов Иван', tab_number: null, department_id: null, department_name: null,
   position_name: null, schedule_name: null, terms_id: 5, staff_category: 'worker', calc_type: 'hourly',
   monthly_salary: null, hourly_rate: '450.0000', bonus_amount: '15000.00', housing_compensation: null,
-  travel_compensation: '3000.50', communication_compensation: null, deduction_amount: '0.00',
+  travel_compensation: '3000.50', communication_compensation: null,
   staff_units: '1.000', effective_from: '2026-07-01', effective_to: null, can_edit: true,
   ...over,
 });
@@ -54,15 +54,15 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '450,5',
-      money: { bonus: '15000', housing: '12000', travel: '3000', deduction: '0' },
+      money: { bonus: '15000', housing: '12000', travel: '0' },
     }));
     expect(wire(result.payload)).toEqual({
       calc_type: 'hourly',
       hourly_rate: 450.5,
       bonus_amount: 15000,
-      // Проживание — только показ (квартира «Проживания», миграция 320): в условия не уходит.
-      travel_compensation: 3000,
-      deduction_amount: 0,
+      // Проживание — только показ (квартира «Проживания», миграция 320): в условия не уходит; удержаний в условиях
+      // с миграции 321 нет.
+      travel_compensation: 0,
       effective_from: '2026-09-24',
     });
   });
@@ -71,25 +71,23 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '',
-      money: { ...EMPTY_MONEY, travel: '-1', deduction: 'abc' },
+      money: { ...EMPTY_MONEY, travel: '-1', bonus: 'abc' },
       effectiveFrom: '',
     }));
     expect(result.payload).toBeNull();
     expect(result.errors).toEqual({
       amount: 'Укажите часовую ставку',
+      bonus: 'Введите число не меньше нуля',
       travel: 'Введите число не меньше нуля',
-      deduction: 'Введите число не меньше нуля',
       effectiveFrom: 'Укажите дату «Действует с»',
     });
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
   });
 
-  it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций, удержание последним', () => {
-    expect(firstInvalidField({ travel: 'x', deduction: 'x' })).toBe('travel');
+  it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций', () => {
     expect(firstInvalidField({ travel: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
     expect(firstInvalidField({ supplementTo: 'x', travel: 'x' })).toBe('travel');
-    expect(firstInvalidField({ deduction: 'x', supplementFrom: 'x' })).toBe('supplementFrom');
     expect(firstInvalidField({ supplementTo: 'x', supplementAmount: 'x' })).toBe('supplementAmount');
   });
 
@@ -176,7 +174,7 @@ describe('initialPayrollTermsValues', () => {
       staffCategory: 'worker',
       calcType: 'hourly',
       amount: '450',
-      money: { bonus: '15000', housing: '', travel: '3000.5', deduction: '0' },
+      money: { bonus: '15000', housing: '', travel: '3000.5' },
       supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });

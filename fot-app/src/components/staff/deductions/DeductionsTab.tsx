@@ -12,15 +12,17 @@ import {
   staffDeductionService,
   type IStaffDeduction,
 } from '../../../services/staffDeductionService';
+import { invalidateDeductionQueries } from '../../../utils/deductionQueries';
 import { formatMonthLabel } from '../../../utils/formatMoney';
 import {
   buildStaffDeductionExport,
   STAFF_DEDUCTION_COLUMNS,
   staffDeductionInMonths,
+  staffDeductionKindLabel,
 } from '../../../utils/staffDeductionTable';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { DeductionKindsModal } from './DeductionKindsModal';
-import { StaffDeductionModal } from './StaffDeductionModal';
+import { StaffDeductionModal, type IStaffDeductionEditorApi } from './StaffDeductionModal';
 
 /** Окно правки: добавление или ✎ конкретного удержания. */
 type EditorState = { mode: 'add' } | { mode: 'edit'; deduction: IStaffDeduction } | null;
@@ -28,10 +30,18 @@ type EditorState = { mode: 'add' } | { mode: 'edit'; deduction: IStaffDeduction 
 const deductionKey = (deduction: IStaffDeduction): number => deduction.id;
 const deductionName = (deduction: IStaffDeduction): string => deduction.full_name;
 
+/** Окно удержания у кадров: поиск и запись — через API кадров (право /staff-control/deductions). */
+const STAFF_EDITOR_API: IStaffDeductionEditorApi = {
+  searchEmployees: staffDeductionService.searchEmployees,
+  add: staffDeductionService.add,
+  update: staffDeductionService.update,
+};
+
 /**
- * «Управление кадрами» → «Удержания» (миграция 318): удержания сотрудников — вид, месяц, сумма — за выбранные
- * месяцы. С правом «Редактирование» — «Добавить сотрудника», ✎ и 🗑; «Виды удержаний» — справочник, общий
- * с «Зарплатой»; «Экспорт» — ровно таблица экрана.
+ * «Управление кадрами» → «Удержания» (миграции 318, 321): удержания сотрудников — вид, подвид, месяц, сумма — за
+ * выбранные месяцы. Те же записи — в «Зарплате» («Справочник» → «Удержания» → «Сотрудники»). С правом
+ * «Редактирование» — «Добавить сотрудника», ✎ и 🗑; «Виды удержаний» — справочник с подвидами, общий с «Зарплатой»;
+ * «Экспорт» — ровно таблица экрана.
  */
 export const DeductionsTab: FC = () => {
   const { isAdmin, canEditPage } = useAuth();
@@ -54,11 +64,12 @@ export const DeductionsTab: FC = () => {
     [deductionsQuery.data, months.value],
   );
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: STAFF_DEDUCTIONS_KEY });
+  // Записи общие с «Зарплатой»: перечитать и её таблицу, и окно сотрудника.
+  const refresh = () => invalidateDeductionQueries(queryClient);
 
   const handleDelete = async (deduction: IStaffDeduction) => {
     if (deletingId !== null) return;
-    const question = `Удалить удержание: ${deduction.full_name}, ${deduction.kind_name}, ${formatMonthLabel(deduction.month)}?`;
+    const question = `Удалить удержание: ${deduction.full_name}, ${staffDeductionKindLabel(deduction)}, ${formatMonthLabel(deduction.month)}?`;
     if (!window.confirm(question)) return;
     setDeletingId(deduction.id);
     try {
@@ -98,6 +109,7 @@ export const DeductionsTab: FC = () => {
         <StaffDeductionModal
           deduction={editor.mode === 'edit' ? editor.deduction : undefined}
           kinds={kinds.data ?? []}
+          api={STAFF_EDITOR_API}
           onClose={() => setEditor(null)}
           onSaved={() => { void refresh(); }}
         />

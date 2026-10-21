@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
-// Справочник видов удержаний (миграция 299), виды сотрудника (миграция 300) и справочник ставок
-// (миграция 306) на настоящем PostgreSQL: засев и повторный запуск, уникальность названия,
-// несколько видов у сотрудника, переименование и удаление вида, ставки.
+// Справочник видов удержаний (миграция 299) и справочник ставок (миграция 306) на настоящем PostgreSQL: засев
+// и повторный запуск, уникальность названия, переименование и удаление вида, ставки. Сумма удержания из окна
+// сотрудника с миграции 321 в условия не пишется (удержания — staff_deductions, staff-deductions.pg.test.ts).
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -56,15 +56,8 @@ vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => 
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
-import { withTransaction } from '../../config/postgres.js';
-import {
-  addDeductionKind,
-  deleteDeductionKind,
-  getEmployeeDeductionKindIds,
-  listDeductionKinds,
-  renameDeductionKind,
-  setEmployeeDeductionKinds,
-} from './payroll-deduction-kinds.service.js';
+import { addDeductionKind, deleteDeductionKind, renameDeductionKind } from './payroll-deduction-kinds.service.js';
+import { listDeductionKindTree } from './payroll-deduction-subkinds.service.js';
 import { addRate, deleteRate, listRates, updateRate } from './payroll-rates.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
 
@@ -98,7 +91,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
-        payroll_rates, payroll_compensation_terms, staff_deductions, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
+        payroll_rates, payroll_compensation_terms, staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
+        payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
@@ -144,17 +138,22 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('313_payroll_rate_code.sql'));
     // Ставка «Проживание общежития» из 313 проверяется в dormitory-stays.pg.test.ts; здесь — обычные ставки.
     await pg.pool!.query(`DELETE FROM payroll_rates WHERE code = 'dormitory'`);
-    // Удержания кадров (318) — пустая таблица: удаление вида считает и их (staff-deductions.pg.test.ts).
+    // Из 318 — только то, что читают виды: сумма вида по умолчанию и удержания (сотрудник и вид);
+    // подвиды и подвид удержания — из 321.
+    await pg.pool!.query(`ALTER TABLE payroll_deduction_kinds ADD COLUMN default_amount numeric(12,2)`);
     await pg.pool!.query(`CREATE TABLE staff_deductions (
       employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id) ON DELETE RESTRICT)`);
+    await pg.pool!.query(migration('321_payroll_deduction_subkinds.sql'));
   });
+
+  const listKinds = async () => (await listDeductionKindTree()).map(({ id, name }) => ({ id, name }));
 
   afterAll(async () => {
     await pg.pool?.end();
   });
 
   it('засев — 6 видов (299) и удержания «Оплачено» (301) по порядку, повтор миграций их не задваивает', async () => {
-    expect((await listDeductionKinds()).map(kind => kind.name)).toEqual([
+    expect((await listKinds()).map(kind => kind.name)).toEqual([
       'Корректировка удержаний', 'ТМЦ', 'Штраф за мусор', 'Спецодежда', 'Питание', 'Штрафы',
       'Нарушение техники безопасности', 'Удержание по исп. листу',
     ]);
@@ -165,40 +164,27 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     expect(added?.name).toBe('Штраф за опоздание');
     expect(await addDeductionKind('штраф за ОПОЗДАНИЕ')).toBeNull();
     expect(await addDeductionKind(' Штрафы ')).toBeNull();
-    const kinds = await listDeductionKinds();
+    const kinds = await listKinds();
     expect(kinds).toHaveLength(9);
     expect(kinds[8]).toEqual(added);
   });
 
-  it('300: CHECK «вид и сумма вместе» снят — сумма удержания сохраняется без вида', async () => {
-    expect((await assign(3, { deduction_amount: 100 })).statusCode).toBe(200);
+  it('321: сумма удержания из окна сотрудника не пишется — 0 принят, больше нуля — 409', async () => {
+    expect((await assign(3, { deduction_amount: 0 })).statusCode).toBe(200);
     const saved = await pg.pool!.query(
       `SELECT deduction_amount::text AS amount FROM payroll_compensation_terms WHERE employee_id = 3`,
     );
-    expect(saved.rows).toEqual([{ amount: '100.00' }]);
-  });
+    expect(saved.rows).toEqual([{ amount: null }]);
 
-  it('несколько видов у сотрудника: замена набора, порядок справочника, неизвестный вид — FK', async () => {
-    const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
-    const save = (employeeId: number, ids: number[]) =>
-      withTransaction(client => setEmployeeDeductionKinds(client, employeeId, ids));
-
-    expect(await save(1, [byName['Штрафы'], byName['Питание'], byName['Питание']]))
-      .toEqual({ added: expect.arrayContaining([byName['Штрафы'], byName['Питание']]), removed: [] });
-    expect(await getEmployeeDeductionKindIds(1)).toEqual([byName['Питание'], byName['Штрафы']]);
-
-    expect(await save(1, [byName['Питание'], byName['ТМЦ']])).toEqual({ added: [byName['ТМЦ']], removed: [byName['Штрафы']] });
-    expect(await save(1, [byName['Питание'], byName['ТМЦ']])).toEqual({ added: [], removed: [] });
-    expect(await getEmployeeDeductionKindIds(1)).toEqual([byName['ТМЦ'], byName['Питание']]);
-
-    await expect(save(2, [9999])).rejects.toThrow(/foreign key/);
-    // Отмеченный вид не удалить из справочника.
-    await expect(pg.pool!.query(`DELETE FROM payroll_deduction_kinds WHERE id = $1`, [byName['ТМЦ']]))
-      .rejects.toThrow(/foreign key/);
+    const refused = await assign(3, { deduction_amount: 100, effective_from: '2026-11-01' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body.code).toBe('DEDUCTION_MOVED');
+    expect((await pg.pool!.query(`SELECT count(*)::int AS n FROM payroll_compensation_terms WHERE employee_id = 3`)).rows)
+      .toEqual([{ n: 1 }]);
   });
 
   it('переименование: новое название и прежнее для аудита; занятое — дубль; вида нет — null', async () => {
-    const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
+    const byName = Object.fromEntries((await listKinds()).map(kind => [kind.name, kind.id]));
     const id = byName['Штраф за мусор'];
 
     expect(await renameDeductionKind(id, 'Штраф за мусор на объекте'))
@@ -209,27 +195,29 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     expect(await renameDeductionKind(id, ' питание')).toBe('duplicate');
     expect(await renameDeductionKind(9999, 'Нет такого')).toBeNull();
 
-    // Порядок списка от названия не зависит, отметки у сотрудников переименование не трогает.
-    expect((await listDeductionKinds())[2]).toEqual({ id, name: 'ШТРАФ за мусор на объекте' });
-    expect(await getEmployeeDeductionKindIds(1)).toEqual([byName['ТМЦ'], byName['Питание']]);
+    // Порядок списка от названия не зависит.
+    expect((await listKinds())[2]).toEqual({ id, name: 'ШТРАФ за мусор на объекте' });
   });
 
-  it('удаление: свободный вид уходит, отмеченный у сотрудников — остаётся с их числом', async () => {
-    const byName = Object.fromEntries((await listDeductionKinds()).map(kind => [kind.name, kind.id]));
-    await withTransaction(client => setEmployeeDeductionKinds(client, 3, [byName['Питание']]));
+  it('удаление: свободный вид уходит, назначенный удержаниям — остаётся с числом разных сотрудников', async () => {
+    const byName = Object.fromEntries((await listKinds()).map(kind => [kind.name, kind.id]));
+    // «Питание» — у Акимова (1, дважды) и Васильева (3); «ТМЦ» — у Акимова.
+    await pg.pool!.query(
+      `INSERT INTO staff_deductions (employee_id, kind_id) VALUES ($1, $2), ($1, $2), ($3, $2), ($1, $4)`,
+      [1, byName['Питание'], 3, byName['ТМЦ']],
+    );
 
-    // «Питание» — у Акимова (1) и Васильева (3).
     expect(await deleteDeductionKind(byName['Питание'])).toEqual({ inUse: 2 });
     expect(await deleteDeductionKind(byName['ТМЦ'])).toEqual({ inUse: 1 });
     expect(await deleteDeductionKind(byName['Спецодежда'])).toEqual({ id: byName['Спецодежда'], name: 'Спецодежда' });
     expect(await deleteDeductionKind(byName['Спецодежда'])).toBeNull();
 
-    const names = (await listDeductionKinds()).map(kind => kind.name);
+    const names = (await listKinds()).map(kind => kind.name);
     expect(names).toContain('Питание');
     expect(names).not.toContain('Спецодежда');
 
-    // Сняли вид у всех — теперь удаляется.
-    await withTransaction(client => setEmployeeDeductionKinds(client, 1, [byName['Питание']]));
+    // Удержаний с видом не осталось — теперь удаляется.
+    await pg.pool!.query(`DELETE FROM staff_deductions WHERE kind_id = $1`, [byName['ТМЦ']]);
     expect(await deleteDeductionKind(byName['ТМЦ'])).toEqual({ id: byName['ТМЦ'], name: 'ТМЦ' });
   });
 

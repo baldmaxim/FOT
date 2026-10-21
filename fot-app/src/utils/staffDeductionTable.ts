@@ -5,11 +5,16 @@ import { formatPayrollMoney } from './payrollFormat';
 import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
 
 /**
- * Таблица «Удержания» «Управления кадрами»: столбцы для экрана, сортировки, фильтров и выгрузки в xlsx
- * (общие функции — в tableView.ts).
+ * Таблица удержаний — вкладка «Удержания» «Управления кадрами» и «Удержания» «Справочника» «Зарплаты» (те же записи):
+ * столбцы для экрана, сортировки, фильтров и выгрузки в xlsx (общие функции — в tableView.ts).
  */
 
 const orDash = (value: string | null): string => value || '—';
+
+/** Вид с подвидом: «Спецодежда — Каска»; без подвида — просто вид. */
+export const staffDeductionKindLabel = (row: Pick<IStaffDeduction, 'kind_name' | 'subkind_name'>): string => (
+  row.subkind_name ? `${row.kind_name} — ${row.subkind_name}` : row.kind_name
+);
 
 export const STAFF_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IStaffDeduction>> = [
   {
@@ -39,9 +44,9 @@ export const STAFF_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IStaffDeduct
     key: 'kind_name',
     label: 'Вид удержания',
     type: 'text',
-    width: 180,
-    text: row => row.kind_name,
-    sortValue: row => row.kind_name,
+    width: 200,
+    text: staffDeductionKindLabel,
+    sortValue: staffDeductionKindLabel,
   },
   {
     key: 'month',

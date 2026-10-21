@@ -4,9 +4,10 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
 /**
- * «Удержания» кадров (миграция 318): право /staff-control/deductions. Проверка прав НАСТОЯЩАЯ
- * (resolveEffectivePageAccess) и роутер настоящий, контроллер — заглушка со счётчиком вызовов.
- * «Просмотр» — список, выгрузка и виды; добавление, правка, удаление, поиск и правка видов — только с «Редактированием».
+ * «Удержания» кадров (миграции 318, 321): право /staff-control/deductions. Проверка прав НАСТОЯЩАЯ
+ * (resolveEffectivePageAccess) и роутер настоящий, контроллеры — заглушки со счётчиком вызовов.
+ * «Просмотр» — список, выгрузка и виды с подвидами; добавление, правка, удаление, поиск, правка видов и подвидов —
+ * только с «Редактированием».
  */
 
 const h = vi.hoisted(() => {
@@ -55,6 +56,7 @@ vi.mock('../services/hiring-access.service.js', () => ({
 vi.mock('../services/object-kpi-roles-cache.service.js', () => ({ isEconomicsHead: vi.fn(async () => false) }));
 
 vi.mock('../controllers/staff-deductions.controller.js', () => ({ staffDeductionsController: h.stubController('deductions') }));
+vi.mock('../controllers/deduction-subkinds.controller.js', () => ({ deductionSubkindsController: h.stubController('subkinds') }));
 
 const app = express();
 app.use(express.json());
@@ -96,6 +98,9 @@ const WRITES: Array<['get' | 'post' | 'patch' | 'delete', string]> = [
   ['post', '/api/staff-deductions/kinds'],
   ['patch', '/api/staff-deductions/kinds/3'],
   ['delete', '/api/staff-deductions/kinds/3'],
+  ['post', '/api/staff-deductions/kinds/3/subkinds'],
+  ['patch', '/api/staff-deductions/subkinds/5'],
+  ['delete', '/api/staff-deductions/subkinds/5'],
 ];
 
 beforeEach(() => {
@@ -111,7 +116,7 @@ describe('права вкладки «Удержания»', () => {
     for (const [method, url] of WRITES) {
       expect((await send(method, url, 'hr')).status, `${method} ${url}`).toBe(403);
     }
-    expect(h.calls).toEqual(['deductions.list', 'deductions.exportTable', 'deductions.listKinds']);
+    expect(h.calls).toEqual(['deductions.list', 'deductions.exportTable', 'subkinds.listKindTree']);
   });
 
   it('«Редактирование» — всё', async () => {
@@ -119,9 +124,10 @@ describe('права вкладки «Удержания»', () => {
       expect((await send(method, url, 'hr_admin')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual([
-      'deductions.list', 'deductions.exportTable', 'deductions.listKinds', 'deductions.searchEmployees',
+      'deductions.list', 'deductions.exportTable', 'subkinds.listKindTree', 'deductions.searchEmployees',
       'deductions.add', 'deductions.update', 'deductions.remove',
       'deductions.addKind', 'deductions.updateKind', 'deductions.deleteKind',
+      'subkinds.add', 'subkinds.update', 'subkinds.remove',
     ]);
   });
 

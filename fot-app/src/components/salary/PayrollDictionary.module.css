@@ -166,6 +166,22 @@
 }
 .iconButton:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
 .iconButtonDanger:hover:not(:disabled) { color: var(--error); }
+/* «+» раскрытой строки (подвиды вида) — цветом акцента: видно, чей список открыт. */
+.iconButtonActive,
+.iconButtonActive:hover:not(:disabled) { color: var(--primary); }
+
+/* Подвиды вида — под его строкой во всю ширину, с отступом и линией слева. */
+.rowDetails {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 2px 0 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+/* Новый подвид: колонка «Удержаний» в «Справочнике» узкая — название во всю строку, сумма и «Добавить» — под ним
+   (три класса перебивают раскладку формы с 769px). */
+.rowDetails .formAdd .formName { flex-basis: 100%; }
+.rowDetails .formAdd .formAmount { flex: 1 1 0; }
 .iconButton:disabled { opacity: 0.5; cursor: default; }
 .iconButton:focus-visible,
 .addButton:focus-visible,

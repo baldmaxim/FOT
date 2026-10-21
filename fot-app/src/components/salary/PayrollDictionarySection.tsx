@@ -1,4 +1,4 @@
-import { useId, useState, type FC } from 'react';
+import { useId, useState, type FC, type ReactNode } from 'react';
 
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
@@ -30,6 +30,12 @@ interface IPayrollDictionarySectionProps {
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
   /** Кнопки таблиц сотрудников рядом с заголовком: у «Удержаний» — одна, у «Ставок» — по таблице на ставку. */
   lists?: ReadonlyArray<IPayrollDictionaryList>;
+  /** Передан — у каждой строки «+», раскрывающий под ней этот блок (подвиды вида удержания, миграция 321). */
+  renderDetails?: (item: IPayrollDictionaryItem) => ReactNode;
+  /** Подпись «+» для диктора: «Подвиды: Спецодежда». */
+  detailsLabel?: (name: string) => string;
+  /** Пустой список: «Подвидов нет»; по умолчанию — «Список пуст». */
+  emptyText?: string;
 }
 
 /** Кнопка таблицы сотрудников у заголовка колонки. */
@@ -61,10 +67,20 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onDelete,
   isLocked,
   lists,
+  renderDetails,
+  detailsLabel = name => name,
+  emptyText = 'Список пуст',
 }) => {
   const titleId = useId();
   // Правится одна строка: открытие другой закрывает прежнюю без сохранения.
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Раскрытых строк может быть несколько.
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<number>>(() => new Set());
+  const toggleExpanded = (id: number) => setExpandedIds(prev => {
+    const next = new Set(prev);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
 
   return (
     <section
@@ -90,7 +106,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
           <button type="button" className={styles.retryButton} onClick={onRetry}>Повторить</button>
         </p>
       )}
-      {items && items.length === 0 && <p className={styles.state}>Список пуст</p>}
+      {items && items.length === 0 && <p className={styles.state}>{emptyText}</p>}
 
       {items && items.length > 0 && (
         <ul className={styles.list}>
@@ -111,6 +127,13 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
                 setEditingId(null);
               }}
               onDelete={() => onDelete(item.id)}
+              details={renderDetails && {
+                // Свёрнутый блок не строится: подвиды рисуются только у раскрытых строк.
+                content: expandedIds.has(item.id) ? renderDetails(item) : null,
+                expanded: expandedIds.has(item.id),
+                onToggle: () => toggleExpanded(item.id),
+                label: detailsLabel(item.name),
+              }}
             />
           ))}
         </ul>

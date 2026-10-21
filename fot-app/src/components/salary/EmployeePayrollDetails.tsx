@@ -9,14 +9,12 @@ import {
   type IAssignTermsPayload,
   type IPayrollTermsRow,
 } from '../../services/payrollService';
-import { usePayrollEmployeeDeductions } from '../../hooks/usePayrollEmployeeDeductions';
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { payrollFieldId, payrollRowCategory } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
-import { DeductionKindsField } from './DeductionKindsField';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
@@ -48,17 +46,11 @@ interface IEmployeePayrollDetailsProps {
   onSaved?: (employeeId: number, onScreen: boolean) => void;
 }
 
-interface ISaveVariables {
-  /** null — условия не правили: новую версию условий не создаём. */
-  terms: IAssignTermsPayload | null;
-  /** Виды удержаний; null — не меняли. */
-  kinds: number[] | null;
-}
-
 /**
  * Карточка сотрудника раздела «Зарплата» — окно на «Расчётах» (editable) и вкладка «Подробно» (только просмотр).
- * В окне: условия оплаты (вид оплаты, оклад, премия), компенсация, плановая доплата, удержание; «Сохранить»
- * пишет условия и виды удержаний — что из них правили. В «Подробно»: Категория и «Оплачено», без полей и кнопок.
+ * В окне: условия оплаты (вид оплаты, оклад, премия), компенсация, плановая доплата; «Сохранить» пишет условия.
+ * «Удержание» — только показ удержаний сотрудника (вносят в «Справочнике» и у кадров, миграция 321).
+ * В «Подробно»: Категория и «Оплачено», без полей и кнопок.
  * Ниже — свёрнутая справка: история изменений, история выплат и отпуска; грузится отдельно, её ошибки форму не блокируют.
  * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
  * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
@@ -88,7 +80,6 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
-  const deductions = usePayrollEmployeeDeductions(row.employee_id, editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
@@ -99,15 +90,11 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   }, [active]);
 
   const saveMutation = useMutation({
-    // Сначала виды: запрос идемпотентен — если условия не сохранятся, повтор ничего не задвоит.
-    mutationFn: async ({ terms, kinds }: ISaveVariables) => {
-      if (kinds) await payrollService.saveEmployeeDeductions(row.employee_id, kinds);
-      if (terms) await payrollService.assign(row.employee_id, terms);
-    },
-    onSuccess: (_data, { terms }) => {
-      // Префикс сбрасывает список, «Расчёты», историю изменений условий, «Оплачено» и виды удержаний.
+    mutationFn: (terms: IAssignTermsPayload) => payrollService.assign(row.employee_id, terms),
+    onSuccess: () => {
+      // Префикс сбрасывает список, «Расчёты», историю изменений условий и «Оплачено».
       queryClient.invalidateQueries({ queryKey: ['payroll-terms'] });
-      success(terms ? 'Условия оплаты назначены: 1' : 'Удержания сохранены');
+      success('Условия оплаты назначены: 1');
       onSaved?.(row.employee_id, activeRef.current);
     },
     // Ошибку показывает карточка (ввод не теряется). Тост — если карточки на экране уже нет.
@@ -127,18 +114,12 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || saveMutation.isPending) return;
-    const kinds = deductions.changedKindIds();
-    // Правили только виды удержаний: условия не трогаем — оклад не обязателен, новая версия не создаётся.
-    if (kinds && !form.isChanged()) {
-      saveMutation.mutate({ terms: null, kinds });
-      return;
-    }
     const { payload, firstInvalid } = form.buildPayload();
     if (!payload) {
       if (firstInvalid) document.getElementById(payrollFieldId(idPrefix, firstInvalid))?.focus();
       return;
     }
-    saveMutation.mutate({ terms: payload, kinds });
+    saveMutation.mutate(payload);
   };
 
   // Enter в поле не отправляет форму: окно сохраняется и закрывается только кнопками.
@@ -200,9 +181,6 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           stacked
           detailsOnly={!editable}
           total
-          deductionKinds={(
-            <DeductionKindsField id={`${idPrefix}-deduction-kinds`} deductions={deductions} readOnly={!canEdit} />
-          )}
           staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
         />
 

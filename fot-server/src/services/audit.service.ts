@@ -253,6 +253,10 @@ export const AUDIT_ACTIONS = {
   PAYROLL_DEDUCTION_KIND_DELETED: 'PAYROLL_DEDUCTION_KIND_DELETED',
   // Вид удержания изменён во вкладке кадров «Удержания» (миграция 318): название и сумма по умолчанию, было → стало.
   PAYROLL_DEDUCTION_KIND_UPDATED: 'PAYROLL_DEDUCTION_KIND_UPDATED',
+  // Подвиды видов удержаний (миграция 321): добавлен, изменён (название и сумма, было → стало), удалён.
+  PAYROLL_DEDUCTION_SUBKIND_ADDED: 'PAYROLL_DEDUCTION_SUBKIND_ADDED',
+  PAYROLL_DEDUCTION_SUBKIND_UPDATED: 'PAYROLL_DEDUCTION_SUBKIND_UPDATED',
+  PAYROLL_DEDUCTION_SUBKIND_DELETED: 'PAYROLL_DEDUCTION_SUBKIND_DELETED',
   // Справочник ставок (миграция 306): название и значение, правка — было → стало.
   PAYROLL_RATE_ADDED: 'PAYROLL_RATE_ADDED',
   PAYROLL_RATE_UPDATED: 'PAYROLL_RATE_UPDATED',

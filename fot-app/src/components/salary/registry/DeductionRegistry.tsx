@@ -3,21 +3,26 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { usePayrollDeductionKinds } from '../../../hooks/usePayrollDeductionKinds';
 import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import {
   PAYROLL_REGISTRY_KEYS,
-  PAYROLL_TERMS_PREFIX,
   payrollRegistryService,
   type IDeductionRegistryRow,
 } from '../../../services/payrollRegistryService';
-import { moscowTodayIso } from '../../../utils/moscowDate';
-import { buildDeductionExport, DEDUCTION_COLUMNS } from '../../../utils/payrollRegistries';
+import { invalidateDeductionQueries } from '../../../utils/deductionQueries';
+import { formatMonthLabel } from '../../../utils/formatMoney';
+import {
+  buildStaffDeductionExport,
+  STAFF_DEDUCTION_COLUMNS,
+  staffDeductionKindLabel,
+} from '../../../utils/staffDeductionTable';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
-import { DeductionForm } from './DeductionForm';
+import { StaffDeductionModal, type IStaffDeductionEditorApi } from '../../staff/deductions/StaffDeductionModal';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
 
 interface IDeductionRegistryProps {
-  /** Право правки условий оплаты (/salary/terms): сумма удержания — часть условий. */
+  /** Право правки условий оплаты (/salary/terms) — как у прочих таблиц сотрудников «Справочника». */
   canEdit: boolean;
   onClose: () => void;
 }
@@ -25,19 +30,27 @@ interface IDeductionRegistryProps {
 type EditorState = { mode: 'add' } | { mode: 'edit'; row: IDeductionRegistryRow } | null;
 
 const sendExport = payrollRegistryService.exportTable('deductions');
-const rowKey = (row: IDeductionRegistryRow): number => row.employee_id;
+const rowKey = (row: IDeductionRegistryRow): number => row.id;
 const rowName = (row: IDeductionRegistryRow): string => row.full_name;
 const canEditRow = (row: IDeductionRegistryRow): boolean => row.can_edit;
 
+/** Окно удержания в «Зарплате»: поиск — «штат зарплаты», запись — через API «Зарплаты». */
+const PAYROLL_EDITOR_API: IStaffDeductionEditorApi = {
+  searchEmployees: payrollRegistryService.searchEmployees,
+  add: payrollRegistryService.addDeduction,
+  update: payrollRegistryService.updateDeduction,
+};
+
 /**
- * «Справочник» → «Удержания»: у кого есть вид удержания или сумма удержания в условиях выбранных месяцев
- * (сумма — из последней версии условий в них; виды датой не хранятся — текущий набор). Те же данные, что
- * «Удержание» окна сотрудника: правка здесь видна там, и наоборот. Сумма меняется с даты «Действует с».
+ * «Справочник» → «Удержания» → «Сотрудники»: удержания (вид, подвид, месяц, сумма) выбранных месяцев — те же записи,
+ * что во вкладке кадров «Удержания» (миграция 321): добавленное или удалённое здесь видно там, и наоборот. Охват —
+ * «штат зарплаты»: прошлые строки уволенных правят кадры. В окне сотрудника — тот же список, только показ.
  */
 export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const months = useRegistryMonths();
+  const kinds = usePayrollDeductionKinds();
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [busyKey, setBusyKey] = useState<number | null>(null);
@@ -48,17 +61,18 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
     staleTime: 0,
   });
 
-  // Условия оплаты поменялись — перечитать и список «Расчётов», и открытое окно сотрудника.
-  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
+  // Записи общие с кадрами: перечитать и вкладку кадров, и окно сотрудника.
+  const refresh = () => invalidateDeductionQueries(queryClient);
 
   const handleRemove = async (row: IDeductionRegistryRow) => {
     if (busyKey !== null) return;
-    if (!window.confirm(`Снять удержания у ${row.full_name} с сегодняшнего дня?`)) return;
-    setBusyKey(row.employee_id);
+    const question = `Удалить удержание: ${row.full_name}, ${staffDeductionKindLabel(row)}, ${formatMonthLabel(row.month)}?`;
+    if (!window.confirm(question)) return;
+    setBusyKey(row.id);
     try {
-      await payrollRegistryService.saveDeduction(row.employee_id, { kind_ids: [], amount: null, effective_from: moscowTodayIso() });
+      await payrollRegistryService.removeDeduction(row.id);
     } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось снять удержания');
+      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось удалить');
     } finally {
       setBusyKey(null);
       void refresh();
@@ -69,7 +83,7 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
     <PayrollRegistryModal title="Удержания" onClose={onClose} closeOnEscape={!filterOpen && !editor}>
       <RegistryPanel
         label="Удержания"
-        columns={DEDUCTION_COLUMNS}
+        columns={STAFF_DEDUCTION_COLUMNS}
         rows={query.data}
         isLoading={query.isLoading}
         isError={query.isError}
@@ -77,13 +91,12 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
-        buildExport={buildDeductionExport}
+        buildExport={buildStaffDeductionExport}
         sendExport={sendExport}
         months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
         onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
         onDelete={canEdit ? row => { void handleRemove(row); } : undefined}
-        deleteLabel="Снять"
         canEditRow={canEditRow}
         busyKey={busyKey}
         raisedFilters
@@ -91,8 +104,11 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
       />
 
       {editor && (
-        <DeductionForm
-          row={editor.mode === 'edit' ? editor.row : undefined}
+        <StaffDeductionModal
+          deduction={editor.mode === 'edit' ? editor.row : undefined}
+          kinds={kinds.data ?? []}
+          api={PAYROLL_EDITOR_API}
+          raised
           onClose={() => setEditor(null)}
           onSaved={() => { void refresh(); }}
         />

@@ -2,17 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   ICompensationStop,
-  IDeductionRegistryRow,
   IDormitoryAllowanceRow,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import {
   apartmentRemoval,
   buildCompensationStopExport,
-  buildDeductionExport,
   buildDormitoryAllowanceExport,
   dormitoryAllowanceInMonths,
-  DEDUCTION_COLUMNS,
   periodIntersectsMonths,
   registryMonthOptions,
   registryMonthsParam,
@@ -25,53 +22,21 @@ import {
 } from './payrollRegistries';
 import {
   oneTimeMonthOptions,
-  parseDeductionForm,
   parseOneTimeForm,
   parsePeriodForm,
   parsePlannedForm,
 } from './payrollRegistryForms';
 import {
   applyTableView,
-  columnFilterOptions,
   fitRegistryColumnWidths,
   matchesNameSearch,
   type IRegistryColumn,
 } from './tableView';
 
-const deduction = (employeeId: number, kinds: string[], amount: string | null = null): IDeductionRegistryRow => ({
-  employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, department: null, position: null, kinds,
-  kind_ids: kinds.map((_, index) => index + 1), amount, can_edit: true,
-});
-
 const supplement = (over: Partial<IPayrollSupplementRow>): IPayrollSupplementRow => ({
   kind: 'planned', id: null, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
   amount: '5000.00', date_from: '2026-10-01', date_to: '2026-12-31', month: null, reason: null, can_edit: true,
   ...over,
-});
-
-describe('«Удержания»: фильтр по отдельным видам', () => {
-  const rows = [deduction(1, ['ТМЦ', 'Питание']), deduction(2, ['ТМЦ']), deduction(3, [], '1500.00')];
-
-  it('в списке фильтра — виды по отдельности, без склеек; без вида — «—»', () => {
-    expect(columnFilterOptions(rows, DEDUCTION_COLUMNS, {}, 'kinds')).toEqual(expect.arrayContaining([
-      { value: 'ТМЦ', count: 2 },
-      { value: 'Питание', count: 1 },
-      { value: '—', count: 1 },
-    ]));
-    expect(columnFilterOptions(rows, DEDUCTION_COLUMNS, {}, 'kinds')).toHaveLength(3);
-  });
-
-  it('«Питание» находит строку «ТМЦ, Питание»', () => {
-    const visible = applyTableView(rows, DEDUCTION_COLUMNS, { sort: '', dir: 'asc', filters: { kinds: ['Питание'] } });
-    expect(visible.map(row => row.employee_id)).toEqual([1]);
-  });
-
-  it('экспорт: виды текстом ячейки, сумма — числом-строкой с сервера, нет суммы — «—», как на экране', () => {
-    const snapshot = buildDeductionExport(rows);
-    expect(snapshot.columns.map(column => column.label)).toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид удержания', 'Сумма, ₽/мес']);
-    expect(snapshot.rows[0].cells).toEqual([1, 'Сотрудник 1', '—', '—', 'ТМЦ, Питание', '—']);
-    expect(snapshot.rows[2].cells[5]).toBe('1500.00');
-  });
 });
 
 describe('«Доплата»', () => {
@@ -137,23 +102,6 @@ describe('формы', () => {
     expect(period('2026-08-01', '2026-07-31')).toMatchObject({ ok: false, field: 'date_to' });
     expect(parsePeriodForm({ selected: true, dateFrom: '', dateTo: '', fromLabel: 'Доплата с' }))
       .toEqual({ ok: false, field: 'date_from', message: 'Укажите дату «Доплата с»' });
-  });
-
-  it('удержание: нужен вид или сумма; сумма без оклада — нельзя; при правке пусто — снять', () => {
-    const base = { selected: true, isEdit: false, hasTerms: true, kindIds: [] as number[], amount: '', effectiveFrom: '2026-10-19' };
-    expect(parseDeductionForm(base)).toMatchObject({ ok: false, field: 'kinds' });
-    expect(parseDeductionForm({ ...base, kindIds: [2, 2, 5] }))
-      .toEqual({ ok: true, payload: { kind_ids: [2, 5], amount: null, effective_from: '2026-10-19' } });
-    expect(parseDeductionForm({ ...base, amount: '1 500,5' }))
-      .toEqual({ ok: true, payload: { kind_ids: [], amount: 1500.5, effective_from: '2026-10-19' } });
-    expect(parseDeductionForm({ ...base, amount: '1500', hasTerms: false }))
-      .toMatchObject({ ok: false, field: 'amount', message: 'Сначала внесите оклад в окне сотрудника' });
-    // Без оклада виды — можно: сумма не задана.
-    expect(parseDeductionForm({ ...base, hasTerms: false, kindIds: [1] })).toMatchObject({ ok: true });
-    expect(parseDeductionForm({ ...base, amount: '0', kindIds: [1] })).toMatchObject({ ok: false, field: 'amount' });
-    expect(parseDeductionForm({ ...base, kindIds: [1], effectiveFrom: '2026-02-31' })).toMatchObject({ ok: false, field: 'date_from' });
-    expect(parseDeductionForm({ ...base, isEdit: true }))
-      .toEqual({ ok: true, payload: { kind_ids: [], amount: null, effective_from: '2026-10-19' } });
   });
 
   it('месяцы разовой доплаты: следующий, текущий и 11 прошлых', () => {

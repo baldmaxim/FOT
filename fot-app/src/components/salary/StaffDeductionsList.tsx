@@ -1,10 +1,11 @@
-import { useId, useMemo, type FC } from 'react';
+import { useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { payrollService } from '../../services/payrollService';
 import { STAFF_DEDUCTIONS_KEY } from '../../services/staffDeductionService';
 import { formatMonthLabel } from '../../utils/formatMoney';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { staffDeductionKindLabel } from '../../utils/staffDeductionTable';
 import styles from './StaffDeductionsList.module.css';
 
 interface IStaffDeductionsListProps {
@@ -12,12 +13,11 @@ interface IStaffDeductionsListProps {
 }
 
 /**
- * «Из кадров» в «Удержании» окна сотрудника на «Расчётах»: удержания, внесённые во вкладке «Управление кадрами» →
- * «Удержания» (вид, месяц, сумма), новые сверху, только чтение. Нет таких — блока нет.
+ * «Удержание» окна сотрудника на «Расчётах»: удержания сотрудника (вид — подвид, месяц, сумма), новые сверху, только
+ * чтение. Те же записи вносят в «Справочнике» → «Удержания» и во вкладке кадров «Удержания» (миграция 321).
  */
 export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId }) => {
-  const titleId = useId();
-  // Префикс кадровой вкладки: правка там перечитывает и этот список.
+  // Префикс кадровой вкладки: правка там или в «Справочнике» перечитывает и этот список.
   const query = useQuery({
     queryKey: [...STAFF_DEDUCTIONS_KEY, 'payroll-employee', employeeId],
     queryFn: ({ signal }) => payrollService.getEmployeeStaffDeductions(employeeId, signal),
@@ -31,25 +31,23 @@ export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId 
   if (query.isError && !query.data) {
     return (
       <p className={styles.error}>
-        Не удалось загрузить удержания из кадров
+        Не удалось загрузить удержания
         <button type="button" className={styles.retry} onClick={() => { void query.refetch(); }}>Повторить</button>
       </p>
     );
   }
-  if (rows.length === 0) return null;
+  if (!query.data) return null;
+  if (rows.length === 0) return <p className={styles.empty}>Нет удержаний</p>;
 
   return (
-    <div className={styles.block}>
-      <span id={titleId} className={styles.title}>Из кадров</span>
-      <ul className={styles.list} aria-labelledby={titleId}>
-        {rows.map(row => (
-          <li key={row.id} className={styles.row}>
-            <span className={styles.kind}>{row.kind_name}</span>
-            <span className={styles.month}>{formatMonthLabel(row.month)}</span>
-            <span className={styles.amount}>{formatPayrollMoney(row.amount) ?? '—'}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <ul className={styles.list}>
+      {rows.map(row => (
+        <li key={row.id} className={styles.row}>
+          <span className={styles.kind}>{staffDeductionKindLabel(row)}</span>
+          <span className={styles.month}>{formatMonthLabel(row.month)}</span>
+          <span className={styles.amount}>{formatPayrollMoney(row.amount) ?? '—'}</span>
+        </li>
+      ))}
+    </ul>
   );
 };

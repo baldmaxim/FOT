@@ -15,7 +15,6 @@ const employees = vi.hoisted(() => ({ searchCandidates: vi.fn(), getEmployeeStat
 vi.mock('../services/dormitory-stays.service.js', () => employees);
 
 const kinds = vi.hoisted(() => ({
-  listDeductionKindsWithDefaults: vi.fn(),
   addDeductionKindWithDefault: vi.fn(),
   updateDeductionKind: vi.fn(),
   deleteDeductionKind: vi.fn(),
@@ -60,6 +59,8 @@ const DEDUCTION = {
   position: 'Монтажник',
   kind_id: 3,
   kind_name: 'Штраф за мусор',
+  subkind_id: null,
+  subkind_name: null,
   month: '2026-10',
   amount: '5000.00',
 };
@@ -112,7 +113,7 @@ describe('добавление', () => {
     await c.add(makeReq({ body }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, month: '2026-10', amount: 5000 });
+    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000 });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_ADDED',
       expect.objectContaining({
@@ -134,6 +135,8 @@ describe('добавление', () => {
       { ...body, amount: 10_000_000_000 },
       { ...body, kind_id: undefined },
       { ...body, kind_id: 1.5 },
+      { ...body, subkind_id: '4' },
+      { ...body, subkind_id: 0 },
       { ...body, employee_id: undefined },
       { ...body, employee_id: '42' },
     ];
@@ -165,20 +168,23 @@ describe('добавление', () => {
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
-  it('вид удалили в соседнем окне — 409 без аудита', async () => {
+  it('вид или подвид удалили в соседнем окне (или подвид не этого вида) — 409 без аудита', async () => {
     employees.getEmployeeState.mockResolvedValue(ACTIVE);
     scope.canWriteEmployeeInScope.mockResolvedValue(true);
-    svc.addDeduction.mockResolvedValue('kind_missing');
-    const res = makeRes();
-    await c.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.body.code).toBe('KIND_MISSING');
+    for (const [missing, code] of [['kind_missing', 'KIND_MISSING'], ['subkind_missing', 'SUBKIND_MISSING']]) {
+      svc.addDeduction.mockResolvedValueOnce(missing);
+      const res = makeRes();
+      await c.add(makeReq({ body: { ...body, subkind_id: 4 } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(res.body.code).toBe(code);
+    }
+    expect(svc.addDeduction).toHaveBeenLastCalledWith(42, { kind_id: 3, subkind_id: 4, month: '2026-10', amount: 5000 });
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 });
 
 describe('правка', () => {
-  const body = { kind_id: 3, month: '2026-11', amount: 3000 };
+  const body = { kind_id: 3, subkind_id: null, month: '2026-11', amount: 3000 };
   const after = { ...DEDUCTION, month: '2026-11', amount: '3000.00' };
 
   it('было и стало в аудите; без изменений — аудита нет', async () => {
@@ -200,6 +206,17 @@ describe('правка', () => {
     svc.updateDeduction.mockResolvedValueOnce({ before: after, after });
     await c.update(makeReq({ params: { id: '7' }, body }), makeRes());
     expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+
+    // Сменился только подвид — тоже правка.
+    const withSubkind = { ...after, subkind_id: 4, subkind_name: 'Курение' };
+    svc.updateDeduction.mockResolvedValueOnce({ before: after, after: withSubkind });
+    await c.update(makeReq({ params: { id: '7' }, body: { ...body, subkind_id: 4 } }), makeRes());
+    expect(svc.updateDeduction).toHaveBeenLastCalledWith(7, { ...body, subkind_id: 4 });
+    expect(audit.logFromRequest).toHaveBeenCalledTimes(2);
+    expect(audit.logFromRequest).toHaveBeenLastCalledWith(
+      expect.anything(), 'user-1', 'STAFF_DEDUCTION_UPDATED',
+      expect.objectContaining({ details: expect.objectContaining({ to: expect.objectContaining({ subkind_name: 'Курение' }) }) }),
+    );
   });
 
   it('уволенный: виден в списке кадров — можно; не виден — 403; работающий вне охвата — 403', async () => {

@@ -2,7 +2,10 @@ import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
 import type { IDormitoryCandidate } from './dormitoryService';
 
-/** Удержание сотрудника (миграция 318): вид, месяц удержания, сумма. Отдел и должность — текущие. */
+/**
+ * Удержание сотрудника (миграции 318, 321): вид, подвид (необязателен), месяц удержания, сумма. Те же записи ведут
+ * кадры и «Зарплата» («Справочник» → «Удержания»). Отдел и должность — текущие.
+ */
 export interface IStaffDeduction {
   id: number;
   employee_id: number;
@@ -11,6 +14,9 @@ export interface IStaffDeduction {
   position: string | null;
   kind_id: number;
   kind_name: string;
+  /** Без подвида — null. */
+  subkind_id: number | null;
+  subkind_name: string | null;
   /** YYYY-MM. */
   month: string;
   /** NUMERIC как строка: «5000.00». */
@@ -19,19 +25,45 @@ export interface IStaffDeduction {
 
 export interface IStaffDeductionPayload {
   kind_id: number;
+  /** null — без подвида. */
+  subkind_id: number | null;
   /** YYYY-MM. */
   month: string;
   amount: number;
 }
 
-/** Вид удержания — общий справочник с «Зарплатой»; сумма по умолчанию — только у кадров. */
+/** Подвид вида удержания (миграция 321): «Спецодежда» → «Каска»; своя сумма по умолчанию. */
+export interface IDeductionSubkind {
+  id: number;
+  kind_id: number;
+  name: string;
+  /** NUMERIC как строка; не задана — null (берётся сумма вида). */
+  default_amount: string | null;
+}
+
+/** Вид удержания с подвидами — общий справочник кадров и «Зарплаты». */
 export interface IStaffDeductionKind {
   id: number;
   name: string;
   /** NUMERIC как строка; не задана — null. */
   default_amount: string | null;
+  /** В порядке добавления. */
+  subkinds: IDeductionSubkind[];
 }
 
+/** Вид без подвидов — ответ на добавление и правку вида. */
+export type StaffDeductionKindEntry = Omit<IStaffDeductionKind, 'subkinds'>;
+
+/** Подвиды из окна справочника: кадры и «Зарплата» ходят каждый в свой API (свои права), справочник один. */
+export interface IDeductionSubkindsApi {
+  /** Такой у вида уже есть — ApiError 409. */
+  add: (kindId: number, payload: IStaffDeductionKindPayload) => Promise<IDeductionSubkind>;
+  update: (subkindId: number, payload: IStaffDeductionKindPayload) => Promise<IDeductionSubkind>;
+  /** Подвид назначен сотрудникам — ApiError 409. */
+  remove: (subkindId: number) => Promise<void>;
+}
+
+/** Название и сумма по умолчанию — вида или подвида. */
 export interface IStaffDeductionKindPayload {
   name: string;
   default_amount: number | null;
@@ -78,24 +110,39 @@ export const staffDeductionService = {
       timeoutMs: 120_000,
     }),
 
+  /** Виды с подвидами — то же дерево, что у «Зарплаты». */
   listKinds: async (signal?: AbortSignal): Promise<IStaffDeductionKind[]> => {
     const res = await apiClient.get<IApiResponse<IStaffDeductionKind[]>>('/staff-deductions/kinds', { signal });
     return res.data;
   },
 
-  /** Такой вид уже есть — ApiError 409. */
-  addKind: async (payload: IStaffDeductionKindPayload): Promise<IStaffDeductionKind> => {
-    const res = await apiClient.post<IApiResponse<IStaffDeductionKind>>('/staff-deductions/kinds', payload);
+  /** Такой вид уже есть — ApiError 409. Ответ — вид без подвидов. */
+  addKind: async (payload: IStaffDeductionKindPayload): Promise<StaffDeductionKindEntry> => {
+    const res = await apiClient.post<IApiResponse<StaffDeductionKindEntry>>('/staff-deductions/kinds', payload);
     return res.data;
   },
 
-  updateKind: async (kindId: number, payload: IStaffDeductionKindPayload): Promise<IStaffDeductionKind> => {
-    const res = await apiClient.patch<IApiResponse<IStaffDeductionKind>>(`/staff-deductions/kinds/${kindId}`, payload);
+  updateKind: async (kindId: number, payload: IStaffDeductionKindPayload): Promise<StaffDeductionKindEntry> => {
+    const res = await apiClient.patch<IApiResponse<StaffDeductionKindEntry>>(`/staff-deductions/kinds/${kindId}`, payload);
     return res.data;
   },
 
-  /** Вид назначен сотрудникам (в кадрах или в «Зарплате») — ApiError 409. */
+  /** Вид назначен сотрудникам — ApiError 409. */
   removeKind: async (kindId: number): Promise<void> => {
     await apiClient.delete<IApiResponse<IStaffDeductionKind>>(`/staff-deductions/kinds/${kindId}`);
   },
+
+  subkinds: {
+    add: async (kindId, payload) => {
+      const res = await apiClient.post<IApiResponse<IDeductionSubkind>>(`/staff-deductions/kinds/${kindId}/subkinds`, payload);
+      return res.data;
+    },
+    update: async (subkindId, payload) => {
+      const res = await apiClient.patch<IApiResponse<IDeductionSubkind>>(`/staff-deductions/subkinds/${subkindId}`, payload);
+      return res.data;
+    },
+    remove: async subkindId => {
+      await apiClient.delete<IApiResponse<IDeductionSubkind>>(`/staff-deductions/subkinds/${subkindId}`);
+    },
+  } satisfies IDeductionSubkindsApi,
 };

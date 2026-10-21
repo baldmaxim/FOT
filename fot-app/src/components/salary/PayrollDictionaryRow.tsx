@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FC } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type FC, type ReactNode } from 'react';
+import { Minus, Pencil, Plus, Trash2 } from 'lucide-react';
 
 import { rateAmountInputValue, type IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
@@ -31,6 +31,16 @@ interface IPayrollDictionaryRowProps {
   onSave: (payload: IPayrollDictionaryPayload) => Promise<void>;
   /** Отклонённый промис — причина отказа (вид отмечен у сотрудников): показывается под строкой. */
   onDelete: () => Promise<void>;
+  /**
+   * Блок под строкой (подвиды вида): передан — у строки «+», раскрывающий его; кнопка есть и без права правки.
+   */
+  details?: {
+    content: ReactNode;
+    expanded: boolean;
+    onToggle: () => void;
+    /** Для диктора: «Подвиды: Спецодежда». */
+    label: string;
+  };
 }
 
 /** Строка справочника «Расчётов»: просмотр с кнопками «Изменить» / «Удалить» или правка на месте. */
@@ -46,7 +56,9 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   onCancelEdit,
   onSave,
   onDelete,
+  details,
 }) => {
+  const detailsId = useId();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -70,6 +82,11 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
     }
   };
 
+  // Раскрытый блок остаётся и на время правки строки: подвиды не прячутся, пока переименовывают вид.
+  const detailsBlock = details?.expanded ? (
+    <div id={detailsId} className={styles.rowDetails}>{details.content}</div>
+  ) : null;
+
   if (isEditing) {
     return (
       <li className={styles.row}>
@@ -83,6 +100,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
           onSubmit={onSave}
           onCancel={onCancelEdit}
         />
+        {detailsBlock}
       </li>
     );
   }
@@ -93,22 +111,36 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
       {amountLabel !== undefined && (
         <span className={styles.rowAmount}>{formatPayrollMoney(item.amount) ?? '—'}</span>
       )}
-      {canEdit && (
+      {(canEdit || details) && (
         <span className={styles.rowActions}>
-          <button
-            ref={editButtonRef}
-            type="button"
-            className={styles.iconButton}
-            disabled={deleting}
-            onClick={() => {
-              setDeleteError(null);
-              onStartEdit();
-            }}
-            aria-label={`Изменить: ${item.name}`}
-          >
-            <Pencil size={16} aria-hidden="true" />
-          </button>
-          {!locked && (
+          {details && (
+            <button
+              type="button"
+              className={`${styles.iconButton} ${details.expanded ? styles.iconButtonActive : ''}`}
+              onClick={details.onToggle}
+              aria-expanded={details.expanded}
+              aria-controls={details.expanded ? detailsId : undefined}
+              aria-label={details.label}
+            >
+              {details.expanded ? <Minus size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              ref={editButtonRef}
+              type="button"
+              className={styles.iconButton}
+              disabled={deleting}
+              onClick={() => {
+                setDeleteError(null);
+                onStartEdit();
+              }}
+              aria-label={`Изменить: ${item.name}`}
+            >
+              <Pencil size={16} aria-hidden="true" />
+            </button>
+          )}
+          {canEdit && !locked && (
             <button
               type="button"
               className={`${styles.iconButton} ${styles.iconButtonDanger}`}
@@ -122,6 +154,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
         </span>
       )}
       {deleteError && <p className={styles.error} role="alert">{deleteError}</p>}
+      {detailsBlock}
     </li>
   );
 };

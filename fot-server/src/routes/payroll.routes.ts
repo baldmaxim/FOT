@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
+import { deductionSubkindsController } from '../controllers/deduction-subkinds.controller.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollDormitoryAllowancesController } from '../controllers/payroll-dormitory-allowances.controller.js';
 import { payrollHousingController } from '../controllers/payroll-housing.controller.js';
@@ -11,6 +12,7 @@ import { payrollRatesController } from '../controllers/payroll-rates.controller.
 import { payrollRegistryController } from '../controllers/payroll-registry.controller.js';
 import { dormitoryStaysController } from '../controllers/dormitory-stays.controller.js';
 import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
+import { payrollStaffDeductionsController } from '../controllers/payroll-staff-deductions.controller.js';
 import { payrollSummaryController } from '../controllers/payroll-summary.controller.js';
 import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
@@ -47,15 +49,17 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 
-// ─── Удержания: справочник видов и виды удержаний сотрудника ──────────────────
-router.get('/deduction-kinds', deductionsView, payrollDeductionsController.listKinds);
+// ─── Удержания: справочник видов с подвидами (общий с кадрами) и удержания сотрудника ──
+// Дерево «вид → подвиды» — то же, что у кадров (/api/staff-deductions/kinds), миграция 321.
+router.get('/deduction-kinds', deductionsView, deductionSubkindsController.listKindTree);
 router.post('/deduction-kinds', deductionsEdit, payrollDeductionsController.addKind);
 router.patch('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.renameKind);
 router.delete('/deduction-kinds/:id', deductionsEdit, payrollDeductionsController.deleteKind);
-router.get('/deductions/employee/:empId', deductionsView, payrollDeductionsController.getByEmployee);
-// Удержания из «Управления кадрами» (миграция 318) — в окне сотрудника только для чтения.
+router.post('/deduction-kinds/:id/subkinds', deductionsEdit, deductionSubkindsController.add);
+router.patch('/deduction-subkinds/:id', deductionsEdit, deductionSubkindsController.update);
+router.delete('/deduction-subkinds/:id', deductionsEdit, deductionSubkindsController.remove);
+// Удержания сотрудника (staff_deductions, миграции 318, 321) — в окне сотрудника только для чтения.
 router.get('/deductions/employee/:empId/staff', deductionsView, payrollDeductionsController.getStaffByEmployee);
-router.put('/deductions/employee/:empId', deductionsEdit, payrollDeductionsController.saveByEmployee);
 
 // ─── Справочник ставок (окно «Справочник» на «Расчётах») ─────────────────────
 router.get('/rates', deductionsView, payrollRatesController.list);
@@ -89,9 +93,11 @@ router.get('/dormitory-allowances', deductionsView, payrollDormitoryAllowancesCo
 router.post('/dormitory-allowances', deductionsEdit, payrollDormitoryAllowancesController.add);
 router.patch('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.update);
 router.delete('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.remove);
-// «Удержания»: виды и сумма ₽/мес — те же, что «Удержание» окна сотрудника. Сумма — условия оплаты (termsEdit).
-router.get('/deduction-registry', deductionsView, payrollRegistryController.listDeductions);
-router.put('/deduction-registry/employee/:empId', termsEdit, payrollRegistryController.saveDeductions);
+// «Удержания» — удержания staff_deductions (миграция 321): те же записи, что во вкладке кадров «Удержания».
+router.get('/staff-deductions', deductionsView, payrollStaffDeductionsController.list);
+router.post('/staff-deductions', termsEdit, payrollStaffDeductionsController.add);
+router.patch('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.update);
+router.delete('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.remove);
 // «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, dormitory-allowances, deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 

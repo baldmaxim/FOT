@@ -173,12 +173,12 @@ const insertCompensations = (insertCallIndex: number) => {
   return { travel: params[15], communication: params[16], deduction: params[17] };
 };
 
-describe('условия оплаты: проезд, связь, удержание', () => {
+describe('условия оплаты: проезд, связь; удержание — не из условий (миграция 321)', () => {
   const baseBody = {
     staff_category: 'worker', calc_type: 'hourly', hourly_rate: 450, effective_from: '2026-09-24',
   };
 
-  it('одиночное назначение сохраняет три суммы и пишет их в аудит', async () => {
+  it('одиночное назначение сохраняет проезд и связь; удержание 0 от прежнего клиента — принято, не пишется', async () => {
     const res = makeRes();
 
     await payrollTermsController.assign(makeReq({
@@ -187,11 +187,26 @@ describe('условия оплаты: проезд, связь, удержан�
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: 3000, communication: 500, deduction: 0 });
+    expect(insertCompensations(SINGLE_INSERT)).toEqual({ travel: 3000, communication: 500, deduction: null });
     // Премия и проживание остаются на своих местах ($14/$15).
     expect(insertAmounts(SINGLE_INSERT)).toEqual({ bonus: null, housing: null });
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ travel_compensation: 3000, communication_compensation: 500, deduction_amount: 0 });
+    expect(details).toMatchObject({ travel_compensation: 3000, communication_compensation: 500 });
+    expect(details).not.toHaveProperty('deduction_amount');
+  });
+
+  it('удержание больше нуля от прежнего клиента — 409 «обновите страницу», ничего не пишется', async () => {
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { ...baseBody, deduction_amount: 1500 },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('DEDUCTION_MOVED');
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
   it('без сумм — NULL', async () => {
@@ -727,13 +742,13 @@ describe('payrollTermsController.list', () => {
     expect(res.body.data.map((row: { can_edit: boolean }) => row.can_edit)).toEqual([true, false]);
   });
 
-  it('список отдаёт компенсации проезда, связи и удержание для предзаполнения карточки', async () => {
+  it('список отдаёт компенсации проезда и связи для предзаполнения карточки; удержания условий — нет', async () => {
     const res = makeRes();
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
 
     expect(listParams().sql).toMatch(/t\.travel_compensation/);
     expect(listParams().sql).toMatch(/t\.communication_compensation/);
-    expect(listParams().sql).toMatch(/t\.deduction_amount/);
+    expect(listParams().sql).not.toMatch(/deduction_amount/);
   });
 
   it('список отдаёт последнюю плановую доплату — только для строк порции, после LIMIT', async () => {

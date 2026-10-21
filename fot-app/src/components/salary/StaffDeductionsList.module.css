@@ -1,22 +1,16 @@
 /*
- * «Из кадров» в «Удержании» окна сотрудника «Зарплаты»: удержания вкладки кадров, только чтение.
+ * «Удержание» окна сотрудника «Зарплаты»: удержания сотрудника (вносят в «Справочнике» и у кадров), только чтение.
  * Mobile-first: вид — первой строкой, месяц и сумма — второй; с 600px — одной строкой в три колонки.
  */
-.block {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.list {
   max-width: 640px;
   min-width: 0;
-}
-
-.title { font-size: 13px; color: var(--text-secondary); }
-
-.list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
+
+.empty { margin: 0; font-size: 13px; color: var(--text-secondary); }
 
 .row {
   display: grid;

@@ -66,6 +66,10 @@ vi.mock('../controllers/payroll-compensation-stops.controller.js', () => ({
   payrollCompensationStopsController: h.stubController('stops'),
 }));
 vi.mock('../controllers/payroll-registry.controller.js', () => ({ payrollRegistryController: h.stubController('registry') }));
+vi.mock('../controllers/payroll-staff-deductions.controller.js', () => ({
+  payrollStaffDeductionsController: h.stubController('staffDeductions'),
+}));
+vi.mock('../controllers/deduction-subkinds.controller.js', () => ({ deductionSubkindsController: h.stubController('subkinds') }));
 
 const app = express();
 app.use(express.json());
@@ -102,7 +106,8 @@ const ROUTES = [
   '/api/payroll/housing-allowances',
   '/api/payroll/supplements',
   '/api/payroll/compensation-stops',
-  '/api/payroll/deduction-registry',
+  '/api/payroll/staff-deductions',
+  '/api/payroll/deduction-kinds',
 ];
 
 beforeEach(() => {
@@ -128,8 +133,31 @@ describe('раздел «Зарплата» по списку', () => {
     }
     expect(h.calls).toEqual([
       'terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll',
-      'housing.list', 'supplements.list', 'stops.list', 'registry.listDeductions',
+      'housing.list', 'supplements.list', 'stops.list', 'staffDeductions.list', 'subkinds.listKindTree',
     ]);
+  });
+
+  it('удержания и подвиды (миграция 321): запись — только из списка', async () => {
+    const writes: Array<['post' | 'patch' | 'delete', string, string]> = [
+      ['post', '/api/payroll/staff-deductions', 'staffDeductions.add'],
+      ['patch', '/api/payroll/staff-deductions/7', 'staffDeductions.update'],
+      ['delete', '/api/payroll/staff-deductions/7', 'staffDeductions.remove'],
+      ['post', '/api/payroll/deduction-kinds/3/subkinds', 'subkinds.add'],
+      ['patch', '/api/payroll/deduction-subkinds/5', 'subkinds.update'],
+      ['delete', '/api/payroll/deduction-subkinds/5', 'subkinds.remove'],
+    ];
+    const send = (method: 'post' | 'patch' | 'delete', url: string, userId: string) =>
+      request(app)[method](url).set('Authorization', `Bearer ${tokenFor(userId, 'admin')}`).send({});
+    for (const [method, url] of writes) {
+      expect((await send(method, url, 'admin-outside')).status, `${method} ${url}`).toBe(403);
+    }
+    expect(h.calls).toEqual([]);
+
+    h.listedUserIds.add('admin-listed');
+    for (const [method, url] of writes) {
+      expect((await send(method, url, 'admin-listed')).status, `${method} ${url}`).toBe(200);
+    }
+    expect(h.calls).toEqual(writes.map(([, , call]) => call));
   });
 
   it('офисный сотрудник из списка — проходит, не из списка — 403', async () => {

@@ -72,6 +72,8 @@ const termsBodySchema = z.object({
   housing_compensation: optionalMoneySchema,
   travel_compensation: optionalMoneySchema,
   communication_compensation: optionalMoneySchema,
+  // Прежний клиент ещё присылает — пустое и 0 принимаем и не пишем, сумму больше нуля отклоняем (409): удержания
+  // с миграции 321 — staff_deductions, вносятся в «Справочник» → «Удержания» и во вкладке кадров.
   deduction_amount: optionalMoneySchema,
   staff_units: z.coerce.number().positive().max(2).optional(),
   organization_id: z.string().uuid().nullable().optional(),
@@ -112,6 +114,13 @@ const plannedSupplementSchema = z.object({
 const assignBodySchema = termsBodySchema.and(z.object({
   planned_supplement: plannedSupplementSchema.nullable().optional(),
 }));
+
+/** Прежний клиент прислал «Сумма, ₽/мес» удержания: тихо не записываем — просим обновить страницу. */
+const DEDUCTION_MOVED = {
+  success: false,
+  error: 'Удержания теперь вносятся в «Справочник» → «Удержания» — обновите страницу',
+  code: 'DEDUCTION_MOVED',
+};
 
 function handleZodError(error: unknown, res: Response): boolean {
   if (error instanceof z.ZodError) {
@@ -247,7 +256,6 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
              LIMIT 1) AS housing_compensation,
            t.travel_compensation,
            t.communication_compensation,
-           t.deduction_amount,
            t.staff_units,
            t.effective_from,
            t.effective_to
@@ -382,7 +390,6 @@ interface IPayrollTermsListRow {
   housing_compensation: string | number | null;
   travel_compensation: string | number | null;
   communication_compensation: string | number | null;
-  deduction_amount: string | number | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -644,6 +651,10 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     const body = assignBodySchema.parse(req.body);
+    if ((body.deduction_amount ?? 0) > 0) {
+      res.status(409).json(DEDUCTION_MOVED);
+      return;
+    }
     const supplement = body.planned_supplement;
 
     // Условия и доплата — одной транзакцией под блокировкой сотрудника: параллельное
@@ -666,7 +677,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         housingCompensation: null,
         travelCompensation: body.travel_compensation ?? null,
         communicationCompensation: body.communication_compensation ?? null,
-        deductionAmount: body.deduction_amount ?? null,
+        // Удержания с миграции 321 — staff_deductions: окно сотрудника их только показывает.
+        deductionAmount: null,
         staffUnits: body.staff_units,
         organizationId: body.organization_id ?? null,
         effectiveFrom: body.effective_from,
@@ -704,7 +716,6 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         bonus_amount: body.bonus_amount ?? null,
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
-        deduction_amount: body.deduction_amount ?? null,
         // undefined — доплату не трогали (в аудите ключа нет), null — снята.
         planned_supplement: supplement,
         planned_supplement_changed: supplementChanged,

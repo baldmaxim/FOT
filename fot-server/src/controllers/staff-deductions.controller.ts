@@ -1,12 +1,12 @@
 /**
- * «Удержания» (миграция 318): вкладка «Управления кадрами» (право /staff-control/deductions) — удержания
- * сотрудников по месяцам и справочник видов, общий с «Зарплатой» (payroll_deduction_kinds).
+ * «Удержания» (миграции 318, 321): вкладка «Управления кадрами» (право /staff-control/deductions) — удержания
+ * сотрудников по месяцам и справочник видов, общий с «Зарплатой» (payroll_deduction_kinds). Те же записи
+ * ведёт «Зарплата» (payroll-staff-deductions.controller.ts); дерево видов и подвиды — deduction-subkinds.controller.ts.
  *
  * Охват — как у «Проживания»: список — как список кадров (resolveStaffRosterEmployeeIds), запись —
  * canWriteEmployeeInScope; уволенного (его назначения отделов сняты) правит тот, кто видит его в «Уволенных».
  */
 import type { Response } from 'express';
-import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
@@ -19,7 +19,6 @@ import {
 import {
   addDeductionKindWithDefault,
   deleteDeductionKind,
-  listDeductionKindsWithDefaults,
   updateDeductionKind,
   type IDeductionKindWithDefault,
 } from '../services/payroll/payroll-deduction-kinds.service.js';
@@ -29,41 +28,25 @@ import {
   getDeduction,
   listDeductions,
   updateDeduction,
-  type IStaffDeduction,
 } from '../services/staff-deductions.service.js';
+import { handlePayrollZodError, parsePayrollDictionaryId } from './payroll-dictionary.helpers.js';
 import {
-  handlePayrollZodError,
-  parsePayrollDictionaryId,
-  payrollDictionaryNameSchema,
-  payrollEmployeeIdSchema,
-  payrollMonthSchema,
-  payrollPositiveMoneySchema,
-} from './payroll-dictionary.helpers.js';
+  deductionDictionaryEntrySchema,
+  STAFF_DEDUCTION_REF_MISSING,
+  staffDeductionAddRefusal,
+  staffDeductionAddSchema,
+  staffDeductionAuditDetails,
+  staffDeductionChanged,
+  staffDeductionFieldsSchema,
+} from './staff-deduction-input.js';
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
 const DEDUCTIONS_SHEET = { sheetName: 'Удержания', tableName: 'Deductions' } as const;
 
-const deductionFields = {
-  kind_id: z.number({ required_error: 'Выберите вид удержания', invalid_type_error: 'Выберите вид удержания' })
-    .int('Выберите вид удержания').positive('Выберите вид удержания'),
-  month: payrollMonthSchema('Укажите месяц'),
-  amount: payrollPositiveMoneySchema('Укажите сумму'),
-};
-const addSchema = z.object({ employee_id: payrollEmployeeIdSchema, ...deductionFields });
-const updateSchema = z.object(deductionFields);
-
-/** Сумма по умолчанию не задана — null (или поле не прислали). */
-const kindSchema = z.object({
-  name: payrollDictionaryNameSchema('Введите название вида'),
-  default_amount: payrollPositiveMoneySchema('Сумма должна быть числом')
-    .nullable()
-    .optional()
-    .transform(value => value ?? null),
-});
+const kindSchema = deductionDictionaryEntrySchema('Введите название вида');
 
 const NOT_FOUND = { success: false, error: 'Удержание не найдено' };
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
-const KIND_MISSING = { success: false, error: 'Вид удержания не найден — обновите список видов', code: 'KIND_MISSING' };
 const KIND_NOT_FOUND = { success: false, error: 'Вид удержания не найден' };
 const DUPLICATE_KIND = { success: false, error: 'Такой вид удержания уже есть', code: 'DUPLICATE_KIND' };
 
@@ -83,15 +66,6 @@ const canWriteDeduction = async (req: AuthenticatedRequest, employeeId: number):
   if (!employee || employee.employment_status === 'active') return false;
   return canSeeEmployeeInStaffList(req, employeeId);
 };
-
-const auditDetails = (deduction: IStaffDeduction) => ({
-  employee_id: deduction.employee_id,
-  full_name: deduction.full_name,
-  kind_id: deduction.kind_id,
-  kind_name: deduction.kind_name,
-  month: deduction.month,
-  amount: deduction.amount,
-});
 
 const kindAudit = (kind: IDeductionKindWithDefault) => ({ name: kind.name, default_amount: kind.default_amount });
 
@@ -120,22 +94,13 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
   }
 };
 
-/** POST /api/staff-deductions { employee_id, kind_id, month, amount } — добавить удержание. */
+/** POST /api/staff-deductions { employee_id, kind_id, subkind_id?, month, amount } — добавить удержание. */
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { employee_id: employeeId, ...input } = addSchema.parse(req.body);
-    // Поиск отдаёт только работающих и не подрядчиков, но тело запроса могут собрать и руками.
-    const employee = await getEmployeeState(employeeId);
-    if (!employee) {
-      res.status(404).json({ success: false, error: 'Сотрудник не найден' });
-      return;
-    }
-    if (employee.employment_status !== 'active' || employee.is_archived) {
-      res.status(400).json({ success: false, error: 'Добавить можно только работающего сотрудника' });
-      return;
-    }
-    if (employee.is_contractor) {
-      res.status(400).json({ success: false, error: 'Подрядчика добавить нельзя' });
+    const { employee_id: employeeId, ...input } = staffDeductionAddSchema.parse(req.body);
+    const refusal = await staffDeductionAddRefusal(employeeId);
+    if (refusal) {
+      res.status(refusal.status).json(refusal.body);
       return;
     }
     if (!(await canWriteEmployeeInScope(req, employeeId))) {
@@ -143,14 +108,14 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
       return;
     }
     const deduction = await addDeduction(employeeId, input);
-    if (deduction === 'kind_missing') {
-      res.status(409).json(KIND_MISSING);
+    if (typeof deduction === 'string') {
+      res.status(409).json(STAFF_DEDUCTION_REF_MISSING[deduction]);
       return;
     }
     await auditService.logFromRequest(req, req.user.id, 'STAFF_DEDUCTION_ADDED', {
       entityType: 'staff_deductions',
       entityId: String(deduction.id),
-      details: auditDetails(deduction),
+      details: staffDeductionAuditDetails(deduction),
     });
     res.json({ success: true, data: deduction });
   } catch (err) {
@@ -160,7 +125,7 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   }
 };
 
-/** PATCH /api/staff-deductions/:id { kind_id, month, amount } — вид, месяц и сумма; сотрудник не меняется. */
+/** PATCH /api/staff-deductions/:id { kind_id, subkind_id?, month, amount } — сотрудник не меняется. */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const id = parsePayrollDictionaryId(req);
@@ -168,7 +133,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
-    const input = updateSchema.parse(req.body);
+    const input = staffDeductionFieldsSchema.parse(req.body);
     const current = await getDeduction(id);
     if (!current) {
       res.status(404).json(NOT_FOUND);
@@ -183,16 +148,16 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
-    if (updated === 'kind_missing') {
-      res.status(409).json(KIND_MISSING);
+    if (typeof updated === 'string') {
+      res.status(409).json(STAFF_DEDUCTION_REF_MISSING[updated]);
       return;
     }
     const { before, after } = updated;
-    if (before.kind_id !== after.kind_id || before.month !== after.month || before.amount !== after.amount) {
+    if (staffDeductionChanged(before, after)) {
       await auditService.logFromRequest(req, req.user.id, 'STAFF_DEDUCTION_UPDATED', {
         entityType: 'staff_deductions',
         entityId: String(id),
-        details: { from: auditDetails(before), to: auditDetails(after) },
+        details: { from: staffDeductionAuditDetails(before), to: staffDeductionAuditDetails(after) },
       });
     }
     res.json({ success: true, data: after });
@@ -224,7 +189,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     await auditService.logFromRequest(req, req.user.id, 'STAFF_DEDUCTION_DELETED', {
       entityType: 'staff_deductions',
       entityId: String(id),
-      details: auditDetails(deleted),
+      details: staffDeductionAuditDetails(deleted),
     });
     res.json({ success: true, data: deleted });
   } catch (err) {
@@ -244,16 +209,6 @@ const exportTable = async (req: AuthenticatedRequest, res: Response): Promise<vo
     if (handlePayrollZodError(err, res)) return;
     console.error('staffDeductions.export error:', err);
     res.status(500).json({ success: false, error: 'Не удалось выгрузить таблицу' });
-  }
-};
-
-/** GET /api/staff-deductions/kinds — виды удержаний с суммой по умолчанию, в порядке справочника. */
-const listKinds = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    res.json({ success: true, data: await listDeductionKindsWithDefaults() });
-  } catch (err) {
-    console.error('staffDeductions.listKinds error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения видов удержаний' });
   }
 };
 
@@ -350,7 +305,6 @@ export const staffDeductionsController = {
   update,
   remove,
   exportTable,
-  listKinds,
   addKind,
   updateKind,
   deleteKind,

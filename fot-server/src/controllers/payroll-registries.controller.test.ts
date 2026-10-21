@@ -15,7 +15,9 @@ const housing = vi.hoisted(() => ({ listHousingAllowances: vi.fn() }));
 vi.mock('../services/payroll/payroll-housing.service.js', () => housing);
 
 // «Доплата за проживание» пишет квартиры «Проживания» (миграция 320).
-const stays = vi.hoisted(() => ({ getStay: vi.fn(), addStay: vi.fn(), updateStay: vi.fn(), deleteStay: vi.fn() }));
+const stays = vi.hoisted(() => ({
+  getStay: vi.fn(), addStay: vi.fn(), updateStay: vi.fn(), deleteStay: vi.fn(), getEmployeeState: vi.fn(),
+}));
 vi.mock('../services/dormitory-stays.service.js', () => stays);
 
 const supplements = vi.hoisted(() => ({
@@ -37,18 +39,16 @@ const stops = vi.hoisted(() => ({
 }));
 vi.mock('../services/payroll/payroll-compensation-stops.service.js', () => stops);
 
-const deductionKinds = vi.hoisted(() => ({
-  listDeductionRegistry: vi.fn(),
-  allDeductionKindsExist: vi.fn(),
-  setEmployeeDeductionKinds: vi.fn(),
+// «Удержания» пишут удержания staff_deductions — те же записи, что во вкладке кадров (миграция 321).
+const deductions = vi.hoisted(() => ({
+  listPayrollDeductions: vi.fn(),
+  getDeduction: vi.fn(),
+  addDeduction: vi.fn(),
+  updateDeduction: vi.fn(),
+  deleteDeduction: vi.fn(),
 }));
-vi.mock('../services/payroll/payroll-deduction-kinds.service.js', () => deductionKinds);
+vi.mock('../services/staff-deductions.service.js', () => deductions);
 
-const termsAmount = vi.hoisted(() => ({ setTermsAmountFrom: vi.fn() }));
-vi.mock('../services/payroll/payroll-terms-amount.service.js', () => termsAmount);
-
-// Порядок вызовов в транзакции «Удержаний»: блокировка, проверка видов, виды, сумма.
-const calls = vi.hoisted(() => [] as string[]);
 const terms = vi.hoisted(() => ({ lockPayrollEmployee: vi.fn() }));
 vi.mock('../services/payroll/payroll-terms.service.js', () => terms);
 
@@ -63,6 +63,7 @@ import { payrollHousingController as housingC } from './payroll-housing.controll
 import { payrollSupplementsController as supplementsC } from './payroll-supplements.controller.js';
 import { payrollCompensationStopsController as stopsC } from './payroll-compensation-stops.controller.js';
 import { payrollRegistryController as registryC } from './payroll-registry.controller.js';
+import { payrollStaffDeductionsController as deductionsC } from './payroll-staff-deductions.controller.js';
 
 const makeRes = () => {
   const res = {
@@ -82,19 +83,8 @@ const SCOPE = { contractorRootId: 'contractor-root', departmentIds: ['d-1'] };
 
 beforeEach(() => {
   vi.resetAllMocks();
-  calls.length = 0;
   registryScope.resolvePayrollStaffScope.mockResolvedValue(SCOPE);
   payrollScope.resolvePayrollEditPredicate.mockResolvedValue((employeeId: number) => employeeId !== 99);
-  terms.lockPayrollEmployee.mockImplementation(async () => { calls.push('lock'); });
-  deductionKinds.allDeductionKindsExist.mockImplementation(async () => { calls.push('kinds-exist'); return true; });
-  deductionKinds.setEmployeeDeductionKinds.mockImplementation(async () => {
-    calls.push('kinds');
-    return { added: [], removed: [] };
-  });
-  termsAmount.setTermsAmountFrom.mockImplementation(async () => {
-    calls.push('amount');
-    return { status: 'unchanged' };
-  });
 });
 
 describe('списки', () => {
@@ -110,15 +100,15 @@ describe('списки', () => {
   });
 
   it('«Удержания» и «Без проезда» — в том же охвате; у «Удержаний» can_edit по строке', async () => {
-    deductionKinds.listDeductionRegistry.mockResolvedValue([
-      { employee_id: 42, full_name: 'Каримов Акмал', kinds: ['ТМЦ'], kind_ids: [2], amount: null },
-      { employee_id: 99, full_name: 'Сам Себе', kinds: [], kind_ids: [], amount: '1500.00' },
+    deductions.listPayrollDeductions.mockResolvedValue([
+      { id: 1, employee_id: 42, full_name: 'Каримов Акмал', kind_name: 'ТМЦ', month: '2026-10', amount: '500.00' },
+      { id: 2, employee_id: 99, full_name: 'Сам Себе', kind_name: 'Штрафы', month: '2026-10', amount: '1500.00' },
     ]);
     stops.listCompensationStops.mockResolvedValue([]);
     const res = makeRes();
-    await registryC.listDeductions(makeReq(), res);
+    await deductionsC.list(makeReq(), res);
     await stopsC.list(makeReq(), makeRes());
-    expect(deductionKinds.listDeductionRegistry).toHaveBeenCalledWith(expect.objectContaining(SCOPE));
+    expect(deductions.listPayrollDeductions).toHaveBeenCalledWith(expect.objectContaining(SCOPE));
     expect(stops.listCompensationStops).toHaveBeenCalledWith(SCOPE);
     expect(res.body.data.map((row: { can_edit: boolean }) => row.can_edit)).toEqual([true, false]);
   });
@@ -129,123 +119,155 @@ describe('месяцы в «Доплате за проживание» и «Уд
 
   it('старый клиент без months — на сегодня (МСК), как до выбора месяца', async () => {
     housing.listHousingAllowances.mockResolvedValue([]);
-    deductionKinds.listDeductionRegistry.mockResolvedValue([]);
+    deductions.listPayrollDeductions.mockResolvedValue([]);
     await housingC.list(makeReq(), makeRes());
-    await registryC.listDeductions(makeReq(), makeRes());
+    await deductionsC.list(makeReq(), makeRes());
     expect(periodOf(housing.listHousingAllowances)).toEqual({ onDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
-    expect(periodOf(deductionKinds.listDeductionRegistry)).toEqual({ onDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(periodOf(deductions.listPayrollDeductions)).toEqual({ onDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
   });
 
   it('список месяцев — первые числа без повторов по возрастанию; all — весь период', async () => {
     housing.listHousingAllowances.mockResolvedValue([]);
+    deductions.listPayrollDeductions.mockResolvedValue([]);
     await housingC.list(makeReq({ query: { months: '2026-10,2026-09,2026-10' } }), makeRes());
     await housingC.list(makeReq({ query: { months: 'all' } }), makeRes());
+    await deductionsC.list(makeReq({ query: { months: '2026-10,2026-09' } }), makeRes());
     expect((housing.listHousingAllowances.mock.calls[0][0] as { period: unknown }).period)
       .toEqual({ monthStarts: ['2026-09-01', '2026-10-01'] });
     expect((housing.listHousingAllowances.mock.calls[1][0] as { period: unknown }).period).toEqual({ monthStarts: null });
+    expect(periodOf(deductions.listPayrollDeductions)).toEqual({ monthStarts: ['2026-09-01', '2026-10-01'] });
   });
 
   it('неверный месяц — 400, список не читается', async () => {
     for (const months of ['2026-13', '', '2026-1', ['2026-09', '2026-10']]) {
       const res = makeRes();
-      await registryC.listDeductions(makeReq({ query: { months } as never }), res);
+      await deductionsC.list(makeReq({ query: { months } as never }), res);
       expect(res.statusCode, JSON.stringify(months)).toBe(400);
     }
-    expect(deductionKinds.listDeductionRegistry).not.toHaveBeenCalled();
+    expect(deductions.listPayrollDeductions).not.toHaveBeenCalled();
   });
 });
 
-describe('«Удержания»: сохранение из таблицы', () => {
-  const body = { kind_ids: [2, 5], amount: 1500, effective_from: '2026-10-19' };
-  const save = async (over: Record<string, unknown> = {}) => {
+describe('«Удержания»: те же записи, что во вкладке кадров', () => {
+  const ACTIVE = { employment_status: 'active', is_archived: false, is_contractor: false };
+  const DEDUCTION = {
+    id: 7, employee_id: 42, full_name: 'Каримов Акмал', department: null, position: null,
+    kind_id: 4, kind_name: 'Спецодежда', subkind_id: 9, subkind_name: 'Каска', month: '2026-10', amount: '800.00',
+  };
+  const body = { employee_id: 42, kind_id: 4, subkind_id: 9, month: '2026-10', amount: 800 };
+  const add = async (over: Record<string, unknown> = {}) => {
     const res = makeRes();
-    await registryC.saveDeductions(makeReq({ params: { empId: '42' }, body: { ...body, ...over } }), res);
+    await deductionsC.add(makeReq({ body: { ...body, ...over } }), res);
     return res;
   };
 
-  it('не «штат зарплаты» или чужой — 403, транзакции нет', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
-    const res = await save();
-    expect(res.statusCode).toBe(403);
-    expect(calls).toEqual([]);
-  });
-
-  it('блокировка сотрудника — первой, затем виды, затем сумма', async () => {
+  it('добавить: работающему из «штата зарплаты»; аудит удержания с source', async () => {
+    stays.getEmployeeState.mockResolvedValue(ACTIVE);
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    const res = await save();
+    deductions.addDeduction.mockResolvedValue(DEDUCTION);
+    const res = await add();
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual(['lock', 'kinds-exist', 'kinds', 'amount']);
-    expect(deductionKinds.allDeductionKindsExist).toHaveBeenCalledWith([2, 5], {});
-    expect(termsAmount.setTermsAmountFrom).toHaveBeenCalledWith({}, {
-      column: 'deduction_amount', employeeId: 42, amount: 1500, from: '2026-10-19', createdBy: 'user-1',
-    });
-  });
-
-  it('неизвестный вид — 400, ничего не пишется', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    deductionKinds.allDeductionKindsExist.mockResolvedValue(false);
-    const res = await save();
-    expect(res.statusCode).toBe(400);
-    expect(deductionKinds.setEmployeeDeductionKinds).not.toHaveBeenCalled();
-    expect(termsAmount.setTermsAmountFrom).not.toHaveBeenCalled();
-  });
-
-  it('сумма без условий на дату — 409 NO_TERMS (транзакция откатывается), аудита нет', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    deductionKinds.setEmployeeDeductionKinds.mockResolvedValue({ added: [2, 5], removed: [] });
-    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'no_terms' });
-    const res = await save();
-    expect(res.statusCode).toBe(409);
-    expect(res.body.code).toBe('NO_TERMS');
-    expect(audit.logFromRequest).not.toHaveBeenCalled();
-  });
-
-  it('сумма null без условий — сохраняются только виды, аудит видов', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    deductionKinds.setEmployeeDeductionKinds.mockResolvedValue({ added: [2], removed: [7] });
-    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'no_terms' });
-    const res = await save({ amount: null });
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ changed: true });
-    expect(audit.logFromRequest.mock.calls.map(call => call[2])).toEqual(['PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED']);
+    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: 9, month: '2026-10', amount: 800 });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'user-1', 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
-      expect.objectContaining({ details: { source: 'deduction_registry', employee_id: 42, added: [2], removed: [7] } }),
+      expect.anything(), 'user-1', 'STAFF_DEDUCTION_ADDED',
+      expect.objectContaining({
+        entityId: '7',
+        details: expect.objectContaining({ source: 'deduction_registry', subkind_id: 9, subkind_name: 'Каска' }),
+      }),
     );
   });
 
-  it('аудит — только изменившиеся части: сумма с source deduction_registry', async () => {
+  it('добавить без подвида — subkind_id null', async () => {
+    stays.getEmployeeState.mockResolvedValue(ACTIVE);
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    termsAmount.setTermsAmountFrom.mockResolvedValue({
-      status: 'saved', termsId: 21, previousTermsId: 20, previousAmount: '1000.00', laterUpdated: 0,
-    });
-    const res = await save();
-    expect(res.body.data).toEqual({ changed: true });
-    expect(audit.logFromRequest.mock.calls.map(call => call[2])).toEqual(['PAYROLL_TERMS_ASSIGNED']);
+    deductions.addDeduction.mockResolvedValue({ ...DEDUCTION, subkind_id: null, subkind_name: null });
+    const { subkind_id: _omitted, ...withoutSubkind } = body;
+    const res = makeRes();
+    await deductionsC.add(makeReq({ body: withoutSubkind }), res);
+    expect(res.statusCode).toBe(200);
+    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: null, month: '2026-10', amount: 800 });
+  });
+
+  it('добавить: уволенному — 400, не «штат зарплаты» — 403, подвид чужого вида — 409', async () => {
+    stays.getEmployeeState.mockResolvedValueOnce({ ...ACTIVE, employment_status: 'dismissed' });
+    expect((await add()).statusCode).toBe(400);
+
+    stays.getEmployeeState.mockResolvedValue(ACTIVE);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValueOnce(false);
+    expect((await add()).statusCode).toBe(403);
+    expect(deductions.addDeduction).not.toHaveBeenCalled();
+
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    deductions.addDeduction.mockResolvedValue('subkind_missing');
+    const missing = await add();
+    expect(missing.statusCode).toBe(409);
+    expect(missing.body.code).toBe('SUBKIND_MISSING');
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('добавить: сумма 0 или строкой, без вида, месяц 13, подвид строкой — 400', async () => {
+    for (const patch of [{ amount: 0 }, { amount: '800' }, { kind_id: null }, { month: '2026-13' }, { subkind_id: '9' }]) {
+      const res = await add(patch);
+      expect(res.statusCode, JSON.stringify(patch)).toBe(400);
+    }
+    expect(deductions.addDeduction).not.toHaveBeenCalled();
+  });
+
+  it('изменить: только удержание «штата зарплаты»; было и стало в аудите, без изменений — аудита нет', async () => {
+    const patch = { kind_id: 4, subkind_id: null, month: '2026-10', amount: 800 };
+    deductions.getDeduction.mockResolvedValue(DEDUCTION);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValueOnce(false);
+    const denied = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: patch }), denied);
+    expect(denied.statusCode).toBe(403);
+    expect(deductions.updateDeduction).not.toHaveBeenCalled();
+
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    const after = { ...DEDUCTION, subkind_id: null, subkind_name: null };
+    deductions.updateDeduction.mockResolvedValueOnce({ before: DEDUCTION, after });
+    const res = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: patch }), res);
+    expect(res.body.data).toEqual(after);
+    expect(deductions.updateDeduction).toHaveBeenCalledWith(7, patch);
     expect(audit.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'user-1', 'PAYROLL_TERMS_ASSIGNED',
+      expect.anything(), 'user-1', 'STAFF_DEDUCTION_UPDATED',
       expect.objectContaining({
-        entityId: '21',
         details: expect.objectContaining({
-          source: 'deduction_registry', deduction_amount: 1500, previous_deduction_amount: '1000.00',
+          source: 'deduction_registry',
+          from: expect.objectContaining({ subkind_id: 9 }),
+          to: expect.objectContaining({ subkind_id: null }),
         }),
       }),
     );
 
     audit.logFromRequest.mockClear();
-    termsAmount.setTermsAmountFrom.mockResolvedValue({ status: 'unchanged' });
-    const same = await save();
-    expect(same.body.data).toEqual({ changed: false });
+    deductions.updateDeduction.mockResolvedValueOnce({ before: DEDUCTION, after: DEDUCTION });
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: { ...patch, subkind_id: 9 } }), makeRes());
     expect(audit.logFromRequest).not.toHaveBeenCalled();
+
+    deductions.getDeduction.mockResolvedValueOnce(null);
+    const missing = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '8' }, body: patch }), missing);
+    expect(missing.statusCode).toBe(404);
   });
 
-  it('сумма 0, строкой, вид не массивом, дата 31.02 — 400', async () => {
+  it('удалить: аудит с source; чужое — 403', async () => {
+    deductions.getDeduction.mockResolvedValue(DEDUCTION);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValueOnce(false);
+    const denied = makeRes();
+    await deductionsC.remove(makeReq({ params: { id: '7' } }), denied);
+    expect(denied.statusCode).toBe(403);
+    expect(deductions.deleteDeduction).not.toHaveBeenCalled();
+
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    for (const patch of [{ amount: 0 }, { amount: '1500' }, { kind_ids: 'x' }, { effective_from: '2026-02-31' }]) {
-      const res = await save(patch);
-      expect(res.statusCode, JSON.stringify(patch)).toBe(400);
-    }
-    expect(calls).toEqual([]);
+    deductions.deleteDeduction.mockResolvedValue(DEDUCTION);
+    const res = makeRes();
+    await deductionsC.remove(makeReq({ params: { id: '7' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'STAFF_DEDUCTION_DELETED',
+      expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'deduction_registry' }) }),
+    );
   });
 });
 
