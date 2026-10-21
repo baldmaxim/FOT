@@ -98,6 +98,17 @@ describe('Documents API: исключение hr_*', () => {
     expect(pgExecute).not.toHaveBeenCalled();
   });
 
+  it('delete документа без сотрудника (вложение подачи, файл дня) → 404, R2 и БД не трогает', async () => {
+    const { r2Service } = await import('../services/r2.service.js');
+    vi.mocked(r2Service.deleteObject).mockClear();
+    pgQueryOne.mockResolvedValueOnce({ r2_key: 'k', employee_id: null, category: 'timesheet_correction', deleted_at: null });
+    const res = makeRes();
+    await documentsController.remove(req({ params: { id: '5' } }), res);
+    expect(res.statusCode).toBe(404);
+    expect(pgExecute).not.toHaveBeenCalled();
+    expect(r2Service.deleteObject).not.toHaveBeenCalled();
+  });
+
   it('upload с категорией hr_* → 400', async () => {
     const res = makeRes();
     await documentsController.uploadFile(

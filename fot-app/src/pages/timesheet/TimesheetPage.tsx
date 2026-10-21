@@ -2926,6 +2926,8 @@ export const TimesheetPage: FC = () => {
             // «Просмотр табеля»: корректировки видны и такой роли — только на чтение.
             hideCorrectionTab={!canEditTimesheet && !modalViewOnly}
             allowAttachmentsOnCreate
+            // «Файлы дня»: файл/фото к дню без корректировки — только кадровый админ и админ.
+            showDayFiles={canManageAsHrAdmin('/timesheet-hr')}
             viewOnly={modalViewOnly}
             onDelete={
               modalViewOnly ? undefined

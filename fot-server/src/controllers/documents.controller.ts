@@ -405,11 +405,13 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       [id],
     );
 
-    if (isHrOrDeleted(doc) || !doc) {
+    // Документ без сотрудника (вложение подачи, файл дня табеля) удаляется только своим
+    // эндпоинтом: здесь скоуп не проверить, и раньше такой файл мог удалить кто угодно.
+    if (isHrOrDeleted(doc) || !doc || doc.employee_id == null) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (doc.employee_id != null && !(await canWriteEmployeeInScope(req, doc.employee_id))) {
+    if (!(await canWriteEmployeeInScope(req, doc.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }

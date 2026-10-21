@@ -5709,6 +5709,28 @@
 .ts-corr-card > .ts-corr-approval {
   margin: 0 20px 12px;
 }
+/* «Файлы дня» (кадровый админ): тап-цели ≥ 44px на телефоне/планшете, компактно на десктопе. */
+.ts-day-files__add {
+  min-height: 44px;
+  padding: 0 16px;
+  touch-action: manipulation;
+}
+.ts-day-files__icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  touch-action: manipulation;
+}
+@media (min-width: 1024px) {
+  .ts-day-files__add {
+    min-height: 32px;
+    padding: 0 10px;
+  }
+  .ts-day-files__icon-btn {
+    min-width: 28px;
+    min-height: 28px;
+  }
+}
 
 @media (max-width: 1023px) {
   .ts-modal--two-col {

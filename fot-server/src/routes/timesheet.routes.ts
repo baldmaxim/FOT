@@ -11,6 +11,7 @@ import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import correctionAttachmentsRouter from './correction-attachments.routes.js';
+import timesheetDayFilesRouter from './timesheet-day-files.routes.js';
 
 const router = Router();
 
@@ -325,6 +326,9 @@ router.get(
 
 // /api/timesheet/corrections/:id/attachments
 router.use('/corrections', correctionAttachmentsRouter);
+
+// /api/timesheet/day-files — файлы дня кадрового админа (без корректировки)
+router.use('/day-files', timesheetDayFilesRouter);
 
 // POST /api/timesheet/refresh — пересчёт изменяет данные, поэтому edit (не view):
 // view-only роли (например, security с view_all_departments) запускать его не должны.

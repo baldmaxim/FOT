@@ -13,6 +13,7 @@ import { CorrectionSourceRequestLine } from './CorrectionSourceRequestLine';
 import { CorrectionAuthorLine } from './CorrectionAuthorLine';
 import { CorrectionAuthorBlock } from './CorrectionAuthorBlock';
 import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
+import { TimesheetDayFiles } from './TimesheetDayFiles';
 import {
   buildDisplayItems,
   calculateWorkSeconds,
@@ -109,6 +110,9 @@ interface ICorrectionModalProps {
   // загрузка после создания). Включает родитель, чей onSave умеет грузить файлы
   // (табель). По умолчанию false — ЛК/массовая корректировка без picker'а.
   allowAttachmentsOnCreate?: boolean;
+  // Блок «Файлы дня» (кадровый админ): файл к дню без корректировки. Включает родитель
+  // по праву canManageAsHrAdmin('/timesheet-hr') — остальным блок не показывается.
+  showDayFiles?: boolean;
   // Показать верхнюю вкладку «Передвижения» (есть превышение лимита/непривязанная точка).
   // Если true — модалка открывается на вкладке «Передвижения», рядом вкладка «Корректировки»
   // с обычным содержимым. Размер модалки при переключении не меняется.
@@ -1626,6 +1630,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   preselectedObjectKey,
   initialMode,
   allowAttachmentsOnCreate,
+  showDayFiles = false,
   showTravelTab,
   companionWorkRequest,
   canAddRemote,
@@ -1865,6 +1870,9 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
       )}
       {hasObjectsBlock && attachmentsNode}
       {approvalBanner}
+      {showDayFiles && employeeId && workDate && (
+        <TimesheetDayFiles employeeId={employeeId} workDate={workDate} />
+      )}
     </div>
   ) : null;
 
