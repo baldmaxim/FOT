@@ -33,6 +33,15 @@ describe('справочник «Расчётов»: значение ставк
     expect(parseRateAmount('9999999999,99')).toEqual({ amount: 9999999999.99, error: null });
   });
 
+  it('часовая ставка: до 4 знаков после запятой, верх — NUMERIC(12,4)', () => {
+    expect(parseRateAmount('450,1250', 4)).toEqual({ amount: 450.125, error: null });
+    expect(parseRateAmount('1 041,6667', 4)).toEqual({ amount: 1041.6667, error: null });
+    expect(parseRateAmount('99999999,9999', 4)).toEqual({ amount: 99999999.9999, error: null });
+    expect(parseRateAmount('450,12345', 4).error).toBe('Значение — число не меньше нуля, до четырёх знаков после запятой');
+    expect(parseRateAmount('100000000', 4).error).toBe('Слишком большое значение');
+    expect(parseRateAmount('450,125').error).toBe('Значение — число не меньше нуля, до двух знаков после запятой');
+  });
+
   it('значение в поле правки — без хвоста нулей и с запятой; разбирается обратно в то же число', () => {
     expect(rateAmountInputValue('450.50')).toBe('450,5');
     expect(rateAmountInputValue('520.00')).toBe('520');

@@ -90,6 +90,7 @@ describe('добавить подвид', () => {
     for (const [id, body, status] of [
       ['4', { name: '  ' }, 400],
       ['4', { name: 'Каска', default_amount: 0 }, 400],
+      ['4', { name: 'Каска', default_amount: 800.005 }, 400],
       ['x', { name: 'Каска' }, 404],
     ] as const) {
       const res = makeRes();

@@ -67,18 +67,15 @@ export interface IPayrollTermsRow {
   planned_supplement_amount?: string | number | null;
   planned_supplement_from?: string | null;
   planned_supplement_to?: string | null;
-  /**
-   * Начисления по месяцам (придут из 1С ЗУП). Сервер пока не отдаёт — источник подключается
-   * отдельно; без поля ячейка «Начисления» показывает «—».
-   */
+  /** Начисления по месяцам из «Оплачено» (1С ЗУП); без поля ячейка «Начисления» показывает «—». */
   accruals?: IPayrollMonthlyAccrual[] | null;
   /**
-   * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽; null — сумм нет («—»).
+   * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽, NUMERIC строкой; null — сумм нет («—»).
    * Итог «Начислено»; «К выплате» — он минус paid_deductions_total, как в «Своде».
    */
-  paid_total?: number | null;
-  /** Итог «Удержано»; 0 — суммы есть и дают ноль. */
-  paid_deductions_total?: number | null;
+  paid_total?: string | null;
+  /** Итог «Удержано», NUMERIC строкой; «0.00» — суммы есть и дают ноль. */
+  paid_deductions_total?: string | null;
   /** Статьи «Удержано» по месяцам — для окна удержаний. */
   paid_deductions?: IPayrollPaidAmount[] | null;
   /**

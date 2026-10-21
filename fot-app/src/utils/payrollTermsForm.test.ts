@@ -84,6 +84,32 @@ describe('validatePayrollTerms: состав запроса сохранения
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
   });
 
+  it('копейки: пробелы между разрядами допустимы, третий знак — ошибка, а не молчаливое округление', () => {
+    const ok = validatePayrollTerms(values({ amount: '175 000,50', money: { ...EMPTY_MONEY, bonus: '25\u00a0000,10' } }));
+    expect(ok.errors).toBeNull();
+    expect(ok.payload).toMatchObject({ monthly_salary: 175000.5, bonus_amount: 25000.1 });
+
+    const result = validatePayrollTerms(values({ amount: '175000,555', money: { ...EMPTY_MONEY, travel: '100,005' } }));
+    expect(result.payload).toBeNull();
+    expect(result.errors).toEqual({
+      amount: 'Значение — число не меньше нуля, до двух знаков после запятой',
+      travel: 'Значение — число не меньше нуля, до двух знаков после запятой',
+    });
+  });
+
+  it('часовая ставка — до 4 знаков после запятой, пятый — ошибка', () => {
+    const ok = validatePayrollTerms(values({ calcType: 'hourly', amount: '450,1250' }));
+    expect(ok.errors).toBeNull();
+    expect(ok.payload?.hourly_rate).toBe(450.125);
+    expect(validatePayrollTerms(values({ calcType: 'hourly', amount: '450,12345' })).errors)
+      .toEqual({ amount: 'Значение — число не меньше нуля, до четырёх знаков после запятой' });
+  });
+
+  it('сумма сверх NUMERIC(12,2) — ошибка, а не 500 от БД', () => {
+    expect(validatePayrollTerms(values({ amount: '10000000000' })).errors)
+      .toEqual({ amount: 'Слишком большое значение' });
+  });
+
   it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций', () => {
     expect(firstInvalidField({ travel: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
@@ -153,6 +179,8 @@ describe('validatePayrollTerms: плановая доплата', () => {
       .toEqual({ supplementAmount: 'Введите число больше нуля' });
     expect(validatePayrollTerms(values({ supplement: { ...NOV_DEC, amount: 'abc' } }), withSupplement()).errors)
       .toEqual({ supplementAmount: 'Введите число больше нуля' });
+    expect(validatePayrollTerms(values({ supplement: { ...NOV_DEC, amount: '5000,005' } }), withSupplement()).errors)
+      .toEqual({ supplementAmount: 'Значение — число не меньше нуля, до двух знаков после запятой' });
   });
 
   it('окончание раньше начала — ошибка у даты окончания', () => {
@@ -264,11 +292,15 @@ describe('payrollTermsTotal: «Итого» = оклад + премия', () => 
     expect(payrollTermsTotal(values({ amount: '175000', money: { ...EMPTY_MONEY, bonus: '25000,10' } }))).toBe(200000.1);
     expect(payrollTermsTotal(values({ amount: '0.1', money: { ...EMPTY_MONEY, bonus: '0.2' } }))).toBe(0.3);
     expect(payrollTermsTotal(values({ amount: '', money: { ...EMPTY_MONEY, bonus: '15000' } }))).toBe(15000);
+    expect(payrollTermsTotal(values({ amount: '175 000,50', money: { ...EMPTY_MONEY, bonus: '' } }))).toBe(175000.5);
   });
 
   it('оба поля пустые, не число или почасовая оплата — «—» (null)', () => {
     expect(payrollTermsTotal(values({ amount: '' }))).toBeNull();
     expect(payrollTermsTotal(values({ amount: 'abc' }))).toBeNull();
+    // третий знак сохранить нельзя — не показываем округлённые 100,01
+    expect(payrollTermsTotal(values({ amount: '100,005' }))).toBeNull();
+    expect(payrollTermsTotal(values({ amount: '175000', money: { ...EMPTY_MONEY, bonus: '1,001' } }))).toBeNull();
     expect(payrollTermsTotal(values({ calcType: 'hourly', amount: '450' }))).toBeNull();
   });
 });

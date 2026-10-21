@@ -88,9 +88,14 @@ const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): st
 /** Подпись кнопки суммы для экранного диктора. */
 const PAID_KIND_LABELS: Record<PayrollPaidTotalKind, string> = { accrued: 'Начислено', deducted: 'Удержания' };
 
-/** Сумма «Оплачено» строки «Расчётов»: нет — «—». */
-const formatPaid = (value: number | null | undefined): string => (
+/** Сумма «Оплачено» строки «Расчётов» (с сервера — NUMERIC строкой): нет — «—». */
+const formatPaid = (value: string | number | null | undefined): string => (
   value === null || value === undefined ? '—' : formatPaidAmount(Number(value))
+);
+
+/** NUMERIC-строка «Оплачено» → число для «К выплате» (вычитание дальше — в копейках); нет — null. */
+const paidNumber = (value: string | null | undefined): number | null => (
+  value === null || value === undefined ? null : Number(value)
 );
 
 
@@ -190,7 +195,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     column: PayrollTableColumn,
     row: IPayrollTermsRow,
     kind: PayrollPaidTotalKind,
-    total: number | null | undefined,
+    total: string | null | undefined,
     hasDetails: boolean,
   ): ReactNode => (
     <td key={column} className={styles.cellNumber}>
@@ -218,8 +223,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     if (column.key === 'accruals') {
       // Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет.
       return (
-        <th key={column.key} title={`Начисления за последние полгода, тыс. ₽: ${accrualPeriodLong}`}>
-          Начисления, тыс. ₽
+        <th key={column.key} title={`Начисления за последние полгода, ₽: ${accrualPeriodLong}`}>
+          Начисления, ₽
           <span className={styles.headPeriod}>{accrualPeriodShort}</span>
         </th>
       );
@@ -256,7 +261,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         // «К выплате» — начислено минус удержано, как в «Своде».
         return (
           <td key={column} className={styles.cellNumber}>
-            {formatPaid(paidPayout({ accrued: row.paid_total ?? null, deducted: row.paid_deductions_total ?? null }))}
+            {formatPaid(paidPayout({ accrued: paidNumber(row.paid_total), deducted: paidNumber(row.paid_deductions_total) }))}
           </td>
         );
       case 'accrued': {

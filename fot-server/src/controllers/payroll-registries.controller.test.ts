@@ -206,7 +206,9 @@ describe('«Удержания»: те же записи, что во вклад
   });
 
   it('добавить: сумма 0 или строкой, без вида, месяц 13, подвид строкой — 400', async () => {
-    for (const patch of [{ amount: 0 }, { amount: '800' }, { kind_id: null }, { month: '2026-13' }, { subkind_id: '9' }]) {
+    for (const patch of [
+      { amount: 0 }, { amount: '800' }, { amount: 800.005 }, { kind_id: null }, { month: '2026-13' }, { subkind_id: '9' },
+    ]) {
       const res = await add(patch);
       expect(res.statusCode, JSON.stringify(patch)).toBe(400);
     }
@@ -322,7 +324,7 @@ describe('«Доплата за проживание»: квартиры «Пр�
   it('добавить: без суммы, сумма 0 или строкой, выезд не позже въезда, без сотрудника — 400', async () => {
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
     const bodies = [
-      { ...body, amount: undefined }, { ...body, amount: 0 }, { ...body, amount: '630' },
+      { ...body, amount: undefined }, { ...body, amount: 0 }, { ...body, amount: '630' }, { ...body, amount: 630.005 },
       { ...body, check_out: '2026-10-01' }, { ...body, check_in: '2026-02-31' }, { ...body, employee_id: undefined },
     ];
     for (const bad of bodies) {
@@ -407,10 +409,15 @@ describe('«Доплата»: плановая', () => {
     ]);
   });
 
-  it('окончание раньше начала — 400; чужой — 403', async () => {
+  it('окончание раньше начала, третий знак у суммы — 400; чужой — 403', async () => {
     const order = makeRes();
     await supplementsC.addPlanned(makeReq({ body: { ...body, date_to: '2026-09-30' } }), order);
     expect(order.statusCode).toBe(400);
+
+    const decimals = makeRes();
+    await supplementsC.addPlanned(makeReq({ body: { ...body, amount: 5000.005 } }), decimals);
+    expect(decimals.statusCode).toBe(400);
+    expect(decimals.body.error).toBe('Не больше двух знаков после запятой');
 
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
     const denied = makeRes();
@@ -437,8 +444,8 @@ describe('«Доплата»: разовая', () => {
     );
   });
 
-  it('пустое основание и месяц 13 — 400', async () => {
-    for (const patch of [{ reason: '   ' }, { month: '2026-13' }]) {
+  it('пустое основание, месяц 13, третий знак у суммы — 400', async () => {
+    for (const patch of [{ reason: '   ' }, { month: '2026-13' }, { amount: 10000.005 }]) {
       const res = makeRes();
       await supplementsC.addOneTime(makeReq({
         body: { employee_id: 42, month: '2026-10', amount: 10000, reason: 'Премия', ...patch },

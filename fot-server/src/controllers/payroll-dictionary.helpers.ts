@@ -30,6 +30,20 @@ export const handlePayrollZodError = (error: unknown, res: Response): boolean =>
 
 /** Верх NUMERIC(12,2): больше — переполнение в БД и 500 вместо понятной ошибки. */
 export const PAYROLL_MAX_MONEY = 9_999_999_999.99;
+/** Верх NUMERIC(12,4) — часовая ставка. */
+export const PAYROLL_MAX_HOURLY_RATE = 99_999_999.9999;
+
+export const MONEY_DECIMALS_MESSAGE = 'Не больше двух знаков после запятой';
+export const HOURLY_RATE_DECIMALS_MESSAGE = 'Не больше четырёх знаков после запятой';
+
+/**
+ * Не больше digits знаков после запятой: лишний знак NUMERIC округлил бы молча (100.005 → 100.01).
+ * Проверяется запись числа (String — кратчайшая, дающая то же число), а не value * 100:
+ * во float 0.29 * 100 = 28.999999999999996. Экспоненту (1e-7) запись не пропускает.
+ */
+export const hasMaxDecimals = (value: number, digits: number): boolean => (
+  new RegExp(`^-?\\d+(\\.\\d{1,${digits}})?$`).test(String(value))
+);
 
 /** YYYY-MM-DD, и такая дата есть в календаре: 31.02 — 400, а не ошибка PostgreSQL (500). */
 const isCalendarDate = (value: string): boolean => {
@@ -79,11 +93,12 @@ export const payrollRegistryTermsPeriod = (raw: unknown, today: string): Payroll
   return { monthStarts: selection === 'all' ? null : payrollMonthStarts(selection) };
 };
 
-/** Сумма больше нуля, без coerce: '' и false не должны превращаться в число. */
+/** Сумма больше нуля, до копеек, без coerce: '' и false не должны превращаться в число. */
 export const payrollPositiveMoneySchema = (message: string) => z.number({ required_error: message, invalid_type_error: message })
   .finite(message)
   .positive('Сумма должна быть больше нуля')
-  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма');
+  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
+  .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE);
 
 export const payrollEmployeeIdSchema = z.number({ required_error: 'Выберите сотрудника', invalid_type_error: 'Выберите сотрудника' })
   .int('Выберите сотрудника').positive('Выберите сотрудника');

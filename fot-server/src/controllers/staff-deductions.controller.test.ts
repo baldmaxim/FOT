@@ -133,6 +133,7 @@ describe('добавление', () => {
       { ...body, amount: -1 },
       { ...body, amount: '5000' },
       { ...body, amount: 10_000_000_000 },
+      { ...body, amount: 5000.005 },
       { ...body, kind_id: undefined },
       { ...body, kind_id: 1.5 },
       { ...body, subkind_id: '4' },
@@ -317,7 +318,10 @@ describe('виды удержаний', () => {
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.body.code).toBe('DUPLICATE_KIND');
 
-    for (const bad of [{ name: '   ' }, { name: 'Штраф', default_amount: 0 }, { name: 'Штраф', default_amount: '100' }]) {
+    for (const bad of [
+      { name: '   ' }, { name: 'Штраф', default_amount: 0 }, { name: 'Штраф', default_amount: '100' },
+      { name: 'Штраф', default_amount: 100.005 },
+    ]) {
       const res400 = makeRes();
       await c.addKind(makeReq({ body: bad }), res400);
       expect(res400.statusCode, JSON.stringify(bad)).toBe(400);

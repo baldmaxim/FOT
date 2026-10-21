@@ -8,7 +8,13 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { addRate, deleteRate, listRates, updateRate } from '../services/payroll/payroll-rates.service.js';
-import { handlePayrollZodError, parsePayrollDictionaryId, payrollDictionaryNameSchema } from './payroll-dictionary.helpers.js';
+import {
+  MONEY_DECIMALS_MESSAGE,
+  handlePayrollZodError,
+  hasMaxDecimals,
+  parsePayrollDictionaryId,
+  payrollDictionaryNameSchema,
+} from './payroll-dictionary.helpers.js';
 
 /** Верхняя граница — NUMERIC(12,2). */
 const MAX_RATE_AMOUNT = 9_999_999_999.99;
@@ -23,6 +29,7 @@ const rateSchema = z.object({
     .finite('Значение должно быть числом')
     .min(0, 'Значение не может быть отрицательным')
     .max(MAX_RATE_AMOUNT, 'Слишком большое значение')
+    .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE)
     .nullable()
     .optional()
     .transform(value => value ?? null),

@@ -443,6 +443,65 @@ describe('payrollTermsController.assign: плановая доплата', () =>
   });
 });
 
+describe('payrollTermsController.assign: точность сумм', () => {
+  const assign = async (body: Record<string, unknown>) => {
+    const res = makeRes();
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { staff_category: 'itr', effective_from: '2026-10-01', ...body },
+    } as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+
+  it('оклад и премия с копейками сохраняются как есть', async () => {
+    const res = await assign({ calc_type: 'salary', monthly_salary: 175000.55, bonus_amount: 0.29 });
+
+    expect(res.statusCode).toBe(200);
+    const insertParams = txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[];
+    expect(insertParams[4]).toBe(175000.55);
+    expect(insertAmounts(SINGLE_INSERT).bonus).toBe(0.29);
+  });
+
+  it('третий знак у оклада, премии, проезда или доплаты — 400 до записи, а не молчаливое округление БД', async () => {
+    for (const body of [
+      { calc_type: 'salary', monthly_salary: 100.005 },
+      { calc_type: 'salary', monthly_salary: 150000, bonus_amount: 0.001 },
+      { calc_type: 'salary', monthly_salary: 150000, travel_compensation: '2500.555' },
+      { calc_type: 'salary', monthly_salary: 150000, planned_supplement: { amount: 10000.001, date_from: '2026-11-01', date_to: null } },
+    ]) {
+      const res = await assign(body);
+      expect(res.statusCode, JSON.stringify(body)).toBe(400);
+      expect(res.body.error, JSON.stringify(body)).toBe('Не больше двух знаков после запятой');
+    }
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('часовая ставка — до 4 знаков после запятой, пятый — 400', async () => {
+    const ok = await assign({ calc_type: 'hourly', hourly_rate: 450.125 });
+    expect(ok.statusCode).toBe(200);
+    expect((txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[5]).toBe(450.125);
+
+    vi.clearAllMocks();
+    const res = await assign({ calc_type: 'hourly', hourly_rate: 450.12345 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('Не больше четырёх знаков после запятой');
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('сверх верха столбца или бесконечность — 400, а не переполнение NUMERIC и 500', async () => {
+    for (const body of [
+      { calc_type: 'salary', monthly_salary: 1e11 },
+      { calc_type: 'salary', monthly_salary: '1e400' },
+      { calc_type: 'salary', monthly_salary: 150000, bonus_amount: 1e11 },
+      { calc_type: 'hourly', hourly_rate: 1e9 },
+    ]) {
+      const res = await assign(body);
+      expect(res.statusCode, JSON.stringify(body)).toBe(400);
+    }
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+});
+
 describe('payrollTermsController.getChanges', () => {
   it('сотрудник вне скоупа — 403, в БД не ходим', async () => {
     scope.canAccessEmployeeInScope.mockResolvedValueOnce(false);
@@ -769,7 +828,8 @@ describe('payrollTermsController.list', () => {
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
 
     const { sql } = listParams();
-    expect(sql).toMatch(/planned_supplement_amount/);
+    // Сумма — NUMERIC строкой: json_agg отдал бы её числом JSON.
+    expect(sql).toMatch(/ps\.amount::text AS planned_supplement_amount/);
     expect(sql).toMatch(/planned_supplement_from/);
     expect(sql).toMatch(/planned_supplement_to/);
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_planned_supplements'));
@@ -781,6 +841,8 @@ describe('payrollTermsController.list', () => {
 
     const { sql } = listParams();
     expect(sql).toMatch(/acc\.accruals/);
+    // Суммы месяцев — NUMERIC строкой, копейки не проходят через число JSON.
+    expect(sql).toContain("'amount', a.amount::text");
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_paid_amounts'));
     expect(sql).toMatch(/pa\.month <\s+date_trunc\('month', \$1::date\)::date/);
     expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'vacation', 'housing', 'travel', "
@@ -1155,9 +1217,9 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).toMatch(/pa\.month = ANY\(\$13::date\[\]\)/);
     expect(sql).not.toMatch(/accruals/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
-    // «К выплате» — только начисления: удержания не вычитаются.
-    expect(sql).toMatch(/SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan'\)\) AS paid_total/);
-    expect(sql).toMatch(/SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction'\)\) AS paid_deductions_total/);
+    // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan'\)\)\)::text AS paid_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction'\)\)\)::text AS paid_deductions_total/);
     expectPlaceholdersMatch(sql, params);
   });
 
@@ -1208,18 +1270,18 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
       rows: [{
         employee_id: 5,
         full_name: 'А',
-        paid_total: 141900,
-        paid_deductions_total: 8500,
-        paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.00' }],
+        paid_total: '141900.55',
+        paid_deductions_total: '8500.10',
+        paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.10' }],
       }],
     });
     const res = makeRes();
     await payrollTermsController.list(makeReq({ query: { paid_months: '2026-07' } } as Partial<AuthenticatedRequest>), res);
 
     expect(res.body.data[0]).toMatchObject({
-      paid_total: 141900,
-      paid_deductions_total: 8500,
-      paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.00' }],
+      paid_total: '141900.55',
+      paid_deductions_total: '8500.10',
+      paid_deductions: [{ month: '2026-07', item: 'meals', amount: '8500.10' }],
     });
   });
 });

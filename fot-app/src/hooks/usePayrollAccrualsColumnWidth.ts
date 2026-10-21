@@ -5,7 +5,7 @@ import { accrualsByMonthParts, accrualsCellWidth, type AccrualTextKind } from '.
 
 /** Нет canvas — прежняя ширина под три суммы в строке. */
 const FALLBACK_WIDTH = 260;
-/** Не уже шапки «НАЧИСЛЕНИЯ, ТЫС. ₽». */
+/** Не уже шапки «НАЧИСЛЕНИЯ, ₽» и строки из одних прочерков. */
 const MIN_WIDTH = 180;
 /** Паддинги ячейки (12 + 12) и запас на округление шрифта. */
 const CELL_EXTRA = 24 + 4;

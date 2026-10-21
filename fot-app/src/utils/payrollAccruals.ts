@@ -3,6 +3,7 @@
  */
 import type { IPayrollMonthlyAccrual } from '../services/payrollService';
 import { MONTHS_RU } from './calendarUtils';
+import { formatPayrollMoney } from './payrollFormat';
 import { shiftMonth } from './moscowDate';
 
 /** Начисления показываются за полгода. */
@@ -74,37 +75,35 @@ const toAmount = (value: string | number | null | undefined): number | null => {
   return Number.isFinite(num) ? num : null;
 };
 
-/** Итоги по окну месяцев. Месяцы вне окна не учитываются, суммы одного месяца складываются. */
+/**
+ * Итоги по окну месяцев. Месяцы вне окна не учитываются, суммы одного месяца складываются.
+ * Складываем в целых копейках: сумма float-ов дала бы «0,30000000000000004».
+ */
 export const summarizeAccruals = (
   months: string[],
   accruals: IPayrollMonthlyAccrual[] | null | undefined,
 ): IAccrualSummary => {
-  const byMonth = new Map<string, number>();
+  const centsByMonth = new Map<string, number>();
   for (const item of accruals ?? []) {
     const amount = toAmount(item.amount);
-    if (amount !== null) byMonth.set(item.month, (byMonth.get(item.month) ?? 0) + amount);
+    if (amount !== null) centsByMonth.set(item.month, (centsByMonth.get(item.month) ?? 0) + Math.round(amount * 100));
   }
-  const values = months.map(month => byMonth.get(month) ?? null);
-  const present = values.filter((value): value is number => value !== null);
-  const total = present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : null;
+  const cents = months.map(month => centsByMonth.get(month) ?? null);
+  const present = cents.filter((value): value is number => value !== null);
+  const totalCents = present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : null;
   return {
-    values,
-    total,
-    average: total === null ? null : total / present.length,
+    values: cents.map(value => (value === null ? null : value / 100)),
+    total: totalCents === null ? null : totalCents / 100,
+    average: totalCents === null ? null : totalCents / present.length / 100,
     monthsWithData: present.length,
   };
 };
-
-/** 177730 → «177,7»: тысячи рублей с одним знаком. */
-const formatThousands = (value: number): string => (
-  (value / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-);
 
 export interface IAccrualMonthPart {
   month: string;
   /** «июл» */
   name: string;
-  /** «165,2» тыс. ₽; null — за месяц данных нет. */
+  /** «165 230,40» ₽; null — за месяц данных нет. */
   amount: string | null;
 }
 
@@ -120,7 +119,7 @@ export const accrualsByMonthParts = (
     return {
       month,
       name: MONTHS_SHORT_RU[monthIndex(month)],
-      amount: value === null ? null : formatThousands(value),
+      amount: value === null ? null : formatPayrollMoney(value),
     };
   });
 };
@@ -156,7 +155,7 @@ export const accrualsCellWidth = (parts: IAccrualMonthPart[], measure: AccrualTe
 };
 
 /**
- * Ячейка «Начисления»: «апр —; май —; июл: 165,2; авг: 177,7» — каждый месяц окна в тыс. ₽.
+ * Ячейка «Начисления»: «апр —; май —; июл: 165 230,40; авг: 177 730,00» — каждый месяц окна в ₽ с копейками.
  * Точка с запятой — разделитель месяцев (запятая занята дробной частью). Между месяцем и суммой
  * неразрывный пробел: строка переносится только после «;».
  * Данных нет ни за один месяц — null.

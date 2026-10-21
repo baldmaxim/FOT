@@ -46,14 +46,34 @@ import {
   type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
-import { parsePayrollMonthsQuery, payrollMonthStarts } from './payroll-dictionary.helpers.js';
+import {
+  HOURLY_RATE_DECIMALS_MESSAGE,
+  MONEY_DECIMALS_MESSAGE,
+  PAYROLL_MAX_HOURLY_RATE,
+  PAYROLL_MAX_MONEY,
+  hasMaxDecimals,
+  parsePayrollMonthsQuery,
+  payrollMonthStarts,
+} from './payroll-dictionary.helpers.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
-const moneySchema = z.coerce.number().positive('Сумма должна быть больше нуля');
+/**
+ * Суммы — до копеек, часовая ставка — до 4 знаков (NUMERIC(12,2) / NUMERIC(12,4)): лишний знак БД округлила бы
+ * молча, а сверх верха столбца — переполнение и 500.
+ */
+const moneySchema = z.coerce.number().finite('Сумма должна быть числом').positive('Сумма должна быть больше нуля')
+  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
+  .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE);
+const hourlyRateSchema = z.coerce.number().finite('Ставка должна быть числом').positive('Ставка должна быть больше нуля')
+  .max(PAYROLL_MAX_HOURLY_RATE, 'Слишком большая ставка')
+  .refine(value => hasMaxDecimals(value, 4), HOURLY_RATE_DECIMALS_MESSAGE);
 /** Премия, компенсации и удержание могут быть нулевыми: 0 — «явно не положено», отсутствие — «не задано». */
-const optionalMoneySchema = z.coerce.number().min(0, 'Сумма не может быть отрицательной').optional();
+const optionalMoneySchema = z.coerce.number().finite('Сумма должна быть числом').min(0, 'Сумма не может быть отрицательной')
+  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
+  .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE)
+  .optional();
 
 /**
  * Сумма привязана к виду оплаты: у оклада — monthly_salary, у почасовой — hourly_rate.
@@ -66,7 +86,7 @@ const termsBodySchema = z.object({
   staff_category: z.enum(['office', 'itr', 'worker']).optional(),
   calc_type: z.enum(['salary', 'hourly']),
   monthly_salary: moneySchema.optional(),
-  hourly_rate: moneySchema.optional(),
+  hourly_rate: hourlyRateSchema.optional(),
   bonus_amount: optionalMoneySchema,
   // Прежний клиент ещё присылает — принимаем и не пишем: проживание с миграции 320 — квартиры «Проживания».
   housing_compensation: optionalMoneySchema,
@@ -97,12 +117,9 @@ const calendarDateSchema = dateSchema.refine(value => {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }, 'Некорректная дата');
 
-/** Верх NUMERIC(12,2): больше — переполнение в БД и 500 вместо понятной ошибки. */
-const MAX_MONEY = 9_999_999_999.99;
-
 /** Плановая доплата: сумма ₽/мес на период «с — по» включительно; «по» пусто — бессрочно. */
 const plannedSupplementSchema = z.object({
-  amount: moneySchema.max(MAX_MONEY, 'Слишком большая сумма доплаты'),
+  amount: moneySchema,
   date_from: calendarDateSchema,
   date_to: calendarDateSchema.nullable().optional(),
 }).refine(value => !value.date_to || value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
@@ -284,11 +301,12 @@ const DEDUCTION_CODES_SQL = PAYROLL_PAID_DEDUCTION_CODES.map(code => `'${code}'`
 /**
  * «Начисления» — итог «Начислено» из «Оплачено» по месяцам: 6 закрытых месяцев перед
  * датой выборки, как окно столбца на фронте (payrollAccrualMonths). Нет сумм — null («—»).
+ * Суммы — NUMERIC строкой (::text): json_agg отдал бы их числом JSON.
  */
 const ACCRUALS_SELECT_SQL = 'acc.accruals';
 const ACCRUALS_JOIN_SQL = `
                 LEFT JOIN LATERAL (
-                  SELECT json_agg(json_build_object('month', to_char(a.month, 'YYYY-MM'), 'amount', a.amount)
+                  SELECT json_agg(json_build_object('month', to_char(a.month, 'YYYY-MM'), 'amount', a.amount::text)
                                   ORDER BY a.month) AS accruals
                     FROM (SELECT pa.month, SUM(pa.amount) AS amount
                             FROM payroll_paid_amounts pa
@@ -302,14 +320,14 @@ const ACCRUALS_JOIN_SQL = `
 const PAID_SELECT_SQL = 'paid.paid_total, paid.paid_deductions_total, paid.paid_deductions';
 
 /**
- * «Расчёты»: «К выплате» — итог «Начислено» (как «Выплачено» в «Подробно», удержания не вычитаются),
- * «Удержания» — итог «Удержано» и его статьи по месяцам для окна. monthsParam — date[] первых чисел
- * месяцев, NULL — весь период. Нет сумм группы — null («—»).
+ * «Расчёты»: итоги «Начислено» и «Удержано» и статьи «Удержано» по месяцам для окна; «К выплате»
+ * (начислено минус удержано) фронт считает в копейках. monthsParam — date[] первых чисел
+ * месяцев, NULL — весь период. Нет сумм группы — null («—»). Суммы — NUMERIC строкой (::text).
  */
 const paidJoinSql = (monthsParam: string): string => `
                 LEFT JOIN LATERAL (
-                  SELECT SUM(pa.amount) FILTER (WHERE pa.item_code IN (${ACCRUAL_CODES_SQL})) AS paid_total,
-                         SUM(pa.amount) FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})) AS paid_deductions_total,
+                  SELECT (SUM(pa.amount) FILTER (WHERE pa.item_code IN (${ACCRUAL_CODES_SQL})))::text AS paid_total,
+                         (SUM(pa.amount) FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})))::text AS paid_deductions_total,
                          json_agg(json_build_object('month', to_char(pa.month, 'YYYY-MM'),
                                                     'item', pa.item_code,
                                                     'amount', pa.amount::text)
@@ -350,7 +368,7 @@ const buildListSql = (options: {
       -- Плановая доплата и суммы «Оплачено» — только для строк порции: LATERAL после LIMIT.
       SELECT json_agg(p ORDER BY ${options.orderSql.replace(/\bk\./g, 'p.')})
         FROM (SELECT page.*,
-                     ps.amount    AS planned_supplement_amount,
+                     ps.amount::text AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
                      ps.date_to   AS planned_supplement_to,
                      ${options.paidMonthsParam ? PAID_SELECT_SQL : ACCRUALS_SELECT_SQL}
@@ -372,7 +390,7 @@ const LEGACY_SORT_KEY_SQL = `COALESCE(full_name, '')`;
 const LEGACY_CURSOR_SQL = `($12::int IS NULL OR (k.sort_key, k.employee_id) > ($11::text, $12::int))`;
 const LEGACY_ORDER_SQL = `k.sort_key, k.employee_id`;
 
-/** Строка списка (json_agg отдаёт NUMERIC числами, sort_key_text — текстом). */
+/** Строка списка (json_agg отдаёт NUMERIC числами; суммы «Оплачено», доплата и sort_key_text — текстом). */
 interface IPayrollTermsListRow {
   employee_id: number;
   full_name: string | null;
@@ -394,14 +412,14 @@ interface IPayrollTermsListRow {
   effective_from: string | null;
   effective_to: string | null;
   /** Последняя сохранённая плановая доплата (период может быть будущим или прошедшим). */
-  planned_supplement_amount: string | number | null;
+  planned_supplement_amount: string | null;
   planned_supplement_from: string | null;
   planned_supplement_to: string | null;
   /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. Нет при paid_months. */
-  accruals?: Array<{ month: string; amount: number }> | null;
+  accruals?: Array<{ month: string; amount: string }> | null;
   /** Только при paid_months («Расчёты»): итоги «Начислено» и «Удержано» за месяцы, статьи удержаний. */
-  paid_total?: number | null;
-  paid_deductions_total?: number | null;
+  paid_total?: string | null;
+  paid_deductions_total?: string | null;
   paid_deductions?: Array<{ month: string; item: string; amount: string }> | null;
   /** Категория по текущему отделу — её карточка показывает и её же сервер запишет при назначении. */
   department_category?: StaffCategory;

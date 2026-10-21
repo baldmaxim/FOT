@@ -5,6 +5,7 @@ import type {
   PayrollCalcType,
   StaffCategory,
 } from '../services/payrollService';
+import { parseRateAmount } from './payrollFormat';
 
 /**
  * Необязательные суммы условий, ₽/мес: премия и компенсации. Удержания с миграции 321 — не условия: их вносят
@@ -112,12 +113,20 @@ export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: 
   || SUPPLEMENT_FIELDS.some(field => values.supplement[field] !== initial.supplement[field])
 );
 
-/** Необязательная сумма: пусто → undefined, некорректно или < 0 → null. */
-const parseOptionalMoney = (raw: string): number | undefined | null => {
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number(trimmed.replace(',', '.'));
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+/**
+ * Текст ошибки поля суммы: число, но с лишним знаком после запятой или слишком большое, — текст разбора
+ * («до двух знаков после запятой»); буквы, минус — прежняя подсказка поля.
+ */
+const amountError = (raw: string, parseError: string, fallback: string): string => {
+  const num = Number(raw.replace(/\s/g, '').replace(',', '.'));
+  return Number.isFinite(num) && num > 0 ? parseError : fallback;
+};
+
+/** Необязательная сумма: пусто → undefined, иначе число или текст ошибки (третий знак, буквы, < 0). */
+const parseOptionalMoney = (raw: string): { value: number } | { error: string } | undefined => {
+  const parsed = parseRateAmount(raw);
+  if (parsed.error !== null) return { error: amountError(raw, parsed.error, 'Введите число не меньше нуля') };
+  return parsed.amount === null ? undefined : { value: parsed.amount };
 };
 
 const isSupplementEmpty = (values: IPayrollSupplementValues): boolean =>
@@ -129,10 +138,11 @@ const parseSupplement = (
   errors: PayrollTermsFieldErrors,
 ): IPlannedSupplementPayload | null => {
   if (isSupplementEmpty(values)) return null;
-  const rawAmount = values.amount.trim();
-  const amount = Number(rawAmount.replace(',', '.'));
-  if (!rawAmount) errors.supplementAmount = 'Укажите сумму доплаты';
-  else if (!Number.isFinite(amount) || amount <= 0) errors.supplementAmount = 'Введите число больше нуля';
+  const parsed = parseRateAmount(values.amount);
+  const amount = parsed.amount ?? 0;
+  if (parsed.error !== null) errors.supplementAmount = amountError(values.amount, parsed.error, 'Введите число больше нуля');
+  else if (parsed.amount === null) errors.supplementAmount = 'Укажите сумму доплаты';
+  else if (amount <= 0) errors.supplementAmount = 'Введите число больше нуля';
   if (!values.from) errors.supplementFrom = 'Укажите дату начала';
   // Дата окончания необязательна: пусто — бессрочно.
   if (values.from && values.to && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
@@ -172,16 +182,19 @@ export const validatePayrollTerms = (
 ): PayrollTermsValidation => {
   const errors: PayrollTermsFieldErrors = {};
 
-  const parsed = Number(values.amount.replace(',', '.'));
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    errors.amount = values.calcType === 'salary' ? 'Укажите оклад' : 'Укажите часовую ставку';
-  }
+  // Ставка хранится с 4 знаками (NUMERIC(12,4)), оклад — с копейками.
+  const amountParse = parseRateAmount(values.amount, values.calcType === 'hourly' ? 4 : 2);
+  const parsed = amountParse.amount ?? 0;
+  const amountRequired = values.calcType === 'salary' ? 'Укажите оклад' : 'Укажите часовую ставку';
+  if (amountParse.error !== null) errors.amount = amountError(values.amount, amountParse.error, amountRequired);
+  else if (parsed <= 0) errors.amount = amountRequired;
 
   const optional: Partial<Record<PayrollMoneyField, number>> = {};
   for (const field of PAYROLL_MONEY_FIELDS) {
-    const value = parseOptionalMoney(values.money[field]);
-    if (value === null) errors[field] = 'Введите число не меньше нуля';
-    else if (value !== undefined) optional[field] = value;
+    const result = parseOptionalMoney(values.money[field]);
+    if (result === undefined) continue;
+    if ('error' in result) errors[field] = result.error;
+    else optional[field] = result.value;
   }
 
   let plannedSupplement: IPlannedSupplementPayload | null | undefined;
@@ -213,19 +226,14 @@ export const validatePayrollTerms = (
 
 /**
  * «Итого» рядом с окладом и премией: их сумма, ₽/мес. Только у оклада (ставка — за час, премия — за месяц);
- * пусто или не число в обоих полях — null («—»). Пустое поле — 0, сумма в копейках без ошибки float.
+ * пусто в обоих полях или ошибка в любом (буквы, третий знак после запятой) — null («—»): не показываем
+ * округлённую сумму, которую сохранить нельзя. Пустое поле — 0, сумма в копейках без ошибки float.
  */
 export const payrollTermsTotal = (values: Pick<IPayrollTermsFormValues, 'calcType' | 'amount' | 'money'>): number | null => {
   if (values.calcType !== 'salary') return null;
-  const parts = [values.amount, values.money.bonus].map(raw => raw.trim());
-  if (parts.every(raw => !raw)) return null;
-  let cents = 0;
-  for (const raw of parts) {
-    if (!raw) continue;
-    const value = Number(raw.replace(',', '.'));
-    if (!Number.isFinite(value)) return null;
-    cents += Math.round(value * 100);
-  }
+  const parts = [values.amount, values.money.bonus].map(raw => parseRateAmount(raw));
+  if (parts.some(part => part.error !== null) || parts.every(part => part.amount === null)) return null;
+  const cents = parts.reduce((sum, part) => sum + Math.round((part.amount ?? 0) * 100), 0);
   return cents / 100;
 };
 

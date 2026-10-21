@@ -74,12 +74,19 @@ describe('payrollRatesController.add', () => {
     expect(pgQueryOne.mock.calls.map(call => (call[1] as unknown[])[1])).toEqual([null, null, 0]);
   });
 
+  it('копейки сохраняются как есть', async () => {
+    await payrollRatesController.add(makeReq({ body: { name: 'Сварщик', amount: 450.55 } }), makeRes());
+    expect((pgQueryOne.mock.calls[0][1] as unknown[])[1]).toBe(450.55);
+  });
+
   it('кривое значение и название — 400 без записи', async () => {
     const bodies = [
       { name: 'Сварщик', amount: -1 },
       { name: 'Сварщик', amount: '450' },
       { name: 'Сварщик', amount: '' },
       { name: 'Сварщик', amount: 10_000_000_000 },
+      // третий знак после запятой NUMERIC(12,2) округлил бы молча
+      { name: 'Сварщик', amount: 450.005 },
       { name: '   ', amount: 1 },
       { name: 'а'.repeat(101), amount: 1 },
     ];

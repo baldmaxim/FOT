@@ -94,22 +94,32 @@ describe('итоги начислений', () => {
     expect(summary.values.slice(4)).toEqual([120000, -5000]);
     expect(summary.total).toBe(115000);
   });
+
+  it('копейки складываются без ошибки float', () => {
+    const summary = summarizeAccruals(MAR_AUG_2026, [
+      { month: '2026-07', amount: '0.10' },
+      { month: '2026-07', amount: '0.20' },
+      { month: '2026-08', amount: '55057.30' },
+    ]);
+    expect(summary.values.slice(4)).toEqual([0.3, 55057.3]);
+    expect(summary.total).toBe(55057.6);
+  });
 });
 
 describe('начисления по месяцам в ячейке', () => {
-  it('каждый месяц окна в тыс. ₽, без данных — «—»', () => {
+  it('каждый месяц окна в ₽ с копейками, без данных — «—»', () => {
     expect(plain(formatAccrualsByMonth(MAR_AUG_2026, [
       { month: '2026-05', amount: 0 },
       { month: '2026-07', amount: '165230.40' },
       { month: '2026-08', amount: 177730 },
-    ]))).toBe('мар —; апр —; май: 0,0; июн —; июл: 165,2; авг: 177,7');
+    ]))).toBe('мар —; апр —; май: 0,00; июн —; июл: 165 230,40; авг: 177 730,00');
   });
 
-  it('миллион — с разрядами, сторно — с минусом', () => {
+  it('миллион — с разрядами, сторно — с минусом, копейки не теряются', () => {
     expect(plain(formatAccrualsByMonth(['2026-07', '2026-08'], [
-      { month: '2026-07', amount: 1234567 },
+      { month: '2026-07', amount: '1234567.89' },
       { month: '2026-08', amount: -5000 },
-    ]))).toBe('июл: 1 234,6; авг: -5,0');
+    ]))).toBe('июл: 1 234 567,89; авг: -5 000,00');
   });
 
   it('нет данных ни за один месяц — null', () => {
@@ -131,8 +141,8 @@ describe('раскладка и ширина ячейки начислений',
     const parts = accrualsByMonthParts(MAR_AUG_2026, [{ month: '2026-07', amount: 175000 }])!;
     // 1-я: «мар —» «апр —» «май —» = 3 × (3 + 2), 2 разделителя (2 + gap) и «;» в конце
     const first = 3 * 5 + 2 * (2 + ACCRUAL_GAP_PX) + 1;
-    // 2-я: «июн —», «июл: 175,0» = 3 + 2 + 5 × 2, «авг —»
-    const second = 5 + (3 + 2 + 10) + 5 + 2 * (2 + ACCRUAL_GAP_PX);
+    // 2-я: «июн —», «июл: 175 000,00» = 3 + 2 + 10 × 2, «авг —»
+    const second = 5 + (3 + 2 + 20) + 5 + 2 * (2 + ACCRUAL_GAP_PX);
     expect(accrualsCellWidth(parts, measure)).toBe(Math.max(first, second));
   });
 

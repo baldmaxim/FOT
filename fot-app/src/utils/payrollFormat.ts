@@ -1,5 +1,30 @@
 import type { PayrollValueFilterColumn } from '../services/payrollService';
 
+/** Верхняя граница суммы — NUMERIC(12,2). */
+export const MAX_RATE_AMOUNT = 9_999_999_999.99;
+/** Верхняя граница часовой ставки — NUMERIC(12,4). */
+export const MAX_HOURLY_RATE = 99_999_999.9999;
+
+export type RateAmountParse = { amount: number | null; error: null } | { amount: null; error: string };
+
+const DECIMALS_LABEL: Record<2 | 4, string> = { 2: 'двух', 4: 'четырёх' };
+
+/**
+ * Сумма из поля. Пусто — «не задано» (null, а не 0). Допустимы запятая и пробелы между
+ * разрядами («1 250,5»). Лишний знак после запятой БД округлила бы молча — не принимаем:
+ * у сумм — копейки (2 знака), у часовой ставки — 4 знака, как в NUMERIC(12,4).
+ */
+export const parseRateAmount = (raw: string, decimals: 2 | 4 = 2): RateAmountParse => {
+  const compact = raw.replace(/\s/g, '').replace(',', '.');
+  if (!compact) return { amount: null, error: null };
+  if (!new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`).test(compact)) {
+    return { amount: null, error: `Значение — число не меньше нуля, до ${DECIMALS_LABEL[decimals]} знаков после запятой` };
+  }
+  const amount = Number(compact);
+  if (amount > (decimals === 4 ? MAX_HOURLY_RATE : MAX_RATE_AMOUNT)) return { amount: null, error: 'Слишком большое значение' };
+  return { amount, error: null };
+};
+
 /** 175000 → «175 000,00»; не число — null. */
 export const formatPayrollMoney = (value: string | number | null | undefined): string | null => {
   if (value === null || value === undefined || value === '') return null;
