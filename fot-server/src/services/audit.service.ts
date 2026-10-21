@@ -251,6 +251,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
   PAYROLL_DEDUCTION_KIND_RENAMED: 'PAYROLL_DEDUCTION_KIND_RENAMED',
   PAYROLL_DEDUCTION_KIND_DELETED: 'PAYROLL_DEDUCTION_KIND_DELETED',
+  // Вид удержания изменён во вкладке кадров «Удержания» (миграция 318): название и сумма по умолчанию, было → стало.
+  PAYROLL_DEDUCTION_KIND_UPDATED: 'PAYROLL_DEDUCTION_KIND_UPDATED',
   // Справочник ставок (миграция 306): название и значение, правка — было → стало.
   PAYROLL_RATE_ADDED: 'PAYROLL_RATE_ADDED',
   PAYROLL_RATE_UPDATED: 'PAYROLL_RATE_UPDATED',
@@ -277,6 +279,10 @@ export const AUDIT_ACTIONS = {
   DORMITORY_STAY_ADDED: 'DORMITORY_STAY_ADDED',
   DORMITORY_STAY_UPDATED: 'DORMITORY_STAY_UPDATED',
   DORMITORY_STAY_DELETED: 'DORMITORY_STAY_DELETED',
+  // «Удержания» кадров (миграция 318): удержание сотрудника — добавлено, изменено (было → стало), удалено.
+  STAFF_DEDUCTION_ADDED: 'STAFF_DEDUCTION_ADDED',
+  STAFF_DEDUCTION_UPDATED: 'STAFF_DEDUCTION_UPDATED',
+  STAFF_DEDUCTION_DELETED: 'STAFF_DEDUCTION_DELETED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

@@ -8,6 +8,8 @@ import styles from './PayrollDictionary.module.css';
 
 interface IPayrollDictionarySectionProps {
   title: string;
+  /** false — заголовка на экране нет (его даёт окно: «Виды удержаний» кадров), title — подпись для диктора. */
+  showTitle?: boolean;
   /** Записи в порядке списка; undefined — ещё не загружены. */
   items: readonly IPayrollDictionaryItem[] | undefined;
   isError: boolean;
@@ -45,6 +47,7 @@ export interface IPayrollDictionaryList {
  */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
+  showTitle = true,
   items,
   isError,
   onRetry,
@@ -64,8 +67,12 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   const [editingId, setEditingId] = useState<number | null>(null);
 
   return (
-    <section className={styles.section} aria-labelledby={titleId}>
-      {lists && lists.length > 0 ? (
+    <section
+      className={styles.section}
+      aria-labelledby={showTitle ? titleId : undefined}
+      aria-label={showTitle ? undefined : title}
+    >
+      {showTitle && (lists && lists.length > 0 ? (
         <div className={styles.sectionHead}>
           <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
           {lists.map(list => (
@@ -74,7 +81,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
         </div>
       ) : (
         <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
-      )}
+      ))}
 
       {!items && !isError && <p className={styles.state}>Загрузка…</p>}
       {!items && isError && (

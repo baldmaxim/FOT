@@ -98,7 +98,7 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
-        payroll_rates, payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
+        payroll_rates, payroll_compensation_terms, staff_deductions, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
@@ -144,6 +144,9 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('313_payroll_rate_code.sql'));
     // Ставка «Проживание общежития» из 313 проверяется в dormitory-stays.pg.test.ts; здесь — обычные ставки.
     await pg.pool!.query(`DELETE FROM payroll_rates WHERE code = 'dormitory'`);
+    // Удержания кадров (318) — пустая таблица: удаление вида считает и их (staff-deductions.pg.test.ts).
+    await pg.pool!.query(`CREATE TABLE staff_deductions (
+      employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id) ON DELETE RESTRICT)`);
   });
 
   afterAll(async () => {

@@ -197,6 +197,8 @@
 .formWithAmount .formName,
 .formAdd .formName { flex-basis: 100%; }
 .formAdd .addButton { flex-grow: 1; }
+/* Добавление с суммой («Виды удержаний» кадров): сумма забирает остаток строки, кнопка — по тексту. */
+.formAdd.formWithAmount .addButton { flex-grow: 0; }
 
 .addButton,
 .retryButton {

@@ -1,6 +1,6 @@
 /** Коды ошибок PostgreSQL, которые справочники «Зарплаты» превращают в понятный ответ. */
 export const PG_UNIQUE_VIOLATION = '23505';
-const PG_FOREIGN_KEY_VIOLATION = '23503';
+export const PG_FOREIGN_KEY_VIOLATION = '23503';
 /** PostgreSQL 18 отдаёт нарушение ON DELETE RESTRICT своим кодом, до 18 — общим кодом внешнего ключа. */
 const PG_RESTRICT_VIOLATION = '23001';
 

@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from 'react';
-import { Download, UserPlus } from 'lucide-react';
+import { Download, UserPlus, type LucideIcon } from 'lucide-react';
 
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { applyTableView, matchesNameSearch, type ITableExportSnapshot, type ITableView } from '../../../utils/tableView';
@@ -14,6 +14,13 @@ const DEFAULT_VIEW: ITableView = { sort: 'full_name', dir: 'asc', filters: {} };
 export interface IRegistryTotals {
   display: Readonly<Record<string, string>>;
   export: Readonly<Record<string, string | number | null>>;
+}
+
+/** Своя кнопка панели перед выбором месяцев: «Виды удержаний» во вкладке кадров. */
+export interface IRegistryToolbarAction {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
 }
 
 /** Выбор месяцев рядом с «Экспортом»; пусто — «Весь период». */
@@ -43,15 +50,18 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
   months?: IRegistryMonths;
   /** Передан — строка «Итого» из видимых строк (после поиска и фильтров): и на экране, и в xlsx. */
   totals?: (rows: ReadonlyArray<Row>) => IRegistryTotals | null;
+  /** Передана — своя кнопка перед выбором месяцев и «Экспортом». */
+  toolbarAction?: IRegistryToolbarAction;
 }
 
 /**
  * Таблица-реестр с панелью: поиск по ФИО, выбор месяцев, «Экспорт» ровно видимых строк, при праве правки —
- * «Добавить сотрудника»; ошибка загрузки — с «Повторить». «Общежитие», таблицы «Справочника» и «Свод» «Зарплаты».
+ * «Добавить сотрудника»; ошибка загрузки — с «Повторить». «Проживание» и «Удержания» кадров, таблицы «Справочника»
+ * и «Свод» «Зарплаты».
  */
 export const RegistryPanel = <Row,>({
   rows, isLoading, isError, onRetry, searchText, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
-  initialView = DEFAULT_VIEW, months, totals, ...tableProps
+  initialView = DEFAULT_VIEW, months, totals, toolbarAction, ...tableProps
 }: IRegistryPanelProps<Row>): ReactElement => {
   const { columns } = tableProps;
   const [search, setSearch] = useState('');
@@ -74,6 +84,12 @@ export const RegistryPanel = <Row,>({
           <SearchInput clearable value={search} onValueChange={setSearch} placeholder={searchPlaceholder} />
         </div>
         <div className={styles.actions}>
+          {toolbarAction && (
+            <button type="button" className={`${styles.button} ${styles.buttonSecondary}`} onClick={toolbarAction.onClick}>
+              <toolbarAction.icon size={14} aria-hidden="true" />
+              <span>{toolbarAction.label}</span>
+            </button>
+          )}
           {months && (
             <MonthsPicker
               value={months.value}

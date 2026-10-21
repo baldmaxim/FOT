@@ -59,7 +59,7 @@ describe('изоляция прав «все объекты», «все отде
       .map(({ file }) => file)
       .sort();
     expect(importers).toEqual([
-      // Вкладка «Общежитие» «Управления кадрами» (миграция 314): список и правка — в круге списка кадров.
+      // Вкладка «Проживание» «Управления кадрами» (миграция 314): список и правка — в круге списка кадров.
       'controllers/dormitory-stays.controller.ts',
       'controllers/employees-export.controller.ts',
       'controllers/employees-main-objects.controller.ts',
@@ -68,6 +68,8 @@ describe('изоляция прав «все объекты», «все отде
       'controllers/hr-documents.controller.ts',
       'controllers/hr-profiles.controller.ts',
       'controllers/schedule.controller.ts',
+      // Вкладка «Удержания» «Управления кадрами» (миграция 318): список и правка — в круге списка кадров.
+      'controllers/staff-deductions.controller.ts',
       'services/employee-section-filter.service.ts',
       'services/employees-export.service.ts',
       'services/hr-documents-access.service.ts',

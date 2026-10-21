@@ -74,7 +74,7 @@ export const navGroups: INavGroup[] = [
     label: 'Управление',
     area: 'admin',
     items: [
-      { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: ['/staff-control', '/staff-control/hiring', '/staff-control/dormitory'] },
+      { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: ['/staff-control', '/staff-control/hiring', '/staff-control/dormitory', '/staff-control/deductions'] },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },
       { id: 'approvals', path: '/approvals', label: 'Согласования', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
       { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },

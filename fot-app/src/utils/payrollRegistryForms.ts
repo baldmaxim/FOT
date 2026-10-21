@@ -31,8 +31,8 @@ export const oneTimeMonthOptions = (currentMonth: string): string[] => (
   Array.from({ length: ONE_TIME_MONTHS_BACK + 2 }, (_, index) => shiftMonth(currentMonth, 1 - index))
 );
 
-/** Сумма больше нуля: «1 250,5» → 1250.5. */
-const parsePositiveAmount = (raw: string): { amount: number } | { error: string } => {
+/** Сумма больше нуля: «1 250,5» → 1250.5. Та же проверка — у «Удержаний» кадров (staffDeductionForm.ts). */
+export const parsePositiveAmount = (raw: string): { amount: number } | { error: string } => {
   const parsed = parseRateAmount(raw);
   if (parsed.error !== null) return { error: 'Сумма — число больше нуля, до двух знаков после запятой' };
   if (parsed.amount === null) return { error: 'Укажите сумму' };

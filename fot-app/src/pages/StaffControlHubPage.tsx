@@ -1,6 +1,6 @@
 import { lazy, useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Users, Briefcase, UserPlus, BedDouble } from 'lucide-react';
+import { Users, Briefcase, UserPlus, BedDouble, CircleMinus } from 'lucide-react';
 import { HubShell, type IHubTab } from '../components/hub/HubShell';
 import { useAuth } from '../contexts/AuthContext';
 import { hrProfileService } from '../services/hrProfileService';
@@ -12,6 +12,7 @@ const StaffControlPage = lazy(() => import('./StaffControlPage').then(m => ({ de
 const HiringRequestsBoard = lazy(() => import('../components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));
 const NewEmployeeTab = lazy(() => import('../components/staff/hr/NewEmployeeTab').then(m => ({ default: m.NewEmployeeTab })));
 const DormitoryTab = lazy(() => import('../components/staff/dormitory/DormitoryTab').then(m => ({ default: m.DormitoryTab })));
+const DeductionsTab = lazy(() => import('../components/staff/deductions/DeductionsTab').then(m => ({ default: m.DeductionsTab })));
 
 export const StaffControlHubPage: FC = () => {
   const { isAdmin, canEditPage, canViewPage } = useAuth();
@@ -58,10 +59,17 @@ export const StaffControlHubPage: FC = () => {
     } satisfies IHubTab] : []),
     {
       key: 'dormitory',
-      label: 'Общежитие',
+      label: 'Проживание',
       accessPath: '/staff-control/dormitory',
       icon: BedDouble,
       render: () => <DormitoryTab />,
+    },
+    {
+      key: 'deductions',
+      label: 'Удержания',
+      accessPath: '/staff-control/deductions',
+      icon: CircleMinus,
+      render: () => <DeductionsTab />,
     },
   ], [newEmployeeTabAvailable]);
 

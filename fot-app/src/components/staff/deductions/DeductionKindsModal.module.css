@@ -1,0 +1,24 @@
+/*
+ * Окно «Виды удержаний» во вкладке «Удержания»: оверлей, шапка и прокручиваемое тело — из PayrollModal.module.css,
+ * список — PayrollDictionarySection («Справочник» «Зарплаты»). Mobile-first: во всю ширину оверлея, поля и
+ * кнопки 44px; с 769px — компактные поля, окно до 560px.
+ */
+.container {
+  --dict-control-h: 44px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+@media (min-width: 769px) {
+  .container { --dict-control-h: 36px; }
+}

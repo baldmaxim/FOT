@@ -4,6 +4,9 @@
  * Справочник — пункты списка «Вид» в «Удержании» окна сотрудника; пополняется там же, правится
  * и чистится в окне «Справочник» на «Расчётах». Вид, отмеченный у сотрудника, не удалить — FK RESTRICT.
  * У сотрудника видов может быть несколько; это не версия условий оплаты.
+ *
+ * Тот же справочник ведут кадры («Управление кадрами» → «Удержания», миграция 318): у вида там ещё
+ * сумма по умолчанию, а назначенное в кадрах удержание (staff_deductions) тоже не даёт удалить вид.
  */
 import { query, queryOne, type DbExecutor } from '../../config/postgres.js';
 import { hasPgCode, isPgReferencedRow, PG_UNIQUE_VIOLATION } from './payroll-pg-errors.js';
@@ -72,9 +75,69 @@ export const renameDeductionKind = async (
   }
 };
 
+/** Вид со суммой по умолчанию — справочник во вкладке кадров «Удержания» (миграция 318). */
+export interface IDeductionKindWithDefault extends IPayrollDeductionKind {
+  /** NUMERIC как строка: «5000.00»; не задана — null. */
+  default_amount: string | null;
+}
+
+const KIND_WITH_DEFAULT_COLUMNS = `id, name, default_amount::text AS default_amount`;
+
+export const listDeductionKindsWithDefaults = async (): Promise<IDeductionKindWithDefault[]> =>
+  query<IDeductionKindWithDefault>(
+    `SELECT ${KIND_WITH_DEFAULT_COLUMNS} FROM payroll_deduction_kinds ORDER BY sort_order, id`,
+  );
+
+/** Добавить вид с суммой по умолчанию. Такой уже есть — null. */
+export const addDeductionKindWithDefault = async (
+  name: string,
+  defaultAmount: number | null,
+): Promise<IDeductionKindWithDefault | null> => {
+  try {
+    return await queryOne<IDeductionKindWithDefault>(
+      `INSERT INTO payroll_deduction_kinds (name, sort_order, default_amount) VALUES ($1, $2, $3)
+       RETURNING ${KIND_WITH_DEFAULT_COLUMNS}`,
+      [name, NEW_KIND_SORT_ORDER, defaultAmount],
+    );
+  } catch (err) {
+    if (hasPgCode(err, PG_UNIQUE_VIOLATION)) return null;
+    throw err;
+  }
+};
+
 /**
- * Удалить вид. Вида нет — null; отмечен у сотрудников — { inUse: сколько их } (FK RESTRICT:
- * отдельной проверки перед удалением нет, гонку с отметкой решает сама БД).
+ * Название и сумма по умолчанию вида. Вида нет — null; название занято другим видом — 'duplicate'.
+ * Прежние значения возвращаются для аудита («было → стало»).
+ */
+export const updateDeductionKind = async (
+  id: number,
+  name: string,
+  defaultAmount: number | null,
+): Promise<{ before: IDeductionKindWithDefault; after: IDeductionKindWithDefault } | 'duplicate' | null> => {
+  try {
+    const row = await queryOne<IDeductionKindWithDefault & { previous_name: string; previous_amount: string | null }>(
+      `UPDATE payroll_deduction_kinds k
+          SET name = $2, default_amount = $3
+         FROM (SELECT id, name, default_amount FROM payroll_deduction_kinds WHERE id = $1 FOR UPDATE) prev
+        WHERE k.id = prev.id
+        RETURNING k.id, k.name, k.default_amount::text AS default_amount,
+                  prev.name AS previous_name, prev.default_amount::text AS previous_amount`,
+      [id, name, defaultAmount],
+    );
+    if (!row) return null;
+    return {
+      before: { id: row.id, name: row.previous_name, default_amount: row.previous_amount },
+      after: { id: row.id, name: row.name, default_amount: row.default_amount },
+    };
+  } catch (err) {
+    if (hasPgCode(err, PG_UNIQUE_VIOLATION)) return 'duplicate';
+    throw err;
+  }
+};
+
+/**
+ * Удалить вид. Вида нет — null; отмечен у сотрудников в «Зарплате» или назначен в кадрах —
+ * { inUse: сколько сотрудников } (FK RESTRICT: отдельной проверки перед удалением нет, гонку решает сама БД).
  */
 export const deleteDeductionKind = async (
   id: number,
@@ -87,7 +150,10 @@ export const deleteDeductionKind = async (
   } catch (err) {
     if (!isPgReferencedRow(err)) throw err;
     const used = await queryOne<{ total: number }>(
-      `SELECT count(*)::int AS total FROM payroll_employee_deductions WHERE kind_id = $1`,
+      `SELECT count(*)::int AS total
+         FROM (SELECT employee_id FROM payroll_employee_deductions WHERE kind_id = $1
+               UNION
+               SELECT employee_id FROM staff_deductions WHERE kind_id = $1) used`,
       [id],
     );
     return { inUse: used?.total ?? 0 };
