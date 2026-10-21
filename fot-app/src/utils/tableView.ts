@@ -55,12 +55,47 @@ export const REGISTRY_ACTIONS_WIDTH = 84;
 export const REGISTRY_ACTIONS_WIDTH_TOUCH = 116;
 /** Заголовку столбца кроме подписи: паддинги 24 + стрелка 16 (12 и зазор 4) + зазор 2 + воронка 16. */
 export const REGISTRY_HEADER_EXTRA = 58;
+/** Ячейке кроме текста: паддинги 24 + запас 4 на расхождение замера canvas и вёрстки. */
+export const REGISTRY_CELL_EXTRA = 28;
+/** Шире текст столбец не тянет: длинное «Основание» переносится, а не забирает таблицу. */
+export const REGISTRY_TEXT_MAX_WIDTH = 360;
+
+/**
+ * Запас после подписей — переносящимся столбцам (ФИО, отдел, должность, основание…) по их тексту: не хватает
+ * на всех — пропорционально нехватке; хватает — каждому по тексту, остаток пропорционально ширинам. Даты и суммы
+ * (nowrap) не трогаем. Столбец без ширины (ФИО) так и остаётся без неё — его доля и есть остаток таблицы.
+ */
+const growToContent = <Row,>(
+  columns: ReadonlyArray<IRegistryColumn<Row>>,
+  widths: ReadonlyArray<number | undefined>,
+  contentWidths: ReadonlyArray<number>,
+  spare: number,
+): Array<number | undefined> => {
+  if (spare <= 0) return [...widths];
+  const grow = columns.flatMap((column, index) => {
+    if (column.nowrap) return [];
+    const current = widths[index] ?? REGISTRY_NAME_MIN_WIDTH;
+    const text = Math.min(REGISTRY_TEXT_MAX_WIDTH, Math.ceil(contentWidths[index] ?? 0) + REGISTRY_CELL_EXTRA);
+    return [{ index, current, wanted: Math.max(current, text) }];
+  });
+  const need = grow.reduce((sum, item) => sum + item.wanted - item.current, 0);
+  const wantedTotal = grow.reduce((sum, item) => sum + item.wanted, 0);
+  const result = [...widths];
+  grow.forEach((item) => {
+    if (widths[item.index] === undefined) return;
+    result[item.index] = need >= spare
+      ? item.current + Math.floor((item.wanted - item.current) * spare / need)
+      : item.wanted + Math.floor((spare - need) * item.wanted / wantedTotal);
+  });
+  return result;
+};
 
 /**
  * Ширины столбцов таблицы-реестра под ширину контейнера. width столбца — компактная ширина (подпись может
  * переноситься); если запас позволяет, столбец расширяется так, чтобы подпись встала в одну строку. Жадно, по
  * порядку столбцов: не влез один — следующие ещё пробуем. Запас — контейнер минус «№», ФИО не уже минимума,
- * действия и компактные ширины. undefined — столбец без ширины (ФИО, остаток).
+ * действия и компактные ширины. Остаток запаса при contentWidths делится по тексту (growToContent), без них —
+ * весь у ФИО. undefined — столбец без ширины (ФИО, остаток).
  */
 export const fitRegistryColumnWidths = <Row,>(params: {
   columns: ReadonlyArray<IRegistryColumn<Row>>;
@@ -69,10 +104,12 @@ export const fitRegistryColumnWidths = <Row,>(params: {
   labelWidth: (label: string) => number;
   /** Столбец действий; 0 — его нет. */
   actionsWidth: number;
+  /** Самый длинный текст ячеек столбца одной строкой, px (по индексу столбца). */
+  contentWidths?: ReadonlyArray<number>;
 }): Array<number | undefined> => {
   const compactTotal = params.columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
   let spare = params.containerWidth - REGISTRY_NUM_WIDTH - REGISTRY_NAME_MIN_WIDTH - params.actionsWidth - compactTotal;
-  return params.columns.map((column) => {
+  const widths = params.columns.map((column) => {
     if (column.width === undefined) return undefined;
     const oneLine = Math.ceil(params.labelWidth(column.label)) + REGISTRY_HEADER_EXTRA;
     const extra = oneLine - column.width;
@@ -80,6 +117,7 @@ export const fitRegistryColumnWidths = <Row,>(params: {
     spare -= extra;
     return oneLine;
   });
+  return params.contentWidths ? growToContent(params.columns, widths, params.contentWidths, spare) : widths;
 };
 
 export interface IFilterOption {

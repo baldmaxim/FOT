@@ -146,6 +146,44 @@ describe('ширины столбцов: подпись в одну строку
   });
 });
 
+describe('ширины столбцов: запас — по тексту ячеек, а не весь у ФИО', () => {
+  // Те же столбцы, сумма и дата — одной строкой; после подписей запас = контейнер − 48 − 170 − 84 − 602.
+  const column = (label: string, width?: number, nowrap?: boolean): IRegistryColumn<object> => ({
+    key: label, label, type: 'text', width, nowrap, text: () => '', sortValue: () => null,
+  });
+  const COLUMNS = [
+    column('ФИО'), column('Отдел', 140), column('Должность', 148),
+    column('Сумма, ₽/мес', 128, true), column('Действует с', 160, true),
+  ];
+  // ФИО 200 → 228, отдел 240 → 268, должность 250 → 278 (+ паддинги 28): нехватка 58 + 128 + 130 = 316.
+  const fit = (containerWidth: number, contentWidths: number[] = [200, 240, 250, 999, 999]) => fitRegistryColumnWidths({
+    columns: COLUMNS, containerWidth, labelWidth: label => label.length * 8, actionsWidth: 84, contentWidths,
+  });
+
+  it('места много — всем по тексту, остаток 80 пропорционально ширинам; ФИО без ширины', () => {
+    // Запас 396: отдел 268 + ⌊80 × 268 / 774⌋ = 295, должность 278 + ⌊80 × 278 / 774⌋ = 306; ФИО — остаток 253.
+    expect(fit(1300)).toEqual([undefined, 295, 306, 154, 160]);
+  });
+
+  it('места мало — запас пропорционально нехватке', () => {
+    // Запас 296: отдел 140 + ⌊128 × 296 / 316⌋ = 259, должность 148 + ⌊130 × 296 / 316⌋ = 269; ФИО — 226.
+    expect(fit(1200)).toEqual([undefined, 259, 269, 154, 160]);
+  });
+
+  it('длинный текст тянет не больше 360', () => {
+    // Отдел 1000 → 360: нехватка 58 + 220 + 130 = 408; отдел 140 + ⌊220 × 296 / 408⌋ = 299, должность 148 + 94.
+    expect(fit(1200, [200, 1000, 250, 0, 0])).toEqual([undefined, 299, 242, 154, 160]);
+  });
+
+  it('запаса нет — компактные ширины; переносится только ФИО — всё у него, как раньше', () => {
+    expect(fit(878)).toEqual([undefined, 140, 148, 128, 160]);
+    expect(fitRegistryColumnWidths({
+      columns: [column('Объект'), column('Чел.', 84, true)],
+      containerWidth: 1300, labelWidth: () => 0, actionsWidth: 0, contentWidths: [400, 0],
+    })).toEqual([undefined, 84]);
+  });
+});
+
 describe('выбор месяца в таблицах «Справочника»', () => {
   it('варианты: 24 месяца назад и 12 вперёд по возрастанию', () => {
     const options = registryMonthOptions('2026-10');

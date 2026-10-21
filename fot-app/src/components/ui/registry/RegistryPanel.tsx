@@ -70,9 +70,10 @@ export const RegistryPanel = <Row,>({
   const buildSnapshot = (exported: ReadonlyArray<Row>) => buildExport(exported, totals?.(exported)?.export);
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, sendExport);
 
+  const allRows = useMemo(() => rows ?? [], [rows]);
   const searchedRows = useMemo(
-    () => (rows ?? []).filter(row => matchesNameSearch(searchText(row), search)),
-    [rows, search, searchText],
+    () => allRows.filter(row => matchesNameSearch(searchText(row), search)),
+    [allRows, search, searchText],
   );
   const visibleRows = useMemo(() => applyTableView(searchedRows, columns, view), [searchedRows, columns, view]);
   const footer = useMemo(() => totals?.(visibleRows)?.display ?? null, [totals, visibleRows]);
@@ -127,6 +128,7 @@ export const RegistryPanel = <Row,>({
         <RegistryTable
           {...tableProps}
           rows={searchedRows}
+          sizeRows={allRows}
           visibleRows={visibleRows}
           view={view}
           onViewChange={setView}

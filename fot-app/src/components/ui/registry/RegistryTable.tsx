@@ -21,6 +21,8 @@ import styles from './RegistryTable.module.css';
 /** Подпись заголовка: 12px, 600, ПРОПИСНЫЕ, letter-spacing 0.04em (RegistryTable.module.css). */
 const HEADER_FONT = '600 12px';
 const HEADER_LETTER_SPACING = 0.48;
+/** Текст ячейки: 13px, обычный (.table). */
+const CELL_FONT = '400 13px';
 /** Запас на расхождение замера canvas и вёрстки. */
 const HEADER_MEASURE_SLACK = 4;
 const TOUCH_QUERY = '(max-width: 768px)';
@@ -29,6 +31,8 @@ export interface IRegistryTableProps<Row> {
   columns: ReadonlyArray<IRegistryColumn<Row>>;
   /** Все строки — из них считаются варианты фильтров. */
   rows: ReadonlyArray<Row>;
+  /** Строки для ширин столбцов по тексту; не переданы — rows. Панель даёт строки до поиска: ширины не прыгают. */
+  sizeRows?: ReadonlyArray<Row>;
   /** Строки после поиска, фильтров и сортировки — ровно они же уходят в экспорт. */
   visibleRows: ReadonlyArray<Row>;
   view: ITableView;
@@ -65,7 +69,7 @@ export interface IRegistryTableProps<Row> {
  * экране подписи столбцов — в одну строку (fitRegistryColumnWidths).
  */
 export const RegistryTable = <Row,>({
-  columns, rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
+  columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
   onRowClick, footer = null,
 }: IRegistryTableProps<Row>): ReactElement => {
@@ -87,8 +91,9 @@ export const RegistryTable = <Row,>({
     } as CSSProperties;
   }, [columns, withActions]);
 
-  // Широкий экран: столбцы с переносящейся подписью расширяются, пока есть запас, — подпись в одну строку,
-  // остаток по-прежнему у ФИО. Пока не замерили (первый кадр) — компактные ширины, как в описании столбцов.
+  // Широкий экран: столбцы с переносящейся подписью расширяются, пока есть запас, — подпись в одну строку;
+  // остаток делится между ФИО, отделом, должностью и другими текстовыми столбцами по их тексту, а не весь у ФИО.
+  // Пока не замерили (первый кадр) — компактные ширины, как в описании столбцов.
   const wrapRef = useRef<HTMLDivElement>(null);
   const [fitted, setFitted] = useState<Array<number | undefined> | null>(null);
   useEffect(() => {
@@ -96,14 +101,25 @@ export const RegistryTable = <Row,>({
     const context = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
     if (!wrap || !context || typeof ResizeObserver === 'undefined') return undefined;
     const touch = window.matchMedia(TOUCH_QUERY);
+    // Текст ячеек замеряется один раз (и заново после загрузки шрифта), не на каждый ресайз.
+    let contentWidths: number[] | null = null;
     const measure = () => {
-      context.font = `${HEADER_FONT} ${getComputedStyle(wrap).fontFamily}`;
+      const fontFamily = getComputedStyle(wrap).fontFamily;
+      if (!contentWidths) {
+        context.font = `${CELL_FONT} ${fontFamily}`;
+        contentWidths = columns.map(column => (column.nowrap ? 0 : sizeRows.reduce(
+          (max, row) => Math.max(max, context.measureText(column.text(row)).width),
+          0,
+        )));
+      }
+      context.font = `${HEADER_FONT} ${fontFamily}`;
       const next = fitRegistryColumnWidths({
         columns,
         containerWidth: wrap.clientWidth,
         labelWidth: label => context.measureText(label.toLocaleUpperCase('ru')).width
           + HEADER_LETTER_SPACING * label.length + HEADER_MEASURE_SLACK,
         actionsWidth: withActions ? (touch.matches ? REGISTRY_ACTIONS_WIDTH_TOUCH : REGISTRY_ACTIONS_WIDTH) : 0,
+        contentWidths,
       });
       setFitted(prev => (prev && prev.length === next.length && prev.every((width, index) => width === next[index]) ? prev : next));
     };
@@ -111,12 +127,16 @@ export const RegistryTable = <Row,>({
     const observer = new ResizeObserver(measure);
     observer.observe(wrap);
     let alive = true;
-    void document.fonts?.ready.then(() => { if (alive) measure(); });
+    void document.fonts?.ready.then(() => {
+      if (!alive) return;
+      contentWidths = null;
+      measure();
+    });
     return () => {
       alive = false;
       observer.disconnect();
     };
-  }, [columns, withActions]);
+  }, [columns, sizeRows, withActions]);
   const columnWidth = (index: number): number | undefined => (fitted ? fitted[index] : columns[index].width);
 
   const filterOpen = filterFor !== null;
