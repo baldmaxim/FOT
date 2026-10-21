@@ -186,7 +186,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
 
         <div className={styles.reference}>
           <SalaryHistorySection employeeId={row.employee_id} />
-          <PaidHistorySection employeeId={row.employee_id} />
+          <PaidHistorySection employeeId={row.employee_id} positionName={row.position_name} />
           <EmployeeVacationSection employeeId={row.employee_id} />
         </div>
       </div>

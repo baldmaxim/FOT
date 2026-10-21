@@ -41,6 +41,7 @@ const unifiedRow = (employeeId: number, over: Partial<IUnifiedRow> = {}): IUnifi
     dayValues: new Map([[1, { hours: 8, isUnderwork: false }]]),
     totalHours: 8,
     workedDays: 1,
+    workedDayNumbers: [1],
   },
   departmentName: 'Отдел',
   objectAddress: 'ЖК Сад',
@@ -77,6 +78,7 @@ describe('serializeUnifiedRowsForLog', () => {
           ]),
           totalHours: 0,
           workedDays: 0,
+          workedDayNumbers: [],
         },
       }),
     ]);

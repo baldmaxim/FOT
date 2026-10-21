@@ -17,6 +17,10 @@ const scope = vi.hoisted(() => ({
 
 vi.mock('../services/payroll/payroll-scope.service.js', () => scope);
 
+const payslip = vi.hoisted(() => ({ getPayslipInfo: vi.fn() }));
+
+vi.mock('../services/payroll/payroll-payslip.service.js', () => payslip);
+
 import { payrollPaidController } from './payroll-paid.controller.js';
 
 const makeRes = () => {
@@ -81,8 +85,47 @@ describe('«Оплачено»: чтение', () => {
   });
 });
 
+describe('Расчётный листок месяца', () => {
+  it('отдаёт период, дни и условия месяца', async () => {
+    const info = {
+      month: '2026-07',
+      period_from: '2026-07-01',
+      period_to: '2026-07-31',
+      worked_days: { workday: 24, dayoff: 2 },
+      terms: [{ effective_from: '2026-01-01', effective_to: null, calc_type: 'salary', amount: '130000.00' }],
+    };
+    payslip.getPayslipInfo.mockResolvedValue(info);
+    const res = makeRes();
+
+    await payrollPaidController.getPayslip(makeReq({ query: { month: '2026-07' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual(info);
+    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(42, '2026-07');
+  });
+
+  it('без доступа к сотруднику — 403, табель не собирается', async () => {
+    scope.canReadPayrollEmployee.mockResolvedValue(false);
+    const res = makeRes();
+
+    await payrollPaidController.getPayslip(makeReq({ query: { month: '2026-07' } } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(payslip.getPayslipInfo).not.toHaveBeenCalled();
+  });
+
+  it('кривой месяц — 400', async () => {
+    for (const query of [{ month: '2026-13' }, { month: '2026-7' }, {}]) {
+      const res = makeRes();
+      await payrollPaidController.getPayslip(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode).toBe(400);
+    }
+    expect(payslip.getPayslipInfo).not.toHaveBeenCalled();
+  });
+});
+
 describe('«Оплачено»: только чтение', () => {
   it('ввода больше нет: у контроллера только чтение', () => {
-    expect(Object.keys(payrollPaidController)).toEqual(['getByEmployee']);
+    expect(Object.keys(payrollPaidController)).toEqual(['getByEmployee', 'getPayslip']);
   });
 });

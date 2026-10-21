@@ -216,6 +216,27 @@ export interface IPayrollPaidAmount {
   amount: string;
 }
 
+/** Условия оплаты, действовавшие в месяце расчётного листка. Сумма — текстом NUMERIC. */
+export interface IPayslipTerms {
+  effective_from: string;
+  /** null — действуют дальше месяца. */
+  effective_to: string | null;
+  calc_type: PayrollCalcType;
+  /** Оклад ₽/мес или ставка ₽/час; null — не задана. */
+  amount: string | null;
+}
+
+/** К расчётному листку «Истории выплат»: период, дни табеля ФОТ и условия месяца. Суммы — из «Оплачено». */
+export interface IPayrollPayslipInfo {
+  month: string;
+  /** null — сотрудник в месяце не работал (уволен раньше). */
+  period_from: string | null;
+  period_to: string | null;
+  /** Отработано: рабочие дни графика (с плановыми выходными) и выходные сверх графика; null — нет в табеле. */
+  worked_days: { workday: number; dayoff: number } | null;
+  terms: IPayslipTerms[];
+}
+
 interface IApiResponse<T> { success: boolean; data: T }
 
 /** Итоги считаются сервером по всей отфильтрованной выборке, а не по странице. */
@@ -404,6 +425,16 @@ export const payrollService = {
     const search = new URLSearchParams({ from, to });
     const res = await apiClient.get<IApiResponse<IPayrollPaidAmount[]>>(
       `/payroll/terms/employee/${employeeId}/paid?${search.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Расчётный листок месяца YYYY-MM: период, дни табеля и условия оплаты. */
+  getPayslip: async (employeeId: number, month: string, signal?: AbortSignal): Promise<IPayrollPayslipInfo> => {
+    const search = new URLSearchParams({ month });
+    const res = await apiClient.get<IApiResponse<IPayrollPayslipInfo>>(
+      `/payroll/terms/employee/${employeeId}/payslip?${search.toString()}`,
       { signal },
     );
     return res.data;

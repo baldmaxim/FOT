@@ -95,6 +95,9 @@ export interface IDepartmentTimesheetData {
   // отделе, после — в новом). Нет карты или ключа → не ограничен; [] → ни одного дня;
   // { from: null, toExclusive: null } → весь период. Интервалы — [from, toExclusive).
   dayWindowsByEmployeeId?: Map<number, IDayWindow[]>;
+  // Плановые (по квоте графика) выходные месяца — `${employeeId}|${date}`, тот же набор, по которому
+  // includeExportDayHours оставляет часы выходного. Нужен расчётному листку: плановая суббота — рабочий день.
+  plannedWeekendDays?: Set<string>;
 }
 
 
@@ -432,6 +435,7 @@ export async function fetchTimesheetDataForDepartment(
     exportDays,
     showActualHours,
     cutoffByEmployeeId,
+    plannedWeekendDays: weekendExemptions,
   }, options);
 }
 
@@ -603,6 +607,7 @@ export async function fetchTimesheetDataForEmployees(
     exportDays,
     showActualHours,
     cutoffByEmployeeId,
+    plannedWeekendDays: weekendExemptions,
   }, options);
 }
 

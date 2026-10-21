@@ -77,6 +77,7 @@ const row = (employeeId: number, fullName: string, over: Partial<IUnifiedRow> = 
     ]),
     totalHours: 8,
     workedDays: 1,
+    workedDayNumbers: [1],
   },
   departmentName: 'Отдел',
   objectAddress: 'ЖК Сад',
@@ -151,7 +152,7 @@ describe.skipIf(!PG_URL)('журнал выгрузок «Единый файл 
       ...baseEntry,
       rows: [
         row(1, '=Иванов'),
-        row(1, 'Иванов', { objectId: null, oneCRow: { employeeId: 1, fullName: 'Иванов', dayValues: new Map(), totalHours: 0, workedDays: 0 } }),
+        row(1, 'Иванов', { objectId: null, oneCRow: { employeeId: 1, fullName: 'Иванов', dayValues: new Map(), totalHours: 0, workedDays: 0, workedDayNumbers: [] } }),
       ],
       candidates,
     });

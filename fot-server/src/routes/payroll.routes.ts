@@ -48,6 +48,8 @@ router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsContr
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
+// Расчётный листок месяца в «Истории выплат»: период, дни табеля (рабочие / выходные), условия оплаты.
+router.get('/terms/employee/:empId/payslip', termsView, payrollPaidController.getPayslip);
 
 // ─── Удержания: справочник видов с подвидами (общий с кадрами) и удержания сотрудника ──
 // Дерево «вид → подвиды» — то же, что у кадров (/api/staff-deductions/kinds), миграция 321.

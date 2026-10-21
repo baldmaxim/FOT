@@ -243,6 +243,8 @@ export interface IOneCExportRow {
   totalHours: number;
   /** Отработанные дни строки — колонка «Дни» (правило см. isWorkedDayForOneC). */
   workedDays: number;
+  /** Числа месяца, вошедшие в workedDays, по возрастанию (расчётный листок делит их на рабочие и выходные). */
+  workedDayNumbers: number[];
 }
 
 let oneCTemplateBufferPromise: Promise<Buffer> | null = null;
@@ -382,7 +384,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
     const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
     const dayValues = new Map<number, IOneCDisplayDayValue>();
     let totalHours = 0;
-    let workedDays = 0;
+    const workedDayNumbers: number[] = [];
 
     for (const day of data.exportDays) {
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
@@ -402,7 +404,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       if (label) {
         dayValues.set(day, { hours: 0, label, isUnderwork: false });
         // Удалёнка (УУ) — буква в ячейке, но отработанный день.
-        if (isWorkedDayForOneC(entry.status, 0)) workedDays++;
+        if (isWorkedDayForOneC(entry.status, 0)) workedDayNumbers.push(day);
         continue;
       }
       // Часы, реально уходящие в ячейку: 0, если дня нет или он схлопнулся при округлении.
@@ -429,7 +431,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       }
       // Один инкремент на день: РБ/УД с часами дают +1, а не +2. Нулевой УД/РБ
       // (учебный день в нерабочий по графику) идёт в «Дни» при пустой ячейке.
-      if (isWorkedDayForOneC(entry.status, exportedHours)) workedDays++;
+      if (isWorkedDayForOneC(entry.status, exportedHours)) workedDayNumbers.push(day);
       if (!exportedHours) markWeekend();
     }
 
@@ -438,7 +440,8 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       fullName: employee.full_name,
       dayValues,
       totalHours,
-      workedDays,
+      workedDays: workedDayNumbers.length,
+      workedDayNumbers,
     };
   });
 };
@@ -472,7 +475,7 @@ export const buildObjectRowsForOneC = (
       const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
       const dayValues = new Map<number, IOneCDisplayDayValue>();
       let totalHours = 0;
-      let workedDays = 0;
+      const workedDayNumbers: number[] = [];
 
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
@@ -487,7 +490,7 @@ export const buildObjectRowsForOneC = (
         const label = statusEntry ? STATUS_LABELS[statusEntry.status] : undefined;
         if (label) {
           dayValues.set(day, { hours: 0, label, isUnderwork: false });
-          if (isWorkedDayForOneC(statusEntry?.status, 0)) workedDays++;
+          if (isWorkedDayForOneC(statusEntry?.status, 0)) workedDayNumbers.push(day);
           continue;
         }
 
@@ -524,7 +527,7 @@ export const buildObjectRowsForOneC = (
         // Один инкремент на день. Нулевой УУ/РБ/УД идёт в «Дни» и здесь — паритет
         // с UI; у сотрудника с несколькими объектами такой день попадёт в каждую
         // его строку, как уже дублируется сама буква статуса.
-        if (isWorkedDayForOneC(statusEntry?.status, exportedHours)) workedDays++;
+        if (isWorkedDayForOneC(statusEntry?.status, exportedHours)) workedDayNumbers.push(day);
 
         // В рабочие дни показываем часы на конкретном объекте; буквенные статусы
         // невыхода уже проставлены выше из утверждённого табеля.
@@ -539,7 +542,8 @@ export const buildObjectRowsForOneC = (
         fullName: employee.full_name,
         dayValues,
         totalHours,
-        workedDays,
+        workedDays: workedDayNumbers.length,
+        workedDayNumbers,
       };
     });
 };

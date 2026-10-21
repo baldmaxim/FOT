@@ -7,17 +7,19 @@ import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { formatAccrualMonthLabel } from '../../utils/payrollAccruals';
 import {
   formatPaidAmount,
-  paidCellKey,
   paidHistory,
   PAYROLL_PAID_ALL_FROM,
   type IPaidHistoryMonth,
   type PayrollPaidTotalKind,
 } from '../../utils/payrollPaid';
+import { PaidPayslipRow } from './PaidPayslipRow';
 import disclosure from './PayrollDisclosure.module.css';
 import paidTable from './PayrollPaidTable.module.css';
 
 interface IPaidHistorySectionProps {
   employeeId: number;
+  /** Должность сотрудника — первая строка расчётного листка. */
+  positionName: string | null;
 }
 
 const SUM_COLUMNS: ReadonlyArray<{ kind: PayrollPaidTotalKind | 'payout'; label: string }> = [
@@ -38,9 +40,9 @@ const monthValue = (entry: IPaidHistoryMonth, kind: PayrollPaidTotalKind | 'payo
 /**
  * «История выплат» — раскрываемый блок карточки, свёрнут по умолчанию. Все месяцы, за которые из 1С
  * пришли суммы «Оплачено», новые сверху: «Начислено», «Удержано» и «К выплате» (начислено минус удержано,
- * как в «Своде»). Клик по месяцу раскрывает его статьи — сумма в столбце своего раздела. Только чтение.
+ * как в «Своде»). Клик по месяцу раскрывает его расчётный листок (PaidPayslipRow). Только чтение.
  */
-export const PaidHistorySection: FC<IPaidHistorySectionProps> = ({ employeeId }) => {
+export const PaidHistorySection: FC<IPaidHistorySectionProps> = ({ employeeId, positionName }) => {
   // «Сейчас» — на момент открытия карточки.
   const [toMonth] = useState(moscowCurrentMonth);
   const historyQuery = useQuery({
@@ -116,15 +118,16 @@ export const PaidHistorySection: FC<IPaidHistorySectionProps> = ({ employeeId })
                         <td key={column.kind} className={paidTable.total}>{formatTotal(monthValue(entry, column.kind))}</td>
                       ))}
                     </tr>
-                    {open && entry.groups.flatMap(group => group.items.map(item => (
-                      <tr key={item.code}>
-                        <th scope="row" className={`${paidTable.rowHead} ${paidTable.rowHeadNested}`}>{item.label}</th>
-                        {SUM_COLUMNS.map(column => {
-                          const value = column.kind === group.kind ? history.amounts.get(paidCellKey(entry.month, item.code)) : undefined;
-                          return <td key={column.kind} className={paidTable.value}>{value === undefined ? '' : formatPaidAmount(value)}</td>;
-                        })}
-                      </tr>
-                    )))}
+                    {open && (
+                      <PaidPayslipRow
+                        employeeId={employeeId}
+                        month={entry.month}
+                        positionName={positionName}
+                        amounts={history.amounts}
+                        totals={entry.totals}
+                        colSpan={SUM_COLUMNS.length + 1}
+                      />
+                    )}
                   </tbody>
                 );
               })}

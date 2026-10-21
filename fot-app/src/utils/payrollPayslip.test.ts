@@ -1,0 +1,64 @@
+import { describe, expect, it } from 'vitest';
+
+import type { IPayslipTerms } from '../services/payrollService';
+import { toPaidAmounts } from './payrollPaid';
+import { formatPayslipTerms, payslipLines, payslipPeriodParts } from './payrollPayslip';
+
+const plain = (value: string | null): string | null => (value === null ? null : value.replace(/\s/g, ' '));
+
+const salary = (amount: string | null, from = '2026-01-01', to: string | null = null): IPayslipTerms => ({
+  effective_from: from,
+  effective_to: to,
+  calc_type: 'salary',
+  amount,
+});
+
+describe('расчётный листок: оклад', () => {
+  it('один оклад — без границ', () => {
+    expect(plain(formatPayslipTerms([salary('130000.00')]))).toBe('Оклад: 130 000');
+  });
+
+  it('ставка — ₽/ч', () => {
+    expect(plain(formatPayslipTerms([{ ...salary('500.50'), calc_type: 'hourly' }]))).toBe('Ставка: 500,50 ₽/ч');
+  });
+
+  it('смена в месяце — каждая с границей', () => {
+    const terms = [salary('120000.00', '2026-01-01', '2026-07-14'), salary('130000.00', '2026-07-15')];
+    expect(plain(formatPayslipTerms(terms))).toBe('Оклад: 120 000 по 14.07.2026, Оклад: 130 000 с 15.07.2026');
+  });
+
+  it('без суммы или условий — null', () => {
+    expect(formatPayslipTerms([])).toBeNull();
+    expect(formatPayslipTerms([salary(null)])).toBeNull();
+  });
+});
+
+describe('расчётный листок: период', () => {
+  it('«с …», «по …»; без периода — null', () => {
+    expect(payslipPeriodParts('2026-07-01', '2026-07-31')).toEqual(['с 01.07.2026', 'по 31.07.2026']);
+    expect(payslipPeriodParts(null, null)).toBeNull();
+  });
+});
+
+describe('расчётный листок: строки статей', () => {
+  const amounts = toPaidAmounts([
+    { month: '2026-07', item: 'contract', amount: '135200.00' },
+    { month: '2026-07', item: 'travel', amount: '2730.00' },
+    { month: '2026-07', item: 'bonus', amount: '5000.00' },
+    { month: '2026-07', item: 'safety_fine', amount: '1000.00' },
+    { month: '2026-08', item: 'housing', amount: '630.00' },
+  ]);
+
+  it('начисления месяца — в порядке ведомости, без основной статьи и чужих месяцев', () => {
+    expect(payslipLines('2026-07', amounts, 'accrued')).toEqual([
+      { code: 'bonus', label: 'Премиальная', amount: 5000 },
+      { code: 'travel', label: 'Проезд', amount: 2730 },
+    ]);
+  });
+
+  it('удержания месяца', () => {
+    expect(payslipLines('2026-07', amounts, 'deducted')).toEqual([
+      { code: 'safety_fine', label: 'Нарушение техники безопасности', amount: 1000 },
+    ]);
+  });
+});
