@@ -191,7 +191,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     await run(migration('313_payroll_rate_code.sql'));
     for (const name of [
       '314_employee_dormitory_stays.sql', '318_staff_deductions.sql', '319_dormitory_addresses.sql',
-      '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql',
+      '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql', '322_payroll_planned_supplement_open_end.sql',
     ]) {
       await run(migration(name));
     }
@@ -324,6 +324,30 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       // Новую сняли как ошибочную — прошлый период остаётся.
       await savePlannedSupplement({ employeeId: 6, value: null, createdBy: AUTHOR });
       expect(await planned6()).toEqual([expect.objectContaining({ date_to: '2026-09-30', is_current: false })]);
+    });
+
+    it('плановая бессрочная: пересекается с любым будущим периодом; «убрали» — новый период после неё', async () => {
+      const planned1 = () => listSupplements(SCOPE)
+        .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 1));
+      const open = { amount: 20000, dateFrom: '2023-02-01', dateTo: null };
+      expect(await savePlannedSupplement({ employeeId: 1, value: open, createdBy: AUTHOR, onlyIfNone: true }))
+        .toEqual({ status: 'saved', previous: null });
+      expect(await planned1()).toEqual([
+        expect.objectContaining({ amount: '20000.00', date_from: '2023-02-01', date_to: null, is_current: true }),
+      ]);
+      expect(await savePlannedSupplement({
+        employeeId: 1, value: { amount: 1000, dateFrom: '2030-01-01', dateTo: '2030-01-31' }, createdBy: AUTHOR, onlyIfNone: true,
+      })).toEqual({ status: 'exists' });
+
+      // «Убрали» с 01.10 — версия по 30.09; новый бессрочный с декабря — прежний период остаётся историей.
+      await savePlannedSupplement({ employeeId: 1, value: { ...open, dateTo: '2026-09-30' }, createdBy: AUTHOR });
+      expect(await savePlannedSupplement({
+        employeeId: 1, value: { amount: 25000, dateFrom: '2026-12-01', dateTo: null }, createdBy: AUTHOR, onlyIfNone: true,
+      })).toMatchObject({ status: 'saved', previous: { dateTo: '2026-09-30' } });
+      expect(await planned1()).toEqual([
+        expect.objectContaining({ amount: '20000.00', date_to: '2026-09-30', is_current: false }),
+        expect.objectContaining({ amount: '25000.00', date_from: '2026-12-01', date_to: null, is_current: true }),
+      ]);
     });
 
     it('разовые: несколько за месяц; подрядчик в таблицу не попадает', async () => {

@@ -393,6 +393,20 @@ describe('«Доплата»: плановая', () => {
       .toEqual(['PAYROLL_PLANNED_SUPPLEMENT_SET', 'PAYROLL_PLANNED_SUPPLEMENT_SET']);
   });
 
+  it('без «по» — бессрочно: dateTo null', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    supplements.savePlannedSupplement.mockResolvedValue({ status: 'saved', previous: null });
+    const { date_to: _dateTo, ...open } = body;
+    const res = makeRes();
+    await supplementsC.addPlanned(makeReq({ body: open }), res);
+    await supplementsC.addPlanned(makeReq({ body: { ...open, date_to: null } }), makeRes());
+    expect(res.statusCode).toBe(200);
+    expect(supplements.savePlannedSupplement.mock.calls.map(call => call[0].value)).toEqual([
+      { amount: 5000, dateFrom: '2026-10-01', dateTo: null },
+      { amount: 5000, dateFrom: '2026-10-01', dateTo: null },
+    ]);
+  });
+
   it('окончание раньше начала — 400; чужой — 403', async () => {
     const order = makeRes();
     await supplementsC.addPlanned(makeReq({ body: { ...body, date_to: '2026-09-30' } }), order);
