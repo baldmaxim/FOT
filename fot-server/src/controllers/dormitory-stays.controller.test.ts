@@ -97,13 +97,6 @@ describe('список', () => {
     expect(svc.listStays).toHaveBeenLastCalledWith({ departmentIds: null, kind: 'dormitory' });
   });
 
-  it('ставка «Доплата за проживание» — сумма по умолчанию для квартиры', async () => {
-    svc.getHousingRateAmount.mockResolvedValue('630.00');
-    const res = makeRes();
-    await c.housingRate(makeReq(), res);
-    expect(res.body).toEqual({ success: true, data: { amount: '630.00' } });
-  });
-
   it('сохранённые адреса — списком для подсказок', async () => {
     svc.listAddresses.mockResolvedValue(['Общ. База Мытищи', 'Общежитие №2']);
     const res = makeRes();
@@ -189,25 +182,26 @@ describe('добавление', () => {
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
-  it('квартира: сумма обязательна, адрес — по желанию; сумма у общежития не читается', async () => {
+  it('квартира: сумма — ставка «Доплата за проживание», присланная не читается; адрес — по желанию', async () => {
     svc.getEmployeeState.mockResolvedValue(ACTIVE);
     scope.canWriteEmployeeInScope.mockResolvedValue(true);
+    svc.getHousingRateAmount.mockResolvedValue('630.00');
     svc.addStay.mockResolvedValue(APARTMENT);
 
-    await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 630, address: '  ' } }), makeRes());
+    await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', address: '  ' } }), makeRes());
     expect(svc.addStay).toHaveBeenLastCalledWith(42, {
       kind: 'apartment', check_in: '2026-10-01', check_out: null, address: null, amount: 630,
     });
+    // Прежний клиент присылает сумму — она не пишется: сумму задаёт «Зарплата».
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 700, address: ' ул. Рабочая ' } }), makeRes());
-    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ address: 'ул. Рабочая', amount: 700 }));
+    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ address: 'ул. Рабочая', amount: 630 }));
     await c.add(makeReq({ body: { ...body, amount: 999 } }), makeRes());
     expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ kind: 'dormitory', amount: null }));
 
     for (const bad of [
-      { employee_id: 42, kind: 'apartment', check_in: '2026-10-01' },
-      { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 0 },
-      { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: '630' },
-      { employee_id: 42, kind: 'flat', check_in: '2026-10-01', amount: 630 },
+      { employee_id: 42, kind: 'apartment' },
+      { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', address: 'а'.repeat(201) },
+      { employee_id: 42, kind: 'flat', check_in: '2026-10-01' },
     ]) {
       const res = makeRes();
       await c.add(makeReq({ body: bad }), res);
@@ -216,12 +210,33 @@ describe('добавление', () => {
     expect(svc.addStay).toHaveBeenCalledTimes(3);
   });
 
+  it('квартира без ставки «Доплата за проживание» (не задана или 0) — 409, общежитию ставка не нужна', async () => {
+    svc.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWriteEmployeeInScope.mockResolvedValue(true);
+    svc.addStay.mockResolvedValue(STAY);
+    for (const rate of [null, '0.00']) {
+      svc.getHousingRateAmount.mockResolvedValueOnce(rate);
+      const res = makeRes();
+      await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01' } }), res);
+      expect(res.statusCode, String(rate)).toBe(409);
+      expect(res.body.code).toBe('HOUSING_RATE_MISSING');
+    }
+    expect(svc.addStay).not.toHaveBeenCalled();
+
+    svc.getHousingRateAmount.mockClear();
+    const dormitory = makeRes();
+    await c.add(makeReq({ body }), dormitory);
+    expect(dormitory.statusCode).toBe(200);
+    expect(svc.getHousingRateAmount).not.toHaveBeenCalled();
+  });
+
   it('квартира в днях доплаты за общежитие — 409 с текстом, без аудита', async () => {
     svc.getEmployeeState.mockResolvedValue(ACTIVE);
     scope.canWriteEmployeeInScope.mockResolvedValue(true);
+    svc.getHousingRateAmount.mockResolvedValue('630.00');
     svc.addStay.mockRejectedValue(new DormitoryAllowanceConflictError('HAS_DORMITORY_ALLOWANCE', 'С 01.11.2026 у сотрудника доплата за общежитие'));
     const res = makeRes();
-    await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 630 } }), res);
+    await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01' } }), res);
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ code: 'HAS_DORMITORY_ALLOWANCE', error: expect.stringContaining('01.11.2026') });
     expect(audit.logFromRequest).not.toHaveBeenCalled();
@@ -314,22 +329,21 @@ describe('правка', () => {
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
-  it('правка квартиры — по её виду: сумма обязательна, вид из тела не читается', async () => {
+  it('правка квартиры — по её виду: сумма не меняется (null — прежняя), вид и сумма из тела не читаются', async () => {
     svc.getStay.mockResolvedValue(APARTMENT);
     scope.canWriteEmployeeInScope.mockResolvedValue(true);
-    svc.updateStay.mockResolvedValue({ before: APARTMENT, after: { ...APARTMENT, amount: '700.00' } });
-
-    const missing = makeRes();
-    await c.update(makeReq({ params: { id: '8' }, body: { check_in: '2026-10-01' } }), missing);
-    expect(missing.statusCode).toBe(400);
+    svc.updateStay.mockResolvedValue({ before: APARTMENT, after: { ...APARTMENT, check_out: '2026-12-01' } });
 
     const res = makeRes();
-    await c.update(makeReq({ params: { id: '8' }, body: { kind: 'dormitory', check_in: '2026-10-01', amount: 700 } }), res);
+    await c.update(makeReq({
+      params: { id: '8' },
+      body: { kind: 'dormitory', check_in: '2026-10-01', check_out: '2026-12-01', amount: 700 },
+    }), res);
     expect(res.statusCode).toBe(200);
-    expect(svc.updateStay).toHaveBeenCalledWith(8, { check_in: '2026-10-01', check_out: null, address: null, amount: 700 });
+    expect(svc.updateStay).toHaveBeenCalledWith(8, { check_in: '2026-10-01', check_out: '2026-12-01', address: null, amount: null });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED',
-      expect.objectContaining({ details: { from: expect.objectContaining({ amount: '630.00' }), to: expect.objectContaining({ amount: '700.00' }) } }),
+      expect.objectContaining({ details: { from: expect.objectContaining({ check_out: null }), to: expect.objectContaining({ check_out: '2026-12-01' }) } }),
     );
   });
 });

@@ -292,6 +292,9 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     if (flat === 'overlap') throw new Error('квартира не добавлена');
     expect(await updateStay(flat.id, { check_in: '2026-10-01', check_out: '2026-12-01', address: 'ул. Рабочая, 5', amount: 700 }))
       .toMatchObject({ before: { amount: '630.50' }, after: { check_out: '2026-12-01', address: 'ул. Рабочая, 5', amount: '700.00' } });
+    // Правка кадров — без суммы (null): у квартиры остаётся та, что задала «Зарплата».
+    expect(await updateStay(flat.id, { check_in: '2026-10-01', check_out: '2026-12-01', address: null, amount: null }))
+      .toMatchObject({ after: { address: null, amount: '700.00' } });
     // Со дня выезда из квартиры — в общежитие можно.
     expect(await addStay(6, { kind: 'dormitory', check_in: '2026-12-01', check_out: null, address: 'Общ. Свободы 35', amount: null }))
       .toMatchObject({ kind: 'dormitory' });

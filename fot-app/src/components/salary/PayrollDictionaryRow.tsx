@@ -83,7 +83,8 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   };
 
   // Раскрытый блок остаётся и на время правки строки: подвиды не прячутся, пока переименовывают вид.
-  const detailsBlock = details?.expanded ? (
+  // Пустой (показывать нечего) — не рисуется: иначе осталась бы пустая полоса с линией слева.
+  const detailsBlock = details?.expanded && details.content ? (
     <div id={detailsId} className={styles.rowDetails}>{details.content}</div>
   ) : null;
 

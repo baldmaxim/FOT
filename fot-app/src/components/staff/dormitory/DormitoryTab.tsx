@@ -6,7 +6,6 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import {
   DORMITORY_ADDRESSES_KEY,
-  DORMITORY_HOUSING_RATE_KEY,
   DORMITORY_STAYS_KEY,
   dormitoryService,
   type IDormitoryStay,
@@ -53,13 +52,6 @@ export const DormitoryTab: FC = () => {
     () => dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, ...(addressesQuery.data ?? [])]),
     [addressesQuery.data],
   );
-  // Сумма квартиры по умолчанию — ставка «Доплата за проживание»; нужна только окну правки.
-  const housingRateQuery = useQuery({
-    queryKey: DORMITORY_HOUSING_RATE_KEY,
-    queryFn: ({ signal }) => dormitoryService.housingRate(signal),
-    enabled: canEdit,
-    staleTime: 0,
-  });
 
   // Префикс общий с таблицей «Справочника» «Зарплаты» и подсказками адресов — они тоже перечитаются; квартиры —
   // «Доплата за проживание» и «Компенсация проживания» условий оплаты (префикс 'payroll-terms').
@@ -102,7 +94,6 @@ export const DormitoryTab: FC = () => {
         <DormitoryStayModal
           stay={editor.mode === 'edit' ? editor.stay : undefined}
           addresses={addresses}
-          housingRate={housingRateQuery.data ?? null}
           onClose={() => setEditor(null)}
           onSaved={() => { void refresh(); }}
         />

@@ -27,3 +27,8 @@ export const withSubkinds = (
   kindId: number,
   change: (subkinds: IDeductionSubkind[]) => IDeductionSubkind[],
 ): IStaffDeductionKind[] => kinds.map(kind => (kind.id === kindId ? { ...kind, subkinds: change(kind.subkinds) } : kind));
+
+/** Есть ли что показать под видом по «+»: подвиды или (с правом правки) поле нового подвида. */
+export const hasSubkindsSection = (kind: IStaffDeductionKind, canEdit: boolean): boolean => (
+  canEdit || kind.subkinds.length > 0
+);

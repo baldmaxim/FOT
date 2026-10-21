@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { PAYROLL_DEDUCTION_KINDS_KEY, usePayrollDeductionKinds } from '../../hooks/usePayrollDeductionKinds';
 import { payrollService } from '../../services/payrollService';
 import type { IStaffDeductionKind } from '../../services/staffDeductionService';
-import { invalidateDeductionQueries } from '../../utils/deductionQueries';
+import { hasSubkindsSection, invalidateDeductionQueries } from '../../utils/deductionQueries';
 import { DeductionSubkindsSection } from './DeductionSubkindsSection';
 import { PayrollDictionarySection } from './PayrollDictionarySection';
 
@@ -50,7 +50,7 @@ export const DeductionKindsEditor: FC<IDeductionKindsEditorProps> = ({ canEdit, 
       deleteQuestion={name => `Удалить вид удержания «${name}»?`}
       renderDetails={item => {
         const kind = kinds.data?.find(entry => entry.id === item.id);
-        return kind && (
+        return kind && hasSubkindsSection(kind, canEdit) && (
           <DeductionSubkindsSection
             kind={kind}
             canEdit={canEdit}

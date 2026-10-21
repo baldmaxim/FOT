@@ -49,7 +49,7 @@ export const DeductionSubkindsSection: FC<IDeductionSubkindsSectionProps> = ({ k
       nameLabel="Подвид"
       amountLabel="Сумма, ₽"
       addLabel="Новый подвид"
-      emptyText="Подвидов нет"
+      emptyText={null}
       canEdit={canEdit}
       deleteQuestion={name => `Удалить подвид «${name}» («${kind.name}»)?`}
       onAdd={({ name, amount }) => apply(async () => {

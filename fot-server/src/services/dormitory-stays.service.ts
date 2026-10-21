@@ -208,9 +208,9 @@ export const addStay = async (
 };
 
 /**
- * Изменить даты, адрес и сумму (вид не меняется). Проживания нет — null; пересечение — 'overlap';
- * квартира в добавленных днях доплаты за общежитие — DormitoryAllowanceConflictError.
- * Возвращает прежнюю и новую строки: аудит пишет «было → стало».
+ * Изменить даты, адрес и сумму (вид не меняется); amount null — сумма прежняя (кадры сумму квартиры не задают,
+ * у общежития её нет). Проживания нет — null; пересечение — 'overlap'; квартира в добавленных днях доплаты
+ * за общежитие — DormitoryAllowanceConflictError. Возвращает прежнюю и новую строки: аудит пишет «было → стало».
  */
 export const updateStay = async (
   id: number,
@@ -226,7 +226,8 @@ export const updateStay = async (
       if (!before) return null;
       await client.query(
         `UPDATE employee_dormitory_stays
-            SET check_in = $2::date, check_out = $3::date, address = $4, amount = $5, updated_at = now()
+            SET check_in = $2::date, check_out = $3::date, address = $4, amount = COALESCE($5, amount),
+                updated_at = now()
           WHERE id = $1`,
         [id, input.check_in, input.check_out, input.address, input.amount],
       );

@@ -1,7 +1,7 @@
 /**
  * Ввод и аудит проживания (миграции 314, 320) — общие для вкладки кадров «Проживание» и таблицы «Доплата за
- * проживание» «Зарплаты»: даты въезда и выезда, у общежития — адрес (обязателен), у квартиры — сумма ₽/мес
- * и адрес по желанию.
+ * проживание» «Зарплаты»: даты въезда и выезда, у общежития — адрес (обязателен), у квартиры — адрес по желанию
+ * и сумма ₽/мес. Сумму квартиры задаёт только «Зарплата»: кадры её не присылают (см. dormitory-stays.controller.ts).
  */
 import { z } from 'zod';
 
@@ -43,23 +43,41 @@ const dormitorySchema = z.object({
 }).refine(checkOutAfterCheckIn, DATES_ORDER)
   .transform((value): IDormitoryStayFields => ({ ...value, amount: null }));
 
-/** Квартира: сумма доплаты за проживание обязательна, адрес — по желанию (пусто — нет). */
+/** Адрес квартиры — по желанию (пусто — нет). */
+const apartmentAddressSchema = z.string({ invalid_type_error: 'Неверный адрес' })
+  .transform(squeeze)
+  .pipe(z.string().max(200, ADDRESS_TOO_LONG))
+  .nullable()
+  .optional()
+  .transform(value => value || null);
+
+/** Квартира в «Зарплате»: сумма доплаты за проживание обязательна. */
 const apartmentSchema = z.object({
   ...dates,
   amount: payrollPositiveMoneySchema('Укажите сумму доплаты'),
-  address: z.string({ invalid_type_error: 'Неверный адрес' })
-    .transform(squeeze)
-    .pipe(z.string().max(200, ADDRESS_TOO_LONG))
-    .nullable()
-    .optional()
-    .transform(value => value || null),
+  address: apartmentAddressSchema,
 }).refine(checkOutAfterCheckIn, DATES_ORDER)
   .transform((value): IDormitoryStayFields => ({ ...value, address: value.address ?? null }));
 
-/** Поля проживания этого вида из тела запроса; ошибка — ZodError (400). */
-export const parseStayFields = (kind: DormitoryStayKind, body: unknown): IDormitoryStayFields => (
-  kind === 'apartment' ? apartmentSchema.parse(body) : dormitorySchema.parse(body)
-);
+/** Квартира у кадров: сумму задаёт «Зарплата» — присланную (прежний клиент) не читаем, amount — null. */
+const apartmentWithoutAmountSchema = z.object({
+  ...dates,
+  address: apartmentAddressSchema,
+}).refine(checkOutAfterCheckIn, DATES_ORDER)
+  .transform((value): IDormitoryStayFields => ({ ...value, address: value.address ?? null, amount: null }));
+
+/**
+ * Поля проживания этого вида из тела запроса; ошибка — ZodError (400). withAmount false — квартира без суммы
+ * (вкладка кадров): сумму подставляет вызывающий.
+ */
+export const parseStayFields = (
+  kind: DormitoryStayKind,
+  body: unknown,
+  { withAmount = true }: { withAmount?: boolean } = {},
+): IDormitoryStayFields => {
+  if (kind === 'dormitory') return dormitorySchema.parse(body);
+  return withAmount ? apartmentSchema.parse(body) : apartmentWithoutAmountSchema.parse(body);
+};
 
 /** Вид при добавлении во вкладке кадров; не прислан — общежитие (прежний клиент). */
 export const stayKindSchema = z.object({

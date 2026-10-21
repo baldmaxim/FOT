@@ -8,7 +8,7 @@ import {
   staffDeductionService,
   type IStaffDeductionKind,
 } from '../../../services/staffDeductionService';
-import { invalidateDeductionQueries } from '../../../utils/deductionQueries';
+import { hasSubkindsSection, invalidateDeductionQueries } from '../../../utils/deductionQueries';
 import { DeductionSubkindsSection } from '../../salary/DeductionSubkindsSection';
 import { PayrollDictionarySection } from '../../salary/PayrollDictionarySection';
 import modal from '../../salary/PayrollModal.module.css';
@@ -79,7 +79,7 @@ export const DeductionKindsModal: FC<IDeductionKindsModalProps> = ({ canEdit, on
               deleteQuestion={name => `Удалить вид удержания «${name}»?`}
               renderDetails={item => {
                 const kind = kinds.data?.find(entry => entry.id === item.id);
-                return kind && (
+                return kind && hasSubkindsSection(kind, canEdit) && (
                   <DeductionSubkindsSection
                     kind={kind}
                     canEdit={canEdit}

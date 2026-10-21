@@ -46,6 +46,13 @@ describe('parseDormitoryStay', () => {
     expect(parseDormitoryStay({ ...draft, amount: '999' }, picked)).toMatchObject({ ok: true, payload: { amount: null } });
   });
 
+  it('квартира у кадров — суммы в окне нет: amount null, её задаёт «Зарплата»', () => {
+    expect(parseDormitoryStay({ checkIn: '2026-10-01', checkOut: '', address: ' ул. Рабочая ' }, picked, 'apartment')).toEqual({
+      ok: true,
+      payload: { check_in: '2026-10-01', check_out: null, address: 'ул. Рабочая', amount: null },
+    });
+  });
+
   it('выезд строго позже въезда; день в день — нельзя', () => {
     expect(parseDormitoryStay({ ...draft, checkOut: '2026-10-02' }, picked)).toMatchObject({ ok: true });
     expect(parseDormitoryStay({ ...draft, checkOut: '2026-10-01' }, picked)).toMatchObject({ ok: false, field: 'check_out' });

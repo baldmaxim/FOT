@@ -1,7 +1,8 @@
 /**
  * «Проживание» (миграции 314, 320): вкладка «Управления кадрами» (право /staff-control/dormitory) — общежития
  * и квартиры; общежития только для чтения — в «Зарплате» («Справочник» → кнопка «Общежитие»). Квартиры — те же
- * записи, что «Доплата за проживание» «Зарплаты» (payroll-housing.controller.ts).
+ * записи, что «Доплата за проживание» «Зарплаты» (payroll-housing.controller.ts). Сумму квартиры кадры не задают:
+ * новой — ставка «Доплата за проживание», при правке — прежняя; меняет её только «Зарплата».
  *
  * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — как условия оплаты
  * (resolvePayrollReadableDepartmentIds). Запись — canWriteEmployeeInScope; уволенному (его назначения
@@ -47,6 +48,11 @@ const OVERLAP = {
   success: false,
   error: 'В эти даты у сотрудника уже есть проживание — в общежитии или квартире',
   code: 'DORMITORY_OVERLAP',
+};
+const HOUSING_RATE_MISSING = {
+  success: false,
+  error: 'Задайте ставку «Доплата за проживание» в «Зарплате» → «Справочник» → «Ставки»',
+  code: 'HOUSING_RATE_MISSING',
 };
 
 /** Ошибка проверки или правило «одна доплата из двух» — ответ отправлен. */
@@ -138,25 +144,16 @@ const listSavedAddresses = async (_req: AuthenticatedRequest, res: Response): Pr
   }
 };
 
-/** GET /api/dormitory/housing-rate — сумма по умолчанию для квартиры (ставка «Доплата за проживание»). */
-const housingRate = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    res.json({ success: true, data: { amount: await getHousingRateAmount() } });
-  } catch (err) {
-    console.error('dormitory.housingRate error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения ставки' });
-  }
-};
-
 /**
- * POST /api/dormitory/stays { employee_id, kind?, check_in, check_out?, address?, amount? } — добавить проживание:
- * общежитие (адрес обязателен) или квартиру (сумма обязательна, адрес — по желанию).
+ * POST /api/dormitory/stays { employee_id, kind?, check_in, check_out?, address? } — добавить проживание:
+ * общежитие (адрес обязателен) или квартиру (адрес — по желанию; сумма — ставка «Доплата за проживание»,
+ * не задана — 409).
  */
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId } = stayEmployeeIdSchema.parse(req.body);
     const { kind } = stayKindSchema.parse(req.body);
-    const input = { kind, ...parseStayFields(kind, req.body) };
+    const input = { kind, ...parseStayFields(kind, req.body, { withAmount: false }) };
     // Поиск отдаёт только работающих и не подрядчиков, но тело запроса могут собрать и руками.
     const employee = await getEmployeeState(employeeId);
     if (!employee) {
@@ -174,6 +171,14 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     if (!(await canWriteEmployeeInScope(req, employeeId))) {
       res.status(403).json(NO_ACCESS);
       return;
+    }
+    if (kind === 'apartment') {
+      const rate = Number(await getHousingRateAmount());
+      if (!(rate > 0)) {
+        res.status(409).json(HOUSING_RATE_MISSING);
+        return;
+      }
+      input.amount = rate;
     }
     const stay = await addStay(employeeId, input);
     if (stay === 'overlap') {
@@ -194,8 +199,8 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
 };
 
 /**
- * PATCH /api/dormitory/stays/:id { check_in, check_out?, address?, amount? } — даты, адрес и (у квартиры) сумма;
- * сотрудник и вид не меняются.
+ * PATCH /api/dormitory/stays/:id { check_in, check_out?, address? } — даты и адрес; сотрудник, вид и сумма квартиры
+ * не меняются (сумму правит «Зарплата»).
  */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -209,7 +214,8 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
-    const input = parseStayFields(current.kind, req.body);
+    // Без суммы: у квартиры остаётся прежняя (её меняет «Зарплата»).
+    const input = parseStayFields(current.kind, req.body, { withAmount: false });
     if (!(await canWriteStay(req, current.employee_id))) {
       res.status(403).json(NO_ACCESS);
       return;
@@ -288,7 +294,6 @@ export const dormitoryStaysController = {
   listForPayroll,
   searchEmployees,
   listAddresses: listSavedAddresses,
-  housingRate,
   add,
   update,
   remove,

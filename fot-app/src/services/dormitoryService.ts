@@ -45,7 +45,6 @@ export const DORMITORY_STAYS_KEY = ['dormitory-stays'] as const;
 export const PAYROLL_DORMITORY_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'payroll'] as const;
 /** Под тем же префиксом: сохранение проживания перечитывает и подсказки адресов. */
 export const DORMITORY_ADDRESSES_KEY = [...DORMITORY_STAYS_KEY, 'addresses'] as const;
-export const DORMITORY_HOUSING_RATE_KEY = [...DORMITORY_STAYS_KEY, 'housing-rate'] as const;
 
 export const dormitoryService = {
   /** «Управление кадрами» → «Проживание»: общежития и квартиры, охват списка кадров. */
@@ -74,14 +73,9 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** Сумма по умолчанию для квартиры — ставка «Доплата за проживание»; не задана — null. */
-  housingRate: async (signal?: AbortSignal): Promise<string | null> => {
-    const res = await apiClient.get<IApiResponse<{ amount: string | null }>>('/dormitory/housing-rate', { signal });
-    return res.data.amount;
-  },
-
   /**
-   * Пересечение с другим проживанием сотрудника — ApiError 409; квартира в днях «Доплаты за общежитие» — тоже 409.
+   * Пересечение с другим проживанием сотрудника — ApiError 409; квартира в днях «Доплаты за общежитие» или без
+   * ставки «Доплата за проживание» (сумму квартиры сервер берёт из неё) — тоже 409.
    */
   add: async (employeeId: number, kind: DormitoryStayKind, payload: IDormitoryStayPayload): Promise<IDormitoryStay> => {
     const res = await apiClient.post<IApiResponse<IDormitoryStay>>(

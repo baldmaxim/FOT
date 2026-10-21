@@ -34,8 +34,8 @@ interface IPayrollDictionarySectionProps {
   renderDetails?: (item: IPayrollDictionaryItem) => ReactNode;
   /** Подпись «+» для диктора: «Подвиды: Спецодежда». */
   detailsLabel?: (name: string) => string;
-  /** Пустой список: «Подвидов нет»; по умолчанию — «Список пуст». */
-  emptyText?: string;
+  /** Надпись у пустого списка, по умолчанию «Список пуст»; null — без надписи (подвиды вида). */
+  emptyText?: string | null;
 }
 
 /** Кнопка таблицы сотрудников у заголовка колонки. */
@@ -106,7 +106,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
           <button type="button" className={styles.retryButton} onClick={onRetry}>Повторить</button>
         </p>
       )}
-      {items && items.length === 0 && <p className={styles.state}>{emptyText}</p>}
+      {items && items.length === 0 && emptyText && <p className={styles.state}>{emptyText}</p>}
 
       {items && items.length > 0 && (
         <ul className={styles.list}>
