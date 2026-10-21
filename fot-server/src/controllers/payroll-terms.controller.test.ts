@@ -383,6 +383,19 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     });
   });
 
+  it('доплата без даты окончания — бессрочная версия', async () => {
+    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
+    const res = makeRes();
+
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { ...baseBody, planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: null } },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1']);
+  });
+
   it('null снимает доплату: версия с пустыми суммой и датами', async () => {
     const res = makeRes();
 
@@ -417,7 +430,7 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     ['окончание раньше начала', { amount: 10000, date_from: '2026-12-01', date_to: '2026-11-30' }],
     ['сумма больше NUMERIC(12,2)', { amount: 10_000_000_000, date_from: '2026-11-01', date_to: '2026-12-31' }],
     ['нулевая сумма', { amount: 0, date_from: '2026-11-01', date_to: '2026-12-31' }],
-    ['нет даты окончания', { amount: 10000, date_from: '2026-11-01' }],
+    ['нет даты начала', { amount: 10000, date_to: '2026-12-31' }],
   ])('%s — 400 до похода в БД', async (_name, plannedSupplement) => {
     const res = makeRes();
 

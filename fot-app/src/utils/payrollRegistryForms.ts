@@ -44,7 +44,7 @@ const parseDate = (value: string, field: RegistryFormField, emptyMessage: string
   return null;
 };
 
-/** Плановая доплата: сумма ₽/мес, «с — по» включительно. */
+/** Плановая доплата: сумма ₽/мес, «с — по» включительно; «по» пусто — бессрочно. */
 export const parsePlannedForm = (draft: {
   selected: boolean;
   amount: string;
@@ -56,10 +56,9 @@ export const parsePlannedForm = (draft: {
   if ('error' in amount) return fail('amount', amount.error);
   const fromError = parseDate(draft.dateFrom, 'date_from', 'Укажите дату начала');
   if (fromError) return fromError;
-  const toError = parseDate(draft.dateTo, 'date_to', 'Укажите дату окончания');
-  if (toError) return toError;
-  if (draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата окончания раньше даты начала');
-  return { ok: true, payload: { amount: amount.amount, date_from: draft.dateFrom, date_to: draft.dateTo } };
+  if (draft.dateTo && !isCalendarDate(draft.dateTo)) return fail('date_to', 'Такой даты нет');
+  if (draft.dateTo && draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата окончания раньше даты начала');
+  return { ok: true, payload: { amount: amount.amount, date_from: draft.dateFrom, date_to: draft.dateTo || null } };
 };
 
 /** Разовая доплата: месяц, сумма, основание (обязательно). */

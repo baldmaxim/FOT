@@ -168,7 +168,8 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
 export interface IPlannedSupplementValue {
   amount: number;
   dateFrom: string;
-  dateTo: string;
+  /** null — бессрочно (миграция 322). */
+  dateTo: string | null;
 }
 
 /**

@@ -120,7 +120,8 @@ export interface IHousingAllowancePayload {
 export interface IPlannedSupplementFields {
   amount: number;
   date_from: string;
-  date_to: string;
+  /** null — бессрочно. */
+  date_to: string | null;
 }
 
 export interface IOneTimeSupplementFields {

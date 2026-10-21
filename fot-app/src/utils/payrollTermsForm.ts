@@ -134,10 +134,10 @@ const parseSupplement = (
   if (!rawAmount) errors.supplementAmount = 'Укажите сумму доплаты';
   else if (!Number.isFinite(amount) || amount <= 0) errors.supplementAmount = 'Введите число больше нуля';
   if (!values.from) errors.supplementFrom = 'Укажите дату начала';
-  if (!values.to) errors.supplementTo = 'Укажите дату окончания';
-  else if (values.from && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
+  // Дата окончания необязательна: пусто — бессрочно.
+  if (values.from && values.to && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
   if (errors.supplementAmount || errors.supplementFrom || errors.supplementTo) return null;
-  return { amount, date_from: values.from, date_to: values.to };
+  return { amount, date_from: values.from, date_to: values.to || null };
 };
 
 const sameSupplement = (a: IPlannedSupplementPayload | null, b: IPlannedSupplementPayload | null): boolean => (

@@ -45,6 +45,7 @@ const supplement = (over: Partial<IPayrollSupplementRow>): IPayrollSupplementRow
 describe('«Доплата»', () => {
   it('период: плановая — даты, разовая — месяц', () => {
     expect(supplementPeriod(supplement({}))).toBe('01.10.2026 – 31.12.2026');
+    expect(supplementPeriod(supplement({ date_to: null }))).toBe('с 01.10.2026');
     expect(supplementPeriod(supplement({ kind: 'one_time', id: 5, month: '2026-10', date_from: null, date_to: null })))
       .toBe('октябрь 2026');
   });
@@ -85,9 +86,11 @@ describe('формы', () => {
     expect(apartmentRemoval({ check_in: '2026-10-05', check_out: null }, '2026-10-20')).toEqual({ action: 'delete' });
   });
 
-  it('плановая: окончание раньше начала', () => {
+  it('плановая: окончание раньше начала; «по» пусто — бессрочно', () => {
     expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '2026-09-30' }))
       .toMatchObject({ ok: false, field: 'date_to' });
+    expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '' }))
+      .toEqual({ ok: true, payload: { amount: 5000, date_from: '2026-10-01', date_to: null } });
   });
 
   it('разовая: основание обязательно и без лишних пробелов', () => {

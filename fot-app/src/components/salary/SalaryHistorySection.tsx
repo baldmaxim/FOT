@@ -52,7 +52,7 @@ const formatSupplement = (amount: string | null): string => {
 };
 
 const formatSupplementPeriod = (from: string | null, to: string | null): string =>
-  `с ${formatDate(from)} по ${formatDate(to)}`;
+  (to ? `с ${formatDate(from)} по ${formatDate(to)}` : `с ${formatDate(from)}`);
 
 /** «Изменил: ФИО · дата» — дата изменения по Москве: журнал упорядочен по ней. */
 const formatAuthor = (change: IPayrollTermsChange): string => {

@@ -38,10 +38,13 @@ import {
 const plannedFields = {
   amount: payrollPositiveMoneySchema('Укажите сумму доплаты'),
   date_from: payrollDateSchema('Укажите дату начала'),
-  date_to: payrollDateSchema('Укажите дату окончания'),
+  // Пусто — бессрочно (миграция 322).
+  date_to: payrollDateSchema('Такой даты нет').nullable().optional(),
 };
 const PLANNED_ORDER = { message: 'Дата окончания раньше даты начала', path: ['date_to'] };
-const plannedOrder = (value: { date_from: string; date_to: string }): boolean => value.date_to >= value.date_from;
+const plannedOrder = (value: { date_from: string; date_to?: string | null }): boolean => (
+  !value.date_to || value.date_to >= value.date_from
+);
 
 const plannedSchema = z.object(plannedFields).refine(plannedOrder, PLANNED_ORDER);
 const plannedAddSchema = z.object({ employee_id: payrollEmployeeIdSchema, ...plannedFields })
@@ -68,7 +71,7 @@ const EXISTS = {
 const toPlannedValue = (body: z.infer<typeof plannedSchema>): IPlannedSupplementValue => ({
   amount: body.amount,
   dateFrom: body.date_from,
-  dateTo: body.date_to,
+  dateTo: body.date_to ?? null,
 });
 
 const plannedAudit = (value: IPlannedSupplementValue | null) => (value && {

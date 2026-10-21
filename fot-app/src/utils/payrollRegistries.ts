@@ -82,7 +82,7 @@ export const HOUSING_COLUMNS: ReadonlyArray<IRegistryColumn<IHousingAllowanceRow
 export const supplementPeriod = (row: IPayrollSupplementRow): string => (
   row.kind === 'one_time'
     ? (row.month ? formatMonthLabel(row.month) : '—')
-    : `${formatDate(row.date_from)} – ${formatDate(row.date_to)}`
+    : row.date_to ? `${formatDate(row.date_from)} – ${formatDate(row.date_to)}` : `с ${formatDate(row.date_from)}`
 );
 
 export const SUPPLEMENT_KIND_LABELS: Record<IPayrollSupplementRow['kind'], string> = {

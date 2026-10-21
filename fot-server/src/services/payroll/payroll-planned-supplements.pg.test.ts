@@ -136,7 +136,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('286_payroll_terms_compensations.sql'));
     await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
     // Повторный запуск безопасен.
-    await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
+    await pg.pool!.query(migration('322_payroll_planned_supplement_open_end.sql'));
+    await pg.pool!.query(migration('322_payroll_planned_supplement_open_end.sql'));
     // Список берёт «Начисления» из «Оплачено».
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
@@ -202,9 +203,14 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
        VALUES (3, 1000, '2026-12-01', '2026-11-01')`,
     )).rejects.toThrow(/payroll_supplement_state/);
+    // Без «с» нельзя; без «по» — бессрочно (322), проверка — в последнем тесте.
     await expect(pg.pool!.query(
       `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
-       VALUES (3, 1000, '2026-12-01', NULL)`,
+       VALUES (3, 1000, NULL, '2026-12-01')`,
+    )).rejects.toThrow(/payroll_supplement_state/);
+    await expect(pg.pool!.query(
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
+       VALUES (3, NULL, '2026-12-01', NULL)`,
     )).rejects.toThrow(/payroll_supplement_state/);
   });
 
@@ -330,5 +336,21 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     const all = await list('all');
     expect(all[1]).toMatchObject({ paid_total: 327270, paid_deductions_total: 7248 });
     expect(all[3]).toMatchObject({ paid_total: null, paid_deductions_total: 50000 });
+  });
+
+  it('бессрочная (без «по»): повтор без правки не пишет, в списке «по» пусто', async () => {
+    const open: IPlannedSupplementValue = { amount: 20000, dateFrom: '2023-02-01', dateTo: null };
+    expect(await save(4, open)).toBe(true);
+    expect(await save(4, { ...open })).toBe(false);
+    expect((await versions(4)).at(-1)).toEqual({ amount: '20000.00', date_from: '2023-02-01', date_to: null });
+
+    const res = makeRes();
+    await payrollTermsController.list({
+      user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01' },
+    } as unknown as AuthenticatedRequest, res);
+    const row = (res.body.data as Array<Record<string, unknown>>).find(r => r.employee_id === 4);
+    expect(row).toMatchObject({
+      planned_supplement_amount: 20000, planned_supplement_from: '2023-02-01', planned_supplement_to: null,
+    });
   });
 });

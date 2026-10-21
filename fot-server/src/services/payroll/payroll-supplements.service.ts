@@ -121,7 +121,7 @@ const readPlanned = async (client: PoolClient, employeeId: number): Promise<IPla
       LIMIT 1`,
     [employeeId],
   )).rows[0];
-  if (!row || row.amount === null || row.date_from === null || row.date_to === null) return null;
+  if (!row || row.amount === null || row.date_from === null) return null;
   return { amount: Number(row.amount), dateFrom: row.date_from, dateTo: row.date_to };
 };
 
@@ -130,9 +130,9 @@ export type PlannedSetResult =
   | { status: 'unchanged' }
   | { status: 'saved'; previous: IPlannedSupplementValue | null };
 
-/** Периоды «с — по» (YYYY-MM-DD включительно) пересекаются. */
+/** Периоды «с — по» (YYYY-MM-DD включительно; «по» null — бессрочно) пересекаются. */
 const plannedOverlap = (a: IPlannedSupplementValue, b: IPlannedSupplementValue): boolean => (
-  a.dateFrom <= b.dateTo && b.dateFrom <= a.dateTo
+  (b.dateTo === null || a.dateFrom <= b.dateTo) && (a.dateTo === null || b.dateFrom <= a.dateTo)
 );
 
 /**

@@ -100,12 +100,12 @@ const calendarDateSchema = dateSchema.refine(value => {
 /** Верх NUMERIC(12,2): больше — переполнение в БД и 500 вместо понятной ошибки. */
 const MAX_MONEY = 9_999_999_999.99;
 
-/** Плановая доплата: сумма ₽/мес на период «с — по» включительно. */
+/** Плановая доплата: сумма ₽/мес на период «с — по» включительно; «по» пусто — бессрочно. */
 const plannedSupplementSchema = z.object({
   amount: moneySchema.max(MAX_MONEY, 'Слишком большая сумма доплаты'),
   date_from: calendarDateSchema,
-  date_to: calendarDateSchema,
-}).refine(value => value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
+  date_to: calendarDateSchema.nullable().optional(),
+}).refine(value => !value.date_to || value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
 
 /**
  * Назначение сотруднику — с плановой доплатой: не передана — доплату не трогать
@@ -695,7 +695,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           value: supplement && {
             amount: supplement.amount,
             dateFrom: supplement.date_from,
-            dateTo: supplement.date_to,
+            dateTo: supplement.date_to ?? null,
           },
           createdBy: req.user.id,
         });

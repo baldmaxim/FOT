@@ -138,9 +138,15 @@ describe('validatePayrollTerms: плановая доплата', () => {
     expect(result.payload?.planned_supplement).toEqual({ amount: 10000, date_from: '2026-11-01', date_to: '2027-01-31' });
   });
 
+  it('без даты окончания — бессрочная доплата', () => {
+    const result = validatePayrollTerms(values({ supplement: { ...NOV_DEC, to: '' } }), withSupplement());
+    expect(result.errors).toBeNull();
+    expect(result.payload?.planned_supplement).toEqual({ amount: 10000, date_from: '2026-11-01', date_to: null });
+  });
+
   it('заполнено частично — ошибки по полям, запроса нет', () => {
     expect(validatePayrollTerms(values({ supplement: { ...EMPTY_SUPPLEMENT, amount: '5000' } }), withSupplement()).errors)
-      .toEqual({ supplementFrom: 'Укажите дату начала', supplementTo: 'Укажите дату окончания' });
+      .toEqual({ supplementFrom: 'Укажите дату начала' });
     expect(validatePayrollTerms(values({ supplement: { ...NOV_DEC, amount: '' } }), withSupplement()).errors)
       .toEqual({ supplementAmount: 'Укажите сумму доплаты' });
     expect(validatePayrollTerms(values({ supplement: { ...NOV_DEC, amount: '0' } }), withSupplement()).errors)

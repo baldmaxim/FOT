@@ -126,11 +126,11 @@ export interface IAssignTermsPayload {
   planned_supplement?: IPlannedSupplementPayload | null;
 }
 
-/** Плановая доплата: сумма ₽/мес на период «с — по» включительно. */
+/** Плановая доплата: сумма ₽/мес на период «с — по» включительно; «по» null — бессрочно. */
 export interface IPlannedSupplementPayload {
   amount: number;
   date_from: string;
-  date_to: string;
+  date_to: string | null;
 }
 
 /** Изменение оклада / ставки. Суммы — текстом NUMERIC; разница — только при том же виде оплаты. */
