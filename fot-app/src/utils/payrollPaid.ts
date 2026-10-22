@@ -173,9 +173,19 @@ export interface IPaidHistoryMonth {
   groups: IPayrollPaidGroup[];
 }
 
+/** Год «Истории выплат»: его месяцы (новые сверху) и итоги за год. */
+export interface IPaidHistoryYear {
+  year: string;
+  months: IPaidHistoryMonth[];
+  totals: PayrollPaidTotals;
+  payout: number | null;
+}
+
 export interface IPaidHistory {
   /** Месяцы с суммами, новые сверху. */
   months: IPaidHistoryMonth[];
+  /** Те же месяцы по годам, новые сверху. */
+  years: IPaidHistoryYear[];
   amounts: ReadonlyMap<string, number>;
   overall: PayrollPaidTotals;
   overallPayout: number | null;
@@ -186,13 +196,25 @@ export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory =
   const months = paidAmountMonths(rows);
   const amounts = toPaidAmounts(rows);
   const { byMonth, overall } = paidTotals(months, amounts);
+  const historyMonths = [...months].reverse().map(month => ({
+    month,
+    totals: byMonth[month],
+    payout: paidPayout(byMonth[month]),
+    groups: visiblePaidGroups([month], amounts),
+  }));
+  // Map хранит порядок вставки — годы тоже новые сверху.
+  const byYear = new Map<string, IPaidHistoryMonth[]>();
+  for (const entry of historyMonths) {
+    const year = entry.month.slice(0, 4);
+    byYear.set(year, [...(byYear.get(year) ?? []), entry]);
+  }
+  const years = [...byYear].map(([year, yearMonths]): IPaidHistoryYear => {
+    const totals = paidTotals(yearMonths.map(entry => entry.month), amounts).overall;
+    return { year, months: yearMonths, totals, payout: paidPayout(totals) };
+  });
   return {
-    months: [...months].reverse().map(month => ({
-      month,
-      totals: byMonth[month],
-      payout: paidPayout(byMonth[month]),
-      groups: visiblePaidGroups([month], amounts),
-    })),
+    months: historyMonths,
+    years,
     amounts,
     overall,
     overallPayout: paidPayout(overall),

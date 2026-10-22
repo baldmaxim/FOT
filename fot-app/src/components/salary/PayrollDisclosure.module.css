@@ -30,7 +30,6 @@
 .content { padding: 0 0 12px 22px; }
 
 .state { margin: 0; font-size: 13px; color: var(--text-secondary); }
-.hint { margin: 0 0 8px; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .stateError { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--error); }
 .retryButton {

@@ -168,9 +168,27 @@ describe('«История выплат»', () => {
     expect(history.overallPayout).toBe(236120.24);
   });
 
+  it('годы новые сверху, итоги года — до копейки', () => {
+    const history = paidHistory([
+      { month: '2025-11', item: 'contract', amount: '0.10' },
+      { month: '2025-12', item: 'contract', amount: '0.20' },
+      { month: '2025-12', item: 'meals', amount: '0.05' },
+      { month: '2026-01', item: 'contract', amount: '1000.00' },
+    ]);
+    expect(history.years.map(entry => [entry.year, entry.months.map(item => item.month)])).toEqual([
+      ['2026', ['2026-01']],
+      ['2025', ['2025-12', '2025-11']],
+    ]);
+    expect(history.years[1].totals).toEqual({ accrued: 0.3, deducted: 0.05 });
+    expect(history.years[1].payout).toBe(0.25);
+    expect(history.years[0].totals).toEqual({ accrued: 1000, deducted: null });
+    expect(history.years[0].payout).toBe(1000);
+  });
+
   it('сумм нет — пусто, «К выплате» — «—»', () => {
     const history = paidHistory([]);
     expect(history.months).toEqual([]);
+    expect(history.years).toEqual([]);
     expect(history.overallPayout).toBeNull();
     expect(paidPayout({ accrued: null, deducted: 0 })).toBe(0);
     expect(paidPayout({ accrued: null, deducted: 1800 })).toBe(-1800);

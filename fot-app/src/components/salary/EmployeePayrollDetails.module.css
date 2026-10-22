@@ -18,7 +18,7 @@
 
 /*
  * ФИО и сразу за ним выбор месяцев «Оплачено»; узко — выбор переносится под ФИО. Ниже — отдел и должность.
- * В окне «Расчётов» справа — крестик.
+ * Справа — «История выплат», в окне «Расчётов» за ней крестик.
  */
 .header {
   display: flex;
@@ -35,6 +35,33 @@
 /* Фокус на ФИО ставится программно (режим просмотра) — обводка не нужна. */
 .name:focus { outline: none; }
 .meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+/* «История выплат» открывает своё окно; на телефоне — только иконка. */
+.historyButton {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 44px;
+  height: var(--payroll-control-h);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--transition);
+}
+.historyButton:hover { background: var(--surface-hover); }
+.historyButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.historyLabel { display: none; }
 
 .body {
   flex: 1 1 auto;
@@ -93,6 +120,11 @@
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+@media (min-width: 480px) {
+  .historyButton { min-width: 0; padding: 0 12px; }
+  .historyLabel { display: inline; }
+}
+
 @media (min-width: 768px) {
   .details { --payroll-control-h: 40px; }
   .nameRow .monthsTrigger { min-height: 32px; }
@@ -110,5 +142,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .primaryButton, .secondaryButton { transition: none; }
+  .primaryButton, .secondaryButton, .historyButton { transition: none; }
 }

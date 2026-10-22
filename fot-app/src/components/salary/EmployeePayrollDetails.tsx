@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { History, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -18,7 +18,7 @@ import { MonthsPicker } from '../ui/MonthsPicker';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
-import { PaidHistorySection } from './PaidHistorySection';
+import { PaidHistoryModal } from './PaidHistoryModal';
 import { SalaryHistorySection } from './SalaryHistorySection';
 import { StaffDeductionsList } from './StaffDeductionsList';
 import modal from './PayrollModal.module.css';
@@ -51,7 +51,8 @@ interface IEmployeePayrollDetailsProps {
  * В окне: условия оплаты (вид оплаты, оклад, премия), компенсация, плановая доплата; «Сохранить» пишет условия.
  * «Удержание» — только показ удержаний сотрудника (вносят в «Справочнике» и у кадров, миграция 321).
  * В «Подробно»: Категория и «Оплачено», без полей и кнопок.
- * Ниже — свёрнутая справка: история изменений, история выплат и отпуска; грузится отдельно, её ошибки форму не блокируют.
+ * Ниже — свёрнутая справка: история изменений и отпуска; грузится отдельно, её ошибки форму не блокируют.
+ * «История выплат» — кнопкой в шапке, своим окном (PaidHistoryModal).
  * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
  * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
  */
@@ -81,6 +82,8 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
   const activeRef = useRef(active);
@@ -128,91 +131,111 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   };
 
   return (
-    <form
-      className={className ? `${styles.details} ${className}` : styles.details}
-      onSubmit={handleSubmit}
-      onKeyDown={handleKeyDown}
-      noValidate
-      aria-labelledby={titleId}
-    >
-      <header className={styles.header}>
-        <div className={styles.headerMain}>
-          <div className={styles.nameRow}>
-            <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
-            {!editable && (
-              <MonthsPicker
-                value={months}
-                options={monthOptions}
-                onChange={setMonths}
-                allowAll={false}
-                resetValue={[shiftMonth(currentMonth, -1)]}
-                ariaLabel="Месяцы «Оплачено»"
-                className={styles.monthsTrigger}
-              />
-            )}
+    <>
+      <form
+        className={className ? `${styles.details} ${className}` : styles.details}
+        onSubmit={handleSubmit}
+        onKeyDown={handleKeyDown}
+        noValidate
+        aria-labelledby={titleId}
+      >
+        <header className={styles.header}>
+          <div className={styles.headerMain}>
+            <div className={styles.nameRow}>
+              <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
+              {!editable && (
+                <MonthsPicker
+                  value={months}
+                  options={monthOptions}
+                  onChange={setMonths}
+                  allowAll={false}
+                  resetValue={[shiftMonth(currentMonth, -1)]}
+                  ariaLabel="Месяцы «Оплачено»"
+                  className={styles.monthsTrigger}
+                />
+              )}
+            </div>
+            {meta && <p className={styles.meta}>{meta}</p>}
           </div>
-          {meta && <p className={styles.meta}>{meta}</p>}
-        </div>
-        {/* Крестик — как «Отмена»: пока идёт сохранение, не закрыть. */}
-        {editable && onClose && (
           <button
             type="button"
-            className={modal.closeButton}
-            onClick={onClose}
-            disabled={saveMutation.isPending}
-            aria-label="Закрыть"
+            className={styles.historyButton}
+            onClick={() => setHistoryOpen(true)}
+            aria-label="История выплат"
           >
-            <X size={20} aria-hidden="true" />
+            <History size={18} aria-hidden="true" />
+            <span className={styles.historyLabel}>История выплат</span>
           </button>
-        )}
-      </header>
-
-      <div className={styles.body}>
-        {editable && !canEdit && (
-          <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
-        )}
-        <PayrollTermsFields
-          form={form}
-          idPrefix={idPrefix}
-          readOnly={!canEdit}
-          category={payrollRowCategory(row)}
-          autoFocus={canEdit}
-          paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
-          stacked
-          detailsOnly={!editable}
-          total
-          staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
-        />
-
-        <div className={styles.reference}>
-          <SalaryHistorySection employeeId={row.employee_id} />
-          <PaidHistorySection employeeId={row.employee_id} positionName={row.position_name} />
-          <EmployeeVacationSection employeeId={row.employee_id} />
-        </div>
-      </div>
-
-      {/* В «Подробно» вносить нечего — кнопок нет: к списку — переключателем экранов. */}
-      {editable && (
-        <footer className={styles.footer}>
-          {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
-          <div className={styles.actions}>
-            {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
+          {/* Крестик — как «Отмена»: пока идёт сохранение, не закрыть. */}
+          {editable && onClose && (
             <button
               type="button"
-              className={styles.secondaryButton}
+              className={modal.closeButton}
               onClick={onClose}
               disabled={saveMutation.isPending}
+              aria-label="Закрыть"
             >
-              {canEdit ? 'Отмена' : 'Закрыть'}
+              <X size={20} aria-hidden="true" />
             </button>
-            {canEdit && (
-              <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
-                {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
-              </button>
-            )}
+          )}
+        </header>
+
+        <div className={styles.body}>
+          {editable && !canEdit && (
+            <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
+          )}
+          <PayrollTermsFields
+            form={form}
+            idPrefix={idPrefix}
+            readOnly={!canEdit}
+            category={payrollRowCategory(row)}
+            autoFocus={canEdit}
+            paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
+            stacked
+            detailsOnly={!editable}
+            total
+            staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
+          />
+
+          <div className={styles.reference}>
+            <SalaryHistorySection employeeId={row.employee_id} />
+            <EmployeeVacationSection employeeId={row.employee_id} />
           </div>
-        </footer>
+        </div>
+
+        {/* В «Подробно» вносить нечего — кнопок нет: к списку — переключателем экранов. */}
+        {editable && (
+          <footer className={styles.footer}>
+            {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
+            <div className={styles.actions}>
+              {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={onClose}
+                disabled={saveMutation.isPending}
+              >
+                {canEdit ? 'Отмена' : 'Закрыть'}
+              </button>
+              {canEdit && (
+                <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
+                  {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+                </button>
+              )}
+            </div>
+          </footer>
+        )}
+      </form>
+
+      {/* Рядом с формой, не внутри: Enter и отправка формы окна не касаются. */}
+      {historyOpen && (
+        <PaidHistoryModal
+          employeeId={row.employee_id}
+          fullName={row.full_name}
+          positionName={row.position_name}
+          onClose={closeHistory}
+        />
       )}
-    </form>
+    </>
   );
 };

@@ -34,19 +34,6 @@ const formatSummary = (summary: IVacationSummary, balance: IVacationBalance | nu
   + (balance ? ` · остаток ${formatFraction(balance.current_days)} дн.` : '')
 );
 
-/** Расшифровка остатка одной строкой: откуда начальный, сколько начислено и отгулено. */
-const formatBalance = (balance: IVacationBalance): string => {
-  const accrued = `${formatFraction(balance.accrued_days)} за ${balance.accrued_months} мес.`;
-  const parts = balance.source === '1c'
-    ? `${formatFraction(balance.opening_days)} по 1С на ${formatDate(balance.as_of)} + ${accrued}`
-      + ` − ${balance.used_days} отгулено после ${formatDate(balance.as_of)}`
-    : `${accrued} с приёма ${formatDate(balance.as_of)} − ${balance.used_days} отгулено`;
-  const unpaid = balance.unpaid_excess_days > 0
-    ? `; без сохранения сверх 14 дн. в году — ${balance.unpaid_excess_days} дн. не в стаже (ст. 121 ТК)`
-    : '';
-  return `Остаток на ${formatDate(balance.until)}: ${formatFraction(balance.current_days)} дн. = ${parts}${unpaid}.`;
-};
-
 const formatPeriod = (period: IVacationPeriod): string => (
   period.start_date === period.end_date
     ? formatDate(period.start_date)
@@ -67,7 +54,7 @@ const formatSource = (period: IVacationPeriod): string => {
 
 /**
  * «Отпуска» — раскрываемый блок, свёрнут по умолчанию, сводка с остатком видна всегда. В раскрытии —
- * расшифровка остатка, пояснение и все периоды с основанием и согласованием.
+ * все периоды с основанием и согласованием.
  * Свой запрос: сбой не мешает форме.
  */
 export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ employeeId }) => {
@@ -108,11 +95,6 @@ export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ emp
 
         {data && (
           <>
-            {data.balance && <p className={styles.hint}>{formatBalance(data.balance)}</p>}
-            <p className={styles.hint}>
-              По табелю. Ежегодный отпуск — в календарных днях: выходные между днями отпуска входят,
-              нерабочие праздничные — нет (ст. 120 ТК).
-            </p>
             {data.history.length === 0 ? (
               <p className={styles.state}>Отпусков в табеле нет.</p>
             ) : (
