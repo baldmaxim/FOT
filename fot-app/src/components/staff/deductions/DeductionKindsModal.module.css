@@ -1,7 +1,8 @@
 /*
  * Окно «Виды удержаний» во вкладке «Удержания»: оверлей, шапка и прокручиваемое тело — из PayrollModal.module.css,
  * список — PayrollDictionarySection («Справочник» «Зарплаты»). Mobile-first: во всю ширину оверлея, поля и
- * кнопки 44px; с 769px — компактные поля, окно до 560px.
+ * кнопки 44px; с 769px — компактные поля, окно до 760px: подвид спецодежды из 1С с размером («Костюм "Сириус-Лидер М"
+ * зимний (куртка+п/к) 52-54/170-176 (шт)») — в одну строку.
  */
 .container {
   --dict-control-h: 44px;
@@ -9,7 +10,7 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 560px;
+  max-width: 760px;
   max-height: 100%;
   overflow: hidden;
   border: 1px solid var(--border);
