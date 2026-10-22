@@ -1,9 +1,10 @@
-import { lazy, Suspense, useRef, useState, type FC } from 'react';
+import { lazy, Suspense, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
-import { moscowCurrentMonth } from '../../utils/moscowDate';
+import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
+import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { PAYROLL_CALC_COLUMNS_KEY, PAYROLL_CALC_TABLE_COLUMNS } from '../../utils/payrollColumns';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
@@ -52,21 +53,22 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   const summaryButtonRef = useRef<HTMLButtonElement>(null);
   const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
-  // Месяцы «Свода» — те, за которые есть «Оплачено». Пока не загружены, выбора нет и «Свод» неактивен:
-  // окно не должно успеть запросить суммы до месяца по умолчанию. «Весь период» не выбирается.
+  // Месяцы «Свода» — как в карточке «Подробно»: текущий и 11 предыдущих, даже без «Оплачено», плюс более
+  // старые месяцы с «Оплачено». «Весь период» не выбирается.
   const monthsQuery = useQuery({
     queryKey: PAYROLL_SUMMARY_KEYS.months,
     queryFn: ({ signal }) => payrollSummaryService.listMonths(signal),
     enabled: active,
     staleTime: 60_000,
   });
-  const monthOptions = monthsQuery.data ?? [];
-  const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
-  // Не выбирали — последний месяц с данными; месяцы не загрузились — текущий (не весь период молча).
-  // Суммы таблицы — за те же месяцы; пока месяцы грузятся, список ждёт.
   const [currentMonth] = useState(moscowCurrentMonth);
-  const summaryMonths = chosenMonths
-    ?? (monthsQuery.data ? monthOptions.slice(-1) : monthsQuery.isError ? [currentMonth] : null);
+  const monthOptions = useMemo(
+    () => [...new Set([...payrollMonthOptions(currentMonth), ...(monthsQuery.data ?? [])])].sort(),
+    [currentMonth, monthsQuery.data],
+  );
+  const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
+  // Не выбирали — прошлый месяц, даже если 1С его ещё не выгрузила. Суммы таблицы — за те же месяцы.
+  const summaryMonths = chosenMonths ?? [shiftMonth(currentMonth, -1)];
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие
   // экрана их не прячет. Паттерн «состояние из прошлого рендера» вместо setState-в-effect.
@@ -115,13 +117,12 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
               type="button"
               className={styles.dictionaryButton}
               aria-haspopup="dialog"
-              disabled={summaryMonths === null}
               onClick={() => setSummaryOpen(true)}
             >
               Свод
             </button>
             <MonthsPicker
-              value={summaryMonths ?? []}
+              value={summaryMonths}
               options={monthOptions}
               onChange={setChosenMonths}
               allowAll={false}
@@ -143,7 +144,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
 
       {dictionaryOpen && <PayrollDictionaryModal onClose={closeDictionary} />}
 
-      {summaryOpen && summaryMonths !== null && (
+      {summaryOpen && (
         <Suspense fallback={null}>
           <PayrollSummaryModal months={summaryMonths} onClose={closeSummary} />
         </Suspense>
