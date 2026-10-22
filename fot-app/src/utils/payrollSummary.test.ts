@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { IPayrollSummaryRow } from '../services/payrollSummaryService';
+import { PAYROLL_PAID_GROUPS } from './payrollPaid';
 import {
   buildSummarySnapshot,
   filterSummaryByCategory,
@@ -108,22 +109,18 @@ describe('«Свод»: сотрудники объекта и xlsx', () => {
     expect(summaryEmployeeTotals(items)(employees)?.export).toMatchObject({ full_name: 'Итого', contract: 145000, meals: 1200 });
   });
 
-  it('все 17 статей: снимок ≤ 30 столбцов, итог последней строкой, имя файла без пробелов', () => {
-    const all = {
-      contract: '1', bonus: '1', sick_leave: '1', vacation: '1', housing: '1', travel: '1', overtime: '1', recalc_prev: '1',
-      severance: '1', supplement: '1', planned_supplement: '1', loan: '1', meals: '1', workwear: '1', safety_fine: '1',
-      fines: '1', writ_deduction: '1',
-    };
+  it('все 34 статьи: снимок ≤ 50 столбцов (лимит сервера), итог последней строкой, имя файла без пробелов', () => {
+    const all = Object.fromEntries(PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, '1'])));
     const rows = toSummaryEmployeeRows([row({ amounts: all })]);
     const items = summaryItems([row({ amounts: all })]);
-    expect(items).toHaveLength(17);
+    expect(items).toHaveLength(34);
     const columns = summaryEmployeeColumns(items, true);
     const snapshot = buildSummarySnapshot({ title: 'Свод', subject: 'ЖК Химки', periodLabel: 'июль 2026', categoryLabel: 'Все', columns })(
       rows, summaryEmployeeTotals(items)(rows)?.export,
     );
-    expect(snapshot.columns).toHaveLength(25);
-    expect(snapshot.columns.length).toBeLessThanOrEqual(30);
-    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(25);
+    expect(snapshot.columns).toHaveLength(42);
+    expect(snapshot.columns.length).toBeLessThanOrEqual(50);
+    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(42);
     expect(snapshot.rows).toHaveLength(2);
     expect(snapshot.rows[1].cells[0]).toBeNull();
     expect(snapshot.rows[1].cells[1]).toBe('Итого');

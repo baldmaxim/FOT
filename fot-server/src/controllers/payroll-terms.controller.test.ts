@@ -883,7 +883,8 @@ describe('payrollTermsController.list', () => {
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_paid_amounts'));
     expect(sql).toMatch(/pa\.month <\s+date_trunc\('month', \$1::date\)::date/);
     expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'vacation', 'housing', 'travel', "
-      + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan')");
+      + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan', "
+      + "'kpi', 'premium', 'premium_contract', 'gph', 'extra_work', 'substitution', 'car_compensation', 'deposit')");
   });
 
   it('список: премиальная часть — из условий, проживание — квартира «Проживания» на дату выборки', async () => {
@@ -1255,8 +1256,11 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).not.toMatch(/accruals/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
-    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan'\)\)\)::text AS paid_total/);
-    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction'\)\)\)::text AS paid_deductions_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit'\)\)\)::text AS paid_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees'\)\)\)::text AS paid_deductions_total/);
+    // Новые статьи 325: удержание не попадает в итог начислений, начисление — в итог удержаний.
+    expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'bank_fees'/);
+    expect(sql).not.toMatch(/item_code IN \('meals'[^)]*'premium'/);
     expectPlaceholdersMatch(sql, params);
   });
 

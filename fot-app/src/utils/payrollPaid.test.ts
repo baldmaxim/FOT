@@ -21,15 +21,24 @@ import {
 const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
 describe('статьи', () => {
-  it('17 статей без повторов, в порядке ведомости', () => {
-    expect(ITEMS).toHaveLength(17);
-    expect(new Set(ITEMS.map(item => item.code)).size).toBe(17);
+  it('34 статьи без повторов, в порядке ведомости', () => {
+    expect(ITEMS).toHaveLength(34);
+    expect(new Set(ITEMS.map(item => item.code)).size).toBe(34);
     expect(PAYROLL_PAID_GROUPS.map(group => group.items.map(item => item.label))).toEqual([
       ['По трудовому договору', 'Премиальная', 'Больничный', 'Отпуска'],
       ['Компенсация проживания', 'Проезд', 'Переработка', 'Перерасчёт за предыдущий период',
-        'Выходное пособие при увольнении', 'Разовая доплата', 'Плановая доплата', 'Займ'],
-      ['Питание', 'Спецодежда', 'Нарушение техники безопасности', 'Штрафы', 'Удержание по исп. листу'],
+        'Выходное пособие при увольнении', 'Разовая доплата', 'Плановая доплата', 'Займ',
+        'KPI', 'Премия', 'Премия % по договору', 'Выплата по договору ГПХ', 'Допработы', 'Замещение',
+        'Компенсация использования личного а/м', 'Депонент'],
+      ['Питание', 'Спецодежда', 'Нарушение техники безопасности', 'Штрафы', 'Удержание по исп. листу',
+        'Оплата отпуска (удержание)', 'Погашение займа', '% Займа', 'Квартиры', 'Подотчёт',
+        'Удержание в пользу третьего лица', 'Транспортные затраты', 'Моб. телефон',
+        'Банковские издержки по исп. листам'],
     ]);
+  });
+
+  it('подписи не повторяются — заголовки столбцов xlsx «Свода» уникальны', () => {
+    expect(new Set(ITEMS.map(item => item.label)).size).toBe(ITEMS.length);
   });
 
   it('исп. лист — в удержаниях, займ и плановая доплата — в начислениях', () => {
@@ -37,6 +46,9 @@ describe('статьи', () => {
     expect(kindOf('writ_deduction')).toBe('deducted');
     expect(kindOf('loan')).toBe('accrued');
     expect(kindOf('planned_supplement')).toBe('accrued');
+    expect(kindOf('premium_contract')).toBe('accrued');
+    expect(kindOf('loan_repayment')).toBe('deducted');
+    expect(kindOf('bank_fees')).toBe('deducted');
   });
 });
 

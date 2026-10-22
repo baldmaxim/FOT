@@ -46,6 +46,8 @@ describe('расчётный листок: строки статей', () => {
     { month: '2026-07', item: 'travel', amount: '2730.00' },
     { month: '2026-07', item: 'bonus', amount: '5000.00' },
     { month: '2026-07', item: 'safety_fine', amount: '1000.00' },
+    { month: '2026-07', item: 'premium_contract', amount: '83470.00' },
+    { month: '2026-07', item: 'bank_fees', amount: '19127.00' },
     { month: '2026-08', item: 'housing', amount: '630.00' },
   ]);
 
@@ -53,12 +55,14 @@ describe('расчётный листок: строки статей', () => {
     expect(payslipLines('2026-07', amounts, 'accrued')).toEqual([
       { code: 'bonus', label: 'Премиальная', amount: 5000 },
       { code: 'travel', label: 'Проезд', amount: 2730 },
+      { code: 'premium_contract', label: 'Премия % по договору', amount: 83470 },
     ]);
   });
 
   it('удержания месяца', () => {
     expect(payslipLines('2026-07', amounts, 'deducted')).toEqual([
       { code: 'safety_fine', label: 'Нарушение техники безопасности', amount: 1000 },
+      { code: 'bank_fees', label: 'Банковские издержки по исп. листам', amount: 19127 },
     ]);
   });
 });

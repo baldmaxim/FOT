@@ -1,11 +1,11 @@
 /**
  * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей «Сводной ведомости» ЗУП —
- * начислено и удержано — по месяцам (миграции 295, 297, 298, 301). Только чтение: суммы
+ * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325). Только чтение: суммы
  * приходят из 1С (API или выгрузка). В расчёте зарплаты не участвуют. Суммы нет — строки нет.
  */
 import { query } from '../../config/postgres.js';
 
-/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 301 и в fot-app/src/utils/payrollPaid.ts. */
+/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 325 и в fot-app/src/utils/payrollPaid.ts. */
 export const PAYROLL_PAID_ITEM_CODES = [
   // Начислено.
   'contract',
@@ -21,12 +21,29 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'supplement',
   'planned_supplement',
   'loan',
+  'kpi',
+  'premium',
+  'premium_contract',
+  'gph',
+  'extra_work',
+  'substitution',
+  'car_compensation',
+  'deposit',
   // Удержано.
   'meals',
   'workwear',
   'safety_fine',
   'fines',
   'writ_deduction',
+  'vacation_deduction',
+  'loan_repayment',
+  'loan_interest',
+  'apartment',
+  'imprest',
+  'third_party',
+  'transport',
+  'mobile',
+  'bank_fees',
 ] as const;
 
 export type PayrollPaidItemCode = typeof PAYROLL_PAID_ITEM_CODES[number];
@@ -48,6 +65,14 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'supplement',
   'planned_supplement',
   'loan',
+  'kpi',
+  'premium',
+  'premium_contract',
+  'gph',
+  'extra_work',
+  'substitution',
+  'car_compensation',
+  'deposit',
 ];
 
 /**
@@ -60,6 +85,15 @@ export const PAYROLL_PAID_DEDUCTION_CODES: readonly PayrollPaidItemCode[] = [
   'safety_fine',
   'fines',
   'writ_deduction',
+  'vacation_deduction',
+  'loan_repayment',
+  'loan_interest',
+  'apartment',
+  'imprest',
+  'third_party',
+  'transport',
+  'mobile',
+  'bank_fees',
 ];
 
 /** Сумма ячейки: месяц YYYY-MM, сумма — текстом NUMERIC. */

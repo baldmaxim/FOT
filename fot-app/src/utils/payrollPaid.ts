@@ -2,7 +2,7 @@
  * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяц
  * столбцом. Статьи — в двух разделах ведомости: начислено (1) и удержано (3). Только чтение:
  * суммы приходят из 1С (API или выгрузка); показываются лишь статьи, по которым сумма есть.
- * Коды статей — те же, что в CHECK миграции 301 и в payroll-paid.service.ts на сервере.
+ * Коды статей — те же, что в CHECK миграции 325 и в payroll-paid.service.ts на сервере.
  */
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
 import { formatMonthsLabel } from './monthsSelection';
@@ -46,6 +46,14 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'supplement', label: 'Разовая доплата' }, // 1.3.5
       { code: 'planned_supplement', label: 'Плановая доплата' },
       { code: 'loan', label: 'Займ' }, // 1.3.7
+      { code: 'kpi', label: 'KPI' }, // Начислено по KPI — итог четырёх KPI
+      { code: 'premium', label: 'Премия' }, // Премия
+      { code: 'premium_contract', label: 'Премия % по договору' }, // Премия % по договору
+      { code: 'gph', label: 'Выплата по договору ГПХ' }, // Выплата по договору ГПХ
+      { code: 'extra_work', label: 'Допработы' }, // Допработы
+      { code: 'substitution', label: 'Замещение' }, // Замещение
+      { code: 'car_compensation', label: 'Компенсация использования личного а/м' }, // то же
+      { code: 'deposit', label: 'Депонент' }, // Депонент
     ],
   },
   {
@@ -57,6 +65,15 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'safety_fine', label: 'Нарушение техники безопасности' }, // 3.18
       { code: 'fines', label: 'Штрафы' }, // 3.21
       { code: 'writ_deduction', label: 'Удержание по исп. листу' }, // 3.20
+      { code: 'vacation_deduction', label: 'Оплата отпуска (удержание)' }, // Оплата отпуска
+      { code: 'loan_repayment', label: 'Погашение займа' }, // Займ
+      { code: 'loan_interest', label: '% Займа' }, // % Займа
+      { code: 'apartment', label: 'Квартиры' }, // Квартиры
+      { code: 'imprest', label: 'Подотчёт' }, // Подотчет
+      { code: 'third_party', label: 'Удержание в пользу третьего лица' }, // Удержание из ЗП сотрудника в пользу третьего лица
+      { code: 'transport', label: 'Транспортные затраты' }, // Транспортные затраты
+      { code: 'mobile', label: 'Моб. телефон' }, // Моб.телефон
+      { code: 'bank_fees', label: 'Банковские издержки по исп. листам' }, // то же
     ],
   },
 ];
