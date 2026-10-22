@@ -26,12 +26,15 @@ const formatAmount = (value: string | null, calcType: PayrollCalcType): string =
   return money === null ? '—' : `${money} ${UNIT[calcType]}`;
 };
 
+/** Разница NUMERIC-строкой равна нулю: «0.00», «-0.0000». */
+const isZeroDiff = (diff: string): boolean => /^-?0(\.0+)?$/.test(diff);
+
 /**
  * Разница приходит строкой NUMERIC со знаком. Знак рисуем сами («+» / «−»),
  * модуль — строкой без минуса: считать деньги в JS не нужно.
  */
 const formatDelta = (change: ISalaryChange): { text: string; isDown: boolean } | null => {
-  if (change.diff === null) return null;
+  if (change.diff === null || isZeroDiff(change.diff)) return null;
   const isDown = change.diff.startsWith('-');
   const sign = isDown ? '−' : '+';
   const money = formatPayrollMoney(change.diff.replace(/^-/, ''));
@@ -98,6 +101,82 @@ const renderSupplementChange = (change: IPlannedSupplementChange & { kind: 'supp
   );
 };
 
+const AMOUNT_LABEL: Record<PayrollCalcType, string> = { salary: 'оклад', hourly: 'ставка' };
+
+/**
+ * Строка составляющей: «премия — → 61 900,00 ₽/мес». Без изменения — одно значение приглушённо;
+ * prev === undefined — сравнивать не с чем (первое назначение), значение выделено.
+ */
+const renderPart = (label: string, value: string | null, prev: string | null | undefined, unit: string) => {
+  const money = formatPayrollMoney(value) ?? '—';
+  if (prev === undefined || prev === value) {
+    return (
+      <div className={styles.amounts}>
+        <span className={prev === undefined ? styles.amount : styles.prevAmount}>{label} {money} {unit}</span>
+      </div>
+    );
+  }
+  return (
+    <div className={styles.amounts}>
+      <span className={styles.prevAmount}>{label} {formatPayrollMoney(prev) ?? '—'}</span>
+      <span className={styles.prevAmount} aria-hidden="true">→</span>
+      <span className={styles.amount}>{money} {unit}</span>
+    </div>
+  );
+};
+
+/**
+ * Оклад / ставка: с премией — раскладка «оклад», «премия», «итого», чтобы перенос суммы из оклада
+ * в премию читался как перераспределение, а не снижение; без премии — «было → стало», как раньше.
+ */
+const renderSalaryChange = (change: ISalaryChange & { kind: 'salary' }) => {
+  const isFirst = change.prev_calc_type === null;
+  const calcChanged = change.prev_calc_type !== null && change.prev_calc_type !== change.calc_type;
+  const hasBonus = Boolean(change.bonus ?? change.prev_bonus);
+  const delta = formatDelta(change);
+  const totalUnchanged = change.total !== null && change.diff !== null && isZeroDiff(change.diff);
+  const amountChange = change.prev_amount !== null && change.prev_calc_type !== null ? (
+    <div className={styles.amounts}>
+      <span className={styles.prevAmount}>было {formatAmount(change.prev_amount, change.prev_calc_type)}</span>
+      <span className={styles.prevAmount} aria-hidden="true">→</span>
+      <span className={styles.amount}>стало {formatAmount(change.amount, change.calc_type)}</span>
+    </div>
+  ) : (
+    <div className={styles.amounts}>
+      <span className={styles.amount}>назначено {formatAmount(change.amount, change.calc_type)}</span>
+    </div>
+  );
+  return (
+    <li key={`salary-${change.effective_from}`} className={styles.item}>
+      <div className={styles.itemHead}>
+        <span className={styles.itemSecondary}>{formatPeriod(change)}</span>
+        {delta && <span className={delta.isDown ? styles.deltaDown : styles.deltaUp}>{delta.text}</span>}
+        {totalUnchanged && <span className={styles.itemSecondary}>итого без изменений</span>}
+      </div>
+      {hasBonus ? (
+        <>
+          {calcChanged
+            ? amountChange
+            : renderPart(
+              AMOUNT_LABEL[change.calc_type],
+              change.amount,
+              isFirst ? undefined : change.prev_amount,
+              UNIT[change.calc_type],
+            )}
+          {renderPart('премия', change.bonus, isFirst ? undefined : change.prev_bonus, '₽/мес')}
+          {change.total !== null && renderPart('итого', change.total, change.prev_total ?? undefined, '₽/мес')}
+        </>
+      ) : amountChange}
+      {calcChanged && change.prev_calc_type !== null && (
+        <div className={styles.itemMeta}>
+          Смена вида оплаты: {CALC_TYPE_LABELS[change.prev_calc_type]} → {CALC_TYPE_LABELS[change.calc_type]}
+        </div>
+      )}
+      <div className={styles.itemMeta}>{formatAuthor(change)}</div>
+    </li>
+  );
+};
+
 /**
  * «История изменений условий оплаты» — раскрываемый блок, свёрнут по умолчанию.
  * Оклад / ставка и плановая доплата одним журналом, по времени изменения (новые сверху).
@@ -145,36 +224,9 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
 
         {data && data.length > 0 && (
           <ul className={styles.list}>
-            {data.map(change => {
-              if (change.kind === 'supplement') return renderSupplementChange(change);
-              const delta = formatDelta(change);
-              const calcChanged = change.prev_calc_type !== null && change.prev_calc_type !== change.calc_type;
-              return (
-                <li key={`salary-${change.effective_from}`} className={styles.item}>
-                  <div className={styles.itemHead}>
-                    <span className={styles.itemSecondary}>{formatPeriod(change)}</span>
-                    {delta && <span className={delta.isDown ? styles.deltaDown : styles.deltaUp}>{delta.text}</span>}
-                  </div>
-                  <div className={styles.amounts}>
-                    {change.prev_amount !== null && change.prev_calc_type !== null ? (
-                      <>
-                        <span className={styles.prevAmount}>было {formatAmount(change.prev_amount, change.prev_calc_type)}</span>
-                        <span className={styles.prevAmount} aria-hidden="true">→</span>
-                        <span className={styles.amount}>стало {formatAmount(change.amount, change.calc_type)}</span>
-                      </>
-                    ) : (
-                      <span className={styles.amount}>назначено {formatAmount(change.amount, change.calc_type)}</span>
-                    )}
-                  </div>
-                  {calcChanged && change.prev_calc_type !== null && (
-                    <div className={styles.itemMeta}>
-                      Смена вида оплаты: {CALC_TYPE_LABELS[change.prev_calc_type]} → {CALC_TYPE_LABELS[change.calc_type]}
-                    </div>
-                  )}
-                  <div className={styles.itemMeta}>{formatAuthor(change)}</div>
-                </li>
-              );
-            })}
+            {data.map(change => (
+              change.kind === 'supplement' ? renderSupplementChange(change) : renderSalaryChange(change)
+            ))}
           </ul>
         )}
       </div>

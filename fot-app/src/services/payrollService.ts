@@ -143,8 +143,15 @@ export interface ISalaryChange {
   effective_to: string | null;
   calc_type: PayrollCalcType;
   amount: string;
+  /** Премия ₽/мес; null — не задана. */
+  bonus: string | null;
+  /** Оклад + премия; у почасовой — null. */
+  total: string | null;
   prev_calc_type: PayrollCalcType | null;
   prev_amount: string | null;
+  prev_bonus: string | null;
+  prev_total: string | null;
+  /** У оклада — разница итога (оклад + премия), у ставки — ставки. */
   diff: string | null;
   diff_percent: string | null;
   changed_by_name: string | null;

@@ -99,9 +99,18 @@ export interface ISalaryChange {
   calc_type: PayrollCalcType;
   /** Оклад (₽/мес) или часовая ставка (₽/ч). */
   amount: string;
+  /** Премиальная часть ₽/мес; null — не задана (0 тоже null). */
+  bonus: string | null;
+  /** Оклад + премия; у почасовой — null: ₽/ч с ₽/мес не складываются. */
+  total: string | null;
   prev_calc_type: PayrollCalcType | null;
   prev_amount: string | null;
-  /** Разница и процент — только при том же виде оплаты: оклад со ставкой не сравнить. */
+  prev_bonus: string | null;
+  prev_total: string | null;
+  /**
+   * Разница и процент — только при том же виде оплаты: оклад со ставкой не сравнить.
+   * У оклада — по итогу (оклад + премия): перенос суммы из оклада в премию даёт 0; у ставки — по ставке.
+   */
   diff: string | null;
   diff_percent: string | null;
   changed_by_name: string | null;
@@ -111,8 +120,8 @@ export interface ISalaryChange {
 /**
  * История оклада / ставки, новые сверху.
  *
- * Новая строка условий появляется и при смене одной премии, поэтому подряд идущие строки
- * с тем же видом оплаты и суммой склеиваются в одно изменение (острова по флагу смены).
+ * Новая строка условий появляется и при смене одной компенсации, поэтому подряд идущие строки
+ * с тем же видом оплаты, суммой и премией склеиваются в одно изменение (острова по флагу смены).
  * Деньги считаются в SQL: NUMERIC приходит строкой, арифметика в JS запрещена.
  */
 export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChange[]> =>
@@ -120,10 +129,12 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
     `WITH terms AS (
        SELECT t.id, t.effective_from, t.effective_to, t.calc_type, t.created_by, t.created_at,
               COALESCE(t.monthly_salary, t.hourly_rate) AS amount,
+              NULLIF(t.bonus_amount, 0) AS bonus,
               CASE
                 WHEN LAG(t.calc_type) OVER w = t.calc_type
                  AND LAG(COALESCE(t.monthly_salary, t.hourly_rate)) OVER w
                      = COALESCE(t.monthly_salary, t.hourly_rate)
+                 AND LAG(NULLIF(t.bonus_amount, 0)) OVER w IS NOT DISTINCT FROM NULLIF(t.bonus_amount, 0)
                 THEN 0 ELSE 1
               END AS is_change
          FROM payroll_compensation_terms t
@@ -137,25 +148,39 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
               CASE WHEN bool_or(effective_to IS NULL) THEN NULL ELSE MAX(effective_to) END AS effective_to,
               (array_agg(calc_type ORDER BY effective_from, id))[1] AS calc_type,
               (array_agg(amount ORDER BY effective_from, id))[1] AS amount,
+              (array_agg(bonus ORDER BY effective_from, id))[1] AS bonus,
               (array_agg(created_by ORDER BY effective_from, id))[1] AS created_by,
               (array_agg(created_at ORDER BY effective_from, id))[1] AS created_at
          FROM grouped
         GROUP BY grp
-     ), compared AS (
+     ), paid AS (
+       -- Что сравнивать: у оклада — итог с премией, у ставки — сама ставка.
        SELECT periods.*,
-              LAG(calc_type) OVER o AS prev_calc_type,
-              LAG(amount) OVER o AS prev_amount
+              CASE WHEN calc_type = 'salary' THEN amount + COALESCE(bonus, 0) END AS total,
+              CASE WHEN calc_type = 'salary' THEN amount + COALESCE(bonus, 0) ELSE amount END AS pay
          FROM periods
+     ), compared AS (
+       SELECT paid.*,
+              LAG(calc_type) OVER o AS prev_calc_type,
+              LAG(amount) OVER o AS prev_amount,
+              LAG(bonus) OVER o AS prev_bonus,
+              LAG(total) OVER o AS prev_total,
+              LAG(pay) OVER o AS prev_pay
+         FROM paid
        WINDOW o AS (ORDER BY effective_from)
      )
      SELECT c.effective_from, c.effective_to, c.calc_type,
             c.amount::text AS amount,
+            c.bonus::text AS bonus,
+            c.total::text AS total,
             c.prev_calc_type,
             c.prev_amount::text AS prev_amount,
+            c.prev_bonus::text AS prev_bonus,
+            c.prev_total::text AS prev_total,
             CASE WHEN c.prev_calc_type = c.calc_type
-                 THEN (c.amount - c.prev_amount)::text END AS diff,
-            CASE WHEN c.prev_calc_type = c.calc_type AND c.prev_amount > 0
-                 THEN ROUND((c.amount - c.prev_amount) * 100 / c.prev_amount, 1)::text END AS diff_percent,
+                 THEN (c.pay - c.prev_pay)::text END AS diff,
+            CASE WHEN c.prev_calc_type = c.calc_type AND c.prev_pay > 0
+                 THEN ROUND((c.pay - c.prev_pay) * 100 / c.prev_pay, 1)::text END AS diff_percent,
             up.full_name AS changed_by_name,
             c.created_at AS changed_at
        FROM compared c

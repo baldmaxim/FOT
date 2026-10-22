@@ -265,27 +265,46 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
     )).rejects.toThrow(/payroll_terms_travel_non_negative/);
   });
 
-  it('история зарплаты: смена одной премии склеивается, повышение с дельтой, оклад → часы без дельты', async () => {
+  it('история зарплаты: премия 0 = нет, перенос в премию без дельты, смена премии — запись, оклад → часы без дельты', async () => {
     await pg.pool!.query(`
       INSERT INTO payroll_compensation_terms
         (employee_id, staff_category, calc_type, monthly_salary, hourly_rate, bonus_amount,
          effective_from, effective_to, created_by, created_at)
       VALUES
-        (1, 'itr', 'salary', 100000, NULL, 10000, '2026-01-01', '2026-03-31', '${AUTHOR}', '2025-12-30T10:00:00Z'),
-        (1, 'itr', 'salary', 100000, NULL, 20000, '2026-04-01', '2026-05-31', '${REVIEWER}', '2026-03-30T10:00:00Z'),
-        (1, 'itr', 'salary', 120000, NULL, 20000, '2026-06-01', '2026-06-30', '${REVIEWER}', '2026-05-30T10:00:00Z'),
+        (1, 'itr', 'salary', 100000, NULL, NULL, '2026-01-01', '2026-02-28', '${AUTHOR}', '2025-12-30T10:00:00Z'),
+        (1, 'itr', 'salary', 100000, NULL, 0, '2026-03-01', '2026-03-31', '${REVIEWER}', '2026-02-27T10:00:00Z'),
+        (1, 'itr', 'salary', 80000, NULL, 20000, '2026-04-01', '2026-04-30', '${REVIEWER}', '2026-03-30T10:00:00Z'),
+        (1, 'itr', 'salary', 80000, NULL, 30000, '2026-05-01', '2026-06-30', '${AUTHOR}', '2026-04-29T10:00:00Z'),
         (1, 'worker', 'hourly', NULL, 450, NULL, '2026-07-01', NULL, '${AUTHOR}', '2026-06-30T10:00:00Z');
     `);
 
     const changes = await getSalaryChanges(1);
 
     expect(changes.map(c => ({
-      from: c.effective_from, to: c.effective_to, calc: c.calc_type, amount: c.amount,
-      prevCalc: c.prev_calc_type, prev: c.prev_amount, diff: c.diff, pct: c.diff_percent, by: c.changed_by_name,
+      from: c.effective_from, to: c.effective_to, calc: c.calc_type, amount: c.amount, bonus: c.bonus, total: c.total,
+      prevCalc: c.prev_calc_type, prev: c.prev_amount, prevBonus: c.prev_bonus, prevTotal: c.prev_total,
+      diff: c.diff, pct: c.diff_percent, by: c.changed_by_name,
     }))).toEqual([
-      { from: '2026-07-01', to: null, calc: 'hourly', amount: '450.0000', prevCalc: 'salary', prev: '120000.00', diff: null, pct: null, by: 'Петрова А.А.' },
-      { from: '2026-06-01', to: '2026-06-30', calc: 'salary', amount: '120000.00', prevCalc: 'salary', prev: '100000.00', diff: '20000.00', pct: '20.0', by: 'Иванов И.И.' },
-      { from: '2026-01-01', to: '2026-05-31', calc: 'salary', amount: '100000.00', prevCalc: null, prev: null, diff: null, pct: null, by: 'Петрова А.А.' },
+      {
+        from: '2026-07-01', to: null, calc: 'hourly', amount: '450.0000', bonus: null, total: null,
+        prevCalc: 'salary', prev: '80000.00', prevBonus: '30000.00', prevTotal: '110000.00',
+        diff: null, pct: null, by: 'Петрова А.А.',
+      },
+      {
+        from: '2026-05-01', to: '2026-06-30', calc: 'salary', amount: '80000.00', bonus: '30000.00', total: '110000.00',
+        prevCalc: 'salary', prev: '80000.00', prevBonus: '20000.00', prevTotal: '100000.00',
+        diff: '10000.00', pct: '10.0', by: 'Петрова А.А.',
+      },
+      {
+        from: '2026-04-01', to: '2026-04-30', calc: 'salary', amount: '80000.00', bonus: '20000.00', total: '100000.00',
+        prevCalc: 'salary', prev: '100000.00', prevBonus: null, prevTotal: '100000.00',
+        diff: '0.00', pct: '0.0', by: 'Иванов И.И.',
+      },
+      {
+        from: '2026-01-01', to: '2026-03-31', calc: 'salary', amount: '100000.00', bonus: null, total: '100000.00',
+        prevCalc: null, prev: null, prevBonus: null, prevTotal: null,
+        diff: null, pct: null, by: 'Петрова А.А.',
+      },
     ]);
   });
 });
