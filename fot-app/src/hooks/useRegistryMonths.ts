@@ -5,7 +5,7 @@ import { moscowTodayIso } from '../utils/moscowDate';
 import { registryMonthOptions, registryMonthsParam } from '../utils/payrollRegistries';
 
 /**
- * Выбор месяцев таблицы «Справочника»: по умолчанию — текущий месяц (МСК), пусто — «Весь период».
+ * Выбор месяцев таблицы «Справочника»: по умолчанию — текущий месяц (МСК); «Весь период» не выбирается.
  * param — значение ?months= для таблиц с суммами из условий оплаты (входит в ключ запроса).
  */
 export const useRegistryMonths = (): IRegistryMonths & { param: string } => {

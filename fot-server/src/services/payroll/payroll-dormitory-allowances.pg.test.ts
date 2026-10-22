@@ -70,7 +70,7 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { listRates, updateRate } from './payroll-rates.service.js';
+import { currentRateMonth, listRates, shiftRateMonth, updateRate } from './payroll-rates.service.js';
 import { addStay, updateStay } from '../dormitory-stays.service.js';
 import { DormitoryAllowanceConflictError, listDormitoryAllowances } from './payroll-dormitory-allowances.service.js';
 import { payrollDormitoryAllowancesController as controller } from '../../controllers/payroll-dormitory-allowances.controller.js';
@@ -140,7 +140,7 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     await run(`
       DROP TABLE IF EXISTS payroll_dormitory_allowances, employee_dormitory_stays, payroll_compensation_stops,
         payroll_one_time_supplements, payroll_paid_amounts, payroll_planned_supplements, payroll_settings,
-        payroll_item_types, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
+        payroll_item_types, payroll_rate_values, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, role_page_access, access_pages,
         test_audit, positions, user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -229,9 +229,13 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
   it('317 дважды: ставка с кодом — прежняя строка (значение 450 не тронуто), «Доплата за проживание» та же', async () => {
     await run(migration('317_payroll_dormitory_allowances.sql'));
     await run(migration('317_payroll_dormitory_allowances.sql'));
-    expect((await listRates()).map(rate => [rate.name, rate.amount, rate.code])).toEqual([
-      ['Доплата за проживание', '630.00', 'housing'],
-      [' Доплата за общежитие', '450.00', 'dormitory_allowance'],
+    // 324 — значения по месяцам: прежние значения действуют «с начала», «Проезд» — без значения.
+    await run(migration('324_payroll_rate_values.sql'));
+    await run(migration('324_payroll_rate_values.sql'));
+    expect((await listRates()).map(rate => [rate.name, rate.amount, rate.code, rate.values])).toEqual([
+      ['Доплата за проживание', '630.00', 'housing', [{ effective_from: '2000-01', amount: '630.00' }]],
+      [' Доплата за общежитие', '450.00', 'dormitory_allowance', [{ effective_from: '2000-01', amount: '450.00' }]],
+      ['Проезд', null, 'travel', []],
     ]);
   });
 
@@ -353,14 +357,31 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     });
   });
 
-  it('сумма — значение ставки у всех строк сразу, в том числе NULL → 500', async () => {
-    const [, rate] = await listRates();
-    await updateRate(rate.id, rate.name, null);
-    expect(new Set((await listDormitoryAllowances(SCOPE)).map(row => row.amount))).toEqual(new Set([null]));
-    await updateRate(rate.id, rate.name, 500);
-    const rows = await listDormitoryAllowances(SCOPE);
-    expect(rows.length).toBeGreaterThan(3);
-    expect(new Set(rows.map(row => row.amount))).toEqual(new Set(['500.00']));
+  it('сумма — ставка на последний месяц периода, не позже текущего: прошлые периоды смена не трогает', async () => {
+    const rate = (await listRates()).find(item => item.code === 'dormitory_allowance')!;
+    const month = currentRateMonth();
+    // Доплата, закончившаяся давно, — при ставке того времени.
+    expect((await add(1, '2020-01-01', '2020-06-30')).statusCode).toBe(200);
+    // Закончилась до текущего месяца — прошлая (здесь же сентябрьская строка Васильева).
+    const amounts = async () => {
+      const rows = await listDormitoryAllowances(SCOPE);
+      const isPast = (row: { date_to: string | null }) => row.date_to !== null && row.date_to < `${month}-01`;
+      return {
+        past: new Set(rows.filter(isPast).map(row => row.amount)),
+        current: new Set(rows.filter(row => !isPast(row)).map(row => row.amount)),
+        count: rows.length,
+      };
+    };
+
+    await updateRate(rate.id, rate.name, 500, month);
+    expect(await amounts()).toEqual({ past: new Set(['450.00']), current: new Set(['500.00']), count: expect.any(Number) });
+    expect((await amounts()).count).toBeGreaterThan(3);
+    // Будущая смена — на сегодня всё ещё 500.
+    await updateRate(rate.id, rate.name, 600, shiftRateMonth(month, 1));
+    expect(await amounts()).toMatchObject({ past: new Set(['450.00']), current: new Set(['500.00']) });
+    // Ставку отключили с текущего месяца — у текущих строк суммы нет, прошлые — те же.
+    await updateRate(rate.id, rate.name, null, month);
+    expect(await amounts()).toMatchObject({ past: new Set(['450.00']), current: new Set([null]) });
   });
 
   it('удаление: аудит в транзакции; повтор — 404', async () => {

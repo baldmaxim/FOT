@@ -55,6 +55,7 @@ import {
   parsePayrollMonthsQuery,
   payrollMonthStarts,
 } from './payroll-dictionary.helpers.js';
+import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
@@ -365,12 +366,20 @@ const buildListSql = (options: {
     COALESCE((
       -- ORDER BY внутри json_agg: next_cursor берётся из последнего элемента массива,
       -- порядок подзапроса агрегат гарантированно не сохраняет.
-      -- Плановая доплата и суммы «Оплачено» — только для строк порции: LATERAL после LIMIT.
+      -- Плановая доплата, проезд и суммы «Оплачено» — только для строк порции: LATERAL после LIMIT.
       SELECT json_agg(p ORDER BY ${options.orderSql.replace(/\bk\./g, 'p.')})
         FROM (SELECT page.*,
                      ps.amount::text AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
                      ps.date_to   AS planned_supplement_to,
+                     -- Проезд (миграция 324): ставка за месяц даты; положен ли — решает категория (на клиенте).
+                     payroll_rate_value('${TRAVEL_RATE_CODE}', $1::date)::text AS travel_rate,
+                     EXISTS (
+                       SELECT 1 FROM payroll_compensation_stops cs
+                        WHERE cs.employee_id = page.employee_id
+                          AND cs.date_from <= (date_trunc('month', $1::date) + interval '1 month - 1 day')::date
+                          AND (cs.date_to IS NULL OR cs.date_to >= date_trunc('month', $1::date)::date)
+                     ) AS travel_stopped,
                      ${options.paidMonthsParam ? PAID_SELECT_SQL : ACCRUALS_SELECT_SQL}
                 FROM (SELECT k.*, k.sort_key::text AS sort_key_text FROM keyed k
                        WHERE ${options.cursorSql}
@@ -415,6 +424,10 @@ interface IPayrollTermsListRow {
   planned_supplement_amount: string | null;
   planned_supplement_from: string | null;
   planned_supplement_to: string | null;
+  /** Ставка «Проезд» за месяц даты выборки (NUMERIC текстом); не задана — null. */
+  travel_rate: string | null;
+  /** В месяце даты есть день «Без проезда» — проезда в этом месяце нет. */
+  travel_stopped: boolean;
   /** «Начисления» по месяцам окна (итог «Начислено» из «Оплачено»); null — сумм нет. Нет при paid_months. */
   accruals?: Array<{ month: string; amount: string }> | null;
   /** Только при paid_months («Расчёты»): итоги «Начислено» и «Удержано» за месяцы, статьи удержаний. */

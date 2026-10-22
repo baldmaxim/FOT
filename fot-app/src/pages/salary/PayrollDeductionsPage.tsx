@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
+import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { PAYROLL_CALC_COLUMNS_KEY, PAYROLL_CALC_TABLE_COLUMNS } from '../../utils/payrollColumns';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
@@ -52,7 +53,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
   // Месяцы «Свода» — те, за которые есть «Оплачено». Пока не загружены, выбора нет и «Свод» неактивен:
-  // пустой выбор значит «весь период», и окно не должно успеть запросить его до месяца по умолчанию.
+  // окно не должно успеть запросить суммы до месяца по умолчанию. «Весь период» не выбирается.
   const monthsQuery = useQuery({
     queryKey: PAYROLL_SUMMARY_KEYS.months,
     queryFn: ({ signal }) => payrollSummaryService.listMonths(signal),
@@ -61,11 +62,11 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
   });
   const monthOptions = monthsQuery.data ?? [];
   const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
-  // Не выбирали — последний месяц с данными.
-  const summaryMonths = chosenMonths ?? (monthsQuery.data ? monthOptions.slice(-1) : null);
-  // Суммы таблицы — за те же месяцы (пусто — весь период). Пока месяцы грузятся, список ждёт;
-  // не загрузились — весь период: пикер тогда и так показывает «Весь период».
-  const paidMonths = summaryMonths ?? (monthsQuery.isError ? 'all' : null);
+  // Не выбирали — последний месяц с данными; месяцы не загрузились — текущий (не весь период молча).
+  // Суммы таблицы — за те же месяцы; пока месяцы грузятся, список ждёт.
+  const [currentMonth] = useState(moscowCurrentMonth);
+  const summaryMonths = chosenMonths
+    ?? (monthsQuery.data ? monthOptions.slice(-1) : monthsQuery.isError ? [currentMonth] : null);
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие
   // экрана их не прячет. Паттерн «состояние из прошлого рендера» вместо setState-в-effect.
@@ -105,7 +106,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         onOpenEmployee={setEmployee}
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         columns={PAYROLL_CALC_TABLE_COLUMNS}
-        paidMonths={paidMonths}
+        paidMonths={summaryMonths}
         onOpenPaidItems={(row, kind, trigger, months) => setPaidItems({ row, kind, trigger, months })}
         actionsExtra={(
           <>
@@ -123,6 +124,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
               value={summaryMonths ?? []}
               options={monthOptions}
               onChange={setChosenMonths}
+              allowAll={false}
               ariaLabel="Месяцы «Свода» и таблицы"
               className={styles.monthsButton}
             />

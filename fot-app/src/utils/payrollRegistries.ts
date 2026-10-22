@@ -6,9 +6,11 @@ import type {
   IHousingAllowanceRow,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
+import type { IPayrollRateValue } from '../services/payrollService';
 import { formatDate, formatMonthLabel } from './formatMoney';
 import { moscowTodayIso, shiftMonth } from './moscowDate';
 import { formatPayrollMoney } from './payrollFormat';
+import { rateValueOn } from './payrollRates';
 import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
 
 /**
@@ -138,7 +140,7 @@ export interface IDormitoryRegistryRow {
   date_from: string;
   /** Выезд (в этот день уже не живёт) или «по» доплаты включительно; null — живёт / бессрочно. */
   date_to: string | null;
-  /** Только у доплаты: значение ставки «Доплата за общежитие», не задано — null. */
+  /** Только у доплаты: ставка «Доплата за общежитие» за последний подходящий выбранный месяц; не задана — null. */
   amount: string | null;
   /** Строка доплаты — её правят и убирают; у проживания null. */
   allowance: IDormitoryAllowanceRow | null;
@@ -287,17 +289,32 @@ const stayTouchesMonth = (stay: IDormitoryStayPeriod, month: string): boolean =>
   stay.check_in <= monthEnd(month) && (stay.check_out === null || stay.check_out > `${month}-01`)
 );
 
+/** Доплата за общежитие положена в месяце: период задевает его и сотрудник в нём не жил в общежитии. */
+const allowanceInMonth = (row: IDormitoryAllowanceRow, month: string): boolean => (
+  periodIntersectsMonths(row.date_from, row.date_to, [month])
+  && !row.dormitory_stays.some(stay => stayTouchesMonth(stay, month))
+);
+
 /**
  * «Доплата за общежитие» в месяцах: «Весь период» — все строки; иначе есть выбранный месяц, который задевает
  * период доплаты и в котором сотрудник не жил в общежитии (заселили позже — в месяцах проживания строки нет).
  */
 export const dormitoryAllowanceInMonths = (row: IDormitoryAllowanceRow, months: ReadonlyArray<string>): boolean => (
-  months.length === 0
-  || months.some(month => (
-    periodIntersectsMonths(row.date_from, row.date_to, [month])
-    && !row.dormitory_stays.some(stay => stayTouchesMonth(stay, month))
-  ))
+  months.length === 0 || months.some(month => allowanceInMonth(row, month))
 );
+
+/**
+ * Сумма строки доплаты за общежитие — ставка за последний выбранный месяц, в который доплата положена
+ * (несколько месяцев с разными ставками — ставка последнего). Нет истории ставки или выбора — сумма сервера.
+ */
+const dormitoryAllowanceAmount = (
+  row: IDormitoryAllowanceRow,
+  months: ReadonlyArray<string>,
+  rateValues: ReadonlyArray<IPayrollRateValue> | undefined,
+): string | null => {
+  const month = [...months].sort().reverse().find(candidate => allowanceInMonth(row, candidate));
+  return rateValues && month ? rateValueOn(rateValues, month) : row.amount;
+};
 
 /**
  * Строки таблицы «Общежитие» в выбранных месяцах: кто живёт в общежитии (проживание задевает месяц) и кому
@@ -307,6 +324,7 @@ export const buildDormitoryRegistryRows = (
   stays: ReadonlyArray<IDormitoryStay>,
   allowances: ReadonlyArray<IDormitoryAllowanceRow>,
   months: ReadonlyArray<string>,
+  allowanceRateValues?: ReadonlyArray<IPayrollRateValue>,
 ): IDormitoryRegistryRow[] => [
   ...stays
     .filter(stay => months.length === 0 || months.some(month => stayTouchesMonth(stay, month)))
@@ -331,7 +349,7 @@ export const buildDormitoryRegistryRows = (
       address: null,
       date_from: row.date_from,
       date_to: row.date_to,
-      amount: row.amount,
+      amount: dormitoryAllowanceAmount(row, months, allowanceRateValues),
       allowance: row,
     })),
 ];

@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, useState, type FC, type ReactNode } from 'react';
 import { Minus, Pencil, Plus, Trash2 } from 'lucide-react';
 
+import type { IPayrollRateValue } from '../../services/payrollService';
 import { rateAmountInputValue, type IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { nextRateValue, rateFromLabel } from '../../utils/payrollRates';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
 import styles from './PayrollDictionary.module.css';
 
@@ -13,6 +15,8 @@ export interface IPayrollDictionaryItem {
   amount?: string | number | null;
   /** Ставка, привязанная к функционалу (миграция 315: housing — «Доплата за проживание»). */
   code?: string | null;
+  /** История значений ставки по месяцам (миграция 324). */
+  values?: IPayrollRateValue[];
 }
 
 interface IPayrollDictionaryRowProps {
@@ -20,6 +24,11 @@ interface IPayrollDictionaryRowProps {
   nameLabel: string;
   /** Подпись значения (ставки). Не передана — у записи значения нет. */
   amountLabel?: string;
+  /**
+   * Ставки с историей: месяцы «с какого» для правки (первый — текущий). У ставки ещё без значения выбора нет —
+   * первое значение действует «с начала». Под строкой — запланированное значение.
+   */
+  monthOptions?: ReadonlyArray<{ value: string; label: string }>;
   canEdit: boolean;
   /** Привязана к функционалу: правится только значение, удалить нельзя (сервер стережёт тоже). */
   locked: boolean;
@@ -48,6 +57,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   item,
   nameLabel,
   amountLabel,
+  monthOptions,
   canEdit,
   locked,
   isEditing,
@@ -88,6 +98,9 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
     <div id={detailsId} className={styles.rowDetails}>{details.content}</div>
   ) : null;
 
+  const currentMonth = monthOptions?.[0]?.value;
+  const scheduled = currentMonth && item.values ? nextRateValue(item.values, currentMonth) : null;
+
   if (isEditing) {
     return (
       <li className={styles.row}>
@@ -98,6 +111,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
           initialName={item.name}
           fixedName={locked}
           initialAmount={rateAmountInputValue(item.amount)}
+          monthOptions={item.values && item.values.length > 0 ? monthOptions : undefined}
           onSubmit={onSave}
           onCancel={onCancelEdit}
         />
@@ -152,6 +166,11 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
               <Trash2 size={16} aria-hidden="true" />
             </button>
           )}
+        </span>
+      )}
+      {scheduled && (
+        <span className={styles.rowNote}>
+          {rateFromLabel(scheduled.effective_from)} — {formatPayrollMoney(scheduled.amount) ?? 'не задано'}
         </span>
       )}
       {deleteError && <p className={styles.error} role="alert">{deleteError}</p>}

@@ -2,7 +2,9 @@
  * «Доплата за общежитие» — таблица окна «Справочник» на «Расчётах» (миграция 317): кому платят за то, что
  * он НЕ живёт в общежитии компании. Период «с — по» (по — включительно, NULL — бессрочно); прекратили —
  * ставят «по», строка остаётся историей; удаляют только ошибочную. Сумма одна на всех — значение ставки
- * dormitory_allowance на момент чтения. Отдел и должность — текущие.
+ * dormitory_allowance за месяц (миграция 324). amount строки — значение на последний месяц периода, не позже
+ * текущего (МСК): так его показывает прежний фронт; новый берёт ставку за выбранные месяцы сам. Отдел и
+ * должность — текущие.
  *
  * Правила записи — под lockPayrollEmployee, одной транзакцией с записью (и аудитом у вызывающего):
  * - в дни проживания в общежитии (employee_dormitory_stays kind = dormitory, [въезд, выезд)) доплату не назначить;
@@ -36,7 +38,7 @@ export interface IDormitoryAllowance {
   date_from: string;
   /** YYYY-MM-DD; бессрочно — null. */
   date_to: string | null;
-  /** ₽/мес, numeric строкой: значение ставки; не задано — null. */
+  /** ₽/мес, numeric строкой: ставка на последний месяц периода, не позже текущего; не задана — null. */
   amount: string | null;
   /** Для фильтра месяцев на клиенте: в месяцах проживания строка не показывается. */
   dormitory_stays: IDormitoryStayPeriod[];
@@ -60,7 +62,9 @@ const ALLOWANCE_SELECT = `
   SELECT a.id, a.employee_id, e.full_name, d.name AS department, p.name AS position,
          to_char(a.date_from, 'YYYY-MM-DD') AS date_from,
          to_char(a.date_to, 'YYYY-MM-DD') AS date_to,
-         (SELECT r.amount::text FROM payroll_rates r WHERE r.code = '${DORMITORY_ALLOWANCE_RATE_CODE}') AS amount,
+         payroll_rate_value(
+           '${DORMITORY_ALLOWANCE_RATE_CODE}', LEAST((now() AT TIME ZONE 'Europe/Moscow')::date, a.date_to)
+         )::text AS amount,
          COALESCE((
            SELECT json_agg(json_build_object(
                     'check_in', to_char(s.check_in, 'YYYY-MM-DD'),

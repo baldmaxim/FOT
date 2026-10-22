@@ -1,8 +1,14 @@
 /**
  * Расчётный листок месяца в «Истории выплат» — по подобию листка ЗУП: начислено и удержано по статьям.
- * Суммы — «Оплачено» из 1С; период, дни и оклад — из ФОТ (табель и условия оплаты).
+ * Суммы — «Оплачено» из 1С; период, дни и оклад — из ФОТ (табель и условия оплаты). «По ставкам ФОТ» —
+ * суммы за месяц по ставкам «Справочника» на тот месяц (миграция 324).
  */
-import type { IPayslipTerms, PayrollPaidItemCode } from '../services/payrollService';
+import type {
+  IPayslipRateAllowance,
+  IPayslipTerms,
+  PayrollPaidItemCode,
+  PayslipRateAllowanceCode,
+} from '../services/payrollService';
 import { formatDate } from './formatMoney';
 import { formatPaidAmount, PAYROLL_PAID_GROUPS, paidCellKey, type PayrollPaidTotalKind } from './payrollPaid';
 
@@ -28,6 +34,19 @@ export const payslipLines = (
     const amount = amounts.get(paidCellKey(month, item.code));
     return amount === undefined ? [] : [{ code: item.code, label: item.label, amount }];
   });
+
+const RATE_ALLOWANCE_LABELS: Record<PayslipRateAllowanceCode, string> = {
+  travel: 'Проезд',
+  housing: 'Доплата за проживание',
+  dormitory_allowance: 'Доплата за общежитие',
+};
+
+/** «По ставкам ФОТ»: подпись и сумма; нет строк (или старый бэкенд) — пусто, секции нет. */
+export const payslipRateLines = (
+  allowances: readonly IPayslipRateAllowance[] | undefined,
+): Array<{ code: PayslipRateAllowanceCode; label: string; amount: number }> => (allowances ?? [])
+  .map(item => ({ code: item.code, label: RATE_ALLOWANCE_LABELS[item.code], amount: Number(item.amount) }))
+  .filter(line => Number.isFinite(line.amount));
 
 const formatTermsAmount = (terms: IPayslipTerms): string | null => {
   const value = terms.amount === null ? Number.NaN : Number(terms.amount);

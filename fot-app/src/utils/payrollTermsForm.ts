@@ -8,12 +8,13 @@ import type {
 import { parseRateAmount } from './payrollFormat';
 
 /**
- * Необязательные суммы условий, ₽/мес: премия и компенсации. Удержания с миграции 321 — не условия: их вносят
- * в «Справочнике» и у кадров, окно сотрудника только показывает.
+ * Необязательные суммы условий, ₽/мес: премия и проживание (только показ). Удержания с миграции 321 — не условия:
+ * их вносят в «Справочнике» и у кадров, окно сотрудника только показывает. Проезд с миграции 324 — ставка
+ * «Справочника», не значение формы (travelAllowance).
  */
-export type PayrollMoneyField = 'bonus' | 'housing' | 'travel';
+export type PayrollMoneyField = 'bonus' | 'housing';
 
-export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing', 'travel'];
+export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing'];
 
 /** Плановая доплата: сумма ₽/мес, дата начала и дата окончания — строки как в полях ввода. */
 export interface IPayrollSupplementValues {
@@ -39,7 +40,7 @@ export type PayrollTermsFieldKey =
   | (typeof SUPPLEMENT_FIELD_KEYS)[PayrollSupplementField];
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
-  'effectiveFrom', 'amount', 'bonus', 'housing', 'travel',
+  'effectiveFrom', 'amount', 'bonus', 'housing',
   'supplementAmount', 'supplementFrom', 'supplementTo',
 ];
 
@@ -90,7 +91,6 @@ export const initialPayrollTermsValues = (
       bonus: pick(row.bonus_amount),
       // Проживание — квартира «Проживания» на дату (миграция 320), не условия: есть и без оклада, только показ.
       housing: toInputValue(row.housing_compensation),
-      travel: pick(row.travel_compensation),
     },
     supplement: {
       amount: toInputValue(row.planned_supplement_amount),
@@ -217,7 +217,6 @@ export const validatePayrollTerms = (
       monthly_salary: values.calcType === 'salary' ? parsed : undefined,
       hourly_rate: values.calcType === 'hourly' ? parsed : undefined,
       bonus_amount: optional.bonus,
-      travel_compensation: optional.travel,
       effective_from: values.effectiveFrom,
       planned_supplement: plannedSupplement,
     },

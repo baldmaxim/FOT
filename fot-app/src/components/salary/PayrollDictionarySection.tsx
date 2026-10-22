@@ -18,6 +18,8 @@ interface IPayrollDictionarySectionProps {
   nameLabel: string;
   /** Подпись значения. Передана — у записей есть значение (ставки). */
   amountLabel?: string;
+  /** Ставки с историей значений (миграция 324): «с какого месяца» в правке, первый — текущий. */
+  monthOptions?: ReadonlyArray<{ value: string; label: string }>;
   /** Подсказка в поле новой записи: «Новый вид удержания». */
   addLabel?: string;
   canEdit: boolean;
@@ -59,6 +61,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onRetry,
   nameLabel,
   amountLabel,
+  monthOptions,
   addLabel,
   canEdit,
   deleteQuestion,
@@ -116,6 +119,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
               item={item}
               nameLabel={nameLabel}
               amountLabel={amountLabel}
+              monthOptions={monthOptions}
               canEdit={canEdit}
               locked={isLocked?.(item) ?? false}
               isEditing={editingId === item.id}

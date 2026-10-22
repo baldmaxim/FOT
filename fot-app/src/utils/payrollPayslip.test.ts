@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { IPayslipTerms } from '../services/payrollService';
 import { toPaidAmounts } from './payrollPaid';
-import { formatPayslipTerms, payslipLines, payslipPeriodParts } from './payrollPayslip';
+import { formatPayslipTerms, payslipLines, payslipPeriodParts, payslipRateLines } from './payrollPayslip';
 
 const plain = (value: string | null): string | null => (value === null ? null : value.replace(/\s/g, ' '));
 
@@ -60,5 +60,21 @@ describe('расчётный листок: строки статей', () => {
     expect(payslipLines('2026-07', amounts, 'deducted')).toEqual([
       { code: 'safety_fine', label: 'Нарушение техники безопасности', amount: 1000 },
     ]);
+  });
+});
+
+describe('расчётный листок: «По ставкам ФОТ»', () => {
+  it('подписи по коду, суммы числом; нет строк или поля (старый бэкенд) — пусто', () => {
+    expect(payslipRateLines([
+      { code: 'travel', amount: '2730.00' },
+      { code: 'dormitory_allowance', amount: '160.00' },
+    ])).toEqual([
+      { code: 'travel', label: 'Проезд', amount: 2730 },
+      { code: 'dormitory_allowance', label: 'Доплата за общежитие', amount: 160 },
+    ]);
+    expect(payslipRateLines([{ code: 'housing', amount: '630.50' }]))
+      .toEqual([{ code: 'housing', label: 'Доплата за проживание', amount: 630.5 }]);
+    expect(payslipRateLines([])).toEqual([]);
+    expect(payslipRateLines(undefined)).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import { useToast } from '../../../contexts/ToastContext';
 import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import {
   PAYROLL_REGISTRY_KEYS,
+  PAYROLL_TERMS_PREFIX,
   payrollRegistryService,
   type ICompensationStop,
 } from '../../../services/payrollRegistryService';
@@ -54,7 +55,8 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
   });
   const rows = useMemo(() => query.data?.filter(stop => stopInMonths(stop, months.value)), [query.data, months.value]);
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_REGISTRY_KEYS.stops });
+  // «Без проезда» решает проезд в карточке и листке — префикс 'payroll-terms' перечитывает и их, и эту таблицу.
+  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
 
   const handleDelete = async (stop: ICompensationStop) => {
     if (busyKey !== null) return;

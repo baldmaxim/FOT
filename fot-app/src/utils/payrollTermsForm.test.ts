@@ -12,7 +12,7 @@ import {
 } from './payrollTermsForm';
 import type { IPayrollTermsRow } from '../services/payrollService';
 
-const EMPTY_MONEY = { bonus: '', housing: '', travel: '' };
+const EMPTY_MONEY = { bonus: '', housing: '' };
 const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
@@ -54,15 +54,14 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '450,5',
-      money: { bonus: '15000', housing: '12000', travel: '0' },
+      money: { bonus: '0', housing: '12000' },
     }));
     expect(wire(result.payload)).toEqual({
       calc_type: 'hourly',
       hourly_rate: 450.5,
-      bonus_amount: 15000,
-      // Проживание — только показ (квартира «Проживания», миграция 320): в условия не уходит; удержаний в условиях
-      // с миграции 321 нет.
-      travel_compensation: 0,
+      bonus_amount: 0,
+      // Проживание — только показ (квартира «Проживания», миграция 320), проезд — ставка «Справочника» (324):
+      // в условия не уходят; удержаний в условиях с миграции 321 нет.
       effective_from: '2026-09-24',
     });
   });
@@ -71,14 +70,13 @@ describe('validatePayrollTerms: состав запроса сохранения
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '',
-      money: { ...EMPTY_MONEY, travel: '-1', bonus: 'abc' },
+      money: { ...EMPTY_MONEY, bonus: 'abc' },
       effectiveFrom: '',
     }));
     expect(result.payload).toBeNull();
     expect(result.errors).toEqual({
       amount: 'Укажите часовую ставку',
       bonus: 'Введите число не меньше нуля',
-      travel: 'Введите число не меньше нуля',
       effectiveFrom: 'Укажите дату «Действует с»',
     });
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
@@ -89,11 +87,11 @@ describe('validatePayrollTerms: состав запроса сохранения
     expect(ok.errors).toBeNull();
     expect(ok.payload).toMatchObject({ monthly_salary: 175000.5, bonus_amount: 25000.1 });
 
-    const result = validatePayrollTerms(values({ amount: '175000,555', money: { ...EMPTY_MONEY, travel: '100,005' } }));
+    const result = validatePayrollTerms(values({ amount: '175000,555', money: { ...EMPTY_MONEY, bonus: '100,005' } }));
     expect(result.payload).toBeNull();
     expect(result.errors).toEqual({
       amount: 'Значение — число не меньше нуля, до двух знаков после запятой',
-      travel: 'Значение — число не меньше нуля, до двух знаков после запятой',
+      bonus: 'Значение — число не меньше нуля, до двух знаков после запятой',
     });
   });
 
@@ -111,9 +109,8 @@ describe('validatePayrollTerms: состав запроса сохранения
   });
 
   it('порядок фокуса — как на экране: премия рядом с окладом, доплата после компенсаций', () => {
-    expect(firstInvalidField({ travel: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ housing: 'x', bonus: 'x' })).toBe('bonus');
-    expect(firstInvalidField({ supplementTo: 'x', travel: 'x' })).toBe('travel');
+    expect(firstInvalidField({ supplementTo: 'x', housing: 'x' })).toBe('housing');
     expect(firstInvalidField({ supplementTo: 'x', supplementAmount: 'x' })).toBe('supplementAmount');
   });
 
@@ -208,7 +205,8 @@ describe('initialPayrollTermsValues', () => {
       staffCategory: 'worker',
       calcType: 'hourly',
       amount: '450',
-      money: { bonus: '15000', housing: '', travel: '3000.5' },
+      // Проезд условий (travel_compensation) с миграции 324 в форму не попадает.
+      money: { bonus: '15000', housing: '' },
       supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
@@ -265,7 +263,7 @@ describe('isPayrollTermsChanged', () => {
     expect(isPayrollTermsChanged(values({ amount: '180000' }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ calcType: 'hourly' }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ effectiveFrom: '2026-10-01' }), initial)).toBe(true);
-    expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY, travel: '2730' } }), initial)).toBe(true);
+    expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY, bonus: '2730' } }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ supplement: { ...EMPTY_SUPPLEMENT, to: '2026-12-31' } }), initial)).toBe(true);
     expect(isPayrollTermsChanged(values({ money: { ...EMPTY_MONEY } }), initial)).toBe(false);
   });

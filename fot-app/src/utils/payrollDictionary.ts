@@ -6,10 +6,14 @@ import { toInputValue } from './payrollTermsForm';
 
 export { MAX_RATE_AMOUNT, parseRateAmount, type RateAmountParse } from './payrollFormat';
 
-/** Запись справочника при добавлении и правке. У видов удержаний значения нет — amount не читается. */
+/**
+ * Запись справочника при добавлении и правке. У видов удержаний значения нет — amount не читается.
+ * effective_month — с какого месяца значение ставки (миграция 324); не передан — с текущего.
+ */
 export interface IPayrollDictionaryPayload {
   name: string;
   amount: number | null;
+  effective_month?: string;
 }
 
 /** Пробелы схлопываются, как на сервере: «Штраф  за мусор» и «Штраф за мусор» — одно название. */

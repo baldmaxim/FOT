@@ -1,13 +1,22 @@
 /**
- * Справочник ставок «Зарплаты»: название и значение. Ведётся в окне «Справочник» на «Расчётах»;
- * ставка только хранится — в условия оплаты и расчёты не подставляется.
+ * Справочник ставок «Зарплаты»: название и значения по месяцам (миграция 324). Ведётся в окне «Справочник»
+ * на «Расчётах». Значение меняют с текущего месяца МСК и до RATE_MONTHS_AHEAD вперёд: прошлые месяцы
+ * сохраняют прежнее значение.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
-import { addRate, deleteRate, listRates, updateRate } from '../services/payroll/payroll-rates.service.js';
+import {
+  addRate,
+  currentRateMonth,
+  deleteRate,
+  listRates,
+  RATE_MONTHS_AHEAD,
+  shiftRateMonth,
+  updateRate,
+} from '../services/payroll/payroll-rates.service.js';
 import {
   MONEY_DECIMALS_MESSAGE,
   handlePayrollZodError,
@@ -35,13 +44,25 @@ const rateSchema = z.object({
     .transform(value => value ?? null),
 });
 
+/** Правка: ещё и «с какого месяца» действует значение; не прислали — с текущего месяца МСК. */
+const rateUpdateSchema = rateSchema.extend({
+  effective_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Ожидается месяц YYYY-MM').optional(),
+});
+
 const NOT_FOUND = { success: false, error: 'Ставка не найдена' };
 const DUPLICATE = { success: false, error: 'Такая ставка уже есть', code: 'DUPLICATE_RATE' };
 // Ставка с кодом (миграция 313) привязана к функционалу: меняется только значение.
 const SYSTEM_NAME = { success: false, error: 'Название этой ставки не меняется', code: 'SYSTEM_RATE' };
 const SYSTEM_DELETE = { success: false, error: 'Эту ставку удалить нельзя', code: 'SYSTEM_RATE' };
+// Прошлые месяцы показывают значение своего периода — задним числом ставку не меняют.
+const PAST_MONTH = { success: false, error: 'Значение меняется с текущего месяца или позже', code: 'PAST_MONTH' };
+const MONTH_TOO_FAR = {
+  success: false,
+  error: `Значение можно задать не дальше чем на ${RATE_MONTHS_AHEAD} месяцев вперёд`,
+  code: 'MONTH_TOO_FAR',
+};
 
-/** GET /api/payroll/rates — справочник ставок в порядке добавления. */
+/** GET /api/payroll/rates — ставки с историей значений: сначала ставки с кодом, затем в порядке добавления. */
 const list = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     res.json({ success: true, data: await listRates() });
@@ -51,7 +72,7 @@ const list = async (_req: AuthenticatedRequest, res: Response): Promise<void> =>
   }
 };
 
-/** POST /api/payroll/rates { name, amount? } — добавить ставку; такая уже есть — 409. */
+/** POST /api/payroll/rates { name, amount? } — добавить ставку (значение — «с начала»); такая уже есть — 409. */
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { name, amount } = rateSchema.parse(req.body);
@@ -74,8 +95,9 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
 };
 
 /**
- * PATCH /api/payroll/rates/:id { name, amount? } — название и значение целиком; название занято — 409;
- * у ставки с кодом сменили название — 409.
+ * PATCH /api/payroll/rates/:id { name, amount?, effective_month? } — название и значение с месяца (первое
+ * значение ставки — «с начала»); месяц раньше текущего или дальше RATE_MONTHS_AHEAD — 400; название
+ * занято — 409; у ставки с кодом сменили название — 409.
  */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -84,8 +106,18 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
-    const { name, amount } = rateSchema.parse(req.body);
-    const updated = await updateRate(id, name, amount);
+    const { name, amount, effective_month: effectiveMonth } = rateUpdateSchema.parse(req.body);
+    const current = currentRateMonth();
+    const month = effectiveMonth ?? current;
+    if (month < current) {
+      res.status(400).json(PAST_MONTH);
+      return;
+    }
+    if (month > shiftRateMonth(current, RATE_MONTHS_AHEAD)) {
+      res.status(400).json(MONTH_TOO_FAR);
+      return;
+    }
+    const updated = await updateRate(id, name, amount, month);
     if (updated === null) {
       res.status(404).json(NOT_FOUND);
       return;
@@ -98,12 +130,16 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(409).json(SYSTEM_NAME);
       return;
     }
-    const { before, after } = updated;
-    if (before.name !== after.name || before.amount !== after.amount) {
+    const { before, after, nameChanged, value } = updated;
+    // Значение — «было → стало» в изменённом месяце: будущая смена не трогает значение на сегодня.
+    if (nameChanged || value) {
       await auditService.logFromRequest(req, req.user.id, 'PAYROLL_RATE_UPDATED', {
         entityType: 'payroll_rates',
         entityId: String(id),
-        details: { from: { name: before.name, amount: before.amount }, to: { name: after.name, amount: after.amount } },
+        details: {
+          ...(nameChanged ? { name: { from: before.name, to: after.name } } : {}),
+          ...(value ? { value } : {}),
+        },
       });
     }
     res.json({ success: true, data: after });

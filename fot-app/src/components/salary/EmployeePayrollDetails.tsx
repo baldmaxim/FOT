@@ -13,7 +13,8 @@ import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
-import { payrollFieldId, payrollRowCategory } from '../../utils/payrollTermsForm';
+import { travelAllowance } from '../../utils/payrollRates';
+import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
@@ -189,6 +190,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
             idPrefix={idPrefix}
             readOnly={!canEdit}
             category={payrollRowCategory(row)}
+            travel={toInputValue(travelAllowance(form.staffCategory ?? payrollRowCategory(row), row))}
             autoFocus={canEdit}
             paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
             stacked

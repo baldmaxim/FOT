@@ -20,6 +20,11 @@ interface IPayrollDictionaryFormProps {
   /** Название не меняется (ставка, привязанная к функционалу): вместо поля — текст. */
   fixedName?: boolean;
   initialAmount?: string;
+  /**
+   * «С какого месяца» действует значение (правка ставки с историей, миграция 324): по умолчанию — первый.
+   * Не передан — выбора нет, сервер пишет с текущего месяца (у первого значения — «с начала»).
+   */
+  monthOptions?: ReadonlyArray<{ value: string; label: string }>;
   /** Отклонённый промис — ошибка сохранения: её текст показывается под полями, ввод не теряется. */
   onSubmit: (payload: IPayrollDictionaryPayload) => Promise<void>;
   /** Правка: Escape и «Отменить». */
@@ -36,6 +41,7 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
   initialName = '',
   fixedName = false,
   initialAmount = '',
+  monthOptions,
   onSubmit,
   onCancel,
 }) => {
@@ -44,6 +50,7 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
   const errorId = useId();
   const [name, setName] = useState(initialName);
   const [amount, setAmount] = useState(initialAmount);
+  const [month, setMonth] = useState(monthOptions?.[0]?.value ?? '');
   const [error, setError] = useState<{ field: 'name' | 'amount' | null; message: string } | null>(null);
   const [pending, setPending] = useState(false);
   const withAmount = amountLabel !== undefined;
@@ -65,7 +72,11 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
     setPending(true);
     setError(null);
     try {
-      await onSubmit({ name: cleanName, amount: parsed.amount });
+      await onSubmit({
+        name: cleanName,
+        amount: parsed.amount,
+        ...(monthOptions && month ? { effective_month: month } : {}),
+      });
       if (mode === 'add') {
         setName('');
         setAmount('');
@@ -134,6 +145,20 @@ export const PayrollDictionaryForm: FC<IPayrollDictionaryFormProps> = ({
           aria-describedby={describedBy}
           clearLabel="Очистить значение"
         />
+      )}
+      {withAmount && monthOptions && (
+        <select
+          className={styles.formMonth}
+          value={month}
+          onChange={event => {
+            setMonth(event.target.value);
+            setError(null);
+          }}
+          disabled={pending}
+          aria-label="С какого месяца действует значение"
+        >
+          {monthOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
       )}
       {mode === 'add' ? (
         <button type="submit" className={styles.addButton} disabled={!name.trim() || pending}>

@@ -3,13 +3,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { usePayrollRates } from '../../../hooks/usePayrollRates';
 import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import { dormitoryService, PAYROLL_DORMITORY_STAYS_KEY } from '../../../services/dormitoryService';
 import {
   PAYROLL_REGISTRY_KEYS,
+  PAYROLL_TERMS_PREFIX,
   payrollRegistryService,
   type IDormitoryAllowanceRow,
 } from '../../../services/payrollRegistryService';
+import { DORMITORY_ALLOWANCE_RATE_CODE } from '../../../services/payrollService';
 import { formatDate } from '../../../utils/formatMoney';
 import { moscowTodayIso } from '../../../utils/moscowDate';
 import {
@@ -40,7 +43,8 @@ const canEditRow = (row: IDormitoryRegistryRow): boolean => row.allowance?.can_e
 /**
  * «Справочник» → «Общежитие» (кнопка в шапке): одна таблица — кто живёт в общежитии компании (адрес, въезд —
  * выезд; только просмотр) и кому общежитие не назначено — «Доплата за общежитие», период «с — по» (все периоды —
- * история; в месяцах проживания строки доплаты нет). Сумма доплаты — значение ставки, одна на всех.
+ * история; в месяцах проживания строки доплаты нет). Сумма доплаты — ставка за последний выбранный месяц, в который
+ * доплата положена (миграция 324: смена ставки прошлые месяцы не трогает), одна на всех.
  * «Добавить сотрудника», ✎ и 🗑 — только доплата. 🗑 «Убрать» — с 1-го числа текущего месяца: период закрывается
  * датой «по», прошлые месяцы остаются; не начавшийся или прошлый период — ошибочная строка, удаляется.
  */
@@ -51,6 +55,9 @@ export const DormitoryRegistry: FC<IDormitoryRegistryProps> = ({ canEdit, onClos
   const [editor, setEditor] = useState<EditorState>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const months = useRegistryMonths();
+  const rates = usePayrollRates();
+  // Нет истории (старый бэкенд, ставки не загрузились) — сумма строки от сервера.
+  const allowanceRateValues = rates.data?.find(rate => rate.code === DORMITORY_ALLOWANCE_RATE_CODE)?.values;
 
   const staysQuery = useQuery({
     queryKey: PAYROLL_DORMITORY_STAYS_KEY,
@@ -64,12 +71,13 @@ export const DormitoryRegistry: FC<IDormitoryRegistryProps> = ({ canEdit, onClos
   });
   const rows = useMemo(
     () => (staysQuery.data && allowancesQuery.data
-      ? buildDormitoryRegistryRows(staysQuery.data, allowancesQuery.data, months.value)
+      ? buildDormitoryRegistryRows(staysQuery.data, allowancesQuery.data, months.value, allowanceRateValues)
       : undefined),
-    [staysQuery.data, allowancesQuery.data, months.value],
+    [staysQuery.data, allowancesQuery.data, months.value, allowanceRateValues],
   );
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_REGISTRY_KEYS.dormitoryAllowances });
+  // Доплата за общежитие — в листке «Истории выплат»: префикс 'payroll-terms' перечитывает и его, и эту таблицу.
+  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
 
   const handleDelete = async (row: IDormitoryRegistryRow) => {
     const allowance = row.allowance;

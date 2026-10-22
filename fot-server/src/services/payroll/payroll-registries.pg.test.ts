@@ -60,9 +60,9 @@ vi.mock('../../config/contractor.js', () => ({
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
-import { listRates } from './payroll-rates.service.js';
+import { currentRateMonth, listRates, shiftRateMonth, updateRate } from './payroll-rates.service.js';
 import { listHousingAllowances } from './payroll-housing.service.js';
-import { addStay } from '../dormitory-stays.service.js';
+import { addStay, getHousingRateAmount } from '../dormitory-stays.service.js';
 import {
   addOneTimeSupplement,
   listSupplements,
@@ -120,7 +120,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
         payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
-        payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rates, payroll_compensation_terms,
+        payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rate_values, payroll_rates,
+        payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
         employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
@@ -205,10 +206,42 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     const [before] = (await run(`SELECT id FROM payroll_rates WHERE code = 'dormitory'`)).rows;
     await run(migration('315_payroll_dictionary_registries.sql'));
     await run(migration('315_payroll_dictionary_registries.sql'));
+    // 324 — значения по месяцам и «Проезд»; ставки с кодом — первыми.
+    await run(migration('324_payroll_rate_values.sql'));
+    await run(migration('324_payroll_rate_values.sql'));
     expect(await listRates()).toEqual([
-      { id: expect.any(Number), name: 'Сварщик', amount: '520.00', code: null },
-      { id: before.id, name: 'Доплата за проживание', amount: '630.00', code: 'housing' },
+      { id: before.id, name: 'Доплата за проживание', amount: '630.00', code: 'housing',
+        values: [{ effective_from: '2000-01', amount: '630.00' }] },
+      { id: expect.any(Number), name: 'Проезд', amount: null, code: 'travel', values: [] },
+      { id: expect.any(Number), name: 'Сварщик', amount: '520.00', code: null,
+        values: [{ effective_from: '2000-01', amount: '520.00' }] },
     ]);
+  });
+
+  it('324: «Проезд» в списке условий — ставка за месяц даты и «Без проезда» в месяце; квартира — ставка текущего месяца', async () => {
+    const month = currentRateMonth();
+    const [housing, travel] = await listRates();
+    await updateRate(travel.id, travel.name, 2730, month);
+    await run(`INSERT INTO payroll_compensation_stops (employee_id, date_from, date_to) VALUES (2, '2026-09-15', '2026-09-20')`);
+    const travelOn = async (date: string) => {
+      const res = makeRes();
+      await payrollTermsController.list(req({ query: { date } }), res);
+      const byId = new Map<number, { travel_rate: string | null; travel_stopped: boolean }>(
+        res.body.data.map((r: { employee_id: number; travel_rate: string | null; travel_stopped: boolean }) => [r.employee_id, r]),
+      );
+      return [1, 2].map(id => [byId.get(id)?.travel_rate, byId.get(id)?.travel_stopped]);
+    };
+    // Первое значение — «с начала»: и в прошлом месяце 2730; «Без проезда» задевает только сентябрь.
+    expect(await travelOn('2026-09-01')).toEqual([['2730.00', false], ['2730.00', true]]);
+    expect(await travelOn('2026-10-01')).toEqual([['2730.00', false], ['2730.00', false]]);
+
+    // Сумма квартиры по умолчанию — ставка «Доплата за проживание» на текущий месяц: будущая смена её не трогает.
+    const next = shiftRateMonth(month, 1);
+    await updateRate(housing.id, housing.name, 700, next);
+    expect(await getHousingRateAmount()).toBe('630.00');
+    await updateRate(housing.id, housing.name, 630, next);
+
+    await run(`DELETE FROM payroll_compensation_stops WHERE employee_id = 2`);
   });
 
   it('«штат зарплаты»: подрядчик, уволенный и архивный — не пишутся', async () => {

@@ -53,7 +53,7 @@ vi.mock('../config/contractor.js', () => ({
 import {
   addStay, deleteStay, getEmployeeState, listAddresses, listStays, searchCandidates, updateStay,
 } from './dormitory-stays.service.js';
-import { deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
+import { currentRateMonth, deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -65,13 +65,17 @@ const D2 = '00000000-0000-0000-0000-0000000000d2';
 describe.skipIf(!PG_URL)('общежитие и ставка с кодом на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rates, role_page_access, access_pages,
+      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rate_values, payroll_rates,
+        role_page_access, access_pages,
         payroll_compensation_terms, payroll_dormitory_allowances, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
       -- Для миграции 320 и проверки квартиры: доплата в условиях оплаты и «Доплата за общежитие» (317).
-      CREATE TABLE payroll_compensation_terms (id serial PRIMARY KEY, employee_id integer, housing_compensation numeric(12,2));
+      -- travel_compensation — для комментария миграции 324.
+      CREATE TABLE payroll_compensation_terms (
+        id serial PRIMARY KEY, employee_id integer, housing_compensation numeric(12,2), travel_compensation numeric(12,2)
+      );
       CREATE TABLE payroll_dormitory_allowances (
         id serial PRIMARY KEY, employee_id integer NOT NULL, date_from date NOT NULL, date_to date
       );
@@ -119,37 +123,48 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     await pg.pool?.end();
   });
 
+  // Ставки читаются с историей значений (миграция 324) — она идёт следом за 313; «Проезд» (travel) — её ставка.
+  const TRAVEL = { id: expect.any(Number), name: 'Проезд', amount: null, code: 'travel', values: [] };
+
   it('313 на чистой БД — ставка «Проживание общежития» без значения; повтор не задваивает', async () => {
     await run(migration('306_payroll_rates.sql'));
     await run(migration('313_payroll_rate_code.sql'));
     await run(migration('313_payroll_rate_code.sql'));
+    await run(migration('324_payroll_rate_values.sql'));
     expect(await listRates()).toEqual([
-      { id: expect.any(Number), name: 'Проживание общежития', amount: null, code: 'dormitory' },
+      TRAVEL,
+      { id: expect.any(Number), name: 'Проживание общежития', amount: null, code: 'dormitory', values: [] },
     ]);
   });
 
   it('313 на БД со ставкой — код проставлен той же строке, название и значение не тронуты', async () => {
-    await run(`DROP TABLE payroll_rates`);
+    await run(`DROP TABLE payroll_rate_values, payroll_rates`);
     await run(migration('306_payroll_rates.sql'));
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Сварщик', 520), (' Проживание ОБЩЕЖИТИЯ ', 630)`);
     const [{ id: dormitoryId }] = (await run(`SELECT id FROM payroll_rates WHERE amount = 630`)).rows;
     await run(migration('313_payroll_rate_code.sql'));
     await run(migration('313_payroll_rate_code.sql'));
+    await run(migration('324_payroll_rate_values.sql'));
 
     expect(await listRates()).toEqual([
-      { id: expect.any(Number), name: 'Сварщик', amount: '520.00', code: null },
-      { id: dormitoryId, name: ' Проживание ОБЩЕЖИТИЯ ', amount: '630.00', code: 'dormitory' },
+      TRAVEL,
+      { id: expect.any(Number), name: 'Сварщик', amount: '520.00', code: null,
+        values: [{ effective_from: '2000-01', amount: '520.00' }] },
+      { id: dormitoryId, name: ' Проживание ОБЩЕЖИТИЯ ', amount: '630.00', code: 'dormitory',
+        values: [{ effective_from: '2000-01', amount: '630.00' }] },
     ]);
   });
 
   it('ставку с кодом не удалить и не переименовать, значение меняется', async () => {
     const dormitory = (await listRates()).find(rate => rate.code === 'dormitory')!;
+    const month = currentRateMonth();
     expect(await deleteRate(dormitory.id)).toBe('system');
-    expect(await updateRate(dormitory.id, 'Общежитие', 630)).toBe('system_name');
+    expect(await updateRate(dormitory.id, 'Общежитие', 630, month)).toBe('system_name');
     // Контроллер схлопывает пробелы: « Проживание ОБЩЕЖИТИЯ » приходит без них — это не переименование,
     // и в БД название остаётся как было.
-    expect(await updateRate(dormitory.id, 'Проживание ОБЩЕЖИТИЯ', 700)).toMatchObject({
+    expect(await updateRate(dormitory.id, 'Проживание ОБЩЕЖИТИЯ', 700, month)).toMatchObject({
       before: { amount: '630.00' }, after: { name: ' Проживание ОБЩЕЖИТИЯ ', amount: '700.00', code: 'dormitory' },
+      nameChanged: false, value: { effective_month: month, from: '630.00', to: '700.00' },
     });
     expect((await listRates()).find(rate => rate.id === dormitory.id)).toMatchObject({ name: dormitory.name, amount: '700.00' });
     // Обычная ставка — как раньше.

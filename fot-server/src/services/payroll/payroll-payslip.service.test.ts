@@ -10,7 +10,7 @@ vi.mock('../../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { payslipPeriod, splitWorkedDays } from './payroll-payslip.service.js';
+import { payslipPeriod, pickPayslipRateAllowances, splitWorkedDays, type IPayslipRateFacts } from './payroll-payslip.service.js';
 
 // «5+2» с двумя плановыми субботами в месяц — как у прорабов в июле 2026.
 const schedule: IResolvedSchedule = {
@@ -133,5 +133,57 @@ describe('расчётный листок: период', () => {
 
   it('дата приёма позже месяца не режет период: суммы из 1С за месяц есть — значит, работал', () => {
     expect(payslipPeriod('2026-07', '2026-08-03', null)).toEqual({ from: '2026-07-01', to: '2026-07-31' });
+  });
+});
+
+describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
+  const facts = (over: Partial<IPayslipRateFacts> = {}): IPayslipRateFacts => ({
+    category: 'office',
+    travelRate: '2730.00',
+    travelStopped: false,
+    dormitoryAllowanceRate: '160.00',
+    housing: [],
+    ...over,
+  });
+
+  it('проезд — офису и ИТР по ставке месяца; рабочим, «Без проезда» в месяце и без ставки — нет', () => {
+    expect(pickPayslipRateAllowances(facts())).toEqual([{ code: 'travel', amount: '2730.00' }]);
+    expect(pickPayslipRateAllowances(facts({ category: 'itr' }))).toEqual([{ code: 'travel', amount: '2730.00' }]);
+    expect(pickPayslipRateAllowances(facts({ category: 'worker' }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ travelStopped: true }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ travelRate: null }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ travelRate: '0.00' }))).toEqual([]);
+  });
+
+  it('две квартиры в месяце — одна сумма, по поздней', () => {
+    const housing = [
+      { kind: 'apartment' as const, start: '2026-10-16', amount: '700.00' },
+      { kind: 'apartment' as const, start: '2026-09-01', amount: '630.00' },
+    ];
+    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing }))).toEqual([{ code: 'housing', amount: '700.00' }]);
+  });
+
+  it('квартира, затем доплата за общежитие — доплата по ставке месяца; затем общежитие — ничего', () => {
+    const toAllowance = [
+      { kind: 'apartment' as const, start: '2026-10-01', amount: '630.00' },
+      { kind: 'dormitory_allowance' as const, start: '2026-10-16', amount: null },
+    ];
+    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing: toAllowance })))
+      .toEqual([{ code: 'dormitory_allowance', amount: '160.00' }]);
+
+    const toDormitory = [
+      { kind: 'dormitory_allowance' as const, start: '2026-10-01', amount: null },
+      { kind: 'dormitory' as const, start: '2026-10-16', amount: null },
+    ];
+    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing: toDormitory }))).toEqual([]);
+  });
+
+  it('доплата за общежитие без ставки — строки нет; проезд и проживание — обе строки', () => {
+    const housing = [{ kind: 'dormitory_allowance' as const, start: '2026-01-01', amount: null }];
+    expect(pickPayslipRateAllowances(facts({ travelRate: null, dormitoryAllowanceRate: null, housing }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ housing }))).toEqual([
+      { code: 'travel', amount: '2730.00' },
+      { code: 'dormitory_allowance', amount: '160.00' },
+    ]);
   });
 });

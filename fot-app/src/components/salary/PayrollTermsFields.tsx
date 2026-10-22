@@ -11,7 +11,6 @@ import { formatPaidAmount } from '../../utils/payrollPaid';
 import {
   payrollFieldId,
   payrollTermsTotal,
-  type PayrollMoneyField,
   type PayrollTermsFieldKey,
 } from '../../utils/payrollTermsForm';
 import styles from './PayrollTermsFields.module.css';
@@ -45,16 +44,10 @@ interface IPayrollTermsFieldsProps {
    * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах».
    */
   detailsOnly?: boolean;
+  /** «Проезд» в «Компенсации» — значение ставки, если положен (travelAllowance), как в поле ввода; нет — пусто. */
+  travel?: string;
 }
 
-/**
- * «Компенсация» в одну строку — в порядке на экране. Проживание — квартира «Проживания» (миграция 320): только
- * показ, вносят в «Доплате за проживание» и во вкладке кадров.
- */
-const COMPENSATION_FIELDS: ReadonlyArray<{ field: PayrollMoneyField; label: string; locked?: boolean }> = [
-  { field: 'housing', label: 'Проживание, ₽/мес', locked: true },
-  { field: 'travel', label: 'Проезд, ₽/мес' },
-];
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
@@ -79,8 +72,10 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   staffDeductions,
   detailsOnly = false,
   total = false,
+  travel = '',
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
+  const travelId = `${idPrefix}-travel`;
   const totalValue = total ? payrollTermsTotal(form) : null;
 
   /** Денежное поле с подписью сверху и ошибкой снизу. Без числовых подсказок: подсказка — не значение. */
@@ -249,14 +244,23 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
             <h3 id={`${idPrefix}-compensation`} className={styles.sectionTitle}>Компенсация</h3>
             <div className={styles.halves}>
               <div className={styles.half}>
+                {/*
+                  Только показ. Проживание — квартира «Проживания» (миграция 320): вносят в «Доплате за проживание»
+                  и во вкладке кадров. Проезд — ставка «Проезд» «Справочника» (миграция 324): всем, кроме «Рабочих»
+                  и «Без проезда».
+                */}
                 <div className={styles.row}>
-                  {COMPENSATION_FIELDS.map(({ field, label, locked }) => renderMoney(
-                    field,
-                    label,
-                    form.money[field],
-                    value => form.changeMoney(field, value),
-                    locked,
-                  ))}
+                  {renderMoney(
+                    'housing',
+                    'Проживание, ₽/мес',
+                    form.money.housing,
+                    value => form.changeMoney('housing', value),
+                    true,
+                  )}
+                  <div className={styles.field}>
+                    <label htmlFor={travelId} className={styles.label}>Проезд, ₽/мес</label>
+                    <input id={travelId} className={styles.control} value={travel} disabled readOnly />
+                  </div>
                 </div>
               </div>
             </div>

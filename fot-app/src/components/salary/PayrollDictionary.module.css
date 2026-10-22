@@ -146,6 +146,15 @@
   white-space: nowrap;
 }
 .rowActions { display: inline-flex; flex-shrink: 0; gap: 4px; margin-left: auto; }
+/* Запланированное значение ставки — под строкой: «с ноября 2026 — 3 000,00». */
+.rowNote {
+  flex: 1 1 100%;
+  margin: -4px 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
 
 .iconButton {
   display: inline-flex;
@@ -198,6 +207,29 @@
 }
 .formName,
 .formAmount { flex: 1 1 0; }
+/*
+ * «С какого месяца» у правки ставки — как поле ввода: 44px и 16px на телефоне (Safari не зумит). На телефоне —
+ * своей строкой под значением и кнопками: рядом с ними «с октября 2026» не помещается.
+ */
+.formMonth {
+  box-sizing: border-box;
+  order: 1;
+  flex: 1 1 100%;
+  min-width: 0;
+  height: var(--dict-control-h);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.formMonth:focus { outline: none; }
+.formMonth:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+.formMonth:disabled { opacity: 0.6; cursor: default; }
 /* Название, которое не меняется (ставка с кодом), — текстом на месте поля. */
 .formFixedName {
   display: flex;
@@ -266,6 +298,7 @@
   .formAdd .formName { flex-basis: 0; }
   .formAdd .addButton { flex-grow: 0; }
   .formAmount { flex: 0 0 116px; }
+  .formMonth { order: 0; flex: 0 0 150px; font-size: 13px; }
 }
 
 /* Третья колонка — только когда ставкам остаётся место под строку правки. */

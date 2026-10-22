@@ -270,6 +270,28 @@ describe('выбор месяца в таблицах «Справочника»
     expect(buildDormitoryRegistryExport(all).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Общежитие', 'С', 'По', 'Доплата, ₽/мес']);
   });
+
+  it('сумма доплаты — ставка последнего выбранного месяца, в который доплата положена (миграция 324)', () => {
+    // Ставка 160 «с начала», с ноября — 200; в ноябре сотрудник уже живёт в общежитии.
+    const values = [{ effective_from: '2000-01', amount: '160.00' }, { effective_from: '2026-11', amount: '200.00' }];
+    const allowance: IDormitoryAllowanceRow = {
+      id: 8, employee_id: 2, full_name: 'Борисов А.А.', department: null, position: null,
+      date_from: '2026-09-01', date_to: null, amount: '200.00', can_edit: true,
+      dormitory_stays: [{ check_in: '2026-11-10', check_out: null }],
+    };
+    const amounts = (months: string[]) => buildDormitoryRegistryRows([], [allowance], months, values)
+      .map(row => row.amount);
+
+    expect(amounts(['2026-09'])).toEqual(['160.00']);
+    // Сентябрь и октябрь — ставка октября; ноябрь исключён общежитием — строка по октябрю, не по ноябрю.
+    expect(amounts(['2026-09', '2026-10'])).toEqual(['160.00']);
+    expect(amounts(['2026-10', '2026-11'])).toEqual(['160.00']);
+    expect(amounts(['2026-11'])).toEqual([]);
+    // Ставка прошлого месяца не меняется будущей сменой; без истории ставки — сумма сервера.
+    const moved = { ...allowance, dormitory_stays: [] };
+    expect(buildDormitoryRegistryRows([], [moved], ['2026-10', '2026-12'], values).map(row => row.amount)).toEqual(['200.00']);
+    expect(buildDormitoryRegistryRows([], [moved], ['2026-10']).map(row => row.amount)).toEqual(['200.00']);
+  });
 });
 
 describe('🗑 в таблицах периодов: убрать с 1-го числа или удалить ошибочную', () => {

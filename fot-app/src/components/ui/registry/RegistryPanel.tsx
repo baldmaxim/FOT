@@ -23,7 +23,7 @@ export interface IRegistryToolbarAction {
   onClick: () => void;
 }
 
-/** Выбор месяцев рядом с «Экспортом»; пусто — «Весь период». */
+/** Выбор месяцев рядом с «Экспортом»: только месяцы, «Весь период» не выбирается — последний месяц не снять. */
 export interface IRegistryMonths {
   value: string[];
   options: string[];
@@ -96,6 +96,7 @@ export const RegistryPanel = <Row,>({
               value={months.value}
               options={months.options}
               onChange={months.onChange}
+              allowAll={false}
               ariaLabel="Месяцы таблицы"
               className={styles.monthsButton}
             />

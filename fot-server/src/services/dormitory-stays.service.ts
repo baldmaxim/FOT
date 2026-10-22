@@ -16,6 +16,7 @@ import type { PoolClient } from 'pg';
 
 import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
@@ -159,11 +160,14 @@ const REMEMBER_ADDRESS_SQL = `INSERT INTO dormitory_addresses (address) VALUES (
 export const listAddresses = async (): Promise<string[]> =>
   (await query<{ address: string }>(`SELECT address FROM dormitory_addresses ORDER BY id`)).map(row => row.address);
 
-/** Сумма по умолчанию для квартиры — значение ставки «Доплата за проживание» (code housing); не задана — null. */
+/**
+ * Сумма по умолчанию для квартиры — значение ставки «Доплата за проживание» (code housing) на текущий месяц
+ * МСК (миграция 324); не задана — null.
+ */
 export const getHousingRateAmount = async (): Promise<string | null> =>
   (await queryOne<{ amount: string | null }>(
-    `SELECT amount::text AS amount FROM payroll_rates WHERE code = $1`,
-    [HOUSING_RATE_CODE],
+    `SELECT payroll_rate_value($1, $2::date)::text AS amount`,
+    [HOUSING_RATE_CODE, moscowTodayIso()],
   ))?.amount ?? null;
 
 /** После записи: адрес общежития — в подсказки; квартира — без доплаты за общежитие в добавленных днях. */

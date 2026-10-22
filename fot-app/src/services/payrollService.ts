@@ -54,9 +54,16 @@ export interface IPayrollTermsRow {
   bonus_amount: string | number | null;
   /** Компенсация проживания, ₽/мес. */
   housing_compensation: string | number | null;
-  /** Компенсации проезда и связи, ₽/мес. */
+  /** Компенсации проезда и связи, ₽/мес. Проезд условий с миграции 324 не используется — см. travel_rate. */
   travel_compensation?: string | number | null;
   communication_compensation?: string | number | null;
+  /**
+   * Проезд (миграция 324): ставка «Проезд» за месяц даты выборки, NUMERIC строкой; null — не задана. Положен ли
+   * сотруднику — по категории и travel_stopped (travelAllowance). Нет у старого бэкенда.
+   */
+  travel_rate?: string | null;
+  /** В месяце даты выборки есть день «Без проезда». */
+  travel_stopped?: boolean;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -115,7 +122,6 @@ export interface IAssignTermsPayload {
   /** Не передано — сумма не задана (прежнее значение очищается). */
   bonus_amount?: number;
   housing_compensation?: number;
-  travel_compensation?: number;
   communication_compensation?: number;
   staff_units?: number;
   effective_from: string;
@@ -250,6 +256,16 @@ export interface IPayrollPayslipInfo {
   /** Отработано: рабочие дни графика (с плановыми выходными) и выходные сверх графика; null — нет в табеле. */
   worked_days: { workday: number; dayoff: number } | null;
   terms: IPayslipTerms[];
+  /** «По ставкам ФОТ» за месяц (миграция 324); нет у старого бэкенда. В «Всего начислено» (ЗУП) не входят. */
+  rate_allowances?: IPayslipRateAllowance[];
+}
+
+export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowance';
+
+/** Сумма по ставке «Справочника» за месяц листка — NUMERIC строкой. */
+export interface IPayslipRateAllowance {
+  code: PayslipRateAllowanceCode;
+  amount: string;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
@@ -323,13 +339,22 @@ export interface IPayrollDeductionKind {
   name: string;
 }
 
+/** Значение ставки с месяца effective_from (YYYY-MM) до следующей записи; null — ставку отключили. */
+export interface IPayrollRateValue {
+  effective_from: string;
+  amount: string | null;
+}
+
 /** Ставка из справочника («Расчёты» → «Справочник»). Значение — текстом NUMERIC; не задано — null. */
 export interface IPayrollRate {
   id: number;
   name: string;
+  /** Значение на текущий месяц МСК. */
   amount: string | number | null;
   /** Ставка, привязанная к функционалу (миграция 313): название не меняется, удалить нельзя. */
   code: string | null;
+  /** История значений по возрастанию месяца (миграция 324); нет у старого бэкенда. */
+  values?: IPayrollRateValue[];
 }
 
 /**
@@ -338,16 +363,20 @@ export interface IPayrollRate {
  */
 export const HOUSING_RATE_CODE = 'housing';
 
+/** Код ставки «Доплата за общежитие» (миграция 317): её значение за месяц — сумма всем из таблицы «Общежитие». */
+export const DORMITORY_ALLOWANCE_RATE_CODE = 'dormitory_allowance';
+
 /** Учётка из списка доступа к разделу «Зарплата» (миграция 310) — окно «Справочник», только чтение. */
 export interface IPayrollSectionUser {
   user_id: string;
   full_name: string | null;
 }
 
-/** Название и значение ставки при правке. */
+/** Название и значение ставки при правке; значение — с месяца effective_month (не передан — с текущего). */
 export interface IPayrollRatePayload {
   name: string;
   amount: number | null;
+  effective_month?: string;
 }
 
 export interface IPayrollTermsListResult {

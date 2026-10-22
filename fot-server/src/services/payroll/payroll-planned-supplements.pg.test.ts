@@ -99,7 +99,8 @@ const makeRes = () => {
 describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS employee_dormitory_stays, payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
+      DROP TABLE IF EXISTS employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
+        payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -148,6 +149,12 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Проживание (320) — пустое: «Компенсацию проживания» список условий берёт из квартир.
     await pg.pool!.query(`CREATE TABLE employee_dormitory_stays (
       employee_id integer NOT NULL, kind text NOT NULL, check_in date NOT NULL, check_out date, amount numeric(12,2))`);
+    // Проезд (324): ставка за месяц и «Без проезда» — список читает их у строк порции.
+    await pg.pool!.query(`CREATE TABLE payroll_compensation_stops (
+      employee_id integer NOT NULL, date_from date NOT NULL, date_to date)`);
+    await pg.pool!.query(migration('306_payroll_rates.sql'));
+    await pg.pool!.query(migration('313_payroll_rate_code.sql'));
+    await pg.pool!.query(migration('324_payroll_rate_values.sql'));
   });
 
   afterAll(async () => {
