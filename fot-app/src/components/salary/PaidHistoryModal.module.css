@@ -6,6 +6,9 @@
  */
 .overlay.overlay { z-index: 1100; }
 
+/* Стрелка «Назад» слева от заголовка — на одной линии с ним. */
+.header { align-items: center; }
+
 /* ФИО и должность под заголовком: длинное ФИО переносится, а не уезжает под крестик. */
 .subtitle {
   margin: 2px 0 0;
@@ -159,9 +162,10 @@
 
 /* Список слева, листок справа; оба видны всегда — «Все месяцы» не нужна. */
 @media (min-width: 1024px) {
+  /* Список уже 28rem до 1280px — листку хватает места на столбец «Вид». */
   .body {
     display: grid;
-    grid-template-columns: minmax(0, 28rem) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 25rem) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
   .body[data-view] .listPane,
@@ -170,6 +174,10 @@
   .backButton { display: none; }
   .detailHead { padding: 14px 0 12px; }
   .detailTitle { font-size: 16px; }
+}
+
+@media (min-width: 1280px) {
+  .body { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
 }
 
 /* Тап-цель строки месяца на сенсорных экранах. */

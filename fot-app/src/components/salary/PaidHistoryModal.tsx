@@ -46,6 +46,7 @@ const sumValue = (
  * пришли суммы «Оплачено», по годам (новые сверху, у года — итоги): «Начислено», «Удержано», «К выплате»
  * (начислено минус удержано, как в «Своде»). Справа — расчётный листок выбранного месяца (PaidPayslip),
  * по умолчанию последнего. Уже 1024px — одна колонка: список, тап по месяцу открывает листок.
+ * Стрелка «Назад» и ✕ закрывают только это окно — карточка остаётся.
  * Через портал: внутри окна карточки с transform fixed-слой встал бы по окну, а не по экрану. Только чтение.
  */
 export const PaidHistoryModal: FC<IPaidHistoryModalProps> = ({ employeeId, fullName, positionName, onClose }) => {
@@ -79,7 +80,10 @@ export const PaidHistoryModal: FC<IPaidHistoryModalProps> = ({ employeeId, fullN
     >
       {({ requestClose }) => (
         <>
-          <header className={modal.header}>
+          <header className={`${modal.header} ${styles.header}`}>
+            <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Назад к карточке">
+              <ArrowLeft size={20} aria-hidden="true" />
+            </button>
             <div className={modal.headerText}>
               <h2 id={titleId} className={modal.title}>История выплат</h2>
               {subtitle && <p className={styles.subtitle}>{subtitle}</p>}
