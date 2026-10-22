@@ -299,6 +299,26 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await searchCandidates('Кар', [])).toEqual([]);
     expect((await searchCandidates('_', null))).toEqual([]);
   });
+  it('поиск: ё/е, английская раскладка, одна ошибка — только если точного нет', async () => {
+    const found = async (search: string, ids: number[] | null = null) =>
+      (await searchCandidates(search, ids)).map(row => row.full_name);
+    expect(await found('rfhbvjd')).toEqual(['Каримов Акмал']);
+    expect(await found('rfhbvd')).toEqual(['Каримов Акмал']); // латиница + опечатка: параметры не сдвигаются
+    expect(await found('КАРИМОВ')).toEqual(['Каримов Акмал']);
+    expect(await found('каримв')).toEqual(['Каримов Акмал']);
+    expect(await found('борсов')).toEqual(['Борисов Антон']);
+    // Подрядчик не находится и с ошибкой; охват держится.
+    expect(await found('карпенк')).toEqual([]);
+    expect(await found('каримв', [2])).toEqual([]);
+    // Точное есть — похожие с одной ошибкой не подмешиваются; точного нет — находятся оба.
+    await pg.pool!.query(`INSERT INTO employees (id, full_name, org_department_id, employment_status, is_archived) VALUES (7, 'Карамов Тест', $1, 'active', false)`, [D1]);
+    try {
+      expect(await found('каримов')).toEqual(['Каримов Акмал']);
+      expect((await found('карумов')).sort()).toEqual(['Каримов Акмал', 'Карамов Тест'].sort());
+    } finally {
+      await pg.pool!.query('DELETE FROM employees WHERE id = 7');
+    }
+  });
   it('квартира: сумма и адрес по желанию; в один день — одно место; «Общежитие» «Зарплаты» её не видит', async () => {
     const flat = await addStay(6, { kind: 'apartment', check_in: '2026-10-01', check_out: null, address: null, amount: 630.5 });
     expect(flat).toMatchObject({ kind: 'apartment', address: null, amount: '630.50' });

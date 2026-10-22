@@ -120,6 +120,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
         rowKey={supplementRowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildSupplementExport}
         sendExport={sendExport}
         months={months}

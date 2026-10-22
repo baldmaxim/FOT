@@ -1,8 +1,9 @@
 /**
  * Общий фильтр «Управления кадрами» для GET /employees (постранично), счётчиков месяца и
- * выгрузки текущей таблицы. База — права, архивность, раздел, отдел, поиск, график; статус и
+ * выгрузки текущей таблицы. База — права, архивность, раздел, отдел, график; статус и
  * период добавляются отдельно: счётчикам месяца они не нужны (иначе на «Действующих» число
- * уволенных всегда было бы 0).
+ * уволенных всегда было бы 0). Поиск по ФИО — последним (appendStaffFioSearch): допуск
+ * опечатки решается по итоговому набору экрана.
  */
 import { query, queryOne } from '../config/postgres.js';
 import {
@@ -19,7 +20,7 @@ import {
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql, type IFioSearch } from '../utils/fio-search.utils.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -36,6 +37,8 @@ export interface IStaffBaseFilter {
   /** Отдел из запроса после проверки доступа (null — без фильтра отдела). */
   departmentId: string | null;
   showArchived: boolean;
+  /** Поиск по ФИО (null — без поиска); в whereParts не входит — см. appendStaffFioSearch. */
+  search: IFioSearch | null;
 }
 
 export type StaffBaseFilterResult =
@@ -123,11 +126,6 @@ export async function buildStaffBaseFilter(req: AuthenticatedRequest): Promise<S
     return { kind: 'empty' };
   }
 
-  const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
-  if (search) {
-    params.push(`%${escapeLike(search)}%`);
-    whereParts.push(`full_name ILIKE $${params.length}`);
-  }
   if (sectionContext) {
     whereParts.push(buildSectionConditionSql(sectionContext, 'employees', params));
   }
@@ -184,7 +182,34 @@ export async function buildStaffBaseFilter(req: AuthenticatedRequest): Promise<S
     }
   }
 
-  return { kind: 'ok', whereParts, params, departmentId, showArchived };
+  const search = buildFioSearch(typeof req.query.search === 'string' ? req.query.search : '');
+  return { kind: 'ok', whereParts, params, departmentId, showArchived, search };
+}
+
+/**
+ * Условие поиска по ФИО для `FROM employees` без алиаса. Вызывать после всех условий экрана (статус,
+ * период, фильтры столбцов), пока в params только параметры WHERE — до сортировки, курсора и LIMIT.
+ * Точные совпадения в итоговом наборе есть — только они; нет — плюс варианты с одной ошибкой.
+ */
+export async function appendStaffFioSearch(
+  whereParts: string[],
+  params: unknown[],
+  search: IFioSearch | null,
+): Promise<void> {
+  if (!search) return;
+  let fuzzy = false;
+  if (search.fuzzy.length > 0) {
+    const checkParams = [...params];
+    const exactSql = fioExactConditionSql('employees', checkParams, search);
+    const row = await queryOne<{ found: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM employees WHERE ${[...whereParts, exactSql].join(' AND ')}) AS found`,
+      checkParams,
+    );
+    fuzzy = !row?.found;
+  }
+  whereParts.push(fuzzy
+    ? fioFuzzyConditionSql('employees', params, search)
+    : fioExactConditionSql('employees', params, search));
 }
 
 export type StrictParseResult<T> = { ok: true; value: T } | { ok: false };

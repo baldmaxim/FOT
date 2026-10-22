@@ -81,6 +81,7 @@ import ExcelJS from 'exceljs';
 import { respondEmployeesPage } from './employees-list-paginated.helpers.js';
 import { employeesStaffController } from './employees-staff.controller.js';
 import { saveStaffComment } from '../services/employee-staff-comment.service.js';
+import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../utils/fio-search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import type { Request, Response } from 'express';
 
@@ -360,5 +361,157 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
     await q('DELETE FROM user_profiles WHERE id = $1', [U3]);
     const [row] = await q<{ updated_by: string | null }>('SELECT updated_by FROM employee_staff_comments WHERE employee_id = 3');
     expect(row.updated_by).toBeNull();
+  });
+
+  it('поиск по ФИО: ё/е, раскладка, пробелы, одна ошибка — по итоговому набору экрана', async () => {
+    const monthStart = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' }).slice(0, 8) + '01';
+    const rows: Array<[number, string, string, string | null, string | null, string | null]> = [
+      [1001, 'Гринёв Андрей Александрович', 'active', D1, monthStart, null],
+      [1002, 'Гриневич  Николай', 'active', D2, null, null],
+      [1003, 'Петров Пётр', 'fired', D1, null, monthStart],
+      [1004, 'Петрав Иван', 'active', D1, null, null],
+      [1005, 'Смирнова Анна', 'active', D2, '2020-01-01', null],
+      [1006, 'Смирнава Ольга', 'active', D1, monthStart, null],
+      [1007, 'Тест_Подчёркивание', 'active', D1, null, null],
+      [1008, 'Процент 50%', 'active', D1, null, null],
+      [1009, 'Слэш\\Имя', 'active', D1, null, null],
+      [1010, 'Иванов И.И.', 'active', D1, null, null],
+      [1011, 'Иванов ИХИ', 'active', D1, null, null],
+    ];
+    for (const [id, name, status, dept, hire, dismissal] of rows) {
+      await q(
+        `INSERT INTO employees (id, full_name, employment_status, org_department_id, hire_date, dismissal_date)
+         VALUES ($1, $2, $3, $4, $5::date, $6::date)`,
+        [id, name, status, dept, hire, dismissal],
+      );
+    }
+    const makeRes = () => {
+      const res = {
+        statusCode: 200, body: null as unknown, sent: null as Buffer | null,
+        status(code: number) { res.statusCode = code; return res; },
+        json(body: unknown) { res.body = body; return res; },
+        setHeader: () => undefined,
+        send(buffer: Buffer) { res.sent = buffer; return res; },
+      };
+      return res;
+    };
+    const names = async (query: Record<string, string>): Promise<string[]> => {
+      const res = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000', sort: 'name', dir: 'asc', ...query });
+      expect(res.statusCode).toBe(200);
+      // Порядок ФИО зависит от collation тестовой БД — сравниваем наборы.
+      return (res.body.data as unknown as Array<{ full_name: string }>).map(row => row.full_name).sort();
+    };
+    try {
+      const grin = ['Гринёв Андрей Александрович', 'Гриневич  Николай'].sort();
+      expect(await names({ search: 'грине' })).toEqual(grin);
+      expect(await names({ search: 'Гринев' })).toEqual(grin);
+      expect(await names({ search: 'uhbyt' })).toEqual(grin);
+      expect(await names({ search: 'Гриневич Николай' })).toEqual(['Гриневич  Николай']);
+      // Одна ошибка: пропуск, лишняя, неверная, перестановка; две — ничего.
+      for (const typo of ['гинёв', 'гриневв', 'гринеф', 'гирнев']) {
+        expect(await names({ search: typo }), typo).toEqual(grin);
+      }
+      expect(await names({ search: 'гирнеф' })).toEqual([]);
+      // Спецсимволы LIKE — буквально.
+      expect(await names({ search: '_' })).toEqual(['Тест_Подчёркивание']);
+      expect(await names({ search: '50%' })).toEqual(['Процент 50%']);
+      expect(await names({ search: '\\' })).toEqual(['Слэш\\Имя']);
+      // Точка — не «любой символ».
+      expect(await names({ search: 'и.и' })).toEqual(['Иванов И.И.']);
+
+      // Точный есть в наборе — только он; точный вне набора (статус, отдел, фильтр столбца, период) не мешает.
+      expect(await names({ search: 'смирнова' })).toEqual(['Смирнова Анна']);
+      expect(await names({ search: 'петров' })).toEqual(['Петрав Иван']);
+      expect(await names({ search: 'петров', status: 'fired' })).toEqual(['Петров Пётр']);
+      expect(await names({ search: 'смирнова', department_id: D1 })).toEqual(['Смирнава Ольга']);
+      expect(await names({ search: 'смирнова', cf: JSON.stringify({ values: { department: ['Бухгалтерия'] } }) }))
+        .toEqual(['Смирнава Ольга']);
+      expect(await names({ search: 'смирнова', status: 'active', period: 'hired_month' })).toEqual(['Смирнава Ольга']);
+
+      // Порции по курсору с опечаткой — без потерь и повторов, total один.
+      const ids: number[] = [];
+      let cursor: { key: string | null; isNull: boolean; id: number } | null = null;
+      for (let guard = 0; guard < 10; guard += 1) {
+        const query: Record<string, string> = { page: '1', keyset: '1', view: 'staff', pageSize: '1', sort: 'name', dir: 'asc', search: 'гинёв' };
+        if (cursor) {
+          query.after_id = String(cursor.id);
+          query.after_null = cursor.isNull ? '1' : '0';
+          if (!cursor.isNull && cursor.key !== null) query.after_key = cursor.key;
+        }
+        const res = await callPage(query);
+        expect(res.body.meta.total).toBe(2);
+        ids.push(...res.body.data.map(row => row.id));
+        cursor = res.body.meta.next_cursor;
+        if (!cursor) break;
+      }
+      expect(ids.sort()).toEqual([1001, 1002]);
+
+      // Выгрузка = список при тех же фильтрах.
+      audit.withClient.mockReset().mockResolvedValue(undefined);
+      const exported = makeRes();
+      await employeesStaffController.exportView(makeReq({ status: 'active', sort: 'name', dir: 'asc', search: 'петров' }), exported as unknown as Response);
+      expect(exported.statusCode).toBe(200);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(exported.sent as unknown as ArrayBuffer);
+      const ws = workbook.worksheets[0];
+      expect(Array.from({ length: ws.rowCount - 1 }, (_, i) => String(ws.getRow(i + 2).getCell(2).value))).toEqual(['Петрав Иван']);
+
+      // Счётчики — тот же поиск по своему набору «приняты/уволены за месяц».
+      const movement = makeRes();
+      await employeesStaffController.getMonthMovement(makeReq({ search: 'петров' }), movement as unknown as Response);
+      expect(movement.body).toMatchObject({ data: { hired: 0, fired: 1 } });
+      await employeesStaffController.getMonthMovement(makeReq({ search: 'гинёв' }), movement as unknown as Response);
+      expect(movement.body).toMatchObject({ data: { hired: 1, fired: 0 } });
+
+      // Фасеты — тот же поиск без собственного фильтра столбца: точная «Смирнова» из «Склада» есть.
+      const facets = makeRes();
+      await employeesStaffController.getColumnValues(
+        makeReq({ column: 'department', search: 'смирнова', cf: JSON.stringify({ values: { department: ['Бухгалтерия'] } }) }),
+        facets as unknown as Response,
+      );
+      expect((facets.body as { data: { values: unknown[] } }).data.values).toEqual([{ value: 'Склад', count: 1 }]);
+    } finally {
+      await q('DELETE FROM employees WHERE id BETWEEN 1001 AND 1011');
+    }
+  });
+
+  it('условия поиска ФИО идут по trigram-индексу idx_employees_full_name_trgm', async () => {
+    // Из миграции 080 — только индекс по ФИО: tab_number в тестовой схеме нет.
+    await q('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+    await q('CREATE INDEX IF NOT EXISTS idx_employees_full_name_trgm ON employees USING gin (full_name gin_trgm_ops)');
+    const usesIndex = (plan: unknown): boolean => {
+      if (Array.isArray(plan)) return plan.some(usesIndex);
+      if (!plan || typeof plan !== 'object') return false;
+      const node = plan as Record<string, unknown>;
+      return node['Index Name'] === 'idx_employees_full_name_trgm' || Object.values(node).some(usesIndex);
+    };
+    // Таблица маленькая: без запретов планировщик выберет Seq Scan или проход по первичному ключу —
+    // остаются только bitmap-сканы, и условие либо идёт по индексу ФИО, либо план сваливается в запрещённый.
+    const explain = async (build: (params: unknown[]) => string): Promise<unknown> => {
+      const params: unknown[] = [];
+      const where = build(params);
+      const client = await pg.pool!.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL enable_seqscan = off');
+        await client.query('SET LOCAL enable_indexscan = off');
+        const res = await client.query(`EXPLAIN (FORMAT JSON) SELECT id FROM employees WHERE ${where}`, params);
+        return res.rows[0]['QUERY PLAN'];
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+    };
+    try {
+      // «елена» → [её]л[её]на: обычных триграмм нет совсем.
+      for (const input of ['грине', 'елена', 'uhbyt']) {
+        const plan = await explain(params => fioExactConditionSql('employees', params, buildFioSearch(input)!));
+        expect(usesIndex(plan), input).toBe(true);
+      }
+      const fuzzyPlan = await explain(params => fioFuzzyConditionSql('employees', params, buildFioSearch('грнев')!));
+      expect(usesIndex(fuzzyPlan)).toBe(true);
+    } finally {
+      await q('DROP INDEX IF EXISTS idx_employees_full_name_trgm');
+    }
   });
 });

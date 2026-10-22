@@ -235,7 +235,7 @@ describe('getAll — параметр section', () => {
     const [sql, params] = employeeListCalls()[0];
     expect(sql).toContain(`employment_status = 'fired'`);
     expect(params).toContainEqual(['br-1']); // фильтр отдела
-    expect(params).toContainEqual('%Ив%');
+    expect(params).toContainEqual('ив'); // поиск по ФИО: регулярное выражение по индексу
     expect(params).toContainEqual([7]); // график
     expectPlaceholdersMatch(sql, params);
   });

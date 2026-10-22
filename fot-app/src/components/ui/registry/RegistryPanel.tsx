@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { Download, UserPlus, type LucideIcon } from 'lucide-react';
 
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
+import { searchRowsByFio } from '../../../utils/fioSearch';
 import { applyTableView, matchesNameSearch, type ITableExportSnapshot, type ITableView } from '../../../utils/tableView';
 import { MonthsPicker } from '../MonthsPicker';
 import { SearchInput } from '../SearchInput';
@@ -38,6 +39,8 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
   onRetry: () => void;
   /** ФИО строки (или другое имя — см. searchPlaceholder) — по нему поиск над таблицей. */
   searchText: (row: Row) => string | null;
+  /** searchText — ФИО: ё = е, английская раскладка, ничего точного — с одной ошибкой. */
+  fioSearch?: boolean;
   searchPlaceholder?: string;
   /** Снимок xlsx видимых строк (с итогом, если он есть) и его отправка на сервер. */
   buildExport: (rows: ReadonlyArray<Row>, totals?: IRegistryTotals['export']) => ITableExportSnapshot;
@@ -60,7 +63,7 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
  * и «Свод» «Зарплаты».
  */
 export const RegistryPanel = <Row,>({
-  rows, isLoading, isError, onRetry, searchText, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
+  rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
   initialView = DEFAULT_VIEW, months, totals, toolbarAction, ...tableProps
 }: IRegistryPanelProps<Row>): ReactElement => {
   const { columns } = tableProps;
@@ -71,11 +74,12 @@ export const RegistryPanel = <Row,>({
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, sendExport);
 
   const allRows = useMemo(() => rows ?? [], [rows]);
-  const searchedRows = useMemo(
-    () => allRows.filter(row => matchesNameSearch(searchText(row), search)),
-    [allRows, search, searchText],
-  );
-  const visibleRows = useMemo(() => applyTableView(searchedRows, columns, view), [searchedRows, columns, view]);
+  const { searchedRows, visibleRows } = useMemo(() => {
+    const finalize = (list: Row[]) => applyTableView(list, columns, view);
+    if (fioSearch) return searchRowsByFio(allRows, searchText, search, finalize);
+    const searched = allRows.filter(row => matchesNameSearch(searchText(row), search));
+    return { searchedRows: searched, visibleRows: finalize(searched) };
+  }, [allRows, columns, fioSearch, search, searchText, view]);
   const footer = useMemo(() => totals?.(visibleRows)?.display ?? null, [totals, visibleRows]);
 
   return (

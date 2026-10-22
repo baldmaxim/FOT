@@ -37,6 +37,7 @@ export const DormitoryStaysPanel: FC<IDormitoryStaysPanelProps> = ({
     rowKey={stayKey}
     rowLabel={stayName}
     searchText={stayName}
+    fioSearch
     buildExport={buildHousingStaysExport}
     sendExport={dormitoryService.exportTable}
     onAdd={onAdd}

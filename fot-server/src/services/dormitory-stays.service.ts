@@ -17,7 +17,7 @@ import type { PoolClient } from 'pg';
 import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../utils/fio-search.utils.js';
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
 import { HOUSING_RATE_CODE } from './payroll/payroll-rates.service.js';
@@ -118,29 +118,39 @@ const readStay = async (client: PoolClient, id: number, lock: boolean): Promise<
     .rows[0] ?? null;
 
 /**
- * Кого можно добавить: работающие, не в архиве, не из ветки подрядных организаций, по части ФИО;
- * employeeIds — охват (null — все).
+ * Кого можно добавить: работающие, не в архиве, не из ветки подрядных организаций, по части ФИО
+ * (ё = е, английская раскладка; ничего точного — с одной ошибкой); employeeIds — охват (null — все).
  */
 export const searchCandidates = async (
   search: string,
   employeeIds: number[] | null,
 ): Promise<IDormitoryCandidate[]> => {
-  if (employeeIds?.length === 0) return [];
-  return query<IDormitoryCandidate>(
-    `WITH ${payrollContractorDeptsCte('$3')}
-     SELECT e.id, e.full_name, d.name AS department, p.name AS position
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-       LEFT JOIN positions p ON p.id = e.position_id
-      WHERE e.full_name ILIKE $1
-        AND e.employment_status = 'active'
-        AND e.is_archived IS NOT TRUE
-        AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
-        AND ($2::int[] IS NULL OR e.id = ANY($2::int[]))
-      ORDER BY e.full_name
-      LIMIT 20`,
-    [`%${escapeLike(search)}%`, employeeIds, await getContractorRootId()],
-  );
+  const fio = buildFioSearch(search);
+  if (!fio || employeeIds?.length === 0) return [];
+  const contractorRootId = await getContractorRootId();
+  const find = (fuzzy: boolean) => {
+    // Число параметров поиска зависит от ввода (латиница — два выражения), поэтому они — после постоянных.
+    const params: unknown[] = [employeeIds, contractorRootId];
+    const searchSql = fuzzy ? fioFuzzyConditionSql('e', params, fio) : fioExactConditionSql('e', params, fio);
+    return query<IDormitoryCandidate>(
+      `WITH ${payrollContractorDeptsCte('$2')}
+       SELECT e.id, e.full_name, d.name AS department, p.name AS position
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+         LEFT JOIN positions p ON p.id = e.position_id
+        WHERE ${searchSql}
+          AND e.employment_status = 'active'
+          AND e.is_archived IS NOT TRUE
+          AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
+          AND ($1::int[] IS NULL OR e.id = ANY($1::int[]))
+        ORDER BY e.full_name
+        LIMIT 20`,
+      params,
+    );
+  };
+  const exact = await find(false);
+  if (exact.length > 0 || fio.fuzzy.length === 0) return exact;
+  return find(true);
 };
 
 export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEmployeeState | null> =>

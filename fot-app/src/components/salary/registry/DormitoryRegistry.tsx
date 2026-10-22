@@ -118,6 +118,7 @@ export const DormitoryRegistry: FC<IDormitoryRegistryProps> = ({ canEdit, onClos
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildDormitoryRegistryExport}
         sendExport={sendExport}
         months={months}

@@ -95,6 +95,7 @@ export const DeductionsTab: FC = () => {
         rowKey={deductionKey}
         rowLabel={deductionName}
         searchText={deductionName}
+        fioSearch
         buildExport={buildStaffDeductionExport}
         sendExport={staffDeductionService.exportTable}
         months={months}

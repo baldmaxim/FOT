@@ -97,6 +97,7 @@ export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ c
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildHousingExport}
         sendExport={sendExport}
         months={months}

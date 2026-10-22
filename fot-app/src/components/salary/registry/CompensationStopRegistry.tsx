@@ -93,6 +93,7 @@ export const CompensationStopRegistry: FC<ICompensationStopRegistryProps> = ({ c
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildCompensationStopExport}
         sendExport={sendExport}
         months={months}

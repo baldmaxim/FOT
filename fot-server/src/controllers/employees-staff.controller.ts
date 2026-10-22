@@ -16,6 +16,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { resolveExportPeriod } from './employees-export.controller.js';
 import {
+  appendStaffFioSearch,
   buildStaffBaseFilter,
   parseStaffPeriod,
   parseStaffStatus,
@@ -120,6 +121,7 @@ export const employeesStaffController = {
       if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
       const valueColumn = column as StaffValueFilterColumn;
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, valueColumn))) return;
+      await appendStaffFioSearch(whereParts, params, filter.search);
 
       let keySql: string;
       try {
@@ -238,11 +240,14 @@ export const employeesStaffController = {
       const fromIdx = params.length;
       params.push(range.today);
       const toIdx = params.length;
+      const hiredSql = `employment_status <> 'fired' AND hire_date BETWEEN $${fromIdx}::date AND $${toIdx}::date`;
+      const firedSql = `employment_status = 'fired' AND dismissal_date BETWEEN $${fromIdx}::date AND $${toIdx}::date`;
+      // Своё множество — принятые и уволенные за месяц: по нему же решается допуск опечатки в поиске.
+      whereParts.push(`((${hiredSql}) OR (${firedSql}))`);
+      await appendStaffFioSearch(whereParts, params, filter.search);
       const row = await queryOne<{ hired: number | string; fired: number | string }>(
-        `SELECT count(*) FILTER (WHERE employment_status <> 'fired'
-                                   AND hire_date BETWEEN $${fromIdx}::date AND $${toIdx}::date)::int AS hired,
-                count(*) FILTER (WHERE employment_status = 'fired'
-                                   AND dismissal_date BETWEEN $${fromIdx}::date AND $${toIdx}::date)::int AS fired
+        `SELECT count(*) FILTER (WHERE ${hiredSql})::int AS hired,
+                count(*) FILTER (WHERE ${firedSql})::int AS fired
            FROM employees
           WHERE ${whereParts.join(' AND ')}`,
         params,
@@ -303,6 +308,7 @@ export const employeesStaffController = {
       if (statusSql) whereParts.push(statusSql);
       if (period) whereParts.push(periodConditionSql(period, resolveMonthRange(), params));
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters))) return;
+      await appendStaffFioSearch(whereParts, params, filter.search);
 
       let sortKeySql: string;
       try {

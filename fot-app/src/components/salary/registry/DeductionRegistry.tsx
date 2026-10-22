@@ -91,6 +91,7 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildStaffDeductionExport}
         sendExport={sendExport}
         months={months}

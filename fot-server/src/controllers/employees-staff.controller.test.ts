@@ -65,7 +65,7 @@ const makeReq = (query: Record<string, unknown> = {}, extra: Partial<{ params: o
   socket: {},
 }) as unknown as AuthenticatedRequest;
 
-const baseFilter = () => ({ kind: 'ok', whereParts: ['is_archived = $1'], params: [false], departmentId: null, showArchived: false });
+const baseFilter = () => ({ kind: 'ok', whereParts: ['is_archived = $1'], params: [false], departmentId: null, showArchived: false, search: null });
 
 beforeEach(() => {
   Object.values(h).forEach(fn => fn.mockReset());

@@ -55,6 +55,7 @@ export const PayrollSummaryObjectModal: FC<IPayrollSummaryObjectModalProps> = ({
         rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
+        fioSearch
         buildExport={buildExport}
         sendExport={sendExport}
         totals={totals}

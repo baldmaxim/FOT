@@ -19,6 +19,7 @@ import {
   type IKeysetParams,
 } from './employees-list-page.helpers.js';
 import {
+  appendStaffFioSearch,
   buildStaffBaseFilter,
   parseStaffPeriod,
   parseStaffStatus,
@@ -107,6 +108,8 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
   try {
     await appendColumnFilters(whereParts, params, columnFiltersParsed.filters);
+    // Последним из условий: опечатка допускается, только если точных нет во всём наборе (все порции).
+    await appendStaffFioSearch(whereParts, params, filter.search);
   } catch (error) {
     if (error instanceof StaffFilterUnavailableError) {
       res.status(409).json({ success: false, error: error.message, code: 'FILTER_UNAVAILABLE' });
