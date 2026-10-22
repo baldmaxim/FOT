@@ -4,7 +4,7 @@
  */
 import type { AuthenticatedRequest } from '../types/index.js';
 import { query, queryOne } from '../config/postgres.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback } from '../utils/fio-search.utils.js';
 import {
   canWriteDepartmentInScope,
   canWriteEmployeeInScope,
@@ -172,8 +172,8 @@ export async function searchTimesheetOfficeEmployees(
   req: AuthenticatedRequest,
   search: string,
 ): Promise<ITimesheetOfficeEmployee[]> {
-  const term = search.trim().toLowerCase().replace(/ё/g, 'е');
-  if (term.length < SEARCH_MIN_LENGTH) return [];
+  const fio = search.trim().length >= SEARCH_MIN_LENGTH ? buildFioSearch(search) : null;
+  if (!fio) return [];
 
   const [contractorIds, accessible] = await Promise.all([
     loadContractorDepartmentIds(),
@@ -183,26 +183,28 @@ export async function searchTimesheetOfficeEmployees(
   const writable = accessible === 'all' ? null : await resolveWritableScopedDepartmentIds(req, accessible);
   if (writable && writable.length === 0) return [];
 
-  const params: unknown[] = [contractorIds, `%${escapeLike(term)}%`];
-  let scopeSql = '';
-  if (writable) {
-    params.push(writable);
-    scopeSql = 'AND e.org_department_id = ANY($3::uuid[])';
-  }
-  const rows = await query<ITimesheetOfficeEmployee>(
-    `SELECT e.id, e.full_name, d.name AS department
-       FROM employees e
-       LEFT JOIN org_departments d ON d.id = e.org_department_id
-      WHERE e.is_archived = false
-        AND e.employment_status = 'active'
-        AND e.org_department_id IS NOT NULL
-        AND NOT (e.org_department_id = ANY($1::uuid[]))
-        AND replace(lower(e.full_name), 'ё', 'е') LIKE $2
-        ${scopeSql}
-      ORDER BY e.full_name, e.id
-      LIMIT ${SEARCH_LIMIT}`,
-    params,
-  );
+  const rows = await withFioFallback(fio, (mode) => {
+    const params: unknown[] = [contractorIds];
+    let scopeSql = '';
+    if (writable) {
+      params.push(writable);
+      scopeSql = 'AND e.org_department_id = ANY($2::uuid[])';
+    }
+    return query<ITimesheetOfficeEmployee>(
+      `SELECT e.id, e.full_name, d.name AS department
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.is_archived = false
+          AND e.employment_status = 'active'
+          AND e.org_department_id IS NOT NULL
+          AND NOT (e.org_department_id = ANY($1::uuid[]))
+          AND ${fioConditionSql('e', params, fio, mode)}
+          ${scopeSql}
+        ORDER BY e.full_name, e.id
+        LIMIT ${SEARCH_LIMIT}`,
+      params,
+    );
+  });
   return rows.map(row => ({ id: Number(row.id), full_name: row.full_name, department: row.department }));
 }
 

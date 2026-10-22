@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildFioSearch,
   buildFuzzyVariants,
+  createFioTextMatcher,
+  fioConditionSql,
   fioExactConditionSql,
   fioFuzzyConditionSql,
   fioSearchTerms,
+  includesText,
   switchLayoutToRu,
+  withFioFallback,
   type FioSearchTable,
 } from './fio-search.utils.js';
 
@@ -119,5 +123,52 @@ describe('fio-search: условия SQL', () => {
 
   it('таблица — только из белого списка', () => {
     expect(() => fioExactConditionSql('x; DROP TABLE employees' as FioSearchTable, [], buildFioSearch('а')!)).toThrow();
+  });
+});
+
+describe('fio-search: user_profiles, режим, подсказки', () => {
+  it('user_profiles (up): точное — по up.full_name, с ошибкой — LATERAL по user_profiles, id uuid', () => {
+    const search = buildFioSearch('грнев')!;
+    const exactParams: unknown[] = [];
+    expect(fioExactConditionSql('up', exactParams, search)).toBe('(up.full_name ~* $1)');
+    const fuzzyParams: unknown[] = ['x'];
+    const sql = fioConditionSql('up', fuzzyParams, search, 'fuzzy');
+    expect(sql).toBe('up.id IN (SELECT fz.id FROM unnest($2::text[]) AS fz_re(re)'
+      + ' CROSS JOIN LATERAL (SELECT fx.id FROM user_profiles fx WHERE fx.full_name ~* fz_re.re) fz)');
+  });
+
+  it('withFioFallback: точное есть — второго запроса нет; пусто — с ошибкой; вариантов нет — без второго', async () => {
+    const run = vi.fn(async (mode: 'exact' | 'fuzzy') => (mode === 'exact' ? ['точный'] : ['с ошибкой']));
+    expect(await withFioFallback(buildFioSearch('грнев')!, run)).toEqual(['точный']);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    const empty = vi.fn(async (mode: 'exact' | 'fuzzy') => (mode === 'exact' ? [] : ['с ошибкой']));
+    expect(await withFioFallback(buildFioSearch('грнев')!, empty)).toEqual(['с ошибкой']);
+    expect(await withFioFallback(buildFioSearch('гри')!, empty)).toEqual([]);
+  });
+});
+
+describe('fio-search: проверка в JS', () => {
+  it('точно: ё = е, регистр, пробелы, раскладка; с ошибкой — только в режиме fuzzy', () => {
+    const matcher = createFioTextMatcher('грнев')!;
+    expect(matcher.hasFuzzy).toBe(true);
+    expect(matcher.matches('Гринёв  Андрей', 'exact')).toBe(false);
+    expect(matcher.matches('Гринёв  Андрей', 'fuzzy')).toBe(true);
+    expect(matcher.matches('Петров', 'fuzzy')).toBe(false);
+    expect(createFioTextMatcher('uhbyt')!.matches('ГРИНЁВ', 'exact')).toBe(true);
+    expect(createFioTextMatcher('гринев андрей')!.matches('Гринёв   Андрей', 'exact')).toBe(true);
+    expect(createFioTextMatcher('  ')).toBeNull();
+  });
+
+  it('спецсимволы — буквально; две ошибки — нет', () => {
+    expect(createFioTextMatcher('и.и')!.matches('Иванов ИХИ', 'fuzzy')).toBe(false);
+    expect(createFioTextMatcher('и.и')!.matches('Иванов И.И.', 'exact')).toBe(true);
+    expect(createFioTextMatcher('гирнеф')!.matches('Гринёв', 'fuzzy')).toBe(false);
+  });
+
+  it('includesText: прочие поля — вхождение, ё = е, без раскладки', () => {
+    expect(includesText('Главный инженёр', 'инженер')).toBe(true);
+    expect(includesText('Бухгалтерия', ',e[')).toBe(false);
+    expect(includesText(null, 'а')).toBe(false);
   });
 });

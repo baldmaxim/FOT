@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { buildFuzzyVariants, fioSearchTerms, searchRowsByFio, switchLayoutToRu } from './fioSearch';
+import {
+  buildFuzzyVariants,
+  createFioMatcher,
+  filterByFio,
+  fioSearchTerms,
+  includesText,
+  searchRowsByFio,
+  switchLayoutToRu,
+  withFioFallback,
+} from './fioSearch';
 
 // Те же случаи — в fot-server/src/utils/fio-search.utils.test.ts: алгоритм сервера и фронта один.
 describe('fioSearch: термы', () => {
@@ -112,5 +121,48 @@ describe('searchRowsByFio', () => {
     const result = searchRowsByFio(ROWS, nameOf, '  ', all);
     expect(result.searchedRows).toEqual(ROWS);
     expect(result.visibleRows).toEqual(ROWS);
+  });
+});
+
+// Те же случаи, что «fio-search: проверка в JS» на сервере.
+describe('createFioMatcher / withFioFallback / includesText', () => {
+  it('точно: ё = е, регистр, пробелы, раскладка; с ошибкой — только в режиме fuzzy', () => {
+    const matcher = createFioMatcher('грнев')!;
+    expect(matcher.hasFuzzy).toBe(true);
+    expect(matcher.matches('Гринёв  Андрей', 'exact')).toBe(false);
+    expect(matcher.matches('Гринёв  Андрей', 'fuzzy')).toBe(true);
+    expect(matcher.matches('Петров', 'fuzzy')).toBe(false);
+    expect(createFioMatcher('uhbyt')!.matches('ГРИНЁВ', 'exact')).toBe(true);
+    expect(createFioMatcher('гринев андрей')!.matches('Гринёв   Андрей', 'exact')).toBe(true);
+    expect(createFioMatcher('  ')).toBeNull();
+  });
+
+  it('спецсимволы — буквально; две ошибки — нет', () => {
+    expect(createFioMatcher('и.и')!.matches('Иванов ИХИ', 'fuzzy')).toBe(false);
+    expect(createFioMatcher('и.и')!.matches('Иванов И.И.', 'exact')).toBe(true);
+    expect(createFioMatcher('гирнеф')!.matches('Гринёв', 'fuzzy')).toBe(false);
+  });
+
+  it('withFioFallback: точное есть — только оно; пусто — с ошибкой; без вариантов — пусто', () => {
+    const run = (exact: string[], fuzzy: string[]) => (mode: 'exact' | 'fuzzy') => (mode === 'exact' ? exact : fuzzy);
+    expect(withFioFallback(createFioMatcher('грнев'), run(['т'], ['о']))).toEqual(['т']);
+    expect(withFioFallback(createFioMatcher('грнев'), run([], ['о']))).toEqual(['о']);
+    expect(withFioFallback(createFioMatcher('гри'), run([], ['о']))).toEqual([]);
+  });
+
+  it('includesText: прочие поля — вхождение, ё = е, без раскладки', () => {
+    expect(includesText('Главный инженёр', 'инженер')).toBe(true);
+    expect(includesText('Бухгалтерия', ',e[')).toBe(false);
+    expect(includesText(null, 'а')).toBe(false);
+  });
+});
+
+describe('filterByFio', () => {
+  const people = [{ name: 'Гринёв Андрей' }, { name: 'Гриневич Николай' }, { name: 'Петров Пётр' }];
+  it('пустой ввод — тот же массив; точные; без точных — с одной ошибкой', () => {
+    expect(filterByFio(people, row => row.name, '  ')).toBe(people);
+    expect(filterByFio(people, row => row.name, 'uhbyt').map(row => row.name)).toEqual(['Гринёв Андрей', 'Гриневич Николай']);
+    expect(filterByFio(people, row => row.name, 'петрв').map(row => row.name)).toEqual(['Петров Пётр']);
+    expect(filterByFio(people, row => row.name, 'гриневич').map(row => row.name)).toEqual(['Гриневич Николай']);
   });
 });

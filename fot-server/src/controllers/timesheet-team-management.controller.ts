@@ -11,7 +11,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback } from '../utils/fio-search.utils.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { hasPageEdit, resolveEffectivePageAccess } from '../services/access-control.service.js';
@@ -238,22 +238,26 @@ export const timesheetTeamManagementController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
       }
 
-      const employees = await query<{
-        id: number;
-        full_name: string | null;
-        org_department_id: string | null;
-        excluded_from_timesheet: boolean;
-      }>(
-        `SELECT id, full_name, org_department_id, excluded_from_timesheet
-           FROM employees
-          WHERE full_name ILIKE $1
-            AND employment_status = 'active'
-            AND is_archived = false
-            AND (org_department_id IS NULL OR org_department_id <> $2)
-          ORDER BY full_name
-          LIMIT 20`,
-        [`%${escapeLike(parsed.q)}%`, targetDepartmentId],
-      );
+      const fio = buildFioSearch(parsed.q);
+      const employees = !fio ? [] : await withFioFallback(fio, (mode) => {
+        const params: unknown[] = [targetDepartmentId];
+        return query<{
+          id: number;
+          full_name: string | null;
+          org_department_id: string | null;
+          excluded_from_timesheet: boolean;
+        }>(
+          `SELECT id, full_name, org_department_id, excluded_from_timesheet
+             FROM employees
+            WHERE ${fioConditionSql('employees', params, fio, mode)}
+              AND employment_status = 'active'
+              AND is_archived = false
+              AND (org_department_id IS NULL OR org_department_id <> $1)
+            ORDER BY full_name
+            LIMIT 20`,
+          params,
+        );
+      });
 
       const departmentIds = [...new Set(employees
         .map(employee => employee.org_department_id)

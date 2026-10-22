@@ -89,22 +89,37 @@ export const buildFioSearch = (raw: string): IFioSearch | null => {
   return { exact, fuzzy };
 };
 
-const FIO_SEARCH_COLUMNS = {
-  employees: { name: 'full_name', id: 'id' },
-  e: { name: 'e.full_name', id: 'e.id' },
-} as const;
-/** Таблица employees в запросе: без алиаса или `e`. */
-export type FioSearchTable = keyof typeof FIO_SEARCH_COLUMNS;
+/** Точный поиск или с одной ошибкой — решается по итоговому набору экрана. */
+export type FioSearchMode = 'exact' | 'fuzzy';
 
-const fioColumns = (table: FioSearchTable) => {
-  const columns = FIO_SEARCH_COLUMNS[table];
-  if (!columns) throw new Error(`Недопустимая таблица поиска ФИО: ${table}`);
-  return columns;
+/**
+ * Цели условий — только из белого списка. С индексом: внешние колонки ФИО и id + таблица, в которой каждый вариант
+ * с ошибкой ищется по trigram-индексу отдельно (LATERAL). Без индекса — выражение, варианты через `~* ANY`.
+ */
+type FioSearchTargetSpec =
+  | { kind: 'indexed'; name: string; id: string; table: 'employees' | 'user_profiles' }
+  | { kind: 'plain'; name: string };
+
+const FIO_SEARCH_TARGETS = {
+  // employees: id int, индекс 080.
+  employees: { kind: 'indexed', name: 'full_name', id: 'id', table: 'employees' },
+  e: { kind: 'indexed', name: 'e.full_name', id: 'e.id', table: 'employees' },
+  // user_profiles: id uuid, индекс 110.
+  user_profiles: { kind: 'indexed', name: 'full_name', id: 'id', table: 'user_profiles' },
+  up: { kind: 'indexed', name: 'up.full_name', id: 'up.id', table: 'user_profiles' },
+} as const satisfies Record<string, FioSearchTargetSpec>;
+/** Таблица и алиас в запросе. */
+export type FioSearchTable = keyof typeof FIO_SEARCH_TARGETS;
+
+const fioTarget = (table: FioSearchTable): FioSearchTargetSpec => {
+  const target: FioSearchTargetSpec | undefined = FIO_SEARCH_TARGETS[table];
+  if (!target) throw new Error(`Недопустимая таблица поиска ФИО: ${table}`);
+  return target;
 };
 
 /** Точные совпадения: OR по выражениям — каждое идёт по trigram-индексу (BitmapOr). */
 export const fioExactConditionSql = (table: FioSearchTable, params: unknown[], search: IFioSearch): string => {
-  const { name } = fioColumns(table);
+  const { name } = fioTarget(table);
   return `(${search.exact.map(regex => {
     params.push(regex);
     return `${name} ~* $${params.length}`;
@@ -116,8 +131,59 @@ export const fioExactConditionSql = (table: FioSearchTable, params: unknown[], s
  * отдельно (LATERAL), найденные id объединяются.
  */
 export const fioFuzzyConditionSql = (table: FioSearchTable, params: unknown[], search: IFioSearch): string => {
-  const { id } = fioColumns(table);
+  const target = fioTarget(table);
   params.push([...search.exact, ...search.fuzzy]);
-  return `${id} IN (SELECT fz.id FROM unnest($${params.length}::text[]) AS fz_re(re)`
-    + ' CROSS JOIN LATERAL (SELECT fx.id FROM employees fx WHERE fx.full_name ~* fz_re.re) fz)';
+  if (target.kind === 'plain') return `${target.name} ~* ANY($${params.length}::text[])`;
+  return `${target.id} IN (SELECT fz.id FROM unnest($${params.length}::text[]) AS fz_re(re)`
+    + ` CROSS JOIN LATERAL (SELECT fx.id FROM ${target.table} fx WHERE fx.full_name ~* fz_re.re) fz)`;
 };
+
+export const fioConditionSql = (
+  table: FioSearchTable,
+  params: unknown[],
+  search: IFioSearch,
+  mode: FioSearchMode,
+): string => (mode === 'fuzzy' ? fioFuzzyConditionSql(table, params, search) : fioExactConditionSql(table, params, search));
+
+/**
+ * Подсказки: точный поиск, пусто — с одной ошибкой. Только если все фильтры экрана (доступ, политика) уже внутри run:
+ * иначе точный результат, отрезанный фильтром после run, ошибочно не пустит опечатку или пустит её зря.
+ */
+export const withFioFallback = async <T>(
+  search: IFioSearch,
+  run: (mode: FioSearchMode) => Promise<T[]>,
+): Promise<T[]> => {
+  const exact = await run('exact');
+  if (exact.length > 0 || search.fuzzy.length === 0) return exact;
+  return run('fuzzy');
+};
+
+/** Проверка ФИО в JS (фильтры после SQL) — то же правило, что в SQL и на фронте. */
+export interface IFioTextMatcher {
+  hasFuzzy: boolean;
+  matches: (text: string | null | undefined, mode: FioSearchMode) => boolean;
+}
+
+const escapeJsRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export const createFioTextMatcher = (raw: string): IFioTextMatcher | null => {
+  const terms = fioSearchTerms(raw);
+  if (terms.length === 0) return null;
+  const variants = [...new Set(terms.flatMap(buildFuzzyVariants))];
+  // Текст нормализован (пробелы схлопнуты), поэтому `_` — просто любой символ.
+  const fuzzyRe = variants.length > 0
+    ? new RegExp(variants.map(variant => variant.split('_').map(escapeJsRegExp).join('.')).join('|'))
+    : null;
+  return {
+    hasFuzzy: fuzzyRe !== null,
+    matches: (text, mode) => {
+      const normalized = normalizeFioSearch(text ?? '');
+      if (terms.some(term => normalized.includes(term))) return true;
+      return mode === 'fuzzy' && fuzzyRe !== null && fuzzyRe.test(normalized);
+    },
+  };
+};
+
+/** Прочие текстовые поля (должность, отдел, организация): вхождение без учёта регистра, ё = е. */
+export const includesText = (text: string | null | undefined, query: string): boolean =>
+  normalizeFioSearch(text ?? '').includes(normalizeFioSearch(query));

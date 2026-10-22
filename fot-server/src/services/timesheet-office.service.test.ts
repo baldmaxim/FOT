@@ -536,9 +536,21 @@ describe('чтение', () => {
     const rows = await searchTimesheetOfficeEmployees(req, 'Семёнов');
     expect(rows).toEqual([{ id: 30, full_name: 'Семенов', department: 'Бухгалтерия' }]);
     const [sql, params] = h.query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("replace(lower(e.full_name), 'ё', 'е') LIKE $2");
+    // ё = е и регистр — регулярным выражением по сырому ФИО (trigram-индекс 080), скоуп — до поиска.
+    expect(sql).toContain('e.org_department_id = ANY($2::uuid[])');
+    expect(sql).toContain('(e.full_name ~* $3)');
     expect(sql).toContain('ORDER BY e.full_name, e.id');
-    expect(params).toEqual([[CONTRACTOR_DEPT], '%семенов%', [DEPT]]);
+    expect(params).toEqual([[CONTRACTOR_DEPT], [DEPT], 'с[её]м[её]нов']);
+    expect(h.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('поиск: точного нет — второй запрос с одной ошибкой', async () => {
+    h.accessible.mockResolvedValue('all');
+    h.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 31, full_name: 'Семенов', department: null }]);
+    const rows = await searchTimesheetOfficeEmployees(req, 'Семнов');
+    expect(rows.map(row => row.id)).toEqual([31]);
+    const [sql] = h.query.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('e.id IN (SELECT fz.id FROM unnest($2::text[])');
   });
 });
 

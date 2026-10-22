@@ -57,9 +57,55 @@ export const fioSearchTerms = (raw: string): string[] => {
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Строка подходит под один из вариантов с ошибкой (`_` — любой символ). */
-const fuzzyMatcher = (variants: ReadonlyArray<string>): RegExp =>
-  new RegExp(variants.map(variant => variant.split('_').map(escapeRegExp).join('.')).join('|'));
+/** Точный поиск или с одной ошибкой — решается по итоговому набору экрана. */
+export type FioSearchMode = 'exact' | 'fuzzy';
+
+export interface IFioMatcher {
+  /** Есть варианты с одной ошибкой (ввод 5–20 символов из букв, пробелов и дефисов). */
+  hasFuzzy: boolean;
+  /** ФИО: точно (ё = е, регистр, пробелы, раскладка) или ещё и с одной ошибкой. */
+  matches: (text: string | null | undefined, mode: FioSearchMode) => boolean;
+}
+
+/** null — пустой ввод: фильтра нет. */
+export const createFioMatcher = (search: string): IFioMatcher | null => {
+  const terms = fioSearchTerms(search);
+  if (terms.length === 0) return null;
+  const variants = [...new Set(terms.flatMap(buildFuzzyVariants))];
+  // Текст нормализован (пробелы схлопнуты), поэтому `_` — просто любой символ.
+  const fuzzyRe = variants.length > 0
+    ? new RegExp(variants.map(variant => variant.split('_').map(escapeRegExp).join('.')).join('|'))
+    : null;
+  return {
+    hasFuzzy: fuzzyRe !== null,
+    matches: (text, mode) => {
+      const normalized = normalizeFioSearch(text ?? '');
+      if (terms.some(term => normalized.includes(term))) return true;
+      return mode === 'fuzzy' && fuzzyRe !== null && fuzzyRe.test(normalized);
+    },
+  };
+};
+
+/**
+ * Фильтр с поиском по ФИО: run('exact'); пусто и есть варианты — run('fuzzy'). run считает итоговый набор
+ * экрана целиком (все прочие фильтры внутри), иначе точный, убранный другим фильтром, ошибочно не пустит опечатку.
+ */
+export const withFioFallback = <T,>(matcher: IFioMatcher | null, run: (mode: FioSearchMode) => T[]): T[] => {
+  const exact = run('exact');
+  if (exact.length > 0 || !matcher?.hasFuzzy) return exact;
+  return run('fuzzy');
+};
+
+/** Список, где ищут только по ФИО: пустой ввод — тот же список; иначе точные, а без них — с одной ошибкой. */
+export const filterByFio = <T,>(rows: T[], getFio: (row: T) => string | null | undefined, search: string): T[] => {
+  const matcher = createFioMatcher(search);
+  if (!matcher) return rows;
+  return withFioFallback(matcher, mode => rows.filter(row => matcher.matches(getFio(row), mode)));
+};
+
+/** Прочие текстовые поля (должность, отдел, организация, объект): вхождение без учёта регистра, ё = е. */
+export const includesText = (text: string | null | undefined, search: string): boolean =>
+  normalizeFioSearch(text ?? '').includes(normalizeFioSearch(search));
 
 export interface IFioSearchResult<Row> {
   /** После поиска, до фильтров столбцов — для вариантов фильтров. */
@@ -78,17 +124,15 @@ export const searchRowsByFio = <Row,>(
   search: string,
   finalize: (rows: Row[]) => Row[],
 ): IFioSearchResult<Row> => {
-  const terms = fioSearchTerms(search);
-  if (terms.length === 0) {
+  const matcher = createFioMatcher(search);
+  if (!matcher) {
     const searchedRows = [...rows];
     return { searchedRows, visibleRows: finalize(searchedRows) };
   }
-  const texts = rows.map(row => normalizeFioSearch(getText(row) ?? ''));
-  const exactRows = rows.filter((_, i) => terms.some(term => texts[i].includes(term)));
-  const exactVisible = finalize(exactRows);
-  const fuzzy = [...new Set(terms.flatMap(buildFuzzyVariants))];
-  if (exactVisible.length > 0 || fuzzy.length === 0) return { searchedRows: exactRows, visibleRows: exactVisible };
-  const matcher = fuzzyMatcher(fuzzy);
-  const searchedRows = rows.filter((_, i) => terms.some(term => texts[i].includes(term)) || matcher.test(texts[i]));
-  return { searchedRows, visibleRows: finalize(searchedRows) };
+  let searchedRows: Row[] = [];
+  const visibleRows = withFioFallback(matcher, mode => {
+    searchedRows = rows.filter(row => matcher.matches(getText(row), mode));
+    return finalize(searchedRows);
+  });
+  return { searchedRows, visibleRows };
 };

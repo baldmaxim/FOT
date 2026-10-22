@@ -21,6 +21,7 @@ import { HrAckRequestCard } from '../components/leave-requests/HrAckRequestCard'
 import { isLeaveRequestFullyFuture, leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
 import { TIMESHEET_FAMILY_KEYS } from '../api/queryKeys';
 import './LeaveRequestsManagePage.css';
+import { createFioMatcher, withFioFallback } from '../utils/fioSearch';
 
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 const NO_DEPARTMENT_KEY = 'Без отдела';
@@ -134,11 +135,13 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
 
   const filtered = useMemo(() => {
     if (!isFiltering) return ackFiltered;
-    return ackFiltered.filter(r =>
+    // ФИО — после остальных фильтров: точный, убранный ими, опечатку не глушит.
+    const matcher = createFioMatcher(search);
+    return withFioFallback(matcher, mode => ackFiltered.filter(r =>
       (deptFilter === '' || deptKeyOf(r) === deptFilter)
       && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
-      && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
-  }, [ackFiltered, isFiltering, deptFilter, hasPeriod, periodFrom, periodTo, query]);
+      && (!matcher || matcher.matches(r.employee_name, mode))));
+  }, [ackFiltered, isFiltering, deptFilter, hasPeriod, periodFrom, periodTo, search]);
 
   // Инвариант from ≤ to держим сами: min/max — лишь подсказка календарю,
   // при ручном вводе с клавиатуры перевёрнутый диапазон иначе пройдёт.

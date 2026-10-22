@@ -211,6 +211,7 @@ vi.mock('../services/recipients.service.js', () => ({
 const scope = vi.hoisted(() => ({
   resolveTimesheetScope: vi.fn(async () => 'department' as const),
   canAccess: vi.fn(async () => true),
+  filterView: vi.fn(async (_req: unknown, ids: number[], _from: string, _to: string) => ids),
   hasManagedTimesheetAccess: vi.fn(async () => true),
   periods: vi.fn(async () => []),
 }));
@@ -222,6 +223,7 @@ vi.mock('../services/timesheet-scope.service.js', () => ({
   resolveTimesheetScopedDepartmentId: vi.fn(async (_req: unknown, id: string | null) => id),
   resolveTimesheetReadableDepartmentId: vi.fn(async (_req: unknown, id: string | null) => id),
   canAccessEmployeeForTimesheetPeriod: scope.canAccess,
+  filterEmployeeIdsForTimesheetView: scope.filterView,
   filterEmployeeIdsByTimesheetScope: vi.fn(async (_req: unknown, ids: number[]) => ids),
   filterAdditionalEmployeeIdsForTimesheetPeriod: vi.fn(async (_req: unknown, ids: number[]) => ids),
   roleAllowsTimesheet: vi.fn(async () => true),
@@ -492,6 +494,10 @@ describe('listEmployeeAssignmentPeriods', () => {
 });
 
 describe('searchEmployeesForTimesheet', () => {
+  beforeEach(() => {
+    scope.filterView.mockImplementation(async (_req: unknown, ids: number[]) => ids);
+  });
+
   const call = async (query: Record<string, unknown>) => {
     const res = makeRes();
     await timesheetController.searchEmployeesForTimesheet(makeReq(query), res);
@@ -502,6 +508,23 @@ describe('searchEmployeesForTimesheet', () => {
     { id: 1, full_name: 'Иванов Иван', org_department_id: null, employment_status: 'active' },
     { id: 2, full_name: 'Иванов Пётр', org_department_id: null, employment_status: 'fired' },
   ];
+  const isSearchSql = (sql: string) => sql.includes('FROM employees') && sql.includes('~*');
+  const isDetailsSql = (sql: string) => sql.includes('FROM employees WHERE id = ANY');
+  // Поиск отдаёт id в порядке ORDER BY, детали — по id.
+  const mockEmployees = (ordered: typeof candidates, fuzzy: typeof candidates = []) => {
+    h.pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('employee_timesheet_view_access')) return [];
+      if (isSearchSql(sql)) {
+        const isFuzzy = sql.includes('unnest(');
+        return (isFuzzy ? [...ordered, ...fuzzy] : ordered).map(row => ({ id: row.id }));
+      }
+      if (isDetailsSql(sql)) {
+        const ids = (params?.[0] ?? []) as number[];
+        return [...candidates, ...fuzzy].filter(row => ids.includes(row.id));
+      }
+      return [];
+    });
+  };
 
   it('без диапазона дат → 400', async () => {
     const res = await call({ q: 'Иванов' });
@@ -516,72 +539,105 @@ describe('searchEmployeesForTimesheet', () => {
     expect(h.pgQuery).not.toHaveBeenCalled();
   });
 
-  it('неглобальный скоуп: недоступные сотрудники отсеиваются поштучно', async () => {
-    h.pgQuery.mockImplementation(async (sql: string) => (
-      sql.includes('FROM employees') ? candidates : []
-    ));
-    scope.canAccess.mockImplementation(async (_req: unknown, id: number) => id === 1);
+  it('неглобальный скоуп: недоступные отсеиваются пакетно, без поштучных проверок', async () => {
+    mockEmployees(candidates);
+    scope.filterView.mockImplementation(async (_req, ids) => ids.filter(id => id === 1));
 
     const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
 
     expect(res._json.data).toEqual([
       expect.objectContaining({ id: 1, full_name: 'Иванов Иван' }),
     ]);
+    expect(scope.filterView).toHaveBeenCalledWith(expect.anything(), [1, 2], `${MONTH}-01`, `${MONTH}-31`);
+    expect(scope.canAccess).not.toHaveBeenCalled();
+  });
+
+  it('доступный сотрудник за прежним лимитом 40 находится; выдача — не больше 20', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      id: 100 + i, full_name: `Иванов ${String(i).padStart(2, '0')}`, org_department_id: null, employment_status: 'active',
+    }));
+    h.pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (isSearchSql(sql)) return many.map(row => ({ id: row.id }));
+      if (isDetailsSql(sql)) return many.filter(row => ((params?.[0] ?? []) as number[]).includes(row.id));
+      return [];
+    });
+    scope.filterView.mockImplementation(async (_req, ids) => ids.filter(id => id >= 145));
+
+    const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
+
+    expect(res._json.data.map((row: { id: number }) => row.id)).toEqual(
+      Array.from({ length: 15 }, (_, i) => 145 + i),
+    );
+    expect(h.pgQuery.mock.calls.filter(([sql]) => isSearchSql(String(sql)))).toHaveLength(1);
+  });
+
+  it('точный есть только в недоступной области — опечатка ищется среди доступных', async () => {
+    const fuzzyRow = { id: 3, full_name: 'Иванав Олег', org_department_id: null, employment_status: 'active' };
+    mockEmployees(candidates, [fuzzyRow]);
+    scope.filterView.mockImplementation(async (_req, ids) => ids.filter(id => id === 3));
+
+    const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
+
+    expect(res._json.data.map((row: { id: number }) => row.id)).toEqual([3]);
+  });
+
+  it('точный доступный есть — опечатки не подмешиваются', async () => {
+    const fuzzyRow = { id: 3, full_name: 'Иванав Олег', org_department_id: null, employment_status: 'active' };
+    mockEmployees(candidates, [fuzzyRow]);
+
+    const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
+
+    expect(res._json.data.map((row: { id: number }) => row.id)).toEqual([1, 2]);
+    expect(h.pgQuery.mock.calls.some(([sql]) => isSearchSql(String(sql)) && String(sql).includes('unnest('))).toBe(false);
   });
 
   it('self-скоуп не видит чужих сотрудников', async () => {
     scope.resolveTimesheetScope.mockResolvedValue('self');
-    h.pgQuery.mockImplementation(async (sql: string) => (
-      sql.includes('FROM employees') ? candidates : []
-    ));
-    // canAccessEmployeeForTimesheetPeriod при self пропускает только самого себя,
-    // а сам пользователь под этот поисковый запрос не подходит.
-    scope.canAccess.mockImplementation(async (_req: unknown, id: number) => id === 999);
+    mockEmployees(candidates);
+    // При self пакетная проверка пропускает только самого себя, а он под запрос не подходит.
+    scope.filterView.mockImplementation(async (_req, ids) => ids.filter(id => id === 999));
 
     const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
 
     expect(res._json.data).toEqual([]);
   });
 
-  it('«Просмотр табеля»: назначенные — первыми в запросе (лимит 40), выдача — по ФИО', async () => {
-    h.pgQuery.mockImplementation(async (sql: string) => {
+  it('«Просмотр табеля»: назначенные — первыми в запросе, выдача — по ФИО', async () => {
+    h.pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes('employee_timesheet_view_access')) return [{ employee_id: 2 }];
       // БД отдаёт назначенного первым — по ORDER BY с приоритетом.
-      if (sql.includes('FROM employees')) return [candidates[1], candidates[0]];
+      if (isSearchSql(sql)) return [{ id: 2 }, { id: 1 }];
+      if (isDetailsSql(sql)) return candidates.filter(row => ((params?.[0] ?? []) as number[]).includes(row.id));
       return [];
     });
-    scope.canAccess.mockResolvedValue(true);
 
     const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
 
-    const searchCall = h.pgQuery.mock.calls.find(([sql]) => String(sql).includes('FROM employees'));
-    expect(String(searchCall?.[0])).toContain('ORDER BY (id = ANY($3::int[])) DESC, full_name');
-    expect(searchCall?.[1]).toEqual(['%Иванов%', `${MONTH}-01`, [2]]);
+    const searchCall = h.pgQuery.mock.calls.find(([sql]) => isSearchSql(String(sql)));
+    expect(String(searchCall?.[0])).toContain('ORDER BY (id = ANY($2::int[])) DESC, full_name');
+    expect(searchCall?.[1]).toEqual([`${MONTH}-01`, [2], 'иванов']);
     expect(res._json.data.map((row: { id: number }) => row.id)).toEqual([1, 2]);
   });
 
-  it('глобальный скоуп не делает поштучных проверок', async () => {
+  it('глобальный скоуп не фильтрует доступ', async () => {
     scope.resolveTimesheetScope.mockResolvedValue('all');
-    h.pgQuery.mockImplementation(async (sql: string) => (
-      sql.includes('FROM employees') ? candidates : []
-    ));
+    mockEmployees(candidates);
 
     const res = await call({ q: 'Иванов', from: `${MONTH}-01`, to: `${MONTH}-31` });
 
     expect(res._json.data).toHaveLength(2);
+    expect(scope.filterView).not.toHaveBeenCalled();
     expect(scope.canAccess).not.toHaveBeenCalled();
   });
 
   it('уволенный в месяце увольнения ищется по составу табеля (до даты увольнения)', async () => {
     scope.resolveTimesheetScope.mockResolvedValue('all');
-    h.pgQuery.mockImplementation(async (sql: string) => (
-      sql.includes('FROM employees') ? candidates : []
-    ));
+    mockEmployees(candidates);
 
     await call({ q: 'Иванов', from: '2026-10-01', to: '2026-10-31' });
 
-    const searchSql = String(h.pgQuery.mock.calls.find(([sql]) => String(sql).includes('FROM employees'))?.[0]);
-    expect(searchSql).toContain('dismissal_date >= $2::date');
+    const searchSql = String(h.pgQuery.mock.calls.find(([sql]) => isSearchSql(String(sql)))?.[0]);
+    expect(searchSql).toContain('dismissal_date >= $1::date');
     expect(searchSql).not.toContain('date_trunc');
   });
 });

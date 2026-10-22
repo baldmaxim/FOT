@@ -36,6 +36,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { collectDescendantIds } from '../../utils/departmentUtils';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { matchApprovalEmployees, normalizeFio } from '../../utils/approvalEmployeeSearch';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -193,14 +194,13 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
 
   const allGroups: ICorrectionDepartmentGroup[] = useMemo(() => query.data ?? [], [query.data]);
   const groups: ICorrectionDepartmentGroup[] = useMemo(() => {
-    let gs = allowedDeptIds ? allGroups.filter(g => allowedDeptIds.has(g.department_id)) : allGroups;
-    const q = debouncedName.trim().toLowerCase();
-    if (q) {
-      gs = gs
-        .map(g => ({ ...g, items: g.items.filter(it => (it.employee_name ?? '').toLowerCase().includes(q)) }))
-        .filter(g => g.items.length > 0);
-    }
-    return gs;
+    const gs = allowedDeptIds ? allGroups.filter(g => allowedDeptIds.has(g.department_id)) : allGroups;
+    // Поиск — после фильтра отдела: точный в чужом отделе опечатку не глушит.
+    const matcher = createFioMatcher(debouncedName);
+    if (!matcher) return gs;
+    return withFioFallback(matcher, mode => gs
+      .map(g => ({ ...g, items: g.items.filter(it => matcher.matches(it.employee_name, mode)) }))
+      .filter(g => g.items.length > 0));
   }, [allGroups, allowedDeptIds, debouncedName]);
 
   const toggleId = (id: number) => {
@@ -948,19 +948,18 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
 
   const allRows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
   // Совпавшие по ФИО сотрудники каждой подачи — по составу из review-list, без раскрытия карточек.
-  const matchesByApproval = useMemo(() => {
-    const map = new Map<number, Array<{ employee_id: number; full_name: string }>>();
-    for (const r of allRows) {
-      const matches = matchApprovalEmployees(r.employees, debouncedName);
-      if (matches.length > 0) map.set(r.id, matches);
-    }
-    return map;
-  }, [allRows, debouncedName]);
+  const deptRows: IApprovalReviewItem[] = useMemo(
+    () => allRows.filter(r => !allowedDeptIds || (r.department_id != null && allowedDeptIds.has(r.department_id))),
+    [allRows, allowedDeptIds],
+  );
+  // Поиск — после фильтра отдела; подсветка карточек — из того же результата.
+  const matchesByApproval = useMemo(
+    () => matchApprovalEmployees(deptRows, debouncedName),
+    [deptRows, debouncedName],
+  );
   const rows: IApprovalReviewItem[] = useMemo(
-    () => allRows.filter(r =>
-      (!allowedDeptIds || (r.department_id != null && allowedDeptIds.has(r.department_id)))
-      && (!searchActive || matchesByApproval.has(r.id))),
-    [allRows, allowedDeptIds, searchActive, matchesByApproval],
+    () => deptRows.filter(r => !searchActive || matchesByApproval.has(r.id)),
+    [deptRows, searchActive, matchesByApproval],
   );
 
   // Группировка карточек по «участку» (общему parent_department_id) — см. group_key с бэка.

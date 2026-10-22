@@ -1,6 +1,13 @@
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { formatDateShift } from './timesheet-department-assignments.service.js';
-import { escapeLike } from '../utils/search.utils.js';
+import {
+  buildFioSearch,
+  createFioTextMatcher,
+  fioConditionSql,
+  type FioSearchMode,
+  type IFioSearch,
+  type IFioTextMatcher,
+} from '../utils/fio-search.utils.js';
 
 export interface ITransferRow {
   assignment_new_id: string;
@@ -701,7 +708,7 @@ export interface IAdminTransfersListing {
  * Фильтры применяются после построения базового списка:
  * - from/to: по transfer_date (для переводов) или exclusion_date (для исключений)
  * - department_id: для переводов — связан с from или to; для исключений — текущий отдел сотрудника
- * - employee_query: ilike по full_name
+ * - employee_query: ФИО (ё = е, раскладка); ничего точного ни в переводах, ни в исключениях — с одной ошибкой
  */
 export async function listAllTransfersAndExclusions(
   filters: IAdminTransfersFilters,
@@ -711,17 +718,27 @@ export async function listAllTransfersAndExclusions(
   const dateTo = filters.to || null;
   const deptFilter = filters.department_id || null;
 
-  const transfers = await buildAllTransfers({ dateFrom, dateTo, deptFilter, query: trimmedQuery });
-  const exclusions = await buildAllExclusions({ dateFrom, dateTo, deptFilter, query: trimmedQuery });
+  const fio = trimmedQuery ? buildFioSearch(trimmedQuery) : null;
+  const matcher = trimmedQuery ? createFioTextMatcher(trimmedQuery) : null;
+  const build = async (mode: FioSearchMode): Promise<IAdminTransfersListing> => {
+    const search = fio && matcher ? { fio, matcher, mode } : null;
+    const transfers = await buildAllTransfers({ dateFrom, dateTo, deptFilter, search });
+    const exclusions = await buildAllExclusions({ dateFrom, dateTo, deptFilter, search });
+    return { transfers, exclusions };
+  };
 
-  return { transfers, exclusions };
+  // Решение об опечатке — общее для обоих списков: точное совпадение в любом из них её не пускает.
+  const exact = await build('exact');
+  if (exact.transfers.length > 0 || exact.exclusions.length > 0 || !matcher?.hasFuzzy) return exact;
+  return build('fuzzy');
 }
 
 interface IBuildArgs {
   dateFrom: string | null;
   dateTo: string | null;
   deptFilter: string | null;
-  query: string;
+  /** Поиск по ФИО (null — без поиска): SQL у исключений, JS у переводов — одно правило. */
+  search: { fio: IFioSearch; matcher: IFioTextMatcher; mode: FioSearchMode } | null;
 }
 
 async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]> {
@@ -827,7 +844,6 @@ async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]>
   }
 
   // 4) Собираем строки переводов.
-  const queryLower = args.query.toLowerCase();
   const result: ITransferAdminRow[] = [];
   for (const empId of candidateEmployeeIds) {
     if (archivedSet.has(empId)) continue;
@@ -837,7 +853,7 @@ async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]>
     if (newA.org_department_id === oldA.org_department_id) continue;
 
     const fullName = nameByEmployee.get(empId) || '';
-    if (queryLower && !fullName.toLowerCase().includes(queryLower)) continue;
+    if (args.search && !args.search.matcher.matches(fullName, args.search.mode)) continue;
     if (
       args.deptFilter
       && newA.org_department_id !== args.deptFilter
@@ -878,9 +894,8 @@ async function buildAllExclusions(args: IBuildArgs): Promise<IExclusionAdminRow[
     params.push(args.deptFilter);
     where.push(`org_department_id = $${params.length}`);
   }
-  if (args.query) {
-    params.push(`%${escapeLike(args.query)}%`);
-    where.push(`full_name ILIKE $${params.length}`);
+  if (args.search) {
+    where.push(fioConditionSql('employees', params, args.search.fio, args.search.mode));
   }
 
   const rows = await query<{

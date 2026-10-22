@@ -264,6 +264,56 @@ export async function canAccessEmployeeForTimesheetPeriod(
 }
 
 /**
+ * Пакетная canAccessEmployeeForTimesheetPeriod(…, requireEdit = false): наборы резолвятся один раз на весь список,
+ * а не на каждого сотрудника (поиск по ФИО проверяет все совпадения). Ветки — в том же порядке; паритет — в тесте.
+ * filterAdditionalEmployeeIdsForTimesheetPeriod не годится: в ней нет «Просмотра табеля» (309) и уволенных
+ * в месяце увольнения.
+ */
+export async function filterEmployeeIdsForTimesheetView(
+  req: AuthenticatedRequest,
+  ids: number[],
+  startDate: string,
+  endDate: string,
+): Promise<number[]> {
+  const candidates = ids.filter(id => Boolean(id));
+  if (candidates.length === 0) return [];
+
+  const scope = await resolveTimesheetScope(req);
+  if (!scope) return [];
+  if (scope === 'all') return candidates;
+  const selfId = req.user.employee_id;
+  if (scope === 'self') return candidates.filter(id => id === selfId);
+
+  const allowed = new Set<number>();
+  if (scope === 'department') {
+    if (selfId) allowed.add(selfId);
+    for (const id of await resolveTimesheetViewOnlyEmployeeIds(req)) allowed.add(id);
+  }
+
+  if (await hasGlobalDepartmentReadScope(req)) return candidates;
+
+  if (await hasObjectViewScope(req)) {
+    const acc = await resolveAccessibleEmployeeIds(req);
+    if (acc === 'all') return candidates;
+    return candidates.filter(id => allowed.has(id) || acc.has(id));
+  }
+
+  const managedDepartmentIds = await resolveManagedDepartmentIds(req);
+  if (managedDepartmentIds.length > 0) {
+    const employeeIdsByDepartment = await Promise.all(
+      managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(
+        departmentId, startDate, endDate, { firedInDismissalMonth: true },
+      )),
+    );
+    for (const id of employeeIdsByDepartment.flat()) allowed.add(id);
+  }
+
+  for (const id of await resolveEffectiveDirectSubordinates(req)) allowed.add(id);
+
+  return candidates.filter(id => allowed.has(id));
+}
+
+/**
  * Сужает состав до видимого пользователю — зеркало объектного view-фильтра грида
  * (timesheet.controller.ts, getAll). Применяется ТОЛЬКО для hr и hasObjectViewScope:
  * при обычном полном department-скоупе пересечение с accessible-набором порезало бы

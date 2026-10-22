@@ -33,6 +33,7 @@ import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshes
 import { canManageAsHrAdmin } from '../services/access-control.service.js';
 import {
   canAccessEmployeeForTimesheetPeriod,
+  filterEmployeeIdsForTimesheetView,
   hasManagedTimesheetAccess,
   resolveTimesheetReadableDepartmentId,
   resolveTimesheetScope,
@@ -41,7 +42,7 @@ import {
 } from '../services/timesheet-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { listEmployeeDepartmentPeriods } from '../services/timesheet-employee-periods.service.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import {
   buildAttendanceEntries,
   deleteAttendanceAdjustmentBySource,
@@ -3363,45 +3364,50 @@ export const timesheetController = {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < from) {
         return res.status(400).json({ success: false, error: 'Некорректный диапазон дат' });
       }
-      if (q.length < 2) {
+      const fio = q.length >= 2 ? buildFioSearch(q) : null;
+      if (!fio) {
         return res.json({ success: true, data: [] });
       }
 
       // «Просмотр табеля» (миграция 309): назначенных — первыми, иначе при частой фамилии
-      // они терялись бы за первыми 40 совпадениями до поштучной проверки доступа ниже.
+      // они терялись бы за первыми 20 доступными.
       const viewOnlyIds = scope === 'department'
         ? [...await resolveTimesheetViewOnlyEmployeeIds(req)]
         : [];
-      const candidates = await query<{
+      const isGlobal = scope === 'all' || await hasGlobalDepartmentReadScope(req);
+      // Доступ — пакетно по ВСЕМ совпадениям (не поштучно по первым 40): иначе доступный сотрудник за лимитом
+      // терялся бы, а опечатка включалась бы, хотя точный есть. Чужие ФИО не уходят: фильтр во всех неглобальных скоупах.
+      const findVisibleIds = async (mode: FioSearchMode): Promise<number[]> => {
+        const params: unknown[] = [from, viewOnlyIds];
+        const rows = await query<{ id: number | string }>(
+          `SELECT id
+             FROM employees
+            WHERE ${fioConditionSql('employees', params, fio, mode)}
+              AND is_archived = false
+              AND ${firedPortalEligibleSql(null, '$1')}
+              AND NOT (excluded_from_timesheet = true
+                       AND (excluded_from_timesheet_date IS NULL
+                            OR excluded_from_timesheet_date <= $1::date))
+            ORDER BY (id = ANY($2::int[])) DESC, full_name, id`,
+          params,
+        );
+        const ids = rows.map(row => Number(row.id)).filter(id => Number.isFinite(id));
+        if (isGlobal) return ids;
+        const allowed = new Set(await filterEmployeeIdsForTimesheetView(req, ids, from, to));
+        return ids.filter(id => allowed.has(id));
+      };
+      const visibleIds = (await withFioFallback(fio, findVisibleIds)).slice(0, 20);
+      const details = visibleIds.length === 0 ? [] : await query<{
         id: number | string;
         full_name: string | null;
         org_department_id: string | null;
         employment_status: string | null;
       }>(
-        `SELECT id, full_name, org_department_id, employment_status
-           FROM employees
-          WHERE full_name ILIKE $1
-            AND is_archived = false
-            AND ${firedPortalEligibleSql(null, '$2')}
-            AND NOT (excluded_from_timesheet = true
-                     AND (excluded_from_timesheet_date IS NULL
-                          OR excluded_from_timesheet_date <= $2::date))
-          ORDER BY (id = ANY($3::int[])) DESC, full_name
-          LIMIT 40`,
-        [`%${escapeLike(q)}%`, from, viewOnlyIds],
+        'SELECT id, full_name, org_department_id, employment_status FROM employees WHERE id = ANY($1::int[])',
+        [visibleIds],
       );
-
-      // Доступ проверяем поштучно во ВСЕХ неглобальных скоупах: filterEmployeeIdsByTimesheetScope
-      // при обычном department-скоупе и при self возвращает список нетронутым — чужие ФИО утекли бы.
-      const isGlobal = scope === 'all' || await hasGlobalDepartmentReadScope(req);
-      const visible: typeof candidates = [];
-      for (const candidate of candidates) {
-        if (visible.length >= 20) break;
-        const empId = Number(candidate.id);
-        if (!Number.isFinite(empId)) continue;
-        if (!isGlobal && !(await canAccessEmployeeForTimesheetPeriod(req, empId, from, to))) continue;
-        visible.push(candidate);
-      }
+      const detailById = new Map(details.map(row => [Number(row.id), row]));
+      const visible = visibleIds.flatMap(id => detailById.get(id) ?? []);
       // Назначенные шли первыми только ради лимита — в выдаче прежний порядок по ФИО.
       if (viewOnlyIds.length > 0) {
         visible.sort((left, right) => String(left.full_name || '').localeCompare(String(right.full_name || ''), 'ru'));

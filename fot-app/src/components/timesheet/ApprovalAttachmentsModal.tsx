@@ -5,6 +5,7 @@ import { SearchInput } from '../ui/SearchInput';
 import { AttachmentList } from './AttachmentList';
 import type { IApprovalAttachment } from '../../services/timesheetApprovalService';
 import styles from './ApprovalAttachmentsModal.module.css';
+import { createFioMatcher, withFioFallback, type FioSearchMode, type IFioMatcher } from '../../utils/fioSearch';
 
 type Disposition = 'inline' | 'attachment';
 
@@ -19,11 +20,11 @@ interface IApprovalAttachmentsModalProps {
 }
 
 /** Совпадение по ФИО сотрудника, для которого прикреплён файл (не по тому, кто прикрепил). */
-const matchesEmployee = (att: IApprovalAttachment, q: string): boolean => {
+const matchesEmployee = (att: IApprovalAttachment, matcher: IFioMatcher, mode: FioSearchMode): boolean => {
   if (att.employees && att.employees.length > 0) {
-    return att.employees.some(e => (e.employee_name ?? '').toLowerCase().includes(q));
+    return att.employees.some(e => matcher.matches(e.employee_name, mode));
   }
-  return (att.employee_name ?? '').toLowerCase().includes(q);
+  return matcher.matches(att.employee_name, mode);
 };
 
 export const ApprovalAttachmentsModal: FC<IApprovalAttachmentsModalProps> = ({
@@ -37,10 +38,11 @@ export const ApprovalAttachmentsModal: FC<IApprovalAttachmentsModalProps> = ({
 }) => {
   const [search, setSearch] = useState('');
   const q = search.trim().toLowerCase();
-  const filtered = useMemo(
-    () => (q ? attachments.filter(att => matchesEmployee(att, q)) : attachments),
-    [attachments, q],
-  );
+  const filtered = useMemo(() => {
+    const matcher = createFioMatcher(search);
+    if (!matcher) return attachments;
+    return withFioFallback(matcher, mode => attachments.filter(att => matchesEmployee(att, matcher, mode)));
+  }, [attachments, search]);
 
   const countLabel = q
     ? ` (${filtered.length} из ${attachments.length})`

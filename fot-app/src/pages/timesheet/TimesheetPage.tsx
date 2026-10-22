@@ -18,6 +18,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useDepartmentSupervisor } from '../../hooks/useDepartmentSupervisor';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { filterByFio } from '../../utils/fioSearch';
 import { formatPendingDecisions, isWaitingWeekends, PENDING_WEEKENDS_LABEL } from '../../utils/pendingDecisions';
 import {
   COVERED_DAY_MESSAGE,
@@ -2003,11 +2004,10 @@ export const TimesheetPage: FC = () => {
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
 
   const assignedEmployees = useMemo(() => assigneesQuery.data || [], [assigneesQuery.data]);
-  const filteredAssignees = useMemo(() => {
-    const q = assigneeSearch.trim().toLowerCase();
-    if (!q) return assignedEmployees;
-    return assignedEmployees.filter(emp => emp.full_name.toLowerCase().includes(q));
-  }, [assignedEmployees, assigneeSearch]);
+  const filteredAssignees = useMemo(
+    () => filterByFio(assignedEmployees, emp => emp.full_name, assigneeSearch),
+    [assignedEmployees, assigneeSearch],
+  );
 
   const selectedAssignee = useMemo(() => {
     if (!selectedAssigneeId) return null;

@@ -4,6 +4,7 @@ import {
   SlidersHorizontal, X, RotateCcw, Circle, UserX, CheckSquare, MinusSquare, Square, type LucideIcon,
 } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
+import { createFioMatcher, includesText, withFioFallback } from '../../utils/fioSearch';
 import {
   formatHalfLabel,
   getCurrentHalf,
@@ -274,21 +275,25 @@ export const MassTimesheetExportDashboardTab: FC = () => {
     () => deptStatusMap.filter(d => !searchHeatmap || includesQuery(`${d.name} ${d.parent_path}`, searchHeatmap)),
     [deptStatusMap, searchHeatmap],
   );
-  const nsMgrShown = useMemo(
-    () => notSubmittedManagers.filter(m => !searchNsMgr || includesQuery(`${m.full_name} ${m.department_path}`, searchNsMgr)),
-    [notSubmittedManagers, searchNsMgr],
-  );
+  // ФИО — точно, без точных — с одной ошибкой; отдел — вхождением текста. Поля не склеиваем.
+  const nsMgrShown = useMemo(() => {
+    const matcher = createFioMatcher(searchNsMgr);
+    if (!matcher) return notSubmittedManagers;
+    return withFioFallback(matcher, mode => notSubmittedManagers.filter(m =>
+      matcher.matches(m.full_name, mode) || includesText(m.department_path, searchNsMgr)));
+  }, [notSubmittedManagers, searchNsMgr]);
   const unassignedShown = useMemo(
     () => unassignedDepts.filter(d => !searchUnassigned || includesQuery(`${d.department_name} ${d.parent_path}`, searchUnassigned)),
     [unassignedDepts, searchUnassigned],
   );
-  const managersShown = useMemo(
-    () => managers.filter(m => !searchManagers || includesQuery(
-      `${m.full_name} ${m.departments.map(d => d.name).join(' ')} ${m.assigned_employees.map(e => e.full_name).join(' ')}`,
-      searchManagers,
-    )),
-    [managers, searchManagers],
-  );
+  const managersShown = useMemo(() => {
+    const matcher = createFioMatcher(searchManagers);
+    if (!matcher) return managers;
+    return withFioFallback(matcher, mode => managers.filter(m =>
+      matcher.matches(m.full_name, mode)
+      || m.assigned_employees.some(e => matcher.matches(e.full_name, mode))
+      || m.departments.some(d => includesText(d.name, searchManagers))));
+  }, [managers, searchManagers]);
 
   // Сворачивание нижних блоков (свёрнуты по умолчанию, состояние в localStorage).
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());

@@ -4,6 +4,7 @@ import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { timesheetService } from '../../services/timesheetService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { filterByFio } from '../../utils/fioSearch';
 import { collectDepartmentIdsCoveringRange } from '../../utils/timesheetApprovedCoverage';
 import { useToast } from '../../contexts/ToastContext';
 
@@ -85,13 +86,10 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employees, checkedIds, approvedDeptIds]);
 
-  const filteredEmployees = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return employees;
-    return employees.filter(employee =>
-      employee.full_name.toLowerCase().includes(q),
-    );
-  }, [employees, searchQuery]);
+  const filteredEmployees = useMemo(
+    () => filterByFio(employees, employee => employee.full_name, searchQuery),
+    [employees, searchQuery],
+  );
 
   useEffect(() => {
     saveStoredAssignedIds(checkedIds);

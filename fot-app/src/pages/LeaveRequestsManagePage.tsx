@@ -20,6 +20,7 @@ import { LeaveRequestsBulkBar } from '../components/leave-requests/LeaveRequests
 import { LeaveRequestsGroup } from '../components/leave-requests/LeaveRequestsGroup';
 import { leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
 import './LeaveRequestsManagePage.css';
+import { createFioMatcher, withFioFallback } from '../utils/fioSearch';
 
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 const NO_DEPARTMENT_KEY = 'Без отдела';
@@ -106,12 +107,14 @@ export const LeaveRequestsManagePage: FC = () => {
 
   const filteredRequests = useMemo(() => {
     if (!isFiltering) return baseRequests;
-    return baseRequests.filter(r =>
+    // ФИО — после остальных фильтров: точный, убранный ими, опечатку не глушит.
+    const matcher = createFioMatcher(search);
+    return withFioFallback(matcher, mode => baseRequests.filter(r =>
       (typeFilter === 'all' || r.request_type === typeFilter)
       && (deptFilter === '' || groupKeyOf(r) === deptFilter)
       && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
-      && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
-  }, [baseRequests, isFiltering, typeFilter, deptFilter, hasPeriod, periodFrom, periodTo, query]);
+      && (!matcher || matcher.matches(r.employee_name, mode))));
+  }, [baseRequests, isFiltering, typeFilter, deptFilter, hasPeriod, periodFrom, periodTo, search]);
 
   // Массовый режим — только на вкладке «Ожидающие» и только у тех, кто может согласовывать.
   const bulkMode = filter === 'pending' && canEditRequests;
