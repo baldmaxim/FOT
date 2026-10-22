@@ -8,7 +8,8 @@
  * выходной — согласованный выход сверх графика.
  *
  * «По ставкам ФОТ» — суммы за месяц по ставкам «Справочника» (миграция 324), ставка — за месяц листка:
- * - проезд — если категория на конец периода не «Рабочие» и в месяце нет ни одного дня «Без проезда»;
+ * - проезд — если категория месяца (по табелю, payroll-staff-category.ts; как в «Своде») не «Рабочие» и в месяце
+ *   нет ни одного дня «Без проезда»;
  * - проживание — одна сумма по записи, действующей на конец периода (самая поздняя из задевающих период):
  *   квартира — её сумма, доплата за общежитие — ставка, проживание в общежитии — ничего.
  */
@@ -17,7 +18,8 @@ import { isWorkingDay } from '../schedule.service.js';
 import { buildEmployeeRowsForOneC } from '../timesheet-excel.service.js';
 import { fetchTimesheetDataForEmployees, type IDepartmentTimesheetData } from '../timesheet-export.service.js';
 import { DORMITORY_ALLOWANCE_RATE_CODE, TRAVEL_RATE_CODE } from './payroll-rates.service.js';
-import { resolveEmployeeStaffCategories } from './payroll-staff-category.js';
+import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-month-attribution.service.js';
+import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import { getTermsForPeriod, type PayrollCalcType, type StaffCategory } from './payroll-terms.service.js';
 
 export interface IPayslipWorkedDays {
@@ -53,7 +55,7 @@ export interface IPayslipHousingRecord {
 }
 
 export interface IPayslipRateFacts {
-  /** Категория на конец периода. */
+  /** Категория месяца. */
   category: StaffCategory;
   travelRate: string | null;
   /** В месяце есть день «Без проезда». */
@@ -196,23 +198,49 @@ const loadRateFacts = async (
   };
 };
 
+/** Категория месяца — как в «Своде»: объект и отдел месяца, режим табелирования месяца. */
+const resolvePayslipCategory = async (
+  employeeId: number,
+  month: string,
+  employee: { org_department_id: string | null; employment_status: string | null } | null,
+): Promise<StaffCategory> => {
+  const pair = { employeeId, month };
+  const breakdown = await loadMonthBreakdown([`${month}-01`], [employeeId]);
+  const attribution = (await attributeMonths(
+    [pair],
+    breakdown,
+    new Map([[employeeId, employee ?? { org_department_id: null, employment_status: null }]]),
+  )).get(monthPairKey(employeeId, month));
+  const [category] = await resolveMonthStaffCategories([{
+    employeeId,
+    monthStart: `${month}-01`,
+    officeObject: attribution?.object.key === 'office',
+    departmentId: attribution?.departmentId ?? null,
+    mode: attribution?.mode,
+  }]);
+  return category ?? 'office';
+};
+
 /** Листок сотрудника за месяц YYYY-MM. */
 export const getPayslipInfo = async (employeeId: number, month: string): Promise<IPayrollPayslipInfo> => {
   // snapshot — сотрудник берётся при любом статусе: уволенный в месяце увольнения тоже со своими днями
   // (обычный состав 1С его не берёт). Дни после увольнения режет cutoff.
   const [data, employee] = await Promise.all([
     fetchTimesheetDataForEmployees(month, [employeeId], 'Payroll', 'FULL', 'actual', true, { rosterMode: 'snapshot' }),
-    queryOne<{ hire_date: string | null }>('SELECT hire_date FROM employees WHERE id = $1', [employeeId]),
+    queryOne<{ hire_date: string | null; org_department_id: string | null; employment_status: string | null }>(
+      'SELECT hire_date, org_department_id::text AS org_department_id, employment_status FROM employees WHERE id = $1',
+      [employeeId],
+    ),
   ]);
   const period = payslipPeriod(month, employee?.hire_date ?? null, data.cutoffByEmployeeId?.get(employeeId) ?? null);
   if (!period) return { month, period_from: null, period_to: null, worked_days: null, terms: [], rate_allowances: [] };
 
-  const termsByEmployee = await getTermsForPeriod([employeeId], period.from, period.to);
+  const [termsByEmployee, category] = await Promise.all([
+    getTermsForPeriod([employeeId], period.from, period.to),
+    // Категория — по табелю месяца; staff_category условий — снимок и её не решает.
+    resolvePayslipCategory(employeeId, month, employee),
+  ]);
   const termRows = termsByEmployee.get(employeeId) ?? [];
-  // Категория на конец периода: последний отрезок условий; условий нет — по текущему отделу.
-  const category = termRows.at(-1)?.staff_category
-    ?? (await resolveEmployeeStaffCategories([employeeId])).get(employeeId)
-    ?? 'office';
   const terms = termRows.map(row => {
     const amount = row.calc_type === 'hourly' ? row.hourly_rate : row.monthly_salary;
     return {

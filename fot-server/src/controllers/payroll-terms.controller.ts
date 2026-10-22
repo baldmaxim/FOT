@@ -32,10 +32,7 @@ import {
   resolvePayrollReadableDepartmentIds,
 } from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
-import {
-  loadStaffCategoryResolver,
-  resolveEmployeeStaffCategories,
-} from '../services/payroll/payroll-staff-category.js';
+import { resolveCurrentStaffCategories } from '../services/payroll/payroll-staff-category.js';
 import {
   assignTerms,
   getSalaryChanges,
@@ -44,7 +41,6 @@ import {
   getTermsOnDate,
   lockPayrollEmployee,
   setPlannedSupplement,
-  type StaffCategory,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
 import {
@@ -90,9 +86,7 @@ const optionalMoneySchema = z.coerce.number().finite('Сумма должна б
  * пользователю понятный текст, а не 500 от констрейнта.
  */
 const termsBodySchema = z.object({
-  // Категория: в окне сотрудника на «Расчётах» её выбирают — одиночное назначение берёт присланную;
-  // не прислали — по отделу. Массовое назначение всегда ставит по отделу каждого.
-  staff_category: z.enum(['office', 'itr', 'worker']).optional(),
+  // Категории в теле нет: её решает табель (payroll-staff-category.ts); присланную прежним клиентом zod отбросит.
   calc_type: z.enum(['salary', 'hourly']),
   monthly_salary: moneySchema.optional(),
   hourly_rate: hourlyRateSchema.optional(),
@@ -220,13 +214,14 @@ const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, c
 
 /**
  * Общая часть выборки списка и вариантов фильтра. Параметры $1–$8:
- * $1 дата, $2 подразделение, $3 категория, $4 вид оплаты, $5 «только без условий»,
- * $6 корень подрядчиков, $7 доступные отделы, $8 поиск.
+ * $1 дата, $2 подразделение, $3 — всегда NULL (был фильтр категории по сохранённым условиям; категорию
+ * решает табель уже после выборки, а слот оставлен, чтобы не перенумеровывать $4–$12), $4 вид оплаты,
+ * $5 «только без условий», $6 корень подрядчиков, $7 доступные отделы, $8 поиск.
  *
  * scoped   — свой штат в скоупе пользователя (без фильтров по условиям оплаты);
- * filtered — scoped + фильтры по категории / виду оплаты / «только без условий» + фильтры столбцов.
+ * filtered — scoped + фильтры по виду оплаты / «только без условий» + фильтры столбцов.
  *
- * «Без условий» считается по scoped, а не по filtered: при фильтре «Категория: Офис»
+ * «Без условий» считается по scoped, а не по filtered: при фильтре «Вид оплаты: оклад»
  * сотрудники без условий в выборку не попадают по определению, и счётчик показал бы 0,
  * хотя люди, которые не попадут в расчёт, есть.
  *
@@ -298,7 +293,7 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
   ),
   filtered AS (
     SELECT * FROM scoped
-     WHERE ($3::text IS NULL OR staff_category = $3::text)
+     WHERE $3::text IS NULL
        AND ($4::text IS NULL OR calc_type = $4::text)
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)${columnFilterSql ? `\n       AND ${columnFilterSql}` : ''}
   )`;
@@ -444,8 +439,6 @@ interface IPayrollTermsListRow {
   paid_total?: string | null;
   paid_deductions_total?: string | null;
   paid_deductions?: Array<{ month: string; item: string; amount: string }> | null;
-  /** Категория по текущему отделу — её карточка показывает и её же сервер запишет при назначении. */
-  department_category?: StaffCategory;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
@@ -454,7 +447,6 @@ interface IPayrollTermsListRow {
 export const baseQuerySchema = z.object({
   date: dateSchema.optional(),
   department_id: z.string().uuid().optional(),
-  staff_category: z.enum(['office', 'itr', 'worker']).optional(),
   calc_type: z.enum(['salary', 'hourly']).optional(),
   without_terms: z.enum(['true', 'false']).optional(),
   q: z.string().trim().max(100).optional(),
@@ -473,7 +465,8 @@ export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuer
   const params: unknown[] = [
     onDate,
     query.department_id ?? null,
-    query.staff_category ?? null,
+    // $3 — резерв: фильтра категории больше нет (см. buildBaseCtes).
+    null,
     query.calc_type ?? null,
     query.without_terms === 'true',
     contractorRootId,
@@ -487,7 +480,7 @@ export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuer
 
 /**
  * Поиск ФИО «Условий оплаты»: точно; если точного (ФИО или табельный) нет во всём `filtered` — после скоупа,
- * подразделения, категории и фильтров столбцов, до курсора и LIMIT — с одной ошибкой. Режим один на список,
+ * подразделения и фильтров столбцов, до курсора и LIMIT — с одной ошибкой. Режим один на список,
  * итоги и счётчики. baseParams — $1–$8 от buildBaseParams.
  */
 const resolvePayrollFioMode = async (
@@ -622,11 +615,12 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     // can_edit — скоуп правки конкретного сотрудника (то же, что проверит assign):
     // право на страницу есть, а отдел — только на просмотр → карточка без правки.
     const canEditRow = await resolvePayrollEditPredicate(req);
-    const categoryOf = await loadStaffCategoryResolver();
-    // Служебные поля ключа наружу не отдаём.
-    const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, ...row }) => ({
+    // Категория — по табелю на сейчас (payroll-staff-category.ts): её карточка показывает, по ней «Проезд».
+    const categories = await resolveCurrentStaffCategories(pageRows.map(row => row.employee_id));
+    // Служебные поля ключа и снимок категории из условий наружу не отдаём.
+    const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, staff_category: _stored, ...row }) => ({
       ...row,
-      department_category: categoryOf(row.department_id),
+      category: categories.get(row.employee_id) ?? 'office',
       can_edit: canEditRow(row.employee_id),
     }));
 
@@ -641,8 +635,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         next_cursor: nextCursor,
         total: Number(result?.total ?? 0),
         without_terms_total: Number(result?.without_terms_total ?? 0),
-        // Сколько в выборке уже имеют условия. 0 при фильтре по категории — значит,
-        // фильтровать не по чему: категория появляется только после назначения.
+        // Сколько в выборке уже имеют условия.
         with_terms_total: Number(result?.with_terms_total ?? 0),
         contractors_excluded: contractorRootId !== null,
         // Фронт убирает этот узел из дерева подразделений: подрядчики исключены из списка,
@@ -734,10 +727,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     // сохранение не прочтёт ту же прежнюю версию доплаты.
     const { termsId, previous, supplementChanged, staffCategory } = await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
-      // Категория — выбранная в окне; не прислали — по отделу сотрудника на момент сохранения.
-      const category = body.staff_category
-        ?? (await resolveEmployeeStaffCategories([employeeId], client)).get(employeeId)
-        ?? 'office';
+      // Категория — снимок на дату сохранения: по табелю на сейчас; категорию и «Проезд» он не решает.
+      const category = (await resolveCurrentStaffCategories([employeeId], client)).get(employeeId) ?? 'office';
       const previousTerms = await getTermsOnDate(employeeId, body.effective_from, client);
       const id = await assignTerms({
         employeeId,

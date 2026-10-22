@@ -190,7 +190,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
             idPrefix={idPrefix}
             readOnly={!canEdit}
             category={payrollRowCategory(row)}
-            travel={toInputValue(travelAllowance(form.staffCategory ?? payrollRowCategory(row), row))}
+            travel={toInputValue(travelAllowance(payrollRowCategory(row), row))}
             autoFocus={canEdit}
             paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
             stacked

@@ -6,23 +6,14 @@
  * подрядчиков (текущий отдел или отдел подачи месяца — в поддереве подрядных организаций). Охват
  * пользователя: сотрудник виден, если в охвате его текущий отдел или отдел его подачи за месяц.
  *
- * Объект и отдел месяца — из объектной разбивки последней редакции каждой подачи месяца
- * (payroll-summary.attribution.ts); категория — из условий оплаты месяца, иначе по отделу месяца.
+ * Объект и отдел месяца — payroll-month-attribution.service.ts (объектная разбивка закрытого табеля, иначе
+ * режим табелирования месяца); категория — по табелю месяца (payroll-staff-category.ts), не из условий оплаты.
  */
 import { query } from '../../config/postgres.js';
-import { resolveExportModes, type IResolvedExportMode } from '../timesheet-export-mode.service.js';
-import { loadStaffCategoryResolver } from './payroll-staff-category.js';
+import { attributeMonths, loadMonthBreakdown, monthPairKey as pairKey } from './payroll-month-attribution.service.js';
+import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import type { StaffCategory } from './payroll-terms.service.js';
-import {
-  centsToAmount,
-  fallbackSummaryObject,
-  pickMainObject,
-  pickMonthDepartment,
-  toCents,
-  type ISummaryBreakdownRow,
-  type ISummaryObject,
-  type ISummaryObjectMeta,
-} from './payroll-summary.attribution.js';
+import { centsToAmount, toCents, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
 
 export interface IPayrollSummaryScope {
   contractorRootId: string | null;
@@ -56,19 +47,13 @@ interface IPaidRow {
   amount: string;
 }
 
-interface IBreakdownSqlRow extends ISummaryBreakdownRow {
-  month: string;
-  employee_id: number;
-}
-
 interface IEmployeeRow {
   id: number;
   full_name: string | null;
   org_department_id: string | null;
+  employment_status: string | null;
   position: string | null;
 }
-
-const pairKey = (employeeId: number, month: string): string => `${employeeId}|${month}`;
 
 const loadPaid = (monthStarts: string[] | null): Promise<IPaidRow[]> => query<IPaidRow>(
   `SELECT p.employee_id, to_char(p.month, 'YYYY-MM') AS month, p.item_code AS item, p.amount::text AS amount
@@ -76,34 +61,6 @@ const loadPaid = (monthStarts: string[] | null): Promise<IPaidRow[]> => query<IP
     WHERE $1::date[] IS NULL OR p.month = ANY($1::date[])
     ORDER BY p.employee_id, p.month, p.item_code`,
   [monthStarts],
-);
-
-/**
- * Разбивка подач месяцев: последняя редакция каждой подачи, строка — часы сотрудника на объекте.
- * Сотрудник в подаче без объектов — одна строка с object_key NULL и нулём часов (виден отдел подачи).
- */
-const loadBreakdown = (monthStarts: string[], employeeIds: number[]): Promise<IBreakdownSqlRow[]> => query<IBreakdownSqlRow>(
-  `WITH latest AS (
-     SELECT DISTINCT ON (v.approval_id) v.id, v.department_id, v.start_date
-       FROM timesheet_versions v
-      WHERE date_trunc('month', v.start_date)::date = ANY($1::date[])
-      ORDER BY v.approval_id, v.revision DESC
-   )
-   SELECT to_char(l.start_date, 'YYYY-MM') AS month,
-          (emp->>'employee_id')::int AS employee_id,
-          l.id::int AS version_id,
-          l.department_id::text AS department_id,
-          obj->>'object_key' AS object_key,
-          obj->>'object_id' AS object_id,
-          obj->>'object_name' AS object_name,
-          obj->>'object_address' AS object_address,
-          COALESCE((obj->>'total_hours')::float8, 0) AS hours
-     FROM latest l
-     JOIN timesheet_version_objects vo ON vo.version_id = l.id
-    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(vo.payload->'employees', '[]'::jsonb)) AS emp
-     LEFT JOIN LATERAL jsonb_array_elements(COALESCE(emp->'objects', '[]'::jsonb)) AS obj ON true
-    WHERE (emp->>'employee_id')::int = ANY($2::int[])`,
-  [monthStarts, employeeIds],
 );
 
 const loadContractorDepartments = async (rootId: string | null): Promise<Set<string>> => {
@@ -129,26 +86,18 @@ const filterScope = async (
 }> => {
   const employeeIds = [...new Set(paid.map(row => row.employee_id))];
   const monthStarts = [...new Set(paid.map(row => `${row.month}-01`))];
-  const [employees, breakdownRows, contractors] = await Promise.all([
+  const [employees, breakdown, contractors] = await Promise.all([
     query<IEmployeeRow>(
-      `SELECT e.id, e.full_name, e.org_department_id::text AS org_department_id, p.name AS position
+      `SELECT e.id, e.full_name, e.org_department_id::text AS org_department_id, e.employment_status,
+              p.name AS position
          FROM employees e
          LEFT JOIN positions p ON p.id = e.position_id
         WHERE e.id = ANY($1::int[])`,
       [employeeIds],
     ),
-    employeeIds.length > 0 ? loadBreakdown(monthStarts, employeeIds) : Promise.resolve([]),
+    loadMonthBreakdown(monthStarts, employeeIds),
     loadContractorDepartments(scope.contractorRootId),
   ]);
-
-  const breakdown = new Map<string, ISummaryBreakdownRow[]>();
-  for (const row of breakdownRows) {
-    const key = pairKey(Number(row.employee_id), row.month);
-    const list = breakdown.get(key);
-    const item: ISummaryBreakdownRow = { ...row, version_id: Number(row.version_id), hours: Number(row.hours) };
-    if (list) list.push(item);
-    else breakdown.set(key, [item]);
-  }
 
   const employeeById = new Map(employees.map(row => [Number(row.id), row]));
   const scopeDepartments = scope.departmentIds ? new Set(scope.departmentIds) : null;
@@ -180,47 +129,6 @@ export const listPayrollSummaryMonths = async (scope: IPayrollSummaryScope): Pro
   return [...new Set([...allowed].map(key => key.split('|')[1]))].sort();
 };
 
-/** Категория из условий оплаты месяца: последняя версия, пересекающая месяц. */
-const loadTermsCategories = async (employeeIds: number[], monthStarts: string[]): Promise<Map<string, StaffCategory>> => {
-  const rows = await query<{ employee_id: number; month: string; staff_category: StaffCategory }>(
-    `SELECT DISTINCT ON (t.employee_id, m.start)
-            t.employee_id, to_char(m.start, 'YYYY-MM') AS month, t.staff_category
-       FROM unnest($2::date[]) AS m(start)
-       JOIN payroll_compensation_terms t
-         ON t.employee_id = ANY($1::int[])
-        AND t.effective_from < (m.start + INTERVAL '1 month')::date
-        AND (t.effective_to IS NULL OR t.effective_to >= m.start)
-      ORDER BY t.employee_id, m.start, t.effective_from DESC`,
-    [employeeIds, monthStarts],
-  );
-  return new Map(rows.map(row => [pairKey(Number(row.employee_id), row.month), row.staff_category]));
-};
-
-const loadObjectMeta = async (ids: string[]): Promise<Map<string, ISummaryObjectMeta>> => {
-  if (ids.length === 0) return new Map();
-  const rows = await query<{ id: string; name: string; alt_name: string | null }>(
-    'SELECT id::text AS id, name, alt_name FROM skud_objects WHERE id::text = ANY($1::text[])',
-    [ids],
-  );
-  return new Map(rows.map(row => [row.id, { name: row.name, address: row.alt_name }]));
-};
-
-/** Режимы табелирования месяцев для пар без разбивки. */
-const loadFallbackModes = async (pairs: ReadonlyArray<{ employeeId: number; month: string }>): Promise<Map<string, IResolvedExportMode>> => {
-  const byMonth = new Map<string, number[]>();
-  for (const pair of pairs) {
-    const list = byMonth.get(pair.month);
-    if (list) list.push(pair.employeeId);
-    else byMonth.set(pair.month, [pair.employeeId]);
-  }
-  const result = new Map<string, IResolvedExportMode>();
-  for (const [month, ids] of byMonth) {
-    const modes = await resolveExportModes(ids, undefined, { month });
-    for (const [employeeId, mode] of modes) result.set(pairKey(employeeId, month), mode);
-  }
-  return result;
-};
-
 /**
  * «Свод» за месяцы monthStarts (первые числа; null — все месяцы с суммами): строки по (сотрудник,
  * объект, категория), суммы статей сложены за месяцы — в копейках, без потерь на дробях.
@@ -237,42 +145,29 @@ export const loadPayrollSummary = async (input: {
   const paid = paidAll.filter(row => allowed.has(pairKey(row.employee_id, row.month)));
   if (paid.length === 0) return { months: [], rows: [] };
   const months = [...new Set(paid.map(row => row.month))].sort();
-  const employeeIds = [...new Set(paid.map(row => row.employee_id))];
 
-  // Объект пары: основной из разбивки, иначе — режим табелирования месяца.
-  const objectByPair = new Map<string, ISummaryObject>();
-  const fallbackPairs: Array<{ employeeId: number; month: string }> = [];
-  for (const key of allowed) {
-    const main = pickMainObject(breakdown.get(key) ?? []);
-    if (main) objectByPair.set(key, main);
-    else {
-      const [employeeId, month] = key.split('|');
-      fallbackPairs.push({ employeeId: Number(employeeId), month });
-    }
-  }
-  const [fallbackModes, termsCategories, categoryOf] = await Promise.all([
-    loadFallbackModes(fallbackPairs),
-    loadTermsCategories(employeeIds, months.map(month => `${month}-01`)),
-    loadStaffCategoryResolver(),
-  ]);
-  const pinnedIds = [...new Set([...fallbackModes.values()]
-    .map(mode => (mode.mode === 'object' ? mode.pinnedObjectId : null))
-    .filter((id): id is string => id !== null))];
-  const breakdownObjectIds = [...new Set([...objectByPair.values()].map(object => object.key))]
-    .filter(key => key !== 'office' && key !== 'unknown');
-  const objectMeta = await loadObjectMeta([...new Set([...pinnedIds, ...breakdownObjectIds])]);
-  for (const pair of fallbackPairs) {
-    const key = pairKey(pair.employeeId, pair.month);
-    objectByPair.set(key, fallbackSummaryObject(fallbackModes.get(key), objectMeta));
-  }
+  // Объект, отдел и режим месяца пары; категория — по табелю месяца.
+  const pairs = [...allowed].map(key => {
+    const [employeeId, month] = key.split('|');
+    return { employeeId: Number(employeeId), month };
+  });
+  const attribution = await attributeMonths(pairs, breakdown, employees);
+  const categories = await resolveMonthStaffCategories(pairs.map(pair => {
+    const item = attribution.get(pairKey(pair.employeeId, pair.month));
+    return {
+      employeeId: pair.employeeId,
+      monthStart: `${pair.month}-01`,
+      officeObject: item?.object.key === 'office',
+      departmentId: item?.departmentId ?? null,
+      mode: item?.mode,
+    };
+  }));
+  const categoryByPair = new Map(pairs.map((pair, index) => [pairKey(pair.employeeId, pair.month), categories[index]]));
 
   // Отдел месяца — и для категории, и для подписи «Отдел» (уволенный — отдел, где работал).
-  const departmentByPair = new Map<string, string | null>();
-  for (const key of allowed) {
-    const employee = employees.get(Number(key.split('|')[0]));
-    departmentByPair.set(key, pickMonthDepartment(breakdown.get(key) ?? []) ?? employee?.org_department_id ?? null);
-  }
-  const departmentIds = [...new Set([...departmentByPair.values()].filter((id): id is string => id !== null))];
+  const departmentIds = [...new Set([...attribution.values()]
+    .map(item => item.departmentId)
+    .filter((id): id is string => id !== null))];
   const departmentNames = new Map((departmentIds.length > 0
     ? await query<{ id: string; name: string }>(
       'SELECT id::text AS id, name FROM org_departments WHERE id::text = ANY($1::text[])',
@@ -283,11 +178,10 @@ export const loadPayrollSummary = async (input: {
   const rows = new Map<string, IPayrollSummaryRow & { cents: Map<string, number> }>();
   for (const row of paid) {
     const key = pairKey(row.employee_id, row.month);
-    const object = objectByPair.get(key) ?? { key: 'unknown', name: 'Не определён' };
-    // Имя объекта — текущее из справочника СКУД (в разбивке — имя на момент закрытия табеля).
-    const objectName = objectMeta.get(object.key)?.name?.trim() || object.name;
-    const departmentId = departmentByPair.get(key) ?? null;
-    const category = termsCategories.get(key) ?? categoryOf(departmentId);
+    const item = attribution.get(key);
+    const object: ISummaryObject = item?.object ?? { key: 'unknown', name: 'Не определён' };
+    const departmentId = item?.departmentId ?? null;
+    const category: StaffCategory = categoryByPair.get(key) ?? 'office';
     const rowKey = `${row.employee_id}|${object.key}|${category}`;
     let target = rows.get(rowKey);
     if (!target) {
@@ -299,7 +193,7 @@ export const loadPayrollSummary = async (input: {
         position: employee?.position ?? null,
         category,
         object_key: object.key,
-        object_name: objectName,
+        object_name: object.name,
         amounts: {},
         cents: new Map(),
       };

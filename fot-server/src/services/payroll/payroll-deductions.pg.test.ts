@@ -45,6 +45,11 @@ vi.mock('../../config/postgres.js', async () => {
   };
 });
 
+// Категория по табелю — режимы табелирования (288/291) и структура, своя схема; здесь не проверяется.
+vi.mock('./payroll-staff-category.js', () => ({
+  resolveCurrentStaffCategories: async (ids: number[]) => new Map(ids.map(id => [id, 'office'])),
+}));
+
 vi.mock('./payroll-scope.service.js', () => ({
   resolvePayrollReadableDepartmentIds: async () => 'all',
   canReadPayrollEmployee: async () => true,

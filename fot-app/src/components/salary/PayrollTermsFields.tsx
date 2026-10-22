@@ -21,10 +21,7 @@ interface IPayrollTermsFieldsProps {
   idPrefix: string;
   /** Только просмотр: поля заблокированы. */
   readOnly?: boolean;
-  /**
-   * Категория сотрудника (сохранённая или по отделу). В окне сотрудника с правом правки — список
-   * (Офис, Рабочие, ИТР), сохраняется с условиями; иначе — только для чтения.
-   */
+  /** Категория сотрудника — по табелю (сервер), только для чтения. */
   category: StaffCategory;
   /** «Итого, ₽/мес» — сумма оклада и премии в их строке (только в окне сотрудника). */
   total?: boolean;
@@ -50,9 +47,6 @@ interface IPayrollTermsFieldsProps {
 
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
-
-/** Категории в списке окна сотрудника — в порядке: офис, рабочие, ИТР. */
-const CATEGORY_OPTIONS: readonly StaffCategory[] = ['office', 'worker', 'itr'];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
@@ -143,7 +137,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
         <div className={stacked ? `${styles.halves} ${styles.halvesStacked}` : styles.halves}>
           <div className={styles.half}>
             <div className={styles.mainRow}>
-              {/* По умолчанию категория — по отделу сотрудника; в окне сотрудника её можно сменить. */}
+              {/* Категория — по табелю, её ставит сервер; выбора нет. */}
               {/* «Подробно» — одной строкой текстом: значение короткое, широкое поле ни к чему. */}
               {detailsOnly && (
                 <p className={styles.inlineField}>
@@ -155,23 +149,12 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
               {!detailsOnly && (
                 <div className={styles.field}>
                   <label htmlFor={fieldId('category')} className={styles.label}>Категория</label>
-                  {readOnly || form.staffCategory === null ? (
-                    <input
-                      id={fieldId('category')}
-                      className={`${styles.control} ${styles.controlReadOnly}`}
-                      value={STAFF_CATEGORY_LABELS[category]}
-                      readOnly
-                    />
-                  ) : (
-                    <select
-                      id={fieldId('category')}
-                      className={styles.control}
-                      value={form.staffCategory}
-                      onChange={event => form.setStaffCategory(event.target.value as StaffCategory)}
-                    >
-                      {CATEGORY_OPTIONS.map(key => <option key={key} value={key}>{STAFF_CATEGORY_LABELS[key]}</option>)}
-                    </select>
-                  )}
+                  <input
+                    id={fieldId('category')}
+                    className={`${styles.control} ${styles.controlReadOnly}`}
+                    value={STAFF_CATEGORY_LABELS[category]}
+                    readOnly
+                  />
                 </div>
               )}
 

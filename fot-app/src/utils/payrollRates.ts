@@ -45,7 +45,7 @@ export const rateMonthOptions = (currentMonth: string): Array<{ value: string; l
 
 /**
  * Проезд сотрудника за месяц даты выборки: ставка «Проезд», кроме «Рабочих» и «Без проезда» в этом месяце.
- * category — выбранная в окне: смена категории сразу меняет показанный проезд.
+ * category — по табелю, с сервера (payrollRowCategory).
  */
 export const travelAllowance = (
   category: StaffCategory,

@@ -5,7 +5,7 @@ import { dropPayrollDetails, openPayrollDetails, paymentsViewOptions, resolvePay
 
 const row = (employeeId: number): IPayrollTermsRow => ({
   employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, tab_number: null, department_id: null,
-  department_name: null, position_name: null, schedule_name: null, terms_id: null, staff_category: null,
+  department_name: null, position_name: null, schedule_name: null, terms_id: null, category: 'office',
   calc_type: null, monthly_salary: null, hourly_rate: null, bonus_amount: null, housing_compensation: null,
   staff_units: null, effective_from: null, effective_to: null, can_edit: true,
 });

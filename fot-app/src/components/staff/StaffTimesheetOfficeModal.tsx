@@ -31,9 +31,12 @@ import { TimesheetOfficeEmployeeSearch } from './TimesheetOfficeEmployeeSearch';
 import styles from './StaffTimesheetOfficeModal.module.css';
 
 const TIMESHEET_OFFICE_QUERY_KEY = ['admin-timesheet-office'] as const;
-/** Ключи, где видно объект табелирования: карточка, табель, ЛК, «Статья затрат». */
+/**
+ * Ключи, где видно объект табелирования: карточка, табель, ЛК, «Статья затрат»; 'payroll-terms' — категория
+ * и «Проезд» в «Зарплате» (по табелю, payroll-staff-category.ts на сервере).
+ */
 const TIMESHEET_OBJECT_QUERY_KEYS = [
-  'employee', 'timesheet', 'timesheet-page', STAFF_MAIN_OBJECTS_QUERY_KEY,
+  'employee', 'timesheet', 'timesheet-page', STAFF_MAIN_OBJECTS_QUERY_KEY, 'payroll-terms',
 ];
 
 type Target = 'department' | 'employee';

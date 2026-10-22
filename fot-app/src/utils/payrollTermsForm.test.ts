@@ -17,7 +17,6 @@ const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
 const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
-  staffCategory: null,
   calcType: 'salary',
   amount: '175000',
   money: EMPTY_MONEY,
@@ -31,7 +30,7 @@ const wire = (payload: unknown) => JSON.parse(JSON.stringify(payload));
 
 const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
   employee_id: 7, full_name: 'Иванов Иван', tab_number: null, department_id: null, department_name: null,
-  position_name: null, schedule_name: null, terms_id: 5, staff_category: 'worker', calc_type: 'hourly',
+  position_name: null, schedule_name: null, terms_id: 5, category: 'worker', calc_type: 'hourly',
   monthly_salary: null, hourly_rate: '450.0000', bonus_amount: '15000.00', housing_compensation: null,
   travel_compensation: '3000.50', communication_compensation: null,
   staff_units: '1.000', effective_from: '2026-07-01', effective_to: null, can_edit: true,
@@ -202,7 +201,6 @@ describe('validatePayrollTerms: плановая доплата', () => {
 describe('initialPayrollTermsValues', () => {
   it('из условий сотрудника: хвост нулей NUMERIC убирается, пустые суммы остаются пустыми', () => {
     expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
-      staffCategory: 'worker',
       calcType: 'hourly',
       amount: '450',
       // Проезд условий (travel_compensation) с миграции 324 в форму не попадает.
@@ -223,7 +221,7 @@ describe('initialPayrollTermsValues', () => {
   it('доплата предзаполняется и без условий на дату: она от условий не зависит', () => {
     const initial = initialPayrollTermsValues(
       row({
-        terms_id: null, staff_category: null, calc_type: null, hourly_rate: null,
+        terms_id: null, calc_type: null, hourly_rate: null,
         planned_supplement_amount: 10000, planned_supplement_from: '2026-11-01', planned_supplement_to: '2026-12-31',
       }),
       '2026-09-24',
@@ -234,11 +232,11 @@ describe('initialPayrollTermsValues', () => {
 
   it('без условий: суммы пустые, вид оплаты — по графику (оклад), и у рабочих тоже', () => {
     const initial = initialPayrollTermsValues(
-      row({ terms_id: null, staff_category: null, calc_type: null, hourly_rate: null, bonus_amount: '1.00' }),
+      row({ terms_id: null, calc_type: null, hourly_rate: null, bonus_amount: '1.00' }),
       '2026-09-24',
     );
     expect(initial).toEqual({
-      staffCategory: 'office', calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });
@@ -270,17 +268,10 @@ describe('isPayrollTermsChanged', () => {
 });
 
 describe('категория в окне сотрудника', () => {
-  it('сохранённая в условиях важнее отдела; без условий — по отделу; отдела нет — офис', () => {
-    expect(payrollRowCategory(row({ staff_category: 'itr', department_category: 'worker' }))).toBe('itr');
-    expect(payrollRowCategory(row({ terms_id: null, staff_category: null, department_category: 'worker' }))).toBe('worker');
-    expect(payrollRowCategory(row({ terms_id: null, staff_category: null, department_category: undefined }))).toBe('office');
-  });
-
-  it('выбранная уходит в запрос и считается правкой условий; без категории (null) поле не шлётся', () => {
-    const initial = initialPayrollTermsValues(row(), '2026-09-24');
-    const changed = { ...initial, staffCategory: 'itr' as const };
-    expect(isPayrollTermsChanged(changed, initial)).toBe(true);
-    expect(validatePayrollTerms(changed).payload?.staff_category).toBe('itr');
+  it('по табелю — как прислал сервер; в форме и в запросе её нет', () => {
+    expect(payrollRowCategory(row({ category: 'itr' }))).toBe('itr');
+    expect(payrollRowCategory(row({ terms_id: null, category: 'worker' }))).toBe('worker');
+    expect(initialPayrollTermsValues(row(), '2026-09-24')).not.toHaveProperty('staffCategory');
     expect(wire(validatePayrollTerms(values()).payload)).not.toHaveProperty('staff_category');
   });
 });

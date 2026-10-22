@@ -12,7 +12,7 @@
  */
 import { query, queryOne, withTransaction, type DbExecutor } from '../../config/postgres.js';
 
-/** Категория персонала — по отделу сотрудника (payroll-staff-category.ts); на формулу расчёта не влияет. */
+/** Категория персонала — по табелю (payroll-staff-category.ts); на формулу расчёта не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты. Единственное, что определяет формулу начисления. */
 export type PayrollCalcType = 'salary' | 'hourly';
@@ -21,6 +21,7 @@ export interface IPayrollTerms {
   id: number;
   employee_id: number;
   organization_id: string | null;
+  /** Снимок категории на дату сохранения; актуальную категорию и «Проезд» решает табель. */
   staff_category: StaffCategory;
   calc_type: PayrollCalcType;
   monthly_salary: number | null;

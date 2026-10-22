@@ -48,8 +48,6 @@ export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, strin
 
 /** Значения формы — строки как в полях ввода. */
 export interface IPayrollTermsFormValues {
-  /** Категория в окне сотрудника; null — не передаётся (сервер ставит по отделу). */
-  staffCategory: StaffCategory | null;
   calcType: PayrollCalcType;
   amount: string;
   money: Record<PayrollMoneyField, string>;
@@ -64,13 +62,8 @@ export const toInputValue = (value: string | number | null | undefined): string 
   return text.includes('.') ? text.replace(/\.?0+$/, '') : text;
 };
 
-/**
- * Категория сотрудника: сохранённая в действующих условиях; условий нет — по отделу (как поставит сервер),
- * отдел без категории — офис.
- */
-export const payrollRowCategory = (row: IPayrollTermsRow): StaffCategory => (
-  (row.terms_id ? row.staff_category : null) ?? row.department_category ?? row.staff_category ?? 'office'
-);
+/** Категория сотрудника — по табелю, её ставит сервер; не выбирается. */
+export const payrollRowCategory = (row: IPayrollTermsRow): StaffCategory => row.category ?? 'office';
 
 /**
  * Начальные значения: из строки списка сотрудника; без условий — пусто,
@@ -84,7 +77,6 @@ export const initialPayrollTermsValues = (
   const hasTerms = Boolean(row.terms_id);
   const pick = (value: string | number | null | undefined) => (hasTerms ? toInputValue(value) : '');
   return {
-    staffCategory: payrollRowCategory(row),
     calcType: row.calc_type ?? 'salary',
     amount: hasTerms ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
     money: {
@@ -105,8 +97,7 @@ const SUPPLEMENT_FIELDS = Object.keys(SUPPLEMENT_FIELD_KEYS) as PayrollSupplemen
 
 /** Правили ли условия: хоть одно поле отличается от начального значения. */
 export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: IPayrollTermsFormValues): boolean => (
-  values.staffCategory !== initial.staffCategory
-  || values.calcType !== initial.calcType
+  values.calcType !== initial.calcType
   || values.amount !== initial.amount
   || values.effectiveFrom !== initial.effectiveFrom
   || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
@@ -212,7 +203,6 @@ export const validatePayrollTerms = (
   return {
     errors: null,
     payload: {
-      staff_category: values.staffCategory ?? undefined,
       calc_type: values.calcType,
       monthly_salary: values.calcType === 'salary' ? parsed : undefined,
       hourly_rate: values.calcType === 'hourly' ? parsed : undefined,

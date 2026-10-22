@@ -41,12 +41,11 @@ export interface IPayrollTermsRow {
   schedule_name: string | null;
   /** null — условий на выбранную дату нет: такой сотрудник не попадёт в расчёт. */
   terms_id: number | null;
-  staff_category: StaffCategory | null;
   /**
-   * Категория по текущему отделу: бригады — рабочие, ЛИНИЯ и ЛИНИЯ-Общестрой — ИТР, остальные — офис.
-   * Её карточка показывает и её же сервер запишет при назначении. Нет у старого бэкенда.
+   * Категория по табелю на сейчас (сервер): объект «Офис» — офис, рабочий табеля — рабочие, ЛИНИЯ и
+   * ЛИНИЯ-Общестрой — ИТР, остальные — офис. Не выбирается; по ней «Проезд».
    */
-  department_category?: StaffCategory;
+  category: StaffCategory;
   calc_type: PayrollCalcType | null;
   monthly_salary: string | number | null;
   hourly_rate: string | number | null;
@@ -114,8 +113,6 @@ export interface IPayrollTermsHistoryRow {
 }
 
 export interface IAssignTermsPayload {
-  /** Категория из окна сотрудника; не передано — сервер ставит по отделу. */
-  staff_category?: StaffCategory;
   calc_type: PayrollCalcType;
   monthly_salary?: number;
   hourly_rate?: number;
