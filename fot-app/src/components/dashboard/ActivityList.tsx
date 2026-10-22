@@ -5,6 +5,7 @@ import { Card, CardContent } from '../ui/Card';
 import { useFavorites } from '../../hooks/useFavorites';
 import type { IEmployeePresence } from '../../types';
 import styles from './ActivityList.module.css';
+import { filterByFio } from '../../utils/fioSearch';
 
 type TabFilter = 'favorites' | 'all' | 'online' | 'offline' | 'absent';
 
@@ -214,10 +215,8 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading, emplo
     else if (tab === 'offline') list = list.filter(e => e.status === 'offline');
     else if (tab === 'absent') list = list.filter(e => e.status === 'unknown');
 
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(e => e.full_name.toLowerCase().includes(q));
-    }
+    // ФИО — ё = е, раскладка; точных во вкладке нет — с одной ошибкой.
+    list = filterByFio(list, e => e.full_name, searchQuery);
 
     return [...list].sort((a, b) => {
       const aFav = favorites.has(a.employee_id) ? 0 : 1;

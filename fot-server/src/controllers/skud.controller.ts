@@ -48,6 +48,8 @@ import {
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { resolveTimesheetViewOnlyEmployeeIds } from '../services/employee-timesheet-view-access.service.js';
 import { resolveTimesheetScope } from '../services/timesheet-scope.service.js';
+import { filterDisciplineEmployeeSummaries } from '../services/discipline-export-filter.service.js';
+import { createFioTextMatcher } from '../utils/fio-search.utils.js';
 import { hasDashboardAllDepartmentsGrant, hasPresenceAllObjectsGrant } from '../services/read-scope-grants.service.js';
 import {
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
@@ -611,41 +613,6 @@ function buildDisciplineEmployeeSummaries(data: IDisciplineResult): DisciplineEx
   );
 }
 
-function filterDisciplineEmployeeSummaries(
-  employees: DisciplineExportEmployeeSummary[],
-  filters: {
-    departmentIds: string[];
-    searchQuery: string;
-    activeTab: DisciplineTab;
-    onlyViolations: boolean;
-  },
-): DisciplineExportEmployeeSummary[] {
-  let filtered = employees;
-
-  if (filters.departmentIds.length > 0) {
-    const set = new Set(filters.departmentIds);
-    filtered = filtered.filter(employee => employee.departmentId !== null && set.has(employee.departmentId));
-  }
-
-  if (filters.searchQuery.trim()) {
-    const normalizedQuery = filters.searchQuery.trim().toLowerCase();
-    filtered = filtered.filter(employee => employee.name.toLowerCase().includes(normalizedQuery));
-  }
-
-  if (filters.onlyViolations) {
-    filtered = filtered.filter(employee => employee.total > 0);
-  }
-
-  if (filters.activeTab !== 'all') {
-    const key = filters.activeTab as DisciplineViolationType;
-    filtered = filtered
-      .filter(employee => employee[key] > 0)
-      .sort((left, right) => right[key] - left[key]);
-  }
-
-  return filtered;
-}
-
 const dashboardStatsQuerySchema = z.object({
   department_id: z.string().optional(),
   period: z.enum(['today', 'week', 'month']).default('today'),
@@ -1039,9 +1006,16 @@ const skudReadController = {
         employee_id: event.employee_id,
       }));
 
-      const result = searchStr
-        ? decrypted.filter(e => (e.physical_person || '').toLowerCase().includes(searchStr))
-        : decrypted;
+      // ФИО — ё = е, раскладка; точных среди загруженных нет — с одной ошибкой. Выборка упёрлась в лимит —
+      // точный мог остаться за ним, опечатку не включаем.
+      const matcher = searchStr ? createFioTextMatcher(searchStr) : null;
+      let result = decrypted;
+      if (matcher) {
+        result = decrypted.filter(e => matcher.matches(e.physical_person, 'exact'));
+        if (result.length === 0 && matcher.hasFuzzy && data.length < limit) {
+          result = decrypted.filter(e => matcher.matches(e.physical_person, 'fuzzy'));
+        }
+      }
 
       res.json({ success: true, data: result });
     } catch (error) {

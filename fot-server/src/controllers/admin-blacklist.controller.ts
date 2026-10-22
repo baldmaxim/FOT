@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadUserFullName } from '../services/audit-context.helpers.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import {
   addEntryIn,
   applyAccountLock,
@@ -264,8 +264,13 @@ export const adminBlacklistController = {
         res.json({ success: true, data: [] });
         return;
       }
-      const pattern = `%${escapeLike(q)}%`;
-      const rows = await query<Record<string, unknown>>(
+      // ФИО — ё = е, раскладка; точных нет ни у сотрудников, ни у держателей пропусков — с одной ошибкой у обоих.
+      const fio = buildFioSearch(q);
+      const findPersons = (mode: FioSearchMode) => {
+        const params: unknown[] = [];
+        const employeeSql = fio ? fioConditionSql('e', params, fio, mode) : 'FALSE';
+        const holderSql = fio ? fioConditionSql('holder', params, fio, mode) : 'FALSE';
+        return query<Record<string, unknown>>(
         `(SELECT 'employee' AS kind, e.id::text AS ref_id, e.full_name,
                  e.birth_date::text AS birth_date,
                  nullif(regexp_replace(coalesce(e.pension_number,''),'\\D','','g'),'') IS NOT NULL AS has_snils,
@@ -274,7 +279,7 @@ export const adminBlacklistController = {
                  NULL::text AS pass_number, NULL::text AS org_name,
                  e.employment_status AS extra
             FROM employees e
-           WHERE e.full_name ILIKE $1 ESCAPE '\\'
+           WHERE ${employeeSql}
            ORDER BY e.full_name
            LIMIT 20)
          UNION ALL
@@ -287,12 +292,14 @@ export const adminBlacklistController = {
             FROM contractor_passes p
             LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
             LEFT JOIN org_departments od ON od.id = p.org_department_id
-           WHERE COALESCE(h.holder_name, p.holder_name) ILIKE $1 ESCAPE '\\'
+           WHERE ${holderSql}
              AND p.status IN ('assigned','submitted','applied','blocked','provisioning')
            ORDER BY p.pass_number
            LIMIT 20)`,
-        [pattern],
-      );
+        params,
+        );
+      };
+      const rows = fio ? await withFioFallback(fio, findPersons) : [];
       res.json({ success: true, data: rows });
     } catch (error) {
       console.error('searchPersons error:', error);

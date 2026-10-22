@@ -382,4 +382,24 @@ describe('поиск персон', () => {
     expect(h.query).not.toHaveBeenCalled();
     expect((res.body as { data: unknown[] }).data).toEqual([]);
   });
+
+  it('ФИО: ё = е и раскладка в обеих ветках; точных нет ни в одной — обе с одной ошибкой', async () => {
+    h.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ kind: 'employee', ref_id: '7', full_name: 'Гринёв Андрей' }]);
+    const res = makeRes();
+    const request = req({});
+    (request as { query: Record<string, string> }).query = { q: 'грнев' };
+
+    await adminBlacklistController.searchPersons(request, res as never);
+
+    const [exactSql, exactParams] = h.query.mock.calls[0] as [string, unknown[]];
+    expect(exactSql).toContain('WHERE (e.full_name ~* $1)');
+    expect(exactSql).toContain('WHERE (COALESCE(h.holder_name, p.holder_name) ~* $2)');
+    expect(exactParams).toEqual(['грн[её]в', 'грн[её]в']);
+    const fuzzySql = String(h.query.mock.calls[1][0]);
+    expect(fuzzySql).toContain('e.id IN (SELECT fz.id FROM unnest($1::text[])');
+    expect(fuzzySql).toContain('COALESCE(h.holder_name, p.holder_name) ~* ANY($2::text[])');
+    expect((res.body as { data: unknown[] }).data).toHaveLength(1);
+  });
 });

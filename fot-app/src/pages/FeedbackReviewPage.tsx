@@ -18,6 +18,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { OrgDepartmentNode } from '../types/organization';
 import styles from './FeedbackReviewPage.module.css';
+import { filterByFio } from '../utils/fioSearch';
 
 const TestManagementModal = lazy(() =>
   import('../components/tests/TestManagementModal').then(m => ({ default: m.TestManagementModal })),
@@ -301,10 +302,11 @@ const DeptTakersContent: FC<{ testId: string; responses: ITestResponseRow[]; dep
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  const filtered = useMemo(() => responses.filter(r =>
-    r.status === 'submitted'
-    && r.department_name === departmentName
-    && (!q || (r.full_name ?? '').toLowerCase().includes(q.toLowerCase())),
+  // ФИО — ё = е, раскладка; точных среди прошедших отдела нет — с одной ошибкой.
+  const filtered = useMemo(() => filterByFio(
+    responses.filter(r => r.status === 'submitted' && r.department_name === departmentName),
+    r => r.full_name,
+    q,
   ), [responses, departmentName, q]);
 
   const handleDelete = async (responseId: string) => {

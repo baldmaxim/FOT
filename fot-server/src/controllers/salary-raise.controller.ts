@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne } from '../config/postgres.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import type { AuthenticatedRequest, IResolvedSchedule, SalaryRaiseStatus } from '../types/index.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { pushService } from '../services/push.service.js';
@@ -1215,26 +1215,27 @@ const getCandidates = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const params: unknown[] = [candidateIds];
-    let sql = `SELECT id, full_name, position_id, org_department_id, employment_status, is_archived
-                 FROM employees
-                WHERE id = ANY($1::int[])
-                  AND employment_status = 'active'
-                  AND is_archived = false`;
-    if (search) {
-      params.push(`%${escapeLike(search)}%`);
-      sql += ` AND full_name ILIKE $${params.length}`;
-    }
-    sql += ` ORDER BY full_name LIMIT 20`;
-
-    const data = await query<{
-      id: number;
-      full_name: string | null;
-      position_id: string | null;
-      org_department_id: string | null;
-      employment_status: string | null;
-      is_archived: boolean | null;
-    }>(sql, params);
+    // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; скоуп — внутри запроса.
+    const fio = search ? buildFioSearch(search) : null;
+    const findCandidates = (mode: FioSearchMode) => {
+      const params: unknown[] = [candidateIds];
+      let sql = `SELECT id, full_name, position_id, org_department_id, employment_status, is_archived
+                   FROM employees
+                  WHERE id = ANY($1::int[])
+                    AND employment_status = 'active'
+                    AND is_archived = false`;
+      if (fio) sql += ` AND ${fioConditionSql('employees', params, fio, mode)}`;
+      sql += ` ORDER BY full_name LIMIT 20`;
+      return query<{
+        id: number;
+        full_name: string | null;
+        position_id: string | null;
+        org_department_id: string | null;
+        employment_status: string | null;
+        is_archived: boolean | null;
+      }>(sql, params);
+    };
+    const data = fio ? await withFioFallback(fio, findCandidates) : await findCandidates('exact');
 
     const positionIds = [...new Set(data.map((item) => item.position_id).filter((v): v is string => Boolean(v)))];
     const departmentIds = [...new Set(data.map((item) => item.org_department_id).filter((v): v is string => Boolean(v)))];

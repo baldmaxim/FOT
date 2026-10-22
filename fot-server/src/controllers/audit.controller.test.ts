@@ -35,16 +35,31 @@ describe('auditController.getActionLogs — поиск q', () => {
     mockedQuery.mockResolvedValue([]);
   });
 
-  it('q попадает в параметры как %строка%, один плейсхолдер в обоих условиях', async () => {
+  it('q: детали — как раньше (%строка%), ФИО автора — точным поиском ФИО (ё = е)', async () => {
     const res = makeRes();
     await auditController.getActionLogs(makeReq({ q: 'Ельшина' }), res);
 
     const sql = lastSql();
-    expect(lastParams()).toEqual(['%Ельшина%', 50, 0]);
+    expect(lastParams()).toEqual(['%Ельшина%', '[её]льшина', 50, 0]);
     expect(sql).toContain('details::text ILIKE $1');
-    expect(sql).toContain('full_name ILIKE $1');
-    expect(sql).not.toContain('$4');
+    expect(sql).toContain('(full_name ~* $2)');
+    expect(sql).not.toContain('$5');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, total: 0 }));
+  });
+
+  it('точного нет на первой странице — второй запрос с одной ошибкой в ФИО автора (детали — как были)', async () => {
+    await auditController.getActionLogs(makeReq({ q: 'Ельшина' }), makeRes());
+    expect(mockedQuery).toHaveBeenCalledTimes(2);
+    const [fuzzySql, fuzzyParams] = mockedQuery.mock.calls[1] as [string, unknown[]];
+    expect(fuzzySql).toContain('details::text ILIKE $1');
+    expect(fuzzySql).toContain('full_name ~* ANY($2::text[])');
+    expect(fuzzyParams[0]).toBe('%Ельшина%');
+  });
+
+  it('пустая страница при большом OFFSET: точные есть раньше — режим не переключается', async () => {
+    mockedQuery.mockImplementation(async (sql: string) => (String(sql).includes('SELECT EXISTS') ? [{ found: true }] : []));
+    await auditController.getActionLogs(makeReq({ q: 'Ельшина', page: '9' }), makeRes());
+    expect(mockedQuery.mock.calls.map(([sql]) => String(sql)).some(sql => sql.includes('~* ANY'))).toBe(false);
   });
 
   it('спецсимволы %, _, \\ экранируются и ищутся буквально', async () => {
@@ -65,16 +80,17 @@ describe('auditController.getActionLogs — поиск q', () => {
     );
     const sql = lastSql();
     expect(sql).toContain('action = $1');
-    expect(sql).toContain('details::text ILIKE $2');
-    expect(sql).toContain('full_name ILIKE $2');
-    expect(sql).toContain('created_at >= $3');
-    expect(sql).toContain('created_at <= $4');
-    expect(sql).toMatch(/WHERE action = \$1 AND \(details/);
+    expect(sql).toContain('created_at >= $2');
+    expect(sql).toContain('created_at <= $3');
+    expect(sql).toContain('details::text ILIKE $4');
+    expect(sql).toContain('(full_name ~* $5)');
+    expect(sql).toMatch(/WHERE action = \$1 AND created_at >= \$2 AND created_at <= \$3 AND \(details/);
     expect(lastParams()).toEqual([
       'TIMESHEET_REFRESH',
-      '%объект%',
       '2026-07-01',
       '2026-07-20T23:59:59.999Z',
+      '%объект%',
+      'объ[её]кт',
       50,
       0,
     ]);

@@ -11,6 +11,7 @@ import { OtitbRowBadge } from './OtitbStatusBadge';
 import { OtitbPersonModal } from './OtitbPersonModal';
 import contractorStyles from '../../../pages/contractor/Contractor.module.css';
 import styles from './Otitb.module.css';
+import { createFioMatcher, includesText, withFioFallback } from '../../../utils/fioSearch';
 
 /** Плоский список реестра по всем организациям (режим «показать всех»). */
 export const OtitbFlatList: FC<{ canEdit: boolean; catalog: IOtTrainingDef[] }> = ({
@@ -31,14 +32,13 @@ export const OtitbFlatList: FC<{ canEdit: boolean; catalog: IOtTrainingDef[] }> 
   const all: IInductedPersonFull[] = allQuery.data ?? [];
 
   const q = search.trim().toLocaleLowerCase('ru');
-  const rows = useMemo(
-    () => (q
-      ? all.filter(r =>
-        r.full_name.toLocaleLowerCase('ru').includes(q)
-        || r.org_name.toLocaleLowerCase('ru').includes(q))
-      : all),
-    [all, q],
-  );
+  // ФИО — ё = е, раскладка, без точных — с одной ошибкой; организация — вхождением текста.
+  const rows = useMemo(() => {
+    const matcher = createFioMatcher(search);
+    if (!matcher) return all;
+    return withFioFallback(matcher, mode => all.filter(r =>
+      matcher.matches(r.full_name, mode) || includesText(r.org_name, search)));
+  }, [all, search]);
 
   const handleArchive = async (row: IInductedPersonFull) => {
     if (!window.confirm(

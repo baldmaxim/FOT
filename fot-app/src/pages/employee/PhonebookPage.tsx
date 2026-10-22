@@ -2,6 +2,7 @@ import { type FC, useMemo, useState } from 'react';
 import { usePhonebook } from '../../hooks/useMySim';
 import { fmtPhone } from '../mts-business/mtsBusinessFormat';
 import styles from './PhonebookPage.module.css';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 
 const normText = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').trim();
 const digitsOf = (s: string): string => s.replace(/\D/g, '');
@@ -20,10 +21,15 @@ export const PhonebookPage: FC = () => {
     const q = normText(search);
     if (!q) return list;
     const qDigits = digitsOf(q);
-    return list.filter(r => {
+    // Номер — как раньше (от 3 цифр); ФИО — ё = е, раскладка, без точных — с одной ошибкой; должность и отдел —
+    // вхождением текста. Поля не склеиваем.
+    const matcher = createFioMatcher(search);
+    return withFioFallback(matcher, mode => list.filter(r => {
       if (qDigits.length >= 3 && r.msisdn && digitsOf(r.msisdn).includes(qDigits)) return true;
-      return normText(`${r.fullName} ${r.positionName ?? ''} ${r.departmentName ?? ''}`).includes(q);
-    });
+      return Boolean(matcher?.matches(r.fullName, mode))
+        || normText(r.positionName ?? '').includes(q)
+        || normText(r.departmentName ?? '').includes(q);
+    }));
   }, [rows, search]);
 
   return (

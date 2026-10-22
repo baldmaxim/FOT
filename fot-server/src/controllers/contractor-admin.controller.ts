@@ -36,6 +36,7 @@ import {
 } from '../services/contractor-pass-rename.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
   createSigurEmployee,
@@ -1285,11 +1286,14 @@ export const contractorAdminController = {
   async getPendingSubmissions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
-      // Опциональный поиск по ФИО держателя пропуска. Метасимволы LIKE экранируются,
-      // чтобы % / _ из поля не превращались в wildcard (буквальный поиск).
+      // Опциональный поиск по ФИО держателя пропуска: ё = е, раскладка, спецсимволы буквально;
+      // точных нет ни в одной заявке — с одной ошибкой.
       const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-      const like = q ? `%${q.replace(/[\\%_]/g, '\\$&')}%` : null;
-      const data = await query(
+      const fio = q ? buildFioSearch(q) : null;
+      const loadSubmissions = (mode: FioSearchMode) => {
+        const params: unknown[] = [];
+        const holderSql = fio ? `AND ${fioConditionSql('holder2', params, fio, mode)}` : '';
+        return query(
         `SELECT s.id,
                 s.org_department_id,
                 d.name AS org_name,
@@ -1308,12 +1312,13 @@ export const contractorAdminController = {
               LEFT JOIN contractor_pass_holders h2 ON h2.pass_id = p2.id AND h2.valid_until IS NULL
                WHERE p2.submission_id = s.id
                  AND p2.approval_status = 'pending'
-                 AND ($1::text IS NULL
-                      OR COALESCE(h2.holder_name, p2.holder_name) ILIKE $1 ESCAPE '\\'))
+                 ${holderSql})
           GROUP BY s.id, d.name
           ORDER BY s.submitted_at ASC`,
-        [like],
-      );
+        params,
+        );
+      };
+      const data = fio ? await withFioFallback(fio, loadSubmissions) : await loadSubmissions('exact');
       res.json({ success: true, data });
     } catch (error) {
       console.error('Contractor getPendingSubmissions error:', error);
@@ -2013,18 +2018,25 @@ export const contractorAdminController = {
 
       let rows;
       if (q) {
-        const pattern = `%${escapeLike(q)}%`;
-        // Ищем и по ФИО из кадров: пропуск с опечаткой находится по верному имени.
-        rows = await query(
-          `${baseSelect}
-            WHERE p.status <> 'revoked'
-              AND (p.pass_number ILIKE $1
-                   OR COALESCE(h.holder_name, p.holder_name) ILIKE $1
-                   OR (p.approval_status = 'approved' AND e.full_name ILIKE $1))
-            ORDER BY p.pass_number::int ASC
-            LIMIT 100`,
-          [pattern],
-        );
+        // Ищем и по ФИО из кадров: пропуск с опечаткой находится по верному имени. Номер пропуска — как раньше
+        // (ILIKE); ФИО держателя и из кадров — ё = е, раскладка, а если точного нет нигде — с одной ошибкой.
+        const fio = buildFioSearch(q);
+        const searchPasses = (mode: FioSearchMode) => {
+          const params: unknown[] = [`%${escapeLike(q)}%`];
+          const holderSql = fio ? fioConditionSql('holder', params, fio, mode) : 'FALSE';
+          const employeeSql = fio ? fioConditionSql('e', params, fio, mode) : 'FALSE';
+          return query(
+            `${baseSelect}
+              WHERE p.status <> 'revoked'
+                AND (p.pass_number ILIKE $1
+                     OR ${holderSql}
+                     OR (p.approval_status = 'approved' AND ${employeeSql}))
+              ORDER BY p.pass_number::int ASC
+              LIMIT 100`,
+            params,
+          );
+        };
+        rows = fio ? await withFioFallback(fio, searchPasses) : await searchPasses('exact');
       } else {
         const orgId = z.string().uuid().parse(orgIdRaw);
         rows = await query(

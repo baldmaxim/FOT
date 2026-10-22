@@ -31,6 +31,7 @@ import { getContractByObject, listAddenda, listKs2Entries } from '../services/ob
 import { listKs6Entries } from '../services/object-kpi-ks6.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { listAssignments, listGlobalRoles } from '../services/object-kpi-assignments.service.js';
+import { buildFioSearch, fioConditionSql, withFioFallback } from '../utils/fio-search.utils.js';
 
 /**
  * Чтение KPI-контура: отчёт, карточка объекта, планы, история, ЛК руководителя.
@@ -625,15 +626,20 @@ export const objectKpiController = {
       // Нужен только для закреплений — то же право, что и на них.
       await assertCanManageAssignmentsOr403(req);
       const term = z.string().trim().min(2, 'Введите минимум 2 символа').parse(req.query.q);
-      const rows = await query<{ id: number; full_name: string | null }>(
-        `SELECT id, full_name
-           FROM employees
-          WHERE employment_status = 'active'
-            AND full_name ILIKE '%' || $1 || '%'
-          ORDER BY full_name
-          LIMIT 20`,
-        [term],
-      );
+      // ФИО — точно (ё = е, раскладка; спецсимволы буквально), без точных — с одной ошибкой.
+      const fio = buildFioSearch(term);
+      const rows = !fio ? [] : await withFioFallback(fio, (mode) => {
+        const params: unknown[] = [];
+        return query<{ id: number; full_name: string | null }>(
+          `SELECT id, full_name
+             FROM employees
+            WHERE employment_status = 'active'
+              AND ${fioConditionSql('employees', params, fio, mode)}
+            ORDER BY full_name
+            LIMIT 20`,
+          params,
+        );
+      });
       res.json({ success: true, data: rows });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] searchEmployees');

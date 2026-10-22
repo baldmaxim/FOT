@@ -15,15 +15,21 @@ import { EntityFilter } from './EntityFilter';
 import { PresenceExportModal } from './PresenceExportModal';
 import { isSyncedCompanyId } from './companyId.utils';
 import styles from './SkudPresencePage.module.css';
+import { createFioMatcher, includesText, type FioSearchMode, type IFioMatcher } from '../../../utils/fioSearch';
 
 const TOP_COMPANIES_LIMIT = 5;
 
-const matchesEmployee = (emp: IPresenceObjectEmployee, query: string): boolean => {
-  if (!query) return true;
-  const normalized = query.toLowerCase();
-  return emp.full_name.toLowerCase().includes(normalized)
-    || (emp.position_name?.toLowerCase().includes(normalized) ?? false)
-    || (emp.department_name?.toLowerCase().includes(normalized) ?? false);
+/** ФИО — проверкой ФИО (ё = е, раскладка, опечатка — в режиме fuzzy); должность и отдел — вхождением текста. */
+const matchesEmployee = (
+  emp: IPresenceObjectEmployee,
+  search: string,
+  matcher: IFioMatcher | null,
+  mode: FioSearchMode,
+): boolean => {
+  if (!matcher) return true;
+  return matcher.matches(emp.full_name, mode)
+    || includesText(emp.position_name, search)
+    || includesText(emp.department_name, search);
 };
 
 interface IFilteredBucket extends Omit<IPresenceObjectBucket, 'companies'> {
@@ -46,40 +52,48 @@ const filterData = (
   const hasCompanyFilter = selectedCompanyIds.size > 0;
   const hasObjectFilter = selectedObjectIds.size > 0;
   const isActive = q !== '' || hasCompanyFilter || hasObjectFilter;
+  const matcher = createFioMatcher(search);
 
-  const buckets: IFilteredBucket[] = [];
-  let filteredCount = 0;
+  // Точных (по ФИО, должности, отделу, компании, объекту) после фильтров нет — ФИО с одной ошибкой.
+  const run = (mode: FioSearchMode) => {
+    const buckets: IFilteredBucket[] = [];
+    let filteredCount = 0;
 
-  for (const bucket of data.buckets) {
-    const objectKey = bucket.object_id ?? '__no_object__';
-    if (hasObjectFilter && !selectedObjectIds.has(objectKey)) continue;
+    for (const bucket of data.buckets) {
+      const objectKey = bucket.object_id ?? '__no_object__';
+      if (hasObjectFilter && !selectedObjectIds.has(objectKey)) continue;
 
-    // Поиск по названию объекта: совпал — показываем весь объект.
-    const objectMatches = q !== '' && bucket.object_name.toLowerCase().includes(q);
+      // Поиск по названию объекта: совпал — показываем весь объект.
+      const objectMatches = matcher !== null && includesText(bucket.object_name, search);
 
-    const filteredCompanies: IPresenceObjectCompany[] = [];
-    let bucketTotal = 0;
+      const filteredCompanies: IPresenceObjectCompany[] = [];
+      let bucketTotal = 0;
 
-    for (const company of bucket.companies) {
-      if (hasCompanyFilter && !selectedCompanyIds.has(company.company_id)) continue;
-      // Поиск по названию компании: совпал — показываем весь её состав.
-      const companyMatches = q !== '' && company.company_name.toLowerCase().includes(q);
-      const matched = objectMatches || companyMatches
-        ? company.employees
-        : company.employees.filter(emp => matchesEmployee(emp, search));
-      if (matched.length === 0 && isActive) continue;
-      filteredCompanies.push({ ...company, online_count: matched.length, employees: matched });
-      bucketTotal += matched.length;
-      filteredCount += matched.length;
+      for (const company of bucket.companies) {
+        if (hasCompanyFilter && !selectedCompanyIds.has(company.company_id)) continue;
+        // Поиск по названию компании: совпал — показываем весь её состав.
+        const companyMatches = matcher !== null && includesText(company.company_name, search);
+        const matched = objectMatches || companyMatches
+          ? company.employees
+          : company.employees.filter(emp => matchesEmployee(emp, search, matcher, mode));
+        if (matched.length === 0 && isActive) continue;
+        filteredCompanies.push({ ...company, online_count: matched.length, employees: matched });
+        bucketTotal += matched.length;
+        filteredCount += matched.length;
+      }
+
+      // Под активным поиском/фильтром объект без совпадений скрываем целиком.
+      if (bucketTotal === 0 && (isActive || hideEmpty)) continue;
+
+      buckets.push({ ...bucket, companies: filteredCompanies, online_count: bucketTotal });
     }
 
-    // Под активным поиском/фильтром объект без совпадений скрываем целиком.
-    if (bucketTotal === 0 && (isActive || hideEmpty)) continue;
+    return { buckets, totalOnline: data.total_online, filteredCount };
+  };
 
-    buckets.push({ ...bucket, companies: filteredCompanies, online_count: bucketTotal });
-  }
-
-  return { buckets, totalOnline: data.total_online, filteredCount };
+  const exact = run('exact');
+  if (exact.filteredCount > 0 || !matcher?.hasFuzzy) return exact;
+  return run('fuzzy');
 };
 
 const pluralCompanies = (n: number): string => {

@@ -12,6 +12,7 @@ import {
 } from '../../services/contractorService';
 import { PassDocumentsModal, hasDocDuplicate } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
+import { filterByFio } from '../../utils/fioSearch';
 
 const fmtSize = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
@@ -84,9 +85,9 @@ export const ApproveSubmissionModal: FC<IProps> = ({
 
   const pendingRows = useMemo<ISubmissionDetailRow[]>(() => {
     const rows = (detailQuery.data ?? []).filter(r => r.approval_status === 'pending');
-    const q = (filterName ?? '').trim().toLocaleLowerCase('ru');
-    // Под активным поиском модалка открывает только совпавших по ФИО (не всю заявку).
-    return q ? rows.filter(r => (r.holder_name ?? '').toLocaleLowerCase('ru').includes(q)) : rows;
+    // Под активным поиском модалка открывает только совпавших по ФИО (не всю заявку) — тем же правилом,
+    // что строка заявки в списке (ё = е, раскладка, без точных — с одной ошибкой).
+    return filterName ? filterByFio(rows, r => r.holder_name, filterName) : rows;
   }, [detailQuery.data, filterName]);
 
   const minDate = useMemo(() => {

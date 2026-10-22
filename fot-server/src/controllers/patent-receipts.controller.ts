@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import * as Sentry from '@sentry/node';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { buildFioSearch, fioConditionSql, type FioSearchMode } from '../utils/fio-search.utils.js';
 import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
@@ -89,6 +90,9 @@ const PATCH_ALLOWED_FIELDS = new Set<keyof PatentPaymentReceiptPatch>([
   'period_end',
 ]);
 
+/** Свежих чеков в выдаче: поиск по ФИО — до лимита, на сервере. */
+const RECEIPTS_LIMIT = 500;
+
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const {
@@ -114,16 +118,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       whereParts.push(`d.recognition_status = ${addParam(status)}`);
     }
     // Поиск по ФИО — на сервере (до LIMIT), иначе клиентский фильтр не видит
-    // чеки за пределами топ-500 свежих.
+    // чеки за пределами топ-500 свежих. ё = е (раньше строчная «ё» — «Семёнов» — не находилась),
+    // раскладка; точных нет после фильтров ниже — с одной ошибкой.
     const searchTerm = typeof search === 'string' ? search.trim() : '';
-    if (searchTerm) {
-      const normalized = searchTerm.toUpperCase().replace(/Ё/g, 'Е').replace(/[%_\\]/g, '\\$&');
-      whereParts.push(
-        `upper(replace(e.full_name, 'Ё', 'Е')) LIKE ${addParam(`%${normalized}%`)} ESCAPE '\\'`,
-      );
-    }
-
-    const whereSql = `WHERE ${whereParts.join(' AND ')}`;
+    const fio = searchTerm ? buildFioSearch(searchTerm) : null;
 
     type DocRow = {
       id: number;
@@ -141,76 +139,86 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       receipt_data: Record<string, unknown> | null;
     };
 
-    const docs = await query<DocRow>(
-      `SELECT
-         d.id,
-         d.employee_id,
-         d.file_name,
-         d.mime_type,
-         d.r2_key,
-         d.recognition_status,
-         d.recognition_attempts,
-         d.recognized_at,
-         d.recognition_error,
-         d.created_at,
-         e.full_name AS employee_full_name,
-         r.id AS receipt_id,
-         CASE WHEN r.id IS NULL THEN NULL ELSE to_jsonb(r) END AS receipt_data
-       FROM documents d
-       LEFT JOIN employees e ON e.id = d.employee_id
-       LEFT JOIN patent_payment_receipts r ON r.document_id = d.id
-       ${whereSql}
-       ORDER BY d.created_at DESC
-       LIMIT 500`,
-      params,
-    );
+    const loadRows = async (mode: FioSearchMode) => {
+      const modeParams = [...params];
+      const modeWhere = fio ? [...whereParts, fioConditionSql('e', modeParams, fio, mode)] : whereParts;
+      const docs = await query<DocRow>(
+        `SELECT
+           d.id,
+           d.employee_id,
+           d.file_name,
+           d.mime_type,
+           d.r2_key,
+           d.recognition_status,
+           d.recognition_attempts,
+           d.recognized_at,
+           d.recognition_error,
+           d.created_at,
+           e.full_name AS employee_full_name,
+           r.id AS receipt_id,
+           CASE WHEN r.id IS NULL THEN NULL ELSE to_jsonb(r) END AS receipt_data
+         FROM documents d
+         LEFT JOIN employees e ON e.id = d.employee_id
+         LEFT JOIN patent_payment_receipts r ON r.document_id = d.id
+         WHERE ${modeWhere.join(' AND ')}
+         ORDER BY d.created_at DESC
+         LIMIT ${RECEIPTS_LIMIT}`,
+        modeParams,
+      );
 
-    const mapped = docs
-      .map(doc => {
-        const rawReceipt = doc.receipt_data;
-        const receipt = rawReceipt
-          ? (decryptReceiptRow(rawReceipt as Record<string, unknown>) as Record<string, unknown>)
-          : null;
+      const rows = docs
+        .map(doc => {
+          const rawReceipt = doc.receipt_data;
+          const receipt = rawReceipt
+            ? (decryptReceiptRow(rawReceipt as Record<string, unknown>) as Record<string, unknown>)
+            : null;
 
-        return {
-          id: (receipt?.id as number | null | undefined) ?? null,
-          document_id: doc.id,
-          employee_id: doc.employee_id,
-          payment_date: (receipt?.payment_date as string | null | undefined) ?? null,
-          payment_amount: (receipt?.payment_amount as string | null | undefined) ?? null,
-          payer_full_name: (receipt?.payer_full_name as string | null | undefined) ?? null,
-          payer_inn: (receipt?.payer_inn as string | null | undefined) ?? null,
-          payer_passport: (receipt?.payer_passport as string | null | undefined) ?? null,
-          patent_number: (receipt?.patent_number as string | null | undefined) ?? null,
-          kbk: (receipt?.kbk as string | null | undefined) ?? null,
-          oktmo: (receipt?.oktmo as string | null | undefined) ?? null,
-          source_type: (receipt?.source_type as string | null | undefined) ?? null,
-          confidence: (receipt?.confidence as string | null | undefined) ?? null,
-          needs_review: Boolean(receipt?.needs_review),
-          manually_edited: Boolean(receipt?.manually_edited),
-          is_verified: Boolean(receipt?.is_verified),
-          recognition_model: (receipt?.recognition_model as string | null | undefined) ?? null,
-          cost_usd: (receipt?.cost_usd as string | null | undefined) ?? null,
-          period_start: (receipt?.period_start as string | null | undefined) ?? null,
-          period_end: (receipt?.period_end as string | null | undefined) ?? null,
-          created_at: (receipt?.created_at as string | undefined) ?? doc.created_at,
-          r2_key: doc.r2_key,
-          documents: {
-            file_name: doc.file_name,
-            mime_type: doc.mime_type,
-            recognition_status: doc.recognition_status,
-            recognition_error: doc.recognition_error,
-          },
-          employees: doc.employee_full_name !== null ? { full_name: doc.employee_full_name } : null,
-        };
-      })
-      .filter(row => {
-        if (from && (!row.payment_date || row.payment_date < from)) return false;
-        if (to && (!row.payment_date || row.payment_date > to)) return false;
-        if (needs_review === 'true' && !row.needs_review) return false;
-        if (needs_review === 'false' && (!row.id || row.needs_review)) return false;
-        return true;
-      });
+          return {
+            id: (receipt?.id as number | null | undefined) ?? null,
+            document_id: doc.id,
+            employee_id: doc.employee_id,
+            payment_date: (receipt?.payment_date as string | null | undefined) ?? null,
+            payment_amount: (receipt?.payment_amount as string | null | undefined) ?? null,
+            payer_full_name: (receipt?.payer_full_name as string | null | undefined) ?? null,
+            payer_inn: (receipt?.payer_inn as string | null | undefined) ?? null,
+            payer_passport: (receipt?.payer_passport as string | null | undefined) ?? null,
+            patent_number: (receipt?.patent_number as string | null | undefined) ?? null,
+            kbk: (receipt?.kbk as string | null | undefined) ?? null,
+            oktmo: (receipt?.oktmo as string | null | undefined) ?? null,
+            source_type: (receipt?.source_type as string | null | undefined) ?? null,
+            confidence: (receipt?.confidence as string | null | undefined) ?? null,
+            needs_review: Boolean(receipt?.needs_review),
+            manually_edited: Boolean(receipt?.manually_edited),
+            is_verified: Boolean(receipt?.is_verified),
+            recognition_model: (receipt?.recognition_model as string | null | undefined) ?? null,
+            cost_usd: (receipt?.cost_usd as string | null | undefined) ?? null,
+            period_start: (receipt?.period_start as string | null | undefined) ?? null,
+            period_end: (receipt?.period_end as string | null | undefined) ?? null,
+            created_at: (receipt?.created_at as string | undefined) ?? doc.created_at,
+            r2_key: doc.r2_key,
+            documents: {
+              file_name: doc.file_name,
+              mime_type: doc.mime_type,
+              recognition_status: doc.recognition_status,
+              recognition_error: doc.recognition_error,
+            },
+            employees: doc.employee_full_name !== null ? { full_name: doc.employee_full_name } : null,
+          };
+        })
+        .filter(row => {
+          if (from && (!row.payment_date || row.payment_date < from)) return false;
+          if (to && (!row.payment_date || row.payment_date > to)) return false;
+          if (needs_review === 'true' && !row.needs_review) return false;
+          if (needs_review === 'false' && (!row.id || row.needs_review)) return false;
+          return true;
+        });
+      return { rows, truncated: docs.length >= RECEIPTS_LIMIT };
+    };
+    const exact = await loadRows('exact');
+    // Точных нет после фильтров и выборка не упёрлась в лимит (точный мог остаться за ним) — с одной ошибкой.
+    const mapped = fio && fio.fuzzy.length > 0 && exact.rows.length === 0 && !exact.truncated
+      ? (await loadRows('fuzzy')).rows
+      : exact.rows;
 
     const result = await Promise.all(mapped.map(async row => {
       let download_url: string | null = null;

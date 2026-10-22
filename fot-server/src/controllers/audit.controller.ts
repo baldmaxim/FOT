@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { query } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, type FioSearchMode } from '../utils/fio-search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface AuditIssue {
@@ -58,45 +59,73 @@ export const auditController = {
 
       if (action) whereParts.push(`action = ${addParam(action)}`);
       if (user_id) whereParts.push(`user_id = ${addParam(user_id)}`);
-      // q может прийти массивом (?q=a&q=b) — берём только строку
-      const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 64) : '';
-      if (q) {
-        // slice до экранирования, лимит 128 после — иначе escapeLike срезала бы удвоенные спецсимволы
-        const p = addParam(`%${escapeLike(q, 128)}%`);
-        whereParts.push(
-          `(details::text ILIKE ${p}
-            OR user_id IN (SELECT id FROM user_profiles WHERE full_name ILIKE ${p}))`,
-        );
-      }
       if (date_from) whereParts.push(`created_at >= ${addParam(date_from)}`);
       if (date_to) {
         const end = date_to.length === 10 ? `${date_to}T23:59:59.999Z` : date_to;
         whereParts.push(`created_at <= ${addParam(end)}`);
       }
-      const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+      // q может прийти массивом (?q=a&q=b) — берём только строку
+      const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 64) : '';
+      // Текст деталей — как раньше (ILIKE); ФИО автора — точно (ё = е, раскладка), а если точного нет
+      // ни в деталях, ни у авторов — с одной ошибкой (только ФИО).
+      const fio = q ? buildFioSearch(q) : null;
+      const buildWhere = (mode: FioSearchMode): { whereSql: string; whereParams: unknown[] } => {
+        const whereParams = [...params];
+        const modeWhere = [...whereParts];
+        if (q) {
+          // slice до экранирования, лимит 128 после — иначе escapeLike срезала бы удвоенные спецсимволы
+          whereParams.push(`%${escapeLike(q, 128)}%`);
+          const p = `$${whereParams.length}`;
+          const actorSql = fio ? fioConditionSql('user_profiles', whereParams, fio, mode) : 'FALSE';
+          modeWhere.push(
+            `(details::text ILIKE ${p}
+              OR user_id IN (SELECT id FROM user_profiles WHERE ${actorSql}))`,
+          );
+        }
+        return { whereSql: modeWhere.length ? `WHERE ${modeWhere.join(' AND ')}` : '', whereParams };
+      };
 
-      const limitPlaceholder = addParam(limitNum);
-      const offsetPlaceholder = addParam(offset);
+      const loadPage = (mode: FioSearchMode) => {
+        const { whereSql, whereParams } = buildWhere(mode);
+        whereParams.push(limitNum);
+        const limitPlaceholder = `$${whereParams.length}`;
+        whereParams.push(offset);
+        const offsetPlaceholder = `$${whereParams.length}`;
+        return query<{
+          id: string;
+          user_id: string | null;
+          action: string;
+          entity_type: string | null;
+          entity_id: string | null;
+          details: unknown;
+          ip_address: string | null;
+          created_at: string;
+          total_count: number;
+        }>(
+          `SELECT id, user_id, action, entity_type, entity_id, details, ip_address, created_at,
+                  count(*) OVER ()::int AS total_count
+             FROM audit_logs
+             ${whereSql}
+             ORDER BY created_at DESC
+             LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
+          whereParams,
+        );
+      };
 
-      const logs = await query<{
-        id: string;
-        user_id: string | null;
-        action: string;
-        entity_type: string | null;
-        entity_id: string | null;
-        details: unknown;
-        ip_address: string | null;
-        created_at: string;
-        total_count: number;
-      }>(
-        `SELECT id, user_id, action, entity_type, entity_id, details, ip_address, created_at,
-                count(*) OVER ()::int AS total_count
-           FROM audit_logs
-           ${whereSql}
-           ORDER BY created_at DESC
-           LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
-        params,
-      );
+      let logs = await loadPage('exact');
+      if (fio && fio.fuzzy.length > 0 && logs.length === 0) {
+        // Пустая страница при большом OFFSET режим не переключает: точные могут быть на прежних страницах.
+        let hasExact = false;
+        if (offset > 0) {
+          const { whereSql, whereParams } = buildWhere('exact');
+          const rows = await query<{ found: boolean }>(
+            `SELECT EXISTS (SELECT 1 FROM audit_logs ${whereSql}) AS found`,
+            whereParams,
+          );
+          hasExact = rows[0]?.found === true;
+        }
+        if (!hasExact) logs = await loadPage('fuzzy');
+      }
 
       const userIds = [...new Set(logs.map(l => l.user_id).filter((v): v is string => Boolean(v)))];
       const userMap: Record<string, string> = {};

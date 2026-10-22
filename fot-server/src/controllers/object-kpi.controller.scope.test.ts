@@ -173,6 +173,18 @@ describe('закрепления — список и поиск', () => {
     expect(h.query).not.toHaveBeenCalled();
   });
 
+  it('поиск сотрудника: ё = е, раскладка, спецсимволы буквально; точных нет — с одной ошибкой', async () => {
+    h.canManage.mockResolvedValue(true);
+    h.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 5, full_name: 'Гринёв Андрей' }]);
+    const { res, out } = makeRes();
+    await objectKpiController.searchEmployees(economistReq({ query: { q: 'грнев' } }), res);
+    expect(out.status).toBe(200);
+    const [exactSql, exactParams] = h.query.mock.calls[0] as [string, unknown[]];
+    expect(exactSql).toContain('AND (full_name ~* $1)');
+    expect(exactParams).toEqual(['грн[её]в']);
+    expect(String(h.query.mock.calls[1][0])).toContain('id IN (SELECT fz.id FROM unnest($1::text[])');
+  });
+
   it('руководитель эк. отдела: список закреплений отдаётся', async () => {
     h.canManage.mockResolvedValue(true);
     h.resolveScope.mockResolvedValue({ is_unrestricted: true, object_ids: [OWN, FOREIGN] });

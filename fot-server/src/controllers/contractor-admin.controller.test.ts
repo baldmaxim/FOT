@@ -1438,6 +1438,38 @@ describe('contractorAdminController — доступ по гранту стра�
     await contractorAdminController.monitorPasses(makeAccessReq(true, 'admin'), res as never);
     expect(res.statusCode).toBe(403);
   });
+
+  it('заявки: ФИО держателя — ё = е, спецсимволы буквально; точных нет ни в одной заявке — с одной ошибкой', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SECTION]);
+    h.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'sub-9' }]);
+    const request = makeAccessReq(false, 'security') as unknown as { query: Record<string, string> };
+    request.query = { q: 'грнев' };
+    const res = makeRes();
+    await contractorAdminController.getPendingSubmissions(request as never, res as never);
+    expect(res.body).toMatchObject({ data: [{ id: 'sub-9' }] });
+    const [exactSql, exactParams] = h.query.mock.calls[0] as [string, unknown[]];
+    expect(exactSql).toContain('AND (COALESCE(h2.holder_name, p2.holder_name) ~* $1)');
+    expect(exactParams).toEqual(['грн[её]в']);
+    expect(String(h.query.mock.calls[1][0])).toContain('AND COALESCE(h2.holder_name, p2.holder_name) ~* ANY($1::text[])');
+  });
+
+  it('монитор: номер пропуска — как раньше; держатель и ФИО из кадров — поиск ФИО; точный есть — без опечаток', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SECTION]);
+    h.query.mockImplementation(async (sql: string) => (String(sql).includes('pass_number ILIKE') ? [{ id: 1, card_uid: null }] : []));
+    const request = makeAccessReq(false, 'security') as unknown as { query: Record<string, string> };
+    request.query = { q: 'uhbyt' };
+    const res = makeRes();
+    await contractorAdminController.monitorPasses(request as never, res as never);
+    const searchCalls = h.query.mock.calls.filter(([sql]) => String(sql).includes('pass_number ILIKE'));
+    expect(searchCalls).toHaveLength(1);
+    const [sql, params] = searchCalls[0] as [string, unknown[]];
+    expect(sql).toContain('p.pass_number ILIKE $1');
+    expect(sql).toContain('OR (COALESCE(h.holder_name, p.holder_name) ~* $2 OR COALESCE(h.holder_name, p.holder_name) ~* $3)');
+    expect(sql).toContain("(p.approval_status = 'approved' AND (e.full_name ~* $4 OR e.full_name ~* $5))");
+    expect(params).toEqual(['%uhbyt%', 'uhbyt', 'грин[её]', 'uhbyt', 'грин[её]']);
+  });
 });
 
 describe('contractorAdminController — реестр обучения по ОТ', () => {

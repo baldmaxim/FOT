@@ -13,6 +13,7 @@ import { formatCardW26 } from '../../utils/cardW26';
 import { ApproveSubmissionModal } from './ApproveSubmissionModal';
 import { PassDocumentsModal, hasDocDuplicate } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
+import { filterByFio } from '../../utils/fioSearch';
 
 interface ISubmissionDetailProps {
   submissionId: string;
@@ -37,11 +38,9 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
 
   const rows: ISubmissionDetailRow[] = detailQuery.data ?? [];
   const pendingRows = rows.filter(r => r.approval_status === 'pending');
-  // При активном поиске показываем и оперируем только совпавшими по ФИО строками.
-  const q = (filterName ?? '').toLocaleLowerCase('ru');
-  const displayRows = q
-    ? pendingRows.filter(r => (r.holder_name ?? '').toLocaleLowerCase('ru').includes(q))
-    : pendingRows;
+  // При активном поиске показываем и оперируем только совпавшими по ФИО строками: ё = е, раскладка;
+  // точных в заявке нет — с одной ошибкой (так её и нашёл сервер).
+  const displayRows = filterName ? filterByFio(pendingRows, r => r.holder_name, filterName) : pendingRows;
   // Выбрать для открытия можно только тех, кто прошёл вводный инструктаж (и виден в поиске).
   const selectableIds = new Set(displayRows.filter(r => r.induction_passed).map(r => r.id));
   const selectableCount = selectableIds.size;
@@ -203,8 +202,6 @@ export const SubmissionsTab: FC<{ search?: string }> = ({ search = '' }) => {
   // чтобы на одну букву не раскрывать и не грузить detail десятков заявок сразу.
   const searchActive = search.trim().length >= 2;
   const searchQuery = searchActive ? search.trim() : '';
-  const holderMatches = (r: ISubmissionDetailRow): boolean =>
-    !searchActive || (r.holder_name ?? '').toLocaleLowerCase('ru').includes(searchQuery.toLocaleLowerCase('ru'));
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
@@ -271,8 +268,9 @@ export const SubmissionsTab: FC<{ search?: string }> = ({ search = '' }) => {
       // гонки: клик мог случиться до того, как эффект авто-выбора сузил selectedByPass.
       if (sel === undefined || searchActive) {
         const detail = await contractorAdminService.getSubmissionDetail(submissionId);
-        const visiblePending = detail
-          .filter(r => r.approval_status === 'pending' && holderMatches(r))
+        const pendingDetail = detail.filter(r => r.approval_status === 'pending');
+        // Тот же набор, что виден в строке заявки: поиск ФИО тем же правилом.
+        const visiblePending = (searchActive ? filterByFio(pendingDetail, r => r.holder_name, searchQuery) : pendingDetail)
           .map(r => r.id);
         const visibleSet = new Set(visiblePending);
         passIds = sel ? Array.from(sel).filter(id => visibleSet.has(id)) : visiblePending;

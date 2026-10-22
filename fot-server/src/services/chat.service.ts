@@ -1,6 +1,6 @@
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, type FioSearchMode } from '../utils/fio-search.utils.js';
 import { TOMBSTONE_USER_ID } from '../config/system-users.js';
 import {
   chatPolicyService,
@@ -230,6 +230,10 @@ async function formatContactRequests(rows: ChatRequestRow[], currentUserId: stri
     direction: row.target_user_id === currentUserId ? 'inbox' : 'outbox',
   }));
 }
+
+/** Подсказки «Новый чат»: выдача и сколько совпавших проверять политикой общения. */
+const CHAT_SEARCH_RESULTS = 50;
+const CHAT_SEARCH_CANDIDATES = 500;
 
 export const chatService = {
   async getOrCreateConversation(userId1: string, userId2: string): Promise<string> {
@@ -595,66 +599,69 @@ export const chatService = {
   },
 
   async searchUsers(searchQuery: string, currentUserId: string): Promise<IChatUser[]> {
-    const trimmed = searchQuery.trim();
-    let users: Array<{ id: string }>;
-    try {
-      // Надгробие (284) не одобрено и в выдачу не попадает, но исключаем явно:
-      // писать «Удалённому пользователю» нельзя ни при каких настройках.
-      if (trimmed) {
-        users = await query<{ id: string }>(
-          `SELECT id FROM user_profiles
-            WHERE id <> $1
-              AND id <> $3::uuid
-              AND is_approved = true
-              AND full_name ILIKE $2
-            ORDER BY full_name ASC
-            LIMIT 50`,
-          [currentUserId, `%${escapeLike(trimmed)}%`, TOMBSTONE_USER_ID],
-        );
-      } else {
+    const fio = buildFioSearch(searchQuery);
+    // Надгробие (284) не одобрено и в выдачу не попадает, но исключаем явно:
+    // писать «Удалённому пользователю» нельзя ни при каких настройках.
+    // Без поиска — первые 50 по ФИО. С поиском — до 500 совпавших: политика общения режет уже после SQL,
+    // и разрешённый точный не должен теряться за первыми 50.
+    const loadCandidates = async (mode: FioSearchMode | null): Promise<{ ids: string[]; truncated: boolean }> => {
+      const params: unknown[] = [currentUserId, TOMBSTONE_USER_ID];
+      const limit = fio ? CHAT_SEARCH_CANDIDATES : CHAT_SEARCH_RESULTS;
+      let users: Array<{ id: string }>;
+      try {
         users = await query<{ id: string }>(
           `SELECT id FROM user_profiles
             WHERE id <> $1
               AND id <> $2::uuid
               AND is_approved = true
+              ${fio && mode ? `AND ${fioConditionSql('user_profiles', params, fio, mode)}` : ''}
             ORDER BY full_name ASC
-            LIMIT 50`,
-          [currentUserId, TOMBSTONE_USER_ID],
+            LIMIT ${limit}`,
+          params,
         );
+      } catch {
+        throw new Error('Failed to search users');
       }
-    } catch {
-      throw new Error('Failed to search users');
-    }
+      return { ids: users.map(user => user.id), truncated: users.length >= limit };
+    };
 
-    const candidateIds = users.map(user => user.id);
-    if (candidateIds.length === 0) return [];
+    const applyPolicy = async (candidateIds: string[]): Promise<IChatUser[]> => {
+      if (candidateIds.length === 0) return [];
+      const [contexts, decisions] = await Promise.all([
+        chatPolicyService.getUserContexts([currentUserId, ...candidateIds]),
+        chatPolicyService.getDecisionsForTargets(currentUserId, candidateIds),
+      ]);
 
-    const [contexts, decisions] = await Promise.all([
-      chatPolicyService.getUserContexts([currentUserId, ...candidateIds]),
-      chatPolicyService.getDecisionsForTargets(currentUserId, candidateIds),
-    ]);
+      const results: IChatUser[] = [];
+      candidateIds.forEach(userIdValue => {
+        const context = contexts.get(userIdValue);
+        const decision = decisions.get(userIdValue);
 
-    const results: IChatUser[] = [];
-    candidateIds.forEach(userIdValue => {
-      const context = contexts.get(userIdValue);
-      const decision = decisions.get(userIdValue);
+        if (!context || !decision || decision.availability === 'forbidden') {
+          return;
+        }
 
-      if (!context || !decision || decision.availability === 'forbidden') {
-        return;
-      }
-
-      results.push({
-        id: context.id,
-        full_name: context.full_name,
-        role_code: context.role_code,
-        department_id: context.department_ids[0] ?? null,
-        availability: decision.availability,
-        availability_reason: decision.availability_reason,
-        request_status: decision.request_status,
+        results.push({
+          id: context.id,
+          full_name: context.full_name,
+          role_code: context.role_code,
+          department_id: context.department_ids[0] ?? null,
+          availability: decision.availability,
+          availability_reason: decision.availability_reason,
+          request_status: decision.request_status,
+        });
       });
-    });
 
-    return results;
+      return results.slice(0, CHAT_SEARCH_RESULTS);
+    };
+
+    if (!fio) return applyPolicy((await loadCandidates(null)).ids);
+    // ФИО — точно (ё = е, раскладка); среди разрешённых политикой точных нет — с одной ошибкой.
+    // Упёрлись в 500 — точный мог остаться за лимитом, опечатку не включаем.
+    const exact = await loadCandidates('exact');
+    const exactResults = await applyPolicy(exact.ids);
+    if (exactResults.length > 0 || exact.truncated || fio.fuzzy.length === 0) return exactResults;
+    return applyPolicy((await loadCandidates('fuzzy')).ids);
   },
 
   async listContactRequests(userId: string, box: 'inbox' | 'outbox'): Promise<IChatContactRequest[]> {

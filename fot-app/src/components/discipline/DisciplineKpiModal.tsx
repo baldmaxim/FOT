@@ -15,6 +15,7 @@ import type {
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { triggerBlobDownload } from '../../utils/download';
 import styles from './DisciplineKpiModal.module.css';
+import { filterByFio } from '../../utils/fioSearch';
 
 interface IKpiEmployee {
   id: number;
@@ -111,9 +112,9 @@ export const DisciplineKpiModal: FC<IDisciplineKpiModalProps> = ({
   const [result, setResult] = useState<IDisciplineKpiResult | null>(null);
 
   const employeeMatches = useMemo(() => {
-    const q = employeeQuery.trim().toLowerCase();
-    if (!q) return [];
-    return employees.filter(e => e.name.toLowerCase().includes(q)).slice(0, 40);
+    if (!employeeQuery.trim()) return [];
+    // ФИО — ё = е, раскладка; точных нет — с одной ошибкой.
+    return filterByFio(employees, e => e.name, employeeQuery).slice(0, 40);
   }, [employeeQuery, employees]);
 
   const departmentMatches = useMemo(() => {

@@ -108,6 +108,9 @@ const FIO_SEARCH_TARGETS = {
   // против 81 мс по индексу на проде 22.10.2026).
   user_profiles: { kind: 'plain', name: 'full_name' },
   up: { kind: 'plain', name: 'up.full_name' },
+  // Держатель пропуска подрядчика (текущий из истории или вписанный в пропуск): ~7 тыс. пропусков, без индекса.
+  holder: { kind: 'plain', name: 'COALESCE(h.holder_name, p.holder_name)' },
+  holder2: { kind: 'plain', name: 'COALESCE(h2.holder_name, p2.holder_name)' },
 } as const satisfies Record<string, FioSearchTargetSpec>;
 /** Таблица и алиас в запросе. */
 export type FioSearchTable = keyof typeof FIO_SEARCH_TARGETS;

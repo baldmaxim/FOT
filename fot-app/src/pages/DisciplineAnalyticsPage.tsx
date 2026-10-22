@@ -9,6 +9,7 @@ import { DepartmentTreeMultiSelect } from '../components/staff/DepartmentTreeMul
 import { triggerBlobDownload } from '../utils/download';
 import { getVisibleRootNodes, filterDepartmentTreeByIds, collectDescendantIds } from '../utils/departmentUtils';
 import '../styles/DisciplineAnalyticsPage.css';
+import { filterDisciplineEmployees } from '../utils/disciplineFilter';
 
 type ViolationType = 'late' | 'underwork' | 'early' | 'absence';
 
@@ -249,17 +250,10 @@ export const DisciplineAnalyticsPage: FC = () => {
     for (const e of employees) if (e.departmentId) map.set(e.departmentId, e.department);
     return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [employees]);
-  const deptFilteredBase = useMemo(() => {
-    let list = employees;
-    if (selectedDeptIds.length > 0) {
-      list = list.filter(e => e.departmentId !== null && effectiveDeptIds.has(e.departmentId));
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter(e => e.name.toLowerCase().includes(q));
-    }
-    return list;
-  }, [employees, selectedDeptIds, effectiveDeptIds, searchQuery]);
+  const deptFilteredBase = useMemo(
+    () => filterDisciplineEmployees(employees, selectedDeptIds.length > 0 ? effectiveDeptIds : null, searchQuery),
+    [employees, selectedDeptIds, effectiveDeptIds, searchQuery],
+  );
 
   const filtered = useMemo(() => {
     let list = deptFilteredBase;

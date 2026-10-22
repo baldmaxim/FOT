@@ -23,6 +23,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { ApiError } from '../../api/client';
 import styles from './PatentReceiptsPage.module.css';
+import { filterByFio } from '../../utils/fioSearch';
 
 const SOURCE_LABELS: Record<string, string> = {
   solidarnost_terminal: 'Терминал «Солидарность»',
@@ -167,19 +168,16 @@ export const PatentReceiptsPage: FC = () => {
   });
   const deptOptions = su10DeptsQuery.data ?? [];
 
+  // Повторный фильтр ответа сервера — тем же правилом (ё = е, раскладка, одна ошибка без точных): сервер,
+  // не найдя точных, отдаёт строки с опечаткой, и они здесь не отбрасываются.
   const visibleRows = useMemo(() => {
-    const q = searchFio.trim().toUpperCase().replace(/Ё/g, 'Е');
-    return rows.filter(r => {
-      if (q) {
-        const name = (r.employees?.full_name || '').toUpperCase().replace(/Ё/g, 'Е');
-        if (!name.includes(q)) return false;
-      }
-      if (filterDeptId) {
+    const inDept = filterDeptId
+      ? rows.filter(r => {
         const emp = r.employee_id != null ? empById.get(r.employee_id) : undefined;
-        if (!emp || emp.org_department_id !== filterDeptId) return false;
-      }
-      return true;
-    });
+        return Boolean(emp) && emp?.org_department_id === filterDeptId;
+      })
+      : rows;
+    return filterByFio(inDept, r => r.employees?.full_name, searchFio);
   }, [rows, searchFio, filterDeptId, empById]);
 
   const handleRecognize = async (documentId: number) => {

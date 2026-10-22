@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne, execute } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   canWriteEmployeeInScope,
@@ -111,27 +112,31 @@ const listMessages = async (req: AuthenticatedRequest, res: Response): Promise<v
       params.push(to);
       where.push(`f.created_at < ($${params.length}::date + INTERVAL '1 day')`);
     }
-    // Поиск по ФИО применяется только к НЕ-анонимным (иначе раскрыли бы автора).
+    // Поиск по ФИО применяется только к НЕ-анонимным (иначе раскрыли бы автора) — и точный, и с опечаткой.
+    // ФИО — ё = е, раскладка; точных нет — с одной ошибкой.
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-    if (q) {
-      params.push(`%${escapeLike(q)}%`);
-      where.push(`(f.is_anonymous = false AND e.full_name ILIKE $${params.length})`);
-    }
-
-    const rows = await query<{
-      id: number; content: string; is_anonymous: boolean; created_at: string;
-      full_name: string | null; department_name: string | null;
-    }>(
-      `SELECT f.id, f.content, f.is_anonymous, f.created_at,
-              e.full_name, d.name AS department_name
-         FROM feedback_messages f
-         JOIN employees e ON e.id = f.employee_id
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
-        WHERE ${where.join(' AND ')}
-        ORDER BY f.created_at DESC
-        LIMIT 1000`,
-      params,
-    );
+    const fio = q ? buildFioSearch(q) : null;
+    const loadMessages = (mode: FioSearchMode) => {
+      const modeParams = [...params];
+      const modeWhere = fio
+        ? [...where, `(f.is_anonymous = false AND ${fioConditionSql('e', modeParams, fio, mode)})`]
+        : where;
+      return query<{
+        id: number; content: string; is_anonymous: boolean; created_at: string;
+        full_name: string | null; department_name: string | null;
+      }>(
+        `SELECT f.id, f.content, f.is_anonymous, f.created_at,
+                e.full_name, d.name AS department_name
+           FROM feedback_messages f
+           JOIN employees e ON e.id = f.employee_id
+           LEFT JOIN org_departments d ON d.id = e.org_department_id
+          WHERE ${modeWhere.join(' AND ')}
+          ORDER BY f.created_at DESC
+          LIMIT 1000`,
+        modeParams,
+      );
+    };
+    const rows = fio ? await withFioFallback(fio, loadMessages) : await loadMessages('exact');
 
     // Анонимные обращения отдаём без ФИО и без отдела (отдел может косвенно выдать автора).
     const data = rows.map(r => ({
