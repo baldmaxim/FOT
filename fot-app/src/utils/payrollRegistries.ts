@@ -1,4 +1,4 @@
-import type { IDormitoryStay } from '../services/dormitoryService';
+import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
@@ -125,7 +125,7 @@ export const COMPENSATION_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensat
 ];
 
 /**
- * Строка таблицы «Общежитие»: проживание в общежитии (ведут кадры, здесь только просмотр) или «Доплата за
+ * Строка таблицы «Общежитие»: проживание в общежитии (ведут кадры, здесь только 🗑) или «Доплата за
  * общежитие» — общежитие не назначено, платят значение ставки.
  */
 export interface IDormitoryRegistryRow {
@@ -144,6 +144,8 @@ export interface IDormitoryRegistryRow {
   amount: string | null;
   /** Строка доплаты — её правят и убирают; у проживания null. */
   allowance: IDormitoryAllowanceRow | null;
+  /** Строка проживания — её только убирают (🗑); у доплаты null. */
+  stay: IPayrollDormitoryStay | null;
 }
 
 const NOT_ASSIGNED = 'Не назначено';
@@ -244,11 +246,11 @@ const dayBefore = (iso: string): string => {
 };
 
 /**
- * 🗑 у квартиры в «Доплате за проживание» — то же правило, что у периодов «Справочника»: выезд ставится 1-м числом
- * текущего месяца (в прошлых месяцах строка остаётся), не начавшееся или прошедшее проживание удаляется.
- * Выезд — день, когда уже не живёт, поэтому «по» периода = день до выезда.
+ * 🗑 у проживания — квартиры в «Доплате за проживание», общежития в «Общежитии» — то же правило, что у периодов
+ * «Справочника»: выезд ставится 1-м числом текущего месяца (в прошлых месяцах строка остаётся), не начавшееся
+ * или прошедшее проживание удаляется. Выезд — день, когда уже не живёт, поэтому «по» периода = день до выезда.
  */
-export const apartmentRemoval = (
+export const stayRemoval = (
   stay: { check_in: string; check_out: string | null },
   todayIso: string,
 ): { action: 'close'; checkOut: string } | { action: 'delete' } => {
@@ -321,7 +323,7 @@ const dormitoryAllowanceAmount = (
  * «Доплата за общежитие» (правило dormitoryAllowanceInMonths). «Весь период» — все строки.
  */
 export const buildDormitoryRegistryRows = (
-  stays: ReadonlyArray<IDormitoryStay>,
+  stays: ReadonlyArray<IPayrollDormitoryStay>,
   allowances: ReadonlyArray<IDormitoryAllowanceRow>,
   months: ReadonlyArray<string>,
   allowanceRateValues?: ReadonlyArray<IPayrollRateValue>,
@@ -338,6 +340,7 @@ export const buildDormitoryRegistryRows = (
       date_to: stay.check_out,
       amount: null,
       allowance: null,
+      stay,
     })),
   ...allowances
     .filter(row => dormitoryAllowanceInMonths(row, months))
@@ -351,5 +354,6 @@ export const buildDormitoryRegistryRows = (
       date_to: row.date_to,
       amount: dormitoryAllowanceAmount(row, months, allowanceRateValues),
       allowance: row,
+      stay: null,
     })),
 ];

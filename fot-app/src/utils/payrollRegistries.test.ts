@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IDormitoryStay } from '../services/dormitoryService';
+import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import {
-  apartmentRemoval,
   buildCompensationStopExport,
   buildDormitoryRegistryExport,
   buildDormitoryRegistryRows,
@@ -17,6 +16,7 @@ import {
   registryMonthOptions,
   registryMonthsParam,
   registryRemoval,
+  stayRemoval,
   stopInMonths,
   SUPPLEMENT_COLUMNS,
   supplementInMonths,
@@ -75,15 +75,17 @@ describe('поиск по ФИО', () => {
 });
 
 describe('формы', () => {
-  it('квартира (🗑): выезд — 1-е число месяца; не начавшаяся или прошедшая — удаляется', () => {
+  it('проживание — квартира или общежитие (🗑): выезд — 1-е число месяца; не начавшееся или прошедшее — удаляется', () => {
     // Живёт с июля — убрана с 01.10: выезд 01.10 (по 30.09 включительно).
-    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: null }, '2026-10-20'))
+    expect(stayRemoval({ check_in: '2026-07-01', check_out: null }, '2026-10-20'))
       .toEqual({ action: 'close', checkOut: '2026-10-01' });
-    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: '2026-12-01' }, '2026-10-20'))
+    expect(stayRemoval({ check_in: '2026-07-01', check_out: '2026-12-01' }, '2026-10-20'))
       .toEqual({ action: 'close', checkOut: '2026-10-01' });
     // Выехала 01.10 — в октябре уже не жила: прошедшее проживание.
-    expect(apartmentRemoval({ check_in: '2026-07-01', check_out: '2026-10-01' }, '2026-10-20')).toEqual({ action: 'delete' });
-    expect(apartmentRemoval({ check_in: '2026-10-05', check_out: null }, '2026-10-20')).toEqual({ action: 'delete' });
+    expect(stayRemoval({ check_in: '2026-07-01', check_out: '2026-10-01' }, '2026-10-20')).toEqual({ action: 'delete' });
+    expect(stayRemoval({ check_in: '2026-10-05', check_out: null }, '2026-10-20')).toEqual({ action: 'delete' });
+    // «Тест рабочего»: въезд 25.10, выезд 25.11 — ещё не начиналось к 01.10, ошибочная строка.
+    expect(stayRemoval({ check_in: '2026-10-25', check_out: '2026-11-25' }, '2026-10-22')).toEqual({ action: 'delete' });
   });
 
   it('плановая: окончание раньше начала; «по» пусто — бессрочно', () => {
@@ -249,9 +251,9 @@ describe('выбор месяца в таблицах «Справочника»
   });
 
   it('«Общежитие»: в одной таблице живущие (адрес, без доплаты) и «Не назначено» с доплатой', () => {
-    const stay: IDormitoryStay = {
+    const stay: IPayrollDormitoryStay = {
       id: 7, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null, kind: 'dormitory',
-      check_in: '2026-09-01', check_out: '2026-10-01', address: 'Общ. Мал.Почтовая 2\\2', amount: null,
+      check_in: '2026-09-01', check_out: '2026-10-01', address: 'Общ. Мал.Почтовая 2\\2', amount: null, can_edit: true,
     };
     // Выехал 01.10 — с октября доплата; id совпадает с проживанием, ключи разные.
     const allowance: IDormitoryAllowanceRow = {
@@ -267,6 +269,8 @@ describe('выбор месяца в таблицах «Справочника»
     const all = buildDormitoryRegistryRows([stay], [allowance], []);
     expect(all.map(row => row.key)).toEqual(['stay:7', 'allowance:7']);
     expect(all.map(row => row.allowance)).toEqual([null, allowance]);
+    // У проживания — только 🗑 по его строке.
+    expect(all.map(row => row.stay)).toEqual([stay, null]);
     expect(buildDormitoryRegistryExport(all).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Общежитие', 'С', 'По', 'Доплата, ₽/мес']);
   });

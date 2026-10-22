@@ -50,6 +50,8 @@ export interface IRegistryTableProps<Row> {
   deleteLabel?: string;
   /** Можно ли править строку (охват сотрудника); не передано — все. */
   canEditRow?: (row: Row) => boolean;
+  /** Можно ли 🗑 строку, если не как ✎: «Общежитие» — проживание только убирают. Не передано — canEditRow. */
+  canDeleteRow?: (row: Row) => boolean;
   /** Строка, которую удаляют: её кнопки неактивны. */
   busyKey?: string | number | null;
   /** Таблица в модальном окне: фильтр столбца — над окном. */
@@ -70,7 +72,7 @@ export interface IRegistryTableProps<Row> {
  */
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
-  onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
+  onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
   onRowClick, footer = null,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
@@ -191,6 +193,7 @@ export const RegistryTable = <Row,>({
           {!loading && visibleRows.map((row, index) => {
             const key = rowKey(row);
             const editable = canEditRow ? canEditRow(row) : true;
+            const deletable = canDeleteRow ? canDeleteRow(row) : editable;
             return (
               // Чередование — по индексу видимой строки: после фильтра полосы не «слипаются».
               <tr
@@ -220,9 +223,10 @@ export const RegistryTable = <Row,>({
                 ))}
                 {withActions && (
                   <td className={styles.cellActions}>
-                    {editable && (
+                    {((onEdit && editable) || (onDelete && deletable)) && (
                       <span className={styles.actions}>
-                        {onEdit && (
+                        {/* 🗑 без ✎ — на месте ✎ пусто: корзины всех строк в одном столбце. */}
+                        {onEdit && (editable ? (
                           <button
                             type="button"
                             className={styles.iconBtn}
@@ -233,8 +237,8 @@ export const RegistryTable = <Row,>({
                           >
                             <Pencil size={14} aria-hidden="true" />
                           </button>
-                        )}
-                        {onDelete && (
+                        ) : <span className={styles.iconSlot} aria-hidden="true" />)}
+                        {onDelete && deletable && (
                           <button
                             type="button"
                             className={`${styles.iconBtn} ${styles.iconBtnDanger}`}

@@ -51,7 +51,7 @@ vi.mock('../config/contractor.js', () => ({
 }));
 
 import {
-  addStay, deleteStay, getEmployeeState, listAddresses, listStays, searchCandidates, updateStay,
+  addStay, deleteStay, getEmployeeState, listAddresses, listPayrollDormitoryStays, listStays, searchCandidates, updateStay,
 } from './dormitory-stays.service.js';
 import { currentRateMonth, deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 
@@ -299,6 +299,7 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await searchCandidates('Кар', [])).toEqual([]);
     expect((await searchCandidates('_', null))).toEqual([]);
   });
+
   it('поиск: ё/е, английская раскладка, одна ошибка — только если точного нет', async () => {
     const found = async (search: string, ids: number[] | null = null) =>
       (await searchCandidates(search, ids)).map(row => row.full_name);
@@ -335,8 +336,28 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
       .toMatchObject({ kind: 'dormitory' });
 
     expect((await listStays({ employeeIds: [6] })).map(stay => stay.kind)).toEqual(['apartment', 'dormitory']);
-    expect((await listStays({ employeeIds: [6], kind: 'dormitory' })).map(stay => stay.kind)).toEqual(['dormitory']);
+    expect((await listPayrollDormitoryStays({ contractorRootId: CONTRACTORS, departmentIds: null }))
+      .filter(stay => stay.employee_id === 6).map(stay => stay.kind)).toEqual(['dormitory']);
     // Адрес квартиры в подсказки общежитий не попадает.
     expect(await listAddresses()).not.toContain('ул. Рабочая, 5');
+  });
+
+  it('«Справочник» → «Общежитие»: только «штат зарплаты» — уволенного, архивного, подрядчика не видно, записи остаются', async () => {
+    await run(`INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, address) VALUES
+      (3, 'dormitory', '2026-08-01', 'Общ. Уволенного'),
+      (4, 'dormitory', '2026-08-01', 'Общ. Архивного'),
+      (5, 'dormitory', '2026-08-01', 'Общ. Подрядчика')`);
+    const names = async (departmentIds: string[] | null) =>
+      (await listPayrollDormitoryStays({ contractorRootId: CONTRACTORS, departmentIds })).map(stay => stay.full_name);
+
+    const all = await names(null);
+    expect(all).toEqual(expect.arrayContaining(['Каримов Акмал', 'Карелин Безотдельный']));
+    for (const hidden of ['Карпов Уволенный', 'Карасёв Архивный', 'Карпенко Подрядчик']) expect(all).not.toContain(hidden);
+    // Охват по отделам: безотдельного в нём нет; пустой охват — пусто.
+    expect(new Set(await names([D1]))).toEqual(new Set(['Каримов Акмал']));
+    expect(await names([D2])).toEqual([]);
+    expect(await names([])).toEqual([]);
+    // Запись уволенного в БД и во вкладке кадров остаётся.
+    expect((await listStays({ employeeIds: [3] })).map(stay => stay.address)).toEqual(['Общ. Уволенного']);
   });
 });

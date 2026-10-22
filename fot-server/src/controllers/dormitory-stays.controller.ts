@@ -4,9 +4,11 @@
  * записи, что «Доплата за проживание» «Зарплаты» (payroll-housing.controller.ts). Сумму квартиры кадры не задают:
  * новой — ставка «Доплата за проживание», при правке — прежняя; меняет её только «Зарплата».
  *
- * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — как условия оплаты
- * (resolvePayrollReadableDepartmentIds). Запись — canWriteEmployeeInScope; уволенному (его назначения
- * отделов сняты) дату выезда ставит тот, кто видит его в «Уволенных» кадров.
+ * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — «штат зарплаты»
+ * (работающие, без подрядчиков, охват условий оплаты). Запись — canWriteEmployeeInScope; уволенному (его
+ * назначения отделов сняты) дату выезда ставит тот, кто видит его в «Уволенных» кадров.
+ * «Зарплата» общежитие не правит, только убирает (🗑): выезд 1-м числом месяца или удаление ошибочной строки —
+ * право /salary/terms или /salary/payments и запись в «Справочник» (canWritePayrollRegistryEmployee).
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -22,6 +24,7 @@ import {
   getHousingRateAmount,
   getStay,
   listAddresses,
+  listPayrollDormitoryStays,
   listStays,
   searchCandidates,
   updateStay,
@@ -30,7 +33,11 @@ import {
   canSeeEmployeeInStaffList,
   resolveStaffRosterEmployeeIds,
 } from '../services/employee-scope-filter.service.js';
-import { resolvePayrollReadableDepartmentIds } from '../services/payroll/payroll-scope.service.js';
+import {
+  canWritePayrollRegistryEmployee,
+  resolvePayrollStaffScope,
+} from '../services/payroll/payroll-registry-scope.service.js';
+import { resolvePayrollEditPredicate } from '../services/payroll/payroll-scope.service.js';
 import {
   dormitoryStayAuditDetails,
   dormitoryStayChanged,
@@ -38,9 +45,11 @@ import {
   stayEmployeeIdSchema,
   stayKindSchema,
 } from './dormitory-stay-input.js';
+import { withCanEdit } from './payroll-dictionary.helpers.js';
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
 const DORMITORY_SHEET = { sheetName: 'Проживание', tableName: 'Housing' } as const;
+const PAYROLL_AUDIT_SOURCE = 'payroll_dormitory_registry';
 
 const NOT_FOUND = { success: false, error: 'Запись не найдена' };
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
@@ -105,14 +114,14 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
   }
 };
 
-/** GET /api/payroll/dormitory-stays — общежития в «Зарплате» («Справочник» → «Общежитие»), охват условий оплаты. */
+/**
+ * GET /api/payroll/dormitory-stays — общежития «штата зарплаты» («Справочник» → «Общежитие»): уволенных нет;
+ * can_edit — можно ли убрать.
+ */
 const listForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const departments = await resolvePayrollReadableDepartmentIds(req);
-    res.json({
-      success: true,
-      data: await listStays({ departmentIds: departments === 'all' ? null : departments, kind: 'dormitory' }),
-    });
+    const [scope, canEdit] = await Promise.all([resolvePayrollStaffScope(req), resolvePayrollEditPredicate(req)]);
+    res.json({ success: true, data: withCanEdit(await listPayrollDormitoryStays(scope), canEdit) });
   } catch (err) {
     console.error('dormitory.listForPayroll error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения списка' });
@@ -275,6 +284,86 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/** Общежитие по :id, которое «Зарплата» может убрать; иначе ответ отправлен и null. */
+const payrollRemovableDormitory = async (req: AuthenticatedRequest, res: Response) => {
+  const id = parseId(req);
+  const current = id === null ? null : await getStay(id);
+  if (id === null || !current || current.kind !== 'dormitory') {
+    res.status(404).json(NOT_FOUND);
+    return null;
+  }
+  if (!(await canWritePayrollRegistryEmployee(req, current.employee_id))) {
+    res.status(403).json(NO_ACCESS);
+    return null;
+  }
+  return { id, current };
+};
+
+/**
+ * PATCH /api/payroll/dormitory-stays/:id { check_out } — «Зарплата» убирает из общежития с даты: выезд только
+ * раньше прежнего; въезд и адрес не меняются (их ведут кадры).
+ */
+const closeForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const target = await payrollRemovableDormitory(req, res);
+    if (!target) return;
+    const { current } = target;
+    const fields = parseStayFields('dormitory', {
+      check_in: current.check_in,
+      check_out: (req.body as { check_out?: unknown } | undefined)?.check_out,
+      address: current.address,
+    });
+    if (fields.check_out === null || (current.check_out !== null && fields.check_out > current.check_out)) {
+      res.status(400).json({ success: false, error: 'Дату выезда можно только приблизить' });
+      return;
+    }
+    const updated = await updateStay(target.id, fields);
+    if (updated === null) {
+      res.status(404).json(NOT_FOUND);
+      return;
+    }
+    if (updated === 'overlap') {
+      res.status(409).json(OVERLAP);
+      return;
+    }
+    const { before, after } = updated;
+    if (dormitoryStayChanged(before, after)) {
+      await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_UPDATED', {
+        entityType: 'employee_dormitory_stays',
+        entityId: String(target.id),
+        details: { source: PAYROLL_AUDIT_SOURCE, from: dormitoryStayAuditDetails(before), to: dormitoryStayAuditDetails(after) },
+      });
+    }
+    res.json({ success: true, data: after });
+  } catch (err) {
+    if (handleStayError(err, res)) return;
+    console.error('dormitory.closeForPayroll error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения' });
+  }
+};
+
+/** DELETE /api/payroll/dormitory-stays/:id — «Зарплата» удаляет ошибочную строку общежития. */
+const removeForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const target = await payrollRemovableDormitory(req, res);
+    if (!target) return;
+    const deleted = await deleteStay(target.id);
+    if (!deleted) {
+      res.status(404).json(NOT_FOUND);
+      return;
+    }
+    await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_DELETED', {
+      entityType: 'employee_dormitory_stays',
+      entityId: String(target.id),
+      details: { source: PAYROLL_AUDIT_SOURCE, ...dormitoryStayAuditDetails(deleted) },
+    });
+    res.json({ success: true, data: deleted });
+  } catch (err) {
+    console.error('dormitory.removeForPayroll error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка удаления' });
+  }
+};
+
 /**
  * POST /api/dormitory/stays/export — xlsx ровно как на экране: сортировка и фильтры применены
  * на клиенте, сервер только оформляет лист (до 1000 строк).
@@ -292,6 +381,8 @@ const exportTable = async (req: AuthenticatedRequest, res: Response): Promise<vo
 export const dormitoryStaysController = {
   list,
   listForPayroll,
+  closeForPayroll,
+  removeForPayroll,
   searchEmployees,
   listAddresses: listSavedAddresses,
   add,

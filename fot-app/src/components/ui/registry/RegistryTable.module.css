@@ -141,6 +141,13 @@
   gap: 4px;
 }
 
+/* Место ✎ в строке, где есть только 🗑. */
+.iconSlot {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
 /* Как .sc-btn-icon у кадров */
 .iconBtn {
   width: 28px;

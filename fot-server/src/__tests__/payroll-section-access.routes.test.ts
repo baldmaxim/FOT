@@ -145,6 +145,8 @@ describe('раздел «Зарплата» по списку', () => {
       ['post', '/api/payroll/deduction-kinds/3/subkinds', 'subkinds.add'],
       ['patch', '/api/payroll/deduction-subkinds/5', 'subkinds.update'],
       ['delete', '/api/payroll/deduction-subkinds/5', 'subkinds.remove'],
+      ['patch', '/api/payroll/dormitory-stays/7', 'dormitory.closeForPayroll'],
+      ['delete', '/api/payroll/dormitory-stays/7', 'dormitory.removeForPayroll'],
     ];
     const send = (method: 'post' | 'patch' | 'delete', url: string, userId: string) =>
       request(app)[method](url).set('Authorization', `Bearer ${tokenFor(userId, 'admin')}`).send({});

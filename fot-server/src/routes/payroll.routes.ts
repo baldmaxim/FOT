@@ -68,8 +68,11 @@ router.get('/rates', deductionsView, payrollRatesController.list);
 router.post('/rates', deductionsEdit, payrollRatesController.add);
 router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
 router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
-// Кто живёт в общежитии — кнопка «Общежитие» в шапке «Справочника»; ведётся в «Управлении кадрами».
+// Кто живёт в общежитии — кнопка «Общежитие» в шапке «Справочника»; ведётся в «Управлении кадрами»,
+// «Зарплата» только убирает: выезд 1-м числом месяца (PATCH) или ошибочная строка (DELETE).
 router.get('/dormitory-stays', deductionsView, dormitoryStaysController.listForPayroll);
+router.patch('/dormitory-stays/:id', deductionsEdit, dormitoryStaysController.closeForPayroll);
+router.delete('/dormitory-stays/:id', deductionsEdit, dormitoryStaysController.removeForPayroll);
 
 // ─── Таблицы окна «Справочник» (миграция 315) ────────────────────────────────
 // «Доплата за проживание» — квартиры «Проживания» (миграция 320): те же записи, что во вкладке кадров.

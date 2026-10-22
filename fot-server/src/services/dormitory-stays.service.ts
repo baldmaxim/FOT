@@ -4,7 +4,7 @@
  * - квартира (apartment) — сумма доплаты за проживание ₽/мес, адрес необязателен.
  *
  * Ведётся во вкладке «Управления кадрами»; квартиры — те же записи, что «Доплата за проживание» «Зарплаты»
- * (её таблица пишет сюда же), общежития «Зарплата» видит только для чтения («Справочник» → «Общежитие»).
+ * (её таблица пишет сюда же), общежития «Зарплата» только убирает («Справочник» → «Общежитие», 🗑).
  * Строка — одно проживание; периоды одного сотрудника не пересекаются ни в каком виде (EXCLUDE в БД,
  * диапазон [въезд, выезд)). Отдел и должность — текущие, как в списке кадров.
  * Запись — под lockPayrollEmployee (тот же замок, что у доплат «Зарплаты»): квартира в днях «Доплаты за
@@ -21,7 +21,7 @@ import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../u
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
 import { HOUSING_RATE_CODE } from './payroll/payroll-rates.service.js';
-import { payrollContractorDeptsCte } from './payroll/payroll-registry-scope.service.js';
+import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll/payroll-registry-scope.service.js';
 import { lockPayrollEmployee } from './payroll/payroll-terms.service.js';
 
 /** Нарушение EXCLUDE: у сотрудника уже есть проживание в эти даты. */
@@ -89,12 +89,11 @@ const STAY_SELECT = `
 
 /**
  * Проживания в порядке ФИО и въезда. employeeIds / departmentIds — охват (null — без ограничения);
- * пустой массив — пустой ответ без запроса. kind — только этот вид («Справочник» → «Общежитие»).
+ * пустой массив — пустой ответ без запроса.
  */
 export const listStays = async (scope: {
   employeeIds?: number[] | null;
   departmentIds?: string[] | null;
-  kind?: DormitoryStayKind;
 }): Promise<IDormitoryStay[]> => {
   const employeeIds = scope.employeeIds ?? null;
   const departmentIds = scope.departmentIds ?? null;
@@ -103,9 +102,27 @@ export const listStays = async (scope: {
     `${STAY_SELECT}
       WHERE ($1::int[] IS NULL OR s.employee_id = ANY($1::int[]))
         AND ($2::uuid[] IS NULL OR e.org_department_id = ANY($2::uuid[]))
-        AND ($3::text IS NULL OR s.kind = $3)
       ORDER BY e.full_name, s.check_in, s.id`,
-    [employeeIds, departmentIds, scope.kind ?? null],
+    [employeeIds, departmentIds],
+  );
+};
+
+/**
+ * Общежития «штата зарплаты» — «Справочник» → «Общежитие»: работающие, не в архиве, не подрядчики, в охвате
+ * (departmentIds null — весь штат, пустой — пустой ответ). Уволенных не видно, их записи остаются.
+ */
+export const listPayrollDormitoryStays = async (scope: {
+  contractorRootId: string | null;
+  departmentIds: string[] | null;
+}): Promise<IDormitoryStay[]> => {
+  if (scope.departmentIds?.length === 0) return [];
+  return query<IDormitoryStay>(
+    `WITH ${payrollContractorDeptsCte('$1')}
+     ${STAY_SELECT}
+      WHERE s.kind = 'dormitory'
+        AND ${payrollStaffWhereSql('e', '$2')}
+      ORDER BY e.full_name, e.id, s.check_in, s.id`,
+    [scope.contractorRootId, scope.departmentIds],
   );
 };
 

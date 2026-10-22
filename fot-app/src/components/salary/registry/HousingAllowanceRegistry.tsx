@@ -15,7 +15,7 @@ import {
 } from '../../../services/payrollRegistryService';
 import { formatDate } from '../../../utils/formatMoney';
 import { moscowTodayIso } from '../../../utils/moscowDate';
-import { apartmentRemoval, buildHousingExport, HOUSING_COLUMNS } from '../../../utils/payrollRegistries';
+import { buildHousingExport, HOUSING_COLUMNS, stayRemoval } from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { HousingAllowanceForm } from './HousingAllowanceForm';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
@@ -63,7 +63,7 @@ export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ c
 
   const handleRemove = async (row: IHousingAllowanceRow) => {
     if (busyKey !== null) return;
-    const removal = apartmentRemoval(row, moscowTodayIso());
+    const removal = stayRemoval(row, moscowTodayIso());
     const question = removal.action === 'close'
       ? `Убрать доплату за проживание у ${row.full_name} с ${formatDate(removal.checkOut)}? Прошлые месяцы останутся в истории.`
       : `Удалить ошибочную строку: ${row.full_name}, въезд ${formatDate(row.check_in)}?`;

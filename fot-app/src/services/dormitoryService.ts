@@ -22,6 +22,11 @@ export interface IDormitoryStay {
   amount: string | null;
 }
 
+/** Общежитие в «Справочнике» «Зарплаты»: только «штат зарплаты»; can_edit — можно ли убрать (🗑). */
+export interface IPayrollDormitoryStay extends IDormitoryStay {
+  can_edit: boolean;
+}
+
 /** Работающий сотрудник для «Добавить сотрудника». */
 export interface IDormitoryCandidate {
   id: number;
@@ -53,10 +58,20 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** «Зарплата» → «Справочник» → «Общежитие» (кнопка в шапке): только общежития, охват условий оплаты. */
-  listForPayroll: async (signal?: AbortSignal): Promise<IDormitoryStay[]> => {
-    const res = await apiClient.get<IApiResponse<IDormitoryStay[]>>('/payroll/dormitory-stays', { signal });
+  /** «Зарплата» → «Справочник» → «Общежитие» (кнопка в шапке): только общежития работающих, охват условий оплаты. */
+  listForPayroll: async (signal?: AbortSignal): Promise<IPayrollDormitoryStay[]> => {
+    const res = await apiClient.get<IApiResponse<IPayrollDormitoryStay[]>>('/payroll/dormitory-stays', { signal });
     return res.data;
+  },
+
+  /** «Зарплата» убирает из общежития: выезд — только раньше прежнего, въезд и адрес не меняются. */
+  closeForPayroll: async (stayId: number, checkOut: string): Promise<void> => {
+    await apiClient.patch(`/payroll/dormitory-stays/${stayId}`, { check_out: checkOut });
+  },
+
+  /** «Зарплата» удаляет ошибочную строку общежития. */
+  removeForPayroll: async (stayId: number): Promise<void> => {
+    await apiClient.delete(`/payroll/dormitory-stays/${stayId}`);
   },
 
   searchEmployees: async (search: string, signal?: AbortSignal): Promise<IDormitoryCandidate[]> => {

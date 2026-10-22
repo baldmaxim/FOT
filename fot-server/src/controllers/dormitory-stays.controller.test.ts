@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 const svc = vi.hoisted(() => ({
   listStays: vi.fn(),
+  listPayrollDormitoryStays: vi.fn(),
   getStay: vi.fn(),
   searchCandidates: vi.fn(),
   listAddresses: vi.fn(),
@@ -19,7 +20,9 @@ const scope = vi.hoisted(() => ({
   canWriteEmployeeInScope: vi.fn(),
   canSeeEmployeeInStaffList: vi.fn(),
   resolveStaffRosterEmployeeIds: vi.fn(),
-  resolvePayrollReadableDepartmentIds: vi.fn(),
+  resolvePayrollEditPredicate: vi.fn(),
+  resolvePayrollStaffScope: vi.fn(),
+  canWritePayrollRegistryEmployee: vi.fn(),
 }));
 vi.mock('../services/data-scope.service.js', () => ({ canWriteEmployeeInScope: scope.canWriteEmployeeInScope }));
 vi.mock('../services/employee-scope-filter.service.js', () => ({
@@ -27,7 +30,11 @@ vi.mock('../services/employee-scope-filter.service.js', () => ({
   resolveStaffRosterEmployeeIds: scope.resolveStaffRosterEmployeeIds,
 }));
 vi.mock('../services/payroll/payroll-scope.service.js', () => ({
-  resolvePayrollReadableDepartmentIds: scope.resolvePayrollReadableDepartmentIds,
+  resolvePayrollEditPredicate: scope.resolvePayrollEditPredicate,
+}));
+vi.mock('../services/payroll/payroll-registry-scope.service.js', () => ({
+  resolvePayrollStaffScope: scope.resolvePayrollStaffScope,
+  canWritePayrollRegistryEmployee: scope.canWritePayrollRegistryEmployee,
 }));
 
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
@@ -86,15 +93,16 @@ describe('список', () => {
     expect(svc.listStays).toHaveBeenLastCalledWith({ employeeIds: null });
   });
 
-  it('«Зарплата»: охват условий оплаты по отделам', async () => {
-    svc.listStays.mockResolvedValue([]);
-    scope.resolvePayrollReadableDepartmentIds.mockResolvedValueOnce(['d-1']);
-    await c.listForPayroll(makeReq(), makeRes());
-    expect(svc.listStays).toHaveBeenLastCalledWith({ departmentIds: ['d-1'], kind: 'dormitory' });
-
-    scope.resolvePayrollReadableDepartmentIds.mockResolvedValueOnce('all');
-    await c.listForPayroll(makeReq(), makeRes());
-    expect(svc.listStays).toHaveBeenLastCalledWith({ departmentIds: null, kind: 'dormitory' });
+  it('«Зарплата»: «штат зарплаты» и can_edit по праву на сотрудника', async () => {
+    const payrollScope = { contractorRootId: 'root', departmentIds: ['d-1'] };
+    scope.resolvePayrollStaffScope.mockResolvedValue(payrollScope);
+    scope.resolvePayrollEditPredicate.mockResolvedValue((employeeId: number) => employeeId === 42);
+    svc.listPayrollDormitoryStays.mockResolvedValue([STAY, { ...STAY, id: 9, employee_id: 43 }]);
+    const res = makeRes();
+    await c.listForPayroll(makeReq(), res);
+    expect(svc.listPayrollDormitoryStays).toHaveBeenCalledWith(payrollScope);
+    expect(svc.listStays).not.toHaveBeenCalled();
+    expect(res.body.data.map((row: { id: number; can_edit: boolean }) => [row.id, row.can_edit])).toEqual([[7, true], [9, false]]);
   });
 
   it('сохранённые адреса — списком для подсказок', async () => {
@@ -371,5 +379,92 @@ describe('удаление', () => {
     await c.remove(makeReq({ params: { id: '8' } }), missing);
     expect(missing.statusCode).toBe(404);
     expect(svc.deleteStay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('«Зарплата» убирает общежитие', () => {
+  const LIVING = { ...STAY, check_in: '2026-07-01', check_out: null };
+
+  it('выезд 1-м числом: въезд и адрес прежние, в аудите было → стало с источником', async () => {
+    svc.getStay.mockResolvedValue(LIVING);
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    const after = { ...LIVING, check_out: '2026-10-01' };
+    svc.updateStay.mockResolvedValue({ before: LIVING, after });
+    const res = makeRes();
+
+    await c.closeForPayroll(makeReq({ params: { id: '7' }, body: { check_out: '2026-10-01', check_in: '2020-01-01', address: 'Другое' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(svc.updateStay).toHaveBeenCalledWith(7, {
+      check_in: '2026-07-01', check_out: '2026-10-01', address: 'Общежитие №2, комн. 14', amount: null,
+    });
+    expect(scope.canWritePayrollRegistryEmployee).toHaveBeenCalledWith(expect.anything(), 42);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED',
+      expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'payroll_dormitory_registry' }) }),
+    );
+  });
+
+  it('выезд позже прежнего, пустой или не позже въезда — 400 без записи', async () => {
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    svc.getStay.mockResolvedValueOnce({ ...LIVING, check_out: '2026-11-01' });
+    const later = makeRes();
+    await c.closeForPayroll(makeReq({ params: { id: '7' }, body: { check_out: '2026-12-01' } }), later);
+    expect(later.statusCode).toBe(400);
+
+    svc.getStay.mockResolvedValueOnce(LIVING);
+    const empty = makeRes();
+    await c.closeForPayroll(makeReq({ params: { id: '7' }, body: {} }), empty);
+    expect(empty.statusCode).toBe(400);
+
+    svc.getStay.mockResolvedValueOnce(LIVING);
+    const beforeCheckIn = makeRes();
+    await c.closeForPayroll(makeReq({ params: { id: '7' }, body: { check_out: '2026-07-01' } }), beforeCheckIn);
+    expect(beforeCheckIn.statusCode).toBe(400);
+    expect(svc.updateStay).not.toHaveBeenCalled();
+  });
+
+  it('квартира, нет записи — 404; не в «Справочнике» (уволенный, чужой) — 403', async () => {
+    svc.getStay.mockResolvedValueOnce(APARTMENT);
+    const apartment = makeRes();
+    await c.closeForPayroll(makeReq({ params: { id: '8' }, body: { check_out: '2026-10-01' } }), apartment);
+    expect(apartment.statusCode).toBe(404);
+
+    svc.getStay.mockResolvedValueOnce(APARTMENT);
+    const apartmentDelete = makeRes();
+    await c.removeForPayroll(makeReq({ params: { id: '8' } }), apartmentDelete);
+    expect(apartmentDelete.statusCode).toBe(404);
+
+    svc.getStay.mockResolvedValueOnce(null);
+    const missing = makeRes();
+    await c.removeForPayroll(makeReq({ params: { id: '9' } }), missing);
+    expect(missing.statusCode).toBe(404);
+
+    svc.getStay.mockResolvedValue(STAY);
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
+    const foreignClose = makeRes();
+    await c.closeForPayroll(makeReq({ params: { id: '7' }, body: { check_out: '2026-11-01' } }), foreignClose);
+    expect(foreignClose.statusCode).toBe(403);
+    const foreignDelete = makeRes();
+    await c.removeForPayroll(makeReq({ params: { id: '7' } }), foreignDelete);
+    expect(foreignDelete.statusCode).toBe(403);
+
+    expect(svc.updateStay).not.toHaveBeenCalled();
+    expect(svc.deleteStay).not.toHaveBeenCalled();
+    expect(scope.canWriteEmployeeInScope).not.toHaveBeenCalled();
+  });
+
+  it('ошибочная строка — удалена, в аудите с источником', async () => {
+    svc.getStay.mockResolvedValue(STAY);
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    svc.deleteStay.mockResolvedValue(STAY);
+    const res = makeRes();
+    await c.removeForPayroll(makeReq({ params: { id: '7' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(svc.deleteStay).toHaveBeenCalledWith(7);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'DORMITORY_STAY_DELETED',
+      expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'payroll_dormitory_registry' }) }),
+    );
   });
 });
