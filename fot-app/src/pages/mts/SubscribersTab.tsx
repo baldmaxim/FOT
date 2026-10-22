@@ -18,6 +18,7 @@ import { EmployeeFioPicker } from './EmployeeFioPicker';
 import { MtsRequestLocationModal } from './MtsRequestLocationModal';
 import { MtsHistoryModal } from './MtsHistoryModal';
 import styles from './MtsPage.module.css';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 
 const errText = (e: unknown, fallback: string): string =>
   e instanceof ApiError ? e.message : fallback;
@@ -69,16 +70,18 @@ export const SubscribersTab: FC = () => {
   const filtered = useMemo(() => {
     const all = subsQuery.data ?? [];
     const q = search.trim().toLowerCase();
-    if (!q) return all;
-    return all.filter(s => {
+    const matcher = createFioMatcher(search);
+    if (!q || !matcher) return all;
+    // Имя абонента — точно (ё = е, раскладка), без точных — с одной ошибкой; телефоны и ID — прежним вхождением.
+    return withFioFallback(matcher, mode => all.filter(s => {
       const phoneFromMap = mapBySub.get(s.subscriberID)?.phone || '';
       return (
-        (s.name || '').toLowerCase().includes(q)
+        matcher.matches(s.name, mode)
         || (s.phone || '').toLowerCase().includes(q)
         || phoneFromMap.toLowerCase().includes(q)
         || String(s.subscriberID).includes(q)
       );
-    });
+    }));
   }, [subsQuery.data, search, mapBySub]);
 
   const applyMapping = async (subscriberId: number, employeeId: number | null) => {

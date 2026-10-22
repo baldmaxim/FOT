@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useMtsBusinessImportedNumbers } from '../../hooks/useMtsBusinessData';
 import type { IMtsBusinessImportedNumberRow } from '../../services/mtsBusinessService';
 import styles from './NumberFioPicker.module.css';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 
 interface IDropdownPos {
   top: number;
@@ -52,11 +53,11 @@ export const NumberFioPicker: FC<IProps> = ({ accountId, value, onChange, disabl
 
   const filtered = useMemo(() => {
     const q = norm(query);
-    if (!q) return accountRows;
-    return accountRows.filter(r => {
-      const hay = norm(`${rowFio(r) ?? ''} ${r.msisdn ?? ''}`);
-      return hay.includes(q);
-    });
+    const matcher = createFioMatcher(query);
+    if (!q || !matcher) return accountRows;
+    // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; номер — прежним вхождением.
+    return withFioFallback(matcher, mode => accountRows.filter(r =>
+      matcher.matches(rowFio(r), mode) || norm(r.msisdn ?? '').includes(q)));
   }, [accountRows, query]);
 
   const recompute = useCallback(() => {

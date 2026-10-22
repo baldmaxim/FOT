@@ -162,18 +162,25 @@ describe('appendPayrollColumnFilters', () => {
     expect(params).toEqual(['base', ['6+0 (10ч)']]);
   });
 
-  it('«содержит» по ФИО экранирует шаблон; exclude пропускает свой столбец', () => {
+  it('«содержит» по ФИО — точный поиск ФИО (ё = е, раскладка, спецсимволы буквально); exclude пропускает свой столбец', () => {
     const where: string[] = [];
     const params: unknown[] = [];
     appendPayrollColumnFilters(where, params, {
       values: { position: ['Монтажник'], department: ['Мех.цех'] },
-      text: { name: ' 100%_ ' },
+      text: { name: ' Гринё.( ' },
     }, { exclude: 'position' });
     expect(where).toEqual([
       "(NULLIF(btrim(department_name), '') = ANY($1::text[]))",
-      "NULLIF(btrim(full_name), '') ILIKE $2",
+      '(full_name ~* $2)',
     ]);
-    expect(params).toEqual([['Мех.цех'], '%100\\%\\_%']);
+    expect(params).toEqual([['Мех.цех'], 'грин[её]\\.\\(']);
+
+    // Латиница — и в русской раскладке; без опечаток.
+    const layout: string[] = [];
+    const layoutParams: unknown[] = [];
+    appendPayrollColumnFilters(layout, layoutParams, { text: { name: 'uhbyt' } });
+    expect(layout).toEqual(['(full_name ~* $1 OR full_name ~* $2)']);
+    expect(layoutParams).toEqual(['uhbyt', 'грин[её]']);
 
     const noName: string[] = [];
     appendPayrollColumnFilters(noName, [], { text: { name: 'ов' } }, { exclude: 'name' });

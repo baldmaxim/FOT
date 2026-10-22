@@ -24,6 +24,7 @@ import { SubscriberDrawer } from './subscribers/SubscriberDrawer';
 import { UnavailableNotice } from './common/UnavailableNotice';
 import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, lastMonths, monthRange } from './mtsBusinessFormat';
 import styles from './OverviewSection.module.css';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 
 const ACCENT_PALETTE = ['var(--primary)', 'var(--success)', 'var(--warning)', 'var(--purple)', 'var(--text-tertiary)'];
 
@@ -224,17 +225,19 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
   const empQuery = empSearch.trim().toLowerCase();
   const metricValue = (r: IEmployeeStatRow): number => (topMetric === 'time' ? r.totalSeconds : r.chargesAmount ?? 0);
   const topItems = useMemo(() => {
-    const filtered = employeeStats.filter(r => {
+    // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; табельный — прежним вхождением.
+    const matcher = createFioMatcher(empSearch);
+    const filtered = withFioFallback(matcher, mode => employeeStats.filter(r => {
       if (deptFilter && r.departmentName !== deptFilter) return false;
-      if (empQuery && !`${r.label} ${r.tabNumber ?? ''}`.toLowerCase().includes(empQuery)) return false;
+      if (matcher && !matcher.matches(r.label, mode) && !(r.tabNumber ?? '').toLowerCase().includes(empQuery)) return false;
       // Нулевые по выбранной метрике прячем, но при активном поиске показываем
       // всё найденное — секция заменяет и справочную таблицу «По сотрудникам».
       if (!empQuery && metricValue(r) <= 0) return false;
       return true;
-    });
+    }));
     return filtered.sort((a, b) => metricValue(b) - metricValue(a));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeStats, deptFilter, empQuery, topMetric]);
+  }, [employeeStats, deptFilter, empQuery, empSearch, topMetric]);
   // Поиск/фильтр отдела показывают весь результат сразу; без них — топ-10 + «Остальные».
   const collapsible = !empQuery && !deptFilter;
   const topTop = collapsible ? topItems.slice(0, TOP_N) : topItems;

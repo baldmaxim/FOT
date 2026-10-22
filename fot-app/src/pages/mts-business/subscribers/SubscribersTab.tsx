@@ -10,6 +10,7 @@ import type { IMtsSubscriberRow } from '../../../services/mtsBusinessSubscribers
 import { errText, fmtDur, fmtLast, fmtMoney, fmtPhone, FORWARDING_TYPE_LABELS } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
+import { createFioMatcher, withFioFallback } from '../../../utils/fioSearch';
 
 type Msg = { ok: boolean; text: string } | null;
 
@@ -163,20 +164,21 @@ export const SubscribersTab: FC = () => {
 
   const filtered = useMemo(() => {
     const q = norm(search);
-    return rows.filter(r => {
+    // ФИО (МТС и сотрудника) — точно (ё = е, раскладка), без точных — с одной ошибкой; номер, комментарий,
+    // табельный, тариф, счёт, отдел — прежним вхождением. Поля не склеиваем.
+    const matcher = createFioMatcher(search);
+    return withFioFallback(matcher, mode => rows.filter(r => {
       if (accountId && r.accountId !== accountId) return false;
       if (departmentId === NO_DEPT && r.departmentId != null) return false;
       if (departmentId && departmentId !== NO_DEPT && r.departmentId !== departmentId) return false;
       if (onlyUnlinked && r.employeeId != null) return false;
       if (onlyForwarded && r.forwardingType == null) return false;
       if (onlyDuplicates && (r.employeeId == null || !dupEmployeeIds.has(r.employeeId))) return false;
-      if (!q) return true;
-      const hay = norm([
-        r.msisdn, r.mtsFio, r.mtsComment, r.employeeFullName, r.employeeTabNumber,
-        r.tariffName, r.accountLabel, r.departmentName,
-      ].filter(Boolean).join(' '));
-      return hay.includes(q);
-    });
+      if (!q || !matcher) return true;
+      if (matcher.matches(r.mtsFio, mode) || matcher.matches(r.employeeFullName, mode)) return true;
+      return [r.msisdn, r.mtsComment, r.employeeTabNumber, r.tariffName, r.accountLabel, r.departmentName]
+        .some(value => value != null && norm(String(value)).includes(q));
+    }));
   }, [rows, search, accountId, departmentId, onlyUnlinked, onlyForwarded, onlyDuplicates, dupEmployeeIds]);
 
   const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${onlyForwarded}|${onlyDuplicates}|${pageSize}`;

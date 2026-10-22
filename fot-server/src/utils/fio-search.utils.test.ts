@@ -127,14 +127,13 @@ describe('fio-search: условия SQL', () => {
 });
 
 describe('fio-search: user_profiles, режим, подсказки', () => {
-  it('user_profiles (up): точное — по up.full_name, с ошибкой — LATERAL по user_profiles, id uuid', () => {
+  it('user_profiles (up): точное — по up.full_name (индекс 110), с ошибкой — перебором ~* ANY', () => {
     const search = buildFioSearch('грнев')!;
     const exactParams: unknown[] = [];
     expect(fioExactConditionSql('up', exactParams, search)).toBe('(up.full_name ~* $1)');
     const fuzzyParams: unknown[] = ['x'];
-    const sql = fioConditionSql('up', fuzzyParams, search, 'fuzzy');
-    expect(sql).toBe('up.id IN (SELECT fz.id FROM unnest($2::text[]) AS fz_re(re)'
-      + ' CROSS JOIN LATERAL (SELECT fx.id FROM user_profiles fx WHERE fx.full_name ~* fz_re.re) fz)');
+    expect(fioConditionSql('up', fuzzyParams, search, 'fuzzy')).toBe('up.full_name ~* ANY($2::text[])');
+    expect(fuzzyParams[1]).toEqual([...search.exact, ...search.fuzzy]);
   });
 
   it('withFioFallback: точное есть — второго запроса нет; пусто — с ошибкой; вариантов нет — без второго', async () => {

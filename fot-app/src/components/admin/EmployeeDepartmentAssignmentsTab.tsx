@@ -12,6 +12,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { getTreeFlatDepartments, findSu10CompanyNode, collectDescendantIds } from '../../utils/departmentUtils';
 import { EmployeeAssignmentPanel } from './EmployeeAssignmentPanel';
 import styles from '../../pages/admin/Admin.module.css';
+import { createFioMatcher, withFioFallback } from '../../utils/fioSearch';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
   allUsers: IUserSlim[];
@@ -121,7 +122,10 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
   const filteredEmployees = useMemo(() => {
     const normalizedSearch = normalizeText(searchQuery);
-    return employees.filter(employee => {
+    // ФИО сотрудника и учётки — точно (ё = е, раскладка), без точных — с одной ошибкой; email, должность и
+    // отделы — прежним вхождением. Решение — после всех фильтров вкладки.
+    const matcher = createFioMatcher(searchQuery);
+    return withFioFallback(matcher, mode => employees.filter(employee => {
       const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids || []);
       if (hideEmployeesWithoutAssignments && additionalDepartmentIds.length === 0) {
         return false;
@@ -144,22 +148,23 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         }
       }
 
-      if (!normalizedSearch) {
+      if (!normalizedSearch || !matcher) {
         return true;
       }
 
       const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
-      const searchableParts = [
-        employee.full_name,
-        linkedUser?.full_name,
+      if (matcher.matches(employee.full_name, mode) || matcher.matches(linkedUser?.full_name, mode)) {
+        return true;
+      }
+      const textParts = [
         linkedUser?.email,
         employee.position_name,
         employee.department_name,
         ...additionalDepartmentIds.map(departmentId => departmentMap.get(departmentId)?.name || null),
       ];
 
-      return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
-    });
+      return textParts.some(part => normalizeText(part).includes(normalizedSearch));
+    }));
   }, [departmentMap, employees, hideEmployeesWithoutAssignments, showContractors, showWithoutResponsible, su10DepartmentIds, linkedUserByEmployeeId, searchQuery]);
 
   // Виртуализация: рендерим только видимые строки. Без неё список из ~8700

@@ -19,6 +19,7 @@ import { canSeeEmployeeInStaffList, resolveStaffRosterEmployeeIds } from '../ser
 import { canUseHrDocumentsForEmployee, resolveHrDocumentsAccess } from '../services/hr-documents-access.service.js';
 import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import {
   HR_DOCUMENT_PROFILES,
   HR_DOCUMENT_TYPES,
@@ -217,60 +218,68 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     if (typeof q.zupTo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.zupTo)) where.push(`p.zup_uploaded_at::date <= $${add(q.zupTo)}::date`);
 
     const search = typeof q.search === 'string' ? q.search.trim() : '';
-    if (search) {
-      const ors: string[] = [`e.full_name ILIKE $${add(`%${escapeLike(search)}%`)}`];
-      const digits = normalizeDigits(search, 12);
-      if (digits && digits.length === 11) ors.push(`p.snils_hash = $${add(hashForSearch('snils', digits))}`, `regexp_replace(COALESCE(e.pension_number,''), '\\D', '', 'g') = $${add(digits)}`);
-      if (digits && (digits.length === 10 || digits.length === 12)) ors.push(`p.inn_hash = $${add(hashForSearch('inn', digits))}`);
-      const doc = normalizeDocNumber(search);
-      if (doc && doc.length >= 6) ors.push(`p.passport_number_hash = $${add(hashForSearch('passport', doc))}`);
-      where.push(`(${ors.join(' OR ')})`);
-    }
-
-    const rows = await query<IListRow>(
-      `SELECT p.employee_id, e.full_name, e.employment_status, e.hire_date, e.birth_date, e.org_department_id,
-              d.name AS department_name, p.citizenship_id, c.name AS citizenship_name, c.requires_patent, c.is_eaeu, c.iso_code,
-              p.has_residence_permit, p.zup_is_uploaded, p.zup_uploaded_at, p.zup_exported_at, p.planned_exit_date, p.updated_at,
-              (SELECT array_agg(DISTINCT dd.category) FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL) AS file_categories,
-              (SELECT count(*)::int FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL) AS files_count,
-              (SELECT count(*)::int FROM employee_hr_ocr_conflicts oc WHERE oc.employee_id = p.employee_id AND oc.status = 'open') AS open_conflicts,
-              (SELECT count(*)::int FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL AND dd.recognition_status IN ('pending','processing')) AS ocr_pending
-         FROM employee_hr_profiles p
-         JOIN employees e ON e.id = p.employee_id
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
-         LEFT JOIN hr_citizenships c ON c.id = p.citizenship_id
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-        ORDER BY e.full_name`,
-      params,
-    );
-
+    // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; СНИЛС, ИНН, паспорт — прежнее точное сравнение
+    // хешей. Решение — после фильтра комплектности файлов (он после SQL): точный, убранный им, опечатку не глушит.
+    const fio = search ? buildFioSearch(search) : null;
     const filesFilter = typeof q.files === 'string' ? q.files : '';
-    const enriched = rows.map(r => {
-      const cit = r.citizenship_id ? { requires_patent: !!r.requires_patent, is_eaeu: !!r.is_eaeu, iso_code: r.iso_code, name: r.citizenship_name ?? undefined } : null;
-      const profile = resolveDocumentProfile(cit, r.has_residence_permit);
-      const slots = resolveDocumentSlots(profile, r.has_residence_permit);
-      const present = new Set((r.file_categories ?? []).map(c => getHrDocumentType(c)?.code ?? c));
-      const filled = slots.required.filter(code => present.has(code)).length;
-      const completeness: 'full' | 'partial' | 'none' = r.files_count === 0 ? 'none' : filled >= slots.required.length ? 'full' : 'partial';
-      return {
-        employee_id: r.employee_id,
-        full_name: r.full_name,
-        employment_status: r.employment_status,
-        hire_date: r.hire_date,
-        birth_date: r.birth_date,
-        department: r.department_name,
-        org_department_id: r.org_department_id,
-        citizenship: r.citizenship_name,
-        requires_patent: requiresPatent(cit, r.has_residence_permit),
-        has_residence_permit: r.has_residence_permit,
-        planned_exit_date: r.planned_exit_date,
-        zup: { is_uploaded: r.zup_is_uploaded, uploaded_at: r.zup_uploaded_at, exported_at: r.zup_exported_at },
-        files: { count: r.files_count, required_filled: filled, required_total: slots.required.length, completeness },
-        open_conflicts: r.open_conflicts,
-        ocr_pending: r.ocr_pending,
-        updated_at: r.updated_at,
-      };
-    }).filter(r => !filesFilter || r.files.completeness === filesFilter);
+    const load = async (mode: FioSearchMode) => {
+      const modeWhere = [...where];
+      const modeParams = [...params];
+      const addParam = (v: unknown): number => { modeParams.push(v); return modeParams.length; };
+      if (search) {
+        const ors: string[] = [fio ? fioConditionSql('e', modeParams, fio, mode) : 'FALSE'];
+        const digits = normalizeDigits(search, 12);
+        if (digits && digits.length === 11) ors.push(`p.snils_hash = $${addParam(hashForSearch('snils', digits))}`, `regexp_replace(COALESCE(e.pension_number,''), '\\D', '', 'g') = $${addParam(digits)}`);
+        if (digits && (digits.length === 10 || digits.length === 12)) ors.push(`p.inn_hash = $${addParam(hashForSearch('inn', digits))}`);
+        const doc = normalizeDocNumber(search);
+        if (doc && doc.length >= 6) ors.push(`p.passport_number_hash = $${addParam(hashForSearch('passport', doc))}`);
+        modeWhere.push(`(${ors.join(' OR ')})`);
+      }
+
+      const rows = await query<IListRow>(
+        `SELECT p.employee_id, e.full_name, e.employment_status, e.hire_date, e.birth_date, e.org_department_id,
+                d.name AS department_name, p.citizenship_id, c.name AS citizenship_name, c.requires_patent, c.is_eaeu, c.iso_code,
+                p.has_residence_permit, p.zup_is_uploaded, p.zup_uploaded_at, p.zup_exported_at, p.planned_exit_date, p.updated_at,
+                (SELECT array_agg(DISTINCT dd.category) FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL) AS file_categories,
+                (SELECT count(*)::int FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL) AS files_count,
+                (SELECT count(*)::int FROM employee_hr_ocr_conflicts oc WHERE oc.employee_id = p.employee_id AND oc.status = 'open') AS open_conflicts,
+                (SELECT count(*)::int FROM documents dd WHERE dd.employee_id = p.employee_id AND dd.category LIKE 'hr\\_%' AND dd.deleted_at IS NULL AND dd.recognition_status IN ('pending','processing')) AS ocr_pending
+           FROM employee_hr_profiles p
+           JOIN employees e ON e.id = p.employee_id
+           LEFT JOIN org_departments d ON d.id = e.org_department_id
+           LEFT JOIN hr_citizenships c ON c.id = p.citizenship_id
+          ${modeWhere.length ? `WHERE ${modeWhere.join(' AND ')}` : ''}
+          ORDER BY e.full_name`,
+        modeParams,
+      );
+      return rows.map(r => {
+        const cit = r.citizenship_id ? { requires_patent: !!r.requires_patent, is_eaeu: !!r.is_eaeu, iso_code: r.iso_code, name: r.citizenship_name ?? undefined } : null;
+        const profile = resolveDocumentProfile(cit, r.has_residence_permit);
+        const slots = resolveDocumentSlots(profile, r.has_residence_permit);
+        const present = new Set((r.file_categories ?? []).map(c => getHrDocumentType(c)?.code ?? c));
+        const filled = slots.required.filter(code => present.has(code)).length;
+        const completeness: 'full' | 'partial' | 'none' = r.files_count === 0 ? 'none' : filled >= slots.required.length ? 'full' : 'partial';
+        return {
+          employee_id: r.employee_id,
+          full_name: r.full_name,
+          employment_status: r.employment_status,
+          hire_date: r.hire_date,
+          birth_date: r.birth_date,
+          department: r.department_name,
+          org_department_id: r.org_department_id,
+          citizenship: r.citizenship_name,
+          requires_patent: requiresPatent(cit, r.has_residence_permit),
+          has_residence_permit: r.has_residence_permit,
+          planned_exit_date: r.planned_exit_date,
+          zup: { is_uploaded: r.zup_is_uploaded, uploaded_at: r.zup_uploaded_at, exported_at: r.zup_exported_at },
+          files: { count: r.files_count, required_filled: filled, required_total: slots.required.length, completeness },
+          open_conflicts: r.open_conflicts,
+          ocr_pending: r.ocr_pending,
+          updated_at: r.updated_at,
+        };
+      }).filter(r => !filesFilter || r.files.completeness === filesFilter);
+    };
+    const enriched = fio ? await withFioFallback(fio, load) : await load('exact');
 
     const total = enriched.length;
     const start = (page - 1) * pageSize;

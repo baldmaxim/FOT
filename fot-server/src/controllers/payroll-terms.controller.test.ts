@@ -709,14 +709,16 @@ describe('payrollTermsController.list', () => {
     expect(pgQueryOne).not.toHaveBeenCalled();
   });
 
-  it('поиск уходит в БД по всему штату, спецсимволы шаблона экранируются', async () => {
+  it('поиск: табельный — прежним ILIKE в $8 (спецсимволы экранированы), ФИО — точным поиском ФИО', async () => {
     const res = makeRes();
     await payrollTermsController.list(
-      makeReq({ query: { q: '  есенов  ' } } as Partial<AuthenticatedRequest>),
+      makeReq({ query: { q: '  гри  ' } } as Partial<AuthenticatedRequest>),
       res,
     );
-    expect(listParams().search).toBe('%есенов%');
-    expect(listParams().sql).toMatch(/full_name ILIKE \$8::text OR e\.tab_number ILIKE \$8::text/);
+    // Меньше 5 букв — опечаток нет, проверки «есть ли точные» тоже.
+    expect(pgQueryOne).toHaveBeenCalledTimes(1);
+    expect(listParams().search).toBe('%гри%');
+    expect(listParams().sql).toMatch(/\$8::text IS NULL OR \(e\.full_name ~\* \$\d+\) OR e\.tab_number ILIKE \$8::text/);
 
     pgQueryOne.mockClear();
     await payrollTermsController.list(
@@ -724,6 +726,33 @@ describe('payrollTermsController.list', () => {
       makeRes(),
     );
     expect(listParams().search).toBe('%50\\%\\_\\\\%');
+  });
+
+  it('поиск ФИО: точное есть в отфильтрованном наборе — только точные; нет — с одной ошибкой, итоги — тем же режимом', async () => {
+    const listCall = () => pgQueryOne.mock.calls.find(([sql]) => String(sql).includes('keyed AS'));
+    const existsCall = () => pgQueryOne.mock.calls.find(([sql]) => String(sql).includes('SELECT EXISTS'));
+    const cf = JSON.stringify({ values: { schedule: ['5+2'] } });
+
+    pgQueryOne.mockImplementation(async (sql: string) => (String(sql).includes('SELECT EXISTS')
+      ? { found: true } : { total: '0', without_terms_total: '0', rows: [] }));
+    await payrollTermsController.list(makeReq({ query: { q: 'гринев', cf, without_terms: 'true' } } as Partial<AuthenticatedRequest>), makeRes());
+    // Проверка — по всему filtered: фильтры столбцов и «без условий» в ней есть, курсора и LIMIT — нет.
+    const [checkSql, checkParams] = existsCall() as [string, unknown[]];
+    expect(checkSql).toContain('NULLIF(btrim(schedule_name), \'\') = ANY($9::text[])');
+    expect(checkSql).toContain('(e.full_name ~* $10)');
+    expect(checkSql).not.toMatch(/OFFSET|LIMIT \$/);
+    expect(checkParams.slice(8)).toEqual([['5+2'], 'грин[её]в']);
+    expect(String(listCall()?.[0])).not.toContain('unnest(');
+
+    pgQueryOne.mockClear();
+    pgQueryOne.mockImplementation(async (sql: string) => (String(sql).includes('SELECT EXISTS')
+      ? { found: false } : { total: '0', without_terms_total: '0', rows: [] }));
+    await payrollTermsController.list(makeReq({ query: { q: 'гринев', cf } } as Partial<AuthenticatedRequest>), makeRes());
+    const [sql, params] = listCall() as [string, unknown[]];
+    expect(sql).toContain('e.id IN (SELECT fz.id FROM unnest(');
+    // Режим один на порцию и итоги: условие ФИО — в scoped, итоги считаются из него же.
+    expect(sql.indexOf('unnest(')).toBeLessThan(sql.indexOf('filtered AS ('));
+    expectPlaceholdersMatch(sql, params);
   });
 
   it('скоуп: у бухгалтера подразделения список сужен до его отделов, у admin — без фильтра', async () => {
@@ -1069,11 +1098,11 @@ describe('payrollTermsController.list: сортировка и фильтры с
     expect(filtered).toMatch(/NULLIF\(btrim\(schedule_name\), ''\) = ANY\(\$13::text\[\]\) OR NULLIF\(btrim\(schedule_name\), ''\) IS NULL/);
     expect(filtered).toMatch(/'мес:' \|\| monthly_salary::text/);
     expect(filtered).toMatch(/\(bonus_amount::text IS NULL\)/);
-    expect(filtered).toMatch(/NULLIF\(btrim\(full_name\), ''\) ILIKE \$15/);
+    // «ФИО» — точный поиск ФИО регулярным выражением, % — буквально.
+    expect(filtered).toMatch(/\(full_name ~\* \$15\)/);
     expect(params[12]).toEqual(['6+0 (10ч)']);
     expect(params[13]).toEqual(['мес:175000.00']);
-    // Спецсимволы шаблона экранированы.
-    expect(params[14]).toBe('%50\\%%');
+    expect(params[14]).toBe('50%');
     // total считается по filtered — с фильтрами столбцов, без курсора.
     expect(sql).toMatch(/\(SELECT count\(\*\) FROM filtered\)\s+AS total/);
     expectPlaceholdersMatch(sql, params);

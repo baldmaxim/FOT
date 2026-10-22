@@ -23,6 +23,7 @@ import {
   payrollValueKeySql,
   payrollValueOrderSql,
   type IPayrollSortCursor,
+  type PayrollFilterColumn,
 } from './payroll-terms-list.helpers.js';
 import {
   canEditPayrollEmployee,
@@ -58,6 +59,13 @@ import {
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import {
+  buildFioSearch,
+  fioConditionSql,
+  fioExactConditionSql,
+  type FioSearchMode,
+  type IFioSearch,
+} from '../utils/fio-search.utils.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
 /**
@@ -229,7 +237,7 @@ const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, c
  * назначение по дате начала, иначе график по умолчанию. Считается в SQL, чтобы ячейка,
  * сортировка и фильтр по графику совпадали.
  */
-export const buildBaseCtes = (columnFilterSql: string): string => `
+export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string => `
   WITH ${payrollContractorDeptsCte('$6')},
   -- Фильтр подразделения — поддерево: выбрали департамент, видны все его бригады.
   filter_depts AS (
@@ -286,7 +294,7 @@ export const buildBaseCtes = (columnFilterSql: string): string => `
             AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
      WHERE ${payrollStaffWhereSql('e', '$7')}
        AND ($2::uuid IS NULL OR e.org_department_id IN (SELECT id FROM filter_depts))
-       AND ($8::text IS NULL OR e.full_name ILIKE $8::text OR e.tab_number ILIKE $8::text)
+       AND ($8::text IS NULL OR ${fioSql} OR e.tab_number ILIKE $8::text)
   ),
   filtered AS (
     SELECT * FROM scoped
@@ -350,12 +358,14 @@ const paidJoinSql = (monthsParam: string): string => `
  */
 const buildListSql = (options: {
   columnFilterSql: string;
+  /** Условие ФИО (fioConditionSql) — без него поиск только по табельному ($8). */
+  fioSql?: string;
   sortKeySql: string;
   cursorSql: string;
   orderSql: string;
   /** Параметр месяцев «Расчётов» ($N): с ним вместо «Начислений» — «К выплате» и «Удержания». */
   paidMonthsParam?: string;
-}): string => `${buildBaseCtes(options.columnFilterSql)},
+}): string => `${buildBaseCtes(options.columnFilterSql, options.fioSql)},
   keyed AS (
     SELECT filtered.*, ${options.sortKeySql} AS sort_key FROM filtered
   )
@@ -468,9 +478,35 @@ export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuer
     query.without_terms === 'true',
     contractorRootId,
     accessible === 'all' ? null : accessible,
+    // Табельный — прежним ILIKE; ФИО — условием поиска ФИО (resolvePayrollFioMode + fioConditionSql).
     query.q ? toIlikePattern(query.q) : null,
   ];
-  return { onDate, contractorRootId, params };
+  const fio = query.q ? buildFioSearch(query.q) : null;
+  return { onDate, contractorRootId, params, fio };
+};
+
+/**
+ * Поиск ФИО «Условий оплаты»: точно; если точного (ФИО или табельный) нет во всём `filtered` — после скоупа,
+ * подразделения, категории и фильтров столбцов, до курсора и LIMIT — с одной ошибкой. Режим один на список,
+ * итоги и счётчики. baseParams — $1–$8 от buildBaseParams.
+ */
+const resolvePayrollFioMode = async (
+  fio: IFioSearch | null,
+  baseParams: unknown[],
+  filters: Parameters<typeof appendPayrollColumnFilters>[2],
+  options: { exclude?: PayrollFilterColumn } = {},
+): Promise<FioSearchMode> => {
+  if (!fio || fio.fuzzy.length === 0) return 'exact';
+  const params = baseParams.slice(0, 8);
+  const whereParts: string[] = [];
+  appendPayrollColumnFilters(whereParts, params, filters, options);
+  const fioSql = fioExactConditionSql('e', params, fio);
+  const row = await queryOne<{ found: boolean }>(
+    `${buildBaseCtes(whereParts.join('\n       AND '), fioSql)}
+     SELECT EXISTS (SELECT 1 FROM filtered) AS found`,
+    params,
+  );
+  return row?.found ? 'exact' : 'fuzzy';
 };
 
 const badRequest = (res: Response, error: string, code: string): void => {
@@ -509,7 +545,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     // «Расчёты»: месяцы «К выплате» и «Удержаний». Без параметра — прежний список с «Начислениями».
     const paidMonths = parsePayrollMonthsQuery(query.paid_months);
 
-    const { onDate, contractorRootId, params } = await buildBaseParams(req, parsed);
+    const { onDate, contractorRootId, params, fio } = await buildBaseParams(req, parsed);
+    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters);
 
     // Прежний курсор (ФИО, id) — только без сортировки по столбцу.
     let legacyAfter: { name: string; id: number } | null = null;
@@ -554,8 +591,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       paidMonthsParam = `$${params.length}`;
     }
 
+    const fioSql = fio ? fioConditionSql('e', params, fio, fioMode) : undefined;
     const sql = buildListSql({
       columnFilterSql: whereParts.join('\n       AND '),
+      fioSql,
       sortKeySql: sort ? payrollSortKeySql(sort.key).sql : LEGACY_SORT_KEY_SQL,
       cursorSql,
       orderSql: sort ? buildPayrollOrderSql('k', sort.dir) : LEGACY_ORDER_SQL,
@@ -640,16 +679,19 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     const filtersResult = parsePayrollColumnFilters((req.query as Record<string, unknown>).cf);
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
 
-    const { params } = await buildBaseParams(req, parsed);
+    const { params, fio } = await buildBaseParams(req, parsed);
+    // Режим поиска — по своему набору: без фильтра самого столбца, как и варианты.
+    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { exclude: column });
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters, { exclude: column });
+    const fioSql = fio ? fioConditionSql('e', params, fio, fioMode) : undefined;
 
     params.push(parsed.value_q ? toIlikePattern(parsed.value_q) : null);
     const valueSearchIdx = params.length;
     params.push(COLUMN_VALUES_LIMIT + 1);
     const limitIdx = params.length;
 
-    const sql = `${buildBaseCtes(whereParts.join('\n       AND '))}
+    const sql = `${buildBaseCtes(whereParts.join('\n       AND '), fioSql)}
       SELECT v.value, count(*)::int AS count
         FROM (SELECT ${payrollValueKeySql(column)} AS value, ${payrollValueOrderSql(column)} AS ord FROM filtered) v
        WHERE ($${valueSearchIdx}::text IS NULL OR v.value ILIKE $${valueSearchIdx}::text)

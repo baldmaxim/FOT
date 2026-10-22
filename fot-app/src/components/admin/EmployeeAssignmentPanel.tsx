@@ -24,6 +24,7 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useTimesheetViewEmployeesDraft } from '../../hooks/useTimesheetViewEmployeesDraft';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDate } from '../../utils/formatMoney';
+import { createFioMatcher, withFioFallback, type FioSearchMode } from '../../utils/fioSearch';
 import { TimesheetViewEmployeesTab } from './TimesheetViewEmployeesTab';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -262,26 +263,42 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     [allEmployees],
   );
 
+  // «Человек»: действующие кандидаты и уволенные подчинённые — один список, поэтому решение об опечатке одно.
+  // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; должность и отдел — прежним вхождением.
+  const personFioMode = useMemo<FioSearchMode>(() => {
+    const matcher = createFioMatcher(searchQuery);
+    if (!employee || !matcher?.hasFuzzy) return 'exact';
+    const search = normalizeText(searchQuery);
+    const anyExact = allEmployees.some(e => e.employee_id !== employee.employee_id && (
+      matcher.matches(e.full_name, 'exact')
+      || normalizeText(e.position_name || '').includes(search)
+      || normalizeText(e.department_name || '').includes(search)))
+      || (directReportsQuery.data || []).some(row => !employeeMap.has(row.subordinate_employee_id)
+        && matcher.matches(row.subordinate?.full_name || `ID ${row.subordinate_employee_id}`, 'exact'));
+    return anyExact ? 'exact' : 'fuzzy';
+  }, [employee, allEmployees, directReportsQuery.data, employeeMap, searchQuery]);
+
   const personCandidates = useMemo(() => {
     if (!employee) return [];
     const search = normalizeText(searchQuery);
+    const matcher = createFioMatcher(searchQuery);
     const filtered = allEmployees
       .filter(e => e.employee_id !== employee.employee_id)
-      .filter(e => !search
-        || normalizeText(e.full_name).includes(search)
+      .filter(e => !matcher
+        || matcher.matches(e.full_name, personFioMode)
         || normalizeText(e.position_name || '').includes(search)
         || normalizeText(e.department_name || '').includes(search));
     const pinnedIds = new Set<number>([...initialDirectIds, ...draftDirectIds]);
     const pinned = filtered.filter(e => pinnedIds.has(e.employee_id));
     const rest = filtered.filter(e => !pinnedIds.has(e.employee_id));
     return [...pinned, ...rest.slice(0, 60)];
-  }, [employee, allEmployees, searchQuery, initialDirectIds, draftDirectIds]);
+  }, [employee, allEmployees, searchQuery, personFioMode, initialDirectIds, draftDirectIds]);
 
   // Список сотрудников панели — только действующие, а связь с уволенным подчинённым
   // живёт до конца периода и дальше не снимается. Без этих строк счётчик вкладки
   // не сходился со списком, и такую связь было нечем снять.
   const missingDirectReports = useMemo<IMissingDirectReport[]>(() => {
-    const search = normalizeText(searchQuery);
+    const matcher = createFioMatcher(searchQuery);
     return (directReportsQuery.data || [])
       .filter(row => !employeeMap.has(row.subordinate_employee_id))
       .map(row => ({
@@ -289,8 +306,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         full_name: row.subordinate?.full_name || `ID ${row.subordinate_employee_id}`,
         note: formatMissingDirectReportNote(row.subordinate),
       }))
-      .filter(item => !search || normalizeText(item.full_name).includes(search));
-  }, [directReportsQuery.data, employeeMap, searchQuery]);
+      .filter(item => !matcher || matcher.matches(item.full_name, personFioMode));
+  }, [directReportsQuery.data, employeeMap, searchQuery, personFioMode]);
 
   // === Вкладка «Выходные»: производные данные ===
   const whitelistSet = useMemo(
@@ -314,12 +331,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const weekendEmpCandidates = useMemo(() => {
     if (!employee) return [];
     const search = normalizeText(searchQuery);
+    const matcher = createFioMatcher(searchQuery);
     let list = weekendEligibleQuery.data || [];
     if (weekendShowFree) list = list.filter(e => e.responsible_employee_id == null);
-    return list.filter(e => !search
-      || normalizeText(e.full_name || '').includes(search)
+    return withFioFallback(matcher, mode => list.filter(e => !matcher
+      || matcher.matches(e.full_name, mode)
       || normalizeText(e.position_name || '').includes(search)
-      || normalizeText(e.department_name || '').includes(search));
+      || normalizeText(e.department_name || '').includes(search)));
   }, [employee, weekendEligibleQuery.data, weekendShowFree, searchQuery]);
   // ФИО ответственного по employee_id (для подсказок «занят: X»).
   const responsibleName = useCallback((empId: number): string => (

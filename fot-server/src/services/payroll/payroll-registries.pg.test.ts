@@ -218,6 +218,24 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     ]);
   });
 
+  it('«Условия оплаты»: поиск ФИО — ё = е, раскладка, одна ошибка только без точных; фильтр «ФИО» — без ошибок', async () => {
+    const found = async (query: Record<string, string>) => {
+      const res = makeRes();
+      await payrollTermsController.list(req({ query }), res);
+      return res.body.data.map((r: { employee_id: number }) => r.employee_id);
+    };
+    expect(await found({ q: 'акимов' })).toEqual([1]);
+    expect(await found({ q: 'fRBVJD' })).toEqual([1]); // «акимов» в английской раскладке
+    expect(await found({ q: 'акмов' })).toEqual([1]); // пропущена буква
+    expect(await found({ q: 'борисов' })).toEqual([2]);
+    expect(await found({ q: 'боирсов' })).toEqual([2]); // переставлены соседние
+    // Точный есть — похожие с ошибкой не подмешиваются: «Егоров» не тянет «Егорав…» и наоборот.
+    expect(await found({ q: 'егоров' })).toEqual([6]);
+    // Фильтр столбца «ФИО» — точно, без опечаток.
+    expect(await found({ cf: JSON.stringify({ text: { name: 'Акимов' } }) })).toEqual([1]);
+    expect(await found({ cf: JSON.stringify({ text: { name: 'акмов' } }) })).toEqual([]);
+  });
+
   it('324: «Проезд» в списке условий — ставка за месяц даты и «Без проезда» в месяце; квартира — ставка текущего месяца', async () => {
     const month = currentRateMonth();
     const [housing, travel] = await listRates();

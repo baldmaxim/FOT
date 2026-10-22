@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioExactConditionSql } from '../utils/fio-search.utils.js';
 import { buildStaffSortKeySql, StaffSortUnavailableError } from './employees-staff-sort.helpers.js';
 
 export const STAFF_VALUE_FILTER_COLUMNS = ['department', 'position', 'schedule', 'main_object', 'sign'] as const;
@@ -135,6 +136,12 @@ export async function appendColumnFilters(
   for (const column of STAFF_TEXT_FILTER_COLUMNS) {
     const text = filters.text?.[column]?.trim();
     if (!text || column === exclude) continue;
+    if (column === 'name') {
+      // «ФИО» — только точно (ё = е, регистр, раскладка), без опечаток: опечатки — у строки поиска экрана.
+      const search = buildFioSearch(text.slice(0, MAX_TEXT_LENGTH));
+      if (search) whereParts.push(fioExactConditionSql('employees', params, search));
+      continue;
+    }
     const key = await keySql(column, params);
     params.push(`%${escapeLike(text, MAX_TEXT_LENGTH)}%`);
     whereParts.push(`${key} ILIKE $${params.length}`);

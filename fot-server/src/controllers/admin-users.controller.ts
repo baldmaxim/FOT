@@ -41,6 +41,13 @@ import { invalidateDepartmentScopeCaches, invalidateGlobalReadScopeCaches } from
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
+import {
+  buildFioSearch,
+  fioConditionSql,
+  fioExactConditionSql,
+  withFioFallback,
+  type FioSearchMode,
+} from '../utils/fio-search.utils.js';
 import { getActiveDirectManagersFor } from '../services/employee-direct-reports.service.js';
 import { listFullManagersForDepartments } from '../services/approval-routing.service.js';
 import { normalizeAccessLevel, type DepartmentAccessLevel } from '../services/department-access.service.js';
@@ -523,13 +530,33 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   }
   if (search) {
     baseParams.push(`%${escapeLike(search)}%`);
-    const idx = baseParams.length;
+    const emailIdx = baseParams.length;
     // Некоррелированный IN — planner превращает в semi-join, для full_name
     // и email отдельно используются GIN/trgm-индексы (миграция 110), потом
     // объединение через PK. Коррелированный EXISTS такой план не давал.
-    baseWhere.push(
-      `(up.full_name ILIKE $${idx} OR up.id IN (SELECT id FROM app_auth.users WHERE email ILIKE $${idx}))`,
-    );
+    const emailSql = `up.id IN (SELECT id FROM app_auth.users WHERE email ILIKE $${emailIdx})`;
+    // ФИО — точно (ё = е, раскладка); email — прежним ILIKE. Опечатка (только в ФИО) — если точного нет
+    // ни у одной роли: экран сам переключается на роль с совпадением, поэтому решение — по базе без роли,
+    // и roleCounts, список и страницы берут один режим.
+    const fio = buildFioSearch(search);
+    let mode: FioSearchMode = 'exact';
+    if (fio && fio.fuzzy.length > 0) {
+      const checkParams = [...baseParams];
+      const exactSql = `(${fioExactConditionSql('up', checkParams, fio)} OR ${emailSql})`;
+      try {
+        const row = await queryOne<{ found: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM user_profiles up WHERE ${[...baseWhere, exactSql].join(' AND ')}) AS found`,
+          checkParams,
+        );
+        mode = row?.found ? 'exact' : 'fuzzy';
+      } catch (err) {
+        console.error('Get users search mode error:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch users' });
+        return;
+      }
+    }
+    const fioSql = fio ? fioConditionSql('up', baseParams, fio, mode) : 'FALSE';
+    baseWhere.push(`(${fioSql} OR ${emailSql})`);
   }
 
   const baseWhereSql = baseWhere.length ? `WHERE ${baseWhere.join(' AND ')}` : '';
@@ -2388,27 +2415,29 @@ export const adminUsersController = {
             .map(p => p.employee_id)
             .filter((id): id is number => id !== null);
 
-      const params: unknown[] = [`%${escapeLike(q)}%`];
-      let sql = `SELECT id, full_name, org_department_id
-                   FROM employees
-                  WHERE full_name ILIKE $1
-                    AND employment_status = 'active'`;
-      if (accessible !== 'all') {
-        params.push(accessible);
-        sql += ` AND org_department_id = ANY($${params.length}::uuid[])`;
-      }
-      if (linkedIds.length > 0) {
-        params.push(linkedIds);
-        sql += ` AND id <> ALL($${params.length}::int[])`;
-      }
-      sql += ' LIMIT 20';
+      const fio = buildFioSearch(q);
+      // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; скоуп и «без учётки» — внутри запроса.
+      const findEmployees = (mode: FioSearchMode) => {
+        const params: unknown[] = [];
+        let sql = `SELECT id, full_name, org_department_id
+                     FROM employees
+                    WHERE employment_status = 'active'`;
+        if (accessible !== 'all') {
+          params.push(accessible);
+          sql += ` AND org_department_id = ANY($${params.length}::uuid[])`;
+        }
+        if (linkedIds.length > 0) {
+          params.push(linkedIds);
+          sql += ` AND id <> ALL($${params.length}::int[])`;
+        }
+        if (fio) sql += ` AND ${fioConditionSql('employees', params, fio, mode)}`;
+        sql += ' LIMIT 20';
+        return query<{ id: number; full_name: string; org_department_id: string | null }>(sql, params);
+      };
 
       let employees: Array<{ id: number; full_name: string; org_department_id: string | null }>;
       try {
-        employees = await query<{ id: number; full_name: string; org_department_id: string | null }>(
-          sql,
-          params,
-        );
+        employees = fio ? await withFioFallback(fio, findEmployees) : [];
       } catch (error) {
         logSupabaseError('SearchUnlinkedEmployees', error);
         res.status(500).json({ success: false, error: 'Failed to search employees' });

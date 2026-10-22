@@ -3,6 +3,7 @@ import { useMemo, type FC } from 'react';
 import type { EmployeeDepartmentAssignmentFromApi } from '../../services/adminService';
 import type { ITimesheetViewAssignment } from '../../services/timesheetViewAccessService';
 import styles from '../../pages/admin/Admin.module.css';
+import { createFioMatcher, type FioSearchMode } from '../../utils/fioSearch';
 
 interface ITimesheetViewEmployeesTabProps {
   /** Общий список сотрудников панели (действующие). */
@@ -49,11 +50,24 @@ export const TimesheetViewEmployeesTab: FC<ITimesheetViewEmployeesTabProps> = ({
 
   const { selected, rest, missing } = useMemo(() => {
     const query = normalizeText(search);
-    const matches = (employee: EmployeeDepartmentAssignmentFromApi): boolean => !query
-      || normalizeText(employee.full_name).includes(query)
-      || normalizeText(employee.position_name).includes(query)
-      || normalizeText(employee.department_name).includes(query);
-    const filtered = allEmployees.filter(employee => employee.employee_id !== selfId && matches(employee));
+    // ФИО — точно (ё = е, раскладка), без точных — с одной ошибкой; должность и отдел — прежним вхождением.
+    // Действующие и уволенные назначенные — один список, решение об опечатке одно.
+    const matcher = createFioMatcher(search);
+    const known = new Set(allEmployees.map(employee => employee.employee_id));
+    const pick = (mode: FioSearchMode) => {
+      const matches = (employee: EmployeeDepartmentAssignmentFromApi): boolean => !matcher
+        || matcher.matches(employee.full_name, mode)
+        || normalizeText(employee.position_name).includes(query)
+        || normalizeText(employee.department_name).includes(query);
+      return {
+        filtered: allEmployees.filter(employee => employee.employee_id !== selfId && matches(employee)),
+        // Уволенные назначенные: в общем списке их нет, но снять связь должно быть можно.
+        missing: assigned.filter(row => !known.has(row.employee_id) && (!matcher || matcher.matches(row.full_name, mode))),
+      };
+    };
+    let found = pick('exact');
+    if (matcher?.hasFuzzy && found.filtered.length === 0 && found.missing.length === 0) found = pick('fuzzy');
+    const { filtered, missing } = found;
     // Как во вкладке «Человек»: сохранённые и отмеченные — сверху и вне лимита, чтобы
     // снятая галочка не уводила человека за пределы списка.
     const pinnedIds = new Set<number>([...assigned.map(row => row.employee_id), ...selectedIds]);
@@ -61,12 +75,10 @@ export const TimesheetViewEmployeesTab: FC<ITimesheetViewEmployeesTabProps> = ({
       ...filtered.filter(employee => pinnedIds.has(employee.employee_id)),
       ...filtered.filter(employee => !pinnedIds.has(employee.employee_id)).slice(0, MAX_REST),
     ];
-    const known = new Set(allEmployees.map(employee => employee.employee_id));
     return {
       selected: candidates.filter(employee => selectedSet.has(employee.employee_id)),
       rest: candidates.filter(employee => !selectedSet.has(employee.employee_id)),
-      // Уволенные назначенные: в общем списке их нет, но снять связь должно быть можно.
-      missing: assigned.filter(row => !known.has(row.employee_id) && (!query || normalizeText(row.full_name).includes(query))),
+      missing,
     };
   }, [allEmployees, selfId, search, selectedIds, selectedSet, assigned]);
 

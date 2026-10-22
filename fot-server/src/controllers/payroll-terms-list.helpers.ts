@@ -11,7 +11,7 @@
  * параметры $n.
  */
 import { z } from 'zod';
-import { escapeLike } from '../utils/search.utils.js';
+import { buildFioSearch, fioExactConditionSql } from '../utils/fio-search.utils.js';
 
 export const PAYROLL_SORT_KEYS = ['name', 'department', 'position', 'schedule', 'salary', 'bonus', 'housing'] as const;
 export type PayrollSortKey = typeof PAYROLL_SORT_KEYS[number];
@@ -200,9 +200,10 @@ export function appendPayrollColumnFilters(
     whereParts.push(`(${parts.join(' OR ')})`);
   }
 
-  const nameText = filters.text?.name?.trim();
-  if (nameText && exclude !== 'name') {
-    params.push(`%${escapeLike(nameText, MAX_TEXT_LENGTH)}%`);
-    whereParts.push(`${SORT_KEY_SQL.name.sql} ILIKE $${params.length}`);
+  // «ФИО» — только точно (ё = е, регистр, раскладка), без опечаток: опечатки — у строки поиска экрана,
+  // две нечёткие строки сразу запутали бы. full_name — столбец CTE scoped.
+  const nameSearch = filters.text?.name ? buildFioSearch(filters.text.name.slice(0, MAX_TEXT_LENGTH)) : null;
+  if (nameSearch && exclude !== 'name') {
+    whereParts.push(fioExactConditionSql('employees', params, nameSearch));
   }
 }

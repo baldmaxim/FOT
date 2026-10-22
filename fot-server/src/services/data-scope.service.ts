@@ -378,6 +378,57 @@ export async function canAccessEmployeeInScope(
 }
 
 /**
+ * Пакетная canAccessEmployeeInScope: наборы резолвятся один раз на весь список (отделы сотрудников — одним
+ * запросом), а не на каждого (поиск по ФИО проверяет все совпадения). Ветки — в том же порядке; паритет — в тесте.
+ */
+export async function filterEmployeeIdsInScope(
+  req: AuthenticatedRequest,
+  ids: number[],
+): Promise<number[]> {
+  const candidates = ids.filter(id => Boolean(id));
+  if (candidates.length === 0) return [];
+  const selfId = req.user.employee_id;
+
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return candidates;
+
+  const allowed = new Set<number>();
+  if (selfId) allowed.add(selfId);
+
+  if (accessible.length > 0) {
+    const accessMap = await loadEmployeeAccessMap(candidates);
+    const fullSet = await resolveVisibilityFullDepartmentIds(req, accessible);
+    const accessibleSet = new Set(accessible);
+    let objectEmployees: Set<number> | null = null;
+    for (const id of candidates) {
+      const targetDepartmentIds = accessMap.get(id) || [];
+      if (targetDepartmentIds.length === 0) continue;
+      if (targetDepartmentIds.some(departmentId => fullSet.has(departmentId))) {
+        allowed.add(id);
+        continue;
+      }
+      if (targetDepartmentIds.some(departmentId => accessibleSet.has(departmentId) && !fullSet.has(departmentId))) {
+        objectEmployees ??= await resolveManagerObjectEmployeeIds(req);
+        if (objectEmployees.size === 0 || objectEmployees.has(id)) allowed.add(id);
+      }
+    }
+  }
+
+  if (isTimekeeper(req)) {
+    for (const id of await resolveTimekeeperDirectEmployeeIds(req)) allowed.add(id);
+  }
+
+  if (selfId) {
+    if (req.user.__direct_subordinates === undefined) {
+      req.user.__direct_subordinates = new Set(await listDirectSubordinates(selfId));
+    }
+    for (const id of req.user.__direct_subordinates) allowed.add(id);
+  }
+
+  return candidates.filter(id => allowed.has(id));
+}
+
+/**
  * Объекты СКУД, назначенные пользователю как «курируемые» — берём из его
  * employee_skud_object_access (вкладка «Объекты» в настройках). Для руководителя
  * это объекты, сотрудников которых он контролирует (read-only). Кэш на req.

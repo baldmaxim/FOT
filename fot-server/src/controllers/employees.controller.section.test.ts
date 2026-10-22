@@ -418,14 +418,15 @@ describe('getAll — сортировка по столбцу (keyset + sort)', 
     }), res as never);
     expect(res.statusCode).toBe(200);
     const [sql, params] = sortedCall();
-    expect(sql).toContain('ILIKE');
+    // «ФИО» в фильтре столбца — точный поиск ФИО регулярным выражением (ё = е, раскладка).
+    expect(sql).toMatch(/\(full_name ~\* \$\d+\)/);
     expect(sql).toContain('employees.hire_date >= $');
     expect(params).toContainEqual(['Работает']);
-    expect(params).toContain('%Ив%');
+    expect(params).toContain('ив');
     expectPlaceholdersMatch(sql, params);
     const [countSql, countParams] = h.queryOne.mock.calls.at(-1) as Call;
-    expect(countSql).toContain('ILIKE');
-    expect(countParams).toContain('%Ив%');
+    expect(countSql).toMatch(/\(full_name ~\* \$\d+\)/);
+    expect(countParams).toContain('ив');
     expectPlaceholdersMatch(countSql, countParams);
   });
 

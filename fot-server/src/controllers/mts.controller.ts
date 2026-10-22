@@ -10,7 +10,9 @@ import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import {
   canAccessEmployeeInScope,
   canWriteEmployeeInScope,
+  filterEmployeeIdsInScope,
 } from '../services/data-scope.service.js';
+import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import { mtsGeofenceService, GeofenceValidationError } from '../services/mts-geofence.service.js';
 import { query as pgQuery } from '../config/postgres.js';
 import { encryptionService } from '../services/encryption.service.js';
@@ -654,59 +656,64 @@ export const mtsController = {
   async getEmployeesLinked(req: AuthenticatedRequest, res: Response): Promise<void> {
     logRequest(req, 'GET /employees-linked');
     try {
-      const search = String(req.query.search || '').trim().toLowerCase();
+      const search = String(req.query.search || '').trim();
       const limit = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
       const page = Math.max(1, Number(req.query.page) || 1);
       const offset = (page - 1) * limit;
+      const fio = search ? buildFioSearch(search) : null;
 
-      // JOIN employees + map + последние снимки (для last_seen_at).
-      const rows = await pgQuery<{
-        subscriber_id: number;
-        employee_id: number | null;
-        employee_full_name: string | null;
-        employee_tab_number: string | null;
-        phone_enc: string | null;
-        display_name_enc: string | null;
-        last_recorded_at: string | null;
-        total_count: number;
-      }>(
-        `WITH last_snap AS (
-           SELECT DISTINCT ON (subscriber_id) subscriber_id, recorded_at
-             FROM mts_location_snapshots
-            ORDER BY subscriber_id, recorded_at DESC
-         )
-         SELECT m.subscriber_id, m.employee_id, e.full_name AS employee_full_name,
-                e.tab_number AS employee_tab_number,
-                m.phone_enc, m.display_name_enc,
-                ls.recorded_at AS last_recorded_at,
-                count(*) OVER ()::int AS total_count
-           FROM mts_subscriber_map m
-           LEFT JOIN employees e ON e.id = m.employee_id
-           LEFT JOIN last_snap ls ON ls.subscriber_id = m.subscriber_id
-          WHERE m.employee_id IS NOT NULL
-            AND ($1 = '' OR LOWER(COALESCE(e.full_name, '')) LIKE '%' || $1 || '%')
-          ORDER BY e.full_name NULLS LAST
-          LIMIT $2 OFFSET $3`,
-        [search, limit, offset],
-      );
+      // JOIN employees + map + последние снимки (для last_seen_at). Связанных — сотни (576 на 22.10.2026):
+      // берём все совпадения, доступ — пакетно, и только потом страница и total. Раньше доступ резался после
+      // LIMIT по одной строке, и total считал недоступных.
+      const loadVisible = async (mode: FioSearchMode) => {
+        const params: unknown[] = [];
+        const searchSql = fio ? `AND ${fioConditionSql('e', params, fio, mode)}` : '';
+        const rows = await pgQuery<{
+          subscriber_id: number;
+          employee_id: number | null;
+          employee_full_name: string | null;
+          employee_tab_number: string | null;
+          phone_enc: string | null;
+          display_name_enc: string | null;
+          last_recorded_at: string | null;
+        }>(
+          `WITH last_snap AS (
+             SELECT DISTINCT ON (subscriber_id) subscriber_id, recorded_at
+               FROM mts_location_snapshots
+              ORDER BY subscriber_id, recorded_at DESC
+           )
+           SELECT m.subscriber_id, m.employee_id, e.full_name AS employee_full_name,
+                  e.tab_number AS employee_tab_number,
+                  m.phone_enc, m.display_name_enc,
+                  ls.recorded_at AS last_recorded_at
+             FROM mts_subscriber_map m
+             LEFT JOIN employees e ON e.id = m.employee_id
+             LEFT JOIN last_snap ls ON ls.subscriber_id = m.subscriber_id
+            WHERE m.employee_id IS NOT NULL
+              ${searchSql}
+            ORDER BY e.full_name NULLS LAST, m.subscriber_id`,
+          params,
+        );
+        if (hasFullMtsAccess(req)) return rows;
+        const allowed = new Set(await filterEmployeeIdsInScope(
+          req,
+          rows.map(r => r.employee_id).filter((id): id is number => id !== null),
+        ));
+        return rows.filter(r => r.employee_id !== null && allowed.has(r.employee_id));
+      };
+      // ФИО — точно (ё = е, раскладка); среди доступных точных нет — с одной ошибкой.
+      const visible = fio ? await withFioFallback(fio, loadVisible) : await loadVisible('exact');
 
-      const items = [];
-      for (const r of rows) {
-        if (!hasFullMtsAccess(req)) {
-          if (!r.employee_id || !(await canAccessEmployeeInScope(req, r.employee_id))) continue;
-        }
-        items.push({
-          subscriberId: r.subscriber_id,
-          employeeId: r.employee_id,
-          employeeFullName: r.employee_full_name,
-          employeeTabNumber: r.employee_tab_number,
-          phone: encryptionService.decryptField(r.phone_enc),
-          displayName: encryptionService.decryptField(r.display_name_enc),
-          lastRecordedAt: r.last_recorded_at,
-        });
-      }
-      const total = rows.length > 0 ? rows[0].total_count : 0;
-      res.json({ success: true, data: items, meta: { total, page, pageSize: limit } });
+      const items = visible.slice(offset, offset + limit).map(r => ({
+        subscriberId: r.subscriber_id,
+        employeeId: r.employee_id,
+        employeeFullName: r.employee_full_name,
+        employeeTabNumber: r.employee_tab_number,
+        phone: encryptionService.decryptField(r.phone_enc),
+        displayName: encryptionService.decryptField(r.display_name_enc),
+        lastRecordedAt: r.last_recorded_at,
+      }));
+      res.json({ success: true, data: items, meta: { total: visible.length, page, pageSize: limit } });
     } catch (error) {
       fail(res, error, 'Ошибка получения списка сотрудников MTS');
     }

@@ -62,7 +62,7 @@ describe('parseStaffColumnFilters', () => {
 });
 
 describe('appendColumnFilters', () => {
-  it('все типы: согласованные плейсхолдеры, «пусто» через IS NULL, текст через ILIKE с экранированием', async () => {
+  it('все типы: согласованные плейсхолдеры, «пусто» через IS NULL, «ФИО» — точным поиском ФИО', async () => {
     const whereParts = ['is_archived = $1'];
     const params: unknown[] = [false];
     await appendColumnFilters(whereParts, params, {
@@ -74,7 +74,9 @@ describe('appendColumnFilters', () => {
     const sql = whereParts.join(' AND ');
     expectPlaceholdersMatch(sql, params);
     expect(params).toContainEqual(['Склад']);
-    expect(params).toContain('%50\\%\\_А%');
+    // ё = е, регистр, раскладка — регулярным выражением; % и _ — буквально, без опечаток.
+    expect(params).toContain('50%_а');
+    expect(sql).toMatch(/\(full_name ~\* \$\d+\)/);
     expect(params).toContain(5);
     expect(sql).toMatch(/= ANY\(\$\d+::text\[\]\) OR \(SELECT NULLIF\(btrim\(d\.name\), ''\)[\s\S]*IS NULL\)/);
     expect(sql).toContain('employees.hire_date >= $');
@@ -82,7 +84,7 @@ describe('appendColumnFilters', () => {
     expect(sql).toContain('employees.birth_date <= $');
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM employee_staff_comments');
     // Пустой текст комментария не добавляет условия.
-    expect(sql.match(/ILIKE/g)).toHaveLength(1);
+    expect(sql.match(/ILIKE/g)).toBeNull();
   });
 
   it('exclude пропускает только свой столбец', async () => {

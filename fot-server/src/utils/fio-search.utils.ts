@@ -97,16 +97,17 @@ export type FioSearchMode = 'exact' | 'fuzzy';
  * с ошибкой ищется по trigram-индексу отдельно (LATERAL). Без индекса — выражение, варианты через `~* ANY`.
  */
 type FioSearchTargetSpec =
-  | { kind: 'indexed'; name: string; id: string; table: 'employees' | 'user_profiles' }
+  | { kind: 'indexed'; name: string; id: string; table: 'employees' }
   | { kind: 'plain'; name: string };
 
 const FIO_SEARCH_TARGETS = {
   // employees: id int, индекс 080.
   employees: { kind: 'indexed', name: 'full_name', id: 'id', table: 'employees' },
   e: { kind: 'indexed', name: 'e.full_name', id: 'e.id', table: 'employees' },
-  // user_profiles: id uuid, индекс 110.
-  user_profiles: { kind: 'indexed', name: 'full_name', id: 'id', table: 'user_profiles' },
-  up: { kind: 'indexed', name: 'up.full_name', id: 'up.id', table: 'user_profiles' },
+  // user_profiles: ~2 тыс. строк — точные идут по индексу 110, а варианты с ошибкой быстрее перебором (29 мс
+  // против 81 мс по индексу на проде 22.10.2026).
+  user_profiles: { kind: 'plain', name: 'full_name' },
+  up: { kind: 'plain', name: 'up.full_name' },
 } as const satisfies Record<string, FioSearchTargetSpec>;
 /** Таблица и алиас в запросе. */
 export type FioSearchTable = keyof typeof FIO_SEARCH_TARGETS;
