@@ -68,8 +68,8 @@ describe('суммы с сервера', () => {
     expect(amounts.get(paidCellKey('2026-08', 'recalc_prev'))).toBe(-1500.5);
   });
 
-  it('сумма в ячейке: разряды, копейки только если есть', () => {
-    expect(formatPaidAmount(175000).replace(/\s/g, ' ')).toBe('175 000');
+  it('сумма в ячейке: разряды, копейки всегда', () => {
+    expect(formatPaidAmount(175000).replace(/\s/g, ' ')).toBe('175 000,00');
     expect(formatPaidAmount(55057.3).replace(/\s/g, ' ')).toBe('55 057,30');
   });
 });

@@ -68,7 +68,7 @@ describe('«Свод»: объекты', () => {
     expect(text('recalc_prev', 'mytishchi')).toMatch(/^[-−]2\s500,25$/);
     expect(text('accrued', 'mytishchi')).toMatch(/^47\s499,75$/);
     expect(text('deducted', 'mytishchi')).toBe('—');
-    expect(text('deducted', 'khimki')).toMatch(/^1\s200$/);
+    expect(text('deducted', 'khimki')).toMatch(/^1\s200,00$/);
   });
 
   it('«К выплате» — «Всего начислено» минус «Всего удержано»; удержаний нет — равно начисленному', () => {

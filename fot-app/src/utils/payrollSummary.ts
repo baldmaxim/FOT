@@ -137,7 +137,7 @@ export const summaryItems = (rows: ReadonlyArray<IPayrollSummaryRow>): PayrollPa
   return ITEM_ORDER.filter(item => present.has(item));
 };
 
-/** Сумма в ячейке: «175 000», «−2 500,25»; нет суммы — «—». */
+/** Сумма в ячейке: «175 000,00», «−2 500,25»; нет суммы — «—». */
 const money = (cents: number | null | undefined): string => (cents == null ? '—' : formatPaidAmount(cents / 100));
 const moneyExport = (cents: number | null | undefined): number | null => (cents == null ? null : cents / 100);
 

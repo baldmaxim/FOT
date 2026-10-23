@@ -15,7 +15,7 @@ const salary = (amount: string | null, from = '2026-01-01', to: string | null = 
 
 describe('расчётный листок: оклад', () => {
   it('один оклад — без границ', () => {
-    expect(plain(formatPayslipTerms([salary('130000.00')]))).toBe('Оклад: 130 000');
+    expect(plain(formatPayslipTerms([salary('130000.00')]))).toBe('Оклад: 130 000,00');
   });
 
   it('ставка — ₽/ч', () => {
@@ -24,7 +24,7 @@ describe('расчётный листок: оклад', () => {
 
   it('смена в месяце — каждая с границей', () => {
     const terms = [salary('120000.00', '2026-01-01', '2026-07-14'), salary('130000.00', '2026-07-15')];
-    expect(plain(formatPayslipTerms(terms))).toBe('Оклад: 120 000 по 14.07.2026, Оклад: 130 000 с 15.07.2026');
+    expect(plain(formatPayslipTerms(terms))).toBe('Оклад: 120 000,00 по 14.07.2026, Оклад: 130 000,00 с 15.07.2026');
   });
 
   it('без суммы или условий — null', () => {

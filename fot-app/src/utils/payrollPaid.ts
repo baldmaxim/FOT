@@ -93,9 +93,9 @@ export const PAYROLL_PAID_TOTALS: ReadonlyArray<{ kind: PayrollPaidTotalKind; la
 
 export const paidCellKey = (month: string, item: PayrollPaidItemCode): string => `${month}:${item}`;
 
-/** Сумма в ячейке: с разделителем тысяч, копейки — только если есть: «175 000», «55 057,30». */
+/** Сумма в ячейке: с разделителем тысяч, копейки — всегда: «175 000,00», «55 057,30». */
 export const formatPaidAmount = (value: number): string => value.toLocaleString('ru-RU', {
-  minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+  minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
