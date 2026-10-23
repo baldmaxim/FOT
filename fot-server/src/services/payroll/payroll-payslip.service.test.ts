@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { IResolvedSchedule } from '../../types/index.js';
+import type { IProductionCalendarMonth, IResolvedSchedule } from '../../types/index.js';
 import type { IDepartmentTimesheetData, IExportDayValue } from '../timesheet-export.service.js';
 
 vi.mock('../../config/postgres.js', () => ({
@@ -10,7 +10,14 @@ vi.mock('../../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { payslipPeriod, pickPayslipRateAllowances, splitWorkedDays, type IPayslipRateFacts } from './payroll-payslip.service.js';
+import {
+  countPayslipNormDays,
+  payslipPeriod,
+  pickPayslipRateAllowances,
+  proratedTravel,
+  splitWorkedDays,
+  type IPayslipRateFacts,
+} from './payroll-payslip.service.js';
 
 // «5+2» с двумя плановыми субботами в месяц — как у прорабов в июле 2026.
 const schedule: IResolvedSchedule = {
@@ -141,18 +148,35 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     category: 'office',
     travelRate: '2730.00',
     travelStopped: false,
+    travelDays: { worked: 21, norm: 21 },
     dormitoryAllowanceRate: '160.00',
     housing: [],
     ...over,
   });
 
+  const fullTravel = { code: 'travel', amount: '2730.00', days: { worked: 21, norm: 21 } };
+
   it('проезд — офису и ИТР по ставке месяца; рабочим, «Без проезда» в месяце и без ставки — нет', () => {
-    expect(pickPayslipRateAllowances(facts())).toEqual([{ code: 'travel', amount: '2730.00' }]);
-    expect(pickPayslipRateAllowances(facts({ category: 'itr' }))).toEqual([{ code: 'travel', amount: '2730.00' }]);
+    expect(pickPayslipRateAllowances(facts())).toEqual([fullTravel]);
+    expect(pickPayslipRateAllowances(facts({ category: 'itr' }))).toEqual([fullTravel]);
     expect(pickPayslipRateAllowances(facts({ category: 'worker' }))).toEqual([]);
     expect(pickPayslipRateAllowances(facts({ travelStopped: true }))).toEqual([]);
     expect(pickPayslipRateAllowances(facts({ travelRate: null }))).toEqual([]);
     expect(pickPayslipRateAllowances(facts({ travelRate: '0.00' }))).toEqual([]);
+  });
+
+  it('проезд — по отработанным дням из нормы; дни сверх нормы в подписи не считаются', () => {
+    expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 22, norm: 23 } })))
+      .toEqual([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 } }]);
+    // Назархудоев, август 2026: 22 рабочих + 8 выходных при норме 23 — ЗУП дал полную ставку.
+    expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 30, norm: 23 } })))
+      .toEqual([{ code: 'travel', amount: '2730.00', days: { worked: 23, norm: 23 } }]);
+  });
+
+  it('нет в табеле, ни одного дня или норма 0 — строки проезда нет', () => {
+    expect(pickPayslipRateAllowances(facts({ travelDays: null }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 0, norm: 23 } }))).toEqual([]);
+    expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 5, norm: 0 } }))).toEqual([]);
   });
 
   it('две квартиры в месяце — одна сумма, по поздней', () => {
@@ -182,8 +206,85 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     const housing = [{ kind: 'dormitory_allowance' as const, start: '2026-01-01', amount: null }];
     expect(pickPayslipRateAllowances(facts({ travelRate: null, dormitoryAllowanceRate: null, housing }))).toEqual([]);
     expect(pickPayslipRateAllowances(facts({ housing }))).toEqual([
-      { code: 'travel', amount: '2730.00' },
+      fullTravel,
       { code: 'dormitory_allowance', amount: '160.00' },
     ]);
+  });
+});
+
+describe('proratedTravel — проезд пропорционально дням, как ЗУП', () => {
+  it('до рубля, половина — вверх (август 2026, «Оплачено» ЗУП)', () => {
+    expect(proratedTravel('2730.00', { worked: 22, norm: 23 })).toBe('2611.00'); // 2 611,30
+    expect(proratedTravel('2730.00', { worked: 18, norm: 23 })).toBe('2137.00'); // 2 136,52
+    expect(proratedTravel('2730.00', { worked: 11, norm: 21 })).toBe('1430.00'); // 11 × 130
+    expect(proratedTravel('2730.00', { worked: 1, norm: 4 })).toBe('683.00'); // ровно 682,50
+  });
+
+  it('отработал норму — ставка как есть, с копейками', () => {
+    expect(proratedTravel('2730.00', { worked: 21, norm: 21 })).toBe('2730.00');
+    expect(proratedTravel('2730.50', { worked: 21, norm: 21 })).toBe('2730.50');
+    expect(proratedTravel('2730.50', { worked: 25, norm: 21 })).toBe('2730.50');
+  });
+
+  it('ни одного дня или норма 0 — null', () => {
+    expect(proratedTravel('2730.00', { worked: 0, norm: 21 })).toBeNull();
+    expect(proratedTravel('2730.00', { worked: 3, norm: 0 })).toBeNull();
+  });
+});
+
+describe('countPayslipNormDays — норма дней графика за месяц', () => {
+  const calendar = (over: Partial<IProductionCalendarMonth> = {}): IProductionCalendarMonth => ({
+    year: 2026,
+    month: 7,
+    norm_days: 23,
+    norm_hours: 184,
+    holidays: [],
+    mandatory_holidays: [],
+    pre_holidays: [],
+    ...over,
+  });
+  // «6+0 (11 ч)»: цикл пн–сб, воскресенье — выходной (якорь — понедельник).
+  const sixDays: IResolvedSchedule = {
+    ...schedule,
+    schedule_id: 'sched-6',
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 0,
+    cycle_length: 7,
+    cycle_days: [...Array.from({ length: 6 }, () => ({ work_hours: 11 })), { work_hours: 0 }],
+    anchor_date: '2026-06-29',
+  };
+  const scheduleMap = (pick: (date: string) => IResolvedSchedule) => (
+    new Map([[60, new Map(julyDates.map(date => [date, pick(date)]))]])
+  );
+
+  it('«5+2» с двумя плановыми субботами: 23 будних июля + 2 = 25', () => {
+    expect(countPayslipNormDays(makeData({}), 60)).toBe(25);
+  });
+
+  it('цикл «6+0»: все дни, кроме воскресений, — 27 (июль 2026, как ЗУП)', () => {
+    expect(countPayslipNormDays(makeData({}, { dailySchedulesMap: scheduleMap(() => sixDays) }), 60)).toBe(27);
+  });
+
+  it('праздник в будний день графика нормы не даёт', () => {
+    const data = makeData({}, { calendarMonth: calendar({ holidays: ['2026-07-15'] }) });
+    expect(countPayslipNormDays(data, 60)).toBe(24);
+  });
+
+  it('смена графика в месяце: рабочие дни — по графику дня, квота суббот — графика последнего дня', () => {
+    // 1–15 — «6+0»: 13 дней; 16–31 — «5+2»: 12 будних; квота «5+2» на 31-е — 2.
+    const data = makeData({}, { dailySchedulesMap: scheduleMap(date => (date < '2026-07-16' ? sixDays : schedule)) });
+    expect(countPayslipNormDays(data, 60)).toBe(27);
+  });
+
+  it('увольнение в месяце норму не режет', () => {
+    const data = makeData({}, { cutoffByEmployeeId: new Map([[60, '2026-07-21']]) });
+    expect(countPayslipNormDays(data, 60)).toBe(25);
+  });
+
+  it('графика нет хоть на один день — норма производственного календаря', () => {
+    const partial = new Map([[60, new Map(julyDates.slice(0, 10).map(date => [date, schedule]))]]);
+    expect(countPayslipNormDays(makeData({}, { dailySchedulesMap: partial, calendarMonth: calendar() }), 60)).toBe(23);
+    expect(countPayslipNormDays(makeData({}, { dailySchedulesMap: new Map(), calendarMonth: calendar() }), 60)).toBe(23);
+    expect(countPayslipNormDays(makeData({}, { dailySchedulesMap: new Map() }), 60)).toBe(0);
   });
 });

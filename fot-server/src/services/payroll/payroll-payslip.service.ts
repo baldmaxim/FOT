@@ -4,16 +4,20 @@
  *
  * Дни — те же, что в колонке «Дни» единого файла 1С (buildEmployeeRowsForOneC): округление часов,
  * УУ/РБ/УД, отсечка увольнения, будущие дни не считаются. Рабочий — день по графику или плановая
- * суббота/воскресенье в квоте графика (как в ЗУП: «5+2» с двумя субботами даёт 24 рабочих в июле 2026);
- * выходной — согласованный выход сверх графика.
+ * суббота/воскресенье в квоте графика (как в ЗУП: «5+2» с двумя субботами — у Абдухалимова в июле 2026
+ * 22 будних + 2 субботы = 24 отработанных рабочих); выходной — согласованный выход сверх графика.
  *
  * «По ставкам ФОТ» — суммы за месяц по ставкам «Справочника» (миграция 324), ставка — за месяц листка:
  * - проезд — если категория месяца (по табелю, payroll-staff-category.ts; как в «Своде») не «Рабочие» и в месяце
- *   нет ни одного дня «Без проезда»;
+ *   нет ни одного дня «Без проезда». Ставка — максимум за месяц: как в ЗУП, ставка × отработанные дни / норма
+ *   дней графика, до рубля (половина — вверх). Отработанные — рабочие дни плюс плановые и согласованные выходы
+ *   в выходные (несогласованные выгрузка обнуляет), не больше нормы. Норма — дни по графику за весь месяц +
+ *   плановые субботы/воскресенья (в августе 2026 у «5+2» с двумя субботами — 23);
  * - проживание — одна сумма по записи, действующей на конец периода (самая поздняя из задевающих период):
  *   квартира — её сумма, доплата за общежитие — ставка, проживание в общежитии — ничего.
  */
 import { queryOne } from '../../config/postgres.js';
+import type { IResolvedSchedule } from '../../types/index.js';
 import { isWorkingDay } from '../schedule.service.js';
 import { buildEmployeeRowsForOneC } from '../timesheet-excel.service.js';
 import { fetchTimesheetDataForEmployees, type IDepartmentTimesheetData } from '../timesheet-export.service.js';
@@ -40,10 +44,18 @@ export interface IPayslipTerms {
 
 export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowance';
 
+/** Дни проезда: отработано (рабочие + выходы в выходные, не больше нормы) из нормы дней графика за месяц. */
+export interface IPayslipTravelDays {
+  worked: number;
+  norm: number;
+}
+
 /** Сумма «По ставкам ФОТ» — NUMERIC текстом. */
 export interface IPayslipRateAllowance {
   code: PayslipRateAllowanceCode;
   amount: string;
+  /** Только у проезда: из скольких дней посчитан. */
+  days?: IPayslipTravelDays;
 }
 
 /** Проживание, задевающее период листка: квартира, общежитие или доплата за общежитие; start — YYYY-MM-DD. */
@@ -60,6 +72,8 @@ export interface IPayslipRateFacts {
   travelRate: string | null;
   /** В месяце есть день «Без проезда». */
   travelStopped: boolean;
+  /** Отработано / норма за месяц; null — сотрудника нет в табеле месяца. */
+  travelDays: IPayslipTravelDays | null;
   dormitoryAllowanceRate: string | null;
   housing: IPayslipHousingRecord[];
 }
@@ -114,6 +128,40 @@ export const splitWorkedDays = (
   return { workday, dayoff };
 };
 
+/**
+ * Норма дней месяца для проезда: дни, рабочие по графику своего дня (праздники учтены), + плановые субботы
+ * и воскресенья графика последнего дня месяца — как countNormHoursForSchedule. За весь месяц: приём и увольнение
+ * внутри месяца норму не режут. Нет графика хоть на один день — норма производственного календаря: по найденным
+ * дням она бы занизилась.
+ */
+export const countPayslipNormDays = (data: IDepartmentTimesheetData, employeeId: number): number => {
+  const schedules = data.dailySchedulesMap.get(employeeId);
+  const daily: IResolvedSchedule[] = [];
+  for (let day = 1; day <= data.daysInMonth; day++) {
+    const schedule = schedules?.get(`${data.year}-${pad2(data.mon)}-${pad2(day)}`);
+    if (!schedule) return data.calendarMonth?.norm_days ?? 0;
+    daily.push(schedule);
+  }
+  const workdays = daily.filter((schedule, index) => (
+    isWorkingDay(schedule, new Date(data.year, data.mon - 1, index + 1), data.calendarMonth)
+  )).length;
+  const last = daily[daily.length - 1];
+  return workdays + (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
+};
+
+/**
+ * Проезд за месяц: ставка × отработано / норма, до рубля, половина — вверх (как ЗУП: 2 730 × 18/23 = 2 136,52 → 2 137).
+ * Счёт в целых копейках. Отработал норму — ставка как есть, с копейками. null — дней или нормы нет.
+ */
+export const proratedTravel = (rate: string, days: IPayslipTravelDays): string | null => {
+  if (days.norm <= 0 || days.worked <= 0) return null;
+  if (days.worked >= days.norm) return rate;
+  const rateCents = Math.round(Number(rate) * 100);
+  const normCents = days.norm * 100;
+  const rubles = Math.floor((2 * rateCents * days.worked + normCents) / (2 * normCents));
+  return rubles > 0 ? `${rubles}.00` : null;
+};
+
 /** Период листка: месяц, обрезанный датой приёма и отсечкой увольнения табеля (cutoff — первый день без работы). */
 export const payslipPeriod = (
   month: string,
@@ -133,8 +181,11 @@ const positive = (amount: string | null): amount is string => amount !== null &&
 /** Строки «По ставкам ФОТ» по фактам месяца — правила в шапке файла. */
 export const pickPayslipRateAllowances = (facts: IPayslipRateFacts): IPayslipRateAllowance[] => {
   const result: IPayslipRateAllowance[] = [];
-  if (facts.category !== 'worker' && !facts.travelStopped && positive(facts.travelRate)) {
-    result.push({ code: 'travel', amount: facts.travelRate });
+  if (facts.category !== 'worker' && !facts.travelStopped && positive(facts.travelRate) && facts.travelDays) {
+    const amount = proratedTravel(facts.travelRate, facts.travelDays);
+    // Дни сверх нормы проезд не увеличивают — и в подписи их нет.
+    const days = { worked: Math.min(facts.travelDays.worked, facts.travelDays.norm), norm: facts.travelDays.norm };
+    if (amount !== null) result.push({ code: 'travel', amount, days });
   }
   // Записи одного сотрудника по дням не пересекаются: самая поздняя по началу действует на конец периода.
   const last = facts.housing.reduce<IPayslipHousingRecord | null>(
@@ -155,6 +206,7 @@ const loadRateFacts = async (
   month: string,
   period: { from: string; to: string },
   category: StaffCategory,
+  travelDays: IPayslipTravelDays | null,
 ): Promise<IPayslipRateFacts> => {
   const row = await queryOne<{
     travel_rate: string | null;
@@ -193,6 +245,7 @@ const loadRateFacts = async (
     category,
     travelRate: row?.travel_rate ?? null,
     travelStopped: row?.travel_stopped ?? false,
+    travelDays,
     dormitoryAllowanceRate: row?.dormitory_allowance_rate ?? null,
     housing: row?.housing ?? [],
   };
@@ -252,12 +305,18 @@ export const getPayslipInfo = async (employeeId: number, month: string): Promise
     };
   });
 
+  const workedDays = splitWorkedDays(data, employeeId);
+  // Выходы в выходные проезд считают, как ЗУП: 22 рабочих + 8 выходных при норме 23 — полная ставка.
+  const travelDays = workedDays
+    ? { worked: workedDays.workday + workedDays.dayoff, norm: countPayslipNormDays(data, employeeId) }
+    : null;
+
   return {
     month,
     period_from: period.from,
     period_to: period.to,
-    worked_days: splitWorkedDays(data, employeeId),
+    worked_days: workedDays,
     terms,
-    rate_allowances: pickPayslipRateAllowances(await loadRateFacts(employeeId, month, period, category)),
+    rate_allowances: pickPayslipRateAllowances(await loadRateFacts(employeeId, month, period, category, travelDays)),
   };
 };

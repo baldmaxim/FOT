@@ -30,8 +30,8 @@ const formatTotal = (value: number | null): string => (value === null ? '—' : 
  * должность и оклад, период, отработано дней (рабочие по графику / выходные сверх графика) и сумма
  * «По трудовому договору»; ниже прочие начисления и «Всего начислено». Затем «Удержано» и «Всего удержано».
  * Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад — из ФОТ: грузятся при выборе месяца.
- * Ниже — «По ставкам ФОТ» (проезд, доплата за проживание или за общежитие) по ставкам того месяца; в «Всего
- * начислено» они не входят.
+ * Ниже — «По ставкам ФОТ» (проезд — пропорционально дням, доплата за проживание или за общежитие) по ставкам того
+ * месяца; в «Всего начислено» они не входят.
  */
 export const PaidPayslip: FC<IPaidPayslipProps> = ({ employeeId, month, positionName, amounts, totals }) => {
   const payslipQuery = useQuery({
@@ -176,7 +176,10 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({ employeeId, month, position
               <tbody>
                 {rateLines.map(line => (
                   <tr key={line.code}>
-                    <th scope="row" className={styles.kind}>{line.label}</th>
+                    <th scope="row" className={styles.kind}>
+                      <span className={styles.kindName}>{line.label}</span>
+                      {line.note && <span className={styles.kindNote}>{line.note}</span>}
+                    </th>
                     <td className={styles.num}>{formatPaidAmount(line.amount)}</td>
                   </tr>
                 ))}

@@ -1,7 +1,7 @@
 /**
  * Расчётный листок месяца в «Истории выплат» — по подобию листка ЗУП: начислено и удержано по статьям.
  * Суммы — «Оплачено» из 1С; период, дни и оклад — из ФОТ (табель и условия оплаты). «По ставкам ФОТ» —
- * суммы за месяц по ставкам «Справочника» на тот месяц (миграция 324).
+ * суммы за месяц по ставкам «Справочника» на тот месяц (миграция 324); проезд — пропорционально дням.
  */
 import type {
   IPayslipRateAllowance,
@@ -41,11 +41,19 @@ const RATE_ALLOWANCE_LABELS: Record<PayslipRateAllowanceCode, string> = {
   dormitory_allowance: 'Доплата за общежитие',
 };
 
-/** «По ставкам ФОТ»: подпись и сумма; нет строк (или старый бэкенд) — пусто, секции нет. */
+/**
+ * «По ставкам ФОТ»: подпись и сумма; нет строк (или старый бэкенд) — пусто, секции нет. У проезда — дни,
+ * из которых он посчитан: «22 из 23 дн.»; старый бэкенд дней не отдаёт — без подписи.
+ */
 export const payslipRateLines = (
   allowances: readonly IPayslipRateAllowance[] | undefined,
-): Array<{ code: PayslipRateAllowanceCode; label: string; amount: number }> => (allowances ?? [])
-  .map(item => ({ code: item.code, label: RATE_ALLOWANCE_LABELS[item.code], amount: Number(item.amount) }))
+): Array<{ code: PayslipRateAllowanceCode; label: string; amount: number; note?: string }> => (allowances ?? [])
+  .map(item => ({
+    code: item.code,
+    label: RATE_ALLOWANCE_LABELS[item.code],
+    amount: Number(item.amount),
+    ...(item.days ? { note: `${item.days.worked} из ${item.days.norm} дн.` } : {}),
+  }))
   .filter(line => Number.isFinite(line.amount));
 
 const formatTermsAmount = (terms: IPayslipTerms): string | null => {

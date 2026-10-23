@@ -102,4 +102,10 @@ describe('расчётный листок: «По ставкам ФОТ»', () =
     expect(payslipRateLines([])).toEqual([]);
     expect(payslipRateLines(undefined)).toEqual([]);
   });
+
+  it('проезд с днями — подпись «22 из 23 дн.»', () => {
+    expect(payslipRateLines([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 } }]))
+      .toEqual([{ code: 'travel', label: 'Проезд', amount: 2611, note: '22 из 23 дн.' }]);
+    expect(payslipRateLines([{ code: 'travel', amount: '2730.00' }])[0]).not.toHaveProperty('note');
+  });
 });

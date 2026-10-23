@@ -9,11 +9,46 @@ vi.mock('../../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
+// Сентябрь 2026: «5+2» без плановых суббот — 22 будних; отработано 20 будних и согласованная суббота 5-го.
+const septemberDates = Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
+const fiveTwo = {
+  schedule_id: 'sched-5-2',
+  schedule_type: 'office',
+  work_start: '09:00:00',
+  work_end: '18:00:00',
+  work_hours: 8,
+  work_days: [1, 2, 3, 4, 5],
+  office_days: null,
+  late_threshold_minutes: 0,
+  day_overrides: null,
+  lunch_minutes: 0,
+  respects_holidays: true,
+  pattern_type: 'custom',
+  expected_saturdays_per_month: 0,
+  expected_sundays_per_month: 0,
+  full_day_threshold_minutes: null,
+  weekend_full_day_threshold_minutes: null,
+  cycle_length: null,
+  cycle_days: null,
+  anchor_date: null,
+  assignment_anchor_date: null,
+  source: 'employee',
+};
 vi.mock('../timesheet-export.service.js', () => ({
-  fetchTimesheetDataForEmployees: vi.fn(async () => ({})),
+  fetchTimesheetDataForEmployees: vi.fn(async () => ({
+    year: 2026,
+    mon: 9,
+    daysInMonth: 30,
+    calendarMonth: null,
+    dailySchedulesMap: new Map([[42, new Map(septemberDates.map(date => [date, fiveTwo]))]]),
+    plannedWeekendDays: new Set(),
+  })),
 }));
 vi.mock('../timesheet-excel.service.js', () => ({
-  buildEmployeeRowsForOneC: vi.fn(() => []),
+  buildEmployeeRowsForOneC: vi.fn(() => [{
+    employeeId: 42,
+    workedDayNumbers: [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 21, 22, 23, 24, 25, 28],
+  }]),
 }));
 
 const terms = vi.hoisted(() => ({ getTermsForPeriod: vi.fn() }));
@@ -73,12 +108,14 @@ describe('getPayslipInfo — категория месяца по табелю',
     expect(info.rate_allowances).toEqual([]);
   });
 
-  it('месячный резолвер дал «Офис» — проезд по ставке месяца', async () => {
+  it('месячный резолвер дал «Офис» — проезд по ставке месяца: 20 рабочих + 1 выходной из 22 дней', async () => {
     category.resolveMonthStaffCategories.mockResolvedValue(['office']);
 
     const info = await getPayslipInfo(42, '2026-09');
 
-    expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2730.00' }]);
+    expect(info.worked_days).toEqual({ workday: 20, dayoff: 1 });
+    // Выход в выходной считается: 2 730 × 21 / 22 = 2 605,91 → 2 606.
+    expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2606.00', days: { worked: 21, norm: 22 } }]);
   });
 
   it('объект месяца «Не определён» — категория по нему, объект «Свода» по часам листок не считает', async () => {

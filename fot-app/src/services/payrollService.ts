@@ -274,6 +274,11 @@ export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowan
 export interface IPayslipRateAllowance {
   code: PayslipRateAllowanceCode;
   amount: string;
+  /**
+   * Только у проезда: отработано дней (рабочие плюс плановые и согласованные выходы, не больше нормы) из нормы
+   * графика за месяц; нет у старого бэкенда.
+   */
+  days?: { worked: number; norm: number };
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
