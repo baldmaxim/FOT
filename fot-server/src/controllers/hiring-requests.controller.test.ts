@@ -278,6 +278,36 @@ describe('addAssignee', () => {
     expect(empUserId).not.toHaveBeenCalled();
     expect(createMany).not.toHaveBeenCalled();
   });
+  // Заявка 161 (23.10): окно со старыми данными предложило добавить Белого ещё раз,
+  // повтор через 13 с снял с него «главного». Повтор — no-op.
+  it('повторное добавление уже назначенного не трогает «главного», событие и уведомление', async () => {
+    mgr.mockResolvedValue(true);
+    recruiter.mockResolvedValue(true);
+    empUserId.mockResolvedValue('rec-user');
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    txClient.query.mockResolvedValueOnce({ rows: [{ employee_id: 77 }], rowCount: 1 }); // уже назначен
+    const res = makeRes();
+    await c.addAssignee(makeReq({ params: { id: '161' }, body: { employee_id: 77 } }), res);
+    await new Promise(r => setImmediate(r));
+    expect(res._json).toMatchObject({ success: true });
+    expect(txClient.query).toHaveBeenCalledTimes(1);
+    expect(pgExecute).not.toHaveBeenCalled(); // logEvent
+    expect(createMany).not.toHaveBeenCalled();
+  });
+  it('второй ответственный добавляется не главным, upsert не снимает «главного»', async () => {
+    mgr.mockResolvedValue(true);
+    recruiter.mockResolvedValue(true);
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    txClient.query.mockResolvedValueOnce({ rows: [{ employee_id: 5 }], rowCount: 1 });
+    const res = makeRes();
+    await c.addAssignee(makeReq({ params: { id: '90' }, body: { employee_id: 77 } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    expect(txClient.query).toHaveBeenCalledTimes(2); // без сброса главного
+    const [sql, params] = txClient.query.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('hiring_request_assignees.is_primary OR EXCLUDED.is_primary');
+    expect(params).toEqual([90, 77, false, 'u1']);
+    expect(pgExecute).toHaveBeenCalledTimes(1); // событие assign
+  });
 });
 
 describe('кадровый админ: подбор как у админа (глобальный скоуп + edit «Управления кадрами»)', () => {

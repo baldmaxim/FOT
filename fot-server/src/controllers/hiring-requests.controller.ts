@@ -496,19 +496,29 @@ const addAssignee = async (req: AuthenticatedRequest, res: Response): Promise<vo
   const inPool = await isRecruiter(employeeId);
   if (!inPool) { res.status(400).json({ success: false, error: 'Сотрудник не в пуле рекрутеров' }); return; }
 
-  await withTransaction(async (client) => {
-    const existing = await client.query(`SELECT 1 FROM hiring_request_assignees WHERE request_id = $1 AND is_active = TRUE LIMIT 1`, [id]);
+  const added = await withTransaction(async (client) => {
+    const existing = await client.query<{ employee_id: number }>(
+      `SELECT employee_id FROM hiring_request_assignees WHERE request_id = $1 AND is_active = TRUE`, [id],
+    );
+    const alreadyAssigned = existing.rows.some(r => Number(r.employee_id) === employeeId);
+    // Повторное добавление уже назначенного — no-op: без события, уведомления и
+    // сброса «главного» (окно со старыми данными предлагало добавить его ещё раз).
+    if (alreadyAssigned && !req.body?.is_primary) return false;
     const wantPrimary = !!req.body?.is_primary || existing.rowCount === 0; // первый назначенный → primary
     if (wantPrimary) {
       await client.query(`UPDATE hiring_request_assignees SET is_primary = FALSE WHERE request_id = $1 AND is_active = TRUE`, [id]);
     }
+    // OR: параллельный повтор (двойной клик) не снимает «главного», выставленного первым.
     await client.query(
       `INSERT INTO hiring_request_assignees (request_id, employee_id, is_primary, assigned_by)
        VALUES ($1,$2,$3,$4)
-       ON CONFLICT (request_id, employee_id) WHERE is_active = TRUE DO UPDATE SET is_primary = EXCLUDED.is_primary`,
+       ON CONFLICT (request_id, employee_id) WHERE is_active = TRUE
+       DO UPDATE SET is_primary = hiring_request_assignees.is_primary OR EXCLUDED.is_primary`,
       [id, employeeId, wantPrimary, req.user.id],
     );
+    return !alreadyAssigned;
   });
+  if (!added) { res.json({ success: true }); return; }
   await logEvent(id, req.user.id, 'assign', { body: `Назначен ответственный (employee #${employeeId})` });
 
   // Оповещение назначенного рекрутера — fire-and-forget.

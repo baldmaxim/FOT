@@ -2,11 +2,16 @@ import { Router } from 'express';
 import multer from 'multer';
 import { hiringRequestsController as c } from '../controllers/hiring-requests.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 router.use(authenticate);
+// Окно заявки перечитывается после каждой правки (ответственные, этап, кандидаты).
+// Глобальный max-age=30 из app.ts отдавал тело, снятое ДО правки: назначенный
+// рекрутер не появлялся, его добавляли повторно — и тот терял «главного».
+router.use(noStore);
 // Доступ к вкладке: роль ∨ авто-доступ (рекрутер/руководитель отдела кадров/ответственный).
 // Тонкие права (manage/work/author) проверяются в контроллере.
 const guard = requirePageAccess('/staff-control/hiring', 'view');

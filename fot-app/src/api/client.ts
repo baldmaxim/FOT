@@ -246,7 +246,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/admin/timesheet-office'
     || path === '/admin/timesheet-office/employees'
     || path.startsWith('/admin/timesheet-office/employees/')
-    || path.startsWith('/admin/timesheet-office/departments/');
+    || path.startsWith('/admin/timesheet-office/departments/')
+    // Заявки на поиск сотрудников: после правки окно заявки и доска перечитываются с
+    // сервера. max-age=30 показывал «Не назначены» после назначения рекрутера — его
+    // добавляли повторно. Сервер шлёт no-store, это дубль для прогретого кэша.
+    || path === '/hiring-requests'
+    || path.startsWith('/hiring-requests/');
 };
 
 const refreshSession = async (): Promise<boolean> => {

@@ -114,3 +114,30 @@ describe('shouldBypassHttpCache — режим табелирования', () =
     expect(initOf(0).cache).toBe('no-store');
   });
 });
+
+/** Заявки на поиск: после назначения ответственного окно заявки — с сервера, не из кэша. */
+describe('shouldBypassHttpCache — заявки на поиск сотрудников', () => {
+  beforeEach(() => {
+    fetchMock.mockClear();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    '/hiring-requests',
+    '/hiring-requests/161',
+    '/hiring-requests/recruiters',
+    '/hiring-requests/analytics?from=2026-10-01',
+  ])('%s идёт мимо HTTP-кэша', async (endpoint) => {
+    await apiClient.get(endpoint);
+    expect(initOf(0).cache).toBe('no-store');
+  });
+
+  it('соседний путь с тем же префиксом под обход не попадает', async () => {
+    await apiClient.get('/hiring-requests-archive');
+    expect(initOf(0).cache).toBeUndefined();
+  });
+});
