@@ -1,11 +1,11 @@
 /**
  * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей «Сводной ведомости» ЗУП —
- * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325). Только чтение: суммы
+ * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325, 326). Только чтение: суммы
  * приходят из 1С (API или выгрузка). В расчёте зарплаты не участвуют. Суммы нет — строки нет.
  */
 import { query } from '../../config/postgres.js';
 
-/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 325 и в fot-app/src/utils/payrollPaid.ts. */
+/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 326 и в fot-app/src/utils/payrollPaid.ts. */
 export const PAYROLL_PAID_ITEM_CODES = [
   // Начислено.
   'contract',
@@ -29,6 +29,8 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'substitution',
   'car_compensation',
   'deposit',
+  'day_rate',
+  'workwear_accrual',
   // Удержано.
   'meals',
   'workwear',
@@ -44,6 +46,9 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'transport',
   'mobile',
   'bank_fees',
+  'alimony',
+  'tmc',
+  'car_rent',
 ] as const;
 
 export type PayrollPaidItemCode = typeof PAYROLL_PAID_ITEM_CODES[number];
@@ -73,6 +78,8 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'substitution',
   'car_compensation',
   'deposit',
+  'day_rate',
+  'workwear_accrual',
 ];
 
 /**
@@ -94,6 +101,9 @@ export const PAYROLL_PAID_DEDUCTION_CODES: readonly PayrollPaidItemCode[] = [
   'transport',
   'mobile',
   'bank_fees',
+  'alimony',
+  'tmc',
+  'car_rent',
 ];
 
 /** Сумма ячейки: месяц YYYY-MM, сумма — текстом NUMERIC. */

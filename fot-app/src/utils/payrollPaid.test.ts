@@ -21,19 +21,19 @@ import {
 const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
 describe('статьи', () => {
-  it('34 статьи без повторов, в порядке ведомости', () => {
-    expect(ITEMS).toHaveLength(34);
-    expect(new Set(ITEMS.map(item => item.code)).size).toBe(34);
+  it('39 статей без повторов, в порядке ведомости', () => {
+    expect(ITEMS).toHaveLength(39);
+    expect(new Set(ITEMS.map(item => item.code)).size).toBe(39);
     expect(PAYROLL_PAID_GROUPS.map(group => group.items.map(item => item.label))).toEqual([
       ['По трудовому договору', 'Премиальная', 'Больничный', 'Отпуска'],
       ['Компенсация проживания', 'Проезд', 'Переработка', 'Перерасчёт за предыдущий период',
         'Выходное пособие при увольнении', 'Разовая доплата', 'Плановая доплата', 'Займ',
         'KPI', 'Премия', 'Премия % по договору', 'Выплата по договору ГПХ', 'Допработы', 'Замещение',
-        'Компенсация использования личного а/м', 'Депонент'],
+        'Компенсация использования личного а/м', 'Депонент', 'Оплата по дневному тарифу', 'Спецодежда (начисление)'],
       ['Питание', 'Спецодежда', 'Нарушение техники безопасности', 'Штрафы', 'Удержание по исп. листу',
         'Оплата отпуска (удержание)', 'Погашение займа', '% Займа', 'Квартиры', 'Подотчёт',
         'Удержание в пользу третьего лица', 'Транспортные затраты', 'Моб. телефон',
-        'Банковские издержки по исп. листам'],
+        'Банковские издержки по исп. листам', 'Алименты', 'ТМЦ', 'Удержание по договору аренды а/м'],
     ]);
   });
 
@@ -49,6 +49,12 @@ describe('статьи', () => {
     expect(kindOf('premium_contract')).toBe('accrued');
     expect(kindOf('loan_repayment')).toBe('deducted');
     expect(kindOf('bank_fees')).toBe('deducted');
+    expect(kindOf('day_rate')).toBe('accrued');
+    expect(kindOf('workwear_accrual')).toBe('accrued');
+    expect(kindOf('workwear')).toBe('deducted');
+    expect(kindOf('alimony')).toBe('deducted');
+    expect(kindOf('tmc')).toBe('deducted');
+    expect(kindOf('car_rent')).toBe('deducted');
   });
 });
 

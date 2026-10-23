@@ -65,6 +65,27 @@ describe('расчётный листок: строки статей', () => {
       { code: 'bank_fees', label: 'Банковские издержки по исп. листам', amount: 19127 },
     ]);
   });
+
+  it('статьи 326: дневной тариф и спецодежда начислением — в начислениях; алименты, ТМЦ, аренда а/м — в удержаниях', () => {
+    const july = toPaidAmounts([
+      { month: '2026-07', item: 'day_rate', amount: '35857.50' },
+      { month: '2026-07', item: 'workwear_accrual', amount: '2450.00' },
+      { month: '2026-07', item: 'workwear', amount: '2933.58' },
+      { month: '2026-07', item: 'alimony', amount: '5000.00' },
+      { month: '2026-07', item: 'tmc', amount: '27000.00' },
+      { month: '2026-07', item: 'car_rent', amount: '2610.00' },
+    ]);
+    expect(payslipLines('2026-07', july, 'accrued')).toEqual([
+      { code: 'day_rate', label: 'Оплата по дневному тарифу', amount: 35857.5 },
+      { code: 'workwear_accrual', label: 'Спецодежда (начисление)', amount: 2450 },
+    ]);
+    expect(payslipLines('2026-07', july, 'deducted')).toEqual([
+      { code: 'workwear', label: 'Спецодежда', amount: 2933.58 },
+      { code: 'alimony', label: 'Алименты', amount: 5000 },
+      { code: 'tmc', label: 'ТМЦ', amount: 27000 },
+      { code: 'car_rent', label: 'Удержание по договору аренды а/м', amount: 2610 },
+    ]);
+  });
 });
 
 describe('расчётный листок: «По ставкам ФОТ»', () => {

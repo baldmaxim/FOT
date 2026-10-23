@@ -109,18 +109,18 @@ describe('«Свод»: сотрудники объекта и xlsx', () => {
     expect(summaryEmployeeTotals(items)(employees)?.export).toMatchObject({ full_name: 'Итого', contract: 145000, meals: 1200 });
   });
 
-  it('все 34 статьи: снимок ≤ 50 столбцов (лимит сервера), итог последней строкой, имя файла без пробелов', () => {
+  it('все 39 статей: снимок ≤ 50 столбцов (лимит сервера), итог последней строкой, имя файла без пробелов', () => {
     const all = Object.fromEntries(PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, '1'])));
     const rows = toSummaryEmployeeRows([row({ amounts: all })]);
     const items = summaryItems([row({ amounts: all })]);
-    expect(items).toHaveLength(34);
+    expect(items).toHaveLength(39);
     const columns = summaryEmployeeColumns(items, true);
     const snapshot = buildSummarySnapshot({ title: 'Свод', subject: 'ЖК Химки', periodLabel: 'июль 2026', categoryLabel: 'Все', columns })(
       rows, summaryEmployeeTotals(items)(rows)?.export,
     );
-    expect(snapshot.columns).toHaveLength(42);
+    expect(snapshot.columns).toHaveLength(47);
     expect(snapshot.columns.length).toBeLessThanOrEqual(50);
-    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(42);
+    expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(47);
     expect(snapshot.rows).toHaveLength(2);
     expect(snapshot.rows[1].cells[0]).toBeNull();
     expect(snapshot.rows[1].cells[1]).toBe('Итого');
