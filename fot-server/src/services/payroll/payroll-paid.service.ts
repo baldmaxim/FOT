@@ -54,8 +54,8 @@ export const PAYROLL_PAID_ITEM_CODES = [
 export type PayrollPaidItemCode = typeof PAYROLL_PAID_ITEM_CODES[number];
 
 /**
- * Статьи раздела «Начислено» — из них столбец «Начисления» в списке условий оплаты; удержания
- * туда не идут. Тот же состав, что у итога «Начислено» в fot-app/src/utils/payrollPaid.ts.
+ * Статьи раздела «Начислено» — итог «Начислено» на «Расчётах»; в столбце «Выплачено» списка условий
+ * оплаты прибавляются. Тот же состав, что у итога «Начислено» в fot-app/src/utils/payrollPaid.ts.
  */
 export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'contract',
@@ -83,8 +83,8 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
 ];
 
 /**
- * Статьи раздела «Удержано» — столбец «Удержания» на «Расчётах». Тот же состав, что у группы
- * «Удержано» в fot-app/src/utils/payrollPaid.ts.
+ * Статьи раздела «Удержано» — столбец «Удержания» на «Расчётах»; в столбце «Выплачено» списка
+ * условий оплаты вычитаются. Тот же состав, что у группы «Удержано» в fot-app/src/utils/payrollPaid.ts.
  */
 export const PAYROLL_PAID_DEDUCTION_CODES: readonly PayrollPaidItemCode[] = [
   'meals',

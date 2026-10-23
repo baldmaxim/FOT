@@ -5,7 +5,7 @@ import { accrualsByMonthParts, accrualsCellWidth, type AccrualTextKind } from '.
 
 /** Нет canvas — прежняя ширина под три суммы в строке. */
 const FALLBACK_WIDTH = 260;
-/** Не уже шапки «НАЧИСЛЕНИЯ, ₽» и строки из одних прочерков. */
+/** Не уже шапки «ВЫПЛАЧЕНО, ₽» и строки из одних прочерков. */
 const MIN_WIDTH = 180;
 /** Паддинги ячейки (12 + 12) и запас на округление шрифта. */
 const CELL_EXTRA = 24 + 4;
@@ -44,14 +44,14 @@ const measureColumnWidth = (rows: IPayrollTermsRow[], months: string[]): number 
 
   let widest = 0;
   for (const row of rows) {
-    const parts = accrualsByMonthParts(months, row.accruals);
+    const parts = accrualsByMonthParts(months, row.payouts);
     if (parts !== null) widest = Math.max(widest, accrualsCellWidth(parts, measure));
   }
   return Math.max(MIN_WIDTH, Math.ceil(widest) + CELL_EXTRA);
 };
 
 /**
- * Ширина столбца «Начисления» по самой длинной строке среди загруженных сотрудников:
+ * Ширина столбца «Выплачено» по самой длинной строке среди загруженных сотрудников:
  * пока сумм мало — столбец узкий, появятся суммы за все месяцы — расширится, раскладка 3 + 3 не ломается.
  */
 export const usePayrollAccrualsColumnWidth = (rows: IPayrollTermsRow[], months: string[]): number => (

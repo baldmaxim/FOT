@@ -1,12 +1,12 @@
 /**
- * Начисления за полгода в таблице «Условия оплаты»: окно месяцев, подписи периода и итоги.
+ * «Выплачено» за полгода в таблице «Условия оплаты»: окно месяцев, подписи периода и итоги.
  */
 import type { IPayrollMonthlyAccrual } from '../services/payrollService';
 import { MONTHS_RU } from './calendarUtils';
 import { formatPayrollMoney } from './payrollFormat';
 import { shiftMonth } from './moscowDate';
 
-/** Начисления показываются за полгода. */
+/** «Выплачено» показывается за полгода. */
 export const PAYROLL_ACCRUAL_MONTH_COUNT = 6;
 
 /** Короткие названия в именительном падеже: «май», а не «мая», как в MONTH_GENITIVE_SHORT_RU. */
@@ -107,7 +107,7 @@ export interface IAccrualMonthPart {
   amount: string | null;
 }
 
-/** Месяцы окна для ячейки «Начисления»; данных нет ни за один месяц — null. */
+/** Месяцы окна для ячейки «Выплачено»; данных нет ни за один месяц — null. */
 export const accrualsByMonthParts = (
   months: string[],
   accruals: IPayrollMonthlyAccrual[] | null | undefined,
@@ -124,7 +124,7 @@ export const accrualsByMonthParts = (
   });
 };
 
-/** Ячейка «Начисления» в две строки поровну: 6 месяцев → 3 + 3. */
+/** Ячейка «Выплачено» в две строки поровну: 6 месяцев → 3 + 3. */
 export const accrualLines = <T>(parts: T[]): [T[], T[]] => {
   const secondLineStart = Math.ceil(parts.length / 2);
   return [parts.slice(0, secondLineStart), parts.slice(secondLineStart)];
@@ -139,7 +139,7 @@ export type AccrualTextKind = 'month' | 'amount' | 'text';
 /** Ширина текста в px. */
 export type AccrualTextMeasure = (text: string, kind: AccrualTextKind) => number;
 
-/** Ширина содержимого ячейки «Начисления» (без паддингов) — по более длинной из двух строк. */
+/** Ширина содержимого ячейки «Выплачено» (без паддингов) — по более длинной из двух строк. */
 export const accrualsCellWidth = (parts: IAccrualMonthPart[], measure: AccrualTextMeasure): number => {
   const separator = measure('; ', 'text') + ACCRUAL_GAP_PX;
   const partWidth = ({ name, amount }: IAccrualMonthPart): number => measure(name, 'month') + (
@@ -155,7 +155,7 @@ export const accrualsCellWidth = (parts: IAccrualMonthPart[], measure: AccrualTe
 };
 
 /**
- * Ячейка «Начисления»: «апр —; май —; июл: 165 230,40; авг: 177 730,00» — каждый месяц окна в ₽ с копейками.
+ * Ячейка «Выплачено»: «апр —; май —; июл: 165 230,40; авг: 177 730,00» — каждый месяц окна в ₽ с копейками.
  * Точка с запятой — разделитель месяцев (запятая занята дробной частью). Между месяцем и суммой
  * неразрывный пробел: строка переносится только после «;».
  * Данных нет ни за один месяц — null.

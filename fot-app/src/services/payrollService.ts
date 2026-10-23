@@ -22,11 +22,11 @@ export const CALC_TYPE_LABELS: Record<PayrollCalcType, string> = {
   hourly: 'По часам',
 };
 
-/** Начислено сотруднику за месяц. */
+/** Выплачено сотруднику за месяц: начислено минус удержано («К выплате» месяца). */
 export interface IPayrollMonthlyAccrual {
   /** YYYY-MM. */
   month: string;
-  /** Начислено всего за месяц, ₽ (NUMERIC может прийти строкой); null — нет данных. */
+  /** Выплачено за месяц, ₽ (NUMERIC может прийти строкой); null — нет данных. */
   amount: string | number | null;
 }
 
@@ -73,8 +73,8 @@ export interface IPayrollTermsRow {
   planned_supplement_amount?: string | number | null;
   planned_supplement_from?: string | null;
   planned_supplement_to?: string | null;
-  /** Начисления по месяцам из «Оплачено» (1С ЗУП); без поля ячейка «Начисления» показывает «—». */
-  accruals?: IPayrollMonthlyAccrual[] | null;
+  /** «Выплачено» по месяцам из «Оплачено» (1С ЗУП); без поля ячейка «Выплачено» показывает «—». */
+  payouts?: IPayrollMonthlyAccrual[] | null;
   /**
    * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽, NUMERIC строкой; null — сумм нет («—»).
    * Итог «Начислено»; «К выплате» — он минус paid_deductions_total, как в «Своде».
@@ -405,7 +405,7 @@ export const payrollService = {
     pageSize?: number;
     /** Курсор порции; без него — первая порция. */
     cursor?: IPayrollTermsCursor | null;
-    /** «Расчёты»: суммы «Оплачено» за эти месяцы вместо «Начислений». */
+    /** «Расчёты»: суммы «Оплачено» за эти месяцы вместо «Выплачено». */
     paidMonths?: PayrollPaidMonths;
   }, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();

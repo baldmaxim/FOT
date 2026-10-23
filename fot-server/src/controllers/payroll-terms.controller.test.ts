@@ -872,12 +872,12 @@ describe('payrollTermsController.list', () => {
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_planned_supplements'));
   });
 
-  it('список отдаёт «Начисления» из «Оплачено»: только статьи начислений, окно до месяца даты, после LIMIT', async () => {
+  it('список отдаёт «Выплачено» из «Оплачено»: начисления минус удержания, окно до месяца даты, после LIMIT', async () => {
     const res = makeRes();
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
 
     const { sql } = listParams();
-    expect(sql).toMatch(/acc\.accruals/);
+    expect(sql).toMatch(/pay\.payouts/);
     // Суммы месяцев — NUMERIC строкой, копейки не проходят через число JSON.
     expect(sql).toContain("'amount', a.amount::text");
     expect(sql.indexOf('LIMIT $9 OFFSET $10')).toBeLessThan(sql.indexOf('FROM payroll_paid_amounts'));
@@ -885,7 +885,12 @@ describe('payrollTermsController.list', () => {
     expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'vacation', 'housing', 'travel', "
       + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan', "
       + "'kpi', 'premium', 'premium_contract', 'gph', 'extra_work', 'substitution', 'car_compensation', 'deposit', "
-      + "'day_rate', 'workwear_accrual')");
+      + "'day_rate', 'workwear_accrual', "
+      + "'meals', 'workwear', 'safety_fine', 'fines', 'writ_deduction', 'vacation_deduction', 'loan_repayment', "
+      + "'loan_interest', 'apartment', 'imprest', 'third_party', 'transport', 'mobile', 'bank_fees', "
+      + "'alimony', 'tmc', 'car_rent')");
+    // Удержания — минусом: «К выплате» месяца, как на «Расчётах».
+    expect(sql).toMatch(/THEN -pa\.amount ELSE pa\.amount END/);
   });
 
   it('список: премиальная часть — из условий, проживание — квартира «Проживания» на дату выборки', async () => {
@@ -1235,17 +1240,17 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     pgQueryOne.mockResolvedValue({ total: '0', without_terms_total: '0', rows: [] });
   });
 
-  it('без paid_months — прежний список: «Начисления» есть, сумм «Расчётов» нет', async () => {
+  it('без paid_months — прежний список: «Выплачено» есть, сумм «Расчётов» нет', async () => {
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
 
     const { sql, params } = lastListCall();
-    expect(sql).toMatch(/acc\.accruals/);
+    expect(sql).toMatch(/pay\.payouts/);
     expect(sql).not.toMatch(/paid_total|paid_deductions/);
     expect(params).toHaveLength(12);
     expectPlaceholdersMatch(sql, params);
   });
 
-  it('список месяцев — первые числа последним параметром; «Начислений» нет, читается одна выборка «Оплачено»', async () => {
+  it('список месяцев — первые числа последним параметром; «Выплачено» нет, читается одна выборка «Оплачено»', async () => {
     await payrollTermsController.list(makeReq({
       query: { paid_months: '2026-08,2026-07,2026-08' },
     } as Partial<AuthenticatedRequest>), makeRes());
@@ -1254,7 +1259,7 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(params).toHaveLength(13);
     expect(params[12]).toEqual(['2026-07-01', '2026-08-01']);
     expect(sql).toMatch(/pa\.month = ANY\(\$13::date\[\]\)/);
-    expect(sql).not.toMatch(/accruals/);
+    expect(sql).not.toMatch(/payouts/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual'\)\)\)::text AS paid_total/);

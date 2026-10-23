@@ -38,7 +38,7 @@ interface IPayrollTermsTableProps {
   onSort: (key: PayrollSortKey) => void;
   columnFilters: IPayrollColumnFilters;
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
-  /** Месяцы столбца «Начисления» (YYYY-MM) по порядку. */
+  /** Месяцы столбца «Выплачено» (YYYY-MM) по порядку. */
   accrualMonths: string[];
   /** Период сумм «К выплате», «Начислено» и «Удержаний» — тех, что пришли в строках. */
   paidPeriod?: string;
@@ -108,11 +108,11 @@ const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ 
 ));
 
 /**
- * «Начисления»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP.
+ * «Выплачено»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP.
  * Ширину содержимого считает usePayrollAccrualsColumnWidth — разметку менять вместе с accrualsCellWidth.
  */
 const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
-  const parts = accrualsByMonthParts(months, row.accruals);
+  const parts = accrualsByMonthParts(months, row.payouts);
   if (parts === null) return '—';
   const [first, second] = accrualLines(parts);
   return (
@@ -223,8 +223,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     if (column.key === 'accruals') {
       // Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет.
       return (
-        <th key={column.key} title={`Начисления за последние полгода, ₽: ${accrualPeriodLong}`}>
-          Начисления, ₽
+        <th key={column.key} title={`Выплачено за последние полгода (начислено − удержано), ₽: ${accrualPeriodLong}`}>
+          Выплачено, ₽
           <span className={styles.headPeriod}>{accrualPeriodShort}</span>
         </th>
       );

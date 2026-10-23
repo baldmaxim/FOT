@@ -34,8 +34,17 @@ describe('скрытые столбцы таблицы условий оплат
   });
 });
 
+describe('столбцы «Условий оплаты»', () => {
+  it('вместо «Начислений» — «Выплачено» за полгода', () => {
+    expect(PAYROLL_TERMS_TABLE_COLUMNS.map(column => column.label)).toEqual([
+      'Подразделение', 'Должность', 'График работы', 'Оклад', 'Премиальная часть', 'Компенсация проживания',
+      'Выплачено за посл. полгода',
+    ]);
+  });
+});
+
 describe('столбцы «Расчётов»', () => {
-  it('вместо оклада, премии, проживания и «Начислений» — «К выплате», «Начислено» и «Удержания»', () => {
+  it('вместо оклада, премии, проживания и «Выплачено» — «К выплате», «Начислено» и «Удержания»', () => {
     expect(PAYROLL_CALC_TABLE_COLUMNS.map(column => column.label)).toEqual([
       'Подразделение', 'Должность', 'График работы', 'К выплате', 'Начислено', 'Удержания',
     ]);
@@ -44,7 +53,7 @@ describe('столбцы «Расчётов»', () => {
     ]);
   });
 
-  it('скрытые в ключе «Расчётов» оклад, премия, проживание и «Начисления» не считаются', () => {
+  it('скрытые в ключе «Расчётов» оклад, премия, проживание и «Выплачено» не считаются', () => {
     const stored = parseHiddenPayrollColumns('["salary","bonus","housing","accruals","position","deductions"]');
     expect([...keepPayrollTableColumns(stored, PAYROLL_CALC_TABLE_COLUMNS)]).toEqual(['position', 'deductions']);
     expect(keepPayrollTableColumns(parseHiddenPayrollColumns('["salary","accruals"]'), PAYROLL_CALC_TABLE_COLUMNS).size).toBe(0);

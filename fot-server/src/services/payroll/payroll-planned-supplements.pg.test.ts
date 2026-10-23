@@ -283,17 +283,17 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     });
   });
 
-  it('список: «Начисления» — итог «Начислено» из «Оплачено» за 6 закрытых месяцев перед датой', async () => {
+  it('список: «Выплачено» — начислено минус удержано из «Оплачено» за 6 закрытых месяцев перед датой', async () => {
     await pg.pool!.query(`
       INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
         (1, '2026-08-01', 'contract',      68095),
         (1, '2026-08-01', 'vacation',      59245),
         (1, '2026-08-01', 'travel',         1430),
-        (1, '2026-08-01', 'meals',          5248),     -- удержание — не начисление
+        (1, '2026-08-01', 'meals',          5248),     -- удержание — вычитается
         (1, '2026-07-01', 'recalc_prev',   -1500),     -- сторно — минусом
         (1, '2026-03-01', 'contract',     100000),     -- до окна апр – сен
         (1, '2026-10-01', 'contract',     100000),     -- текущий месяц — не закрыт
-        (3, '2026-09-01', 'workwear',      50000);     -- только удержание
+        (3, '2026-09-01', 'workwear',      50000);     -- только удержание — минусом
     `);
     const res = makeRes();
 
@@ -301,10 +301,11 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01' },
     } as unknown as AuthenticatedRequest, res);
 
-    const byId = Object.fromEntries((res.body.data as Array<Record<string, unknown>>).map(row => [row.employee_id, row.accruals]));
-    expect(byId[1]).toEqual([{ month: '2026-07', amount: -1500 }, { month: '2026-08', amount: 128770 }]);
+    const byId = Object.fromEntries((res.body.data as Array<Record<string, unknown>>).map(row => [row.employee_id, row.payouts]));
+    // Суммы — NUMERIC строкой (::text): копейки не проходят через число JSON.
+    expect(byId[1]).toEqual([{ month: '2026-07', amount: '-1500.00' }, { month: '2026-08', amount: '123522.00' }]);
     expect(byId[2]).toBeNull();
-    expect(byId[3]).toBeNull();
+    expect(byId[3]).toEqual([{ month: '2026-09', amount: '-50000.00' }]);
   });
 
   it('«Расчёты»: «К выплате» и «Удержания» за выбранные месяцы — удержания не вычитаются', async () => {
@@ -333,7 +334,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         { month: '2026-08', item: 'meals', amount: '5248.00' },
       ],
     });
-    expect(julAug[1]).not.toHaveProperty('accruals');
+    expect(julAug[1]).not.toHaveProperty('payouts');
     expect(julAug[2]).toMatchObject({ paid_total: null, paid_deductions_total: null, paid_deductions: null });
     // Только удержание — «К выплате» пусто; удержание вне выбранных месяцев не попадает.
     expect(julAug[3]).toMatchObject({ paid_total: null, paid_deductions_total: null, paid_deductions: null });

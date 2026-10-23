@@ -93,7 +93,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   paidMonths,
   onOpenPaidItems,
 }) => {
-  // Начисления — за закрытые месяцы перед месяцем этой даты.
+  // «Выплачено» — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [sort, setSort] = useState<PayrollSortKey>('name');
   const [dir, setDir] = useState<PayrollSortDir>('asc');

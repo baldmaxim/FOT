@@ -23,10 +23,10 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'salary', label: 'Оклад' },
   { key: 'bonus', label: 'Премиальная часть' },
   { key: 'housing', label: 'Компенсация проживания' },
-  { key: 'accruals', label: 'Начисления за посл. полгода' },
+  { key: 'accruals', label: 'Выплачено за посл. полгода' },
 ];
 
-/** «Расчёты»: вместо условий и «Начислений» — суммы «Оплачено» за выбранные месяцы. */
+/** «Расчёты»: вместо условий и «Выплачено» — суммы «Оплачено» за выбранные месяцы. */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
   { key: 'payout', label: 'К выплате' },
@@ -67,7 +67,7 @@ export const serializeHiddenPayrollColumns = (hidden: ReadonlySet<PayrollTableCo
 };
 
 /**
- * Только столбцы этой таблицы: в ключе «Расчётов» могли остаться оклад, премия и «Начисления» —
+ * Только столбцы этой таблицы: в ключе «Расчётов» могли остаться оклад, премия и «Выплачено» —
  * их больше нет на экране, и шестерёнка не должна считать их скрытыми.
  */
 export const keepPayrollTableColumns = (
