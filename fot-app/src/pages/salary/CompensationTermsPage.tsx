@@ -59,6 +59,9 @@ interface ICompensationTermsPageProps {
   /** Поиск по ФИО — общий у «Условий оплаты» и «Расчётов»: крестик на одном экране чистит оба. */
   search: string;
   onSearchChange: (value: string) => void;
+  /** Отдел или бригада — общие у «Условий оплаты» и «Расчётов»: выбор и крестик на одном экране — на обоих. */
+  departmentId: string;
+  onDepartmentChange: (id: string) => void;
   /** Клик по строке — карточка этого сотрудника. */
   onOpenEmployee: (row: IPayrollTermsRow) => void;
   /** Кнопки панели перед шестерёнкой («Справочник» на «Расчётах»). */
@@ -81,6 +84,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   active,
   search,
   onSearchChange,
+  departmentId,
+  onDepartmentChange,
   onOpenEmployee,
   actionsExtra,
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
@@ -90,7 +95,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 }) => {
   // Начисления — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
-  const [departmentId, setDepartmentId] = useState('');
   const [sort, setSort] = useState<PayrollSortKey>('name');
   const [dir, setDir] = useState<PayrollSortDir>('asc');
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
@@ -257,7 +261,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             key={departmentSelectKey}
             departments={departments}
             value={departmentId}
-            onChange={setDepartmentId}
+            onChange={onDepartmentChange}
             isLoading={structureTree.isPending}
             isError={structureTree.isError}
             onRetry={() => { void structureTree.refetch(); }}

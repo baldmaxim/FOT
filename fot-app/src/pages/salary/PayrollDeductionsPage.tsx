@@ -26,6 +26,9 @@ interface IPayrollDeductionsPageProps {
   /** Поиск по ФИО — общий с «Условиями оплаты». */
   search: string;
   onSearchChange: (value: string) => void;
+  /** Отдел или бригада — общие с «Условиями оплаты». */
+  departmentId: string;
+  onDepartmentChange: (id: string) => void;
   /** Карточку сотрудника сохранили в окне: его карточка «Подробно» (если открыта) устарела. */
   onSaved: (employeeId: number) => void;
 }
@@ -45,7 +48,9 @@ interface IPaidItemsWindow {
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
  * ставки и таблицы. Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
-export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, active, search, onSearchChange, onSaved }) => {
+export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
+  date, active, search, onSearchChange, departmentId, onDepartmentChange, onSaved,
+}) => {
   const [employee, setEmployee] = useState<IPayrollTermsRow | null>(null);
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const dictionaryButtonRef = useRef<HTMLButtonElement>(null);
@@ -105,6 +110,8 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({ date, a
         active={active}
         search={search}
         onSearchChange={onSearchChange}
+        departmentId={departmentId}
+        onDepartmentChange={onDepartmentChange}
         onOpenEmployee={setEmployee}
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         columns={PAYROLL_CALC_TABLE_COLUMNS}

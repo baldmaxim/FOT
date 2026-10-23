@@ -43,6 +43,8 @@ export const PaymentsTab: FC = () => {
   const [date] = useState(moscowTodayIso);
   // Поиск по ФИО — один на «Условия оплаты» и «Расчёты».
   const [search, setSearch] = useState('');
+  // Отдел или бригада — тоже один на оба списка.
+  const [departmentId, setDepartmentId] = useState('');
   // Сотрудник вкладки «Подробно» — строка списка на момент клика.
   const [details, setDetails] = useState<IPayrollTermsRow | null>(null);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
@@ -103,6 +105,8 @@ export const PaymentsTab: FC = () => {
                 active={view === 'terms'}
                 search={search}
                 onSearchChange={setSearch}
+                departmentId={departmentId}
+                onDepartmentChange={setDepartmentId}
                 onOpenEmployee={openEmployee}
               />
             </Suspense>
@@ -134,6 +138,8 @@ export const PaymentsTab: FC = () => {
                 active={view === 'calc'}
                 search={search}
                 onSearchChange={setSearch}
+                departmentId={departmentId}
+                onDepartmentChange={setDepartmentId}
                 onSaved={handleCalcSaved}
               />
             </Suspense>
