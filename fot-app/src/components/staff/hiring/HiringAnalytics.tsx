@@ -63,7 +63,7 @@ export const HiringAnalytics: FC = () => {
               return (
                 <tr key={r.employee_id} className={r.employee_id === leaderId ? styles.leader : ''}>
                   <td><div className={styles.rec}>{r.employee_id === leaderId ? '🏆 ' : ''}<Avatar name={r.full_name} id={r.employee_id} /> {r.full_name}</div></td>
-                  <td className={styles.num}>{r.total}</td>
+                  <td className={styles.num}>{r.in_work}</td>
                   <td className={styles.num}>{r.closed}</td>
                   <td className={styles.num}>{pct == null ? '—' : <span className={`${styles.tg} ${tgClass(pct)}`}>{pct}%</span>}</td>
                   <td className={styles.num}>{r.avg_close_days == null ? '—' : `${r.avg_close_days} дн`}</td>

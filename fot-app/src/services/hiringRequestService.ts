@@ -110,6 +110,7 @@ export interface IHiringAnalyticsRow {
   employee_id: number;
   full_name: string | null;
   total: number;
+  in_work: number;
   closed: number;
   avg_headcount: number | null;
   interviews: number;

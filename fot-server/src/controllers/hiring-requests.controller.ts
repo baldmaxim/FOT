@@ -910,7 +910,10 @@ const analytics = async (req: AuthenticatedRequest, res: Response): Promise<void
          WHERE a.is_active = TRUE AND a.is_primary = TRUE
      )
      SELECT e.id AS employee_id, e.full_name,
-            COUNT(r.id)::int AS total,
+            -- «В работе» — как «открыто» на доске; total = в работе + закрыто за период
+            COUNT(*) FILTER (WHERE r.stage NOT IN ('closed','cancelled','rework')
+                                OR (r.stage = 'closed' AND r.closed_at >= NOW() - $1::interval))::int AS total,
+            COUNT(*) FILTER (WHERE r.stage NOT IN ('closed','cancelled','rework'))::int AS in_work,
             COUNT(*) FILTER (WHERE r.stage = 'closed' AND r.closed_at >= NOW() - $1::interval)::int AS closed,
             ROUND(AVG(r.headcount), 1) AS avg_headcount,
             (SELECT COUNT(*)::int FROM hiring_candidates c
@@ -924,7 +927,7 @@ const analytics = async (req: AuthenticatedRequest, res: Response): Promise<void
        JOIN employees e ON e.id = pa.employee_id
        JOIN hiring_requests r ON r.id = pa.request_id
       GROUP BY e.id, e.full_name
-      ORDER BY closed DESC, total DESC`,
+      ORDER BY closed DESC, in_work DESC`,
     [interval],
   );
 
