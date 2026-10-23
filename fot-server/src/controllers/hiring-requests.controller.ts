@@ -910,23 +910,30 @@ const analytics = async (req: AuthenticatedRequest, res: Response): Promise<void
          WHERE a.is_active = TRUE AND a.is_primary = TRUE
      )
      SELECT e.id AS employee_id, e.full_name,
-            -- «В работе» — как «открыто» на доске; total = в работе + закрыто за период
-            COUNT(*) FILTER (WHERE r.stage NOT IN ('closed','cancelled','rework')
-                                OR (r.stage = 'closed' AND r.closed_at >= NOW() - $1::interval))::int AS total,
-            COUNT(*) FILTER (WHERE r.stage NOT IN ('closed','cancelled','rework'))::int AS in_work,
-            COUNT(*) FILTER (WHERE r.stage = 'closed' AND r.closed_at >= NOW() - $1::interval)::int AS closed,
-            ROUND(AVG(r.headcount), 1) AS avg_headcount,
+            -- Метрики — по заявкам в работе (как «открыто» на доске) и закрытым за период
+            COUNT(*) FILTER (WHERE f.is_open OR f.is_closed)::int AS total,
+            COUNT(*) FILTER (WHERE f.is_open)::int AS in_work,
+            COUNT(*) FILTER (WHERE f.is_closed)::int AS closed,
+            ROUND(AVG(r.headcount) FILTER (WHERE f.is_open OR f.is_closed), 1) AS avg_headcount,
             (SELECT COUNT(*)::int FROM hiring_candidates c
+               JOIN hiring_requests cr ON cr.id = c.request_id
               WHERE c.request_id IN (SELECT request_id FROM primary_assignee pa WHERE pa.employee_id = e.id)
+                AND cr.stage NOT IN ('closed','cancelled','rework')
                 AND c.status = 'interview') AS interviews,
-            ROUND(AVG(EXTRACT(DAY FROM (r.closed_at - COALESCE(r.reactivated_at, r.created_at)))) FILTER (WHERE r.stage = 'closed'), 1) AS avg_close_days,
-            COUNT(*) FILTER (WHERE r.stage = 'closed' AND r.deadline IS NOT NULL AND r.closed_at::date <= r.deadline)::int AS closed_in_time,
-            COUNT(*) FILTER (WHERE r.stage = 'closed' AND r.deadline IS NOT NULL)::int AS closed_with_deadline,
+            ROUND(AVG(EXTRACT(DAY FROM (r.closed_at - COALESCE(r.reactivated_at, r.created_at)))) FILTER (WHERE f.is_closed), 1) AS avg_close_days,
+            COUNT(*) FILTER (WHERE f.is_closed AND r.deadline IS NOT NULL AND r.closed_at::date <= r.deadline)::int AS closed_in_time,
+            COUNT(*) FILTER (WHERE f.is_closed AND r.deadline IS NOT NULL)::int AS closed_with_deadline,
+            -- Просрочка включает «Доработку» (в in_work её нет) — осознанно, как было
             COUNT(*) FILTER (WHERE r.stage NOT IN ('closed','cancelled') AND r.deadline IS NOT NULL AND r.deadline < CURRENT_DATE)::int AS overdue
        FROM primary_assignee pa
        JOIN employees e ON e.id = pa.employee_id
        JOIN hiring_requests r ON r.id = pa.request_id
+       CROSS JOIN LATERAL (
+         SELECT r.stage NOT IN ('closed','cancelled','rework') AS is_open,
+                r.stage = 'closed' AND r.closed_at >= NOW() - $1::interval AS is_closed
+       ) f
       GROUP BY e.id, e.full_name
+     HAVING COUNT(*) FILTER (WHERE f.is_open OR f.is_closed) > 0
       ORDER BY closed DESC, in_work DESC`,
     [interval],
   );
