@@ -7,7 +7,9 @@ import {
   type StaffCategory,
 } from '../../services/payrollService';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
+import { formatDate } from '../../utils/formatMoney';
 import { formatPaidAmount } from '../../utils/payrollPaid';
+import { formatPayrollMoney } from '../../utils/payrollFormat';
 import {
   payrollFieldId,
   payrollTermsTotal,
@@ -37,14 +39,22 @@ interface IPayrollTermsFieldsProps {
    */
   staffDeductions?: ReactNode;
   /**
-   * Вкладка «Подробно» — только просмотр: в «Основной оплате» лишь Категория и «Оплачено», секций Компенсация,
-   * Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника на «Расчётах».
+   * Вкладка «Подробно» — только просмотр: в «Основной оплате» Категория, действующие оклад, премия, итого и
+   * «Оплачено» текстом; секций Компенсация, Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника
+   * на «Расчётах».
    */
   detailsOnly?: boolean;
   /** «Проезд» в «Компенсации» — значение ставки, если положен (travelAllowance), как в поле ввода; нет — пусто. */
   travel?: string;
+  /** «Подробно»: с какой даты действуют показанные условия; null — условий нет, «Действует с» не показываем. */
+  termsFrom?: string | null;
 }
 
+/** Сумма текстом «195 000,00 ₽/мес»; пусто — «—» без единицы. */
+const formatTermsMoney = (value: string | number | null, unit: string): string => {
+  const money = formatPayrollMoney(value);
+  return money === null ? '—' : `${money} ${unit}`;
+};
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
@@ -53,7 +63,7 @@ const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
  * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
  * «Оплачено» (только в «Подробно») — под ними на всю ширину формы. В узком окне и при stacked половины встают
  * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
- * detailsOnly («Подробно») — только Категория и «Оплачено».
+ * detailsOnly («Подробно») — Категория, действующие оклад · премия · итого и «Оплачено».
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   form,
@@ -67,6 +77,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   detailsOnly = false,
   total = false,
   travel = '',
+  termsFrom = null,
 }) => {
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
   const travelId = `${idPrefix}-travel`;
@@ -189,6 +200,36 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                 </>
               )}
             </div>
+
+            {/* «Подробно» — действующие условия текстом, как «Категория»; форма здесь не меняется. */}
+            {detailsOnly && (
+              <dl className={styles.termsSummary}>
+                <div>
+                  <dt className={styles.label}>{form.calcType === 'salary' ? 'Оклад:' : 'Часовая ставка:'}</dt>
+                  {' '}
+                  <dd className={styles.inlineValue}>
+                    {formatTermsMoney(form.amount, form.calcType === 'salary' ? '₽/мес' : '₽/час')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className={styles.label}>Премиальная часть:</dt>
+                  {' '}
+                  <dd className={styles.inlineValue}>{formatTermsMoney(form.money.bonus, '₽/мес')}</dd>
+                </div>
+                <div>
+                  <dt className={styles.label}>Итого:</dt>
+                  {' '}
+                  <dd className={styles.inlineValue}>{formatTermsMoney(totalValue, '₽/мес')}</dd>
+                </div>
+                {termsFrom && (
+                  <div>
+                    <dt className={styles.label}>Действует с</dt>
+                    {' '}
+                    <dd className={styles.inlineValue}>{formatDate(termsFrom)}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
           </div>
 
           {!detailsOnly && (

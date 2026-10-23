@@ -58,6 +58,11 @@
 .inlineField { margin: 0; font-size: 14px; line-height: 1.4; }
 .inlineValue { color: var(--text-primary); font-weight: 500; }
 
+/* «Подробно»: действующие условия «Оклад: … Премиальная часть: … Итого: …» в строку, узко — переносом. */
+.termsSummary { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; font-size: 14px; line-height: 1.4; }
+.termsSummary dt,
+.termsSummary dd { display: inline; margin: 0; }
+
 .control {
   box-sizing: border-box;
   width: 100%;
