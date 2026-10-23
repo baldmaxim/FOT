@@ -8,9 +8,12 @@
  *
  * Объект и отдел месяца — payroll-month-attribution.service.ts (объектная разбивка закрытого табеля, иначе
  * режим табелирования месяца); категория — по табелю месяца (payroll-staff-category.ts), не из условий оплаты.
+ * Объект месяца «Не определён» — строке «Свода» объект по часам месяца (payroll-summary-object.service.ts);
+ * категория при этом остаётся по базовому объекту.
  */
 import { query } from '../../config/postgres.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey as pairKey } from './payroll-month-attribution.service.js';
+import { resolveSummaryObjects } from './payroll-summary-object.service.js';
 import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import type { StaffCategory } from './payroll-terms.service.js';
 import { centsToAmount, toCents, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
@@ -163,6 +166,8 @@ export const loadPayrollSummary = async (input: {
     };
   }));
   const categoryByPair = new Map(pairs.map((pair, index) => [pairKey(pair.employeeId, pair.month), categories[index]]));
+  // Объект строки, где базовый «Не определён»: режим месяца, затем часы. Категорию не меняет.
+  const summaryObjects = await resolveSummaryObjects(attribution);
 
   // Отдел месяца — и для категории, и для подписи «Отдел» (уволенный — отдел, где работал).
   const departmentIds = [...new Set([...attribution.values()]
@@ -179,7 +184,7 @@ export const loadPayrollSummary = async (input: {
   for (const row of paid) {
     const key = pairKey(row.employee_id, row.month);
     const item = attribution.get(key);
-    const object: ISummaryObject = item?.object ?? { key: 'unknown', name: 'Не определён' };
+    const object: ISummaryObject = summaryObjects.get(key) ?? item?.object ?? { key: 'unknown', name: 'Не определён' };
     const departmentId = item?.departmentId ?? null;
     const category: StaffCategory = categoryByPair.get(key) ?? 'office';
     const rowKey = `${row.employee_id}|${object.key}|${category}`;

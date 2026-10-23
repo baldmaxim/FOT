@@ -166,12 +166,18 @@ export function groupObjectHours(
  * Часы сотрудников по объектам табелирования за период. Метрика — та же, что у
  * основного объекта (display_hours_worked: СКУД + объектные корректировки).
  * todayStr — сегодня по МСК: незакрытый вход прошлого дня часов не даёт, а
- * сегодняшний считается до текущего момента.
+ * сегодняшний считается до текущего момента. includeInactive — считать и объекты, неактивные
+ * сейчас («Свод» за прошлые месяцы: тогда площадка работала); ночной расчёт — без него.
  */
 export async function loadTimesheetObjectHours(
   employeeIds: number[],
   period: { start: string; end: string },
-  options: { todayStr?: string; exec?: DbExecutor; objectsById?: ReadonlyMap<string, ISkudObjectInfo> } = {},
+  options: {
+    todayStr?: string;
+    exec?: DbExecutor;
+    objectsById?: ReadonlyMap<string, ISkudObjectInfo>;
+    includeInactive?: boolean;
+  } = {},
 ): Promise<Map<number, ITimesheetObjectHours[]>> {
   const result = new Map<number, ITimesheetObjectHours[]>();
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
@@ -192,7 +198,7 @@ export async function loadTimesheetObjectHours(
       exec: options.exec,
     });
     for (const [employeeId, list] of sumObjectHoursByEmployee(data.objectEntries)) {
-      const grouped = groupObjectHours(list, objectsById);
+      const grouped = groupObjectHours(list, objectsById, { includeInactive: options.includeInactive });
       if (grouped.length > 0) result.set(employeeId, grouped);
     }
     if (index + EMPLOYEE_CHUNK_SIZE < ids.length) await yieldToEventLoop();

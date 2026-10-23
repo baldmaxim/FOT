@@ -29,6 +29,10 @@ vi.mock('./payroll-month-attribution.service.js', () => attribution);
 const category = vi.hoisted(() => ({ resolveMonthStaffCategories: vi.fn() }));
 vi.mock('./payroll-staff-category.js', () => category);
 
+// Объект «Свода» по часам — только для строки «Свода»: листок его не вызывает.
+const summaryObject = vi.hoisted(() => ({ resolveSummaryObjects: vi.fn() }));
+vi.mock('./payroll-summary-object.service.js', () => summaryObject);
+
 import { getPayslipInfo } from './payroll-payslip.service.js';
 
 describe('getPayslipInfo — категория месяца по табелю', () => {
@@ -75,5 +79,20 @@ describe('getPayslipInfo — категория месяца по табелю',
     const info = await getPayslipInfo(42, '2026-09');
 
     expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2730.00' }]);
+  });
+
+  it('объект месяца «Не определён» — категория по нему, объект «Свода» по часам листок не считает', async () => {
+    attribution.attributeMonths.mockResolvedValue(new Map([['42|2026-09', {
+      object: { key: 'unknown', name: 'Не определён' },
+      departmentId: 'dept-auto',
+      mode: { mode: 'skud', pinnedObjectId: null, source: 'legacy_default' },
+    }]]));
+    category.resolveMonthStaffCategories.mockResolvedValue(['worker']);
+
+    const info = await getPayslipInfo(42, '2026-09');
+
+    expect(category.resolveMonthStaffCategories.mock.calls[0][0][0]).toMatchObject({ officeObject: false });
+    expect(summaryObject.resolveSummaryObjects).not.toHaveBeenCalled();
+    expect(info.rate_allowances).toEqual([]);
   });
 });

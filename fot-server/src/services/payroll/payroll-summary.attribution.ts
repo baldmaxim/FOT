@@ -121,6 +121,46 @@ export const fallbackSummaryObject = (
   return SUMMARY_UNKNOWN;
 };
 
+/** Последний день месяца по первому числу (YYYY-MM-DD). */
+const lastDayOfMonth = (monthStart: string): string => {
+  const date = new Date(`${monthStart}T00:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() + 1, 0);
+  return date.toISOString().slice(0, 10);
+};
+
+/** День раньше (YYYY-MM-DD). */
+const previousDay = (isoDate: string): string => {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+};
+
+/**
+ * Период часов месяца для объекта «Свода» по проходам: завершённый месяц — целиком, текущий — с 1-го
+ * по вчера по МСК (как ночной расчёт объекта табелирования); 1-го числа и будущий месяц — null.
+ */
+export const summaryHoursPeriod = (
+  monthStart: string,
+  todayMsk: string,
+): { start: string; end: string } | null => {
+  const end = lastDayOfMonth(monthStart);
+  if (end < todayMsk) return { start: monthStart, end };
+  const yesterday = previousDay(todayMsk);
+  return yesterday >= monthStart ? { start: monthStart, end: yesterday } : null;
+};
+
+/**
+ * Объект «Свода» по часам месяца: первый в списке объектов табелирования (больше всего часов,
+ * офисы — суммой). Офисная группа (без id) — «Офис»; часов нет — null.
+ */
+export const summaryObjectFromHours = (
+  top: { objectId: string | null; label: string } | undefined,
+): ISummaryObject | null => {
+  if (!top) return null;
+  if (!top.objectId) return SUMMARY_OFFICE;
+  return { key: top.objectId, name: top.label.trim() || SUMMARY_UNKNOWN.name };
+};
+
 /** «175000.50» → 17500050 копеек; мусор — 0. */
 export const toCents = (amount: string): number => {
   const value = Number(amount);

@@ -5,11 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * табелирования, подписи.
  */
 
-const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
+const { pgQuery, buildObjectData } = vi.hoisted(() => ({ pgQuery: vi.fn(), buildObjectData: vi.fn() }));
 vi.mock('../config/postgres.js', () => ({ query: pgQuery }));
 vi.mock('../config/contractor.js', () => ({ getContractorRootId: vi.fn(async () => 'root') }));
 vi.mock('./attendance.service.js', () => ({ loadAttendanceAdjustments: vi.fn(async () => []) }));
-vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: vi.fn() }));
+vi.mock('./timesheet-object.service.js', () => ({ buildObjectAttendanceData: buildObjectData }));
 
 const {
   OFFICE_LABEL,
@@ -20,6 +20,7 @@ const {
   isWorkerSkudMode,
   labelForResolved,
   loadContractorDepartmentIds,
+  loadTimesheetObjectHours,
   loadTimesheetObjectLabels,
   monthEnd,
   previousMonthStartMsk,
@@ -93,6 +94,23 @@ describe('groupObjectHours — объекты табелирования', () =>
 
   it('нулевые и отрицательные итоги отбрасываются', () => {
     expect(groupObjectHours([{ objectId: 'o-dom', hours: 0 }], objects)).toEqual([]);
+  });
+});
+
+describe('loadTimesheetObjectHours — неактивные объекты', () => {
+  it('по умолчанию неактивный объект не считается; includeInactive («Свод» за прошлые месяцы) — считается', async () => {
+    const entry = (objectId: string, name: string, hours: number) => ({
+      employee_id: 7, object_key: objectId, object_id: objectId, object_name: name, display_hours_worked: hours,
+    });
+    buildObjectData.mockResolvedValue({ objectEntries: [entry('o-old', 'Закрытый объект', 100), entry('o-dom', 'ЖК Дом 56', 20)] });
+    const period = { start: '2026-03-01', end: '2026-03-31' };
+    const options = { todayStr: '2026-10-23', objectsById: objects };
+
+    const byDefault = await loadTimesheetObjectHours([7], period, options);
+    expect(byDefault.get(7)?.map(item => item.value)).toEqual(['o-dom']);
+
+    const withInactive = await loadTimesheetObjectHours([7], period, { ...options, includeInactive: true });
+    expect(withInactive.get(7)?.map(item => [item.value, item.hours])).toEqual([['o-old', 100], ['o-dom', 20]]);
   });
 });
 

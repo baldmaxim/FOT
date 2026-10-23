@@ -5,6 +5,8 @@ import {
   fallbackSummaryObject,
   pickMainObject,
   pickMonthDepartment,
+  summaryHoursPeriod,
+  summaryObjectFromHours,
   summaryObjectOf,
   toCents,
   type ISummaryBreakdownRow,
@@ -115,6 +117,32 @@ describe('fallbackSummaryObject', () => {
       .toEqual({ key: 'office', name: 'Офис' });
     expect(fallbackSummaryObject({ mode: 'skud', pinnedObjectId: null, source: 'legacy_default' }, meta).key).toBe('unknown');
     expect(fallbackSummaryObject(undefined, meta).key).toBe('unknown');
+  });
+});
+
+describe('summaryHoursPeriod — часы месяца для объекта «Свода»', () => {
+  it('завершённый месяц — целиком, февраль и високосный год — по календарю', () => {
+    expect(summaryHoursPeriod('2026-08-01', '2026-10-23')).toEqual({ start: '2026-08-01', end: '2026-08-31' });
+    expect(summaryHoursPeriod('2026-02-01', '2026-10-23')).toEqual({ start: '2026-02-01', end: '2026-02-28' });
+    expect(summaryHoursPeriod('2028-02-01', '2028-03-05')).toEqual({ start: '2028-02-01', end: '2028-02-29' });
+  });
+
+  it('текущий месяц — по вчера, как ночной расчёт; последнее число месяца — тоже по вчера', () => {
+    expect(summaryHoursPeriod('2026-10-01', '2026-10-23')).toEqual({ start: '2026-10-01', end: '2026-10-22' });
+    expect(summaryHoursPeriod('2026-10-01', '2026-10-31')).toEqual({ start: '2026-10-01', end: '2026-10-30' });
+  });
+
+  it('1-е число текущего месяца и будущий месяц — часов нет', () => {
+    expect(summaryHoursPeriod('2026-10-01', '2026-10-01')).toBeNull();
+    expect(summaryHoursPeriod('2026-11-01', '2026-10-23')).toBeNull();
+  });
+});
+
+describe('summaryObjectFromHours', () => {
+  it('объект — с id и именем; офисная группа — «Офис»; часов нет — null', () => {
+    expect(summaryObjectFromHours({ objectId: OBJ_A, label: 'ЖК Марк (лот 33)' })).toEqual({ key: OBJ_A, name: 'ЖК Марк (лот 33)' });
+    expect(summaryObjectFromHours({ objectId: null, label: 'Офис' })).toEqual({ key: 'office', name: 'Офис' });
+    expect(summaryObjectFromHours(undefined)).toBeNull();
   });
 });
 
