@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   defaultPaidMonth,
+  effectivePaidMonths,
   formatPaidAmount,
   formatPaidPeriod,
   paidAmountMonths,
@@ -258,5 +259,31 @@ describe('выбор месяцев «Оплачено» в карточке', (
     expect(defaultPaidMonth(paidMonthOptions(WINDOW, withCurrent), withCurrent, '2026-10')).toBe('2026-08');
     expect(defaultPaidMonth(WINDOW, null, '2026-10')).toBe('2026-09');
     expect(defaultPaidMonth([], new Set(), '2026-10')).toBe('2026-09');
+  });
+
+  it('суммы только за текущий месяц — умолчание он, а не пустой прошлый', () => {
+    const onlyCurrent = new Set(['2026-10']);
+    expect(defaultPaidMonth(paidMonthOptions(WINDOW, onlyCurrent), onlyCurrent, '2026-10')).toBe('2026-10');
+  });
+
+  it('старые месяцы с суммами за окном — доступны («Расчёты»: окно ∪ месяцы с суммами)', () => {
+    const paid = new Set(['2025-03', '2026-08']);
+    const candidates = [...new Set([...WINDOW, ...paid])].sort();
+    expect(paidMonthOptions(candidates, paid)).toEqual(['2025-03', '2026-08']);
+  });
+
+  it('выбранные месяцы: не выбирали — умолчание; пока грузится — как выбрали', () => {
+    expect(effectivePaidMonths(null, null, '2026-09')).toEqual(['2026-09']);
+    expect(effectivePaidMonths(null, new Set(['2026-08']), '2026-08')).toEqual(['2026-08']);
+    expect(effectivePaidMonths(['2026-09'], null, '2026-09')).toEqual(['2026-09']);
+  });
+
+  it('пустой месяц, выбранный до загрузки, после загрузки отбрасывается', () => {
+    const paid = new Set(['2026-07', '2026-08']);
+    // Только пустые — умолчание.
+    expect(effectivePaidMonths(['2026-09'], paid, '2026-08')).toEqual(['2026-08']);
+    // Часть пустая — остаются месяцы с суммами.
+    expect(effectivePaidMonths(['2026-07', '2026-09'], paid, '2026-08')).toEqual(['2026-07']);
+    expect(effectivePaidMonths(['2026-07', '2026-08'], paid, '2026-08')).toEqual(['2026-07', '2026-08']);
   });
 });

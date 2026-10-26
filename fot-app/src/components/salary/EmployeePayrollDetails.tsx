@@ -14,7 +14,7 @@ import { paidHistoryQueryOptions, usePayrollPaid } from '../../hooks/usePayrollP
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
-import { defaultPaidMonth, paidAmountMonths, paidMonthOptions } from '../../utils/payrollPaid';
+import { defaultPaidMonth, effectivePaidMonths, paidAmountMonths, paidMonthOptions } from '../../utils/payrollPaid';
 import { travelAllowance } from '../../utils/payrollRates';
 import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
@@ -103,9 +103,13 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     [currentMonth, paidMonths],
   );
   // По умолчанию — последний закрытый месяц с суммами; пока пользователь не выбирал, подстраивается под данные.
+  // Пустой месяц, выбранный до загрузки сумм, после неё отбрасывается.
   const defaultMonth = defaultPaidMonth(monthOptions, paidMonths, currentMonth);
   const [pickedMonths, setPickedMonths] = useState<string[] | null>(null);
-  const months = useMemo(() => pickedMonths ?? [defaultMonth], [pickedMonths, defaultMonth]);
+  const months = useMemo(
+    () => effectivePaidMonths(pickedMonths, paidMonths, defaultMonth),
+    [pickedMonths, paidMonths, defaultMonth],
+  );
   const paid = usePayrollPaid(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
   const tabsId = useId();

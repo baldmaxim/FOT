@@ -3,10 +3,16 @@ import { useQuery } from '@tanstack/react-query';
 
 import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
-import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
+import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { PAYROLL_CALC_COLUMNS_KEY, PAYROLL_CALC_TABLE_COLUMNS } from '../../utils/payrollColumns';
-import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import {
+  defaultPaidMonth,
+  effectivePaidMonths,
+  formatPaidPeriod,
+  paidMonthOptions,
+  type PayrollPaidTotalKind,
+} from '../../utils/payrollPaid';
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
@@ -58,8 +64,8 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   const summaryButtonRef = useRef<HTMLButtonElement>(null);
   const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
-  // Месяцы «Свода» — как в карточке «Подробно»: текущий и 11 предыдущих, даже без «Оплачено», плюс более
-  // старые месяцы с «Оплачено». «Весь период» не выбирается.
+  // Месяцы «Свода» — как в карточке «Подробно»: текущий и 11 предыдущих плюс более старые, но доступны только те,
+  // за которые в охвате пользователя есть «Оплачено». Пока месяцы грузятся — всё окно. «Весь период» не выбирается.
   const monthsQuery = useQuery({
     queryKey: PAYROLL_SUMMARY_KEYS.months,
     queryFn: ({ signal }) => payrollSummaryService.listMonths(signal),
@@ -67,13 +73,22 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
     staleTime: 60_000,
   });
   const [currentMonth] = useState(moscowCurrentMonth);
+  const paidMonths = useMemo(() => (monthsQuery.data ? new Set(monthsQuery.data) : null), [monthsQuery.data]);
   const monthOptions = useMemo(
-    () => [...new Set([...payrollMonthOptions(currentMonth), ...(monthsQuery.data ?? [])])].sort(),
-    [currentMonth, monthsQuery.data],
+    () => paidMonthOptions(
+      [...new Set([...payrollMonthOptions(currentMonth), ...(monthsQuery.data ?? [])])].sort(),
+      paidMonths,
+    ),
+    [currentMonth, monthsQuery.data, paidMonths],
   );
+  // Не выбирали — последний закрытый месяц с «Оплачено» (пока грузится — прошлый). Выбранный до загрузки пустой
+  // месяц после неё отбрасывается. Суммы таблицы — за те же месяцы.
+  const defaultMonth = defaultPaidMonth(monthOptions, paidMonths, currentMonth);
   const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
-  // Не выбирали — прошлый месяц, даже если 1С его ещё не выгрузила. Суммы таблицы — за те же месяцы.
-  const summaryMonths = chosenMonths ?? [shiftMonth(currentMonth, -1)];
+  const summaryMonths = useMemo(
+    () => effectivePaidMonths(chosenMonths, paidMonths, defaultMonth),
+    [chosenMonths, paidMonths, defaultMonth],
+  );
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие
   // экрана их не прячет. Паттерн «состояние из прошлого рендера» вместо setState-в-effect.
@@ -133,6 +148,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
               options={monthOptions}
               onChange={setChosenMonths}
               allowAll={false}
+              resetValue={[defaultMonth]}
               ariaLabel="Месяцы «Свода» и таблицы"
               className={styles.monthsButton}
             />

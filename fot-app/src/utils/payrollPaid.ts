@@ -185,8 +185,9 @@ export const paidMonthOptions = (windowMonths: readonly string[], paidMonths: Re
 );
 
 /**
- * Месяц «Оплачено» по умолчанию: последний с суммами раньше текущего (текущий ещё не закрыт).
- * Суммы ещё грузятся или раньше текущего их нет — прошлый месяц.
+ * Месяц «Оплачено» по умолчанию: последний с суммами раньше текущего (текущий ещё не закрыт); раньше текущего
+ * сумм нет — последний с суммами (данные только за текущий — текущий). Сумм нет или ещё грузятся — прошлый месяц.
+ * Так умолчание и «Очистить» указывают на доступный месяц, если он есть.
  */
 export const defaultPaidMonth = (
   options: readonly string[],
@@ -195,7 +196,23 @@ export const defaultPaidMonth = (
 ): string => {
   const previous = shiftMonth(currentMonth, -1);
   if (!paidMonths) return previous;
-  return options.filter(month => month < currentMonth).at(-1) ?? previous;
+  return options.filter(month => month < currentMonth).at(-1) ?? options.at(-1) ?? previous;
+};
+
+/**
+ * Месяцы, по которым строятся таблица и «Свод». Не выбирали — умолчание. Пока суммы грузятся, выбрать можно любой
+ * месяц окна — после загрузки месяцы без сумм из выбора отбрасываются, ничего не осталось — умолчание.
+ * Состояние выбора не переписывается: результат производный.
+ */
+export const effectivePaidMonths = (
+  chosen: readonly string[] | null,
+  paidMonths: ReadonlySet<string> | null,
+  defaultMonth: string,
+): string[] => {
+  if (!chosen) return [defaultMonth];
+  if (!paidMonths) return [...chosen];
+  const valid = chosen.filter(month => paidMonths.has(month));
+  return valid.length > 0 ? valid : [defaultMonth];
 };
 
 /** Период сумм «Расчётов»: 'all' или пусто — «весь период», как у «Свода». */
