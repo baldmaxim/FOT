@@ -34,6 +34,11 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     if (payload.action === 'update_type') {
       keys.push(...TIMESHEET_FAMILY_KEYS);
     }
+    // Отмена согласованного удаляет дни заявления из табеля — им же считается остаток отпуска.
+    if (payload.action === 'revoke') {
+      keys.push(...TIMESHEET_FAMILY_KEYS);
+      if (payload.employeeId != null) keys.push(['payroll-vacation', payload.employeeId]);
+    }
     return keys;
   },
   'correction:changed': () => [

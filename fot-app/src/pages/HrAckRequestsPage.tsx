@@ -79,7 +79,7 @@ interface IHrAckRequestsPageProps {
 export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
   const cfg = VARIANT_CONFIG[variant];
   const queryClient = useQueryClient();
-  const { canEditPage } = useAuth();
+  const { canEditPage, canManageAsHrAdmin } = useAuth();
   const { showToast } = useToast();
   const { data, isLoading } = useHrAckLeaveRequests(variant);
   const requests = data ?? EMPTY_REQUESTS;
@@ -95,6 +95,10 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
   const [editingTypeOriginal, setEditingTypeOriginal] = useState<LeaveRequestType>('vacation');
   const [typeDraft, setTypeDraft] = useState<LeaveRequestType>('vacation');
   const [savingType, setSavingType] = useState(false);
+  // Отмена согласованного отпуска: открытая форма (одна на вкладку), причина, запрос.
+  const [revokeId, setRevokeId] = useState<number | null>(null);
+  const [revokeReason, setRevokeReason] = useState('');
+  const [revoking, setRevoking] = useState(false);
   // Под-вкладки: «Не ознакомлен» (hr_acknowledged_at пусто) / «Ознакомлен».
   const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
   const [search, setSearch] = useState('');
@@ -128,6 +132,12 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
     if (r.status === 'pending') return true;
     return r.status === 'approved' && isLeaveRequestFullyFuture(r, todayIso);
   };
+
+  // Отмена согласованного отпуска — админ и кадровый админ, без ограничения по дате
+  // (как на бэке); закрытый табель сервер отсечёт 409.
+  const canRevokeAny = canManageAsHrAdmin('/leave-requests');
+  const canRevoke = (r: ILeaveRequest): boolean =>
+    variant === 'vacations' && canRevokeAny && r.status === 'approved';
 
   const query = search.trim().toLowerCase();
   const hasPeriod = periodFrom !== '' || periodTo !== '';
@@ -255,11 +265,58 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
     }
   };
 
+  const closeRevoke = () => {
+    setRevokeId(null);
+    setRevokeReason('');
+  };
+
+  const handleRevoke = async (r: ILeaveRequest) => {
+    setRevoking(true);
+    try {
+      const updated = await leaveRequestService.revokeApproval(r.id, revokeReason.trim() || undefined);
+      // Сразу кладём ответ в кэш: до refetch'а карточка иначе мелькнула бы согласованной
+      // с кнопкой отмены. Вложения ответ не несёт — оставляем свои.
+      queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+        { queryKey },
+        (prev) => prev?.map(item => (item.id === r.id
+          ? { ...item, ...(updated ?? { status: 'cancelled' as const }), attachments: item.attachments }
+          : item)),
+      );
+      closeRevoke();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-request', r.id] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-request-history', r.id] }),
+        // Остаток отпуска в «Зарплате» считается из дней табеля — дни отпуска удалены.
+        queryClient.invalidateQueries({ queryKey: ['payroll-vacation', r.employee_id] }),
+        ...TIMESHEET_FAMILY_KEYS.map(key => queryClient.invalidateQueries({ queryKey: key })),
+      ]);
+    } catch (err) {
+      console.error('revoke vacation error:', err);
+      // 409 «Период уже сдан/закрыт» или «Статус изменился» — форма и причина остаются.
+      showToast('error', err instanceof Error ? err.message : 'Не удалось отменить отпуск');
+      await queryClient.invalidateQueries({ queryKey });
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  const startRevoke = (id: number) => {
+    // Редактор категории закрываем, только если он не сохраняет (кнопка тогда недоступна).
+    setEditingTypeId(null);
+    setRevokeId(id);
+    setRevokeReason('');
+  };
+
   const openAttachment = (att: ILeaveRequestAttachment) => {
     setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
   };
 
   const startEditType = (r: ILeaveRequest) => {
+    // Карандаш недоступен во время отмены, так что закрываем только открытую форму.
+    closeRevoke();
     setEditingTypeId(r.id);
     // Фиксируем категорию, которую HR видит перед правкой: сервер
     // сверит её под локом (анти-гонка stale-UI двух редакторов).
@@ -274,6 +331,9 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
       variant={variant}
       canAcknowledge={canEdit}
       isAcking={acking.has(r.id)}
+      // Пока у карточки открыта форма отмены (или идёт любая отмена) — «Ознакомлен»
+      // и категория недоступны: иначе карточка уйдёт из под-вкладки с висящей формой.
+      actionsDisabled={revoking || revokeId === r.id}
       onAcknowledge={(id) => { void handleAcknowledge(id); }}
       onStartEditType={canEditType(r) ? () => startEditType(r) : undefined}
       typeEditor={editingTypeId === r.id ? {
@@ -282,6 +342,16 @@ export const HrAckRequestsPage: FC<IHrAckRequestsPageProps> = ({ variant }) => {
         onDraftChange: setTypeDraft,
         onSave: () => { void handleUpdateType(r.id); },
         onCancel: () => setEditingTypeId(null),
+      } : undefined}
+      revoke={canRevoke(r) ? {
+        isOpen: revokeId === r.id,
+        reason: revokeReason,
+        revoking: revoking && revokeId === r.id,
+        disabled: revoking || savingType || acking.has(r.id),
+        onStart: () => startRevoke(r.id),
+        onReasonChange: setRevokeReason,
+        onConfirm: () => { void handleRevoke(r); },
+        onCancel: closeRevoke,
       } : undefined}
       onOpenAttachment={openAttachment}
     />

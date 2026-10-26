@@ -658,6 +658,16 @@
   padding-top: 12px;
 }
 
+/* Вкладка «Отпуска»: «Ознакомлен» + «Отменить отпуск» в ряд, форма отмены — под ними. */
+.lrm-card-actions > .lrm-action-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.lrm-card-actions > .lrm-revoke-form {
+  margin-top: 10px;
+}
+
 /* Отметка «Отдел кадров ознакомлен» (зелёная галочка) — вкладка «Отпуска» и карточка руководителя */
 .lrm-hr-ack {
   display: inline-flex;

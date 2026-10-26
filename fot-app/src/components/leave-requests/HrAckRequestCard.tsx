@@ -48,17 +48,34 @@ export interface IHrAckTypeEditor {
   onCancel: () => void;
 }
 
+/** Отмена согласованного отпуска (админ / кадровый админ): форма подтверждения этой карточки. */
+export interface IHrAckRevoke {
+  isOpen: boolean;
+  reason: string;
+  revoking: boolean;
+  /** Кнопка «Отменить отпуск» недоступна (идёт другое действие). */
+  disabled: boolean;
+  onStart: () => void;
+  onReasonChange: (next: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
 interface IHrAckRequestCardProps {
   request: ILeaveRequest;
   variant: HrAckRequestsVariant;
   /** Право edit на маркер вкладки: без него кнопки «Ознакомлен» нет, отметка видна. */
   canAcknowledge: boolean;
   isAcking: boolean;
+  /** Блокирует «Ознакомлен» и карандаш категории (открыта или идёт отмена). */
+  actionsDisabled?: boolean;
   onAcknowledge: (id: number) => void;
   /** Задан, когда категорию этой карточки можно править (кнопка-карандаш). */
   onStartEditType?: () => void;
   /** Задан, когда редактор категории открыт именно у этой карточки. */
   typeEditor?: IHrAckTypeEditor;
+  /** Задан, когда согласованный отпуск можно отменить. */
+  revoke?: IHrAckRevoke;
   onOpenAttachment: (att: ILeaveRequestAttachment) => void;
 }
 
@@ -67,9 +84,11 @@ export const HrAckRequestCard: FC<IHrAckRequestCardProps> = ({
   variant,
   canAcknowledge,
   isAcking,
+  actionsDisabled = false,
   onAcknowledge,
   onStartEditType,
   typeEditor,
+  revoke,
   onOpenAttachment,
 }) => {
   const Icon = STATUS_ICONS[r.status];
@@ -140,6 +159,7 @@ export const HrAckRequestCard: FC<IHrAckRequestCardProps> = ({
             <button
               type="button"
               className="lrm-type-btn"
+              disabled={actionsDisabled}
               onClick={(e) => { e.stopPropagation(); onStartEditType(); }}
               title="Изменить категорию"
             >
@@ -184,21 +204,65 @@ export const HrAckRequestCard: FC<IHrAckRequestCardProps> = ({
       </div>
 
       <div className="lrm-card-actions" onClick={stop}>
-        {isAcked ? (
-          <div className="lrm-hr-ack">
-            <CheckCircle size={15} /> Ознакомлен
+        <div className="lrm-action-row">
+          {isAcked ? (
+            <div className="lrm-hr-ack">
+              <CheckCircle size={15} /> Ознакомлен
+            </div>
+          ) : canAcknowledge ? (
+            <button
+              type="button"
+              className="lrm-ack-btn lrm-ack-btn--pending"
+              disabled={isAcking || actionsDisabled}
+              onClick={() => onAcknowledge(r.id)}
+            >
+              <UserCheck size={14} /> {isAcking ? 'Отмечаем…' : 'Ознакомлен'}
+            </button>
+          ) : (
+            // Только просмотр (view без edit): статус виден, отметить нельзя.
+            <div className="lrm-hr-ack lrm-hr-ack--pending">Не ознакомлен</div>
+          )}
+          {revoke && !revoke.isOpen && (
+            <button
+              type="button"
+              className="lrm-details-btn lrm-details-btn--danger"
+              disabled={revoke.disabled}
+              onClick={revoke.onStart}
+            >
+              <Ban size={14} /> Отменить отпуск
+            </button>
+          )}
+        </div>
+        {revoke?.isOpen && (
+          <div className="lrm-revoke-form">
+            <div className="lrm-revoke-confirm">Отменить согласованный отпуск?</div>
+            <input
+              className="lrm-revoke-input"
+              placeholder="Причина (необязательно)"
+              value={revoke.reason}
+              disabled={revoke.revoking}
+              onChange={e => revoke.onReasonChange(e.target.value)}
+              aria-label="Причина отмены"
+            />
+            <div className="lrm-revoke-btns">
+              <button
+                type="button"
+                className="lrm-details-btn lrm-details-btn--danger"
+                disabled={revoke.revoking}
+                onClick={revoke.onConfirm}
+              >
+                <Ban size={14} /> {revoke.revoking ? 'Отменяем…' : 'Отменить отпуск'}
+              </button>
+              <button
+                type="button"
+                className="lrm-details-btn lrm-details-btn--ghost"
+                disabled={revoke.revoking}
+                onClick={revoke.onCancel}
+              >
+                Назад
+              </button>
+            </div>
           </div>
-        ) : canAcknowledge ? (
-          <button
-            className="lrm-ack-btn lrm-ack-btn--pending"
-            disabled={isAcking}
-            onClick={() => onAcknowledge(r.id)}
-          >
-            <UserCheck size={14} /> {isAcking ? 'Отмечаем…' : 'Ознакомлен'}
-          </button>
-        ) : (
-          // Только просмотр (view без edit): статус виден, отметить нельзя.
-          <div className="lrm-hr-ack lrm-hr-ack--pending">Не ознакомлен</div>
         )}
       </div>
     </div>
