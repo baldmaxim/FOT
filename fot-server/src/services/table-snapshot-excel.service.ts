@@ -73,8 +73,12 @@ export const toExcelCellValue = (
   return defangCsvCell(String(value));
 };
 
-export function buildTableSnapshotWorkbook(table: ITableSnapshot, sheet: ITableSnapshotSheet): ExcelJS.Workbook {
-  const workbook = new ExcelJS.Workbook();
+/** Лист снимка в книге: заголовок, подзаголовок и умная таблица с фильтрами. */
+export function addTableSnapshotSheet(
+  workbook: ExcelJS.Workbook,
+  table: ITableSnapshot,
+  sheet: ITableSnapshotSheet,
+): void {
   const ws = workbook.addWorksheet(sheet.sheetName);
 
   table.columns.forEach((column, index) => {
@@ -107,6 +111,10 @@ export function buildTableSnapshotWorkbook(table: ITableSnapshot, sheet: ITableS
       if (row.muted) cell.font = { color: { argb: MUTED_FONT_COLOR } };
     });
   });
+}
 
+export function buildTableSnapshotWorkbook(table: ITableSnapshot, sheet: ITableSnapshotSheet): ExcelJS.Workbook {
+  const workbook = new ExcelJS.Workbook();
+  addTableSnapshotSheet(workbook, table, sheet);
   return workbook;
 }

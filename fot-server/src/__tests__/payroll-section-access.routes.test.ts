@@ -66,6 +66,9 @@ vi.mock('../controllers/payroll-compensation-stops.controller.js', () => ({
   payrollCompensationStopsController: h.stubController('stops'),
 }));
 vi.mock('../controllers/payroll-registry.controller.js', () => ({ payrollRegistryController: h.stubController('registry') }));
+vi.mock('../controllers/payroll-card-export.controller.js', () => ({
+  payrollCardExportController: h.stubController('cardExport'),
+}));
 vi.mock('../controllers/payroll-staff-deductions.controller.js', () => ({
   payrollStaffDeductionsController: h.stubController('staffDeductions'),
 }));
@@ -160,6 +163,19 @@ describe('раздел «Зарплата» по списку', () => {
       expect((await send(method, url, 'admin-listed')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual(writes.map(([, , call]) => call));
+  });
+
+  it('«Экспорт» карточки сотрудника — по ключу /salary/terms, только из списка', async () => {
+    const send = (userId: string) => request(app)
+      .post('/api/payroll/terms/card/export')
+      .set('Authorization', `Bearer ${tokenFor(userId, 'admin')}`)
+      .send({});
+    expect((await send('admin-outside')).status).toBe(403);
+    expect(h.calls).toEqual([]);
+
+    h.listedUserIds.add('admin-listed');
+    expect((await send('admin-listed')).status).toBe(200);
+    expect(h.calls).toEqual(['cardExport.exportCard']);
   });
 
   it('офисный сотрудник из списка — проходит, не из списка — 403', async () => {

@@ -1,22 +1,20 @@
 /*
- * Окно «История выплат»: размер — .container окна сотрудника (PayrollEmployeeModal.module.css), оверлей, шапка
- * и крестик — PayrollModal.module.css. Оверлей выше окна сотрудника (1000).
- * Тело — список месяцев и листок, каждый прокручивается сам. Узко — одна колонка: список, по тапу листок
- * (data-view="detail") с кнопкой «Все месяцы»; с 1024px — обе колонки рядом.
+ * Вкладка «История выплат» карточки сотрудника: занимает тело карточки под вкладками.
+ * Список месяцев и листок прокручиваются каждый сам. Две колонки решает ширина карточки (container query):
+ * в «Подробно» она уже экрана на сайдбар, в окне «Расчётов» — 90% экрана. Узко — одна колонка:
+ * список, по тапу листок (data-view="detail") с кнопкой «Все месяцы».
  */
-.overlay.overlay { z-index: 1100; }
-
-/* Стрелка «Назад» слева от заголовка — на одной линии с ним. */
-.header { align-items: center; }
-
-/* ФИО и должность под заголовком: длинное ФИО переносится, а не уезжает под крестик. */
-.subtitle {
-  margin: 2px 0 0;
-  font-size: 13px;
-  line-height: 1.35;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+.panel {
+  container: paid-history / inline-size;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
+
+/* Загрузка, ошибка, «Выплат нет» — с отступами тела карточки. */
+.state { padding: 16px; }
 
 .body {
   flex: 1 1 auto;
@@ -155,14 +153,15 @@
 }
 
 @media (min-width: 768px) {
+  .state { padding: 16px 20px; }
   .listPane,
   .detailPane { padding: 0 20px 20px; }
   .backButton { min-height: 36px; }
 }
 
 /* Список слева, листок справа; оба видны всегда — «Все месяцы» не нужна. */
-@media (min-width: 1024px) {
-  /* Список уже 28rem до 1280px — листку хватает места на столбец «Вид». */
+@container paid-history (min-width: 900px) {
+  /* Список уже 28rem, пока карточка уже 1150px — листку хватает места на столбец «Вид». */
   .body {
     display: grid;
     grid-template-columns: minmax(0, 25rem) minmax(0, 1fr);
@@ -176,7 +175,7 @@
   .detailTitle { font-size: 16px; }
 }
 
-@media (min-width: 1280px) {
+@container paid-history (min-width: 1150px) {
   .body { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
 }
 

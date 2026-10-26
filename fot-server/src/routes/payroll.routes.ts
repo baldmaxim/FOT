@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
 import { deductionSubkindsController } from '../controllers/deduction-subkinds.controller.js';
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
@@ -50,6 +51,8 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 // Расчётный листок месяца в «Истории выплат»: период, дни табеля (рабочие / выходные), условия оплаты.
 router.get('/terms/employee/:empId/payslip', termsView, payrollPaidController.getPayslip);
+// «Экспорт» карточки сотрудника: условия и история выплат — два листа xlsx из снимка экрана.
+router.post('/terms/card/export', termsView, payrollCardExportController.exportCard);
 
 // ─── Удержания: справочник видов с подвидами (общий с кадрами) и удержания сотрудника ──
 // Дерево «вид → подвиды» — то же, что у кадров (/api/staff-deductions/kinds), миграция 321.

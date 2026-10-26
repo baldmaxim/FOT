@@ -1,4 +1,5 @@
 import { apiClient } from '../api/client';
+import type { IPayrollCardExport } from '../utils/payrollCardExport';
 import type {
   IDeductionSubkind,
   IDeductionSubkindsApi,
@@ -496,6 +497,14 @@ export const payrollService = {
     );
     return res.data;
   },
+
+  /** xlsx карточки сотрудника: условия и история выплат — два листа из снимка карточки. */
+  exportCard: (snapshot: IPayrollCardExport): Promise<{ blob: Blob; filename: string }> =>
+    apiClient.download('/payroll/terms/card/export', snapshot.file_name, {
+      method: 'POST',
+      body: JSON.stringify(snapshot),
+      timeoutMs: 120_000,
+    }),
 
   /** Справочник видов удержаний с подвидами — в порядке списка; то же дерево, что у кадров. */
   listDeductionKinds: async (signal?: AbortSignal): Promise<IStaffDeductionKind[]> => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { History, X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -9,6 +9,7 @@ import {
   type IAssignTermsPayload,
   type IPayrollTermsRow,
 } from '../../services/payrollService';
+import { usePayrollCardExport } from '../../hooks/usePayrollCardExport';
 import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
 import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
@@ -19,11 +20,18 @@ import { MonthsPicker } from '../ui/MonthsPicker';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
-import { PaidHistoryModal } from './PaidHistoryModal';
+import { PaidHistoryPanel } from './PaidHistoryPanel';
 import { SalaryHistorySection } from './SalaryHistorySection';
 import { StaffDeductionsList } from './StaffDeductionsList';
 import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
+
+type CardTab = 'terms' | 'history';
+
+const CARD_TABS: ReadonlyArray<{ key: CardTab; label: string }> = [
+  { key: 'terms', label: 'Условия' },
+  { key: 'history', label: 'История выплат' },
+];
 
 interface IEmployeePayrollDetailsProps {
   row: IPayrollTermsRow;
@@ -54,7 +62,8 @@ interface IEmployeePayrollDetailsProps {
  * «Удержание» — только показ удержаний сотрудника (вносят в «Справочнике» и у кадров, миграция 321).
  * В «Подробно»: Категория, действующие оклад · премия · итого и «Оплачено», без полей и кнопок.
  * Ниже — свёрнутая справка: история изменений и отпуска; грузится отдельно, её ошибки форму не блокируют.
- * «История выплат» — кнопкой в шапке, своим окном (PaidHistoryModal).
+ * Под шапкой вкладки: «Условия» (всё перечисленное) и «История выплат» (PaidHistoryPanel) — внутри карточки,
+ * без своего окна. «Экспорт» в шапке — xlsx с условиями и историей выплат (usePayrollCardExport).
  * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
  * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
  */
@@ -84,8 +93,37 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const tabsId = useId();
+  const [tab, setTab] = useState<CardTab>('terms');
+  // История монтируется при первом открытии вкладки и дальше остаётся: выбранный месяц и прокрутка целы.
+  const [historyMounted, setHistoryMounted] = useState(false);
+  const tabRefs = useRef<Partial<Record<CardTab, HTMLButtonElement | null>>>({});
+  const { exporting, exportCard } = usePayrollCardExport(row, defaultDate, currentMonth);
+  const tabId = (key: CardTab) => `${tabsId}-tab-${key}`;
+  const panelId = (key: CardTab) => `${tabsId}-panel-${key}`;
+
+  const selectTab = useCallback((key: CardTab) => {
+    setTab(key);
+    if (key === 'history') setHistoryMounted(true);
+  }, []);
+
+  // Вкладки — один стоп Tab: между ними стрелки, Home и End (выбор сразу, как по клику).
+  const handleTabsKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = CARD_TABS.findIndex(item => item.key === tab);
+    const last = CARD_TABS.length - 1;
+    const moves: Partial<Record<string, number>> = {
+      ArrowRight: index === last ? 0 : index + 1,
+      ArrowLeft: index === 0 ? last : index - 1,
+      Home: 0,
+      End: last,
+    };
+    const next = moves[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    const key = CARD_TABS[next].key;
+    selectTab(key);
+    tabRefs.current[key]?.focus();
+  };
 
   // Ответ сервера приходит позже клика: к этому времени вкладку могли сменить, а карточку — закрыть.
   const activeRef = useRef(active);
@@ -133,113 +171,147 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   };
 
   return (
-    <>
-      <form
-        className={className ? `${styles.details} ${className}` : styles.details}
-        onSubmit={handleSubmit}
-        onKeyDown={handleKeyDown}
-        noValidate
-        aria-labelledby={titleId}
-      >
-        <header className={styles.header}>
-          <div className={styles.headerMain}>
-            <div className={styles.nameRow}>
-              <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
-              {!editable && (
-                <MonthsPicker
-                  value={months}
-                  options={monthOptions}
-                  onChange={setMonths}
-                  allowAll={false}
-                  resetValue={[shiftMonth(currentMonth, -1)]}
-                  ariaLabel="Месяцы «Оплачено»"
-                  className={styles.monthsTrigger}
-                />
-              )}
-            </div>
-            {meta && <p className={styles.meta}>{meta}</p>}
+    <form
+      className={className ? `${styles.details} ${className}` : styles.details}
+      onSubmit={handleSubmit}
+      onKeyDown={handleKeyDown}
+      noValidate
+      aria-labelledby={titleId}
+    >
+      <header className={styles.header}>
+        <div className={styles.headerMain}>
+          <div className={styles.nameRow}>
+            <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
+            {/* Месяцы задают «Оплачено» на «Условиях»; истории они не касаются. */}
+            {!editable && (
+              <MonthsPicker
+                value={months}
+                options={monthOptions}
+                onChange={setMonths}
+                allowAll={false}
+                resetValue={[shiftMonth(currentMonth, -1)]}
+                ariaLabel="Месяцы «Оплачено»"
+                className={tab === 'terms' ? styles.monthsTrigger : `${styles.monthsTrigger} ${styles.monthsHidden}`}
+              />
+            )}
           </div>
+          {meta && <p className={styles.meta}>{meta}</p>}
+        </div>
+        <button
+          type="button"
+          className={styles.exportButton}
+          onClick={() => { void exportCard(); }}
+          disabled={exporting}
+          aria-busy={exporting}
+          aria-label={exporting ? 'Готовим…' : 'Экспорт'}
+        >
+          <Download size={18} aria-hidden="true" />
+          <span className={styles.exportLabel}>{exporting ? 'Готовим…' : 'Экспорт'}</span>
+        </button>
+        {/* Крестик — как «Отмена»: пока идёт сохранение, не закрыть. */}
+        {editable && onClose && (
           <button
             type="button"
-            className={styles.historyButton}
-            onClick={() => setHistoryOpen(true)}
-            aria-label="История выплат"
+            className={modal.closeButton}
+            onClick={onClose}
+            disabled={saveMutation.isPending}
+            aria-label="Закрыть"
           >
-            <History size={18} aria-hidden="true" />
-            <span className={styles.historyLabel}>История выплат</span>
+            <X size={20} aria-hidden="true" />
           </button>
-          {/* Крестик — как «Отмена»: пока идёт сохранение, не закрыть. */}
-          {editable && onClose && (
+        )}
+      </header>
+
+      {/* Кнопки вкладок — type="button": карточка целиком форма, клик не должен её отправлять. */}
+      <div className={styles.tabs} role="tablist" aria-label="Разделы карточки" onKeyDown={handleTabsKeyDown}>
+        {CARD_TABS.map(item => {
+          const selected = item.key === tab;
+          return (
+            <button
+              key={item.key}
+              ref={element => { tabRefs.current[item.key] = element; }}
+              type="button"
+              role="tab"
+              id={tabId(item.key)}
+              aria-selected={selected}
+              aria-controls={panelId(item.key)}
+              tabIndex={selected ? 0 : -1}
+              className={selected ? `${styles.tab} ${styles.tabActive}` : styles.tab}
+              onClick={() => selectTab(item.key)}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Скрытые «Условия» остаются смонтированными: введённое и раскрытые блоки не теряются. */}
+      <div
+        className={styles.body}
+        role="tabpanel"
+        id={panelId('terms')}
+        aria-labelledby={tabId('terms')}
+        hidden={tab !== 'terms'}
+      >
+        {editable && !canEdit && (
+          <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
+        )}
+        <PayrollTermsFields
+          form={form}
+          idPrefix={idPrefix}
+          readOnly={!canEdit}
+          category={payrollRowCategory(row)}
+          travel={toInputValue(travelAllowance(payrollRowCategory(row), row))}
+          autoFocus={canEdit}
+          paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
+          stacked
+          detailsOnly={!editable}
+          termsFrom={row.terms_id ? row.effective_from : null}
+          total
+          staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
+        />
+
+        <div className={styles.reference}>
+          <SalaryHistorySection employeeId={row.employee_id} />
+          <EmployeeVacationSection employeeId={row.employee_id} />
+        </div>
+      </div>
+
+      {/* Кнопки в панели истории — type="button": Enter и отправка формы её не касаются. */}
+      <div
+        className={styles.historyPanel}
+        role="tabpanel"
+        id={panelId('history')}
+        aria-labelledby={tabId('history')}
+        hidden={tab !== 'history'}
+      >
+        {historyMounted && (
+          <PaidHistoryPanel employeeId={row.employee_id} positionName={row.position_name} toMonth={currentMonth} />
+        )}
+      </div>
+
+      {/* В «Подробно» вносить нечего — кнопок нет: к списку — переключателем экранов. На истории — тоже нет. */}
+      {editable && tab === 'terms' && (
+        <footer className={styles.footer}>
+          {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
+          <div className={styles.actions}>
+            {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
             <button
               type="button"
-              className={modal.closeButton}
+              className={styles.secondaryButton}
               onClick={onClose}
               disabled={saveMutation.isPending}
-              aria-label="Закрыть"
             >
-              <X size={20} aria-hidden="true" />
+              {canEdit ? 'Отмена' : 'Закрыть'}
             </button>
-          )}
-        </header>
-
-        <div className={styles.body}>
-          {editable && !canEdit && (
-            <p className={styles.readOnlyNote}>Только просмотр: нет права менять условия этого сотрудника.</p>
-          )}
-          <PayrollTermsFields
-            form={form}
-            idPrefix={idPrefix}
-            readOnly={!canEdit}
-            category={payrollRowCategory(row)}
-            travel={toInputValue(travelAllowance(payrollRowCategory(row), row))}
-            autoFocus={canEdit}
-            paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
-            stacked
-            detailsOnly={!editable}
-            termsFrom={row.terms_id ? row.effective_from : null}
-            total
-            staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
-          />
-
-          <div className={styles.reference}>
-            <SalaryHistorySection employeeId={row.employee_id} />
-            <EmployeeVacationSection employeeId={row.employee_id} />
-          </div>
-        </div>
-
-        {/* В «Подробно» вносить нечего — кнопок нет: к списку — переключателем экранов. */}
-        {editable && (
-          <footer className={styles.footer}>
-            {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
-            <div className={styles.actions}>
-              {/* Пока идёт сохранение, карточку не закрыть: иначе её можно открыть заново со старыми суммами. */}
-              <button
-                type="button"
-                className={styles.secondaryButton}
-                onClick={onClose}
-                disabled={saveMutation.isPending}
-              >
-                {canEdit ? 'Отмена' : 'Закрыть'}
+            {canEdit && (
+              <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
               </button>
-              {canEdit && (
-                <button type="submit" className={styles.primaryButton} disabled={saveMutation.isPending}>
-                  {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
-                </button>
-              )}
-            </div>
-          </footer>
-        )}
-      </form>
-
-      {/* Рядом с формой, не внутри: Enter и отправка формы окна не касаются. */}
-      {historyOpen && (
-        <PaidHistoryModal
-          employeeId={row.employee_id}
-          fullName={row.full_name}
-          positionName={row.position_name}
-          onClose={closeHistory}
-        />
+            )}
+          </div>
+        </footer>
       )}
-    </>
+    </form>
   );
 };

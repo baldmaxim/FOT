@@ -1,10 +1,21 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 
 import { payrollService } from '../services/payrollService';
-import { paidTotals, toPaidAmounts, visiblePaidGroups } from '../utils/payrollPaid';
+import { PAYROLL_PAID_ALL_FROM, paidTotals, toPaidAmounts, visiblePaidGroups } from '../utils/payrollPaid';
 
 export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
+
+/**
+ * «История выплат» карточки: все суммы «Оплачено» по toMonth. Один запрос на вкладку и «Экспорт» —
+ * toMonth берётся у карточки, чтобы ключ совпадал и открытая история не грузилась повторно.
+ * Префикс 'payroll-terms': сохранение карточки перечитывает и суммы.
+ */
+export const paidHistoryQueryOptions = (employeeId: number, toMonth: string) => queryOptions({
+  queryKey: ['payroll-terms', 'paid-history', employeeId, toMonth],
+  queryFn: ({ signal }) => payrollService.getPaid(employeeId, PAYROLL_PAID_ALL_FROM, toMonth, signal),
+  staleTime: 30_000,
+});
 
 /**
  * «Оплачено» в карточке сотрудника: суммы за выбранные месяцы (по возрастанию, могут идти

@@ -1,6 +1,6 @@
 /*
- * Вкладка «Подробно» раздела «Зарплата» — карточка условий оплаты сотрудника на всю область вкладки.
- * Шапка и кнопки на месте, прокручивается только тело. Высота контролов (--payroll-control-h) — 44px
+ * Карточка сотрудника раздела «Зарплата» — на всю область вкладки «Подробно» и в окне «Расчётов».
+ * Шапка, вкладки и кнопки на месте, прокручивается только тело. Высота контролов (--payroll-control-h) — 44px
  * на телефоне, 40px с 768px.
  */
 .details {
@@ -18,26 +18,27 @@
 
 /*
  * ФИО и сразу за ним выбор месяцев «Оплачено»; узко — выбор переносится под ФИО. Ниже — отдел и должность.
- * Справа — «История выплат», в окне «Расчётов» за ней крестик.
+ * Справа — «Экспорт», в окне «Расчётов» за ним крестик. Граница снизу — у вкладок.
  */
 .header {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 12px 16px 8px;
 }
 .headerMain { flex: 1; min-width: 0; }
 .nameRow { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; }
 /* Триггер выбора месяцев — из общего MonthsPicker; вложенный селектор перекрывает его размер. */
 .nameRow .monthsTrigger { margin-top: 0; min-height: 44px; font-size: 14px; }
 .name { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--text-primary); overflow-wrap: anywhere; }
+/* На «Истории выплат» выбор месяцев не нужен: прячется, но держит место — шапка и вкладки не прыгают. */
+.monthsHidden { visibility: hidden; }
 /* Фокус на ФИО ставится программно (режим просмотра) — обводка не нужна. */
 .name:focus { outline: none; }
 .meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
 
-/* «История выплат» открывает своё окно; на телефоне — только иконка. */
-.historyButton {
+/* «Экспорт» — xlsx условий и истории выплат; на телефоне — только иконка. */
+.exportButton {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -59,9 +60,54 @@
   -webkit-tap-highlight-color: transparent;
   transition: background var(--transition);
 }
-.historyButton:hover { background: var(--surface-hover); }
-.historyButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.historyLabel { display: none; }
+.exportButton:hover:not(:disabled) { background: var(--surface-hover); }
+.exportButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exportButton:disabled { opacity: 0.6; cursor: default; }
+.exportLabel { display: none; }
+
+/* Вкладки «Условия» / «История выплат»: подчёркивание тенью — без сдвига текста. */
+.tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 150ms ease-out;
+}
+.tab:hover { color: var(--text-primary); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
+.tabActive,
+.tabActive:hover { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+
+/* Вкладка истории: список и листок прокручиваются сами, панель — на всю высоту под вкладками. */
+.historyPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.body[hidden],
+.historyPanel[hidden] { display: none; }
 
 .body {
   flex: 1 1 auto;
@@ -121,26 +167,29 @@
 .secondaryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (min-width: 480px) {
-  .historyButton { min-width: 0; padding: 0 12px; }
-  .historyLabel { display: inline; }
+  .exportButton { min-width: 0; padding: 0 12px; }
+  .exportLabel { display: inline; }
 }
 
 @media (min-width: 768px) {
   .details { --payroll-control-h: 40px; }
   .nameRow .monthsTrigger { min-height: 32px; }
-  .header { padding: 14px 20px 12px; }
+  .header { padding: 14px 20px 10px; }
+  .tabs { padding: 0 12px; }
+  .tab { min-height: 40px; }
   .body { padding: 16px 20px 20px; }
   .footer { padding: 12px 20px; }
 }
 
 /* Низкий экран (крупный масштаб, альбомный телефон): шапка и подвал компактнее — больше места полям. */
 @media (max-height: 560px) {
-  .header { padding: 8px 12px 8px 16px; }
+  .header { padding: 8px 12px 6px 16px; }
+  .tab { min-height: 36px; }
   .name { font-size: 15px; }
   .body { padding: 12px 16px 16px; }
   .footer { padding: 8px 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .primaryButton, .secondaryButton, .historyButton { transition: none; }
+  .primaryButton, .secondaryButton, .exportButton, .tab { transition: none; }
 }
