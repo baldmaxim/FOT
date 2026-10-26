@@ -273,6 +273,8 @@ export interface IContractorPassStat {
   issued_new: number;
   /** Активные новые номерные пропуска. */
   active_new: number;
+  /** Из активных — без проходов по СКУД больше IDLE_PASS_DAYS дней (без проходов — от даты выдачи). */
+  idle_new: number;
   /** Старые «белые» пропуска — сотрудники в папке подрядчика без нового номерного пропуска. */
   old_total: number;
   /** Из них реально использовались (проходы по СКУД за последние 2 недели). */
@@ -288,6 +290,21 @@ export interface IContractorPassDetail {
   w26: string | null;
   /** Дата выдачи = дата одобрения заявки (МСК), YYYY-MM-DD. */
   issued_on: string;
+}
+
+/** Больше стольких дней без проходов — пропуск в «Не ходят» (зеркален бэкенду contractor-pass-idle.service). */
+export const IDLE_PASS_DAYS = 5;
+
+/** Активный пропуск без проходов по СКУД больше IDLE_PASS_DAYS дней. */
+export interface IContractorIdlePass {
+  pass_id: string;
+  pass_number: string;
+  holder_name: string;
+  /** Последний проход после выдачи текущему держателю (МСК), YYYY-MM-DD; null — проходов не было. */
+  last_event_date: string | null;
+  last_access_point: string | null;
+  /** От последнего прохода, без него — от даты выдачи. */
+  days_idle: number;
 }
 
 /** Точка доступа и число активных пропусков подрядчика на ней. */
@@ -1112,6 +1129,12 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IContractorPassDetail[]>>(
       `/admin/contractor/passes/stats/details${qs}`,
     );
+    return r.data ?? [];
+  },
+  /** Активные пропуска подрядчика без проходов больше IDLE_PASS_DAYS дней — «на сейчас», без периода. */
+  async getPassStatsIdle(orgDepartmentId: string): Promise<IContractorIdlePass[]> {
+    const qs = buildStatsQuery({ org_department_id: orgDepartmentId });
+    const r = await apiClient.get<ApiResponse<IContractorIdlePass[]>>(`/admin/contractor/passes/stats/idle${qs}`);
     return r.data ?? [];
   },
   /**

@@ -432,6 +432,22 @@
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
+/* Число не ходящих в строке подрядчика: клик выбирает подрядчика и показывает список. */
+.statsCountLink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.statsCountLink:hover {
+  text-decoration: underline;
+}
+.statsCountLink:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 .table td.apChipsCell,
 .table tr:hover td.apChipsCell {
   padding: 8px 12px 12px;

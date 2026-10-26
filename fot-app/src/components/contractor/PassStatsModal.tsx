@@ -1,16 +1,18 @@
-import { Fragment, useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   contractorAdminService,
+  IDLE_PASS_DAYS,
   type IContractorOrg,
   type IContractorPassAccessPointStats,
   type IContractorPassDetail,
   type IContractorPassStat,
 } from '../../services/contractorService';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
+import { PassStatsIdleSection } from './PassStatsIdleSection';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 interface IPassStatsModalProps {
@@ -19,7 +21,7 @@ interface IPassStatsModalProps {
   onClose: () => void;
 }
 
-const EMPTY_TOTAL = { issued_new: 0, active_new: 0, old_total: 0, old_used: 0 };
+const EMPTY_TOTAL = { issued_new: 0, active_new: 0, idle_new: 0, old_total: 0, old_used: 0 };
 
 /** Суффикс периода для имени файла экспорта (зеркален бэкенду statsPeriodFileSuffix). */
 const periodFileSuffix = (dateFrom: string, dateTo: string): string => {
@@ -35,9 +37,10 @@ const formatIsoDate = (iso: string): string => iso.split('-').reverse().join('.'
 /**
  * Модалка статистики пропусков по подрядчику. По умолчанию — «Все подрядчики»
  * (строка на каждого подрядчика с данными), либо один выбранный.
- * Колонки: выдано новых / активные / всего старых / используются старые (2 нед.).
- * При выбранном подрядчике внизу — список выданных пропусков (текущие одобренные
- * держатели). Период фильтрует «выдано новых» и список по дате одобрения заявки.
+ * Колонки: выдано новых / активные / не ходят > 5 дн. / всего старых / используются старые (2 нед.).
+ * При выбранном подрядчике ниже — не ходящие (клик по их числу в «Все подрядчики» выбирает
+ * подрядчика) и список выданных пропусков (текущие одобренные держатели). Период фильтрует
+ * «выдано новых» и список выданных по дате одобрения заявки.
  */
 export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, onClose }) => {
   const overlay = useOverlayDismiss(onClose);
@@ -48,6 +51,7 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
   const [exporting, setExporting] = useState(false);
   /** Раскрытая строка сводки в режиме «Все подрядчики» (одна за раз). */
   const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   const statsQuery = useQuery<IContractorPassStat[]>({
     queryKey: ['contractor-pass-stats', dateFrom, dateTo],
@@ -78,6 +82,7 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
       (acc, r) => ({
         issued_new: acc.issued_new + r.issued_new,
         active_new: acc.active_new + r.active_new,
+        idle_new: acc.idle_new + r.idle_new,
         old_total: acc.old_total + r.old_total,
         old_used: acc.old_used + r.old_used,
       }),
@@ -101,7 +106,11 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
     [accessPointsQuery.data],
   );
 
-  useEffect(() => setExpandedOrgId(null), [orgId]);
+  // Смена подрядчика (в т.ч. кликом по числу не ходящих) — к началу: секция не ходящих первая.
+  useEffect(() => {
+    setExpandedOrgId(null);
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, [orgId]);
 
   /** Блок точек доступа одного подрядчика: загрузка / ошибка / пусто / чипы. */
   const renderAccessPoints = (targetOrgId: string): ReactNode => {
@@ -226,14 +235,16 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
         <div className={styles.statusNote} style={{ marginBottom: 10 }}>
           Старые «белые» пропуска — сотрудники в папке подрядчика без нового номерного пропуска.
           «Используются старые» — были проходы по СКУД за последние 2 недели.
+          {` «Не ходят > ${IDLE_PASS_DAYS} дн.» — активные пропуска без проходов по СКУД больше ${IDLE_PASS_DAYS} дней;`
+            + ' без проходов после выдачи — от даты выдачи.'}
           {hasPeriod
             ? ' При выбранном периоде «Выдано новых» — пропуска, одобренные (выданные сотрудникам) в периоде;'
-              + ' «Активные» и «старые» — состояние на сейчас.'
+              + ' «Активные», «Не ходят» и «старые» — состояние на сейчас.'
             : ' Без периода «Выдано новых» — все неотозванные номерные пропуска (включая пустые слоты),'
               + ' а список ниже — только пропуска с одобренным держателем.'}
         </div>
 
-        <div className={styles.statsBody}>
+        <div className={styles.statsBody} ref={bodyRef}>
           {statsQuery.isLoading && <div className={styles.empty}>Загрузка…</div>}
           {statsQuery.isError && <div className={styles.empty}>Не удалось загрузить статистику</div>}
           {!statsQuery.isLoading && !statsQuery.isError && rows.length === 0 && (
@@ -246,6 +257,7 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                   <th>Подрядчик</th>
                   <th>Выдано новых</th>
                   <th>Активные</th>
+                  <th>Не ходят &gt; {IDLE_PASS_DAYS} дн.</th>
                   <th>Всего старых</th>
                   <th>Используются старые</th>
                 </tr>
@@ -259,6 +271,7 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                         <td>{r.org_name}</td>
                         <td>{r.issued_new}</td>
                         <td>{r.active_new}</td>
+                        <td>{r.idle_new}</td>
                         <td>{r.old_total}</td>
                         <td>{r.old_used}</td>
                       </tr>
@@ -282,12 +295,24 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                         </td>
                         <td>{r.issued_new}</td>
                         <td>{r.active_new}</td>
+                        <td>
+                          {r.idle_new > 0 ? (
+                            <button
+                              type="button"
+                              className={styles.statsCountLink}
+                              aria-label={`Не ходят больше ${IDLE_PASS_DAYS} дней: ${r.org_name}`}
+                              onClick={e => { e.stopPropagation(); setOrgId(r.org_department_id); }}
+                            >
+                              {r.idle_new}
+                            </button>
+                          ) : 0}
+                        </td>
                         <td>{r.old_total}</td>
                         <td>{r.old_used}</td>
                       </tr>
                       {expanded && (
                         <tr>
-                          <td className={styles.apChipsCell} colSpan={5}>
+                          <td className={styles.apChipsCell} colSpan={6}>
                             {renderAccessPoints(r.org_department_id)}
                           </td>
                         </tr>
@@ -302,6 +327,7 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                     <td>Итого</td>
                     <td>{total.issued_new}</td>
                     <td>{total.active_new}</td>
+                    <td>{total.idle_new}</td>
                     <td>{total.old_total}</td>
                     <td>{total.old_used}</td>
                   </tr>
@@ -319,6 +345,8 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
 
           {orgId && (
             <>
+              <PassStatsIdleSection key={orgId} orgId={orgId} />
+
               <div className={styles.statsSubtitle}>
                 Точки доступа — активные пропуска
                 {accessPointsQuery.isSuccess

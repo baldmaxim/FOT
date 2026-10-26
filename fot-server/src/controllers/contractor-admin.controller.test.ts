@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   hasOrgWideAccountAccess: vi.fn(),
   resolveEffectivePageAccess: vi.fn(),
   renamePassHolder: vi.fn(),
+  countIdlePassesByOrg: vi.fn(),
+  fetchIdleContractorPasses: vi.fn(),
 }));
 
 vi.mock('../services/org-wide-account-access.service.js', () => ({
@@ -46,6 +48,12 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: h.withTransaction,
 }));
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
+// SQL «не ходящих» проверяет PG-тест сервиса; здесь — только как контроллер им пользуется.
+vi.mock('../services/contractor-pass-idle.service.js', () => ({
+  IDLE_PASS_DAYS: 5,
+  countIdlePassesByOrg: h.countIdlePassesByOrg,
+  fetchIdleContractorPasses: h.fetchIdleContractorPasses,
+}));
 vi.mock('../services/access-control.service.js', () => ({
   hasPageView: h.hasPageView,
   hasPageEdit: h.hasPageEdit,
@@ -128,6 +136,7 @@ vi.mock('../services/employee-cache.service.js', () => ({
 }));
 
 import { contractorAdminController } from './contractor-admin.controller.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 const makeRes = () => {
   const res = {
@@ -1696,6 +1705,8 @@ describe('contractorAdminController — статистика пропусков 
     h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
     h.getContractorOrgs.mockResolvedValue([{ id: ORG, name: 'АЛЬФА ООО', sigur_department_id: 1 }]);
     h.query.mockResolvedValue([]);
+    h.countIdlePassesByOrg.mockResolvedValue([]);
+    h.fetchIdleContractorPasses.mockResolvedValue([]);
   });
 
   it('passStats без периода: параметры [orgIds, 14, null, null], SQL с независимыми границами', async () => {
@@ -1928,6 +1939,82 @@ describe('contractorAdminController — статистика пропусков 
     await contractorAdminController.exportPassStats(statsReq(), allOrgs as never);
     expect(allOrgs.statusCode).toBe(200);
     expect(h.query.mock.calls[4][1]).toEqual([[ORG]]);
+  });
+
+  const idleRow = (over: Partial<Record<string, unknown>> = {}) => ({
+    pass_id: 'p1', org_department_id: ORG, org_name: 'АЛЬФА ООО', pass_number: '101', holder_name: 'Иванов И.',
+    last_event_date: '2026-10-10', last_access_point: 'кпп ASTERUS', days_idle: 16, ...over,
+  });
+
+  it('passStats: idle_new из счётчика сервиса на сегодня по МСК, подрядчик без не ходящих — 0', async () => {
+    h.query.mockResolvedValueOnce([statRow()]);
+    h.countIdlePassesByOrg.mockResolvedValueOnce([{ org_department_id: ORG, idle_new: 2 }]);
+    const res = makeRes();
+    await contractorAdminController.passStats(statsReq(), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true, data: [{ org_department_id: ORG, active_new: 2, idle_new: 2 }] });
+    expect(h.countIdlePassesByOrg).toHaveBeenCalledWith([ORG], moscowTodayIso());
+
+    h.query.mockResolvedValueOnce([statRow()]);
+    const zero = makeRes();
+    await contractorAdminController.passStats(statsReq(), zero as never);
+    expect(zero.body).toMatchObject({ data: [{ org_department_id: ORG, idle_new: 0 }] });
+  });
+
+  it('passStatsIdle: 400 без организации; список подрядчика на сегодня, период не участвует', async () => {
+    const noOrg = makeRes();
+    await contractorAdminController.passStatsIdle(statsReq(), noOrg as never);
+    expect(noOrg.statusCode).toBe(400);
+    expect(noOrg.body).toMatchObject({ error: 'Некорректная организация' });
+    expect(h.fetchIdleContractorPasses).not.toHaveBeenCalled();
+
+    h.fetchIdleContractorPasses.mockResolvedValueOnce([
+      idleRow(),
+      idleRow({ pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null, days_idle: 40 }),
+    ]);
+    const res = makeRes();
+    await contractorAdminController.passStatsIdle(
+      statsReq({ org_department_id: ORG, date_from: '2026-07-01' }), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(h.fetchIdleContractorPasses).toHaveBeenCalledWith([ORG], moscowTodayIso());
+    expect(res.body).toEqual({
+      success: true,
+      data: [
+        { pass_id: 'p1', pass_number: '101', holder_name: 'Иванов И.', last_event_date: '2026-10-10', last_access_point: 'кпп ASTERUS', days_idle: 16 },
+        { pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null, days_idle: 40 },
+      ],
+    });
+  });
+
+  it('exportPassStats: «Не ходят» — столбец сводки из списка и свой блок, даже когда выданных за период нет', async () => {
+    // Сводка (выданных за период 0), точек нет, детализация выданных пуста.
+    h.query.mockResolvedValueOnce([statRow({ issued_new: 0, active_new: 2, old_total: 0, old_used: 0 })]);
+    h.fetchIdleContractorPasses.mockResolvedValueOnce([
+      idleRow({ pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null, days_idle: 40 }),
+      idleRow(),
+    ]);
+    const res = makeExportRes();
+    await contractorAdminController.exportPassStats(
+      statsReq({ date_from: '2026-07-01', date_to: '2026-07-31' }), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(h.fetchIdleContractorPasses).toHaveBeenCalledWith([ORG], moscowTodayIso());
+    expect(h.countIdlePassesByOrg).not.toHaveBeenCalled();
+
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.sent as Buffer as never);
+    const stat = wb.getWorksheet('Статистика')!;
+    expect(stat.getRow(1).values).toEqual([
+      undefined, 'Подрядчик', 'Выдано новых', 'Активные', 'Не ходят > 5 дн.', 'Всего старых', 'Используются старые (14 дн.)',
+    ]);
+    expect(stat.getRow(2).values).toEqual([undefined, 'АЛЬФА ООО', 0, 2, 2, 0, 0]);
+    expect(stat.getRow(3).values).toEqual([]);
+    expect(stat.getRow(4).getCell(1).value).toBe('Не ходят больше 5 дней');
+    expect(stat.getRow(5).values).toEqual([
+      undefined, 'Подрядчик', 'ФИО', '№ пропуска ФОТ', 'Последний проход', 'Точка последнего прохода', 'Дней без проходов',
+    ]);
+    expect(stat.getRow(6).values).toEqual([undefined, 'АЛЬФА ООО', 'Петров П.', '102', 'не было', '—', 40]);
+    expect(stat.getRow(7).values).toEqual([undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '2026-10-10', 'кпп ASTERUS', 16]);
   });
 });
 

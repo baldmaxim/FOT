@@ -92,6 +92,11 @@ import {
   OtTrainingKindError,
   type OtTrainingsPatch,
 } from '../services/contractor-induction.service.js';
+import {
+  countIdlePassesByOrg,
+  fetchIdleContractorPasses,
+  IDLE_PASS_DAYS,
+} from '../services/contractor-pass-idle.service.js';
 
 /** Даты обучения: ключ отсутствует — вид не трогаем, null — снять дату. */
 const otTrainingsSchema = z.record(
@@ -2060,8 +2065,8 @@ export const contractorAdminController = {
 
   /**
    * GET /passes/stats?date_from=&date_to= — статистика пропусков по всем подрядчикам.
-   * Возвращает по строке на организацию: выдано новых / активные / всего старых /
-   * используются старые. Период фильтрует только «выдано новых» (по дате одобрения).
+   * Возвращает по строке на организацию: выдано новых / активные / не ходят > IDLE_PASS_DAYS дн. /
+   * всего старых / используются старые. Период фильтрует только «выдано новых» (по дате одобрения).
    * Фильтрацию по конкретному подрядчику делает фронт.
    */
   async passStats(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -2073,8 +2078,11 @@ export const contractorAdminController = {
         res.json({ success: true, data: [] });
         return;
       }
-      const stats = await fetchContractorPassStats(orgs.map(o => o.id), dateFrom, dateTo);
+      const ids = orgs.map(o => o.id);
+      const stats = await fetchContractorPassStats(ids, dateFrom, dateTo);
+      const idle = await countIdlePassesByOrg(ids, moscowTodayIso());
       const byId = new Map(stats.map(s => [s.org_department_id, s]));
+      const idleById = new Map(idle.map(i => [i.org_department_id, i.idle_new]));
       const data = orgs.map(o => {
         const s = byId.get(o.id);
         return {
@@ -2082,6 +2090,7 @@ export const contractorAdminController = {
           org_name: o.name,
           issued_new: s?.issued_new ?? 0,
           active_new: s?.active_new ?? 0,
+          idle_new: idleById.get(o.id) ?? 0,
           old_total: s?.old_total ?? 0,
           old_used: s?.old_used ?? 0,
         };
@@ -2133,6 +2142,37 @@ export const contractorAdminController = {
   },
 
   /**
+   * GET /passes/stats/idle?org_department_id= — активные пропуска подрядчика без проходов СКУД
+   * больше IDLE_PASS_DAYS дней: № пропуска, ФИО, последний проход и его точка, дней без проходов.
+   * Период не принимается: как и «Активные», это состояние «на сейчас».
+   */
+  async passStatsIdle(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const orgRaw = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id.trim() : '';
+      const orgId = z.string().uuid().parse(orgRaw);
+      const rows = await fetchIdleContractorPasses([orgId], moscowTodayIso());
+      const data = rows.map(r => ({
+        pass_id: r.pass_id,
+        pass_number: r.pass_number,
+        holder_name: r.holder_name,
+        last_event_date: r.last_event_date,
+        last_access_point: r.last_access_point,
+        days_idle: r.days_idle,
+      }));
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor passStatsIdle error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить список пропусков' });
+    }
+  },
+
+  /**
    * GET /passes/stats/access-points?org_department_id= — разбивка активных пропусков
    * по точкам доступа: с org — по одному подрядчику, без него — по всем.
    * Период не принимается: как и «Активные» в сводке, это состояние «на сейчас».
@@ -2162,7 +2202,7 @@ export const contractorAdminController = {
   /**
    * GET /passes/stats/export?org_department_id=&date_from=&date_to= — xlsx со статистикой
    * пропусков. Без org — все подрядчики (только непустые строки), с ним — один.
-   * Лист «Статистика» + лист «Пропуска» (детализация выданных). Период — как в /passes/stats.
+   * Один лист: сводка, детализация выданных, не ходящие. Период — как в /passes/stats.
    */
   async exportPassStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -2179,21 +2219,31 @@ export const contractorAdminController = {
       const stats = await fetchContractorPassStats(ids, dateFrom, dateTo);
       const accessPoints = await fetchContractorPassAccessPointStats(ids);
       const pointsByOrg = new Map(accessPoints.map(a => [a.org_department_id, a.points]));
+      const details = await fetchContractorPassDetails(ids, dateFrom, dateTo);
+      // Не ходящие — «на сейчас», период на них не влияет; счётчик сводки — из этого же списка.
+      const idle = await fetchIdleContractorPasses(ids, moscowTodayIso());
+      const idleByOrg = new Map<string, number>();
+      for (const i of idle) idleByOrg.set(i.org_department_id, (idleByOrg.get(i.org_department_id) ?? 0) + 1);
 
       const rows = stats
-        .map(s => ({ ...s, org_name: nameById.get(s.org_department_id) ?? '—' }))
+        .map(s => ({
+          ...s,
+          idle_new: idleByOrg.get(s.org_department_id) ?? 0,
+          org_name: nameById.get(s.org_department_id) ?? '—',
+        }))
         // в режиме «все подрядчики» показываем только тех, у кого есть хоть какие-то пропуска
         .filter(s => (orgFilter ? true : s.issued_new > 0 || s.active_new > 0 || s.old_total > 0))
         .sort((a, b) => a.org_name.localeCompare(b.org_name, 'ru'));
 
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Статистика');
-      // Ширины общие со списком выданных ниже (B — «Выдано новых» и ФИО).
+      // Ширины общие со списками ниже (B — «Выдано новых» и ФИО, E — «Всего старых» и точка прохода).
       ws.columns = [
         { header: 'Подрядчик', key: 'org_name', width: 40 },
         { header: 'Выдано новых', key: 'issued_new', width: 35 },
         { header: 'Активные', key: 'active_new', width: 16 },
-        { header: 'Всего старых', key: 'old_total', width: 16 },
+        { header: `Не ходят > ${IDLE_PASS_DAYS} дн.`, key: 'idle_new', width: 18 },
+        { header: 'Всего старых', key: 'old_total', width: 28 },
         { header: `Используются старые (${OLD_PASS_USAGE_WINDOW_DAYS} дн.)`, key: 'old_used', width: 28 },
       ];
       ws.getRow(1).font = { bold: true };
@@ -2204,6 +2254,7 @@ export const contractorAdminController = {
           org_name: r.org_name,
           issued_new: r.issued_new,
           active_new: r.active_new,
+          idle_new: r.idle_new,
           old_total: r.old_total,
           old_used: r.old_used,
         });
@@ -2219,10 +2270,11 @@ export const contractorAdminController = {
           (acc, r) => ({
             issued_new: acc.issued_new + r.issued_new,
             active_new: acc.active_new + r.active_new,
+            idle_new: acc.idle_new + r.idle_new,
             old_total: acc.old_total + r.old_total,
             old_used: acc.old_used + r.old_used,
           }),
-          { issued_new: 0, active_new: 0, old_total: 0, old_used: 0 },
+          { issued_new: 0, active_new: 0, idle_new: 0, old_total: 0, old_used: 0 },
         );
         const totalRow = ws.addRow({ org_name: 'Итого', ...total });
         totalRow.font = { bold: true };
@@ -2238,13 +2290,29 @@ export const contractorAdminController = {
 
       // Детализация выданных (текущие одобренные держатели) — на том же листе,
       // через пустую строку после сводки. Шапка — addRow массивом (ws.columns занят сводкой).
-      const details = await fetchContractorPassDetails(ids, dateFrom, dateTo);
       if (details.length > 0) {
         ws.addRow([]);
         const detailsHeader = ws.addRow(['Подрядчик', 'ФИО', '№ пропуска ФОТ', '№ Sigur (W26)', 'Дата выдачи']);
         detailsHeader.font = { bold: true };
         for (const d of details) {
           ws.addRow([d.org_name, d.holder_name, d.pass_number, decodeW26(d.card_uid) ?? '—', d.issued_on]);
+        }
+      }
+
+      // Не ходящие — своим условием, не внутри детализации: за период выданных может не быть,
+      // а не ходящие (состояние «на сейчас») — есть.
+      if (idle.length > 0) {
+        ws.addRow([]);
+        ws.addRow([`Не ходят больше ${IDLE_PASS_DAYS} дней`]).font = { bold: true };
+        const idleHeader = ws.addRow([
+          'Подрядчик', 'ФИО', '№ пропуска ФОТ', 'Последний проход', 'Точка последнего прохода', 'Дней без проходов',
+        ]);
+        idleHeader.font = { bold: true };
+        for (const i of idle) {
+          ws.addRow([
+            i.org_name, i.holder_name, i.pass_number,
+            i.last_event_date ?? 'не было', i.last_access_point ?? '—', i.days_idle,
+          ]);
         }
       }
 
