@@ -86,6 +86,19 @@ describe('расчётный листок: строки статей', () => {
       { code: 'car_rent', label: 'Удержание по договору аренды а/м', amount: 2610 },
     ]);
   });
+
+  it('статья 327: «Аванс» из ведомости бригады — своей строкой в начислениях, не в основной', () => {
+    const may = toPaidAmounts([
+      { month: '2026-05', item: 'contract', amount: '226029.72' },
+      { month: '2026-05', item: 'housing', amount: '4000.00' },
+      { month: '2026-05', item: 'advance_accrual', amount: '31388.64' },
+    ]);
+    expect(payslipLines('2026-05', may, 'accrued')).toEqual([
+      { code: 'housing', label: 'Компенсация проживания', amount: 4000 },
+      { code: 'advance_accrual', label: 'Аванс (начисление)', amount: 31388.64 },
+    ]);
+    expect(payslipLines('2026-05', may, 'deducted')).toEqual([]);
+  });
 });
 
 describe('расчётный листок: «По ставкам ФОТ»', () => {

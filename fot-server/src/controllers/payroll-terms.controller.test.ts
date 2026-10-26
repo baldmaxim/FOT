@@ -885,7 +885,7 @@ describe('payrollTermsController.list', () => {
     expect(sql).toContain("pa.item_code IN ('contract', 'bonus', 'sick_leave', 'vacation', 'housing', 'travel', "
       + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan', "
       + "'kpi', 'premium', 'premium_contract', 'gph', 'extra_work', 'substitution', 'car_compensation', 'deposit', "
-      + "'day_rate', 'workwear_accrual', "
+      + "'day_rate', 'workwear_accrual', 'advance_accrual', "
       + "'meals', 'workwear', 'safety_fine', 'fines', 'writ_deduction', 'vacation_deduction', 'loan_repayment', "
       + "'loan_interest', 'apartment', 'imprest', 'third_party', 'transport', 'mobile', 'bank_fees', "
       + "'alimony', 'tmc', 'car_rent')");
@@ -1262,7 +1262,7 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).not.toMatch(/payouts/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
-    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual'\)\)\)::text AS paid_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual'\)\)\)::text AS paid_total/);
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent'\)\)\)::text AS paid_deductions_total/);
     // Новые статьи 325: удержание не попадает в итог начислений, начисление — в итог удержаний.
     expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'bank_fees'/);
@@ -1270,6 +1270,8 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     // 326: «Спецодежда (начисление)» — в начислениях, «Спецодежда» и «Алименты» — в удержаниях.
     expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'alimony'/);
     expect(sql).not.toMatch(/item_code IN \('meals'[^)]*'workwear_accrual'/);
+    // 327: «Аванс (начисление)» — только в начислениях.
+    expect(sql).not.toMatch(/item_code IN \('meals'[^)]*'advance_accrual'/);
     expectPlaceholdersMatch(sql, params);
   });
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// «Оплачено» на настоящем PostgreSQL (миграции 295, 297, 325, 326): вставка, замена, неизменённая сумма,
+// «Оплачено» на настоящем PostgreSQL (миграции 295, 297, 325, 326, 327): вставка, замена, неизменённая сумма,
 // очистка, CHECK статьи, минуса и первого числа, выборка по периоду.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
@@ -165,17 +165,19 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
     ]);
   });
 
-  // Последним: 325 и 326 расширяют CHECK, тест 301 выше проверяет прежний состав.
-  it('325 + 326: все статьи каталога сервера вставляются; выплаты и минус у новых — нет', async () => {
+  // Последним: 325, 326 и 327 расширяют CHECK, тест 301 выше проверяет прежний состав.
+  it('325 + 326 + 327: все статьи каталога сервера вставляются; выплаты (и «Аванс» 8.3) и минус у новых — нет', async () => {
     await pg.pool!.query(migration('325_payroll_paid_more_items.sql'));
     await pg.pool!.query(migration('326_payroll_paid_july_items.sql'));
-    await pg.pool!.query(migration('326_payroll_paid_july_items.sql'));
+    await pg.pool!.query(migration('327_payroll_paid_advance_accrual.sql'));
+    await pg.pool!.query(migration('327_payroll_paid_advance_accrual.sql'));
     await insert(3, PAYROLL_PAID_ITEM_CODES.map(code => ['2026-08', code, 1] as [string, string, number]));
     const saved = await getPaidAmounts(3, '2026-08', '2026-08');
     expect(saved.map(row => row.item).sort()).toEqual([...PAYROLL_PAID_ITEM_CODES].sort());
     await expect(insert(3, [['2026-09', 'advance', 1]])).rejects.toThrow(/payroll_paid_item_code/);
     await expect(insert(3, [['2026-09', 'loan_repayment', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
     await expect(insert(3, [['2026-09', 'alimony', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
+    await expect(insert(3, [['2026-09', 'advance_accrual', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
   });
 
   it('326: «Спецодежда» удержанием и начислением у одного сотрудника за месяц — две разные статьи', async () => {
