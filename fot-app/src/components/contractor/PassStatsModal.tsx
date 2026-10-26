@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Download } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -216,6 +216,18 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                 onClick={() => { setDateFrom(''); setDateTo(''); }}
               >
                 Сбросить
+              </button>
+            </div>
+          )}
+          {orgId && (
+            <div className={`${styles.field} ${styles.filterAction}`}>
+              <span className={styles.label}>&nbsp;</span>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnIcon}`}
+                onClick={() => setOrgId('')}
+              >
+                <ArrowLeft size={14} /> Все подрядчики
               </button>
             </div>
           )}
