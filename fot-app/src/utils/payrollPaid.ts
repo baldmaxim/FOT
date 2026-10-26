@@ -6,6 +6,7 @@
  */
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
 import { formatMonthsLabel } from './monthsSelection';
+import { shiftMonth } from './moscowDate';
 
 export interface IPayrollPaidItem {
   code: PayrollPaidItemCode;
@@ -174,6 +175,28 @@ export const paidTotals = (
 export const paidAmountMonths = (rows: readonly IPayrollPaidAmount[]): string[] => (
   [...new Set(rows.map(row => row.month))].sort()
 );
+
+/**
+ * Месяцы выбора «Оплачено» в карточке «Подробно» (окно — по возрастанию): только те, за которые из 1С пришли суммы.
+ * paidMonths = null — суммы ещё грузятся или не загрузились: всё окно, выбор не блокируется.
+ */
+export const paidMonthOptions = (windowMonths: readonly string[], paidMonths: ReadonlySet<string> | null): string[] => (
+  paidMonths ? windowMonths.filter(month => paidMonths.has(month)) : [...windowMonths]
+);
+
+/**
+ * Месяц «Оплачено» по умолчанию: последний с суммами раньше текущего (текущий ещё не закрыт).
+ * Суммы ещё грузятся или раньше текущего их нет — прошлый месяц.
+ */
+export const defaultPaidMonth = (
+  options: readonly string[],
+  paidMonths: ReadonlySet<string> | null,
+  currentMonth: string,
+): string => {
+  const previous = shiftMonth(currentMonth, -1);
+  if (!paidMonths) return previous;
+  return options.filter(month => month < currentMonth).at(-1) ?? previous;
+};
 
 /** Период сумм «Расчётов»: 'all' или пусто — «весь период», как у «Свода». */
 export const formatPaidPeriod = (months: PayrollPaidMonths): string => (

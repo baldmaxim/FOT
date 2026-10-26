@@ -33,6 +33,18 @@ export const formatPayrollMoney = (value: string | number | null | undefined): s
   return num.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+/**
+ * Условия в карточке «Подробно»: «250 000 ₽», с копейками — только если они есть: «147 240,33 ₽».
+ * Целые рубли проверяются в копейках — дробные рубли в float дают «хвосты». Не число — null.
+ */
+export const formatPayrollRubles = (value: string | number | null | undefined): string | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(num)) return null;
+  const digits = Math.round(num * 100) % 100 === 0 ? 0 : 2;
+  return `${num.toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ₽`;
+};
+
 const EMPTY_VALUE_LABELS: Record<PayrollValueFilterColumn, string> = {
   department: 'Без подразделения',
   position: 'Без должности',

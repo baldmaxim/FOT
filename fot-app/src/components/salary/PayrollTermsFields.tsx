@@ -9,7 +9,7 @@ import {
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
 import { formatDate } from '../../utils/formatMoney';
 import { formatPaidAmount } from '../../utils/payrollPaid';
-import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { formatPayrollMoney, formatPayrollRubles } from '../../utils/payrollFormat';
 import {
   payrollFieldId,
   payrollTermsTotal,
@@ -55,6 +55,9 @@ const formatTermsMoney = (value: string | number | null, unit: string): string =
   const money = formatPayrollMoney(value);
   return money === null ? '—' : `${money} ${unit}`;
 };
+
+/** Оклад, премия и итого в «Подробно»: «250 000 ₽», копейки — только если есть. */
+const formatTermsRubles = (value: string | number | null): string => formatPayrollRubles(value) ?? '—';
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
 
@@ -208,18 +211,18 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                   <dt className={styles.label}>{form.calcType === 'salary' ? 'Оклад:' : 'Часовая ставка:'}</dt>
                   {' '}
                   <dd className={styles.inlineValue}>
-                    {formatTermsMoney(form.amount, form.calcType === 'salary' ? '₽/мес' : '₽/час')}
+                    {form.calcType === 'salary' ? formatTermsRubles(form.amount) : formatTermsMoney(form.amount, '₽/час')}
                   </dd>
                 </div>
                 <div>
                   <dt className={styles.label}>Премиальная часть:</dt>
                   {' '}
-                  <dd className={styles.inlineValue}>{formatTermsMoney(form.money.bonus, '₽/мес')}</dd>
+                  <dd className={styles.inlineValue}>{formatTermsRubles(form.money.bonus)}</dd>
                 </div>
                 <div>
                   <dt className={styles.label}>Итого:</dt>
                   {' '}
-                  <dd className={styles.inlineValue}>{formatTermsMoney(totalValue, '₽/мес')}</dd>
+                  <dd className={styles.inlineValue}>{formatTermsRubles(totalValue)}</dd>
                 </div>
                 {termsFrom && (
                   <div>

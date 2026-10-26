@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  defaultPaidMonth,
   formatPaidAmount,
   formatPaidPeriod,
   paidAmountMonths,
   paidCellKey,
   paidHistory,
   paidItemTotal,
+  paidMonthOptions,
   paidPayout,
   paidMonthsRange,
   paidTotals,
@@ -236,5 +238,25 @@ describe('окно «Начислено» на «Расчётах»', () => {
   it('раздел: начисления без удержаний и наоборот', () => {
     expect(pickPaidKind(ROWS, 'accrued').map(row => row.item)).toEqual(['contract', 'contract', 'housing', 'travel']);
     expect(pickPaidKind(ROWS, 'deducted').map(row => row.item)).toEqual(['meals']);
+  });
+});
+
+describe('выбор месяцев «Оплачено» в карточке', () => {
+  const WINDOW = ['2026-07', '2026-08', '2026-09', '2026-10'];
+
+  it('только месяцы с суммами; пока суммы не загружены — всё окно', () => {
+    expect(paidMonthOptions(WINDOW, new Set(['2026-08', '2026-07', '2025-01']))).toEqual(['2026-07', '2026-08']);
+    expect(paidMonthOptions(WINDOW, null)).toEqual(WINDOW);
+    expect(paidMonthOptions(WINDOW, new Set())).toEqual([]);
+  });
+
+  it('по умолчанию — последний месяц с суммами раньше текущего, иначе прошлый', () => {
+    const paid = new Set(['2026-07', '2026-08']);
+    expect(defaultPaidMonth(paidMonthOptions(WINDOW, paid), paid, '2026-10')).toBe('2026-08');
+    // Суммы за текущий месяц не делают его умолчанием: он ещё не закрыт.
+    const withCurrent = new Set(['2026-08', '2026-10']);
+    expect(defaultPaidMonth(paidMonthOptions(WINDOW, withCurrent), withCurrent, '2026-10')).toBe('2026-08');
+    expect(defaultPaidMonth(WINDOW, null, '2026-10')).toBe('2026-09');
+    expect(defaultPaidMonth([], new Set(), '2026-10')).toBe('2026-09');
   });
 });

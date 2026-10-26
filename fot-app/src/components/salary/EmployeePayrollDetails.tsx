@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
@@ -10,10 +10,11 @@ import {
   type IPayrollTermsRow,
 } from '../../services/payrollService';
 import { usePayrollCardExport } from '../../hooks/usePayrollCardExport';
-import { usePayrollPaid } from '../../hooks/usePayrollPaid';
+import { paidHistoryQueryOptions, usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
-import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
+import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
+import { defaultPaidMonth, paidAmountMonths, paidMonthOptions } from '../../utils/payrollPaid';
 import { travelAllowance } from '../../utils/payrollRates';
 import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
@@ -86,11 +87,24 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const canEdit = editable && canEditPage('/salary/terms') && row.can_edit !== false;
   const form = usePayrollTermsForm({ row, defaultDate, plannedSupplement: editable });
   // «Сегодня» — на момент открытия карточки: defaultDate фиксируется при входе в раздел и через
-  // границу месяца без перезагрузки устарел бы. По умолчанию — прошлый, уже закрытый месяц.
+  // границу месяца без перезагрузки устарел бы.
   const [currentMonth] = useState(moscowCurrentMonth);
-  const [months, setMonths] = useState<string[]>(() => [shiftMonth(currentMonth, -1)]);
+  // Месяцы, за которые из 1С пришли суммы, — тем же запросом, что вкладка «История выплат» и «Экспорт».
+  // Остальные в выборе «Оплачено» неактивны. Пока грузится (или ошибка) — доступно всё окно, как раньше.
+  const historyQuery = useQuery({ ...paidHistoryQueryOptions(row.employee_id, currentMonth), enabled: !editable });
+  const paidMonths = useMemo(
+    () => (historyQuery.data ? new Set(paidAmountMonths(historyQuery.data)) : null),
+    [historyQuery.data],
+  );
   // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
-  const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
+  const monthOptions = useMemo(
+    () => paidMonthOptions([...payrollMonthOptions(currentMonth)].reverse(), paidMonths),
+    [currentMonth, paidMonths],
+  );
+  // По умолчанию — последний закрытый месяц с суммами; пока пользователь не выбирал, подстраивается под данные.
+  const defaultMonth = defaultPaidMonth(monthOptions, paidMonths, currentMonth);
+  const [pickedMonths, setPickedMonths] = useState<string[] | null>(null);
+  const months = useMemo(() => pickedMonths ?? [defaultMonth], [pickedMonths, defaultMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
   const tabsId = useId();
@@ -187,9 +201,9 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
               <MonthsPicker
                 value={months}
                 options={monthOptions}
-                onChange={setMonths}
+                onChange={setPickedMonths}
                 allowAll={false}
-                resetValue={[shiftMonth(currentMonth, -1)]}
+                resetValue={[defaultMonth]}
                 ariaLabel="Месяцы «Оплачено»"
                 className={tab === 'terms' ? styles.monthsTrigger : `${styles.monthsTrigger} ${styles.monthsHidden}`}
               />
