@@ -5,9 +5,9 @@ import type { PayrollPaidApi } from '../../hooks/usePayrollPaid';
 import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from '../../utils/payrollAccruals';
 import {
   formatPaidAmount,
-  PAYROLL_PAID_TOTALS,
   paidCellKey,
   paidItemTotal,
+  paidPayout,
   type IPayrollPaidItem,
 } from '../../utils/payrollPaid';
 import styles from './PayrollPaidTable.module.css';
@@ -21,8 +21,9 @@ const formatTotal = (value: number | null): string => (value === null ? '—' : 
 /**
  * «Оплачено» за выбранные месяцы, только чтение (суммы приходят из 1С). Месяцы — столбцами: добавили месяц —
  * таблица наращивается; при нескольких месяцах справа столбец «Итого» — сумма за все выбранные. Сверху — итог
- * «Выплачено». Клик по его строке раскрывает ниже статьи по группам ведомости ЗУП (с удержаниями) — в той же
- * таблице, сам итог при этом не сдвигается. Таблица прокручивается вбок, подписи закреплены слева.
+ * «Выплачено»: расчётное «К выплате» по данным 1С — начислено минус удержано (как в «Истории выплат», на «Расчётах»
+ * и в «Своде»), без НДФЛ. Клик по его строке раскрывает ниже статьи по группам ведомости ЗУП (с удержаниями) —
+ * в той же таблице, сам итог при этом не сдвигается. Таблица прокручивается вбок, подписи закреплены слева.
  */
 export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid }) => {
   const withYear = accrualPeriodCrossesYear(paid.months);
@@ -62,24 +63,22 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid }) => {
           </thead>
           {/* Итоги — всегда на месте: статьи раскрываются под ними. Клик и Enter/Space с кнопки всплывают до строки. */}
           <tbody>
-            {PAYROLL_PAID_TOTALS.map(({ kind, label }) => (
-              <tr key={kind} className={styles.totalRow} onClick={paid.toggleExpanded}>
-                <th scope="row" className={`${styles.rowHead} ${styles.totalHead}`}>
-                  <button type="button" className={styles.totalToggle} aria-expanded={paid.expanded}>
-                    <ChevronRight size={16} className={styles.chevron} aria-hidden="true" />
-                    {label}
-                  </button>
-                </th>
-                {paid.months.map(month => (
-                  <td key={month} className={styles.total}>
-                    {ready ? formatTotal(paid.totals.byMonth[month][kind]) : ''}
-                  </td>
-                ))}
-                {withTotal && (
-                  <td className={styles.total}>{ready ? formatTotal(paid.totals.overall[kind]) : ''}</td>
-                )}
-              </tr>
-            ))}
+            <tr className={styles.totalRow} onClick={paid.toggleExpanded}>
+              <th scope="row" className={`${styles.rowHead} ${styles.totalHead}`}>
+                <button type="button" className={styles.totalToggle} aria-expanded={paid.expanded}>
+                  <ChevronRight size={16} className={styles.chevron} aria-hidden="true" />
+                  Выплачено
+                </button>
+              </th>
+              {paid.months.map(month => (
+                <td key={month} className={styles.total}>
+                  {ready ? formatTotal(paidPayout(paid.totals.byMonth[month])) : ''}
+                </td>
+              ))}
+              {withTotal && (
+                <td className={styles.total}>{ready ? formatTotal(paidPayout(paid.totals.overall)) : ''}</td>
+              )}
+            </tr>
           </tbody>
           {/* Сумм по статьям нет — прочерк в столбцах сумм, как у пустых итогов. */}
           {paid.expanded && ready && paid.groups.length === 0 && (

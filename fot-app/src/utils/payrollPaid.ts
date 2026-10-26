@@ -84,14 +84,6 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
   },
 ];
 
-/**
- * Строки итогов над статьями: только общая сумма начислений — «Выплачено». Удержания видны
- * в раскрытой строке «Выплачено» (группа «Удержано»).
- */
-export const PAYROLL_PAID_TOTALS: ReadonlyArray<{ kind: PayrollPaidTotalKind; label: string }> = [
-  { kind: 'accrued', label: 'Выплачено' },
-];
-
 export const paidCellKey = (month: string, item: PayrollPaidItemCode): string => `${month}:${item}`;
 
 /** Сумма в ячейке: с разделителем тысяч, копейки — всегда: «175 000,00», «55 057,30». */

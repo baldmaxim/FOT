@@ -214,6 +214,16 @@ describe('«История выплат»', () => {
     expect(paidPayout({ accrued: null, deducted: 0 })).toBe(0);
     expect(paidPayout({ accrued: null, deducted: 1800 })).toBe(-1800);
   });
+
+  it('«Выплачено» в «Подробно» — начислено минус удержано (Абдукаюмов, август 2026)', () => {
+    const amounts = toPaidAmounts([
+      { month: '2026-08', item: 'contract', amount: '140275.95' },
+      { month: '2026-08', item: 'workwear', amount: '918.77' },
+    ]);
+    const { byMonth, overall } = paidTotals(['2026-08'], amounts);
+    expect(paidPayout(byMonth['2026-08'])).toBe(139357.18);
+    expect(paidPayout(overall)).toBe(139357.18);
+  });
 });
 
 describe('окно «Начислено» на «Расчётах»', () => {
