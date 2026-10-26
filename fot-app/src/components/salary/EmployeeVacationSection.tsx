@@ -15,6 +15,8 @@ import styles from './PayrollDisclosure.module.css';
 
 interface IEmployeeVacationSectionProps {
   employeeId: number;
+  /** «Подробно»: только строка-сводка, без раскрытия и списка периодов. Окно «Расчётов» — с раскрытием. */
+  summaryOnly?: boolean;
 }
 
 const days = (count: number): string => `${count} ${pluralDays(count)}`;
@@ -54,10 +56,10 @@ const formatSource = (period: IVacationPeriod): string => {
 
 /**
  * «Отпуска» — раскрываемый блок, свёрнут по умолчанию, сводка с остатком видна всегда. В раскрытии —
- * все периоды с основанием и согласованием.
+ * все периоды с основанием и согласованием. summaryOnly («Подробно») — только строка-сводка, не раскрывается.
  * Свой запрос: сбой не мешает форме.
  */
-export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ employeeId }) => {
+export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ employeeId, summaryOnly = false }) => {
   const vacationQuery = useQuery({
     queryKey: ['payroll-vacation', employeeId],
     queryFn: ({ signal }) => payrollService.getVacation(employeeId, signal),
@@ -69,6 +71,25 @@ export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ emp
   if (data) meta = formatSummary(data.summary, data.balance);
   else if (vacationQuery.isError) meta = 'не удалось загрузить';
   else meta = 'загрузка…';
+  const metaClass = vacationQuery.isError ? `${styles.summaryMeta} ${styles.summaryMetaError}` : styles.summaryMeta;
+
+  // Строка без раскрытия — обычные div: не кликается и не фокусируется. Отступ слева — под заголовок соседнего блока.
+  if (summaryOnly) {
+    return (
+      <div className={styles.disclosure}>
+        <div className={`${styles.summary} ${styles.summaryStatic}`}>
+          <span className={styles.summaryTitle}>Отпуска</span>
+          <span className={metaClass}>{meta}</span>
+          {/* type="button": карточка целиком форма. */}
+          {vacationQuery.isError && (
+            <button type="button" className={styles.retryButton} onClick={() => { void vacationQuery.refetch(); }}>
+              Повторить
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <details className={styles.disclosure}>
@@ -77,9 +98,7 @@ export const EmployeeVacationSection: FC<IEmployeeVacationSectionProps> = ({ emp
           <ChevronRight size={16} className={styles.chevron} aria-hidden="true" />
           <span className={styles.summaryTitle}>Отпуска</span>
         </span>
-        <span className={vacationQuery.isError ? `${styles.summaryMeta} ${styles.summaryMetaError}` : styles.summaryMeta}>
-          {meta}
-        </span>
+        <span className={metaClass}>{meta}</span>
       </summary>
 
       <div className={styles.content}>

@@ -18,6 +18,8 @@
 }
 .summary::-webkit-details-marker { display: none; }
 .summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+/* Строка без раскрытия («Отпуска» в «Подробно»): ниже .summary — перекрывает его; отступ = стрелка 16px + зазор 6px. */
+.summaryStatic { cursor: default; padding-left: 22px; }
 
 .summaryHead { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .chevron { flex-shrink: 0; color: var(--text-tertiary); transition: transform var(--transition); }
