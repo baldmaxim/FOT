@@ -2,7 +2,7 @@
  * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяц
  * столбцом. Статьи — в двух разделах ведомости: начислено (1) и удержано (3). Только чтение:
  * суммы приходят из 1С (API или выгрузка); показываются лишь статьи, по которым сумма есть.
- * Коды статей — те же, что в CHECK миграции 327 и в payroll-paid.service.ts на сервере.
+ * Коды статей — те же, что в CHECK миграции 329 и в payroll-paid.service.ts на сервере.
  */
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
 import { formatMonthsLabel } from './monthsSelection';
@@ -58,6 +58,7 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'day_rate', label: 'Оплата по дневному тарифу' }, // Оплата по дневному тарифу
       { code: 'workwear_accrual', label: 'Спецодежда (начисление)' }, // Спецодежда в начислениях
       { code: 'advance_accrual', label: 'Аванс (начисление)' }, // «Аванс» — доп. начисление в ведомости бригады
+      { code: 'fine_refund', label: 'Возврат штрафа' }, // «Возврат штрафа» — доп. начисление в ведомости бригады
     ],
   },
   {
@@ -81,6 +82,7 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'alimony', label: 'Алименты' }, // Алименты
       { code: 'tmc', label: 'ТМЦ' }, // ТМЦ
       { code: 'car_rent', label: 'Удержание по договору аренды а/м' }, // то же
+      { code: 'property_damage', label: 'Порча имущества' }, // «Порча имущества» в ведомости бригады
     ],
   },
 ];

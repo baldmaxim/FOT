@@ -24,20 +24,21 @@ import {
 const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
 describe('статьи', () => {
-  it('40 статей без повторов, в порядке ведомости', () => {
-    expect(ITEMS).toHaveLength(40);
-    expect(new Set(ITEMS.map(item => item.code)).size).toBe(40);
+  it('42 статьи без повторов, в порядке ведомости', () => {
+    expect(ITEMS).toHaveLength(42);
+    expect(new Set(ITEMS.map(item => item.code)).size).toBe(42);
     expect(PAYROLL_PAID_GROUPS.map(group => group.items.map(item => item.label))).toEqual([
       ['По трудовому договору', 'Премиальная', 'Больничный', 'Отпуска'],
       ['Компенсация проживания', 'Проезд', 'Переработка', 'Перерасчёт за предыдущий период',
         'Выходное пособие при увольнении', 'Разовая доплата', 'Плановая доплата', 'Займ',
         'KPI', 'Премия', 'Премия % по договору', 'Выплата по договору ГПХ', 'Допработы', 'Замещение',
         'Компенсация использования личного а/м', 'Депонент', 'Оплата по дневному тарифу', 'Спецодежда (начисление)',
-        'Аванс (начисление)'],
+        'Аванс (начисление)', 'Возврат штрафа'],
       ['Питание', 'Спецодежда', 'Нарушение техники безопасности', 'Штрафы', 'Удержание по исп. листу',
         'Оплата отпуска (удержание)', 'Погашение займа', '% Займа', 'Квартиры', 'Подотчёт',
         'Удержание в пользу третьего лица', 'Транспортные затраты', 'Моб. телефон',
-        'Банковские издержки по исп. листам', 'Алименты', 'ТМЦ', 'Удержание по договору аренды а/м'],
+        'Банковские издержки по исп. листам', 'Алименты', 'ТМЦ', 'Удержание по договору аренды а/м',
+        'Порча имущества'],
     ]);
   });
 
@@ -56,10 +57,12 @@ describe('статьи', () => {
     expect(kindOf('day_rate')).toBe('accrued');
     expect(kindOf('workwear_accrual')).toBe('accrued');
     expect(kindOf('advance_accrual')).toBe('accrued');
+    expect(kindOf('fine_refund')).toBe('accrued');
     expect(kindOf('workwear')).toBe('deducted');
     expect(kindOf('alimony')).toBe('deducted');
     expect(kindOf('tmc')).toBe('deducted');
     expect(kindOf('car_rent')).toBe('deducted');
+    expect(kindOf('property_damage')).toBe('deducted');
   });
 });
 

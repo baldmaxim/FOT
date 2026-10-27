@@ -99,6 +99,22 @@ describe('расчётный листок: строки статей', () => {
     ]);
     expect(payslipLines('2026-05', may, 'deducted')).toEqual([]);
   });
+
+  it('статьи 329: «Возврат штрафа» — своей строкой в начислениях, «Порча имущества» — в удержаниях', () => {
+    const june = toPaidAmounts([
+      { month: '2026-06', item: 'contract', amount: '123302.35' },
+      { month: '2026-06', item: 'fine_refund', amount: '13705.62' },
+      { month: '2026-06', item: 'housing', amount: '4320.00' },
+      { month: '2026-06', item: 'property_damage', amount: '8000.00' },
+    ]);
+    expect(payslipLines('2026-06', june, 'accrued')).toEqual([
+      { code: 'housing', label: 'Компенсация проживания', amount: 4320 },
+      { code: 'fine_refund', label: 'Возврат штрафа', amount: 13705.62 },
+    ]);
+    expect(payslipLines('2026-06', june, 'deducted')).toEqual([
+      { code: 'property_damage', label: 'Порча имущества', amount: 8000 },
+    ]);
+  });
 });
 
 describe('расчётный листок: «По ставкам ФОТ»', () => {
