@@ -302,6 +302,32 @@ export function planSigurCardRebinds(
   return { rebinds, handledSigurIds, ambiguousSigurIds };
 }
 
+/** Карточка Sigur тёзки новой карточки: 'absent' — 404, 'unknown' — Sigur не ответил. */
+export type TNamesakeCardState = 'absent' | 'working' | 'archived' | 'unknown';
+
+export interface IQuickNamesakeDecision {
+  action: 'proceed' | 'skip' | 'retry';
+  blockingReason?: 'multiple_portal_only' | 'archived_card';
+}
+
+/**
+ * Точечный синк: новая карточка, у которой в ФОТ есть тёзки. Вставляем или привязываем
+ * сразу, только если так же решил бы плановый синк по полному снимку:
+ * - несколько активных portal-only — unmatched (неоднозначная привязка);
+ * - карточка тёзки в архиве Sigur — planSigurCardRebinds (перепривязка или unmatched);
+ * - удалённая или рабочая карточка тёзки вставке не мешает.
+ * Известный блокер важнее 'unknown': повтор не изменит решения.
+ */
+export function decideQuickNamesake({ portalActiveCount, cardStates }: {
+  portalActiveCount: number;
+  cardStates: TNamesakeCardState[];
+}): IQuickNamesakeDecision {
+  if (portalActiveCount > 1) return { action: 'skip', blockingReason: 'multiple_portal_only' };
+  if (cardStates.includes('archived')) return { action: 'skip', blockingReason: 'archived_card' };
+  if (cardStates.includes('unknown')) return { action: 'retry' };
+  return { action: 'proceed' };
+}
+
 const TECHNICAL_ACCESS_SOURCES = ['sigur_sync', 'portal_lifecycle'];
 
 /**
@@ -948,13 +974,24 @@ export async function syncEmployeesLogic(
     if (emp.id != null && !cardBySigurId.has(emp.id)) cardBySigurId.set(emp.id, emp);
   }
 
-  // Точечный режим: тёзки по всей БД (любой статус, по full_name — last_name у старых
-  // записей бывает пустым). Связь с ними без полного снимка не решить — вставку откладываем.
+  // Точечный режим: тёзки новых карточек по всей БД (любой статус, по full_name — last_name
+  // у старых записей бывает пустым). Связанным карточкам ветка вставки не нужна.
   const namesakesByKey = new Map<string, { id: number; sigur_employee_id: number | null; employment_status: string }[]>();
-  const quickNamesakeSkips: { sigurId: number; name: string; namesakeIds: number[] }[] = [];
+  // Состояние карточек Sigur этих тёзок — одна проба на карточку за прогон (decideQuickNamesake).
+  const namesakeCardStates = new Map<number, TNamesakeCardState>();
+  const quickNamesakeSkips: {
+    sigurId: number;
+    name: string;
+    namesakeIds: number[];
+    blockingReason: IQuickNamesakeDecision['blockingReason'];
+    archivedSigurIds: number[];
+    portalActiveCount: number;
+  }[] = [];
   if (quickMode) {
     const nameKeys = [...new Set(
-      sigurEmployees.filter(emp => emp.name).map(emp => normalizeFullName(emp.name as string, { collapseYo: true })),
+      sigurEmployees
+        .filter(emp => emp.name && !(emp.id != null && sigurIdToDbId.has(emp.id)))
+        .map(emp => normalizeFullName(emp.name as string, { collapseYo: true })),
     )];
     if (nameKeys.length > 0) {
       const namesakeRows = await query<{ id: number; sigur_employee_id: number | null; employment_status: string; name_key: string }>(
@@ -969,6 +1006,38 @@ export async function syncEmployeesLogic(
         else namesakesByKey.set(row.name_key, [row]);
       }
     }
+
+    // Запрошенные в этом прогоне карточки уже получены — их не запрашиваем повторно.
+    // Карточки-пробы в sigurEmployees не попадают: они только для решения о вставке.
+    const toProbe = new Set<number>();
+    for (const rows of namesakesByKey.values()) {
+      for (const row of rows) {
+        const sid = row.sigur_employee_id;
+        if (sid == null || sid <= 0 || namesakeCardStates.has(sid)) continue;
+        if (!quickIds.includes(sid)) {
+          toProbe.add(sid);
+          continue;
+        }
+        const fetched = cardBySigurId.get(sid);
+        if (fetched) {
+          namesakeCardStates.set(sid, resolveCardDept(fetched.departmentId).isDismissalDept ? 'archived' : 'working');
+        } else {
+          namesakeCardStates.set(sid, outcomes.get(sid) === 'not_found' ? 'absent' : 'unknown');
+        }
+      }
+    }
+    const probeIds = [...toProbe];
+    const probes = await mapWithConcurrency(
+      probeIds,
+      PROBE_CONCURRENCY,
+      sid => probeSigurCard(sid, archiveDepartmentId, connection),
+    );
+    probeIds.forEach((sid, idx) => {
+      const probe = probes[idx];
+      if (probe.state === 'deleted') namesakeCardStates.set(sid, 'absent');
+      else if (probe.state === 'unknown') namesakeCardStates.set(sid, 'unknown');
+      else namesakeCardStates.set(sid, resolveCardDept(probe.departmentId).isDismissalDept ? 'archived' : 'working');
+    });
   }
 
   let imported = 0;
@@ -1384,19 +1453,44 @@ export async function syncEmployeesLogic(
 
       const nameKey = normalizeFullName(fullName, { collapseYo: true });
       if (quickMode) {
-        // Привязываем только единственного активного portal-only и только если других
-        // тёзок нет совсем. Иначе — плановому синку (rebind/unmatched по полному снимку).
+        // Тёзки — решение как у планового синка (decideQuickNamesake); блокер — плановому
+        // синку (rebind/unmatched по полному снимку), иначе общая ветка ниже.
         const sameName = (namesakesByKey.get(nameKey) || []).filter(r => r.sigur_employee_id !== sigurEmpId);
         const portalActive = sameName.filter(r => r.sigur_employee_id == null && r.employment_status === 'active');
-        if (sameName.length > portalActive.length || portalActive.length > 1) {
+        const withCard = sameName
+          .filter(r => r.sigur_employee_id != null)
+          .map(r => ({ row: r, state: namesakeCardStates.get(r.sigur_employee_id as number) ?? 'unknown' as const }));
+        const decision = decideQuickNamesake({
+          portalActiveCount: portalActive.length,
+          cardStates: withCard.map(c => c.state),
+        });
+        if (decision.action === 'retry') {
           console.warn(
-            `[syncEmployees] quick: skip insert (namesake): ${fullName} (sigurId=${sigurEmpId}) — `
-            + `namesakes: ${sameName.map(r => r.id).join(',')}`,
+            `[syncEmployees] quick: namesake card state unknown: ${fullName} (sigurId=${sigurEmpId}) — `
+            + `cards: ${withCard.filter(c => c.state === 'unknown').map(c => c.row.sigur_employee_id).join(',')}`,
+          );
+          skipped++;
+          markQuick(sigurEmpId, 'retryable');
+          continue;
+        }
+        if (decision.action === 'skip') {
+          const archived = withCard.filter(c => c.state === 'archived').map(c => c.row);
+          const blocking = decision.blockingReason === 'multiple_portal_only' ? portalActive : archived;
+          console.warn(
+            `[syncEmployees] quick: skip insert (namesake, ${decision.blockingReason}): ${fullName} `
+            + `(sigurId=${sigurEmpId}) — namesakes: ${blocking.map(r => r.id).join(',')}`,
           );
           skipped++;
           markQuick(sigurEmpId, 'skipped_namesake');
           if (sigurEmpId != null) {
-            quickNamesakeSkips.push({ sigurId: sigurEmpId, name: fullName.trim(), namesakeIds: sameName.map(r => r.id) });
+            quickNamesakeSkips.push({
+              sigurId: sigurEmpId,
+              name: fullName.trim(),
+              namesakeIds: blocking.map(r => r.id),
+              blockingReason: decision.blockingReason,
+              archivedSigurIds: archived.map(r => r.sigur_employee_id as number),
+              portalActiveCount: portalActive.length,
+            });
           }
           continue;
         }
@@ -1766,7 +1860,14 @@ export async function syncEmployeesLogic(
           action: 'SIGUR_QUICK_SYNC_SKIPPED',
           entity_type: 'sigur_employee',
           entity_id: String(skip.sigurId),
-          details: { reason: 'namesake', name: skip.name, namesake_employee_ids: skip.namesakeIds },
+          details: {
+            reason: 'namesake',
+            name: skip.name,
+            blocking_reason: skip.blockingReason,
+            namesake_employee_ids: skip.namesakeIds,
+            archived_sigur_ids: skip.archivedSigurIds,
+            portal_only_active: skip.portalActiveCount,
+          },
         });
       } catch (auditErr) {
         console.warn('[syncEmployees] quick namesake audit failed:', (auditErr as Error).message);

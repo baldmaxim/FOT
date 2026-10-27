@@ -97,7 +97,7 @@ vi.mock('./sigur-sync-shared.js', async () => {
   };
 });
 
-import { syncEmployeesLogic } from './sigur-sync-employees.service.js';
+import { decideQuickNamesake, syncEmployeesLogic, type TNamesakeCardState } from './sigur-sync-employees.service.js';
 import { getWhitelistedDepartmentIdsCached } from './sigur-sync-shared.js';
 
 const ARCHIVE_LOCAL = 'local-archive-uuid';
@@ -331,13 +331,48 @@ describe('точечный режим syncEmployeesLogic', () => {
     expect(namesakeCall?.[1]).toEqual([['семенов петр']]);
   });
 
+  it('правка связанной карточки — тёзок не ищем, карточки не пробуем', async () => {
+    setupQueries({ employees: [dbEmployee()] });
+    h.getEmployeeById.mockResolvedValue(card());
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('unchanged');
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('name_key'))).toBe(false);
+    expect(h.probe).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ['уволенный тёзка', { id: 500, sigur_employee_id: 140000, employment_status: 'fired' }],
-    ['тёзка с другой карточкой', { id: 501, sigur_employee_id: 140001, employment_status: 'active' }],
-    ['legacy-тёзка без last_name (найден по full_name)', { id: 502, sigur_employee_id: null, employment_status: 'fired' }],
-  ])('%s: вставки нет, аудит с причиной', async (_title, namesake) => {
+    ['уволенный тёзка, карточки в Sigur нет', { id: 500, sigur_employee_id: 140000, employment_status: 'fired' }, { state: 'deleted', departmentId: null }],
+    ['тёзка с карточкой в рабочем отделе', { id: 501, sigur_employee_id: 140001, employment_status: 'active' }, { state: 'working', departmentId: OTHER_SIGUR }],
+  ])('%s — вставка сразу, проба с тем же подключением', async (_title, namesake, probe) => {
     setupQueries({ namesakes: [{ ...namesake, name_key: 'сангалии зикрулло' }] });
     h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockResolvedValue(probe);
+
+    const result = await syncEmployeesLogic('external', undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('inserted');
+    expect(result.imported).toBe(1);
+    expect(h.probe).toHaveBeenCalledTimes(1);
+    expect(h.probe).toHaveBeenCalledWith(namesake.sigur_employee_id, ARCHIVE_SIGUR, 'external');
+    expect(h.auditLog).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'SIGUR_QUICK_SYNC_SKIPPED' }));
+  });
+
+  it('legacy-тёзка без карточки (уволен, найден по full_name) — вставка без пробы', async () => {
+    setupQueries({ namesakes: [{ id: 502, sigur_employee_id: null, employment_status: 'fired', name_key: 'сангалии зикрулло' }] });
+    h.getEmployeeById.mockResolvedValue(card());
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('inserted');
+    expect(h.probe).not.toHaveBeenCalled();
+  });
+
+  it('карточка тёзки в архиве Sigur — вставки нет, аудит с причиной', async () => {
+    setupQueries({ namesakes: [{ id: 500, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' }] });
+    h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockResolvedValue({ state: 'archived', departmentId: ARCHIVE_SIGUR });
 
     const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
 
@@ -347,8 +382,80 @@ describe('точечный режим syncEmployeesLogic', () => {
     expect(h.auditLog).toHaveBeenCalledWith(expect.objectContaining({
       action: 'SIGUR_QUICK_SYNC_SKIPPED',
       entity_id: '151896',
-      details: expect.objectContaining({ reason: 'namesake', namesake_employee_ids: [namesake.id] }),
+      details: expect.objectContaining({
+        reason: 'namesake',
+        blocking_reason: 'archived_card',
+        namesake_employee_ids: [500],
+        archived_sigur_ids: [140000],
+        portal_only_active: 0,
+      }),
     }));
+  });
+
+  it('Sigur не ответил по карточке тёзки — повтор, без вставки и аудита', async () => {
+    setupQueries({ namesakes: [{ id: 500, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' }] });
+    h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockResolvedValue({ state: 'unknown', departmentId: null, error: 'empty body' });
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('retryable');
+    expect(result.imported).toBe(0);
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO employees'))).toBe(false);
+    expect(h.auditLog).not.toHaveBeenCalled();
+  });
+
+  it('архивная карточка одного тёзки важнее ошибки по другому — пропуск без повтора', async () => {
+    setupQueries({
+      namesakes: [
+        { id: 500, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' },
+        { id: 501, sigur_employee_id: 140001, employment_status: 'fired', name_key: 'сангалии зикрулло' },
+      ],
+    });
+    h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockImplementation(async (sid: number) => (sid === 140000
+      ? { state: 'archived', departmentId: ARCHIVE_SIGUR }
+      : { state: 'unknown', departmentId: null, error: 'timeout' }));
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('skipped_namesake');
+    expect(h.auditLog).toHaveBeenCalledWith(expect.objectContaining({
+      details: expect.objectContaining({ namesake_employee_ids: [500], archived_sigur_ids: [140000] }),
+    }));
+  });
+
+  it('две новые карточки одного ФИО — одна проба тёзки на прогон', async () => {
+    setupQueries({ namesakes: [{ id: 500, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' }] });
+    h.getEmployeeById.mockImplementation(async (id: number) => card({ id }));
+    h.probe.mockResolvedValue({ state: 'deleted', departmentId: null });
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896, 151897] });
+
+    expect(h.probe).toHaveBeenCalledTimes(1);
+    expect(result.quick_outcomes?.get(151896)).toBe('inserted');
+    expect(result.quick_outcomes?.get(151897)).toBe('inserted');
+  });
+
+  it('старая архивная и новая карточка в одной пачке — старая без повторного GET, новая ждёт планового синка', async () => {
+    setupQueries({
+      employees: [dbEmployee({
+        id: 500, sigur_employee_id: 140000, employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-31',
+      })],
+      namesakes: [{ id: 500, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' }],
+    });
+    h.getEmployeeById.mockImplementation(async (id: number) => (id === 140000
+      ? card({ id, departmentId: ARCHIVE_SIGUR })
+      : card()));
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [140000, 151896] });
+
+    expect(h.getEmployeeById).toHaveBeenCalledTimes(2);
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(result.quick_outcomes?.get(151896)).toBe('skipped_namesake');
+    // Старая карточка — обычная ветка связанного сотрудника: уже уволен и в архиве, без изменений.
+    expect(result.quick_outcomes?.get(140000)).toBe('unchanged');
+    expect(h.openDismiss).not.toHaveBeenCalled();
   });
 
   it('единственный активный portal-only тёзка — привязка', async () => {
@@ -371,16 +478,55 @@ describe('точечный режим syncEmployeesLogic', () => {
     expect(result.imported).toBe(0);
   });
 
-  it('portal-only плюс уволенный тёзка — неоднозначно, привязки нет', async () => {
-    const portal = {
-      id: 700, full_name: 'Сангалии Зикрулло', last_name: 'Сангалии', first_name: 'Зикрулло', middle_name: null,
-      org_department_id: BRIGADE_LOCAL, position_id: 'position-1', tab_number: null, department_locked: false, name_locked: false,
-    };
+  const portalRow = (id: number) => ({
+    id, full_name: 'Сангалии Зикрулло', last_name: 'Сангалии', first_name: 'Зикрулло', middle_name: null,
+    org_department_id: BRIGADE_LOCAL, position_id: 'position-1', tab_number: null, department_locked: false, name_locked: false,
+  });
+
+  it.each([
+    ['карточки в Sigur нет', { state: 'deleted', departmentId: null }],
+    ['карточка в рабочем отделе', { state: 'working', departmentId: OTHER_SIGUR }],
+  ])('portal-only плюс уволенный тёзка (%s) — привязка к portal-only', async (_title, probe) => {
     setupQueries({
-      portalOnly: [portal],
+      portalOnly: [portalRow(700)],
       namesakes: [
         { id: 700, sigur_employee_id: null, employment_status: 'active', name_key: 'сангалии зикрулло' },
         { id: 701, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' },
+      ],
+      accessRows: [{ id: 700, org_department_id: BRIGADE_LOCAL, has_access: true }],
+    });
+    h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockResolvedValue(probe);
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('linked');
+    expect(result.imported).toBe(0);
+  });
+
+  it('portal-only плюс тёзка с карточкой в архиве — привязки нет', async () => {
+    setupQueries({
+      portalOnly: [portalRow(700)],
+      namesakes: [
+        { id: 700, sigur_employee_id: null, employment_status: 'active', name_key: 'сангалии зикрулло' },
+        { id: 701, sigur_employee_id: 140000, employment_status: 'fired', name_key: 'сангалии зикрулло' },
+      ],
+    });
+    h.getEmployeeById.mockResolvedValue(card());
+    h.probe.mockResolvedValue({ state: 'archived', departmentId: ARCHIVE_SIGUR });
+
+    const result = await syncEmployeesLogic(undefined, undefined, {}, true, { onlySigurIds: [151896] });
+
+    expect(result.quick_outcomes?.get(151896)).toBe('skipped_namesake');
+    expect(employeeUpdates()).toHaveLength(0);
+  });
+
+  it('два активных portal-only — пропуск, в аудите оба', async () => {
+    setupQueries({
+      portalOnly: [portalRow(700), portalRow(702)],
+      namesakes: [
+        { id: 700, sigur_employee_id: null, employment_status: 'active', name_key: 'сангалии зикрулло' },
+        { id: 702, sigur_employee_id: null, employment_status: 'active', name_key: 'сангалии зикрулло' },
       ],
     });
     h.getEmployeeById.mockResolvedValue(card());
@@ -389,6 +535,12 @@ describe('точечный режим syncEmployeesLogic', () => {
 
     expect(result.quick_outcomes?.get(151896)).toBe('skipped_namesake');
     expect(employeeUpdates()).toHaveLength(0);
+    expect(result.imported).toBe(0);
+    expect(h.auditLog).toHaveBeenCalledWith(expect.objectContaining({
+      details: expect.objectContaining({
+        blocking_reason: 'multiple_portal_only', namesake_employee_ids: [700, 702], portal_only_active: 2,
+      }),
+    }));
   });
 
   it('смена отдела у существующего — через changeDepartment, исход updated', async () => {
@@ -518,5 +670,22 @@ describe('точечный режим syncEmployeesLogic', () => {
 
     expect(h.invalidateStructureCache).toHaveBeenCalled();
     expect(h.invalidateCache).toHaveBeenCalledWith('structure:positions');
+  });
+});
+
+describe('decideQuickNamesake: тёзки новой карточки', () => {
+  it.each<[string, number, TNamesakeCardState[], string, string | undefined]>([
+    ['тёзок с карточками нет', 0, [], 'proceed', undefined],
+    ['карточки удалены или в рабочих отделах', 0, ['absent', 'working'], 'proceed', undefined],
+    ['один portal-only и рабочая карточка', 1, ['working'], 'proceed', undefined],
+    ['несколько portal-only', 2, ['absent'], 'skip', 'multiple_portal_only'],
+    ['несколько portal-only важнее unknown', 2, ['unknown'], 'skip', 'multiple_portal_only'],
+    ['карточка в архиве', 1, ['working', 'archived'], 'skip', 'archived_card'],
+    ['архивная важнее unknown', 0, ['unknown', 'archived'], 'skip', 'archived_card'],
+    ['unknown без блокеров', 1, ['absent', 'unknown'], 'retry', undefined],
+  ])('%s', (_title, portalActiveCount, cardStates, action, blockingReason) => {
+    expect(decideQuickNamesake({ portalActiveCount, cardStates })).toEqual(
+      blockingReason ? { action, blockingReason } : { action },
+    );
   });
 });
