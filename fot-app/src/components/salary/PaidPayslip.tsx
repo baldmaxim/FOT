@@ -1,6 +1,7 @@
 import type { FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import type { IEmployeePayout1c } from '../../services/payroll1cPayoutsService';
 import { payrollService } from '../../services/payrollService';
 import { pluralDays } from '../../utils/dateCompact';
 import { formatPaidAmount, paidCellKey, type PayrollPaidTotals } from '../../utils/payrollPaid';
@@ -21,19 +22,29 @@ interface IPaidPayslipProps {
   positionName: string | null;
   amounts: ReadonlyMap<string, number>;
   totals: PayrollPaidTotals;
+  /** Ведомости выплаты 1С за месяц начисления и их сумма (справочно, миграция 328). */
+  transfers: readonly IEmployeePayout1c[];
+  transferred: number | null;
 }
 
 const formatTotal = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
+
+/** YYYY-MM-DD → ДД.ММ.ГГГГ. */
+const formatDocDate = (date: string): string => date.split('-').reverse().join('.');
 
 /**
  * Выбранный месяц вкладки «История выплат» — расчётный листок по подобию ЗУП. «Начислено за N дней»: первая строка —
  * должность и оклад, период, отработано дней (рабочие по графику / выходные сверх графика) и сумма
  * «По трудовому договору»; ниже прочие начисления и «Всего начислено». Затем «Удержано» и «Всего удержано».
  * Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад — из ФОТ: грузятся при выборе месяца.
+ * «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
+ * справочно, в «Всего начислено» и «К выплате» не входит.
  * Ниже — «По ставкам ФОТ» (проезд — пропорционально дням, доплата за проживание или за общежитие) по ставкам того
  * месяца; в «Всего начислено» они не входят.
  */
-export const PaidPayslip: FC<IPaidPayslipProps> = ({ employeeId, month, positionName, amounts, totals }) => {
+export const PaidPayslip: FC<IPaidPayslipProps> = ({
+  employeeId, month, positionName, amounts, totals, transfers, transferred,
+}) => {
   const payslipQuery = useQuery({
     // Под префиксом 'payroll-terms': сохранение карточки перечитывает и листок (оклад).
     queryKey: ['payroll-terms', 'payslip', employeeId, month],
@@ -153,6 +164,48 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({ employeeId, month, position
                   <td className={styles.num}>{formatTotal(totals.deducted)}</td>
                 </tr>
               </tfoot>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {transfers.length > 0 && (
+        <section className={styles.part} aria-label="Перечислено (1С)">
+          <p className={styles.partTitle}>Перечислено (1С)</p>
+          <div className={styles.scroll}>
+            <table className={styles.table}>
+              <colgroup>
+                <col className={styles.dateCol} />
+                <col />
+                <col className={styles.sumCol} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col">Дата</th>
+                  <th scope="col">Ведомость</th>
+                  <th scope="col" className={styles.num}>Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfers.map((doc, index) => (
+                  <tr key={`${doc.document_id}-${index}`}>
+                    <td className={styles.nowrap}>{formatDocDate(doc.doc_date)}</td>
+                    <th scope="row" className={styles.kind}>
+                      <span className={styles.kindName}>№ {doc.doc_number}</span>
+                      <span className={styles.kindNote}>{doc.payment_method}</span>
+                    </th>
+                    <td className={styles.num}>{formatPaidAmount(Number(doc.amount))}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {transfers.length > 1 && (
+                <tfoot>
+                  <tr>
+                    <th scope="row" colSpan={2}>Всего перечислено</th>
+                    <td className={styles.num}>{formatTotal(transferred)}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </section>

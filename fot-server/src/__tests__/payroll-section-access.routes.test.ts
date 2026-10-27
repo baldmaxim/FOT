@@ -73,6 +73,7 @@ vi.mock('../controllers/payroll-staff-deductions.controller.js', () => ({
   payrollStaffDeductionsController: h.stubController('staffDeductions'),
 }));
 vi.mock('../controllers/deduction-subkinds.controller.js', () => ({ deductionSubkindsController: h.stubController('subkinds') }));
+vi.mock('../controllers/payroll-1c-payouts.controller.js', () => ({ payroll1cPayoutsController: h.stubController('payouts1c') }));
 
 const app = express();
 app.use(express.json());

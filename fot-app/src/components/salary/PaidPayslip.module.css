@@ -35,6 +35,8 @@
 .periodCol { width: var(--period-w); }
 .daysCol { width: var(--days-w); }
 .sumCol { width: var(--sum-w); }
+/* «Перечислено (1С)»: дата ведомости ДД.ММ.ГГГГ в строку. */
+.dateCol { width: var(--period-w); }
 
 .table th,
 .table td {

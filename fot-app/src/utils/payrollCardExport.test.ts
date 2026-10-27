@@ -112,10 +112,11 @@ describe('лист «История выплат»', () => {
     amount('2026-08', 'fines', '0.20'),
   ];
 
-  it('столбцы: месяц, три итога и статьи с суммами в порядке ведомости', () => {
+  it('столбцы: месяц, три итога, «Перечислено (1С)» и статьи с суммами в порядке ведомости', () => {
     const sheet = buildPaidHistorySheet('Иванов', paid);
     expect(sheet.columns.map(column => column.label)).toEqual([
-      'Месяц', 'Начислено', 'Удержано', 'К выплате', 'По трудовому договору', 'Компенсация проживания', 'Питание', 'Штрафы',
+      'Месяц', 'Начислено', 'Удержано', 'К выплате', 'Перечислено (1С)',
+      'По трудовому договору', 'Компенсация проживания', 'Питание', 'Штрафы',
     ]);
     expect(sheet.columns.slice(1).every(column => column.type === 'money')).toBe(true);
   });
@@ -123,23 +124,41 @@ describe('лист «История выплат»', () => {
   it('месяцы новые сверху, «Итого» по каждому столбцу в копейках — и при одном годе', () => {
     const { rows } = buildPaidHistorySheet('Иванов', paid);
     expect(rows.map(r => r.cells)).toEqual([
-      ['Август 2026', 151400.33, 0.3, 151400.03, 147240.33, 4160, 0.1, 0.2],
-      ['Июль 2026', 157617.7, null, 157617.7, 157617.7, null, null, null],
-      ['Итого', 309018.03, 0.3, 309017.73, 304858.03, 4160, 0.1, 0.2],
+      ['Август 2026', 151400.33, 0.3, 151400.03, null, 147240.33, 4160, 0.1, 0.2],
+      ['Июль 2026', 157617.7, null, 157617.7, null, 157617.7, null, null, null],
+      ['Итого', 309018.03, 0.3, 309017.73, null, 304858.03, 4160, 0.1, 0.2],
     ]);
   });
 
-  it('выплат нет — четыре столбца и одна строка-подпись', () => {
+  it('«Перечислено (1С)»: месяц только с перечислением, несколько ведомостей за месяц — сумма в копейках', () => {
+    const payout = (month: string, amountValue: string, documentId: number) => ({
+      month, document_id: documentId, doc_number: `0000-00${documentId}`, zup2_number: null, doc_date: '2026-10-09',
+      payment_method: 'Зарплата', amount: amountValue,
+    });
+    const { rows } = buildPaidHistorySheet('Иванов', paid, [
+      payout('2026-09', '43500.00', 1),
+      payout('2026-08', '100000.10', 2),
+      payout('2026-08', '51400.20', 3),
+    ]);
+    expect(rows.map(r => r.cells.slice(0, 5))).toEqual([
+      ['Сентябрь 2026', null, null, null, 43500],
+      ['Август 2026', 151400.33, 0.3, 151400.03, 151400.3],
+      ['Июль 2026', 157617.7, null, 157617.7, null],
+      ['Итого', 309018.03, 0.3, 309017.73, 194900.3],
+    ]);
+  });
+
+  it('выплат нет — пять столбцов и одна строка-подпись', () => {
     const sheet = buildPaidHistorySheet(null, []);
-    expect(sheet.columns.map(column => column.label)).toEqual(['Месяц', 'Начислено', 'Удержано', 'К выплате']);
-    expect(sheet.rows).toEqual([{ cells: [PAYROLL_CARD_NO_PAYOUTS, null, null, null] }]);
+    expect(sheet.columns.map(column => column.label)).toEqual(['Месяц', 'Начислено', 'Удержано', 'К выплате', 'Перечислено (1С)']);
+    expect(sheet.rows).toEqual([{ cells: [PAYROLL_CARD_NO_PAYOUTS, null, null, null, null] }]);
     expect(sheet.subtitle).toBe('Сотрудник');
   });
 
   it('все 42 статьи — подписи столбцов уникальны и влезают в лимит сервера (50)', () => {
     const all = PAYROLL_PAID_GROUPS.flatMap(group => group.items).map(item => amount('2026-08', item.code, '1.00'));
     const { columns } = buildPaidHistorySheet('Иванов', all);
-    expect(columns).toHaveLength(46);
+    expect(columns).toHaveLength(47);
     expect(new Set(columns.map(column => column.label)).size).toBe(columns.length);
   });
 });

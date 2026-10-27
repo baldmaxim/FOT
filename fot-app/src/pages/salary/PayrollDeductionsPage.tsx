@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { PAYOUTS_1C_KEYS, payroll1cPayoutsService } from '../../services/payroll1cPayoutsService';
 import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
 import { moscowCurrentMonth } from '../../utils/moscowDate';
@@ -23,6 +24,8 @@ import styles from './PayrollDeductionsPage.module.css';
 
 const PayrollSummaryModal = lazy(() => import('../../components/salary/summary/PayrollSummaryModal')
   .then(m => ({ default: m.PayrollSummaryModal })));
+const Payroll1cImportModal = lazy(() => import('../../components/salary/Payroll1cImportModal')
+  .then(m => ({ default: m.Payroll1cImportModal })));
 
 interface IPayrollDeductionsPageProps {
   /** Дата выборки условий — та же, что у «Условий оплаты». */
@@ -52,7 +55,8 @@ interface IPaidItemsWindow {
  * «Удержания» («Оплачено» ЗУП) за месяцы, выбранные рядом со «Сводом»; «К выплате» — начислено минус удержано,
  * как в «Своде». Клик по сумме «Начислено» или «Удержания» — окно со статьями.
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
- * ставки и таблицы. Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
+ * ставки и таблицы. «Загрузить из 1С» — ведомость выплаты (миграция 328), только тем, кому сервер разрешает
+ * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   date, active, search, onSearchChange, departmentId, onDepartmentChange, onSaved,
@@ -62,6 +66,15 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   const dictionaryButtonRef = useRef<HTMLButtonElement>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const summaryButtonRef = useRef<HTMLButtonElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const importButtonRef = useRef<HTMLButtonElement>(null);
+  // Кнопка — по той же проверке, что у загрузки на сервере: нет права — нет кнопки.
+  const importCapability = useQuery({
+    queryKey: PAYOUTS_1C_KEYS.capability,
+    queryFn: ({ signal }) => payroll1cPayoutsService.capability(signal),
+    enabled: active,
+    staleTime: 5 * 60_000,
+  });
   const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
   // Месяцы «Свода» — как в карточке «Подробно»: текущий и 11 предыдущих плюс более старые, но доступны только те,
@@ -98,6 +111,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
     if (!active) {
       setDictionaryOpen(false);
       setSummaryOpen(false);
+      setImportOpen(false);
       setEmployee(null);
       setPaidItems(null);
     }
@@ -111,6 +125,10 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   const closeSummary = () => {
     setSummaryOpen(false);
     summaryButtonRef.current?.focus();
+  };
+  const closeImport = () => {
+    setImportOpen(false);
+    importButtonRef.current?.focus();
   };
   // Строку с кнопкой могла убрать виртуализация или новая выборка — тогда фокус некуда вернуть.
   const closePaidItems = () => {
@@ -161,11 +179,28 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
             >
               Справочник
             </button>
+            {importCapability.data === true && (
+              <button
+                ref={importButtonRef}
+                type="button"
+                className={styles.dictionaryButton}
+                aria-haspopup="dialog"
+                onClick={() => setImportOpen(true)}
+              >
+                Загрузить из 1С
+              </button>
+            )}
           </>
         )}
       />
 
       {dictionaryOpen && <PayrollDictionaryModal onClose={closeDictionary} />}
+
+      {importOpen && (
+        <Suspense fallback={null}>
+          <Payroll1cImportModal onClose={closeImport} />
+        </Suspense>
+      )}
 
       {summaryOpen && (
         <Suspense fallback={null}>

@@ -3,6 +3,7 @@
  * Снимок собирается здесь, сервер только оформляет книгу (POST /payroll/terms/card/export).
  * Деньги — рублями числом (в Excel — числа), прочерк и даты — текстом, как в карточке.
  */
+import type { IEmployeePayout1c } from '../services/payroll1cPayoutsService';
 import {
   CALC_TYPE_LABELS,
   STAFF_CATEGORY_LABELS,
@@ -97,8 +98,12 @@ export const buildPayrollTermsSheet = (row: IPayrollTermsRow, asOfDate: string):
  * по которым есть сумма хоть в одном месяце (порядок и подписи — PAYROLL_PAID_GROUPS). Внизу «Итого» по всем
  * столбцам в копейках. Сумм нет — одна строка «Выплат из 1С пока нет».
  */
-export const buildPaidHistorySheet = (fullName: string | null, paidRows: readonly IPayrollPaidAmount[]): PayrollCardSheet => {
-  const history = paidHistory(paidRows);
+export const buildPaidHistorySheet = (
+  fullName: string | null,
+  paidRows: readonly IPayrollPaidAmount[],
+  payouts: readonly IEmployeePayout1c[] = [],
+): PayrollCardSheet => {
+  const history = paidHistory(paidRows, payouts);
   const months = history.months.map(entry => entry.month);
   const items = visiblePaidGroups(months, history.amounts).flatMap(group => group.items);
   const columns: PayrollCardSheet['columns'] = [
@@ -106,12 +111,13 @@ export const buildPaidHistorySheet = (fullName: string | null, paidRows: readonl
     { label: 'Начислено', type: 'money' },
     { label: 'Удержано', type: 'money' },
     { label: 'К выплате', type: 'money' },
+    { label: 'Перечислено (1С)', type: 'money' },
     ...items.map(item => ({ label: item.label, type: 'money' as const })),
   ];
   const base = { title: 'История выплат', subtitle: (fullName ?? 'Сотрудник').slice(0, MAX_SUBTITLE), columns };
 
   if (history.months.length === 0) {
-    return { ...base, rows: [{ cells: [PAYROLL_CARD_NO_PAYOUTS, null, null, null] }] };
+    return { ...base, rows: [{ cells: [PAYROLL_CARD_NO_PAYOUTS, null, null, null, null] }] };
   }
 
   return {
@@ -123,6 +129,7 @@ export const buildPaidHistorySheet = (fullName: string | null, paidRows: readonl
           entry.totals.accrued,
           entry.totals.deducted,
           entry.payout,
+          entry.transferred,
           ...items.map(item => history.amounts.get(paidCellKey(entry.month, item.code)) ?? null),
         ],
       })),
@@ -132,6 +139,7 @@ export const buildPaidHistorySheet = (fullName: string | null, paidRows: readonl
           history.overall.accrued,
           history.overall.deducted,
           history.overallPayout,
+          history.overallTransferred,
           ...items.map(item => paidItemTotal(months, history.amounts, item.code)),
         ],
       },
@@ -143,12 +151,14 @@ export const buildPaidHistorySheet = (fullName: string | null, paidRows: readonl
 export const buildPayrollCardExport = (params: {
   row: IPayrollTermsRow;
   paidRows: readonly IPayrollPaidAmount[];
+  /** «Перечислено (1С)» — ведомости выплаты по месяцам начисления (справочно). */
+  payouts?: readonly IEmployeePayout1c[];
   asOfDate: string;
   exportedAt: string;
 }): IPayrollCardExport => {
-  const { row, paidRows, asOfDate, exportedAt } = params;
+  const { row, paidRows, payouts = [], asOfDate, exportedAt } = params;
   return {
     file_name: `Зарплата_${row.full_name ?? 'Сотрудник'}_${exportedAt}.xlsx`.replace(/[\s/\\:*?"<>|]+/g, '_'),
-    sheets: [buildPayrollTermsSheet(row, asOfDate), buildPaidHistorySheet(row.full_name, paidRows)],
+    sheets: [buildPayrollTermsSheet(row, asOfDate), buildPaidHistorySheet(row.full_name, paidRows, payouts)],
   };
 };

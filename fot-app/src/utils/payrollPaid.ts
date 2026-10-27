@@ -4,8 +4,10 @@
  * суммы приходят из 1С (API или выгрузка); показываются лишь статьи, по которым сумма есть.
  * Коды статей — те же, что в CHECK миграции 329 и в payroll-paid.service.ts на сервере.
  */
+import type { IEmployeePayout1c } from '../services/payroll1cPayoutsService';
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
 import { formatMonthsLabel } from './monthsSelection';
+import { payoutsByMonth, payoutsTotal } from './payroll1cPayouts';
 import { shiftMonth } from './moscowDate';
 
 export interface IPayrollPaidItem {
@@ -222,12 +224,15 @@ export const paidPayout = (totals: PayrollPaidTotals): number | null => (
     : (Math.round((totals.accrued ?? 0) * 100) - Math.round((totals.deducted ?? 0) * 100)) / 100
 );
 
-/** Месяц «Истории выплат»: итоги разделов, «К выплате» и статьи с суммами. */
+/** Месяц «Истории выплат»: итоги разделов, «К выплате», статьи с суммами и «Перечислено (1С)». */
 export interface IPaidHistoryMonth {
   month: string;
   totals: PayrollPaidTotals;
   payout: number | null;
   groups: IPayrollPaidGroup[];
+  /** Перечислено по ведомостям выплаты 1С за месяц начисления; null — ведомостей нет. Справочно. */
+  transferred: number | null;
+  transfers: IEmployeePayout1c[];
 }
 
 /** Год «Истории выплат»: его месяцы (новые сверху) и итоги за год. */
@@ -236,6 +241,7 @@ export interface IPaidHistoryYear {
   months: IPaidHistoryMonth[];
   totals: PayrollPaidTotals;
   payout: number | null;
+  transferred: number | null;
 }
 
 export interface IPaidHistory {
@@ -246,11 +252,16 @@ export interface IPaidHistory {
   amounts: ReadonlyMap<string, number>;
   overall: PayrollPaidTotals;
   overallPayout: number | null;
+  overallTransferred: number | null;
 }
 
-/** «История выплат» в карточке: все месяцы, за которые из 1С пришли суммы. */
-export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory => {
-  const months = paidAmountMonths(rows);
+/**
+ * «История выплат» в карточке: все месяцы, за которые из 1С пришли суммы «Оплачено» или ведомости выплаты
+ * (месяц может быть только с перечислением — «Начислено» и «К выплате» тогда «—»).
+ */
+export const paidHistory = (rows: readonly IPayrollPaidAmount[], payouts: readonly IEmployeePayout1c[] = []): IPaidHistory => {
+  const transfers = payoutsByMonth(payouts);
+  const months = [...new Set([...paidAmountMonths(rows), ...transfers.keys()])].sort();
   const amounts = toPaidAmounts(rows);
   const { byMonth, overall } = paidTotals(months, amounts);
   const historyMonths = [...months].reverse().map(month => ({
@@ -258,6 +269,8 @@ export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory =
     totals: byMonth[month],
     payout: paidPayout(byMonth[month]),
     groups: visiblePaidGroups([month], amounts),
+    transferred: transfers.get(month)?.total ?? null,
+    transfers: transfers.get(month)?.documents ?? [],
   }));
   // Map хранит порядок вставки — годы тоже новые сверху.
   const byYear = new Map<string, IPaidHistoryMonth[]>();
@@ -266,8 +279,9 @@ export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory =
     byYear.set(year, [...(byYear.get(year) ?? []), entry]);
   }
   const years = [...byYear].map(([year, yearMonths]): IPaidHistoryYear => {
-    const totals = paidTotals(yearMonths.map(entry => entry.month), amounts).overall;
-    return { year, months: yearMonths, totals, payout: paidPayout(totals) };
+    const yearMonthKeys = yearMonths.map(entry => entry.month);
+    const totals = paidTotals(yearMonthKeys, amounts).overall;
+    return { year, months: yearMonths, totals, payout: paidPayout(totals), transferred: payoutsTotal(transfers, yearMonthKeys) };
   });
   return {
     months: historyMonths,
@@ -275,6 +289,7 @@ export const paidHistory = (rows: readonly IPayrollPaidAmount[]): IPaidHistory =
     amounts,
     overall,
     overallPayout: paidPayout(overall),
+    overallTransferred: payoutsTotal(transfers, months),
   };
 };
 

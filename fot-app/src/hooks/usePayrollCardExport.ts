@@ -7,11 +7,12 @@ import { payrollService, type IPayrollTermsRow } from '../services/payrollServic
 import { triggerBlobDownload } from '../utils/download';
 import { moscowTodayIso } from '../utils/moscowDate';
 import { buildPayrollCardExport } from '../utils/payrollCardExport';
-import { paidHistoryQueryOptions } from './usePayrollPaid';
+import { paidHistoryQueryOptions, payouts1cHistoryQueryOptions } from './usePayrollPaid';
 
 /**
  * «Экспорт» карточки сотрудника: xlsx с условиями (row на момент открытия карточки) и историей выплат.
- * История — тем же запросом, что вкладка «История выплат» (toMonth карточки): открытая не грузится заново.
+ * История и «Перечислено (1С)» — теми же запросами, что вкладка «История выплат» (toMonth карточки): открытая
+ * не грузится заново.
  * asOfDate — дата выборки условий; имя файла — по дате выгрузки по Москве.
  */
 export const usePayrollCardExport = (row: IPayrollTermsRow, asOfDate: string, toMonth: string) => {
@@ -23,8 +24,11 @@ export const usePayrollCardExport = (row: IPayrollTermsRow, asOfDate: string, to
     if (exporting) return;
     setExporting(true);
     try {
-      const paidRows = await queryClient.fetchQuery(paidHistoryQueryOptions(row.employee_id, toMonth));
-      const snapshot = buildPayrollCardExport({ row, paidRows, asOfDate, exportedAt: moscowTodayIso() });
+      const [paidRows, payouts] = await Promise.all([
+        queryClient.fetchQuery(paidHistoryQueryOptions(row.employee_id, toMonth)),
+        queryClient.fetchQuery(payouts1cHistoryQueryOptions(row.employee_id, toMonth)),
+      ]);
+      const snapshot = buildPayrollCardExport({ row, paidRows, payouts, asOfDate, exportedAt: moscowTodayIso() });
       const { blob, filename } = await payrollService.exportCard(snapshot);
       triggerBlobDownload(blob, filename);
     } catch (err) {

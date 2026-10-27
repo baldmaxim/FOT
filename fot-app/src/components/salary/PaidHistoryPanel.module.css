@@ -47,7 +47,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Телефон: столбцы плотные — четыре суммы помещаются в ширину окна; с 480px — свободнее. */
+/* Телефон: столбцы плотные — пять сумм помещаются в ширину окна; с 480px — свободнее. */
 .list th,
 .list td {
   padding: 6px 3px;
@@ -59,6 +59,9 @@
 }
 .list tr > :first-child { padding-left: 6px; }
 .list .num { text-align: right; white-space: nowrap; }
+/* «Перечислено (1С)» — длинная подпись: в шапке переносится, суммы — в строку. */
+.list thead th.wrapHead { white-space: normal; min-width: 6.5em; }
+.listNote { margin-top: 12px; }
 
 /* Шапка столбцов закреплена при прокрутке списка; фон — чтобы строки под ней не просвечивали. */
 .list thead th {
@@ -161,10 +164,10 @@
 
 /* Список слева, листок справа; оба видны всегда — «Все месяцы» не нужна. */
 @container paid-history (min-width: 900px) {
-  /* Список уже 28rem, пока карточка уже 1150px — листку хватает места на столбец «Вид». */
+  /* Список уже 34rem, пока карточка уже 1150px — листку хватает места на столбец «Вид». */
   .body {
     display: grid;
-    grid-template-columns: minmax(0, 25rem) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 31rem) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
   .body[data-view] .listPane,
@@ -176,7 +179,7 @@
 }
 
 @container paid-history (min-width: 1150px) {
-  .body { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
+  .body { grid-template-columns: minmax(0, 34rem) minmax(0, 1fr); }
 }
 
 /* Тап-цель строки месяца на сенсорных экранах. */

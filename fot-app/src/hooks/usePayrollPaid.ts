@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 
+import { payroll1cPayoutsService } from '../services/payroll1cPayoutsService';
 import { payrollService } from '../services/payrollService';
 import { PAYROLL_PAID_ALL_FROM, paidTotals, toPaidAmounts, visiblePaidGroups } from '../utils/payrollPaid';
 
@@ -14,6 +15,16 @@ export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
 export const paidHistoryQueryOptions = (employeeId: number, toMonth: string) => queryOptions({
   queryKey: ['payroll-terms', 'paid-history', employeeId, toMonth],
   queryFn: ({ signal }) => payrollService.getPaid(employeeId, PAYROLL_PAID_ALL_FROM, toMonth, signal),
+  staleTime: 30_000,
+});
+
+/**
+ * «Перечислено (1С)» для «Истории выплат» и «Экспорта»: ведомости выплаты по месяцам начисления до toMonth.
+ * Тот же префикс 'payroll-terms': загрузка ведомости сбрасывает его, открытая карточка перечитывает.
+ */
+export const payouts1cHistoryQueryOptions = (employeeId: number, toMonth: string) => queryOptions({
+  queryKey: ['payroll-terms', 'payouts-1c-history', employeeId, toMonth],
+  queryFn: ({ signal }) => payroll1cPayoutsService.getByEmployee(employeeId, PAYROLL_PAID_ALL_FROM, toMonth, signal),
   staleTime: 30_000,
 });
 

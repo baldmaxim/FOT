@@ -264,6 +264,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_RATE_ADDED: 'PAYROLL_RATE_ADDED',
   PAYROLL_RATE_UPDATED: 'PAYROLL_RATE_UPDATED',
   PAYROLL_RATE_DELETED: 'PAYROLL_RATE_DELETED',
+  // Ведомость выплаты из 1С (миграция 328): документ, действие (new / replace / enrich / relink), ревизия, число строк.
+  PAYROLL_1C_PAYOUTS_IMPORTED: 'PAYROLL_1C_PAYOUTS_IMPORTED',
   // Виды удержаний сотрудника (миграция 300): добавленные и снятые.
   PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED: 'PAYROLL_EMPLOYEE_DEDUCTIONS_SAVED',
   // Плановая доплата (миграция 293) изменена — из окна сотрудника и из таблицы «Доплата»; null — снята.

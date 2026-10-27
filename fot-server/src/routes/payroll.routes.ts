@@ -2,6 +2,8 @@ import { Router } from 'express';
 
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
+import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
 import { deductionSubkindsController } from '../controllers/deduction-subkinds.controller.js';
@@ -36,6 +38,9 @@ const termsEdit = requirePageAccess('/salary/terms', 'edit');
 // и на «Расчётах».
 const deductionsView = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'view');
 const deductionsEdit = requireAnyPageAccess(['/salary/terms', '/salary/payments'], 'edit');
+// Ведомости выплаты из 1С (миграция 328) — с «Расчётов»; загрузка ещё требует весь штат (requirePayouts1cImport).
+const paymentsView = requirePageAccess('/salary/payments', 'view');
+const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
 
 // ─── Условия оплаты ──────────────────────────────────────────────────────────
 router.get('/terms', termsView, payrollTermsController.list);
@@ -51,6 +56,8 @@ router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
 // Расчётный листок месяца в «Истории выплат»: период, дни табеля (рабочие / выходные), условия оплаты.
 router.get('/terms/employee/:empId/payslip', termsView, payrollPaidController.getPayslip);
+// «Перечислено (1С)» сотрудника по месяцам начисления (миграция 328, только чтение).
+router.get('/terms/employee/:empId/payouts-1c', termsView, payroll1cPayoutsController.getByEmployee);
 // «Экспорт» карточки сотрудника: условия и история выплат — два листа xlsx из снимка экрана.
 router.post('/terms/card/export', termsView, payrollCardExportController.exportCard);
 
@@ -115,6 +122,12 @@ router.get('/summary', termsView, payrollSummaryController.get);
 
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);
+
+// ─── Ведомости выплаты из 1С (миграция 328): справочно, в расчётах не участвуют ──
+// Право — до приёма файла: без него файл не читается в память.
+router.get('/1c-payouts/capability', paymentsView, payroll1cPayoutsController.capability);
+router.post('/1c-payouts/preview', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.preview);
+router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.importFile);
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
