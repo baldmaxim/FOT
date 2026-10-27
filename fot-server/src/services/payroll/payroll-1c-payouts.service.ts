@@ -15,6 +15,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 import { query, withTransaction } from '../../config/postgres.js';
 import { matchPayoutLines, type IPayoutCandidate } from './payroll-1c-payouts.matching.js';
 import { parsePayout1cXml, type IPayout1cDocument, type Payout1cFormat } from './payroll-1c-payouts.parser.js';
+import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll-registry-scope.service.js';
 
 export type PayoutResolution = 'auto_id_all' | 'confirmed' | 'unmatched';
 export type PayoutPreviewStatus = 'new' | 'unchanged' | 'enrich' | 'changed';
@@ -463,4 +464,25 @@ export const listEmployeePayouts1c = async (employeeId: number, from: string, to
     [employeeId, from, to],
   );
   return rows.map(({ line_no: _lineNo, ...row }) => ({ ...row, document_id: Number(row.document_id) }));
+};
+
+/**
+ * Месяцы начисления ведомостей в банк у «штата зарплаты» в охвате пользователя (как список «Расчётов»): выбор
+ * месяцев «Расчётов» показывает и месяц, по которому из 1С пришла только ведомость. По возрастанию, YYYY-MM.
+ */
+export const listPayouts1cMonths = async (
+  scope: { contractorRootId: string | null; departmentIds: string[] | null },
+): Promise<string[]> => {
+  if (scope.departmentIds?.length === 0) return [];
+  const rows = await query<{ month: string }>(
+    `WITH ${payrollContractorDeptsCte('$1')}
+     SELECT DISTINCT to_char(d.period_month, 'YYYY-MM') AS month
+       FROM payroll_1c_payout_lines l
+       JOIN payroll_1c_payout_documents d ON d.id = l.document_id
+       JOIN employees e ON e.id = l.employee_id
+      WHERE ${payrollStaffWhereSql('e', '$2')}
+      ORDER BY month`,
+    [scope.contractorRootId, scope.departmentIds],
+  );
+  return rows.map(row => row.month);
 };

@@ -5,7 +5,8 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
 // Плановая доплата на настоящем PostgreSQL: журнал версий (миграция 293), действие и прежние
-// значения в истории, два параллельных сохранения, общий журнал с окладом, SQL списка.
+// значения в истории, два параллельных сохранения, общий журнал с окладом, SQL списка (и «Расчётов»:
+// статьи 1С и ведомости в банк).
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
 
@@ -62,6 +63,9 @@ vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => 
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
+// Расчёт ФОТ по закрытому табелю (столбцы «Расчётов») — своя схема табеля; здесь только SQL списка.
+vi.mock('./payroll-calc.service.js', () => ({ getPayoutForEmployees: async () => new Map() }));
+
 import { withTransaction } from '../../config/postgres.js';
 import {
   getPlannedSupplementChanges,
@@ -71,6 +75,7 @@ import {
   type IPlannedSupplementValue,
 } from './payroll-terms.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
+import { listPayouts1cMonths } from './payroll-1c-payouts.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -104,7 +109,9 @@ const makeRes = () => {
 describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
+      DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
+        employee_hr_profiles,
+        employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
@@ -160,6 +167,12 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('306_payroll_rates.sql'));
     await pg.pool!.query(migration('313_payroll_rate_code.sql'));
     await pg.pool!.query(migration('324_payroll_rate_values.sql'));
+    // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) списку не нужно.
+    await pg.pool!.query(`ALTER TABLE payroll_compensation_terms
+      ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Ведомости в банк (328) — «Выплаты на карту» на «Расчётах»; профиль нужен только для индекса миграции.
+    await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
+    await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));
   });
 
   afterAll(async () => {
@@ -262,10 +275,10 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       [row.planned_supplement_amount, row.planned_supplement_from, row.planned_supplement_to],
     ]));
     expect(byId).toEqual({
-      1: [10000, '2026-11-01', '2026-12-31'],
-      2: [10000, '2026-11-01', '2026-12-31'],
-      3: [10000, '2026-11-01', '2026-12-31'],
-      4: [5000, '2025-01-01', '2025-03-31'],
+      1: ['10000.00', '2026-11-01', '2026-12-31'],
+      2: ['10000.00', '2026-11-01', '2026-12-31'],
+      3: ['10000.00', '2026-11-01', '2026-12-31'],
+      4: ['5000.00', '2025-01-01', '2025-03-31'],
     });
   });
 
@@ -327,8 +340,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Июль и август: сторно минусом входит в начисления, мартовский и октябрьский договор — нет.
     const julAug = await list('2026-07,2026-08');
     expect(julAug[1]).toMatchObject({
-      paid_total: 127270,
-      paid_deductions_total: 7248,
+      paid_total: '127270.00',
+      paid_deductions_total: '7248.00',
       paid_deductions: [
         { month: '2026-07', item: 'fines', amount: '2000.00' },
         { month: '2026-08', item: 'meals', amount: '5248.00' },
@@ -339,16 +352,16 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Только удержание — «К выплате» пусто; удержание вне выбранных месяцев не попадает.
     expect(julAug[3]).toMatchObject({ paid_total: null, paid_deductions_total: null, paid_deductions: null });
     // Явный ноль — 0, а не «нет данных».
-    expect(julAug[4]).toMatchObject({ paid_total: null, paid_deductions_total: 0 });
+    expect(julAug[4]).toMatchObject({ paid_total: null, paid_deductions_total: '0.00' });
 
     // Исключённый месяц не попадает.
     const aug = await list('2026-08');
-    expect(aug[1]).toMatchObject({ paid_total: 128770, paid_deductions_total: 5248 });
+    expect(aug[1]).toMatchObject({ paid_total: '128770.00', paid_deductions_total: '5248.00' });
 
     // Весь период — все месяцы, включая текущий.
     const all = await list('all');
-    expect(all[1]).toMatchObject({ paid_total: 327270, paid_deductions_total: 7248 });
-    expect(all[3]).toMatchObject({ paid_total: null, paid_deductions_total: 50000 });
+    expect(all[1]).toMatchObject({ paid_total: '327270.00', paid_deductions_total: '7248.00' });
+    expect(all[3]).toMatchObject({ paid_total: null, paid_deductions_total: '50000.00' });
   });
 
   it('бессрочная (без «по»): повтор без правки не пишет, в списке «по» пусто', async () => {
@@ -363,7 +376,60 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     } as unknown as AuthenticatedRequest, res);
     const row = (res.body.data as Array<Record<string, unknown>>).find(r => r.employee_id === 4);
     expect(row).toMatchObject({
-      planned_supplement_amount: 20000, planned_supplement_from: '2023-02-01', planned_supplement_to: null,
+      planned_supplement_amount: '20000.00', planned_supplement_from: '2023-02-01', planned_supplement_to: null,
     });
+  });
+  it('«Расчёты»: отпускные, больничные, перерасчёт из 1С и выплаты на карту по видам — без удвоения', async () => {
+    await pg.pool!.query(`
+      INSERT INTO employees (id, full_name, employment_status) VALUES (5, 'Дмитриев Д.Д.', 'dismissed');
+      INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
+        (2, '2026-09-01', 'contract',    100000),
+        (2, '2026-09-01', 'vacation',    40000.50),
+        (2, '2026-09-01', 'sick_leave',  3000),
+        (2, '2026-09-01', 'recalc_prev', -1200),
+        (2, '2026-10-01', 'vacation',    999);
+      INSERT INTO payroll_1c_payout_documents
+        (id, doc_guid, doc_number, doc_date, period_month, payment_method, organization_inn, total_amount, content_hash, revision)
+      VALUES
+        (1, gen_random_uuid(), '0001', '2026-09-20', '2026-09-01', 'Аванс',      '7736255508', 50000,   repeat('a', 64), 1),
+        (2, gen_random_uuid(), '0002', '2026-10-05', '2026-09-01', 'Зарплата',   '7736255508', 70000,   repeat('b', 64), 1),
+        (3, gen_random_uuid(), '0003', '2026-10-06', '2026-09-01', 'Зарплата',   '7736255508', 5000.25, repeat('c', 64), 1),
+        (4, gen_random_uuid(), '0004', '2026-10-07', '2026-09-01', 'Увольнения', '7736255508', 1000,    repeat('d', 64), 1),
+        (5, gen_random_uuid(), '0005', '2026-09-05', '2026-08-01', 'Зарплата',   '7736255508', 9999,    repeat('e', 64), 1),
+        (6, gen_random_uuid(), '0006', '2026-11-05', '2026-10-01', 'Зарплата',   '7736255508', 777,     repeat('f', 64), 1);
+      INSERT INTO payroll_1c_payout_lines (document_id, line_no, line_key, full_name_1c, amount, employee_id, resolution) VALUES
+        (1, 1, 'k1', 'Борисов А.А.',   30000,   2,    'auto_id_all'),
+        (1, 2, 'k2', 'Неизвестный Н.', 20000,   NULL, 'unmatched'),
+        (2, 1, 'k1', 'Борисов А.А.',   70000,   2,    'auto_id_all'),
+        (3, 1, 'k1', 'Борисов А.А.',   5000.25, 2,    'confirmed'),
+        (4, 1, 'k1', 'Борисов А.А.',   1000,    2,    'auto_id_all'),
+        (5, 1, 'k1', 'Борисов А.А.',   9999,    2,    'auto_id_all'),
+        (6, 1, 'k1', 'Дмитриев Д.Д.',  777,     5,    'auto_id_all');
+    `);
+    const res = makeRes();
+    await payrollTermsController.list({
+      user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', paid_months: '2026-09' },
+    } as unknown as AuthenticatedRequest, res);
+    expect(res.statusCode).toBe(200);
+    const rows = Object.fromEntries((res.body.data as Array<Record<string, unknown>>).map(row => [row.employee_id, row]));
+
+    // Четыре ведомости и четыре статьи за месяц — суммы статей не умножаются на число ведомостей.
+    expect(rows[2]).toMatchObject({
+      paid_total: '141800.50',
+      paid_vacation: '40000.50',
+      paid_sick_leave: '3000.00',
+      paid_recalc_prev: '-1200.00',
+      // Две «Зарплаты» и «Увольнения» — ЗП; строка без сотрудника и ведомость августа не попадают.
+      card_payouts: { advance: '30000.00', salary: '76000.25', premium: null },
+    });
+    expect(rows[2]).not.toHaveProperty('card_payouts_raw');
+    expect(rows[1]).toMatchObject({ paid_vacation: null, card_payouts: null });
+
+    // Месяцы ведомостей — только у штата в охвате: уволенный (октябрь) не даёт месяц.
+    expect(await listPayouts1cMonths({ contractorRootId: null, departmentIds: null })).toEqual(['2026-08', '2026-09']);
+    expect(await listPayouts1cMonths({ contractorRootId: null, departmentIds: [] })).toEqual([]);
+    expect(await listPayouts1cMonths({
+      contractorRootId: null, departmentIds: ['00000000-0000-0000-0000-0000000000d1'],
+    })).toEqual([]);
   });
 });

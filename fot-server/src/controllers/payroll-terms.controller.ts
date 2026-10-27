@@ -45,6 +45,7 @@ import {
   type ProrationRounding,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
+import { cardPayoutsJoinSql, classifyCardPayouts, getCalcColumns } from '../services/payroll/payroll-calc-columns.service.js';
 import {
   HOURLY_RATE_DECIMALS_MESSAGE,
   MONEY_DECIMALS_MESSAGE,
@@ -327,11 +328,13 @@ const PAYOUTS_JOIN_SQL = `
                            GROUP BY pa.month) a
                 ) pay ON TRUE`;
 
-const PAID_SELECT_SQL = 'paid.paid_total, paid.paid_deductions_total, paid.paid_deductions';
+const PAID_SELECT_SQL = `paid.paid_total, paid.paid_deductions_total, paid.paid_deductions,
+                     paid.paid_vacation, paid.paid_sick_leave, paid.paid_recalc_prev, card.card_payouts_raw`;
 
 /**
  * «Расчёты»: итоги «Начислено» и «Удержано» и статьи «Удержано» по месяцам для окна; «К выплате»
- * (начислено минус удержано) фронт считает в копейках. monthsParam — date[] первых чисел
+ * (начислено минус удержано) фронт считает в копейках. Отдельно — отпускные, больничные и перерасчёт (столбцы
+ * из 1С, payroll-calc-columns.service) и ведомости в банк по способу выплаты. monthsParam — date[] первых чисел
  * месяцев, NULL — весь период. Нет сумм группы — null («—»). Суммы — NUMERIC строкой (::text).
  */
 const paidJoinSql = (monthsParam: string): string => `
@@ -342,11 +345,14 @@ const paidJoinSql = (monthsParam: string): string => `
                                                     'item', pa.item_code,
                                                     'amount', pa.amount::text)
                                   ORDER BY pa.month, pa.item_code)
-                           FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})) AS paid_deductions
+                           FILTER (WHERE pa.item_code IN (${DEDUCTION_CODES_SQL})) AS paid_deductions,
+                         (SUM(pa.amount) FILTER (WHERE pa.item_code = 'vacation'))::text AS paid_vacation,
+                         (SUM(pa.amount) FILTER (WHERE pa.item_code = 'sick_leave'))::text AS paid_sick_leave,
+                         (SUM(pa.amount) FILTER (WHERE pa.item_code = 'recalc_prev'))::text AS paid_recalc_prev
                     FROM payroll_paid_amounts pa
                    WHERE pa.employee_id = page.employee_id
                      AND (${monthsParam}::date[] IS NULL OR pa.month = ANY(${monthsParam}::date[]))
-                ) paid ON TRUE`;
+                ) paid ON TRUE${cardPayoutsJoinSql(monthsParam)}`;
 
 /**
  * Список: итоги + порция. Параметры $9 LIMIT, $10 OFFSET, $11/$12 — курсор прежнего порядка
@@ -447,6 +453,12 @@ interface IPayrollTermsListRow {
   paid_total?: string | null;
   paid_deductions_total?: string | null;
   paid_deductions?: Array<{ month: string; item: string; amount: string }> | null;
+  /** Только при paid_months: отпускные, больничные и перерасчёт из 1С за месяцы. */
+  paid_vacation?: string | null;
+  paid_sick_leave?: string | null;
+  paid_recalc_prev?: string | null;
+  /** Только при paid_months: ведомости в банк по способу выплаты (наружу — card_payouts по видам). */
+  card_payouts_raw?: Array<{ method: string; amount: string }> | null;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
@@ -524,7 +536,9 @@ const badRequest = (res: Response, error: string, code: string): void => {
  * и сортировка в браузере переставляла бы только загруженные строки.
  *
  * ?paid_months=2026-07,2026-08 | all («Расчёты») — вместо «Выплачено» строки несут paid_total,
- * paid_deductions_total и paid_deductions за эти месяцы; без параметра этих полей нет.
+ * paid_deductions_total и paid_deductions за эти месяцы, отпускные, больничные, перерасчёт и card_payouts из 1С,
+ * а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service); без параметра этих
+ * полей нет.
  */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -625,9 +639,17 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const canEditRow = await resolvePayrollEditPredicate(req);
     // Категория — по табелю на сейчас (payroll-staff-category.ts): её карточка показывает, по ней «Проезд».
     const categories = await resolveCurrentStaffCategories(pageRows.map(row => row.employee_id));
+    // «Расчёты»: столбцы по расчёту ФОТ закрытого табеля — для строк порции («весь период» не считается).
+    const calcColumns = paidMonths !== null && paidMonths !== 'all'
+      ? await getCalcColumns(pageRows.map(row => row.employee_id), paidMonths, req)
+      : null;
     // Служебные поля ключа и снимок категории из условий наружу не отдаём.
-    const data = pageRows.map(({ sort_key: _sortKey, sort_key_text: _sortKeyText, staff_category: _stored, ...row }) => ({
+    const data = pageRows.map(({
+      sort_key: _sortKey, sort_key_text: _sortKeyText, staff_category: _stored, card_payouts_raw: cardPayoutsRaw, ...row
+    }) => ({
       ...row,
+      ...(paidMonths !== null ? { card_payouts: classifyCardPayouts(cardPayoutsRaw) } : {}),
+      ...(calcColumns ? { calc: calcColumns.get(row.employee_id) ?? null } : {}),
       category: categories.get(row.employee_id) ?? 'office',
       can_edit: canEditRow(row.employee_id),
     }));

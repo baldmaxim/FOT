@@ -8,10 +8,9 @@ import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { PAYROLL_CALC_COLUMNS_KEY, PAYROLL_CALC_TABLE_COLUMNS } from '../../utils/payrollColumns';
 import {
-  defaultPaidMonth,
+  calcMonthsSelection,
   effectivePaidMonths,
   formatPaidPeriod,
-  paidMonthOptions,
   type PayrollPaidTotalKind,
 } from '../../utils/payrollPaid';
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
@@ -77,30 +76,35 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   });
   const [paidItems, setPaidItems] = useState<IPaidItemsWindow | null>(null);
 
-  // Месяцы «Свода» — как в карточке «Подробно»: текущий и 11 предыдущих плюс более старые, но доступны только те,
-  // за которые в охвате пользователя есть «Оплачено». Пока месяцы грузятся — всё окно. «Весь период» не выбирается.
+  // Месяцы «Свода» и таблицы — как в карточке «Подробно»: текущий и 11 предыдущих плюс более старые, но доступны
+  // только месяцы с данными (calcMonthsSelection). Пока месяцы грузятся — всё окно. «Весь период» не выбирается.
   const monthsQuery = useQuery({
     queryKey: PAYROLL_SUMMARY_KEYS.months,
     queryFn: ({ signal }) => payrollSummaryService.listMonths(signal),
     enabled: active,
     staleTime: 60_000,
   });
+  // Месяцы ведомостей в банк: месяц, по которому из 1С пришла только ведомость, тоже выбирается.
+  const payoutMonthsQuery = useQuery({
+    queryKey: PAYOUTS_1C_KEYS.months,
+    queryFn: ({ signal }) => payroll1cPayoutsService.months(signal),
+    enabled: active,
+    staleTime: 60_000,
+  });
   const [currentMonth] = useState(moscowCurrentMonth);
-  const paidMonths = useMemo(() => (monthsQuery.data ? new Set(monthsQuery.data) : null), [monthsQuery.data]);
-  const monthOptions = useMemo(
-    () => paidMonthOptions(
-      [...new Set([...payrollMonthOptions(currentMonth), ...(monthsQuery.data ?? [])])].sort(),
-      paidMonths,
-    ),
-    [currentMonth, monthsQuery.data, paidMonths],
-  );
-  // Не выбирали — последний закрытый месяц с «Оплачено» (пока грузится — прошлый). Выбранный до загрузки пустой
-  // месяц после неё отбрасывается. Суммы таблицы — за те же месяцы.
-  const defaultMonth = defaultPaidMonth(monthOptions, paidMonths, currentMonth);
+  // Кроме месяцев «Оплачено» — прошлые месяцы с расчётом ФОТ по закрытому табелю и месяцы ведомостей.
+  const { options: monthOptions, selectable, defaultMonth } = useMemo(() => calcMonthsSelection({
+    currentMonth,
+    windowMonths: payrollMonthOptions(currentMonth),
+    paidMonths: monthsQuery.data ?? null,
+    payoutMonths: payoutMonthsQuery.data ?? null,
+  }), [currentMonth, monthsQuery.data, payoutMonthsQuery.data]);
+  // Не выбирали — последний закрытый месяц с «Оплачено» (пока грузится — прошлый). Выбранный до загрузки
+  // недопустимый месяц после неё отбрасывается. Суммы таблицы — за те же месяцы.
   const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
   const summaryMonths = useMemo(
-    () => effectivePaidMonths(chosenMonths, paidMonths, defaultMonth),
-    [chosenMonths, paidMonths, defaultMonth],
+    () => effectivePaidMonths(chosenMonths, selectable, defaultMonth),
+    [chosenMonths, selectable, defaultMonth],
   );
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие

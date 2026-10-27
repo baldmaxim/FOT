@@ -15,10 +15,12 @@ import {
   formatAccrualPeriodShort,
   type IAccrualMonthPart,
 } from '../../utils/payrollAccruals';
+import { PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
-import type { PayrollTableColumn, PayrollTableColumns } from '../../utils/payrollColumns';
+import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import { formatPaidAmount, paidPayout, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import { PayrollCalcCell } from './PayrollCalcCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import styles from './PayrollTermsTable.module.css';
 
@@ -46,13 +48,6 @@ interface IPayrollTermsTableProps {
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
 }
 
-/** Столбцы с сортировкой и фильтром (подпись шапки — из набора столбцов). */
-const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollSortKey & PayrollTableColumn>([
-  'department', 'position', 'schedule', 'salary', 'bonus', 'housing',
-]);
-
-const isSortableColumn = (key: PayrollTableColumn): key is PayrollSortKey & PayrollTableColumn => SORTABLE_COLUMNS.has(key);
-
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
 /** Всегда видимые столбцы: «№», «Сотрудник» (и чекбокс, если есть). */
@@ -70,6 +65,16 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   payout: 'colPayout',
   accrued: 'colAccrued',
   deductions: 'colDeductions',
+  calc_rate: 'colCalcRate',
+  calc_timesheet: 'colCalcTimesheet',
+  calc_travel: 'colCalcSum',
+  paid_vacation: 'colCalcSum',
+  paid_sick: 'colCalcSum',
+  calc_housing: 'colCalcHousing',
+  paid_recalc: 'colCalcSum',
+  calc_supplements: 'colCalcSum',
+  calc_deductions: 'colCalcSum',
+  card_payouts: 'colCardPayouts',
 };
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
@@ -219,7 +224,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   /** Шапка столбца; у сумм «Оплачено» — период под подписью, без сортировки и фильтра. */
   const renderHeader = (column: PayrollTableColumns[number]): ReactNode => {
-    if (isSortableColumn(column.key)) return renderSortHeader(column.key, column.label);
+    if (isSortablePayrollColumn(column.key)) return renderSortHeader(column.key, column.label);
     if (column.key === 'accruals') {
       // Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет.
       return (
@@ -229,10 +234,13 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         </th>
       );
     }
+    // «Оклад» — ставка на конец периода, не сумма за месяцы: периода под подписью нет.
     return (
-      <th key={column.key}>
+      <th key={column.key} title={PAYROLL_CALC_HEADER_TITLES[column.key]}>
         {column.label}
-        {paidPeriod && <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>}
+        {paidPeriod && column.key !== 'calc_rate' && (
+          <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
+        )}
       </th>
     );
   };
@@ -273,6 +281,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         const total = row.paid_deductions_total;
         return renderPaidCell(column, row, 'deducted', total, total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0);
       }
+      default:
+        // Состав зарплаты «Расчётов»: ФОТ по закрытому табелю и суммы 1С.
+        return <PayrollCalcCell key={column} column={column} row={row} />;
     }
   };
 

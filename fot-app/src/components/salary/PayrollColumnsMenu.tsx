@@ -9,6 +9,8 @@ interface IPayrollColumnsMenuProps {
   /** Столбцы этой таблицы по порядку. */
   columns: PayrollTableColumns;
   hidden: ReadonlySet<PayrollTableColumn>;
+  /** «Расчёты»: столбцы без данных в выборке — скрыты сами, в меню помечены «нет данных». */
+  empty?: ReadonlySet<PayrollTableColumn>;
   onToggle: (column: PayrollTableColumn, visible: boolean) => void;
   onShowAll: () => void;
   onClose: () => void;

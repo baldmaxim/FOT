@@ -76,6 +76,7 @@ interface IApiResponse<T> { success: boolean; data: T }
 
 export const PAYOUTS_1C_KEYS = {
   capability: ['payroll-1c-payouts', 'capability'] as const,
+  months: ['payroll-1c-payouts', 'months'] as const,
 };
 
 const fileForm = (file: File): FormData => {
@@ -90,6 +91,10 @@ export const payroll1cPayoutsService = {
     const res = await apiClient.get<IApiResponse<{ can_import: boolean }>>('/payroll/1c-payouts/capability', { signal });
     return res.data.can_import;
   },
+
+  /** Месяцы ведомостей в банк у штата в охвате (YYYY-MM, по возрастанию) — для выбора месяцев «Расчётов». */
+  months: async (signal?: AbortSignal): Promise<string[]> =>
+    (await apiClient.get<IApiResponse<string[]>>('/payroll/1c-payouts/months', { signal })).data,
 
   preview: async (file: File): Promise<IPayoutPreview> => {
     const res = await apiClient.post<IApiResponse<IPayoutPreview>>('/payroll/1c-payouts/preview', fileForm(file));

@@ -193,6 +193,9 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     ]) {
       await run(migration(name));
     }
+    // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) здесь не нужно.
+    await run(`ALTER TABLE payroll_compensation_terms
+      ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Сварщик', 520), ('Проживание общежития', 630)`);
     await run(migration('313_payroll_rate_code.sql'));
     for (const name of [

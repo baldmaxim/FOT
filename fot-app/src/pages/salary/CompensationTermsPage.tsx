@@ -27,11 +27,13 @@ import {
   setPayrollColumnFilter,
 } from '../../utils/payrollColumnFilters';
 import {
+  isSortablePayrollColumn,
   PAYROLL_TERMS_COLUMNS_KEY,
   PAYROLL_TERMS_TABLE_COLUMNS,
   type PayrollTableColumn,
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
+import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
@@ -211,7 +213,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
     // Без сортировки и фильтра.
-    if (column === 'accruals' || column === 'payout' || column === 'accrued' || column === 'deductions') return;
+    if (!isSortablePayrollColumn(column)) return;
     if (isPayrollColumnFilterActive(columnFilters, column)) {
       setColumnFilters(prev => setPayrollColumnFilter(prev, column, null));
     }
@@ -224,6 +226,15 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     hiddenColumnsKey,
     columns,
     clearHiddenColumnConditions,
+  );
+  // «Расчёты»: столбцы сумм без данных в загруженных строках скрываются сами; выбор шестерёнки не меняется.
+  const emptyColumns = useMemo(
+    () => (paidMonths === undefined ? new Set<PayrollTableColumn>() : emptyPayrollColumns(rows, columns)),
+    [paidMonths, rows, columns],
+  );
+  const tableHiddenColumns = useMemo(
+    () => (emptyColumns.size === 0 ? hiddenColumns : new Set([...hiddenColumns, ...emptyColumns])),
+    [hiddenColumns, emptyColumns],
   );
   /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
   const closeColumnsMenu = () => {
@@ -309,7 +320,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           <PayrollTermsTable
             rows={rows}
             columns={columns}
-            hiddenColumns={hiddenColumns}
+            hiddenColumns={tableHiddenColumns}
             onEdit={onOpenEmployee}
             onLoadMore={loadMore}
             resetKey={resetKey}
@@ -357,6 +368,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           anchor={columnsAnchor}
           columns={columns}
           hidden={hiddenColumns}
+          empty={emptyColumns}
           onToggle={setColumnVisible}
           onShowAll={showAll}
           onClose={closeColumnsMenu}

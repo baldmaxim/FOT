@@ -2,11 +2,24 @@
  * Видимость столбцов таблиц «Условия оплаты» и «Расчёты». Выбор — удобство конкретного браузера,
  * поэтому хранится в localStorage; недоступное или битое хранилище = все столбцы видны.
  */
+import type { PayrollSortKey } from '../services/payrollService';
+
 
 /** Столбцы, которые можно скрыть. Чекбокс выбора, «№» и «Сотрудник» видны всегда. */
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
-  | 'payout' | 'accrued' | 'deductions';
+  | 'payout' | 'accrued' | 'deductions'
+  | 'calc_rate' | 'calc_timesheet' | 'calc_travel' | 'paid_vacation' | 'paid_sick' | 'calc_housing'
+  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'card_payouts';
+
+/** Столбцы условий с сортировкой и фильтром; суммы «Выплачено» и «Расчётов» их не имеют. */
+const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
+  'department', 'position', 'schedule', 'salary', 'bonus', 'housing',
+]);
+
+export const isSortablePayrollColumn = (key: PayrollTableColumn): key is PayrollSortKey & PayrollTableColumn => (
+  SORTABLE_COLUMNS.has(key)
+);
 
 /** Набор столбцов таблицы в её порядке; подпись — для шестерёнки и шапки сортируемых столбцов. */
 export type PayrollTableColumns = ReadonlyArray<{ key: PayrollTableColumn; label: string }>;
@@ -26,12 +39,25 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'accruals', label: 'Выплачено за посл. полгода' },
 ];
 
-/** «Расчёты»: вместо условий и «Выплачено» — суммы «Оплачено» за выбранные месяцы. */
+/**
+ * «Расчёты»: вместо условий и «Выплачено» — суммы «Оплачено» за выбранные месяцы, затем состав зарплаты
+ * (payrollCalcColumns.ts): по расчёту ФОТ закрытого табеля и из 1С, где ФОТ сумму не считает.
+ */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
   { key: 'payout', label: 'К выплате' },
   { key: 'accrued', label: 'Начислено' },
   { key: 'deductions', label: 'Удержания' },
+  { key: 'calc_rate', label: 'Оклад' },
+  { key: 'calc_timesheet', label: 'Начислено по табелю' },
+  { key: 'calc_travel', label: 'Компенсация проезда' },
+  { key: 'paid_vacation', label: 'Отпускные' },
+  { key: 'paid_sick', label: 'Больничные' },
+  { key: 'calc_housing', label: 'Проживание' },
+  { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
+  { key: 'calc_supplements', label: 'Доплаты' },
+  { key: 'calc_deductions', label: 'Удержания (ФОТ)' },
+  { key: 'card_payouts', label: 'Выплаты на карту' },
 ];
 
 /** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */

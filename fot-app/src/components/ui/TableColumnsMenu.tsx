@@ -10,6 +10,8 @@ interface ITableColumnsMenuProps<K extends string> {
   /** Столбцы таблицы, которые можно скрыть, по порядку. */
   columns: ReadonlyArray<{ key: K; label: string }>;
   hidden: ReadonlySet<K>;
+  /** Столбцы, скрытые сами: в таблице нет данных. Галочка остаётся выбором пользователя, рядом — «нет данных». */
+  empty?: ReadonlySet<K>;
   /** Подпись о столбцах, которые видны всегда. */
   fixedNote: string;
   onToggle: (column: K, visible: boolean) => void;
@@ -26,7 +28,7 @@ const SHEET_MEDIA = '(max-width: 768px)';
  * закрытие — Escape, клик мимо или «Готово».
  */
 export const TableColumnsMenu = <K extends string>({
-  anchor, columns, hidden, fixedNote, onToggle, onShowAll, onClose,
+  anchor, columns, hidden, empty, fixedNote, onToggle, onShowAll, onClose,
 }: ITableColumnsMenuProps<K>) => {
   const dismiss = useOverlayDismiss(onClose);
 
@@ -72,6 +74,7 @@ export const TableColumnsMenu = <K extends string>({
                   onChange={event => onToggle(column.key, event.target.checked)}
                 />
                 <span>{column.label}</span>
+                {empty?.has(column.key) && <span className={styles.emptyNote}>нет данных</span>}
               </label>
             </li>
           ))}

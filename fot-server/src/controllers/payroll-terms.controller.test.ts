@@ -1259,8 +1259,12 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(params).toHaveLength(13);
     expect(params[12]).toEqual(['2026-07-01', '2026-08-01']);
     expect(sql).toMatch(/pa\.month = ANY\(\$13::date\[\]\)/);
-    expect(sql).not.toMatch(/payouts/);
+    // «Выплачено» (pay.payouts) нет; card_payouts_raw — ведомости в банк, другое поле.
+    expect(sql).not.toMatch(/\bpayouts\b/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
+    // Отпускные, больничные, перерасчёт — из той же выборки; ведомости — своим LATERAL за те же месяцы.
+    expect(sql).toMatch(/FILTER \(WHERE pa\.item_code = 'vacation'\)\)::text AS paid_vacation/);
+    expect(sql).toMatch(/d\.period_month = ANY\(\$13::date\[\]\)/);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund'\)\)\)::text AS paid_total/);
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts'\)\)\)::text AS paid_deductions_total/);

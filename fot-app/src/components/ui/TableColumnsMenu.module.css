@@ -50,6 +50,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 .option:hover { background: var(--surface-hover); }
+.emptyNote { margin-left: auto; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 
 .checkbox { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--primary); cursor: pointer; }
 .checkbox:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

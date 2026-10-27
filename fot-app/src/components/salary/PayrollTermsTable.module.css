@@ -54,6 +54,12 @@
 .colPayout     { width: 150px; }
 .colAccrued    { width: 150px; }
 .colDeductions { width: 150px; }
+/* Состав зарплаты: «КОМПЕНСАЦИЯ» 102px и паддинги; суммы до «12 345 678,90» + ⚠ */
+.colCalcRate      { width: 150px; }
+.colCalcTimesheet { width: 160px; }
+.colCalcSum       { width: 150px; }
+.colCalcHousing   { width: 150px; }
+.colCardPayouts   { width: 190px; }
 
 .table thead th {
   position: sticky;
@@ -193,6 +199,13 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* Ячейки состава зарплаты (PayrollCalcCell) */
+.calcWarn { margin-left: 4px; vertical-align: -1px; color: var(--warning); }
+.calcMuted { color: var(--text-secondary); }
+.calcSub { display: block; color: var(--text-secondary); font-size: 11px; }
+.calcLine { display: block; }
+.calcLineLabel { display: inline-block; min-width: 52px; margin-right: 6px; color: var(--text-secondary); }
 
 .empty {
   padding: 40px 0;

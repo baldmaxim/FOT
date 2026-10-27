@@ -12,9 +12,11 @@ import { Payout1cParseError } from '../services/payroll/payroll-1c-payouts.parse
 import {
   importPayouts1c,
   listEmployeePayouts1c,
+  listPayouts1cMonths,
   Payout1cImportError,
   previewPayouts1c,
 } from '../services/payroll/payroll-1c-payouts.service.js';
+import { resolvePayrollStaffScope } from '../services/payroll/payroll-registry-scope.service.js';
 import { canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
@@ -124,4 +126,13 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
-export const payroll1cPayoutsController = { capability, preview, importFile, getByEmployee };
+/** GET /api/payroll/1c-payouts/months — месяцы ведомостей в банк у штата в охвате (выбор месяцев «Расчётов»). */
+const months = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ success: true, data: await listPayouts1cMonths(await resolvePayrollStaffScope(req)) });
+  } catch (err) {
+    sendError(res, err, 'months');
+  }
+};
+
+export const payroll1cPayoutsController = { capability, preview, importFile, getByEmployee, months };

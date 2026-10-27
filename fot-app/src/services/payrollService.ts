@@ -39,6 +39,33 @@ export interface IPayrollMonthlyAccrual {
   amount: string | number | null;
 }
 
+/** Перечислено на карту по видам выплаты (ведомости в банк 1С), NUMERIC строкой; вида нет — null. */
+export interface IPayrollCardPayouts {
+  advance: string | null;
+  salary: string | null;
+  premium: string | null;
+}
+
+/** Почему закрытый месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
+export type PayrollCalcColumnsIssue =
+  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_error' | 'unknown_amount';
+
+/**
+ * Столбцы «Расчётов» по расчёту ФОТ за выбранные месяцы: суммы закрытых месяцев (NUMERIC строкой; null — суммы
+ * нет ни в одном), незакрытые и неполные месяцы. rate — оклад или ставка на as_of, не суммируется.
+ */
+export interface IPayrollCalcColumns {
+  rate: { amount: string; calc_type: PayrollCalcType; as_of: string } | null;
+  timesheet: string | null;
+  travel: string | null;
+  housing: string | null;
+  housing_kinds: Array<'apartment' | 'dormitory'>;
+  supplements: string | null;
+  deductions: string | null;
+  open_months: string[];
+  incomplete: Array<{ month: string; reasons: PayrollCalcColumnsIssue[] }>;
+}
+
 export interface IPayrollTermsRow {
   employee_id: number;
   full_name: string | null;
@@ -95,6 +122,14 @@ export interface IPayrollTermsRow {
   paid_deductions_total?: string | null;
   /** Статьи «Удержано» по месяцам — для окна удержаний. */
   paid_deductions?: IPayrollPaidAmount[] | null;
+  /** «Расчёты»: отпускные, больничные и перерасчёт за прошлый период из 1С за месяцы, NUMERIC строкой; null — нет. */
+  paid_vacation?: string | null;
+  paid_sick_leave?: string | null;
+  paid_recalc_prev?: string | null;
+  /** «Расчёты»: перечислено на карту по ведомостям 1С за месяцы, по видам; null — ведомостей нет. */
+  card_payouts?: IPayrollCardPayouts | null;
+  /** «Расчёты»: столбцы по расчёту ФОТ закрытого табеля; нет поля — сервер не считал (старый бэкенд, «весь период»). */
+  calc?: IPayrollCalcColumns | null;
   /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.

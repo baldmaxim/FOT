@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { serverTiming } from '../middleware/serverTiming.js';
 import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
 import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
@@ -44,7 +45,8 @@ const paymentsView = requirePageAccess('/salary/payments', 'view');
 const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
 
 // ─── Условия оплаты ──────────────────────────────────────────────────────────
-router.get('/terms', termsView, payrollTermsController.list);
+// Server-Timing: на «Расчётах» список считает расчёт ФОТ порции — время видно в DevTools.
+router.get('/terms', termsView, serverTiming('payroll_terms_list'), payrollTermsController.list);
 // Варианты фильтра столбца (воронка в заголовке таблицы условий).
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
@@ -128,6 +130,7 @@ router.get('/section-access', deductionsView, payrollSectionAccessController.lis
 // ─── Ведомости выплаты из 1С (миграция 328): справочно, в расчётах не участвуют ──
 // Право — до приёма файла: без него файл не читается в память.
 router.get('/1c-payouts/capability', paymentsView, payroll1cPayoutsController.capability);
+router.get('/1c-payouts/months', paymentsView, payroll1cPayoutsController.months);
 router.post('/1c-payouts/preview', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.preview);
 router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.importFile);
 

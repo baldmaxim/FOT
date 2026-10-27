@@ -199,6 +199,33 @@ export const defaultPaidMonth = (
   return options.filter(month => month < currentMonth).at(-1) ?? options.at(-1) ?? previous;
 };
 
+/** Сколько прошлых месяцев «Расчёты» дают выбрать без сумм 1С: у них — расчёт ФОТ по закрытому табелю. */
+export const CALC_RECENT_MONTHS = 6;
+
+/**
+ * Месяцы выбора «Расчётов» (столбцы по расчёту ФОТ и из 1С). Допустимы месяцы «Оплачено», месяцы ведомостей в банк
+ * и CALC_RECENT_MONTHS прошлых; по умолчанию — по «Оплачено», как прежде (на нём и «Свод»). paidMonths = null —
+ * месяцы 1С ещё грузятся: допустимо всё окно, выбор не блокируется. payoutMonths = null — ведомостей нет или не
+ * загрузились.
+ */
+export const calcMonthsSelection = (input: {
+  currentMonth: string;
+  /** Окно выбора по возрастанию (текущий и прошлые месяцы). */
+  windowMonths: readonly string[];
+  paidMonths: readonly string[] | null;
+  payoutMonths: readonly string[] | null;
+}): { options: string[]; selectable: ReadonlySet<string> | null; defaultMonth: string } => {
+  const paid = input.paidMonths ? new Set(input.paidMonths) : null;
+  const recent = Array.from({ length: CALC_RECENT_MONTHS }, (_, index) => shiftMonth(input.currentMonth, -1 - index));
+  const allMonths = [...new Set([...input.windowMonths, ...(input.paidMonths ?? []), ...(input.payoutMonths ?? [])])].sort();
+  const selectable = paid ? new Set([...paid, ...recent, ...(input.payoutMonths ?? [])]) : null;
+  return {
+    options: paidMonthOptions(allMonths, selectable),
+    selectable,
+    defaultMonth: defaultPaidMonth(paidMonthOptions(allMonths, paid), paid, input.currentMonth),
+  };
+};
+
 /**
  * Месяцы, по которым строятся таблица и «Свод». Не выбирали — умолчание. Пока суммы грузятся, выбрать можно любой
  * месяц окна — после загрузки месяцы без сумм из выбора отбрасываются, ничего не осталось — умолчание.

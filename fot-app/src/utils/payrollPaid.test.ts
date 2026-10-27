@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  calcMonthsSelection,
   defaultPaidMonth,
   effectivePaidMonths,
   formatPaidAmount,
@@ -20,6 +21,7 @@ import {
   toPaidAmounts,
   visiblePaidGroups,
 } from './payrollPaid';
+import { shiftMonth } from './moscowDate';
 
 const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
@@ -321,5 +323,41 @@ describe('выбор месяцев «Оплачено» в карточке', (
     // Часть пустая — остаются месяцы с суммами.
     expect(effectivePaidMonths(['2026-07', '2026-09'], paid, '2026-08')).toEqual(['2026-07']);
     expect(effectivePaidMonths(['2026-07', '2026-08'], paid, '2026-08')).toEqual(['2026-07', '2026-08']);
+  });
+});
+
+describe('месяцы «Расчётов»: 1С, расчёт ФОТ и ведомости в банк', () => {
+  // Октябрь 2026: «Оплачено» за май–август, ведомость — только за март.
+  const input = {
+    currentMonth: '2026-10',
+    // Окно — текущий и 11 прошлых, как payrollMonthOptions (по убыванию).
+    windowMonths: Array.from({ length: 12 }, (_, index) => shiftMonth('2026-10', -index)),
+    paidMonths: ['2026-05', '2026-06', '2026-07', '2026-08'],
+    payoutMonths: ['2026-03'],
+  };
+
+  it('сентябрь без сумм 1С выбирается (расчёт ФОТ), по умолчанию — прежний месяц по «Оплачено»', () => {
+    const { options, selectable, defaultMonth } = calcMonthsSelection(input);
+
+    expect(options).toEqual(['2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']);
+    expect(defaultMonth).toBe('2026-08');
+    // Выбор ФОТ-месяца после загрузки месяцев не отбрасывается; текущий (не закрыт) — отбрасывается.
+    expect(effectivePaidMonths(['2026-09'], selectable, defaultMonth)).toEqual(['2026-09']);
+    expect(effectivePaidMonths(['2026-10'], selectable, defaultMonth)).toEqual(['2026-08']);
+  });
+
+  it('месяц только с ведомостью — вне шести прошлых, но выбирается', () => {
+    const { selectable } = calcMonthsSelection(input);
+
+    expect(selectable?.has('2026-03')).toBe(true);
+    expect(effectivePaidMonths(['2026-03'], selectable, '2026-08')).toEqual(['2026-03']);
+  });
+
+  it('месяцы 1С ещё грузятся — допустимо всё окно, умолчание — прошлый месяц', () => {
+    const { options, selectable, defaultMonth } = calcMonthsSelection({ ...input, paidMonths: null, payoutMonths: null });
+
+    expect(selectable).toBeNull();
+    expect(options).toEqual([...input.windowMonths].reverse());
+    expect(defaultMonth).toBe('2026-09');
   });
 });
