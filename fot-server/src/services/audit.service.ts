@@ -292,6 +292,11 @@ export const AUDIT_ACTIONS = {
   STAFF_DEDUCTION_ADDED: 'STAFF_DEDUCTION_ADDED',
   STAFF_DEDUCTION_UPDATED: 'STAFF_DEDUCTION_UPDATED',
   STAFF_DEDUCTION_DELETED: 'STAFF_DEDUCTION_DELETED',
+  // «Табель → Зарплата» (миграция 330): выработка бригады и КТУ за месяц — было → стало;
+  // пересчёт зафиксированного месяца (новая редакция или новый ввод) — итог и изменённые доли.
+  BRIGADE_SALARY_OUTPUT_SET: 'BRIGADE_SALARY_OUTPUT_SET',
+  BRIGADE_SALARY_KTU_SET: 'BRIGADE_SALARY_KTU_SET',
+  BRIGADE_SALARY_RECALCULATED: 'BRIGADE_SALARY_RECALCULATED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

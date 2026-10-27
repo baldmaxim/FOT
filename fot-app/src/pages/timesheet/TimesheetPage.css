@@ -6052,3 +6052,207 @@
   .ts-alloc-row .ts-form-input--hm { font-size: 16px; min-height: 44px; }
   .ts-alloc-row .ts-form-select { font-size: 16px; min-height: 44px; }
 }
+
+/* ===== Вкладка «Зарплата»: КТУ, «Сумма», «Выработка» бригады (миграция 330) ===== */
+/* КТУ закреплён справа от «Сотрудник» (ширина колонки сотрудника — 184px). */
+.ts-table th.ts-col-ktu-sticky,
+.ts-table td.ts-col-ktu-sticky {
+  position: sticky;
+  left: 184px;
+  z-index: 19;
+  width: 64px;
+  min-width: 64px;
+  padding: 2px 4px;
+  background: var(--surface);
+}
+.ts-table thead th.ts-col-ktu-sticky {
+  z-index: 59;
+  background: var(--bg-secondary);
+}
+.ts-table tbody tr:hover td.ts-col-ktu-sticky {
+  background: var(--surface-hover);
+}
+
+/* «Сумма» — слева от «Дни»; тень границы прокрутки переезжает на неё. */
+.ts-table th.ts-col-salary-sticky,
+.ts-table td.ts-col-salary-sticky {
+  position: sticky;
+  right: 192px;
+  z-index: 15;
+  min-width: 104px;
+  padding: 2px 8px;
+  background: var(--surface);
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
+}
+.ts-table thead th.ts-col-salary-sticky {
+  z-index: 55;
+  text-align: center;
+  background: var(--bg-secondary);
+}
+.ts-table tbody tr:hover td.ts-col-salary-sticky {
+  background: var(--surface-hover);
+}
+.ts-table--salary th.ts-col-days-sticky,
+.ts-table--salary td.ts-col-days-sticky {
+  box-shadow: none;
+}
+
+/* Прежние суммы открытого табеля («Требует перерасчёта»). */
+.ts-salary-amount--stale {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.ts-salary-ktu-select {
+  width: 100%;
+  height: 28px;
+  padding: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.ts-salary-ktu-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ts-salary-ktu-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.ts-salary-ktu-text {
+  font-weight: 600;
+}
+
+/* Строка-заголовок бригады: название, «Выработка», пометка состояния — прижаты к левому краю видимой области. */
+.ts-table td.ts-section-divider-cell--salary {
+  text-align: left;
+}
+.ts-salary-divider {
+  position: sticky;
+  left: 12px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.ts-salary-header {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+.ts-salary-output {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.ts-salary-output-label {
+  white-space: nowrap;
+}
+.ts-salary-output-input {
+  width: 168px;
+}
+.ts-salary-output-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ts-salary-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ts-salary-state--ok {
+  background: var(--success-muted);
+  color: var(--success);
+}
+.ts-salary-state--warn {
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+.ts-salary-state--error {
+  background: var(--error-muted);
+  color: var(--error);
+}
+
+/* Мобильная карточка: КТУ и «Сумма» строкой под ФИО; в разделителе «Выработка» — под названием. */
+.ts-section-divider-mobile .ts-salary-header {
+  display: flex;
+  margin-top: 8px;
+}
+.ts-section-divider-mobile .ts-salary-output {
+  flex: 1 1 100%;
+}
+.ts-section-divider-mobile .ts-salary-output-input {
+  flex: 1;
+  width: auto;
+}
+.ts-salary-mobile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+.ts-salary-mobile-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.ts-salary-mobile-field .ts-salary-ktu-select {
+  width: 72px;
+  height: 44px;
+  font-size: 16px;
+}
+.ts-salary-mobile-amount {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .ts-table th.ts-col-ktu-sticky,
+  .ts-table td.ts-col-ktu-sticky {
+    left: 118px;
+  }
+}
+@media (max-width: 480px) {
+  .ts-table th.ts-col-salary-sticky,
+  .ts-table td.ts-col-salary-sticky {
+    right: 156px;
+    min-width: 88px;
+    font-size: 11px;
+  }
+}
+@media (max-width: 430px) {
+  .ts-table th.ts-col-ktu-sticky,
+  .ts-table td.ts-col-ktu-sticky {
+    left: 108px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ts-salary-ktu-select {
+    transition: none;
+  }
+}

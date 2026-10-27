@@ -316,3 +316,40 @@ export interface IDepartmentSupervisor {
   kind: string;
   supervisor: { id: number; full_name: string } | null;
 }
+
+/** «Табель → Зарплата»: состояние сумм бригады (миграция 330). */
+export type TimesheetSalaryState = 'preliminary' | 'fixed' | 'stale';
+export type TimesheetSalaryDistribution = 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
+export type TimesheetSalaryErrorCode = 'unknown_status' | 'no_schedule' | 'duplicate_day';
+
+export interface ITimesheetSalaryRow {
+  employee_id: number;
+  /** КТУ для выбора ('1.0' по умолчанию); у отделов null. */
+  ktu: string | null;
+  counted_hours: number | null;
+  /** Сумма с копейками строкой; null — суммы нет. */
+  amount: string | null;
+  source: 'version' | 'live' | null;
+  can_edit: boolean;
+}
+
+export interface ITimesheetSalaryError {
+  employee_id: number;
+  full_name: string;
+  code: TimesheetSalaryErrorCode;
+  date: string;
+}
+
+export interface ITimesheetSalaryResponse {
+  department_id: string;
+  month: string;
+  kind: 'brigade' | 'department';
+  state: TimesheetSalaryState | null;
+  distribution: TimesheetSalaryDistribution | null;
+  as_of: string | null;
+  open_ranges: Array<{ start_date: string; end_date: string }>;
+  output_amount: string | null;
+  errors: ITimesheetSalaryError[];
+  computed_at: string | null;
+  rows: ITimesheetSalaryRow[];
+}

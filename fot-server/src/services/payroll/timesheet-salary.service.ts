@@ -1,0 +1,127 @@
+/**
+ * Ответ вкладки «Табель → Зарплата»: столбцы КТУ и «Сумма» для сетки отдела или бригады.
+ *
+ * Бригада — доли «Выработки» (brigade-salary.service). Отдел — оклад по дням из общего расчёта
+ * «Зарплаты» (подключается отдельно, пока строк нет — столбец «Сумма» у отделов не показывается).
+ */
+import { query, queryOne } from '../../config/postgres.js';
+import type { AuthenticatedRequest } from '../../types/index.js';
+import type { BrigadeDistributionState, BrigadeSalaryErrorCode } from './brigade-salary.calc.js';
+import { DEFAULT_KTU_TENTHS } from './brigade-salary-inputs.service.js';
+import type { IDateRange } from './brigade-salary-source.service.js';
+import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
+import { resolvePayrollEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
+
+export interface ITimesheetSalaryDepartment {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+export interface ITimesheetSalaryRow {
+  employee_id: number;
+  /** КТУ для выбора — текущий ввод ('1.0' по умолчанию); у отделов null. */
+  ktu: string | null;
+  /** Учтённые часы, по которым посчитана доля; null — суммы нет. */
+  counted_hours: number | null;
+  amount: string | null;
+  source: 'version' | 'live' | null;
+  can_edit: boolean;
+}
+
+export interface ITimesheetSalaryError {
+  employee_id: number;
+  full_name: string;
+  code: BrigadeSalaryErrorCode;
+  date: string;
+}
+
+export interface ITimesheetSalaryResponse {
+  department_id: string;
+  month: string;
+  kind: 'brigade' | 'department';
+  state: BrigadeSalaryState | null;
+  distribution: BrigadeDistributionState | null;
+  as_of: string | null;
+  open_ranges: IDateRange[];
+  output_amount: string | null;
+  errors: ITimesheetSalaryError[];
+  computed_at: string | null;
+  rows: ITimesheetSalaryRow[];
+}
+
+export async function loadSalaryDepartment(departmentId: string): Promise<ITimesheetSalaryDepartment | null> {
+  return queryOne<ITimesheetSalaryDepartment>(
+    `SELECT id, name, COALESCE(kind, 'department') AS kind FROM org_departments WHERE id = $1`,
+    [departmentId],
+  );
+}
+
+/** Отдел виден в «Зарплате» этому пользователю (тот же скоуп, что у списка условий оплаты). */
+export async function canReadSalaryDepartment(req: AuthenticatedRequest, departmentId: string): Promise<boolean> {
+  const readable = await resolvePayrollReadableDepartmentIds(req);
+  return readable === 'all' || readable.includes(departmentId);
+}
+
+async function namesOf(employeeIds: number[]): Promise<Map<number, string>> {
+  if (employeeIds.length === 0) return new Map();
+  const found = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',
+    [employeeIds],
+  );
+  return new Map(found.map(row => [Number(row.id), String(row.full_name ?? '').trim()]));
+}
+
+export async function getTimesheetSalary(
+  req: AuthenticatedRequest,
+  department: ITimesheetSalaryDepartment,
+  month: string,
+): Promise<ITimesheetSalaryResponse> {
+  if (department.kind !== 'brigade') {
+    return {
+      department_id: department.id,
+      month,
+      kind: 'department',
+      state: null,
+      distribution: null,
+      as_of: null,
+      open_ranges: [],
+      output_amount: null,
+      errors: [],
+      computed_at: null,
+      rows: [],
+    };
+  }
+
+  const result = await getBrigadeSalary(req, department.id, month);
+  const canEdit = await resolvePayrollEditPredicate(req);
+  const members = new Set(result.member_ids);
+  const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
+  const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys()])].sort((a, b) => a - b);
+  const names = await namesOf([...new Set(result.errors.map(error => error.employee_id))]);
+
+  return {
+    department_id: department.id,
+    month,
+    kind: 'brigade',
+    state: result.state,
+    distribution: result.distribution,
+    as_of: result.as_of,
+    open_ranges: result.open_ranges,
+    output_amount: result.inputs.output,
+    errors: result.errors.map(error => ({ ...error, full_name: names.get(error.employee_id) ?? '' })),
+    computed_at: result.computed_at,
+    rows: employeeIds.map(employeeId => {
+      const row = byEmployee.get(employeeId);
+      return {
+        employee_id: employeeId,
+        ktu: ((result.inputs.ktu.get(employeeId) ?? DEFAULT_KTU_TENTHS) / 10).toFixed(1),
+        counted_hours: row ? Math.round((row.counted_minutes / 60) * 100) / 100 : null,
+        amount: row?.amount ?? null,
+        source: row?.source ?? null,
+        // КТУ правят только текущему составу (без начальника участка) и не себе.
+        can_edit: members.has(employeeId) && canEdit(employeeId),
+      };
+    }),
+  };
+}

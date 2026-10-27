@@ -41,7 +41,7 @@ export interface IBulkObjectCorrectionTarget {
   objectEntry: TimesheetObjectEntry | null;
 }
 
-export type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'transfers';
+export type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'transfers' | 'salary';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 

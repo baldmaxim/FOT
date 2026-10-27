@@ -22,6 +22,8 @@ import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { useAuth } from '../../contexts/AuthContext';
+import { TimesheetSalaryAmountCell, TimesheetSalaryKtuCell, TimesheetSalaryMobileRow, type ITimesheetSalaryGridProps } from './TimesheetSalaryCells';
+import { TimesheetSalaryHeader } from './TimesheetSalaryHeader';
 import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
@@ -57,6 +59,8 @@ interface ITimesheetGridProps {
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
   departmentName?: string;
+  /** Вкладка «Зарплата»: столбцы КТУ (бригады) и «Сумма», «Выработка» в строке бригады. */
+  salary?: ITimesheetSalaryGridProps;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
   onBulkBlockedSelectionAttempt?: (reason: BulkBlockReason) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
@@ -483,6 +487,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   canManageTeam = false,
   pendingEmployeeId = null,
   departmentName,
+  salary,
   onBulkSelectionChange,
   onBulkBlockedSelectionAttempt,
   onEmployeeClick,
@@ -585,6 +590,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       };
     });
   }, [days, employees, entries, objectEntries, year, month]);
+
+  // Вкладка «Зарплата»: КТУ — только у бригад; «Сумма» — у бригад и у отделов, когда есть суммы.
+  const showKtuColumn = viewMode === 'employees' && salary?.data?.kind === 'brigade';
+  const showSalaryColumn = viewMode === 'employees' && Boolean(salary?.data)
+    && (salary?.data?.kind === 'brigade' || (salary?.data?.rows.length ?? 0) > 0);
+  // «Выработка» — в строке-заголовке первой секции состава бригады (не «Начальник участка»).
+  const salaryHeaderRowKey = useMemo(() => {
+    if (!showKtuColumn) return null;
+    const first = employeeRows.find(row => (row.employee.source ?? 'department') === 'department');
+    return first ? getTimesheetRowKey(first.employee) : null;
+  }, [showKtuColumn, employeeRows]);
 
   const objectViewGroups = useMemo<IObjectViewGroup[]>(() => {
     const employeeById = new Map(employees.map(employee => [employee.id, employee]));
@@ -1211,7 +1227,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             return (
               <Fragment key={rowKey}>
                 {sectionLabel && (
-                  <div className="ts-section-divider-mobile">{sectionLabel}</div>
+                  <div className="ts-section-divider-mobile">
+                    {sectionLabel}
+                    {salary && rowKey === salaryHeaderRowKey && <TimesheetSalaryHeader salary={salary} />}
+                  </div>
                 )}
               <article
                 className={`ts-mobile-card${expanded ? ' ts-mobile-card--expanded' : ''}`}
@@ -1291,6 +1310,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     )}
                   </div>
                 </div>
+                {salary && showSalaryColumn && <TimesheetSalaryMobileRow salary={salary} employee={row.employee} />}
 
                 {expanded && (() => {
                   const firstDay = days[0] ?? 1;
@@ -1516,7 +1536,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }
 
-  const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0);
+  const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)
+    + (showKtuColumn ? 1 : 0) + (showSalaryColumn ? 1 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1527,10 +1548,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       </div>
 
       <div className="ts-table-scroll" ref={tableScrollRef}>
-        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}`}>
+        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${showSalaryColumn ? ' ts-table--salary' : ''}`}>
           <thead>
             <tr>
               <th className="ts-col-sticky">Сотрудник</th>
+              {showKtuColumn && (
+                <th className="ts-col-ktu-sticky" title="Коэффициент трудового участия: 0,5–2,0">КТУ</th>
+              )}
               {days.map(day => {
                 const weekend = isWeekend(year, month, day);
                 const today = isToday(year, month, day);
@@ -1544,6 +1568,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </th>
                 );
               })}
+              {showSalaryColumn && (
+                <th
+                  className="ts-col-salary-sticky"
+                  title={salary?.data?.kind === 'brigade' ? 'Доля выработки: КТУ × учтённые часы' : 'Оклад по табелю'}
+                >
+                  Сумма
+                </th>
+              )}
               {showDaysColumn && (
                 <th className="ts-col-days-sticky" title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД">
                   Дни
@@ -1603,10 +1635,15 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   {sectionLabel && (
                     <tr className="ts-section-divider-row">
                       <td
-                        className="ts-col-sticky ts-section-divider-cell"
+                        className={`ts-col-sticky ts-section-divider-cell${salary && rowKey === salaryHeaderRowKey ? ' ts-section-divider-cell--salary' : ''}`}
                         colSpan={desktopColSpan}
                       >
-                        {sectionLabel}
+                        {salary && rowKey === salaryHeaderRowKey ? (
+                          <div className="ts-salary-divider">
+                            <span>{sectionLabel}</span>
+                            <TimesheetSalaryHeader salary={salary} />
+                          </div>
+                        ) : sectionLabel}
                       </td>
                     </tr>
                   )}
@@ -1666,6 +1703,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         )}
                       </div>
                     </td>
+                    {showKtuColumn && salary && <TimesheetSalaryKtuCell salary={salary} employee={row.employee} />}
                     {days.map(day => {
                       const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                       const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
@@ -1730,6 +1768,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })}
+                    {showSalaryColumn && salary && <TimesheetSalaryAmountCell salary={salary} employee={row.employee} />}
                     {showDaysColumn && (
                       <td className="ts-col-days-sticky" title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД">
                         {rowDays > 0 ? rowDays : '—'}
@@ -1764,6 +1803,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           ↳ {objectRow.object_name}
                         </div>
                       </td>
+                      {showKtuColumn && <td className="ts-col-ktu-sticky" />}
                       {days.map(day => {
                         const objectEntry = objectRow.days.get(day) || null;
                         const dailyEntry = row.days.get(day) || null;
@@ -1813,6 +1853,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      {showSalaryColumn && <td className="ts-col-salary-sticky" />}
                       {showDaysColumn && <td className="ts-col-days-sticky" />}
                       {showSumColumn && <td className="ts-col-sum-sticky" />}
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}

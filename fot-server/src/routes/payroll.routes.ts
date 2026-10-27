@@ -20,6 +20,7 @@ import { payrollSummaryController } from '../controllers/payroll-summary.control
 import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
+import { timesheetSalaryController } from '../controllers/timesheet-salary.controller.js';
 
 const router = Router();
 
@@ -131,5 +132,10 @@ router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPa
 
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
+
+// ─── «Табель → Зарплата» (миграция 330): КТУ, «Выработка» бригады, «Сумма» ─────
+router.get('/timesheet-salary', termsView, timesheetSalaryController.get);
+router.put('/timesheet-salary/output', termsEdit, timesheetSalaryController.setOutput);
+router.put('/timesheet-salary/ktu', termsEdit, timesheetSalaryController.setKtu);
 
 export default router;
