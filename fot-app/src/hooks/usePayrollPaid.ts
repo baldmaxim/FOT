@@ -2,10 +2,13 @@ import { useMemo, useState } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 
 import { payroll1cPayoutsService } from '../services/payroll1cPayoutsService';
+import { payrollPaidDebtsService, type IPayrollPaidDebt } from '../services/payrollPaidDebtsService';
 import { payrollService } from '../services/payrollService';
 import { PAYROLL_PAID_ALL_FROM, paidTotals, toPaidAmounts, visiblePaidGroups } from '../utils/payrollPaid';
 
 export type PayrollPaidStatus = 'loading' | 'error' | 'ready';
+
+const NO_DEBTS: readonly IPayrollPaidDebt[] = [];
 
 /**
  * «История выплат» карточки: все суммы «Оплачено» по toMonth. Один запрос на вкладку и «Экспорт» —
@@ -29,6 +32,16 @@ export const payouts1cHistoryQueryOptions = (employeeId: number, toMonth: string
 });
 
 /**
+ * Долги прошлых месяцев (справочно, миграция 332) за месяцы from — to: «Подробно» и расчётный листок месяца.
+ * Префикс 'payroll-terms' — как у сумм «Оплачено».
+ */
+export const paidDebtsQueryOptions = (employeeId: number, from: string, to: string) => queryOptions({
+  queryKey: ['payroll-terms', 'paid-debts', employeeId, from, to],
+  queryFn: ({ signal }) => payrollPaidDebtsService.getByEmployee(employeeId, from, to, signal),
+  staleTime: 30_000,
+});
+
+/**
  * «Оплачено» в карточке сотрудника: суммы за выбранные месяцы (по возрастанию, могут идти
  * вразброс), итоги и статьи с суммами для раскрытой таблицы — месяцы в ней столбцами.
  * Только чтение — суммы приходят из 1С. По умолчанию свёрнуто до итогов.
@@ -44,6 +57,8 @@ export const usePayrollPaid = (employeeId: number, months: string[], enabled = t
     queryFn: ({ signal }) => payrollService.getPaid(employeeId, from, to, signal),
     enabled: enabled && months.length > 0,
   });
+  // Справочно, под статьями раскрытой таблицы; не загрузились — блока нет, суммы «Оплачено» не ждут.
+  const debtsQuery = useQuery({ ...paidDebtsQueryOptions(employeeId, from, to), enabled: enabled && months.length > 0 });
   const [expanded, setExpanded] = useState(false);
 
   const amounts = useMemo(() => toPaidAmounts(query.data ?? []), [query.data]);
@@ -58,6 +73,7 @@ export const usePayrollPaid = (employeeId: number, months: string[], enabled = t
     amounts,
     totals,
     groups,
+    debts: debtsQuery.data ?? NO_DEBTS,
     expanded,
     toggleExpanded: () => setExpanded(prev => !prev),
   };

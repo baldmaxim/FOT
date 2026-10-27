@@ -13,6 +13,7 @@ import {
   payslipRateLines,
 } from '../../utils/payrollPayslip';
 import { PayslipCalcSection } from './PayslipCalcSection';
+import { PayslipDebtSection } from './PayslipDebtSection';
 import disclosure from './PayrollDisclosure.module.css';
 import styles from './PaidPayslip.module.css';
 
@@ -39,7 +40,8 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
  * «По трудовому договору»; ниже прочие начисления и «Всего начислено». Затем «Удержано» и «Всего удержано».
  * Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад — из ФОТ: грузятся при выборе месяца.
  * «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
- * справочно, в «Всего начислено» и «К выплате» не входит.
+ * справочно, в «Всего начислено» и «К выплате» не входит. Долги прошлых месяцев из ведомости бригады
+ * (PayslipDebtSection) — тоже справочно.
  * Ниже — «Расчёт ФОТ» по закрытому табелю (PayslipCalcSection) со столбцом «1С» для сравнения; месяц без сумм 1С
  * с закрытым табелем — только он. Старый бэкенд без расчёта — прежний блок «По ставкам ФОТ».
  */
@@ -175,6 +177,8 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
           </div>
         </section>
       )}
+
+      <PayslipDebtSection employeeId={employeeId} month={month} />
 
       {transfers.length > 0 && (
         <section className={styles.part} aria-label="Перечислено (1С)">

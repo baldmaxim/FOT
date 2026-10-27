@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { getPaidAmounts } from '../services/payroll/payroll-paid.service.js';
+import { getPaidDebts } from '../services/payroll/payroll-paid-debts.service.js';
 import { getPayslipInfo } from '../services/payroll/payroll-payslip.service.js';
 import { canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 
@@ -42,6 +43,30 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
 };
 
 /**
+ * GET /api/payroll/terms/employee/:empId/paid-debts?from=YYYY-MM&to=YYYY-MM — справочно долги прошлых месяцев
+ * из ведомостей бригад за месяцы периода (миграция 332). Доступ — как у сумм «Оплачено».
+ */
+const getDebtsByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = Number(req.params.empId);
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+    const range = rangeQuerySchema.parse(req.query);
+    const data = await getPaidDebts(employeeId, range.from, range.to);
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: err.errors[0]?.message ?? 'Некорректные данные' });
+      return;
+    }
+    console.error('payrollPaid.getDebtsByEmployee error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения долгов прошлых месяцев' });
+  }
+};
+
+/**
  * GET /api/payroll/terms/employee/:empId/payslip?month=YYYY-MM — к расчётному листку «Истории выплат»:
  * период, отработанные дни по табелю (рабочие / выходные) и условия оплаты месяца. Суммы — из /paid.
  */
@@ -65,4 +90,4 @@ const getPayslip = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-export const payrollPaidController = { getByEmployee, getPayslip };
+export const payrollPaidController = { getByEmployee, getDebtsByEmployee, getPayslip };

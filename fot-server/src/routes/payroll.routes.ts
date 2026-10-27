@@ -55,6 +55,7 @@ router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsContr
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);
 // «Оплачено» по месяцам в карточке: суммы статей отчёта ЗУП из 1С, только чтение.
 router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getByEmployee);
+router.get('/terms/employee/:empId/paid-debts', termsView, payrollPaidController.getDebtsByEmployee);
 // Расчётный листок месяца в «Истории выплат»: период, дни табеля (рабочие / выходные), условия оплаты.
 router.get('/terms/employee/:empId/payslip', termsView, payrollPaidController.getPayslip);
 // «Перечислено (1С)» сотрудника по месяцам начисления (миграция 328, только чтение).

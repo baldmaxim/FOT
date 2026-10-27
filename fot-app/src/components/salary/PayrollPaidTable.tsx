@@ -12,6 +12,7 @@ import {
   type IPayrollPaidItem,
 } from '../../utils/payrollPaid';
 import { PayrollCalcRows } from './PayrollCalcRows';
+import { PayrollPaidDebtRows } from './PayrollPaidDebtRows';
 import styles from './PayrollPaidTable.module.css';
 
 interface IPayrollPaidTableProps {
@@ -28,7 +29,8 @@ const formatTotal = (value: number | null): string => (value === null ? '—' : 
  * «Выплачено»: расчётное «К выплате» по данным 1С — начислено минус удержано (как в «Истории выплат», на «Расчётах»
  * и в «Своде»), без НДФЛ. Клик по его строке раскрывает ниже статьи по группам ведомости ЗУП (с удержаниями) —
  * в той же таблице, сам итог при этом не сдвигается. Таблица прокручивается вбок, подписи закреплены слева.
- * Над «Выплачено» — «К выплате (ФОТ)»: расчёт ФОТ по закрытому табелю (PayrollCalcRows).
+ * Над «Выплачено» — «К выплате (ФОТ)»: расчёт ФОТ по закрытому табелю (PayrollCalcRows). Под статьями —
+ * долги прошлых месяцев из ведомостей бригад (PayrollPaidDebtRows), справочно.
  */
 export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, calc }) => {
   const withYear = accrualPeriodCrossesYear(paid.months);
@@ -112,6 +114,7 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, calc }) => 
               {group.items.map(item => renderRow(item, group.label !== null))}
             </tbody>
           ))}
+          {paid.expanded && ready && <PayrollPaidDebtRows months={paid.months} debts={paid.debts} withTotal={withTotal} />}
         </table>
       </div>
       {paid.status === 'loading' && <p className={styles.note}>Загрузка…</p>}

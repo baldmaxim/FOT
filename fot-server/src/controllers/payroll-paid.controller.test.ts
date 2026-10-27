@@ -85,6 +85,50 @@ describe('«Оплачено»: чтение', () => {
   });
 });
 
+describe('Долги прошлых месяцев (справочно)', () => {
+  it('отдаёт строки периода из payroll_paid_debts', async () => {
+    pgQuery.mockResolvedValue([
+      { month: '2026-06', line: 'debt_day_salary', amount: '4141.90' },
+      { month: '2026-06', line: 'carried_forward', amount: '9000.00' },
+    ]);
+    const res = makeRes();
+
+    await payrollPaidController.getDebtsByEmployee(makeReq({
+      query: { from: '2026-05', to: '2026-08' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual([
+      { month: '2026-06', line: 'debt_day_salary', amount: '4141.90' },
+      { month: '2026-06', line: 'carried_forward', amount: '9000.00' },
+    ]);
+    expect(pgQuery.mock.calls[0][0]).toContain('FROM payroll_paid_debts');
+    expect(pgQuery.mock.calls[0][0]).toContain('amount::text');
+    expect(pgQuery.mock.calls[0][1]).toEqual([42, '2026-05', '2026-08']);
+  });
+
+  it('без доступа к сотруднику — 403', async () => {
+    scope.canReadPayrollEmployee.mockResolvedValue(false);
+    const res = makeRes();
+
+    await payrollPaidController.getDebtsByEmployee(makeReq({
+      query: { from: '2026-05', to: '2026-08' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('период задом наперёд и кривой месяц — 400', async () => {
+    for (const query of [{ from: '2026-08', to: '2026-05' }, { from: '2026-00', to: '2026-08' }, {}]) {
+      const res = makeRes();
+      await payrollPaidController.getDebtsByEmployee(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+      expect(res.statusCode).toBe(400);
+    }
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+});
+
 describe('Расчётный листок месяца', () => {
   it('отдаёт период, дни и условия месяца', async () => {
     const info = {
@@ -126,6 +170,6 @@ describe('Расчётный листок месяца', () => {
 
 describe('«Оплачено»: только чтение', () => {
   it('ввода больше нет: у контроллера только чтение', () => {
-    expect(Object.keys(payrollPaidController)).toEqual(['getByEmployee', 'getPayslip']);
+    expect(Object.keys(payrollPaidController)).toEqual(['getByEmployee', 'getDebtsByEmployee', 'getPayslip']);
   });
 });
