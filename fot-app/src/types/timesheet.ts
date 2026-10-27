@@ -1,4 +1,4 @@
-import type { PayrollCalcMissing } from '../services/payrollService';
+import type { IPayrollCalcLine, PayrollCalcMissing } from '../services/payrollService';
 import type { IResolvedSchedule } from './schedule';
 
 // Timesheet types
@@ -334,6 +334,10 @@ export interface ITimesheetSalaryRow {
   share?: string | null;
   /** Учтённые удержания месяца. */
   deducted?: string | null;
+  /** Отдел, табель закрыт: «По трудовому договору» (оклад по дням); нет у старого бэкенда. */
+  contract?: IPayrollCalcLine | null;
+  /** Отдел, табель закрыт: «Переработка»; null — переработки нет. */
+  overtime?: IPayrollCalcLine | null;
   /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
   missing?: PayrollCalcMissing[];
   /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null. */

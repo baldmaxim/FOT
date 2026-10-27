@@ -3,7 +3,9 @@ import type { FC } from 'react';
 import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
-import { findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle } from '../../utils/timesheetSalary';
+import {
+  findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle, salaryLineTitle,
+} from '../../utils/timesheetSalary';
 
 /** Вкладка «Зарплата» в табеле: данные и правка КТУ / «Выработки». */
 export interface ITimesheetSalaryGridProps {
@@ -70,7 +72,7 @@ export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) 
   const stale = salary.data?.state === 'stale';
   return (
     <td
-      className={`ts-col-salary-sticky${stale && row?.amount ? ' ts-salary-amount--stale' : ''}`}
+      className={`ts-col-salary${stale && row?.amount ? ' ts-salary-amount--stale' : ''}`}
       title={row ? amountTitle(salary, row) : undefined}
     >
       {formatSalaryAmount(row?.amount ?? null)}
@@ -78,7 +80,28 @@ export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) 
   );
 };
 
-/** Мобильная карточка: КТУ и «Сумма» строкой под ФИО. */
+type SalaryLineCode = 'contract' | 'overtime';
+
+/** «Оклад» / «Переработка» отдела — строки расчёта «Суммы». */
+export const TimesheetSalaryLineCell: FC<ICellProps & { code: SalaryLineCode }> = ({ salary, employee, code }) => {
+  const row = findSalaryRow(salary.data, employee);
+  const line = row?.[code];
+  return (
+    <td className="ts-col-salary" title={row ? salaryLineTitle(row, line) : undefined}>
+      {formatSalaryAmount(line?.amount ?? null)}
+    </td>
+  );
+};
+
+/** Клетка «УУ» вкладки «Зарплата»: сверху «УУ», под чертой — часы по графику. */
+export const TimesheetRemoteFraction: FC<{ hours: number }> = ({ hours }) => (
+  <span className="ts-day-fraction">
+    <span>УУ</span>
+    <span className="ts-day-fraction-hours">{hours}</span>
+  </span>
+);
+
+/** Мобильная карточка: КТУ (бригада) или «Оклад» и «Переработка» (отдел) и «Сумма» строкой под ФИО. */
 export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) => {
   const row = findSalaryRow(salary.data, employee);
   if (!row) return null;
@@ -91,6 +114,12 @@ export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) =
           <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={formatTimesheetEmployeeName(employee.full_name)} />
         </label>
       )}
+      {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => (
+        <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
+          {label}
+          <span className="ts-salary-mobile-line">{formatSalaryAmount(row[code]?.amount ?? null)}</span>
+        </span>
+      ))}
       <span
         className={`ts-salary-mobile-amount${salary.data?.state === 'stale' && row.amount ? ' ts-salary-amount--stale' : ''}`}
         title={amountTitle(salary, row)}

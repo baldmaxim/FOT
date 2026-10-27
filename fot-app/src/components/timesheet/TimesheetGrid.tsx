@@ -13,6 +13,7 @@ import {
 } from '../../utils/calendarUtils';
 import {
   getScheduleForTimesheetDay,
+  getDayNormHoursForDay,
   getFullDayThresholdHoursForDay,
   isScheduleDayOff,
   isPreHolidayForSchedule,
@@ -21,8 +22,16 @@ import { formatTimesheetEmployeeName, getTimesheetRowKey } from '../../utils/tim
 import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
+import { getRemoteScheduleHours } from '../../utils/timesheetSalary';
 import { useAuth } from '../../contexts/AuthContext';
-import { TimesheetSalaryAmountCell, TimesheetSalaryKtuCell, TimesheetSalaryMobileRow, type ITimesheetSalaryGridProps } from './TimesheetSalaryCells';
+import {
+  TimesheetRemoteFraction,
+  TimesheetSalaryAmountCell,
+  TimesheetSalaryKtuCell,
+  TimesheetSalaryLineCell,
+  TimesheetSalaryMobileRow,
+  type ITimesheetSalaryGridProps,
+} from './TimesheetSalaryCells';
 import { TimesheetSalaryHeader } from './TimesheetSalaryHeader';
 import '../../pages/timesheet/TimesheetPage.css';
 
@@ -356,13 +365,20 @@ const getDayCellTextMobile = (entry: TimesheetEntry | null, weekend: boolean): s
   return '';
 };
 
-const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string | undefined => {
+// scheduleHours — «УУ» вкладки «Зарплата»: в клетке часы графика, а не записи (у ручной удалёнки бывает 0).
+const getDayCellTitle = (
+  entry: TimesheetEntry | null,
+  weekend: boolean,
+  scheduleHours: number | null = null,
+): string | undefined => {
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return 'Выходной';
   if (!entry) return undefined;
 
   const parts: string[] = [];
-  if (visibleHours != null) {
+  if (scheduleHours !== null) {
+    parts.push(`Часы по графику: ${formatHoursLabel(scheduleHours)}`);
+  } else if (visibleHours != null) {
     parts.push(`Часы: ${formatHoursLabel(Math.round(visibleHours))}`);
   }
   if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
@@ -591,10 +607,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     });
   }, [days, employees, entries, objectEntries, year, month]);
 
-  // Вкладка «Зарплата»: КТУ — только у бригад; «Сумма» — у бригад и у отделов, когда есть суммы.
+  // Вкладка «Зарплата»: КТУ — только у бригад; «Сумма» — у бригад и у отделов, когда есть суммы;
+  // «Оклад» и «Переработка» — только у отделов.
+  const salaryTab = Boolean(salary);
   const showKtuColumn = viewMode === 'employees' && salary?.data?.kind === 'brigade';
   const showSalaryColumn = viewMode === 'employees' && Boolean(salary?.data)
     && (salary?.data?.kind === 'brigade' || (salary?.data?.rows.length ?? 0) > 0);
+  const showSalaryLineColumns = showSalaryColumn && salary?.data?.kind === 'department';
+  // «УУ» во вкладке «Зарплата» — часы по графику дня (в клетке дробью и в «Часы»); вне вкладки — null.
+  const getSalaryRemoteHours = (employeeId: number, day: number, entry: TimesheetEntry | null): number | null => {
+    if (!salaryTab || entry?.status !== 'remote') return null;
+    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month, day);
+    return getRemoteScheduleHours(entry.status, getDayNormHoursForDay(sched, calendar, year, month, day));
+  };
   // «Выработка» — в строке-заголовке первой секции состава бригады (не «Начальник участка»).
   const salaryHeaderRowKey = useMemo(() => {
     if (!showKtuColumn) return null;
@@ -1346,7 +1371,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate));
                         const text = getDayCellTextMobile(entry, dayOff);
-                        const baseTitle = getDayCellTitle(entry, dayOff);
+                        const remoteHours = inactive ? null : getSalaryRemoteHours(row.employee.id, day, entry);
+                        const baseTitle = getDayCellTitle(entry, dayOff, remoteHours);
                         const title = preHoliday
                           ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ')
                           : baseTitle;
@@ -1370,7 +1396,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             onClick={() => !inactive && onDayClick(row.employee, day, entry)}
                           >
                             <span className="ts-mobile-day-num">{day}</span>
-                            <span className="ts-mobile-day-value">{text || '·'}</span>
+                            <span className="ts-mobile-day-value">
+                              {remoteHours !== null ? <TimesheetRemoteFraction hours={remoteHours} /> : (text || '·')}
+                            </span>
                           </button>
                         );
                       })}
@@ -1537,7 +1565,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
 
   const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)
-    + (showKtuColumn ? 1 : 0) + (showSalaryColumn ? 1 : 0);
+    + (showKtuColumn ? 1 : 0) + (showSalaryColumn ? 1 : 0) + (showSalaryLineColumns ? 2 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1548,7 +1576,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       </div>
 
       <div className="ts-table-scroll" ref={tableScrollRef}>
-        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${showSalaryColumn ? ' ts-table--salary' : ''}`}>
+        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}`}>
           <thead>
             <tr>
               <th className="ts-col-sticky">Сотрудник</th>
@@ -1568,9 +1596,15 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </th>
                 );
               })}
+              {showSalaryLineColumns && (
+                <>
+                  <th className="ts-col-salary" title="«По трудовому договору»: оклад по дням закрытого табеля">Оклад</th>
+                  <th className="ts-col-salary" title="Выходы сверх нормы и часы сверх нормы дня по корректировкам">Переработка</th>
+                </>
+              )}
               {showSalaryColumn && (
                 <th
-                  className="ts-col-salary-sticky"
+                  className="ts-col-salary"
                   title={salary?.data?.kind === 'brigade'
                     ? 'К выплате: доля выработки по КТУ − удержания, без НДФЛ'
                     : 'К выплате по закрытому табелю: начислено − удержания, без НДФЛ'}
@@ -1584,7 +1618,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 </th>
               )}
               {showSumColumn && (
-                <th className="ts-col-sum-sticky" title="Сумма показываемых часов за месяц">
+                <th
+                  className="ts-col-sum-sticky"
+                  title={salaryTab ? 'Сумма показываемых часов за месяц; УУ — по графику' : 'Сумма показываемых часов за месяц'}
+                >
                   Часы
                 </th>
               )}
@@ -1622,13 +1659,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 index > 0 ? employeeRows[index - 1] : null,
                 departmentName,
               );
-              // Сумма показываемых часов по строке — повтор логики ячейки, см. getDayCellHours.
+              // Сумма показываемых часов по строке — повтор логики ячейки, см. getDayCellHours;
+              // во вкладке «Зарплата» плюс часы графика за «УУ».
               const rowSum = showSumColumn
-                ? days.reduce((acc, day) => (
-                  isDayInactiveForEmployee(row.employee, year, month, day)
-                    ? acc
-                    : acc + getDayCellHours(row.days.get(day) || null)
-                ), 0)
+                ? days.reduce((acc, day) => {
+                  if (isDayInactiveForEmployee(row.employee, year, month, day)) return acc;
+                  const entry = row.days.get(day) || null;
+                  return acc + getDayCellHours(entry) + (getSalaryRemoteHours(row.employee.id, day, entry) ?? 0);
+                }, 0)
                 : 0;
               const rowDays = showDaysColumn ? countWorkedDays(row, days, year, month) : 0;
 
@@ -1732,8 +1770,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         ? ' ts-day--flash'
                         : '';
                       const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}`;
-                      const text = inactive ? '' : getDayCellText(entry, dayOff);
-                      const baseTitle = getDayCellTitle(entry, dayOff);
+                      const remoteHours = inactive ? null : getSalaryRemoteHours(row.employee.id, day, entry);
+                      const text = inactive
+                        ? ''
+                        : remoteHours !== null ? <TimesheetRemoteFraction hours={remoteHours} /> : getDayCellText(entry, dayOff);
+                      const baseTitle = getDayCellTitle(entry, dayOff, remoteHours);
                       const title = preHoliday
                         ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ')
                         : baseTitle;
@@ -1770,6 +1811,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })}
+                    {showSalaryLineColumns && salary && (
+                      <>
+                        <TimesheetSalaryLineCell salary={salary} employee={row.employee} code="contract" />
+                        <TimesheetSalaryLineCell salary={salary} employee={row.employee} code="overtime" />
+                      </>
+                    )}
                     {showSalaryColumn && salary && <TimesheetSalaryAmountCell salary={salary} employee={row.employee} />}
                     {showDaysColumn && (
                       <td className="ts-col-days-sticky" title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД">
@@ -1855,7 +1902,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
-                      {showSalaryColumn && <td className="ts-col-salary-sticky" />}
+                      {showSalaryLineColumns && <><td className="ts-col-salary" /><td className="ts-col-salary" /></>}
+                      {showSalaryColumn && <td className="ts-col-salary" />}
                       {showDaysColumn && <td className="ts-col-days-sticky" />}
                       {showSumColumn && <td className="ts-col-sum-sticky" />}
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}

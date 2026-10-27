@@ -2,7 +2,7 @@
  * Ответ вкладки «Табель → Зарплата»: столбцы КТУ и «Сумма» для сетки отдела или бригады.
  *
  * «Сумма» — к выплате у всех (решение 27.10.2026), то же число, что «К выплате (ФОТ)» в карточке «Зарплаты»:
- * начислено минус удержания, без НДФЛ.
+ * начислено минус удержания, без НДФЛ. «Оклад» и «Переработка» — строки того же расчёта, только у отдела.
  * - Отдел — расчёт ФОТ по закрытому табелю (payroll-calc.service): оклад по дням, проезд, проживание, доплаты.
  *   Табель месяца сотрудника не закрыт — суммы нет.
  * - Бригада — доля «Выработки» по КТУ (brigade-salary.service) + разовые доплаты и проживание − удержания;
@@ -16,7 +16,7 @@ import type { IDateRange } from './brigade-salary-source.service.js';
 import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
 import { monthBounds } from './brigade-salary-source.service.js';
-import type { IBrigadeShareFact, PayrollCalcMissing } from './payroll-calc.rules.js';
+import type { IBrigadeShareFact, IPayrollCalcLine, PayrollCalcMissing } from './payroll-calc.rules.js';
 import { getPayoutForEmployees, previewBrigadePayouts } from './payroll-calc.service.js';
 import { resolvePayrollEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
 
@@ -38,6 +38,10 @@ export interface ITimesheetSalaryRow {
   share: string | null;
   /** Учтённые удержания месяца; null — суммы нет. */
   deducted: string | null;
+  /** Отдел, табель закрыт: «По трудовому договору» (оклад по дням); иначе null. */
+  contract: IPayrollCalcLine | null;
+  /** Отдел, табель закрыт: «Переработка»; null — переработки нет или суммы нет. */
+  overtime: IPayrollCalcLine | null;
   /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
   missing: PayrollCalcMissing[];
   /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null (состояние у всей бригады). */
@@ -121,6 +125,8 @@ export async function getTimesheetSalary(
           amount: closed?.net ?? null,
           share: null,
           deducted: closed?.deducted ?? null,
+          contract: closed?.lines.find(line => line.code === 'contract') ?? null,
+          overtime: closed?.lines.find(line => line.code === 'overtime') ?? null,
           missing: closed?.missing ?? [],
           payout_state: closed ? 'closed' : 'not_closed',
           source: null,
@@ -167,6 +173,8 @@ export async function getTimesheetSalary(
         amount: payouts.get(employeeId)?.net ?? null,
         share: row?.amount ?? null,
         deducted: payouts.get(employeeId)?.deducted ?? null,
+        contract: null,
+        overtime: null,
         missing: payouts.get(employeeId)?.missing ?? [],
         payout_state: null,
         source: row?.source ?? null,

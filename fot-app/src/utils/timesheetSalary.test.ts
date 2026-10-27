@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { TimesheetEmployee } from '../types';
 import type { ITimesheetSalaryResponse } from '../types/timesheet';
-import { findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle } from './timesheetSalary';
+import {
+  findSalaryRow, formatKtu, formatSalaryAmount, getRemoteScheduleHours, salaryAmountTitle, salaryLineTitle,
+} from './timesheetSalary';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
   id, full_name: 'Халимзода Раджабали Абдурахмон', position_id: null, position_name: null,
@@ -51,5 +53,40 @@ describe('подсказка «Суммы» — к выплате', () => {
     };
     expect(salaryAmountTitle(department, row)).toBe('К выплате (ФОТ) · без: отпускные');
     expect(salaryAmountTitle(department, { ...row, amount: null, payout_state: 'not_closed' })).toBe('Табель не закрыт');
+  });
+});
+
+describe('«Оклад» и «Переработка» отдела', () => {
+  const row = {
+    employee_id: 1428, ktu: null, counted_hours: null, amount: '255570.91', share: null, deducted: '0.00',
+    missing: [], payout_state: 'closed' as const, source: null, can_edit: false,
+  };
+  const contract = { code: 'contract' as const, amount: '250000.00', days: { worked: 22, norm: 22 } };
+  const overtime = { code: 'overtime' as const, amount: '2840.91', days: { worked: 0, norm: 22 }, hours: 2 };
+
+  it('строка есть — из скольких дней или часов', () => {
+    expect(salaryLineTitle(row, contract)).toBe('22 из 22 дн.');
+    expect(salaryLineTitle(row, overtime)).toBe('2 ч');
+  });
+
+  it('табель не закрыт — «Табель не закрыт»; закрыт без строки — без подсказки', () => {
+    expect(salaryLineTitle({ ...row, payout_state: 'not_closed' }, null)).toBe('Табель не закрыт');
+    expect(salaryLineTitle(row, null)).toBeUndefined();
+    expect(salaryLineTitle(row, undefined)).toBeUndefined();
+  });
+});
+
+describe('часы «УУ» по графику', () => {
+  it('удалёнка — норма дня целыми', () => {
+    expect(getRemoteScheduleHours('remote', 8)).toBe(8);
+    expect(getRemoteScheduleHours('remote', 7.5)).toBe(8);
+    expect(getRemoteScheduleHours('remote', 7)).toBe(7);
+  });
+
+  it('нет нормы (выходной по графику) или не удалёнка — нет часов', () => {
+    expect(getRemoteScheduleHours('remote', 0)).toBeNull();
+    expect(getRemoteScheduleHours('work', 8)).toBeNull();
+    expect(getRemoteScheduleHours('sick_worked', 8)).toBeNull();
+    expect(getRemoteScheduleHours(undefined, 8)).toBeNull();
   });
 });

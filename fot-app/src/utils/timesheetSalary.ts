@@ -1,6 +1,7 @@
-import type { TimesheetEmployee } from '../types';
+import type { IPayrollCalcLine } from '../services/payrollService';
+import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../types/timesheet';
-import { calcMissingNote } from './payrollCalc';
+import { calcLineDaysNote, calcMissingNote } from './payrollCalc';
 import { formatPaidAmount } from './payrollPaid';
 
 /** Строка вкладки «Зарплата» у сотрудника, если он в составе (начальник участка, «Руководитель» — нет). */
@@ -42,4 +43,20 @@ export const salaryAmountTitle = (data: ITimesheetSalaryResponse, row: ITimeshee
   const missing = calcMissingNote(row.missing ?? []);
   if (missing) parts.push(missing);
   return parts.join(' · ');
+};
+
+/**
+ * Подсказка «Оклада» / «Переработки»: табель не закрыт — так и пишем; строка есть — из скольких дней или часов
+ * («22 из 22 дн.», «2 ч»); табель закрыт, а строки нет (нет переработки) — без подсказки.
+ */
+export const salaryLineTitle = (row: ITimesheetSalaryRow, line: IPayrollCalcLine | null | undefined): string | undefined => {
+  if (row.payout_state === 'not_closed') return 'Табель не закрыт';
+  return line ? calcLineDaysNote(line) ?? undefined : undefined;
+};
+
+/** Часы «УУ» во вкладке «Зарплата» — норма дня по графику, целыми, как цифры в клетках; нет нормы — null. */
+export const getRemoteScheduleHours = (status: TimesheetStatus | undefined, normHours: number): number | null => {
+  if (status !== 'remote') return null;
+  const hours = Math.round(normHours);
+  return hours > 0 ? hours : null;
 };

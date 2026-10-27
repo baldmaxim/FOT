@@ -6073,12 +6073,9 @@
   background: var(--surface-hover);
 }
 
-/* «Сумма» — слева от «Дни»; тень границы прокрутки переезжает на неё. */
-.ts-table th.ts-col-salary-sticky,
-.ts-table td.ts-col-salary-sticky {
-  position: sticky;
-  right: 192px;
-  z-index: 15;
+/* «Оклад», «Переработка», «Сумма» — сразу за последним днём, прокручиваются с днями (не закреплены). */
+.ts-table th.ts-col-salary,
+.ts-table td.ts-col-salary {
   min-width: 104px;
   padding: 2px 8px;
   background: var(--surface);
@@ -6086,19 +6083,29 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
 }
-.ts-table thead th.ts-col-salary-sticky {
-  z-index: 55;
+.ts-table thead th.ts-col-salary {
   text-align: center;
   background: var(--bg-secondary);
 }
-.ts-table tbody tr:hover td.ts-col-salary-sticky {
+.ts-table tbody tr:hover td.ts-col-salary {
   background: var(--surface-hover);
 }
-.ts-table--salary th.ts-col-days-sticky,
-.ts-table--salary td.ts-col-days-sticky {
-  box-shadow: none;
+
+/* «УУ» вкладки «Зарплата»: дробью — «УУ» над чертой, часы графика под ней. */
+.ts-day-fraction {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+}
+.ts-day-fraction-hours {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid currentColor;
+  min-width: 16px;
+  text-align: center;
 }
 
 /* Прежние суммы открытого табеля («Требует перерасчёта»). */
@@ -6207,9 +6214,10 @@
 }
 .ts-salary-mobile-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   margin-top: 6px;
 }
 .ts-salary-mobile-field {
@@ -6223,6 +6231,11 @@
   width: 72px;
   height: 44px;
   font-size: 16px;
+}
+.ts-salary-mobile-line {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .ts-salary-mobile-amount {
   margin-left: auto;
@@ -6238,9 +6251,8 @@
   }
 }
 @media (max-width: 480px) {
-  .ts-table th.ts-col-salary-sticky,
-  .ts-table td.ts-col-salary-sticky {
-    right: 156px;
+  .ts-table th.ts-col-salary,
+  .ts-table td.ts-col-salary {
     min-width: 88px;
     font-size: 11px;
   }
