@@ -188,7 +188,7 @@ export const resolveTimesheetExportDays = (
  * `${employeeId}|${date}` дней, которые считаются плановыми (сырой СКУД без
  * корректировки, в пределах квоты expected_saturdays/sundays_per_month).
  */
-async function computeExportWeekendExemptions(
+export async function computeExportWeekendExemptions(
   employeeIds: number[],
   year: number,
   mon: number,

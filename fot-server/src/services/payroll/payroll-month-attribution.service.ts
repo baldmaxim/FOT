@@ -30,11 +30,13 @@ interface IBreakdownSqlRow extends ISummaryBreakdownRow {
 /**
  * Разбивка подач месяцев (первые числа) по парам: последняя редакция каждой подачи, строка — часы
  * сотрудника на объекте. Сотрудник в подаче без объектов — одна строка с object_key NULL и нулём часов
- * (виден отдел подачи).
+ * (виден отдел подачи). versionIds — только эти редакции (расчёт «К выплате» берёт объект из тех же закрытых
+ * подач, что и дни); без него — все последние редакции, как в «Своде».
  */
 export const loadMonthBreakdown = async (
   monthStarts: string[],
   employeeIds: number[],
+  versionIds?: readonly number[],
 ): Promise<Map<string, ISummaryBreakdownRow[]>> => {
   const result = new Map<string, ISummaryBreakdownRow[]>();
   if (monthStarts.length === 0 || employeeIds.length === 0) return result;
@@ -58,8 +60,9 @@ export const loadMonthBreakdown = async (
        JOIN timesheet_version_objects vo ON vo.version_id = l.id
       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(vo.payload->'employees', '[]'::jsonb)) AS emp
        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(emp->'objects', '[]'::jsonb)) AS obj ON true
-      WHERE (emp->>'employee_id')::int = ANY($2::int[])`,
-    [monthStarts, employeeIds],
+      WHERE (emp->>'employee_id')::int = ANY($2::int[])
+        AND ($3::bigint[] IS NULL OR l.id = ANY($3::bigint[]))`,
+    [monthStarts, employeeIds, versionIds ? [...versionIds] : null],
   );
   for (const row of rows) {
     const key = monthPairKey(Number(row.employee_id), row.month);

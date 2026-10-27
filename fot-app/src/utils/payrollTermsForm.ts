@@ -3,6 +3,7 @@ import type {
   IPayrollTermsRow,
   IPlannedSupplementPayload,
   PayrollCalcType,
+  ProrationRounding,
   StaffCategory,
 } from '../services/payrollService';
 import { parseRateAmount } from './payrollFormat';
@@ -50,6 +51,8 @@ export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, strin
 export interface IPayrollTermsFormValues {
   calcType: PayrollCalcType;
   amount: string;
+  /** Округление оклада за неполный месяц, как в ЗУП (миграция 331). */
+  prorationRounding: ProrationRounding;
   money: Record<PayrollMoneyField, string>;
   supplement: IPayrollSupplementValues;
   effectiveFrom: string;
@@ -79,6 +82,7 @@ export const initialPayrollTermsValues = (
   return {
     calcType: row.calc_type ?? 'salary',
     amount: hasTerms ? pick(row.calc_type === 'salary' ? row.monthly_salary : row.hourly_rate) : '',
+    prorationRounding: (hasTerms && row.proration_rounding) || 'ruble',
     money: {
       bonus: pick(row.bonus_amount),
       // Проживание — квартира «Проживания» на дату (миграция 320), не условия: есть и без оклада, только показ.
@@ -99,6 +103,7 @@ const SUPPLEMENT_FIELDS = Object.keys(SUPPLEMENT_FIELD_KEYS) as PayrollSupplemen
 export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: IPayrollTermsFormValues): boolean => (
   values.calcType !== initial.calcType
   || values.amount !== initial.amount
+  || values.prorationRounding !== initial.prorationRounding
   || values.effectiveFrom !== initial.effectiveFrom
   || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
   || SUPPLEMENT_FIELDS.some(field => values.supplement[field] !== initial.supplement[field])
@@ -207,6 +212,8 @@ export const validatePayrollTerms = (
       monthly_salary: values.calcType === 'salary' ? parsed : undefined,
       hourly_rate: values.calcType === 'hourly' ? parsed : undefined,
       bonus_amount: optional.bonus,
+      // Округление — только у оклада; у ставки не передаём: сервер оставит прежнее.
+      proration_rounding: values.calcType === 'salary' ? values.prorationRounding : undefined,
       effective_from: values.effectiveFrom,
       planned_supplement: plannedSupplement,
     },

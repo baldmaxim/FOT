@@ -40,7 +40,9 @@ import {
   getTermsHistory,
   getTermsOnDate,
   lockPayrollEmployee,
+  PRORATION_ROUNDINGS,
   setPlannedSupplement,
+  type ProrationRounding,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
 import {
@@ -99,6 +101,7 @@ const termsBodySchema = z.object({
   // с миграции 321 — staff_deductions, вносятся в «Справочник» → «Удержания» и во вкладке кадров.
   deduction_amount: optionalMoneySchema,
   staff_units: z.coerce.number().positive().max(2).optional(),
+  proration_rounding: z.enum(PRORATION_ROUNDINGS as [ProrationRounding, ...ProrationRounding[]]).optional(),
   organization_id: z.string().uuid().nullable().optional(),
   effective_from: dateSchema,
   change_reason: z.string().trim().max(500).optional(),
@@ -277,6 +280,7 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
              LIMIT 1) AS housing_compensation,
            t.travel_compensation,
            t.communication_compensation,
+           t.proration_rounding,
            t.staff_units,
            t.effective_from,
            t.effective_to
@@ -424,6 +428,8 @@ interface IPayrollTermsListRow {
   housing_compensation: string | number | null;
   travel_compensation: string | number | null;
   communication_compensation: string | number | null;
+  /** Округление оклада за неполный месяц (миграция 331); без условий — null. */
+  proration_rounding: ProrationRounding | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -746,6 +752,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         // Удержания с миграции 321 — staff_deductions: окно сотрудника их только показывает.
         deductionAmount: null,
         staffUnits: body.staff_units,
+        // Прежний клиент поля не знает — как у условий на дату: признак ставит скрипт по ЗУП, сохранение не сбрасывает.
+        prorationRounding: body.proration_rounding ?? previousTerms?.proration_rounding,
         organizationId: body.organization_id ?? null,
         effectiveFrom: body.effective_from,
         changeReason: body.change_reason ?? null,
@@ -782,6 +790,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         bonus_amount: body.bonus_amount ?? null,
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
+        proration_rounding: body.proration_rounding ?? null,
         // undefined — доплату не трогали (в аудите ключа нет), null — снята.
         planned_supplement: supplement,
         planned_supplement_changed: supplementChanged,

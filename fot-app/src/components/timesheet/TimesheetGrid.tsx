@@ -1571,7 +1571,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               {showSalaryColumn && (
                 <th
                   className="ts-col-salary-sticky"
-                  title={salary?.data?.kind === 'brigade' ? 'Доля выработки: КТУ × учтённые часы' : 'Оклад по табелю'}
+                  title={salary?.data?.kind === 'brigade'
+                    ? 'К выплате: доля выработки по КТУ − удержания, без НДФЛ'
+                    : 'К выплате по закрытому табелю: начислено − удержания, без НДФЛ'}
                 >
                   Сумма
                 </th>

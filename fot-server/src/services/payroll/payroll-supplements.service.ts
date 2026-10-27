@@ -57,10 +57,30 @@ export interface IOneTimeSupplementInput {
 }
 
 /**
- * Плановые и разовые доплаты «штата зарплаты». Плановые — текущая (не снятая) версия журнала и прошлые
- * периоды: версия, после которой доплату не сняли и чей период не пересекается ни с одной более поздней
- * ненулевой версией. Пересекается — это правка (сумма, даты), прежняя версия не показывается.
+ * Действующие периоды плановой доплаты по журналу всех сотрудников: текущая (не снятая) версия и прошлые
+ * периоды — версия, после которой доплату не сняли и чей период не пересекается ни с одной более поздней
+ * ненулевой версией. Пересекается — это правка (сумма, даты), прежняя версия не действует. Окна — по всему
+ * журналу сотрудника, отсев — после: снятая не «оживает» прежней версией; фильтровать месяц — снаружи.
  */
+export const PLANNED_SUPPLEMENT_PERIODS_SQL = `
+  SELECT v.id, v.employee_id, v.amount, v.date_from, v.date_to, v.is_current
+    FROM (
+      SELECT x.id, x.employee_id, x.amount, x.date_from, x.date_to,
+             x.id = max(x.id) OVER (PARTITION BY x.employee_id) AS is_current,
+             lead(x.amount IS NULL) OVER (PARTITION BY x.employee_id ORDER BY x.id) AS next_removed
+        FROM payroll_planned_supplements x
+    ) v
+   WHERE v.amount IS NOT NULL
+     AND (v.is_current OR (
+           v.next_removed IS NOT TRUE
+           AND NOT EXISTS (
+             SELECT 1 FROM payroll_planned_supplements y
+              WHERE y.employee_id = v.employee_id
+                AND y.id > v.id
+                AND y.amount IS NOT NULL
+                AND daterange(y.date_from, y.date_to, '[]') && daterange(v.date_from, v.date_to, '[]'))))`;
+
+/** Плановые (PLANNED_SUPPLEMENT_PERIODS_SQL) и разовые доплаты «штата зарплаты». */
 export const listSupplements = async (scope: {
   contractorRootId: string | null;
   departmentIds: string[] | null;
@@ -82,22 +102,7 @@ export const listSupplements = async (scope: {
               to_char(v.date_to, 'YYYY-MM-DD') AS date_to,
               NULL::text AS month, NULL::text AS reason, v.is_current
          FROM staff s
-         -- Окна — по всему журналу сотрудника, отсев — после: снятая не «оживает» прежней версией.
-         JOIN (
-           SELECT x.id, x.employee_id, x.amount, x.date_from, x.date_to,
-                  x.id = max(x.id) OVER (PARTITION BY x.employee_id) AS is_current,
-                  lead(x.amount IS NULL) OVER (PARTITION BY x.employee_id ORDER BY x.id) AS next_removed
-             FROM payroll_planned_supplements x
-         ) v ON v.employee_id = s.id
-        WHERE v.amount IS NOT NULL
-          AND (v.is_current OR (
-                v.next_removed IS NOT TRUE
-                AND NOT EXISTS (
-                  SELECT 1 FROM payroll_planned_supplements y
-                   WHERE y.employee_id = v.employee_id
-                     AND y.id > v.id
-                     AND y.amount IS NOT NULL
-                     AND daterange(y.date_from, y.date_to, '[]') && daterange(v.date_from, v.date_to, '[]'))))
+         JOIN (${PLANNED_SUPPLEMENT_PERIODS_SQL}) v ON v.employee_id = s.id
        UNION ALL
        SELECT 'one_time'::text, o.id, s.id, s.full_name, s.department, s.position,
               o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, NULL

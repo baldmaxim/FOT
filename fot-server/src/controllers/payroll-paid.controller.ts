@@ -53,7 +53,7 @@ const getPayslip = async (req: AuthenticatedRequest, res: Response): Promise<voi
       return;
     }
     const { month } = payslipQuerySchema.parse(req.query);
-    const data = await getPayslipInfo(employeeId, month);
+    const data = await getPayslipInfo(employeeId, month, req);
     res.json({ success: true, data });
   } catch (err) {
     if (err instanceof z.ZodError) {

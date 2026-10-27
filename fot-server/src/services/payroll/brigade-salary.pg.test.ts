@@ -113,7 +113,7 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { getBrigadeSalary } from './brigade-salary.service.js';
+import { getBrigadeSalary, getBrigadeShares } from './brigade-salary.service.js';
 import { setBrigadeKtu, setBrigadeOutput } from './brigade-salary-inputs.service.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
@@ -266,6 +266,21 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграция 330)', ()
 
     expect(result.state).toBe('fixed');
     expect(amounts(result.rows)).toEqual({ [A]: '0.00', [B]: '0.00', [F]: '0.00' });
+  });
+
+  it('доли для «К выплате (ФОТ)»: закрытый месяц — зафиксированные, тот же расчёт, что во вкладке; открытый — нет', async () => {
+    const { h2 } = await closeSeptemberInHalves();
+    await setBrigadeOutput(BRIGADE, '2026-09-01', '312000.00', PROFILE);
+
+    const shares = await getBrigadeShares(req, BRIGADE, '2026-09');
+
+    expect(shares.state).toBe('fixed');
+    expect(amounts(shares.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
+    expect(amounts((await getBrigadeSalary(req, BRIGADE, '2026-09')).rows)).toEqual(amounts(shares.rows));
+    expect(await q('SELECT 1 FROM brigade_salary_results')).toHaveLength(1);
+
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    expect(await getBrigadeShares(req, BRIGADE, '2026-09')).toEqual({ state: 'open', distribution: null, rows: [] });
   });
 
   it('половина не закрыта и результата не было → «Предварительно» по живому табелю, ничего не сохраняется', async () => {

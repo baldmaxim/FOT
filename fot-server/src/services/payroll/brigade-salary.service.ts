@@ -325,6 +325,28 @@ async function ensureFixed(
   });
 }
 
+/** Доли бригады для «К выплате (ФОТ)»: только зафиксированный расчёт закрытого месяца, иначе — open. */
+export interface IBrigadeShares {
+  state: 'fixed' | 'open';
+  distribution: BrigadeDistributionState | null;
+  rows: IBrigadeSalaryResultRow[];
+}
+
+/**
+ * Зафиксированные доли бригады за месяц — тот же расчёт, что во вкладке (закрытый месяц фиксируется при первом
+ * чтении). Месяц открыт или открыли, пока ждали замок, — open: доли не окончательные.
+ */
+export async function getBrigadeShares(
+  req: AuthenticatedRequest,
+  departmentId: string,
+  month: string,
+): Promise<IBrigadeShares> {
+  const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
+  const fixed = closure.closed ? await ensureFixed(req, departmentId, month) : null;
+  if (!fixed) return { state: 'open', distribution: null, rows: [] };
+  return { state: 'fixed', distribution: fixed.stored.distribution, rows: fixed.stored.rows };
+}
+
 /** Расчёт бригады для вкладки: закрытый месяц — зафиксированный, открытый — предварительный или прежний. */
 export async function getBrigadeSalary(
   req: AuthenticatedRequest,

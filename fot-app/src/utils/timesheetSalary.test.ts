@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TimesheetEmployee } from '../types';
 import type { ITimesheetSalaryResponse } from '../types/timesheet';
-import { findSalaryRow, formatKtu, formatSalaryAmount } from './timesheetSalary';
+import { findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle } from './timesheetSalary';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
   id, full_name: 'Халимзода Раджабали Абдурахмон', position_id: null, position_name: null,
@@ -32,5 +32,24 @@ describe('timesheetSalary', () => {
 
   it('КТУ с запятой', () => {
     expect(formatKtu('1.5')).toBe('1,5');
+  });
+});
+
+describe('подсказка «Суммы» — к выплате', () => {
+  const plain = (value: string | undefined): string | undefined => value?.replace(/\s/g, ' ');
+
+  it('бригада: доля, КТУ, часы и удержания', () => {
+    const row = { ...data.rows[0], share: '141818.18', deducted: '3500.00', amount: '138318.18', missing: [] };
+    expect(plain(salaryAmountTitle(data, row))).toBe('Доля 141 818,18 · КТУ 1,5 · 210 ч · удержано 3 500,00');
+  });
+
+  it('отдел: закрытый табель — «К выплате (ФОТ)» и чего нет; незакрытый — «Табель не закрыт»', () => {
+    const department: ITimesheetSalaryResponse = { ...data, kind: 'department', state: null, distribution: null };
+    const row = {
+      employee_id: 71, ktu: null, counted_hours: null, amount: '252730.00', share: null, deducted: '0.00',
+      missing: ['vacation_pay' as const], payout_state: 'closed' as const, source: null, can_edit: false,
+    };
+    expect(salaryAmountTitle(department, row)).toBe('К выплате (ФОТ) · без: отпускные');
+    expect(salaryAmountTitle(department, { ...row, amount: null, payout_state: 'not_closed' })).toBe('Табель не закрыт');
   });
 });

@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { IEmployeePayout1c } from '../../services/payroll1cPayoutsService';
 import { payrollService } from '../../services/payrollService';
 import { pluralDays } from '../../utils/dateCompact';
-import { formatPaidAmount, paidCellKey, type PayrollPaidTotals } from '../../utils/payrollPaid';
+import { formatPaidAmount, paidCellKey, paidPayout, type PayrollPaidTotals } from '../../utils/payrollPaid';
 import {
   formatPayslipTerms,
   PAYSLIP_MAIN_ITEM,
@@ -12,6 +12,7 @@ import {
   payslipPeriodParts,
   payslipRateLines,
 } from '../../utils/payrollPayslip';
+import { PayslipCalcSection } from './PayslipCalcSection';
 import disclosure from './PayrollDisclosure.module.css';
 import styles from './PaidPayslip.module.css';
 
@@ -39,8 +40,8 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
  * Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад — из ФОТ: грузятся при выборе месяца.
  * «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
  * справочно, в «Всего начислено» и «К выплате» не входит.
- * Ниже — «По ставкам ФОТ» (проезд — пропорционально дням, доплата за проживание или за общежитие) по ставкам того
- * месяца; в «Всего начислено» они не входят.
+ * Ниже — «Расчёт ФОТ» по закрытому табелю (PayslipCalcSection) со столбцом «1С» для сравнения; месяц без сумм 1С
+ * с закрытым табелем — только он. Старый бэкенд без расчёта — прежний блок «По ставкам ФОТ».
  */
 export const PaidPayslip: FC<IPaidPayslipProps> = ({
   employeeId, month, positionName, amounts, totals, transfers, transferred,
@@ -60,6 +61,10 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
   const terms = info ? formatPayslipTerms(info.terms) : null;
   const period = info ? payslipPeriodParts(info.period_from, info.period_to) : null;
   const rateLines = payslipRateLines(info?.rate_allowances);
+  const calc = info?.calc;
+  // Сумм 1С за месяц нет, а расчёт ФОТ есть — таблицы 1С из одних прочерков не показываются.
+  const hasPaid = totals.accrued !== null || totals.deducted !== null;
+  const show1c = hasPaid || calc?.state !== 'closed';
 
   // Пока табель грузится — многоточие, нет данных — прочерк: суммы видны сразу.
   const fromInfo = (value: number | undefined): string => {
@@ -69,71 +74,73 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
 
   return (
     <div className={styles.payslip}>
-      <section className={styles.part} aria-label="Начислено">
-        <p className={styles.partTitle}>
-          {daysTotal > 0 ? `Начислено за ${daysTotal} ${pluralDays(daysTotal)}` : 'Начислено'}
-        </p>
-        <div className={styles.scroll}>
-          <table className={styles.table}>
-            <colgroup>
-              <col />
-              <col className={styles.periodCol} />
-              <col className={styles.daysCol} />
-              <col className={styles.daysCol} />
-              <col className={styles.sumCol} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th scope="col" rowSpan={2}>Вид</th>
-                <th scope="col" rowSpan={2}>Период</th>
-                <th scope="colgroup" colSpan={2} className={styles.center}>Отработано, дн.</th>
-                <th scope="col" rowSpan={2} className={styles.num}>Сумма</th>
-              </tr>
-              <tr>
-                <th scope="col" className={styles.center}>раб.</th>
-                <th scope="col" className={styles.center}>вых.</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <th scope="row" className={styles.kind}>
-                  <span className={styles.kindName}>{positionName || 'По трудовому договору'}</span>
-                  {terms && <span className={styles.kindNote}>{terms}</span>}
-                </th>
-                <td className={styles.period}>
-                  {period
-                    ? <><span className={styles.nowrap}>{period[0]}</span> <span className={styles.nowrap}>{period[1]}</span></>
-                    : (payslipQuery.isPending ? '…' : '—')}
-                </td>
-                <td className={styles.center}>{fromInfo(days?.workday)}</td>
-                <td className={styles.center}>{fromInfo(days?.dayoff)}</td>
-                <td className={styles.num}>{mainAmount === undefined ? '—' : formatPaidAmount(mainAmount)}</td>
-              </tr>
-              {accruals.map(line => (
-                <tr key={line.code}>
-                  <th scope="row" className={styles.kind}>{line.label}</th>
-                  <td colSpan={3} />
-                  <td className={styles.num}>{formatPaidAmount(line.amount)}</td>
+      {show1c && (
+        <section className={styles.part} aria-label="Начислено">
+          <p className={styles.partTitle}>
+            {daysTotal > 0 ? `Начислено за ${daysTotal} ${pluralDays(daysTotal)}` : 'Начислено'}
+          </p>
+          <div className={styles.scroll}>
+            <table className={styles.table}>
+              <colgroup>
+                <col />
+                <col className={styles.periodCol} />
+                <col className={styles.daysCol} />
+                <col className={styles.daysCol} />
+                <col className={styles.sumCol} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col" rowSpan={2}>Вид</th>
+                  <th scope="col" rowSpan={2}>Период</th>
+                  <th scope="colgroup" colSpan={2} className={styles.center}>Отработано, дн.</th>
+                  <th scope="col" rowSpan={2} className={styles.num}>Сумма</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th scope="row" colSpan={4}>Всего начислено</th>
-                <td className={styles.num}>{formatTotal(totals.accrued)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        {payslipQuery.isError && (
-          <div className={`${disclosure.stateError} ${styles.note}`}>
-            <span>Не удалось загрузить дни табеля и оклад</span>
-            <button type="button" className={disclosure.retryButton} onClick={() => { void payslipQuery.refetch(); }}>
-              Повторить
-            </button>
+                <tr>
+                  <th scope="col" className={styles.center}>раб.</th>
+                  <th scope="col" className={styles.center}>вых.</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row" className={styles.kind}>
+                    <span className={styles.kindName}>{positionName || 'По трудовому договору'}</span>
+                    {terms && <span className={styles.kindNote}>{terms}</span>}
+                  </th>
+                  <td className={styles.period}>
+                    {period
+                      ? <><span className={styles.nowrap}>{period[0]}</span> <span className={styles.nowrap}>{period[1]}</span></>
+                      : (payslipQuery.isPending ? '…' : '—')}
+                  </td>
+                  <td className={styles.center}>{fromInfo(days?.workday)}</td>
+                  <td className={styles.center}>{fromInfo(days?.dayoff)}</td>
+                  <td className={styles.num}>{mainAmount === undefined ? '—' : formatPaidAmount(mainAmount)}</td>
+                </tr>
+                {accruals.map(line => (
+                  <tr key={line.code}>
+                    <th scope="row" className={styles.kind}>{line.label}</th>
+                    <td colSpan={3} />
+                    <td className={styles.num}>{formatPaidAmount(line.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th scope="row" colSpan={4}>Всего начислено</th>
+                  <td className={styles.num}>{formatTotal(totals.accrued)}</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
-        )}
-      </section>
+          {payslipQuery.isError && (
+            <div className={`${disclosure.stateError} ${styles.note}`}>
+              <span>Не удалось загрузить дни табеля и оклад</span>
+              <button type="button" className={disclosure.retryButton} onClick={() => { void payslipQuery.refetch(); }}>
+                Повторить
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       {deductions.length > 0 && (
         <section className={styles.part} aria-label="Удержано">
@@ -211,7 +218,17 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
         </section>
       )}
 
-      {rateLines.length > 0 && (
+      {(payslipQuery.isPending || calc) && (
+        <PayslipCalcSection
+          month={month}
+          calc={calc}
+          amounts={amounts}
+          payout1c={hasPaid ? paidPayout(totals) : null}
+          deducted1c={totals.deducted}
+        />
+      )}
+
+      {info && !calc && rateLines.length > 0 && (
         <section className={styles.part} aria-label="По ставкам ФОТ">
           <p className={styles.partTitle}>По ставкам ФОТ</p>
           <div className={styles.scroll}>

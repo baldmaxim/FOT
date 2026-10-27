@@ -101,7 +101,7 @@ describe('Расчётный листок месяца', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual(info);
-    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(42, '2026-07');
+    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(42, '2026-07', expect.objectContaining({ user: expect.any(Object) }));
   });
 
   it('без доступа к сотруднику — 403, табель не собирается', async () => {

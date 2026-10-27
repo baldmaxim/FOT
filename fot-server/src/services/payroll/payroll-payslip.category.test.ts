@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Листок: категория месяца — по табелю (месячный резолвер), а не staff_category из условий оплаты.
-const pg = vi.hoisted(() => ({ queryOne: vi.fn() }));
+const pg = vi.hoisted(() => ({ query: vi.fn(), queryOne: vi.fn() }));
 vi.mock('../../config/postgres.js', () => ({
-  query: vi.fn(),
+  query: pg.query,
   queryOne: pg.queryOne,
   execute: vi.fn(),
   withTransaction: vi.fn(),
@@ -68,14 +68,21 @@ vi.mock('./payroll-staff-category.js', () => category);
 const summaryObject = vi.hoisted(() => ({ resolveSummaryObjects: vi.fn() }));
 vi.mock('./payroll-summary-object.service.js', () => summaryObject);
 
+import type { AuthenticatedRequest } from '../../types/index.js';
 import { getPayslipInfo } from './payroll-payslip.service.js';
+
+const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
 
 describe('getPayslipInfo — категория месяца по табелю', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pg.queryOne.mockImplementation(async (sql: string) => (sql.includes('FROM employees')
       ? { hire_date: null, org_department_id: 'dept-auto', employment_status: 'active' }
-      : { travel_rate: '2730.00', dormitory_allowance_rate: null, travel_stopped: false, housing: [] }));
+      : null));
+    // Закрытых подач нет — листок по живому табелю; ставки месяца — пакетным запросом.
+    pg.query.mockImplementation(async (sql: string) => (sql.includes('payroll_rate_value')
+      ? [{ employee_id: 42, travel_rate: '2730.00', dormitory_allowance_rate: null, travel_stopped: false, housing: [] }]
+      : []));
     // В условиях — «Офис»: прежний листок дал бы проезд.
     terms.getTermsForPeriod.mockResolvedValue(new Map([[42, [{
       effective_from: '2026-09-01', effective_to: null, calc_type: 'salary', monthly_salary: '100000.00',
@@ -91,7 +98,7 @@ describe('getPayslipInfo — категория месяца по табелю',
   it('месячный резолвер дал «Рабочие» — проезда нет, хотя в условиях «Офис»', async () => {
     category.resolveMonthStaffCategories.mockResolvedValue(['worker']);
 
-    const info = await getPayslipInfo(42, '2026-09');
+    const info = await getPayslipInfo(42, '2026-09', req);
 
     expect(category.resolveMonthStaffCategories).toHaveBeenCalledWith([{
       employeeId: 42,
@@ -111,7 +118,7 @@ describe('getPayslipInfo — категория месяца по табелю',
   it('месячный резолвер дал «Офис» — проезд по ставке месяца: 20 рабочих + 1 выходной из 22 дней', async () => {
     category.resolveMonthStaffCategories.mockResolvedValue(['office']);
 
-    const info = await getPayslipInfo(42, '2026-09');
+    const info = await getPayslipInfo(42, '2026-09', req);
 
     expect(info.worked_days).toEqual({ workday: 20, dayoff: 1 });
     // Выход в выходной считается: 2 730 × 21 / 22 = 2 605,91 → 2 606.
@@ -126,7 +133,7 @@ describe('getPayslipInfo — категория месяца по табелю',
     }]]));
     category.resolveMonthStaffCategories.mockResolvedValue(['worker']);
 
-    const info = await getPayslipInfo(42, '2026-09');
+    const info = await getPayslipInfo(42, '2026-09', req);
 
     expect(category.resolveMonthStaffCategories.mock.calls[0][0][0]).toMatchObject({ officeObject: false });
     expect(summaryObject.resolveSummaryObjects).not.toHaveBeenCalled();

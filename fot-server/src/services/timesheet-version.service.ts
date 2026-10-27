@@ -47,6 +47,7 @@ import {
   resolveDayOwnership,
 } from './timesheet-day-ownership.service.js';
 import type { IApprovalLockInfo } from './timesheet-department-assignments.service.js';
+import { copyPayrollBasis, writePayrollBasisForVersion } from './payroll/payroll-basis.service.js';
 
 // 'rebuild' — аварийная пересборка фоновым воркером. В штатном процессе не возникает:
 // закрытый табель правится только через «Открыть → Закрыть», и это даёт source='close'.
@@ -837,6 +838,8 @@ export async function materializeVersion(
     const objectsSame = latest.objects_content_hash === objects.hash;
     const managersSame = latest.managers_content_hash === managers.hash;
     if (objectsSame && managersSame) {
+      // Тот же табель, но графики могли поменяться: основа зарплаты — новой revision, если другая.
+      await writePayrollBasisForVersion(client, latest.id, payload);
       return { version: latest, created: false };
     }
 
@@ -850,6 +853,7 @@ export async function materializeVersion(
     if (onlyMissingSnapshots && !latest.acked) {
       if (!objectsSame) await insertObjectsSnapshot(client, latest.id, objects, 'materialize');
       if (!managersSame) await insertManagersSnapshot(client, latest.id, managers, 'materialize');
+      await writePayrollBasisForVersion(client, latest.id, payload);
       return { version: latest, created: false };
     }
     // Иначе — содержимое снимка изменилось либо редакция уже принята: нужна новая
@@ -884,6 +888,7 @@ export async function materializeVersion(
 
   await insertObjectsSnapshot(client, inserted.id, objects, 'materialize');
   await insertManagersSnapshot(client, inserted.id, managers, 'materialize');
+  await writePayrollBasisForVersion(client, inserted.id, payload);
 
   return { version: inserted, created: true };
 }
@@ -1067,6 +1072,8 @@ export async function rebuildVersionObjects(
      ON CONFLICT (version_id) DO NOTHING`,
     [inserted.id, latest.id],
   );
+  // Дни прежние — основа зарплаты переносится как есть.
+  await copyPayrollBasis(client, latest.id, inserted.id);
 
   const changedEmployeeIds = [...new Set([...merged.changedEmployeeIds, ...zeroChanged])].sort((a, b) => a - b);
   return { created: true, revision: nextRevision, changedEmployeeIds };
@@ -1237,6 +1244,7 @@ export async function rebuildVersionWithoutEmployees(
       ],
     );
   }
+  await copyPayrollBasis(client, latest.id, inserted.id, built.removedIds);
 
   return { created: true, revision: nextRevision, removedIds: built.removedIds };
 }

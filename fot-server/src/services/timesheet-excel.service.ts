@@ -10,7 +10,7 @@ import { defangCsvCell } from '../utils/file-validation.utils.js';
 
 // study_day (и sick_worked) намеренно отсутствуют: в 1С и в HR-выгрузках учебный день
 // экспортируется целыми часами нормы графика, а не буквенным статусом.
-const STATUS_LABELS: Record<string, string> = {
+export const STATUS_LABELS: Record<string, string> = {
   work: '', sick: 'Б', vacation: 'От', absent: 'Н',
   dayoff: 'В', remote: 'УУ', unpaid: 'С', educational_leave: 'У', manual: '',
 };
@@ -129,7 +129,7 @@ const WORKED_DAY_STATUSES = new Set(['remote', 'sick_worked', STUDY_DAY_STATUS])
  * а не исходный факт: у отпуска/больничного в данных может стоять норма часов,
  * но в выгрузке они выводятся буквой и рабочим днём не считаются.
  */
-const isWorkedDayForOneC = (status: string | undefined, exportedHours: number): boolean => {
+export const isWorkedDayForOneC = (status: string | undefined, exportedHours: number): boolean => {
   if (status && WORKED_DAY_STATUSES.has(status)) return true;
   return hasPositiveHours(exportedHours);
 };
@@ -278,7 +278,7 @@ const ONE_C_STUDENT_FULL_DAY_HOURS = 8;
 const ONE_C_STUDENT_PRE_HOLIDAY_FULL_DAY_HOURS = 7;
 const STUDENT_SCHEDULE_NAME_PATTERN = /\(студент/i;
 
-const isStudentSchedule = (schedule?: IResolvedSchedule | null): boolean =>
+export const isStudentSchedule = (schedule?: IResolvedSchedule | null): boolean =>
   Boolean(schedule?.name && STUDENT_SCHEDULE_NAME_PATTERN.test(schedule.name));
 
 const getEffectiveScheduleForDate = (
@@ -300,7 +300,7 @@ const getEffectiveScheduleForDate = (
  *  - факт < нормы → факт, округлённый арифметически до ближайшего целого часа.
  * Допуск 0.001 ч ≈ 4 секунды компенсирует потери точности при хранении total_hours без total_minutes.
  */
-const compute1CDayHours = (
+export const compute1CDayHours = (
   factHours: number,
   dayNormHours: number,
   isPreHoliday: boolean,

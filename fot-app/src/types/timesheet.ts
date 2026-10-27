@@ -1,3 +1,4 @@
+import type { PayrollCalcMissing } from '../services/payrollService';
 import type { IResolvedSchedule } from './schedule';
 
 // Timesheet types
@@ -327,8 +328,16 @@ export interface ITimesheetSalaryRow {
   /** КТУ для выбора ('1.0' по умолчанию); у отделов null. */
   ktu: string | null;
   counted_hours: number | null;
-  /** Сумма с копейками строкой; null — суммы нет. */
+  /** К выплате: начислено − удержания, без НДФЛ, с копейками строкой; null — суммы нет. */
   amount: string | null;
+  /** Доля «Выработки» по КТУ (бригада); нет у старого бэкенда. */
+  share?: string | null;
+  /** Учтённые удержания месяца. */
+  deducted?: string | null;
+  /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
+  missing?: PayrollCalcMissing[];
+  /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null. */
+  payout_state?: 'closed' | 'not_closed' | null;
   source: 'version' | 'live' | null;
   can_edit: boolean;
 }

@@ -19,6 +19,7 @@ const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
   calcType: 'salary',
   amount: '175000',
+  prorationRounding: 'ruble',
   money: EMPTY_MONEY,
   supplement: EMPTY_SUPPLEMENT,
   effectiveFrom: '2026-09-24',
@@ -45,6 +46,7 @@ describe('validatePayrollTerms: состав запроса сохранения
       calc_type: 'salary',
       monthly_salary: 175000,
       bonus_amount: 20000,
+      proration_rounding: 'ruble',
       effective_from: '2026-09-24',
     });
   });
@@ -199,10 +201,25 @@ describe('validatePayrollTerms: плановая доплата', () => {
 });
 
 describe('initialPayrollTermsValues', () => {
+  it('округление оклада — из условий; без условий — до рубля', () => {
+    expect(initialPayrollTermsValues(row({ proration_rounding: 'daily_kopeck' }), '2026-09-24').prorationRounding)
+      .toBe('daily_kopeck');
+    expect(initialPayrollTermsValues(row({ terms_id: null, proration_rounding: 'daily_kopeck' }), '2026-09-24').prorationRounding)
+      .toBe('ruble');
+  });
+
+  it('смена округления — правка условий, дневная ставка уходит в запрос', () => {
+    const initial = values();
+    expect(isPayrollTermsChanged(values({ prorationRounding: 'daily_kopeck' }), initial)).toBe(true);
+    expect(validatePayrollTerms(values({ prorationRounding: 'daily_kopeck' })).payload)
+      .toMatchObject({ proration_rounding: 'daily_kopeck' });
+  });
+
   it('из условий сотрудника: хвост нулей NUMERIC убирается, пустые суммы остаются пустыми', () => {
     expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
       calcType: 'hourly',
       amount: '450',
+      prorationRounding: 'ruble',
       // Проезд условий (travel_compensation) с миграции 324 в форму не попадает.
       money: { bonus: '15000', housing: '' },
       supplement: EMPTY_SUPPLEMENT,
@@ -236,7 +253,7 @@ describe('initialPayrollTermsValues', () => {
       '2026-09-24',
     );
     expect(initial).toEqual({
-      calcType: 'salary', amount: '', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      calcType: 'salary', amount: '', prorationRounding: 'ruble', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });

@@ -1,6 +1,7 @@
 import type { CSSProperties, FC } from 'react';
 import { ChevronRight } from 'lucide-react';
 
+import type { PayrollCalcApi } from '../../hooks/usePayrollCalc';
 import type { PayrollPaidApi } from '../../hooks/usePayrollPaid';
 import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from '../../utils/payrollAccruals';
 import {
@@ -10,10 +11,13 @@ import {
   paidPayout,
   type IPayrollPaidItem,
 } from '../../utils/payrollPaid';
+import { PayrollCalcRows } from './PayrollCalcRows';
 import styles from './PayrollPaidTable.module.css';
 
 interface IPayrollPaidTableProps {
   paid: PayrollPaidApi;
+  /** «К выплате (ФОТ)» за те же месяцы — строка над «Выплачено»; нет — строки нет. */
+  calc?: PayrollCalcApi;
 }
 
 const formatTotal = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
@@ -24,8 +28,9 @@ const formatTotal = (value: number | null): string => (value === null ? '—' : 
  * «Выплачено»: расчётное «К выплате» по данным 1С — начислено минус удержано (как в «Истории выплат», на «Расчётах»
  * и в «Своде»), без НДФЛ. Клик по его строке раскрывает ниже статьи по группам ведомости ЗУП (с удержаниями) —
  * в той же таблице, сам итог при этом не сдвигается. Таблица прокручивается вбок, подписи закреплены слева.
+ * Над «Выплачено» — «К выплате (ФОТ)»: расчёт ФОТ по закрытому табелю (PayrollCalcRows).
  */
-export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid }) => {
+export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid, calc }) => {
   const withYear = accrualPeriodCrossesYear(paid.months);
   const ready = paid.status === 'ready';
   // Один месяц — «Итого» повторял бы его столбец.
@@ -61,6 +66,7 @@ export const PayrollPaidTable: FC<IPayrollPaidTableProps> = ({ paid }) => {
               {withTotal && <th scope="col" className={styles.monthHead}>Итого</th>}
             </tr>
           </thead>
+          {calc && <PayrollCalcRows calc={calc} withTotal={withTotal} />}
           {/* Итоги — всегда на месте: статьи раскрываются под ними. Клик и Enter/Space с кнопки всплывают до строки. */}
           <tbody>
             <tr className={styles.totalRow} onClick={paid.toggleExpanded}>

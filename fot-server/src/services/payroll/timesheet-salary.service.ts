@@ -1,8 +1,12 @@
 /**
  * Ответ вкладки «Табель → Зарплата»: столбцы КТУ и «Сумма» для сетки отдела или бригады.
  *
- * Бригада — доли «Выработки» (brigade-salary.service). Отдел — оклад по дням из общего расчёта
- * «Зарплаты» (подключается отдельно, пока строк нет — столбец «Сумма» у отделов не показывается).
+ * «Сумма» — к выплате у всех (решение 27.10.2026), то же число, что «К выплате (ФОТ)» в карточке «Зарплаты»:
+ * начислено минус удержания, без НДФЛ.
+ * - Отдел — расчёт ФОТ по закрытому табелю (payroll-calc.service): оклад по дням, проезд, проживание, доплаты.
+ *   Табель месяца сотрудника не закрыт — суммы нет.
+ * - Бригада — доля «Выработки» по КТУ (brigade-salary.service) + разовые доплаты и проживание − удержания;
+ *   до закрытия — «Предварительно», как доля. Доля — в share (подсказка), Σ долей = выработке.
  */
 import { query, queryOne } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
@@ -10,6 +14,10 @@ import type { BrigadeDistributionState, BrigadeSalaryErrorCode } from './brigade
 import { DEFAULT_KTU_TENTHS } from './brigade-salary-inputs.service.js';
 import type { IDateRange } from './brigade-salary-source.service.js';
 import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
+import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
+import { monthBounds } from './brigade-salary-source.service.js';
+import type { IBrigadeShareFact, PayrollCalcMissing } from './payroll-calc.rules.js';
+import { getPayoutForEmployees, previewBrigadePayouts } from './payroll-calc.service.js';
 import { resolvePayrollEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
 
 export interface ITimesheetSalaryDepartment {
@@ -24,7 +32,16 @@ export interface ITimesheetSalaryRow {
   ktu: string | null;
   /** Учтённые часы, по которым посчитана доля; null — суммы нет. */
   counted_hours: number | null;
+  /** К выплате: начислено − удержания, без НДФЛ; null — суммы нет. */
   amount: string | null;
+  /** Доля «Выработки» по КТУ (только бригада); null — нет. */
+  share: string | null;
+  /** Учтённые удержания месяца; null — суммы нет. */
+  deducted: string | null;
+  /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
+  missing: PayrollCalcMissing[];
+  /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null (состояние у всей бригады). */
+  payout_state: 'closed' | 'not_closed' | null;
   source: 'version' | 'live' | null;
   can_edit: boolean;
 }
@@ -78,6 +95,11 @@ export async function getTimesheetSalary(
   month: string,
 ): Promise<ITimesheetSalaryResponse> {
   if (department.kind !== 'brigade') {
+    const { start, end } = monthBounds(month);
+    const memberIds = [...new Set(
+      (await listEmployeeMembershipsForDepartmentPeriod(department.id, start, end)).map(row => Number(row.employee_id)),
+    )].sort((a, b) => a - b);
+    const calcs = await getPayoutForEmployees(memberIds, month, req);
     return {
       department_id: department.id,
       month,
@@ -89,7 +111,22 @@ export async function getTimesheetSalary(
       output_amount: null,
       errors: [],
       computed_at: null,
-      rows: [],
+      rows: memberIds.map(employeeId => {
+        const calc = calcs.get(employeeId);
+        const closed = calc?.state === 'closed' ? calc : null;
+        return {
+          employee_id: employeeId,
+          ktu: null,
+          counted_hours: null,
+          amount: closed?.net ?? null,
+          share: null,
+          deducted: closed?.deducted ?? null,
+          missing: closed?.missing ?? [],
+          payout_state: closed ? 'closed' : 'not_closed',
+          source: null,
+          can_edit: false,
+        };
+      }),
     };
   }
 
@@ -99,6 +136,16 @@ export async function getTimesheetSalary(
   const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
   const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys()])].sort((a, b) => a - b);
   const names = await namesOf([...new Set(result.errors.map(error => error.employee_id))]);
+  // «Сумма» — к выплате из доли: доли нет (выработка не введена, ошибка) — суммы нет.
+  const shares = new Map<number, IBrigadeShareFact>(result.rows
+    .filter(row => row.amount !== null)
+    .map(row => [row.employee_id, {
+      amount: row.amount,
+      ktu: row.ktu,
+      countedMinutes: row.counted_minutes,
+      distribution: result.distribution,
+    }]));
+  const payouts = await previewBrigadePayouts(shares, month);
 
   return {
     department_id: department.id,
@@ -117,7 +164,11 @@ export async function getTimesheetSalary(
         employee_id: employeeId,
         ktu: ((result.inputs.ktu.get(employeeId) ?? DEFAULT_KTU_TENTHS) / 10).toFixed(1),
         counted_hours: row ? Math.round((row.counted_minutes / 60) * 100) / 100 : null,
-        amount: row?.amount ?? null,
+        amount: payouts.get(employeeId)?.net ?? null,
+        share: row?.amount ?? null,
+        deducted: payouts.get(employeeId)?.deducted ?? null,
+        missing: payouts.get(employeeId)?.missing ?? [],
+        payout_state: null,
         source: row?.source ?? null,
         // КТУ правят только текущему составу (без начальника участка) и не себе.
         can_edit: members.has(employeeId) && canEdit(employeeId),

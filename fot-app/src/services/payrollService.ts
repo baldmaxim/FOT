@@ -11,6 +11,8 @@ import type {
 export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты: «по графику» (оклад) или «по часам». */
 export type PayrollCalcType = 'salary' | 'hourly';
+/** Округление оклада за неполный месяц, как в ЗУП: до рубля или дневная ставка до копейки × дни (миграция 331). */
+export type ProrationRounding = 'ruble' | 'daily_kopeck';
 
 export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
   office: 'Офис',
@@ -21,6 +23,12 @@ export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
 export const CALC_TYPE_LABELS: Record<PayrollCalcType, string> = {
   salary: 'По графику (оклад)',
   hourly: 'По часам',
+};
+
+/** Округление оклада за неполный месяц — как в ЗУП у сотрудника. */
+export const PRORATION_ROUNDING_LABELS: Record<ProrationRounding, string> = {
+  ruble: 'До рубля',
+  daily_kopeck: 'Дневная ставка',
 };
 
 /** Выплачено сотруднику за месяц: начислено минус удержано («К выплате» месяца). */
@@ -57,6 +65,8 @@ export interface IPayrollTermsRow {
   /** Компенсации проезда и связи, ₽/мес. Проезд условий с миграции 324 не используется — см. travel_rate. */
   travel_compensation?: string | number | null;
   communication_compensation?: string | number | null;
+  /** Округление оклада за неполный месяц, как в ЗУП (миграция 331); null — условий нет, поля нет у старого бэкенда. */
+  proration_rounding?: ProrationRounding | null;
   /**
    * Проезд (миграция 324): ставка «Проезд» за месяц даты выборки, NUMERIC строкой; null — не задана. Положен ли
    * сотруднику — по категории и travel_stopped (travelAllowance). Нет у старого бэкенда.
@@ -122,6 +132,8 @@ export interface IAssignTermsPayload {
   housing_compensation?: number;
   communication_compensation?: number;
   staff_units?: number;
+  /** Не передано — как у прежних условий. */
+  proration_rounding?: ProrationRounding;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
   planned_supplement?: IPlannedSupplementPayload | null;
@@ -267,7 +279,63 @@ export interface IPayrollPayslipInfo {
   terms: IPayslipTerms[];
   /** «По ставкам ФОТ» за месяц (миграция 324); нет у старого бэкенда. В «Всего начислено» (ЗУП) не входят. */
   rate_allowances?: IPayslipRateAllowance[];
+  /** «К выплате (ФОТ)» по закрытому табелю (миграция 331); нет у старого бэкенда. */
+  calc?: PayrollCalc;
 }
+
+/** Строка расчёта ФОТ — код статьи «Оплачено» (1С), чтобы сравнивать построчно. */
+export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
+
+/** Чего ФОТ не посчитал: дни есть, суммы нет — итог «Расчётная часть». */
+export type PayrollCalcMissing =
+  | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
+  | 'brigade_output' | 'brigade_error';
+
+export interface IPayrollCalcLine {
+  code: PayrollCalcLineCode;
+  /** NUMERIC строкой; null — ФОТ сумму не считает (почасовые условия). */
+  amount: string | null;
+  /** Рабочих (у переработки — выходов) дней из нормы. */
+  days?: { worked: number; norm: number | null };
+  /** Доля бригады: КТУ и учтённые часы. */
+  brigade?: { ktu: string; hours: number };
+}
+
+export interface IPayrollCalcDeduction {
+  kind_id: number;
+  kind: string;
+  amount: string;
+}
+
+export type PayrollAbsenceStatus = 'vacation' | 'sick' | 'educational_leave' | 'unpaid';
+
+export interface IPayrollCalcClosed {
+  state: 'closed';
+  /** reconstructed — графики на дату дозаполнения, а не на дату закрытия табеля. */
+  quality: 'materialized' | 'reconstructed';
+  basis_ids: number[];
+  version_ids: number[];
+  norm_days: number | null;
+  period_from: string;
+  period_to: string;
+  worked_days: { workday: number; dayoff: number };
+  absences: Record<PayrollAbsenceStatus, number>;
+  lines: IPayrollCalcLine[];
+  deductions: IPayrollCalcDeduction[];
+  accrued: string;
+  deducted: string;
+  /** Начислено − удержано, без НДФЛ. */
+  net: string;
+  missing: PayrollCalcMissing[];
+}
+
+/** Табель месяца не закрыт (или сотрудник в месяце не работал) — суммы нет. */
+export interface IPayrollCalcNotClosed {
+  state: 'not_closed';
+  reason: 'not_covered' | 'norm_conflict' | 'no_period' | 'brigade_open';
+}
+
+export type PayrollCalc = IPayrollCalcClosed | IPayrollCalcNotClosed;
 
 export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowance';
 

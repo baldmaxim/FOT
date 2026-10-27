@@ -3,7 +3,7 @@ import type { FC } from 'react';
 import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
-import { findSalaryRow, formatKtu, formatSalaryAmount } from '../../utils/timesheetSalary';
+import { findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle } from '../../utils/timesheetSalary';
 
 /** Вкладка «Зарплата» в табеле: данные и правка КТУ / «Выработки». */
 export interface ITimesheetSalaryGridProps {
@@ -19,12 +19,9 @@ export interface ITimesheetSalaryGridProps {
 /** КТУ 0,5…2,0 с шагом 0,1. */
 const KTU_OPTIONS = Array.from({ length: 16 }, (_, index) => ((index + 5) / 10).toFixed(1));
 
-const amountTitle = (salary: ITimesheetSalaryGridProps, row: ITimesheetSalaryRow): string | undefined => {
-  if (salary.data?.kind !== 'brigade' || row.counted_hours === null) return undefined;
-  const parts = [`Учтено ${String(row.counted_hours).replace('.', ',')} ч`, `КТУ ${formatKtu(row.ktu ?? '1.0')}`];
-  if (salary.data.state === 'fixed' && row.source === 'live') parts.push('нет в закрытом табеле — по данным портала');
-  return parts.join(' · ');
-};
+const amountTitle = (salary: ITimesheetSalaryGridProps, row: ITimesheetSalaryRow): string | undefined => (
+  salary.data ? salaryAmountTitle(salary.data, row) : undefined
+);
 
 interface IKtuSelectProps {
   salary: ITimesheetSalaryGridProps;

@@ -4,6 +4,7 @@ import type {
   IAssignTermsPayload,
   IPayrollTermsRow,
   PayrollCalcType,
+  ProrationRounding,
 } from '../services/payrollService';
 import {
   firstInvalidField,
@@ -56,6 +57,10 @@ export const usePayrollTermsForm = ({
     clearError('amount');
   };
 
+  const setProrationRounding = (next: ProrationRounding) => {
+    setValues(prev => ({ ...prev, prorationRounding: next }));
+  };
+
   const setAmount = (value: string) => {
     setValues(prev => ({ ...prev, amount: value }));
     clearError('amount');
@@ -96,6 +101,7 @@ export const usePayrollTermsForm = ({
     plannedSupplement,
     fieldErrors,
     setCalcType,
+    setProrationRounding,
     setAmount,
     changeMoney,
     changeSupplement,

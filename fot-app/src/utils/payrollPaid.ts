@@ -259,9 +259,14 @@ export interface IPaidHistory {
  * «История выплат» в карточке: все месяцы, за которые из 1С пришли суммы «Оплачено» или ведомости выплаты
  * (месяц может быть только с перечислением — «Начислено» и «К выплате» тогда «—»).
  */
-export const paidHistory = (rows: readonly IPayrollPaidAmount[], payouts: readonly IEmployeePayout1c[] = []): IPaidHistory => {
+export const paidHistory = (
+  rows: readonly IPayrollPaidAmount[],
+  payouts: readonly IEmployeePayout1c[] = [],
+  /** Месяцы без сумм 1С, которые всё равно нужны в списке (расчёт ФОТ по закрытому табелю). */
+  extraMonths: readonly string[] = [],
+): IPaidHistory => {
   const transfers = payoutsByMonth(payouts);
-  const months = [...new Set([...paidAmountMonths(rows), ...transfers.keys()])].sort();
+  const months = [...new Set([...paidAmountMonths(rows), ...transfers.keys(), ...extraMonths])].sort();
   const amounts = toPaidAmounts(rows);
   const { byMonth, overall } = paidTotals(months, amounts);
   const historyMonths = [...months].reverse().map(month => ({

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Download, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
@@ -10,11 +10,11 @@ import {
   type IPayrollTermsRow,
 } from '../../services/payrollService';
 import { usePayrollCardExport } from '../../hooks/usePayrollCardExport';
-import { paidHistoryQueryOptions, usePayrollPaid } from '../../hooks/usePayrollPaid';
+import { usePayrollCalc } from '../../hooks/usePayrollCalc';
+import { usePayrollPaid } from '../../hooks/usePayrollPaid';
 import { usePayrollTermsForm } from '../../hooks/usePayrollTermsForm';
-import { moscowCurrentMonth } from '../../utils/moscowDate';
+import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
-import { defaultPaidMonth, effectivePaidMonths, paidAmountMonths, paidMonthOptions } from '../../utils/payrollPaid';
 import { travelAllowance } from '../../utils/payrollRates';
 import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/payrollTermsForm';
 import { MonthsPicker } from '../ui/MonthsPicker';
@@ -66,8 +66,9 @@ interface IEmployeePayrollDetailsProps {
  * её ошибки форму не блокируют.
  * Под шапкой вкладки: «Условия» (всё перечисленное) и «История выплат» (PaidHistoryPanel) — внутри карточки,
  * без своего окна. «Экспорт» в шапке — xlsx с условиями и историей выплат (usePayrollCardExport).
- * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С. Категория — по отделу, в окне её можно
- * сменить (сохраняется с условиями). Месяцы у ФИО (один или несколько) задают таблицу «Оплачено».
+ * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С; над ними «К выплате (ФОТ)» — расчёт по
+ * закрытому табелю. Категория — по отделу, в окне её можно сменить (сохраняется с условиями). Месяцы у ФИО
+ * (один или несколько) задают таблицу «Оплачено».
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -90,27 +91,15 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   // «Сегодня» — на момент открытия карточки: defaultDate фиксируется при входе в раздел и через
   // границу месяца без перезагрузки устарел бы.
   const [currentMonth] = useState(moscowCurrentMonth);
-  // Месяцы, за которые из 1С пришли суммы, — тем же запросом, что вкладка «История выплат» и «Экспорт».
-  // Остальные в выборе «Оплачено» неактивны. Пока грузится (или ошибка) — доступно всё окно, как раньше.
-  const historyQuery = useQuery({ ...paidHistoryQueryOptions(row.employee_id, currentMonth), enabled: !editable });
-  const paidMonths = useMemo(
-    () => (historyQuery.data ? new Set(paidAmountMonths(historyQuery.data)) : null),
-    [historyQuery.data],
-  );
-  // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад.
-  const monthOptions = useMemo(
-    () => paidMonthOptions([...payrollMonthOptions(currentMonth)].reverse(), paidMonths),
-    [currentMonth, paidMonths],
-  );
-  // По умолчанию — последний закрытый месяц с суммами; пока пользователь не выбирал, подстраивается под данные.
-  // Пустой месяц, выбранный до загрузки сумм, после неё отбрасывается.
-  const defaultMonth = defaultPaidMonth(monthOptions, paidMonths, currentMonth);
+  // Выбор месяцев ждёт окно по возрастанию; payrollMonthOptions отдаёт от текущего назад. Все месяцы окна доступны:
+  // за месяц без сумм 1С есть «К выплате (ФОТ)» по закрытому табелю.
+  const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
+  // По умолчанию — прошлый месяц: текущий табель ещё не закрыт.
+  const defaultMonth = shiftMonth(currentMonth, -1);
   const [pickedMonths, setPickedMonths] = useState<string[] | null>(null);
-  const months = useMemo(
-    () => effectivePaidMonths(pickedMonths, paidMonths, defaultMonth),
-    [pickedMonths, paidMonths, defaultMonth],
-  );
+  const months = useMemo(() => pickedMonths ?? [defaultMonth], [pickedMonths, defaultMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
+  const calc = usePayrollCalc(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
   const tabsId = useId();
   const [tab, setTab] = useState<CardTab>('terms');
@@ -282,7 +271,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           category={payrollRowCategory(row)}
           travel={toInputValue(travelAllowance(payrollRowCategory(row), row))}
           autoFocus={canEdit}
-          paid={editable ? undefined : <PayrollPaidTable paid={paid} />}
+          paid={editable ? undefined : <PayrollPaidTable paid={paid} calc={calc} />}
           stacked
           detailsOnly={!editable}
           termsFrom={row.terms_id ? row.effective_from : null}

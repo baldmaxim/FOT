@@ -17,6 +17,11 @@ export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты. Единственное, что определяет формулу начисления. */
 export type PayrollCalcType = 'salary' | 'hourly';
 
+/** Округление оклада за неполный месяц, как в ЗУП: до рубля или дневная ставка до копейки × дни. */
+export type ProrationRounding = 'ruble' | 'daily_kopeck';
+
+export const PRORATION_ROUNDINGS: readonly ProrationRounding[] = ['ruble', 'daily_kopeck'];
+
 export interface IPayrollTerms {
   id: number;
   employee_id: number;
@@ -35,6 +40,8 @@ export interface IPayrollTerms {
   communication_compensation: number | null;
   /** Ежемесячное удержание, ₽/мес (положительное). Справочно, в расчёте пока не участвует. */
   deduction_amount: number | null;
+  /** Округление оклада за неполный месяц, как в ЗУП (миграция 331). */
+  proration_rounding: ProrationRounding;
   staff_units: number;
   time_accounting_mode: 'daily' | 'summarized';
   accounting_period_months: number | null;
@@ -63,6 +70,8 @@ export interface IAssignTermsInput {
   travelCompensation?: number | null;
   communicationCompensation?: number | null;
   deductionAmount?: number | null;
+  /** Не передано — ruble. */
+  prorationRounding?: ProrationRounding;
   staffUnits?: number;
   organizationId?: string | null;
   effectiveFrom: string;
@@ -76,7 +85,7 @@ export interface IAssignTermsInput {
 const TERMS_COLUMNS = `
   id, employee_id, organization_id, staff_category, calc_type,
   monthly_salary, hourly_rate, bonus_amount, housing_compensation,
-  travel_compensation, communication_compensation, deduction_amount, staff_units,
+  travel_compensation, communication_compensation, deduction_amount, proration_rounding, staff_units,
   time_accounting_mode, accounting_period_months,
   effective_from, effective_to,
   change_reason, order_number, order_date, note,
@@ -426,9 +435,9 @@ export const assignTerms = async (
           monthly_salary, hourly_rate, staff_units,
           effective_from, change_reason, order_number, order_date, note, created_by,
           bonus_amount, housing_compensation,
-          travel_compensation, communication_compensation, deduction_amount)
+          travel_compensation, communication_compensation, deduction_amount, proration_rounding)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 1.000), $8, $9, $10, $11, $12, $13, $14, $15,
-               $16, $17, $18)
+               $16, $17, $18, $19)
        RETURNING id`,
       [
         input.employeeId,
@@ -449,6 +458,7 @@ export const assignTerms = async (
         input.travelCompensation ?? null,
         input.communicationCompensation ?? null,
         input.deductionAmount ?? null,
+        input.prorationRounding ?? 'ruble',
       ],
     );
     return inserted.rows[0].id;
