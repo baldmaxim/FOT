@@ -24,9 +24,9 @@ import {
 const ITEMS = PAYROLL_PAID_GROUPS.flatMap(group => group.items);
 
 describe('статьи', () => {
-  it('42 статьи без повторов, в порядке ведомости', () => {
-    expect(ITEMS).toHaveLength(42);
-    expect(new Set(ITEMS.map(item => item.code)).size).toBe(42);
+  it('43 статьи без повторов, в порядке ведомости', () => {
+    expect(ITEMS).toHaveLength(43);
+    expect(new Set(ITEMS.map(item => item.code)).size).toBe(43);
     expect(PAYROLL_PAID_GROUPS.map(group => group.items.map(item => item.label))).toEqual([
       ['По трудовому договору', 'Премиальная', 'Больничный', 'Отпуска'],
       ['Компенсация проживания', 'Проезд', 'Переработка', 'Перерасчёт за предыдущий период',
@@ -38,7 +38,7 @@ describe('статьи', () => {
         'Оплата отпуска (удержание)', 'Погашение займа', '% Займа', 'Квартиры', 'Подотчёт',
         'Удержание в пользу третьего лица', 'Транспортные затраты', 'Моб. телефон',
         'Банковские издержки по исп. листам', 'Алименты', 'ТМЦ', 'Удержание по договору аренды а/м',
-        'Порча имущества'],
+        'Порча имущества', 'Погашение долгов прошлых месяцев'],
     ]);
   });
 
@@ -63,6 +63,7 @@ describe('статьи', () => {
     expect(kindOf('tmc')).toBe('deducted');
     expect(kindOf('car_rent')).toBe('deducted');
     expect(kindOf('property_damage')).toBe('deducted');
+    expect(kindOf('prior_debts')).toBe('deducted');
   });
 });
 
@@ -228,6 +229,26 @@ describe('«История выплат»', () => {
     const { byMonth, overall } = paidTotals(['2026-08'], amounts);
     expect(paidPayout(byMonth['2026-08'])).toBe(139357.18);
     expect(paidPayout(overall)).toBe(139357.18);
+  });
+
+  it('334: «К выплате» = выплачено по ведомости — погашение долгов в удержаниях, с минусом — выдано сверх', () => {
+    // Юсупов С.Н., июнь: заработал 74 321,63, 61 892,92 удержано в счёт «Оклада по дням» — на Л/С 12 428,71.
+    const june = toPaidAmounts([
+      { month: '2026-06', item: 'contract', amount: '74321.63' },
+      { month: '2026-06', item: 'prior_debts', amount: '61892.92' },
+    ]);
+    const juneTotals = paidTotals(['2026-06'], june).byMonth['2026-06'];
+    expect(juneTotals).toEqual({ accrued: 74321.63, deducted: 61892.92 });
+    expect(paidPayout(juneTotals)).toBe(12428.71);
+    // Бобоназаров Н.М., май: аванс 22 559,69 перенесён в долг — выплачено больше заработанного.
+    const may = toPaidAmounts([
+      { month: '2026-05', item: 'contract', amount: '30379.71' },
+      { month: '2026-05', item: 'housing', amount: '2880.00' },
+      { month: '2026-05', item: 'prior_debts', amount: '-22559.69' },
+    ]);
+    const mayTotals = paidTotals(['2026-05'], may).byMonth['2026-05'];
+    expect(mayTotals).toEqual({ accrued: 33259.71, deducted: -22559.69 });
+    expect(paidPayout(mayTotals)).toBe(55819.4);
   });
 });
 

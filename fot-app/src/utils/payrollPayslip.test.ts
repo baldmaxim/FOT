@@ -115,6 +115,17 @@ describe('расчётный листок: строки статей', () => {
       { code: 'property_damage', label: 'Порча имущества', amount: 8000 },
     ]);
   });
+
+  it('статья 334: «Погашение долгов прошлых месяцев» — в удержаниях, в том числе с минусом', () => {
+    const may = toPaidAmounts([
+      { month: '2026-05', item: 'contract', amount: '30379.71' },
+      { month: '2026-05', item: 'prior_debts', amount: '-22559.69' },
+    ]);
+    expect(payslipLines('2026-05', may, 'deducted')).toEqual([
+      { code: 'prior_debts', label: 'Погашение долгов прошлых месяцев', amount: -22559.69 },
+    ]);
+    expect(payslipLines('2026-05', may, 'accrued')).toEqual([]);
+  });
 });
 
 describe('расчётный листок: «По ставкам ФОТ»', () => {

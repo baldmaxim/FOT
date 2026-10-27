@@ -888,7 +888,7 @@ describe('payrollTermsController.list', () => {
       + "'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund', "
       + "'meals', 'workwear', 'safety_fine', 'fines', 'writ_deduction', 'vacation_deduction', 'loan_repayment', "
       + "'loan_interest', 'apartment', 'imprest', 'third_party', 'transport', 'mobile', 'bank_fees', "
-      + "'alimony', 'tmc', 'car_rent', 'property_damage')");
+      + "'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts')");
     // Удержания — минусом: «К выплате» месяца, как на «Расчётах».
     expect(sql).toMatch(/THEN -pa\.amount ELSE pa\.amount END/);
   });
@@ -1263,7 +1263,7 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund'\)\)\)::text AS paid_total/);
-    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent', 'property_damage'\)\)\)::text AS paid_deductions_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts'\)\)\)::text AS paid_deductions_total/);
     // Новые статьи 325: удержание не попадает в итог начислений, начисление — в итог удержаний.
     expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'bank_fees'/);
     expect(sql).not.toMatch(/item_code IN \('meals'[^)]*'premium'/);
@@ -1275,6 +1275,8 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     // 329: «Возврат штрафа» — только в начислениях, «Порча имущества» — только в удержаниях.
     expect(sql).not.toMatch(/item_code IN \('meals'[^)]*'fine_refund'/);
     expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'property_damage'/);
+    // 334: «Погашение долгов прошлых месяцев» — только в удержаниях (с минусом — прибавляется к «К выплате»).
+    expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'prior_debts'/);
     expectPlaceholdersMatch(sql, params);
   });
 

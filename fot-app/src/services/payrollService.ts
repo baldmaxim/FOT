@@ -249,7 +249,7 @@ export type PayrollPaidItemCode =
   | 'day_rate' | 'workwear_accrual' | 'advance_accrual' | 'fine_refund'
   | 'meals' | 'workwear' | 'safety_fine' | 'fines' | 'writ_deduction'
   | 'vacation_deduction' | 'loan_repayment' | 'loan_interest' | 'apartment' | 'imprest' | 'third_party'
-  | 'transport' | 'mobile' | 'bank_fees' | 'alimony' | 'tmc' | 'car_rent' | 'property_damage';
+  | 'transport' | 'mobile' | 'bank_fees' | 'alimony' | 'tmc' | 'car_rent' | 'property_damage' | 'prior_debts';
 
 /** Сумма ячейки «Оплачено»: месяц YYYY-MM, сумма — текстом NUMERIC. */
 export interface IPayrollPaidAmount {
