@@ -46,11 +46,17 @@ const formatBrigadeNote = (brigade: { ktu: string; hours: number }): string => (
   `КТУ ${brigade.ktu.replace('.', ',')} · ${String(brigade.hours).replace('.', ',')} ч`
 );
 
-/** «22 из 23 дн.», у переработки — «4 вых.», у доли бригады — «КТУ 1,5 · 176 ч»; дней нет — null. */
+/** «22 из 23 дн.», у переработки — «2 вых. · 6 ч», у доли бригады — «КТУ 1,5 · 176 ч»; дней нет — null. */
 export const calcLineDaysNote = (line: IPayrollCalcLine): string | null => {
   if (line.brigade) return formatBrigadeNote(line.brigade);
+  if (line.code === 'overtime') {
+    const parts = [
+      ...(line.days?.worked ? [`${line.days.worked} вых.`] : []),
+      ...(line.hours ? [`${String(line.hours).replace('.', ',')} ч`] : []),
+    ];
+    return parts.length > 0 ? parts.join(' · ') : null;
+  }
   if (!line.days) return null;
-  if (line.code === 'overtime') return `${line.days.worked} вых.`;
   return line.days.norm === null ? null : `${line.days.worked} из ${line.days.norm} дн.`;
 };
 

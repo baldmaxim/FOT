@@ -10,6 +10,8 @@
  * - «Премиальная» (bonus) — плановая доплата × дни оклада в её периоде / норма, до рубля (20 000 × 19/22 = 17 273);
  * - «Разовая доплата» (supplement) — разовые доплаты месяца целиком;
  * - «Переработка» (overtime) — оклад сегмента даты выхода / норма × число выходов сверх нормы, одинарно, до рубля;
+ *   плюс переработка в будни по корректировкам — оклад сегмента даты / норма часов месяца × часы, одинарно, до копейки
+ *   (Абраменко, август: 250 000 / 168 × 6 = 8 928,57, как ЗУП);
  * - «Проезд» и «Компенсация проживания» — строки «По ставкам ФОТ» (payroll-payslip.rules.ts);
  * - «Выработка бригады» (brigade) — доля «Выработки» бригады по КТУ из зафиксированного расчёта бригады
  *   (brigade-salary.service); дни подач бригады в оклад не идут. Выработка не введена или расчёт с ошибкой —
@@ -40,6 +42,8 @@ export interface IPayrollCalcLine {
   amount: string | null;
   /** Из скольких дней: рабочих (у переработки — выходов) из нормы. */
   days?: { worked: number; norm: number | null };
+  /** Только у переработки: часы в будни по корректировкам. */
+  hours?: number;
   /** Только у доли бригады: КТУ и учтённые часы, по которым она посчитана. */
   brigade?: { ktu: string; hours: number };
 }
@@ -91,6 +95,10 @@ export interface IPayrollCalcFacts {
   normDays: number | null;
   workdayDates: readonly string[];
   dayoffDates: readonly string[];
+  /** Норма часов месяца в минутах — знаменатель переработки в будни; null — нет. */
+  normMinutes?: number | null;
+  /** Переработка в будни по корректировкам: дата → минуты; дни бригады уже исключены. */
+  overtimeMinutes?: Readonly<Record<string, number>>;
   absenceDays: PayrollAbsenceDays;
   terms: readonly ICalcTermsRow[];
   plannedSupplements: readonly IPlannedSupplementPeriod[];
@@ -160,6 +168,11 @@ export const prorateToRubleCents = (amountCents: number, days: number, norm: num
   return Math.floor((2 * amountCents * days + normCents) / (2 * normCents)) * 100;
 };
 
+/** Сумма × минуты / норма минут, половина вверх до копейки; в копейках. */
+export const prorateMinutesCents = (amountCents: number, minutes: number, normMinutes: number): number => (
+  Math.floor((2 * amountCents * minutes + normMinutes) / (2 * normMinutes))
+);
+
 /** Дневная ставка до копейки (половина вверх) × дни; в копейках. */
 export const prorateDailyKopeckCents = (amountCents: number, days: number, norm: number): number => (
   Math.floor((2 * amountCents + norm) / (2 * norm)) * days
@@ -200,6 +213,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     segments.find(segment => inRange(date, segment.from, segment.to)) ?? null
   );
 
+  // Выходы сверх нормы — только при норме дней.
+  let overtimeDays: string[] = [];
   if (norm === null) {
     if (facts.workdayDates.length > 0 || facts.dayoffDates.length > 0) missing.add('no_norm');
   } else {
@@ -246,32 +261,46 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
       lines.push({ code: 'bonus', amount: centsToAmount(bonusCents), days: { worked: contractDates.length, norm } });
     }
 
-    // Переработка: каждый выход сверх нормы — по окладу своей даты, одинарно.
-    if (overtimeDates.length > 0) {
-      const countBySegment = new Map<ICalcSegment, number>();
-      for (const date of overtimeDates) {
-        const segment = segmentOf(date);
-        if (!segment) missing.add('no_terms');
-        else countBySegment.set(segment, (countBySegment.get(segment) ?? 0) + 1);
-      }
-      let overtimeCents = 0;
-      let overtimeUnknown = false;
-      for (const [segment, count] of countBySegment) {
-        if (segment.calcType === 'hourly') {
-          overtimeUnknown = true;
-          missing.add('hourly');
-        } else {
-          overtimeCents += prorateToRubleCents(segment.salaryCents, count, norm);
-        }
-      }
-      if (countBySegment.size > 0) {
-        lines.push({
-          code: 'overtime',
-          amount: overtimeUnknown && overtimeCents === 0 ? null : centsToAmount(overtimeCents),
-          days: { worked: overtimeDates.length, norm },
-        });
-      }
+    overtimeDays = overtimeDates;
+  }
+
+  // Переработка: выходы сверх нормы — днём, будни по корректировкам — часами; по окладу своей даты, одинарно.
+  const daysBySegment = new Map<ICalcSegment, number>();
+  for (const date of overtimeDays) {
+    const segment = segmentOf(date);
+    if (!segment) missing.add('no_terms');
+    else daysBySegment.set(segment, (daysBySegment.get(segment) ?? 0) + 1);
+  }
+  const minutesBySegment = new Map<ICalcSegment, number>();
+  const overtimeMinutes = Object.entries(facts.overtimeMinutes ?? {}).filter(([, minutes]) => minutes > 0);
+  const normMinutes = facts.normMinutes !== null && facts.normMinutes !== undefined && facts.normMinutes > 0
+    ? facts.normMinutes
+    : null;
+  if (overtimeMinutes.length > 0 && normMinutes === null) missing.add('no_norm');
+  for (const [date, minutes] of normMinutes === null ? [] : overtimeMinutes) {
+    const segment = segmentOf(date);
+    if (!segment) missing.add('no_terms');
+    else minutesBySegment.set(segment, (minutesBySegment.get(segment) ?? 0) + minutes);
+  }
+  if (daysBySegment.size > 0 || minutesBySegment.size > 0) {
+    let overtimeCents = 0;
+    let overtimeUnknown = false;
+    for (const [segment, count] of daysBySegment) {
+      if (segment.calcType === 'hourly') overtimeUnknown = true;
+      else if (norm !== null) overtimeCents += prorateToRubleCents(segment.salaryCents, count, norm);
     }
+    for (const [segment, minutes] of minutesBySegment) {
+      if (segment.calcType === 'hourly') overtimeUnknown = true;
+      else if (normMinutes !== null) overtimeCents += prorateMinutesCents(segment.salaryCents, minutes, normMinutes);
+    }
+    if (overtimeUnknown) missing.add('hourly');
+    const hours = [...minutesBySegment.values()].reduce((sum, minutes) => sum + minutes, 0) / 60;
+    lines.push({
+      code: 'overtime',
+      amount: overtimeUnknown && overtimeCents === 0 ? null : centsToAmount(overtimeCents),
+      days: { worked: overtimeDays.length, norm },
+      ...(hours > 0 ? { hours: Math.round(hours * 100) / 100 } : {}),
+    });
   }
 
   const shares = facts.brigadeShares ?? [];

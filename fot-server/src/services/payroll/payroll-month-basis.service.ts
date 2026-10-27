@@ -19,9 +19,11 @@ export interface IMonthBasisSource {
   coverFrom: string;
   coverTo: string;
   normDays: number | null;
+  normMinutes: number | null;
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: Partial<PayrollAbsenceDays>;
+  overtimeMinutes: Record<string, number>;
   quality: PayrollBasisQuality;
   /** Отдел подачи; у персональной — null. */
   departmentId: string | null;
@@ -44,9 +46,12 @@ export interface IClosedMonthBasis {
   basisIds: number[];
   versionIds: number[];
   normDays: number | null;
+  normMinutes: number | null;
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: PayrollAbsenceDays;
+  /** Переработка в будни по корректировкам: дата → минуты. */
+  overtimeMinutes: Record<string, number>;
   /** Те же дни подач бригад — по бригадам. */
   brigades: IMonthBrigadeDays[];
 }
@@ -82,7 +87,8 @@ export const assembleMonthBasis = (
 ): MonthBasis => {
   if (sources.length === 0 || !coversPeriod(sources, period)) return { state: 'not_closed', reason: 'not_covered' };
   const norms = new Set(sources.map(source => source.normDays).filter((norm): norm is number => norm !== null));
-  if (norms.size > 1) return { state: 'not_closed', reason: 'norm_conflict' };
+  const normMinutes = new Set(sources.map(source => source.normMinutes).filter((norm): norm is number => norm !== null));
+  if (norms.size > 1 || normMinutes.size > 1) return { state: 'not_closed', reason: 'norm_conflict' };
 
   const inPeriod = (date: string): boolean => date >= period.from && date <= period.to;
   const brigades = new Map<string, IMonthBrigadeDays>();
@@ -94,8 +100,12 @@ export const assembleMonthBasis = (
     brigades.set(source.departmentId, entry);
   }
   const absenceDays = emptyAbsenceDays();
+  const overtimeMinutes: Record<string, number> = {};
   for (const source of sources) {
     for (const status of PAYROLL_ABSENCE_STATUSES) absenceDays[status] += Number(source.absenceDays[status] ?? 0);
+    for (const [date, minutes] of Object.entries(source.overtimeMinutes)) {
+      if (inPeriod(date)) overtimeMinutes[date] = Number(minutes);
+    }
   }
   return {
     state: 'closed',
@@ -103,9 +113,11 @@ export const assembleMonthBasis = (
     basisIds: sources.map(source => source.basisId).sort((a, b) => a - b),
     versionIds: [...new Set(sources.map(source => source.versionId))].sort((a, b) => a - b),
     normDays: norms.size === 1 ? [...norms][0] : null,
+    normMinutes: normMinutes.size === 1 ? [...normMinutes][0] : null,
     workdayDates: sources.flatMap(source => source.workdayDates).filter(inPeriod).sort(),
     dayoffDates: sources.flatMap(source => source.dayoffDates).filter(inPeriod).sort(),
     absenceDays,
+    overtimeMinutes,
     brigades: [...brigades.values()].map(entry => ({
       ...entry,
       workdayDates: entry.workdayDates.sort(),
@@ -121,6 +133,8 @@ interface IBasisSourceRow {
   cover_from: string;
   cover_to: string;
   norm_days: number | null;
+  norm_minutes: number | null;
+  overtime_minutes: Record<string, number> | null;
   workday_dates: string[] | null;
   dayoff_dates: string[] | null;
   absence_days: Partial<PayrollAbsenceDays> | null;
@@ -141,6 +155,8 @@ export const loadMonthBasisSources = async (
             to_char(GREATEST(a.start_date, $2::date), 'YYYY-MM-DD') AS cover_from,
             to_char(LEAST(a.end_date, ($2::date + INTERVAL '1 month - 1 day')::date), 'YYYY-MM-DD') AS cover_to,
             b.norm_days,
+            b.norm_minutes,
+            b.overtime_minutes,
             b.workday_dates::text[] AS workday_dates,
             b.dayoff_dates::text[] AS dayoff_dates,
             b.absence_days,
@@ -176,6 +192,8 @@ export const loadMonthBasisSources = async (
       coverFrom: row.cover_from,
       coverTo: row.cover_to,
       normDays: row.norm_days === null ? null : Number(row.norm_days),
+      normMinutes: row.norm_minutes === null || row.norm_minutes === undefined ? null : Number(row.norm_minutes),
+      overtimeMinutes: row.overtime_minutes ?? {},
       workdayDates: row.workday_dates ?? [],
       dayoffDates: row.dayoff_dates ?? [],
       absenceDays: row.absence_days ?? {},

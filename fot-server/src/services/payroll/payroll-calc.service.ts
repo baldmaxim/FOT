@@ -275,6 +275,10 @@ export const getPayoutForEmployees = async (
       normDays: basis.normDays,
       workdayDates: basis.workdayDates.filter(date => !brigadeDates.has(date)),
       dayoffDates: basis.dayoffDates.filter(date => !brigadeDates.has(date)),
+      normMinutes: basis.normMinutes,
+      overtimeMinutes: Object.fromEntries(
+        Object.entries(basis.overtimeMinutes).filter(([date]) => !brigadeDates.has(date)),
+      ),
       absenceDays: basis.absenceDays,
       // NUMERIC приходит строкой; String() — на случай числа из моков и старых драйверов.
       terms: terms.map((row): ICalcTermsRow => ({

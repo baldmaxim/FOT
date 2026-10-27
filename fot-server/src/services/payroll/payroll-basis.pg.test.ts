@@ -49,9 +49,11 @@ const draft = (employeeId: number, over: Partial<IPayrollBasisDraft> = {}): IPay
   employeeId,
   month: '2026-09-01',
   normDays: 22,
+  normMinutes: 10560,
   workdayDates: ['2026-09-01', '2026-09-02'],
   dayoffDates: [],
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+  overtimeMinutes: { '2026-09-02': 180 },
   ...over,
 });
 
@@ -111,14 +113,16 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
     expect(await insertPayrollBasis(pg.pool!, versionId, [draft(71)], options)).toBe(0);
     expect(await insertPayrollBasis(pg.pool!, versionId, [draft(71, { normDays: 23 })], options)).toBe(1);
 
-    const rows = await q<{ revision: number; norm_days: number; workday_dates: string[] }>(
-      `SELECT revision, norm_days, workday_dates::text[] AS workday_dates
+    const rows = await q<{ revision: number; norm_days: number; norm_minutes: number; workday_dates: string[]; overtime_minutes: unknown }>(
+      `SELECT revision, norm_days, norm_minutes, workday_dates::text[] AS workday_dates, overtime_minutes
          FROM timesheet_version_payroll_basis ORDER BY revision`,
     );
     expect(rows).toEqual([
-      { revision: 1, norm_days: 22, workday_dates: ['2026-09-01', '2026-09-02'] },
-      { revision: 2, norm_days: 23, workday_dates: ['2026-09-01', '2026-09-02'] },
+      { revision: 1, norm_days: 22, norm_minutes: 10560, workday_dates: ['2026-09-01', '2026-09-02'], overtime_minutes: { '2026-09-02': 180 } },
+      { revision: 2, norm_days: 23, norm_minutes: 10560, workday_dates: ['2026-09-01', '2026-09-02'], overtime_minutes: { '2026-09-02': 180 } },
     ]);
+    // Другие часы переработки — тоже новая revision.
+    expect(await insertPayrollBasis(pg.pool!, versionId, [draft(71, { normDays: 23, overtimeMinutes: {} })], options)).toBe(1);
   });
 
   it('дозаполнение не трогает снятую при закрытии основу и повторяется без эффекта', async () => {
@@ -152,11 +156,15 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
       client.release();
     }
 
-    const rows = await q<{ employee_id: number; revision: number; norm_days: number; quality: string; reason: string }>(
-      'SELECT employee_id, revision, norm_days, quality, reason FROM timesheet_version_payroll_basis WHERE version_id = $1',
+    const rows = await q<{ employee_id: number; revision: number; norm_days: number; norm_minutes: number; overtime_minutes: unknown; quality: string; reason: string }>(
+      `SELECT employee_id, revision, norm_days, norm_minutes, overtime_minutes, quality, reason
+         FROM timesheet_version_payroll_basis WHERE version_id = $1`,
       [to],
     );
-    expect(rows).toEqual([{ employee_id: 71, revision: 1, norm_days: 23, quality: 'materialized', reason: 'rebuild' }]);
+    expect(rows).toEqual([{
+      employee_id: 71, revision: 1, norm_days: 23, norm_minutes: 10560, overtime_minutes: { '2026-09-02': 180 },
+      quality: 'materialized', reason: 'rebuild',
+    }]);
   });
 
   it('сбой сборки основы не ломает транзакцию закрытия', async () => {

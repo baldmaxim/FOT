@@ -15,9 +15,11 @@ const source = (over: Partial<IMonthBasisSource>): IMonthBasisSource => ({
   coverFrom: '2026-09-01',
   coverTo: '2026-09-15',
   normDays: 22,
+  normMinutes: 10560,
   workdayDates: [],
   dayoffDates: [],
   absenceDays: {},
+  overtimeMinutes: {},
   quality: 'materialized',
   departmentId: 'dept-1',
   isBrigade: false,
@@ -29,7 +31,10 @@ const september = { from: '2026-09-01', to: '2026-09-30' };
 describe('основа месяца из закрытых подач', () => {
   it('две закрытые половины покрывают месяц — дни складываются', () => {
     const basis = assembleMonthBasis([
-      source({ basisId: 2, versionId: 11, coverFrom: '2026-09-16', coverTo: '2026-09-30', workdayDates: ['2026-09-16'] }),
+      source({
+        basisId: 2, versionId: 11, coverFrom: '2026-09-16', coverTo: '2026-09-30', workdayDates: ['2026-09-16'],
+        overtimeMinutes: { '2026-09-16': 180 },
+      }),
       source({ workdayDates: ['2026-09-01'], dayoffDates: ['2026-09-05'], absenceDays: { vacation: 2 } }),
     ], september);
     expect(basis).toEqual({
@@ -38,9 +43,11 @@ describe('основа месяца из закрытых подач', () => {
       basisIds: [1, 2],
       versionIds: [10, 11],
       normDays: 22,
+      normMinutes: 10560,
       workdayDates: ['2026-09-01', '2026-09-16'],
       dayoffDates: ['2026-09-05'],
       absenceDays: { vacation: 2, sick: 0, educational_leave: 0, unpaid: 0 },
+      overtimeMinutes: { '2026-09-16': 180 },
       brigades: [],
     });
   });
@@ -67,6 +74,14 @@ describe('основа месяца из закрытых подач', () => {
     );
     expect(basis.state).toBe('closed');
     expect(basis.state === 'closed' && basis.workdayDates).toEqual(['2026-09-21']);
+  });
+
+  it('норма часов половин разошлась — тоже не закрыт', () => {
+    const basis = assembleMonthBasis([
+      source({}),
+      source({ basisId: 2, versionId: 11, coverFrom: '2026-09-16', coverTo: '2026-09-30', normMinutes: 10500 }),
+    ], september);
+    expect(basis).toEqual({ state: 'not_closed', reason: 'norm_conflict' });
   });
 
   it('нормы половин разошлись — месяц не закрыт', () => {

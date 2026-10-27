@@ -47,9 +47,11 @@ const source = (over: Record<string, unknown> = {}) => ({
   coverFrom: '2026-09-01',
   coverTo: '2026-09-30',
   normDays: 22,
+  normMinutes: 10560,
   workdayDates: septemberWeekdays,
   dayoffDates: [],
   absenceDays: {},
+  overtimeMinutes: { '2026-09-01': 180 },
   quality: 'materialized',
   departmentId: BRIGADE,
   isBrigade: true,
@@ -95,12 +97,16 @@ describe('«К выплате (ФОТ)» бригады', () => {
     expect(tab.get(7)?.net).toBe('138318.18');
   });
 
-  it('начальник участка в делёж не входит — его дни бригады идут в оклад', async () => {
+  it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {
     brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', rows: [shareRow] });
 
     const calc = (await getPayoutForEmployees([8], '2026-09', req)).get(8);
 
-    expect(calc?.state === 'closed' && calc.lines.map(line => [line.code, line.amount])).toEqual([['contract', '110000.00']]);
+    // 3 ч корректировки 1 сентября: 110 000 × 180 / 10 560 = 1 875,00. У рабочего бригады (первый тест) их нет — доля.
+    expect(calc?.state === 'closed' && calc.lines.map(line => [line.code, line.amount])).toEqual([
+      ['contract', '110000.00'],
+      ['overtime', '1875.00'],
+    ]);
   });
 
   it('расчёт бригады не зафиксирован — месяц не закрыт', async () => {

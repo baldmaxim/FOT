@@ -4,6 +4,7 @@ import {
   buildPayrollCalc,
   mergeTermsSegments,
   prorateDailyKopeckCents,
+  prorateMinutesCents,
   prorateToRubleCents,
   type ICalcTermsRow,
   type IPayrollCalcFacts,
@@ -225,3 +226,48 @@ describe('«К выплате (ФОТ)»: бригада', () => {
     expect(result.accrued).toBe('272770.18');
   });
 });
+
+describe('«К выплате (ФОТ)»: переработка в будни по корректировкам', () => {
+  it('Абраменко, август: 6 ч × 250 000 / 168 = 8 928,57, как ЗУП', () => {
+    expect(prorateMinutesCents(25_000_000, 360, 10_080)).toBe(892_857);
+    const result = buildPayrollCalc(facts({
+      normMinutes: 10_080,
+      overtimeMinutes: { '2026-08-04': 180, '2026-08-13': 180 },
+    }));
+    expect(line(result, 'overtime')).toEqual({
+      code: 'overtime', amount: '8928.57', days: { worked: 0, norm: 21 }, hours: 6,
+    });
+  });
+
+  it('выходы днями и часы в будни — одна строка «Переработка»', () => {
+    const result = buildPayrollCalc(facts({
+      normDays: 21,
+      normMinutes: 10_080,
+      workdayDates: august(21),
+      dayoffDates: ['2026-08-30'],
+      terms: [terms({ monthly_salary: '168000.00' })],
+      overtimeMinutes: { '2026-08-04': 120 },
+    }));
+    // Выход: 168 000 / 21 = 8 000; 2 ч: 168 000 × 120 / 10 080 = 2 000.
+    expect(line(result, 'overtime')).toEqual({
+      code: 'overtime', amount: '10000.00', days: { worked: 1, norm: 21 }, hours: 2,
+    });
+  });
+
+  it('часы — по окладу своей даты; нормы часов нет — no_norm', () => {
+    const split = buildPayrollCalc(facts({
+      normMinutes: 10_080,
+      overtimeMinutes: { '2026-08-04': 60, '2026-08-12': 60 },
+      terms: [
+        terms({ effective_to: '2026-08-10', monthly_salary: '100800.00' }),
+        terms({ effective_from: '2026-08-11', monthly_salary: '201600.00' }),
+      ],
+    }));
+    // 100 800 / 168 = 600 и 201 600 / 168 = 1 200.
+    expect(line(split, 'overtime')?.amount).toBe('1800.00');
+    const noNorm = buildPayrollCalc(facts({ normMinutes: null, overtimeMinutes: { '2026-08-04': 60 } }));
+    expect(noNorm.missing).toContain('no_norm');
+    expect(line(noNorm, 'overtime')).toBeUndefined();
+  });
+});
+

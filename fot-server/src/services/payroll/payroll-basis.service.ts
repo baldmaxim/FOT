@@ -10,6 +10,9 @@
  * часы выгрузка уже обнулила); РБ и УД в выходной — не выход: часов у них нет, согласовывать нечего.
  * Квота Сб/Вс графика (она в норме) сначала заполняется выходами — как в ЗУП: у «5+2» с одной субботой и двумя
  * согласованными выходами (Баранский, август 2026) 23 из 23 по окладу и один выход «Переработкой», а не 22 + 2.
+ * Переработка в будни — только по корректировке с часами: часы 1С дня (при правке — округлённый факт) сверх
+ * округлённой нормы дня; СКУД сверх графика без правки 1С и так срезает (Абраменко, август: 8,47 / 11 / 11 ч →
+ * 0 + 3 + 3 = 6 ч, как в ЗУП).
  *
  * Запись — под SAVEPOINT: сбой основы не мешает закрыть табель и отдать его в 1С (основы нет — месяц
  * «Табель не закрыт»). Строки неизменяемы: новая revision — только при другом basis_hash.
@@ -70,6 +73,8 @@ export interface IBasisDays {
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: PayrollAbsenceDays;
+  /** Переработка в будни по корректировкам: дата → минуты. */
+  overtimeMinutes: Record<string, number>;
 }
 
 export interface IClassifyBasisInput {
@@ -90,6 +95,7 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
   const workdayDates: string[] = [];
   const dayoffDates: string[] = [];
   const absenceDays = emptyAbsenceDays();
+  const overtimeMinutes: Record<string, number> = {};
   let quotaUsed = 0;
   const dates = Object.keys(input.days).filter(date => date.startsWith(`${input.month}-`)).sort();
   for (const date of dates) {
@@ -103,12 +109,13 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
     const [year, mon, dom] = date.split('-').map(Number);
     const dateObj = new Date(year, mon - 1, dom);
     const hours = typeof day.hours === 'number' ? day.hours : 0;
+    const dayNorm = schedule ? getDayNormHours(schedule, dateObj, input.calendar) : 0;
     // Буква (УУ, Н, В) уходит в 1С без часов — как в buildEmployeeRowsForOneC.
     const exportedHours = STATUS_LABELS[day.status] || hours <= 0.001
       ? 0
       : compute1CDayHours(
         hours,
-        schedule ? getDayNormHours(schedule, dateObj, input.calendar) : 0,
+        dayNorm,
         Boolean(input.calendar?.pre_holidays?.includes(date)),
         isStudentSchedule(schedule),
         Boolean(day.hours_overridden),
@@ -117,6 +124,8 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
     // Без графика выгрузка считает день рабочим — так же и здесь.
     if (!schedule || isWorkingDay(schedule, dateObj, input.calendar)) {
       workdayDates.push(date);
+      const extra = exportedHours - Math.round(dayNorm);
+      if (schedule && day.hours_overridden && extra > 0) overtimeMinutes[date] = extra * 60;
     } else if (input.plannedWeekendDays.has(`${input.employeeId}|${date}`)) {
       workdayDates.push(date);
       quotaUsed += 1;
@@ -128,7 +137,7 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
   const last = input.schedules?.get(`${input.month}-${pad2(daysInMonth(input.month))}`);
   const quota = (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
   const intoQuota = dayoffDates.splice(0, Math.max(0, quota - quotaUsed));
-  return { workdayDates: [...workdayDates, ...intoQuota].sort(), dayoffDates, absenceDays };
+  return { workdayDates: [...workdayDates, ...intoQuota].sort(), dayoffDates, absenceDays, overtimeMinutes };
 };
 
 /**
@@ -155,11 +164,36 @@ export const countMonthNormDays = (
   return workdays + (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
 };
 
+/**
+ * Норма часов месяца в минутах — знаменатель часовой переработки. Как ЗУП — норма производственного календаря
+ * (40-часовая неделя): у Абраменко в августе 2026 график с 7-часовой пятницей (164 ч), а ЗУП заплатил 6 ч ×
+ * 250 000 / 168. Календаря нет — часы графика каждого дня + плановые Сб/Вс (как countNormHoursForSchedule); нет
+ * графика хоть на день — null.
+ */
+export const countMonthNormMinutes = (
+  schedules: ReadonlyMap<string, IResolvedSchedule> | undefined,
+  month: string,
+  calendar: IProductionCalendarMonth | null,
+): number | null => {
+  if (calendar && Number(calendar.norm_hours) > 0) return Math.round(Number(calendar.norm_hours) * 60);
+  const [year, mon] = month.split('-').map(Number);
+  let hours = 0;
+  let last: IResolvedSchedule | undefined;
+  for (let day = 1; day <= daysInMonth(month); day++) {
+    last = schedules?.get(`${month}-${pad2(day)}`);
+    if (!last) return null;
+    hours += getDayNormHours(last, new Date(year, mon - 1, day), calendar);
+  }
+  const quota = (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
+  return Math.round((hours + quota * (last?.work_hours ?? 0)) * 60);
+};
+
 export interface IPayrollBasisDraft extends IBasisDays {
   employeeId: number;
   /** YYYY-MM-01. */
   month: string;
   normDays: number | null;
+  normMinutes: number | null;
 }
 
 /** Хэш содержимого основы: одинаковая основа повторного закрытия новой revision не даёт. */
@@ -167,9 +201,11 @@ export const computeBasisHash = (draft: IPayrollBasisDraft): string => crypto
   .createHash('sha256')
   .update(canonicalJson({
     normDays: draft.normDays,
+    normMinutes: draft.normMinutes,
     workdayDates: draft.workdayDates,
     dayoffDates: draft.dayoffDates,
     absenceDays: draft.absenceDays,
+    overtimeMinutes: draft.overtimeMinutes,
   }))
   .digest('hex');
 
@@ -204,6 +240,7 @@ export const buildPayrollBasisDrafts = async (
         employeeId,
         month: `${month}-01`,
         normDays: countMonthNormDays(employeeSchedules, month, calendar),
+        normMinutes: countMonthNormMinutes(employeeSchedules, month, calendar),
         ...classifyBasisDays({
           employeeId,
           month,
@@ -251,24 +288,26 @@ export const insertPayrollBasis = async (
       revision: (previous ? Number(previous.revision) : 0) + 1,
       basis_hash: hash,
       norm_days: draft.normDays,
+      norm_minutes: draft.normMinutes,
       workday_dates: draft.workdayDates,
       dayoff_dates: draft.dayoffDates,
       absence_days: draft.absenceDays,
+      overtime_minutes: draft.overtimeMinutes,
     });
   }
   if (rows.length === 0) return 0;
   await exec.query(
     `INSERT INTO timesheet_version_payroll_basis (
-       version_id, employee_id, month, revision, basis_hash, norm_days,
-       workday_dates, dayoff_dates, absence_days, quality, reason
+       version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
+       workday_dates, dayoff_dates, absence_days, overtime_minutes, quality, reason
      )
-     SELECT $1, r.employee_id, r.month, r.revision, r.basis_hash, r.norm_days,
+     SELECT $1, r.employee_id, r.month, r.revision, r.basis_hash, r.norm_days, r.norm_minutes,
             ARRAY(SELECT jsonb_array_elements_text(r.workday_dates))::date[],
             ARRAY(SELECT jsonb_array_elements_text(r.dayoff_dates))::date[],
-            r.absence_days, $3, $4
+            r.absence_days, r.overtime_minutes, $3, $4
        FROM jsonb_to_recordset($2::jsonb) AS r(
-         employee_id int, month date, revision int, basis_hash text, norm_days int,
-         workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb)
+         employee_id int, month date, revision int, basis_hash text, norm_days int, norm_minutes int,
+         workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb, overtime_minutes jsonb)
      ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,
     [versionId, JSON.stringify(rows), options.quality, options.reason],
   );
@@ -318,11 +357,11 @@ export const copyPayrollBasis = async (
 ): Promise<void> => withBasisSavepoint(client, `copy ${fromVersionId} → ${toVersionId}`, async () => {
   await client.query(
     `INSERT INTO timesheet_version_payroll_basis (
-       version_id, employee_id, month, revision, basis_hash, norm_days,
-       workday_dates, dayoff_dates, absence_days, quality, reason
+       version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
+       workday_dates, dayoff_dates, absence_days, overtime_minutes, quality, reason
      )
-     SELECT $2, b.employee_id, b.month, 1, b.basis_hash, b.norm_days,
-            b.workday_dates, b.dayoff_dates, b.absence_days, b.quality, 'rebuild'
+     SELECT $2, b.employee_id, b.month, 1, b.basis_hash, b.norm_days, b.norm_minutes,
+            b.workday_dates, b.dayoff_dates, b.absence_days, b.overtime_minutes, b.quality, 'rebuild'
        FROM (
          SELECT DISTINCT ON (employee_id, month) *
            FROM timesheet_version_payroll_basis

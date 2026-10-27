@@ -13,6 +13,7 @@ import {
   classifyBasisDays,
   computeBasisHash,
   countMonthNormDays,
+  countMonthNormMinutes,
   monthsInRange,
   type IClassifyBasisInput,
 } from './payroll-basis.service.js';
@@ -136,6 +137,20 @@ describe('основа расчёта: дни месяца', () => {
     expect(result.workdayDates).toEqual(['2026-09-14']);
   });
 
+  it('переработка в будни — только по корректировке, часами 1С сверх нормы: 8,47 / 11 / 11 → 0 + 3 + 3 ч', () => {
+    const result = classify({
+      '2026-09-01': day('work', 8.47, true),
+      '2026-09-02': day('work', 11, true),
+      '2026-09-03': day('manual', 11, true),
+      // СКУД сверх графика без правки — не переработка.
+      '2026-09-04': day('work', 11.5),
+      // Корректировка в выходной — выход целым днём, не часы.
+      '2026-09-05': day('work', 11, true),
+    });
+    expect(result.overtimeMinutes).toEqual({ '2026-09-02': 180, '2026-09-03': 180 });
+    expect(result.dayoffDates).toEqual(['2026-09-05']);
+  });
+
   it('дня нет в графике — рабочий, как в выгрузке 1С', () => {
     const result = classify({ '2026-09-05': day('work', 8) }, { schedules: new Map() });
     expect(result.workdayDates).toEqual(['2026-09-05']);
@@ -151,6 +166,15 @@ describe('основа расчёта: норма дней месяца', () => 
     expect(countMonthNormDays(septemberSchedules, '2026-09', null)).toBe(22);
     const withSaturdays = new Map(septemberDates.map(date => [date, { ...fiveTwo, expected_saturdays_per_month: 2 }]));
     expect(countMonthNormDays(withSaturdays, '2026-09', null)).toBe(24);
+  });
+
+  it('норма часов — производственного календаря, как ЗУП; без календаря — по графику с плановыми субботами', () => {
+    const shortFriday = new Map(septemberDates.map(date => [date, { ...fiveTwo, work_hours: 7 }]));
+    expect(countMonthNormMinutes(shortFriday, '2026-09', calendar)).toBe(176 * 60);
+    expect(countMonthNormMinutes(septemberSchedules, '2026-09', null)).toBe(22 * 8 * 60);
+    const withSaturdays = new Map(septemberDates.map(date => [date, { ...fiveTwo, expected_saturdays_per_month: 2 }]));
+    expect(countMonthNormMinutes(withSaturdays, '2026-09', null)).toBe(24 * 8 * 60);
+    expect(countMonthNormMinutes(undefined, '2026-09', null)).toBeNull();
   });
 
   it('нет графика хоть на день — норма календаря, нет и её — null', () => {
@@ -171,11 +195,14 @@ describe('основа расчёта: служебное', () => {
       employeeId: 71,
       month: '2026-09-01',
       normDays: 22,
+      normMinutes: 10560,
       workdayDates: ['2026-09-01'],
       dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+      overtimeMinutes: {},
     };
     expect(computeBasisHash(draft)).toBe(computeBasisHash({ ...draft, absenceDays: { unpaid: 0, sick: 0, vacation: 0, educational_leave: 0 } }));
     expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, normDays: 23 }));
+    expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, overtimeMinutes: { '2026-09-01': 60 } }));
   });
 });

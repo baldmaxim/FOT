@@ -5,8 +5,8 @@
 -- назначений внесены после закрытия месяца, 7 шаблонов из 39 в октябре правились на месте. Без снимка оклад
 -- закрытого месяца менялся бы вслед за графиком.
 --
--- timesheet_version_payroll_basis — неизменяемый снимок по (редакция, сотрудник, месяц): норма дней месяца,
--- рабочие дни для оклада, выходы в выходные, дни отсутствий. Пишется при утверждении/закрытии подачи рядом
+-- timesheet_version_payroll_basis — неизменяемый снимок по (редакция, сотрудник, месяц): норма дней и часов месяца,
+-- рабочие дни для оклада, выходы в выходные, часы переработки в будни по корректировкам, дни отсутствий. Пишется при утверждении/закрытии подачи рядом
 -- со снимками объектов и руководителей; payload, content_hash, редакции и ACK для 1С не трогает. Повторное
 -- закрытие с другим графиком даёт новую revision, прежние строки не меняются и не удаляются.
 -- quality: materialized — снят при закрытии; reconstructed — дозаполнен скриптом по графикам на дату запуска.
@@ -29,9 +29,11 @@ CREATE TABLE IF NOT EXISTS timesheet_version_payroll_basis (
   revision      INTEGER NOT NULL DEFAULT 1,
   basis_hash    TEXT    NOT NULL,
   norm_days     INTEGER,
+  norm_minutes  INTEGER,
   workday_dates DATE[]  NOT NULL DEFAULT '{}',
   dayoff_dates  DATE[]  NOT NULL DEFAULT '{}',
   absence_days  JSONB   NOT NULL DEFAULT '{}'::jsonb,
+  overtime_minutes JSONB NOT NULL DEFAULT '{}'::jsonb,
   quality       TEXT    NOT NULL CHECK (quality IN ('materialized', 'reconstructed')),
   reason        TEXT    NOT NULL CHECK (reason IN ('close', 'rebuild', 'backfill')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -39,8 +41,13 @@ CREATE TABLE IF NOT EXISTS timesheet_version_payroll_basis (
   CONSTRAINT payroll_basis_month CHECK (month = date_trunc('month', month)::date),
   CONSTRAINT payroll_basis_revision CHECK (revision >= 1),
   CONSTRAINT payroll_basis_norm CHECK (norm_days IS NULL OR norm_days >= 0),
+  CONSTRAINT payroll_basis_norm_minutes CHECK (norm_minutes IS NULL OR norm_minutes >= 0),
   CONSTRAINT payroll_basis_unique UNIQUE (version_id, employee_id, month, revision)
 );
+
+-- Колонки часов добавлены в 331 до её первого применения; базы, где 331 уже прошла без них, — догоняем.
+ALTER TABLE timesheet_version_payroll_basis ADD COLUMN IF NOT EXISTS norm_minutes INTEGER;
+ALTER TABLE timesheet_version_payroll_basis ADD COLUMN IF NOT EXISTS overtime_minutes JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS payroll_basis_employee_month
   ON timesheet_version_payroll_basis (employee_id, month);
@@ -55,6 +62,12 @@ COMMENT ON COLUMN timesheet_version_payroll_basis.workday_dates IS
   'Отработанные дни для оклада (правило колонки «Дни» единого 1С) — дни графика и плановые Сб/Вс в квоте.';
 COMMENT ON COLUMN timesheet_version_payroll_basis.dayoff_dates IS
   'Выходы в выходные: день вне графика, статус work/remote/manual, часы > 0 (несогласованные выгрузка обнуляет).';
+COMMENT ON COLUMN timesheet_version_payroll_basis.norm_minutes IS
+  'Норма часов месяца в минутах — производственного календаря, как ЗУП (у графика с 7-часовой пятницей 164 ч, '
+  'а ЗУП делит на 168); календаря нет — часы графика + плановые Сб/Вс; NULL — нет и их. Знаменатель часовой переработки.';
+COMMENT ON COLUMN timesheet_version_payroll_basis.overtime_minutes IS
+  'Переработка в будни по корректировкам: {"YYYY-MM-DD": минуты} — часы 1С дня с правкой часов сверх нормы дня. '
+  'СКУД сверх графика без корректировки сюда не идёт.';
 COMMENT ON COLUMN timesheet_version_payroll_basis.absence_days IS
   'Дни отсутствий подачи: {"vacation": n, "sick": n, "educational_leave": n, "unpaid": n}.';
 

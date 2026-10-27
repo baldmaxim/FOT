@@ -297,6 +297,8 @@ export interface IPayrollCalcLine {
   amount: string | null;
   /** Рабочих (у переработки — выходов) дней из нормы. */
   days?: { worked: number; norm: number | null };
+  /** Переработка: часы в будни по корректировкам. */
+  hours?: number;
   /** Доля бригады: КТУ и учтённые часы. */
   brigade?: { ktu: string; hours: number };
 }

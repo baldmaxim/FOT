@@ -42,6 +42,8 @@ describe('«К выплате (ФОТ)»: подписи', () => {
   it('дни строки: «22 из 22 дн.», у переработки — выходы', () => {
     expect(calcLineDaysNote({ code: 'contract', amount: '1.00', days: { worked: 22, norm: 22 } })).toBe('22 из 22 дн.');
     expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 4, norm: 23 } })).toBe('4 вых.');
+    expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 2, norm: 21 }, hours: 6 })).toBe('2 вых. · 6 ч');
+    expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 0, norm: 21 }, hours: 6.5 })).toBe('6,5 ч');
     expect(calcLineDaysNote({ code: 'supplement', amount: '1.00' })).toBeNull();
   });
 
