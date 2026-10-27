@@ -16,6 +16,14 @@ const {
   StaffSortUnavailableError,
   STAFF_SORT_KEYS,
 } = await import('./employees-staff-sort.helpers.js');
+const { buildStaffSiteIndex } = await import('../services/staff-site.service.js');
+
+const DEPT = '00000000-0000-0000-0000-0000000000d1';
+const SITE_INDEX = buildStaffSiteIndex({
+  departmentLinks: [{ employee_id: 10, department_id: DEPT, full_name: 'Журавлев Владимир Сергеевич', email: null }],
+  directLinks: [{ leader_employee_id: 11, direct_employee_id: 7, leader_full_name: 'Пудовкин Александр', leader_email: null, direct_department_id: DEPT }],
+});
+const makeCtx = () => ({ siteIndex: vi.fn(async () => SITE_INDEX) });
 
 /** Каждый $1..$N встречается в SQL, и выше N плейсхолдеров нет. */
 const expectPlaceholdersMatch = (sql: string, params: unknown[]) => {
@@ -87,7 +95,7 @@ describe('buildStaffSortKeySql', () => {
   it('каждый ключ — корректные плейсхолдеры при непустом наборе параметров', async () => {
     for (const key of STAFF_SORT_KEYS) {
       const params: unknown[] = [true, 'x'];
-      const sql = await buildStaffSortKeySql(key, params);
+      const sql = await buildStaffSortKeySql(key, params, makeCtx());
       const probe = `WHERE is_archived = $1 AND full_name = $2 AND ${sql} IS NOT NULL`;
       expectPlaceholdersMatch(probe, params);
     }
@@ -98,7 +106,7 @@ describe('buildStaffSortKeySql', () => {
     try {
       vi.setSystemTime(new Date('2026-09-30T21:30:00Z')); // в Москве уже 1 октября
       const params: unknown[] = [];
-      const sql = await buildStaffSortKeySql('schedule', params);
+      const sql = await buildStaffSortKeySql('schedule', params, makeCtx());
       expect(params).toEqual(['2026-10-01']);
       expect(sql).toContain('ORDER BY a.effective_from DESC, a.id DESC');
       expect(sql).toContain('LEFT JOIN work_schedules ws');
@@ -110,17 +118,31 @@ describe('buildStaffSortKeySql', () => {
 
   it('признак — id отделов «Декрет» с потомками', async () => {
     const params: unknown[] = [];
-    await buildStaffSortKeySql('sign', params);
+    await buildStaffSortKeySql('sign', params, makeCtx());
     expect((params[0] as string[]).sort()).toEqual(['maternity', 'maternity-child']);
+  });
+
+  it('участок — текст ячейки из индекса запроса: личное назначение, иначе отдел; индекс только для site', async () => {
+    const ctx = makeCtx();
+    const params: unknown[] = [];
+    const sql = await buildStaffSortKeySql('site', params, ctx);
+    expect(params).toEqual([[7], ['Журавлев В. С., Пудовкин А.'], [DEPT], ['Журавлев В. С.']]);
+    expect(sql).toContain('s.id = employees.id');
+    expect(sql).toContain('s.id = employees.org_department_id');
+    expect(ctx.siteIndex).toHaveBeenCalledTimes(1);
+
+    const other = makeCtx();
+    await buildStaffSortKeySql('department', [], other);
+    expect(other.siteIndex).not.toHaveBeenCalled();
   });
 
   it('объект — активное поколение снимка; без снимка — недоступно', async () => {
     const params: unknown[] = [];
-    const sql = await buildStaffSortKeySql('main_object', params);
+    const sql = await buildStaffSortKeySql('main_object', params, makeCtx());
     expect(params).toEqual([77]);
     expect(sql).toContain('employee_main_object_snapshot');
     h.loadActiveSnapshotRun.mockResolvedValue(null);
-    await expect(buildStaffSortKeySql('main_object', [])).rejects.toBeInstanceOf(StaffSortUnavailableError);
+    await expect(buildStaffSortKeySql('main_object', [], makeCtx())).rejects.toBeInstanceOf(StaffSortUnavailableError);
   });
 });
 

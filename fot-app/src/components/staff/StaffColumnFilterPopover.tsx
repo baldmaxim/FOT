@@ -16,6 +16,7 @@ import {
 
 const EMPTY_LABELS: Partial<Record<StaffFilterColumn, string>> = {
   department: 'Без отдела',
+  site: 'Без участка',
   position: 'Без должности',
   schedule: 'Без графика',
   main_object: 'Без объекта',

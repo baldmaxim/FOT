@@ -47,6 +47,8 @@ export interface Employee {
   site_manager_full_name?: string | null;
   /** «Признак» в «Управлении кадрами» (только список view=staff). */
   sign?: EmployeeSign;
+  /** «Участок» в «Управлении кадрами»: начальники участка через запятую (только список view=staff). */
+  site_supervisor_names?: string | null;
   /** Комментарий HR (только список view=staff). */
   staff_comment?: string | null;
   /** Версия комментария (ISO с микросекундами) — для оптимистичной блокировки. */

@@ -18,8 +18,11 @@ describe('affectsActiveSort', () => {
     expect(affectsActiveSort(['department'], 'department')).toBe(true);
   });
 
-  it('смена отдела меняет «Признак» (перенос в «Декрет»)', () => {
+  it('смена отдела меняет «Признак» (перенос в «Декрет») и «Участок»', () => {
     expect(affectsActiveSort(['department'], 'sign')).toBe(true);
+    expect(affectsActiveSort(['department'], 'site')).toBe(true);
+    expect(affectsActiveFilters(['department'], column => column === 'site')).toBe(true);
+    expect(affectsActiveSort(['position'], 'site')).toBe(false);
   });
 
   it('правка другого столбца — строка правится на месте', () => {

@@ -430,8 +430,9 @@
 .sc-col-num      { width: 60px; }
 /* ФИО фиксированной ширины: гибкой колонкой был бы «пустой» простор справа от имени. */
 .sc-col-name     { width: 220px; }
-/* Отдел и должность переносятся на строки. */
+/* Отдел, участок и должность переносятся на строки. */
 .sc-col-dept     { width: 150px; }
+.sc-col-site     { width: 150px; }
 .sc-col-position { width: 160px; }
 /* «ТРУДОУСТРОЙСТВА» ≈ 125px + паддинги 24px — уже нельзя, иначе слово обрежется. */
 /* «ТРУДОУСТРОЙСТВА» ≈ 125px + сортировка 16px + воронка 16px + паддинги 24px. */
@@ -447,7 +448,7 @@
 /* Действия не сужать: «Вернуть в табель», «Восстановить», дата увольнения + отмена. */
 .sc-col-actions  { width: 140px; }
 
-/* ── «Управление кадрами»: 11 колонок, горизонтальная прокрутка внутри таблицы ── */
+/* ── «Управление кадрами»: колонки по шестерёнке, горизонтальная прокрутка внутри таблицы ── */
 
 .sc-table-wrap {
   overscroll-behavior-x: contain;
@@ -457,15 +458,13 @@
 }
 
 .sc-table--staff {
-  /* Сумма колонок: 1330 фиксированных + по 140 минимум «Объекту» и «Комментарию».
-     На 1920 с развёрнутым меню (≈1620px) скролла нет; уже — скроллится таблица, не страница. */
-  min-width: 1610px;
+  /* min-width — сумма видимых колонок (staffTableMinWidth, inline): по умолчанию 1610px,
+     на 1920 с развёрнутым меню (≈1620px) скролла нет; уже — скроллится таблица, не страница. */
   --sc-sticky-num-left: 0px;
   --sc-sticky-name-left: 60px;
 }
 
 .sc-table--staff.sc-table--selecting {
-  min-width: 1654px;
   --sc-sticky-num-left: 44px;
   --sc-sticky-name-left: 104px;
 }
@@ -1019,7 +1018,8 @@
 }
 
 .sc-movement-chip:focus-visible,
-.sc-export-view-btn:focus-visible {
+.sc-export-view-btn:focus-visible,
+.sc-columns-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1029,6 +1029,22 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Шестерёнка «Столбцы таблицы»: квадрат высотой с «Экспорт»; выбор не по умолчанию — акцентом.
+   Два класса — базовый .sc-btn ниже по файлу задаёт padding 8px 20px. */
+.sc-btn.sc-columns-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sc-btn.sc-columns-btn.is-active {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2255,8 +2271,9 @@
     min-height: 44px;
   }
 
-  /* «Экспорт» в блоке действий — иконкой 40×40, как «Добавить». */
-  .sc-page-actions .sc-export-view-btn {
+  /* «Экспорт» и шестерёнка в блоке действий — иконками 40×40, как «Добавить». */
+  .sc-page-actions .sc-export-view-btn,
+  .sc-page-actions .sc-columns-btn {
     width: 40px;
     height: 40px;
     padding: 0;

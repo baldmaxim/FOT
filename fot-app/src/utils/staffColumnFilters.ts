@@ -3,7 +3,7 @@
  * списки значений, диапазоны дат, текст «содержит», наличие комментария.
  */
 
-export type StaffValueFilterColumn = 'department' | 'position' | 'schedule' | 'main_object' | 'sign';
+export type StaffValueFilterColumn = 'department' | 'site' | 'position' | 'schedule' | 'main_object' | 'sign';
 export type StaffDateFilterColumn = 'hire_date' | 'birth_date';
 export type StaffTextFilterColumn = 'name' | 'comment';
 export type StaffFilterColumn = StaffValueFilterColumn | StaffDateFilterColumn | StaffTextFilterColumn;
@@ -22,7 +22,7 @@ export interface IStaffColumnFilters {
   has_comment?: boolean;
 }
 
-export const STAFF_VALUE_FILTER_COLUMNS: readonly StaffValueFilterColumn[] = ['department', 'position', 'schedule', 'main_object', 'sign'];
+export const STAFF_VALUE_FILTER_COLUMNS: readonly StaffValueFilterColumn[] = ['department', 'site', 'position', 'schedule', 'main_object', 'sign'];
 export const STAFF_DATE_FILTER_COLUMNS: readonly StaffDateFilterColumn[] = ['hire_date', 'birth_date'];
 export const STAFF_TEXT_FILTER_COLUMNS: readonly StaffTextFilterColumn[] = ['name', 'comment'];
 
@@ -136,7 +136,7 @@ export const isColumnFilterActive = (filters: IStaffColumnFilters, column: Staff
 };
 
 export const countActiveColumnFilters = (filters: IStaffColumnFilters): number =>
-  (['name', 'department', 'position', 'hire_date', 'birth_date', 'schedule', 'main_object', 'comment', 'sign'] as const)
+  (['name', 'department', 'site', 'position', 'hire_date', 'birth_date', 'schedule', 'main_object', 'comment', 'sign'] as const)
     .filter(column => isColumnFilterActive(filters, column)).length;
 
 /** Фильтр одного столбца, остальные без изменений; null — снять фильтр столбца. */

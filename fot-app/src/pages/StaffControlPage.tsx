@@ -2,8 +2,9 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, Download, Filter, Building2 } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, Download, Filter, Building2, Settings } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
+import { TableColumnsMenu } from '../components/ui/TableColumnsMenu';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -54,6 +55,16 @@ import {
 } from '../utils/staffColumnFilters';
 import { STAFF_SECTION_OPTIONS, isStaffSection, type StaffSection } from '../components/staff/staffSections';
 import { useStaffMainObjects } from '../hooks/useStaffMainObjects';
+import { useStaffHiddenColumns } from '../hooks/useStaffHiddenColumns';
+import {
+  isDefaultStaffColumns,
+  isStaffTableColumn,
+  loadHiddenStaffColumns,
+  staffTableMinWidth,
+  STAFF_TABLE_COLUMNS,
+  visibleStaffColumns,
+  type StaffTableColumn,
+} from '../utils/staffColumns';
 import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
 import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { affectsActiveFilters, affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
@@ -125,6 +136,8 @@ const StaffScheduleName: FC<{ view: IEmployeeScheduleView | undefined; state: Ch
 interface IStaffRowProps {
   emp: Employee;
   index: number;
+  /** Столбцы, скрытые шестерёнкой. */
+  hiddenColumns: ReadonlySet<StaffTableColumn>;
   /** Измерение фактической высоты строки virtualizer'ом (отдел/должность переносятся). */
   measureRef: (element: HTMLTableRowElement | null) => void;
   sideData: IStaffSideData;
@@ -146,11 +159,12 @@ interface IStaffRowProps {
   onEditComment?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
+  const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
 
   const handleAuxClick = (e: ReactMouseEvent) => {
     if (e.button === 1) {
@@ -194,46 +208,57 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, measureRef, sideData, s
           </span>
         )}
       </td>
-      <td title={emp.department || ''}>
-        <span className="sc-cell-with-btn">
-          {emp.department || '—'}
-          {canEditDept && (
-            <button className="sc-inline-btn" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
-              <ArrowRightLeft size={12} />
-            </button>
-          )}
-        </span>
-      </td>
-      <td>
-        <span className="sc-cell-with-btn">
-          {canEditPos && (
-            <button className="sc-inline-btn" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
-              <Pencil size={12} />
-            </button>
-          )}
-          {emp.position_name || '—'}
-        </span>
-      </td>
-      <td className="sc-td-date">{formatDate(emp.hire_date)}</td>
-      <td className="sc-td-date">{formatDate(emp.birth_date)}</td>
-      <td>
-        <span className="sc-cell-with-btn">
-          {canEditSch && (
-            <button className="sc-inline-btn" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
-              <Calendar size={12} />
-            </button>
-          )}
-          <span className="sc-schedule-cell">
-            <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge={false} />
+      {shows('department') && (
+        <td title={emp.department || ''}>
+          <span className="sc-cell-with-btn">
+            {emp.department || '—'}
+            {canEditDept && (
+              <button className="sc-inline-btn" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
+                <ArrowRightLeft size={12} />
+              </button>
+            )}
           </span>
-        </span>
-      </td>
-      <td className="sc-td-main-object">
-        <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
-      </td>
-      <td className="sc-td-comment" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
-        <StaffCommentCell employee={emp} onEdit={onEditComment} />
-      </td>
+        </td>
+      )}
+      {shows('site') && <td title={emp.site_supervisor_names || ''}>{emp.site_supervisor_names || '—'}</td>}
+      {shows('position') && (
+        <td>
+          <span className="sc-cell-with-btn">
+            {canEditPos && (
+              <button className="sc-inline-btn" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
+                <Pencil size={12} />
+              </button>
+            )}
+            {emp.position_name || '—'}
+          </span>
+        </td>
+      )}
+      {shows('hire_date') && <td className="sc-td-date">{formatDate(emp.hire_date)}</td>}
+      {shows('birth_date') && <td className="sc-td-date">{formatDate(emp.birth_date)}</td>}
+      {shows('schedule') && (
+        <td>
+          <span className="sc-cell-with-btn">
+            {canEditSch && (
+              <button className="sc-inline-btn" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
+                <Calendar size={12} />
+              </button>
+            )}
+            <span className="sc-schedule-cell">
+              <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge={false} />
+            </span>
+          </span>
+        </td>
+      )}
+      {shows('main_object') && (
+        <td className="sc-td-main-object">
+          <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
+        </td>
+      )}
+      {shows('comment') && (
+        <td className="sc-td-comment" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
+          <StaffCommentCell employee={emp} onEdit={onEditComment} />
+        </td>
+      )}
       <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} /></td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {onReturn && emp.excluded_from_timesheet ? (
@@ -872,6 +897,9 @@ interface IVirtualListLoadProps {
 
 interface IVirtualTableProps extends IVirtualListLoadProps {
   filtered: Employee[];
+  /** Столбцы, скрытые шестерёнкой, и заголовки видимых столбцов по порядку. */
+  hiddenColumns: ReadonlySet<StaffTableColumn>;
+  sortOptions: ReadonlyArray<{ key: StaffSortKey; label: string }>;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -930,6 +958,8 @@ const useVirtualListLoading = (
 
 const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
+  hiddenColumns,
+  sortOptions,
   sideData,
   selectedIds,
   selectionMode,
@@ -958,8 +988,9 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   columnFilters,
   onOpenFilter,
 }) => {
-  // №, ФИО, Отдел, Должность, Трудоустр., Рожд., График, Объект, Комментарий, Признак, действия.
-  const totalCols = 11 + (selectionMode ? 1 : 0);
+  // №, ФИО, Признак, действия — всегда; остальные — по шестерёнке.
+  const totalCols = 4 + visibleStaffColumns(hiddenColumns).length + (selectionMode ? 1 : 0);
+  const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -976,18 +1007,22 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
 
   return (
     <div className="sc-table-wrap" ref={scrollRef}>
-      <table className={`sc-table sc-table--staff${selectionMode ? ' sc-table--selecting' : ''}`}>
+      <table
+        className={`sc-table sc-table--staff${selectionMode ? ' sc-table--selecting' : ''}`}
+        style={{ minWidth: staffTableMinWidth(hiddenColumns, selectionMode) }}
+      >
         <colgroup>
           {selectionMode && <col className="sc-col-check" />}
           <col className="sc-col-num" />
           <col className="sc-col-name" />
-          <col className="sc-col-dept" />
-          <col className="sc-col-position" />
-          <col className="sc-col-hire" />
-          <col className="sc-col-birth" />
-          <col className="sc-col-schedule" />
-          <col className="sc-col-main-object" />
-          <col className="sc-col-comment" />
+          {shows('department') && <col className="sc-col-dept" />}
+          {shows('site') && <col className="sc-col-site" />}
+          {shows('position') && <col className="sc-col-position" />}
+          {shows('hire_date') && <col className="sc-col-hire" />}
+          {shows('birth_date') && <col className="sc-col-birth" />}
+          {shows('schedule') && <col className="sc-col-schedule" />}
+          {shows('main_object') && <col className="sc-col-main-object" />}
+          {shows('comment') && <col className="sc-col-comment" />}
           <col className="sc-col-sign" />
           <col className="sc-col-actions" />
         </colgroup>
@@ -1005,7 +1040,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
               </th>
             )}
             <th className="sc-th-num">№</th>
-            {STAFF_SORT_OPTIONS.map(option => (
+            {sortOptions.map(option => (
               <StaffSortHeader
                 key={option.key}
                 sortKey={option.key}
@@ -1038,6 +1073,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     key={emp.id}
                     emp={emp}
                     index={vRow.index}
+                    hiddenColumns={hiddenColumns}
                     measureRef={virtualizer.measureElement}
                     sideData={sideData}
                     selectedIds={selectedIds}
@@ -1077,6 +1113,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
 
 interface IVirtualCardsProps extends IVirtualListLoadProps {
   filtered: Employee[];
+  /** Столбцы, скрытые шестерёнкой: их строк в карточке нет. */
+  hiddenColumns: ReadonlySet<StaffTableColumn>;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1100,6 +1138,7 @@ const CARD_ESTIMATE = 250;
 
 const MobileCard: FC<{
   emp: Employee;
+  hiddenColumns: ReadonlySet<StaffTableColumn>;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1117,11 +1156,12 @@ const MobileCard: FC<{
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
-}> = memo(({ emp, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+}> = memo(({ emp, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
+  const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
   const handleAuxClick = (e: ReactMouseEvent) => {
     if (e.button === 1) {
       e.preventDefault();
@@ -1158,36 +1198,56 @@ const MobileCard: FC<{
           </div>
         )}
       </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Отдел</span>
-        <span>{emp.department || '—'}</span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Должность</span>
-        <span>{emp.position_name || '—'}</span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Дата трудоустройства</span>
-        <span>{formatDate(emp.hire_date)}</span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Дата рождения</span>
-        <span>{formatDate(emp.birth_date)}</span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">График</span>
-        <span className="sc-schedule-cell">
-          <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge />
-        </span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Объект</span>
-        <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
-      </div>
-      <div className="sc-card-row" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
-        <span className="sc-card-label">Комментарий</span>
-        <StaffCommentCell employee={emp} onEdit={onEditComment} variant="card" />
-      </div>
+      {shows('department') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Отдел</span>
+          <span>{emp.department || '—'}</span>
+        </div>
+      )}
+      {shows('site') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Участок</span>
+          <span>{emp.site_supervisor_names || '—'}</span>
+        </div>
+      )}
+      {shows('position') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Должность</span>
+          <span>{emp.position_name || '—'}</span>
+        </div>
+      )}
+      {shows('hire_date') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Дата трудоустройства</span>
+          <span>{formatDate(emp.hire_date)}</span>
+        </div>
+      )}
+      {shows('birth_date') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Дата рождения</span>
+          <span>{formatDate(emp.birth_date)}</span>
+        </div>
+      )}
+      {shows('schedule') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">График</span>
+          <span className="sc-schedule-cell">
+            <StaffScheduleName view={scheduleView} state={scheduleState} withDefaultBadge />
+          </span>
+        </div>
+      )}
+      {shows('main_object') && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Объект</span>
+          <StaffMainObjectCell name={sideValue(sideData.mainObjects, emp.id, mainState)} failed={mainState === 'error'} />
+        </div>
+      )}
+      {shows('comment') && (
+        <div className="sc-card-row" onClick={onEditComment ? e => e.stopPropagation() : undefined}>
+          <span className="sc-card-label">Комментарий</span>
+          <StaffCommentCell employee={emp} onEdit={onEditComment} variant="card" />
+        </div>
+      )}
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
@@ -1250,7 +1310,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1278,6 +1338,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, sideData, selecte
             >
               <MobileCard
                 emp={emp}
+                hiddenColumns={hiddenColumns}
                 sideData={sideData}
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}
@@ -1399,11 +1460,17 @@ export const StaffControlPage: FC = () => {
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
   const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => (urlParams.get('status') === 'fired' ? 'fired' : 'active'));
+  // Столбцы, скрытые шестерёнкой, читаются до сортировки и фильтров: условие из URL по скрытому
+  // столбцу не применяется — иначе список сортировался бы и фильтровался по невидимому столбцу.
+  const [initialHiddenColumns] = useState(loadHiddenStaffColumns);
+  const isHiddenOnLoad = (key: string | null): boolean => isStaffTableColumn(key) && initialHiddenColumns.has(key);
   const [sortKey, setSortKey] = useState<StaffSortKey>(() => {
     const fromUrl = urlParams.get('sort');
-    return isStaffSortKey(fromUrl) ? fromUrl : 'name';
+    return isStaffSortKey(fromUrl) && !isHiddenOnLoad(fromUrl) ? fromUrl : 'name';
   });
-  const [sortDir, setSortDir] = useState<StaffSortDir>(() => (urlParams.get('dir') === 'desc' ? 'desc' : 'asc'));
+  const [sortDir, setSortDir] = useState<StaffSortDir>(() => (
+    urlParams.get('dir') === 'desc' && !isHiddenOnLoad(urlParams.get('sort')) ? 'desc' : 'asc'
+  ));
   // Период из URL допустим только со своим статусом (устроены — действующие, уволены — уволенные).
   const [period, setPeriod] = useState<StaffPeriod | null>(() => {
     const fromUrl = urlParams.get('period');
@@ -1413,7 +1480,10 @@ export const StaffControlPage: FC = () => {
     return null;
   });
   // Фильтры столбцов (воронки в заголовках); сериализованная форма — в URL, query key и запросы.
-  const [columnFilters, setColumnFilters] = useState<IStaffColumnFilters>(() => parseColumnFilters(urlParams.get('cf')));
+  const [columnFilters, setColumnFilters] = useState<IStaffColumnFilters>(() => [...initialHiddenColumns].reduce(
+    (filters, column) => (isColumnFilterActive(filters, column) ? setColumnFilter(filters, column, null) : filters),
+    parseColumnFilters(urlParams.get('cf')),
+  ));
   const columnFiltersKey = useMemo(() => serializeColumnFilters(columnFilters), [columnFilters]);
   const activeColumnFilterCount = useMemo(() => countActiveColumnFilters(columnFilters), [columnFilters]);
   const [openFilter, setOpenFilter] = useState<{ column: StaffSortKey; anchor: HTMLElement | null } | null>(null);
@@ -1539,6 +1609,30 @@ export const StaffControlPage: FC = () => {
     setSortKey(key);
     setSortDir('asc');
   }, [sortKey]);
+
+  // Шестерёнка: скрытие столбца снимает его фильтр, сортировку и открытое окно фильтра.
+  const handleColumnHidden = (column: StaffTableColumn) => {
+    setColumnFilters(prev => (isColumnFilterActive(prev, column) ? setColumnFilter(prev, column, null) : prev));
+    if (sortKey === column) {
+      setSortKey('name');
+      setSortDir('asc');
+    }
+    setOpenFilter(prev => (prev?.column === column ? null : prev));
+  };
+  const { hidden: hiddenColumns, setColumnVisible, showAll: showAllColumns } = useStaffHiddenColumns(
+    initialHiddenColumns,
+    handleColumnHidden,
+  );
+  const visibleSortOptions = useMemo(
+    () => STAFF_SORT_OPTIONS.filter(option => !(isStaffTableColumn(option.key) && hiddenColumns.has(option.key))),
+    [hiddenColumns],
+  );
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
+  const closeColumnsMenu = useCallback(() => {
+    columnsAnchor?.focus();
+    setColumnsAnchor(null);
+  }, [columnsAnchor]);
 
   const handleStatusChange = useCallback((next: StaffStatusFilter) => {
     setStatusFilter(next);
@@ -2472,6 +2566,7 @@ export const StaffControlPage: FC = () => {
         sort: sortKey,
         dir: sortDir,
         cf: columnFiltersKey || undefined,
+        columns: visibleStaffColumns(hiddenColumns),
       });
       triggerBlobDownload(blob, filename);
     } catch (err) {
@@ -2479,7 +2574,7 @@ export const StaffControlPage: FC = () => {
     } finally {
       setIsExportingView(false);
     }
-  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, columnFiltersKey, toast]);
+  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, columnFiltersKey, hiddenColumns, toast]);
 
   // Параметры экрана для вариантов значений в фильтре столбца (сервер не применяет фильтр самого столбца).
   const filterViewParams = useMemo(() => ({
@@ -2601,41 +2696,50 @@ export const StaffControlPage: FC = () => {
           }}
           aria-label="Сортировка"
         >
-          {STAFF_SORT_OPTIONS.flatMap(option => [
+          {visibleSortOptions.flatMap(option => [
             <option key={`${option.key}:asc`} value={`${option.key}:asc`}>{option.label} ↑</option>,
             <option key={`${option.key}:desc`} value={`${option.key}:desc`}>{option.label} ↓</option>,
           ])}
         </select>
       )}
-      {(canManageStaff || canExportEmployees || overflowItems.length > 0) && (
-        <div className="sc-page-actions">
-          {canExportEmployees && (
-            <button
-              type="button"
-              className="sc-btn secondary sc-export-view-btn"
-              onClick={() => { void handleExportView(); }}
-              disabled={isExportingView || total === 0}
-              title="Скачать xlsx с текущей таблицей: фильтры, вкладка и сортировка"
-              aria-label="Экспорт текущей таблицы"
-            >
-              <Download size={isMobile ? 20 : 14} aria-hidden="true" />
-              {!isMobile && <span>{isExportingView ? 'Готовим…' : 'Экспорт'}</span>}
-            </button>
-          )}
-          {canManageStaff && statusFilter === 'active' && !hrTabAvailable && (
-            <button
-              className="sc-btn apply"
-              onClick={() => setShowAddModal(true)}
-              title="Добавить сотрудника"
-              aria-label="Добавить сотрудника"
-            >
-              <UserPlus size={isMobile ? 20 : 14} />
-              {!isMobile && <span>Добавить</span>}
-            </button>
-          )}
-          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
-        </div>
-      )}
+      <div className="sc-page-actions">
+        <button
+          type="button"
+          className={`sc-btn secondary sc-columns-btn${isDefaultStaffColumns(hiddenColumns) ? '' : ' is-active'}`}
+          onClick={event => setColumnsAnchor(event.currentTarget)}
+          aria-label="Столбцы таблицы"
+          aria-haspopup="dialog"
+          aria-expanded={columnsAnchor !== null}
+          title="Столбцы таблицы"
+        >
+          <Settings size={isMobile ? 20 : 16} aria-hidden="true" />
+        </button>
+        {canExportEmployees && (
+          <button
+            type="button"
+            className="sc-btn secondary sc-export-view-btn"
+            onClick={() => { void handleExportView(); }}
+            disabled={isExportingView || total === 0}
+            title="Скачать xlsx с текущей таблицей: фильтры, вкладка и сортировка"
+            aria-label="Экспорт текущей таблицы"
+          >
+            <Download size={isMobile ? 20 : 14} aria-hidden="true" />
+            {!isMobile && <span>{isExportingView ? 'Готовим…' : 'Экспорт'}</span>}
+          </button>
+        )}
+        {canManageStaff && statusFilter === 'active' && !hrTabAvailable && (
+          <button
+            className="sc-btn apply"
+            onClick={() => setShowAddModal(true)}
+            title="Добавить сотрудника"
+            aria-label="Добавить сотрудника"
+          >
+            <UserPlus size={isMobile ? 20 : 14} />
+            {!isMobile && <span>Добавить</span>}
+          </button>
+        )}
+        {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
+      </div>
       <div className="sc-filter-search">
         <SearchInput clearable value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
@@ -2722,6 +2826,7 @@ export const StaffControlPage: FC = () => {
       ) : isMobile ? (
         <VirtualCards
           filtered={employees}
+          hiddenColumns={hiddenColumns}
           sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
@@ -2745,6 +2850,8 @@ export const StaffControlPage: FC = () => {
       ) : (
         <VirtualTable
           filtered={employees}
+          hiddenColumns={hiddenColumns}
+          sortOptions={visibleSortOptions}
           sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
@@ -2844,10 +2951,22 @@ export const StaffControlPage: FC = () => {
       )}
       {mobileFiltersOpen && !openFilter && (
         <StaffColumnFilterSheet
+          columns={visibleSortOptions}
           filters={columnFilters}
           onPick={column => handleOpenFilter(column, null)}
           onReset={resetColumnFilters}
           onClose={() => setMobileFiltersOpen(false)}
+        />
+      )}
+      {columnsAnchor && (
+        <TableColumnsMenu
+          anchor={columnsAnchor}
+          columns={STAFF_TABLE_COLUMNS}
+          hidden={hiddenColumns}
+          fixedNote="«№», «ФИО» и «Признак» показываются всегда"
+          onToggle={setColumnVisible}
+          onShowAll={showAllColumns}
+          onClose={closeColumnsMenu}
         />
       )}
       {openFilter && (

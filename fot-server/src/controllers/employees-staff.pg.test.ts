@@ -119,11 +119,17 @@ const callPage = async (query: Record<string, string>) => {
 };
 
 /** Все порции по курсору с сортировкой → id в порядке выдачи. */
-const traverse = async (sort: string, dir: 'asc' | 'desc', pageSize: number): Promise<number[]> => {
+const traverse = async (
+  sort: string,
+  dir: 'asc' | 'desc',
+  pageSize: number,
+  extra: Record<string, string> = {},
+  total = EMPLOYEES,
+): Promise<number[]> => {
   const ids: number[] = [];
   let cursor: { key: string | null; isNull: boolean; id: number } | null = null;
   for (let guard = 0; guard < 100; guard += 1) {
-    const query: Record<string, string> = { page: '1', keyset: '1', view: 'staff', pageSize: String(pageSize), sort, dir };
+    const query: Record<string, string> = { page: '1', keyset: '1', view: 'staff', pageSize: String(pageSize), sort, dir, ...extra };
     if (cursor) {
       query.after_id = String(cursor.id);
       query.after_null = cursor.isNull ? '1' : '0';
@@ -131,7 +137,7 @@ const traverse = async (sort: string, dir: 'asc' | 'desc', pageSize: number): Pr
     }
     const res = await callPage(query);
     expect(res.statusCode).toBe(200);
-    expect(res.body.meta.total).toBe(EMPLOYEES);
+    expect(res.body.meta.total).toBe(total);
     ids.push(...res.body.data.map(row => row.id));
     cursor = res.body.meta.next_cursor;
     if (!cursor) return ids;
@@ -143,9 +149,20 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
   beforeAll(async () => {
     await q(`
       DROP TABLE IF EXISTS employee_staff_comments, employees, org_departments, positions, user_profiles,
-                           employee_schedule_assignments, work_schedules CASCADE;
-      CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
-      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
+                           employee_schedule_assignments, work_schedules, system_roles,
+                           employee_department_access, user_employee_access CASCADE;
+      CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text, employee_id integer, system_role_id uuid);
+      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, is_active boolean NOT NULL DEFAULT true);
+      CREATE TABLE system_roles (id uuid PRIMARY KEY, code text NOT NULL);
+      CREATE TABLE employee_department_access (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), employee_id integer NOT NULL, department_id uuid NOT NULL,
+        is_active boolean NOT NULL DEFAULT true, access_level text NOT NULL DEFAULT 'full',
+        source text NOT NULL DEFAULT 'manual'
+      );
+      CREATE TABLE user_employee_access (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL, employee_id integer NOT NULL,
+        is_active boolean NOT NULL DEFAULT true
+      );
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
       CREATE TABLE work_schedules (id uuid PRIMARY KEY, name text, is_default boolean);
       CREATE TABLE employees (
@@ -351,6 +368,117 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
     );
     expect(facets).toEqual(expectedFacets.map(row => ({ value: row.value, count: Number(row.count) })));
     expect(facets.map(f => f.value)).toContain('Склад');
+  });
+
+  it('участок: правило «По участкам», ячейка = ключ сортировки, курсор, фильтр по начальнику, фасеты, выгрузка', async () => {
+    const R_SITE = '00000000-0000-0000-0000-00000000a001';
+    const R_HEAD = '00000000-0000-0000-0000-00000000a002';
+    await q(`INSERT INTO system_roles VALUES ($1, 'site_supervisor'), ($2, 'header')`, [R_SITE, R_HEAD]);
+    // Начальники — без своего отдела. 703–708 — по разным причинам не начальники участка.
+    const leaders: Array<[number, string, string, Partial<Record<'is_archived' | 'fired' | 'excluded', boolean>>]> = [
+      [701, 'Журавлев Владимир Сергеевич', R_SITE, {}],
+      [702, 'Пудовкин Александр Александрович', R_SITE, {}],
+      [703, 'Архивный Начальник', R_SITE, { is_archived: true }],
+      [704, 'Уволенный Начальник', R_SITE, { fired: true }],
+      [705, 'Исключённый Начальник', R_SITE, { excluded: true }],
+      [706, 'Синхронный Начальник', R_SITE, {}],
+      [707, 'Неактивный Доступ', R_SITE, {}],
+      [708, 'Руководитель Отдела', R_HEAD, {}],
+      [709, 'Абаев Борис', R_SITE, {}],
+    ];
+    const profileOf = (id: number) => `00000000-0000-0000-0000-000000000${id}`;
+    for (const [id, name, role, flags] of leaders) {
+      await q(`INSERT INTO employees (id, full_name, is_archived, employment_status, excluded_from_timesheet)
+               VALUES ($1, $2, $3, $4, $5)`, [id, name, flags.is_archived ?? false, flags.fired ? 'fired' : 'active', flags.excluded ?? false]);
+      await q('INSERT INTO user_profiles (id, full_name, employee_id, system_role_id) VALUES ($1, $2, $3, $4)', [profileOf(id), name, id, role]);
+    }
+    await q(`INSERT INTO employee_department_access (employee_id, department_id, is_active, access_level, source) VALUES
+               (701, $1, true, 'full', 'manual'), (702, $1, true, 'full', 'manual'), (702, $2, true, 'full', 'manual'),
+               (703, $2, true, 'full', 'manual'), (704, $2, true, 'full', 'manual'), (705, $2, true, 'full', 'manual'),
+               (706, $2, true, 'full', 'sigur_sync'), (707, $2, false, 'full', 'manual'), (707, $1, true, 'deputy', 'manual'),
+               (708, $2, true, 'full', 'manual')`, [D1, D2]);
+    // Личные назначения: 3 — без отдела, 4 — в D1 (объединение с начальниками отдела).
+    await q('INSERT INTO user_employee_access (user_id, employee_id) VALUES ($1, 3), ($1, 4)', [profileOf(709)]);
+
+    const expectedLabel = (id: number, dept: string | null): string | null => {
+      if (id === 3) return 'Абаев Б.';
+      if (id === 4) return 'Абаев Б., Журавлев В. С., Пудовкин А. А.';
+      if (dept === D1) return 'Журавлев В. С., Пудовкин А. А.';
+      if (dept === D2) return 'Пудовкин А. А.';
+      return null;
+    };
+    const res = {
+      statusCode: 200, body: null as unknown, sent: null as Buffer | null,
+      status(code: number) { res.statusCode = code; return res; },
+      json(body: unknown) { res.body = body; return res; },
+      setHeader: () => undefined,
+      send(buffer: Buffer) { res.sent = buffer; return res; },
+    };
+    try {
+      const all = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000' });
+      const rows = all.body.data as unknown as Array<{ id: number; org_department_id: string | null; site_supervisor_names: string | null }>;
+      expect(rows.length).toBe(all.body.meta.total);
+      for (const row of rows) {
+        expect(row.site_supervisor_names, `сотрудник ${row.id}`).toBe(expectedLabel(row.id, row.org_department_id));
+      }
+      const ids = rows.map(row => row.id);
+      const labels = rows.map(row => row.site_supervisor_names);
+
+      // Курсор по участку: равные ключи (весь D1), NULL в конце при обоих направлениях.
+      for (const dir of ['asc', 'desc'] as const) {
+        const expected = (await q<{ id: number }>(
+          `SELECT id FROM unnest($1::int[], $2::text[]) AS x(id, k) ORDER BY (k IS NULL), k ${dir}, id ${dir}`,
+          [ids, labels],
+        )).map(row => Number(row.id));
+        for (const pageSize of [1, 4, 7, 50]) {
+          expect(await traverse('site', dir, pageSize, {}, rows.length), `site ${dir} по ${pageSize}`).toEqual(expected);
+        }
+      }
+
+      // Фильтр по отдельному начальнику: личное назначение и отдел двух начальников попадают под каждого.
+      const filtered = async (values: Array<string | null>) => {
+        const page = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000', cf: JSON.stringify({ values: { site: values } }) });
+        expect(page.statusCode).toBe(200);
+        return page.body.data.map(row => row.id).sort((a, b) => a - b);
+      };
+      const idsWith = (predicate: (label: string | null) => boolean) =>
+        rows.filter(row => predicate(row.site_supervisor_names)).map(row => row.id).sort((a, b) => a - b);
+      expect(await filtered(['Абаев Б.'])).toEqual([3, 4]);
+      expect(await filtered(['Журавлев В. С.'])).toEqual(idsWith(label => label?.includes('Журавлев') ?? false));
+      expect(await filtered(['Пудовкин А. А.'])).toEqual(idsWith(label => label?.includes('Пудовкин') ?? false));
+      expect(await filtered([null])).toEqual(idsWith(label => label === null));
+      expect(await filtered([null, 'Абаев Б.'])).toEqual(idsWith(label => label === null || label.includes('Абаев')));
+
+      // Фасеты — по каждому начальнику; 703–708 в вариантах нет.
+      await employeesStaffController.getColumnValues(makeReq({ column: 'site' }), res as unknown as Response);
+      const facets = (res.body as { data: { values: Array<{ value: string | null; count: number }> } }).data.values;
+      const countOf = (name: string) => labels.filter(label => label?.split(', ').includes(name)).length;
+      expect(facets).toEqual([
+        { value: 'Абаев Б.', count: countOf('Абаев Б.') },
+        { value: 'Журавлев В. С.', count: countOf('Журавлев В. С.') },
+        { value: 'Пудовкин А. А.', count: countOf('Пудовкин А. А.') },
+        { value: null, count: labels.filter(label => label === null).length },
+      ].sort((a, b) => (a.value === null ? 1 : b.value === null ? -1 : 0)));
+
+      // Выгрузка с участком = список, отсортированный по участку.
+      audit.withClient.mockReset().mockResolvedValue(undefined);
+      await employeesStaffController.exportView(makeReq({ sort: 'site', dir: 'asc', columns: 'department,site' }), res as unknown as Response);
+      expect(res.statusCode).toBe(200);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
+      const ws = workbook.worksheets[0];
+      expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Признак']);
+      const exported = Array.from({ length: ws.rowCount - 1 }, (_, i) => String(ws.getRow(i + 2).getCell(4).value ?? ''));
+      const listed = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000', sort: 'site', dir: 'asc' });
+      expect(exported).toEqual((listed.body.data as unknown as Array<{ site_supervisor_names: string | null }>)
+        .map(row => row.site_supervisor_names ?? ''));
+    } finally {
+      await q('DELETE FROM user_employee_access');
+      await q('DELETE FROM employee_department_access');
+      await q('DELETE FROM user_profiles WHERE employee_id IS NOT NULL');
+      await q('DELETE FROM system_roles');
+      await q('DELETE FROM employees WHERE id BETWEEN 701 AND 709');
+    }
   });
 
   it('удаление профиля автора не удаляет комментарий (ON DELETE SET NULL)', async () => {

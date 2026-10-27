@@ -3,17 +3,19 @@
  *
  * Ключ сортировки — текстовое выражение над строкой employees, собираемое на КАЖДЫЙ запрос:
  * график зависит от «сегодня» по Москве, признак — от id отделов «Декрет», объект — от
- * опубликованного поколения снимка. Пустые значения (NULL) всегда в конце, при любом
- * направлении; тай-брейк — id в том же направлении.
+ * опубликованного поколения снимка, участок — от индекса начальников участка запроса (ctx).
+ * Пустые значения (NULL) всегда в конце, при любом направлении; тай-брейк — id в том же направлении.
  */
 import { getAllDepartmentsTree } from '../services/skud-shared.service.js';
 import { loadActiveSnapshotRun } from '../services/employee-main-object-snapshot.service.js';
 import { buildSignDepartmentIndex, isInMaternityDepartment } from '../utils/employee-sign.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import { buildStaffSiteKeySql, type IStaffSqlContext } from '../services/staff-site.service.js';
 
 export const STAFF_SORT_KEYS = [
   'name',
   'department',
+  'site',
   'position',
   'hire_date',
   'birth_date',
@@ -80,12 +82,14 @@ const nullIfBlank = (expr: string): string => `NULLIF(btrim(${expr}), '')`;
  * main_object без опубликованного снимка — StaffSortUnavailableError: считать объект на лету
  * для всей выборки сортировка не умеет.
  */
-export async function buildStaffSortKeySql(key: StaffSortKey, params: unknown[]): Promise<string> {
+export async function buildStaffSortKeySql(key: StaffSortKey, params: unknown[], ctx: IStaffSqlContext): Promise<string> {
   switch (key) {
     case 'name':
       return nullIfBlank('employees.full_name');
     case 'department':
       return `(SELECT ${nullIfBlank('d.name')} FROM org_departments d WHERE d.id = employees.org_department_id)`;
+    case 'site':
+      return buildStaffSiteKeySql(await ctx.siteIndex(), params);
     case 'position':
       return `(SELECT ${nullIfBlank('p.name')} FROM positions p WHERE p.id = employees.position_id)`;
     case 'hire_date':

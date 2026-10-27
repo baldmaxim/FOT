@@ -6,9 +6,10 @@
 import { z } from 'zod';
 import { escapeLike } from '../utils/search.utils.js';
 import { buildFioSearch, fioExactConditionSql } from '../utils/fio-search.utils.js';
+import { buildStaffSiteFilterSql, type IStaffSqlContext } from '../services/staff-site.service.js';
 import { buildStaffSortKeySql, StaffSortUnavailableError } from './employees-staff-sort.helpers.js';
 
-export const STAFF_VALUE_FILTER_COLUMNS = ['department', 'position', 'schedule', 'main_object', 'sign'] as const;
+export const STAFF_VALUE_FILTER_COLUMNS = ['department', 'site', 'position', 'schedule', 'main_object', 'sign'] as const;
 export type StaffValueFilterColumn = typeof STAFF_VALUE_FILTER_COLUMNS[number];
 
 export const STAFF_DATE_FILTER_COLUMNS = ['hire_date', 'birth_date'] as const;
@@ -68,9 +69,13 @@ export class StaffFilterUnavailableError extends Error {
 }
 
 /** Столбец-объект снимка недоступен: пробрасываем как ошибку фильтра (409 FILTER_UNAVAILABLE). */
-async function keySql(column: StaffValueFilterColumn | StaffTextFilterColumn, params: unknown[]): Promise<string> {
+async function keySql(
+  column: StaffValueFilterColumn | StaffTextFilterColumn,
+  params: unknown[],
+  ctx: IStaffSqlContext,
+): Promise<string> {
   try {
-    return await buildStaffSortKeySql(column, params);
+    return await buildStaffSortKeySql(column, params, ctx);
   } catch (error) {
     if (error instanceof StaffSortUnavailableError) {
       throw new StaffFilterUnavailableError('Фильтр по объекту недоступен: снимок объектов ещё не рассчитан');
@@ -92,19 +97,24 @@ export function countActiveColumnFilters(filters: IStaffColumnFilters): number {
 /**
  * Добавляет условия фильтров столбцов (таблица employees без алиаса). exclude — столбец, чей
  * фильтр не применяется: варианты значений столбца считаются без его собственного фильтра.
+ * «Участок» фильтруется по отдельному начальнику, а не по тексту ячейки целиком.
  */
 export async function appendColumnFilters(
   whereParts: string[],
   params: unknown[],
   filters: IStaffColumnFilters,
-  options: { exclude?: StaffFilterColumn } = {},
+  options: { exclude?: StaffFilterColumn; ctx: IStaffSqlContext },
 ): Promise<void> {
-  const { exclude } = options;
+  const { exclude, ctx } = options;
 
   for (const column of STAFF_VALUE_FILTER_COLUMNS) {
     const list = filters.values?.[column];
     if (!list || list.length === 0 || column === exclude) continue;
-    const key = await keySql(column, params);
+    if (column === 'site') {
+      whereParts.push(buildStaffSiteFilterSql(await ctx.siteIndex(), list, params));
+      continue;
+    }
+    const key = await keySql(column, params, ctx);
     const values = [...new Set(list.filter((value): value is string => value !== null))];
     const includeEmpty = list.includes(null);
     const parts: string[] = [];
@@ -142,7 +152,7 @@ export async function appendColumnFilters(
       if (search) whereParts.push(fioExactConditionSql('employees', params, search));
       continue;
     }
-    const key = await keySql(column, params);
+    const key = await keySql(column, params, ctx);
     params.push(`%${escapeLike(text, MAX_TEXT_LENGTH)}%`);
     whereParts.push(`${key} ILIKE $${params.length}`);
   }

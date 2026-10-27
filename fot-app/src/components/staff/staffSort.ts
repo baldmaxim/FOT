@@ -4,6 +4,7 @@ import type { StaffSortKey } from '../../services/employeeService';
 export const STAFF_SORT_OPTIONS: ReadonlyArray<{ key: StaffSortKey; label: string }> = [
   { key: 'name', label: 'ФИО' },
   { key: 'department', label: 'Отдел' },
+  { key: 'site', label: 'Участок' },
   { key: 'position', label: 'Должность' },
   { key: 'hire_date', label: 'Дата трудоустройства' },
   { key: 'birth_date', label: 'Дата рождения' },

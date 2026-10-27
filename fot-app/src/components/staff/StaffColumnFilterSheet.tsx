@@ -4,9 +4,10 @@ import { ChevronRight, Filter } from 'lucide-react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { StaffSortKey } from '../../services/employeeService';
 import { countActiveColumnFilters, isColumnFilterActive, type IStaffColumnFilters } from '../../utils/staffColumnFilters';
-import { STAFF_SORT_OPTIONS } from './staffSort';
 
 interface IStaffColumnFilterSheetProps {
+  /** Видимые столбцы таблицы по порядку (скрытые шестерёнкой не показываются). */
+  columns: ReadonlyArray<{ key: StaffSortKey; label: string }>;
   filters: IStaffColumnFilters;
   onPick: (column: StaffSortKey) => void;
   onReset: () => void;
@@ -14,7 +15,7 @@ interface IStaffColumnFilterSheetProps {
 }
 
 /** Мобила: список столбцов с отметкой активных фильтров; выбор открывает редактор фильтра. */
-export const StaffColumnFilterSheet: FC<IStaffColumnFilterSheetProps> = ({ filters, onPick, onReset, onClose }) => {
+export const StaffColumnFilterSheet: FC<IStaffColumnFilterSheetProps> = ({ columns, filters, onPick, onReset, onClose }) => {
   const dismiss = useOverlayDismiss(onClose);
   const activeCount = countActiveColumnFilters(filters);
 
@@ -30,7 +31,7 @@ export const StaffColumnFilterSheet: FC<IStaffColumnFilterSheetProps> = ({ filte
       <div className="sc-colfilter sc-colfilter--sheet" role="dialog" aria-modal="true" aria-label="Фильтры столбцов">
         <div className="sc-colfilter-title">Фильтры столбцов</div>
         <div className="sc-colfilter-columns">
-          {STAFF_SORT_OPTIONS.map(option => {
+          {columns.map(option => {
             const active = isColumnFilterActive(filters, option.key);
             return (
               <button key={option.key} type="button" className="sc-colfilter-column" onClick={() => onPick(option.key)}>

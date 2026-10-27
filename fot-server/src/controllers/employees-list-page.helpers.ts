@@ -11,6 +11,7 @@ import { query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadStructureCache, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { getAllDepartmentsTree } from '../services/skud-shared.service.js';
+import { staffSiteLabel, type IStaffSqlContext } from '../services/staff-site.service.js';
 import { buildSignDepartmentIndex, resolveEmployeeSign } from '../utils/employee-sign.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
@@ -52,16 +53,18 @@ export function parseKeysetParams(queryParams: Record<string, unknown>, status: 
   return { ok: true, keyset: { after: { name, id } } };
 }
 
-/** Строки employees → ответ списка; для view=staff — дата рождения и признак сотрудника. */
+/** Строки employees → ответ списка; для view=staff — дата рождения, признак и участок сотрудника. */
 export async function mapEmployeeRows(
   rows: Array<Record<string, unknown>>,
   isStaffView: boolean,
+  ctx: IStaffSqlContext,
 ): Promise<Array<Record<string, unknown>>> {
   const structureCache = await loadStructureCache();
   const signIndex = isStaffView ? buildSignDepartmentIndex(await getAllDepartmentsTree()) : null;
+  const siteIndex = isStaffView ? await ctx.siteIndex() : null;
   return rows.map(emp => {
     const mapped = decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache);
-    if (!signIndex) return mapped as unknown as Record<string, unknown>;
+    if (!signIndex || !siteIndex) return mapped as unknown as Record<string, unknown>;
     return {
       ...mapped,
       birth_date: typeof emp.birth_date === 'string' ? emp.birth_date : null,
@@ -73,6 +76,7 @@ export async function mapEmployeeRows(
         departmentId: mapped.org_department_id,
         deptById: signIndex,
       }),
+      site_supervisor_names: staffSiteLabel(siteIndex, Number(mapped.id), mapped.org_department_id ?? null),
     };
   });
 }
@@ -87,6 +91,7 @@ interface IKeysetPageInput {
   pageSize: number;
   keyset: IKeysetParams;
   showArchived: boolean;
+  ctx: IStaffSqlContext;
 }
 
 /**
@@ -98,7 +103,7 @@ export async function respondKeysetPage(
   res: Response,
   input: IKeysetPageInput,
 ): Promise<void> {
-  const { t0, selectCols, whereParts, params, orderSql, pageSize, keyset, showArchived } = input;
+  const { t0, selectCols, whereParts, params, orderSql, pageSize, keyset, showArchived, ctx } = input;
   const filterWhere = whereParts.join(' AND ');
   const filterParams = [...params];
 
@@ -145,7 +150,7 @@ export async function respondKeysetPage(
     ? { name: typeof last.full_name === 'string' ? last.full_name : '', id: Number(last.id) }
     : null;
 
-  const employees = await mapEmployeeRows(pageRowsKept, req.query.view === 'staff');
+  const employees = await mapEmployeeRows(pageRowsKept, req.query.view === 'staff', ctx);
 
   auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
     details: { count: employees.length, keyset: true, archived: showArchived },

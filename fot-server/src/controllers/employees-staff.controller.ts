@@ -10,7 +10,12 @@ import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 import { loadMainObjects } from '../services/employee-main-object-snapshot.service.js';
 import { saveStaffComment, STAFF_COMMENT_MAX_LENGTH } from '../services/employee-staff-comment.service.js';
 import { MAX_EXPORT_EMPLOYEES } from '../services/employees-export.service.js';
-import { buildStaffViewWorkbook, type IStaffViewExportRow } from '../services/employees-staff-view-excel.service.js';
+import {
+  buildStaffViewWorkbook,
+  parseStaffViewColumns,
+  type IStaffViewExportRow,
+} from '../services/employees-staff-view-excel.service.js';
+import { buildStaffSiteFacetJoinSql, createStaffSqlContext, type IStaffSqlContext } from '../services/staff-site.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { escapeLike } from '../utils/search.utils.js';
@@ -61,10 +66,11 @@ async function appendColumnFiltersOr409(
   whereParts: string[],
   params: unknown[],
   filters: IStaffColumnFilters,
+  ctx: IStaffSqlContext,
   exclude?: StaffFilterColumn,
 ): Promise<boolean> {
   try {
-    await appendColumnFilters(whereParts, params, filters, { exclude });
+    await appendColumnFilters(whereParts, params, filters, { exclude, ctx });
     return true;
   } catch (error) {
     if (error instanceof StaffFilterUnavailableError) {
@@ -81,6 +87,7 @@ export const employeesStaffController = {
   /**
    * GET /api/employees/column-values?column=… — варианты значений столбца для фильтра в заголовке
    * с количеством. Считаются по всем фильтрам экрана, кроме фильтра самого столбца (как автофильтр Excel).
+   * «Участок» — по отдельным начальникам: сотрудник отдела двух начальников считается у каждого.
    */
   async getColumnValues(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -116,16 +123,19 @@ export const employeesStaffController = {
         return;
       }
       const { whereParts, params } = filter;
+      const ctx = createStaffSqlContext();
       const statusSql = statusConditionSql(statusParsed.value);
       if (statusSql) whereParts.push(statusSql);
       if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
       const valueColumn = column as StaffValueFilterColumn;
-      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, valueColumn))) return;
+      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx, valueColumn))) return;
       await appendStaffFioSearch(whereParts, params, filter.search);
 
-      let keySql: string;
+      let valuesSql: string;
       try {
-        keySql = await buildStaffSortKeySql(valueColumn, params);
+        valuesSql = valueColumn === 'site'
+          ? `SELECT site.label AS value FROM employees ${buildStaffSiteFacetJoinSql(await ctx.siteIndex(), params)}`
+          : `SELECT ${await buildStaffSortKeySql(valueColumn, params, ctx)} AS value FROM employees`;
       } catch (err) {
         if (err instanceof StaffSortUnavailableError) {
           res.status(409).json({ success: false, error: 'Фильтр по объекту недоступен: снимок объектов ещё не рассчитан', code: 'FILTER_UNAVAILABLE' });
@@ -142,7 +152,7 @@ export const employeesStaffController = {
 
       const rows = await query<{ value: string | null; count: number | string }>(
         `SELECT v.value, count(*)::int AS count
-           FROM (SELECT ${keySql} AS value FROM employees WHERE ${whereParts.join(' AND ')}) v
+           FROM (${valuesSql} WHERE ${whereParts.join(' AND ')}) v
           ${searchSql}
           GROUP BY v.value
           ORDER BY v.value ASC NULLS LAST
@@ -235,7 +245,7 @@ export const employeesStaffController = {
         return;
       }
       const { whereParts, params } = filter;
-      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters))) return;
+      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, createStaffSqlContext()))) return;
       params.push(range.monthStart);
       const fromIdx = params.length;
       params.push(range.today);
@@ -267,7 +277,7 @@ export const employeesStaffController = {
     }
   },
 
-  /** GET /api/employees/export-view — xlsx текущей таблицы (фильтры, статус, период, сортировка). */
+  /** GET /api/employees/export-view — xlsx текущей таблицы (фильтры, статус, период, сортировка, видимые столбцы). */
   async exportView(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const statusParsed = parseStaffStatus(req.query.status);
@@ -290,6 +300,12 @@ export const employeesStaffController = {
         res.status(400).json({ success: false, error: 'Некорректные фильтры столбцов', code: 'INVALID_COLUMN_FILTERS' });
         return;
       }
+      const columnsParsed = parseStaffViewColumns(req.query.columns);
+      if (!columnsParsed.ok) {
+        res.status(400).json({ success: false, error: 'Некорректный список столбцов', code: 'INVALID_COLUMNS' });
+        return;
+      }
+      const { columns } = columnsParsed;
       const sort = sortParsed.sort ?? { key: 'name' as const, dir: 'asc' as const };
       const status = statusParsed.value;
       const period = periodParsed.value;
@@ -304,15 +320,16 @@ export const employeesStaffController = {
         return;
       }
       const { whereParts, params } = filter;
+      const ctx = createStaffSqlContext();
       const statusSql = statusConditionSql(status);
       if (statusSql) whereParts.push(statusSql);
       if (period) whereParts.push(periodConditionSql(period, resolveMonthRange(), params));
-      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters))) return;
+      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx))) return;
       await appendStaffFioSearch(whereParts, params, filter.search);
 
       let sortKeySql: string;
       try {
-        sortKeySql = await buildStaffSortKeySql(sort.key, params);
+        sortKeySql = await buildStaffSortKeySql(sort.key, params, ctx);
       } catch (err) {
         if (err instanceof StaffSortUnavailableError) {
           res.status(409).json({ success: false, error: err.message, code: 'SORT_UNAVAILABLE' });
@@ -321,21 +338,23 @@ export const employeesStaffController = {
         throw err;
       }
       // Те же выражения, что у сортировки, — значения в файле совпадают с порядком строк.
-      const scheduleSql = await buildStaffSortKeySql('schedule', params);
-      const signSql = await buildStaffSortKeySql('sign', params);
+      const scheduleSql = await buildStaffSortKeySql('schedule', params, ctx);
+      const signSql = await buildStaffSortKeySql('sign', params, ctx);
+      const siteSql = columns.includes('site') ? await buildStaffSortKeySql('site', params, ctx) : 'NULL::text';
       params.push(MAX_EXPORT_EMPLOYEES + 1);
 
       const rows = await query<{
         id: number; full_name: string | null; hire_date: string | null; birth_date: string | null;
-        department_name: string | null; position_name: string | null; schedule_name: string | null;
-        staff_comment: string | null; sign: string;
+        department_name: string | null; site_name: string | null; position_name: string | null;
+        schedule_name: string | null; staff_comment: string | null; sign: string;
       }>(
-        `SELECT s.id, s.full_name, s.hire_date, s.birth_date, s.department_name, s.position_name,
+        `SELECT s.id, s.full_name, s.hire_date, s.birth_date, s.department_name, s.site_name, s.position_name,
                 s.schedule_name, s.staff_comment, s.sign
            FROM (SELECT employees.id, employees.full_name,
                         to_char(employees.hire_date, 'YYYY-MM-DD') AS hire_date,
                         to_char(employees.birth_date, 'YYYY-MM-DD') AS birth_date,
                         (SELECT d.name FROM org_departments d WHERE d.id = employees.org_department_id) AS department_name,
+                        ${siteSql} AS site_name,
                         (SELECT p.name FROM positions p WHERE p.id = employees.position_id) AS position_name,
                         ${scheduleSql} AS schedule_name,
                         (SELECT c.comment FROM employee_staff_comments c WHERE c.employee_id = employees.id) AS staff_comment,
@@ -361,19 +380,23 @@ export const employeesStaffController = {
         return;
       }
 
-      const objects = await loadMainObjects(rows.map(row => Number(row.id)), resolveExportPeriod());
+      // Объекты считаются только для выбранного столбца: расчёт тяжёлый, а в файл не попадёт.
+      const objects = columns.includes('main_object')
+        ? await loadMainObjects(rows.map(row => Number(row.id)), resolveExportPeriod())
+        : null;
       const exportRows: IStaffViewExportRow[] = rows.map(row => ({
         fullName: row.full_name ?? '',
         department: row.department_name ?? '',
+        site: row.site_name ?? '',
         position: row.position_name ?? '',
         hireDate: row.hire_date,
         birthDate: row.birth_date,
         schedule: row.schedule_name ?? '',
-        object: objects.objects.get(Number(row.id)) ?? '',
+        object: objects?.objects.get(Number(row.id)) ?? '',
         comment: row.staff_comment ?? '',
         sign: row.sign,
       }));
-      const buffer = Buffer.from(await buildStaffViewWorkbook(exportRows).xlsx.writeBuffer());
+      const buffer = Buffer.from(await buildStaffViewWorkbook(exportRows, columns).xlsx.writeBuffer());
 
       const section = typeof req.query.section === 'string' && req.query.section ? req.query.section : 'all';
       const today = resolveMonthRange().today;
@@ -395,7 +418,8 @@ export const employeesStaffController = {
             period,
             sort: sort.key,
             dir: sort.dir,
-            object_source: objects.source,
+            columns,
+            object_source: objects?.source ?? null,
             column_filters: countActiveColumnFilters(columnFilters.filters) > 0 ? columnFilters.filters : null,
           },
         });

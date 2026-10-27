@@ -3,10 +3,10 @@ import type { StaffSortKey } from '../services/employeeService';
 /** Что поменялось в строке «Текущих сотрудников» после правки на странице. */
 export type StaffRowChange = 'comment' | 'department' | 'position' | 'schedule';
 
-/** Столбцы, чьё значение зависит от изменения («Признак» считается от отдела). */
+/** Столбцы, чьё значение зависит от изменения («Участок» и «Признак» считаются от отдела). */
 const COLUMNS_BY_CHANGE: Record<StaffRowChange, readonly StaffSortKey[]> = {
   comment: ['comment'],
-  department: ['department', 'sign'],
+  department: ['department', 'site', 'sign'],
   position: ['position'],
   schedule: ['schedule'],
 };

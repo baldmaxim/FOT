@@ -191,6 +191,69 @@ describe('GET /employees/export-view', () => {
     expect(h.logWithClient).not.toHaveBeenCalled();
   });
 
+  /** Связи начальников участка (индекс) — по подстроке SQL, строки выгрузки — всё остальное. */
+  const mockSiteAndRows = (exportRows: unknown[]) => {
+    h.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employee_department_access')) {
+        return [{ employee_id: 10, department_id: 'd-1', full_name: 'Журавлев Владимир Сергеевич', email: null }];
+      }
+      if (sql.includes('FROM user_employee_access')) return [];
+      return exportRows;
+    });
+  };
+
+  it('columns: участок между отделом и должностью, порядок экрана, повторы схлопнуты, объекты не считаются', async () => {
+    mockSiteAndRows([{ ...rows[0], site_name: '=Журавлев В. С.' }]);
+    const res = makeRes();
+    await employeesStaffController.exportView(makeReq({ columns: 'position, site,department,site' }), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    const exportCall = h.query.mock.calls.find(([sql]) => String(sql).includes('AS site_name')) as [string, unknown[]];
+    expect(exportCall[0]).toContain('s.id = employees.org_department_id');
+    expect(exportCall[1]).toContainEqual(['Журавлев В. С.']);
+    // Индекс грузится один раз на запрос.
+    expect(h.query.mock.calls.filter(([sql]) => String(sql).includes('FROM employee_department_access'))).toHaveLength(1);
+    expect(h.loadMainObjects).not.toHaveBeenCalled();
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
+    const ws = workbook.worksheets[0];
+    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Должность', 'Признак']);
+    expect(ws.getRow(2).getCell(4).value).toBe("'=Журавлев В. С.");
+    expect(h.logWithClient.mock.calls[0][4].details.columns).toEqual(['department', 'site', 'position']);
+  });
+
+  it('columns= (пусто) — только №, ФИО, Признак; без участка индекс не грузится', async () => {
+    mockSiteAndRows(rows);
+    const res = makeRes();
+    await employeesStaffController.exportView(makeReq({ columns: '' }), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('FROM employee_department_access'))).toBe(false);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
+    expect((workbook.worksheets[0].getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Признак']);
+    expect(h.logWithClient.mock.calls[0][4].details.columns).toEqual([]);
+  });
+
+  it('неверный columns — 400 INVALID_COLUMNS: неизвестный ключ, повтор параметра, длина', async () => {
+    for (const columns of ['site,sign', 'cost_item', ['site', 'position'], 'site,'.repeat(50)]) {
+      const res = makeRes();
+      await employeesStaffController.exportView(makeReq({ columns }), res as unknown as Response);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'INVALID_COLUMNS' });
+    }
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('сортировка по участку — ключ из того же индекса, что и колонка', async () => {
+    mockSiteAndRows([{ ...rows[0], site_name: 'Журавлев В. С.' }]);
+    const res = makeRes();
+    await employeesStaffController.exportView(makeReq({ sort: 'site', columns: 'site' }), res as unknown as Response);
+    expect(res.statusCode).toBe(200);
+    expect(h.query.mock.calls.filter(([sql]) => String(sql).includes('FROM employee_department_access'))).toHaveLength(1);
+  });
+
   it('сортировка по объекту без снимка — 409 SORT_UNAVAILABLE', async () => {
     h.loadActiveSnapshotRun.mockResolvedValue(null);
     const res = makeRes();
@@ -262,6 +325,36 @@ describe('GET /employees/column-values', () => {
     await employeesStaffController.getColumnValues(makeReq({ column: 'main_object' }), res as unknown as Response);
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ code: 'FILTER_UNAVAILABLE' });
+  });
+});
+
+describe('GET /employees/column-values — участок', () => {
+  it('по отдельному начальнику: LATERAL по парам «отдел → начальник», без фильтра самого участка', async () => {
+    h.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employee_department_access')) {
+        return [
+          { employee_id: 10, department_id: 'd-1', full_name: 'Журавлев Владимир Сергеевич', email: null },
+          { employee_id: 11, department_id: 'd-1', full_name: 'Пудовкин Александр Александрович', email: null },
+        ];
+      }
+      if (sql.includes('FROM user_employee_access')) return [];
+      return [{ value: 'Журавлев В. С.', count: 7 }, { value: 'Пудовкин А. А.', count: 7 }, { value: null, count: 3 }];
+    });
+    const res = makeRes();
+    await employeesStaffController.getColumnValues(makeReq({
+      column: 'site',
+      cf: JSON.stringify({ values: { site: ['Журавлев В. С.'] } }),
+    }), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ data: { values: [{ value: 'Журавлев В. С.', count: 7 }, { value: 'Пудовкин А. А.', count: 7 }, { value: null, count: 3 }] } });
+    const [sql, params] = h.query.mock.calls.find(([text]) => String(text).includes('GROUP BY v.value')) as [string, unknown[]];
+    expect(sql).toContain('LEFT JOIN LATERAL');
+    expect(sql).toContain('SELECT site.label AS value FROM employees');
+    expect(params).toContainEqual(['d-1', 'd-1']);
+    expect(params).toContainEqual(['Журавлев В. С.', 'Пудовкин А. А.']);
+    // Собственный фильтр участка в фасетах не применяется.
+    expect(sql).not.toContain('employees.org_department_id = ANY(');
   });
 });
 

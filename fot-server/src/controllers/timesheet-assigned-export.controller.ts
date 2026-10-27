@@ -41,6 +41,7 @@ import {
 } from '../services/timesheet-scope.service.js';
 import { buildUnified1CBuffer, parseStrictExportPeriod } from '../services/timesheet-unified-export.service.js';
 import { departmentManagerConditionSql } from '../services/department-managers.service.js';
+import { loadSiteSupervisorLinks } from '../services/site-supervisor-links.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -85,79 +86,9 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     }
   }
 
-  // 1) Назначения отделов через employee_department_access.
-  // Только пользователи с ролью site_supervisor («Начальник участка»)
-  // попадают в выгрузку.
-  const edaWhere: string[] = [
-    // Начальник участка — это full-назначение: заместитель (миграция 283) в выгрузку
-    // и в exempt-список 1С попадать не должен.
-    departmentManagerConditionSql('eda'),
-    `e.employment_status = 'active'`,
-    `e.is_archived = false`,
-    `e.excluded_from_timesheet = false`,
-    `od.is_active = true`,
-    `sr.code = 'site_supervisor'`,
-  ];
-  const edaParams: unknown[] = [];
-  if (managedIds) {
-    edaParams.push(managedIds);
-    edaWhere.push(`eda.department_id = ANY($${edaParams.length}::uuid[])`);
-  }
-
-  const edaRows = await query<{
-    employee_id: number;
-    department_id: string;
-    full_name: string | null;
-    email: string | null;
-  }>(
-    `SELECT eda.employee_id,
-            eda.department_id,
-            e.full_name,
-            e.email
-       FROM employee_department_access eda
-       INNER JOIN employees e ON e.id = eda.employee_id
-       INNER JOIN org_departments od ON od.id = eda.department_id
-       INNER JOIN user_profiles up ON up.employee_id = e.id
-       INNER JOIN system_roles sr ON sr.id = up.system_role_id
-      WHERE ${edaWhere.join(' AND ')}`,
-    edaParams,
-  );
-
-  // 2) Прямые назначения сотрудников через user_employee_access (миграция 090).
-  // leader = user_profile.employee_id, подчинённый = uea.employee_id.
-  // Department-scope: подчинённый должен попадать по primary org_department_id.
-  const ueaWhere: string[] = [
-    'uea.is_active = true',
-    `sr.code = 'site_supervisor'`,
-    `leader.employment_status = 'active'`,
-    `leader.is_archived = false`,
-    `direct.employment_status = 'active'`,
-    `direct.is_archived = false`,
-    `direct.excluded_from_timesheet = false`,
-  ];
-  const ueaParams: unknown[] = [];
-  if (managedIds) {
-    ueaParams.push(managedIds);
-    ueaWhere.push(`direct.org_department_id = ANY($${ueaParams.length}::uuid[])`);
-  }
-
-  const ueaRows = await query<{
-    leader_employee_id: number;
-    direct_employee_id: number;
-    leader_full_name: string | null;
-    leader_email: string | null;
-  }>(
-    `SELECT leader.id   AS leader_employee_id,
-            direct.id   AS direct_employee_id,
-            leader.full_name AS leader_full_name,
-            leader.email     AS leader_email
-       FROM user_employee_access uea
-       INNER JOIN user_profiles up ON up.id = uea.user_id
-       INNER JOIN system_roles sr ON sr.id = up.system_role_id
-       INNER JOIN employees leader ON leader.id = up.employee_id
-       INNER JOIN employees direct ON direct.id = uea.employee_id
-      WHERE ${ueaWhere.join(' AND ')}`,
-    ueaParams,
+  // Связи начальников участка — общий источник со столбцом «Участок» «Управления кадрами».
+  const { departmentLinks: edaRows, directLinks: ueaRows } = await loadSiteSupervisorLinks(
+    managedIds ? { departmentIds: managedIds } : {},
   );
 
   type Entry = {

@@ -10,6 +10,7 @@ import { query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, reconcileFiredEmployeesArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { STAFF_COMMENT_LIST_COLUMNS_SQL } from '../services/employee-staff-comment.service.js';
+import { createStaffSqlContext, type IStaffSqlContext } from '../services/staff-site.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   KEYSET_NAME_SQL,
@@ -103,11 +104,13 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   }
 
   const { whereParts, params, showArchived } = filter;
+  // Один индекс участков на запрос: фильтр, сортировка и ячейка — по одному состоянию назначений.
+  const ctx = createStaffSqlContext();
   const statusSql = statusConditionSql(status);
   if (statusSql) whereParts.push(statusSql);
   if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
   try {
-    await appendColumnFilters(whereParts, params, columnFiltersParsed.filters);
+    await appendColumnFilters(whereParts, params, columnFiltersParsed.filters, { ctx });
     // Последним из условий: опечатка допускается, только если точных нет во всём наборе (все порции).
     await appendStaffFioSearch(whereParts, params, filter.search);
   } catch (error) {
@@ -121,7 +124,7 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   const selectCols = isStaffView ? STAFF_COLUMNS : LIST_COLUMNS;
 
   if (sort) {
-    await respondSortedKeysetPage(req, res, { t0, selectCols, whereParts, params, pageSize, sort, after: sortedAfter, showArchived });
+    await respondSortedKeysetPage(req, res, { t0, selectCols, whereParts, params, pageSize, sort, after: sortedAfter, showArchived, ctx });
     return;
   }
 
@@ -131,7 +134,7 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
     : `ORDER BY ${KEYSET_NAME_SQL} ASC, id ASC`;
 
   if (legacyKeyset) {
-    await respondKeysetPage(req, res, { t0, selectCols, whereParts, params, orderSql, pageSize, keyset: legacyKeyset, showArchived });
+    await respondKeysetPage(req, res, { t0, selectCols, whereParts, params, orderSql, pageSize, keyset: legacyKeyset, showArchived, ctx });
     return;
   }
 
@@ -166,7 +169,7 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
     return;
   }
 
-  const employees = await mapEmployeeRows(data, isStaffView);
+  const employees = await mapEmployeeRows(data, isStaffView, ctx);
   const total = data.length > 0 ? Number(data[0].total_count) : (emptyPageTotal ?? 0);
 
   auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
@@ -190,6 +193,7 @@ interface ISortedPageInput {
   sort: IStaffSort;
   after: IStaffSortCursor | null;
   showArchived: boolean;
+  ctx: IStaffSqlContext;
 }
 
 /**
@@ -197,14 +201,14 @@ interface ISortedPageInput {
  * условие курсора — во внешнем по одной колонке sort_key. total — count без курсора.
  */
 async function respondSortedKeysetPage(req: AuthenticatedRequest, res: Response, input: ISortedPageInput): Promise<void> {
-  const { t0, selectCols, whereParts, params, pageSize, sort, after, showArchived } = input;
+  const { t0, selectCols, whereParts, params, pageSize, sort, after, showArchived, ctx } = input;
   const filterParams = [...params];
   const filterWhere = whereParts.join(' AND ');
 
   const pageParams = [...params];
   let sortKeySql: string;
   try {
-    sortKeySql = await buildStaffSortKeySql(sort.key, pageParams);
+    sortKeySql = await buildStaffSortKeySql(sort.key, pageParams, ctx);
   } catch (err) {
     if (err instanceof StaffSortUnavailableError) {
       res.status(409).json({ success: false, error: err.message, code: 'SORT_UNAVAILABLE' });
@@ -259,6 +263,7 @@ async function respondSortedKeysetPage(req: AuthenticatedRequest, res: Response,
   const employees = await mapEmployeeRows(
     kept.map(({ sort_key: _sortKey, ...row }) => row),
     req.query.view === 'staff',
+    ctx,
   );
 
   auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {

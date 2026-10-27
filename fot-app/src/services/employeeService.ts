@@ -1,5 +1,6 @@
 import { apiClient } from '../api/client';
 import type { Employee, EmployeeInput, EmployeeHistoryEvent } from '../types';
+import type { StaffTableColumn } from '../utils/staffColumns';
 
 interface ApiResponse<T> {
   data: T;
@@ -33,7 +34,7 @@ export interface PaginatedParams {
 }
 
 export type StaffSortKey =
-  | 'name' | 'department' | 'position' | 'hire_date' | 'birth_date' | 'schedule' | 'main_object' | 'comment' | 'sign';
+  | 'name' | 'department' | 'site' | 'position' | 'hire_date' | 'birth_date' | 'schedule' | 'main_object' | 'comment' | 'sign';
 export type StaffSortDir = 'asc' | 'desc';
 export type StaffPeriod = 'hired_month' | 'fired_month';
 
@@ -56,6 +57,8 @@ export interface IStaffViewParams {
   sort?: StaffSortKey;
   dir?: StaffSortDir;
   cf?: string;
+  /** Только выгрузка: видимые столбцы; [] — только «№», «ФИО», «Признак»; не задан — прежний набор. */
+  columns?: readonly StaffTableColumn[];
 }
 
 export interface IStaffColumnValue {
@@ -91,7 +94,7 @@ export interface IStaffCommentCurrent {
   updated_by_name: string | null;
 }
 
-const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewParams): void => {
+export const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewParams): void => {
   if (params.search) qs.set('search', params.search);
   if (params.departmentId) qs.set('department_id', params.departmentId);
   if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
@@ -101,6 +104,8 @@ const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewParams): v
   if (params.sort) qs.set('sort', params.sort);
   if (params.dir) qs.set('dir', params.dir);
   if (params.cf) qs.set('cf', params.cf);
+  // Пустой список — тоже значение (columns=): сервер выгрузит только фиксированные столбцы.
+  if (params.columns !== undefined) qs.set('columns', params.columns.join(','));
 };
 
 export interface PaginatedMeta {
