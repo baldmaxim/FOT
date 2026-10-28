@@ -241,6 +241,18 @@ export const getDayNormHoursForDay = (
   return Math.max(0, base - minus);
 };
 
+/**
+ * Часы по умолчанию в окне корректировки дня: рабочий день — норма дня (предпраздничный −1, иначе «8» 11.06.2026
+ * подставлялась при норме 7); выходной — часы графика, как для выхода.
+ */
+export const getCorrectionDefaultHoursForDay = (
+  sched: IResolvedSchedule | undefined,
+  calendar: IProductionCalendarMonth | null,
+  year: number,
+  month: number,
+  day: number,
+): number => getDayNormHoursForDay(sched, calendar, year, month, day) || getWorkHoursForDay(sched, year, month, day);
+
 export const getEffectiveLateThresholdForDay = (
   sched: IResolvedSchedule | undefined,
   year: number,

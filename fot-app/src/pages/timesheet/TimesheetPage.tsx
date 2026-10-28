@@ -54,6 +54,7 @@ import {
 } from '../../hooks/useTimesheetApprovalData';
 import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
+  getCorrectionDefaultHoursForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
   getWorkHoursForDay,
@@ -1474,12 +1475,14 @@ export const TimesheetPage: FC = () => {
       if (v > 0) return v;
       return modalObjectEntry?.base_hours_worked ?? 0;
     }
-    const v = selectVisibleHours(modalEntry ?? null, showActualHours);
+    // Авто-удалёнка несёт часы графика без предпраздничного −1 (бэк) — подставляем норму дня, как в пустой день.
+    const autoRemote = modalEntry?.status === 'remote' && !modalEntry.is_correction;
+    const v = autoRemote ? null : selectVisibleHours(modalEntry ?? null, showActualHours);
     if (v != null) return v;
     if (!modalEmployee) return 8;
     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
-    return getWorkHoursForDay(sched, year, month, modalDay);
-  }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, year, month, modalDay, showActualHours]);
+    return getCorrectionDefaultHoursForDay(sched, calendar, year, month, modalDay);
+  }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, calendar, year, month, modalDay, showActualHours]);
 
   // Корректировки могут превышать длительность смены по графику — лимит снят.
   const modalMaxHours = null;
@@ -3086,9 +3089,9 @@ export const TimesheetPage: FC = () => {
             // объектный список (иначе единственный путь правки упирается в запрет).
             disableObjectEntries={objectEntriesDisabled}
             plannedHours={modalEmployee
-              ? getWorkHoursForDay(
+              ? getCorrectionDefaultHoursForDay(
                   getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),
-                  year, month, modalDay,
+                  calendar, year, month, modalDay,
                 )
               : null}
             hasDayLevelCorrection={Boolean(
@@ -3105,9 +3108,9 @@ export const TimesheetPage: FC = () => {
               && !isDayLocked(modalEmployee?.id, modalWorkDate)
             }
             remoteDefaultHours={modalEmployee
-              ? (getWorkHoursForDay(
+              ? (getCorrectionDefaultHoursForDay(
                   getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),
-                  year, month, modalDay,
+                  calendar, year, month, modalDay,
                 ) || 8)
               : 8}
             onAddRemote={handleAddRemoteOverWork}

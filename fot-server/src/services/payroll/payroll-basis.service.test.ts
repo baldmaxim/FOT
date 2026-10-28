@@ -164,12 +164,15 @@ describe('основа расчёта: дни месяца', () => {
     expect(result.overtimeMinutes).toEqual({ '2026-09-11': 60 });
   });
 
-  it('предпраздничный день — порог 7 ч; смена длиннее 8 ч — порог её норма', () => {
+  it('предпраздничный день — порог тоже 8 ч (правка «8» — полный день); смена длиннее 8 ч — порог её норма', () => {
     const calendar: IProductionCalendarMonth = {
       year: 2026, month: 9, norm_days: 22, norm_hours: 175, holidays: [], mandatory_holidays: [],
-      pre_holidays: ['2026-09-30'],
+      pre_holidays: ['2026-09-29', '2026-09-30'],
     };
-    expect(classify({ '2026-09-30': day('work', 8, true) }, { calendar }).overtimeMinutes)
+    expect(classify({ '2026-09-29': day('work', 8, true), '2026-09-30': day('manual', 9, true) }, { calendar }).overtimeMinutes)
+      .toEqual({ '2026-09-30': 60 });
+    // «УУ 8» в предпраздничный (11.06.2026: «Полная удаленка», форма подставила 8) — не переработка.
+    expect(classify({ '2026-09-29': day('remote', 8, true), '2026-09-30': day('remote', 9, true) }, { calendar }).overtimeMinutes)
       .toEqual({ '2026-09-30': 60 });
 
     const longShift: IResolvedSchedule = { ...fiveTwo, work_hours: 11 };
