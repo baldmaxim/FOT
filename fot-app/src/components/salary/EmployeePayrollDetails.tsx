@@ -31,7 +31,7 @@ type CardTab = 'terms' | 'history';
 
 const CARD_TABS: ReadonlyArray<{ key: CardTab; label: string }> = [
   { key: 'terms', label: 'Условия' },
-  { key: 'history', label: 'История выплат' },
+  { key: 'history', label: 'Зарплата' },
 ];
 
 interface IEmployeePayrollDetailsProps {
