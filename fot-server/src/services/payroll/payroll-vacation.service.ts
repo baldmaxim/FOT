@@ -13,13 +13,18 @@
  *
  * Остаток (getVacationBalance) — от остатка 1С на дату (payroll_vacation_balances, миграция 323):
  * история до неё — из 1С, табель ФОТ за прошлые периоды неполный. Дальше, как в 1С:
- *  - +2,33 дн. за месяц (не 28/12: остатки 1С на 30.09.2026 кратны 2,33). Месяцы от даты остатка —
- *    календарные, засчитываются по окончании; неполный месяц (≥ 15 дней) — только в месяце увольнения;
- *  - принятый после последней выгрузки 1С — с нуля от даты приёма, месяцы рабочего года, остаток
- *    ≥ 15 дней — целый месяц (Правила об очередных и дополнительных отпусках, п. 35);
+ *  - +2,33 дн. за месяц (не 28/12: остатки 1С на 30.09.2026 кратны 2,33, 12 мес. = 27,96). Календарный месяц
+ *    засчитывается целиком с первого дня счёта в нём — так 1С начислила месяц приёма (принятой 28.09 на 30.09 —
+ *    2,33). Сверка с выгрузкой 30.09 по 76 принятым за год: правило объясняет 55, «от 15 дней» — 28, остальные —
+ *    другая дата приёма в 1С. Месяц даты остатка 1С уже начислила — счёт со следующего;
+ *  - месяц увольнения — только от 15 дней (Правила об очередных и дополнительных отпусках, п. 35);
+ *  - принятый после последней выгрузки 1С — с нуля с месяца приёма;
  *  - «без сохранения» сверх 14 дней за год от начала отсчёта не входит в стаж (ст. 121 ТК) и
  *    сдвигает конец начисления;
  *  - отгулено — ежегодный отпуск после даты остатка по сегодня, без праздников ст. 112.
+ * Приближения: ст. 121 — от даты остатка, а не по рабочему году (дней без содержания до выгрузки ФОТ не знает);
+ * новые — от hire_date ФОТ, у части людей она не совпадает с 1С. Остаток справочный: компенсацию при увольнении
+ * ФОТ не считает, следующая выгрузка 1С его заменяет.
  * Принятый раньше выгрузки, но без строки 1С, остатка не получает: его не с чего считать.
  */
 import { query, queryOne } from '../../config/postgres.js';
@@ -223,7 +228,7 @@ export const getVacationHistory = async (employeeId: number): Promise<IVacationP
 
 /** Начисление за месяц, сотые дня: ровно 2,33, как в 1С (остатки на 30.09.2026 кратны 2,33, а не 28/12). */
 export const VACATION_ACCRUAL_PER_MONTH_HUNDREDTHS = 233;
-/** Неполный месяц от 15 дней — целый месяц (Правила об очередных и дополнительных отпусках, п. 35). */
+/** Месяц увольнения засчитывается от 15 дней (Правила об очередных и дополнительных отпусках, п. 35). */
 export const HALF_MONTH_DAYS = 15;
 /** «Без сохранения» до 14 дней за год входит в стаж для отпуска (ст. 121 ТК), сверх — нет. */
 export const UNPAID_FREE_DAYS_PER_YEAR = 14;
@@ -239,25 +244,27 @@ const fromDayNumber = (dayNumber: number): string => new Date(dayNumber * MS_PER
 
 export const addDaysIso = (iso: string, days: number): string => fromDayNumber(toDayNumber(iso) + days);
 
-/** Та же дата через months месяцев; нет такого числа — последний день месяца (ст. 14 ТК). */
-const addMonthsIso = (iso: string, months: number): string => {
-  const [year, month, day] = iso.split('-').map(Number);
-  const first = new Date(Date.UTC(year, month - 1 + months, 1));
-  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
-  return fromDayNumber(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, lastDay)) / MS_PER_DAY);
+/** Сквозной номер месяца: год × 12 + месяц − 1. */
+const monthNumber = (iso: string): number => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1;
+
+/** 1-е число месяца, следующего за месяцем даты. */
+const firstOfNextMonth = (iso: string): string => {
+  const next = monthNumber(iso) + 1;
+  return `${Math.floor(next / 12)}-${String((next % 12) + 1).padStart(2, '0')}-01`;
 };
 
 /**
- * Сколько месяцев начисления с start по until включительно: месяц k — [start + (k−1) мес., start + k мес.).
- * countHalfRemainder — неполный хвост от 15 дней считается целым месяцем.
+ * Сколько месяцев начисления с accrualFrom по until включительно: календарный месяц, где есть хоть один день
+ * счёта, засчитывается целиком с первого такого дня. dismissed — until это день увольнения: его месяц засчитывается
+ * только от 15 дней счёта в нём.
  */
-export const countAccrualMonths = (start: string, until: string, countHalfRemainder: boolean): number => {
-  if (until < start) return 0;
-  const afterUntil = addDaysIso(until, 1);
-  let months = 0;
-  while (addMonthsIso(start, months + 1) <= afterUntil) months += 1;
-  const remainderDays = toDayNumber(until) - toDayNumber(addMonthsIso(start, months)) + 1;
-  return countHalfRemainder && remainderDays >= HALF_MONTH_DAYS ? months + 1 : months;
+export const countAccrualMonths = (accrualFrom: string, until: string, dismissed: boolean): number => {
+  if (until < accrualFrom) return 0;
+  const months = monthNumber(until) - monthNumber(accrualFrom) + 1;
+  if (!dismissed) return months;
+  const monthStart = `${until.slice(0, 8)}01`;
+  const tailDays = toDayNumber(until) - toDayNumber(accrualFrom > monthStart ? accrualFrom : monthStart) + 1;
+  return tailDays >= HALF_MONTH_DAYS ? months : months - 1;
 };
 
 /** Сотые дня → «7.21» / «-11.71». */
@@ -278,8 +285,10 @@ interface IBalanceStart {
   source: IVacationBalance['source'];
   as_of: string;
   opening_days: string;
-  /** Первый день счёта начисления и отгулянного. */
+  /** Первый день счёта отгулянного и «без сохранения». */
   start: string;
+  /** Первый день начисления: у остатка 1С — 1-е число месяца после as_of (его месяц 1С уже начислила). */
+  accrual_from: string;
 }
 
 /**
@@ -290,11 +299,11 @@ export const resolveBalanceStart = (row: IBalanceStartRow): IBalanceStart | null
   if (row.opening_as_of && row.opening_days !== null) {
     return {
       source: '1c', as_of: row.opening_as_of, opening_days: row.opening_days,
-      start: addDaysIso(row.opening_as_of, 1),
+      start: addDaysIso(row.opening_as_of, 1), accrual_from: firstOfNextMonth(row.opening_as_of),
     };
   }
   if (row.hire_date && row.last_as_of && row.hire_date > row.last_as_of) {
-    return { source: 'hire', as_of: row.hire_date, opening_days: '0.00', start: row.hire_date };
+    return { source: 'hire', as_of: row.hire_date, opening_days: '0.00', start: row.hire_date, accrual_from: row.hire_date };
   }
   return null;
 };
@@ -312,11 +321,8 @@ export const calcVacationBalance = (
 ): IVacationBalance => {
   const dismissed = dismissalDate !== null && dismissalDate <= today;
   const until = dismissed ? dismissalDate : today;
-  // Хвост месяца от 15 дней — у нового сотрудника всегда (как у 1С на дату), у остатка 1С — только при
-  // увольнении: месяцы от 1-го числа, текущий засчитывается по окончании.
-  const countHalfRemainder = startInfo.source === 'hire' || dismissed;
   const accrualUntil = addDaysIso(until, -unpaidExcessDays);
-  const months = countAccrualMonths(startInfo.start, accrualUntil, countHalfRemainder);
+  const months = countAccrualMonths(startInfo.accrual_from, accrualUntil, dismissed);
   const accrued = months * VACATION_ACCRUAL_PER_MONTH_HUNDREDTHS;
   const opening = Math.round(Number(startInfo.opening_days) * 100);
   return {

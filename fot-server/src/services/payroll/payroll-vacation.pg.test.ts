@@ -229,20 +229,22 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
     expect(summary.planned_days).toBe(9);
   });
 
-  it('остаток: 1С на 30.09 минус отпуск после 30.09, месяц начисляется по окончании', async () => {
+  it('остаток: 1С на 30.09 минус отпуск после 30.09, месяц начисляется с 1-го числа', async () => {
     expect(await getVacationBalance(3, '2026-10-21')).toEqual({
       source: '1c', as_of: '2026-09-30', opening_days: '6.95', until: '2026-10-21',
-      accrued_months: 0, accrued_days: '0.00', used_days: 9, unpaid_excess_days: 0, current_days: '-2.05',
+      accrued_months: 1, accrued_days: '2.33', used_days: 9, unpaid_excess_days: 0, current_days: '0.28',
     });
-    expect((await getVacationBalance(3, '2026-10-31'))?.current_days).toBe('0.28');
+    expect((await getVacationBalance(3, '2026-11-01'))?.current_days).toBe('2.61');
   });
 
   it('остаток нового сотрудника — с даты приёма, «без сохранения» сверх 14 дней сдвигает начисление', async () => {
-    // Принят 15.10 (после выгрузки 30.09). К 31.12 без ст. 121 было бы 3 мес. (хвост 17 дней), 6 дней сверх 14 — 2.
+    // Принят 15.10 (после выгрузки 30.09), 20 дней без сохранения в ноябре — 6 сверх 14. К 31.12 конец сдвинут
+    // на 25.12 — все 3 месяца; к 03.12 — на 27.11, декабрь не засчитан.
     expect(await getVacationBalance(4, '2026-12-31')).toEqual({
       source: 'hire', as_of: '2026-10-15', opening_days: '0.00', until: '2026-12-31',
-      accrued_months: 2, accrued_days: '4.66', used_days: 0, unpaid_excess_days: 6, current_days: '4.66',
+      accrued_months: 3, accrued_days: '6.99', used_days: 0, unpaid_excess_days: 6, current_days: '6.99',
     });
+    expect(await getVacationBalance(4, '2026-12-03')).toMatchObject({ accrued_months: 2, current_days: '4.66' });
   });
 
   it('принятый до выгрузки без строки 1С — остатка нет', async () => {
