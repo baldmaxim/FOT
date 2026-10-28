@@ -14,9 +14,7 @@ import { performance } from 'node:perf_hooks';
 import {
   CALC_COLUMNS_MAX_MONTHS,
   calcColumnsServerTiming,
-  cardPayoutKind,
   emptyCalcColumnsTiming,
-  classifyCardPayouts,
   getCalcColumns,
   pickRateAsOf,
   sumCalcColumns,
@@ -276,25 +274,5 @@ describe('замер расчёта столбцов', () => {
     );
     now.mockRestore();
     log.mockRestore();
-  });
-});
-
-describe('«Выплаты на карту»', () => {
-  it('вид по способу выплаты: регистр и пробелы не важны, «Увольнения» и неизвестное — ЗП', () => {
-    expect(cardPayoutKind('  АВАНС ')).toBe('advance');
-    expect(cardPayoutKind('Премии')).toBe('premium');
-    expect(cardPayoutKind('Зарплата')).toBe('salary');
-    expect(cardPayoutKind('Увольнения')).toBe('salary');
-    expect(cardPayoutKind('Межрасчётная выплата')).toBe('salary');
-  });
-
-  it('несколько способов одного вида складываются; ведомостей нет — null', () => {
-    expect(classifyCardPayouts([
-      { method: 'Аванс', amount: '80000.00' },
-      { method: 'Зарплата', amount: '150000.10' },
-      { method: 'Увольнения', amount: '22730.00' },
-    ])).toEqual({ advance: '80000.00', salary: '172730.10', premium: null });
-    expect(classifyCardPayouts(null)).toBeNull();
-    expect(classifyCardPayouts([])).toBeNull();
   });
 });

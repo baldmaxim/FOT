@@ -1,14 +1,14 @@
 /**
  * Столбцы состава зарплаты на «Расчётах» (решение пользователя 27.10.2026): что показать в ячейке и какие столбцы
  * пусты в выборке. ФОТ — расчёт по закрытому табелю (сервер, payroll-calc-columns.service): «Начислено по табелю»,
- * проезд, проживание, доплаты, удержания; из 1С — отпускные, больничные, перерасчёт и ведомости в банк.
+ * проезд, проживание, доплаты, удержания; из 1С — отпускные, больничные, перерасчёт и ведомости выплаты по способам.
  * Незакрытый или неполный месяц не превращается в ноль: строка помечается во всех столбцах ФОТ. Незакрытый табель
  * сервер считает предварительно по живому табелю (calc.preliminary, решение 28.10.2026): суммы показываются, под
  * «Начислено по табелю» — «табель не закрыт».
  */
 import type {
   IPayrollCalcColumns,
-  IPayrollCardPayouts,
+  IPayrollCardPayoutByMethod,
   IPayrollTermsRow,
   PayrollCalcColumnsIssue,
 } from '../services/payrollService';
@@ -54,7 +54,7 @@ export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, stri
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
   calc_net: 'К выплате по расчёту ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю + переработка '
     + '+ проезд + проживание + доплаты − удержания (ФОТ)',
-  card_payouts: 'Из 1С: ведомости в банк по месяцу начисления',
+  card_payouts: 'Из 1С: ведомости выплаты по месяцу начисления, по видам выплаты',
 };
 
 const present = (value: string | null | undefined): value is string => value !== null && value !== undefined;
@@ -141,23 +141,52 @@ export const housingKindsLabel = (calc: IPayrollCalcColumns | null | undefined):
   return calc.housing_kinds.map(kind => (kind === 'apartment' ? 'квартира' : 'общежитие')).join(', ');
 };
 
-const CARD_PAYOUT_LABELS: ReadonlyArray<[keyof IPayrollCardPayouts, string]> = [
-  ['advance', 'Аванс'],
-  ['salary', 'ЗП'],
-  ['premium', 'Премия'],
+/** Способы выплаты ведомостей 1С по порядку ячейки и их подписи; незнакомые — следом по алфавиту, названием 1С. */
+const CARD_PAYOUT_METHODS: ReadonlyArray<[string, string]> = [
+  ['Аванс', 'Аванс'],
+  ['Зарплата за месяц', 'Зарплата'],
+  ['Премии', 'Премии'],
+  ['Отпуска', 'Отпуска'],
+  ['Увольнения', 'Увольнения'],
+  ['Больничные листы', 'Больничные'],
+  ['Вознаграждение сотрудникам по договорам ГПХ', 'ГПХ'],
+  ['Материальная помощь', 'Мат. помощь'],
+  ['Разовые начисления', 'Разовые'],
 ];
+const CARD_PAYOUT_ORDER = new Map(CARD_PAYOUT_METHODS.map(([method, label], index) => [method, { label, index }]));
 
-/** Строки ячейки «Выплаты на карту» — только виды с суммой, по порядку: аванс, ЗП, премия. */
+/** Строка ячейки «Выплаты на карту»: method — исходный способ 1С (ключ строки), label — подпись. */
+export interface ICardPayoutLine {
+  method: string;
+  label: string;
+  amount: string;
+}
+
+/**
+ * Строки ячейки «Выплаты на карту» — каждый способ выплаты 1С с суммой, известные по порядку CARD_PAYOUT_METHODS.
+ * Не массив (старый бэкенд) — пусто.
+ */
 export const cardPayoutLines = (
-  payouts: IPayrollCardPayouts | null | undefined,
-): Array<{ label: string; amount: string }> => (
-  payouts
-    ? CARD_PAYOUT_LABELS.flatMap(([key, label]) => {
-      const amount = payouts[key];
-      return present(amount) ? [{ label, amount }] : [];
-    })
-    : []
-);
+  payouts: readonly IPayrollCardPayoutByMethod[] | null | undefined,
+): ICardPayoutLine[] => {
+  if (!Array.isArray(payouts)) return [];
+  const rank = (method: string): number => CARD_PAYOUT_ORDER.get(method)?.index ?? CARD_PAYOUT_METHODS.length;
+  return payouts
+    .filter(payout => present(payout.amount))
+    .map(payout => ({
+      method: payout.method,
+      label: CARD_PAYOUT_ORDER.get(payout.method)?.label ?? payout.method,
+      amount: payout.amount,
+    }))
+    .sort((a, b) => rank(a.method) - rank(b.method) || a.method.localeCompare(b.method, 'ru'));
+};
+
+/** «Итого» ячейки «Выплаты на карту» — в копейках, NUMERIC строкой; при одном виде и меньше — null. */
+export const cardPayoutsTotal = (lines: readonly ICardPayoutLine[]): string | null => {
+  if (lines.length < 2) return null;
+  const cents = lines.reduce((sum, line) => sum + Math.round(Number(line.amount) * 100), 0);
+  return (cents / 100).toFixed(2);
+};
 
 /** Ставка «Оклада»: оклад — с копейками, почасовая — до 4 знаков и «₽/ч». */
 export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
@@ -186,7 +215,7 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
     case 'paid_vacation': return present(row.paid_vacation);
     case 'paid_sick': return present(row.paid_sick_leave);
     case 'paid_recalc': return present(row.paid_recalc_prev);
-    case 'card_payouts': return cardPayoutLines(row.card_payouts).length > 0;
+    case 'card_payouts': return cardPayoutLines(row.card_payouts_by_method).length > 0;
     default: return isCalcSumColumn(column) && present(calcSumAmount(row, column));
   }
 };

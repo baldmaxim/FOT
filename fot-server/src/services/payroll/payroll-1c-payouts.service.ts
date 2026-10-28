@@ -161,6 +161,28 @@ const loadStored = async (run: Runner, guid: string, forUpdate: boolean) => {
   return { doc: { ...doc, id: Number(doc.id), revision: Number(doc.revision) }, lines };
 };
 
+/**
+ * Ключ advisory lock ведомости по номеру и дате. Та же ведомость бывает загружена под другим ГУИДом — из регистра
+ * выплат ЗУП (build-payouts-register-sql.ts, ГУИД синтетический): загрузка и генерированный SQL берут этот lock,
+ * чтобы проверка дубля ниже не разошлась с параллельной вставкой.
+ */
+export const payoutNumberLockKey = (docNumber: string, docDate: string): string => (
+  `payroll_1c_payout_no:${docNumber}|${docDate}`
+);
+
+/** Ведомость с тем же номером и датой уже загружена под другим ГУИДом — второй раз её не грузим (409). */
+const assertNotLoadedUnderOtherGuid = async (run: Runner, doc: IPayout1cDocument): Promise<void> => {
+  const [other] = await run<{ id: string }>(
+    `SELECT id FROM payroll_1c_payout_documents
+      WHERE doc_number = $1 AND doc_date = $2::date AND doc_guid <> $3::uuid LIMIT 1`,
+    [doc.docNumber, doc.docDate, doc.guid],
+  );
+  if (other) {
+    const date = doc.docDate.split('-').reverse().join('.');
+    throw new Payout1cImportError(`Ведомость № ${doc.docNumber} от ${date} уже загружена — повторно не загружается`, 409);
+  }
+};
+
 /** Что дополнит загрузка того же содержимого: пустые поля шапки и строк. */
 const enrichFields = (doc: IPayout1cDocument, stored: IStoredDocument, lines: readonly IStoredLine[]): string[] => {
   const fields: string[] = [];
@@ -210,6 +232,7 @@ const describeChanges = (doc: IPayout1cDocument, stored: IStoredDocument, lines:
 /** Предпросмотр файла — только чтение. */
 export const previewPayouts1c = async (buffer: Buffer): Promise<IPayoutPreview> => {
   const doc = parseFile(buffer);
+  await assertNotLoadedUnderOtherGuid(viaPool, doc);
   const [stored, matches] = await Promise.all([loadStored(viaPool, doc.guid, false), matchPayoutLines(doc)]);
   const sameContent = stored !== null && stored.doc.content_hash === doc.contentHash
     && idAllConflicts(doc, stored.lines).length === 0;
@@ -330,6 +353,8 @@ export const importPayouts1c = async (input: IPayoutImportInput): Promise<IPayou
   return withTransaction(async client => {
     const run = viaClient(client);
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`payroll_1c_payout:${doc.guid}`]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [payoutNumberLockKey(doc.docNumber, doc.docDate)]);
+    await assertNotLoadedUnderOtherGuid(run, doc);
     const stored = await loadStored(run, doc.guid, true);
     const revision = stored?.doc.revision ?? 0;
     if (revision !== input.expectedRevision) {

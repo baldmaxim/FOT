@@ -400,7 +400,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       planned_supplement_amount: '20000.00', planned_supplement_from: '2023-02-01', planned_supplement_to: null,
     });
   });
-  it('«Расчёты»: отпускные, больничные, перерасчёт из 1С и выплаты на карту по видам — без удвоения', async () => {
+  it('«Расчёты»: отпускные, больничные, перерасчёт из 1С и выплаты на карту по способам выплаты — без удвоения', async () => {
     await pg.pool!.query(`
       INSERT INTO employees (id, full_name, employment_status) VALUES (5, 'Дмитриев Д.Д.', 'dismissed');
       INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
@@ -440,11 +440,17 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       paid_vacation: '40000.50',
       paid_sick_leave: '3000.00',
       paid_recalc_prev: '-1200.00',
-      // Две «Зарплаты» и «Увольнения» — ЗП; строка без сотрудника и ведомость августа не попадают.
-      card_payouts: { advance: '30000.00', salary: '76000.25', premium: null },
+      // Каждый способ выплаты отдельно, две «Зарплаты» — одной суммой; строка без сотрудника и ведомость августа
+      // не попадают.
+      card_payouts_by_method: [
+        { method: 'Аванс', amount: '30000.00' },
+        { method: 'Зарплата', amount: '75000.25' },
+        { method: 'Увольнения', amount: '1000.00' },
+      ],
     });
     expect(rows[2]).not.toHaveProperty('card_payouts_raw');
-    expect(rows[1]).toMatchObject({ paid_vacation: null, card_payouts: null });
+    expect(rows[2]).not.toHaveProperty('card_payouts');
+    expect(rows[1]).toMatchObject({ paid_vacation: null, card_payouts_by_method: null });
 
     // Месяцы ведомостей — только у штата в охвате: уволенный (октябрь) не даёт месяц.
     expect(await listPayouts1cMonths({ contractorRootId: null, departmentIds: null })).toEqual(['2026-08', '2026-09']);

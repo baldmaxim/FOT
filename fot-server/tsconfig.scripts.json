@@ -33,6 +33,8 @@
     "scripts/fix-worker-timesheet-objects-month.ts",
     "scripts/rebuild-versions-without-fired.ts",
     "scripts/apply-office-window-month.ts",
+    "scripts/build-payouts-register-sql.ts",
+    "scripts/lib/payouts-register-sql.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

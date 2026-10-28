@@ -66,10 +66,10 @@ interface IPerson { name: string; idAll: string | null; amount: string; brigade?
 const IVANOV: IPerson = { name: 'Иванов Иван Иванович', idAll: ID_A, amount: '43500', brigade: 'бр.Петрова П.П.' };
 const SIDOROV: IPerson = { name: 'Сидоров Сидор Сидорович', idAll: ID_B, amount: '31818,18', brigade: 'бр.Петров П.П.' };
 
-const zup2 = (guid: string, people: IPerson[], total: string): Buffer => Buffer.from(
+const zup2 = (guid: string, people: IPerson[], total: string, docNumber = '0000-000077'): Buffer => Buffer.from(
   '<?xml version="1.0" encoding="UTF-8"?><зп_документы_31><имя>ЗарплатаКВыплате_из_ЗУП_Предст_31_В_ЗУП_УПР</имя>'
   + '<ЗарплатаКВыплатеОрганизаций><документ><имя_док>ВедомостьНаВыплатуЗарплатыВБанк</имя_док>'
-  + `<организация_инн>7736255508</организация_инн><Док_Гуид>${guid}</Док_Гуид><Док_Номер>0000-000077</Док_Номер>`
+  + `<организация_инн>7736255508</организация_инн><Док_Гуид>${guid}</Док_Гуид><Док_Номер>${docNumber}</Док_Номер>`
   + '<Док_Дата><Год>2026</Год><Мес>10</Мес><День>9</День></Док_Дата>'
   + '<ПериодРегистрации><Год>2026</Год><Мес>9</Мес><День>1</День></ПериодРегистрации>'
   + `<ЗарплатныйПроект>Банк №1</ЗарплатныйПроект><СпособВыплаты>Увольнения</СпособВыплаты><СуммаПоДокументу>${total}</СуммаПоДокументу>`
@@ -79,11 +79,11 @@ const zup2 = (guid: string, people: IPerson[], total: string): Buffer => Buffer.
   'utf8',
 );
 
-const external = (guid: string, people: IPerson[], total: string): Buffer => Buffer.from(
+const external = (guid: string, people: IPerson[], total: string, docNumber = '0000-000077'): Buffer => Buffer.from(
   '<?xml version="1.0" encoding="UTF-8"?><ЗУП_ВЫПЛАТЫ><имя>ВыплатаЗПнаЛС</имя><Документы><Документ>'
   + `<док_гуид>${guid}</док_гуид><номер>00003123</номер><дата><Год>2026</Год><Мес>10</Мес><День>09</День></дата>`
   + `<сумма>${total}</сумма><периодо_регистрации><Год>2026</Год><Мес>09</Мес><День>01</День></периодо_регистрации>`
-  + '<НомерБазаИсточник>0000-000077</НомерБазаИсточник><ДатаБазаИсточник><Год>2026</Год><Мес>10</Мес><День>09</День></ДатаБазаИсточник>'
+  + `<НомерБазаИсточник>${docNumber}</НомерБазаИсточник><ДатаБазаИсточник><Год>2026</Год><Мес>10</Мес><День>09</День></ДатаБазаИсточник>`
   + '<СпособВыплаты>Увольнения</СпособВыплаты><фирма_представительская_инн>7736255508</фирма_представительская_инн>'
   + `<ЗарплатныйПроект></ЗарплатныйПроект><Сотрудники>${people.map(p => `<сотрудник><Сумма>${p.amount}</Сумма>`
     + `${p.idAll ? `<физ_лицо_id_all>${p.idAll}</физ_лицо_id_all>` : ''}<физ_лицо_имя>${p.name}</физ_лицо_имя>`
@@ -227,9 +227,10 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
   });
 
   it('другая ведомость с теми же людьми — авто по id_all из подтверждённых строк', async () => {
-    const preview = await previewPayouts1c(external(GUID_2, [IVANOV], '43500'));
+    const buffer = external(GUID_2, [IVANOV], '43500', '0000-000078');
+    const preview = await previewPayouts1c(buffer);
     expect(preview.lines[0].auto_employee_id).toBe(1);
-    expect(await doImport(external(GUID_2, [IVANOV], '43500'), preview)).toMatchObject({ action: 'new', lines_matched: 1 });
+    expect(await doImport(buffer, preview)).toMatchObject({ action: 'new', lines_matched: 1 });
     const doc = await docRow(GUID_2);
     expect((await lineRows(doc.id))[0]).toMatchObject({ employee_id: 1, resolution: 'auto_id_all' });
   });
@@ -264,7 +265,7 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
   });
 
   it('две параллельные загрузки нового документа — одна проходит, вторая 409', async () => {
-    const buffer = external(GUID_3, [IVANOV], '43500');
+    const buffer = external(GUID_3, [IVANOV], '43500', '0000-000079');
     const preview = await previewPayouts1c(buffer);
     const results = await Promise.allSettled([doImport(buffer, preview), doImport(buffer, preview)]);
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
@@ -277,7 +278,7 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     const ID_D = 'aaaaaaaa-0000-0000-0000-000000000004';
     await run(`INSERT INTO employee_hr_profiles VALUES (4, '${ID_C}'), (1, '${ID_D}'), (2, '${ID_D}')`);
     const people = [{ ...IVANOV, idAll: ID_C }, { ...SIDOROV, idAll: ID_D }];
-    const preview = await previewPayouts1c(external('11111111-2222-3333-4444-888888888888', people, TOTAL));
+    const preview = await previewPayouts1c(external('11111111-2222-3333-4444-888888888888', people, TOTAL, '0000-000080'));
     expect(preview.lines.map(line => line.auto_employee_id)).toEqual([null, null]);
     // Подрядчик 4 не кандидат и по коду; при дубле кода оба его сотрудника — кандидаты (1 выше: совпала бригада),
     // за ними — тёзка по ФИО без кода.
@@ -300,5 +301,26 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     expect((await lineRows(doc.id))[0]).toMatchObject({ employee_id: null, resolution: 'confirmed', amount: '31818.00' });
     expect((await run('SELECT count(*)::int AS n FROM payroll_1c_payout_lines WHERE document_id = $1', [doc.id])).rows[0].n).toBe(2);
     expect((await run('SELECT amount::text AS amount FROM payroll_paid_amounts')).rows).toEqual([{ amount: '100000.00' }]);
+  });
+
+  it('та же ведомость (номер и дата) под другим ГУИДом — 409 уже в предпросмотре, ничего не записано', async () => {
+    const before = (await run('SELECT count(*)::int AS n FROM payroll_1c_payout_documents')).rows[0].n;
+    // Номер 0000-000077 от 09.10.2026 уже загружен под GUID (например, из регистра выплат ЗУП).
+    await expect(previewPayouts1c(external('11111111-2222-3333-4444-999999999999', [IVANOV], '43500')))
+      .rejects.toMatchObject({ status: 409, message: 'Ведомость № 0000-000077 от 09.10.2026 уже загружена — повторно не загружается' });
+    expect((await run('SELECT count(*)::int AS n FROM payroll_1c_payout_documents')).rows[0].n).toBe(before);
+  });
+
+  it('две параллельные загрузки разных ГУИДов с одинаковыми номером и датой — проходит одна, вторая 409', async () => {
+    const first = external('22222222-2222-3333-4444-000000000001', [IVANOV], '43500', '0000-000090');
+    const second = zup2('22222222-2222-3333-4444-000000000002', [IVANOV], '43500', '0000-000090');
+    // Предпросмотр обоих — до загрузок: проверка дубля на нём ещё проходит, ловит её lock в загрузке.
+    const [firstPreview, secondPreview] = await Promise.all([previewPayouts1c(first), previewPayouts1c(second)]);
+    const results = await Promise.allSettled([doImport(first, firstPreview), doImport(second, secondPreview)]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ status: 409 });
+    expect((await run(`SELECT count(*)::int AS n FROM payroll_1c_payout_documents WHERE doc_number = '0000-000090'`)).rows[0].n)
+      .toBe(1);
   });
 });

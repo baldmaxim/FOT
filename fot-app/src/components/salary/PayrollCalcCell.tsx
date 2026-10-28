@@ -9,6 +9,7 @@ import {
   calcSumAmount,
   calcTimesheetSub,
   cardPayoutLines,
+  cardPayoutsTotal,
   formatCalcRate,
   housingKindsLabel,
   isCalcColumn,
@@ -62,15 +63,22 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
     case 'paid_recalc':
       return <td className={styles.cellNumber}>{formatAmount(row.paid_recalc_prev)}</td>;
     case 'card_payouts': {
-      const lines = cardPayoutLines(row.card_payouts);
+      const lines = cardPayoutLines(row.card_payouts_by_method);
+      const total = cardPayoutsTotal(lines);
       return (
         <td className={styles.cellNumber}>
           {lines.length === 0 ? '—' : lines.map(line => (
-            <span key={line.label} className={styles.calcLine}>
+            <span key={line.method} className={styles.calcLine}>
               <span className={styles.calcLineLabel}>{line.label}</span>
               {formatAmount(line.amount)}
             </span>
           ))}
+          {total !== null && (
+            <span className={`${styles.calcLine} ${styles.calcTotal}`}>
+              <span className={styles.calcLineLabel}>Итого</span>
+              {formatAmount(total)}
+            </span>
+          )}
         </td>
       );
     }

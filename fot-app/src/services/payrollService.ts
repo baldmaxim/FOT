@@ -39,11 +39,10 @@ export interface IPayrollMonthlyAccrual {
   amount: string | number | null;
 }
 
-/** Перечислено на карту по видам выплаты (ведомости в банк 1С), NUMERIC строкой; вида нет — null. */
-export interface IPayrollCardPayouts {
-  advance: string | null;
-  salary: string | null;
-  premium: string | null;
+/** Перечислено по ведомостям выплаты 1С за месяцы по исходному «Способу выплаты», NUMERIC строкой. */
+export interface IPayrollCardPayoutByMethod {
+  method: string;
+  amount: string;
 }
 
 /** Почему закрытый месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
@@ -148,8 +147,8 @@ export interface IPayrollTermsRow {
   paid_vacation?: string | null;
   paid_sick_leave?: string | null;
   paid_recalc_prev?: string | null;
-  /** «Расчёты»: перечислено на карту по ведомостям 1С за месяцы, по видам; null — ведомостей нет. */
-  card_payouts?: IPayrollCardPayouts | null;
+  /** «Расчёты»: перечислено по ведомостям 1С за месяцы, по способам выплаты; null — ведомостей нет. */
+  card_payouts_by_method?: IPayrollCardPayoutByMethod[] | null;
   /** «Расчёты»: столбцы по расчёту ФОТ закрытого табеля; нет поля — сервер не считал (старый бэкенд, «весь период»). */
   calc?: IPayrollCalcColumns | null;
   /** «Расчёты»: состояние отдельного расчёта ФОТ строки (calcColumns). */

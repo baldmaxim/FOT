@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IPayrollCalcColumns, IPayrollTermsRow } from '../services/payrollService';
+import type { IPayrollCalcColumns, IPayrollCardPayoutByMethod, IPayrollTermsRow } from '../services/payrollService';
 import {
   calcIssuesNote,
   calcNotClosed,
   calcTimesheetSub,
   cardPayoutLines,
+  cardPayoutsTotal,
   emptyPayrollColumns,
   formatCalcRate,
   housingKindsLabel,
@@ -38,7 +39,7 @@ describe('столбцы без данных на «Расчётах»', () => {
   it('сентябрь «Бухгалтерии»: оклад, по табелю, переработка, проезд и сумма — 1С и пустые ФОТ скрыты', () => {
     expect(empty([
       row({
-        paid_total: null, paid_deductions_total: null, card_payouts: null,
+        paid_total: null, paid_deductions_total: null, card_payouts_by_method: null,
         calc: calc({
           rate: { amount: '250000.00', calc_type: 'salary', as_of: '2026-09-30' },
           timesheet: '250000.00', overtime: '1420.45', overtime_hours: 1, travel: '2730.00', net: '254150.45',
@@ -117,12 +118,31 @@ describe('ячейки состава зарплаты', () => {
     expect(overtimeNote(calc())).toBeNull();
   });
 
-  it('выплаты на карту — виды с суммой по порядку; проживание — вид словом', () => {
-    expect(cardPayoutLines({ advance: '80000.00', salary: null, premium: '0.00' })).toEqual([
-      { label: 'Аванс', amount: '80000.00' },
-      { label: 'Премия', amount: '0.00' },
+  it('выплаты на карту — каждый способ 1С по порядку, незнакомые следом; «Итого» в копейках; проживание — словом', () => {
+    const lines = cardPayoutLines([
+      { method: 'Материальная помощь', amount: '100000.00' },
+      { method: 'Премии', amount: '59547.00' },
+      { method: 'Новый способ', amount: '0.10' },
+      { method: 'Аванс', amount: '56550.00' },
+      { method: 'Зарплата за месяц', amount: '10966.73' },
+      { method: 'Отпуска', amount: '24265.56' },
+      { method: 'Вознаграждение сотрудникам по договорам ГПХ', amount: '0.20' },
     ]);
+    expect(lines.map(line => [line.method, line.label])).toEqual([
+      ['Аванс', 'Аванс'],
+      ['Зарплата за месяц', 'Зарплата'],
+      ['Премии', 'Премии'],
+      ['Отпуска', 'Отпуска'],
+      ['Вознаграждение сотрудникам по договорам ГПХ', 'ГПХ'],
+      ['Материальная помощь', 'Мат. помощь'],
+      ['Новый способ', 'Новый способ'],
+    ]);
+    // 0,10 + 0,20 в рублях дали бы 0,30000000000000004 — сложение в копейках.
+    expect(cardPayoutsTotal(lines)).toBe('251329.59');
+    expect(cardPayoutsTotal(lines.slice(0, 1))).toBeNull();
     expect(cardPayoutLines(null)).toEqual([]);
+    // Старый бэкенд отдавал объект трёх видов — не массив, ячейка пустая.
+    expect(cardPayoutLines({ advance: '1.00' } as unknown as IPayrollCardPayoutByMethod[])).toEqual([]);
     expect(housingKindsLabel(calc({ housing_kinds: ['dormitory', 'apartment'] }))).toBe('общежитие, квартира');
   });
 

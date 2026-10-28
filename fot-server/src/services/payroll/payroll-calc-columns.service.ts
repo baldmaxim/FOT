@@ -13,7 +13,7 @@
  * в open_months остаются только месяцы, которые посчитать нечем (1-е число текущего месяца, будущий).
  *
  * Из 1С (там, где ФОТ сумму не считает) — отпускные, больничные и перерасчёт (статьи «Оплачено», SQL списка) и
- * «Выплаты на карту» — ведомости в банк (миграция 328) по виду: аванс, ЗП, премия.
+ * «Выплаты на карту» — ведомости выплаты (миграция 328) по каждому способу выплаты 1С, как есть.
  */
 import { performance } from 'node:perf_hooks';
 
@@ -247,37 +247,11 @@ export const calcColumnsServerTiming = (timing: ICalcColumnsTiming): string => [
   `calc_total;dur=${timing.totalMs.toFixed(1)}`,
 ].join(', ');
 
-/** «Выплаты на карту» строки: суммы ведомостей по виду, NUMERIC текстом; вида нет — null. */
-export interface ICardPayouts {
-  advance: string | null;
-  salary: string | null;
-  premium: string | null;
+/** «Выплаты на карту» строки: сумма ведомостей по исходному «Способу выплаты» 1С, NUMERIC текстом. */
+export interface ICardPayoutByMethod {
+  method: string;
+  amount: string;
 }
-
-/**
- * Вид выплаты по «Способу выплаты» ведомости 1С (без учёта регистра и пробелов по краям): «Аванс» — аванс, «Премия»
- * и «Премии» — премия, всё остальное («Зарплата», «Увольнения», будущие неизвестные способы) — ЗП. Классификация в
- * коде, а не в SQL: lower() кириллицы в PostgreSQL зависит от локали базы.
- */
-export const cardPayoutKind = (paymentMethod: string): keyof ICardPayouts => {
-  const method = paymentMethod.trim().toLowerCase();
-  if (method.includes('аванс')) return 'advance';
-  if (method.includes('прем')) return 'premium';
-  return 'salary';
-};
-
-/** Суммы по способам выплаты (SQL списка) → три вида; ведомостей нет — null. */
-export const classifyCardPayouts = (
-  rows: ReadonlyArray<{ method: string; amount: string }> | null | undefined,
-): ICardPayouts | null => {
-  if (!rows || rows.length === 0) return null;
-  const cents: Record<keyof ICardPayouts, number | null> = { advance: null, salary: null, premium: null };
-  for (const row of rows) {
-    const kind = cardPayoutKind(row.method);
-    cents[kind] = addCents(cents[kind], row.amount);
-  }
-  return { advance: toAmount(cents.advance), salary: toAmount(cents.salary), premium: toAmount(cents.premium) };
-};
 
 /**
  * LATERAL списка «Расчётов»: суммы ведомостей в банк сотрудника page.employee_id за месяцы (date[] первых чисел;

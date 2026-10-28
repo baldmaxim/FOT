@@ -30,7 +30,7 @@ export interface IPayoutLineMatch {
 }
 
 /** То же, что normalizePayoutName, в SQL. */
-const SQL_NAME = (column: string): string => (
+export const SQL_NAME = (column: string): string => (
   `btrim(regexp_replace(regexp_replace(replace(lower(normalize(${column}, NFKC)), 'ё', 'е'), '\\s*-\\s*', '-', 'g'), '\\s+', ' ', 'g'))`
 );
 
@@ -147,7 +147,9 @@ export const loadPayoutEligibility = async (
 };
 
 /** Сопоставление строк документа: по ключу строки — авто по id_all и допустимые кандидаты. */
-export const matchPayoutLines = async (doc: IPayout1cDocument): Promise<Map<string, IPayoutLineMatch>> => {
+export const matchPayoutLines = async (
+  doc: Pick<IPayout1cDocument, 'lines' | 'periodMonth'>,
+): Promise<Map<string, IPayoutLineMatch>> => {
   const idAlls = [...new Set(doc.lines.map(line => line.personIdAll).filter((id): id is string => id !== null))];
   const names = [...new Set(doc.lines.map(line => normalizePayoutName(line.fullName)))];
   const [profiles, confirmed, byName] = await Promise.all([

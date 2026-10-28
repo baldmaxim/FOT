@@ -193,15 +193,24 @@ interface IRawLine {
   amountCents: number;
 }
 
-/** Ключи строк: одинаковые ФИО и сумма нумеруются по порядку в файле. */
-const withKeys = (lines: readonly IRawLine[]): IPayout1cLine[] => {
+/**
+ * Ключи строк (line_key) по порядку: нормализованное ФИО + копейки + номер среди одинаковых. Общие для всех источников
+ * одной ведомости — XML ЗУП2, внешней базы и регистра выплат ЗУП (build-payouts-register-sql.ts).
+ */
+export const buildPayoutLineKeys = (lines: ReadonlyArray<{ fullName: string; amountCents: number }>): string[] => {
   const seen = new Map<string, number>();
-  return lines.map((line, index) => {
+  return lines.map(line => {
     const base = `${normalizePayoutName(line.fullName)}|${line.amountCents}`;
     const occurrence = (seen.get(base) ?? 0) + 1;
     seen.set(base, occurrence);
-    return { ...line, lineNo: index + 1, lineKey: `${base}|${occurrence}` };
+    return `${base}|${occurrence}`;
   });
+};
+
+/** Строки с номерами по порядку в файле и ключами buildPayoutLineKeys. */
+const withKeys = (lines: readonly IRawLine[]): IPayout1cLine[] => {
+  const keys = buildPayoutLineKeys(lines);
+  return lines.map((line, index) => ({ ...line, lineNo: index + 1, lineKey: keys[index] }));
 };
 
 /** Канонический хеш содержимого: одинаков для обоих форматов одной ведомости. */

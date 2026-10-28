@@ -49,8 +49,8 @@ import {
   CALC_COLUMNS_MAX_MONTHS,
   calcColumnsServerTiming,
   cardPayoutsJoinSql,
-  classifyCardPayouts,
   emptyCalcColumnsTiming,
+  type ICardPayoutByMethod,
   getCalcColumns,
 } from '../services/payroll/payroll-calc-columns.service.js';
 import {
@@ -468,8 +468,8 @@ interface IPayrollTermsListRow {
   paid_vacation?: string | null;
   paid_sick_leave?: string | null;
   paid_recalc_prev?: string | null;
-  /** Только при paid_months: ведомости в банк по способу выплаты (наружу — card_payouts по видам). */
-  card_payouts_raw?: Array<{ method: string; amount: string }> | null;
+  /** Только при paid_months: ведомости выплаты по способу выплаты (наружу — card_payouts_by_method). */
+  card_payouts_raw?: ICardPayoutByMethod[] | null;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }
@@ -547,9 +547,9 @@ const badRequest = (res: Response, error: string, code: string): void => {
  * и сортировка в браузере переставляла бы только загруженные строки.
  *
  * ?paid_months=2026-07,2026-08 | all («Расчёты») — вместо «Выплачено» строки несут paid_total,
- * paid_deductions_total и paid_deductions за эти месяцы, отпускные, больничные, перерасчёт и card_payouts из 1С,
- * а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service); без параметра этих
- * полей нет.
+ * paid_deductions_total и paid_deductions за эти месяцы, отпускные, больничные, перерасчёт и card_payouts_by_method
+ * из 1С, а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service); без параметра
+ * этих полей нет.
  */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -662,7 +662,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       sort_key: _sortKey, sort_key_text: _sortKeyText, staff_category: _stored, card_payouts_raw: cardPayoutsRaw, ...row
     }) => ({
       ...row,
-      ...(paidMonths !== null ? { card_payouts: classifyCardPayouts(cardPayoutsRaw) } : {}),
+      // Каждый способ выплаты 1С отдельно; новое имя поля — старый фронт покажет «—», а не три вида.
+      ...(paidMonths !== null ? { card_payouts_by_method: cardPayoutsRaw ?? null } : {}),
       ...(calcColumns ? { calc: calcColumns.get(row.employee_id) ?? null } : {}),
       category: categories.get(row.employee_id) ?? 'office',
       can_edit: canEditRow(row.employee_id),
