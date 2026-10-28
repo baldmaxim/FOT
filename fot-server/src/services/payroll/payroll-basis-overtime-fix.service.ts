@@ -1,13 +1,18 @@
 /**
- * Переработка в будни в сохранённой основе расчёта (миграция 331) — по порогу не ниже дня производственного
- * календаря: 8 ч, предпраздничный 7 ч (решение пользователя 27.10.2026, payroll-basis.service.ts). До правки порогом
- * была норма дня графика, и короткая пятница (7 ч) с правкой «8» давала час переработки.
+ * Переработка в будни в сохранённой основе расчёта (миграция 331) — исправление новой revision, два режима.
  *
- * Основа неизменяема — исправление пишется новой revision. Берётся последняя revision каждой основы с переработкой,
- * основа редакции пересобирается новым правилом, и у каждого дня остаётся меньшее из прежних и новых минут: часы
- * только уходят, дрейф графиков после закрытия их не добавит. Остальные поля и качество (materialized /
- * reconstructed) — прежние, reason = 'backfill'. Повторный запуск — без эффекта. Запуск —
- * scripts/fix-payroll-basis-overtime.ts.
+ * reduce — порог не ниже дня производственного календаря: 8 ч, предпраздничный 7 ч (решение пользователя 27.10.2026,
+ * payroll-basis.service.ts). До правки порогом была норма дня графика, и короткая пятница (7 ч) с правкой «8» давала
+ * час переработки. У каждого дня остаётся меньшее из прежних и новых минут: часы только уходят.
+ *
+ * remote — «УУ» с правкой часов (решение пользователя 28.10.2026): раньше удалёнка уходила в основу без часов, и
+ * правка «9» не давала переработки (Разаханов, 10.09.2026). Добавляются только дни «УУ» с правкой из payload редакции,
+ * которые уже были рабочими днями основы и переработки ещё не имели; остальные дни — как были. Норма дня берётся из
+ * графиков на сейчас (историческая в основе не сохранена), поэтому прежний выходной переработкой не станет.
+ *
+ * Основа неизменяема: берётся последняя revision, основа редакции пересобирается действующим правилом, пишется
+ * копия прежней revision с новой переработкой. Остальные поля и качество (materialized / reconstructed) — прежние,
+ * reason = 'backfill'. Повторный запуск — без эффекта. Запуск — scripts/fix-payroll-basis-overtime.ts.
  */
 import { pool, query, withTransaction, type DbExecutor } from '../../config/postgres.js';
 import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
@@ -18,6 +23,8 @@ import {
   type PayrollAbsenceDays,
   type PayrollBasisQuality,
 } from './payroll-basis.service.js';
+
+export type OvertimeFixMode = 'reduce' | 'remote';
 
 interface IBasisRow {
   version_id: string;
@@ -32,6 +39,8 @@ interface IBasisRow {
   absence_days: PayrollAbsenceDays;
   overtime_minutes: Record<string, number>;
   quality: PayrollBasisQuality;
+  /** Только remote: дни «УУ» с правкой часов > 0 в месяце основы. */
+  remote_dates: string[];
 }
 
 export interface IOvertimeFixMonth {
@@ -50,17 +59,22 @@ export interface IOvertimeFixSample {
   versionId: number;
   before: Record<string, number>;
   after: Record<string, number>;
+  /** Только remote: дни «УУ» с правкой часов. */
+  remoteDates?: string[];
 }
 
 export interface IOvertimeFixResult {
-  /** Основ с переработкой (последние revision). */
+  /** Основ-кандидатов (последние revision): reduce — с переработкой, remote — с «УУ» с правкой. */
   candidates: number;
-  /** Основ, у которых переработка уменьшилась. */
+  /** Основ, у которых переработка изменилась. */
   changed: number;
   /** Записано revision (только при apply). */
   written: number;
   failedVersions: number[];
   months: IOvertimeFixMonth[];
+  /** Все изменившиеся основы. */
+  changes: IOvertimeFixSample[];
+  /** Основы-кандидаты сотрудников из sampleEmployeeIds — и без изменений. */
   samples: IOvertimeFixSample[];
 }
 
@@ -72,6 +86,26 @@ export const reduceOvertime = (
   .map(([date, minutes]) => [date, Math.min(minutes, rebuilt[date] ?? 0)] as const)
   .filter(([, minutes]) => minutes > 0));
 
+/**
+ * К прежней переработке — пересобранные минуты дней «УУ» с правкой: только дни месяца основы, бывшие рабочими днями
+ * основы и без переработки. Остальные дни не меняются.
+ */
+export const addRemoteOvertime = (
+  previous: { month: string; workdayDates: readonly string[]; overtime: Readonly<Record<string, number>> },
+  rebuilt: Readonly<Record<string, number>>,
+  remoteDates: readonly string[],
+): Record<string, number> => {
+  const monthPrefix = previous.month.slice(0, 8);
+  const workdays = new Set(previous.workdayDates);
+  const result: Record<string, number> = { ...previous.overtime };
+  for (const date of remoteDates) {
+    if (!date.startsWith(monthPrefix) || !workdays.has(date) || date in result) continue;
+    const minutes = rebuilt[date] ?? 0;
+    if (minutes > 0) result[date] = minutes;
+  }
+  return result;
+};
+
 const sameOvertime = (a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean => (
   Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([date, minutes]) => b[date] === minutes)
 );
@@ -80,30 +114,64 @@ const sumMinutes = (minutes: Readonly<Record<string, number>>): number => (
   Object.values(minutes).reduce((sum, value) => sum + value, 0)
 );
 
+const BASIS_COLUMNS = `b.version_id::text AS version_id, b.employee_id, e.full_name, to_char(b.month, 'YYYY-MM-DD') AS month,
+            b.revision, b.norm_days, b.norm_minutes,
+            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.workday_dates) d ORDER BY d) AS workday_dates,
+            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.dayoff_dates) d ORDER BY d) AS dayoff_dates,
+            b.absence_days, b.overtime_minutes, b.quality`;
+
+const LATEST_BASIS = `SELECT DISTINCT ON (version_id, employee_id, month) *
+           FROM timesheet_version_payroll_basis
+          ORDER BY version_id, employee_id, month, revision DESC`;
+
+const REDUCE_CANDIDATES_SQL = `SELECT ${BASIS_COLUMNS}, '{}'::text[] AS remote_dates
+       FROM (${LATEST_BASIS}) b
+       LEFT JOIN employees e ON e.id = b.employee_id
+      WHERE b.overtime_minutes <> '{}'::jsonb
+      ORDER BY b.version_id, b.employee_id, b.month`;
+
+// Дни «УУ» с правкой часов > 0 — из payload редакций с основой, по сотруднику и месяцу дня.
+const REMOTE_CANDIDATES_SQL = `WITH remote AS (
+         SELECT v.id AS version_id, (emp->'identity'->>'employee_id')::int AS employee_id,
+                date_trunc('month', d.key::date)::date AS month, array_agg(d.key ORDER BY d.key) AS remote_dates
+           FROM timesheet_versions v
+          CROSS JOIN LATERAL jsonb_array_elements(v.payload->'employees') emp
+          CROSS JOIN LATERAL jsonb_each(emp->'days') d
+          WHERE v.id IN (SELECT DISTINCT version_id FROM timesheet_version_payroll_basis)
+            AND d.value->>'status' = 'remote'
+            AND d.value->>'hours_overridden' = 'true'
+            AND CASE WHEN jsonb_typeof(d.value->'hours') = 'number' THEN (d.value->>'hours')::numeric ELSE 0 END > 0
+          GROUP BY 1, 2, 3
+       )
+     SELECT ${BASIS_COLUMNS}, r.remote_dates
+       FROM (${LATEST_BASIS}) b
+       JOIN remote r ON r.version_id = b.version_id AND r.employee_id = b.employee_id AND r.month = b.month
+       LEFT JOIN employees e ON e.id = b.employee_id
+      ORDER BY b.version_id, b.employee_id, b.month`;
+
 export const fixPayrollBasisOvertime = async (options: {
   apply: boolean;
-  /** Сотрудники, у которых в отчёт идут дни поимённо. */
+  /** По умолчанию reduce. */
+  mode?: OvertimeFixMode;
+  /** Сотрудники, у которых в отчёт идут основы-кандидаты поимённо, и без изменений. */
   sampleEmployeeIds?: ReadonlySet<number>;
   /** Сборка основы редакции; по умолчанию — та же, что при закрытии. */
   rebuild?: (exec: DbExecutor, payload: ITimesheetVersionPayload) => Promise<IPayrollBasisDraft[]>;
   onVersionError?: (versionId: number, error: unknown) => void;
 }): Promise<IOvertimeFixResult> => {
+  const mode = options.mode ?? 'reduce';
   const rebuild = options.rebuild ?? buildPayrollBasisDrafts;
-  const latest = (await query<IBasisRow>(
-    `SELECT b.version_id::text AS version_id, b.employee_id, e.full_name, to_char(b.month, 'YYYY-MM-DD') AS month,
-            b.revision, b.norm_days, b.norm_minutes,
-            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.workday_dates) d ORDER BY d) AS workday_dates,
-            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.dayoff_dates) d ORDER BY d) AS dayoff_dates,
-            b.absence_days, b.overtime_minutes, b.quality
-       FROM (
-         SELECT DISTINCT ON (version_id, employee_id, month) *
-           FROM timesheet_version_payroll_basis
-          ORDER BY version_id, employee_id, month, revision DESC
-       ) b
-       LEFT JOIN employees e ON e.id = b.employee_id
-      WHERE b.overtime_minutes <> '{}'::jsonb
-      ORDER BY b.version_id, b.employee_id, b.month`,
-  )).map(row => ({ ...row, employee_id: Number(row.employee_id), revision: Number(row.revision) }));
+  const latest = (await query<IBasisRow>(mode === 'remote' ? REMOTE_CANDIDATES_SQL : REDUCE_CANDIDATES_SQL))
+    .map(row => ({ ...row, employee_id: Number(row.employee_id), revision: Number(row.revision) }));
+  const merge = (row: IBasisRow, rebuilt: Readonly<Record<string, number>>): Record<string, number> => (
+    mode === 'remote'
+      ? addRemoteOvertime(
+        { month: row.month, workdayDates: row.workday_dates, overtime: row.overtime_minutes },
+        rebuilt,
+        row.remote_dates,
+      )
+      : reduceOvertime(row.overtime_minutes, rebuilt)
+  );
 
   const byVersion = new Map<number, IBasisRow[]>();
   for (const row of latest) {
@@ -112,6 +180,7 @@ export const fixPayrollBasisOvertime = async (options: {
   }
 
   const months = new Map<string, { rows: number; people: Set<number>; before: number; after: number }>();
+  const changes: IOvertimeFixSample[] = [];
   const samples: IOvertimeFixSample[] = [];
   const failedVersions: number[] = [];
   let changed = 0;
@@ -127,7 +196,14 @@ export const fixPayrollBasisOvertime = async (options: {
 
       const fixes: Array<{ row: IBasisRow; overtime: Record<string, number>; hash: string }> = [];
       for (const row of rows) {
-        const overtime = reduceOvertime(row.overtime_minutes, drafts.get(`${row.employee_id}|${row.month}`)?.overtimeMinutes ?? {});
+        const overtime = merge(row, drafts.get(`${row.employee_id}|${row.month}`)?.overtimeMinutes ?? {});
+        const month = row.month.slice(0, 7);
+        const report: IOvertimeFixSample = {
+          employeeId: row.employee_id, fullName: row.full_name, month, versionId,
+          before: row.overtime_minutes, after: overtime,
+          ...(mode === 'remote' ? { remoteDates: row.remote_dates } : {}),
+        };
+        if (options.sampleEmployeeIds?.has(row.employee_id)) samples.push(report);
         if (sameOvertime(overtime, row.overtime_minutes)) continue;
         const draft: IPayrollBasisDraft = {
           employeeId: row.employee_id,
@@ -140,20 +216,14 @@ export const fixPayrollBasisOvertime = async (options: {
           overtimeMinutes: overtime,
         };
         fixes.push({ row, overtime, hash: computeBasisHash(draft) });
+        changes.push(report);
 
-        const month = row.month.slice(0, 7);
         const stat = months.get(month) ?? { rows: 0, people: new Set<number>(), before: 0, after: 0 };
         stat.rows += 1;
         stat.people.add(row.employee_id);
         stat.before += sumMinutes(row.overtime_minutes);
         stat.after += sumMinutes(overtime);
         months.set(month, stat);
-        if (options.sampleEmployeeIds?.has(row.employee_id)) {
-          samples.push({
-            employeeId: row.employee_id, fullName: row.full_name, month, versionId,
-            before: row.overtime_minutes, after: overtime,
-          });
-        }
       }
       changed += fixes.length;
       if (!options.apply || fixes.length === 0) continue;
@@ -192,6 +262,7 @@ export const fixPayrollBasisOvertime = async (options: {
     months: [...months].sort(([a], [b]) => a.localeCompare(b)).map(([month, stat]) => ({
       month, rows: stat.rows, people: stat.people.size, minutesBefore: stat.before, minutesAfter: stat.after,
     })),
+    changes,
     samples,
   };
 };

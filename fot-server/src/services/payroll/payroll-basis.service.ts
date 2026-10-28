@@ -14,7 +14,9 @@
  * округлённой нормы дня, но не ниже дня производственного календаря — 8 ч, в предпраздничный 7 ч (решение
  * пользователя 27.10.2026): у графиков с короткой пятницей (7 ч) правка «8» в пятницу — не переработка, ЗУП её не
  * платит (Марухина, август 2026: четыре таких пятницы, переработки в ЗУП нет). СКУД сверх графика без правки 1С и так
- * срезает (Абраменко, август: 8,47 / 11 / 11 ч → 0 + 3 + 3 = 6 ч, как в ЗУП).
+ * срезает (Абраменко, август: 8,47 / 11 / 11 ч → 0 + 3 + 3 = 6 ч, как в ЗУП). «УУ» уходит в 1С буквой без часов,
+ * но правка часов удалёнки — переработка по тому же порогу (Разаханов, 10.09.2026: «УУ» 9 ч → 1 ч; решение
+ * пользователя 28.10.2026); дни оклада и «Дни» 1С от этого не меняются. ЗУП такие часы не видит.
  *
  * Запись — под SAVEPOINT: сбой основы не мешает закрыть табель и отдать его в 1С (основы нет — месяц
  * «Табель не закрыт»). Строки неизменяемы: новая revision — только при другом basis_hash.
@@ -125,12 +127,16 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
       ? 0
       : compute1CDayHours(hours, dayNorm, preHoliday, isStudentSchedule(schedule), Boolean(day.hours_overridden));
     if (!isWorkedDayForOneC(day.status, exportedHours)) continue;
+    // Часы для переработки: у «УУ» с правкой — округлённая правка, хотя в 1С день уходит буквой.
+    const overtimeHours = day.status === 'remote' && day.hours_overridden && hours > 0.001
+      ? compute1CDayHours(hours, dayNorm, preHoliday, isStudentSchedule(schedule), true)
+      : exportedHours;
     // Без графика выгрузка считает день рабочим — так же и здесь.
     if (!schedule || isWorkingDay(schedule, dateObj, input.calendar)) {
       workdayDates.push(date);
       // Порог — не ниже дня производственного календаря: короткая пятница графика (7 ч) с правкой 8 ч — не переработка.
       const overtimeFrom = Math.max(Math.round(dayNorm), preHoliday ? CALENDAR_PRE_HOLIDAY_HOURS : CALENDAR_DAY_HOURS);
-      const extra = exportedHours - overtimeFrom;
+      const extra = overtimeHours - overtimeFrom;
       if (schedule && day.hours_overridden && extra > 0) overtimeMinutes[date] = extra * 60;
     } else if (input.plannedWeekendDays.has(`${input.employeeId}|${date}`)) {
       workdayDates.push(date);

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { TimesheetEmployee } from '../types';
+import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, getRemoteScheduleHours, salaryAmountTitle, salaryLineTitle,
+  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, salaryAmountTitle, salaryLineTitle,
 } from './timesheetSalary';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
@@ -76,17 +76,32 @@ describe('«Оклад» и «Переработка» отдела', () => {
   });
 });
 
-describe('часы «УУ» по графику', () => {
-  it('удалёнка — норма дня целыми', () => {
-    expect(getRemoteScheduleHours('remote', 8)).toBe(8);
-    expect(getRemoteScheduleHours('remote', 7.5)).toBe(8);
-    expect(getRemoteScheduleHours('remote', 7)).toBe(7);
+describe('часы под «УУ» / «РБ» / «УД»', () => {
+  const entry = (status: TimesheetStatus, hours: number | null = 8, overridden?: boolean) => ({
+    status, hours_worked: hours, hours_overridden: overridden,
   });
 
-  it('нет нормы (выходной по графику) или не удалёнка — нет часов', () => {
-    expect(getRemoteScheduleHours('remote', 0)).toBeNull();
-    expect(getRemoteScheduleHours('work', 8)).toBeNull();
-    expect(getRemoteScheduleHours('sick_worked', 8)).toBeNull();
-    expect(getRemoteScheduleHours(undefined, 8)).toBeNull();
+  it('«УУ» с правкой часов — часы правки целыми (Разаханов, 10.09: 9 ч)', () => {
+    expect(getSalaryLetterHours(entry('remote', 9, true), 8)).toEqual({ label: 'УУ', hours: 9, source: 'override' });
+    expect(getSalaryLetterHours(entry('remote', 8.83, true), 8)).toEqual({ label: 'УУ', hours: 9, source: 'override' });
+  });
+
+  it('«УУ» без правки или с нулём часов — норма дня по графику', () => {
+    expect(getSalaryLetterHours(entry('remote', 9), 8)).toEqual({ label: 'УУ', hours: 8, source: 'schedule' });
+    expect(getSalaryLetterHours(entry('remote', 0, true), 7.5)).toEqual({ label: 'УУ', hours: 8, source: 'schedule' });
+    expect(getSalaryLetterHours(entry('remote', null), 7)).toEqual({ label: 'УУ', hours: 7, source: 'schedule' });
+  });
+
+  it('«РБ» и «УД» — норма дня по графику', () => {
+    expect(getSalaryLetterHours(entry('sick_worked', 10), 10)).toEqual({ label: 'РБ', hours: 10, source: 'schedule' });
+    expect(getSalaryLetterHours(entry('study_day', 8, true), 7)).toEqual({ label: 'УД', hours: 7, source: 'schedule' });
+  });
+
+  it('нет нормы (выходной по графику) или другой статус — нет часов', () => {
+    expect(getSalaryLetterHours(entry('remote', 0), 0)).toBeNull();
+    expect(getSalaryLetterHours(entry('sick_worked', 0), 0)).toBeNull();
+    expect(getSalaryLetterHours(entry('work', 9, true), 8)).toBeNull();
+    expect(getSalaryLetterHours(entry('manual', 9, true), 8)).toBeNull();
+    expect(getSalaryLetterHours(null, 8)).toBeNull();
   });
 });

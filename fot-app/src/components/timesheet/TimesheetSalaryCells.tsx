@@ -93,10 +93,10 @@ export const TimesheetSalaryLineCell: FC<ICellProps & { code: SalaryLineCode }> 
   );
 };
 
-/** Клетка «УУ» вкладки «Зарплата»: сверху «УУ», под чертой — часы по графику. */
-export const TimesheetRemoteFraction: FC<{ hours: number }> = ({ hours }) => (
+/** Клетка «УУ» / «РБ» / «УД» вкладки «Зарплата»: сверху буква, под чертой — часы (правки «УУ» или по графику). */
+export const TimesheetLetterFraction: FC<{ label: string; hours: number }> = ({ label, hours }) => (
   <span className="ts-day-fraction">
-    <span>УУ</span>
+    <span>{label}</span>
     <span className="ts-day-fraction-hours">{hours}</span>
   </span>
 );

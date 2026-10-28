@@ -273,4 +273,73 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
     // Повтор — без эффекта.
     expect(await fixPayrollBasisOvertime({ apply: true, rebuild })).toMatchObject({ changed: 0, written: 0 });
   });
+
+  it('добор «УУ» с правкой: только дни payload с правкой и часами, бывшие рабочими днями основы; повтор — без эффекта', async () => {
+    const [versionId] = await seedApproval({ start: '2026-09-01', end: '2026-09-30' });
+    const remote = (hours: number, overridden: boolean) => ({ status: 'remote', hours, corrected: true, hours_overridden: overridden });
+    await q('UPDATE timesheet_versions SET payload = $2::jsonb WHERE id = $1', [versionId, JSON.stringify({
+      employees: [
+        {
+          identity: { employee_id: 71 },
+          days: {
+            '2026-09-10': remote(9, true),
+            // Без правки, с нулём часов, выходной (нет в рабочих днях основы), другой месяц — не добавляются.
+            '2026-09-11': remote(9, false),
+            '2026-09-14': remote(0, true),
+            '2026-09-12': remote(9, true),
+            '2026-10-01': remote(9, true),
+          },
+        },
+        // Как Ващук: «УУ» 10 ч при графике 10 ч — кандидат без изменений.
+        { identity: { employee_id: 72 }, days: { '2026-09-01': remote(10, true) } },
+      ],
+    })]);
+    const seeded = { quality: 'reconstructed', reason: 'backfill', mode: 'missing' } as const;
+    await insertPayrollBasis(pg.pool!, versionId, [
+      draft(71, { workdayDates: ['2026-09-10', '2026-09-11', '2026-09-14'], overtimeMinutes: {} }),
+      draft(72, { workdayDates: ['2026-09-01'], overtimeMinutes: {} }),
+    ], seeded);
+    const rebuild = async () => [
+      draft(71, { normDays: 99, overtimeMinutes: { '2026-09-10': 60, '2026-09-11': 60, '2026-09-12': 60 } }),
+      draft(72, { overtimeMinutes: {} }),
+    ];
+
+    const dry = await fixPayrollBasisOvertime({ apply: false, mode: 'remote', rebuild, sampleEmployeeIds: new Set([72]) });
+    expect(dry).toMatchObject({
+      candidates: 2, changed: 1, written: 0, failedVersions: [],
+      months: [{ month: '2026-09', rows: 1, people: 1, minutesBefore: 0, minutesAfter: 60 }],
+    });
+    expect(dry.changes).toEqual([{
+      employeeId: 71, fullName: 'Марухина В.С.', month: '2026-09', versionId,
+      before: {}, after: { '2026-09-10': 60 }, remoteDates: ['2026-09-10', '2026-09-12'],
+    }]);
+    expect(dry.samples).toEqual([{
+      employeeId: 72, fullName: null, month: '2026-09', versionId, before: {}, after: {}, remoteDates: ['2026-09-01'],
+    }]);
+    expect(await q('SELECT count(*)::int AS n FROM timesheet_version_payroll_basis')).toEqual([{ n: 2 }]);
+
+    expect((await fixPayrollBasisOvertime({ apply: true, mode: 'remote', rebuild })).written).toBe(1);
+    expect(await q(`SELECT employee_id, revision, norm_days, norm_minutes, workday_dates::text[] AS workday_dates,
+                           absence_days, overtime_minutes, quality, reason
+                      FROM timesheet_version_payroll_basis WHERE employee_id = 71 ORDER BY revision`)).toEqual([
+      {
+        employee_id: 71, revision: 1, norm_days: 22, norm_minutes: 10560,
+        workday_dates: ['2026-09-10', '2026-09-11', '2026-09-14'],
+        absence_days: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+        overtime_minutes: {}, quality: 'reconstructed', reason: 'backfill',
+      },
+      {
+        employee_id: 71, revision: 2, norm_days: 22, norm_minutes: 10560,
+        workday_dates: ['2026-09-10', '2026-09-11', '2026-09-14'],
+        absence_days: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+        overtime_minutes: { '2026-09-10': 60 }, quality: 'reconstructed', reason: 'backfill',
+      },
+    ]);
+    // Расчёт берёт новую revision.
+    expect((await loadMonthBasisSources([71], '2026-09')).get(71)?.[0].overtimeMinutes).toEqual({ '2026-09-10': 60 });
+
+    // Повтор — без эффекта; режим reduce прибавленное не трогает.
+    expect(await fixPayrollBasisOvertime({ apply: true, mode: 'remote', rebuild })).toMatchObject({ changed: 0, written: 0 });
+    expect(await fixPayrollBasisOvertime({ apply: false, rebuild })).toMatchObject({ changed: 0 });
+  });
 });

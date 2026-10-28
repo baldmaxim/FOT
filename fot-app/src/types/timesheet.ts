@@ -18,6 +18,8 @@ export interface TimesheetEntry {
   travel_segments_count?: number;
   travel_problematic_segments?: number;
   is_correction: boolean;
+  /** Часы проставлены корректировкой (положительная правка часов) — авторитетны для 1С и переработки. */
+  hours_overridden?: boolean;
   notes?: string | null;
   approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   first_entry?: string | null;

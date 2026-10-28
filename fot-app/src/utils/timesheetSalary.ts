@@ -1,5 +1,5 @@
 import type { IPayrollCalcLine } from '../services/payrollService';
-import type { TimesheetEmployee, TimesheetStatus } from '../types';
+import type { TimesheetEmployee, TimesheetEntry, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../types/timesheet';
 import { calcLineDaysNote, calcMissingNote } from './payrollCalc';
 import { formatPaidAmount } from './payrollPaid';
@@ -54,9 +54,29 @@ export const salaryLineTitle = (row: ITimesheetSalaryRow, line: IPayrollCalcLine
   return line ? calcLineDaysNote(line) ?? undefined : undefined;
 };
 
-/** Часы «УУ» во вкладке «Зарплата» — норма дня по графику, целыми, как цифры в клетках; нет нормы — null. */
-export const getRemoteScheduleHours = (status: TimesheetStatus | undefined, normHours: number): number | null => {
-  if (status !== 'remote') return null;
+/** Буквы вкладки «Зарплата», под которыми — часы дня: удалёнка, работа на больничном, учебный день. */
+const SALARY_LETTER_LABELS: Partial<Record<TimesheetStatus, string>> = { remote: 'УУ', sick_worked: 'РБ', study_day: 'УД' };
+
+export interface ISalaryLetterHours {
+  label: string;
+  hours: number;
+  /** override — часы правки «УУ» (по ним же переработка), schedule — норма дня по графику. */
+  source: 'override' | 'schedule';
+}
+
+/**
+ * Часы под буквой во вкладке «Зарплата», целыми, как цифры в клетках: «УУ» с правкой часов — часы правки; иначе «УУ»,
+ * «РБ», «УД» — норма дня по графику (ручные «УУ» часто с 0 ч). У студенческого графика 1С ставит за РБ/УД 8 ч (7 ч
+ * в предпраздник) — здесь норма графика. Нормы нет (выходной по графику) — null, в клетке только буква.
+ */
+export const getSalaryLetterHours = (
+  entry: Pick<TimesheetEntry, 'status' | 'hours_worked' | 'hours_overridden'> | null | undefined,
+  normHours: number,
+): ISalaryLetterHours | null => {
+  const label = entry ? SALARY_LETTER_LABELS[entry.status] : undefined;
+  if (!entry || !label) return null;
+  const overrideHours = entry.status === 'remote' && entry.hours_overridden ? Math.round(entry.hours_worked ?? 0) : 0;
+  if (overrideHours > 0) return { label, hours: overrideHours, source: 'override' };
   const hours = Math.round(normHours);
-  return hours > 0 ? hours : null;
+  return hours > 0 ? { label, hours, source: 'schedule' } : null;
 };

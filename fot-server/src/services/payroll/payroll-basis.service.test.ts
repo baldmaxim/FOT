@@ -180,6 +180,40 @@ describe('основа расчёта: дни месяца', () => {
       .toEqual({ '2026-09-02': 60 });
   });
 
+  it('«УУ» с правкой часов — переработка сверх порога, рабочий день остаётся; Разаханов, 10.09: 9 ч → 1 ч', () => {
+    const shortFriday: IResolvedSchedule = {
+      ...fiveTwo,
+      day_overrides: { 5: { work_start: '09:00:00', work_end: '17:00:00', work_hours: 7 } },
+    };
+    const result = classify({
+      '2026-09-10': day('remote', 9, true),
+      // Без правки (часы графика) — не переработка, даже сверх порога.
+      '2026-09-14': day('remote', 9),
+      // Правка 8 в короткую пятницу — порог 8 ч.
+      '2026-09-11': day('remote', 8, true),
+      // Ручная «УУ» с 0 ч — рабочий день без переработки.
+      '2026-09-15': day('remote', 0, true),
+      // Правка в выходной — выход днём, не часы.
+      '2026-09-12': day('remote', 9, true),
+    }, { schedules: new Map(septemberDates.map(date => [date, shortFriday])) });
+    expect(result.overtimeMinutes).toEqual({ '2026-09-10': 60 });
+    expect(result.workdayDates).toEqual(['2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15']);
+    expect(result.dayoffDates).toEqual(['2026-09-12']);
+  });
+
+  it('«УУ» с правкой: смена 10 ч — порог её норма; дня нет в графике — переработки нет', () => {
+    const tenHours: IResolvedSchedule = { ...fiveTwo, work_hours: 10 };
+    expect(classify({
+      '2026-09-01': day('remote', 10, true),
+      '2026-09-02': day('remote', 11, true),
+    }, { schedules: new Map(septemberDates.map(date => [date, tenHours])) }).overtimeMinutes)
+      .toEqual({ '2026-09-02': 60 });
+
+    const noSchedule = classify({ '2026-09-01': day('remote', 10, true) }, { schedules: new Map() });
+    expect(noSchedule.workdayDates).toEqual(['2026-09-01']);
+    expect(noSchedule.overtimeMinutes).toEqual({});
+  });
+
   it('дня нет в графике — рабочий, как в выгрузке 1С', () => {
     const result = classify({ '2026-09-05': day('work', 8) }, { schedules: new Map() });
     expect(result.workdayDates).toEqual(['2026-09-05']);
