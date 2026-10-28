@@ -55,11 +55,12 @@ describe('sumCalcColumns', () => {
     const august = closed({
       lines: [
         { code: 'contract', amount: '130952.36' },
-        { code: 'overtime', amount: '8928.57' },
+        { code: 'overtime', amount: '8928.57', days: { worked: 1, norm: 21 }, hours: 6 },
         { code: 'travel', amount: '2730.00' },
         { code: 'bonus', amount: '17273.00' },
       ],
       deductions: [{ kind_id: 1, kind: 'Питание', amount: '3500.00' }],
+      net: '156383.93',
     });
     const september = closed({
       lines: [
@@ -68,15 +69,21 @@ describe('sumCalcColumns', () => {
         { code: 'housing', amount: '15000.00' },
       ],
       rate_allowances: [{ code: 'housing', amount: '15000.00' }],
+      net: '270000.00',
     });
 
+    // «Начислено по табелю» — без переработки: она отдельным столбцом, «Сумма» = всё начисленное − удержания.
     expect(sumCalcColumns([['2026-08', august], ['2026-09', september]])).toEqual({
-      timesheet: '389880.93',
+      timesheet: '380952.36',
+      overtime: '8928.57',
+      overtime_days: 1,
+      overtime_hours: 6,
       travel: '2730.00',
       housing: '15000.00',
       housing_kinds: ['apartment'],
       supplements: '22273.00',
       deductions: '3500.00',
+      net: '426383.93',
       open_months: [],
       incomplete: [],
     });
@@ -134,7 +141,7 @@ describe('sumCalcColumns', () => {
     ]);
 
     expect(result.housing_kinds).toEqual(['dormitory']);
-    expect(result).toMatchObject({ timesheet: null, travel: null, supplements: null, deductions: null });
+    expect(result).toMatchObject({ timesheet: null, overtime: null, travel: null, supplements: null, deductions: null });
   });
 });
 

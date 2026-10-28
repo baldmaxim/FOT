@@ -14,14 +14,21 @@ import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from './payrollAccr
 import type { PayrollTableColumn } from './payrollColumns';
 
 /** Столбцы по расчёту ФОТ, суммы которых складываются по месяцам. */
-export type PayrollCalcSumColumn = 'calc_timesheet' | 'calc_travel' | 'calc_housing' | 'calc_supplements' | 'calc_deductions';
+export type PayrollCalcSumColumn =
+  | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_housing' | 'calc_supplements' | 'calc_deductions'
+  | 'calc_net';
 
-const CALC_SUM_FIELD: Record<PayrollCalcSumColumn, 'timesheet' | 'travel' | 'housing' | 'supplements' | 'deductions'> = {
+const CALC_SUM_FIELD: Record<
+  PayrollCalcSumColumn,
+  'timesheet' | 'overtime' | 'travel' | 'housing' | 'supplements' | 'deductions' | 'net'
+> = {
   calc_timesheet: 'timesheet',
+  calc_overtime: 'overtime',
   calc_travel: 'travel',
   calc_housing: 'housing',
   calc_supplements: 'supplements',
   calc_deductions: 'deductions',
+  calc_net: 'net',
 };
 
 export const isCalcSumColumn = (column: PayrollTableColumn): column is PayrollCalcSumColumn => column in CALC_SUM_FIELD;
@@ -29,15 +36,19 @@ export const isCalcSumColumn = (column: PayrollTableColumn): column is PayrollCa
 /** Подсказки шапки: из чего столбец. */
 export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, string>> = {
   calc_rate: 'Оклад (у почасовых — ставка) по условиям оплаты на последний день последнего выбранного месяца',
-  calc_timesheet: 'Расчёт ФОТ по закрытому табелю: оклад по дням (с премиальной частью условий) и переработка; '
+  calc_timesheet: 'Расчёт ФОТ по закрытому табелю: оклад по отработанным дням (с премиальной частью условий); '
     + 'у рабочих бригады — доля выработки по КТУ',
+  calc_overtime: 'Расчёт ФОТ по закрытому табелю: выходы в выходные сверх нормы — днём, в будни — часы корректировки '
+    + 'сверх 8 ч (в предпраздничный — сверх 7 ч); оклад / норма',
   calc_travel: 'Расчёт ФОТ по закрытому табелю',
-  paid_vacation: 'Из 1С',
-  paid_sick: 'Из 1С',
+  paid_vacation: 'Из 1С, в «Сумму» не входит',
+  paid_sick: 'Из 1С, в «Сумму» не входит',
   calc_housing: 'Расчёт ФОТ по закрытому табелю: квартира или доплата за общежитие',
-  paid_recalc: 'Из 1С',
+  paid_recalc: 'Из 1С, в «Сумму» не входит',
   calc_supplements: 'Расчёт ФОТ по закрытому табелю: плановая и разовая доплаты',
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
+  calc_net: 'К выплате по расчёту ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю + переработка '
+    + '+ проезд + проживание + доплаты − удержания (ФОТ)',
   card_payouts: 'Из 1С: ведомости в банк по месяцу начисления',
 };
 
@@ -80,6 +91,16 @@ export const calcIssuesNote = (calc: IPayrollCalcColumns | null | undefined): st
     .join('; ')}`;
 };
 
+/** «Переработка»: из чего — «2 вых. · 6 ч»; нет — null. */
+export const overtimeNote = (calc: IPayrollCalcColumns | null | undefined): string | null => {
+  if (!calc) return null;
+  const parts = [
+    ...(calc.overtime_days > 0 ? [`${calc.overtime_days} вых.`] : []),
+    ...(calc.overtime_hours > 0 ? [`${String(calc.overtime_hours).replace('.', ',')} ч`] : []),
+  ];
+  return parts.length > 0 ? parts.join(' · ') : null;
+};
+
 /** «Проживание»: вид — квартира или общежитие (за несколько месяцев — оба). */
 export const housingKindsLabel = (calc: IPayrollCalcColumns | null | undefined): string | null => {
   if (!calc || calc.housing_kinds.length === 0) return null;
@@ -116,8 +137,8 @@ export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
 
 /** Столбцы сумм «Расчётов»: без данных ни в одной загруженной строке — скрываются сами. */
 const SUM_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
-  'payout', 'accrued', 'deductions', 'calc_rate', 'calc_timesheet', 'calc_travel', 'paid_vacation', 'paid_sick',
-  'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'card_payouts',
+  'payout', 'accrued', 'deductions', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'paid_vacation',
+  'paid_sick', 'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'calc_net', 'card_payouts',
 ]);
 
 /** Данные строки в столбце сумм: любая сумма, в том числе 0 и минус; у «Начислено по табелю» — и неполный расчёт. */

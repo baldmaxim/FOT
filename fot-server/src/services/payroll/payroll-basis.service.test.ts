@@ -151,6 +151,35 @@ describe('основа расчёта: дни месяца', () => {
     expect(result.dayoffDates).toEqual(['2026-09-05']);
   });
 
+  it('порог переработки — не ниже 8 ч: короткая пятница графика (7 ч) с правкой 8 — не переработка, 9 — 1 ч', () => {
+    // «5+0 + рос пр(8час) пт - час»: пятница 09:00–17:00, 7 ч (Марухина, сентябрь: четыре такие пятницы).
+    const shortFriday: IResolvedSchedule = {
+      ...fiveTwo,
+      day_overrides: { 5: { work_start: '09:00:00', work_end: '17:00:00', work_hours: 7 } },
+    };
+    const result = classify({
+      '2026-09-04': day('work', 8, true),
+      '2026-09-11': day('work', 9, true),
+    }, { schedules: new Map(septemberDates.map(date => [date, shortFriday])) });
+    expect(result.overtimeMinutes).toEqual({ '2026-09-11': 60 });
+  });
+
+  it('предпраздничный день — порог 7 ч; смена длиннее 8 ч — порог её норма', () => {
+    const calendar: IProductionCalendarMonth = {
+      year: 2026, month: 9, norm_days: 22, norm_hours: 175, holidays: [], mandatory_holidays: [],
+      pre_holidays: ['2026-09-30'],
+    };
+    expect(classify({ '2026-09-30': day('work', 8, true) }, { calendar }).overtimeMinutes)
+      .toEqual({ '2026-09-30': 60 });
+
+    const longShift: IResolvedSchedule = { ...fiveTwo, work_hours: 11 };
+    expect(classify({
+      '2026-09-01': day('work', 11, true),
+      '2026-09-02': day('work', 12, true),
+    }, { schedules: new Map(septemberDates.map(date => [date, longShift])) }).overtimeMinutes)
+      .toEqual({ '2026-09-02': 60 });
+  });
+
   it('дня нет в графике — рабочий, как в выгрузке 1С', () => {
     const result = classify({ '2026-09-05': day('work', 8) }, { schedules: new Map() });
     expect(result.workdayDates).toEqual(['2026-09-05']);

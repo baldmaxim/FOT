@@ -1,8 +1,9 @@
 /**
  * Столбцы «Зарплата → Расчёты» (решение пользователя 27.10.2026): состав зарплаты строки за выбранные месяцы.
  *
- * Расчёт ФОТ по закрытому табелю (getPayoutForEmployees) — «Начислено по табелю» (оклад по дням + переработка + доля
- * бригады), проезд, проживание, доплаты (плановая + разовая), удержания «Справочника». Несколько месяцев — сумма
+ * Расчёт ФОТ по закрытому табелю (getPayoutForEmployees) — «Начислено по табелю» (оклад по дням или доля бригады),
+ * переработка, проезд, проживание, доплаты (плановая + разовая), удержания «Справочника» и «Сумма» — к выплате
+ * (начислено − удержано, то же число, что «Сумма» во вкладке «Табель → Зарплата»). Несколько месяцев — сумма
  * по месяцам. Неизвестная сумма в ноль не превращается: незакрытый месяц — open_months, закрытый с неполным
  * расчётом (почасовая ставка, нет условий или нормы, выработка бригады не введена) — incomplete. «Оклад» не
  * суммируется: ставка условий на последний день последнего месяца.
@@ -46,22 +47,28 @@ export interface ICalcColumns {
   rate: ICalcRate | null;
   /** Суммы ФОТ за закрытые месяцы, NUMERIC текстом; null — суммы нет ни в одном месяце. */
   timesheet: string | null;
+  overtime: string | null;
+  /** Из чего переработка: выходы в выходные сверх нормы (дни) и часы в будни по корректировкам. */
+  overtime_days: number;
+  overtime_hours: number;
   travel: string | null;
   housing: string | null;
   housing_kinds: HousingKind[];
   supplements: string | null;
   deductions: string | null;
+  /** К выплате: начислено − удержано за закрытые месяцы, без НДФЛ; null — закрытых месяцев нет. */
+  net: string | null;
   /** Месяцы с незакрытым табелем (YYYY-MM); месяц, где сотрудник не работал, сюда не входит. */
   open_months: string[];
   incomplete: Array<{ month: string; reasons: CalcColumnsIssue[] }>;
 }
 
-type CalcSumKey = 'timesheet' | 'travel' | 'housing' | 'supplements';
+type CalcSumKey = 'timesheet' | 'overtime' | 'travel' | 'housing' | 'supplements';
 
 const LINE_COLUMN: Record<PayrollCalcLineCode, CalcSumKey> = {
   contract: 'timesheet',
-  overtime: 'timesheet',
   brigade: 'timesheet',
+  overtime: 'overtime',
   travel: 'travel',
   housing: 'housing',
   bonus: 'supplements',
@@ -75,9 +82,11 @@ const toAmount = (cents: number | null): string | null => (cents === null ? null
 export const sumCalcColumns = (
   byMonth: ReadonlyArray<readonly [string, PayrollCalc | undefined]>,
 ): Omit<ICalcColumns, 'rate'> => {
-  const sums: Record<CalcSumKey | 'deductions', number | null> = {
-    timesheet: null, travel: null, housing: null, supplements: null, deductions: null,
+  const sums: Record<CalcSumKey | 'deductions' | 'net', number | null> = {
+    timesheet: null, overtime: null, travel: null, housing: null, supplements: null, deductions: null, net: null,
   };
+  let overtimeDays = 0;
+  let overtimeHours = 0;
   const housingKinds = new Set<HousingKind>();
   const openMonths: string[] = [];
   const incomplete: ICalcColumns['incomplete'] = [];
@@ -91,6 +100,10 @@ export const sumCalcColumns = (
     const reasons = new Set<CalcColumnsIssue>(calc.missing.filter(isCalcIssue));
     for (const line of calc.lines) {
       const key = LINE_COLUMN[line.code];
+      if (line.code === 'overtime') {
+        overtimeDays += line.days?.worked ?? 0;
+        overtimeHours += line.hours ?? 0;
+      }
       if (line.amount === null) {
         if (reasons.size === 0) reasons.add('unknown_amount');
         continue;
@@ -98,6 +111,7 @@ export const sumCalcColumns = (
       sums[key] = addCents(sums[key], line.amount);
     }
     for (const deduction of calc.deductions) sums.deductions = addCents(sums.deductions, deduction.amount);
+    sums.net = addCents(sums.net, calc.net);
     for (const allowance of calc.rate_allowances) {
       if (allowance.code === 'housing') housingKinds.add('apartment');
       else if (allowance.code === 'dormitory_allowance') housingKinds.add('dormitory');
@@ -107,11 +121,15 @@ export const sumCalcColumns = (
 
   return {
     timesheet: toAmount(sums.timesheet),
+    overtime: toAmount(sums.overtime),
+    overtime_days: overtimeDays,
+    overtime_hours: Math.round(overtimeHours * 100) / 100,
     travel: toAmount(sums.travel),
     housing: toAmount(sums.housing),
     housing_kinds: [...housingKinds],
     supplements: toAmount(sums.supplements),
     deductions: toAmount(sums.deductions),
+    net: toAmount(sums.net),
     open_months: openMonths,
     incomplete,
   };

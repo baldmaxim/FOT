@@ -11,8 +11,10 @@
  * Квота Сб/Вс графика (она в норме) сначала заполняется выходами — как в ЗУП: у «5+2» с одной субботой и двумя
  * согласованными выходами (Баранский, август 2026) 23 из 23 по окладу и один выход «Переработкой», а не 22 + 2.
  * Переработка в будни — только по корректировке с часами: часы 1С дня (при правке — округлённый факт) сверх
- * округлённой нормы дня; СКУД сверх графика без правки 1С и так срезает (Абраменко, август: 8,47 / 11 / 11 ч →
- * 0 + 3 + 3 = 6 ч, как в ЗУП).
+ * округлённой нормы дня, но не ниже дня производственного календаря — 8 ч, в предпраздничный 7 ч (решение
+ * пользователя 27.10.2026): у графиков с короткой пятницей (7 ч) правка «8» в пятницу — не переработка, ЗУП её не
+ * платит (Марухина, август 2026: четыре таких пятницы, переработки в ЗУП нет). СКУД сверх графика без правки 1С и так
+ * срезает (Абраменко, август: 8,47 / 11 / 11 ч → 0 + 3 + 3 = 6 ч, как в ЗУП).
  *
  * Запись — под SAVEPOINT: сбой основы не мешает закрыть табель и отдать его в 1С (основы нет — месяц
  * «Табель не закрыт»). Строки неизменяемы: новая revision — только при другом basis_hash.
@@ -39,6 +41,13 @@ export type PayrollAbsenceDays = Record<PayrollAbsenceStatus, number>;
 export type PayrollBasisQuality = 'materialized' | 'reconstructed';
 
 export type PayrollBasisReason = 'close' | 'rebuild' | 'backfill';
+
+/**
+ * Порог переработки в будни не ниже дня производственного календаря (40-часовая неделя), как ЗУП: 8 ч,
+ * в предпраздничный день 7 ч. Смена длиннее (11–12 ч) — порог её норма.
+ */
+const CALENDAR_DAY_HOURS = 8;
+const CALENDAR_PRE_HOLIDAY_HOURS = 7;
 
 /** Выход в выходной оплачивается только за фактическую работу (WORKED_STATUSES_FOR_APPROVAL табеля). */
 const DAYOFF_WORK_STATUSES = new Set(['work', 'remote', 'manual']);
@@ -110,21 +119,18 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
     const dateObj = new Date(year, mon - 1, dom);
     const hours = typeof day.hours === 'number' ? day.hours : 0;
     const dayNorm = schedule ? getDayNormHours(schedule, dateObj, input.calendar) : 0;
+    const preHoliday = Boolean(input.calendar?.pre_holidays?.includes(date));
     // Буква (УУ, Н, В) уходит в 1С без часов — как в buildEmployeeRowsForOneC.
     const exportedHours = STATUS_LABELS[day.status] || hours <= 0.001
       ? 0
-      : compute1CDayHours(
-        hours,
-        dayNorm,
-        Boolean(input.calendar?.pre_holidays?.includes(date)),
-        isStudentSchedule(schedule),
-        Boolean(day.hours_overridden),
-      );
+      : compute1CDayHours(hours, dayNorm, preHoliday, isStudentSchedule(schedule), Boolean(day.hours_overridden));
     if (!isWorkedDayForOneC(day.status, exportedHours)) continue;
     // Без графика выгрузка считает день рабочим — так же и здесь.
     if (!schedule || isWorkingDay(schedule, dateObj, input.calendar)) {
       workdayDates.push(date);
-      const extra = exportedHours - Math.round(dayNorm);
+      // Порог — не ниже дня производственного календаря: короткая пятница графика (7 ч) с правкой 8 ч — не переработка.
+      const overtimeFrom = Math.max(Math.round(dayNorm), preHoliday ? CALENDAR_PRE_HOLIDAY_HOURS : CALENDAR_DAY_HOURS);
+      const extra = exportedHours - overtimeFrom;
       if (schedule && day.hours_overridden && extra > 0) overtimeMinutes[date] = extra * 60;
     } else if (input.plannedWeekendDays.has(`${input.employeeId}|${date}`)) {
       workdayDates.push(date);

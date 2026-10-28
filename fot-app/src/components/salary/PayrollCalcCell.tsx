@@ -10,6 +10,7 @@ import {
   cardPayoutLines,
   formatCalcRate,
   housingKindsLabel,
+  overtimeNote,
   type PayrollCalcSumColumn,
 } from '../../utils/payrollCalcColumns';
 import { formatPaidAmount } from '../../utils/payrollPaid';
@@ -65,12 +66,18 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
       const note = calcIssuesNote(row.calc);
       const amount = calcSumAmount(row, column);
       const notClosed = column === 'calc_timesheet' && amount === null && calcNotClosed(row.calc);
-      const kinds = column === 'calc_housing' && amount !== null ? housingKindsLabel(row.calc) : null;
+      // Вторая строка: вид проживания, из чего переработка.
+      const sub = amount === null ? null
+        : column === 'calc_housing' ? housingKindsLabel(row.calc)
+          : column === 'calc_overtime' ? overtimeNote(row.calc) : null;
       return (
-        <td className={styles.cellNumber} title={note ?? undefined}>
+        <td
+          className={column === 'calc_net' ? `${styles.cellNumber} ${styles.calcTotal}` : styles.cellNumber}
+          title={note ?? undefined}
+        >
           {notClosed ? <span className={styles.calcMuted}>не закрыт</span> : formatAmount(amount)}
           {note && !notClosed && <AlertTriangle size={12} className={styles.calcWarn} role="img" aria-label={note} />}
-          {kinds && <span className={styles.calcSub}>{kinds}</span>}
+          {sub && <span className={styles.calcSub}>{sub}</span>}
         </td>
       );
     }

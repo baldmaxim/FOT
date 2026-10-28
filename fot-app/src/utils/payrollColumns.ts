@@ -9,8 +9,8 @@ import type { PayrollSortKey } from '../services/payrollService';
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
   | 'payout' | 'accrued' | 'deductions'
-  | 'calc_rate' | 'calc_timesheet' | 'calc_travel' | 'paid_vacation' | 'paid_sick' | 'calc_housing'
-  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'card_payouts';
+  | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'paid_vacation' | 'paid_sick' | 'calc_housing'
+  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts';
 
 /** Столбцы условий с сортировкой и фильтром; суммы «Выплачено» и «Расчётов» их не имеют. */
 const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
@@ -50,6 +50,7 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'deductions', label: 'Удержания' },
   { key: 'calc_rate', label: 'Оклад' },
   { key: 'calc_timesheet', label: 'Начислено по табелю' },
+  { key: 'calc_overtime', label: 'Переработка' },
   { key: 'calc_travel', label: 'Компенсация проезда' },
   { key: 'paid_vacation', label: 'Отпускные' },
   { key: 'paid_sick', label: 'Больничные' },
@@ -57,6 +58,7 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
   { key: 'calc_supplements', label: 'Доплаты' },
   { key: 'calc_deductions', label: 'Удержания (ФОТ)' },
+  { key: 'calc_net', label: 'Сумма' },
   { key: 'card_payouts', label: 'Выплаты на карту' },
 ];
 

@@ -67,6 +67,7 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   deductions: 'colDeductions',
   calc_rate: 'colCalcRate',
   calc_timesheet: 'colCalcTimesheet',
+  calc_overtime: 'colCalcSum',
   calc_travel: 'colCalcSum',
   paid_vacation: 'colCalcSum',
   paid_sick: 'colCalcSum',
@@ -74,6 +75,7 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   paid_recalc: 'colCalcSum',
   calc_supplements: 'colCalcSum',
   calc_deductions: 'colCalcSum',
+  calc_net: 'colCalcSum',
   card_payouts: 'colCardPayouts',
 };
 

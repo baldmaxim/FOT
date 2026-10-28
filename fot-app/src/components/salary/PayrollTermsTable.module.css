@@ -203,6 +203,7 @@
 /* Ячейки состава зарплаты (PayrollCalcCell) */
 .calcWarn { margin-left: 4px; vertical-align: -1px; color: var(--warning); }
 .calcMuted { color: var(--text-secondary); }
+.calcTotal { font-weight: 600; }
 .calcSub { display: block; color: var(--text-secondary); font-size: 11px; }
 .calcLine { display: block; }
 .calcLineLabel { display: inline-block; min-width: 52px; margin-right: 6px; color: var(--text-secondary); }

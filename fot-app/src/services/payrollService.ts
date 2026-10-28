@@ -57,11 +57,17 @@ export type PayrollCalcColumnsIssue =
 export interface IPayrollCalcColumns {
   rate: { amount: string; calc_type: PayrollCalcType; as_of: string } | null;
   timesheet: string | null;
+  overtime: string | null;
+  /** Из чего переработка: выходы в выходные сверх нормы и часы в будни по корректировкам (сверх 8 ч). */
+  overtime_days: number;
+  overtime_hours: number;
   travel: string | null;
   housing: string | null;
   housing_kinds: Array<'apartment' | 'dormitory'>;
   supplements: string | null;
   deductions: string | null;
+  /** К выплате: начислено − удержано, без НДФЛ — как «Сумма» во вкладке «Табель → Зарплата». */
+  net: string | null;
   open_months: string[];
   incomplete: Array<{ month: string; reasons: PayrollCalcColumnsIssue[] }>;
 }
