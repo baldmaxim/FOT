@@ -1451,61 +1451,6 @@
   background: var(--bg-secondary);
 }
 
-.sc-panel-add-bar {
-  display: flex;
-  gap: 6px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.sc-panel-add-btn {
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transition: all var(--transition);
-}
-
-.sc-panel-add-btn:hover {
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
-}
-
-.sc-panel-add-form {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.sc-panel-add-form input {
-  height: 32px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: 13px;
-  flex: 1;
-  min-width: 0;
-}
-
-.sc-panel-add-form input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
 .sc-panel-body {
   flex: 1;
   overflow-y: auto;

@@ -1,8 +1,7 @@
 import { useState, useMemo, useCallback, memo, type FC } from 'react';
-import { Pencil, X, TrendingUp, Briefcase, Trash2, Check } from 'lucide-react';
+import { Pencil, X, Briefcase, Trash2, Check } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
-import { useAuth } from '../../contexts/AuthContext';
 import type { Employee, EmployeeHistoryEvent } from '../../types';
 
 type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
@@ -28,20 +27,11 @@ interface IHistoryPanelProps {
 
 export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, canEditAssignments, onClose, onRefresh, onDataChanged }) => {
   const toast = useToast();
-  // Legacy «+ Оклад» (change-salary) — только системный администратор, как на сервере:
-  // список доступа к «Зарплате» открывает сам раздел, а не кадровые карточки.
-  const { isSystemAdmin } = useAuth();
-  const canEditSalary = isSystemAdmin;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editReason, setEditReason] = useState('');
   const [saving, setSaving] = useState(false);
-
-  const [addMode, setAddMode] = useState<'salary' | 'position' | null>(null);
-  const [addVal, setAddVal] = useState('');
-  const [addDate, setAddDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [addReason, setAddReason] = useState('');
 
   const salaryEvents = useMemo(
     () => history.filter(e => e.event_type === 'salary').sort((a, b) => a.event_date.localeCompare(b.event_date)),
@@ -69,7 +59,6 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     setEditDate(ev.event_date);
     setEditReason(String(data.reason || data.change_reason || ''));
     if (ev.event_type === 'salary') setEditSalary(String(data.salary || ''));
-    setAddMode(null);
   }, []);
 
   const saveEdit = useCallback(async (ev: EditableHistoryEvent) => {
@@ -99,36 +88,6 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     }
   }, [employee.id, onRefresh, onDataChanged, toast]);
 
-  const handleAdd = useCallback(async () => {
-    if (!addVal) return;
-    setSaving(true);
-    try {
-      if (addMode === 'salary') {
-        await employeeService.changeSalary(employee.id, Number(addVal), addReason || undefined, addDate || undefined);
-      } else {
-        await employeeService.changePosition(employee.id, addVal, addReason || undefined, addDate || undefined);
-      }
-      setAddMode(null);
-      setAddVal('');
-      setAddReason('');
-      setAddDate(new Date().toISOString().slice(0, 10));
-      onRefresh();
-      onDataChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Ошибка добавления');
-    } finally {
-      setSaving(false);
-    }
-  }, [employee.id, addMode, addVal, addReason, addDate, onRefresh, onDataChanged, toast]);
-
-  const openAdd = useCallback((mode: 'salary' | 'position') => {
-    setAddMode(mode);
-    setAddVal('');
-    setAddDate(new Date().toISOString().slice(0, 10));
-    setAddReason('');
-    setEditingId(null);
-  }, []);
-
   return (
     <div className="sc-panel-overlay" onClick={onClose}>
       <div className="sc-panel" onClick={e => e.stopPropagation()}>
@@ -136,37 +95,6 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
           <h3>{employee.full_name}</h3>
           <button className="sc-panel-close" onClick={onClose}><X size={18} /></button>
         </div>
-
-        <div className="sc-panel-add-bar">
-          {canEditSalary && (
-            <button className="sc-panel-add-btn" onClick={() => openAdd('salary')}>
-              <TrendingUp size={13} /> Оклад
-            </button>
-          )}
-          <button className="sc-panel-add-btn" onClick={() => openAdd('position')}>
-            <Briefcase size={13} /> Должность
-          </button>
-        </div>
-
-        {addMode && (
-          <div className="sc-panel-add-form">
-            <div className="sc-panel-edit-row">
-              {addMode === 'salary' ? (
-                <input type="number" value={addVal} onChange={e => setAddVal(e.target.value)} placeholder="Оклад (₽)" autoFocus />
-              ) : (
-                <input value={addVal} onChange={e => setAddVal(e.target.value)} placeholder="Должность" autoFocus />
-              )}
-              <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} />
-            </div>
-            <input value={addReason} onChange={e => setAddReason(e.target.value)} placeholder="Причина" />
-            <div className="sc-panel-edit-actions">
-              <button className="sc-panel-edit-btn save" onClick={handleAdd} disabled={!addVal || saving}>
-                <Check size={13} /> {saving ? '...' : 'Добавить'}
-              </button>
-              <button className="sc-panel-edit-btn" onClick={() => setAddMode(null)}>Отмена</button>
-            </div>
-          </div>
-        )}
 
         <div className="sc-panel-body">
           {loading ? (
