@@ -11,9 +11,11 @@
  * Объект месяца «Не определён» — строке «Свода» объект по часам месяца (payroll-summary-object.service.ts);
  * категория при этом остаётся по базовому объекту.
  */
+import { performance } from 'node:perf_hooks';
+
 import { query } from '../../config/postgres.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey as pairKey } from './payroll-month-attribution.service.js';
-import { resolveSummaryObjects } from './payroll-summary-object.service.js';
+import { resolveSummaryObjects, type ISummaryObjectsStats } from './payroll-summary-object.service.js';
 import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import type { StaffCategory } from './payroll-terms.service.js';
 import { centsToAmount, toCents, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
@@ -133,19 +135,94 @@ export const listPayrollSummaryMonths = async (scope: IPayrollSummaryScope): Pro
 };
 
 /**
+ * Время шагов «Свода», мс (монотонный таймер), и счётчики — для Server-Timing и лога: по ним видно, какой шаг
+ * медленный. Логику не меняет.
+ */
+export interface IPayrollSummaryTiming extends ISummaryObjectsStats {
+  paidMs: number;
+  paidRows: number;
+  scopeMs: number;
+  pairs: number;
+  attributionMs: number;
+  categoriesMs: number;
+  objectsMs: number;
+  buildMs: number;
+  totalMs: number;
+}
+
+export const emptySummaryTiming = (): IPayrollSummaryTiming => ({
+  paidMs: 0, paidRows: 0, scopeMs: 0, pairs: 0, attributionMs: 0, categoriesMs: 0, objectsMs: 0,
+  unknown: 0, byMode: 0, hoursEmployees: 0, hoursMs: 0, buildMs: 0, totalMs: 0,
+});
+
+/** «Свод» дольше — строка в лог. */
+const SUMMARY_LOG_THRESHOLD_MS = 2000;
+
+const ms = (value: number): string => `${Math.round(value)} мс`;
+
+export const formatSummaryTiming = (monthStarts: string[] | null, timing: IPayrollSummaryTiming): string => (
+  `${monthStarts ? monthStarts.map(month => month.slice(0, 7)).join(',') : 'все месяцы'}: `
+  + `суммы 1С ${ms(timing.paidMs)} (${timing.paidRows} строк), охват ${ms(timing.scopeMs)} (${timing.pairs} пар), `
+  + `объект месяца ${ms(timing.attributionMs)}, категории ${ms(timing.categoriesMs)}, `
+  + `объект по часам ${ms(timing.objectsMs)} (не определён ${timing.unknown}, по режиму ${timing.byMode}, `
+  + `по часам ${timing.hoursEmployees} чел. за ${ms(timing.hoursMs)}), сборка ${ms(timing.buildMs)}; всего ${ms(timing.totalMs)}`
+);
+
+/** Server-Timing «Свода»: шаги по порядку, в desc — счётчики. */
+export const summaryServerTiming = (timing: IPayrollSummaryTiming): string => [
+  `summary_paid;dur=${timing.paidMs.toFixed(1)};desc="${timing.paidRows}"`,
+  `summary_scope;dur=${timing.scopeMs.toFixed(1)};desc="${timing.pairs}"`,
+  `summary_attribution;dur=${timing.attributionMs.toFixed(1)}`,
+  `summary_categories;dur=${timing.categoriesMs.toFixed(1)}`,
+  `summary_objects;dur=${timing.objectsMs.toFixed(1)};desc="${timing.unknown}/${timing.byMode}/${timing.hoursEmployees}"`,
+  `summary_hours;dur=${timing.hoursMs.toFixed(1)}`,
+  `summary_build;dur=${timing.buildMs.toFixed(1)}`,
+  `summary_total;dur=${timing.totalMs.toFixed(1)}`,
+].join(', ');
+
+/**
  * «Свод» за месяцы monthStarts (первые числа; null — все месяцы с суммами): строки по (сотрудник,
- * объект, категория), суммы статей сложены за месяцы — в копейках, без потерь на дробях.
+ * объект, категория), суммы статей сложены за месяцы — в копейках, без потерь на дробях. timing — время шагов
+ * (Server-Timing); всего дольше SUMMARY_LOG_THRESHOLD_MS — строка в лог.
  */
 export const loadPayrollSummary = async (input: {
   scope: IPayrollSummaryScope;
   monthStarts: string[] | null;
+  timing?: IPayrollSummaryTiming;
 }): Promise<IPayrollSummary> => {
-  if (input.scope.departmentIds?.length === 0) return { months: [], rows: [] };
-  const paidAll = await loadPaid(input.monthStarts);
+  const timing = input.timing ?? emptySummaryTiming();
+  const started = performance.now();
+  try {
+    return await buildSummary(input.scope, input.monthStarts, timing);
+  } finally {
+    timing.totalMs = performance.now() - started;
+    if (timing.totalMs > SUMMARY_LOG_THRESHOLD_MS) {
+      console.log(`[payroll-summary] ${formatSummaryTiming(input.monthStarts, timing)}`);
+    }
+  }
+};
+
+const buildSummary = async (
+  scope: IPayrollSummaryScope,
+  monthStarts: string[] | null,
+  timing: IPayrollSummaryTiming,
+): Promise<IPayrollSummary> => {
+  let mark = performance.now();
+  const lap = (key: 'paidMs' | 'scopeMs' | 'attributionMs' | 'categoriesMs' | 'objectsMs' | 'buildMs'): void => {
+    const now = performance.now();
+    timing[key] += now - mark;
+    mark = now;
+  };
+  if (scope.departmentIds?.length === 0) return { months: [], rows: [] };
+  const paidAll = await loadPaid(monthStarts);
+  timing.paidRows = paidAll.length;
+  lap('paidMs');
   if (paidAll.length === 0) return { months: [], rows: [] };
 
-  const { allowed, employees, breakdown } = await filterScope(paidAll, input.scope);
+  const { allowed, employees, breakdown } = await filterScope(paidAll, scope);
   const paid = paidAll.filter(row => allowed.has(pairKey(row.employee_id, row.month)));
+  timing.pairs = allowed.size;
+  lap('scopeMs');
   if (paid.length === 0) return { months: [], rows: [] };
   const months = [...new Set(paid.map(row => row.month))].sort();
 
@@ -155,6 +232,7 @@ export const loadPayrollSummary = async (input: {
     return { employeeId: Number(employeeId), month };
   });
   const attribution = await attributeMonths(pairs, breakdown, employees);
+  lap('attributionMs');
   const categories = await resolveMonthStaffCategories(pairs.map(pair => {
     const item = attribution.get(pairKey(pair.employeeId, pair.month));
     return {
@@ -166,8 +244,10 @@ export const loadPayrollSummary = async (input: {
     };
   }));
   const categoryByPair = new Map(pairs.map((pair, index) => [pairKey(pair.employeeId, pair.month), categories[index]]));
+  lap('categoriesMs');
   // Объект строки, где базовый «Не определён»: режим месяца, затем часы. Категорию не меняет.
-  const summaryObjects = await resolveSummaryObjects(attribution);
+  const summaryObjects = await resolveSummaryObjects(attribution, undefined, timing);
+  lap('objectsMs');
 
   // Отдел месяца — и для категории, и для подписи «Отдел» (уволенный — отдел, где работал).
   const departmentIds = [...new Set([...attribution.values()]
@@ -207,6 +287,7 @@ export const loadPayrollSummary = async (input: {
     target.cents.set(row.item, (target.cents.get(row.item) ?? 0) + toCents(row.amount));
   }
 
+  lap('buildMs');
   return {
     months,
     rows: [...rows.values()]

@@ -10,6 +10,8 @@
  *      считаются — в прошлом месяце площадка работала. Текущий месяц — по вчера;
  *   3. иначе — «Не определён».
  */
+import { performance } from 'node:perf_hooks';
+
 import { moscowTodayIso } from '../../utils/date.utils.js';
 import { loadSkudObjects, loadTimesheetObjectHours } from '../employee-timesheet-object.service.js';
 import { monthPairKey, type IMonthAttribution } from './payroll-month-attribution.service.js';
@@ -22,16 +24,26 @@ import {
   type ISummaryObjectMeta,
 } from './payroll-summary.attribution.js';
 
+/** Сколько пар «Не определён», скольким объект дал режим месяца, скольким считали часы и за сколько мс. */
+export interface ISummaryObjectsStats {
+  unknown: number;
+  byMode: number;
+  hoursEmployees: number;
+  hoursMs: number;
+}
+
 /**
  * Объекты «Свода» для пар («сотрудник|YYYY-MM») с базовым «Не определён». В ответе — только пары,
- * которым объект нашёлся; остальные остаются «Не определён».
+ * которым объект нашёлся; остальные остаются «Не определён». stats — счётчики для замера «Свода».
  */
 export const resolveSummaryObjects = async (
   attribution: ReadonlyMap<string, IMonthAttribution>,
   now: Date = new Date(),
+  stats?: ISummaryObjectsStats,
 ): Promise<Map<string, ISummaryObject>> => {
   const result = new Map<string, ISummaryObject>();
   const unknown = [...attribution].filter(([, item]) => item.object.key === SUMMARY_UNKNOWN.key);
+  if (stats) stats.unknown += unknown.length;
   if (unknown.length === 0) return result;
 
   const objects = await loadSkudObjects();
@@ -45,6 +57,7 @@ export const resolveSummaryObjects = async (
     const byMode = fallbackSummaryObject(item.mode, meta);
     if (byMode.key !== SUMMARY_UNKNOWN.key) {
       result.set(key, byMode);
+      if (stats) stats.byMode += 1;
       continue;
     }
     const [employeeId, month] = key.split('|');
@@ -57,11 +70,16 @@ export const resolveSummaryObjects = async (
   for (const [month, employeeIds] of byMonth) {
     const period = summaryHoursPeriod(`${month}-01`, today);
     if (!period) continue;
+    const hoursStarted = performance.now();
     const hours = await loadTimesheetObjectHours(employeeIds, period, {
       todayStr: today,
       objectsById: objects,
       includeInactive: true,
     });
+    if (stats) {
+      stats.hoursEmployees += employeeIds.length;
+      stats.hoursMs += performance.now() - hoursStarted;
+    }
     for (const employeeId of employeeIds) {
       const object = summaryObjectFromHours(hours.get(employeeId)?.[0]);
       if (object) result.set(monthPairKey(employeeId, month), object);

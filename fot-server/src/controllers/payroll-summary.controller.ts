@@ -6,7 +6,12 @@ import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolvePayrollStaffScope } from '../services/payroll/payroll-registry-scope.service.js';
-import { listPayrollSummaryMonths, loadPayrollSummary } from '../services/payroll/payroll-summary.service.js';
+import {
+  emptySummaryTiming,
+  listPayrollSummaryMonths,
+  loadPayrollSummary,
+  summaryServerTiming,
+} from '../services/payroll/payroll-summary.service.js';
 import { handlePayrollZodError, parsePayrollMonthsQuery, payrollMonthStarts } from './payroll-dictionary.helpers.js';
 
 /** GET /api/payroll/summary/months — месяцы, за которые в охвате пользователя есть «Оплачено». */
@@ -29,7 +34,11 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const selection = parsePayrollMonthsQuery(req.query.months);
     const monthStarts = selection === null || selection === 'all' ? null : payrollMonthStarts(selection);
     const scope = await resolvePayrollStaffScope(req);
-    res.json({ success: true, data: await loadPayrollSummary({ scope, monthStarts }) });
+    // Замер шагов — в Server-Timing (DevTools → Network → Timing), дольше 2 с — и в лог.
+    const timing = emptySummaryTiming();
+    const data = await loadPayrollSummary({ scope, monthStarts, timing });
+    res.setHeader('Server-Timing', summaryServerTiming(timing));
+    res.json({ success: true, data });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
     console.error('payrollSummary.get error:', err);

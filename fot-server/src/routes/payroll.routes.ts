@@ -124,7 +124,7 @@ router.post('/registry/:table/export', deductionsView, payrollRegistryController
 
 // ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──
 router.get('/summary/months', termsView, payrollSummaryController.months);
-router.get('/summary', termsView, payrollSummaryController.get);
+router.get('/summary', termsView, serverTiming('payroll_summary'), payrollSummaryController.get);
 
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);

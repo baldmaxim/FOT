@@ -6,7 +6,10 @@ const registryScope = vi.hoisted(() => ({ resolvePayrollStaffScope: vi.fn() }));
 vi.mock('../services/payroll/payroll-registry-scope.service.js', () => registryScope);
 
 const summary = vi.hoisted(() => ({ listPayrollSummaryMonths: vi.fn(), loadPayrollSummary: vi.fn() }));
-vi.mock('../services/payroll/payroll-summary.service.js', () => summary);
+vi.mock('../services/payroll/payroll-summary.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../services/payroll/payroll-summary.service.js')>()),
+  ...summary,
+}));
 
 import { payrollSummaryController } from './payroll-summary.controller.js';
 
@@ -14,10 +17,12 @@ const makeRes = () => {
   const res = {
     statusCode: 200,
     body: undefined as unknown,
+    headers: {} as Record<string, string>,
     status(code: number) { this.statusCode = code; return this; },
     json(payload: unknown) { this.body = payload; return this; },
+    setHeader(name: string, value: string) { this.headers[name] = value; return this; },
   };
-  return res as unknown as Response & { statusCode: number; body: any };
+  return res as unknown as Response & { statusCode: number; body: any; headers: Record<string, string> };
 };
 
 const makeReq = (query: Record<string, unknown> = {}): AuthenticatedRequest => ({
@@ -45,8 +50,9 @@ describe('«Свод»', () => {
     await payrollSummaryController.get(makeReq({ months: '2026-08,2026-07' }), makeRes());
     await payrollSummaryController.get(makeReq({ months: 'all' }), makeRes());
     await payrollSummaryController.get(makeReq(), makeRes());
-    expect(summary.loadPayrollSummary.mock.calls.map(call => call[0])).toEqual([
-      { scope: SCOPE, monthStarts: ['2026-07-01', '2026-08-01'] },
+    // Третье поле — замер шагов (Server-Timing).
+    expect(summary.loadPayrollSummary.mock.calls.map(call => call[0])).toMatchObject([
+      { scope: SCOPE, monthStarts: ['2026-07-01', '2026-08-01'], timing: expect.objectContaining({ totalMs: 0 }) },
       { scope: SCOPE, monthStarts: null },
       { scope: SCOPE, monthStarts: null },
     ]);
