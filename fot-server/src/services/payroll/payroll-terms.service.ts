@@ -215,11 +215,11 @@ export interface IPlannedSupplementValue {
  * (NUMERIC с NUMERIC). Вызывать в транзакции под блокировкой сотрудника (lockPayrollEmployee),
  * иначе два параллельных сохранения прочтут одну и ту же последнюю версию.
  *
- * Возвращает true, если доплата изменилась.
+ * Возвращает true, если доплата изменилась. createdBy null — запись скриптом по списку 1С, без автора.
  */
 export const setPlannedSupplement = async (
   exec: DbExecutor,
-  input: { employeeId: number; value: IPlannedSupplementValue | null; createdBy: string },
+  input: { employeeId: number; value: IPlannedSupplementValue | null; createdBy: string | null },
 ): Promise<boolean> => {
   const res = await exec.query(
     `WITH last AS (

@@ -6,7 +6,7 @@ import type { AuthenticatedRequest } from '../../types/index.js';
 
 // Плановая доплата на настоящем PostgreSQL: журнал версий (миграция 293), действие и прежние
 // значения в истории, два параллельных сохранения, общий журнал с окладом, SQL списка (и «Расчётов»:
-// статьи 1С и ведомости в банк).
+// статьи 1С и ведомости в банк), приведение доплат к списку 1С.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
 
@@ -25,6 +25,7 @@ vi.mock('../../config/postgres.js', async () => {
     return pg.pool;
   };
   return {
+    pool,
     query: async (sql: string, params?: readonly unknown[]) => (await pool().query(sql, params as unknown[])).rows,
     queryOne: async (sql: string, params?: readonly unknown[]) =>
       (await pool().query(sql, params as unknown[])).rows[0] ?? null,
@@ -76,6 +77,8 @@ import {
 } from './payroll-terms.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
 import { listPayouts1cMonths } from './payroll-1c-payouts.service.js';
+import { PlannedSupplementSyncError, syncPlannedSupplements } from './payroll-planned-supplements-sync.service.js';
+import { PLANNED_SUPPLEMENT_PERIODS_SQL } from './payroll-supplements.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -431,5 +434,97 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     expect(await listPayouts1cMonths({
       contractorRootId: null, departmentIds: ['00000000-0000-0000-0000-0000000000d1'],
     })).toEqual([]);
+  });
+
+  describe('приведение плановых доплат к списку 1С', () => {
+    const p = (amount: number, dateFrom: string, dateTo: string | null = null) => ({ amount, dateFrom, dateTo });
+    const periods = async (employeeId: number) => (await pg.pool!.query(
+      `SELECT x.amount::text AS amount, to_char(x.date_from, 'YYYY-MM-DD') AS date_from,
+              to_char(x.date_to, 'YYYY-MM-DD') AS date_to
+         FROM (${PLANNED_SUPPLEMENT_PERIODS_SQL}) x WHERE x.employee_id = $1 ORDER BY x.date_from`,
+      [employeeId],
+    )).rows;
+    const versionCount = async () => Number((await pg.pool!.query(
+      'SELECT count(*) AS n FROM payroll_planned_supplements WHERE employee_id BETWEEN 20 AND 29',
+    )).rows[0].n);
+    // Корж — две строки таблицы вместе; Белякова — прежняя заменяется; Власов — снять; Бурлаку — новая;
+    // Смитская — уже как в таблице.
+    const targets = [
+      {
+        employeeId: 20, fullName: 'Корж Илья Семенович',
+        periods: [p(20000, '2023-03-01', '2026-09-30'), p(30000, '2026-10-01', '2027-01-31'), p(20000, '2027-02-01')],
+      },
+      { employeeId: 21, fullName: 'Белякова Надежда Владимировна', periods: [p(10000, '2026-10-01', '2027-01-31')] },
+      { employeeId: 22, fullName: 'Власов Алексей Николаевич', periods: [] },
+      { employeeId: 23, fullName: 'Бурлаку Кристина Александровна', periods: [p(10000, '2026-10-01', '2027-01-31')] },
+      { employeeId: 24, fullName: 'Смитская Юлия Александровна', periods: [p(20000, '2023-01-01')] },
+    ];
+
+    beforeAll(async () => {
+      await pg.pool!.query(`
+        INSERT INTO employees (id, full_name) VALUES
+          (20, 'Корж Илья Семенович'), (21, 'Белякова Надежда Владимировна'), (22, 'Власов Алексей Николаевич'),
+          (23, 'Бурлаку Кристина Александровна'), (24, 'Смитская Юлия Александровна'), (25, 'Ёлкин Пётр');
+        INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by) VALUES
+          (20, 20000, '2023-03-01', NULL, NULL),
+          (21, 25000, '2023-09-01', NULL, NULL),
+          (22, 20000, '2023-02-01', NULL, NULL),
+          (24, 20000, '2023-01-01', NULL, NULL),
+          (25, 15000, '2020-01-01', '2020-12-31', NULL),
+          (25, 20000, '2021-01-01', NULL, NULL);
+      `);
+    });
+
+    it('сухой прогон показывает «станет» и ничего не оставляет', async () => {
+      const before = await versionCount();
+      const items = await syncPlannedSupplements(targets, { apply: false });
+      expect(items.map(item => [item.employeeId, item.status])).toEqual([
+        [20, 'changed'], [21, 'changed'], [22, 'changed'], [23, 'changed'], [24, 'same'],
+      ]);
+      expect(items[0].after).toEqual(targets[0].periods);
+      expect(await versionCount()).toBe(before);
+      expect(await periods(21)).toEqual([{ amount: '25000.00', date_from: '2023-09-01', date_to: null }]);
+    });
+
+    it('запись: периоды как в списке, автор пуст, повтор ничего не пишет', async () => {
+      await syncPlannedSupplements(targets, { apply: true });
+      expect(await periods(20)).toEqual([
+        { amount: '20000.00', date_from: '2023-03-01', date_to: '2026-09-30' },
+        { amount: '30000.00', date_from: '2026-10-01', date_to: '2027-01-31' },
+        { amount: '20000.00', date_from: '2027-02-01', date_to: null },
+      ]);
+      expect(await periods(21)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+      expect(await periods(22)).toEqual([]);
+      expect(await periods(23)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+      expect(await periods(24)).toEqual([{ amount: '20000.00', date_from: '2023-01-01', date_to: null }]);
+      expect(Number((await pg.pool!.query(
+        'SELECT count(*) AS n FROM payroll_planned_supplements WHERE employee_id BETWEEN 20 AND 29 AND created_by IS NOT NULL',
+      )).rows[0].n)).toBe(0);
+
+      const count = await versionCount();
+      const again = await syncPlannedSupplements(targets, { apply: true });
+      expect(again.every(item => item.status === 'same')).toBe(true);
+      expect(await versionCount()).toBe(count);
+    });
+
+    it('ФИО не совпадает с id — ошибка, ничего не записано', async () => {
+      const count = await versionCount();
+      await expect(syncPlannedSupplements(
+        [{ employeeId: 23, fullName: 'Рацкевич Светлана Юрьевна', periods: [p(20000, '2026-10-01', '2027-01-31')] }],
+        { apply: true },
+      )).rejects.toThrow(PlannedSupplementSyncError);
+      expect(await versionCount()).toBe(count);
+    });
+
+    it('после записи периоды не равны списку — откат всего списка', async () => {
+      const count = await versionCount();
+      // У 25 старый период 2020 года не перекрывается новым — журнал его не снимет, цель недостижима.
+      await expect(syncPlannedSupplements([
+        { employeeId: 23, fullName: 'Бурлаку Кристина Александровна', periods: [p(12000, '2026-10-01', '2027-01-31')] },
+        { employeeId: 25, fullName: 'Елкин Петр', periods: [p(10000, '2026-10-01', '2027-01-31')] },
+      ], { apply: true })).rejects.toThrow(/не равны списку/);
+      expect(await versionCount()).toBe(count);
+      expect(await periods(23)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+    });
   });
 });
