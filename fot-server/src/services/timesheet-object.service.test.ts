@@ -33,6 +33,8 @@ const mockedState = vi.hoisted(() => ({
       direction: 'entry' | 'exit';
     }>,
     employee_skud_object_access: [] as Array<{ employee_id: number; skud_object_id: string }>,
+    // «Основной объект за 90 дней» (fetchHistoricalPrimaryObjects).
+    history: [] as Array<{ employee_id: number; object_id: string; object_name: string }>,
   },
 }));
 
@@ -109,6 +111,10 @@ function routeQuery(sql: string): unknown[] {
   if (s.includes('employee_object_attribution')) {
     return [];
   }
+  // История за 90 дней — тоже JOIN skud_object_access_points, поэтому раньше.
+  if (s.includes('rn = 1')) {
+    return mockedState.tables.history;
+  }
   if (s.includes('skud_object_access_points')) {
     return mockedState.tables.skud_object_access_points;
   }
@@ -142,12 +148,69 @@ describe('timesheet-object.service', () => {
     ];
     mockedState.tables.skud_events = [];
     mockedState.tables.employee_skud_object_access = [];
+    mockedState.tables.history = [];
 
     pgQuery.mockImplementation(async (sql: string) => routeQuery(sql));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe('история за 90 дней — только тем, кому она может понадобиться («Свод», 27.10: 23 с)', () => {
+    const adjustment = (over: Record<string, unknown>) => ({
+      id: 1,
+      employee_id: 1,
+      work_date: '2026-04-14',
+      hours_override: 8,
+      source_type: 'manual',
+      source_id: null,
+      status: 'manual',
+      reason: 'правка',
+      updated_at: '2026-04-14T10:00:00.000Z',
+      metadata: null,
+      ...over,
+    });
+    const historyCalls = () => pgQuery.mock.calls.filter(([sql]) => String(sql).toLowerCase().includes('rn = 1'));
+    const build = (employeeIds: number[], adjustments: Array<Record<string, unknown>>) => buildObjectAttendanceData({
+      employeeIds,
+      startDate: '2026-04-14',
+      endDate: '2026-04-14',
+      todayStr: '2026-04-14',
+      adjustments: adjustments as unknown as Parameters<typeof buildObjectAttendanceData>[0]['adjustments'],
+    });
+
+    it('без дневной корректировки с часами историю не запрашиваем', async () => {
+      await build([1, 2], [
+        // Обнулённый день и объектная правка с часами — до истории не доходят.
+        adjustment({ employee_id: 1, status: 'work', hours_override: 0 }),
+        adjustment({ id: 2, employee_id: 2, source_type: 'manual_object', source_id: 'obj-a', hours_override: 5,
+          metadata: { object_id: 'obj-a', object_name: 'Объект A' } }),
+      ]);
+      expect(historyCalls()).toHaveLength(0);
+    });
+
+    it('дневная корректировка без СКУД — история только для её владельца, часы — на объект истории', async () => {
+      mockedState.tables.history = [{ employee_id: 1, object_id: 'obj-c', object_name: 'Объект C' }];
+      const result = await build([1, 2, 3], [adjustment({ employee_id: 1 })]);
+
+      expect(historyCalls()).toHaveLength(1);
+      expect(historyCalls()[0][1]?.[0]).toEqual([1]);
+      expect(result.objectEntries).toContainEqual(expect.objectContaining({
+        employee_id: 1, object_id: 'obj-c', hours_worked: 8, is_correction: true,
+      }));
+    });
+
+    it('мигрированная из дневной объектная правка с часами — историю запрашиваем, с приписанным — нет', async () => {
+      mockedState.tables.employee_skud_object_access = [{ employee_id: 5, skud_object_id: 'obj-b' }];
+      await build([4, 5], [
+        adjustment({ id: 4, employee_id: 4, source_type: 'manual_object', source_id: 'obj-a',
+          metadata: { object_id: 'obj-a', object_name: 'Объект A', migrated_from_day_level: true } }),
+        adjustment({ id: 5, employee_id: 5 }),
+      ]);
+      expect(historyCalls()).toHaveLength(1);
+      expect(historyCalls()[0][1]?.[0]).toEqual([4]);
+    });
   });
 
   it('groups repeated visits to the same object and exposes only multi-object employees for disclosure', async () => {

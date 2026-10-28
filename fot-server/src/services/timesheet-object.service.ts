@@ -1160,8 +1160,14 @@ export async function buildObjectAttendanceData(params: {
   // Сотрудники без приписки в employee_skud_object_access — для них day-level
   // корректировку нужно прицепить к фактическому объекту, иначе попадёт в «Не определён».
   // Берём 90 дней до endDate включительно: даёт «основной» объект сотрудника по СКУД-истории.
+  // История нужна только дневной корректировке с часами (ветка 5 ниже) — у кого такой нет, не запрашиваем:
+  // запрос читает СКУД за 90 дней, на холодной БД — секунды («Свод» «Зарплаты», 27.10: 23 с на 151 человека, нужна 41).
+  const employeesWithHoursAdjustment = new Set(adjustments
+    .filter(adjustment => (adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE || isMigratedDayLevelAdjustment(adjustment))
+      && adjustment.hours_override != null && Number(adjustment.hours_override) > 0)
+    .map(adjustment => adjustment.employee_id));
   const employeesWithoutAssignment = includeObjectDetails
-    ? employeeIds.filter(id => (assignedObjectsByEmployee.get(id) || []).length === 0)
+    ? employeeIds.filter(id => (assignedObjectsByEmployee.get(id) || []).length === 0 && employeesWithHoursAdjustment.has(id))
     : [];
   const historicalPrimaryByEmployee = includeObjectDetails
     ? await fetchHistoricalPrimaryObjects(

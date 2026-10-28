@@ -45,7 +45,14 @@ import {
   type ProrationRounding,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
-import { cardPayoutsJoinSql, classifyCardPayouts, getCalcColumns } from '../services/payroll/payroll-calc-columns.service.js';
+import {
+  CALC_COLUMNS_MAX_MONTHS,
+  calcColumnsServerTiming,
+  cardPayoutsJoinSql,
+  classifyCardPayouts,
+  emptyCalcColumnsTiming,
+  getCalcColumns,
+} from '../services/payroll/payroll-calc-columns.service.js';
 import {
   HOURLY_RATE_DECIMALS_MESSAGE,
   MONEY_DECIMALS_MESSAGE,
@@ -56,7 +63,11 @@ import {
   payrollMonthStarts,
 } from './payroll-dictionary.helpers.js';
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
-import { payrollContractorDeptsCte, payrollStaffWhereSql } from '../services/payroll/payroll-registry-scope.service.js';
+import {
+  payrollContractorDeptsCte,
+  payrollStaffWhereSql,
+  resolvePayrollStaffScope,
+} from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   buildFioSearch,
@@ -640,7 +651,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     // Категория — по табелю на сейчас (payroll-staff-category.ts): её карточка показывает, по ней «Проезд».
     const categories = await resolveCurrentStaffCategories(pageRows.map(row => row.employee_id));
     // «Расчёты»: столбцы по расчёту ФОТ закрытого табеля — для строк порции («весь период» не считается).
-    const calcColumns = paidMonths !== null && paidMonths !== 'all'
+    // defer_calc=1 (новый фронт) — строки сразу, ФОТ — отдельным GET /terms/calc-columns; без параметра — как раньше,
+    // чтобы старый открытый фронт не потерял столбцы.
+    const deferCalc = query.defer_calc === '1';
+    const calcColumns = paidMonths !== null && paidMonths !== 'all' && !deferCalc
       ? await getCalcColumns(pageRows.map(row => row.employee_id), paidMonths, req)
       : null;
     // Служебные поля ключа и снимок категории из условий наружу не отдаём.
@@ -842,6 +856,60 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/** Сколько сотрудников за раз — как порция списка. */
+const CALC_COLUMNS_MAX_IDS = 500;
+
+/**
+ * GET /api/payroll/terms/calc-columns?employee_ids=1,2&paid_months=2026-08 — столбцы ФОТ «Расчётов» для порции списка
+ * (список с defer_calc=1 отдаёт строки сразу, без расчёта). Считаются только сотрудники «штата зарплаты» в охвате
+ * пользователя — те же правила, что у списка: работает, не в архиве, не подрядчик, отдел в охвате; остальные id
+ * в расчёт не идут и в ответе их нет. Больше 12 месяцев или «весь период» — { available: false }: ФОТ не считается.
+ */
+const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const params = req.query as Record<string, unknown>;
+    const rawIds = typeof params.employee_ids === 'string'
+      ? params.employee_ids.split(',').map(value => value.trim()).filter(Boolean)
+      : [];
+    // Лимит — до снятия повторов: 501 одинаковый id — тоже лишний.
+    if (rawIds.length === 0 || rawIds.length > CALC_COLUMNS_MAX_IDS) {
+      return badRequest(res, `Нужно от 1 до ${CALC_COLUMNS_MAX_IDS} сотрудников`, 'INVALID_EMPLOYEE_IDS');
+    }
+    const ids = rawIds.map(Number);
+    if (!ids.every(id => Number.isInteger(id) && id > 0)) {
+      return badRequest(res, 'Некорректный id сотрудника', 'INVALID_EMPLOYEE_IDS');
+    }
+    if (params.paid_months === undefined) return badRequest(res, 'Не выбраны месяцы', 'INVALID_MONTHS');
+    const months = parsePayrollMonthsQuery(params.paid_months);
+    if (months === null || months === 'all' || months.length > CALC_COLUMNS_MAX_MONTHS) {
+      res.json({ success: true, data: { available: false, rows: [] } });
+      return;
+    }
+
+    const scope = await resolvePayrollStaffScope(req);
+    const uniqueIds = [...new Set(ids)];
+    const allowedRows = scope.departmentIds?.length === 0 ? [] : await query<{ id: number }>(
+      `WITH ${payrollContractorDeptsCte('$1')}
+       SELECT e.id FROM employees e WHERE e.id = ANY($3::int[]) AND ${payrollStaffWhereSql('e', '$2')}`,
+      [scope.contractorRootId, scope.departmentIds, uniqueIds],
+    );
+    const allowed = new Set(allowedRows.map(row => Number(row.id)));
+    const allowedIds = uniqueIds.filter(id => allowed.has(id));
+
+    const timing = emptyCalcColumnsTiming();
+    const columns = await getCalcColumns(allowedIds, months, req, timing);
+    res.setHeader('Server-Timing', calcColumnsServerTiming(timing));
+    res.json({
+      success: true,
+      data: { available: true, rows: allowedIds.map(id => ({ employee_id: id, calc: columns.get(id) ?? null })) },
+    });
+  } catch (err) {
+    if (handleZodError(err, res)) return;
+    console.error('payrollTerms.calcColumns error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка расчёта ФОТ' });
+  }
+};
+
 export const payrollTermsController = {
-  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign,
+  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns,
 };

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
-import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
 
 import {
@@ -34,6 +34,14 @@ import {
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
 import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
+import {
+  calcColumnsQueryKey,
+  calcPageRequests,
+  calcQueryEnabled,
+  mergeCalcColumns,
+  toCalcQueryState,
+  type CalcQueryState,
+} from '../../utils/payrollCalcPages';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
@@ -128,6 +136,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         pageSize: PAYROLL_TERMS_PAGE_SIZE,
         cursor: pageParam,
         paidMonths: paidMonths ?? undefined,
+        // «Расчёты»: строки сразу, столбцы ФОТ — отдельными запросами ниже.
+        deferCalc: paidMonths !== undefined,
       }, signal),
       paidMonths: paidMonths ?? null,
     }),
@@ -143,6 +153,37 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   } = termsQuery;
 
   const rows = useMemo(() => data?.pages.flatMap(page => page.rows) ?? [], [data]);
+
+  // «Расчёты»: столбцы ФОТ — по каждой порции её же id и месяцами, по одной (payrollCalcPages.ts). Следующая порция
+  // ждёт, пока предыдущая завершится; скрытый экран не считает.
+  const isCalcScreen = paidMonths !== undefined;
+  const queryClient = useQueryClient();
+  const calcRequests = useMemo(() => (isCalcScreen && data ? calcPageRequests(data.pages) : []), [isCalcScreen, data]);
+  const cachedCalcStates = calcRequests.map(request => toCalcQueryState(queryClient.getQueryState(calcColumnsQueryKey(request))));
+  const calcStates = useQueries({
+    queries: calcRequests.map((request, index) => ({
+      queryKey: calcColumnsQueryKey(request),
+      queryFn: ({ signal }: { signal: AbortSignal }) => payrollService.calcColumns(request.ids, request.months, signal),
+      enabled: calcQueryEnabled(index, cachedCalcStates, active),
+      staleTime: 30_000,
+      // Расчёт тяжёлый: повтор — по кнопке, не сам.
+      retry: false,
+    })),
+    combine: results => results.map((result): CalcQueryState => {
+      if (result.isSuccess) return { status: 'success', result: result.data };
+      return result.isError ? { status: 'error' } : { status: 'pending' };
+    }),
+  });
+  const calcMerge = useMemo(() => mergeCalcColumns(rows, calcRequests, calcStates), [rows, calcRequests, calcStates]);
+  const tableRows = isCalcScreen ? calcMerge.rows : rows;
+  /** «Повторить» — только порции, которые не посчитались. */
+  const retryCalc = () => {
+    calcRequests.forEach((request, index) => {
+      if (calcStates[index]?.status === 'error') {
+        void queryClient.refetchQueries({ queryKey: calcColumnsQueryKey(request), exact: true });
+      }
+    });
+  };
   const meta = data?.pages[0]?.meta;
   const total = meta?.total ?? 0;
   // Период сумм «Расчётов» — тех строк, что на экране.
@@ -229,8 +270,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   );
   // «Расчёты»: столбцы сумм без данных в загруженных строках скрываются сами; выбор шестерёнки не меняется.
   const emptyColumns = useMemo(
-    () => (paidMonths === undefined ? new Set<PayrollTableColumn>() : emptyPayrollColumns(rows, columns)),
-    [paidMonths, rows, columns],
+    () => (paidMonths === undefined ? new Set<PayrollTableColumn>() : emptyPayrollColumns(tableRows, columns, calcMerge.ready)),
+    [paidMonths, tableRows, columns, calcMerge.ready],
   );
   const tableHiddenColumns = useMemo(
     () => (emptyColumns.size === 0 ? hiddenColumns : new Set([...hiddenColumns, ...emptyColumns])),
@@ -299,6 +340,15 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         </div>
       </div>
 
+      {isCalcScreen && calcMerge.failed && (
+        <div className={styles.stateError}>
+          Не удалось посчитать ФОТ
+          <button type="button" className={styles.retryButton} onClick={retryCalc}>
+            Повторить
+          </button>
+        </div>
+      )}
+
       {meta && !meta.contractors_excluded && (
         <div className={styles.warning}>
           Не найден узел «Подрядные организации» — в списке могут оказаться сотрудники подрядчиков.
@@ -318,7 +368,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       {data && (
         <>
           <PayrollTermsTable
-            rows={rows}
+            rows={tableRows}
             columns={columns}
             hiddenColumns={tableHiddenColumns}
             onEdit={onOpenEmployee}

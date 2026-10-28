@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Response } from 'express';
@@ -53,19 +53,31 @@ vi.mock('./payroll-staff-category.js', () => ({
   resolveCurrentStaffCategories: async (ids: number[]) => new Map(ids.map(id => [id, 'office'])),
 }));
 
+// Охват и корень подрядчиков — управляемые: тест столбцов ФОТ проверяет «штат зарплаты».
+const scopeMock = vi.hoisted(() => ({
+  departments: 'all' as 'all' | string[],
+  contractorRootId: null as string | null,
+  payoutCalls: [] as Array<{ ids: number[]; month: string }>,
+}));
+
 vi.mock('./payroll-scope.service.js', () => ({
-  resolvePayrollReadableDepartmentIds: async () => 'all',
+  resolvePayrollReadableDepartmentIds: async () => scopeMock.departments,
   canReadPayrollEmployee: async () => true,
   canEditPayrollEmployee: async () => true,
   resolvePayrollEditPredicate: async () => () => true,
 }));
 
-vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => null }));
+vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => scopeMock.contractorRootId }));
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
 // Расчёт ФОТ по закрытому табелю (столбцы «Расчётов») — своя схема табеля; здесь только SQL списка.
-vi.mock('./payroll-calc.service.js', () => ({ getPayoutForEmployees: async () => new Map() }));
+vi.mock('./payroll-calc.service.js', () => ({
+  getPayoutForEmployees: async (ids: readonly number[], month: string) => {
+    scopeMock.payoutCalls.push({ ids: [...ids], month });
+    return new Map();
+  },
+}));
 
 import { withTransaction } from '../../config/postgres.js';
 import {
@@ -103,10 +115,12 @@ const makeRes = () => {
   const res = {
     statusCode: 200,
     body: undefined as unknown,
+    headers: {} as Record<string, string>,
     status(code: number) { this.statusCode = code; return this; },
     json(payload: unknown) { this.body = payload; return this; },
+    setHeader(name: string, value: string) { this.headers[name] = value; return this; },
   };
-  return res as unknown as Response & { statusCode: number; body: any };
+  return res as unknown as Response & { statusCode: number; body: any; headers: Record<string, string> };
 };
 
 describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () => {
@@ -525,6 +539,87 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       ], { apply: true })).rejects.toThrow(/не равны списку/);
       expect(await versionCount()).toBe(count);
       expect(await periods(23)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+    });
+  });
+
+  describe('«Расчёты»: строки сразу, столбцы ФОТ отдельным запросом', () => {
+    const D_CONTRACTOR = '00000000-0000-0000-0000-0000000000c1';
+    const D_OTHER = '00000000-0000-0000-0000-0000000000d1';
+    const D_MINE = '00000000-0000-0000-0000-0000000000e1';
+    const calcColumns = async (query: Record<string, string>) => {
+      const res = makeRes();
+      await payrollTermsController.calcColumns({
+        user: { id: AUTHOR }, params: {}, body: {}, query,
+      } as unknown as AuthenticatedRequest, res);
+      return res;
+    };
+
+    beforeAll(async () => {
+      await pg.pool!.query(`
+        INSERT INTO org_departments (id, name) VALUES
+          ('${D_CONTRACTOR}', 'Подрядчики'), ('${D_OTHER}', 'Чужой'), ('${D_MINE}', 'Свой');
+        INSERT INTO employees (id, full_name, org_department_id, is_archived) VALUES
+          (30, 'Архивный А.А.', NULL, true),
+          (31, 'Подрядчик П.П.', '${D_CONTRACTOR}', false),
+          (32, 'Чужой Ч.Ч.', '${D_OTHER}', false),
+          (33, 'Свой С.С.', '${D_MINE}', false);
+      `);
+    });
+
+    beforeEach(() => {
+      scopeMock.departments = 'all';
+      scopeMock.contractorRootId = null;
+      scopeMock.payoutCalls = [];
+    });
+
+    it('список с defer_calc=1 не считает ФОТ, без параметра — считает, как раньше', async () => {
+      const list = async (extra: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.list({
+          user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', paid_months: '2026-09', ...extra },
+        } as unknown as AuthenticatedRequest, res);
+        expect(res.statusCode).toBe(200);
+        return res.body.data as Array<Record<string, unknown>>;
+      };
+
+      const deferred = await list({ defer_calc: '1' });
+      expect(scopeMock.payoutCalls).toEqual([]);
+      expect(deferred.every(row => !('calc' in row))).toBe(true);
+
+      const inline = await list({});
+      expect(scopeMock.payoutCalls).toHaveLength(1);
+      expect(inline.every(row => 'calc' in row)).toBe(true);
+    });
+
+    it('считаются только «штат зарплаты» в охвате: без уволенного, архивного, подрядчика и чужого отдела', async () => {
+      scopeMock.contractorRootId = D_CONTRACTOR;
+      // 5 — уволен (тест ведомостей выше), 999 — нет такого; повтор 33 — один раз.
+      const all = await calcColumns({ employee_ids: '33,30,31,32,5,1,33,999', paid_months: '2026-09' });
+      expect(all.statusCode).toBe(200);
+      expect(scopeMock.payoutCalls).toEqual([{ ids: [33, 32, 1], month: '2026-09' }]);
+      expect((all.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([33, 32, 1]);
+      expect(all.body.data.available).toBe(true);
+      expect(all.headers['Server-Timing']).toMatch(/calc_total;dur=/);
+
+      scopeMock.payoutCalls = [];
+      scopeMock.departments = [D_MINE];
+      const mine = await calcColumns({ employee_ids: '33,32,1', paid_months: '2026-09' });
+      expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09' }]);
+      expect((mine.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([33]);
+    });
+
+    it('лимиты: 501 id (с повторами) и без месяцев — 400; «весь период» и больше 12 месяцев — ФОТ недоступен', async () => {
+      expect((await calcColumns({ employee_ids: Array(501).fill('1').join(','), paid_months: '2026-09' })).statusCode).toBe(400);
+      expect((await calcColumns({ employee_ids: '1' })).statusCode).toBe(400);
+      expect((await calcColumns({ employee_ids: '1', paid_months: '2026-13' })).statusCode).toBe(400);
+      expect((await calcColumns({ employee_ids: 'abc', paid_months: '2026-09' })).statusCode).toBe(400);
+
+      const all = await calcColumns({ employee_ids: '1', paid_months: 'all' });
+      expect(all.body.data).toEqual({ available: false, rows: [] });
+      const thirteen = Array.from({ length: 13 }, (_, index) => `2025-${String((index % 12) + 1).padStart(2, '0')}`)
+        .map((month, index) => (index === 12 ? '2026-01' : month)).join(',');
+      expect((await calcColumns({ employee_ids: '1', paid_months: thirteen })).body.data).toEqual({ available: false, rows: [] });
+      expect(scopeMock.payoutCalls).toEqual([]);
     });
   });
 });

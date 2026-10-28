@@ -9,9 +9,13 @@ vi.mock('./payroll-calc.service.js', () => calcService);
 const termsService = vi.hoisted(() => ({ getTermsForPeriod: vi.fn() }));
 vi.mock('./payroll-terms.service.js', () => termsService);
 
+import { performance } from 'node:perf_hooks';
+
 import {
   CALC_COLUMNS_MAX_MONTHS,
+  calcColumnsServerTiming,
   cardPayoutKind,
+  emptyCalcColumnsTiming,
   classifyCardPayouts,
   getCalcColumns,
   pickRateAsOf,
@@ -191,6 +195,45 @@ describe('getCalcColumns', () => {
 
     expect((await getCalcColumns([7], months, req)).size).toBe(0);
     expect(calcService.getPayoutForEmployees).not.toHaveBeenCalled();
+  });
+});
+
+describe('замер расчёта столбцов', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    termsService.getTermsForPeriod.mockResolvedValue(new Map());
+  });
+
+  it('шаги складываются по месяцам; в лог — только дольше 2 с', async () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const run = async (stepMs: number) => {
+      calcService.getPayoutForEmployees.mockImplementation(async (_ids: number[], _month: string, _req: unknown, metrics?: {
+        brigades: number; brigadesMs: number;
+      }) => {
+        clock += stepMs;
+        if (metrics) { metrics.brigades += 2; metrics.brigadesMs += stepMs; }
+        return new Map();
+      });
+      const timing = emptyCalcColumnsTiming();
+      await getCalcColumns([7], ['2026-08', '2026-09'], req, timing);
+      return timing;
+    };
+
+    const fast = await run(100);
+    expect(fast).toMatchObject({ brigades: 4, brigadesMs: 200, totalMs: 200 });
+    expect(log).not.toHaveBeenCalled();
+
+    const slow = await run(1500);
+    expect(slow.totalMs).toBe(3000);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0][0])).toMatch(/^\[payroll-calc\] 2026-08, 1 чел\.: .*бригады\(2\) 1500 мс.*; 2026-09, .*всего 3000 мс$/);
+    expect(calcColumnsServerTiming(slow)).toBe(
+      'calc_basis;dur=0.0, calc_brigades;dur=3000.0;desc="4", calc_extras;dur=0.0, calc_build;dur=0.0, calc_total;dur=3000.0',
+    );
+    now.mockRestore();
+    log.mockRestore();
   });
 });
 

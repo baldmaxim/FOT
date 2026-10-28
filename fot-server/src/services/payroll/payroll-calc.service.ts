@@ -11,8 +11,11 @@
  * и то же число. Условия, доплаты, ставки и удержания — из их истории с датами действия; категория для проезда —
  * по объектам тех же закрытых редакций, из которых взяты дни.
  */
+import { performance } from 'node:perf_hooks';
+
 import { query } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
+import { createConcurrencyLimiter } from '../../utils/concurrency-limiter.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
 import { emptyAbsenceDays, type PayrollAbsenceDays, type PayrollBasisQuality } from './payroll-basis.service.js';
 import { getBrigadeShares, type IBrigadeShares } from './brigade-salary.service.js';
@@ -67,6 +70,25 @@ export interface IPayrollCalcNotClosed {
 }
 
 export type PayrollCalc = IPayrollCalcClosed | IPayrollCalcNotClosed;
+
+/**
+ * Время шагов расчёта, мс (монотонный таймер) — для замера «Расчётов». rest — условия, доплаты, удержания, ставки и
+ * категории: они идут в Promise.all, перекрываются и в сумму шагов по отдельности не раскладываются.
+ */
+export interface IPayoutMetrics {
+  basisMs: number;
+  brigades: number;
+  brigadesMs: number;
+  restMs: number;
+  buildMs: number;
+}
+
+/**
+ * Расчёты бригад (getBrigadeShares — транзакция с блокировкой бригады, около 8 обращений к БД) — не больше трёх
+ * одновременно на весь процесс: у пула 10 соединений, остальным запросам портала нужно место.
+ */
+const BRIGADE_SHARES_CONCURRENCY = 3;
+const withBrigadeSlot = createConcurrencyLimiter(BRIGADE_SHARES_CONCURRENCY);
 
 interface IEmployeeRow {
   id: number;
@@ -197,11 +219,18 @@ export const getPayoutForEmployees = async (
   employeeIds: readonly number[],
   month: string,
   req: AuthenticatedRequest,
+  metrics?: IPayoutMetrics,
 ): Promise<Map<number, PayrollCalc>> => {
   const result = new Map<number, PayrollCalc>();
   if (employeeIds.length === 0) return result;
   const monthStart = `${month}-01`;
   const monthEnd = lastDayOfMonth(month);
+  let mark = performance.now();
+  const lap = (key: Exclude<keyof IPayoutMetrics, 'brigades'>): void => {
+    const now = performance.now();
+    if (metrics) metrics[key] += now - mark;
+    mark = now;
+  };
 
   const { employees, periods } = await loadEmployeePeriods(employeeIds, month);
   for (const id of employees.keys()) {
@@ -216,11 +245,17 @@ export const getPayoutForEmployees = async (
     else result.set(employeeId, { state: 'not_closed', reason: basis.reason });
   }
 
-  // Доли бригад — по одному расчёту на бригаду. Бригада не зафиксирована — месяц её людей не закрыт.
-  const brigadeShares = new Map<string, IBrigadeShares>();
-  for (const departmentId of new Set([...bases.values()].flatMap(basis => basis.brigades.map(item => item.departmentId)))) {
-    brigadeShares.set(departmentId, await getBrigadeShares(req, departmentId, month));
-  }
+  lap('basisMs');
+
+  // Доли бригад — по одному расчёту на бригаду, не больше трёх одновременно. Бригада не зафиксирована — месяц её людей
+  // не закрыт.
+  const brigadeIds = [...new Set([...bases.values()].flatMap(basis => basis.brigades.map(item => item.departmentId)))];
+  const brigadeResults = await Promise.all(brigadeIds.map(departmentId => (
+    withBrigadeSlot(() => getBrigadeShares(req, departmentId, month))
+  )));
+  const brigadeShares = new Map<string, IBrigadeShares>(brigadeIds.map((departmentId, index) => [departmentId, brigadeResults[index]]));
+  if (metrics) metrics.brigades += brigadeIds.length;
+  lap('brigadesMs');
   for (const [employeeId, basis] of [...bases]) {
     if (basis.brigades.some(item => brigadeShares.get(item.departmentId)?.state !== 'fixed')) {
       bases.delete(employeeId);
@@ -244,6 +279,7 @@ export const getPayoutForEmployees = async (
     loadPayoutExtras(ids, month, periods),
     loadClosedCategories(month, bases, employees),
   ]);
+  lap('restMs');
   const plannedByEmployee = groupBy(planned);
 
   for (const employeeId of ids) {
@@ -312,6 +348,7 @@ export const getPayoutForEmployees = async (
       ...calc,
     });
   }
+  lap('buildMs');
   return result;
 };
 

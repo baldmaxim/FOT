@@ -47,6 +47,8 @@ const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
 // ─── Условия оплаты ──────────────────────────────────────────────────────────
 // Server-Timing: на «Расчётах» список считает расчёт ФОТ порции — время видно в DevTools.
 router.get('/terms', termsView, serverTiming('payroll_terms_list'), payrollTermsController.list);
+// Столбцы ФОТ порции «Расчётов» — отдельно от списка (список с defer_calc=1 отдаёт строки сразу).
+router.get('/terms/calc-columns', termsView, serverTiming('payroll_calc_columns'), payrollTermsController.calcColumns);
 // Варианты фильтра столбца (воронка в заголовке таблицы условий).
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);

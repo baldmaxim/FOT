@@ -157,19 +157,30 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
   }
 };
 
+/** Столбцы по расчёту ФОТ — считаются отдельным запросом после строк. */
+const CALC_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
+  'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_housing', 'calc_supplements',
+  'calc_deductions', 'calc_net',
+]);
+
+export const isCalcColumn = (column: PayrollTableColumn): boolean => CALC_COLUMNS.has(column);
+
 /**
  * Столбцы сумм без данных ни в одной загруженной строке. Строк нет — ничего не скрывается (шапка не скачет).
  * Видимость — по загруженным строкам: отдел целиком в первой порции (500), на корнях компаний и «Все отделы»
- * столбец может появиться при прокрутке (продуктовое ограничение, план 27.10).
+ * столбец может появиться при прокрутке (продуктовое ограничение, план 27.10). Пока ФОТ считается или расчёт
+ * не удался (calcReady false), столбцы ФОТ не скрываются — иначе пропадали бы и появлялись.
  */
 export const emptyPayrollColumns = (
   rows: readonly IPayrollTermsRow[],
   columns: ReadonlyArray<{ key: PayrollTableColumn }>,
+  calcReady = true,
 ): Set<PayrollTableColumn> => {
   const empty = new Set<PayrollTableColumn>();
   if (rows.length === 0) return empty;
   for (const { key } of columns) {
-    if (SUM_COLUMNS.has(key) && !rows.some(row => hasColumnData(row, key))) empty.add(key);
+    if (!SUM_COLUMNS.has(key) || (!calcReady && CALC_COLUMNS.has(key))) continue;
+    if (!rows.some(row => hasColumnData(row, key))) empty.add(key);
   }
   return empty;
 };

@@ -11,8 +11,10 @@
  * Из 1С (там, где ФОТ сумму не считает) — отпускные, больничные и перерасчёт (статьи «Оплачено», SQL списка) и
  * «Выплаты на карту» — ведомости в банк (миграция 328) по виду: аванс, ЗП, премия.
  */
+import { performance } from 'node:perf_hooks';
+
 import type { AuthenticatedRequest } from '../../types/index.js';
-import { getPayoutForEmployees, type PayrollCalc } from './payroll-calc.service.js';
+import { getPayoutForEmployees, type IPayoutMetrics, type PayrollCalc } from './payroll-calc.service.js';
 import type { PayrollCalcLineCode, PayrollCalcMissing } from './payroll-calc.rules.js';
 import { lastDayOfMonth } from './payroll-payslip.rules.js';
 import { centsToAmount, toCents } from './payroll-summary.attribution.js';
@@ -151,27 +153,78 @@ export const pickRateAsOf = (terms: readonly IPayrollTerms[], asOf: string): ICa
 };
 
 /** Столбцы ФОТ строк порции за месяцы YYYY-MM; больше CALC_COLUMNS_MAX_MONTHS — пустая карта. */
+/** Время расчёта столбцов, мс: шаги getPayoutForEmployees, сложенные по месяцам (они идут по очереди), и всего. */
+export interface ICalcColumnsTiming extends IPayoutMetrics {
+  rateMs: number;
+  totalMs: number;
+}
+
+export const emptyCalcColumnsTiming = (): ICalcColumnsTiming => ({
+  basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0, rateMs: 0, totalMs: 0,
+});
+
+/** Расчёт дольше — в лог, с шагами по месяцам: по нему видно, что ускорять дальше. */
+const CALC_COLUMNS_LOG_THRESHOLD_MS = 2000;
+
+const ms = (value: number): string => `${Math.round(value)} мс`;
+
+export const formatPayoutMetrics = (month: string, people: number, metrics: IPayoutMetrics): string => (
+  `${month}, ${people} чел.: основа ${ms(metrics.basisMs)}, бригады(${metrics.brigades}) ${ms(metrics.brigadesMs)}, `
+  + `условия·доплаты·ставки·категории (вместе) ${ms(metrics.restMs)}, сборка ${ms(metrics.buildMs)}`
+);
+
+/**
+ * Столбцы ФОТ строк порции за месяцы YYYY-MM; больше CALC_COLUMNS_MAX_MONTHS — пустая карта. timing — сюда
+ * складывается время шагов (Server-Timing запроса); всего дольше CALC_COLUMNS_LOG_THRESHOLD_MS — строка в лог.
+ */
 export const getCalcColumns = async (
   employeeIds: readonly number[],
   months: readonly string[],
   req: AuthenticatedRequest,
+  timing: ICalcColumnsTiming = emptyCalcColumnsTiming(),
 ): Promise<Map<number, ICalcColumns>> => {
   const result = new Map<number, ICalcColumns>();
   if (employeeIds.length === 0 || months.length === 0 || months.length > CALC_COLUMNS_MAX_MONTHS) return result;
+  const started = performance.now();
   const sorted = [...new Set(months)].sort();
   // Месяцы — по очереди: расчёт порции сам идёт пачкой запросов, параллельно он занял бы пул.
   const calcs = new Map<string, Map<number, PayrollCalc>>();
-  for (const month of sorted) calcs.set(month, await getPayoutForEmployees(employeeIds, month, req));
+  const perMonth: string[] = [];
+  for (const month of sorted) {
+    const metrics: IPayoutMetrics = { basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0 };
+    calcs.set(month, await getPayoutForEmployees(employeeIds, month, req, metrics));
+    perMonth.push(formatPayoutMetrics(month, employeeIds.length, metrics));
+    timing.basisMs += metrics.basisMs;
+    timing.brigades += metrics.brigades;
+    timing.brigadesMs += metrics.brigadesMs;
+    timing.restMs += metrics.restMs;
+    timing.buildMs += metrics.buildMs;
+  }
   const asOf = lastDayOfMonth(sorted[sorted.length - 1]);
+  const rateStarted = performance.now();
   const terms = await getTermsForPeriod([...employeeIds], `${sorted[0]}-01`, asOf);
+  timing.rateMs += performance.now() - rateStarted;
   for (const employeeId of employeeIds) {
     result.set(employeeId, {
       rate: pickRateAsOf(terms.get(employeeId) ?? [], asOf),
       ...sumCalcColumns(sorted.map(month => [month, calcs.get(month)?.get(employeeId)] as const)),
     });
   }
+  timing.totalMs += performance.now() - started;
+  if (timing.totalMs > CALC_COLUMNS_LOG_THRESHOLD_MS) {
+    console.log(`[payroll-calc] ${perMonth.join('; ')}; оклад ${ms(timing.rateMs)}; всего ${ms(timing.totalMs)}`);
+  }
   return result;
 };
+
+/** Server-Timing: шаги, сложенные по месяцам (условия·доплаты·ставки·категории — вместе, они параллельны). */
+export const calcColumnsServerTiming = (timing: ICalcColumnsTiming): string => [
+  `calc_basis;dur=${timing.basisMs.toFixed(1)}`,
+  `calc_brigades;dur=${timing.brigadesMs.toFixed(1)};desc="${timing.brigades}"`,
+  `calc_extras;dur=${timing.restMs.toFixed(1)}`,
+  `calc_build;dur=${(timing.buildMs + timing.rateMs).toFixed(1)}`,
+  `calc_total;dur=${timing.totalMs.toFixed(1)}`,
+].join(', ');
 
 /** «Выплаты на карту» строки: суммы ведомостей по виду, NUMERIC текстом; вида нет — null. */
 export interface ICardPayouts {

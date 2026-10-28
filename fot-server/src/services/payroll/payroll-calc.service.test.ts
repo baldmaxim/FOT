@@ -118,3 +118,36 @@ describe('«К выплате (ФОТ)» бригады', () => {
     expect(brigade.getBrigadeShares).toHaveBeenCalledWith(req, BRIGADE, '2026-09');
   });
 });
+
+describe('бригады — не больше трёх расчётов одновременно', () => {
+  it('пять бригад: одновременно не больше трёх, каждому рабочему — доля своей бригады', async () => {
+    const ids = [101, 102, 103, 104, 105];
+    pg.query.mockImplementation(async (sql: string) => (sql.includes('FROM employees')
+      ? ids.map(id => ({
+        id, hire_date: null, org_department_id: `brigade-${id}`, employment_status: 'active',
+        dismissal_date: null, excluded_from_timesheet_date: null,
+      }))
+      : []));
+    basis.loadMonthBasisSources.mockResolvedValue(new Map(ids.map(id => [id, [source({ departmentId: `brigade-${id}` })]])));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    brigade.getBrigadeShares.mockImplementation(async (_req: unknown, departmentId: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      inFlight -= 1;
+      const employeeId = Number(departmentId.replace('brigade-', ''));
+      return { state: 'fixed', distribution: 'ok', rows: [{ ...shareRow, employee_id: employeeId, amount: `${employeeId}.00` }] };
+    });
+    const metrics = { basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0 };
+
+    const result = await getPayoutForEmployees(ids, '2026-09', req, metrics);
+
+    expect(maxInFlight).toBe(3);
+    expect(metrics.brigades).toBe(5);
+    expect(ids.map(id => {
+      const calc = result.get(id);
+      return calc?.state === 'closed' ? calc.lines.find(line => line.code === 'brigade')?.amount : null;
+    })).toEqual(['101.00', '102.00', '103.00', '104.00', '105.00']);
+  });
+});

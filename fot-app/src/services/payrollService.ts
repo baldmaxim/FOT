@@ -72,6 +72,15 @@ export interface IPayrollCalcColumns {
   incomplete: Array<{ month: string; reasons: PayrollCalcColumnsIssue[] }>;
 }
 
+/** Ответ calcColumns: столбцы ФОТ по сотрудникам порции. */
+export interface IPayrollCalcColumnsResult {
+  available: boolean;
+  rows: Array<{ employee_id: number; calc: IPayrollCalcColumns | null }>;
+}
+
+/** Столбцы ФОТ строки ещё считаются (pending) или расчёт не удался (error); нет поля — готово. Только на фронте. */
+export type PayrollCalcStatus = 'pending' | 'error';
+
 export interface IPayrollTermsRow {
   employee_id: number;
   full_name: string | null;
@@ -136,6 +145,8 @@ export interface IPayrollTermsRow {
   card_payouts?: IPayrollCardPayouts | null;
   /** «Расчёты»: столбцы по расчёту ФОТ закрытого табеля; нет поля — сервер не считал (старый бэкенд, «весь период»). */
   calc?: IPayrollCalcColumns | null;
+  /** «Расчёты»: состояние отдельного расчёта ФОТ строки (calcColumns). */
+  calc_status?: PayrollCalcStatus;
   /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
@@ -524,6 +535,8 @@ export const payrollService = {
     cursor?: IPayrollTermsCursor | null;
     /** «Расчёты»: суммы «Оплачено» за эти месяцы вместо «Выплачено». */
     paidMonths?: PayrollPaidMonths;
+    /** «Расчёты»: строки сразу, без столбцов ФОТ — их отдаёт calcColumns. Старый бэкенд параметр не знает и считает сам. */
+    deferCalc?: boolean;
   }, signal?: AbortSignal): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();
     appendViewParams(search, params);
@@ -534,6 +547,7 @@ export const payrollService = {
       const { paidMonths } = params;
       search.set('paid_months', paidMonths === 'all' || paidMonths.length === 0 ? 'all' : paidMonths.join(','));
     }
+    if (params.deferCalc) search.set('defer_calc', '1');
     if (params.cursor) {
       search.set('after_null', params.cursor.isNull ? '1' : '0');
       if (!params.cursor.isNull && params.cursor.key !== null) search.set('after_key', params.cursor.key);
@@ -544,6 +558,24 @@ export const payrollService = {
       { signal },
     );
     return { rows: res.data, meta: res.meta };
+  },
+
+  /**
+   * Столбцы ФОТ «Расчётов» для порции списка: только сотрудники в охвате, в порядке id. available: false — ФОТ за
+   * эти месяцы не считается («весь период», больше 12 месяцев).
+   */
+  calcColumns: async (
+    employeeIds: readonly number[],
+    months: PayrollPaidMonths,
+    signal?: AbortSignal,
+  ): Promise<IPayrollCalcColumnsResult> => {
+    const search = new URLSearchParams();
+    search.set('employee_ids', employeeIds.join(','));
+    search.set('paid_months', months === 'all' || months.length === 0 ? 'all' : months.join(','));
+    return (await apiClient.get<IApiResponse<IPayrollCalcColumnsResult>>(
+      `/payroll/terms/calc-columns?${search.toString()}`,
+      { signal },
+    )).data;
   },
 
   /** Варианты фильтра столбца с количеством — без фильтра самого столбца. */

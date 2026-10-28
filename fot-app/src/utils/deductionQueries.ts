@@ -11,7 +11,8 @@ import {
 
 /**
  * Перечитать всё, где видны виды, подвиды и удержания (миграция 321): справочники кадров и «Зарплаты», вкладку
- * кадров «Удержания», таблицу «Удержания» «Справочника» и список в окне сотрудника (ключ под STAFF_DEDUCTIONS_KEY).
+ * кадров «Удержания», таблицу «Удержания» «Справочника», список в окне сотрудника (ключ под STAFF_DEDUCTIONS_KEY)
+ * и столбцы ФОТ «Расчётов».
  * Записи одни на оба раздела — правка в одном месте должна быть видна в другом.
  */
 export const invalidateDeductionQueries = (queryClient: QueryClient): Promise<unknown> => Promise.all([
@@ -19,6 +20,8 @@ export const invalidateDeductionQueries = (queryClient: QueryClient): Promise<un
   queryClient.invalidateQueries({ queryKey: PAYROLL_DEDUCTION_KINDS_KEY }),
   queryClient.invalidateQueries({ queryKey: STAFF_DEDUCTIONS_KEY }),
   queryClient.invalidateQueries({ queryKey: PAYROLL_REGISTRY_KEYS.deductions }),
+  // Удержания входят в столбцы ФОТ «Расчётов» (список и calc-columns — под 'payroll-terms').
+  queryClient.invalidateQueries({ queryKey: ['payroll-terms'] }),
 ]);
 
 /** Справочник после правки подвидов одного вида: остальные виды — те же объекты. */

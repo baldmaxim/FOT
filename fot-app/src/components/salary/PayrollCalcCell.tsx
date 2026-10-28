@@ -10,6 +10,7 @@ import {
   cardPayoutLines,
   formatCalcRate,
   housingKindsLabel,
+  isCalcColumn,
   overtimeNote,
   type PayrollCalcSumColumn,
 } from '../../utils/payrollCalcColumns';
@@ -34,6 +35,14 @@ const formatAmount = (value: string | null | undefined): string => (
  * сумма частичная или её нет; «Начислено по табелю» без суммы при незакрытом табеле — «не закрыт».
  */
 export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
+  // Столбцы ФОТ считаются отдельным запросом после строк: идёт — «…», не удалось — «—» (над таблицей «Повторить»).
+  if (row.calc_status && isCalcColumn(column)) {
+    return (
+      <td className={styles.cellNumber}>
+        {row.calc_status === 'pending' ? <span className={styles.calcMuted} aria-label="Считается">…</span> : '—'}
+      </td>
+    );
+  }
   switch (column) {
     case 'calc_rate': {
       const rate = row.calc?.rate ?? null;
