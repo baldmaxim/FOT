@@ -263,6 +263,22 @@ export const summaryObjectTotals = (items: ReadonlyArray<PayrollPaidItemCode>) =
   };
 };
 
+/** Таблица объектов вкладки — строки и столбцы, как в окне после её выбора (итоги всех вкладок над таблицей). */
+export const summaryCategoryTable = (rows: ReadonlyArray<IPayrollSummaryRow>, category: SummaryCategory): {
+  objects: ISummaryObjectRow[];
+  columns: Array<IRegistryColumn<ISummaryObjectRow>>;
+} => {
+  const categoryRows = filterSummaryByCategory(rows, category);
+  return { objects: groupSummaryByObject(categoryRows), columns: summaryObjectColumns(summaryItems(categoryRows)) };
+};
+
+/** «К выплате» строк — то же, что в строке «Итого»; строк нет — «—». */
+export const summaryPayoutText = (rows: ReadonlyArray<{ cents: SummaryCents }>): string => {
+  const sum: SummaryCents = {};
+  for (const row of rows) addCents(sum, row.cents);
+  return money(payoutTotal(sum));
+};
+
 export const summaryEmployeeTotals = (items: ReadonlyArray<PayrollPaidItemCode>) => (
   rows: ReadonlyArray<ISummaryEmployeeRow>,
 ): ISummaryTotals | null => {

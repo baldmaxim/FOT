@@ -6,11 +6,13 @@ import {
   buildSummarySnapshot,
   filterSummaryByCategory,
   groupSummaryByObject,
+  summaryCategoryTable,
   summaryEmployeeColumns,
   summaryEmployeeTotals,
   summaryItems,
   summaryObjectColumns,
   summaryObjectTotals,
+  summaryPayoutText,
   summaryPeriodLabel,
   toSummaryEmployeeRows,
 } from './payrollSummary';
@@ -97,6 +99,21 @@ describe('«Свод»: объекты', () => {
     const filtered = applyTableView(searched, summaryObjectColumns(items), { sort: '', dir: 'asc', filters: { object_name: ['ЖК Химки'] } });
     expect(totals(filtered)?.export.contract).toBe(145000);
     expect(totals([])).toBeNull();
+  });
+
+  it('итоги вкладок: «К выплате» = строка «Итого» вкладки; поиск и фильтр столбца — те же; нет строк — «—»', () => {
+    const view = { sort: '', dir: 'asc' as const, filters: { object_name: ['ЖК Химки'] } };
+    const payout = (category: 'all' | 'itr' | 'worker' | 'office') => {
+      const { objects, columns } = summaryCategoryTable(ROWS, category);
+      return summaryPayoutText(applyTableView(objects, columns, view));
+    };
+    const itrRows = filterSummaryByCategory(ROWS, 'itr');
+    const itrVisible = applyTableView(groupSummaryByObject(itrRows), summaryObjectColumns(summaryItems(itrRows)), view);
+    expect(payout('itr')).toBe(summaryObjectTotals(summaryItems(itrRows))(itrVisible)?.display.payout);
+    expect(payout('all')).toMatch(/^146\s800,50$/);
+    expect(payout('itr')).toMatch(/^101\s800,50$/);
+    expect(payout('worker')).toMatch(/^45\s000,00$/);
+    expect(payout('office')).toBe('—');
   });
 });
 

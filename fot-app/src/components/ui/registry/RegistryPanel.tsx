@@ -1,9 +1,11 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Download, UserPlus, type LucideIcon } from 'lucide-react';
 
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { searchRowsByFio } from '../../../utils/fioSearch';
-import { applyTableView, matchesNameSearch, type ITableExportSnapshot, type ITableView } from '../../../utils/tableView';
+import {
+  applyTableView, matchesNameSearch, type IRegistryColumn, type ITableExportSnapshot, type ITableView,
+} from '../../../utils/tableView';
 import { MonthsPicker } from '../MonthsPicker';
 import { SearchInput } from '../SearchInput';
 import { RegistryTable, type IRegistryTableProps } from './RegistryTable';
@@ -23,6 +25,9 @@ export interface IRegistryToolbarAction {
   icon: LucideIcon;
   onClick: () => void;
 }
+
+/** Текущие поиск и фильтры столбцов — к другим строкам со своими столбцами: видимые строки, как в таблице. */
+export type RegistryVisibleOf<Row> = (rows: ReadonlyArray<Row>, columns: ReadonlyArray<IRegistryColumn<Row>>) => Row[];
 
 /** Выбор месяцев рядом с «Экспортом»: только месяцы, «Весь период» не выбирается — последний месяц не снять. */
 export interface IRegistryMonths {
@@ -55,6 +60,8 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
   totals?: (rows: ReadonlyArray<Row>) => IRegistryTotals | null;
   /** Передана — своя кнопка перед выбором месяцев и «Экспортом». */
   toolbarAction?: IRegistryToolbarAction;
+  /** Передан — блок справа от поиска: итоги вкладок «Свода» по текущим поиску и фильтрам. */
+  searchAside?: (visibleOf: RegistryVisibleOf<Row>) => ReactNode;
 }
 
 /**
@@ -64,7 +71,7 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
  */
 export const RegistryPanel = <Row,>({
   rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
-  initialView = DEFAULT_VIEW, months, totals, toolbarAction, ...tableProps
+  initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, ...tableProps
 }: IRegistryPanelProps<Row>): ReactElement => {
   const { columns } = tableProps;
   const [search, setSearch] = useState('');
@@ -74,12 +81,17 @@ export const RegistryPanel = <Row,>({
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, sendExport);
 
   const allRows = useMemo(() => rows ?? [], [rows]);
-  const { searchedRows, visibleRows } = useMemo(() => {
-    const finalize = (list: Row[]) => applyTableView(list, columns, view);
-    if (fioSearch) return searchRowsByFio(allRows, searchText, search, finalize);
-    const searched = allRows.filter(row => matchesNameSearch(searchText(row), search));
+  const searchRows = useCallback((list: ReadonlyArray<Row>, listColumns: ReadonlyArray<IRegistryColumn<Row>>) => {
+    const finalize = (found: Row[]) => applyTableView(found, listColumns, view);
+    if (fioSearch) return searchRowsByFio(list, searchText, search, finalize);
+    const searched = list.filter(row => matchesNameSearch(searchText(row), search));
     return { searchedRows: searched, visibleRows: finalize(searched) };
-  }, [allRows, columns, fioSearch, search, searchText, view]);
+  }, [fioSearch, search, searchText, view]);
+  const { searchedRows, visibleRows } = useMemo(() => searchRows(allRows, columns), [searchRows, allRows, columns]);
+  const visibleOf = useCallback<RegistryVisibleOf<Row>>(
+    (list, listColumns) => searchRows(list, listColumns).visibleRows,
+    [searchRows],
+  );
   const footer = useMemo(() => totals?.(visibleRows)?.display ?? null, [totals, visibleRows]);
 
   return (
@@ -88,6 +100,7 @@ export const RegistryPanel = <Row,>({
         <div className={styles.search}>
           <SearchInput clearable value={search} onValueChange={setSearch} placeholder={searchPlaceholder} />
         </div>
+        {searchAside && <div className={styles.searchAside}>{searchAside(visibleOf)}</div>}
         <div className={styles.actions}>
           {toolbarAction && (
             <button type="button" className={`${styles.button} ${styles.buttonSecondary}`} onClick={toolbarAction.onClick}>

@@ -10,16 +10,18 @@ import {
   filterSummaryByCategory,
   groupSummaryByObject,
   SUMMARY_CATEGORIES,
+  summaryCategoryTable,
   summaryItems,
   summaryObjectColumns,
   summaryObjectTotals,
+  summaryPayoutText,
   summaryPeriodLabel,
   type ISummaryObjectRow,
   type SummaryCategory,
 } from '../../../utils/payrollSummary';
 import type { ITableView } from '../../../utils/tableView';
 import { ModalShell } from '../../ui/ModalShell';
-import { RegistryPanel } from '../../ui/registry/RegistryPanel';
+import { RegistryPanel, type RegistryVisibleOf } from '../../ui/registry/RegistryPanel';
 import { PayrollSummaryObjectModal } from './PayrollSummaryObjectModal';
 import modal from '../PayrollModal.module.css';
 import styles from './PayrollSummary.module.css';
@@ -37,8 +39,8 @@ const objectName = (row: ISummaryObjectRow): string => row.object_name;
 
 /**
  * Окно «Свод»: суммы «Оплачено» (ЗУП) за выбранные месяцы по объектам — строки объекты, столбцы статьи,
- * «Начислено», «Удержано» и строка «Итого». Сверху — Все / ИТР / Офис / Рабочие. Клик по объекту —
- * окно с его сотрудниками.
+ * «Начислено», «Удержано» и строка «Итого». Сверху — Все / ИТР / Офис / Рабочие; справа от поиска — «К выплате»
+ * всех четырёх по текущим поиску и фильтрам. Клик по объекту — окно с его сотрудниками.
  */
 export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onClose }) => {
   const titleId = useId();
@@ -66,6 +68,21 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
   const buildExport = useMemo(
     () => buildSummarySnapshot({ title: 'Свод', subject: categoryLabel, periodLabel, categoryLabel, columns }),
     [categoryLabel, periodLabel, columns],
+  );
+  const categoryTables = useMemo(
+    () => SUMMARY_CATEGORIES.map(option => ({ ...option, ...summaryCategoryTable(query.data?.rows ?? [], option.key) })),
+    [query.data],
+  );
+  // Итог вкладки — «К выплате» её строки «Итого» после переключения (поиск и фильтры столбцов те же).
+  const renderCategoryTotals = (visibleOf: RegistryVisibleOf<ISummaryObjectRow>) => query.data && (
+    <div className={styles.totals}>
+      <span className={styles.totalsLabel}>Итого к выплате:</span>
+      {categoryTables.map(table => (
+        <span key={table.key} className={table.key === category ? `${styles.total} ${styles.totalActive}` : styles.total}>
+          {table.label} <span className={styles.totalValue}>{summaryPayoutText(visibleOf(table.objects, table.columns))}</span>
+        </span>
+      ))}
+    </div>
   );
   const openedRows = useMemo(
     () => (opened && categoryRows ? categoryRows.filter(row => row.object_key === opened.object_key) : []),
@@ -125,6 +142,7 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
               onRowClick={setOpened}
               raisedFilters
               onFilterOpenChange={setFilterOpen}
+              searchAside={renderCategoryTotals}
             />
           </div>
 

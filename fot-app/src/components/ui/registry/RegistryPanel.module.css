@@ -29,6 +29,12 @@
   min-width: 0;
 }
 
+/* Блок справа от поиска (итоги вкладок «Свода»): на телефоне — строкой под поиском. */
+.searchAside {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
 .actions {
   display: flex;
   flex: 1 1 100%;
@@ -123,6 +129,7 @@
 
 @media (min-width: 769px) {
   .search { flex: 0 1 320px; }
+  .searchAside { flex: 0 1 auto; }
   .retry { min-height: 36px; }
   .actions { flex: 0 0 auto; margin-left: auto; }
   .button { flex: 0 0 auto; min-height: 36px; }
