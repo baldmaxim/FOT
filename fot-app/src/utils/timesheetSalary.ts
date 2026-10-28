@@ -54,6 +54,11 @@ export const salaryLineTitle = (row: ITimesheetSalaryRow, line: IPayrollCalcLine
   return line ? calcLineDaysNote(line) ?? undefined : undefined;
 };
 
+/** Подпись под суммой «Переработки»: часы будней и выходы сверх нормы («1 вых. · 2 ч»); у других строк — null. */
+export const salaryOvertimeNote = (line: IPayrollCalcLine | null | undefined): string | null => (
+  line?.code === 'overtime' ? calcLineDaysNote(line) : null
+);
+
 /** Буквы вкладки «Зарплата», под которыми — часы дня: удалёнка, работа на больничном, учебный день. */
 const SALARY_LETTER_LABELS: Partial<Record<TimesheetStatus, string>> = { remote: 'УУ', sick_worked: 'РБ', study_day: 'УД' };
 

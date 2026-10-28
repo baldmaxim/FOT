@@ -4,7 +4,7 @@ import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle, salaryLineTitle,
+  findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
 } from '../../utils/timesheetSalary';
 
 /** Вкладка «Зарплата» в табеле: данные и правка КТУ / «Выработки». */
@@ -82,13 +82,15 @@ export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) 
 
 type SalaryLineCode = 'contract' | 'overtime';
 
-/** «Оклад» / «Переработка» отдела — строки расчёта «Суммы». */
+/** «Оклад» / «Переработка» отдела — строки расчёта «Суммы»; у «Переработки» под суммой — часы и выходы. */
 export const TimesheetSalaryLineCell: FC<ICellProps & { code: SalaryLineCode }> = ({ salary, employee, code }) => {
   const row = findSalaryRow(salary.data, employee);
   const line = row?.[code];
+  const note = salaryOvertimeNote(line);
   return (
     <td className="ts-col-salary" title={row ? salaryLineTitle(row, line) : undefined}>
       {formatSalaryAmount(line?.amount ?? null)}
+      {note && <span className="ts-salary-line-note">{note}</span>}
     </td>
   );
 };
@@ -114,12 +116,18 @@ export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) =
           <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={formatTimesheetEmployeeName(employee.full_name)} />
         </label>
       )}
-      {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => (
-        <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
-          {label}
-          <span className="ts-salary-mobile-line">{formatSalaryAmount(row[code]?.amount ?? null)}</span>
-        </span>
-      ))}
+      {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => {
+        const note = salaryOvertimeNote(row[code]);
+        return (
+          <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
+            {label}
+            <span className="ts-salary-mobile-line">
+              {formatSalaryAmount(row[code]?.amount ?? null)}
+              {note && <span className="ts-salary-line-note"> · {note}</span>}
+            </span>
+          </span>
+        );
+      })}
       <span
         className={`ts-salary-mobile-amount${salary.data?.state === 'stale' && row.amount ? ' ts-salary-amount--stale' : ''}`}
         title={amountTitle(salary, row)}

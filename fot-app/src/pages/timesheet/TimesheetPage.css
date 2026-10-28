@@ -6091,6 +6091,16 @@
 .ts-table tbody tr:hover td.ts-col-salary {
   background: var(--surface-hover);
 }
+/* Под суммой «Переработки» — часы будней и выходы сверх нормы («1 вых. · 2 ч»). */
+.ts-salary-line-note {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+.ts-table td.ts-col-salary .ts-salary-line-note {
+  display: block;
+}
 
 /* «УУ» вкладки «Зарплата»: дробью — «УУ» над чертой, часы графика под ней. */
 .ts-day-fraction {

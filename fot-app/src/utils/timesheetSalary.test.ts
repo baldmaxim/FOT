@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, salaryAmountTitle, salaryLineTitle,
+  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
 } from './timesheetSalary';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
@@ -73,6 +73,16 @@ describe('«Оклад» и «Переработка» отдела', () => {
     expect(salaryLineTitle({ ...row, payout_state: 'not_closed' }, null)).toBe('Табель не закрыт');
     expect(salaryLineTitle(row, null)).toBeUndefined();
     expect(salaryLineTitle(row, undefined)).toBeUndefined();
+  });
+
+  it('подпись под «Переработкой» — часы будней и выходы; у «Оклада» и без строки — нет', () => {
+    expect(salaryOvertimeNote(overtime)).toBe('2 ч');
+    expect(salaryOvertimeNote({ ...overtime, days: { worked: 1, norm: 22 } })).toBe('1 вых. · 2 ч');
+    expect(salaryOvertimeNote({ ...overtime, days: { worked: 1, norm: 22 }, hours: undefined })).toBe('1 вых.');
+    expect(salaryOvertimeNote({ ...overtime, hours: 1.5 })).toBe('1,5 ч');
+    expect(salaryOvertimeNote(contract)).toBeNull();
+    expect(salaryOvertimeNote(null)).toBeNull();
+    expect(salaryOvertimeNote(undefined)).toBeNull();
   });
 });
 
