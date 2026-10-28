@@ -39,12 +39,8 @@ export interface IMonthBrigadeDays {
 
 export type MonthBasisNotClosedReason = 'not_covered' | 'norm_conflict';
 
-export interface IClosedMonthBasis {
-  state: 'closed';
-  /** reconstructed — хоть одна основа дозаполнена по нынешним графикам. */
-  quality: PayrollBasisQuality;
-  basisIds: number[];
-  versionIds: number[];
+/** Основа месяца для расчёта: из закрытых подач (IClosedMonthBasis) или из живого табеля (предварительный расчёт). */
+export interface ICalcMonthBasis {
   normDays: number | null;
   normMinutes: number | null;
   workdayDates: string[];
@@ -52,8 +48,16 @@ export interface IClosedMonthBasis {
   absenceDays: PayrollAbsenceDays;
   /** Переработка в будни по корректировкам: дата → минуты. */
   overtimeMinutes: Record<string, number>;
-  /** Те же дни подач бригад — по бригадам. */
+  /** Дни в бригадах — по бригадам: у закрытой основы — дни подач бригад, у живой — дни в окнах членства. */
   brigades: IMonthBrigadeDays[];
+}
+
+export interface IClosedMonthBasis extends ICalcMonthBasis {
+  state: 'closed';
+  /** reconstructed — хоть одна основа дозаполнена по нынешним графикам. */
+  quality: PayrollBasisQuality;
+  basisIds: number[];
+  versionIds: number[];
 }
 
 export type MonthBasis = IClosedMonthBasis | { state: 'not_closed'; reason: MonthBasisNotClosedReason };

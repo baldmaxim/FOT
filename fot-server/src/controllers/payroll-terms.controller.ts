@@ -864,6 +864,8 @@ const CALC_COLUMNS_MAX_IDS = 500;
  * (список с defer_calc=1 отдаёт строки сразу, без расчёта). Считаются только сотрудники «штата зарплаты» в охвате
  * пользователя — те же правила, что у списка: работает, не в архиве, не подрядчик, отдел в охвате; остальные id
  * в расчёт не идут и в ответе их нет. Больше 12 месяцев или «весь период» — { available: false }: ФОТ не считается.
+ * preliminary=1 — незакрытый месяц предварительно по живому табелю (calc.preliminary); без него — как раньше, чтобы
+ * старый фронт не показал предварительные суммы без пометки.
  */
 const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -897,7 +899,7 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const allowedIds = uniqueIds.filter(id => allowed.has(id));
 
     const timing = emptyCalcColumnsTiming();
-    const columns = await getCalcColumns(allowedIds, months, req, timing);
+    const columns = await getCalcColumns(allowedIds, months, req, timing, { preliminary: params.preliminary === '1' });
     res.setHeader('Server-Timing', calcColumnsServerTiming(timing));
     res.json({
       success: true,

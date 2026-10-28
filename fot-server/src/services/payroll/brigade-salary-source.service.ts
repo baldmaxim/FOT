@@ -14,6 +14,7 @@ import {
   buildMembershipWindowMap,
   isWithinMembershipWindow,
   listEmployeeMembershipsForDepartmentPeriod,
+  type IDepartmentEmployeeMembership,
 } from '../timesheet-department-assignments.service.js';
 import type { IBrigadeDayValue, IBrigadeSalaryError } from './brigade-salary.calc.js';
 
@@ -179,6 +180,8 @@ export interface ILiveBrigadeData {
 /**
  * Дни из живого табеля за [start, until] — те же правила, что у редакции: фактические часы СКУД,
  * несогласованные выходные обнулены. Дни после увольнения и вне окна членства в бригаде отброшены.
+ * memberships — уже загруженное членство бригады за [start, until] (предварительный расчёт «Расчётов»), чтобы
+ * не читать его второй раз.
  */
 export async function loadLiveDays(
   departmentId: string,
@@ -186,6 +189,7 @@ export async function loadLiveDays(
   month: string,
   until: string,
   exec?: DbExecutor,
+  memberships?: readonly IDepartmentEmployeeMembership[],
 ): Promise<ILiveBrigadeData> {
   const { start } = monthBounds(month);
   const data = await fetchTimesheetDataForEmployees(
@@ -197,10 +201,10 @@ export async function loadLiveDays(
     true,
     { rosterMode: 'snapshot', exec },
   );
-  const memberships = await listEmployeeMembershipsForDepartmentPeriod(
+  const members = memberships ?? await listEmployeeMembershipsForDepartmentPeriod(
     departmentId, start, until, exec, { firedInDismissalMonth: true },
   );
-  const windows = buildMembershipWindowMap(memberships);
+  const windows = buildMembershipWindowMap([...members]);
   const days: DaysByEmployee = new Map();
   for (const [employeeId, byDate] of data.dataMap) {
     const cutoff = data.cutoffByEmployeeId?.get(employeeId) ?? null;

@@ -139,7 +139,7 @@ describe('бригады — не больше трёх расчётов одн�
       const employeeId = Number(departmentId.replace('brigade-', ''));
       return { state: 'fixed', distribution: 'ok', rows: [{ ...shareRow, employee_id: employeeId, amount: `${employeeId}.00` }] };
     });
-    const metrics = { basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0 };
+    const metrics = { basisMs: 0, brigades: 0, brigadesMs: 0, live: 0, liveMs: 0, restMs: 0, buildMs: 0 };
 
     const result = await getPayoutForEmployees(ids, '2026-09', req, metrics);
 

@@ -203,8 +203,9 @@ export const defaultPaidMonth = (
 export const CALC_RECENT_MONTHS = 6;
 
 /**
- * Месяцы выбора «Расчётов» (столбцы по расчёту ФОТ и из 1С). Допустимы месяцы «Оплачено», месяцы ведомостей в банк
- * и CALC_RECENT_MONTHS прошлых; по умолчанию — по «Оплачено», как прежде (на нём и «Свод»). paidMonths = null —
+ * Месяцы выбора «Расчётов» (столбцы по расчёту ФОТ и из 1С). Допустимы месяцы «Оплачено», месяцы ведомостей в банк,
+ * CALC_RECENT_MONTHS прошлых и текущий (ФОТ — предварительно по табелю на вчера, решение 28.10.2026); по умолчанию —
+ * по «Оплачено», как прежде (на нём и «Свод»). paidMonths = null —
  * месяцы 1С ещё грузятся: допустимо всё окно, выбор не блокируется. payoutMonths = null — ведомостей нет или не
  * загрузились.
  */
@@ -216,7 +217,7 @@ export const calcMonthsSelection = (input: {
   payoutMonths: readonly string[] | null;
 }): { options: string[]; selectable: ReadonlySet<string> | null; defaultMonth: string } => {
   const paid = input.paidMonths ? new Set(input.paidMonths) : null;
-  const recent = Array.from({ length: CALC_RECENT_MONTHS }, (_, index) => shiftMonth(input.currentMonth, -1 - index));
+  const recent = Array.from({ length: CALC_RECENT_MONTHS + 1 }, (_, index) => shiftMonth(input.currentMonth, -index));
   const allMonths = [...new Set([...input.windowMonths, ...(input.paidMonths ?? []), ...(input.payoutMonths ?? [])])].sort();
   const selectable = paid ? new Set([...paid, ...recent, ...(input.payoutMonths ?? [])]) : null;
   return {

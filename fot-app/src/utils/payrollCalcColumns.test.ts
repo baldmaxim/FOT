@@ -4,6 +4,7 @@ import type { IPayrollCalcColumns, IPayrollTermsRow } from '../services/payrollS
 import {
   calcIssuesNote,
   calcNotClosed,
+  calcTimesheetSub,
   cardPayoutLines,
   emptyPayrollColumns,
   formatCalcRate,
@@ -73,6 +74,35 @@ describe('ячейки состава зарплаты', () => {
     }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает; сентябрь — табель не закрыт');
     expect(calcIssuesNote(calc())).toBeNull();
     expect(calcIssuesNote(undefined)).toBeNull();
+  });
+
+  it('предварительный расчёт: причины одного месяца — одной частью, текущий месяц — «по 27.10»', () => {
+    expect(calcIssuesNote(calc({
+      timesheet: '55000.00',
+      preliminary: [{ month: '2026-09', as_of: '2026-09-30' }],
+    }))).toBe('Предварительный расчёт: сентябрь — табель не закрыт, предварительно');
+    expect(calcIssuesNote(calc({
+      preliminary: [{ month: '2026-10', as_of: '2026-10-27' }],
+      incomplete: [{ month: '2026-10', reasons: ['brigade_output'] }, { month: '2026-08', reasons: ['hourly'] }],
+    }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает; '
+      + 'октябрь — табель не закрыт, предварительно по 27.10, выработка бригады не введена');
+  });
+
+  it('подпись «Начислено по табелю»: только у предварительного расчёта', () => {
+    const preliminary = [{ month: '2026-09', as_of: '2026-09-30' }];
+    const noOutput = [{ month: '2026-09', reasons: ['brigade_output' as const] }];
+
+    expect(calcTimesheetSub(calc({ timesheet: '55000.00', preliminary }), '55000.00')).toBe('табель не закрыт');
+    expect(calcTimesheetSub(calc({ preliminary, incomplete: noOutput }), null)).toBe('выработка не внесена');
+    // Закрытый месяц без выработки — как прежде, «—» и ⚠ без подписи.
+    expect(calcTimesheetSub(calc({ incomplete: noOutput }), null)).toBeNull();
+    // Старый бэкенд — поля нет.
+    expect(calcTimesheetSub(calc(), '1000.00')).toBeNull();
+  });
+
+  it('предварительный без суммы по табелю — столбец «Начислено по табелю» не скрывается', () => {
+    expect(empty([row({ calc: calc({ net: '-3500.00', preliminary: [{ month: '2026-09', as_of: '2026-09-30' }] }) })]))
+      .not.toContain('calc_timesheet');
   });
 
   it('«не закрыт» — только когда суммы нет', () => {

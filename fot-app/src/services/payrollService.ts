@@ -51,8 +51,9 @@ export type PayrollCalcColumnsIssue =
   | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_error' | 'unknown_amount';
 
 /**
- * Столбцы «Расчётов» по расчёту ФОТ за выбранные месяцы: суммы закрытых месяцев (NUMERIC строкой; null — суммы
- * нет ни в одном), незакрытые и неполные месяцы. rate — оклад или ставка на as_of, не суммируется.
+ * Столбцы «Расчётов» по расчёту ФОТ за выбранные месяцы: суммы закрытых и предварительно посчитанных месяцев
+ * (NUMERIC строкой; null — суммы нет ни в одном), незакрытые и неполные месяцы. rate — оклад или ставка на as_of,
+ * не суммируется.
  */
 export interface IPayrollCalcColumns {
   rate: { amount: string; calc_type: PayrollCalcType; as_of: string } | null;
@@ -68,7 +69,13 @@ export interface IPayrollCalcColumns {
   deductions: string | null;
   /** К выплате: начислено − удержано, без НДФЛ — как «Сумма» во вкладке «Табель → Зарплата». */
   net: string | null;
+  /** Табель не закрыт и суммы нет (1-е число текущего месяца). */
   open_months: string[];
+  /**
+   * Табель не закрыт — посчитано предварительно по живому табелю по as_of (YYYY-MM-DD) включительно; суммы уже в
+   * столбцах. Нет поля — старый бэкенд.
+   */
+  preliminary?: Array<{ month: string; as_of: string }>;
   incomplete: Array<{ month: string; reasons: PayrollCalcColumnsIssue[] }>;
 }
 
@@ -572,6 +579,8 @@ export const payrollService = {
     const search = new URLSearchParams();
     search.set('employee_ids', employeeIds.join(','));
     search.set('paid_months', months === 'all' || months.length === 0 ? 'all' : months.join(','));
+    // Незакрытый табель — предварительно по живому табелю, с пометкой (без параметра сервер считает только закрытый).
+    search.set('preliminary', '1');
     return (await apiClient.get<IApiResponse<IPayrollCalcColumnsResult>>(
       `/payroll/terms/calc-columns?${search.toString()}`,
       { signal },

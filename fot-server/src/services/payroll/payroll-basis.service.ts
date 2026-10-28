@@ -221,12 +221,42 @@ export const computeBasisHash = (draft: IPayrollBasisDraft): string => crypto
   }))
   .digest('hex');
 
+/** День сотрудника для основы: статус, часы (у буквы — 0) и признак правки часов. */
+export interface IBasisDayValue {
+  status: string;
+  hours: number;
+  hours_overridden: boolean;
+}
+
+/**
+ * Дни сотрудников за период [start_date, end_date] — из редакции табеля (закрытие) или из живого табеля
+ * (предварительный расчёт «Расчётов», payroll-calc-preliminary.service).
+ */
+export interface IBasisDaysSource {
+  start_date: string;
+  end_date: string;
+  employees: ReadonlyArray<{ employee_id: number; days: Readonly<Record<string, IBasisDayValue>> }>;
+}
+
 /** Основа по каждому сотруднику редакции и каждому месяцу её периода — по графикам на сейчас. */
 export const buildPayrollBasisDrafts = async (
   exec: DbExecutor,
   payload: ITimesheetVersionPayload,
+): Promise<IPayrollBasisDraft[]> => buildBasisDraftsForDays(exec, {
+  start_date: payload.approval.start_date,
+  end_date: payload.approval.end_date,
+  employees: payload.employees.map(employee => ({
+    employee_id: Number(employee.identity.employee_id),
+    days: employee.days ?? {},
+  })),
+});
+
+/** Основа по каждому сотруднику и каждому месяцу периода из его дней — правила в шапке файла. */
+export const buildBasisDraftsForDays = async (
+  exec: DbExecutor,
+  source: IBasisDaysSource,
 ): Promise<IPayrollBasisDraft[]> => {
-  const employeeIds = payload.employees.map(employee => Number(employee.identity.employee_id));
+  const employeeIds = source.employees.map(employee => employee.employee_id);
   if (employeeIds.length === 0) return [];
   const employeeRows = (await exec.query<Record<string, unknown>>(
     `SELECT id, employment_status, dismissal_date, excluded_from_timesheet_date
@@ -234,10 +264,10 @@ export const buildPayrollBasisDrafts = async (
     [employeeIds],
   )).rows;
   // Отсечка — та же формула и тот же старт, что у версии (buildTimesheetPayload).
-  const cutoffs = buildFiredCutoffMap(employeeRows, payload.approval.start_date);
+  const cutoffs = buildFiredCutoffMap(employeeRows, source.start_date);
 
   const drafts: IPayrollBasisDraft[] = [];
-  for (const month of monthsInRange(payload.approval.start_date, payload.approval.end_date)) {
+  for (const month of monthsInRange(source.start_date, source.end_date)) {
     const [year, mon] = month.split('-').map(Number);
     // Клиент транзакции не выполняет запросы параллельно — по очереди.
     const schedules = await resolveSchedulesForPeriod(
@@ -245,8 +275,8 @@ export const buildPayrollBasisDrafts = async (
     );
     const calendar = await loadCalendarMonth(year, mon, exec);
     const plannedWeekendDays = await computeExportWeekendExemptions(employeeIds, year, mon, calendar, exec);
-    for (const employee of payload.employees) {
-      const employeeId = Number(employee.identity.employee_id);
+    for (const employee of source.employees) {
+      const employeeId = employee.employee_id;
       const employeeSchedules = schedules.get(employeeId);
       drafts.push({
         employeeId,
@@ -256,7 +286,7 @@ export const buildPayrollBasisDrafts = async (
         ...classifyBasisDays({
           employeeId,
           month,
-          days: employee.days ?? {},
+          days: employee.days,
           schedules: employeeSchedules,
           calendar,
           plannedWeekendDays,

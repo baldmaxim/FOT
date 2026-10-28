@@ -21,6 +21,7 @@ import type { AuthenticatedRequest } from '../../types/index.js';
 import { moscowTodayIso } from '../../utils/date.utils.js';
 import { auditService } from '../audit.service.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod } from '../schedule.service.js';
+import type { IDepartmentEmployeeMembership } from '../timesheet-department-assignments.service.js';
 import {
   buildBrigadeDistribution,
   centsToMoney,
@@ -147,14 +148,26 @@ function distribute(
   };
 }
 
+/** Состав бригады для предварительного расчёта, загруженный заранее (контекст бригады «Расчётов»). */
+export interface IBrigadeMembers {
+  /** Участники делёжа — без начальников участка. */
+  memberIds: number[];
+  /** Членство бригады за [1-е, asOf]: окна дней в бригаде. */
+  memberships: readonly IDepartmentEmployeeMembership[];
+}
+
 async function computePreliminary(
   departmentId: string,
   month: string,
   asOf: string | null,
   inputs: IBrigadeSalaryInputs,
+  members?: IBrigadeMembers,
 ): Promise<{ computation: IBrigadeComputation; memberIds: number[] }> {
-  const supervisors = await supervisorIds(departmentId);
-  const memberIds = (await listBrigadeMemberIds(departmentId, month)).filter(id => !supervisors.has(id));
+  let memberIds = members?.memberIds;
+  if (!memberIds) {
+    const supervisors = await supervisorIds(departmentId);
+    memberIds = (await listBrigadeMemberIds(departmentId, month)).filter(id => !supervisors.has(id));
+  }
   if (asOf === null || memberIds.length === 0) {
     const empty = new Map<string, IBrigadeDayValue>();
     return {
@@ -162,7 +175,7 @@ async function computePreliminary(
       memberIds,
     };
   }
-  const live = await loadLiveDays(departmentId, memberIds, month, asOf);
+  const live = await loadLiveDays(departmentId, memberIds, month, asOf, undefined, members?.memberships);
   const empty = new Map<string, IBrigadeDayValue>();
   return {
     computation: distribute(
@@ -345,6 +358,22 @@ export async function getBrigadeShares(
   const fixed = closure.closed ? await ensureFixed(req, departmentId, month) : null;
   if (!fixed) return { state: 'open', distribution: null, rows: [] };
   return { state: 'fixed', distribution: fixed.stored.distribution, rows: fixed.stored.rows };
+}
+
+/**
+ * Предварительные доли открытой бригады для «Расчётов» — живой расчёт по табелю на asOf. Сохранённый результат не
+ * читается и не пишется: у переоткрытого месяца прежний (stale) расчёт не берётся — незакрытый месяц считается по
+ * живому табелю. Состав — из контекста бригады, членство второй раз не читается.
+ */
+export async function computeBrigadePreliminaryShares(
+  departmentId: string,
+  month: string,
+  asOf: string,
+  inputs: IBrigadeSalaryInputs,
+  members: IBrigadeMembers,
+): Promise<IBrigadeShares> {
+  const { computation } = await computePreliminary(departmentId, month, asOf, inputs, members);
+  return { state: 'open', distribution: computation.distribution, rows: computation.rows };
 }
 
 /** Расчёт бригады для вкладки: закрытый месяц — зафиксированный, открытый — предварительный или прежний. */

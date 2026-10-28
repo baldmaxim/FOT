@@ -57,7 +57,7 @@ vi.mock('./payroll-staff-category.js', () => ({
 const scopeMock = vi.hoisted(() => ({
   departments: 'all' as 'all' | string[],
   contractorRootId: null as string | null,
-  payoutCalls: [] as Array<{ ids: number[]; month: string }>,
+  payoutCalls: [] as Array<{ ids: number[]; month: string; preliminary?: boolean }>,
 }));
 
 vi.mock('./payroll-scope.service.js', () => ({
@@ -75,6 +75,10 @@ vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async ()
 vi.mock('./payroll-calc.service.js', () => ({
   getPayoutForEmployees: async (ids: readonly number[], month: string) => {
     scopeMock.payoutCalls.push({ ids: [...ids], month });
+    return new Map();
+  },
+  getPreliminaryPayoutForEmployees: async (ids: readonly number[], month: string) => {
+    scopeMock.payoutCalls.push({ ids: [...ids], month, preliminary: true });
     return new Map();
   },
 }));
@@ -606,6 +610,15 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       const mine = await calcColumns({ employee_ids: '33,32,1', paid_months: '2026-09' });
       expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09' }]);
       expect((mine.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([33]);
+    });
+
+    it('preliminary=1 — предварительный расчёт; без параметра — по закрытому табелю (старый фронт)', async () => {
+      await calcColumns({ employee_ids: '33', paid_months: '2026-09', preliminary: '1' });
+      expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09', preliminary: true }]);
+
+      scopeMock.payoutCalls = [];
+      await calcColumns({ employee_ids: '33', paid_months: '2026-09' });
+      expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09' }]);
     });
 
     it('лимиты: 501 id (с повторами) и без месяцев — 400; «весь период» и больше 12 месяцев — ФОТ недоступен', async () => {

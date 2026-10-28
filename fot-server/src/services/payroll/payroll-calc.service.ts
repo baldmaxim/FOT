@@ -1,7 +1,9 @@
 /**
  * «К выплате (ФОТ)» за месяц пачкой сотрудников — только по закрытому табелю (основа расчёта, миграция 331;
  * правила — payroll-calc.rules.ts). Незакрытый месяц (подача открыта, не утверждена, половина не подана,
- * уволенный в месяце увольнения) — not_closed: суммы нет, живой табель не считается.
+ * уволенный в месяце увольнения) — not_closed: суммы нет, живой табель не считается. Исключение — «Расчёты»
+ * (getPreliminaryPayoutForEmployees): там незакрытый месяц считается предварительно по живому табелю
+ * (payroll-calc-preliminary.service).
  *
  * Отделы — оклад по дням. Бригады — доля «Выработки» по КТУ из зафиксированного расчёта бригады
  * (brigade-salary.service, вкладка «Табель → Зарплата»); бригада не зафиксирована — месяц не закрыт. Начальник
@@ -15,10 +17,11 @@ import { performance } from 'node:perf_hooks';
 
 import { query } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
-import { createConcurrencyLimiter } from '../../utils/concurrency-limiter.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
 import { emptyAbsenceDays, type PayrollAbsenceDays, type PayrollBasisQuality } from './payroll-basis.service.js';
-import { getBrigadeShares, type IBrigadeShares } from './brigade-salary.service.js';
+import { resolvePreliminaryAsOf, type IBrigadeShares } from './brigade-salary.service.js';
+import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
+import { loadLiveMonthBases } from './payroll-calc-preliminary.service.js';
 import {
   buildPayrollCalc,
   type IBrigadeShareFact,
@@ -31,6 +34,7 @@ import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-mon
 import {
   assembleMonthBasis,
   loadMonthBasisSources,
+  type ICalcMonthBasis,
   type IClosedMonthBasis,
   type MonthBasisNotClosedReason,
 } from './payroll-month-basis.service.js';
@@ -46,12 +50,8 @@ import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import { PLANNED_SUPPLEMENT_PERIODS_SQL } from './payroll-supplements.service.js';
 import { getTermsForPeriod, type IPayrollTerms, type StaffCategory } from './payroll-terms.service.js';
 
-export interface IPayrollCalcClosed extends IPayrollCalcResult {
-  state: 'closed';
-  /** reconstructed — основа дозаполнена по графикам на дату дозаполнения, а не на дату закрытия. */
-  quality: PayrollBasisQuality;
-  basis_ids: number[];
-  version_ids: number[];
+/** Расчёт месяца с суммой: строки и то, из чего они посчитаны. */
+interface IPayrollCalcDetails extends IPayrollCalcResult {
   norm_days: number | null;
   period_from: string;
   period_to: string;
@@ -63,6 +63,21 @@ export interface IPayrollCalcClosed extends IPayrollCalcResult {
   terms: IPayrollTerms[];
 }
 
+export interface IPayrollCalcClosed extends IPayrollCalcDetails {
+  state: 'closed';
+  /** reconstructed — основа дозаполнена по графикам на дату дозаполнения, а не на дату закрытия. */
+  quality: PayrollBasisQuality;
+  basis_ids: number[];
+  version_ids: number[];
+}
+
+/** Предварительно («Расчёты»): табель месяца или расчёт бригады не закрыт — по живому табелю на as_of. */
+export interface IPayrollCalcPreliminary extends IPayrollCalcDetails {
+  state: 'preliminary';
+  /** По какой день взят живой табель: прошлый месяц — последний день, текущий — вчера МСК. */
+  as_of: string;
+}
+
 export interface IPayrollCalcNotClosed {
   state: 'not_closed';
   /** no_period — сотрудник в месяце не работал; brigade_open — расчёт его бригады за месяц не зафиксирован. */
@@ -70,6 +85,8 @@ export interface IPayrollCalcNotClosed {
 }
 
 export type PayrollCalc = IPayrollCalcClosed | IPayrollCalcNotClosed;
+
+export type PayrollCalcWithPreliminary = PayrollCalc | IPayrollCalcPreliminary;
 
 /**
  * Время шагов расчёта, мс (монотонный таймер) — для замера «Расчётов». rest — условия, доплаты, удержания, ставки и
@@ -79,16 +96,12 @@ export interface IPayoutMetrics {
   basisMs: number;
   brigades: number;
   brigadesMs: number;
+  /** Предварительный расчёт: сколько сотрудников прочитано из живого табеля и за сколько. */
+  live: number;
+  liveMs: number;
   restMs: number;
   buildMs: number;
 }
-
-/**
- * Расчёты бригад (getBrigadeShares — транзакция с блокировкой бригады, около 8 обращений к БД) — не больше трёх
- * одновременно на весь процесс: у пула 10 соединений, остальным запросам портала нужно место.
- */
-const BRIGADE_SHARES_CONCURRENCY = 3;
-const withBrigadeSlot = createConcurrencyLimiter(BRIGADE_SHARES_CONCURRENCY);
 
 interface IEmployeeRow {
   id: number;
@@ -122,15 +135,18 @@ const loadEmployeePeriods = async (
   return { employees, periods };
 };
 
-/** Категория месяца — как в «Своде» и листке, но объект — только из закрытых редакций основы. */
-const loadClosedCategories = async (
+/**
+ * Категория месяца — как в «Своде» и листке. versionIds — объект только из этих закрытых редакций основы; без них
+ * (предварительный расчёт) — из последних сохранённых редакций месяца, как в «Своде», нет их — по режиму и отделу.
+ */
+const loadMonthCategories = async (
   month: string,
-  bases: ReadonlyMap<number, IClosedMonthBasis>,
+  ids: readonly number[],
+  versionIds: readonly number[] | undefined,
   employees: ReadonlyMap<number, IEmployeeRow>,
 ): Promise<Map<number, StaffCategory>> => {
-  const ids = [...bases.keys()];
-  const versionIds = [...new Set([...bases.values()].flatMap(basis => basis.versionIds))];
-  const breakdown = await loadMonthBreakdown([`${month}-01`], ids, versionIds);
+  if (ids.length === 0) return new Map();
+  const breakdown = await loadMonthBreakdown([`${month}-01`], [...ids], versionIds);
   const pairs = ids.map(employeeId => ({ employeeId, month }));
   const attributions = await attributeMonths(pairs, breakdown, new Map(ids.map(id => [id, {
     org_department_id: employees.get(id)?.org_department_id ?? null,
@@ -214,19 +230,29 @@ const shareFact = (shares: IBrigadeShares, row: IBrigadeShares['rows'][number]):
   distribution: shares.distribution ?? 'error',
 });
 
-/** «К выплате (ФОТ)» сотрудников за месяц YYYY-MM. Сотрудника нет в БД — его нет и в ответе. */
-export const getPayoutForEmployees = async (
+/** Основа сотрудника месяца: закрытая (closed) или из живого табеля (closed — null). */
+interface ICalcEntry {
+  basis: ICalcMonthBasis;
+  closed: IClosedMonthBasis | null;
+}
+
+/**
+ * Расчёт месяца. preliminary — режим «Расчётов»: незакрытый месяц по живому табелю на asOf, открытая бригада —
+ * предварительной долей. Без него — только закрытый табель (карточка, листок, вкладка табеля).
+ */
+const computePayouts = async (
   employeeIds: readonly number[],
   month: string,
   req: AuthenticatedRequest,
-  metrics?: IPayoutMetrics,
-): Promise<Map<number, PayrollCalc>> => {
-  const result = new Map<number, PayrollCalc>();
+  metrics: IPayoutMetrics | undefined,
+  preliminary: boolean,
+): Promise<Map<number, PayrollCalcWithPreliminary>> => {
+  const result = new Map<number, PayrollCalcWithPreliminary>();
   if (employeeIds.length === 0) return result;
   const monthStart = `${month}-01`;
   const monthEnd = lastDayOfMonth(month);
   let mark = performance.now();
-  const lap = (key: Exclude<keyof IPayoutMetrics, 'brigades'>): void => {
+  const lap = (key: Exclude<keyof IPayoutMetrics, 'brigades' | 'live'>): void => {
     const now = performance.now();
     if (metrics) metrics[key] += now - mark;
     mark = now;
@@ -238,34 +264,52 @@ export const getPayoutForEmployees = async (
   }
 
   const sources = await loadMonthBasisSources([...periods.keys()], month);
-  const bases = new Map<number, IClosedMonthBasis>();
+  const entries = new Map<number, ICalcEntry>();
+  // Предварительно — по какой день живой табель; null — считать нечего (1-е число текущего месяца, будущий месяц).
+  const asOf = preliminary ? resolvePreliminaryAsOf(month) : null;
+  const liveIds: number[] = [];
   for (const [employeeId, period] of periods) {
     const basis = assembleMonthBasis(sources.get(employeeId) ?? [], period);
-    if (basis.state === 'closed') bases.set(employeeId, basis);
-    else result.set(employeeId, { state: 'not_closed', reason: basis.reason });
+    if (basis.state === 'closed') entries.set(employeeId, { basis, closed: basis });
+    else if (asOf === null) result.set(employeeId, { state: 'not_closed', reason: basis.reason });
+    // Принят позже asOf — по табелю ещё не работал.
+    else if (period.from > asOf) result.set(employeeId, { state: 'not_closed', reason: 'no_period' });
+    else liveIds.push(employeeId);
   }
 
   lap('basisMs');
 
-  // Доли бригад — по одному расчёту на бригаду, не больше трёх одновременно. Бригада не зафиксирована — месяц её людей
-  // не закрыт.
-  const brigadeIds = [...new Set([...bases.values()].flatMap(basis => basis.brigades.map(item => item.departmentId)))];
-  const brigadeResults = await Promise.all(brigadeIds.map(departmentId => (
-    withBrigadeSlot(() => getBrigadeShares(req, departmentId, month))
-  )));
-  const brigadeShares = new Map<string, IBrigadeShares>(brigadeIds.map((departmentId, index) => [departmentId, brigadeResults[index]]));
-  if (metrics) metrics.brigades += brigadeIds.length;
+  // Доли бригад — по одному расчёту на бригаду, не больше трёх одновременно. Бригада не зафиксирована (и не посчитана
+  // предварительно) — месяц её людей не закрыт.
+  const brigadeIds = [...new Set([...entries.values()].flatMap(entry => entry.basis.brigades.map(item => item.departmentId)))];
+  const brigades = asOf === null
+    ? await loadFixedBrigadeShares(req, month, brigadeIds)
+    : await loadPreliminaryBrigadeShares(req, month, asOf, brigadeIds, liveIds);
+  if (metrics) metrics.brigades += brigades.shares.size;
   lap('brigadesMs');
-  for (const [employeeId, basis] of [...bases]) {
-    if (basis.brigades.some(item => brigadeShares.get(item.departmentId)?.state !== 'fixed')) {
-      bases.delete(employeeId);
+
+  if (asOf !== null && liveIds.length > 0) {
+    const live = await loadLiveMonthBases(liveIds, periods, month, asOf, brigades.contexts);
+    for (const [employeeId, basis] of live.bases) entries.set(employeeId, { basis, closed: null });
+    if (metrics) metrics.live += live.fetched;
+  }
+  lap('liveMs');
+
+  const counted = (departmentId: string): boolean => (
+    brigades.shares.get(departmentId)?.state === 'fixed' || brigades.preliminary.has(departmentId)
+  );
+  for (const [employeeId, entry] of [...entries]) {
+    if (entry.basis.brigades.some(item => !counted(item.departmentId))) {
+      entries.delete(employeeId);
       result.set(employeeId, { state: 'not_closed', reason: 'brigade_open' });
     }
   }
-  const ids = [...bases.keys()];
+  const ids = [...entries.keys()];
   if (ids.length === 0) return result;
 
-  const [termsByEmployee, planned, extras, categories] = await Promise.all([
+  const closedEntries = ids.flatMap(id => (entries.get(id)!.closed ? [entries.get(id)!.closed!] : []));
+  const closedIds = ids.filter(id => entries.get(id)!.closed !== null);
+  const [termsByEmployee, planned, extras, closedCategories, liveCategories] = await Promise.all([
     getTermsForPeriod(ids, monthStart, monthEnd),
     query<IPlannedSupplementPeriod & { employee_id: number }>(
       `SELECT p.employee_id, p.amount::text AS amount,
@@ -277,13 +321,14 @@ export const getPayoutForEmployees = async (
       [ids, monthStart, monthEnd],
     ),
     loadPayoutExtras(ids, month, periods),
-    loadClosedCategories(month, bases, employees),
+    loadMonthCategories(month, closedIds, [...new Set(closedEntries.flatMap(basis => basis.versionIds))], employees),
+    loadMonthCategories(month, ids.filter(id => entries.get(id)!.closed === null), undefined, employees),
   ]);
   lap('restMs');
   const plannedByEmployee = groupBy(planned);
 
   for (const employeeId of ids) {
-    const basis = bases.get(employeeId)!;
+    const { basis, closed } = entries.get(employeeId)!;
     const period = periods.get(employeeId)!;
     const terms = termsByEmployee.get(employeeId) ?? [];
     const facts = extras.rateFacts.get(employeeId);
@@ -291,7 +336,7 @@ export const getPayoutForEmployees = async (
     const rateAllowances = facts
       ? pickPayslipRateAllowances({
         ...facts,
-        category: categories.get(employeeId) ?? 'office',
+        category: closedCategories.get(employeeId) ?? liveCategories.get(employeeId) ?? 'office',
         travelDays: { worked, norm: basis.normDays ?? 0 },
       })
       : [];
@@ -299,7 +344,7 @@ export const getPayoutForEmployees = async (
     const shares: IBrigadeShareFact[] = [];
     const brigadeDates = new Set<string>();
     for (const brigade of basis.brigades) {
-      const brigadeResult = brigadeShares.get(brigade.departmentId)!;
+      const brigadeResult = brigades.shares.get(brigade.departmentId)!;
       const row = brigadeResult.rows.find(item => Number(item.employee_id) === employeeId);
       if (!row) continue;
       shares.push(shareFact(brigadeResult, row));
@@ -333,11 +378,7 @@ export const getPayoutForEmployees = async (
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: shares,
     });
-    result.set(employeeId, {
-      state: 'closed',
-      quality: basis.quality,
-      basis_ids: basis.basisIds,
-      version_ids: basis.versionIds,
+    const details: IPayrollCalcDetails = {
       norm_days: basis.normDays,
       period_from: period.from,
       period_to: period.to,
@@ -346,11 +387,50 @@ export const getPayoutForEmployees = async (
       rate_allowances: rateAllowances,
       terms,
       ...calc,
-    });
+    };
+    // Живой табель или предварительная доля бригады — предварительно; иначе — закрытый расчёт, как всегда.
+    const preliminaryAsOf = !closed || basis.brigades.some(item => brigades.preliminary.has(item.departmentId)) ? asOf : null;
+    if (preliminaryAsOf !== null) {
+      result.set(employeeId, { state: 'preliminary', as_of: preliminaryAsOf, ...details });
+    } else if (closed) {
+      result.set(employeeId, {
+        state: 'closed',
+        quality: closed.quality,
+        basis_ids: closed.basisIds,
+        version_ids: closed.versionIds,
+        ...details,
+      });
+    }
   }
   lap('buildMs');
   return result;
 };
+
+/** «К выплате (ФОТ)» сотрудников за месяц YYYY-MM по закрытому табелю. Сотрудника нет в БД — его нет и в ответе. */
+export const getPayoutForEmployees = async (
+  employeeIds: readonly number[],
+  month: string,
+  req: AuthenticatedRequest,
+  metrics?: IPayoutMetrics,
+): Promise<Map<number, PayrollCalc>> => {
+  const result = new Map<number, PayrollCalc>();
+  for (const [employeeId, calc] of await computePayouts(employeeIds, month, req, metrics, false)) {
+    // Без режима «Расчётов» предварительных нет; страховка — суммы нет, как у незакрытого месяца.
+    result.set(employeeId, calc.state === 'preliminary' ? { state: 'not_closed', reason: 'not_covered' } : calc);
+  }
+  return result;
+};
+
+/**
+ * «Расчёты»: как getPayoutForEmployees, но незакрытый месяц — предварительно по живому табелю на asOf (прошлый
+ * месяц — целиком, текущий — по вчера МСК), открытая бригада — предварительной долей (payroll-calc-preliminary).
+ */
+export const getPreliminaryPayoutForEmployees = (
+  employeeIds: readonly number[],
+  month: string,
+  req: AuthenticatedRequest,
+  metrics?: IPayoutMetrics,
+): Promise<Map<number, PayrollCalcWithPreliminary>> => computePayouts(employeeIds, month, req, metrics, true);
 
 /**
  * «Сумма» бригады во вкладке табеля из доли (зафиксированной или предварительной): доля + разовые доплаты и

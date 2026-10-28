@@ -9,7 +9,20 @@ vi.mock('../../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
+// Графики и календарь для buildPayrollBasisDrafts — подменены: «5+2» на весь сентябрь, календаря нет.
+const schedules = vi.hoisted(() => ({ resolveSchedulesForPeriod: vi.fn(), loadCalendarMonth: vi.fn(async () => null) }));
+vi.mock('../schedule.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../schedule.service.js')>()),
+  resolveSchedulesForPeriod: schedules.resolveSchedulesForPeriod,
+  loadCalendarMonth: schedules.loadCalendarMonth,
+}));
+vi.mock('../timesheet-export.service.js', () => ({ computeExportWeekendExemptions: vi.fn(async () => new Set()) }));
+
+import type { DbExecutor } from '../../config/postgres.js';
+import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
 import {
+  buildBasisDraftsForDays,
+  buildPayrollBasisDrafts,
   classifyBasisDays,
   computeBasisHash,
   countMonthNormDays,
@@ -270,5 +283,32 @@ describe('основа расчёта: служебное', () => {
     expect(computeBasisHash(draft)).toBe(computeBasisHash({ ...draft, absenceDays: { unpaid: 0, sick: 0, vacation: 0, educational_leave: 0 } }));
     expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, normDays: 23 }));
     expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, overtimeMinutes: { '2026-09-01': 60 } }));
+  });
+});
+
+describe('buildPayrollBasisDrafts — обёртка над buildBasisDraftsForDays', () => {
+  it('редакция и те же дни напрямую (живой табель «Расчётов») дают одну основу', async () => {
+    schedules.resolveSchedulesForPeriod.mockResolvedValue(new Map([[71, septemberSchedules]]));
+    const exec = {
+      query: async () => ({ rows: [{ id: 71, employment_status: 'active', dismissal_date: null, excluded_from_timesheet_date: null }] }),
+    } as unknown as DbExecutor;
+    const days = { '2026-09-01': day('work', 9, true), '2026-09-02': day('work', 8), '2026-09-05': day('work', 6) };
+    const payload = {
+      approval: { start_date: '2026-09-01', end_date: '2026-09-30' },
+      employees: [{ identity: { employee_id: 71 }, days: Object.fromEntries(Object.entries(days).map(([date, value]) => (
+        [date, { ...value, corrected: value.hours_overridden }]
+      ))) }],
+    } as unknown as ITimesheetVersionPayload;
+
+    const fromVersion = await buildPayrollBasisDrafts(exec, payload);
+    const fromDays = await buildBasisDraftsForDays(exec, {
+      start_date: '2026-09-01', end_date: '2026-09-30', employees: [{ employee_id: 71, days }],
+    });
+
+    expect(fromDays).toEqual(fromVersion);
+    expect(fromVersion).toEqual([expect.objectContaining({
+      employeeId: 71, month: '2026-09-01', normDays: 22,
+      workdayDates: ['2026-09-01', '2026-09-02'], dayoffDates: ['2026-09-05'], overtimeMinutes: { '2026-09-01': 60 },
+    })]);
   });
 });

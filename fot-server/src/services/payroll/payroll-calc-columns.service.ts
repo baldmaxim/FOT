@@ -8,13 +8,22 @@
  * расчётом (почасовая ставка, нет условий или нормы, выработка бригады не введена) — incomplete. «Оклад» не
  * суммируется: ставка условий на последний день последнего месяца.
  *
+ * С preliminary (решение пользователя 28.10.2026) незакрытый месяц считается предварительно по живому табелю
+ * (getPreliminaryPayoutForEmployees): суммы входят в столбцы, месяц — в preliminary с датой, по которую взят табель;
+ * в open_months остаются только месяцы, которые посчитать нечем (1-е число текущего месяца, будущий).
+ *
  * Из 1С (там, где ФОТ сумму не считает) — отпускные, больничные и перерасчёт (статьи «Оплачено», SQL списка) и
  * «Выплаты на карту» — ведомости в банк (миграция 328) по виду: аванс, ЗП, премия.
  */
 import { performance } from 'node:perf_hooks';
 
 import type { AuthenticatedRequest } from '../../types/index.js';
-import { getPayoutForEmployees, type IPayoutMetrics, type PayrollCalc } from './payroll-calc.service.js';
+import {
+  getPayoutForEmployees,
+  getPreliminaryPayoutForEmployees,
+  type IPayoutMetrics,
+  type PayrollCalcWithPreliminary,
+} from './payroll-calc.service.js';
 import type { PayrollCalcLineCode, PayrollCalcMissing } from './payroll-calc.rules.js';
 import { lastDayOfMonth } from './payroll-payslip.rules.js';
 import { centsToAmount, toCents } from './payroll-summary.attribution.js';
@@ -60,8 +69,10 @@ export interface ICalcColumns {
   deductions: string | null;
   /** К выплате: начислено − удержано за закрытые месяцы, без НДФЛ; null — закрытых месяцев нет. */
   net: string | null;
-  /** Месяцы с незакрытым табелем (YYYY-MM); месяц, где сотрудник не работал, сюда не входит. */
+  /** Месяцы с незакрытым табелем без суммы (YYYY-MM); месяц, где сотрудник не работал, сюда не входит. */
   open_months: string[];
+  /** Месяцы, посчитанные предварительно (табель не закрыт): as_of — по какой день взят живой табель. */
+  preliminary: Array<{ month: string; as_of: string }>;
   incomplete: Array<{ month: string; reasons: CalcColumnsIssue[] }>;
 }
 
@@ -82,7 +93,7 @@ const toAmount = (cents: number | null): string | null => (cents === null ? null
 
 /** Суммы ФОТ и полнота строки по месяцам (по возрастанию); undefined — сотрудника нет в расчёте месяца. */
 export const sumCalcColumns = (
-  byMonth: ReadonlyArray<readonly [string, PayrollCalc | undefined]>,
+  byMonth: ReadonlyArray<readonly [string, PayrollCalcWithPreliminary | undefined]>,
 ): Omit<ICalcColumns, 'rate'> => {
   const sums: Record<CalcSumKey | 'deductions' | 'net', number | null> = {
     timesheet: null, overtime: null, travel: null, housing: null, supplements: null, deductions: null, net: null,
@@ -91,6 +102,7 @@ export const sumCalcColumns = (
   let overtimeHours = 0;
   const housingKinds = new Set<HousingKind>();
   const openMonths: string[] = [];
+  const preliminary: ICalcColumns['preliminary'] = [];
   const incomplete: ICalcColumns['incomplete'] = [];
 
   for (const [month, calc] of byMonth) {
@@ -99,6 +111,7 @@ export const sumCalcColumns = (
       if (calc.reason !== 'no_period') openMonths.push(month);
       continue;
     }
+    if (calc.state === 'preliminary') preliminary.push({ month, as_of: calc.as_of });
     const reasons = new Set<CalcColumnsIssue>(calc.missing.filter(isCalcIssue));
     for (const line of calc.lines) {
       const key = LINE_COLUMN[line.code];
@@ -133,6 +146,7 @@ export const sumCalcColumns = (
     deductions: toAmount(sums.deductions),
     net: toAmount(sums.net),
     open_months: openMonths,
+    preliminary,
     incomplete,
   };
 };
@@ -160,7 +174,7 @@ export interface ICalcColumnsTiming extends IPayoutMetrics {
 }
 
 export const emptyCalcColumnsTiming = (): ICalcColumnsTiming => ({
-  basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0, rateMs: 0, totalMs: 0,
+  basisMs: 0, brigades: 0, brigadesMs: 0, live: 0, liveMs: 0, restMs: 0, buildMs: 0, rateMs: 0, totalMs: 0,
 });
 
 /** Расчёт дольше — в лог, с шагами по месяцам: по нему видно, что ускорять дальше. */
@@ -170,33 +184,39 @@ const ms = (value: number): string => `${Math.round(value)} мс`;
 
 export const formatPayoutMetrics = (month: string, people: number, metrics: IPayoutMetrics): string => (
   `${month}, ${people} чел.: основа ${ms(metrics.basisMs)}, бригады(${metrics.brigades}) ${ms(metrics.brigadesMs)}, `
+  + `живой табель(${metrics.live}) ${ms(metrics.liveMs)}, `
   + `условия·доплаты·ставки·категории (вместе) ${ms(metrics.restMs)}, сборка ${ms(metrics.buildMs)}`
 );
 
 /**
  * Столбцы ФОТ строк порции за месяцы YYYY-MM; больше CALC_COLUMNS_MAX_MONTHS — пустая карта. timing — сюда
  * складывается время шагов (Server-Timing запроса); всего дольше CALC_COLUMNS_LOG_THRESHOLD_MS — строка в лог.
+ * options.preliminary — незакрытый месяц предварительно по живому табелю (calc-columns с preliminary=1).
  */
 export const getCalcColumns = async (
   employeeIds: readonly number[],
   months: readonly string[],
   req: AuthenticatedRequest,
   timing: ICalcColumnsTiming = emptyCalcColumnsTiming(),
+  options: { preliminary?: boolean } = {},
 ): Promise<Map<number, ICalcColumns>> => {
   const result = new Map<number, ICalcColumns>();
   if (employeeIds.length === 0 || months.length === 0 || months.length > CALC_COLUMNS_MAX_MONTHS) return result;
   const started = performance.now();
   const sorted = [...new Set(months)].sort();
   // Месяцы — по очереди: расчёт порции сам идёт пачкой запросов, параллельно он занял бы пул.
-  const calcs = new Map<string, Map<number, PayrollCalc>>();
+  const calcs = new Map<string, Map<number, PayrollCalcWithPreliminary>>();
   const perMonth: string[] = [];
+  const payouts = options.preliminary ? getPreliminaryPayoutForEmployees : getPayoutForEmployees;
   for (const month of sorted) {
-    const metrics: IPayoutMetrics = { basisMs: 0, brigades: 0, brigadesMs: 0, restMs: 0, buildMs: 0 };
-    calcs.set(month, await getPayoutForEmployees(employeeIds, month, req, metrics));
+    const metrics: IPayoutMetrics = { basisMs: 0, brigades: 0, brigadesMs: 0, live: 0, liveMs: 0, restMs: 0, buildMs: 0 };
+    calcs.set(month, await payouts(employeeIds, month, req, metrics));
     perMonth.push(formatPayoutMetrics(month, employeeIds.length, metrics));
     timing.basisMs += metrics.basisMs;
     timing.brigades += metrics.brigades;
     timing.brigadesMs += metrics.brigadesMs;
+    timing.live += metrics.live;
+    timing.liveMs += metrics.liveMs;
     timing.restMs += metrics.restMs;
     timing.buildMs += metrics.buildMs;
   }
@@ -221,6 +241,7 @@ export const getCalcColumns = async (
 export const calcColumnsServerTiming = (timing: ICalcColumnsTiming): string => [
   `calc_basis;dur=${timing.basisMs.toFixed(1)}`,
   `calc_brigades;dur=${timing.brigadesMs.toFixed(1)};desc="${timing.brigades}"`,
+  `calc_live;dur=${timing.liveMs.toFixed(1)};desc="${timing.live}"`,
   `calc_extras;dur=${timing.restMs.toFixed(1)}`,
   `calc_build;dur=${(timing.buildMs + timing.rateMs).toFixed(1)}`,
   `calc_total;dur=${timing.totalMs.toFixed(1)}`,

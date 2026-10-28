@@ -7,6 +7,7 @@ import {
   calcIssuesNote,
   calcNotClosed,
   calcSumAmount,
+  calcTimesheetSub,
   cardPayoutLines,
   formatCalcRate,
   housingKindsLabel,
@@ -32,7 +33,9 @@ const formatAmount = (value: string | null | undefined): string => (
 
 /**
  * Ячейка состава зарплаты. В столбцах ФОТ незакрытый или неполный месяц — ⚠ с подсказкой «месяц — причина»:
- * сумма частичная или её нет; «Начислено по табелю» без суммы при незакрытом табеле — «не закрыт».
+ * сумма частичная или её нет; «Начислено по табелю» без суммы при незакрытом табеле — «не закрыт». Предварительный
+ * расчёт (табель не закрыт) — под «Начислено по табелю» подпись «табель не закрыт» или «выработка не внесена»
+ * вместо ⚠.
  */
 export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
   // Столбцы ФОТ считаются отдельным запросом после строк: идёт — «…», не удалось — «—» (над таблицей «Повторить»).
@@ -75,17 +78,21 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
       const note = calcIssuesNote(row.calc);
       const amount = calcSumAmount(row, column);
       const notClosed = column === 'calc_timesheet' && amount === null && calcNotClosed(row.calc);
+      // Подпись предварительного расчёта — вместо ⚠ в «Начислено по табелю».
+      const preliminarySub = column === 'calc_timesheet' && !notClosed ? calcTimesheetSub(row.calc, amount) : null;
       // Вторая строка: вид проживания, из чего переработка.
-      const sub = amount === null ? null
+      const sub = preliminarySub ?? (amount === null ? null
         : column === 'calc_housing' ? housingKindsLabel(row.calc)
-          : column === 'calc_overtime' ? overtimeNote(row.calc) : null;
+          : column === 'calc_overtime' ? overtimeNote(row.calc) : null);
       return (
         <td
           className={column === 'calc_net' ? `${styles.cellNumber} ${styles.calcTotal}` : styles.cellNumber}
           title={note ?? undefined}
         >
           {notClosed ? <span className={styles.calcMuted}>не закрыт</span> : formatAmount(amount)}
-          {note && !notClosed && <AlertTriangle size={12} className={styles.calcWarn} role="img" aria-label={note} />}
+          {note && !notClosed && !preliminarySub && (
+            <AlertTriangle size={12} className={styles.calcWarn} role="img" aria-label={note} />
+          )}
           {sub && <span className={styles.calcSub}>{sub}</span>}
         </td>
       );
