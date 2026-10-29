@@ -7,12 +7,13 @@
  *   Табель месяца сотрудника не закрыт — с опцией preliminary (новый фронт, решение 28.10.2026) предварительно по
  *   живому табелю, как «Расчёты»; без неё — суммы нет.
  * - Бригада — доля «Выработки» по КТУ (brigade-salary.service) + разовые доплаты и проживание − удержания;
- *   до закрытия — «Предварительно», как доля. Доля — в share (подсказка), Σ долей = выработке.
+ *   до закрытия — «Предварительно», как доля. Выработка — по объектам (336): objects — группы «Зарплаты по объектам»
+ *   с часами по дням, весами и долями; share строки — Σ долей по объектам.
  */
 import { query, queryOne } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
-import type { BrigadeDistributionState, BrigadeSalaryErrorCode } from './brigade-salary.calc.js';
-import { DEFAULT_KTU_TENTHS } from './brigade-salary-inputs.service.js';
+import type { BrigadeDistributionState, BrigadeObjectState, BrigadeSalaryErrorCode } from './brigade-salary.calc.js';
+import { DEFAULT_KTU_TENTHS, totalBrigadeOutput } from './brigade-salary-inputs.service.js';
 import type { IDateRange } from './brigade-salary-source.service.js';
 import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
@@ -35,6 +36,8 @@ export interface ITimesheetSalaryDepartment {
 
 export interface ITimesheetSalaryRow {
   employee_id: number;
+  /** ФИО — только у бригады (группы по объектам рисуются без сетки табеля); у отдела null. */
+  full_name: string | null;
   /** КТУ для выбора — текущий ввод ('1.0' по умолчанию); у отделов null. */
   ktu: string | null;
   /** Учтённые часы, по которым посчитана доля; null — суммы нет. */
@@ -64,7 +67,37 @@ export interface ITimesheetSalaryError {
   employee_id: number;
   full_name: string;
   code: BrigadeSalaryErrorCode;
-  date: string;
+  /** null — ошибка настройки сотрудника (object_config), не дня. */
+  date: string | null;
+}
+
+/** Рабочий в группе объекта. */
+export interface ITimesheetSalaryObjectMember {
+  employee_id: number;
+  /** Часы по дням на объекте — как в разбивке табеля по объектам. */
+  days: Record<string, number>;
+  /** Σ часов по дням на объекте. */
+  hours: number;
+  /** Учтённые минуты на объекте — по ним доля. */
+  counted_minutes: number;
+  /** КТУ в десятых × учтённые минуты на объекте. */
+  weight: number;
+  /** Доля на объекте; null — нет. */
+  share: string | null;
+}
+
+/** Группа «Зарплаты по объектам»: объект бригады, его выработка и рабочие. */
+export interface ITimesheetSalaryObject {
+  object_key: string;
+  object_name: string;
+  /** Выработка объекта; null — не внесена. */
+  output_amount: string | null;
+  state: BrigadeObjectState;
+  /** Σ часов группы — для заголовка. */
+  total_hours: number;
+  /** Σ весов объекта — точный знаменатель долей. */
+  total_weight: number;
+  members: ITimesheetSalaryObjectMember[];
 }
 
 export interface ITimesheetSalaryResponse {
@@ -75,10 +108,13 @@ export interface ITimesheetSalaryResponse {
   distribution: BrigadeDistributionState | null;
   as_of: string | null;
   open_ranges: IDateRange[];
+  /** Σ выработок по объектам; null — ничего не внесено. */
   output_amount: string | null;
   errors: ITimesheetSalaryError[];
   computed_at: string | null;
   rows: ITimesheetSalaryRow[];
+  /** Группы по объектам — только у бригады; у отдела []. */
+  objects: ITimesheetSalaryObject[];
 }
 
 export async function loadSalaryDepartment(departmentId: string): Promise<ITimesheetSalaryDepartment | null> {
@@ -136,11 +172,13 @@ export async function getTimesheetSalary(
       output_amount: null,
       errors: [],
       computed_at: null,
+      objects: [],
       rows: memberIds.map(employeeId => {
         const calc = calcs.get(employeeId);
         const counted = calc && calc.state !== 'not_closed' ? calc : null;
         return {
           employee_id: employeeId,
+          full_name: null,
           ktu: null,
           counted_hours: null,
           amount: counted?.net ?? null,
@@ -162,12 +200,37 @@ export async function getTimesheetSalary(
   const members = new Set(result.member_ids);
   const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
   const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys()])].sort((a, b) => a - b);
-  const names = await namesOf([...new Set(result.errors.map(error => error.employee_id))]);
-  // «Сумма» — к выплате из доли: доли нет (выработка не введена, ошибка) — суммы нет.
+  const names = await namesOf([...new Set([...employeeIds, ...result.errors.map(error => error.employee_id)])]);
+  // «Сумма» — к выплате из доли: доли нет (выработка не внесена, ошибка) — суммы нет.
   const shares = new Map<number, IBrigadeShareFact>([...brigadeShareFacts(
-    department.id, result.distribution, result.inputs.output, result.rows,
+    department.id, result.distribution, result.rows, result.objects,
   )].filter(([, fact]) => fact.amount !== null));
   const payouts = await previewBrigadePayouts(shares, month);
+
+  const objects: ITimesheetSalaryObject[] = result.objects.map(object => {
+    const objectMembers = result.rows.flatMap(row => {
+      const part = row.objects.find(item => item.object_key === object.object_key);
+      if (!part) return [];
+      const hours = Object.values(part.days).reduce((sum, value) => sum + value, 0);
+      return [{
+        employee_id: row.employee_id,
+        days: part.days,
+        hours: Math.round(hours * 100) / 100,
+        counted_minutes: part.counted_minutes,
+        weight: part.weight,
+        share: part.amount,
+      }];
+    });
+    return {
+      object_key: object.object_key,
+      object_name: object.object_name,
+      output_amount: object.output,
+      state: object.state,
+      total_hours: Math.round(objectMembers.reduce((sum, member) => sum + member.hours, 0) * 100) / 100,
+      total_weight: object.total_weight,
+      members: objectMembers,
+    };
+  });
 
   return {
     department_id: department.id,
@@ -177,13 +240,15 @@ export async function getTimesheetSalary(
     distribution: result.distribution,
     as_of: result.as_of,
     open_ranges: result.open_ranges,
-    output_amount: result.inputs.output,
+    output_amount: totalBrigadeOutput(result.inputs.outputs),
     errors: result.errors.map(error => ({ ...error, full_name: names.get(error.employee_id) ?? '' })),
     computed_at: result.computed_at,
+    objects,
     rows: employeeIds.map(employeeId => {
       const row = byEmployee.get(employeeId);
       return {
         employee_id: employeeId,
+        full_name: names.get(employeeId) ?? null,
         ktu: ((result.inputs.ktu.get(employeeId) ?? DEFAULT_KTU_TENTHS) / 10).toFixed(1),
         counted_hours: row ? Math.round((row.counted_minutes / 60) * 100) / 100 : null,
         amount: payouts.get(employeeId)?.net ?? null,

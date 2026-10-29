@@ -1,8 +1,15 @@
 import type { IPayrollCalcLine } from '../services/payrollService';
 import type { TimesheetEmployee, TimesheetEntry, TimesheetStatus } from '../types';
-import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../types/timesheet';
+import type {
+  ITimesheetSalaryObject,
+  ITimesheetSalaryObjectMember,
+  ITimesheetSalaryResponse,
+  ITimesheetSalaryRow,
+  TimesheetSalaryErrorCode,
+} from '../types/timesheet';
 import { calcLineDaysNote, calcMissingNote } from './payrollCalc';
 import { formatPaidAmount } from './payrollPaid';
+import { formatTimesheetEmployeeName } from './timesheetDisplay';
 
 /** Строка вкладки «Зарплата» у сотрудника, если он в составе (начальник участка, «Руководитель» — нет). */
 export const findSalaryRow = (
@@ -47,6 +54,8 @@ export const salaryAmountTitle = (data: ITimesheetSalaryResponse, row: ITimeshee
     parts.push(`КТУ ${formatKtu(row.ktu ?? '1.0')}`, `${String(row.counted_hours).replace('.', ',')} ч`);
     if (row.deducted && Number(row.deducted) > 0) parts.push(`удержано ${formatSalaryAmount(row.deducted)}`);
     if (data.state === 'fixed' && row.source === 'live') parts.push('нет в закрытом табеле — по данным портала');
+    const missingObjects = row.share === null || row.share === undefined ? missingObjectsNote(data, row.employee_id) : null;
+    if (missingObjects) parts.push(missingObjects);
   } else {
     if (row.payout_state === 'not_closed') return undefined;
     parts.push('К выплате (ФОТ)');
@@ -100,3 +109,105 @@ export const getSalaryLetterHours = (
   const hours = Math.round(normHours);
   return hours > 0 ? { label, hours, source: 'schedule' } : null;
 };
+
+const SALARY_ERROR_LABELS: Record<TimesheetSalaryErrorCode, string> = {
+  no_schedule: 'нет графика',
+  unknown_status: 'неизвестный статус дня',
+  duplicate_day: 'день в двух подачах',
+  object_config: 'не задан объект табелирования',
+};
+
+const formatDayMonth = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+
+export interface ISalaryStateNote {
+  text: string;
+  tone: 'muted' | 'ok' | 'warn' | 'error';
+  title?: string;
+}
+
+/** Пометка состояния сумм бригады: «Предварительно, по 26.10», «По закрытому табелю 03.11», ошибка и т. п. */
+export const describeSalaryState = (data: ITimesheetSalaryResponse): ISalaryStateNote | null => {
+  if (data.distribution === 'error' && data.errors.length > 0) {
+    const first = data.errors[0];
+    const more = data.errors.length > 1 ? ` (ещё ${data.errors.length - 1})` : '';
+    return {
+      text: `Ошибка: ${SALARY_ERROR_LABELS[first.code]} — ${formatTimesheetEmployeeName(first.full_name)}${more}`,
+      tone: 'error',
+      title: data.errors
+        .map(error => `${formatTimesheetEmployeeName(error.full_name)}${error.date ? `, ${formatDayMonth(error.date)}` : ''}: `
+          + SALARY_ERROR_LABELS[error.code])
+        .join('\n'),
+    };
+  }
+  if (data.state === 'stale') return { text: 'Требует перерасчёта — табель открыт', tone: 'warn' };
+  if (data.state === 'fixed') {
+    return { text: `По закрытому табелю${data.computed_at ? ` ${formatDayMonth(data.computed_at.slice(0, 10))}` : ''}`, tone: 'ok' };
+  }
+  if (data.state === 'preliminary') {
+    return { text: `Предварительно${data.as_of ? `, по ${formatDayMonth(data.as_of)}` : ''}`, tone: 'muted' };
+  }
+  return null;
+};
+
+/** Пометка объекта под полем «Выработка»: не внесена / некому распределить; внесена — null. */
+export const salaryObjectStateNote = (object: ITimesheetSalaryObject): string | null => {
+  if (object.state === 'no_output') return 'не внесена';
+  if (object.state === 'nothing_to_distribute') return 'некому распределить — часов нет';
+  return null;
+};
+
+const decimalText = (value: number): string => String(Math.round(value * 100) / 100).replace('.', ',');
+
+/**
+ * Подсказка доли на объекте — из тех же целых весов, что расчёт: «228 000,00 × КТУ 1,0 × 10 ч / 38 (Σ КТУ × ч
+ * объекта) = 60 000,00». Выработки нет — «выработка не внесена»; часов нет — без подсказки.
+ */
+export const objectShareTitle = (
+  object: ITimesheetSalaryObject,
+  member: ITimesheetSalaryObjectMember,
+): string | undefined => {
+  if (member.counted_minutes <= 0) return undefined;
+  if (object.output_amount === null) return 'выработка не внесена';
+  if (member.share === null || object.total_weight <= 0) return undefined;
+  const ktu = decimalText(member.weight / member.counted_minutes / 10);
+  return `${formatSalaryAmount(object.output_amount)} × КТУ ${ktu} × ${decimalText(member.counted_minutes / 60)} ч`
+    + ` / ${decimalText(object.total_weight / 600)} (Σ КТУ × ч объекта) = ${formatSalaryAmount(member.share)}`;
+};
+
+/** Объекты, где у сотрудника есть учтённые часы, а выработка не внесена, — «выработка не внесена: ЖК Stories». */
+export const missingObjectsNote = (data: ITimesheetSalaryResponse, employeeId: number): string | null => {
+  const names = (data.objects ?? [])
+    .filter(object => object.output_amount === null && object.members.some(member => (
+      member.employee_id === employeeId && member.counted_minutes > 0
+    )))
+    .map(object => object.object_name);
+  return names.length > 0 ? `выработка не внесена: ${names.join(', ')}` : null;
+};
+
+/** Σ часов сотрудника по дням на всех объектах — для строки «Итого по бригаде». */
+export const totalDaysOfEmployee = (data: ITimesheetSalaryResponse, employeeId: number): Record<string, number> => {
+  const total: Record<string, number> = {};
+  for (const object of data.objects ?? []) {
+    const member = object.members.find(item => item.employee_id === employeeId);
+    if (!member) continue;
+    for (const [date, hours] of Object.entries(member.days)) {
+      total[date] = Math.round(((total[date] ?? 0) + hours) * 100) / 100;
+    }
+  }
+  return total;
+};
+
+/** Часы клетки дня: целые — без запятой, дробные — «7,5». */
+export const formatDayHours = (hours: number | undefined): string => (
+  hours === undefined || hours <= 0 ? '' : decimalText(hours)
+);
+
+/** Выработку на объекте без часов бригады можно только стереть. */
+export const isOutputClearOnly = (object: ITimesheetSalaryObject): boolean => (
+  object.members.length === 0 && object.output_amount !== null
+);
+
+/** Строки бригады по ФИО: для «Итого» и порядка рабочих в группах. */
+export const sortSalaryRows = (rows: readonly ITimesheetSalaryRow[]): ITimesheetSalaryRow[] => (
+  [...rows].sort((a, b) => (a.full_name ?? '').localeCompare(b.full_name ?? '', 'ru') || a.employee_id - b.employee_id)
+);

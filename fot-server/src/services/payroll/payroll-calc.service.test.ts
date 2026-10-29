@@ -58,7 +58,11 @@ const source = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const shareRow = { employee_id: 7, ktu: '1.5', counted_minutes: 10560, amount: '141818.18', source: 'version' };
+const shareRow = {
+  employee_id: 7, ktu: '1.5', counted_minutes: 10560, amount: '141818.18', source: 'version',
+  objects: [{ object_key: 'wave', days: {}, counted_minutes: 10560, weight: 158_400, amount: '141818.18' }],
+};
+const waveObject = { object_key: 'wave', object_name: 'ЖК Wave', output: '500000.00', state: 'ok', total_weight: 158_400 };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,7 +87,9 @@ beforeEach(() => {
 
 describe('«К выплате (ФОТ)» бригады', () => {
   it('рабочий: доля − удержания; то же число во вкладке табеля', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],
+    });
 
     const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
 
@@ -94,19 +100,25 @@ describe('«К выплате (ФОТ)» бригады', () => {
       amount: '141818.18',
       brigade: { ktu: '1.5', hours: 176 },
       parts: [{
-        kind: 'brigade', department_id: BRIGADE, output: '500000.00', ktu_tenths: 15, counted_minutes: 10560,
-        weight: 158_400, total_weight: 158_400, amount: '141818.18',
+        kind: 'brigade', department_id: BRIGADE, object_key: 'wave', object_name: 'ЖК Wave', output: '500000.00',
+        ktu_tenths: 15, counted_minutes: 10560, weight: 158_400, total_weight: 158_400, amount: '141818.18',
       }],
     }]);
     const tab = await previewBrigadePayouts(new Map([[7, {
       departmentId: BRIGADE, amount: shareRow.amount, ktu: shareRow.ktu, countedMinutes: shareRow.counted_minutes,
-      distribution: 'ok', output: '500000.00', totalWeight: 158_400,
+      distribution: 'ok', output: '500000.00',
+      objects: [{
+        objectKey: 'wave', objectName: 'ЖК Wave', output: '500000.00', countedMinutes: 10560, weight: 158_400,
+        totalWeight: 158_400, amount: '141818.18',
+      }],
     }]]), '2026-09');
     expect(tab.get(7)?.net).toBe('138318.18');
   });
 
   it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],
+    });
 
     const calc = (await getPayoutForEmployees([8], '2026-09', req)).get(8);
 
@@ -118,7 +130,9 @@ describe('«К выплате (ФОТ)» бригады', () => {
   });
 
   it('«Без переработки» в месяце — переработки нет, итог — оклад', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],
+    });
     const base = pg.query.getMockImplementation()!;
     pg.query.mockImplementation(async (sql: string, params?: unknown[]) => (sql.includes('FROM payroll_overtime_stops')
       ? [{ employee_id: 8, date_from: '2026-08-20', date_to: null }]
@@ -133,7 +147,7 @@ describe('«К выплате (ФОТ)» бригады', () => {
   });
 
   it('расчёт бригады не зафиксирован — месяц не закрыт', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, output_amount: null, rows: [] });
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, output_amount: null, rows: [], objects: [] });
 
     const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
 
@@ -160,7 +174,13 @@ describe('бригады — не больше трёх расчётов одн�
       await new Promise(resolve => setTimeout(resolve, 2));
       inFlight -= 1;
       const employeeId = Number(departmentId.replace('brigade-', ''));
-      return { state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [{ ...shareRow, employee_id: employeeId, amount: `${employeeId}.00` }] };
+      return {
+        state: 'fixed', distribution: 'ok', output_amount: '500000.00', objects: [waveObject],
+        rows: [{
+          ...shareRow, employee_id: employeeId, amount: `${employeeId}.00`,
+          objects: [{ ...shareRow.objects[0], amount: `${employeeId}.00` }],
+        }],
+      };
     });
     const metrics = { basisMs: 0, brigades: 0, brigadesMs: 0, live: 0, liveMs: 0, restMs: 0, buildMs: 0 };
 

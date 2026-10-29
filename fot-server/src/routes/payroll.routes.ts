@@ -148,6 +148,7 @@ router.get('/vacation/employee/:empId', termsView, payrollVacationController.get
 // ─── «Табель → Зарплата» (миграция 330): КТУ, «Выработка» бригады, «Сумма» ─────
 router.get('/timesheet-salary', termsView, timesheetSalaryController.get);
 router.put('/timesheet-salary/output', termsEdit, timesheetSalaryController.setOutput);
+router.put('/timesheet-salary/object-output', termsEdit, timesheetSalaryController.setObjectOutput);
 router.put('/timesheet-salary/ktu', termsEdit, timesheetSalaryController.setKtu);
 
 export default router;

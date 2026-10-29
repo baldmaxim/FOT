@@ -396,10 +396,13 @@ export type PayrollCalcLinePart =
   | {
     kind: 'brigade';
     department_id: string;
+    /** Объект, на котором делилась выработка (336); null или нет — без объекта (нет учтённых часов, старый бэкенд). */
+    object_key?: string | null;
+    object_name?: string | null;
     output: string | null;
     ktu_tenths: number;
     counted_minutes: number;
-    /** Вес — КТУ в десятых × минуты; total_weight — сумма весов бригады. */
+    /** Вес — КТУ в десятых × минуты; total_weight — сумма весов объекта (до 336 — бригады). */
     weight: number;
     total_weight: number;
     amount: string | null;

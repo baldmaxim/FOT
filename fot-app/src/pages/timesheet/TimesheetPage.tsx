@@ -74,6 +74,7 @@ import {
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { useTimesheetSalary } from '../../hooks/useTimesheetSalary';
+import { TimesheetSalaryObjects } from '../../components/timesheet/TimesheetSalaryObjects';
 import type { ITimesheetSalaryGridProps } from '../../components/timesheet/TimesheetSalaryCells';
 import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
@@ -376,17 +377,19 @@ export const TimesheetPage: FC = () => {
       ? 'corrections'
       : (queryView === 'transfers' && canViewTransfers && timesheetMode === 'department')
         ? 'transfers'
-        : (queryView === 'salary' && canViewTimesheetSalary && timesheetMode !== 'employee')
-          ? 'salary'
+        : ((queryView === 'salary' || queryView === 'salary_objects') && canViewTimesheetSalary && timesheetMode !== 'employee')
+          ? queryView
           : 'employees';
-  // Сетка вкладки «Зарплата» — та же, что «По сотрудникам», плюс КТУ и «Сумма».
+  // Вкладки «Зарплата по отделам» и «Зарплата по объектам»: весь месяц, без массовых правок.
+  const isSalaryView = viewMode === 'salary' || viewMode === 'salary_objects';
+  // Сетка «Зарплаты по отделам» — та же, что «По сотрудникам», плюс «Оклад», «Переработка» и «Сумма».
   const gridViewMode: 'employees' | 'objects' = viewMode === 'objects' ? 'objects' : 'employees';
 
   // Запоминаем последний «сеточный» вид (по сотрудникам/по объектам), чтобы кнопка
   // «Корректировки» работала переключателем: повторный клик возвращает сюда (#10).
-  const prevGridViewRef = useRef<'employees' | 'objects' | 'salary'>('employees');
+  const prevGridViewRef = useRef<'employees' | 'objects' | 'salary' | 'salary_objects'>('employees');
   useEffect(() => {
-    if (viewMode === 'employees' || viewMode === 'objects' || viewMode === 'salary') {
+    if (viewMode === 'employees' || viewMode === 'objects' || viewMode === 'salary' || viewMode === 'salary_objects') {
       prevGridViewRef.current = viewMode;
     }
   }, [viewMode]);
@@ -425,8 +428,8 @@ export const TimesheetPage: FC = () => {
   const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
   const selectedHalf = useMemo<TimesheetHalf>(() => {
-    // «Сумма» — за месяц: во вкладке «Зарплата» всегда весь месяц.
-    if (viewMode === 'salary') return 'FULL';
+    // «Сумма» — за месяц: во вкладках «Зарплата» всегда весь месяц.
+    if (isSalaryView) return 'FULL';
     const raw: TimesheetHalf = (() => {
       if (queryHalf === 'H1' || queryHalf === 'H2' || queryHalf === 'FULL') return queryHalf;
       if (queryFrom) return getHalfFromDate(queryFrom);
@@ -434,7 +437,7 @@ export const TimesheetPage: FC = () => {
       return (current.year === year && current.month === month) ? current.half : 'H1';
     })();
     return (!showFullPeriod && raw === 'FULL') ? 'H1' : raw;
-  }, [queryHalf, queryFrom, now, year, month, showFullPeriod, viewMode]);
+  }, [queryHalf, queryFrom, now, year, month, showFullPeriod, isSalaryView]);
   const activeRange = useMemo(() => getHalfRange(year, month, selectedHalf), [year, month, selectedHalf]);
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
@@ -454,30 +457,32 @@ export const TimesheetPage: FC = () => {
   // department_id=null); остальные — по отделу сетки.
   const approvalSubmissionMode: 'department' | 'personal' = isDirectReportsMarker ? 'personal' : 'department';
   const approvalBarDeptId = isDirectReportsMarker ? null : activeGridDeptId;
+  // Бригада или отдел — по карточке отдела: «по отделам» — без бригад, «по объектам» — только бригады.
+  const salaryDeptKind = supervisorQuery.data?.kind ?? null;
+  const salaryKindLoading = isSalaryView && supervisorQuery.isLoading;
+  const isSalaryBrigade = salaryDeptKind === 'brigade';
   const timesheetSalary = useTimesheetSalary({
     departmentId: isDirectReportsMarker ? null : activeGridDeptId,
     month: monthStr,
-    enabled: viewMode === 'salary',
+    enabled: !salaryKindLoading && (
+      (viewMode === 'salary' && !isSalaryBrigade) || (viewMode === 'salary_objects' && isSalaryBrigade)
+    ),
   });
   const salaryGridProps = useMemo<ITimesheetSalaryGridProps | undefined>(() => (
     viewMode === 'salary'
       ? {
-        data: timesheetSalary.data,
+        data: timesheetSalary.data?.kind === 'department' ? timesheetSalary.data : undefined,
         canEdit: canEditTimesheetSalary,
-        savingOutput: timesheetSalary.savingOutput,
         pendingKtuEmployeeId: timesheetSalary.pendingKtuEmployeeId,
         onKtuChange: timesheetSalary.setKtu,
-        onOutputSave: timesheetSalary.setOutput,
       }
       : undefined
   ), [
     viewMode,
     canEditTimesheetSalary,
     timesheetSalary.data,
-    timesheetSalary.savingOutput,
     timesheetSalary.pendingKtuEmployeeId,
     timesheetSalary.setKtu,
-    timesheetSalary.setOutput,
   ]);
   // Объектные детали нужны в обоих режимах: «по объектам» — для группировки строк,
   // «по сотрудникам» — для per-object корректировок в дневной модалке.
@@ -2396,7 +2401,7 @@ export const TimesheetPage: FC = () => {
   const hasActiveScope = isEmployeeMode
     ? selectedEmployeeModeId
     : isAssignedMode ? selectedAssigneeId : activeGridDeptId;
-  const segmentControl = hasActiveScope && viewMode !== 'salary' ? (
+  const segmentControl = hasActiveScope && !isSalaryView ? (
     <section className="ts-half-toggle" aria-label="Период табеля">
       <button
         type="button"
@@ -2424,6 +2429,26 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
+  // «Зарплата по отделам» (отделы, без бригад) и «Зарплата по объектам» (бригады по объектам, миграция 336).
+  const salaryChips = hasActiveScope && !isEmployeeMode && canViewTimesheetSalary ? (
+    <>
+      <button
+        type="button"
+        className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('salary')}
+      >
+        Зарплата по отделам
+      </button>
+      <button
+        type="button"
+        className={`ts-view-chip ${viewMode === 'salary_objects' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('salary_objects')}
+      >
+        Зарплата по объектам
+      </button>
+    </>
+  ) : null;
+
   const viewControl = hasActiveScope ? (
     <section className="ts-view-switch">
       {!isEmployeeMode && (
@@ -2442,15 +2467,7 @@ export const TimesheetPage: FC = () => {
           >
             По объектам
           </button>
-          {canViewTimesheetSalary && (
-            <button
-              type="button"
-              className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
-              onClick={() => handleViewModeChange('salary')}
-            >
-              Зарплата
-            </button>
-          )}
+          {salaryChips}
         </>
       )}
       <button
@@ -2488,22 +2505,14 @@ export const TimesheetPage: FC = () => {
       >
         По объектам
       </button>
-      {canViewTimesheetSalary && (
-        <button
-          type="button"
-          className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
-          onClick={() => handleViewModeChange('salary')}
-        >
-          Зарплата
-        </button>
-      )}
     </section>
   ) : null;
 
   // Тумблер «Все сотрудники» — показывает членов ростера без активности за период.
   // Оборачиваем в ts-view-switch (flex-контейнер), чтобы на мобильном чип не растянулся
   // на всю ширину. Подпись постоянная, состояние — оформлением + aria-pressed.
-  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode;
+  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode
+    && viewMode !== 'salary_objects';
   const showAllControl = canShowAllEmployees ? (
     <section className="ts-view-switch">
       <button
@@ -2654,6 +2663,8 @@ export const TimesheetPage: FC = () => {
                 {showAllControl}
               </div>
               <div className="ts-header-toolbar-right">
+                {/* «Зарплата по отделам» и «Зарплата по объектам» — слева от «Экспорт». */}
+                {salaryChips && <section className="ts-view-switch">{salaryChips}</section>}
                 {/* Экспорт скрыт для глобального read-флага: экспорт-эндпоинты работают
                     в старом скоупе и вернули бы 403 (follow-up: расширить read-scope). */}
                 {!hasGlobalTimesheetRead && !isEmployeeMode && !isViewOnlyGrid && (
@@ -2722,7 +2733,7 @@ export const TimesheetPage: FC = () => {
         {isMobile && showAllControl}
       </div>
 
-      {!isMobile && bulkModeEnabled && activeGridDeptId && viewMode !== 'salary' && (
+      {!isMobile && bulkModeEnabled && activeGridDeptId && !isSalaryView && (
         <section className="ts-bulk-bar">
           {viewMode === 'objects' ? (
             <>
@@ -2814,6 +2825,29 @@ export const TimesheetPage: FC = () => {
             employees={employees}
           />
         </div>
+      ) : isSalaryView && activeGridDeptId && (salaryKindLoading || (viewMode === 'salary_objects') !== isSalaryBrigade) ? (
+        <div className="ts-table-container">
+          <div className="ts-loading">
+            {salaryKindLoading
+              ? 'Загрузка…'
+              : viewMode === 'salary_objects'
+                ? 'Выберите бригаду: «Зарплата по объектам» — только для бригад'
+                : 'Бригады — во вкладке «Зарплата по объектам»'}
+          </div>
+        </div>
+      ) : viewMode === 'salary_objects' && activeGridDeptId ? (
+        <TimesheetSalaryObjects
+          data={timesheetSalary.data?.kind === 'brigade' ? timesheetSalary.data : undefined}
+          loading={timesheetSalary.loading}
+          year={year}
+          month={month}
+          compact={isMobile}
+          canEdit={canEditTimesheetSalary}
+          pendingKtuEmployeeId={timesheetSalary.pendingKtuEmployeeId}
+          savingObjectKey={timesheetSalary.savingObjectKey}
+          onKtuChange={timesheetSalary.setKtu}
+          onObjectOutputSave={timesheetSalary.setObjectOutput}
+        />
       ) : isEmployeeMode ? (
         !selectedEmployeeModeId ? (
           <div className="ts-table-container">
@@ -2882,7 +2916,7 @@ export const TimesheetPage: FC = () => {
             dailySchedules={dailySchedules}
             calendar={calendar}
             compact={isMobile}
-            bulkEditMode={bulkModeEnabled && viewMode !== 'salary'}
+            bulkEditMode={bulkModeEnabled && !isSalaryView}
             visibleDays={visibleDays}
             selectedCellKeys={bulkSelectedCellKeys}
             splitDayKeys={splitDayKeys}
@@ -2920,7 +2954,7 @@ export const TimesheetPage: FC = () => {
           dailySchedules={dailySchedules}
           calendar={calendar}
           compact={isMobile}
-          bulkEditMode={bulkModeEnabled && viewMode !== 'salary'}
+          bulkEditMode={bulkModeEnabled && !isSalaryView}
           visibleDays={visibleDays}
           selectedCellKeys={bulkSelectedCellKeys}
           splitDayKeys={splitDayKeys}

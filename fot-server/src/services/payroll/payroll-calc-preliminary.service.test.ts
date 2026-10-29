@@ -147,7 +147,7 @@ beforeEach(() => {
   monthBasis.loadMonthBasisSources.mockResolvedValue(new Map());
   brigade.resolvePreliminaryAsOf.mockImplementation((month: string) => (month === '2026-10' ? '2026-10-27' : `${month}-30`));
   brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, rows: [] });
-  inputs.loadBrigadeSalaryInputs.mockResolvedValue({ output: null, ktu: new Map() });
+  inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), ktu: new Map() });
   membership.list.mockResolvedValue([]);
   live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({}));
   basisDrafts.buildBasisDraftsForDays.mockImplementation(draftsFromDays);
@@ -221,7 +221,7 @@ describe('бригада: незакрытый месяц', () => {
   });
 
   it('выработки нет — часы не считаются, доля без суммы (brigade_output), итог неизвестен — не «−удержания»', async () => {
-    inputs.loadBrigadeSalaryInputs.mockResolvedValue({ output: null, ktu: new Map([[7, 15]]) });
+    inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), ktu: new Map([[7, 15]]) });
 
     const calc = (await getPreliminaryPayoutForEmployees([7], '2026-09', req)).get(7);
 
@@ -235,7 +235,9 @@ describe('бригада: незакрытый месяц', () => {
   });
 
   it('выработка есть, у переоткрытой бригады сохранён stale — живой расчёт доли, общий табель рабочего не грузится', async () => {
-    inputs.loadBrigadeSalaryInputs.mockResolvedValue({ output: '100000.00', ktu: new Map() });
+    inputs.loadBrigadeSalaryInputs.mockResolvedValue({
+      outputs: new Map([['wave', { amount: '100000.00', object_name: 'ЖК Wave' }]]), ktu: new Map(),
+    });
     const schedule = {
       schedule_id: 's', schedule_type: 'office', work_start: '08:00:00', work_end: '17:00:00', work_hours: 8,
       work_days: [1, 2, 3, 4, 5], office_days: null, late_threshold_minutes: 0, day_overrides: null, lunch_minutes: 0,
@@ -245,15 +247,22 @@ describe('бригада: незакрытый месяц', () => {
     };
     const days = weekdays('2026-09').slice(0, 5);
     brigadeSource.loadLiveDays.mockResolvedValue({
-      days: new Map([[7, new Map(days.map(date => [date, { status: 'work', hours: 8, corrected: false, hours_overridden: false }]))]]),
+      days: new Map([[7, new Map(days.map(date => [
+        date, { status: 'work', hours: 8, corrected: false, hours_overridden: false, objects: new Map([['wave', 8]]) },
+      ]))]]),
       schedules: new Map([[7, new Map(days.map(date => [date, schedule]))]]),
       calendar: null,
+      errors: [],
+      objectNames: new Map([['wave', 'ЖК Wave']]),
     });
 
     const calc = (await getPreliminaryPayoutForEmployees([7], '2026-09', req)).get(7);
 
     expect(calc).toMatchObject({ state: 'preliminary', net: '96500.00', missing: [] });
     expect(calc?.state === 'preliminary' && calc.lines.map(line => [line.code, line.amount])).toEqual([['brigade', '100000.00']]);
+    expect(calc?.state === 'preliminary' && calc.lines[0].parts).toMatchObject([
+      { kind: 'brigade', object_key: 'wave', object_name: 'ЖК Wave', output: '100000.00', amount: '100000.00' },
+    ]);
     expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
     expect(brigadeSource.loadLiveDays).toHaveBeenCalledTimes(1);
     expect(brigadeSource.loadLiveDays).toHaveBeenCalledWith(BRIGADE, [7], '2026-09', '2026-09-30', undefined, [member(7)]);
@@ -306,7 +315,7 @@ describe('лимит бригад', () => {
     inputs.loadBrigadeSalaryInputs.mockImplementation(async () => {
       await new Promise(resolve => setTimeout(resolve, 2));
       inFlight -= 1;
-      return { output: null, ktu: new Map() };
+      return { outputs: new Map(), ktu: new Map() };
     });
 
     const result = await getPreliminaryPayoutForEmployees(ids, '2026-09', req);

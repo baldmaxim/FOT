@@ -137,10 +137,15 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       open_ranges: [],
       errors: [],
       computed_at: '2026-10-27T11:16:00.000Z',
-      rows: [{ employee_id: 1951, ktu: '1.5', counted_minutes: 12600, amount: '273399.53', source: 'version' }],
-      inputs: { output: '1000000.00', ktu: new Map([[1951, 15]]) },
+      rows: [{
+        employee_id: 1951, ktu: '1.5', counted_minutes: 12600, amount: '273399.53', source: 'version',
+        objects: [{ object_key: 'wave', days: { '2026-09-01': 10 }, counted_minutes: 12600, weight: 189_000, amount: '273399.53' }],
+      }],
+      objects: [{ object_key: 'wave', object_name: 'ЖК Wave', output: '1000000.00', state: 'ok', total_weight: 691_300 }],
+      inputs: { outputs: new Map([['wave', { amount: '1000000.00', object_name: 'ЖК Wave' }]]), ktu: new Map([[1951, 15]]) },
       member_ids: [1951],
     });
+    pg.query.mockResolvedValue([{ id: 1951, full_name: 'Абдуалимов Жахонгир' }]);
     calc.previewBrigadePayouts.mockResolvedValue(new Map([[1951, {
       lines: [{ code: 'brigade', amount: '273399.53' }],
       deductions: [],
@@ -165,6 +170,55 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       contract: null,
       overtime: null,
       can_edit: true,
+      full_name: 'Абдуалимов Жахонгир',
     })]);
+    expect(result.output_amount).toBe('1000000.00');
+    expect(result.objects).toEqual([{
+      object_key: 'wave',
+      object_name: 'ЖК Wave',
+      output_amount: '1000000.00',
+      state: 'ok',
+      total_hours: 10,
+      total_weight: 691_300,
+      members: [{
+        employee_id: 1951, days: { '2026-09-01': 10 }, hours: 10, counted_minutes: 12600, weight: 189_000,
+        share: '273399.53',
+      }],
+    }]);
+    // Факт доли для «Суммы» — по объектам.
+    expect(calc.previewBrigadePayouts.mock.calls[0][0].get(1951)).toMatchObject({
+      amount: '273399.53',
+      objects: [{ objectKey: 'wave', objectName: 'ЖК Wave', output: '1000000.00', totalWeight: 691_300 }],
+    });
+  });
+
+  it('бригада: выработка без часов — группа без рабочих (её можно стереть); «Не определён» — последней', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue({
+      state: 'preliminary',
+      distribution: 'nothing_to_distribute',
+      as_of: '2026-10-28',
+      open_ranges: [],
+      errors: [],
+      computed_at: null,
+      rows: [{
+        employee_id: 1951, ktu: '1.0', counted_minutes: 600, amount: null, source: 'live',
+        objects: [{ object_key: '__unknown_object__', days: { '2026-10-01': 10 }, counted_minutes: 600, weight: 6000, amount: null }],
+      }],
+      objects: [
+        { object_key: 'alia', object_name: 'ЖК Alia', output: '5000.00', state: 'nothing_to_distribute', total_weight: 0 },
+        { object_key: '__unknown_object__', object_name: 'Не определён', output: null, state: 'no_output', total_weight: 6000 },
+      ],
+      inputs: { outputs: new Map([['alia', { amount: '5000.00', object_name: 'ЖК Alia' }]]), ktu: new Map() },
+      member_ids: [1951],
+    });
+    calc.previewBrigadePayouts.mockResolvedValue(new Map());
+
+    const result = await getTimesheetSalary(req, BRIGADE, '2026-10');
+
+    expect(result.objects.map(object => [object.object_name, object.members.length, object.state])).toEqual([
+      ['ЖК Alia', 0, 'nothing_to_distribute'],
+      ['Не определён', 1, 'no_output'],
+    ]);
+    expect(result.rows[0]).toMatchObject({ amount: null, share: null });
   });
 });

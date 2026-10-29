@@ -94,8 +94,8 @@ export const loadBrigadeContext = async (
 };
 
 /**
- * Доли открытой бригады: выработки нет — технические доли без суммы (часы не считаются, КТУ — введённый или 1,0);
- * есть — живой расчёт по табелю на asOf.
+ * Доли открытой бригады: выработка не внесена ни на одном объекте — технические доли без суммы (часы не считаются,
+ * КТУ — введённый или 1,0); есть — живой расчёт по табелю на asOf.
  */
 export const resolveOpenBrigadeShares = async (
   context: IBrigadeContext,
@@ -103,7 +103,7 @@ export const resolveOpenBrigadeShares = async (
   asOf: string,
 ): Promise<IBrigadeShares> => {
   const inputs = await loadBrigadeSalaryInputs(context.departmentId, `${month}-01`);
-  if (inputs.output === null) {
+  if (inputs.outputs.size === 0) {
     return {
       state: 'open',
       distribution: 'no_output',
@@ -114,7 +114,9 @@ export const resolveOpenBrigadeShares = async (
         counted_minutes: 0,
         amount: null,
         source: 'live' as const,
+        objects: [],
       })),
+      objects: [],
     };
   }
   return computeBrigadePreliminaryShares(context.departmentId, month, asOf, inputs, context);

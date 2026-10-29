@@ -6278,3 +6278,116 @@
     transition: none;
   }
 }
+
+/* ===== «Зарплата по объектам»: бригада по объектам, выработка у объекта (миграция 336) ===== */
+.ts-salary-objects-bar {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px 16px;
+}
+.ts-salary-objects-total {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.ts-salary-objects-total strong {
+  color: var(--text-primary);
+}
+.ts-th-weekday {
+  font-weight: 400;
+}
+/* КТУ закреплён у ФИО и в шапке объектной таблицы (у неё шапка закреплена сверху с z-index 80). */
+.ts-table--salary-objects thead th.ts-col-ktu-sticky {
+  z-index: 88;
+}
+/* Клетки дней — только чтение: часы правятся во вкладке «По объектам». */
+.ts-table--salary-objects td.ts-salary-object-day {
+  cursor: default;
+}
+.ts-table--salary-objects td.ts-salary-object-day:hover {
+  outline: none;
+  transform: none;
+}
+.ts-table--salary-objects .ts-object-group-cell {
+  text-align: left;
+}
+.ts-salary-object-note {
+  color: var(--warning);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ts-salary-total-row .ts-object-group-cell {
+  background: var(--bg-secondary);
+}
+
+/* Телефон: карточка на объект, рабочие строкой «ФИО · КТУ · ч · доля». */
+.ts-salary-objects-mobile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+}
+.ts-salary-object-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.ts-salary-object-card--total {
+  background: var(--bg-secondary);
+}
+.ts-salary-object-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.ts-salary-object-card-head .ts-object-group-meta {
+  margin-left: 0;
+}
+.ts-salary-object-card-output {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.ts-salary-object-card-output .ts-salary-output-input {
+  flex: 1 1 160px;
+  width: auto;
+}
+.ts-salary-object-card-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ts-salary-object-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-light);
+}
+.ts-salary-object-card-name {
+  flex: 1 1 100%;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.ts-salary-object-card-hours,
+.ts-salary-object-card-share {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ts-salary-object-card-amount {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

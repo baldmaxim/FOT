@@ -8,14 +8,18 @@ vi.mock('../../config/postgres.js', () => ({
 }));
 
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../../types/index.js';
+import { UNKNOWN_OBJECT_KEY } from '../timesheet-object.service.js';
 import {
-  buildBrigadeDistribution,
+  BRIGADE_UNKNOWN_OBJECT_KEY,
+  buildBrigadeObjectDistribution,
   centsToMoney,
   countMemberMinutes,
   countedMinutesForDay,
+  displayHoursByObjects,
   distributeByWeights,
   ktuToTenths,
   moneyToCents,
+  splitMinutesByObjects,
   type IBrigadeDayValue,
 } from './brigade-salary.calc.js';
 
@@ -125,6 +129,50 @@ describe('countMemberMinutes', () => {
     expect(result.minutes).toBe(600 + 540);
     expect(result.errors).toEqual([{ employee_id: 7, code: 'unknown_status', date: '2026-10-09' }]);
   });
+
+  it('раскладывает учтённые минуты по объектам дня, часы для показа — как в разбивке', () => {
+    const days = new Map<string, IBrigadeDayValue>([
+      // 12 ч СКУД при графике 10 ч → учтено 600 мин: Wave 8 ч, Stories 4 ч → 400 / 200.
+      [THURSDAY, day({ hours: 12, objects: new Map([['wave', 8], ['stories', 4]]) })],
+      // Разбивки нет — весь день в «Не определён».
+      ['2026-10-12', day({ hours: 9 })],
+    ]);
+    const schedules = new Map([[THURSDAY, schedule], ['2026-10-12', schedule]]);
+    const result = countMemberMinutes(7, days, schedules, calendar);
+    expect(result.minutes).toBe(600 + 540);
+    expect(Object.fromEntries(result.byObject)).toEqual({ wave: 400, stories: 200, [BRIGADE_UNKNOWN_OBJECT_KEY]: 540 });
+    expect(Object.fromEntries(result.days.get('wave')!)).toEqual({ [THURSDAY]: 8 });
+    expect(Object.fromEntries(result.days.get(BRIGADE_UNKNOWN_OBJECT_KEY)!)).toEqual({ '2026-10-12': 9 });
+  });
+});
+
+describe('splitMinutesByObjects', () => {
+  it('Σ = минуты дня, остаток — наибольшим остаткам, при равенстве — по ключу', () => {
+    const split = splitMinutesByObjects(100, new Map([['b', 1], ['a', 1], ['c', 1]]));
+    expect(Object.fromEntries(split)).toEqual({ a: 34, b: 33, c: 33 });
+    expect([...split.values()].reduce((sum, value) => sum + value, 0)).toBe(100);
+  });
+
+  it('дробные часы объектов — веса в сотых часа', () => {
+    const split = splitMinutesByObjects(600, new Map([['wave', 7.25], ['stories', 2.75]]));
+    expect(Object.fromEntries(split)).toEqual({ wave: 435, stories: 165 });
+  });
+
+  it('весов нет или все нулевые — всё в «Не определён»; 0 минут — пусто', () => {
+    expect(Object.fromEntries(splitMinutesByObjects(600, undefined))).toEqual({ [BRIGADE_UNKNOWN_OBJECT_KEY]: 600 });
+    expect(Object.fromEntries(splitMinutesByObjects(600, new Map([['wave', 0]])))).toEqual({ [BRIGADE_UNKNOWN_OBJECT_KEY]: 600 });
+    expect(splitMinutesByObjects(0, new Map([['wave', 8]])).size).toBe(0);
+  });
+
+  it('ключ «Не определён» совпадает с разбивкой табеля', () => {
+    expect(BRIGADE_UNKNOWN_OBJECT_KEY).toBe(UNKNOWN_OBJECT_KEY);
+  });
+
+  it('для показа: часы с разбивкой как есть, без разбивки — в «Не определён», отпуск — пусто', () => {
+    expect(Object.fromEntries(displayHoursByObjects(day({ hours: 10, objects: new Map([['wave', 10]]) })))).toEqual({ wave: 10 });
+    expect(Object.fromEntries(displayHoursByObjects(day({ hours: 10 })))).toEqual({ [BRIGADE_UNKNOWN_OBJECT_KEY]: 10 });
+    expect(displayHoursByObjects(day({ status: 'vacation', hours: 0 })).size).toBe(0);
+  });
 });
 
 describe('деньги и КТУ', () => {
@@ -170,33 +218,58 @@ describe('distributeByWeights', () => {
   });
 });
 
-describe('buildBrigadeDistribution', () => {
+describe('buildBrigadeObjectDistribution', () => {
+  // Бр.Бобокулов: 1 — только Wave, 2 — Wave и Stories (КТУ 1,5), 3 — только Stories.
   const members = [
-    { employee_id: 1, ktu_tenths: 10, minutes: 12000 },
-    { employee_id: 2, ktu_tenths: 15, minutes: 12000 },
+    { employee_id: 1, ktu_tenths: 10, byObject: new Map([['wave', 12000]]) },
+    { employee_id: 2, ktu_tenths: 15, byObject: new Map([['wave', 12000], ['stories', 6000]]) },
+    { employee_id: 3, ktu_tenths: 10, byObject: new Map([['stories', 6000]]) },
   ];
 
-  it('КТУ 1,5 получает в 1,5 раза больше', () => {
-    const { state, amounts } = buildBrigadeDistribution(100000n, members, []);
-    expect(state).toBe('ok');
-    expect(amounts!.get(1)).toBe(40000n);
-    expect(amounts!.get(2)).toBe(60000n);
+  it('доля на объекте — по КТУ × минуты на объекте; итог — Σ по объектам; Σ долей объекта = выработке', () => {
+    const result = buildBrigadeObjectDistribution(new Map([['wave', 100000n], ['stories', 50000n]]), members, []);
+    expect(result.state).toBe('ok');
+    expect(result.objects.get('wave')!.amounts).toEqual(new Map([[1, 40000n], [2, 60000n]]));
+    expect(result.objects.get('wave')!.total_weight).toBe(10 * 12000 + 15 * 12000);
+    // Stories: 15 × 6000 : 10 × 6000 = 3 : 2.
+    expect(result.objects.get('stories')!.amounts).toEqual(new Map([[2, 30000n], [3, 20000n]]));
+    expect(Object.fromEntries(result.totals)).toEqual({ 1: 40000n, 2: 90000n, 3: 20000n });
   });
 
-  it('выработка не введена — no_output; 0,00 — всем 0', () => {
-    expect(buildBrigadeDistribution(null, members, []).state).toBe('no_output');
-    const zero = buildBrigadeDistribution(0n, members, []);
+  it('на объекте с минутами выработка не внесена — итог null только у работавших там; общий — no_output', () => {
+    const result = buildBrigadeObjectDistribution(new Map([['wave', 100000n]]), members, []);
+    expect(result.state).toBe('no_output');
+    expect(result.objects.get('stories')!.state).toBe('no_output');
+    expect(result.objects.get('stories')!.amounts).toBeNull();
+    expect(Object.fromEntries(result.totals)).toEqual({ 1: 40000n, 2: null, 3: null });
+  });
+
+  it('выработка на объекте без минут — nothing_to_distribute, чужие суммы известны', () => {
+    const result = buildBrigadeObjectDistribution(
+      new Map([['wave', 100000n], ['stories', 50000n], ['alia', 7000n]]), members, [],
+    );
+    expect(result.state).toBe('nothing_to_distribute');
+    expect(result.objects.get('alia')).toEqual({ state: 'nothing_to_distribute', total_weight: 0, amounts: null });
+    expect(Object.fromEntries(result.totals)).toEqual({ 1: 40000n, 2: 90000n, 3: 20000n });
+  });
+
+  it('0,00 на объекте — всем на объекте 0; без минут — 0,00 при любой выработке, null — если ничего не внесено', () => {
+    const idle = { employee_id: 4, ktu_tenths: 10, byObject: new Map<string, number>() };
+    const zero = buildBrigadeObjectDistribution(new Map([['wave', 0n], ['stories', 0n]]), [...members, idle], []);
     expect(zero.state).toBe('ok');
-    expect([...zero.amounts!.values()]).toEqual([0n, 0n]);
+    expect(Object.fromEntries(zero.totals)).toEqual({ 1: 0n, 2: 0n, 3: 0n, 4: 0n });
+
+    const none = buildBrigadeObjectDistribution(new Map(), [...members, idle], []);
+    expect(none.state).toBe('no_output');
+    expect(Object.fromEntries(none.totals)).toEqual({ 1: null, 2: null, 3: null, 4: null });
   });
 
-  it('выработка есть, часов нет — nothing_to_distribute', () => {
-    const idle = members.map(member => ({ ...member, minutes: 0 }));
-    expect(buildBrigadeDistribution(100000n, idle, []).state).toBe('nothing_to_distribute');
-  });
-
-  it('ошибка у участника — без долей', () => {
-    const result = buildBrigadeDistribution(100000n, members, [{ employee_id: 2, code: 'no_schedule', date: THURSDAY }]);
-    expect(result).toEqual({ state: 'error', amounts: null });
+  it('ошибка у участника — долей нет ни у кого; ошибка важнее «не внесена»', () => {
+    const result = buildBrigadeObjectDistribution(
+      new Map([['wave', 100000n]]), members, [{ employee_id: 3, code: 'object_config', date: null }],
+    );
+    expect(result.state).toBe('error');
+    expect([...result.totals.values()].every(value => value === null)).toBe(true);
+    expect([...result.objects.values()].every(object => object.amounts === null)).toBe(true);
   });
 });

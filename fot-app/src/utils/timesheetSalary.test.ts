@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TimesheetEmployee, TimesheetStatus } from '../types';
-import type { ITimesheetSalaryResponse } from '../types/timesheet';
+import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, isSalaryRowMuted, salaryAmountTitle, salaryLineTitle,
-  salaryOvertimeNote,
+  describeSalaryState, findSalaryRow, formatDayHours, formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly,
+  isSalaryRowMuted, missingObjectsNote, objectShareTitle, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote,
+  salaryOvertimeNote, sortSalaryRows, totalDaysOfEmployee,
 } from './timesheetSalary';
+
+const NBSP = ' ';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
   id, full_name: 'Халимзода Раджабали Абдурахмон', position_id: null, position_name: null,
@@ -147,5 +150,77 @@ describe('часы под «УУ» / «РБ» / «УД»', () => {
     expect(getSalaryLetterHours(entry('work', 9, true), 8)).toBeNull();
     expect(getSalaryLetterHours(entry('manual', 9, true), 8)).toBeNull();
     expect(getSalaryLetterHours(null, 8)).toBeNull();
+  });
+});
+
+describe('«Зарплата по объектам» (336)', () => {
+  const wave: ITimesheetSalaryObject = {
+    object_key: 'wave', object_name: 'ЖК Wave', output_amount: '228000.00', state: 'ok',
+    total_hours: 22, total_weight: 22_800,
+    members: [
+      { employee_id: 1, days: { '2026-09-01': 12 }, hours: 12, counted_minutes: 600, weight: 6000, share: '60000.00' },
+      { employee_id: 2, days: { '2026-09-01': 6, '2026-09-16': 12 }, hours: 18, counted_minutes: 1080, weight: 10_800, share: '108000.00' },
+    ],
+  };
+  const stories: ITimesheetSalaryObject = {
+    object_key: 'stories', object_name: 'ЖК Stories', output_amount: null, state: 'no_output',
+    total_hours: 14, total_weight: 8400,
+    members: [
+      { employee_id: 2, days: { '2026-09-01': 4 }, hours: 4, counted_minutes: 240, weight: 2400, share: null },
+    ],
+  };
+  const alia: ITimesheetSalaryObject = {
+    object_key: 'alia', object_name: 'ЖК Alia', output_amount: '5000.00', state: 'nothing_to_distribute',
+    total_hours: 0, total_weight: 0, members: [],
+  };
+  const brigade: ITimesheetSalaryResponse = {
+    ...data,
+    state: 'fixed',
+    distribution: 'no_output',
+    computed_at: '2026-10-27T11:16:00.000Z',
+    objects: [alia, stories, wave],
+    rows: [
+      { employee_id: 2, full_name: 'Бобокулов Саид', ktu: '1.0', counted_hours: 22, amount: null, share: null, source: 'version', can_edit: true },
+      { employee_id: 1, full_name: 'Абдуалимов Жахонгир', ktu: '1.0', counted_hours: 10, amount: '60000.00', share: '60000.00', source: 'version', can_edit: true },
+    ],
+  };
+
+  it('подсказка доли — по весам ответа, до копейки; выработки нет — «не внесена»; часов нет — без подсказки', () => {
+    expect(objectShareTitle(wave, wave.members[0]))
+      .toBe(`228${NBSP}000,00 × КТУ 1 × 10 ч / 38 (Σ КТУ × ч объекта) = 60${NBSP}000,00`);
+    expect(objectShareTitle(stories, stories.members[0])).toBe('выработка не внесена');
+    expect(objectShareTitle(wave, { ...wave.members[0], counted_minutes: 0 })).toBeUndefined();
+  });
+
+  it('пометка объекта, выработку без часов — только стереть', () => {
+    expect(salaryObjectStateNote(stories)).toBe('не внесена');
+    expect(salaryObjectStateNote(alia)).toBe('некому распределить — часов нет');
+    expect(salaryObjectStateNote(wave)).toBeNull();
+    expect(isOutputClearOnly(alia)).toBe(true);
+    expect(isOutputClearOnly(wave)).toBe(false);
+  });
+
+  it('«Сумма» без доли — какие объекты не внесены; часы по дням — Σ по объектам', () => {
+    expect(missingObjectsNote(brigade, 2)).toBe('выработка не внесена: ЖК Stories');
+    expect(missingObjectsNote(brigade, 1)).toBeNull();
+    expect(salaryAmountTitle(brigade, brigade.rows[0])).toContain('выработка не внесена: ЖК Stories');
+    expect(totalDaysOfEmployee(brigade, 2)).toEqual({ '2026-09-01': 10, '2026-09-16': 12 });
+    expect(formatDayHours(7.5)).toBe('7,5');
+    expect(formatDayHours(undefined)).toBe('');
+  });
+
+  it('рабочие — по ФИО; состояние бригады и ошибка настройки объекта без даты', () => {
+    expect(sortSalaryRows(brigade.rows).map(row => row.employee_id)).toEqual([1, 2]);
+    expect(describeSalaryState(brigade)).toEqual({ text: 'По закрытому табелю 27.10', tone: 'ok' });
+    const failed: ITimesheetSalaryResponse = {
+      ...brigade,
+      distribution: 'error',
+      errors: [{ employee_id: 2, full_name: 'Бобокулов Саид Эргашевич', code: 'object_config', date: null }],
+    };
+    expect(describeSalaryState(failed)).toEqual({
+      text: 'Ошибка: не задан объект табелирования — Бобокулов С. Э.',
+      tone: 'error',
+      title: 'Бобокулов С. Э.: не задан объект табелирования',
+    });
   });
 });

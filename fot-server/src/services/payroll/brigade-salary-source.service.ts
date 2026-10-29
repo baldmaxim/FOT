@@ -5,11 +5,19 @@
  * табель, фоновый пересчёт СКУД его не меняет. Уволенного в месяце увольнения в редакции нет
  * (isFiredHiddenForPeriod), но долю за отработанные дни он получает (решение 27.10.2026) — его дни
  * берутся из живого табеля. Открытый месяц — «Предварительно», целиком по живому табелю.
+ *
+ * Часы дня по объектам — та же разбивка, что уходит в 1С по объектам (buildVersionObjectBreakdown): у закрытого
+ * месяца — снимок редакции (timesheet_version_objects), у редакции без снимка и у живого табеля — живая разбивка
+ * (часы дня — из табеля, веса — объектные проходы). Снимок с config_errors — ошибка object_config, а не подстановка
+ * «Не определён».
  */
 import type { DbExecutor } from '../../config/postgres.js';
 import { query } from '../../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../../types/index.js';
+import { buildVersionObjectBreakdown, type IObjectMeta } from '../timesheet-object-breakdown.service.js';
+import { resolveExportModes } from '../timesheet-export-mode.service.js';
 import { fetchTimesheetDataForEmployees } from '../timesheet-export.service.js';
+import type { IAttendanceObjectEntry } from '../timesheet-object.service.js';
 import {
   buildMembershipWindowMap,
   isWithinMembershipWindow,
@@ -133,19 +141,36 @@ export const resolveBrigadeMonthClosure = (
   return { closed: openDates.length === 0, open_ranges, versions };
 };
 
-/** Дни сотрудников месяца из редакций. Один и тот же день в двух редакциях — ошибка duplicate_day. */
+export interface IVersionDaysResult {
+  days: DaysByEmployee;
+  errors: IBrigadeSalaryError[];
+  /** Редакции без снимка объектов (до миграции 263 и сбой записи снимка): веса их дней — живые. */
+  withoutObjects: Set<number>;
+  /** Из какой редакции день сотрудника — чтобы подставить живые веса только дням редакций без снимка. */
+  versionOf: Map<number, Map<string, number>>;
+  /** Имена объектов из снимков — замороженные вместе с ними. */
+  objectNames: Map<string, string>;
+}
+
+/**
+ * Дни сотрудников месяца из редакций и их часы по объектам из снимков тех же редакций. Один и тот же день в двух
+ * редакциях — ошибка duplicate_day; config_errors снимка — object_config сотрудника.
+ */
 export async function loadVersionDays(
   versionIds: readonly number[],
   month: string,
   exec?: DbExecutor,
-): Promise<{ days: DaysByEmployee; errors: IBrigadeSalaryError[] }> {
+): Promise<IVersionDaysResult> {
   const days: DaysByEmployee = new Map();
   const errors: IBrigadeSalaryError[] = [];
-  if (versionIds.length === 0) return { days, errors };
+  const versionOf = new Map<number, Map<string, number>>();
+  const objectNames = new Map<string, string>();
+  const withoutObjects = new Set<number>(versionIds);
+  if (versionIds.length === 0) return { days, errors, withoutObjects, versionOf, objectNames };
   const { start, end } = monthBounds(month);
-  const found = await rows<{ employee_id: string | number; date: string; day: Record<string, unknown> }>(
+  const found = await rows<{ version_id: string | number; employee_id: string | number; date: string; day: Record<string, unknown> }>(
     exec,
-    `SELECT (e->'identity'->>'employee_id')::bigint AS employee_id, d.key AS date, d.value AS day
+    `SELECT v.id AS version_id, (e->'identity'->>'employee_id')::bigint AS employee_id, d.key AS date, d.value AS day
        FROM timesheet_versions v
        CROSS JOIN LATERAL jsonb_array_elements(v.payload->'employees') e
        CROSS JOIN LATERAL jsonb_each(e->'days') d
@@ -167,19 +192,179 @@ export async function loadVersionDays(
       hours_overridden: row.day.hours_overridden === true,
     });
     days.set(employeeId, byDate);
+    const versions = versionOf.get(employeeId) ?? new Map<string, number>();
+    versions.set(row.date, Number(row.version_id));
+    versionOf.set(employeeId, versions);
   }
-  return { days, errors };
+
+  const snapshots = await rows<{ version_id: string | number; config_errors: unknown }>(
+    exec,
+    'SELECT version_id, config_errors FROM timesheet_version_objects WHERE version_id = ANY($1::bigint[])',
+    [versionIds],
+  );
+  for (const snapshot of snapshots) {
+    withoutObjects.delete(Number(snapshot.version_id));
+    const configErrors = Array.isArray(snapshot.config_errors) ? snapshot.config_errors : [];
+    for (const item of configErrors as Array<{ employee_id?: unknown }>) {
+      const employeeId = Number(item?.employee_id);
+      if (Number.isInteger(employeeId) && employeeId > 0) {
+        errors.push({ employee_id: employeeId, code: 'object_config', date: null });
+      }
+    }
+  }
+
+  const objectRows = await rows<{
+    version_id: string | number;
+    employee_id: string | number;
+    object_key: string;
+    object_name: string | null;
+    date: string;
+    hours: string | number;
+  }>(
+    exec,
+    `SELECT o.version_id, (e->>'employee_id')::bigint AS employee_id,
+            obj->>'object_key' AS object_key, obj->>'object_name' AS object_name,
+            d.key AS date, d.value::text AS hours
+       FROM timesheet_version_objects o
+       CROSS JOIN LATERAL jsonb_array_elements(o.payload->'employees') e
+       CROSS JOIN LATERAL jsonb_array_elements(e->'objects') obj
+       CROSS JOIN LATERAL jsonb_each(COALESCE(obj->'days', '{}'::jsonb)) d
+      WHERE o.version_id = ANY($1::bigint[])
+        AND d.key >= $2 AND d.key <= $3`,
+    [versionIds, start, end],
+  );
+  const weights = new Map<number, Map<string, Map<string, number>>>();
+  for (const row of objectRows) {
+    const employeeId = Number(row.employee_id);
+    // Только дни, взятые из той же редакции: при duplicate_day второй снимок не подмешивается.
+    if (versionOf.get(employeeId)?.get(row.date) !== Number(row.version_id)) continue;
+    const hours = Number(row.hours);
+    if (!(hours > 0)) continue;
+    objectNames.set(row.object_key, row.object_name ?? row.object_key);
+    const byDate = weights.get(employeeId) ?? new Map<string, Map<string, number>>();
+    const byObject = byDate.get(row.date) ?? new Map<string, number>();
+    byObject.set(row.object_key, (byObject.get(row.object_key) ?? 0) + hours);
+    byDate.set(row.date, byObject);
+    weights.set(employeeId, byDate);
+  }
+  for (const [employeeId, byDate] of weights) {
+    const employeeDays = days.get(employeeId);
+    if (!employeeDays) continue;
+    for (const [date, objects] of byDate) {
+      const day = employeeDays.get(date);
+      if (day) employeeDays.set(date, { ...day, objects });
+    }
+  }
+  return { days, errors, withoutObjects, versionOf, objectNames };
+}
+
+/** Имена и адреса объектов для разбивки (как buildObjectsSnapshot): фактические и закреплённые в режиме «объект». */
+async function loadObjectMeta(objectIds: readonly string[], exec?: DbExecutor): Promise<Map<string, IObjectMeta>> {
+  const meta = new Map<string, IObjectMeta>();
+  if (objectIds.length === 0) return meta;
+  const found = await rows<{ id: string; name: string; alt_name: string | null }>(
+    exec,
+    'SELECT id, name, alt_name FROM skud_objects WHERE id = ANY($1::uuid[])',
+    [[...objectIds]],
+  );
+  for (const row of found) {
+    const altName = row.alt_name?.trim();
+    meta.set(row.id, { name: row.name, address: altName && altName.length > 0 ? altName : row.name });
+  }
+  return meta;
+}
+
+/**
+ * Живая разбивка дней по объектам — тот же buildVersionObjectBreakdown, что у снимка редакции: часы дня берутся из
+ * days, веса — из objectEntries, режим табелирования — месяца. Дни уже отфильтрованы окнами членства, поэтому
+ * ownsDay — все. Возвращает дни с objects, ошибки object_config и имена объектов.
+ */
+export async function attachLiveObjects(
+  days: DaysByEmployee,
+  objectEntries: readonly IAttendanceObjectEntry[],
+  month: string,
+  exec?: DbExecutor,
+): Promise<{ days: DaysByEmployee; errors: IBrigadeSalaryError[]; objectNames: Map<string, string> }> {
+  const objectNames = new Map<string, string>();
+  const employeeIds = [...days.keys()];
+  if (employeeIds.length === 0) return { days, errors: [], objectNames };
+  const modeByEmployee = await resolveExportModes(employeeIds, exec, { month: `${month}-01` });
+  const objectIds = new Set<string>();
+  for (const entry of objectEntries) if (entry.object_id) objectIds.add(entry.object_id);
+  for (const resolved of modeByEmployee.values()) {
+    if (resolved.mode === 'object' && resolved.pinnedObjectId) objectIds.add(resolved.pinnedObjectId);
+  }
+  const built = buildVersionObjectBreakdown({
+    employees: employeeIds.map(employeeId => ({
+      employee_id: employeeId,
+      full_name: null,
+      days: Object.fromEntries([...days.get(employeeId)!].map(([date, day]) => [date, { hours: day.hours }])),
+    })),
+    objectEntries: [...objectEntries],
+    ownsDay: () => true,
+    modeByEmployee,
+    objectMetaById: await loadObjectMeta([...objectIds], exec),
+  });
+  const result: DaysByEmployee = new Map();
+  for (const [employeeId, byDate] of days) result.set(employeeId, new Map(byDate));
+  for (const employee of built.payload.employees) {
+    const employeeDays = result.get(employee.employee_id);
+    if (!employeeDays) continue;
+    const byDate = new Map<string, Map<string, number>>();
+    for (const object of employee.objects) {
+      objectNames.set(object.object_key, object.object_name);
+      for (const [date, hours] of Object.entries(object.days)) {
+        if (!(hours > 0)) continue;
+        const byObject = byDate.get(date) ?? new Map<string, number>();
+        byObject.set(object.object_key, (byObject.get(object.object_key) ?? 0) + hours);
+        byDate.set(date, byObject);
+      }
+    }
+    for (const [date, objects] of byDate) {
+      const day = employeeDays.get(date);
+      if (day) employeeDays.set(date, { ...day, objects });
+    }
+  }
+  const errors = built.configErrors.map(error => ({
+    employee_id: error.employee_id, code: 'object_config' as const, date: null,
+  }));
+  return { days: result, errors, objectNames };
+}
+
+/** Объектные проходы сотрудников за [1-е, until] — веса живой разбивки для дней редакций без снимка. */
+export async function loadLiveObjectEntries(
+  employeeIds: readonly number[],
+  month: string,
+  until: string,
+  exec?: DbExecutor,
+): Promise<IAttendanceObjectEntry[]> {
+  if (employeeIds.length === 0) return [];
+  const { start } = monthBounds(month);
+  const data = await fetchTimesheetDataForEmployees(
+    month,
+    [...employeeIds],
+    'Зарплата бригады',
+    { startDate: start, endDate: until },
+    'actual',
+    true,
+    { rosterMode: 'snapshot', exec },
+  );
+  return data.objectEntries ?? [];
 }
 
 export interface ILiveBrigadeData {
   days: DaysByEmployee;
   schedules: Map<number, Map<string, IResolvedSchedule>>;
   calendar: IProductionCalendarMonth | null;
+  /** object_config живой разбивки. */
+  errors: IBrigadeSalaryError[];
+  objectNames: Map<string, string>;
 }
 
 /**
  * Дни из живого табеля за [start, until] — те же правила, что у редакции: фактические часы СКУД,
- * несогласованные выходные обнулены. Дни после увольнения и вне окна членства в бригаде отброшены.
+ * несогласованные выходные обнулены. Дни после увольнения и вне окна членства в бригаде отброшены. Часы дня по
+ * объектам — живая разбивка (attachLiveObjects).
  * memberships — уже загруженное членство бригады за [start, until] (предварительный расчёт «Расчётов»), чтобы
  * не читать его второй раз.
  */
@@ -222,7 +407,14 @@ export async function loadLiveDays(
     }
     days.set(employeeId, kept);
   }
-  return { days, schedules: data.dailySchedulesMap, calendar: data.calendarMonth };
+  const withObjects = await attachLiveObjects(days, data.objectEntries ?? [], month, exec);
+  return {
+    days: withObjects.days,
+    schedules: data.dailySchedulesMap,
+    calendar: data.calendarMonth,
+    errors: withObjects.errors,
+    objectNames: withObjects.objectNames,
+  };
 }
 
 /** Состав бригады за месяц, как в сетке табеля (уволенный виден и в месяце увольнения). */

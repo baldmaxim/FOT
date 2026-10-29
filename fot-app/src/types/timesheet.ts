@@ -323,10 +323,15 @@ export interface IDepartmentSupervisor {
 /** «Табель → Зарплата»: состояние сумм бригады (миграция 330). */
 export type TimesheetSalaryState = 'preliminary' | 'fixed' | 'stale';
 export type TimesheetSalaryDistribution = 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
-export type TimesheetSalaryErrorCode = 'unknown_status' | 'no_schedule' | 'duplicate_day';
+/** object_config — разбивку по объектам собрать нельзя (режим «объект» без закреплённого объекта). */
+export type TimesheetSalaryErrorCode = 'unknown_status' | 'no_schedule' | 'duplicate_day' | 'object_config';
+/** Объект бригады: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых часов нет. */
+export type TimesheetSalaryObjectState = 'ok' | 'no_output' | 'nothing_to_distribute';
 
 export interface ITimesheetSalaryRow {
   employee_id: number;
+  /** ФИО — у бригады (группы по объектам рисуются без сетки табеля); у отдела null. */
+  full_name?: string | null;
   /** КТУ для выбора ('1.0' по умолчанию); у отделов null. */
   ktu: string | null;
   counted_hours: number | null;
@@ -355,7 +360,34 @@ export interface ITimesheetSalaryError {
   employee_id: number;
   full_name: string;
   code: TimesheetSalaryErrorCode;
-  date: string;
+  /** null — ошибка настройки сотрудника (object_config), не дня. */
+  date: string | null;
+}
+
+/** Рабочий в группе объекта «Зарплаты по объектам» (миграция 336). */
+export interface ITimesheetSalaryObjectMember {
+  employee_id: number;
+  /** Часы по дням на объекте: 'YYYY-MM-DD' → часы. */
+  days: Record<string, number>;
+  hours: number;
+  /** Учтённые минуты на объекте — по ним доля. */
+  counted_minutes: number;
+  /** КТУ в десятых × учтённые минуты. */
+  weight: number;
+  /** Доля на объекте; null — нет. */
+  share: string | null;
+}
+
+/** Группа «Зарплаты по объектам»: объект бригады, его выработка и рабочие. */
+export interface ITimesheetSalaryObject {
+  object_key: string;
+  object_name: string;
+  output_amount: string | null;
+  state: TimesheetSalaryObjectState;
+  total_hours: number;
+  /** Σ весов объекта — точный знаменатель долей (КТУ в десятых × минуты). */
+  total_weight: number;
+  members: ITimesheetSalaryObjectMember[];
 }
 
 export interface ITimesheetSalaryResponse {
@@ -366,8 +398,11 @@ export interface ITimesheetSalaryResponse {
   distribution: TimesheetSalaryDistribution | null;
   as_of: string | null;
   open_ranges: Array<{ start_date: string; end_date: string }>;
+  /** Σ выработок по объектам; null — ничего не внесено. */
   output_amount: string | null;
   errors: ITimesheetSalaryError[];
   computed_at: string | null;
   rows: ITimesheetSalaryRow[];
+  /** Группы по объектам — только у бригады (нет у старого бэкенда). */
+  objects?: ITimesheetSalaryObject[];
 }

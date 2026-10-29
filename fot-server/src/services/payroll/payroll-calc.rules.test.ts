@@ -228,7 +228,11 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
 describe('«К выплате (ФОТ)»: бригада', () => {
   const share: IBrigadeShareFact = {
     departmentId: 'b1', amount: '141818.18', ktu: '1.5', countedMinutes: 10560, distribution: 'ok',
-    output: '500000.00', totalWeight: 558_462,
+    output: '500000.00',
+    objects: [{
+      objectKey: 'wave', objectName: 'ЖК Wave', output: '500000.00', countedMinutes: 10560, weight: 158_400,
+      totalWeight: 558_462, amount: '141818.18',
+    }],
   };
 
   it('рабочий без оклада: доля по КТУ − удержания, «нет условий» не ставится', () => {
@@ -243,8 +247,8 @@ describe('«К выплате (ФОТ)»: бригада', () => {
       amount: '141818.18',
       brigade: { ktu: '1.5', hours: 176 },
       parts: [{
-        kind: 'brigade', department_id: 'b1', output: '500000.00', ktu_tenths: 15, counted_minutes: 10560,
-        weight: 158_400, total_weight: 558_462, amount: '141818.18',
+        kind: 'brigade', department_id: 'b1', object_key: 'wave', object_name: 'ЖК Wave', output: '500000.00',
+        ktu_tenths: 15, counted_minutes: 10560, weight: 158_400, total_weight: 558_462, amount: '141818.18',
       }],
     }]);
     expect(result.net).toBe('138318.18');
@@ -257,6 +261,52 @@ describe('«К выплате (ФОТ)»: бригада', () => {
     expect(noOutput.missing).toEqual(['brigade_output']);
     const error = buildPayrollCalc(facts({ workdayDates: [], terms: [], brigadeShares: [{ ...share, amount: null, distribution: 'error' }] }));
     expect(error.missing).toEqual(['brigade_error']);
+  });
+
+  it('доля по двум объектам — часть на объект, Σ частей = строка', () => {
+    const twoObjects: IBrigadeShareFact = {
+      ...share,
+      amount: '150000.00',
+      objects: [
+        { objectKey: 'stories', objectName: 'ЖК Stories', output: '50000.00', countedMinutes: 600, weight: 9_000, totalWeight: 18_000, amount: '25000.00' },
+        { objectKey: 'wave', objectName: 'ЖК Wave', output: '500000.00', countedMinutes: 9960, weight: 149_400, totalWeight: 597_600, amount: '125000.00' },
+      ],
+    };
+    const result = buildPayrollCalc(facts({ workdayDates: [], terms: [], brigadeShares: [twoObjects] }));
+    const brigade = result.lines[0];
+    expect(brigade.amount).toBe('150000.00');
+    expect(brigade.parts?.map(part => (part.kind === 'brigade' ? [part.object_name, part.amount] : null))).toEqual([
+      ['ЖК Stories', '25000.00'],
+      ['ЖК Wave', '125000.00'],
+    ]);
+    expect(result.net).toBe('150000.00');
+  });
+
+  it('на одном из объектов выработка не внесена — строка «—», а не сумма известной части', () => {
+    const partial: IBrigadeShareFact = {
+      ...share,
+      amount: null,
+      distribution: 'no_output',
+      objects: [
+        { objectKey: 'stories', objectName: 'ЖК Stories', output: null, countedMinutes: 600, weight: 9_000, totalWeight: 18_000, amount: null },
+        { objectKey: 'wave', objectName: 'ЖК Wave', output: '500000.00', countedMinutes: 9960, weight: 149_400, totalWeight: 597_600, amount: '125000.00' },
+      ],
+    };
+    const result = buildPayrollCalc(facts({ workdayDates: [], terms: [], brigadeShares: [partial] }));
+    expect(result.lines[0].amount).toBeNull();
+    expect(result.lines[0].parts?.map(part => part.amount)).toEqual([null, '125000.00']);
+    expect(result.missing).toEqual(['brigade_output']);
+    expect(result.net).toBeNull();
+  });
+
+  it('без учтённых часов на объектах — одна часть бригады без объекта', () => {
+    const idle: IBrigadeShareFact = { ...share, amount: '0.00', countedMinutes: 0, objects: [] };
+    const result = buildPayrollCalc(facts({ workdayDates: [], terms: [], brigadeShares: [idle] }));
+    expect(result.lines[0].parts).toEqual([{
+      kind: 'brigade', department_id: 'b1', object_key: null, object_name: null, output: '500000.00',
+      ktu_tenths: 15, counted_minutes: 0, weight: 0, total_weight: 0, amount: '0.00',
+    }]);
+    expect(result.net).toBe('0.00');
   });
 
   it('месяц из дней отдела и бригады: оклад за дни отдела + доля', () => {
@@ -385,7 +435,12 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
 describe('«К выплате (ФОТ)»: части строк и неизвестный итог', () => {
   const brigadeShare = (over: Partial<IBrigadeShareFact> = {}): IBrigadeShareFact => ({
     departmentId: 'b1', amount: '100000.00', ktu: '1.0', countedMinutes: 9_600, distribution: 'ok',
-    output: '300000.00', totalWeight: 288_000, ...over,
+    output: '300000.00',
+    objects: [{
+      objectKey: 'wave', objectName: 'ЖК Wave', output: '300000.00', countedMinutes: 9_600, weight: 96_000,
+      totalWeight: 288_000, amount: over.amount === undefined ? '100000.00' : over.amount,
+    }],
+    ...over,
   });
 
   /** Сумма известных частей строки в копейках. */
@@ -441,7 +496,6 @@ describe('«К выплате (ФОТ)»: части строк и неизве�
     ['no_terms', facts({ terms: [terms({ effective_from: '2026-08-10' })] })],
     ['no_norm', facts({ normDays: 0 })],
     ['brigade_output', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'no_output', output: null })] })],
-    ['brigade_no_hours', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'nothing_to_distribute' })] })],
     ['brigade_error', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'error' })] })],
   ])('%s — итог неизвестен (net null), начислено — только известная часть', (reason, input) => {
     const result = buildPayrollCalc(input);
@@ -455,14 +509,7 @@ describe('«К выплате (ФОТ)»: части строк и неизве�
     expect(result.net).toBe('130952.00');
   });
 
-  it('выработка есть, делить не по чему — brigade_no_hours, не brigade_output', () => {
-    const result = buildPayrollCalc(facts({
-      workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'nothing_to_distribute' })],
-    }));
-    expect(result.missing).toEqual(['brigade_no_hours']);
-  });
-
-  it('две бригады: одна посчитана, у другой выработки нет — строка частичная, итог неизвестен', () => {
+  it('две бригады: одна посчитана, у другой выработки нет — строка «—», итог неизвестен', () => {
     const result = buildPayrollCalc(facts({
       workdayDates: [],
       terms: [],
@@ -472,34 +519,54 @@ describe('«К выплате (ФОТ)»: части строк и неизве�
       ],
     }));
     const brigade = line(result, 'brigade')!;
-    expect(brigade.amount).toBe('100000.00');
+    expect(brigade.amount).toBeNull();
     expect(brigade.parts?.map(part => part.amount)).toEqual(['100000.00', null]);
     expect(partsCents(brigade)).toBe(10_000_000);
     expect(result.missing).toEqual(['brigade_output']);
     expect(result.net).toBeNull();
-    expect(result.accrued).toBe('100000.00');
+    expect(result.accrued).toBe('0.00');
   });
 });
 
-describe('brigadeShareFacts — доли бригады с весами', () => {
-  it('веса — КТУ в десятых × минуты, не округлённые часы; Σ весов — по всем строкам расчёта', () => {
-    const facts = brigadeShareFacts('b1', 'ok', '100000.00', [
-      { employee_id: 1, ktu: '1.5', counted_minutes: 10_595, amount: '61234.57' },
-      { employee_id: 2, ktu: '1.0', counted_minutes: 10_053, amount: '38765.43' },
-    ]);
-    // 15 × 10 595 + 10 × 10 053 = 158 925 + 100 530.
-    expect(facts.get(1)).toMatchObject({ departmentId: 'b1', output: '100000.00', totalWeight: 259_455, distribution: 'ok' });
+describe('brigadeShareFacts — доли бригады по объектам с весами', () => {
+  const objects = [
+    { object_key: 'stories', object_name: 'ЖК Stories', output: '50000.00', total_weight: 18_000 },
+    { object_key: 'wave', object_name: 'ЖК Wave', output: '100000.00', total_weight: 259_455 },
+    { object_key: '__unknown_object__', object_name: 'Не определён', output: null, total_weight: 0 },
+  ];
+
+  it('объекты с учтёнными минутами сотрудника — с выработкой, весом и Σ весов объекта из того же расчёта', () => {
+    const facts = brigadeShareFacts('b1', 'ok', [
+      {
+        employee_id: 1, ktu: '1.5', counted_minutes: 10_595, amount: '61234.57',
+        objects: [{ object_key: 'wave', counted_minutes: 10_595, weight: 158_925, amount: '61234.57' }],
+      },
+      {
+        employee_id: 2, ktu: '1.0', counted_minutes: 10_053, amount: '38765.43',
+        objects: [
+          { object_key: 'wave', counted_minutes: 10_053, weight: 100_530, amount: '38765.43' },
+          // Часы только для показа (минут нет) — в расшифровку доли не идут.
+          { object_key: '__unknown_object__', counted_minutes: 0, weight: 0, amount: null },
+        ],
+      },
+    ], objects);
+    expect(facts.get(1)).toMatchObject({ departmentId: 'b1', output: '150000.00', distribution: 'ok' });
+    expect(facts.get(2)?.objects).toEqual([{
+      objectKey: 'wave', objectName: 'ЖК Wave', output: '100000.00', countedMinutes: 10_053, weight: 100_530,
+      totalWeight: 259_455, amount: '38765.43',
+    }]);
     const result = buildPayrollCalc({
       monthStart: '2026-08-01', monthEnd: '2026-08-31', normDays: null, workdayDates: [], dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
       oneTimeTotal: null, rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
     });
-    expect(result.lines[0].parts).toEqual([expect.objectContaining({ weight: 158_925, total_weight: 259_455, counted_minutes: 10_595 })]);
+    expect(result.lines[0].parts).toEqual([expect.objectContaining({
+      object_name: 'ЖК Wave', weight: 158_925, total_weight: 259_455, counted_minutes: 10_595,
+    })]);
   });
 
-  it('сохранённый расчёт без долей при введённой выработке — делить было не по чему', () => {
-    const rows = [{ employee_id: 1, ktu: '1.0', counted_minutes: 0, amount: null }];
-    expect(brigadeShareFacts('b1', 'no_output', '50000.00', rows).get(1)?.distribution).toBe('nothing_to_distribute');
-    expect(brigadeShareFacts('b1', 'no_output', null, rows).get(1)?.distribution).toBe('no_output');
+  it('ничего не внесено — output null', () => {
+    const rows = [{ employee_id: 1, ktu: '1.0', counted_minutes: 0, amount: null, objects: [] }];
+    expect(brigadeShareFacts('b1', 'no_output', rows, []).get(1)).toMatchObject({ output: null, distribution: 'no_output' });
   });
 });

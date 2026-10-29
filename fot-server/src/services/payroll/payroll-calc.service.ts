@@ -239,9 +239,9 @@ const loadPayoutExtras = async (
   };
 };
 
-/** Факты долей бригады по сотрудникам: те же строки расчёта, выработка и веса — для расшифровки доли. */
+/** Факты долей бригады по сотрудникам: те же строки расчёта, выработка и веса объектов — для расшифровки доли. */
 const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number, IBrigadeShareFact> => (
-  brigadeShareFacts(departmentId, shares.distribution ?? 'error', shares.output_amount, shares.rows)
+  brigadeShareFacts(departmentId, shares.distribution ?? 'error', shares.rows, shares.objects)
 );
 
 /** Основа сотрудника месяца: закрытая (closed) или из живого табеля (closed — null). */

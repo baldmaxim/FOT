@@ -1,7 +1,7 @@
 /**
- * «Табель → Зарплата» (миграция 330): КТУ, «Выработка» бригады и столбец «Сумма».
+ * «Табель → Зарплата» (миграции 330, 336): КТУ, «Выработка» бригады по объектам и столбец «Сумма».
  * Права страницы /salary/terms решает только список payroll_section_access (гарды в payroll.routes);
- * здесь — скоуп отдела, состав бригады и право на строку.
+ * здесь — скоуп отдела, состав бригады, объекты бригады и право на строку.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -9,8 +9,13 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
-import { setBrigadeKtu, setBrigadeOutput } from '../services/payroll/brigade-salary-inputs.service.js';
+import {
+  loadBrigadeSalaryInputs,
+  setBrigadeKtu,
+  setBrigadeObjectOutput,
+} from '../services/payroll/brigade-salary-inputs.service.js';
 import { listBrigadeMemberIds } from '../services/payroll/brigade-salary-source.service.js';
+import { loadBrigadeObjectKeys } from '../services/payroll/brigade-salary.service.js';
 import { canEditPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
 import {
   canReadSalaryDepartment,
@@ -35,10 +40,21 @@ const monthSchema = payrollMonthSchema('Месяц — в формате ГГГ�
 
 const querySchema = z.object({ department_id: departmentIdSchema, month: monthSchema });
 
-/** Выработка: null — убрать; 0,00 — разрешено (всем по 0,00). */
-const outputSchema = z.object({
+const OBJECT_KEY_MESSAGE = 'Выберите объект бригады';
+
+/** Ключ объекта — skud_objects.id или служебный («Не определён», «Текущая деятельность»). */
+const objectKeySchema = z.string({ required_error: OBJECT_KEY_MESSAGE, invalid_type_error: OBJECT_KEY_MESSAGE })
+  .refine(
+    value => value === '__unknown_object__' || value === '__current_activity__'
+      || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value),
+    OBJECT_KEY_MESSAGE,
+  );
+
+/** Выработка объекта: null — стереть; 0,00 — разрешено (всем на объекте по 0,00). */
+const objectOutputSchema = z.object({
   department_id: departmentIdSchema,
   month: monthSchema,
+  object_key: objectKeySchema,
   amount: z.number({ invalid_type_error: 'Сумма должна быть числом' })
     .finite('Сумма должна быть числом')
     .min(0, 'Сумма не может быть отрицательной')
@@ -99,30 +115,71 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   }
 };
 
-/** PUT /api/payroll/timesheet-salary/output { department_id, month, amount|null } — выработка бригады. */
-const setOutput = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** PUT /api/payroll/timesheet-salary/output — до 336 выработка была одна на бригаду; теперь — по объектам. */
+const setOutput = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  res.status(400).json({
+    success: false,
+    error: 'Выработка вводится по объектам — обновите страницу',
+    code: 'OUTPUT_BY_OBJECT',
+  });
+};
+
+/**
+ * PUT /api/payroll/timesheet-salary/object-output { department_id, month, object_key, amount|null } — выработка
+ * бригады на объекте. Сумма — только для объекта, где у бригады в этом месяце есть часы (та же разбивка, что
+ * у расчёта; для закрытого месяца — из зафиксированного результата). null — только для внесённой ранее.
+ */
+const setObjectOutput = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { department_id: departmentId, month, amount } = outputSchema.parse(req.body);
+    const { department_id: departmentId, month, object_key: objectKey, amount } = objectOutputSchema.parse(req.body);
     const department = await resolveDepartment(req, res, departmentId);
     if (!department) return;
     if (department.kind !== 'brigade') {
       res.status(400).json(NOT_BRIGADE);
       return;
     }
-    const { before, after } = await setBrigadeOutput(
-      department.id, `${month}-01`, amount === null ? null : amount.toFixed(2), req.user.id,
+    const stored = (await loadBrigadeSalaryInputs(department.id, `${month}-01`)).outputs.get(objectKey) ?? null;
+    let objectName = stored?.object_name ?? null;
+    if (amount !== null) {
+      const available = await loadBrigadeObjectKeys(req, department.id, month);
+      if (!available.has(objectKey)) {
+        res.status(400).json({
+          success: false,
+          error: stored
+            ? 'На объекте нет часов бригады за этот месяц — выработку можно только стереть'
+            : 'У бригады нет часов на этом объекте за этот месяц',
+          code: 'OBJECT_NOT_IN_BRIGADE',
+        });
+        return;
+      }
+      objectName = available.get(objectKey)!;
+    } else if (!stored) {
+      res.status(400).json({
+        success: false, error: 'Выработка на этом объекте не внесена', code: 'OBJECT_NOT_IN_BRIGADE',
+      });
+      return;
+    }
+    const { before, after } = await setBrigadeObjectOutput(
+      department.id, `${month}-01`, objectKey, objectName ?? objectKey,
+      amount === null ? null : amount.toFixed(2), req.user.id,
     );
     if (before !== after) {
-      await auditService.logFromRequest(req, req.user.id, 'BRIGADE_SALARY_OUTPUT_SET', {
-        entityType: 'brigade_salary_outputs',
-        entityId: `${department.id}:${month}`,
-        details: { department: department.name, month, amount: { from: before, to: after } },
+      await auditService.logFromRequest(req, req.user.id, 'BRIGADE_SALARY_OBJECT_OUTPUT_SET', {
+        entityType: 'brigade_salary_object_outputs',
+        entityId: `${department.id}:${month}:${objectKey}`,
+        details: {
+          department: department.name,
+          month,
+          object_key: objectKey,
+          object: objectName,
+          amount: { from: before, to: after },
+        },
       });
     }
-    res.json({ success: true, data: { output_amount: after } });
+    res.json({ success: true, data: { object_key: objectKey, output_amount: after } });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
-    console.error('timesheetSalary.setOutput error:', err);
+    console.error('timesheetSalary.setObjectOutput error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения выработки' });
   }
 };
@@ -170,4 +227,4 @@ const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-export const timesheetSalaryController = { get, setOutput, setKtu };
+export const timesheetSalaryController = { get, setOutput, setObjectOutput, setKtu };

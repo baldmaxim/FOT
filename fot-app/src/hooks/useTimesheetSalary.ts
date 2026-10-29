@@ -14,7 +14,7 @@ const errorMessage = (error: unknown, fallback: string): string => (
   error instanceof Error && error.message ? error.message : fallback
 );
 
-/** «Табель → Зарплата»: суммы отдела или бригады и правка КТУ / «Выработки». */
+/** «Табель → Зарплата»: суммы отдела или бригады и правка КТУ / «Выработки» на объектах. */
 export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimesheetSalaryParams) => {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -39,7 +39,9 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
   });
 
   const outputMutation = useMutation({
-    mutationFn: (amount: number | null) => timesheetSalaryService.setOutput(departmentId as string, month, amount),
+    mutationFn: ({ objectKey, amount }: { objectKey: string; amount: number | null }) => (
+      timesheetSalaryService.setObjectOutput(departmentId as string, month, objectKey, amount)
+    ),
     onSuccess: invalidate,
     onError: error => toast.error(errorMessage(error, 'Не удалось сохранить выработку')),
   });
@@ -47,16 +49,18 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
   const { mutate: mutateKtu } = ktuMutation;
   const { mutateAsync: mutateOutput } = outputMutation;
   const setKtu = useCallback((employeeId: number, ktu: number) => mutateKtu({ employeeId, ktu }), [mutateKtu]);
-  const setOutput = useCallback(async (amount: number | null) => { await mutateOutput(amount); }, [mutateOutput]);
+  const setObjectOutput = useCallback(async (objectKey: string, amount: number | null) => {
+    await mutateOutput({ objectKey, amount });
+  }, [mutateOutput]);
 
   return {
     data: query.data,
     loading: query.isLoading,
     error: query.isError,
     setKtu,
-    setOutput,
+    setObjectOutput,
     pendingKtuEmployeeId: ktuMutation.isPending ? (ktuMutation.variables?.employeeId ?? null) : null,
-    savingOutput: outputMutation.isPending,
+    savingObjectKey: outputMutation.isPending ? (outputMutation.variables?.objectKey ?? null) : null,
   };
 };
 

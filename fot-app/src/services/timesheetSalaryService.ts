@@ -3,7 +3,7 @@ import type { ITimesheetSalaryResponse } from '../types/timesheet';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
-/** «Табель → Зарплата»: КТУ, «Выработка» бригады и столбец «Сумма» (раздел «Зарплата», 5 учёток). */
+/** «Табель → Зарплата»: КТУ, «Выработка» бригады по объектам и столбец «Сумма» (раздел «Зарплата», 5 учёток). */
 export const timesheetSalaryService = {
   get: async (departmentId: string, month: string, signal?: AbortSignal): Promise<ITimesheetSalaryResponse> => {
     // preliminary=1 — незакрытый месяц отдела предварительно по живому табелю (без него — только закрытый).
@@ -15,13 +15,17 @@ export const timesheetSalaryService = {
     return res.data;
   },
 
-  /** Выработка бригады за месяц; null — убрать. */
-  setOutput: async (departmentId: string, month: string, amount: number | null): Promise<void> => {
-    await apiClient.put<IApiResponse<{ output_amount: string | null }>>('/payroll/timesheet-salary/output', {
-      department_id: departmentId,
-      month,
-      amount,
-    });
+  /** Выработка бригады на объекте за месяц; null — стереть. */
+  setObjectOutput: async (
+    departmentId: string,
+    month: string,
+    objectKey: string,
+    amount: number | null,
+  ): Promise<void> => {
+    await apiClient.put<IApiResponse<{ object_key: string; output_amount: string | null }>>(
+      '/payroll/timesheet-salary/object-output',
+      { department_id: departmentId, month, object_key: objectKey, amount },
+    );
   },
 
   setKtu: async (departmentId: string, month: string, employeeId: number, ktu: number): Promise<void> => {

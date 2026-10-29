@@ -35,8 +35,9 @@ import type { ProrationRounding } from './payroll-terms.service.js';
 export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
 
 /**
- * brigade_output — выработка бригады не введена; brigade_no_hours — введена, но делить не по чему (нет учтённых
- * часов); brigade_error — расчёт бригады с ошибкой.
+ * brigade_output — выработка не внесена на объекте, где у сотрудника есть учтённые часы (или у бригады ничего не
+ * внесено); brigade_no_hours — до 336: выработка введена, делить не по чему (с 336 не выставляется, тип оставлен для
+ * старых клиентов); brigade_error — расчёт бригады с ошибкой.
  */
 export type PayrollCalcMissing =
   | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
@@ -77,11 +78,14 @@ export type PayrollCalcLinePart =
   | {
     kind: 'brigade';
     department_id: string;
-    /** Выработка бригады; null — не введена. */
+    /** Объект, на котором делилась выработка (336); null — у сотрудника нет учтённых часов на объектах. */
+    object_key?: string | null;
+    object_name?: string | null;
+    /** Выработка объекта (без объекта — Σ выработок бригады); null — не внесена. */
     output: string | null;
     ktu_tenths: number;
     counted_minutes: number;
-    /** Вес сотрудника — КТУ в десятых × минуты; total_weight — сумма весов бригады (тот же расчёт доли). */
+    /** Вес сотрудника — КТУ в десятых × минуты на объекте; total_weight — сумма весов объекта (тот же расчёт доли). */
     weight: number;
     total_weight: number;
     amount: string | null;
@@ -103,43 +107,75 @@ export interface IPayrollCalcLine {
   parts?: PayrollCalcLinePart[];
 }
 
+/** Доля сотрудника на одном объекте бригады. */
+export interface IBrigadeShareObjectFact {
+  objectKey: string;
+  objectName: string;
+  /** Выработка объекта; null — не внесена. */
+  output: string | null;
+  countedMinutes: number;
+  /** КТУ в десятых × минуты на объекте; totalWeight — Σ весов объекта. */
+  weight: number;
+  totalWeight: number;
+  amount: string | null;
+}
+
 /** Доля сотрудника в расчёте одной бригады (зафиксированном или предварительном). */
 export interface IBrigadeShareFact {
   departmentId: string;
-  /** NUMERIC текстом; null — доли нет (выработка не введена, делить не по чему или расчёт с ошибкой). */
+  /** NUMERIC текстом — Σ долей по объектам; null — доли нет (выработка не внесена или расчёт с ошибкой). */
   amount: string | null;
   ktu: string;
   countedMinutes: number;
   distribution: 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
-  /** Выработка бригады; null — не введена. */
+  /** Σ выработок бригады; null — ничего не внесено. */
   output: string | null;
-  /** Сумма весов бригады — КТУ в десятых × минуты по строкам того же расчёта. */
-  totalWeight: number;
+  /** Объекты с учтёнными минутами сотрудника — части расшифровки. */
+  objects: IBrigadeShareObjectFact[];
 }
 
 /** КТУ '1.5' → 15 десятых. */
 export const ktuTenths = (ktu: string): number => Math.round(Number(ktu) * 10);
 
 /**
- * Факты долей бригады из строк её расчёта. Сохранённый расчёт отдаёт no_output и при введённой выработке, если
- * делить было не по чему, — такая выработка уточняется до nothing_to_distribute.
+ * Факты долей бригады из строк её расчёта (по объектам, 336): у сотрудника — объекты, где у него есть учтённые
+ * минуты, с выработкой, весом и Σ весов объекта из того же расчёта.
  */
 export const brigadeShareFacts = (
   departmentId: string,
   distribution: IBrigadeShareFact['distribution'],
-  output: string | null,
-  rows: ReadonlyArray<{ employee_id: number; ktu: string; counted_minutes: number; amount: string | null }>,
+  rows: ReadonlyArray<{
+    employee_id: number;
+    ktu: string;
+    counted_minutes: number;
+    amount: string | null;
+    objects?: ReadonlyArray<{ object_key: string; counted_minutes: number; weight: number; amount: string | null }>;
+  }>,
+  objects: ReadonlyArray<{ object_key: string; object_name: string; output: string | null; total_weight: number }>,
 ): Map<number, IBrigadeShareFact> => {
-  const totalWeight = rows.reduce((sum, row) => sum + ktuTenths(row.ktu) * row.counted_minutes, 0);
-  const refined = distribution === 'no_output' && output !== null ? 'nothing_to_distribute' : distribution;
+  const byKey = new Map(objects.map(object => [object.object_key, object]));
+  const outputs = objects.filter(object => object.output !== null);
+  const output = outputs.length === 0
+    ? null
+    : centsToAmount(outputs.reduce((sum, object) => sum + cents(object.output!), 0));
   return new Map(rows.map(row => [Number(row.employee_id), {
     departmentId,
     amount: row.amount,
     ktu: row.ktu,
     countedMinutes: row.counted_minutes,
-    distribution: refined,
+    distribution,
     output,
-    totalWeight,
+    objects: (row.objects ?? [])
+      .filter(part => part.counted_minutes > 0)
+      .map(part => ({
+        objectKey: part.object_key,
+        objectName: byKey.get(part.object_key)?.object_name ?? part.object_key,
+        output: byKey.get(part.object_key)?.output ?? null,
+        countedMinutes: part.counted_minutes,
+        weight: part.weight,
+        totalWeight: byKey.get(part.object_key)?.total_weight ?? 0,
+        amount: part.amount,
+      })),
   }]));
 };
 
@@ -480,28 +516,45 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
 
   const shares = facts.brigadeShares ?? [];
   if (shares.length > 0) {
-    const known = shares.filter(share => share.amount !== null);
     for (const share of shares.filter(item => item.amount === null)) {
-      missing.add(share.distribution === 'error' ? 'brigade_error'
-        : share.distribution === 'nothing_to_distribute' ? 'brigade_no_hours' : 'brigade_output');
+      // Доля неизвестна только при ошибке или учтённых часах на объекте без выработки (выработка по объектам, 336).
+      missing.add(share.distribution === 'error' ? 'brigade_error' : 'brigade_output');
     }
+    // Неизвестна хоть одна доля — строки нет («—»), а не сумма известных частей.
+    const unknown = shares.some(share => share.amount === null);
     lines.push({
       code: 'brigade',
-      amount: known.length > 0 ? centsToAmount(known.reduce((sum, share) => sum + cents(share.amount), 0)) : null,
+      amount: unknown ? null : centsToAmount(shares.reduce((sum, share) => sum + cents(share.amount), 0)),
       brigade: {
         ktu: shares[0].ktu,
         hours: Math.round((shares.reduce((sum, share) => sum + share.countedMinutes, 0) / 60) * 100) / 100,
       },
-      parts: shares.map(share => ({
-        kind: 'brigade' as const,
-        department_id: share.departmentId,
-        output: share.output,
-        ktu_tenths: ktuTenths(share.ktu),
-        counted_minutes: share.countedMinutes,
-        weight: ktuTenths(share.ktu) * share.countedMinutes,
-        total_weight: share.totalWeight,
-        amount: share.amount === null ? null : centsToAmount(cents(share.amount)),
-      })),
+      // Часть — на объект; у сотрудника без учтённых часов на объектах — одна часть бригады целиком.
+      parts: shares.flatMap((share): PayrollCalcLinePart[] => (share.objects.length > 0
+        ? share.objects.map(object => ({
+          kind: 'brigade' as const,
+          department_id: share.departmentId,
+          object_key: object.objectKey,
+          object_name: object.objectName,
+          output: object.output,
+          ktu_tenths: ktuTenths(share.ktu),
+          counted_minutes: object.countedMinutes,
+          weight: object.weight,
+          total_weight: object.totalWeight,
+          amount: object.amount === null ? null : centsToAmount(cents(object.amount)),
+        }))
+        : [{
+          kind: 'brigade' as const,
+          department_id: share.departmentId,
+          object_key: null,
+          object_name: null,
+          output: share.output,
+          ktu_tenths: ktuTenths(share.ktu),
+          counted_minutes: share.countedMinutes,
+          weight: 0,
+          total_weight: 0,
+          amount: share.amount === null ? null : centsToAmount(cents(share.amount)),
+        }])),
     });
   }
 

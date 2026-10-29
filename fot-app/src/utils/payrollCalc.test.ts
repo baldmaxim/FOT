@@ -180,6 +180,21 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
       .toEqual(['ошибка расчёта бригады']);
   });
 
+  it('доля бригады по объектам (336): строка на объект с его именем и Σ весов объекта; без часов — одна строка', () => {
+    const wave = {
+      kind: 'brigade' as const, department_id: 'b1', object_key: 'w', object_name: 'ЖК Wave', output: '228000.00',
+      ktu_tenths: 10, counted_minutes: 600, weight: 6000, total_weight: 22_800, amount: '60000.00',
+    };
+    const stories = { ...wave, object_key: 's', object_name: 'ЖК Stories', output: null, total_weight: 8_400, amount: null };
+    expect(calcLineFormula({ code: 'brigade', amount: null, parts: [stories, wave] })).toEqual([
+      'ЖК Stories: выработка не внесена',
+      `ЖК Wave: выработка 228${NBSP}000,00 × КТУ 1 × 10 ч / 38 (Σ КТУ × ч объекта) = 60${NBSP}000,00`,
+    ]);
+    const idle = { ...wave, object_key: null, object_name: null, counted_minutes: 0, weight: 0, total_weight: 0, amount: '0.00' };
+    expect(calcLineFormula({ code: 'brigade', amount: '0.00', parts: [idle] }))
+      .toEqual(['нет учтённых часов на объектах = 0,00']);
+  });
+
   it('старый бэкенд без частей — прежняя подпись дней', () => {
     expect(calcLineFormula({ code: 'contract', amount: '1.00', days: { worked: 22, norm: 22 } })).toEqual(['22 из 22 дн.']);
     expect(calcLineFormula({ code: 'supplement', amount: '1.00' })).toEqual([]);

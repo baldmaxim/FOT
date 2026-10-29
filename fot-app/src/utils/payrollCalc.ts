@@ -157,13 +157,21 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
     case 'one_time':
       return 'разовые доплаты месяца';
     case 'brigade': {
-      if (part.output === null) return 'выработка бригады не внесена';
-      if (part.amount === null) return part.total_weight === 0 ? 'нет учтённых часов бригады' : 'ошибка расчёта бригады';
+      // Выработка по объектам (336): часть — объект; без объекта — нет учтённых часов на объектах (или старый бэкенд).
+      const objectName = part.object_name ?? null;
+      const prefix = objectName ? `${objectName}: ` : '';
+      if (part.output === null) return objectName ? `${prefix}выработка не внесена` : 'выработка бригады не внесена';
+      if (part.amount === null) {
+        if (part.total_weight !== 0) return `${prefix}ошибка расчёта бригады`;
+        return objectName ? `${prefix}нет учтённых часов` : 'нет учтённых часов бригады';
+      }
+      if (!objectName && part.total_weight === 0) return `нет учтённых часов на объектах = ${money(part.amount)}`;
       // Вес — КТУ × часы; в БД — КТУ в десятых × минуты, отсюда / 600.
       const ktu = decimal(part.ktu_tenths / 10);
       const hours = decimal(part.counted_minutes / 60);
-      return `выработка ${money(part.output)} × КТУ ${ktu} × ${hours} ч / ${decimal(part.total_weight / 600)} `
-        + `(Σ КТУ × ч бригады) = ${money(part.amount)}`;
+      const scope = objectName ? 'объекта' : 'бригады';
+      return `${prefix}выработка ${money(part.output)} × КТУ ${ktu} × ${hours} ч / ${decimal(part.total_weight / 600)} `
+        + `(Σ КТУ × ч ${scope}) = ${money(part.amount)}`;
     }
   }
 };

@@ -27,12 +27,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   TimesheetLetterFraction,
   TimesheetSalaryAmountCell,
-  TimesheetSalaryKtuCell,
   TimesheetSalaryLineCell,
   TimesheetSalaryMobileRow,
   type ITimesheetSalaryGridProps,
 } from './TimesheetSalaryCells';
-import { TimesheetSalaryHeader } from './TimesheetSalaryHeader';
 import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
@@ -608,13 +606,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     });
   }, [days, employees, entries, objectEntries, year, month]);
 
-  // Вкладка «Зарплата»: КТУ — только у бригад; «Сумма» — у бригад и у отделов, когда есть суммы;
-  // «Оклад» и «Переработка» — только у отделов.
+  // Вкладка «Зарплата по отделам»: «Оклад», «Переработка» и «Сумма» отдела, когда есть суммы. Бригады — во вкладке
+  // «Зарплата по объектам» (TimesheetSalaryObjects), в эту сетку не попадают.
   const salaryTab = Boolean(salary);
-  const showKtuColumn = viewMode === 'employees' && salary?.data?.kind === 'brigade';
-  const showSalaryColumn = viewMode === 'employees' && Boolean(salary?.data)
-    && (salary?.data?.kind === 'brigade' || (salary?.data?.rows.length ?? 0) > 0);
-  const showSalaryLineColumns = showSalaryColumn && salary?.data?.kind === 'department';
+  const showSalaryColumn = viewMode === 'employees' && salary?.data?.kind === 'department'
+    && (salary?.data?.rows.length ?? 0) > 0;
+  const showSalaryLineColumns = showSalaryColumn;
   // «УУ» / «РБ» / «УД» во вкладке «Зарплата» — часы правки «УУ» или графика дня (в клетке дробью и в «Часы»);
   // вне вкладки — null.
   const getSalaryLetterCell = (employeeId: number, day: number, entry: TimesheetEntry | null): ISalaryLetterHours | null => {
@@ -622,12 +619,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month, day);
     return getSalaryLetterHours(entry, getDayNormHoursForDay(sched, calendar, year, month, day));
   };
-  // «Выработка» — в строке-заголовке первой секции состава бригады (не «Начальник участка»).
-  const salaryHeaderRowKey = useMemo(() => {
-    if (!showKtuColumn) return null;
-    const first = employeeRows.find(row => (row.employee.source ?? 'department') === 'department');
-    return first ? getTimesheetRowKey(first.employee) : null;
-  }, [showKtuColumn, employeeRows]);
 
   const objectViewGroups = useMemo<IObjectViewGroup[]>(() => {
     const employeeById = new Map(employees.map(employee => [employee.id, employee]));
@@ -1256,7 +1247,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 {sectionLabel && (
                   <div className="ts-section-divider-mobile">
                     {sectionLabel}
-                    {salary && rowKey === salaryHeaderRowKey && <TimesheetSalaryHeader salary={salary} />}
                   </div>
                 )}
               <article
@@ -1569,7 +1559,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
 
   const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)
-    + (showKtuColumn ? 1 : 0) + (showSalaryColumn ? 1 : 0) + (showSalaryLineColumns ? 2 : 0);
+    + (showSalaryColumn ? 1 : 0) + (showSalaryLineColumns ? 2 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1584,9 +1574,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           <thead>
             <tr>
               <th className="ts-col-sticky">Сотрудник</th>
-              {showKtuColumn && (
-                <th className="ts-col-ktu-sticky" title="Коэффициент трудового участия: 0,5–2,0">КТУ</th>
-              )}
               {days.map(day => {
                 const weekend = isWeekend(year, month, day);
                 const today = isToday(year, month, day);
@@ -1607,12 +1594,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 </>
               )}
               {showSalaryColumn && (
-                <th
-                  className="ts-col-salary"
-                  title={salary?.data?.kind === 'brigade'
-                    ? 'К выплате: доля выработки по КТУ − удержания, без НДФЛ'
-                    : 'К выплате по закрытому табелю: начислено − удержания, без НДФЛ'}
-                >
+                <th className="ts-col-salary" title="К выплате по табелю: начислено − удержания, без НДФЛ">
                   Сумма
                 </th>
               )}
@@ -1680,16 +1662,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 <tbody key={rowKey} data-index={index} ref={rowVirtualizer.measureElement}>
                   {sectionLabel && (
                     <tr className="ts-section-divider-row">
-                      <td
-                        className={`ts-col-sticky ts-section-divider-cell${salary && rowKey === salaryHeaderRowKey ? ' ts-section-divider-cell--salary' : ''}`}
-                        colSpan={desktopColSpan}
-                      >
-                        {salary && rowKey === salaryHeaderRowKey ? (
-                          <div className="ts-salary-divider">
-                            <span>{sectionLabel}</span>
-                            <TimesheetSalaryHeader salary={salary} />
-                          </div>
-                        ) : sectionLabel}
+                      <td className="ts-col-sticky ts-section-divider-cell" colSpan={desktopColSpan}>
+                        {sectionLabel}
                       </td>
                     </tr>
                   )}
@@ -1749,7 +1723,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         )}
                       </div>
                     </td>
-                    {showKtuColumn && salary && <TimesheetSalaryKtuCell salary={salary} employee={row.employee} />}
                     {days.map(day => {
                       const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                       const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
@@ -1860,7 +1833,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           ↳ {objectRow.object_name}
                         </div>
                       </td>
-                      {showKtuColumn && <td className="ts-col-ktu-sticky" />}
                       {days.map(day => {
                         const objectEntry = objectRow.days.get(day) || null;
                         const dailyEntry = row.days.get(day) || null;

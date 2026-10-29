@@ -2,20 +2,17 @@ import type { FC } from 'react';
 
 import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
-import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
   findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
 } from '../../utils/timesheetSalary';
 
-/** Вкладка «Зарплата» в табеле: данные и правка КТУ / «Выработки». */
+/** Вкладки «Зарплата по отделам / по объектам» в табеле: данные и правка КТУ бригады. */
 export interface ITimesheetSalaryGridProps {
   data: ITimesheetSalaryResponse | undefined;
   /** Право страницы «Зарплаты» на правку. */
   canEdit: boolean;
-  savingOutput: boolean;
   pendingKtuEmployeeId: number | null;
   onKtuChange: (employeeId: number, ktu: number) => void;
-  onOutputSave: (amount: number | null) => Promise<void>;
 }
 
 /** КТУ 0,5…2,0 с шагом 0,1. */
@@ -55,17 +52,6 @@ interface ICellProps {
   salary: ITimesheetSalaryGridProps;
   employee: TimesheetEmployee;
 }
-
-export const TimesheetSalaryKtuCell: FC<ICellProps> = ({ salary, employee }) => {
-  const row = findSalaryRow(salary.data, employee);
-  return (
-    <td className="ts-col-ktu-sticky">
-      {row
-        ? <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={formatTimesheetEmployeeName(employee.full_name)} />
-        : '—'}
-    </td>
-  );
-};
 
 export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) => {
   const row = findSalaryRow(salary.data, employee);
@@ -111,22 +97,15 @@ export const TimesheetLetterFraction: FC<{ label: string; hours: number }> = ({ 
   </span>
 );
 
-/** Мобильная карточка: КТУ (бригада) или «Оклад» и «Переработка» (отдел) и «Сумма» строкой под ФИО. */
+/** Мобильная карточка отдела: «Оклад», «Переработка» и «Сумма» строкой под ФИО. */
 export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) => {
   const { data } = salary;
   const row = findSalaryRow(data, employee);
   if (!data || !row) return null;
-  const isBrigade = data.kind === 'brigade';
   const muted = isSalaryRowMuted(data, row);
   return (
     <div className="ts-salary-mobile-row">
-      {isBrigade && (
-        <label className="ts-salary-mobile-field">
-          <span>КТУ</span>
-          <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={formatTimesheetEmployeeName(employee.full_name)} />
-        </label>
-      )}
-      {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => {
+      {([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => {
         const note = salaryOvertimeNote(row[code]);
         return (
           <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
