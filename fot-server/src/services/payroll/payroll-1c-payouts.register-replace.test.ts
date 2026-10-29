@@ -88,7 +88,8 @@ describe('регистр выплат: замена месяца — снимо�
 
   it('оставлен (ГУИД + хеш) — строки из снимка; нет в файле — удалён; нет в снимке — добавлен', () => {
     const from = snapshotToInput(snapshot(), MONTH, lockKey);
-    const a = fileDoc(GA, '0000-000001', 'Аванс', [['Иванов Иван', 10000, 1], ['Товбин Михаил', 20000, null]]);
+    // В файле строки оставляемого документа в другом порядке (второй формат ЗУП без «НомерСтроки») — не расхождение.
+    const a = fileDoc(GA, '0000-000001', 'Аванс', [['Товбин Михаил', 20000, null], ['Иванов Иван', 10000, 1]]);
     const c = fileDoc(GC, '0000-000788', 'Премии', [['Петров Пётр', 7000, 2], ['Новый Нов', 100, 9]]);
     const target = buildReplaceTarget(from, [a.doc, c.doc], [...a.lines, ...c.lines]);
     expect(target.kept.map(doc => doc.guid)).toEqual([GA]);
@@ -96,18 +97,22 @@ describe('регистр выплат: замена месяца — снимо�
     expect(target.added.map(doc => doc.guid)).toEqual([GC]);
     expect(target.to.documents.map(doc => doc.guid)).toEqual([GA, GC]);
     // Оставленный — причины из снимка, не пересчитанные.
-    expect(target.to.lines.filter(line => line.guid === GA).map(line => line.reason))
-      .toEqual(['Регистр выплат ЗУП 09.2026: ФИО + подразделение', 'Регистр выплат ЗУП 09.2026: ФИО + подразделение']);
+    expect(target.to.lines.filter(line => line.guid === GA).map(line => [line.lineNo, line.fullName, line.reason])).toEqual([
+      [1, 'Иванов Иван', 'Регистр выплат ЗУП 09.2026: ФИО + подразделение'],
+      [2, 'Товбин Михаил', 'Регистр выплат ЗУП 09.2026: ФИО + подразделение'],
+    ]);
     expect(target.to.lines.filter(line => line.guid === GC)).toEqual(c.lines);
   });
 
   it('стоп: у оставляемого документа другой сотрудник или строка; у добавленного — не тот, что в загрузке', () => {
     const from = snapshotToInput(snapshot(), MONTH, lockKey);
     const otherEmployee = fileDoc(GA, '0000-000001', 'Аванс', [['Иванов Иван', 10000, 7], ['Товбин Михаил', 20000, null]]);
-    expect(() => buildReplaceTarget(from, [otherEmployee.doc], otherEmployee.lines)).toThrow(/≠ загруженным/);
+    expect(() => buildReplaceTarget(from, [otherEmployee.doc], otherEmployee.lines)).toThrow(/строка 1: сотрудник 1 → 7/);
     const otherBrigade = fileDoc(GA, '0000-000001', 'Аванс', [['Иванов Иван', 10000, 1], ['Товбин Михаил', 20000, null]]);
     otherBrigade.lines[0].department = 'бр.Другая';
-    expect(() => buildReplaceTarget(from, [otherBrigade.doc], otherBrigade.lines)).toThrow(/≠ загруженным/);
+    expect(() => buildReplaceTarget(from, [otherBrigade.doc], otherBrigade.lines)).toThrow(/строка 1: подразделение/);
+    const otherSum = fileDoc(GA, '0000-000001', 'Аванс', [['Иванов Иван', 10001, 1], ['Товбин Михаил', 19999, null]]);
+    expect(() => buildReplaceTarget(from, [otherSum.doc], otherSum.lines)).toThrow(/ФИО или суммы нет в загруженной/);
     const premium = fileDoc(GC, '0000-000788', 'Премии', [['Товбин Михаил', 500, 5]]);
     expect(() => buildReplaceTarget(from, [premium.doc], premium.lines)).toThrow(/в загрузке — —/);
   });

@@ -7,7 +7,8 @@
  * с шапками. Иначе — ошибка: заменять можно только то, что сами загрузили и никто не менял.
  *
  * Оставляемый документ (тот же ГУИД и хеш) в to берётся из снимка как есть — те же line_no, сотрудники, причины.
- * Жёсткие стопы: строки файла оставляемого документа обязаны совпасть со снимком, включая сопоставление; у
+ * Жёсткие стопы: строки файла оставляемого документа обязаны совпасть со снимком по ключу строки (ФИО, подразделение,
+ * сопоставление; порядок — нет, во втором формате ЗУП он бывает другим); у
  * добавленного документа пара «ФИО + подразделение», уже бывшая в снимке, обязана получить прежнего сотрудника.
  */
 import type { PoolClient } from 'pg';
@@ -160,21 +161,24 @@ export interface IReplaceTarget {
 
 const docKey = (doc: IRegisterSqlDocument): string => `${doc.guid}|${doc.contentHash}`;
 const linePairKey = (line: IRegisterSqlLine): string => `${normalizePayoutName(line.fullName)}|${(line.department ?? '').trim()}`;
-/** Чем строки файла оставляемого документа отличаются от загруженных (без ФИО): «строка 19: сотрудник 8732 → 9999». */
+/**
+ * Чем строки файла оставляемого документа отличаются от загруженных (без ФИО): «строка 19: сотрудник 8732 → 9999».
+ * Сравнение по ключу строки (ФИО + сумма + № повтора), не по порядку: во втором формате ЗУП нет «НомерСтроки», и
+ * порядок строк в файле бывает другим. Номера строк остаются загруженные.
+ */
 const lineDiffs = (saved: readonly IRegisterSqlLine[], own: readonly IRegisterSqlLine[]): string[] => {
   if (saved.length !== own.length) return [`строк в файле ${own.length}, загружено ${saved.length}`];
-  const fields: Array<[string, (line: IRegisterSqlLine) => unknown]> = [
-    ['номер строки', line => line.lineNo],
-    ['ФИО или сумма', line => line.lineKey],
-    ['написание ФИО', line => line.fullName],
-    ['подразделение', line => line.department],
-    ['сотрудник', line => line.employeeId ?? '—'],
-  ];
-  return saved.flatMap((line, index) => fields
-    .filter(([, value]) => value(line) !== value(own[index]))
-    .map(([name, value]) => (name === 'сотрудник'
-      ? `строка ${line.lineNo}: сотрудник ${String(value(line))} → ${String(value(own[index]))}`
-      : `строка ${line.lineNo}: ${name}`)));
+  const savedByKey = new Map(saved.map(line => [line.lineKey, line]));
+  return own.flatMap(line => {
+    const before = savedByKey.get(line.lineKey);
+    if (!before) return [`строка файла ${line.lineNo}: ФИО или суммы нет в загруженной`];
+    return [
+      ...(before.fullName !== line.fullName ? [`строка ${before.lineNo}: написание ФИО`] : []),
+      ...(before.department !== line.department ? [`строка ${before.lineNo}: подразделение`] : []),
+      ...(before.employeeId !== line.employeeId
+        ? [`строка ${before.lineNo}: сотрудник ${before.employeeId ?? '—'} → ${line.employeeId ?? '—'}`] : []),
+    ];
+  });
 };
 
 /** Набор to из документов и строк файла (с решениями) и снимка from; расхождение со снимком — ошибка. */
@@ -199,7 +203,7 @@ export const buildReplaceTarget = (
     const own = fileLinesByGuid.get(doc.guid) ?? [];
     if (fromKeys.has(docKey(doc))) {
       const saved = [...(fromLines.get(doc.guid) ?? [])].sort((a, b) => a.lineNo - b.lineNo);
-      const diffs = lineDiffs(saved, [...own].sort((a, b) => a.lineNo - b.lineNo));
+      const diffs = lineDiffs(saved, own);
       if (diffs.length > 0) {
         problems.push(`${doc.docNumber} от ${doc.docDate}: строки или сопоставление файла ≠ загруженным — ${diffs.join('; ')}`);
       }
