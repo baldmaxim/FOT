@@ -23,15 +23,29 @@ interface IRow {
   storno?: string;
   group?: string;
   period?: string;
+  /** «Период» (месяц регистрации), если отличается от ПериодВзаиморасчетов. */
+  registered?: string;
+  kind?: string;
 }
 
 const row = (r: IRow): unknown[] => [
-  r.period ?? SEPT, r.registrar, r.no, r.org ?? 'ООО "СУ-10"', r.name, r.method ?? 'Увольнения', r.employee ?? r.name,
-  r.dept ?? 'бр.Гузь В.', 'Заработная плата и иные доходы с ограничением взыскания', r.amount, r.period ?? SEPT,
-  'Выплата в межрасчетный период', r.storno ?? 'Нет', r.group ?? 'Выплачено',
+  r.registered ?? r.period ?? SEPT, r.registrar, r.no, r.org ?? 'ООО "СУ-10"', r.name, r.method ?? 'Увольнения',
+  r.employee ?? r.name, r.dept ?? 'бр.Гузь В.', 'Заработная плата и иные доходы с ограничением взыскания', r.amount,
+  r.period ?? SEPT, r.kind ?? 'Выплата в межрасчетный период', r.storno ?? 'Нет', r.group ?? 'Выплачено',
 ];
 
 const sheet = (...rows: IRow[]): unknown[][] => [[...PAYOUTS_REGISTER_HEADER], ...rows.map(row)];
+
+/** Второй формат ЗУП: без «НомерСтроки», «Сторно», «Группа…», со «Статьями»; `no` не выгружается. */
+const V2_HEADER = [
+  'Период', 'Регистратор', 'Организация', 'ФизическоеЛицо', 'РегистраторСпособВыплаты', 'СтатьяФинансирования',
+  'СтатьяРасходов', 'Сотрудник', 'Подразделение', 'СуммаВзаиморасчетов', 'ПериодВзаиморасчетов', 'ВидВзаиморасчетов',
+];
+const rowV2 = (r: IRow): unknown[] => [
+  r.registered ?? r.period ?? SEPT, r.registrar, r.org ?? 'ООО "СУ-10"', r.name, r.method ?? 'Увольнения', null, 'ОТ',
+  r.employee ?? r.name, r.dept ?? 'бр.Гузь В.', r.amount, r.period ?? SEPT, r.kind ?? 'Выплата в межрасчетный период',
+];
+const sheetV2 = (...rows: IRow[]): unknown[][] => [V2_HEADER, ...rows.map(rowV2)];
 
 const B2644 = 'Ведомость в банк 0000-002644 от 09.10.2026';
 const B2526 = 'Ведомость в банк 0000-002526 от 05.10.2026';
@@ -83,6 +97,54 @@ describe('регистр выплат ЗУП → ведомости', () => {
     ), '2026-09');
     expect(docs.map(doc => doc.docNumber)).toEqual(['0000-002526', '0000-002644']);
     expect(docs[1].lines[0].fullName).toBe('Кастро Дмитрий Фреди');
+  });
+
+  it('второй формат: без «НомерСтроки» — по порядку в файле; «Премия» с «Периодом» следующего месяца', () => {
+    const docs = buildRegisterDocuments(sheetV2(
+      { registrar: 'Премия 0000-000788 от 05.10.2026', no: 0, name: 'Тюрин Дмитрий Юрьевич', method: 'Премии',
+        amount: 107230, registered: '01.10.2026 0:00:00', dept: 'ИТР' },
+      { registrar: B2644, no: 0, name: 'Алимов Абдуманноп Одил Угли', amount: 43500 },
+      { registrar: 'Премия 0000-000788 от 05.10.2026', no: 0, name: 'Балбашиоглу Эмре', method: 'Премии',
+        amount: 672000, registered: '01.10.2026 0:00:00', dept: 'ИТР' },
+    ), '2026-09');
+    expect(docs.map(doc => [doc.registrar, doc.docNumber, doc.docDate, doc.periodMonth, doc.paymentMethod, doc.totalCents]))
+      .toEqual([
+        ['Премия 0000-000788 от 05.10.2026', '0000-000788', '2026-10-05', '2026-09-01', 'Премии', 77923000],
+        [B2644, '0000-002644', '2026-10-09', '2026-09-01', 'Увольнения', 4350000],
+      ]);
+    expect(docs[0].guid).toBe(registerDocGuid('0000-000788', '2026-10-05'));
+    expect(docs[0].lines.map(line => [line.lineNo, line.fullName, line.sourceRows])).toEqual([
+      [1, 'Тюрин Дмитрий Юрьевич', [1]],
+      [2, 'Балбашиоглу Эмре', [2]],
+    ]);
+  });
+
+  it('одна ведомость в обоих форматах и с переставленными столбцами — те же строки и contentHash', () => {
+    const rows: IRow[] = [
+      { registrar: B2526, no: 1, name: 'Разаханова Марина Аллахяровна', method: 'Аванс', amount: -100000 },
+      { registrar: B2526, no: 2, name: 'Разаханова Марина Аллахяровна', method: 'Аванс', amount: 300000 },
+      { registrar: B2526, no: 3, name: 'Пулатов Аскар Тиничбаевич', method: 'Аванс', amount: 10000, dept: 'бр.Пулатов' },
+      { registrar: B2526, no: 4, name: 'Пулатов Аскар Тиничбаевич', method: 'Аванс', amount: 10000, dept: 'бр.Пулатов' },
+    ];
+    const v1 = buildRegisterDocuments(sheet(...rows), '2026-09');
+    const v2 = buildRegisterDocuments(sheetV2(...rows), '2026-09');
+    const permuted = sheetV2(...rows).map(cells => [...cells].reverse());
+    expect(v2).toEqual(v1);
+    expect(buildRegisterDocuments(permuted, '2026-09')).toEqual(v1);
+    expect(v1[0].lines).toHaveLength(3);
+  });
+
+  it('отказ (второй формат): чужой или повторный столбец, вид не «Выплата…», «Период» раньше месяца', () => {
+    const okV2: IRow = { registrar: B2644, no: 0, name: 'Алимов А.А.', amount: 100 };
+    const rejectsV2 = (data: unknown[][], message: RegExp) => {
+      expect(() => buildRegisterDocuments(data, '2026-09')).toThrow(PayoutsRegisterError);
+      expect(() => buildRegisterDocuments(data, '2026-09')).toThrow(message);
+    };
+    rejectsV2([[...V2_HEADER, 'Лишний'], [...rowV2(okV2), 'x']], /Заголовок/);
+    rejectsV2([[...V2_HEADER, 'СтатьяРасходов'], [...rowV2(okV2), 'ОТ']], /Заголовок/);
+    rejectsV2(sheetV2({ ...okV2, kind: 'Начисление зарплаты' }), /не выплата/);
+    rejectsV2(sheetV2({ ...okV2, registered: '01.08.2026 0:00:00' }), /«Период» раньше 2026-09/);
+    rejectsV2(sheetV2({ ...okV2, period: '01.10.2026 0:00:00' }), /«ПериодВзаиморасчетов» не 2026-09/);
   });
 
   const rejects = (rows: IRow[], message: RegExp) => {

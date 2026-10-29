@@ -35,6 +35,7 @@
     "scripts/apply-office-window-month.ts",
     "scripts/build-payouts-register-sql.ts",
     "scripts/lib/payouts-register-sql.ts",
+    "scripts/lib/payouts-register-replace.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

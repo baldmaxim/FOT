@@ -3,10 +3,15 @@
  * «Перечислено (1С)» (миграция 328). Только разбор и проверка — без БД: сопоставление с сотрудниками и SQL —
  * scripts/build-payouts-register-sql.ts.
  *
- * Строка регистра — выплата человеку по одной ведомости («Регистратор»). Ведомость = регистратор: номер, дата,
- * способ выплаты; месяц — ПериодВзаиморасчетов. ГУИДа ведомости в регистре нет — синтетический UUID v5 от номера и
- * даты (повторный разбор даёт те же). Тип регистратора («в банк» / «на счета») в идентичность не входит: в XML его
- * нет, а загрузка XML той же ведомости отсекается по номеру и дате (payroll-1c-payouts.service).
+ * Строка регистра — выплата человеку по одному документу («Регистратор»): ведомости «в банк» / «на счета» или
+ * «Премия» с выплатой в межрасчетный период. Документ = регистратор: номер, дата, способ выплаты; месяц —
+ * ПериодВзаиморасчетов («Период» — месяц регистрации, бывает позже: премия за сентябрь, проведённая в октябре).
+ * ГУИДа документа в регистре нет — синтетический UUID v5 от номера и даты (повторный разбор даёт те же). Тип
+ * регистратора в идентичность не входит: в XML его нет, а загрузка XML той же ведомости отсекается по номеру и дате
+ * (payroll-1c-payouts.service).
+ *
+ * ЗУП выгружает регистр в двух наборах столбцов: с «НомерСтроки», «Сторно», «Группа…» и без них (с «Статьями»).
+ * Столбцы ищем по имени; без «НомерСтроки» строка ведомости нумеруется по порядку в файле.
  *
  * Отрицательная строка — зачёт внутри ведомости (−аванс + аванс): строки человека в такой ведомости сворачиваются
  * в одну, итог обязан быть > 0. Повтор человека без минуса — две строки, как в XML; line_key — общий
@@ -16,12 +21,22 @@ import { v5 as uuidv5 } from 'uuid';
 
 import { buildPayoutLineKeys, normalizePayoutName, payoutContentHash } from './payroll-1c-payouts.parser.js';
 
-/** Столбцы регистра по порядку — как выгружает ЗУП. */
+/** Столбцы регистра по порядку — первый формат выгрузки ЗУП (с «НомерСтроки», «Сторно», «Группа…»). */
 export const PAYOUTS_REGISTER_HEADER = [
   'Период', 'Регистратор', 'НомерСтроки', 'Организация', 'ФизическоеЛицо', 'РегистраторСпособВыплаты', 'Сотрудник',
   'Подразделение', 'ВидДоходаИсполнительногоПроизводства', 'СуммаВзаиморасчетов', 'ПериодВзаиморасчетов',
   'ВидВзаиморасчетов', 'Сторно', 'ГруппаНачисленияУдержанияВыплаты',
 ] as const;
+
+const REQUIRED_COLUMNS = [
+  'Период', 'Регистратор', 'Организация', 'ФизическоеЛицо', 'РегистраторСпособВыплаты', 'Сотрудник', 'Подразделение',
+  'СуммаВзаиморасчетов', 'ПериодВзаиморасчетов', 'ВидВзаиморасчетов',
+] as const;
+const OPTIONAL_COLUMNS = [
+  'НомерСтроки', 'Сторно', 'ГруппаНачисленияУдержанияВыплаты', 'ВидДоходаИсполнительногоПроизводства',
+  'СтатьяФинансирования', 'СтатьяРасходов',
+] as const;
+type RegisterColumn = (typeof REQUIRED_COLUMNS)[number] | (typeof OPTIONAL_COLUMNS)[number];
 
 export const PAYOUTS_REGISTER_ORGANIZATION = 'ООО "СУ-10"';
 
@@ -35,7 +50,7 @@ const fail: (message: string) => never = message => {
   throw new PayoutsRegisterError(message);
 };
 
-const REGISTRAR_RE = /^(Ведомость в банк|Ведомость на счета) (\d{4}-\d{6}) от (\d{2})\.(\d{2})\.(\d{4})$/;
+const REGISTRAR_RE = /^(Ведомость в банк|Ведомость на счета|Премия) (\d{4}-\d{6}) от (\d{2})\.(\d{2})\.(\d{4})$/;
 const MONTH_START_RE = /^01\.(\d{2})\.(\d{4}) 0:00:00$/;
 
 export interface IRegisterLine {
@@ -51,7 +66,7 @@ export interface IRegisterLine {
 
 export interface IRegisterDocument {
   guid: string;
-  /** Регистратор как в файле: «Ведомость в банк 0000-002644 от 09.10.2026». */
+  /** Регистратор как в файле: «Ведомость в банк 0000-002644 от 09.10.2026», «Премия 0000-000788 от 05.10.2026». */
   registrar: string;
   docNumber: string;
   /** YYYY-MM-DD. */
@@ -103,39 +118,59 @@ const isoDate = (day: string, month: string, year: string, where: string): strin
   return iso;
 };
 
+/** Заголовок → номер столбца по имени. Неизвестный, повторный или пропущенный обязательный столбец — ошибка. */
+const parseHeader = (header: readonly unknown[] | undefined): Map<RegisterColumn, number> => {
+  const got = (header ?? []).map(cell => String(cell ?? '').trim());
+  const known = new Set<string>([...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS]);
+  const lastNamed = got.reduce((last, name, index) => (name === '' ? last : index), -1);
+  const columns = new Map<RegisterColumn, number>();
+  got.slice(0, lastNamed + 1).forEach((name, index) => {
+    if (!known.has(name) || columns.has(name as RegisterColumn)) fail(`Заголовок не тот: ${got.join(' | ')}`);
+    columns.set(name as RegisterColumn, index);
+  });
+  if (REQUIRED_COLUMNS.some(name => !columns.has(name))) fail(`Заголовок не тот: ${got.join(' | ')}`);
+  return columns;
+};
+
 /** Строки листа (первая — заголовок, `sheet_to_json(header: 1, raw: true)`) → проверенные строки регистра. */
 const parseRows = (sheet: readonly unknown[][], month: string): IRegisterRow[] => {
   const [header, ...body] = sheet;
-  const got = (header ?? []).map(cell => String(cell ?? '').trim());
-  if (got.length < PAYOUTS_REGISTER_HEADER.length
-    || PAYOUTS_REGISTER_HEADER.some((name, index) => got[index] !== name)
-    || got.slice(PAYOUTS_REGISTER_HEADER.length).some(name => name !== '')) {
-    fail(`Заголовок не тот: ${got.join(' | ')}`);
-  }
+  const columns = parseHeader(header);
   const [year, mm] = month.split('-');
+  const rowNos = new Map<string, number>();
   const rows: IRegisterRow[] = [];
   body.forEach((cells, index) => {
     if (cells.every(cell => cell === null || cell === undefined || String(cell).trim() === '')) return;
     const where = `Строка ${index + 2}`;
-    const cell = (name: (typeof PAYOUTS_REGISTER_HEADER)[number]): unknown => cells[PAYOUTS_REGISTER_HEADER.indexOf(name)];
-    for (const name of ['Период', 'ПериодВзаиморасчетов'] as const) {
-      const match = MONTH_START_RE.exec(String(cell(name) ?? '').trim());
-      if (!match || match[1] !== mm || match[2] !== year) fail(`${where}: «${name}» не ${month}`);
-    }
+    const has = (name: RegisterColumn): boolean => columns.has(name);
+    const cell = (name: RegisterColumn): unknown => cells[columns.get(name) ?? -1];
+    const settlement = MONTH_START_RE.exec(String(cell('ПериодВзаиморасчетов') ?? '').trim());
+    if (!settlement || settlement[1] !== mm || settlement[2] !== year) fail(`${where}: «ПериодВзаиморасчетов» не ${month}`);
+    // Месяц регистрации — этот или позже: премию за месяц проводят и в следующем.
+    const registered = MONTH_START_RE.exec(String(cell('Период') ?? '').trim());
+    if (!registered || `${registered[2]}-${registered[1]}` < month) fail(`${where}: «Период» раньше ${month}`);
     if (requiredText(cell('Организация'), where) !== PAYOUTS_REGISTER_ORGANIZATION) fail(`${where}: другая организация`);
-    if (requiredText(cell('Сторно'), where) !== 'Нет') fail(`${where}: сторно`);
-    if (requiredText(cell('ГруппаНачисленияУдержанияВыплаты'), where) !== 'Выплачено') fail(`${where}: группа не «Выплачено»`);
+    if (has('Сторно') && requiredText(cell('Сторно'), where) !== 'Нет') fail(`${where}: сторно`);
+    if (has('ГруппаНачисленияУдержанияВыплаты')
+      && requiredText(cell('ГруппаНачисленияУдержанияВыплаты'), where) !== 'Выплачено') {
+      fail(`${where}: группа не «Выплачено»`);
+    }
+    const kind = requiredText(cell('ВидВзаиморасчетов'), `${where}, ВидВзаиморасчетов`);
+    if (!kind.startsWith('Выплата ')) fail(`${where}: вид взаиморасчётов «${kind}» — не выплата`);
     const fullName = requiredText(cell('ФизическоеЛицо'), `${where}, ФизическоеЛицо`);
     const employee = requiredText(cell('Сотрудник'), `${where}, Сотрудник`);
     if (normalizePayoutName(fullName) !== normalizePayoutName(employee)) {
       fail(`${where}: ФизическоеЛицо «${fullName}» ≠ Сотрудник «${employee}»`);
     }
-    const rowNo = cell('НомерСтроки');
+    const registrar = requiredText(cell('Регистратор'), `${where}, Регистратор`);
+    // Без «НомерСтроки» — номер по порядку строк документа в файле.
+    const rowNo = has('НомерСтроки') ? cell('НомерСтроки') : (rowNos.get(registrar) ?? 0) + 1;
     if (typeof rowNo !== 'number' || !Number.isInteger(rowNo) || rowNo <= 0) {
       return fail(`${where}: НомерСтроки «${String(rowNo)}»`);
     }
+    rowNos.set(registrar, rowNo);
     rows.push({
-      registrar: requiredText(cell('Регистратор'), `${where}, Регистратор`),
+      registrar,
       rowNo,
       fullName,
       paymentMethod: requiredText(cell('РегистраторСпособВыплаты'), `${where}, способ выплаты`),
@@ -175,7 +210,7 @@ const documentLines = (registrar: string, rows: readonly IRegisterRow[]): Omit<I
   return lines.map((line, index) => ({ ...line, lineNo: index + 1 }));
 };
 
-/** Регистр за месяц (YYYY-MM) → ведомости по дате и номеру. Любое расхождение с ожидаемым форматом — ошибка. */
+/** Регистр за месяц (YYYY-MM) → документы по дате и номеру. Любое расхождение с ожидаемым форматом — ошибка. */
 export const buildRegisterDocuments = (sheet: readonly unknown[][], month: string): IRegisterDocument[] => {
   if (!/^\d{4}-\d{2}$/.test(month)) fail(`Месяц «${month}» — нужен YYYY-MM`);
   const rows = parseRows(sheet, month);

@@ -10,18 +10,22 @@
  * запрещён, неиспользованное или конфликтующее правило — ошибка.
  *
  * Работает на read-only проде (роль mcp_readonly из --env-file) и в базу ничего не пишет. Файлы — в --out-dir,
- * права 600, не в git (ФИО и суммы).
+ * права 600, не в git (ФИО и суммы). Исходники генератора с незакоммиченными правками — отказ: manifest и SQL
+ * подписаны HEAD, из которого собраны.
+ *
+ * --replace — месяц уже загружен (этим генератором, без правок после): SQL замены документов месяца на набор файла
+ * и обратный SQL отката (scripts/lib/payouts-register-replace.ts). Документы с тем же ГУИДом и хешем не трогаются.
  *
  * Запуск:
  *   cd fot-server && npx tsx scripts/build-payouts-register-sql.ts --file <регистр.xlsx> --month 2026-09 \
- *     [--overrides <решения.json>] [--out-dir ~] [--env-file ~/.config/mcp/env]
- * Затем на проде: psql -X -v ON_ERROR_STOP=1 -f payroll-1c-payouts-<месяц>.sql
+ *     [--overrides <решения.json>] [--out-dir ~] [--env-file ~/.config/mcp/env] [--replace]
+ * Затем на проде: psql -X -v ON_ERROR_STOP=1 -f payroll-1c-payouts-<месяц>[-replace].sql
  *
  * Формат --overrides: { "rules": [{ "key": "<Регистратор>|<НомерСтроки>" или "<ФИО>|<Подразделение>",
  *   "employee_id": 123 | null, "name_mismatch"?: true, "note"?: "…" }] }
  */
 import { createHash } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -35,22 +39,58 @@ import {
   type IRegisterDocument,
   type IRegisterLine,
 } from '../src/services/payroll/payroll-1c-payouts.register.js';
-import { buildRegisterLoadSql, buildRegisterRollbackSql, type IRegisterSqlLine } from './lib/payouts-register-sql.js';
+import { buildReplaceTarget, loadMonthSnapshot, snapshotToInput, type IReplaceTarget } from './lib/payouts-register-replace.js';
+import {
+  buildRegisterLoadSql,
+  buildRegisterReplaceSql,
+  buildRegisterRollbackSql,
+  type IRegisterSqlDocument,
+  type IRegisterSqlInput,
+  type IRegisterSqlLine,
+} from './lib/payouts-register-sql.js';
 
 const TAG = '[build-payouts-register-sql]';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ROW_KEY_RE = /^(Ведомость (?:в банк|на счета) \d{4}-\d{6} от \d{2}\.\d{2}\.\d{4})\|(\d+)$/;
+const ROW_KEY_RE = /^((?:Ведомость (?:в банк|на счета)|Премия) \d{4}-\d{6} от \d{2}\.\d{2}\.\d{4})\|(\d+)$/;
 
-interface IArgs { file: string; month: string; overrides: string | null; outDir: string; envFile: string }
+/** Исходники, от которых зависит результат: с незакоммиченными правками генератор не работает. */
+const SOURCE_PATHS = [
+  'fot-server/scripts/build-payouts-register-sql.ts',
+  'fot-server/scripts/lib/payouts-register-sql.ts',
+  'fot-server/scripts/lib/payouts-register-replace.ts',
+  'fot-server/src/services/payroll/payroll-1c-payouts.register.ts',
+  'fot-server/src/services/payroll/payroll-1c-payouts.parser.ts',
+  'fot-server/src/services/payroll/payroll-1c-payouts.matching.ts',
+  'fot-server/src/services/payroll/payroll-1c-payouts.service.ts',
+  'fot-server/src/config/postgres.ts',
+  'fot-server/src/config/env.ts',
+];
+
+interface IArgs {
+  file: string;
+  month: string;
+  overrides: string | null;
+  outDir: string;
+  envFile: string;
+  replace: boolean;
+}
 
 const parseArgs = (argv: readonly string[]): IArgs => {
   const values = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 2) {
-    const [name, value] = [argv[i], argv[i + 1]];
-    if (!['--file', '--month', '--overrides', '--out-dir', '--env-file'].includes(name) || value === undefined) {
+  let replace = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const name = argv[i];
+    if (name === '--replace') {
+      replace = true;
+      continue;
+    }
+    const value = argv[i + 1];
+    if (!['--file', '--month', '--overrides', '--out-dir', '--env-file'].includes(name)
+      || value === undefined || value.startsWith('--')) {
       throw new Error(`Неизвестный или пустой аргумент «${name}»`);
     }
     values.set(name, value);
+    i += 1;
   }
   const file = values.get('--file');
   const month = values.get('--month');
@@ -61,7 +101,17 @@ const parseArgs = (argv: readonly string[]): IArgs => {
     overrides: values.get('--overrides') ?? null,
     outDir: values.get('--out-dir') ?? os.homedir(),
     envFile: values.get('--env-file') ?? path.join(os.homedir(), '.config', 'mcp', 'env'),
+    replace,
   };
+};
+
+const git = (...gitArgs: string[]): string => execFileSync('git', gitArgs, { cwd: REPO }).toString().trim();
+
+/** HEAD, из которого собирается результат; незакоммиченные правки исходников генератора — ошибка. */
+const sourceHead = (): string => {
+  const dirty = git('status', '--porcelain', '--', ...SOURCE_PATHS);
+  if (dirty) throw new Error(`Незакоммиченные правки в исходниках генератора — сначала коммит:\n${dirty}`);
+  return git('rev-parse', '--short', 'HEAD');
 };
 
 /** Read-only роль прода — до импорта config/postgres: env.ts читает переменные при импорте. Значения не печатаются. */
@@ -169,8 +219,9 @@ const writePrivate = (file: string, content: string | Buffer): void => {
 
 const main = async (): Promise<void> => {
   const args = parseArgs(process.argv.slice(2));
+  const gitHead = sourceHead();
   loadReadonlyEnv(args.envFile);
-  const { query, closeDb } = await import('../src/config/postgres.js');
+  const { query, closeDb, withReadOnlySnapshot } = await import('../src/config/postgres.js');
   const { loadPayoutEligibility, matchPayoutLines, SQL_NAME } = await import('../src/services/payroll/payroll-1c-payouts.matching.js');
   const { payoutNumberLockKey } = await import('../src/services/payroll/payroll-1c-payouts.service.js');
   try {
@@ -304,6 +355,20 @@ const main = async (): Promise<void> => {
       }
     }
 
+    const sqlDocs: IRegisterSqlDocument[] = documents.map(doc => ({
+      guid: doc.guid, docNumber: doc.docNumber, docDate: doc.docDate, periodMonth: doc.periodMonth,
+      paymentMethod: doc.paymentMethod, totalCents: doc.totalCents, contentHash: doc.contentHash,
+      lineCount: doc.lines.length, lockKey: payoutNumberLockKey(doc.docNumber, doc.docDate),
+    }));
+
+    // --replace: месяц на проде — одним снимком; оставляемые документы берутся из него, расхождения — стоп.
+    let replace: (IReplaceTarget & { from: IRegisterSqlInput }) | null = null;
+    if (args.replace) {
+      const snapshot = await withReadOnlySnapshot(client => loadMonthSnapshot(client, periodMonth));
+      const from = snapshotToInput(snapshot, periodMonth, payoutNumberLockKey);
+      replace = { from, ...buildReplaceTarget(from, sqlDocs, sqlLines) };
+    }
+
     // Не найдены: есть ли тёзки у подрядчика — подсказка для решения.
     const nonePairs = [...pairs.values()].filter(pair => pairDecisionOf(pair).kind === 'none');
     const nameRows = nonePairs.length === 0 ? [] : await query<{ id: number; name_key: string }>(
@@ -421,6 +486,13 @@ const main = async (): Promise<void> => {
       if (ids.size > 1) review.push([name, null, [...ids].join(', '), null, null, 'одно ФИО → разные сотрудники ФОТ']);
     }
 
+    const docsCents = (list: readonly IRegisterSqlDocument[]) => list.reduce((sum, doc) => sum + doc.totalCents, 0);
+    if (replace) {
+      summary.push([], ['Замена месяца', 'Документов', '', 'Сумма'],
+        ...([['Оставлено', replace.kept], ['Удалено', replace.removed], ['Добавлено', replace.added]] as const)
+          .map(([label, list]) => [label, list.length, '', docsCents(list) / 100]));
+    }
+
     const book = XLSX.utils.book_new();
     const addSheet = (title: string, rows: unknown[][], widths: number[]) => {
       const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -432,17 +504,27 @@ const main = async (): Promise<void> => {
     addSheet('Тёзки', namesakes, [40, 30, 14, 70, 60, 60]);
     addSheet('Проверить', review, [40, 30, 8, 40, 36, 70]);
     addSheet('Все', everyone, [40, 30, 8, 40, 36, 40, ...methodsOrder.map(() => 14), 16]);
+    if (replace) {
+      const changeRows = (action: string, list: readonly IRegisterSqlDocument[]) => list.map(doc => [
+        action, doc.docNumber, ruDate(doc.docDate), doc.paymentMethod, doc.lineCount, doc.totalCents / 100,
+      ]);
+      addSheet('Изменения', [
+        ['Документ', 'Номер', 'Дата', 'Вид', 'Строк', 'Сумма'],
+        ...changeRows('удалён', replace.removed), ...changeRows('добавлен', replace.added),
+        ...changeRows('оставлен', replace.kept),
+      ], [12, 14, 12, 40, 8, 16]);
+    }
 
-    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}`);
+    const suffix = replace ? '-replace' : '';
+    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}${suffix}`);
     const files = {
       sql: `${base}.sql`,
       rollback: `${base}-rollback.sql`,
-      report: path.join(args.outDir, `Перечислено_1С_${args.month}_сверка.xlsx`),
+      report: path.join(args.outDir, `Перечислено_1С_${args.month}${replace ? '_замена' : ''}_сверка.xlsx`),
       manifest: `${base}.manifest.json`,
     };
     const sourceSha = sha256(args.file);
     const overridesSha = args.overrides ? sha256(args.overrides) : null;
-    const gitHead = execSync('git rev-parse --short HEAD', { cwd: REPO }).toString().trim();
     const collapsed = documents.flatMap(doc => doc.lines).filter(line => line.sourceRows.length > 1).length;
     const methodLine = methodsOrder.map(method => `${method} ${rub(all.get(method) ?? 0)}`).join(' · ');
     const header = [
@@ -459,23 +541,33 @@ const main = async (): Promise<void> => {
       'zup2/external. Происхождение — resolution_reason каждой строки и manifest.',
       'ГУИД ведомости — UUID v5 от «номер|дата» (payroll-1c-payouts.register.ts); XML той же ведомости кнопкой',
       '«Загрузить из 1С» не загрузится (409 по номеру и дате).',
-      'Состояния: ведомостей нет → вставка; ровно этот набор (revision 1, строки, журнал пуст) → без изменений;',
-      'иначе → откат, ничего не записано.',
-      `Запуск: psql -X -v ON_ERROR_STOP=1 -f ${path.basename(files.sql)} → NOTICE «Вставлено ведомостей: ${documents.length}…».`,
+      ...(replace ? [
+        `ЗАМЕНА месяца: оставлено документов ${replace.kept.length} (${rub(docsCents(replace.kept))}) — не трогаются;`,
+        `удалено ${replace.removed.length} (${rub(docsCents(replace.removed))}); добавлено ${replace.added.length}`
+          + ` (${rub(docsCents(replace.added))}).`,
+        'Состояния: документы месяца ровно новый набор → без изменений; ровно прежний (снимок прода: revision 1,',
+        'журнал пуст, других документов за месяц нет) → замена; иначе → откат, ничего не записано. На время',
+        'транзакции таблицы «Перечислено (1С)» закрыты для записи (SHARE ROW EXCLUSIVE).',
+        `Запуск: psql -X -v ON_ERROR_STOP=1 -f ${path.basename(files.sql)} → NOTICE «Оставлено документов…».`,
+      ] : [
+        'Состояния: ведомостей нет → вставка; ровно этот набор (revision 1, строки, журнал пуст) → без изменений;',
+        'иначе → откат, ничего не записано.',
+        `Запуск: psql -X -v ON_ERROR_STOP=1 -f ${path.basename(files.sql)} → NOTICE «Вставлено ведомостей: ${documents.length}…».`,
+      ]),
       `Откат (только по решению): ${path.basename(files.rollback)}.`,
       `Собрано ${new Date().toISOString()} из ${gitHead} (scripts/build-payouts-register-sql.ts).`,
     ];
-    const input = {
-      header,
-      documents: documents.map(doc => ({
-        guid: doc.guid, docNumber: doc.docNumber, docDate: doc.docDate, periodMonth: doc.periodMonth,
-        paymentMethod: doc.paymentMethod, totalCents: doc.totalCents, contentHash: doc.contentHash,
-        lineCount: doc.lines.length, lockKey: payoutNumberLockKey(doc.docNumber, doc.docDate),
-      })),
-      lines: sqlLines,
-    };
-    writePrivate(files.sql, buildRegisterLoadSql(input));
-    writePrivate(files.rollback, buildRegisterRollbackSql({ ...input, header: [...header.slice(0, 2), 'ОТКАТ: удаляет все ведомости набора, только если их не меняли после загрузки.'] }));
+    const input: IRegisterSqlInput = { header, documents: sqlDocs, lines: replace ? replace.to.lines : sqlLines };
+    if (replace) {
+      const rollbackHeader = [...header.slice(0, 2),
+        'ОТКАТ ЗАМЕНЫ: возвращает документы месяца к снимку прода до замены (те же ГУИД, номера, суммы, строки,',
+        'сотрудники, причины; id и created_at — новые), только если после замены их не меняли.'];
+      writePrivate(files.sql, buildRegisterReplaceSql(header, replace.from, input, periodMonth));
+      writePrivate(files.rollback, buildRegisterReplaceSql(rollbackHeader, input, replace.from, periodMonth));
+    } else {
+      writePrivate(files.sql, buildRegisterLoadSql(input));
+      writePrivate(files.rollback, buildRegisterRollbackSql({ ...input, header: [...header.slice(0, 2), 'ОТКАТ: удаляет все ведомости набора, только если их не меняли после загрузки.'] }));
+    }
     writePrivate(files.report, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer);
     writePrivate(files.manifest, `${JSON.stringify({
       generated_at: new Date().toISOString(),
@@ -488,6 +580,11 @@ const main = async (): Promise<void> => {
         matched_lines: matchedLines.length, unmatched_lines: unmatchedLines.length, employees: finalIds.length,
         not_found: notFound.length - 1, namesakes: namesakes.length - 1, review: review.length - 1,
       },
+      replace: replace ? {
+        kept: replace.kept.length, kept_total: (docsCents(replace.kept) / 100).toFixed(2),
+        removed: replace.removed.length, removed_total: (docsCents(replace.removed) / 100).toFixed(2),
+        added: replace.added.length, added_total: (docsCents(replace.added) / 100).toFixed(2),
+      } : null,
       outputs: {
         sql: { file: path.basename(files.sql), sha256: sha256(files.sql) },
         rollback: { file: path.basename(files.rollback), sha256: sha256(files.rollback) },
@@ -499,6 +596,10 @@ const main = async (): Promise<void> => {
     console.log(`${TAG} с сотрудником: строк ${matchedLines.length} (${rub(cents(matchedLines))}), сотрудников ${finalIds.length}`);
     console.log(`${TAG} без сотрудника: строк ${unmatchedLines.length} (${rub(cents(unmatchedLines))});`
       + ` не найдены ${notFound.length - 1}, тёзки ${namesakes.length - 1}, проверить ${review.length - 1}`);
+    if (replace) {
+      console.log(`${TAG} замена: оставлено ${replace.kept.length}, удалено ${replace.removed.length}`
+        + ` (${rub(docsCents(replace.removed))}), добавлено ${replace.added.length} (${rub(docsCents(replace.added))})`);
+    }
     for (const file of Object.values(files)) console.log(`${TAG} ${file}`);
   } finally {
     await closeDb();
