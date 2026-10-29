@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  describeSalaryState, findSalaryRow, formatDayHours, formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly,
+  describeSalaryState, displayedHours, findSalaryRow, formatDayHours, formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly,
   isSalaryRowMuted, missingObjectsNote, objectShareTitle, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote,
   salaryOvertimeNote, sortSalaryRows, totalDaysOfEmployee,
 } from './timesheetSalary';
@@ -205,13 +205,32 @@ describe('«Зарплата по объектам» (336)', () => {
     expect(missingObjectsNote(brigade, 1)).toBeNull();
     expect(salaryAmountTitle(brigade, brigade.rows[0])).toContain('выработка не внесена: ЖК Stories');
     expect(totalDaysOfEmployee(brigade, 2)).toEqual({ '2026-09-01': 10, '2026-09-16': 12 });
-    expect(formatDayHours(7.5)).toBe('7,5');
+  });
+
+  it('часы — целыми, как в сетке табеля; «Часы» — сумма видимых цифр; день по объектам округляется после сложения', () => {
+    // Рахмонзода 17.10: 8,5 → 9; Ковальчук 22.10: 0,42 → 0.
+    expect(formatDayHours(8.5)).toBe('9');
+    expect(formatDayHours(0.42)).toBe('0');
+    expect(formatDayHours(9.05)).toBe('9');
     expect(formatDayHours(undefined)).toBe('');
+    expect(displayedHours({ '2026-10-17': 8.5, '2026-10-20': 8.15, '2026-10-22': 0.42 })).toBe(9 + 8 + 0);
+    const split: ITimesheetSalaryResponse = {
+      ...brigade,
+      objects: [
+        { ...wave, members: [{ ...wave.members[0], employee_id: 5, days: { '2026-09-02': 4.4 } }] },
+        { ...stories, members: [{ ...stories.members[0], employee_id: 5, days: { '2026-09-02': 4.4 } }] },
+      ],
+    };
+    // 4,4 + 4,4 = 8,8 → в «Итого» 9, а не 4 + 4.
+    expect(displayedHours(totalDaysOfEmployee(split, 5))).toBe(9);
   });
 
   it('рабочие — по ФИО; состояние бригады и ошибка настройки объекта без даты', () => {
     expect(sortSalaryRows(brigade.rows).map(row => row.employee_id)).toEqual([1, 2]);
-    expect(describeSalaryState(brigade)).toEqual({ text: 'По закрытому табелю 27.10', tone: 'ok' });
+    // Закрыт табель или нет — не пишем; остаются только предупреждения.
+    expect(describeSalaryState(brigade)).toBeNull();
+    expect(describeSalaryState({ ...brigade, state: 'preliminary', as_of: '2026-10-28' })).toBeNull();
+    expect(describeSalaryState({ ...brigade, state: 'stale' })).toEqual({ text: 'Требует перерасчёта — табель открыт', tone: 'warn' });
     const failed: ITimesheetSalaryResponse = {
       ...brigade,
       distribution: 'error',

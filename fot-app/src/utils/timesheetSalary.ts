@@ -125,7 +125,10 @@ export interface ISalaryStateNote {
   title?: string;
 }
 
-/** Пометка состояния сумм бригады: «Предварительно, по 26.10», «По закрытому табелю 03.11», ошибка и т. п. */
+/**
+ * Пометка состояния сумм бригады — только предупреждения: ошибка расчёта и «Требует перерасчёта». Закрыт табель или
+ * нет, не пишем (решение 29.10.2026, как у отделов).
+ */
 export const describeSalaryState = (data: ITimesheetSalaryResponse): ISalaryStateNote | null => {
   if (data.distribution === 'error' && data.errors.length > 0) {
     const first = data.errors[0];
@@ -140,12 +143,6 @@ export const describeSalaryState = (data: ITimesheetSalaryResponse): ISalaryStat
     };
   }
   if (data.state === 'stale') return { text: 'Требует перерасчёта — табель открыт', tone: 'warn' };
-  if (data.state === 'fixed') {
-    return { text: `По закрытому табелю${data.computed_at ? ` ${formatDayMonth(data.computed_at.slice(0, 10))}` : ''}`, tone: 'ok' };
-  }
-  if (data.state === 'preliminary') {
-    return { text: `Предварительно${data.as_of ? `, по ${formatDayMonth(data.as_of)}` : ''}`, tone: 'muted' };
-  }
   return null;
 };
 
@@ -184,7 +181,10 @@ export const missingObjectsNote = (data: ITimesheetSalaryResponse, employeeId: n
   return names.length > 0 ? `выработка не внесена: ${names.join(', ')}` : null;
 };
 
-/** Σ часов сотрудника по дням на всех объектах — для строки «Итого по бригаде». */
+/**
+ * Часы сотрудника по дням на всех объектах — для строки «Итого по бригаде»: часы дня складываются по объектам точно,
+ * округляет их показ (formatDayHours), как дневную клетку «По сотрудникам».
+ */
 export const totalDaysOfEmployee = (data: ITimesheetSalaryResponse, employeeId: number): Record<string, number> => {
   const total: Record<string, number> = {};
   for (const object of data.objects ?? []) {
@@ -197,9 +197,14 @@ export const totalDaysOfEmployee = (data: ITimesheetSalaryResponse, employeeId: 
   return total;
 };
 
-/** Часы клетки дня: целые — без запятой, дробные — «7,5». */
+/** Часы клетки дня — целыми, как в сетке табеля (8,5 → «9», 0,42 → «0»); дня нет — пусто. */
 export const formatDayHours = (hours: number | undefined): string => (
-  hours === undefined || hours <= 0 ? '' : decimalText(hours)
+  hours === undefined ? '' : String(Math.round(hours))
+);
+
+/** «Часы» строки и групп — сумма видимых (округлённых) цифр по дням, как в сетке табеля. */
+export const displayedHours = (days: Record<string, number>): number => (
+  Object.values(days).reduce((sum, hours) => sum + Math.round(hours), 0)
 );
 
 /** Выработку на объекте без часов бригады можно только стереть. */

@@ -6,6 +6,7 @@ import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
   describeSalaryState,
+  displayedHours,
   formatDayHours,
   formatSalaryAmount,
   isOutputClearOnly,
@@ -26,6 +27,8 @@ export interface ITimesheetSalaryObjectsProps {
   year: number;
   month: number;
   compact: boolean;
+  /** «Все сотрудники»: в «Итого по бригаде» весь состав; выключено — только те, у кого есть часы. */
+  showAllEmployees: boolean;
   canEdit: boolean;
   pendingKtuEmployeeId: number | null;
   savingObjectKey: string | null;
@@ -44,13 +47,13 @@ interface IDayCellsProps {
   hoursByDate: Record<string, number>;
 }
 
-/** Часы по дням — только для чтения: правка часов — во вкладке «По объектам». */
+/** Часы по дням целыми, как в сетке табеля, — только для чтения: правка часов — во вкладке «По объектам». */
 const DayCells: FC<IDayCellsProps> = ({ year, month, days, hoursByDate }) => (
   <>
     {days.map(day => {
       const hours = hoursByDate[isoDay(year, month, day)];
       const classes = ['ts-day', 'ts-salary-object-day'];
-      if (hours !== undefined && hours > 0) classes.push('ts-day--full');
+      if (hours !== undefined && Math.round(hours) > 0) classes.push('ts-day--full');
       else if (isWeekend(year, month, day)) classes.push('ts-day--weekend');
       if (isToday(year, month, day)) classes.push('ts-day--today');
       return <td key={day} className={classes.join(' ')}>{formatDayHours(hours)}</td>;
@@ -64,7 +67,7 @@ const DayCells: FC<IDayCellsProps> = ({ year, month, days, hoursByDate }) => (
  * объектам и «Сумма» к выплате.
  */
 export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props => {
-  const { data, loading, year, month, compact, canEdit, savingObjectKey, onObjectOutputSave } = props;
+  const { data, loading, year, month, compact, showAllEmployees, canEdit, savingObjectKey, onObjectOutputSave } = props;
   const salary: ITimesheetSalaryGridProps = useMemo(() => ({
     data,
     canEdit,
@@ -72,6 +75,12 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
     onKtuChange: props.onKtuChange,
   }), [data, canEdit, props.pendingKtuEmployeeId, props.onKtuChange]);
   const rows = useMemo(() => sortSalaryRows(data?.rows ?? []), [data]);
+  // «Итого по бригаде»: без «Все сотрудники» — только те, у кого есть часы на объектах.
+  const totalRows = useMemo(() => (showAllEmployees || !data
+    ? rows
+    : rows.filter(row => (data.objects ?? []).some(object => object.members.some(member => (
+      member.employee_id === row.employee_id && Object.keys(member.days).length > 0
+    ))))), [rows, data, showAllEmployees]);
   const rowById = useMemo(() => new Map(rows.map(row => [row.employee_id, row])), [rows]);
   const order = useMemo(() => new Map(rows.map((row, index) => [row.employee_id, index])), [rows]);
   const days = useMemo(() => Array.from({ length: getDaysInMonth(year, month) }, (_, index) => index + 1), [year, month]);
@@ -112,6 +121,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
         <TimesheetSalaryObjectsMobile
           data={data}
           rows={rows}
+          totalRows={totalRows}
           salary={salary}
           muted={muted}
           nameOf={nameOf}
@@ -123,7 +133,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
   }
 
   const colSpan = days.length + 5;
-  const totalHours = Math.round(objects.reduce((sum, object) => sum + object.total_hours, 0) * 100) / 100;
+  const totalHours = totalRows.reduce((sum, row) => sum + displayedHours(totalDaysOfEmployee(data, row.employee_id)), 0);
   return (
     <div className="ts-table-container">
       {header}
@@ -150,6 +160,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
               const members = [...object.members].sort((a, b) => (
                 (order.get(a.employee_id) ?? 0) - (order.get(b.employee_id) ?? 0)
               ));
+              const groupHours = members.reduce((sum, member) => sum + displayedHours(member.days), 0);
               return (
                 <Fragment key={object.object_key}>
                   <tr className="ts-object-group-row">
@@ -157,7 +168,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
                       <div className="ts-salary-divider">
                         <span className="ts-object-group-name">{object.object_name}</span>
                         <span className="ts-object-group-meta">
-                          {object.members.length} чел.{object.total_hours > 0 ? ` (${Math.round(object.total_hours)} ч.)` : ''}
+                          {object.members.length} чел.{groupHours > 0 ? ` (${groupHours} ч.)` : ''}
                         </span>
                         <label className="ts-salary-output">
                           <span className="ts-salary-output-label">Выработка, ₽</span>
@@ -169,6 +180,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
                   </tr>
                   {members.map(member => {
                     const row = rowById.get(member.employee_id);
+                    const hours = displayedHours(member.days);
                     return (
                       <tr key={`${object.object_key}_${member.employee_id}`}>
                         <td className="ts-col-sticky ts-object-employee-cell">
@@ -187,7 +199,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
                           {formatSalaryAmount(member.share)}
                         </td>
                         <td className="ts-col-salary" />
-                        <td className="ts-col-sum-sticky">{member.hours > 0 ? formatHoursLabel(member.hours) : '—'}</td>
+                        <td className="ts-col-sum-sticky">{hours > 0 ? formatHoursLabel(hours) : '—'}</td>
                       </tr>
                     );
                   })}
@@ -199,21 +211,21 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
                 <td colSpan={colSpan} className="ts-loading">Нет часов бригады на объектах за месяц</td>
               </tr>
             )}
-            {rows.length > 0 && (
+            {totalRows.length > 0 && (
               <>
                 <tr className="ts-object-group-row ts-salary-total-row">
                   <td className="ts-col-sticky ts-object-group-cell" colSpan={colSpan}>
                     <div className="ts-salary-divider">
                       <span className="ts-object-group-name">Итого по бригаде</span>
                       <span className="ts-object-group-meta">
-                        {rows.length} чел.{totalHours > 0 ? ` (${Math.round(totalHours)} ч.)` : ''}
+                        {totalRows.length} чел.{totalHours > 0 ? ` (${totalHours} ч.)` : ''}
                       </span>
                     </div>
                   </td>
                 </tr>
-                {rows.map(row => {
+                {totalRows.map(row => {
                   const totalDays = totalDaysOfEmployee(data, row.employee_id);
-                  const hours = Object.values(totalDays).reduce((sum, value) => sum + value, 0);
+                  const hours = displayedHours(totalDays);
                   return (
                     <tr key={`total_${row.employee_id}`}>
                       <td className="ts-col-sticky ts-object-employee-cell">

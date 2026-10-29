@@ -2511,8 +2511,7 @@ export const TimesheetPage: FC = () => {
   // Тумблер «Все сотрудники» — показывает членов ростера без активности за период.
   // Оборачиваем в ts-view-switch (flex-контейнер), чтобы на мобильном чип не растянулся
   // на всю ширину. Подпись постоянная, состояние — оформлением + aria-pressed.
-  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode
-    && viewMode !== 'salary_objects';
+  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode;
   const showAllControl = canShowAllEmployees ? (
     <section className="ts-view-switch">
       <button
@@ -2842,6 +2841,7 @@ export const TimesheetPage: FC = () => {
           year={year}
           month={month}
           compact={isMobile}
+          showAllEmployees={includeEmptyEmployees}
           canEdit={canEditTimesheetSalary}
           pendingKtuEmployeeId={timesheetSalary.pendingKtuEmployeeId}
           savingObjectKey={timesheetSalary.savingObjectKey}

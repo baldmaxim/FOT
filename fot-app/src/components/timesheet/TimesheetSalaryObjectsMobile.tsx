@@ -4,6 +4,7 @@ import type { ITimesheetSalaryObject, ITimesheetSalaryResponse, ITimesheetSalary
 import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
+  displayedHours,
   formatSalaryAmount,
   objectShareTitle,
   salaryAmountTitle,
@@ -16,6 +17,8 @@ interface ITimesheetSalaryObjectsMobileProps {
   data: ITimesheetSalaryResponse;
   /** Строки бригады по ФИО. */
   rows: ITimesheetSalaryRow[];
+  /** Строки «Итого по бригаде» — с учётом «Все сотрудники». */
+  totalRows: ITimesheetSalaryRow[];
   salary: ITimesheetSalaryGridProps;
   muted: boolean;
   nameOf: (employeeId: number) => string;
@@ -32,7 +35,7 @@ const amountClass = (muted: boolean, amount: string | null | undefined): string 
  * внизу «Итого по бригаде» с «Суммой». Часы по дням — во вкладке «По объектам».
  */
 export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps> = ({
-  data, rows, salary, muted, nameOf, order, outputField,
+  data, rows, totalRows, salary, muted, nameOf, order, outputField,
 }) => {
   const rowById = new Map(rows.map(row => [row.employee_id, row]));
   const objects = data.objects ?? [];
@@ -44,12 +47,13 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
         const members = [...object.members].sort((a, b) => (
           (order.get(a.employee_id) ?? 0) - (order.get(b.employee_id) ?? 0)
         ));
+        const groupHours = members.reduce((sum, member) => sum + displayedHours(member.days), 0);
         return (
           <section key={object.object_key} className="ts-salary-object-card" aria-label={object.object_name}>
             <header className="ts-salary-object-card-head">
               <span className="ts-object-group-name">{object.object_name}</span>
               <span className="ts-object-group-meta">
-                {object.members.length} чел.{object.total_hours > 0 ? ` (${Math.round(object.total_hours)} ч.)` : ''}
+                {object.members.length} чел.{groupHours > 0 ? ` (${groupHours} ч.)` : ''}
               </span>
             </header>
             <label className="ts-salary-output ts-salary-object-card-output">
@@ -60,6 +64,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
             <ul className="ts-salary-object-card-list">
               {members.map(member => {
                 const row = rowById.get(member.employee_id);
+                const hours = displayedHours(member.days);
                 return (
                   <li key={member.employee_id} className="ts-salary-object-card-row">
                     <span className="ts-salary-object-card-name">{formatTimesheetEmployeeName(nameOf(member.employee_id))}</span>
@@ -69,7 +74,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
                         <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(member.employee_id)} />
                       </label>
                     )}
-                    <span className="ts-salary-object-card-hours">{member.hours > 0 ? formatHoursLabel(member.hours) : '—'}</span>
+                    <span className="ts-salary-object-card-hours">{hours > 0 ? formatHoursLabel(hours) : '—'}</span>
                     <span className={amountClass(muted, member.share)} title={objectShareTitle(object, member)}>
                       {formatSalaryAmount(member.share)}
                     </span>
@@ -80,15 +85,15 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
           </section>
         );
       })}
-      {rows.length > 0 && (
+      {totalRows.length > 0 && (
         <section className="ts-salary-object-card ts-salary-object-card--total" aria-label="Итого по бригаде">
           <header className="ts-salary-object-card-head">
             <span className="ts-object-group-name">Итого по бригаде</span>
-            <span className="ts-object-group-meta">{rows.length} чел.</span>
+            <span className="ts-object-group-meta">{totalRows.length} чел.</span>
           </header>
           <ul className="ts-salary-object-card-list">
-            {rows.map(row => {
-              const hours = Object.values(totalDaysOfEmployee(data, row.employee_id)).reduce((sum, value) => sum + value, 0);
+            {totalRows.map(row => {
+              const hours = displayedHours(totalDaysOfEmployee(data, row.employee_id));
               return (
                 <li key={row.employee_id} className="ts-salary-object-card-row">
                   <span className="ts-salary-object-card-name">{formatTimesheetEmployeeName(nameOf(row.employee_id))}</span>
