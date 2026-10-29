@@ -4,7 +4,8 @@
  * «Сумма» — к выплате у всех (решение 27.10.2026), то же число, что «К выплате (ФОТ)» в карточке «Зарплаты»:
  * начислено минус удержания, без НДФЛ. «Оклад» и «Переработка» — строки того же расчёта, только у отдела.
  * - Отдел — расчёт ФОТ по закрытому табелю (payroll-calc.service): оклад по дням, проезд, проживание, доплаты.
- *   Табель месяца сотрудника не закрыт — суммы нет.
+ *   Табель месяца сотрудника не закрыт — с опцией preliminary (новый фронт, решение 28.10.2026) предварительно по
+ *   живому табелю, как «Расчёты»; без неё — суммы нет.
  * - Бригада — доля «Выработки» по КТУ (brigade-salary.service) + разовые доплаты и проживание − удержания;
  *   до закрытия — «Предварительно», как доля. Доля — в share (подсказка), Σ долей = выработке.
  */
@@ -17,7 +18,13 @@ import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.serv
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
 import { monthBounds } from './brigade-salary-source.service.js';
 import type { IBrigadeShareFact, IPayrollCalcLine, PayrollCalcMissing } from './payroll-calc.rules.js';
-import { getPayoutForEmployees, previewBrigadePayouts } from './payroll-calc.service.js';
+import {
+  getPayoutForEmployees,
+  getPreliminaryPayoutForEmployees,
+  previewBrigadePayouts,
+  type IPayrollCalcPreliminary,
+  type PayrollCalcWithPreliminary,
+} from './payroll-calc.service.js';
 import { resolvePayrollEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
 
 export interface ITimesheetSalaryDepartment {
@@ -38,14 +45,17 @@ export interface ITimesheetSalaryRow {
   share: string | null;
   /** Учтённые удержания месяца; null — суммы нет. */
   deducted: string | null;
-  /** Отдел, табель закрыт: «По трудовому договору» (оклад по дням); иначе null. */
+  /** Отдел, табель закрыт или расчёт предварительный: «По трудовому договору» (оклад по дням); иначе null. */
   contract: IPayrollCalcLine | null;
-  /** Отдел, табель закрыт: «Переработка»; null — переработки нет или суммы нет. */
+  /** Отдел, табель закрыт или расчёт предварительный: «Переработка»; null — переработки нет или суммы нет. */
   overtime: IPayrollCalcLine | null;
   /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
   missing: PayrollCalcMissing[];
-  /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null (состояние у всей бригады). */
-  payout_state: 'closed' | 'not_closed' | null;
+  /**
+   * Отдел: closed — табель месяца закрыт; preliminary — не закрыт, суммы по живому табелю на as_of ответа;
+   * not_closed — суммы нет. У бригады — null (состояние у всей бригады).
+   */
+  payout_state: 'closed' | 'preliminary' | 'not_closed' | null;
   source: 'version' | 'live' | null;
   can_edit: boolean;
 }
@@ -93,42 +103,53 @@ async function namesOf(employeeIds: number[]): Promise<Map<number, string>> {
   return new Map(found.map(row => [Number(row.id), String(row.full_name ?? '').trim()]));
 }
 
+export interface ITimesheetSalaryOptions {
+  /** Незакрытый месяц отдела — предварительно по живому табелю (getPreliminaryPayoutForEmployees). */
+  preliminary?: boolean;
+}
+
 export async function getTimesheetSalary(
   req: AuthenticatedRequest,
   department: ITimesheetSalaryDepartment,
   month: string,
+  options: ITimesheetSalaryOptions = {},
 ): Promise<ITimesheetSalaryResponse> {
   if (department.kind !== 'brigade') {
     const { start, end } = monthBounds(month);
     const memberIds = [...new Set(
       (await listEmployeeMembershipsForDepartmentPeriod(department.id, start, end)).map(row => Number(row.employee_id)),
     )].sort((a, b) => a - b);
-    const calcs = await getPayoutForEmployees(memberIds, month, req);
+    const calcs: Map<number, PayrollCalcWithPreliminary> = options.preliminary
+      ? await getPreliminaryPayoutForEmployees(memberIds, month, req)
+      : await getPayoutForEmployees(memberIds, month, req);
+    // as_of у всех предварительных один (зависит только от месяца).
+    const asOf = [...calcs.values()]
+      .find((calc): calc is IPayrollCalcPreliminary => calc.state === 'preliminary')?.as_of ?? null;
     return {
       department_id: department.id,
       month,
       kind: 'department',
       state: null,
       distribution: null,
-      as_of: null,
+      as_of: asOf,
       open_ranges: [],
       output_amount: null,
       errors: [],
       computed_at: null,
       rows: memberIds.map(employeeId => {
         const calc = calcs.get(employeeId);
-        const closed = calc?.state === 'closed' ? calc : null;
+        const counted = calc && calc.state !== 'not_closed' ? calc : null;
         return {
           employee_id: employeeId,
           ktu: null,
           counted_hours: null,
-          amount: closed?.net ?? null,
+          amount: counted?.net ?? null,
           share: null,
-          deducted: closed?.deducted ?? null,
-          contract: closed?.lines.find(line => line.code === 'contract') ?? null,
-          overtime: closed?.lines.find(line => line.code === 'overtime') ?? null,
-          missing: closed?.missing ?? [],
-          payout_state: closed ? 'closed' : 'not_closed',
+          deducted: counted?.deducted ?? null,
+          contract: counted?.lines.find(line => line.code === 'contract') ?? null,
+          overtime: counted?.lines.find(line => line.code === 'overtime') ?? null,
+          missing: counted?.missing ?? [],
+          payout_state: counted?.state ?? 'not_closed',
           source: null,
           can_edit: false,
         };

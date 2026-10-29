@@ -336,14 +336,17 @@ export interface ITimesheetSalaryRow {
   share?: string | null;
   /** Учтённые удержания месяца. */
   deducted?: string | null;
-  /** Отдел, табель закрыт: «По трудовому договору» (оклад по дням); нет у старого бэкенда. */
+  /** Отдел, табель закрыт или расчёт предварительный: «По трудовому договору» (оклад по дням); нет у старого бэкенда. */
   contract?: IPayrollCalcLine | null;
-  /** Отдел, табель закрыт: «Переработка»; null — переработки нет. */
+  /** Отдел, табель закрыт или расчёт предварительный: «Переработка»; null — переработки нет. */
   overtime?: IPayrollCalcLine | null;
   /** Чего в сумме нет: отпускные, выработка бригады и т. п. */
   missing?: PayrollCalcMissing[];
-  /** Отдел: закрыт ли табель месяца сотрудника; у бригады — null. */
-  payout_state?: 'closed' | 'not_closed' | null;
+  /**
+   * Отдел: closed — табель месяца закрыт; preliminary — не закрыт, суммы по живому табелю на as_of ответа;
+   * not_closed — суммы нет. У бригады — null.
+   */
+  payout_state?: 'closed' | 'preliminary' | 'not_closed' | null;
   source: 'version' | 'live' | null;
   can_edit: boolean;
 }

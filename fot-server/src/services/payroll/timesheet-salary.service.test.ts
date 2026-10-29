@@ -15,7 +15,11 @@ vi.mock('../../config/postgres.js', () => ({
 const memberships = vi.hoisted(() => ({ listEmployeeMembershipsForDepartmentPeriod: vi.fn() }));
 vi.mock('../timesheet-department-assignments.service.js', () => memberships);
 
-const calc = vi.hoisted(() => ({ getPayoutForEmployees: vi.fn(), previewBrigadePayouts: vi.fn() }));
+const calc = vi.hoisted(() => ({
+  getPayoutForEmployees: vi.fn(),
+  getPreliminaryPayoutForEmployees: vi.fn(),
+  previewBrigadePayouts: vi.fn(),
+}));
 vi.mock('./payroll-calc.service.js', () => calc);
 
 const brigade = vi.hoisted(() => ({ getBrigadeSalary: vi.fn() }));
@@ -41,6 +45,11 @@ const closed = (lines: unknown[], net: string) => ({
   state: 'closed', lines, deductions: [], accrued: net, deducted: '0.00', net, missing: [],
 });
 
+const preliminary = (lines: unknown[], net: string, asOf: string) => ({
+  state: 'preliminary', as_of: asOf, lines, deductions: [], accrued: net, deducted: '1200.00', net,
+  missing: ['vacation_pay'],
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   pg.query.mockResolvedValue([]);
@@ -60,6 +69,9 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
     const result = await getTimesheetSalary(req, DEPARTMENT, '2026-09');
 
     expect(calc.getPayoutForEmployees).toHaveBeenCalledWith([1428, 1500], '2026-09', req);
+    // Без опции (старый фронт) — только закрытый табель.
+    expect(calc.getPreliminaryPayoutForEmployees).not.toHaveBeenCalled();
+    expect(result.as_of).toBeNull();
     expect(result.rows[0]).toMatchObject({
       employee_id: 1428, amount: '255570.91', contract: CONTRACT, overtime: OVERTIME, payout_state: 'closed',
     });
@@ -76,6 +88,45 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
     expect(result.rows).toEqual([expect.objectContaining({
       employee_id: 1428, amount: null, contract: null, overtime: null, payout_state: 'not_closed',
     })]);
+  });
+
+  it('отдел, preliminary — незакрытый месяц по живому табелю, закрытый и не работавший — как раньше', async () => {
+    memberships.listEmployeeMembershipsForDepartmentPeriod.mockResolvedValue([
+      { employee_id: 1428 }, { employee_id: 1500 }, { employee_id: 1600 },
+    ]);
+    calc.getPreliminaryPayoutForEmployees.mockResolvedValue(new Map([
+      [1428, closed([CONTRACT, OVERTIME, TRAVEL], '255570.91')],
+      [1500, preliminary([CONTRACT, OVERTIME], '251640.91', '2026-09-30')],
+      [1600, { state: 'not_closed', reason: 'no_period' }],
+    ]));
+
+    const result = await getTimesheetSalary(req, DEPARTMENT, '2026-09', { preliminary: true });
+
+    expect(calc.getPreliminaryPayoutForEmployees).toHaveBeenCalledWith([1428, 1500, 1600], '2026-09', req);
+    expect(calc.getPayoutForEmployees).not.toHaveBeenCalled();
+    expect(result.as_of).toBe('2026-09-30');
+    expect(result.rows[0]).toMatchObject({
+      employee_id: 1428, amount: '255570.91', deducted: '0.00', contract: CONTRACT, overtime: OVERTIME,
+      missing: [], payout_state: 'closed',
+    });
+    expect(result.rows[1]).toMatchObject({
+      employee_id: 1500, amount: '251640.91', deducted: '1200.00', contract: CONTRACT, overtime: OVERTIME,
+      missing: ['vacation_pay'], payout_state: 'preliminary',
+    });
+    expect(result.rows[2]).toMatchObject({
+      employee_id: 1600, amount: null, deducted: null, contract: null, overtime: null, missing: [],
+      payout_state: 'not_closed',
+    });
+  });
+
+  it('отдел, preliminary, предварительных нет — as_of null', async () => {
+    memberships.listEmployeeMembershipsForDepartmentPeriod.mockResolvedValue([{ employee_id: 1428 }]);
+    calc.getPreliminaryPayoutForEmployees.mockResolvedValue(new Map([[1428, closed([CONTRACT], '250000.00')]]));
+
+    const result = await getTimesheetSalary(req, DEPARTMENT, '2026-08', { preliminary: true });
+
+    expect(result.as_of).toBeNull();
+    expect(result.rows[0]).toMatchObject({ amount: '250000.00', payout_state: 'closed' });
   });
 
   it('бригада — оклада и переработки нет, КТУ и «Сумма» прежние', async () => {
@@ -99,8 +150,11 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       missing: [],
     }]]));
 
-    const result = await getTimesheetSalary(req, BRIGADE, '2026-09');
+    // Опция только для отделов: у бригады своё «Предварительно».
+    const result = await getTimesheetSalary(req, BRIGADE, '2026-09', { preliminary: true });
 
+    expect(calc.getPreliminaryPayoutForEmployees).not.toHaveBeenCalled();
+    expect(calc.getPayoutForEmployees).not.toHaveBeenCalled();
     expect(result.rows).toEqual([expect.objectContaining({
       employee_id: 1951,
       ktu: '1.5',

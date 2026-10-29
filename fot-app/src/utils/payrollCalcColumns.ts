@@ -84,7 +84,7 @@ const ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
 };
 
 /** «табель не закрыт, предварительно» — месяц целиком; текущий — «… по 27.10» (as_of не последний день месяца). */
-const preliminaryText = (month: string, asOf: string): string => {
+export const preliminaryText = (month: string, asOf: string): string => {
   const [year, mon] = month.split('-').map(Number);
   const wholeMonth = Number(asOf.slice(8, 10)) === new Date(year, mon, 0).getDate();
   return wholeMonth

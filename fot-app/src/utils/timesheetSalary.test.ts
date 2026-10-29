@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
+  findSalaryRow, formatKtu, formatSalaryAmount, getSalaryLetterHours, isSalaryRowMuted, salaryAmountTitle, salaryLineTitle,
+  salaryOvertimeNote, salaryPreliminaryTitle,
 } from './timesheetSalary';
 
 const employee = (id: number, source?: TimesheetEmployee['source']): TimesheetEmployee => ({
@@ -54,9 +55,51 @@ describe('подсказка «Суммы» — к выплате', () => {
     expect(salaryAmountTitle(department, row)).toBe('К выплате (ФОТ) · без: отпускные');
     expect(salaryAmountTitle(department, { ...row, amount: null, payout_state: 'not_closed' })).toBe('Табель не закрыт');
   });
+
+  it('отдел, предварительно — «Табель не закрыт, предварительно», удержания и чего нет', () => {
+    const department: ITimesheetSalaryResponse = {
+      ...data, month: '2026-09', kind: 'department', state: null, distribution: null, as_of: '2026-09-30',
+    };
+    const row = {
+      employee_id: 71, ktu: null, counted_hours: null, amount: '251500.00', share: null, deducted: '1200.00',
+      missing: ['vacation_pay' as const], payout_state: 'preliminary' as const, source: null, can_edit: false,
+    };
+    expect(plain(salaryAmountTitle(department, row)))
+      .toBe('Табель не закрыт, предварительно · удержано 1 200,00 · без: отпускные');
+  });
+});
+
+describe('предварительный расчёт отдела', () => {
+  const department: ITimesheetSalaryResponse = {
+    ...data, month: '2026-10', kind: 'department', state: null, distribution: null, as_of: '2026-10-27',
+  };
+  const row = {
+    employee_id: 71, ktu: null, counted_hours: null, amount: '251500.00', share: null, deducted: '0.00',
+    missing: [], payout_state: 'preliminary' as const, source: null, can_edit: false,
+  };
+
+  it('подсказка с заглавной: прошлый месяц — без даты, текущий — «по 27.10», as_of нет — без даты', () => {
+    expect(salaryPreliminaryTitle({ ...department, month: '2026-09', as_of: '2026-09-30' }))
+      .toBe('Табель не закрыт, предварительно');
+    expect(salaryPreliminaryTitle(department)).toBe('Табель не закрыт, предварительно по 27.10');
+    expect(salaryPreliminaryTitle({ ...department, as_of: null })).toBe('Табель не закрыт, предварительно');
+  });
+
+  it('приглушение: отдел — только предварительные; бригада — только «Требует перерасчёта»', () => {
+    expect(isSalaryRowMuted(department, row)).toBe(true);
+    expect(isSalaryRowMuted(department, { ...row, payout_state: 'closed' })).toBe(false);
+    expect(isSalaryRowMuted(department, { ...row, payout_state: 'not_closed' })).toBe(false);
+    expect(isSalaryRowMuted(data, data.rows[0])).toBe(false);
+    expect(isSalaryRowMuted({ ...data, state: 'stale' }, data.rows[0])).toBe(true);
+    expect(isSalaryRowMuted(undefined, row)).toBe(false);
+    expect(isSalaryRowMuted(department, null)).toBe(false);
+  });
 });
 
 describe('«Оклад» и «Переработка» отдела', () => {
+  const department: ITimesheetSalaryResponse = {
+    ...data, month: '2026-10', kind: 'department', state: null, distribution: null, as_of: null,
+  };
   const row = {
     employee_id: 1428, ktu: null, counted_hours: null, amount: '255570.91', share: null, deducted: '0.00',
     missing: [], payout_state: 'closed' as const, source: null, can_edit: false,
@@ -65,14 +108,21 @@ describe('«Оклад» и «Переработка» отдела', () => {
   const overtime = { code: 'overtime' as const, amount: '2840.91', days: { worked: 0, norm: 22 }, hours: 2 };
 
   it('строка есть — из скольких дней или часов', () => {
-    expect(salaryLineTitle(row, contract)).toBe('22 из 22 дн.');
-    expect(salaryLineTitle(row, overtime)).toBe('2 ч');
+    expect(salaryLineTitle(department, row, contract)).toBe('22 из 22 дн.');
+    expect(salaryLineTitle(department, row, overtime)).toBe('2 ч');
+  });
+
+  it('предварительно — «Табель не закрыт, предварительно» и дни строки', () => {
+    const prelim = { ...department, as_of: '2026-10-27' };
+    const prelimRow = { ...row, payout_state: 'preliminary' as const };
+    expect(salaryLineTitle(prelim, prelimRow, contract)).toBe('Табель не закрыт, предварительно по 27.10 · 22 из 22 дн.');
+    expect(salaryLineTitle(prelim, prelimRow, null)).toBe('Табель не закрыт, предварительно по 27.10');
   });
 
   it('табель не закрыт — «Табель не закрыт»; закрыт без строки — без подсказки', () => {
-    expect(salaryLineTitle({ ...row, payout_state: 'not_closed' }, null)).toBe('Табель не закрыт');
-    expect(salaryLineTitle(row, null)).toBeUndefined();
-    expect(salaryLineTitle(row, undefined)).toBeUndefined();
+    expect(salaryLineTitle(department, { ...row, payout_state: 'not_closed' }, null)).toBe('Табель не закрыт');
+    expect(salaryLineTitle(department, row, null)).toBeUndefined();
+    expect(salaryLineTitle(department, row, undefined)).toBeUndefined();
   });
 
   it('подпись под «Переработкой» — часы будней и выходы; у «Оклада» и без строки — нет', () => {

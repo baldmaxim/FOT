@@ -4,7 +4,7 @@ import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
+  findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
 } from '../../utils/timesheetSalary';
 
 /** Вкладка «Зарплата» в табеле: данные и правка КТУ / «Выработки». */
@@ -69,10 +69,10 @@ export const TimesheetSalaryKtuCell: FC<ICellProps> = ({ salary, employee }) => 
 
 export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) => {
   const row = findSalaryRow(salary.data, employee);
-  const stale = salary.data?.state === 'stale';
+  const muted = isSalaryRowMuted(salary.data, row);
   return (
     <td
-      className={`ts-col-salary${stale && row?.amount ? ' ts-salary-amount--stale' : ''}`}
+      className={`ts-col-salary${muted && row?.amount ? ' ts-salary-amount--stale' : ''}`}
       title={row ? amountTitle(salary, row) : undefined}
     >
       {formatSalaryAmount(row?.amount ?? null)}
@@ -82,14 +82,22 @@ export const TimesheetSalaryAmountCell: FC<ICellProps> = ({ salary, employee }) 
 
 type SalaryLineCode = 'contract' | 'overtime';
 
+/** Сумма «Оклада» / «Переработки»; предварительная — приглушённо (подпись часов под ней — нет). */
+const SalaryLineAmount: FC<{ amount: string | null; muted: boolean }> = ({ amount, muted }) => (
+  muted && amount !== null
+    ? <span className="ts-salary-amount--stale">{formatSalaryAmount(amount)}</span>
+    : <>{formatSalaryAmount(amount)}</>
+);
+
 /** «Оклад» / «Переработка» отдела — строки расчёта «Суммы»; у «Переработки» под суммой — часы и выходы. */
 export const TimesheetSalaryLineCell: FC<ICellProps & { code: SalaryLineCode }> = ({ salary, employee, code }) => {
-  const row = findSalaryRow(salary.data, employee);
+  const { data } = salary;
+  const row = findSalaryRow(data, employee);
   const line = row?.[code];
   const note = salaryOvertimeNote(line);
   return (
-    <td className="ts-col-salary" title={row ? salaryLineTitle(row, line) : undefined}>
-      {formatSalaryAmount(line?.amount ?? null)}
+    <td className="ts-col-salary" title={data && row ? salaryLineTitle(data, row, line) : undefined}>
+      <SalaryLineAmount amount={line?.amount ?? null} muted={isSalaryRowMuted(data, row)} />
       {note && <span className="ts-salary-line-note">{note}</span>}
     </td>
   );
@@ -105,9 +113,11 @@ export const TimesheetLetterFraction: FC<{ label: string; hours: number }> = ({ 
 
 /** Мобильная карточка: КТУ (бригада) или «Оклад» и «Переработка» (отдел) и «Сумма» строкой под ФИО. */
 export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) => {
-  const row = findSalaryRow(salary.data, employee);
-  if (!row) return null;
-  const isBrigade = salary.data?.kind === 'brigade';
+  const { data } = salary;
+  const row = findSalaryRow(data, employee);
+  if (!data || !row) return null;
+  const isBrigade = data.kind === 'brigade';
+  const muted = isSalaryRowMuted(data, row);
   return (
     <div className="ts-salary-mobile-row">
       {isBrigade && (
@@ -119,17 +129,17 @@ export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) =
       {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => {
         const note = salaryOvertimeNote(row[code]);
         return (
-          <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
+          <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(data, row, row[code])}>
             {label}
             <span className="ts-salary-mobile-line">
-              {formatSalaryAmount(row[code]?.amount ?? null)}
+              <SalaryLineAmount amount={row[code]?.amount ?? null} muted={muted} />
               {note && <span className="ts-salary-line-note"> · {note}</span>}
             </span>
           </span>
         );
       })}
       <span
-        className={`ts-salary-mobile-amount${salary.data?.state === 'stale' && row.amount ? ' ts-salary-amount--stale' : ''}`}
+        className={`ts-salary-mobile-amount${muted && row.amount ? ' ts-salary-amount--stale' : ''}`}
         title={amountTitle(salary, row)}
       >
         {formatSalaryAmount(row.amount)}

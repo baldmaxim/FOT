@@ -6,7 +6,8 @@ interface IApiResponse<T> { success: boolean; data: T }
 /** «Табель → Зарплата»: КТУ, «Выработка» бригады и столбец «Сумма» (раздел «Зарплата», 5 учёток). */
 export const timesheetSalaryService = {
   get: async (departmentId: string, month: string, signal?: AbortSignal): Promise<ITimesheetSalaryResponse> => {
-    const params = new URLSearchParams({ department_id: departmentId, month });
+    // preliminary=1 — незакрытый месяц отдела предварительно по живому табелю (без него — только закрытый).
+    const params = new URLSearchParams({ department_id: departmentId, month, preliminary: '1' });
     const res = await apiClient.get<IApiResponse<ITimesheetSalaryResponse>>(
       `/payroll/timesheet-salary?${params.toString()}`,
       { signal },

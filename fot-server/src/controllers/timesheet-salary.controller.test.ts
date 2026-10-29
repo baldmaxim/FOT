@@ -92,6 +92,18 @@ describe('timesheetSalaryController.get', () => {
     expect(svc.getTimesheetSalary).not.toHaveBeenCalled();
   });
 
+  it('preliminary=1 — предварительный режим; без параметра (старый фронт) — прежний контракт', async () => {
+    svc.loadSalaryDepartment.mockResolvedValue(DEPARTMENT);
+    svc.getTimesheetSalary.mockResolvedValue({ rows: [] });
+    const query = { department_id: DEPARTMENT.id, month: '2026-09' };
+
+    await timesheetSalaryController.get(makeReq({ query: { ...query, preliminary: '1' } }), makeRes());
+    await timesheetSalaryController.get(makeReq({ query }), makeRes());
+
+    expect(svc.getTimesheetSalary).toHaveBeenNthCalledWith(1, expect.anything(), DEPARTMENT, '2026-09', { preliminary: true });
+    expect(svc.getTimesheetSalary).toHaveBeenNthCalledWith(2, expect.anything(), DEPARTMENT, '2026-09', { preliminary: false });
+  });
+
   it('нет отдела — 404', async () => {
     svc.loadSalaryDepartment.mockResolvedValue(null);
     const res = makeRes();

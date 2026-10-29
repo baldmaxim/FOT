@@ -80,13 +80,18 @@ const resolveDepartment = async (
   return department;
 };
 
-/** GET /api/payroll/timesheet-salary?department_id&month — КТУ и «Сумма» для сетки табеля. */
+/**
+ * GET /api/payroll/timesheet-salary?department_id&month — КТУ и «Сумма» для сетки табеля.
+ * preliminary=1 — незакрытый месяц отдела предварительно по живому табелю; без него — как раньше, чтобы старый фронт
+ * не показал предварительные суммы без пометки.
+ */
 const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month } = querySchema.parse(req.query);
+    const preliminary = (req.query as Record<string, unknown>).preliminary === '1';
     const department = await resolveDepartment(req, res, departmentId);
     if (!department) return;
-    res.json({ success: true, data: await getTimesheetSalary(req, department, month) });
+    res.json({ success: true, data: await getTimesheetSalary(req, department, month, { preliminary }) });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
     console.error('timesheetSalary.get error:', err);
