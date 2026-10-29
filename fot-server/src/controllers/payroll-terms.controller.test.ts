@@ -50,6 +50,11 @@ const staffCategory = vi.hoisted(() => ({
 
 vi.mock('../services/payroll/payroll-staff-category.js', () => staffCategory);
 
+// Отдел «Уволенные» — «Расчёты» за месяцы показывают только работавших в них.
+vi.mock('../services/employee-archive-department.service.js', () => ({
+  getKnownArchiveDepartment: vi.fn(async () => ({ id: 'archive-dept', name: 'Уволенные' })),
+}));
+
 // Список доступа к «Зарплате» (миграция 310): здесь пользователь не из списка — охват решает скоуп.
 vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../services/payroll/payroll-access.service.js')>(),
@@ -1250,15 +1255,19 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expectPlaceholdersMatch(sql, params);
   });
 
-  it('список месяцев — первые числа последним параметром; «Выплачено» нет, читается одна выборка «Оплачено»', async () => {
+  it('список месяцев — первые числа, за ними отдел «Уволенные»; «Выплачено» нет, читается одна выборка «Оплачено»', async () => {
     await payrollTermsController.list(makeReq({
       query: { paid_months: '2026-08,2026-07,2026-08' },
     } as Partial<AuthenticatedRequest>), makeRes());
 
     const { sql, params } = lastListCall();
-    expect(params).toHaveLength(13);
+    expect(params).toHaveLength(14);
     expect(params[12]).toEqual(['2026-07-01', '2026-08-01']);
+    expect(params[13]).toBe('archive-dept');
     expect(sql).toMatch(/pa\.month = ANY\(\$13::date\[\]\)/);
+    // Только работавшие в месяцах — по тем же месяцам, без отдела «Уволенные».
+    expect(sql).toMatch(/unnest\(\$13::date\[\]\) AS wm\(month_start\)/);
+    expect(sql).toMatch(/IS DISTINCT FROM \$14::uuid/);
     // «Выплачено» (pay.payouts) нет; card_payouts_raw — ведомости в банк, другое поле.
     expect(sql).not.toMatch(/\bpayouts\b/);
     expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
@@ -1289,7 +1298,10 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
 
     const { sql, params } = lastListCall();
     expect(params[12]).toBeNull();
+    expect(params).toHaveLength(13);
     expect(sql).toMatch(/\$13::date\[\] IS NULL OR/);
+    // «Весь период» — весь штат, без условия «работал в месяце».
+    expect(sql).not.toMatch(/AS wm\(month_start\)/);
     expectPlaceholdersMatch(sql, params);
   });
 
@@ -1307,8 +1319,10 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     } as Partial<AuthenticatedRequest>), makeRes());
 
     const { sql, params } = lastListCall();
-    const monthsIndex = params.length;
+    // Месяцы — предпоследним параметром, последним — отдел «Уволенные».
+    const monthsIndex = params.length - 1;
     expect(params[monthsIndex - 1]).toEqual(['2026-07-01']);
+    expect(params[monthsIndex]).toBe('archive-dept');
     expect(sql).toMatch(new RegExp(`pa\\.month = ANY\\(\\$${monthsIndex}::date\\[\\]\\)`));
     // Курсор и фильтры — свои параметры перед месяцами.
     expect(params).toContain('Бухгалтерия');

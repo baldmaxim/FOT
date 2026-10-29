@@ -71,6 +71,12 @@ vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => 
 
 vi.mock('../audit.service.js', () => ({ auditService: { logFromRequest: async () => undefined } }));
 
+// Отдел «Уволенные» — «Расчёты» за месяцы показывают только работавших в них.
+const ARCHIVE_DEPARTMENT = '00000000-0000-0000-0000-0000000000a0';
+vi.mock('../employee-archive-department.service.js', () => ({
+  getKnownArchiveDepartment: async () => ({ id: '00000000-0000-0000-0000-0000000000a0', name: 'Уволенные' }),
+}));
+
 // Расчёт ФОТ по закрытому табелю (столбцы «Расчётов») — своя схема табеля; здесь только SQL списка.
 vi.mock('./payroll-calc.service.js', () => ({
   getPayoutForEmployees: async (ids: readonly number[], month: string) => {
@@ -131,7 +137,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
-        employee_hr_profiles,
+        employee_hr_profiles, employee_assignments, employee_dismissal_events,
         employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
@@ -147,7 +153,17 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         org_department_id uuid REFERENCES org_departments(id),
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
-        is_archived boolean NOT NULL DEFAULT false
+        is_archived boolean NOT NULL DEFAULT false,
+        hire_date date
+      );
+      -- Состав «Расчётов» за месяцы (payrollWorkedInMonthsSql): назначения и увольнения.
+      CREATE TABLE employee_assignments (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, org_department_id uuid,
+        effective_from date NOT NULL, effective_to date
+      );
+      CREATE TABLE employee_dismissal_events (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
+        cancelled boolean NOT NULL DEFAULT false
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);
@@ -625,6 +641,67 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       scopeMock.payoutCalls = [];
       await calcColumns({ employee_ids: '33', paid_months: '2026-09' });
       expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09' }]);
+    });
+
+    describe('за месяцы — только работавшие в них', () => {
+      const listIds = async (extra: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.list({
+          user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', defer_calc: '1', ...extra },
+        } as unknown as AuthenticatedRequest, res);
+        expect(res.statusCode).toBe(200);
+        return {
+          ids: (res.body.data as Array<{ employee_id: number }>).map(row => row.employee_id).sort((a, b) => a - b),
+          total: Number(res.body.meta.total),
+        };
+      };
+
+      beforeAll(async () => {
+        await pg.pool!.query(`
+          INSERT INTO org_departments (id, name) VALUES ('${ARCHIVE_DEPARTMENT}', 'Уволенные');
+          INSERT INTO employees (id, full_name, org_department_id, hire_date) VALUES
+            (40, 'Кузьмина Х.Х.', '${D_MINE}', '2025-01-01'),
+            (41, 'Новиков Н.Н.', '${D_MINE}', '2026-10-01'),
+            (42, 'Архивов А.А.', '${ARCHIVE_DEPARTMENT}', '2025-01-01'),
+            (43, 'Кузмина В.В.', '${D_MINE}', '2025-01-01');
+          -- Кузьмина: уволена 31.07, «Уволенные» 01.08–14.10, восстановлена 15.10 (как Муравьева).
+          INSERT INTO employee_assignments (employee_id, org_department_id, effective_from, effective_to) VALUES
+            (40, '${D_MINE}', '2026-06-01', '2026-07-31'),
+            (40, '${ARCHIVE_DEPARTMENT}', '2026-08-01', '2026-10-14'),
+            (40, '${D_MINE}', '2026-10-15', NULL);
+        `);
+      });
+
+      afterAll(async () => {
+        await pg.pool!.query('DELETE FROM employee_assignments WHERE employee_id IN (40, 41, 42, 43)');
+        await pg.pool!.query('DELETE FROM employees WHERE id IN (40, 41, 42, 43)');
+        await pg.pool!.query(`DELETE FROM org_departments WHERE id = '${ARCHIVE_DEPARTMENT}'`);
+      });
+
+      it('сентябрь — без уволенной на весь месяц, принятого 01.10 и карточки «Уволенные»; «Загружено из» меньше', async () => {
+        const september = await listIds({ paid_months: '2026-09' });
+        const all = await listIds({ paid_months: 'all' });
+        const terms = await listIds({});
+
+        expect(september.ids).toContain(43);
+        expect(september.ids).not.toContain(40);
+        expect(september.ids).not.toContain(41);
+        expect(september.ids).not.toContain(42);
+        // «Весь период» и «Условия оплаты» — весь штат, как раньше.
+        expect(all.ids).toEqual(expect.arrayContaining([40, 41, 42, 43]));
+        expect(terms.ids).toEqual(expect.arrayContaining([40, 41, 42, 43]));
+        expect(september.total).toBe(all.total - 3);
+
+        const october = await listIds({ paid_months: '2026-10' });
+        expect(october.ids).toEqual(expect.arrayContaining([40, 41, 43]));
+        expect(october.ids).not.toContain(42);
+      });
+
+      it('поиск ФИО: точное совпадение только у скрытого — показывается видимый с одной ошибкой', async () => {
+        expect((await listIds({ paid_months: '2026-09', q: 'Кузьмина' })).ids).toEqual([43]);
+        // В октябре Кузьмина работает — точное совпадение, без ошибки.
+        expect((await listIds({ paid_months: '2026-10', q: 'Кузьмина' })).ids).toEqual([40]);
+      });
     });
 
     it('лимиты: 501 id (с повторами) и без месяцев — 400; «весь период» и больше 12 месяцев — ФОТ недоступен', async () => {

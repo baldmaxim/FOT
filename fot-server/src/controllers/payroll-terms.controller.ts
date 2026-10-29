@@ -66,6 +66,8 @@ import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
 import {
   payrollContractorDeptsCte,
   payrollStaffWhereSql,
+  payrollWorkedInMonthsSql,
+  resolvePayrollArchiveDepartmentId,
   resolvePayrollStaffScope,
 } from '../services/payroll/payroll-registry-scope.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -389,6 +391,8 @@ const buildListSql = (options: {
   )
   SELECT
     (SELECT count(*) FROM filtered)                          AS total,
+    -- Счётчики условий — из scoped, до фильтров: у «Расчётов» за месяцы включают и не работавших в них
+    -- (payrollWorkedInMonthsSql — в filtered); фронт «Расчётов» их не показывает.
     (SELECT count(*) FROM scoped WHERE terms_id IS NULL)     AS without_terms_total,
     (SELECT count(*) FROM scoped WHERE terms_id IS NOT NULL) AS with_terms_total,
     COALESCE((
@@ -509,21 +513,33 @@ export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuer
   return { onDate, contractorRootId, params, fio };
 };
 
+/** «Расчёты» за месяцы: только работавшие в них (payrollWorkedInMonthsSql). */
+interface IPayrollWorkedIn {
+  /** Первые числа месяцев, YYYY-MM-DD. */
+  months: string[];
+  archiveId: string | null;
+}
+
 /**
  * Поиск ФИО «Условий оплаты»: точно; если точного (ФИО или табельный) нет во всём `filtered` — после скоупа,
  * подразделения и фильтров столбцов, до курсора и LIMIT — с одной ошибкой. Режим один на список,
- * итоги и счётчики. baseParams — $1–$8 от buildBaseParams.
+ * итоги и счётчики. baseParams — $1–$8 от buildBaseParams. workedIn — то же условие месяцев, что у списка
+ * «Расчётов»: иначе точное совпадение у скрытого включило бы точный режим и спрятало видимых с одной ошибкой.
  */
 const resolvePayrollFioMode = async (
   fio: IFioSearch | null,
   baseParams: unknown[],
   filters: Parameters<typeof appendPayrollColumnFilters>[2],
-  options: { exclude?: PayrollFilterColumn } = {},
+  options: { exclude?: PayrollFilterColumn; workedIn?: IPayrollWorkedIn | null } = {},
 ): Promise<FioSearchMode> => {
   if (!fio || fio.fuzzy.length === 0) return 'exact';
   const params = baseParams.slice(0, 8);
   const whereParts: string[] = [];
-  appendPayrollColumnFilters(whereParts, params, filters, options);
+  appendPayrollColumnFilters(whereParts, params, filters, { exclude: options.exclude });
+  if (options.workedIn) {
+    params.push(options.workedIn.months, options.workedIn.archiveId);
+    whereParts.push(payrollWorkedInMonthsSql('scoped.employee_id', `$${params.length - 1}`, `$${params.length}`));
+  }
   const fioSql = fioExactConditionSql('e', params, fio);
   const row = await queryOne<{ found: boolean }>(
     `${buildBaseCtes(whereParts.join('\n       AND '), fioSql)}
@@ -573,9 +589,13 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     // «Расчёты»: месяцы «К выплате» и «Удержаний». Без параметра — прежний список с «Выплачено».
     const paidMonths = parsePayrollMonthsQuery(query.paid_months);
+    // За месяцы списком — только работавшие в них; «весь период» и «Условия оплаты» — весь штат, как раньше.
+    const workedIn: IPayrollWorkedIn | null = paidMonths !== null && paidMonths !== 'all'
+      ? { months: payrollMonthStarts(paidMonths), archiveId: await resolvePayrollArchiveDepartmentId() }
+      : null;
 
     const { onDate, contractorRootId, params, fio } = await buildBaseParams(req, parsed);
-    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters);
+    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { workedIn });
 
     // Прежний курсор (ФИО, id) — только без сортировки по столбцу.
     let legacyAfter: { name: string; id: number } | null = null;
@@ -622,6 +642,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     if (paidMonths !== null) {
       params.push(paidMonths === 'all' ? null : payrollMonthStarts(paidMonths));
       paidMonthsParam = `$${params.length}`;
+    }
+    if (workedIn && paidMonthsParam) {
+      params.push(workedIn.archiveId);
+      whereParts.push(payrollWorkedInMonthsSql('scoped.employee_id', paidMonthsParam, `$${params.length}`));
     }
 
     const fioSql = fio ? fioConditionSql('e', params, fio, fioMode) : undefined;
