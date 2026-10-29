@@ -23,9 +23,12 @@ import {
   applyTableView,
   buildExportTable,
   buildMonthColumns,
+  buildObjectColumns,
   defaultMonths,
   listWindowMonths,
-  OBJECT_STAT_COLUMNS,
+  objectPremiumCell,
+  objectPremiumRequest,
+  objectPremiumTotal,
   premiumCell,
   sumMoneyColumns,
   type IKpiColumn,
@@ -99,33 +102,6 @@ export const ObjectKpiPage: FC = () => {
     enabled: Boolean(effectiveObjectFilter),
   });
 
-  // Премия — третьим, ленивым запросом: путь тяжёлый (полный отчёт на каждого
-  // руководителя), и таблица не должна его ждать. Окно берём из ответа таблицы,
-  // чтобы премия и строки считались за один и тот же период.
-  const tablePeriod = tableQuery.data?.period;
-  const premiumQuery = useQuery({
-    queryKey: objectKpiKeys.reportPremium(
-      tablePeriod?.from ?? 'auto',
-      tablePeriod?.to ?? 'auto',
-      effectiveObjectFilter || 'all',
-    ),
-    queryFn: () => objectKpiApi.getReportPremium(tablePeriod, effectiveObjectFilter),
-    enabled: Boolean(effectiveObjectFilter) && Boolean(tablePeriod),
-  });
-
-  const premiumView = useMemo<IPremiumView>(() => {
-    // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
-    const byKey = new Map<string, IReportPremiumRow>();
-    for (const item of premiumQuery.data?.data ?? []) {
-      byKey.set(`${item.employee_id}|${item.period_month}`, item);
-    }
-    return {
-      state: premiumQuery.isLoading ? 'loading' : premiumQuery.isError ? 'error' : 'ready',
-      byKey,
-      hidden: new Set(premiumQuery.data?.hidden_manager_ids ?? []),
-    };
-  }, [premiumQuery.data, premiumQuery.isLoading, premiumQuery.isError]);
-
   // Весь период по всем объектам: окно для выбора месяцев, плитки и таблица «Все объекты».
   // При выбранном объекте всё это уже пришло вместе с его таблицей.
   const summaryQuery = useQuery({
@@ -147,6 +123,43 @@ export const ObjectKpiPage: FC = () => {
     return wanted.filter(month => monthOptions.includes(month));
   }, [basePeriod, monthOptions, selectedMonths]);
   const hasMonths = activeMonths.length > 0;
+
+  // Премия — отдельным, ленивым запросом: путь тяжёлый (полный отчёт на каждого
+  // руководителя), и таблица не должна его ждать. С объектом окно берём из ответа таблицы,
+  // без объекта — выбранные месяцы, но только когда известно базовое окно.
+  const premiumRequest = objectPremiumRequest({
+    objectId: effectiveObjectFilter,
+    tablePeriod: tableQuery.data?.period,
+    basePeriod: summaryQuery.data?.period,
+    activeMonths,
+  });
+  const premiumQuery = useQuery({
+    queryKey: objectKpiKeys.reportPremium(
+      premiumRequest?.period?.from ?? 'auto',
+      premiumRequest?.period?.to ?? 'auto',
+      effectiveObjectFilter || 'all',
+      premiumRequest?.months?.join(',') ?? '',
+    ),
+    queryFn: () => objectKpiApi.getReportPremium(
+      premiumRequest?.period,
+      premiumRequest?.objectId,
+      premiumRequest?.months,
+    ),
+    enabled: premiumRequest !== null,
+  });
+
+  const premiumView = useMemo<IPremiumView>(() => {
+    // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
+    const byKey = new Map<string, IReportPremiumRow>();
+    for (const item of premiumQuery.data?.data ?? []) {
+      byKey.set(`${item.employee_id}|${item.period_month}`, item);
+    }
+    return {
+      state: premiumQuery.isLoading ? 'loading' : premiumQuery.isError ? 'error' : 'ready',
+      byKey,
+      hidden: new Set(premiumQuery.data?.hidden_manager_ids ?? []),
+    };
+  }, [premiumQuery.data, premiumQuery.isLoading, premiumQuery.isError]);
 
   const monthsSummaryQuery = useQuery({
     queryKey: objectKpiKeys.reportSummary(effectiveObjectFilter || 'all', activeMonths.join(',')),
@@ -174,15 +187,32 @@ export const ObjectKpiPage: FC = () => {
     [hasMonths, monthsSummaryQuery.data, summaryQuery.data],
   );
   const objectsLoading = hasMonths ? monthsSummaryQuery.isLoading : summaryQuery.isLoading;
+  // Один набор столбцов на сортировку, фильтры, таблицу и экспорт — иначе они разъедутся.
+  const objectColumns = useMemo(() => buildObjectColumns(premiumView), [premiumView]);
   const visibleObjectRows = useMemo(
-    () => applyTableView(objectRows, OBJECT_STAT_COLUMNS, objectsView),
-    [objectRows, objectsView],
+    () => applyTableView(objectRows, objectColumns, objectsView),
+    [objectRows, objectColumns, objectsView],
   );
   // «Итого» — по видимым строкам: фильтр столбца меняет и суммы; в экспорт уходит та же строка.
+  // Премию общий сумматор сложил бы по строкам — у руководителя двух объектов дважды;
+  // поэтому она перекрывается итогом по уникальным парам «руководитель|месяц».
   const objectTotals = useMemo(
-    () => ({ object: 'Итого', ...sumMoneyColumns(visibleObjectRows, OBJECT_STAT_COLUMNS) }),
-    [visibleObjectRows],
+    () => ({
+      object: 'Итого',
+      ...sumMoneyColumns(visibleObjectRows, objectColumns),
+      premium: objectPremiumTotal(visibleObjectRows, premiumView),
+    }),
+    [visibleObjectRows, objectColumns, premiumView],
   );
+
+  const renderObjectCell = (
+    column: IKpiColumn<IObjectKpiObjectStat>,
+    row: IObjectKpiObjectStat,
+  ): ReactNode | undefined => {
+    if (column.key !== 'premium') return undefined;
+    const cell = objectPremiumCell(row, premiumView);
+    return <span className={cell.muted ? styles.muted : undefined} title={cell.title}>{cell.text}</span>;
+  };
 
   // ─── Таблица объекта по месяцам ─────────────────────────────────────────────
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
@@ -235,9 +265,7 @@ export const ObjectKpiPage: FC = () => {
   const exportRowsCount = selectedObject
     ? (showMonthTable ? visibleMonthRows.length : 0)
     : visibleObjectRows.length;
-  const tableLoading = selectedObject
-    ? tableQuery.isLoading || premiumQuery.isLoading
-    : objectsLoading;
+  const tableLoading = (selectedObject ? tableQuery.isLoading : objectsLoading) || premiumQuery.isLoading;
 
   const handleExport = async (): Promise<void> => {
     const scopeName = selectedObject?.name ?? 'Все объекты';
@@ -256,7 +284,7 @@ export const ObjectKpiPage: FC = () => {
         rows: visibleMonthRows,
         isMuted: row => Boolean(row.is_forecast),
       })
-      : buildExportTable({ ...base, columns: OBJECT_STAT_COLUMNS, rows: visibleObjectRows, totals: objectTotals });
+      : buildExportTable({ ...base, columns: objectColumns, rows: visibleObjectRows, totals: objectTotals });
 
     setExporting(true);
     try {
@@ -356,12 +384,13 @@ export const ObjectKpiPage: FC = () => {
           ariaLabel="KPI по всем объектам"
           rows={objectRows}
           visibleRows={visibleObjectRows}
-          columns={OBJECT_STAT_COLUMNS}
+          columns={objectColumns}
           view={objectsView}
           onViewChange={setObjectsView}
           rowKey={row => row.skud_object_id}
           rowLabel={row => `Открыть объект: ${row.object_name}`}
           onRowClick={row => setObjectFilter(row.skud_object_id)}
+          renderCell={renderObjectCell}
           totals={objectTotals}
           loading={objectsLoading}
           emptyText="Нет объектов с договором за выбранные месяцы"

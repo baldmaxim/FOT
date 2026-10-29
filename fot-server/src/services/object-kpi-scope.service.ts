@@ -94,6 +94,30 @@ export async function loadAssignedObjectIds(
 }
 
 /**
+ * Объекты, закреплённые за сотрудником хотя бы в одном из месяцев (первые числа, YYYY-MM-01).
+ * Для выбора месяцев вразброс: окно «первый — последний» захватило бы и невыбранные месяцы
+ * между ними. Границы месяца — те же, что у loadAssignedObjectIds с periodRange.
+ */
+export async function loadAssignedObjectIdsInMonths(
+  employeeId: number,
+  months: string[],
+  roleKind: AssignmentScopeRoleKind = 'construction_manager',
+): Promise<string[]> {
+  if (months.length === 0) return [];
+  const rows = await query<{ skud_object_id: string }>(
+    `SELECT DISTINCT a.skud_object_id
+       FROM object_kpi_assignments a
+       CROSS JOIN unnest($2::date[]) AS m(month_start)
+      WHERE a.employee_id = $1
+        AND a.role_kind = $3
+        AND a.valid_from < (m.month_start + INTERVAL '1 month')
+        AND (a.valid_to IS NULL OR a.valid_to >= m.month_start)`,
+    [employeeId, months, roleKind],
+  );
+  return rows.map((row) => row.skud_object_id);
+}
+
+/**
  * Флаг роли «KPI объектов: только закреплённые объекты» (system_roles.object_kpi_own_objects_only,
  * миграция 262). Для админа не действует — его скоуп всегда вся стройка.
  */

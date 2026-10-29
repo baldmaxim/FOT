@@ -37,6 +37,7 @@ import {
   canManageObjectKpiAssignments,
   isObjectInScope,
   loadAssignedObjectIds,
+  loadAssignedObjectIdsInMonths,
   resolveObjectKpiScope,
 } from './object-kpi-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -219,6 +220,24 @@ describe('loadAssignedObjectIds', () => {
     await loadAssignedObjectIds(7, '2026-09-01', null);
 
     expect((query as Mock).mock.calls[0][1]).toEqual([7, '2026-09-01', 'construction_manager']);
+  });
+});
+
+describe('loadAssignedObjectIdsInMonths', () => {
+  it('только выбранные месяцы, без промежутков между ними', async () => {
+    (query as Mock).mockResolvedValue([{ skud_object_id: OBJECT_A }]);
+
+    const ids = await loadAssignedObjectIdsInMonths(7, ['2026-07-01', '2026-09-01']);
+
+    expect(ids).toEqual([OBJECT_A]);
+    const [sql, params] = (query as Mock).mock.calls[0];
+    expect(params).toEqual([7, ['2026-07-01', '2026-09-01'], 'construction_manager']);
+    expect(sql).toContain('unnest($2::date[])');
+  });
+
+  it('пустой выбор — без запроса', async () => {
+    await expect(loadAssignedObjectIdsInMonths(7, [])).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
   });
 });
 

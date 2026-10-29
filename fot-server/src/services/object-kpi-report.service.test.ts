@@ -121,6 +121,18 @@ describe('summarizeByObject', () => {
     expect(stat.manager_names).toEqual(['Иванов И. И.', 'Петров П. П.']);
   });
 
+  it('основной руководитель каждого месяца — для премии; месяц без руководителя пропущен', () => {
+    const [stat] = summarizeByObject([
+      objectRow({ period_month: '2026-08-01', primary_manager_id: 8 }),
+      objectRow({ period_month: '2026-07-01', primary_manager_id: 7 }),
+      objectRow({ period_month: '2026-09-01', primary_manager_id: null }),
+    ]);
+    expect(stat.manager_months).toEqual([
+      { period_month: '2026-07-01', employee_id: 7 },
+      { period_month: '2026-08-01', employee_id: 8 },
+    ]);
+  });
+
   it('объекты без договора в таблицу не попадают, порядок объектов — как у строк', () => {
     const stats = summarizeByObject([
       objectRow({ skud_object_id: 'obj-b', object_name: 'База Б' }),

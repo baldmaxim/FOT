@@ -5,10 +5,13 @@ import {
   applyTableView,
   buildExportTable,
   buildMonthColumns,
+  buildObjectColumns,
   columnFilterOptions,
   defaultMonths,
   listWindowMonths,
-  OBJECT_STAT_COLUMNS,
+  objectPremiumCell,
+  objectPremiumRequest,
+  objectPremiumTotal,
   premiumCell,
   setColumnFilter,
   sumMoneyColumns,
@@ -30,6 +33,9 @@ const stat = (over: Partial<IObjectKpiObjectStat>): IObjectKpiObjectStat => ({
   ...over,
 });
 
+/** Премия загружена, но пустая: у строк без manager_months в «Премии» «—». */
+const OBJECT_COLUMNS = buildObjectColumns({ state: 'ready', byKey: new Map(), hidden: new Set() });
+
 const view = (over: Partial<IKpiTableView> = {}): IKpiTableView => ({ sort: 'object', dir: 'asc', filters: {}, ...over });
 
 const rows = [
@@ -42,12 +48,12 @@ const ids = (list: IObjectKpiObjectStat[]) => list.map(item => item.skud_object_
 
 describe('applyTableView: сортировка', () => {
   it('текст — по русскому алфавиту: кириллица раньше латиницы, как в локали ru', () => {
-    expect(ids(applyTableView(rows, OBJECT_STAT_COLUMNS, view()))).toEqual(['a', 'd', 'b', 'c']);
+    expect(ids(applyTableView(rows, OBJECT_COLUMNS, view()))).toEqual(['a', 'd', 'b', 'c']);
   });
 
   it('числа — по значению, пустые в конце при любом направлении', () => {
-    expect(ids(applyTableView(rows, OBJECT_STAT_COLUMNS, view({ sort: 'pct', dir: 'asc' })))).toEqual(['b', 'd', 'c', 'a']);
-    expect(ids(applyTableView(rows, OBJECT_STAT_COLUMNS, view({ sort: 'pct', dir: 'desc' })))).toEqual(['c', 'd', 'b', 'a']);
+    expect(ids(applyTableView(rows, OBJECT_COLUMNS, view({ sort: 'pct', dir: 'asc' })))).toEqual(['b', 'd', 'c', 'a']);
+    expect(ids(applyTableView(rows, OBJECT_COLUMNS, view({ sort: 'pct', dir: 'desc' })))).toEqual(['c', 'd', 'b', 'a']);
   });
 
   it('повторный клик меняет направление, другой столбец — по возрастанию', () => {
@@ -59,42 +65,42 @@ describe('applyTableView: сортировка', () => {
 describe('фильтры столбцов', () => {
   it('фильтр по тексту ячейки; снять фильтр — пустым списком', () => {
     const filtered = setColumnFilter(view(), 'manager', ['—']);
-    expect(ids(applyTableView(rows, OBJECT_STAT_COLUMNS, filtered))).toEqual(['a']);
+    expect(ids(applyTableView(rows, OBJECT_COLUMNS, filtered))).toEqual(['a']);
     expect(setColumnFilter(filtered, 'manager', []).filters).toEqual({});
   });
 
   it('варианты — по строкам, прошедшим фильтры остальных столбцов, со счётчиками', () => {
     const filters = { manager: ['Иванов И. И.'] };
-    expect(columnFilterOptions(rows, OBJECT_STAT_COLUMNS, filters, 'object')).toEqual([
+    expect(columnFilterOptions(rows, OBJECT_COLUMNS, filters, 'object')).toEqual([
       { value: 'ЖК Дом 56', count: 1 },
       { value: 'ЖК Alia', count: 1 },
     ]);
     // Свой фильтр столбца на его варианты не влияет.
-    expect(columnFilterOptions(rows, OBJECT_STAT_COLUMNS, filters, 'manager').map(item => item.value))
+    expect(columnFilterOptions(rows, OBJECT_COLUMNS, filters, 'manager').map(item => item.value))
       .toEqual(['Иванов И. И.', 'Петров П. П.', '—']);
   });
 
   it('выбранное значение, которого в строках больше нет, остаётся в списке с нулём', () => {
-    const options = columnFilterOptions(rows, OBJECT_STAT_COLUMNS, { object: ['ЖК Wave'] }, 'object');
+    const options = columnFilterOptions(rows, OBJECT_COLUMNS, { object: ['ЖК Wave'] }, 'object');
     expect(options).toContainEqual({ value: 'ЖК Wave', count: 0 });
   });
 });
 
 describe('buildExportTable', () => {
   it('«№» по порядку экрана, суммы — как с сервера, пустое — текстом экрана', () => {
-    const visible = applyTableView(rows, OBJECT_STAT_COLUMNS, view({ sort: 'pct', dir: 'desc' }));
+    const visible = applyTableView(rows, OBJECT_COLUMNS, view({ sort: 'pct', dir: 'desc' }));
     const table = buildExportTable({
       title: 'KPI объектов — Все объекты',
       subtitle: 'Период: август 2026. Все суммы — в рублях, с НДС.',
       fileName: 'KPI.xlsx',
-      columns: OBJECT_STAT_COLUMNS,
+      columns: OBJECT_COLUMNS,
       rows: visible,
     });
 
     expect(table.columns.map(column => column.label)).toEqual(
-      ['№', 'Объект', 'Руководитель', 'Договор с ДС', 'КС-6', 'Остаток', 'КС-2', 'План', '%'],
+      ['№', 'Объект', 'Руководитель', 'Премия', 'Договор с ДС', 'КС-6', 'Остаток', 'КС-2', 'План', '%'],
     );
-    expect(table.rows[0].cells).toEqual([1, 'ЖК Alia', 'Иванов И. И.', '1000.00', '100.00', '900.00', 50, 100, 147.5]);
+    expect(table.rows[0].cells).toEqual([1, 'ЖК Alia', 'Иванов И. И.', '—', '1000.00', '100.00', '900.00', 50, 100, 147.5]);
     expect(table.rows[3].cells.slice(0, 3)).toEqual([4, 'База Химки', '—']);
     expect(table.rows[3].cells.at(-1)).toBe('—');
   });
@@ -104,23 +110,24 @@ describe('buildExportTable', () => {
       title: 't',
       subtitle: 's',
       fileName: 'f',
-      columns: OBJECT_STAT_COLUMNS,
+      columns: OBJECT_COLUMNS,
       rows,
-      totals: { object: 'Итого', ...sumMoneyColumns(rows, OBJECT_STAT_COLUMNS) },
+      totals: { object: 'Итого', ...sumMoneyColumns(rows, OBJECT_COLUMNS) },
     });
     expect(table.rows).toHaveLength(5);
     expect(table.rows[4]).toEqual({
-      cells: [null, 'Итого', null, '4000.00', '400.00', '3600.00', '200.00', '400.00', null],
+      cells: [null, 'Итого', null, null, '4000.00', '400.00', '3600.00', '200.00', '400.00', null],
     });
     // Без видимых строк итогов нет — в файле только шапка.
-    expect(buildExportTable({ title: 't', subtitle: 's', fileName: 'f', columns: OBJECT_STAT_COLUMNS, rows: [], totals: { object: 'Итого' } }).rows)
+    expect(buildExportTable({ title: 't', subtitle: 's', fileName: 'f', columns: OBJECT_COLUMNS, rows: [], totals: { object: 'Итого' } }).rows)
       .toEqual([]);
   });
 });
 
 describe('sumMoneyColumns: строка «Итого»', () => {
   it('только денежные столбцы, суммы — строкой numeric', () => {
-    expect(sumMoneyColumns(rows, OBJECT_STAT_COLUMNS)).toEqual({
+    expect(sumMoneyColumns(rows, OBJECT_COLUMNS)).toEqual({
+      premium: null,
       contract: '4000.00',
       ks6: '400.00',
       remainder: '3600.00',
@@ -134,7 +141,7 @@ describe('sumMoneyColumns: строка «Итого»', () => {
       stat({ contract_total: '117412437610.99', remainder: '-100.50', fact_amount: 0.1 }),
       stat({ contract_total: '0.02', remainder: '50.25', fact_amount: 0.2 }),
     ];
-    expect(sumMoneyColumns(big, OBJECT_STAT_COLUMNS)).toMatchObject({
+    expect(sumMoneyColumns(big, OBJECT_COLUMNS)).toMatchObject({
       contract: '117412437611.01',
       remainder: '-50.25',
       ks2: '0.30',
@@ -143,15 +150,15 @@ describe('sumMoneyColumns: строка «Итого»', () => {
 
   it('пустые значения пропускаются; столбец без значений и пустой список — null', () => {
     const partial = [stat({ plan_amount: null, contract_total: null }), stat({ plan_amount: null })];
-    expect(sumMoneyColumns(partial, OBJECT_STAT_COLUMNS)).toMatchObject({ contract: '1000.00', plan: null });
-    expect(sumMoneyColumns([], OBJECT_STAT_COLUMNS)).toEqual({
-      contract: null, ks6: null, remainder: null, ks2: null, plan: null,
+    expect(sumMoneyColumns(partial, OBJECT_COLUMNS)).toMatchObject({ contract: '1000.00', plan: null });
+    expect(sumMoneyColumns([], OBJECT_COLUMNS)).toEqual({
+      premium: null, contract: null, ks6: null, remainder: null, ks2: null, plan: null,
     });
   });
 
   it('по видимым строкам: фильтр столбца меняет итоги', () => {
-    const visible = applyTableView(rows, OBJECT_STAT_COLUMNS, view({ filters: { manager: ['Иванов И. И.'] } }));
-    expect(sumMoneyColumns(visible, OBJECT_STAT_COLUMNS)).toMatchObject({ contract: '2000.00', plan: '200.00' });
+    const visible = applyTableView(rows, OBJECT_COLUMNS, view({ filters: { manager: ['Иванов И. И.'] } }));
+    expect(sumMoneyColumns(visible, OBJECT_COLUMNS)).toMatchObject({ contract: '2000.00', plan: '200.00' });
   });
 });
 
@@ -203,6 +210,175 @@ describe('таблица объекта: премия', () => {
     expect(table.rows[1].cells[1]).toBe('нет шкалы');
     expect(table.rows[2]).toMatchObject({ muted: true });
     expect(table.rows[0]).not.toHaveProperty('muted');
+  });
+});
+
+describe('«Все объекты»: премия', () => {
+  const premiumRow = (employeeId: number, month: string, over: Partial<IReportPremiumRow> = {}): IReportPremiumRow => ({
+    employee_id: employeeId,
+    period_month: month,
+    status: 'calculated',
+    completion_pct: '100.00',
+    coefficient: '1.00',
+    premium_amount: '100000.00',
+    ...over,
+  });
+  const premiumView = (items: IReportPremiumRow[], over: Partial<IPremiumView> = {}): IPremiumView => ({
+    state: 'ready',
+    byKey: new Map(items.map(item => [`${item.employee_id}|${item.period_month}`, item])),
+    hidden: new Set(),
+    ...over,
+  });
+  const months = (...pairs: Array<[number, string]>) =>
+    pairs.map(([employeeId, month]) => ({ employee_id: employeeId, period_month: month }));
+
+  it('смена руководителя между месяцами — складываются премии разных людей, в копейках', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [8, '2026-08-01']) });
+    const premium = premiumView([
+      premiumRow(7, '2026-07-01', { premium_amount: '100000.10' }),
+      premiumRow(8, '2026-08-01', { premium_amount: '50000.20' }),
+    ]);
+    expect(objectPremiumCell(row, premium)).toMatchObject({ amount: '150000.30', muted: false });
+  });
+
+  it('рассчитанный месяц + «нет плана» — сумма, в подсказке «часть периода»', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [7, '2026-08-01']) });
+    const cell = objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01'),
+      premiumRow(7, '2026-08-01', { status: 'no_plan', premium_amount: null }),
+    ]));
+    expect(cell.amount).toBe('100000.00');
+    expect(cell.title).toContain('Рассчитана только часть периода: 1 из 2 мес.');
+  });
+
+  it('нерассчитанные: один статус — короткая подпись, разные — «—»', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [7, '2026-08-01']) });
+    expect(objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01', { status: 'no_plan', premium_amount: null }),
+      premiumRow(7, '2026-08-01', { status: 'no_plan', premium_amount: null }),
+    ]))).toMatchObject({ text: 'нет плана', muted: true, amount: null });
+    expect(objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01', { status: 'no_plan', premium_amount: null }),
+      premiumRow(7, '2026-08-01', { status: 'no_scale', premium_amount: null }),
+    ]))).toMatchObject({ text: '—', amount: null });
+    // Месяца нет в ответе — тоже «разные причины».
+    expect(objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01', { status: 'no_plan', premium_amount: null }),
+    ])).text).toBe('—');
+  });
+
+  it('скрытый руководитель — вся ячейка «—», даже если второй доступен', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [9, '2026-08-01']) });
+    const premium = premiumView([premiumRow(7, '2026-07-01')], { hidden: new Set([9]) });
+    expect(objectPremiumCell(row, premium)).toMatchObject({ text: '—', muted: true, amount: null });
+    expect(objectPremiumTotal([row], premium)).toBeNull();
+  });
+
+  it('пара из скрытой строки есть и в доступной — в итоге один раз', () => {
+    const hiddenRow = stat({ skud_object_id: 'x', manager_months: months([7, '2026-07-01'], [9, '2026-08-01']) });
+    const openRow = stat({ skud_object_id: 'y', manager_months: months([7, '2026-07-01']) });
+    const premium = premiumView([premiumRow(7, '2026-07-01')], { hidden: new Set([9]) });
+    expect(objectPremiumTotal([hiddenRow, openRow], premium)).toBe('100000.00');
+  });
+
+  it('без manager_months (старый бэкенд) — «—»', () => {
+    expect(objectPremiumCell(stat({}), premiumView([premiumRow(7, '2026-07-01')]))).toMatchObject({ text: '—', amount: null });
+  });
+
+  it('один руководитель на двух объектах — в строках по сумме, в «Итого» один раз', () => {
+    const rowsOfOne = [
+      stat({ skud_object_id: 'a', manager_months: months([7, '2026-09-01']) }),
+      stat({ skud_object_id: 'b', manager_months: months([7, '2026-09-01']) }),
+    ];
+    const premium = premiumView([premiumRow(7, '2026-09-01', { premium_amount: '168000.00' })]);
+    expect(rowsOfOne.map(row => objectPremiumCell(row, premium).amount)).toEqual(['168000.00', '168000.00']);
+    expect(objectPremiumTotal(rowsOfOne, premium)).toBe('168000.00');
+  });
+
+  it('calculated без суммы или с мусором — не результат; ноль — валидная премия', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [7, '2026-08-01']) });
+    const broken = objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01', { premium_amount: null }),
+      premiumRow(7, '2026-08-01', { premium_amount: 'abc' }),
+    ]));
+    expect(broken).toMatchObject({ text: '—', amount: null });
+
+    const zero = objectPremiumCell(row, premiumView([
+      premiumRow(7, '2026-07-01', { premium_amount: '0.00' }),
+      premiumRow(7, '2026-08-01', { premium_amount: '0' }),
+    ]));
+    expect(zero.amount).toBe('0.00');
+    expect(zero.title).not.toContain('часть периода');
+  });
+
+  it('повтор пары в manager_months — N из M по уникальным', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01'], [7, '2026-07-01'], [7, '2026-08-01']) });
+    const cell = objectPremiumCell(row, premiumView([premiumRow(7, '2026-07-01')]));
+    expect(cell.amount).toBe('100000.00');
+    expect(cell.title).toContain('1 из 2 мес.');
+  });
+
+  it('загрузка и ошибка — итог null, ячейки «…» и «н/д»', () => {
+    const row = stat({ manager_months: months([7, '2026-07-01']) });
+    const items = [premiumRow(7, '2026-07-01')];
+    expect(objectPremiumTotal([row], premiumView(items, { state: 'loading' }))).toBeNull();
+    expect(objectPremiumTotal([row], premiumView(items, { state: 'error' }))).toBeNull();
+    expect(objectPremiumCell(row, premiumView(items, { state: 'loading' })).text).toBe('…');
+    expect(objectPremiumCell(row, premiumView(items, { state: 'error' })).text).toBe('н/д');
+  });
+
+  it('итог — по строкам после фильтра столбца', () => {
+    const premium = premiumView([premiumRow(7, '2026-09-01'), premiumRow(8, '2026-09-01', { premium_amount: '50000.00' })]);
+    const columns = buildObjectColumns(premium);
+    const list = [
+      stat({ skud_object_id: 'a', manager_names: ['Иванов И. И.'], manager_months: months([7, '2026-09-01']) }),
+      stat({ skud_object_id: 'b', manager_names: ['Петров П. П.'], manager_months: months([8, '2026-09-01']) }),
+    ];
+    const visible = applyTableView(list, columns, view({ filters: { manager: ['Петров П. П.'] } }));
+    expect(objectPremiumTotal(visible, premium)).toBe('50000.00');
+    // Сортировка по премии — по сумме.
+    expect(ids(applyTableView(list, columns, view({ sort: 'premium', dir: 'desc' })))).toEqual(['a', 'b']);
+  });
+
+  it('экспорт: рассчитанная премия — числом, статус — текстом', () => {
+    const premium = premiumView([
+      premiumRow(7, '2026-09-01'),
+      premiumRow(8, '2026-09-01', { status: 'no_plan', premium_amount: null }),
+    ]);
+    const table = buildExportTable({
+      title: 't',
+      subtitle: 's',
+      fileName: 'f',
+      columns: buildObjectColumns(premium),
+      rows: [
+        stat({ skud_object_id: 'a', manager_months: months([7, '2026-09-01']) }),
+        stat({ skud_object_id: 'b', manager_months: months([8, '2026-09-01']) }),
+      ],
+    });
+    expect(table.rows[0].cells[3]).toBe('100000.00');
+    expect(table.rows[1].cells[3]).toBe('нет плана');
+  });
+});
+
+describe('objectPremiumRequest', () => {
+  const period = { from: '2026-01', to: '2026-10' };
+
+  it('«Все объекты»: до базового окна — не звать', () => {
+    expect(objectPremiumRequest({ objectId: '', tablePeriod: undefined, basePeriod: undefined, activeMonths: [] })).toBeNull();
+    expect(objectPremiumRequest({ objectId: '', tablePeriod: undefined, basePeriod: undefined, activeMonths: ['2026-09'] })).toBeNull();
+  });
+
+  it('«Все объекты»: выбранные месяцы — отсортированным набором; пустой выбор — весь период', () => {
+    expect(objectPremiumRequest({ objectId: '', tablePeriod: undefined, basePeriod: period, activeMonths: ['2026-09', '2026-07'] }))
+      .toEqual({ period: null, objectId: null, months: ['2026-07', '2026-09'] });
+    expect(objectPremiumRequest({ objectId: '', tablePeriod: undefined, basePeriod: period, activeMonths: [] }))
+      .toEqual({ period: null, objectId: null, months: null });
+  });
+
+  it('объект: ждёт окно таблицы, выбор месяцев не учитывает', () => {
+    expect(objectPremiumRequest({ objectId: 'obj', tablePeriod: undefined, basePeriod: period, activeMonths: ['2026-09'] })).toBeNull();
+    expect(objectPremiumRequest({ objectId: 'obj', tablePeriod: period, basePeriod: undefined, activeMonths: ['2026-09'] }))
+      .toEqual({ period, objectId: 'obj', months: null });
   });
 });
 

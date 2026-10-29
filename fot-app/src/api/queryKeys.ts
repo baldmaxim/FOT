@@ -143,8 +143,9 @@ export const objectKpiKeys = {
   reportSummary: (objectId: string, months: string = 'all') =>
     [...objectKpiKeys.all, 'report-summary', objectId, months] as const,
   // Окно в ключе обязательно: премия считается за конкретный период, а не «вообще».
-  reportPremium: (from: string, to: string, objectId: string) =>
-    [...objectKpiKeys.all, 'report-premium', from, to, objectId] as const,
+  // months — отсортированный набор через запятую: выбор месяцев бывает вразброс.
+  reportPremium: (from: string, to: string, objectId: string, months: string = '') =>
+    [...objectKpiKeys.all, 'report-premium', from, to, objectId, months] as const,
   headcount: (from: string, to: string) => [...objectKpiKeys.all, 'headcount', from, to] as const,
   card: (objectId: string, from: string, to: string) =>
     [...objectKpiKeys.all, 'card', objectId, from, to] as const,

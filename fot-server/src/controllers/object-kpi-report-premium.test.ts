@@ -26,6 +26,7 @@ vi.mock('../services/object-kpi-premium.service.js', () => ({
 
 vi.mock('../services/object-kpi-scope.service.js', () => ({
   loadAssignedObjectIds: vi.fn(),
+  loadAssignedObjectIdsInMonths: vi.fn(),
   resolveObjectKpiScope: vi.fn(),
   canManageObjectKpiAssignments: vi.fn(async () => false),
   assertCanManageAssignmentsOr403: vi.fn(),
@@ -34,7 +35,11 @@ vi.mock('../services/object-kpi-scope.service.js', () => ({
 import { objectKpiController } from './object-kpi.controller.js';
 import { fetchObjectKpiReport } from '../services/object-kpi-report.service.js';
 import { fetchManagerPremium } from '../services/object-kpi-premium.service.js';
-import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
+import {
+  loadAssignedObjectIds,
+  loadAssignedObjectIdsInMonths,
+  resolveObjectKpiScope,
+} from '../services/object-kpi-scope.service.js';
 
 const OBJECT_A = '11111111-1111-1111-1111-111111111111';
 const OBJECT_B = '22222222-2222-2222-2222-222222222222';
@@ -187,6 +192,61 @@ describe('getReportPremium', () => {
 
     expect(fetchManagerPremium).toHaveBeenCalledTimes(1);
     expect(payload.body?.hidden_manager_ids).toEqual([]);
+  });
+
+  it('месяцы вразброс: в ответе только выбранные, закрепления — только за них', async () => {
+    asMock(fetchObjectKpiReport).mockResolvedValue([
+      reportRow([7], '2026-07-01'),
+      reportRow([7], '2026-08-01'),
+      reportRow([7], '2026-09-01'),
+    ]);
+    asMock(loadAssignedObjectIdsInMonths).mockResolvedValue([OBJECT_A]);
+    asMock(fetchManagerPremium).mockResolvedValue({
+      premium: [
+        premiumMonth('2026-07-01', 'calculated', '100'),
+        premiumMonth('2026-08-01', 'calculated', '200'),
+        premiumMonth('2026-09-01', 'calculated', '300'),
+      ],
+    });
+
+    const { res, payload } = makeRes();
+    await objectKpiController.getReportPremium(request({ months: '2026-09,2026-07' }), res as never);
+
+    expect(loadAssignedObjectIds).not.toHaveBeenCalled();
+    expect(asMock(loadAssignedObjectIdsInMonths).mock.calls[0]).toEqual([7, ['2026-07-01', '2026-09-01']]);
+    expect((payload.body?.data as Array<{ period_month: string }>).map((item) => item.period_month))
+      .toEqual(['2026-07-01', '2026-09-01']);
+  });
+
+  it('ограниченный зритель, недоступный объект только в невыбранном августе — премия июля и сентября видна', async () => {
+    asMock(resolveObjectKpiScope).mockResolvedValue({ is_unrestricted: false, object_ids: [OBJECT_A] });
+    asMock(fetchObjectKpiReport).mockResolvedValue([reportRow([7], '2026-07-01'), reportRow([7], '2026-09-01')]);
+    // Окно июль–сентябрь дало бы и OBJECT_C (август); по выбранным месяцам — только A.
+    asMock(loadAssignedObjectIds).mockResolvedValue([OBJECT_A, OBJECT_C]);
+    asMock(loadAssignedObjectIdsInMonths).mockResolvedValue([OBJECT_A]);
+    asMock(fetchManagerPremium).mockResolvedValue({
+      premium: [premiumMonth('2026-07-01', 'calculated', '100'), premiumMonth('2026-09-01', 'calculated', '300')],
+    });
+
+    const { res, payload } = makeRes();
+    await objectKpiController.getReportPremium(request({ months: '2026-07,2026-09' }), res as never);
+
+    expect(payload.body?.hidden_manager_ids).toEqual([]);
+    expect((payload.body?.data as unknown[])).toHaveLength(2);
+    const call = asMock(fetchManagerPremium).mock.calls[0][0] as { objectIds: string[] };
+    expect(call.objectIds).toEqual([OBJECT_A]);
+  });
+
+  it('без months — прежнее окно закреплений', async () => {
+    asMock(fetchObjectKpiReport).mockResolvedValue([reportRow([7], '2026-08-01')]);
+    asMock(loadAssignedObjectIds).mockResolvedValue([OBJECT_A]);
+    asMock(fetchManagerPremium).mockResolvedValue({ premium: [] });
+
+    const { res } = makeRes();
+    await objectKpiController.getReportPremium(request({ from: '2026-07', to: '2026-08' }), res as never);
+
+    expect(loadAssignedObjectIdsInMonths).not.toHaveBeenCalled();
+    expect(asMock(loadAssignedObjectIds).mock.calls[0]).toEqual([7, '2026-07-01', { from: '2026-07-01', to: '2026-08-01' }]);
   });
 
   it('руководитель без закреплений в окне пропускается', async () => {

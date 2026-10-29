@@ -547,6 +547,11 @@ export interface ObjectKpiObjectStat {
   object_name: string;
   /** Руководители выбранных месяцев без повторов, по порядку месяцев. */
   manager_names: string[];
+  /**
+   * Основной руководитель каждого месяца (месяцы без него пропущены): по паре «руководитель +
+   * месяц» фронт находит премию — она принадлежит человеку, а не объекту (п. 3.5).
+   */
+  manager_months: Array<{ period_month: string; employee_id: number }>;
   /** Договор, КС-6 и остаток — на начало первого выбранного месяца: там «Договор − КС-6 = Остаток». */
   contract_total: string | null;
   ks2_cumulative_before: string | null;
@@ -578,10 +583,14 @@ export function summarizeByObject(rows: ObjectKpiReportRow[]): ObjectKpiObjectSt
     const managerNames = [...new Set(
       sorted.map((row) => row.primary_manager_name).filter((name): name is string => Boolean(name)),
     )];
+    const managerMonths = sorted
+      .filter((row) => row.primary_manager_id !== null)
+      .map((row) => ({ period_month: row.period_month, employee_id: Number(row.primary_manager_id) }));
     return {
       skud_object_id: first.skud_object_id,
       object_name: first.object_name,
       manager_names: managerNames,
+      manager_months: managerMonths,
       contract_total: first.contract_total,
       ks2_cumulative_before: first.ks2_cumulative_before,
       remainder: first.remainder,

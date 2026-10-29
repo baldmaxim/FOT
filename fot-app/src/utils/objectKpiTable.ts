@@ -96,32 +96,6 @@ const percentColumn = <Row,>(value: (row: Row) => string | number | null): IKpiC
   exportValue: row => value(row),
 });
 
-/** Таблица «Все объекты»: строка на объект за выбранные месяцы. */
-export const OBJECT_STAT_COLUMNS: ReadonlyArray<IKpiColumn<IObjectKpiObjectStat>> = [
-  {
-    key: 'object',
-    label: 'Объект',
-    type: 'text',
-    width: 'colObject',
-    text: row => row.object_name,
-    sortValue: row => row.object_name,
-  },
-  {
-    key: 'manager',
-    label: 'Руководитель',
-    type: 'text',
-    width: 'colManager',
-    text: row => row.manager_names.join(', ') || '—',
-    sortValue: row => row.manager_names.join(', ') || null,
-  },
-  moneyColumn('contract', 'Договор с ДС', row => row.contract_total),
-  moneyColumn('ks6', 'КС-6', row => row.ks2_cumulative_before),
-  moneyColumn('remainder', 'Остаток', row => row.remainder),
-  moneyColumn('ks2', 'КС-2', row => row.fact_amount),
-  moneyColumn('plan', 'План', row => row.plan_amount),
-  percentColumn(row => row.completion_pct),
-];
-
 /** Премия руководителя в строке месяца: состояние запроса, скрытые руководители, статусы. */
 export interface IPremiumView {
   state: 'loading' | 'error' | 'ready';
@@ -171,6 +145,147 @@ export const premiumCell = (row: IObjectKpiReportRow, premium: IPremiumView): IP
     amount: item.premium_amount,
   };
 };
+
+/** Ключ премии в IPremiumView.byKey. */
+const premiumKey = (employeeId: number, periodMonth: string): string => `${employeeId}|${periodMonth}`;
+
+/** Премия пары в копейках; null — не рассчитана или сумма не число. Ноль — валидная премия. */
+const calculatedKopecks = (item: IReportPremiumRow | undefined): number | null => {
+  if (!item || item.status !== 'calculated') return null;
+  const value = toSortNumber(item.premium_amount);
+  return value === null ? null : Math.round(value * 100);
+};
+
+/**
+ * Премия строки «Все объекты» — общий разбор для ячейки и «Итого», чтобы они не разошлись.
+ * keys — уникальные пары «руководитель|месяц» строки; calculated — рассчитанные из них.
+ */
+interface IObjectPremiumState {
+  kind: 'no_manager' | 'loading' | 'error' | 'hidden' | 'ready';
+  keys: string[];
+  calculated: Map<string, number>;
+}
+
+const objectPremiumState = (row: IObjectKpiObjectStat, premium: IPremiumView): IObjectPremiumState => {
+  const pairs = new Map<string, number>();
+  for (const item of row.manager_months ?? []) {
+    pairs.set(premiumKey(item.employee_id, item.period_month), item.employee_id);
+  }
+  const keys = [...pairs.keys()];
+  const calculated = new Map<string, number>();
+  if (keys.length === 0) return { kind: 'no_manager', keys, calculated };
+  if (premium.state !== 'ready') return { kind: premium.state, keys, calculated };
+  // Хоть один руководитель скрыт — скрыта вся строка: частичная сумма выглядела бы полной.
+  if ([...pairs.values()].some(id => premium.hidden.has(id))) return { kind: 'hidden', keys, calculated };
+
+  for (const key of keys) {
+    const kopecks = calculatedKopecks(premium.byKey.get(key));
+    if (kopecks !== null) calculated.set(key, kopecks);
+  }
+  return { kind: 'ready', keys, calculated };
+};
+
+/**
+ * «Премия» в строке объекта за выбранные месяцы: сумма рассчитанных месяцев основных
+ * руководителей. Не рассчитано ни одного — подпись статуса, если он у всех месяцев один.
+ */
+export const objectPremiumCell = (row: IObjectKpiObjectStat, premium: IPremiumView): IPremiumCell => {
+  const state = objectPremiumState(row, premium);
+  if (state.kind === 'no_manager') {
+    return { text: '—', title: 'За выбранные месяцы нет закреплённого руководителя', muted: false, amount: null };
+  }
+  if (state.kind === 'loading') return { text: '…', muted: true, amount: null };
+  if (state.kind === 'error') return { text: 'н/д', title: 'Не удалось рассчитать премию', muted: true, amount: null };
+  if (state.kind === 'hidden') {
+    return {
+      text: '—',
+      title: 'Недоступно: у руководителя есть объекты вне вашего доступа',
+      muted: true,
+      amount: null,
+    };
+  }
+
+  if (state.calculated.size > 0) {
+    let kopecks = 0;
+    for (const value of state.calculated.values()) kopecks += value;
+    const amount = formatKopecks(kopecks);
+    const partial = state.calculated.size < state.keys.length
+      ? `. Рассчитана только часть периода: ${state.calculated.size} из ${state.keys.length} мес.`
+      : '';
+    return {
+      text: formatMoneyShort(amount),
+      title: `Совокупно за все объекты руководителя (п. 3.5)${partial}`,
+      muted: false,
+      amount,
+    };
+  }
+
+  const statuses = new Set(state.keys.map(key => premium.byKey.get(key)?.status ?? null));
+  const [status] = statuses;
+  if (statuses.size === 1 && status && status !== 'calculated') {
+    return { text: PREMIUM_STATUS_SHORT[status], title: PREMIUM_STATUS_TEXT[status], muted: true, amount: null };
+  }
+  return { text: '—', title: 'Премия за выбранные месяцы не рассчитана', muted: false, amount: null };
+};
+
+/**
+ * «Итого» премии по видимым строкам: каждая пара «руководитель|месяц» один раз — у руководителя
+ * двух объектов одна и та же премия стоит в обеих строках. Скрытые строки в итог не идут.
+ */
+export const objectPremiumTotal = (
+  rows: ReadonlyArray<IObjectKpiObjectStat>,
+  premium: IPremiumView,
+): string | null => {
+  if (premium.state !== 'ready') return null;
+  const pairs = new Map<string, number>();
+  for (const row of rows) {
+    const state = objectPremiumState(row, premium);
+    if (state.kind !== 'ready') continue;
+    for (const [key, kopecks] of state.calculated) pairs.set(key, kopecks);
+  }
+  if (pairs.size === 0) return null;
+  let kopecks = 0;
+  for (const value of pairs.values()) kopecks += value;
+  return formatKopecks(kopecks);
+};
+
+/**
+ * Таблица «Все объекты»: строка на объект за выбранные месяцы. «Премия» — после руководителя:
+ * она принадлежит ему, а не объекту (п. 3.5).
+ */
+export const buildObjectColumns = (premium: IPremiumView): Array<IKpiColumn<IObjectKpiObjectStat>> => [
+  {
+    key: 'object',
+    label: 'Объект',
+    type: 'text',
+    width: 'colObject',
+    text: row => row.object_name,
+    sortValue: row => row.object_name,
+  },
+  {
+    key: 'manager',
+    label: 'Руководитель',
+    type: 'text',
+    width: 'colManager',
+    text: row => row.manager_names.join(', ') || '—',
+    sortValue: row => row.manager_names.join(', ') || null,
+  },
+  {
+    key: 'premium',
+    label: 'Премия',
+    type: 'money',
+    width: 'colMoney',
+    text: row => objectPremiumCell(row, premium).text,
+    sortValue: row => toSortNumber(objectPremiumCell(row, premium).amount),
+    exportValue: row => objectPremiumCell(row, premium).amount,
+  },
+  moneyColumn('contract', 'Договор с ДС', row => row.contract_total),
+  moneyColumn('ks6', 'КС-6', row => row.ks2_cumulative_before),
+  moneyColumn('remainder', 'Остаток', row => row.remainder),
+  moneyColumn('ks2', 'КС-2', row => row.fact_amount),
+  moneyColumn('plan', 'План', row => row.plan_amount),
+  percentColumn(row => row.completion_pct),
+];
 
 /**
  * Таблица объекта по месяцам. КС-6 — сумма КС-2 за все прошлые месяцы (со стартом из ручного
@@ -241,3 +356,31 @@ export const defaultMonths = (options: ReadonlyArray<string>, currentMonth: stri
   return options.includes(previous) ? [previous] : [];
 };
 
+/** Параметры запроса премии; null — запрос ещё рано слать. */
+export interface IPremiumRequest {
+  period: IPeriod | null;
+  objectId: string | null;
+  months: string[] | null;
+}
+
+/**
+ * Когда и с чем звать премию. С объектом — по его полному окну (месяцы режет таблица), как
+ * раньше. «Все объекты» — только после базового окна: иначе первым ушёл бы тяжёлый запрос за
+ * весь период, а за ним второй — за месяц по умолчанию. Пустой выбор — «весь период».
+ */
+export const objectPremiumRequest = (params: {
+  objectId: string;
+  tablePeriod: IPeriod | undefined;
+  basePeriod: IPeriod | undefined;
+  activeMonths: ReadonlyArray<string>;
+}): IPremiumRequest | null => {
+  if (params.objectId) {
+    return params.tablePeriod ? { period: params.tablePeriod, objectId: params.objectId, months: null } : null;
+  }
+  if (!params.basePeriod) return null;
+  return {
+    period: null,
+    objectId: null,
+    months: params.activeMonths.length > 0 ? [...params.activeMonths].sort() : null,
+  };
+};

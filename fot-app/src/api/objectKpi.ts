@@ -62,6 +62,8 @@ export interface IObjectKpiObjectStat {
   skud_object_id: string;
   object_name: string;
   manager_names: string[];
+  /** Основной руководитель каждого месяца — ключ к премии. Старый бэкенд поля не отдаёт. */
+  manager_months?: Array<{ period_month: string; employee_id: number }>;
   contract_total: string | null;
   ks2_cumulative_before: string | null;
   remainder: string | null;
@@ -400,12 +402,14 @@ export const objectKpiApi = {
   /**
    * Премия руководителей по месяцам — вторым запросом к отчёту.
    * Считается совокупно по всем объектам руководителя (п. 3.5), даже если отчёт сужен.
+   * Набор месяцев (YYYY-MM) — вместо периода: сервер считает только их.
    */
   async getReportPremium(
     period?: IPeriod | null,
     objectId?: string | null,
+    months?: string[] | null,
   ): Promise<IReportPremiumResponse> {
-    return apiClient.get(`/object-kpi/report/premium${reportQuery(period, objectId)}`);
+    return apiClient.get(`/object-kpi/report/premium${reportQuery(period, objectId, months)}`);
   },
 
   /**

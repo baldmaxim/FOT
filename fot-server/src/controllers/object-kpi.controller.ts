@@ -24,6 +24,7 @@ import {
   assertCanManageAssignmentsOr403,
   canManageObjectKpiAssignments,
   loadAssignedObjectIds,
+  loadAssignedObjectIdsInMonths,
   resolveObjectKpiScope,
   type ObjectKpiScope,
 } from '../services/object-kpi-scope.service.js';
@@ -363,6 +364,10 @@ export const objectKpiController = {
    * фильтр «Объект»). Иначе руководитель попадает в hidden_manager_ids, а его премия не
    * считается: усечённая по одному объекту сумма была бы неверной, а совокупная раскрыла
    * бы чужие объекты. Сама формула (fetchManagerPremium) не меняется.
+   *
+   * Выбор месяцев вразброс (июль + сентябрь): закрепления — только в выбранных месяцах, а не
+   * во всём окне между ними. Иначе недоступный объект невыбранного августа скрыл бы премию
+   * целиком. На премию месяца объекты без дней в нём не влияют.
    */
   async getReportPremium(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -393,11 +398,13 @@ export const objectKpiController = {
 
       // Последовательно, а не Promise.all: каждый вызов открывает свою транзакцию
       // REPEATABLE READ и строит полный отчёт по объектам руководителя.
+      const selectedMonths = resolved.monthFilter
+        ? [...resolved.monthFilter].sort().map((month) => `${month}-01`)
+        : null;
       for (const employeeId of managerIds) {
-        const objectIds = await loadAssignedObjectIds(employeeId, monthFrom, {
-          from: monthFrom,
-          to: monthTo,
-        });
+        const objectIds = selectedMonths
+          ? await loadAssignedObjectIdsInMonths(employeeId, selectedMonths)
+          : await loadAssignedObjectIds(employeeId, monthFrom, { from: monthFrom, to: monthTo });
         if (objectIds.length === 0) continue;
 
         if (viewerObjects && objectIds.some((objectId) => !viewerObjects.has(objectId))) {
