@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  brigadeShareFacts,
   buildPayrollCalc,
   mergeTermsSegments,
   prorateDailyKopeckCents,
   prorateMinutesCents,
   prorateToRubleCents,
+  type IBrigadeShareFact,
   type ICalcTermsRow,
   type IPayrollCalcFacts,
+  type IPayrollCalcLine,
 } from './payroll-calc.rules.js';
 
 const terms = (over: Partial<ICalcTermsRow> = {}): ICalcTermsRow => ({
@@ -53,11 +56,21 @@ describe('«К выплате (ФОТ)»: пропорции как в ЗУП', 
 
 describe('«К выплате (ФОТ)»: оклад', () => {
   it('Абраменко, август: 11 из 21 дн. — до рубля или дневной ставкой по признаку условий', () => {
+    // Условия с июля — период части обрезан началом августа.
     expect(line(buildPayrollCalc(facts()), 'contract')).toEqual({
-      code: 'contract', amount: '130952.00', days: { worked: 11, norm: 21 },
+      code: 'contract',
+      amount: '130952.00',
+      days: { worked: 11, norm: 21 },
+      parts: [{
+        kind: 'salary', from: '2026-08-01', to: '2026-08-31', salary: '250000.00', bonus: '0.00', days: 11, norm: 21,
+        rounding: 'ruble', amount: '130952.00',
+      }],
     });
     const daily = buildPayrollCalc(facts({ terms: [terms({ proration_rounding: 'daily_kopeck' })] }));
     expect(line(daily, 'contract')?.amount).toBe('130952.36');
+    expect(line(daily, 'contract')?.parts).toEqual([
+      expect.objectContaining({ rounding: 'daily_kopeck', daily_rate: '11904.76', days: 11, amount: '130952.36' }),
+    ]);
   });
 
   it('полный месяц — оклад с премией как есть, с копейками', () => {
@@ -71,9 +84,21 @@ describe('«К выплате (ФОТ)»: оклад', () => {
 
   it('рабочих сверх нормы — оклад полностью, лишний день — «Переработка»: 24 при норме 23', () => {
     const result = buildPayrollCalc(facts({ normDays: 23, workdayDates: august(24), terms: [terms({ monthly_salary: '260000.00' })] }));
-    expect(line(result, 'contract')).toEqual({ code: 'contract', amount: '260000.00', days: { worked: 23, norm: 23 } });
+    expect(line(result, 'contract')).toMatchObject({
+      code: 'contract', amount: '260000.00', days: { worked: 23, norm: 23 },
+      parts: [{ kind: 'salary', rounding: 'whole', days: 23, norm: 23, amount: '260000.00' }],
+    });
+    expect(line(result, 'contract')?.filled_dayoffs).toBeUndefined();
     // 260 000 / 23 = 11 304,35 → 11 304.
-    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '11304.00', days: { worked: 1, norm: 23 } });
+    expect(line(result, 'overtime')).toEqual({
+      code: 'overtime',
+      amount: '11304.00',
+      days: { worked: 1, norm: 23 },
+      parts: [{
+        kind: 'overtime_days', from: '2026-08-01', to: '2026-08-31', salary: '260000.00', days: 1, norm: 23,
+        amount: '11304.00',
+      }],
+    });
   });
 
   it('выходы сначала добирают норму: 20 рабочих + 2 выхода при норме 21 — оклад 21/21 и один выход', () => {
@@ -82,9 +107,11 @@ describe('«К выплате (ФОТ)»: оклад', () => {
       dayoffDates: ['2026-08-01', '2026-08-30'],
       terms: [terms({ monthly_salary: '120000.00' })],
     }));
-    expect(line(result, 'contract')).toEqual({ code: 'contract', amount: '120000.00', days: { worked: 21, norm: 21 } });
+    expect(line(result, 'contract')).toMatchObject({
+      code: 'contract', amount: '120000.00', days: { worked: 21, norm: 21 }, filled_dayoffs: 1,
+    });
     // Добирает норму первый выход (1-е), «Переработка» — 30-е: 120 000 / 21 = 5 714,29 → 5 714.
-    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '5714.00', days: { worked: 1, norm: 21 } });
+    expect(line(result, 'overtime')).toMatchObject({ code: 'overtime', amount: '5714.00', days: { worked: 1, norm: 21 } });
   });
 
   it('смена одной компенсации — один сегмент: сумма как без неё', () => {
@@ -106,6 +133,10 @@ describe('«К выплате (ФОТ)»: оклад', () => {
     }));
     // 3–10 августа — 8 дней × 100 000 / 21 = 38 095,24 → 38 095; 11–13 — 3 дня × 200 000 / 21 = 28 571,43 → 28 571.
     expect(line(result, 'contract')?.amount).toBe('66666.00');
+    expect(line(result, 'contract')?.parts).toEqual([
+      expect.objectContaining({ from: '2026-08-01', to: '2026-08-10', salary: '100000.00', days: 8, amount: '38095.00' }),
+      expect.objectContaining({ from: '2026-08-11', to: '2026-08-31', salary: '200000.00', days: 3, amount: '28571.00' }),
+    ]);
   });
 
   it('почасовые условия — суммы нет, итог неполный', () => {
@@ -146,7 +177,7 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
       dayoffDates: ['2026-08-01', '2026-08-08', '2026-08-15', '2026-08-22'],
       terms: [terms({ monthly_salary: '92000.00' })],
     }));
-    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '16000.00', days: { worked: 4, norm: 23 } });
+    expect(line(result, 'overtime')).toMatchObject({ code: 'overtime', amount: '16000.00', days: { worked: 4, norm: 23 } });
   });
 
   it('выходы в разных сегментах — каждый по своему окладу', () => {
@@ -195,7 +226,10 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
 });
 
 describe('«К выплате (ФОТ)»: бригада', () => {
-  const share = { amount: '141818.18', ktu: '1.5', countedMinutes: 10560, distribution: 'ok' as const };
+  const share: IBrigadeShareFact = {
+    departmentId: 'b1', amount: '141818.18', ktu: '1.5', countedMinutes: 10560, distribution: 'ok',
+    output: '500000.00', totalWeight: 558_462,
+  };
 
   it('рабочий без оклада: доля по КТУ − удержания, «нет условий» не ставится', () => {
     const result = buildPayrollCalc(facts({
@@ -204,7 +238,15 @@ describe('«К выплате (ФОТ)»: бригада', () => {
       brigadeShares: [share],
       deductions: [{ kind_id: 1, kind: 'Питание', amount: '3500.00' }],
     }));
-    expect(result.lines).toEqual([{ code: 'brigade', amount: '141818.18', brigade: { ktu: '1.5', hours: 176 } }]);
+    expect(result.lines).toEqual([{
+      code: 'brigade',
+      amount: '141818.18',
+      brigade: { ktu: '1.5', hours: 176 },
+      parts: [{
+        kind: 'brigade', department_id: 'b1', output: '500000.00', ktu_tenths: 15, counted_minutes: 10560,
+        weight: 158_400, total_weight: 558_462, amount: '141818.18',
+      }],
+    }]);
     expect(result.net).toBe('138318.18');
     expect(result.missing).toEqual([]);
   });
@@ -235,7 +277,14 @@ describe('«К выплате (ФОТ)»: переработка в будни �
       overtimeMinutes: { '2026-08-04': 180, '2026-08-13': 180 },
     }));
     expect(line(result, 'overtime')).toEqual({
-      code: 'overtime', amount: '8928.57', days: { worked: 0, norm: 21 }, hours: 6,
+      code: 'overtime',
+      amount: '8928.57',
+      days: { worked: 0, norm: 21 },
+      hours: 6,
+      parts: [{
+        kind: 'overtime_hours', from: '2026-08-01', to: '2026-08-31', salary: '250000.00', minutes: 360,
+        norm_minutes: 10_080, amount: '8928.57',
+      }],
     });
   });
 
@@ -249,8 +298,12 @@ describe('«К выплате (ФОТ)»: переработка в будни �
       overtimeMinutes: { '2026-08-04': 120 },
     }));
     // Выход: 168 000 / 21 = 8 000; 2 ч: 168 000 × 120 / 10 080 = 2 000.
-    expect(line(result, 'overtime')).toEqual({
+    expect(line(result, 'overtime')).toMatchObject({
       code: 'overtime', amount: '10000.00', days: { worked: 1, norm: 21 }, hours: 2,
+      parts: [
+        { kind: 'overtime_days', days: 1, amount: '8000.00' },
+        { kind: 'overtime_hours', minutes: 120, amount: '2000.00' },
+      ],
     });
   });
 
@@ -289,13 +342,14 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
 
   it('без периода — как прежде: 3 выхода × 8 000 + 4 ч × 1 000', () => {
     const result = buildPayrollCalc(overtimeFacts());
-    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '28000.00', days: { worked: 3, norm: 21 }, hours: 4 });
+    expect(line(result, 'overtime')).toMatchObject({ code: 'overtime', amount: '28000.00', days: { worked: 3, norm: 21 }, hours: 4 });
     expect(result.net).toBe('196000.00');
   });
 
   it('период на весь месяц — строки «Переработка» нет, выходы-добор остаются в окладе', () => {
     const result = buildPayrollCalc(overtimeFacts({ overtimeStops: [{ date_from: '2026-08-01', date_to: null }] }));
-    expect(result.lines).toEqual([{ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } }]);
+    expect(result.lines).toMatchObject([{ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } }]);
+    expect(result.lines).toHaveLength(1);
     expect(result.net).toBe('168000.00');
     expect(result.missing).toEqual([]);
   });
@@ -303,8 +357,8 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
   it('часть месяца (по — включительно): снимаются выходы и часы только своих дат', () => {
     const result = buildPayrollCalc(overtimeFacts({ overtimeStops: [{ date_from: '2026-08-08', date_to: '2026-08-22' }] }));
     // Выход 8-го — добор нормы, он в окладе; 15 и 22-го сняты, 29-го — 8 000. Часы: 4-го и 24-го — 3 ч = 3 000.
-    expect(line(result, 'contract')).toEqual({ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } });
-    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '11000.00', days: { worked: 1, norm: 21 }, hours: 3 });
+    expect(line(result, 'contract')).toMatchObject({ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } });
+    expect(line(result, 'overtime')).toMatchObject({ code: 'overtime', amount: '11000.00', days: { worked: 1, norm: 21 }, hours: 3 });
     expect(result.net).toBe('179000.00');
   });
 
@@ -325,5 +379,127 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
     const stopped = buildPayrollCalc({ ...hourly, ...stop });
     expect(stopped.missing).toEqual([]);
     expect(line(stopped, 'overtime')).toBeUndefined();
+  });
+});
+
+describe('«К выплате (ФОТ)»: части строк и неизвестный итог', () => {
+  const brigadeShare = (over: Partial<IBrigadeShareFact> = {}): IBrigadeShareFact => ({
+    departmentId: 'b1', amount: '100000.00', ktu: '1.0', countedMinutes: 9_600, distribution: 'ok',
+    output: '300000.00', totalWeight: 288_000, ...over,
+  });
+
+  /** Сумма известных частей строки в копейках. */
+  const partsCents = (item: IPayrollCalcLine): number => (item.parts ?? [])
+    .reduce((sum, part) => sum + (part.amount === null ? 0 : Math.round(Number(part.amount) * 100)), 0);
+
+  it('сумма известных частей = сумма строки: сегменты, премиальная, переработка, проезд, проживание, разовая', () => {
+    const result = buildPayrollCalc(facts({
+      normDays: 21,
+      normMinutes: 10_080,
+      workdayDates: august(20),
+      dayoffDates: ['2026-08-01', '2026-08-29', '2026-08-30'],
+      terms: [
+        terms({ effective_to: '2026-08-14', monthly_salary: '100000.00', bonus_amount: '15000.00' }),
+        terms({ effective_from: '2026-08-15', monthly_salary: '130000.00', proration_rounding: 'daily_kopeck' }),
+      ],
+      overtimeMinutes: { '2026-08-04': 90, '2026-08-20': 45 },
+      plannedSupplements: [{ amount: '20000.00', date_from: '2026-08-10', date_to: null }],
+      oneTimeTotal: '5000.00',
+      rateAllowances: [
+        { code: 'travel', amount: '2600.00', days: { worked: 20, norm: 21 }, rate: '2730.00' },
+        { code: 'housing', amount: '15000.00' },
+      ],
+    }));
+    expect(result.lines.map(item => item.code)).toEqual(['contract', 'bonus', 'overtime', 'supplement', 'travel', 'housing']);
+    for (const item of result.lines) {
+      expect(item.parts?.length, item.code).toBeGreaterThan(0);
+      expect(partsCents(item), item.code).toBe(Math.round(Number(item.amount) * 100));
+    }
+    // Выход 1-го добирает норму; 29 и 30-го — переработка во втором сегменте; часы 4-го и 20-го — по своим сегментам.
+    expect(line(result, 'overtime')?.parts).toMatchObject([
+      { kind: 'overtime_days', from: '2026-08-15', to: '2026-08-31', salary: '130000.00', days: 2 },
+      { kind: 'overtime_hours', from: '2026-08-01', to: '2026-08-14', salary: '100000.00', minutes: 90 },
+      { kind: 'overtime_hours', from: '2026-08-15', to: '2026-08-31', salary: '130000.00', minutes: 45 },
+    ]);
+    expect(line(result, 'contract')?.filled_dayoffs).toBe(1);
+    expect(line(result, 'travel')?.parts).toEqual([{ kind: 'travel', rate: '2730.00', days: 20, norm: 21, amount: '2600.00' }]);
+    expect(line(result, 'housing')?.parts).toEqual([{ kind: 'housing', housing: 'apartment', amount: '15000.00' }]);
+    expect(line(result, 'supplement')?.parts).toEqual([{ kind: 'one_time', amount: '5000.00' }]);
+    expect(line(result, 'bonus')?.parts).toEqual([
+      expect.objectContaining({ kind: 'planned_supplement', from: '2026-08-10', to: '2026-08-31', base: '20000.00' }),
+    ]);
+    expect(result.net).not.toBeNull();
+  });
+
+  it('доплата за общежитие — часть «общежитие»', () => {
+    const result = buildPayrollCalc(facts({ rateAllowances: [{ code: 'dormitory_allowance', amount: '160.00' }] }));
+    expect(line(result, 'housing')?.parts).toEqual([{ kind: 'housing', housing: 'dormitory', amount: '160.00' }]);
+  });
+
+  it.each([
+    ['hourly', facts({ terms: [terms({ calc_type: 'hourly', monthly_salary: null })] })],
+    ['no_terms', facts({ terms: [terms({ effective_from: '2026-08-10' })] })],
+    ['no_norm', facts({ normDays: 0 })],
+    ['brigade_output', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'no_output', output: null })] })],
+    ['brigade_no_hours', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'nothing_to_distribute' })] })],
+    ['brigade_error', facts({ workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'error' })] })],
+  ])('%s — итог неизвестен (net null), начислено — только известная часть', (reason, input) => {
+    const result = buildPayrollCalc(input);
+    expect(result.missing).toContain(reason);
+    expect(result.net).toBeNull();
+  });
+
+  it('отпуск — итог есть: отпускные считает 1С, это не неизвестная сумма', () => {
+    const result = buildPayrollCalc(facts({ absenceDays: { vacation: 5, sick: 0, educational_leave: 0, unpaid: 0 } }));
+    expect(result.missing).toEqual(['vacation_pay']);
+    expect(result.net).toBe('130952.00');
+  });
+
+  it('выработка есть, делить не по чему — brigade_no_hours, не brigade_output', () => {
+    const result = buildPayrollCalc(facts({
+      workdayDates: [], terms: [], brigadeShares: [brigadeShare({ amount: null, distribution: 'nothing_to_distribute' })],
+    }));
+    expect(result.missing).toEqual(['brigade_no_hours']);
+  });
+
+  it('две бригады: одна посчитана, у другой выработки нет — строка частичная, итог неизвестен', () => {
+    const result = buildPayrollCalc(facts({
+      workdayDates: [],
+      terms: [],
+      brigadeShares: [
+        brigadeShare(),
+        brigadeShare({ departmentId: 'b2', amount: null, distribution: 'no_output', output: null }),
+      ],
+    }));
+    const brigade = line(result, 'brigade')!;
+    expect(brigade.amount).toBe('100000.00');
+    expect(brigade.parts?.map(part => part.amount)).toEqual(['100000.00', null]);
+    expect(partsCents(brigade)).toBe(10_000_000);
+    expect(result.missing).toEqual(['brigade_output']);
+    expect(result.net).toBeNull();
+    expect(result.accrued).toBe('100000.00');
+  });
+});
+
+describe('brigadeShareFacts — доли бригады с весами', () => {
+  it('веса — КТУ в десятых × минуты, не округлённые часы; Σ весов — по всем строкам расчёта', () => {
+    const facts = brigadeShareFacts('b1', 'ok', '100000.00', [
+      { employee_id: 1, ktu: '1.5', counted_minutes: 10_595, amount: '61234.57' },
+      { employee_id: 2, ktu: '1.0', counted_minutes: 10_053, amount: '38765.43' },
+    ]);
+    // 15 × 10 595 + 10 × 10 053 = 158 925 + 100 530.
+    expect(facts.get(1)).toMatchObject({ departmentId: 'b1', output: '100000.00', totalWeight: 259_455, distribution: 'ok' });
+    const result = buildPayrollCalc({
+      monthStart: '2026-08-01', monthEnd: '2026-08-31', normDays: null, workdayDates: [], dayoffDates: [],
+      absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
+      oneTimeTotal: null, rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
+    });
+    expect(result.lines[0].parts).toEqual([expect.objectContaining({ weight: 158_925, total_weight: 259_455, counted_minutes: 10_595 })]);
+  });
+
+  it('сохранённый расчёт без долей при введённой выработке — делить было не по чему', () => {
+    const rows = [{ employee_id: 1, ktu: '1.0', counted_minutes: 0, amount: null }];
+    expect(brigadeShareFacts('b1', 'no_output', '50000.00', rows).get(1)?.distribution).toBe('nothing_to_distribute');
+    expect(brigadeShareFacts('b1', 'no_output', null, rows).get(1)?.distribution).toBe('no_output');
   });
 });

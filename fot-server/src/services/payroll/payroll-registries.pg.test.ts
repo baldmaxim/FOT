@@ -251,6 +251,27 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     expect(await found({ cf: JSON.stringify({ text: { name: 'акмов' } }) })).toEqual([]);
   });
 
+  it('«Расчёты» из карточки: employee_id — ровно один сотрудник, тёзки не попадают; без ФИО — тоже по id', async () => {
+    await run(`INSERT INTO employees (id, full_name, org_department_id) VALUES
+      (7, 'Тёзкин Иван Иванович', '${D1}'), (8, 'Тёзкин Иван Иванович', '${D1}'), (9, NULL, '${D1}')`);
+    try {
+      const list = async (query: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.list(req({ query }), res);
+        return res;
+      };
+      const ids = async (query: Record<string, string>) => (await list(query)).body.data
+        .map((r: { employee_id: number }) => r.employee_id);
+      expect(await ids({ q: 'Тёзкин Иван Иванович' })).toEqual([7, 8]);
+      expect(await ids({ q: 'Тёзкин Иван Иванович', employee_id: '8' })).toEqual([8]);
+      expect(await ids({ employee_id: '9' })).toEqual([9]);
+      expect((await list({ employee_id: '9' })).body.meta.total).toBe(1);
+      expect((await list({ employee_id: 'abc' })).statusCode).toBe(400);
+    } finally {
+      await run('DELETE FROM employees WHERE id IN (7, 8, 9)');
+    }
+  });
+
   it('324: «Проезд» в списке условий — ставка за месяц даты и «Без проезда» в месяце; квартира — ставка текущего месяца', async () => {
     const month = currentRateMonth();
     const [housing, travel] = await listRates();

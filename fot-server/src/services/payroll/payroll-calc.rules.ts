@@ -19,7 +19,9 @@
  *   доли нет, итог помечен неполным;
  * - «Удержано» — удержания «Справочника» за месяц по видам.
  * Итог «К выплате (ФОТ)» = начислено − удержано, без НДФЛ — как «Выплачено» из 1С. Отпускные, больничные и
- * учебный отпуск ФОТ не считает: дни есть — итог помечается неполным (missing).
+ * учебный отпуск ФОТ не считает: дни есть — итог помечается неполным (missing). Сумму строки посчитать нельзя
+ * (почасовые условия, нет условий или нормы, доли бригады нет) — итог null: частичная сумма за итог не выдаётся.
+ * Под строками — части (parts): из чего сумма, те же числа, что в ней.
  *
  * Сегменты: соседние строки условий с одинаковыми видом оплаты, окладом, премией и округлением склеиваются —
  * смена одной компенсации даёт новую строку условий, но не новую границу округления.
@@ -32,9 +34,58 @@ import type { ProrationRounding } from './payroll-terms.service.js';
 
 export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
 
+/**
+ * brigade_output — выработка бригады не введена; brigade_no_hours — введена, но делить не по чему (нет учтённых
+ * часов); brigade_error — расчёт бригады с ошибкой.
+ */
 export type PayrollCalcMissing =
   | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
-  | 'brigade_output' | 'brigade_error';
+  | 'brigade_output' | 'brigade_no_hours' | 'brigade_error';
+
+/**
+ * Из чего сумма строки — расшифровка в листке. Части строятся там же, где сумма, и складываются в неё до копейки
+ * (известные; неизвестная доля бригады — amount null). Деньги — NUMERIC текстом, периоды обрезаны границами месяца.
+ */
+export type PayrollCalcLinePart =
+  | {
+    kind: 'salary';
+    from: string;
+    to: string;
+    salary: string;
+    bonus: string;
+    days: number;
+    norm: number;
+    /** whole — полный месяц одним сегментом, оклад как есть; daily_kopeck — дневная ставка до копейки × дни. */
+    rounding: 'whole' | 'ruble' | 'daily_kopeck';
+    daily_rate?: string;
+    amount: string;
+  }
+  | { kind: 'planned_supplement'; from: string; to: string; base: string; days: number; norm: number; amount: string }
+  | { kind: 'overtime_days'; from: string; to: string; salary: string; days: number; norm: number; amount: string }
+  | {
+    kind: 'overtime_hours';
+    from: string;
+    to: string;
+    salary: string;
+    minutes: number;
+    norm_minutes: number;
+    amount: string;
+  }
+  | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
+  | { kind: 'one_time'; amount: string }
+  | {
+    kind: 'brigade';
+    department_id: string;
+    /** Выработка бригады; null — не введена. */
+    output: string | null;
+    ktu_tenths: number;
+    counted_minutes: number;
+    /** Вес сотрудника — КТУ в десятых × минуты; total_weight — сумма весов бригады (тот же расчёт доли). */
+    weight: number;
+    total_weight: number;
+    amount: string | null;
+  };
 
 export interface IPayrollCalcLine {
   /** Код статьи «Оплачено» (1С) — для сравнения построчно. */
@@ -43,20 +94,54 @@ export interface IPayrollCalcLine {
   amount: string | null;
   /** Из скольких дней: рабочих (у переработки — выходов) из нормы. */
   days?: { worked: number; norm: number | null };
+  /** Только у оклада: сколько выходов добрали норму (они в днях оклада). */
+  filled_dayoffs?: number;
   /** Только у переработки: часы в будни по корректировкам. */
   hours?: number;
   /** Только у доли бригады: КТУ и учтённые часы, по которым она посчитана. */
   brigade?: { ktu: string; hours: number };
+  parts?: PayrollCalcLinePart[];
 }
 
-/** Доля сотрудника в зафиксированном расчёте одной бригады. */
+/** Доля сотрудника в расчёте одной бригады (зафиксированном или предварительном). */
 export interface IBrigadeShareFact {
-  /** NUMERIC текстом; null — доли нет (выработка не введена или расчёт с ошибкой). */
+  departmentId: string;
+  /** NUMERIC текстом; null — доли нет (выработка не введена, делить не по чему или расчёт с ошибкой). */
   amount: string | null;
   ktu: string;
   countedMinutes: number;
   distribution: 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
+  /** Выработка бригады; null — не введена. */
+  output: string | null;
+  /** Сумма весов бригады — КТУ в десятых × минуты по строкам того же расчёта. */
+  totalWeight: number;
 }
+
+/** КТУ '1.5' → 15 десятых. */
+export const ktuTenths = (ktu: string): number => Math.round(Number(ktu) * 10);
+
+/**
+ * Факты долей бригады из строк её расчёта. Сохранённый расчёт отдаёт no_output и при введённой выработке, если
+ * делить было не по чему, — такая выработка уточняется до nothing_to_distribute.
+ */
+export const brigadeShareFacts = (
+  departmentId: string,
+  distribution: IBrigadeShareFact['distribution'],
+  output: string | null,
+  rows: ReadonlyArray<{ employee_id: number; ktu: string; counted_minutes: number; amount: string | null }>,
+): Map<number, IBrigadeShareFact> => {
+  const totalWeight = rows.reduce((sum, row) => sum + ktuTenths(row.ktu) * row.counted_minutes, 0);
+  const refined = distribution === 'no_output' && output !== null ? 'nothing_to_distribute' : distribution;
+  return new Map(rows.map(row => [Number(row.employee_id), {
+    departmentId,
+    amount: row.amount,
+    ktu: row.ktu,
+    countedMinutes: row.counted_minutes,
+    distribution: refined,
+    output,
+    totalWeight,
+  }]));
+};
 
 export interface IPayrollCalcDeduction {
   kind_id: number;
@@ -124,10 +209,18 @@ export interface IPayrollCalcResult {
   deductions: IPayrollCalcDeduction[];
   accrued: string;
   deducted: string;
-  /** Начислено − удержано, без НДФЛ. */
-  net: string;
+  /**
+   * Начислено − удержано, без НДФЛ; null — итог неизвестен: сумму строки ФОТ не посчитал (почасовые условия, нет
+   * условий или нормы, доли бригады нет). accrued тогда — только известная часть.
+   */
+  net: string | null;
   missing: PayrollCalcMissing[];
 }
+
+/** Причины, при которых итог «К выплате (ФОТ)» неизвестен: частичная сумма за итог не выдаётся. */
+export const NET_UNKNOWN_MISSING: ReadonlySet<PayrollCalcMissing> = new Set<PayrollCalcMissing>([
+  'hourly', 'no_terms', 'no_norm', 'brigade_output', 'brigade_no_hours', 'brigade_error',
+]);
 
 const nextIsoDay = (iso: string): string => {
   const [y, m, d] = iso.split('-').map(Number);
@@ -182,10 +275,19 @@ export const prorateMinutesCents = (amountCents: number, minutes: number, normMi
   Math.floor((2 * amountCents * minutes + normMinutes) / (2 * normMinutes))
 );
 
+/** Дневная ставка до копейки, половина вверх; в копейках. */
+const dailyKopeckRateCents = (amountCents: number, norm: number): number => Math.floor((2 * amountCents + norm) / (2 * norm));
+
 /** Дневная ставка до копейки (половина вверх) × дни; в копейках. */
 export const prorateDailyKopeckCents = (amountCents: number, days: number, norm: number): number => (
-  Math.floor((2 * amountCents + norm) / (2 * norm)) * days
+  dailyKopeckRateCents(amountCents, norm) * days
 );
+
+/** Период условий или доплаты в границах месяца — для подписи части. */
+const clampPeriod = (from: string, to: string | null, monthStart: string, monthEnd: string): { from: string; to: string } => ({
+  from: from < monthStart ? monthStart : from,
+  to: to === null || to > monthEnd ? monthEnd : to,
+});
 
 /**
  * Дни оклада и выходы «Переработки»: рабочие дни по порядку до нормы, недостающее — первыми выходами месяца;
@@ -238,6 +340,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     let contractCents = 0;
     let contractKnown = false;
     let contractUnknown = false;
+    const contractParts: PayrollCalcLinePart[] = [];
     for (const segment of segments) {
       const days = contractDates.filter(date => inRange(date, segment.from, segment.to)).length;
       if (days === 0) continue;
@@ -248,29 +351,61 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
       }
       const base = segment.salaryCents + segment.bonusCents;
       contractKnown = true;
-      if (wholeMonthSegment && days === norm) contractCents += base;
-      else if (segment.rounding === 'daily_kopeck') contractCents += prorateDailyKopeckCents(base, days, norm);
-      else contractCents += prorateToRubleCents(base, days, norm);
+      const rounding = wholeMonthSegment && days === norm ? 'whole' : segment.rounding;
+      const partCents = rounding === 'whole' ? base
+        : rounding === 'daily_kopeck' ? prorateDailyKopeckCents(base, days, norm)
+          : prorateToRubleCents(base, days, norm);
+      contractCents += partCents;
+      contractParts.push({
+        kind: 'salary',
+        ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+        salary: centsToAmount(segment.salaryCents),
+        bonus: centsToAmount(segment.bonusCents),
+        days,
+        norm,
+        rounding,
+        ...(rounding === 'daily_kopeck' ? { daily_rate: centsToAmount(dailyKopeckRateCents(base, norm)) } : {}),
+        amount: centsToAmount(partCents),
+      });
     }
     if (contractDates.some(date => segmentOf(date) === null)) missing.add('no_terms');
     if (contractKnown || contractUnknown) {
+      const dayoffs = new Set(facts.dayoffDates);
+      const filledDayoffs = contractDates.filter(date => dayoffs.has(date)).length;
       lines.push({
         code: 'contract',
         amount: contractUnknown && !contractKnown ? null : centsToAmount(contractCents),
         days: { worked: contractDates.length, norm },
+        ...(filledDayoffs > 0 ? { filled_dayoffs: filledDayoffs } : {}),
+        parts: contractParts,
       });
     }
 
     // Премиальная: плановая доплата пропорционально дням оклада в её периоде.
     let bonusCents = 0;
+    const bonusParts: PayrollCalcLinePart[] = [];
     for (const period of facts.plannedSupplements) {
       const days = contractDates.filter(date => inRange(date, period.date_from, period.date_to)).length;
       if (days === 0) continue;
       const wholeMonth = period.date_from <= facts.monthStart && (period.date_to === null || period.date_to >= facts.monthEnd);
-      bonusCents += wholeMonth && days === norm ? cents(period.amount) : prorateToRubleCents(cents(period.amount), days, norm);
+      const partCents = wholeMonth && days === norm ? cents(period.amount) : prorateToRubleCents(cents(period.amount), days, norm);
+      bonusCents += partCents;
+      bonusParts.push({
+        kind: 'planned_supplement',
+        ...clampPeriod(period.date_from, period.date_to, facts.monthStart, facts.monthEnd),
+        base: centsToAmount(cents(period.amount)),
+        days,
+        norm,
+        amount: centsToAmount(partCents),
+      });
     }
     if (bonusCents > 0) {
-      lines.push({ code: 'bonus', amount: centsToAmount(bonusCents), days: { worked: contractDates.length, norm } });
+      lines.push({
+        code: 'bonus',
+        amount: centsToAmount(bonusCents),
+        days: { worked: contractDates.length, norm },
+        parts: bonusParts,
+      });
     }
 
     // «Без переработки» — после добора нормы: выходы в окладе остаются.
@@ -299,13 +434,38 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   if (daysBySegment.size > 0 || minutesBySegment.size > 0) {
     let overtimeCents = 0;
     let overtimeUnknown = false;
+    const overtimeParts: PayrollCalcLinePart[] = [];
     for (const [segment, count] of daysBySegment) {
-      if (segment.calcType === 'hourly') overtimeUnknown = true;
-      else if (norm !== null) overtimeCents += prorateToRubleCents(segment.salaryCents, count, norm);
+      if (segment.calcType === 'hourly') {
+        overtimeUnknown = true;
+      } else if (norm !== null) {
+        const partCents = prorateToRubleCents(segment.salaryCents, count, norm);
+        overtimeCents += partCents;
+        overtimeParts.push({
+          kind: 'overtime_days',
+          ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+          salary: centsToAmount(segment.salaryCents),
+          days: count,
+          norm,
+          amount: centsToAmount(partCents),
+        });
+      }
     }
     for (const [segment, minutes] of minutesBySegment) {
-      if (segment.calcType === 'hourly') overtimeUnknown = true;
-      else if (normMinutes !== null) overtimeCents += prorateMinutesCents(segment.salaryCents, minutes, normMinutes);
+      if (segment.calcType === 'hourly') {
+        overtimeUnknown = true;
+      } else if (normMinutes !== null) {
+        const partCents = prorateMinutesCents(segment.salaryCents, minutes, normMinutes);
+        overtimeCents += partCents;
+        overtimeParts.push({
+          kind: 'overtime_hours',
+          ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+          salary: centsToAmount(segment.salaryCents),
+          minutes,
+          norm_minutes: normMinutes,
+          amount: centsToAmount(partCents),
+        });
+      }
     }
     if (overtimeUnknown) missing.add('hourly');
     const hours = [...minutesBySegment.values()].reduce((sum, minutes) => sum + minutes, 0) / 60;
@@ -314,6 +474,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
       amount: overtimeUnknown && overtimeCents === 0 ? null : centsToAmount(overtimeCents),
       days: { worked: overtimeDays.length, norm },
       ...(hours > 0 ? { hours: Math.round(hours * 100) / 100 } : {}),
+      parts: overtimeParts,
     });
   }
 
@@ -321,7 +482,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   if (shares.length > 0) {
     const known = shares.filter(share => share.amount !== null);
     for (const share of shares.filter(item => item.amount === null)) {
-      missing.add(share.distribution === 'error' ? 'brigade_error' : 'brigade_output');
+      missing.add(share.distribution === 'error' ? 'brigade_error'
+        : share.distribution === 'nothing_to_distribute' ? 'brigade_no_hours' : 'brigade_output');
     }
     lines.push({
       code: 'brigade',
@@ -330,18 +492,33 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
         ktu: shares[0].ktu,
         hours: Math.round((shares.reduce((sum, share) => sum + share.countedMinutes, 0) / 60) * 100) / 100,
       },
+      parts: shares.map(share => ({
+        kind: 'brigade' as const,
+        department_id: share.departmentId,
+        output: share.output,
+        ktu_tenths: ktuTenths(share.ktu),
+        counted_minutes: share.countedMinutes,
+        weight: ktuTenths(share.ktu) * share.countedMinutes,
+        total_weight: share.totalWeight,
+        amount: share.amount === null ? null : centsToAmount(cents(share.amount)),
+      })),
     });
   }
 
   if (facts.oneTimeTotal !== null && cents(facts.oneTimeTotal) > 0) {
-    lines.push({ code: 'supplement', amount: centsToAmount(cents(facts.oneTimeTotal)) });
+    const amount = centsToAmount(cents(facts.oneTimeTotal));
+    lines.push({ code: 'supplement', amount, parts: [{ kind: 'one_time', amount }] });
   }
   for (const allowance of facts.rateAllowances) {
     if (allowance.code === 'travel') {
-      lines.push({ code: 'travel', amount: allowance.amount, days: allowance.days });
+      const travelParts: PayrollCalcLinePart[] = allowance.rate !== undefined && allowance.days
+        ? [{ kind: 'travel', rate: allowance.rate, days: allowance.days.worked, norm: allowance.days.norm, amount: allowance.amount }]
+        : [];
+      lines.push({ code: 'travel', amount: allowance.amount, days: allowance.days, parts: travelParts });
     } else {
       // Квартира и доплата за общежитие — одна статья 1С «Компенсация проживания».
-      lines.push({ code: 'housing', amount: allowance.amount });
+      const housing = allowance.code === 'housing' ? 'apartment' : 'dormitory';
+      lines.push({ code: 'housing', amount: allowance.amount, parts: [{ kind: 'housing', housing, amount: allowance.amount }] });
     }
   }
   if (segments.length === 0 && facts.workdayDates.length > 0) missing.add('no_terms');
@@ -352,12 +529,13 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
 
   const accruedCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
   const deductedCents = facts.deductions.reduce((sum, deduction) => sum + cents(deduction.amount), 0);
+  const netKnown = ![...missing].some(code => NET_UNKNOWN_MISSING.has(code)) && lines.every(line => line.amount !== null);
   return {
     lines,
     deductions: [...facts.deductions],
     accrued: centsToAmount(accruedCents),
     deducted: centsToAmount(deductedCents),
-    net: centsToAmount(accruedCents - deductedCents),
+    net: netKnown ? centsToAmount(accruedCents - deductedCents) : null,
     missing: [...missing],
   };
 };

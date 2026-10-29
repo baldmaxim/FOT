@@ -2,7 +2,6 @@ import type { IPayrollCalcLine } from '../services/payrollService';
 import type { TimesheetEmployee, TimesheetEntry, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../types/timesheet';
 import { calcLineDaysNote, calcMissingNote } from './payrollCalc';
-import { preliminaryText } from './payrollCalcColumns';
 import { formatPaidAmount } from './payrollPaid';
 
 /** Строка вкладки «Зарплата» у сотрудника, если он в составе (начальник участка, «Руководитель» — нет). */
@@ -25,27 +24,20 @@ export const formatSalaryAmount = (amount: string | null): string => (
 export const formatKtu = (value: string): string => value.replace('.', ',');
 
 /**
- * Предварительный расчёт отдела: «Табель не закрыт, предварительно» (прошлый месяц целиком) или «…, предварительно
- * по 27.10» (текущий); as_of нет — без даты.
+ * Суммы строки приглушены: бригада «Требует перерасчёта». Отдел — никогда: закрыт табель или нет, на экране не
+ * помечается (решение 29.10.2026).
  */
-export const salaryPreliminaryTitle = (data: ITimesheetSalaryResponse): string => {
-  const text = data.as_of ? preliminaryText(data.month, data.as_of) : 'табель не закрыт, предварительно';
-  return text.charAt(0).toUpperCase() + text.slice(1);
-};
-
-/** Суммы строки приглушены: бригада «Требует перерасчёта» или предварительный расчёт отдела. */
 export const isSalaryRowMuted = (
   data: ITimesheetSalaryResponse | undefined,
   row: ITimesheetSalaryRow | null,
 ): boolean => {
   if (!data || !row) return false;
-  return data.kind === 'brigade' ? data.state === 'stale' : row.payout_state === 'preliminary';
+  return data.kind === 'brigade' && data.state === 'stale';
 };
 
 /**
  * Подсказка «Суммы» (к выплате: начислено − удержания, без НДФЛ). Бригада — из чего она: «Доля 141 818,18 · КТУ 1,5 ·
- * 176 ч · удержано 3 500,00»; отдел — «К выплате (ФОТ)», «Табель не закрыт, предварительно» или «Табель не закрыт».
- * Чего в сумме нет — в конце.
+ * 176 ч · удержано 3 500,00»; отдел — «К выплате (ФОТ)», посчитать нечем — без подсказки. Чего в сумме нет — в конце.
  */
 export const salaryAmountTitle = (data: ITimesheetSalaryResponse, row: ITimesheetSalaryRow): string | undefined => {
   const parts: string[] = [];
@@ -56,8 +48,8 @@ export const salaryAmountTitle = (data: ITimesheetSalaryResponse, row: ITimeshee
     if (row.deducted && Number(row.deducted) > 0) parts.push(`удержано ${formatSalaryAmount(row.deducted)}`);
     if (data.state === 'fixed' && row.source === 'live') parts.push('нет в закрытом табеле — по данным портала');
   } else {
-    if (row.payout_state === 'not_closed') return 'Табель не закрыт';
-    parts.push(row.payout_state === 'preliminary' ? salaryPreliminaryTitle(data) : 'К выплате (ФОТ)');
+    if (row.payout_state === 'not_closed') return undefined;
+    parts.push('К выплате (ФОТ)');
     if (row.deducted && Number(row.deducted) > 0) parts.push(`удержано ${formatSalaryAmount(row.deducted)}`);
   }
   const missing = calcMissingNote(row.missing ?? []);
@@ -66,22 +58,15 @@ export const salaryAmountTitle = (data: ITimesheetSalaryResponse, row: ITimeshee
 };
 
 /**
- * Подсказка «Оклада» / «Переработки»: табель не закрыт — так и пишем; строка есть — из скольких дней или часов
- * («22 из 22 дн.», «2 ч»); табель закрыт, а строки нет (нет переработки) — без подсказки. Предварительный расчёт —
- * «Табель не закрыт, предварительно» и дни строки, если есть.
+ * Подсказка «Оклада» / «Переработки»: из скольких дней или часов («22 из 22 дн.», «2 ч»); строки нет (нет
+ * переработки) или посчитать нечем — без подсказки.
  */
 export const salaryLineTitle = (
-  data: ITimesheetSalaryResponse,
   row: ITimesheetSalaryRow,
   line: IPayrollCalcLine | null | undefined,
 ): string | undefined => {
-  if (row.payout_state === 'not_closed') return 'Табель не закрыт';
-  const days = line ? calcLineDaysNote(line) : null;
-  if (row.payout_state === 'preliminary') {
-    const title = salaryPreliminaryTitle(data);
-    return days ? `${title} · ${days}` : title;
-  }
-  return days ?? undefined;
+  if (row.payout_state === 'not_closed') return undefined;
+  return (line ? calcLineDaysNote(line) : null) ?? undefined;
 };
 
 /** Подпись под суммой «Переработки»: часы будней и выходы сверх нормы («1 вых. · 2 ч»); у других строк — null. */

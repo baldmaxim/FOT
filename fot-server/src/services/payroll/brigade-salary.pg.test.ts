@@ -275,12 +275,15 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграция 330)', ()
     const shares = await getBrigadeShares(req, BRIGADE, '2026-09');
 
     expect(shares.state).toBe('fixed');
+    expect(shares.output_amount).toBe('312000.00');
     expect(amounts(shares.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
     expect(amounts((await getBrigadeSalary(req, BRIGADE, '2026-09')).rows)).toEqual(amounts(shares.rows));
     expect(await q('SELECT 1 FROM brigade_salary_results')).toHaveLength(1);
 
     await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
-    expect(await getBrigadeShares(req, BRIGADE, '2026-09')).toEqual({ state: 'open', distribution: null, rows: [] });
+    expect(await getBrigadeShares(req, BRIGADE, '2026-09')).toEqual({
+      state: 'open', distribution: null, output_amount: null, rows: [],
+    });
   });
 
   it('половина не закрыта и результата не было → «Предварительно» по живому табелю, ничего не сохраняется', async () => {

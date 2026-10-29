@@ -83,22 +83,30 @@ beforeEach(() => {
 
 describe('«К выплате (ФОТ)» бригады', () => {
   it('рабочий: доля − удержания; то же число во вкладке табеля', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
 
     const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
 
     expect(calc).toMatchObject({ state: 'closed', net: '138318.18', missing: [] });
-    expect(calc?.state === 'closed' && calc.lines).toEqual([
-      { code: 'brigade', amount: '141818.18', brigade: { ktu: '1.5', hours: 176 } },
-    ]);
+    // Формула доли: выработка бригады и веса — КТУ в десятых × минуты (бригада из одного рабочего).
+    expect(calc?.state === 'closed' && calc.lines).toEqual([{
+      code: 'brigade',
+      amount: '141818.18',
+      brigade: { ktu: '1.5', hours: 176 },
+      parts: [{
+        kind: 'brigade', department_id: BRIGADE, output: '500000.00', ktu_tenths: 15, counted_minutes: 10560,
+        weight: 158_400, total_weight: 158_400, amount: '141818.18',
+      }],
+    }]);
     const tab = await previewBrigadePayouts(new Map([[7, {
-      amount: shareRow.amount, ktu: shareRow.ktu, countedMinutes: shareRow.counted_minutes, distribution: 'ok',
+      departmentId: BRIGADE, amount: shareRow.amount, ktu: shareRow.ktu, countedMinutes: shareRow.counted_minutes,
+      distribution: 'ok', output: '500000.00', totalWeight: 158_400,
     }]]), '2026-09');
     expect(tab.get(7)?.net).toBe('138318.18');
   });
 
   it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
 
     const calc = (await getPayoutForEmployees([8], '2026-09', req)).get(8);
 
@@ -110,7 +118,7 @@ describe('«К выплате (ФОТ)» бригады', () => {
   });
 
   it('«Без переработки» в месяце — переработки нет, итог — оклад', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', rows: [shareRow] });
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow] });
     const base = pg.query.getMockImplementation()!;
     pg.query.mockImplementation(async (sql: string, params?: unknown[]) => (sql.includes('FROM payroll_overtime_stops')
       ? [{ employee_id: 8, date_from: '2026-08-20', date_to: null }]
@@ -125,7 +133,7 @@ describe('«К выплате (ФОТ)» бригады', () => {
   });
 
   it('расчёт бригады не зафиксирован — месяц не закрыт', async () => {
-    brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, rows: [] });
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, output_amount: null, rows: [] });
 
     const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
 
@@ -152,7 +160,7 @@ describe('бригады — не больше трёх расчётов одн�
       await new Promise(resolve => setTimeout(resolve, 2));
       inFlight -= 1;
       const employeeId = Number(departmentId.replace('brigade-', ''));
-      return { state: 'fixed', distribution: 'ok', rows: [{ ...shareRow, employee_id: employeeId, amount: `${employeeId}.00` }] };
+      return { state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [{ ...shareRow, employee_id: employeeId, amount: `${employeeId}.00` }] };
     });
     const metrics = { basisMs: 0, brigades: 0, brigadesMs: 0, live: 0, liveMs: 0, restMs: 0, buildMs: 0 };
 

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { IPayrollTermsRow } from '../services/payrollService';
-import { dropPayrollDetails, openPayrollDetails, paymentsViewOptions, resolvePaymentsView } from './payrollViews';
+import {
+  calcViewFilters,
+  dropPayrollDetails,
+  openPayrollDetails,
+  paymentsViewOptions,
+  resolvePaymentsView,
+} from './payrollViews';
 
 const row = (employeeId: number): IPayrollTermsRow => ({
   employee_id: employeeId, full_name: `Сотрудник ${employeeId}`, tab_number: null, department_id: null,
@@ -79,5 +85,25 @@ describe('сотрудник вкладки «Подробно»', () => {
   it('сохранение A, завершившееся после открытия B, карточку B не трогает', () => {
     const second = row(2);
     expect(dropPayrollDetails(second, [1])).toBe(second);
+  });
+});
+
+describe('«Расчёты» после открытия карточки — только этот сотрудник', () => {
+  it('фокус — его id, ФИО в поиске и «Все отделы»; общие поиск и отдел не трогаются', () => {
+    expect(calcViewFilters({ employeeId: 42, fullName: 'Абдукаримов Элёр Камол Угли' }, 'Абдук', 'dept-1')).toEqual({
+      employeeId: 42, search: 'Абдукаримов Элёр Камол Угли', departmentId: '',
+    });
+  });
+
+  it('тёзки различаются по id; без ФИО — id и пустой поиск', () => {
+    expect(calcViewFilters({ employeeId: 7, fullName: 'Тёзкин Иван' }, '', '').employeeId).toBe(7);
+    expect(calcViewFilters({ employeeId: 8, fullName: 'Тёзкин Иван' }, '', '').employeeId).toBe(8);
+    expect(calcViewFilters({ employeeId: 9, fullName: null }, 'Абдук', 'dept-1')).toEqual({
+      employeeId: 9, search: '', departmentId: '',
+    });
+  });
+
+  it('фокус снят — общие с «Условиями оплаты» поиск и отдел', () => {
+    expect(calcViewFilters(null, 'Абдук', 'dept-1')).toEqual({ search: 'Абдук', departmentId: 'dept-1' });
   });
 });

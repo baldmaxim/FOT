@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { IPayslipTerms } from '../services/payrollService';
 import { toPaidAmounts } from './payrollPaid';
-import { formatPayslipTerms, payslipLines, payslipPeriodParts, payslipRateLines } from './payrollPayslip';
+import { formatPayslipSchedules, formatPayslipTerms, payslipLines, payslipPeriodParts, payslipRateLines } from './payrollPayslip';
 
 const plain = (value: string | null): string | null => (value === null ? null : value.replace(/\s/g, ' '));
 
@@ -147,5 +147,18 @@ describe('расчётный листок: «По ставкам ФОТ»', () =
     expect(payslipRateLines([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 } }]))
       .toEqual([{ code: 'travel', label: 'Проезд', amount: 2611, note: '22 из 23 дн.' }]);
     expect(payslipRateLines([{ code: 'travel', amount: '2730.00' }])[0]).not.toHaveProperty('note');
+  });
+});
+
+describe('расчётный листок: графики месяца', () => {
+  it('один график — без дат; несколько — с датами; нет (старый бэкенд) — null', () => {
+    expect(formatPayslipSchedules([{ name: '5+2 (Линия С/О)', from: '2026-09-01', to: '2026-09-30' }]))
+      .toBe('График месяца: «5+2 (Линия С/О)»');
+    expect(formatPayslipSchedules([
+      { name: 'Пятидневка', from: '2026-09-01', to: '2026-09-09' },
+      { name: '6+0 (11 ч)', from: '2026-09-10', to: '2026-09-30' },
+    ])).toBe('Графики месяца: «Пятидневка» с 01.09 по 09.09, «6+0 (11 ч)» с 10.09 по 30.09');
+    expect(formatPayslipSchedules([])).toBeNull();
+    expect(formatPayslipSchedules(undefined)).toBeNull();
   });
 });

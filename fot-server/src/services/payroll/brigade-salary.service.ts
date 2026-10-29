@@ -342,6 +342,8 @@ async function ensureFixed(
 export interface IBrigadeShares {
   state: 'fixed' | 'open';
   distribution: BrigadeDistributionState | null;
+  /** Выработка, по которой посчитаны доли; null — не введена (или расчёта нет). */
+  output_amount: string | null;
   rows: IBrigadeSalaryResultRow[];
 }
 
@@ -356,8 +358,13 @@ export async function getBrigadeShares(
 ): Promise<IBrigadeShares> {
   const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
   const fixed = closure.closed ? await ensureFixed(req, departmentId, month) : null;
-  if (!fixed) return { state: 'open', distribution: null, rows: [] };
-  return { state: 'fixed', distribution: fixed.stored.distribution, rows: fixed.stored.rows };
+  if (!fixed) return { state: 'open', distribution: null, output_amount: null, rows: [] };
+  return {
+    state: 'fixed',
+    distribution: fixed.stored.distribution,
+    output_amount: fixed.stored.output_amount,
+    rows: fixed.stored.rows,
+  };
 }
 
 /**
@@ -373,7 +380,7 @@ export async function computeBrigadePreliminaryShares(
   members: IBrigadeMembers,
 ): Promise<IBrigadeShares> {
   const { computation } = await computePreliminary(departmentId, month, asOf, inputs, members);
-  return { state: 'open', distribution: computation.distribution, rows: computation.rows };
+  return { state: 'open', distribution: computation.distribution, output_amount: inputs.output, rows: computation.rows };
 }
 
 /** Расчёт бригады для вкладки: закрытый месяц — зафиксированный, открытый — предварительный или прежний. */

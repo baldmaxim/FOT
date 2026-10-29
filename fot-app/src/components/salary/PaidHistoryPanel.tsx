@@ -182,6 +182,7 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, posit
               totals={selected.totals}
               transfers={selected.transfers}
               transferred={selected.transferred}
+              transfersFailed={payoutsQuery.isError}
             />
           </section>
         </div>

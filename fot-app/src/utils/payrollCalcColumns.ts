@@ -1,10 +1,11 @@
 /**
  * Столбцы состава зарплаты на «Расчётах» (решение пользователя 27.10.2026): что показать в ячейке и какие столбцы
- * пусты в выборке. ФОТ — расчёт по закрытому табелю (сервер, payroll-calc-columns.service): «Начислено по табелю»,
- * проезд, проживание, доплаты, удержания; из 1С — отпускные, больничные, перерасчёт и ведомости выплаты по способам.
- * Незакрытый или неполный месяц не превращается в ноль: строка помечается во всех столбцах ФОТ. Незакрытый табель
- * сервер считает предварительно по живому табелю (calc.preliminary, решение 28.10.2026): суммы показываются, под
- * «Начислено по табелю» — «табель не закрыт».
+ * пусты в выборке. ФОТ — расчёт по табелю (сервер, payroll-calc-columns.service): «Начислено по табелю», проезд,
+ * проживание, доплаты, удержания; из 1С — отпускные, больничные, перерасчёт и ведомости выплаты по способам.
+ * Закрыт табель или нет — на экране не помечается (решение 29.10.2026: незакрытый сервер считает по живому).
+ * Неполный месяц не превращается в ноль: «Сумма» — «—». Выработка бригады не введена — подпись «выработка не
+ * внесена» под «Начислено по табелю» и «Суммой», без ⚠; прочие причины (почасовая ставка, нет условий или нормы,
+ * нет учтённых часов или ошибка бригады) — ⚠ с подсказкой.
  */
 import type {
   IPayrollCalcColumns,
@@ -35,9 +36,8 @@ const CALC_SUM_FIELD: Record<
 
 export const isCalcSumColumn = (column: PayrollTableColumn): column is PayrollCalcSumColumn => column in CALC_SUM_FIELD;
 
-/** Подсказки шапки: из чего столбец. */
 /** Источник столбцов ФОТ в подсказке шапки. */
-const CALC_SOURCE = 'Расчёт ФОТ по табелю (незакрытый — предварительно)';
+const CALC_SOURCE = 'Расчёт ФОТ по табелю';
 
 export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, string>> = {
   calc_rate: 'Оклад (у почасовых — ставка) по условиям оплаты на последний день последнего выбранного месяца',
@@ -64,66 +64,43 @@ export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcSumColum
   row.calc?.[CALC_SUM_FIELD[column]] ?? null
 );
 
-/** Есть незакрытые (в том числе посчитанные предварительно) или неполные месяцы — суммы ФОТ строки не окончательные. */
-export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (
-  (calc?.open_months.length ?? 0) > 0 || (calc?.preliminary?.length ?? 0) > 0 || (calc?.incomplete.length ?? 0) > 0
-);
-
-/** «Начислено по табелю» нечем показать: суммы нет, а табель не закрыт — в ячейке «не закрыт». */
-export const calcNotClosed = (calc: IPayrollCalcColumns | null | undefined): boolean => (
-  calc?.timesheet === null && calc.open_months.length > 0
-);
+/** Есть неполные месяцы — суммы ФОТ строки не окончательные (в том числе выработка бригады не введена). */
+export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;
 
 const ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
   hourly: 'почасовая ставка, ФОТ не считает',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы',
   brigade_output: 'выработка бригады не введена',
+  brigade_no_hours: 'нет учтённых часов бригады',
   brigade_error: 'ошибка расчёта бригады',
   unknown_amount: 'сумма не посчитана',
 };
 
-/** «табель не закрыт, предварительно» — месяц целиком; текущий — «… по 27.10» (as_of не последний день месяца). */
-export const preliminaryText = (month: string, asOf: string): string => {
-  const [year, mon] = month.split('-').map(Number);
-  const wholeMonth = Number(asOf.slice(8, 10)) === new Date(year, mon, 0).getDate();
-  return wholeMonth
-    ? 'табель не закрыт, предварительно'
-    : `табель не закрыт, предварительно по ${asOf.slice(8, 10)}.${asOf.slice(5, 7)}`;
-};
-
 /**
  * Подсказка ⚠, причины одного месяца — в одной части: «Неполный расчёт: август — почасовая ставка, ФОТ не считает;
- * октябрь — табель не закрыт, предварительно по 27.10, выработка бригады не введена». Только предварительные
- * месяцы — «Предварительный расчёт: …».
+ * октябрь — нет учтённых часов бригады». «Выработка не введена» сюда не входит — она подписью (calcBrigadeOutputSub);
+ * других причин нет — null, ⚠ не показывается.
  */
 export const calcIssuesNote = (calc: IPayrollCalcColumns | null | undefined): string | null => {
-  if (!calc || !calcHasIssues(calc)) return null;
+  if (!calc) return null;
   const byMonth = new Map<string, string[]>();
-  const add = (month: string, text: string): void => { byMonth.set(month, [...(byMonth.get(month) ?? []), text]); };
-  for (const month of calc.open_months) add(month, 'табель не закрыт');
-  for (const item of calc.preliminary ?? []) add(item.month, preliminaryText(item.month, item.as_of));
-  for (const item of calc.incomplete) add(item.month, item.reasons.map(reason => ISSUE_LABELS[reason]).join(', '));
+  for (const item of calc.incomplete) {
+    const reasons = item.reasons.filter(reason => reason !== 'brigade_output');
+    if (reasons.length > 0) byMonth.set(item.month, reasons.map(reason => ISSUE_LABELS[reason]));
+  }
+  if (byMonth.size === 0) return null;
   const months = [...byMonth.keys()].sort();
   const withYear = accrualPeriodCrossesYear(months);
-  const title = calc.open_months.length > 0 || calc.incomplete.length > 0 ? 'Неполный расчёт' : 'Предварительный расчёт';
-  return `${title}: ${months
+  return `Неполный расчёт: ${months
     .map(month => `${formatAccrualMonthLabel(month, withYear).toLowerCase()} — ${byMonth.get(month)!.join(', ')}`)
     .join('; ')}`;
 };
 
-/**
- * Подпись под «Начислено по табелю» у предварительного расчёта: суммы нет из-за выработки бригады — «выработка не
- * внесена», иначе — «табель не закрыт». Закрытые месяцы — без подписи (там, как прежде, ⚠).
- */
-export const calcTimesheetSub = (
-  calc: IPayrollCalcColumns | null | undefined,
-  amount: string | null,
-): string | null => {
-  if (!calc?.preliminary?.length) return null;
-  const noOutput = amount === null && calc.incomplete.some(item => item.reasons.includes('brigade_output'));
-  return noOutput ? 'выработка не внесена' : 'табель не закрыт';
-};
+/** Подпись «выработка не внесена» под «Начислено по табелю» и «Суммой»: хоть в одном месяце выработки бригады нет. */
+export const calcBrigadeOutputSub = (calc: IPayrollCalcColumns | null | undefined): string | null => (
+  calc?.incomplete.some(item => item.reasons.includes('brigade_output')) ? 'выработка не внесена' : null
+);
 
 /** «Переработка»: из чего — «2 вых. · 6 ч»; нет — null. */
 export const overtimeNote = (calc: IPayrollCalcColumns | null | undefined): string | null => {
@@ -204,7 +181,10 @@ const SUM_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>
   'paid_sick', 'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'calc_net', 'card_payouts',
 ]);
 
-/** Данные строки в столбце сумм: любая сумма, в том числе 0 и минус; у «Начислено по табелю» — и неполный расчёт. */
+/**
+ * Данные строки в столбце сумм: любая сумма, в том числе 0 и минус; у «Начислено по табелю» и «Суммы» — и неполный
+ * расчёт (там «—» с подписью или ⚠: выборка из одних бригад без выработки не теряет столбцы).
+ */
 const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boolean => {
   switch (column) {
     case 'payout': return present(row.paid_total) || present(row.paid_deductions_total);
@@ -212,6 +192,7 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
     case 'deductions': return present(row.paid_deductions_total);
     case 'calc_rate': return Boolean(row.calc?.rate);
     case 'calc_timesheet': return present(row.calc?.timesheet) || calcHasIssues(row.calc);
+    case 'calc_net': return present(row.calc?.net) || calcHasIssues(row.calc);
     case 'paid_vacation': return present(row.paid_vacation);
     case 'paid_sick': return present(row.paid_sick_leave);
     case 'paid_recalc': return present(row.paid_recalc_prev);

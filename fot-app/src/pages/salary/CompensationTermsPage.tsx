@@ -66,6 +66,8 @@ interface ICompensationTermsPageProps {
   date: string;
   /** Список на экране. Скрытый список не размонтируется: фильтры, выделение и прокрутка сохраняются. */
   active: boolean;
+  /** «Расчёты»: только этот сотрудник (по id) — его карточка открыта в «Подробно». */
+  employeeId?: number;
   /** Поиск по ФИО — общий у «Условий оплаты» и «Расчётов»: крестик на одном экране чистит оба. */
   search: string;
   onSearchChange: (value: string) => void;
@@ -92,6 +94,7 @@ interface ICompensationTermsPageProps {
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   date,
   active,
+  employeeId,
   search,
   onSearchChange,
   departmentId,
@@ -122,7 +125,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     departmentId: departmentId || undefined,
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey]);
+    employeeId,
+  }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId]);
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir, paidMonths ?? null],
@@ -300,7 +304,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 
   const resetColumnFilters = () => setColumnFilters({});
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}`;
 
   return (
     <div className={styles.page}>

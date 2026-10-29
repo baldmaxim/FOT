@@ -5,6 +5,7 @@
  */
 import type {
   IPayslipRateAllowance,
+  IPayslipSchedule,
   IPayslipTerms,
   PayrollPaidItemCode,
   PayslipRateAllowanceCode,
@@ -84,3 +85,16 @@ export const formatPayslipTerms = (terms: readonly IPayslipTerms[]): string | nu
 export const payslipPeriodParts = (from: string | null, to: string | null): [string, string] | null => (
   from && to ? [`с ${formatDate(from)}`, `по ${formatDate(to)}`] : null
 );
+
+/**
+ * «Графики месяца: «5+2 (Линия С/О)»» — справочно, под «Расчётом ФОТ»; графиков несколько — с датами:
+ * «Пятидневка» с 01.09 по 09.09, «6+0 (11 ч)» с 10.09 по 30.09. Нет (старый бэкенд) — null.
+ */
+export const formatPayslipSchedules = (schedules: readonly IPayslipSchedule[] | undefined): string | null => {
+  if (!schedules || schedules.length === 0) return null;
+  const dayMonth = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+  const items = schedules.length === 1
+    ? [`«${schedules[0].name}»`]
+    : schedules.map(item => `«${item.name}» с ${dayMonth(item.from)} по ${dayMonth(item.to)}`);
+  return `${schedules.length === 1 ? 'График месяца' : 'Графики месяца'}: ${items.join(', ')}`;
+};

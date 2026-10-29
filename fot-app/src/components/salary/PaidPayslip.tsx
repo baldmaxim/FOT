@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { IEmployeePayout1c } from '../../services/payroll1cPayoutsService';
 import { payrollService } from '../../services/payrollService';
 import { pluralDays } from '../../utils/dateCompact';
+import { isCalcCounted, payslipRemainder, payslipShow1c } from '../../utils/payrollCalc';
 import { formatPaidAmount, paidCellKey, paidPayout, type PayrollPaidTotals } from '../../utils/payrollPaid';
 import {
   formatPayslipTerms,
@@ -24,9 +25,11 @@ interface IPaidPayslipProps {
   positionName: string | null;
   amounts: ReadonlyMap<string, number>;
   totals: PayrollPaidTotals;
-  /** Ведомости выплаты 1С за месяц начисления и их сумма (справочно, миграция 328). */
+  /** Ведомости выплаты 1С за месяц начисления и их сумма (справочно, миграция 328); null — ведомостей нет. */
   transfers: readonly IEmployeePayout1c[];
   transferred: number | null;
+  /** Ведомости не загрузились — «Остаток» не считается (иначе весь ФОТ выглядел бы остатком). */
+  transfersFailed: boolean;
 }
 
 const formatTotal = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
@@ -35,18 +38,19 @@ const formatTotal = (value: number | null): string => (value === null ? '—' : 
 const formatDocDate = (date: string): string => date.split('-').reverse().join('.');
 
 /**
- * Выбранный месяц вкладки «История выплат» — расчётный листок по подобию ЗУП. «Начислено за N дней»: первая строка —
- * должность и оклад, период, отработано дней (рабочие по графику / выходные сверх графика) и сумма
- * «По трудовому договору»; ниже прочие начисления и «Всего начислено». Затем «Удержано» и «Всего удержано».
- * Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад — из ФОТ: грузятся при выборе месяца.
- * «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
- * справочно, в «Всего начислено» и «К выплате» не входит. Долги прошлых месяцев из ведомости бригады
- * (PayslipDebtSection) — расшифровка строки «Погашение долгов прошлых месяцев» в «Удержано».
- * Ниже — «Расчёт ФОТ» по закрытому табелю (PayslipCalcSection) со столбцом «1С» для сравнения; месяц без сумм 1С
- * с закрытым табелем — только он. Старый бэкенд без расчёта — прежний блок «По ставкам ФОТ».
+ * Выбранный месяц вкладки «Зарплата» — расчётный листок, порядок как в «Условиях» (расчёт над выплаченным):
+ *  - «Расчёт ФОТ» по табелю, закрыт он или нет (PayslipCalcSection) — с формулами и столбцом «1С» для сравнения;
+ *    старый бэкенд без расчёта — прежний блок «По ставкам ФОТ»;
+ *  - «Начислено за N дней» по подобию ЗУП: первая строка — должность и оклад, период, отработано дней (рабочие по
+ *    графику / выходные сверх графика) и сумма «По трудовому договору»; ниже прочие начисления и «Всего начислено».
+ *    Затем «Удержано» и «Всего удержано». Суммы — «Оплачено» из 1С (уже загружены историей), период, дни и оклад —
+ *    из ФОТ: грузятся при выборе месяца. Сумм 1С нет, а расчёт есть — эти таблицы не показываются;
+ *  - долги прошлых месяцев из ведомости бригады (PayslipDebtSection) — расшифровка строки «Погашение долгов»;
+ *  - «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
+ *  - «Остаток (с НДФЛ)» — итог ФОТ минус перечисленное: НДФЛ в итоге ФОТ не вычтен, поэтому он сидит в остатке.
  */
 export const PaidPayslip: FC<IPaidPayslipProps> = ({
-  employeeId, month, positionName, amounts, totals, transfers, transferred,
+  employeeId, month, positionName, amounts, totals, transfers, transferred, transfersFailed,
 }) => {
   const payslipQuery = useQuery({
     // Под префиксом 'payroll-terms': сохранение карточки перечитывает и листок (оклад).
@@ -66,7 +70,8 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
   const calc = info?.calc;
   // Сумм 1С за месяц нет, а расчёт ФОТ есть — таблицы 1С из одних прочерков не показываются.
   const hasPaid = totals.accrued !== null || totals.deducted !== null;
-  const show1c = hasPaid || calc?.state !== 'closed';
+  const show1c = payslipShow1c(hasPaid, calc);
+  const remainder = payslipRemainder(calc, transfersFailed ? 'error' : transferred ?? 0);
 
   // Пока табель грузится — многоточие, нет данных — прочерк: суммы видны сразу.
   const fromInfo = (value: number | undefined): string => {
@@ -76,6 +81,47 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
 
   return (
     <div className={styles.payslip}>
+      {(payslipQuery.isPending || calc) && (
+        <PayslipCalcSection
+          month={month}
+          calc={calc}
+          schedules={info?.schedules}
+          amounts={amounts}
+          payout1c={hasPaid ? paidPayout(totals) : null}
+          deducted1c={totals.deducted}
+        />
+      )}
+
+      {info && !calc && rateLines.length > 0 && (
+        <section className={styles.part} aria-label="По ставкам ФОТ">
+          <p className={styles.partTitle}>По ставкам ФОТ</p>
+          <div className={styles.scroll}>
+            <table className={styles.table}>
+              <colgroup>
+                <col />
+                <col className={styles.sumCol} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col">Вид</th>
+                  <th scope="col" className={styles.num}>Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rateLines.map(line => (
+                  <tr key={line.code}>
+                    <th scope="row" className={styles.kind}>
+                      <span className={styles.kindName}>{line.label}</span>
+                      {line.note && <span className={styles.kindNote}>{line.note}</span>}
+                    </th>
+                    <td className={styles.num}>{formatPaidAmount(line.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       {show1c && (
         <section className={styles.part} aria-label="Начислено">
           <p className={styles.partTitle}>
@@ -222,46 +268,25 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
         </section>
       )}
 
-      {(payslipQuery.isPending || calc) && (
-        <PayslipCalcSection
-          month={month}
-          calc={calc}
-          amounts={amounts}
-          payout1c={hasPaid ? paidPayout(totals) : null}
-          deducted1c={totals.deducted}
-        />
-      )}
-
-      {info && !calc && rateLines.length > 0 && (
-        <section className={styles.part} aria-label="По ставкам ФОТ">
-          <p className={styles.partTitle}>По ставкам ФОТ</p>
+      {isCalcCounted(calc) && (
+        <section className={styles.part} aria-label="Остаток">
           <div className={styles.scroll}>
-            <table className={styles.table}>
+            <table className={`${styles.table} ${styles.remainderTable}`}>
               <colgroup>
                 <col />
                 <col className={styles.sumCol} />
               </colgroup>
-              <thead>
+              <tfoot>
                 <tr>
-                  <th scope="col">Вид</th>
-                  <th scope="col" className={styles.num}>Сумма</th>
+                  <th scope="row">Остаток (с НДФЛ)</th>
+                  <td className={styles.num}>{formatTotal(remainder)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {rateLines.map(line => (
-                  <tr key={line.code}>
-                    <th scope="row" className={styles.kind}>
-                      <span className={styles.kindName}>{line.label}</span>
-                      {line.note && <span className={styles.kindNote}>{line.note}</span>}
-                    </th>
-                    <td className={styles.num}>{formatPaidAmount(line.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
+              </tfoot>
             </table>
           </div>
         </section>
       )}
+
     </div>
   );
 };

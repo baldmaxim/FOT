@@ -154,7 +154,7 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     ...over,
   });
 
-  const fullTravel = { code: 'travel', amount: '2730.00', days: { worked: 21, norm: 21 } };
+  const fullTravel = { code: 'travel', amount: '2730.00', days: { worked: 21, norm: 21 }, rate: '2730.00' };
 
   it('проезд — офису и ИТР по ставке месяца; рабочим, «Без проезда» в месяце и без ставки — нет', () => {
     expect(pickPayslipRateAllowances(facts())).toEqual([fullTravel]);
@@ -167,10 +167,10 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
 
   it('проезд — по отработанным дням из нормы; дни сверх нормы в подписи не считаются', () => {
     expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 22, norm: 23 } })))
-      .toEqual([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 } }]);
+      .toEqual([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 }, rate: '2730.00' }]);
     // Назархудоев, август 2026: 22 рабочих + 8 выходных при норме 23 — ЗУП дал полную ставку.
     expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 30, norm: 23 } })))
-      .toEqual([{ code: 'travel', amount: '2730.00', days: { worked: 23, norm: 23 } }]);
+      .toEqual([{ code: 'travel', amount: '2730.00', days: { worked: 23, norm: 23 }, rate: '2730.00' }]);
   });
 
   it('нет в табеле, ни одного дня или норма 0 — строки проезда нет', () => {

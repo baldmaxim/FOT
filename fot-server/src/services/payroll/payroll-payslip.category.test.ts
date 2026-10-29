@@ -122,7 +122,7 @@ describe('getPayslipInfo — категория месяца по табелю',
 
     expect(info.worked_days).toEqual({ workday: 20, dayoff: 1 });
     // Выход в выходной считается: 2 730 × 21 / 22 = 2 605,91 → 2 606.
-    expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2606.00', days: { worked: 21, norm: 22 } }]);
+    expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2606.00', days: { worked: 21, norm: 22 }, rate: '2730.00' }]);
   });
 
   it('объект месяца «Не определён» — категория по нему, объект «Свода» по часам листок не считает', async () => {

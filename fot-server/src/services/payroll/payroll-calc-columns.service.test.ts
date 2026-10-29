@@ -164,6 +164,32 @@ describe('sumCalcColumns', () => {
     ]);
   });
 
+  it.each(['hourly', 'no_terms', 'no_norm', 'brigade_output', 'brigade_no_hours', 'brigade_error'] as const)(
+    'итог месяца неизвестен (%s) — «Сумма» за все месяцы null, столбцы — известные суммы',
+    reason => {
+      const result = sumCalcColumns([
+        ['2026-08', closed({ lines: [{ code: 'contract', amount: '100000.00' }], accrued: '100000.00', net: '100000.00' })],
+        ['2026-09', closed({ lines: [{ code: 'travel', amount: '2730.00' }], accrued: '2730.00', net: null, missing: [reason] })],
+      ]);
+
+      expect(result.net).toBeNull();
+      expect(result.timesheet).toBe('100000.00');
+      expect(result.travel).toBe('2730.00');
+      expect(result.incomplete).toEqual([{ month: '2026-09', reasons: [reason] }]);
+    },
+  );
+
+  it('строка без суммы без причины (unknown_amount) — «Сумма» null; оба месяца посчитаны — сумма итогов', () => {
+    expect(sumCalcColumns([
+      ['2026-08', closed({ net: '1000.00' })],
+      ['2026-09', closed({ lines: [{ code: 'overtime', amount: null }], net: '500.00' })],
+    ]).net).toBeNull();
+    expect(sumCalcColumns([
+      ['2026-08', closed({ net: '1000.00' })],
+      ['2026-09', closed({ net: '500.50' })],
+    ]).net).toBe('1500.50');
+  });
+
   it('общежитие — по доплате за общежитие; нет сумм — null, а не 0', () => {
     const result = sumCalcColumns([
       ['2026-09', closed({ lines: [{ code: 'housing', amount: '6000.00' }], rate_allowances: [{ code: 'dormitory_allowance', amount: '6000.00' }] })],

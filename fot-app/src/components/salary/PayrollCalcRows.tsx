@@ -2,7 +2,7 @@ import type { FC, ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 
 import type { PayrollCalcApi } from '../../hooks/usePayrollCalc';
-import type { IPayrollCalcClosed, PayrollAbsenceStatus, PayrollCalcLineCode } from '../../services/payrollService';
+import type { PayrollAbsenceStatus, PayrollCalcCounted, PayrollCalcLineCode } from '../../services/payrollService';
 import {
   calcAbsenceLines,
   CALC_ABSENCE_LABELS,
@@ -10,7 +10,7 @@ import {
   calcLineLabel,
   calcMissingNote,
   calcNetTotal,
-  calcSourceNote,
+  isCalcCounted,
   PAYROLL_CALC_LINE_ORDER,
 } from '../../utils/payrollCalc';
 import { formatPaidAmount } from '../../utils/payrollPaid';
@@ -25,49 +25,48 @@ interface IPayrollCalcRowsProps {
 const formatValue = (value: number | null): string => (value === null ? '—' : formatPaidAmount(value));
 
 /**
- * Строка «К выплате (ФОТ)» таблицы «Подробно» — расчёт ФОТ по закрытому табелю, над «Выплачено» из 1С: начислено
- * минус удержано, без НДФЛ. Под суммой — чего в ней нет («без: отпускные») и восстановленная основа; незакрытый
- * месяц — «Табель не закрыт». «Итого» — только когда закрыты все месяцы. Клик раскрывает строки расчёта
- * (статьи с подписями «Оплачено» — сравнение построчно), дни отсутствий, «Начислено» и «Удержано».
+ * Строка «К выплате (ФОТ)» таблицы «Подробно» — расчёт ФОТ по табелю (закрыт он или нет — без пометки), над
+ * «Выплачено» из 1С: начислено минус удержано, без НДФЛ. Под суммой — чего в ней нет («без: отпускные»); итог
+ * неизвестен (выработка бригады не введена…) — «—»; посчитать нечем — «—». «Итого» — только когда итог известен во
+ * всех месяцах. Клик раскрывает строки расчёта (статьи с подписями «Оплачено» — сравнение построчно), дни
+ * отсутствий, «Начислено» и «Удержано».
  */
 export const PayrollCalcRows: FC<IPayrollCalcRowsProps> = ({ calc, withTotal }) => {
   const closed = calc.months
     .map(month => calc.calcs.get(month))
-    .filter((item): item is IPayrollCalcClosed => item?.state === 'closed');
+    .filter(isCalcCounted);
   const lineCodes = PAYROLL_CALC_LINE_ORDER.filter(code => closed.some(item => item.lines.some(line => line.code === code)));
   const absenceStatuses = [...new Set(closed.flatMap(item => calcAbsenceLines(item).map(line => line.status)))];
 
   const headCell = (month: string): ReactNode => {
     const item = calc.calcs.get(month);
     if (!item) return calc.status === 'error' ? '—' : '';
-    const source = calcSourceNote(item);
-    if (item.state === 'not_closed') return <span className={styles.calcNote}>{source}</span>;
+    if (!isCalcCounted(item)) return '—';
     const missing = calcMissingNote(item.missing);
     return (
       <>
         {formatValue(calcAmount(item.net))}
         {missing && <span className={styles.calcNote}>{missing}</span>}
-        {source && <span className={styles.calcNote}>{source}</span>}
       </>
     );
   };
 
-  /** Значение строки по месяцу: незакрытый месяц — пусто, закрытый без значения — прочерк. */
-  const renderRow = (key: string, label: string, value: (item: IPayrollCalcClosed) => string) => (
+  /** Значение строки по месяцу: месяц без расчёта — пусто, посчитанный без значения — прочерк. */
+  const renderRow = (key: string, label: string, value: (item: PayrollCalcCounted) => string) => (
     <tr key={key}>
       <th scope="row" className={`${styles.rowHead} ${styles.rowHeadNested}`}>{label}</th>
       {calc.months.map(month => {
         const item = calc.calcs.get(month);
-        return <td key={month} className={styles.value}>{item?.state === 'closed' ? value(item) : ''}</td>;
+        return <td key={month} className={styles.value}>{isCalcCounted(item) ? value(item) : ''}</td>;
       })}
       {withTotal && <td className={styles.value} />}
     </tr>
   );
 
-  const lineValue = (code: PayrollCalcLineCode) => (item: IPayrollCalcClosed): string => (
+  const lineValue = (code: PayrollCalcLineCode) => (item: PayrollCalcCounted): string => (
     formatValue(calcAmount(item.lines.find(line => line.code === code)?.amount))
   );
-  const absenceValue = (status: PayrollAbsenceStatus) => (item: IPayrollCalcClosed): string => {
+  const absenceValue = (status: PayrollAbsenceStatus) => (item: PayrollCalcCounted): string => {
     const days = item.absences[status] ?? 0;
     return days > 0 ? `${days} дн.` : '—';
   };

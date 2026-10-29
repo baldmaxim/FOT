@@ -1,19 +1,22 @@
 /**
- * «К выплате (ФОТ)» — расчёт ФОТ по закрытому табелю (сервер, миграция 331): подписи строк, дней и пометок для
- * «Подробно» и расчётного листка. Строки — те же статьи, что в «Оплачено» (1С), с теми же подписями: сравнение
- * построчно. Итог — начислено минус удержано, без НДФЛ, как «Выплачено». Отпускные, больничные, KPI и прочие
- * статьи 1С ФОТ не считает: дни отпуска есть — итог помечается «Расчётная часть».
+ * «К выплате (ФОТ)» — расчёт ФОТ по табелю (сервер, миграция 331): закрытый месяц — по основе закрытых подач,
+ * незакрытый — по живому табелю; на экране одинаково, без пометки о закрытии. Подписи строк, дней, формул и пометок
+ * для «Подробно» и расчётного листка. Строки — те же статьи, что в «Оплачено» (1С), с теми же подписями: сравнение
+ * построчно. Итог — начислено минус удержано, без НДФЛ, как «Выплачено»; сумму строки ФОТ не посчитал (выработка
+ * бригады не введена, почасовые условия…) — итога нет. Отпускные, больничные, KPI и прочие статьи 1С ФОТ не считает:
+ * дни отпуска есть — под итогом «без: отпускные».
  */
 import type {
-  IPayrollCalcClosed,
   IPayrollCalcLine,
   PayrollAbsenceStatus,
   PayrollCalc,
+  PayrollCalcCounted,
   PayrollCalcLineCode,
+  PayrollCalcLinePart,
   PayrollCalcMissing,
   PayrollPaidItemCode,
 } from '../services/payrollService';
-import { PAYROLL_PAID_GROUPS } from './payrollPaid';
+import { formatPaidAmount, PAYROLL_PAID_GROUPS } from './payrollPaid';
 
 /** Порядок строк — как в листке ЗУП. */
 export const PAYROLL_CALC_LINE_ORDER: readonly PayrollCalcLineCode[] = [
@@ -68,6 +71,7 @@ const MISSING_LABELS: Record<PayrollCalcMissing, string> = {
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы графика',
   brigade_output: 'выработка бригады',
+  brigade_no_hours: 'доля бригады — нет учтённых часов',
   brigade_error: 'расчёт бригады',
 };
 
@@ -85,23 +89,22 @@ export const CALC_ABSENCE_LABELS: Record<PayrollAbsenceStatus, string> = {
 
 const ABSENCE_ORDER: readonly PayrollAbsenceStatus[] = ['vacation', 'sick', 'educational_leave', 'unpaid'];
 
+/** Месяц посчитан — закрытый или предварительно по живому табелю; иначе посчитать нечем. */
+export const isCalcCounted = (calc: PayrollCalc | undefined): calc is PayrollCalcCounted => (
+  calc?.state === 'closed' || calc?.state === 'preliminary'
+);
+
 /** Отсутствия месяца с днями: суммы отпускных и больничных — только из 1С. */
-export const calcAbsenceLines = (calc: IPayrollCalcClosed): Array<{ status: PayrollAbsenceStatus; label: string; days: number }> => (
+export const calcAbsenceLines = (calc: PayrollCalcCounted): Array<{ status: PayrollAbsenceStatus; label: string; days: number }> => (
   ABSENCE_ORDER
     .filter(status => (calc.absences[status] ?? 0) > 0)
     .map(status => ({ status, label: CALC_ABSENCE_LABELS[status], days: calc.absences[status] }))
 );
 
 /** Строки расчёта в порядке листка. */
-export const calcLines = (calc: IPayrollCalcClosed): IPayrollCalcLine[] => (
+export const calcLines = (calc: PayrollCalcCounted): IPayrollCalcLine[] => (
   PAYROLL_CALC_LINE_ORDER.flatMap(code => calc.lines.filter(line => line.code === code))
 );
-
-/** Пометка источника под суммой: восстановленная основа; закрыт по табелю с полной основой — null. */
-export const calcSourceNote = (calc: PayrollCalc): string | null => {
-  if (calc.state === 'not_closed') return 'Табель не закрыт';
-  return calc.quality === 'reconstructed' ? 'Восстановлено по текущим графикам' : null;
-};
 
 /** «253189.50» → 253 189,50 ₽ числом; не число — null. */
 export const calcAmount = (amount: string | null | undefined): number | null => {
@@ -110,12 +113,92 @@ export const calcAmount = (amount: string | null | undefined): number | null => 
   return Number.isFinite(value) ? value : null;
 };
 
-/** Сумма «К выплате (ФОТ)» за месяцы — только если все закрыты; иначе null. Счёт в копейках. */
+/** Сумма «К выплате (ФОТ)» за месяцы — только если итог известен в каждом; иначе null. Счёт в копейках. */
 export const calcNetTotal = (calcs: ReadonlyArray<PayrollCalc | undefined>): number | null => {
   let cents = 0;
   for (const calc of calcs) {
-    if (!calc || calc.state !== 'closed') return null;
+    if (!isCalcCounted(calc) || calc.net === null) return null;
     cents += Math.round(Number(calc.net) * 100);
   }
   return cents / 100;
+};
+
+const money = (amount: string): string => formatPaidAmount(Number(amount));
+
+/** '2.5' → '2,5'; до двух знаков. */
+const decimal = (value: number): string => String(Math.round(value * 100) / 100).replace('.', ',');
+
+/** YYYY-MM-DD → ДД.ММ. */
+const dayMonth = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+
+/** Одна строка формулы части; equals — дописать «= сумма» (частей у строки несколько). */
+const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
+  const tail = (amount: string | null): string => (equals && amount !== null ? ` = ${money(amount)}` : '');
+  switch (part.kind) {
+    case 'salary': {
+      const base = Number(part.bonus) > 0
+        ? `(оклад ${money(part.salary)} + премиальная ${money(part.bonus)})`
+        : `оклад ${money(part.salary)}`;
+      if (part.rounding === 'daily_kopeck' && part.daily_rate) {
+        return `${base} / ${part.norm} дн. = ${money(part.daily_rate)} × ${part.days} дн.${tail(part.amount)}`;
+      }
+      return `${base} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
+    }
+    case 'planned_supplement':
+      return `плановая доплата ${money(part.base)} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
+    case 'overtime_days':
+      return `${part.days} вых. × ${money(part.salary)} / ${part.norm} дн.${tail(part.amount)}`;
+    case 'overtime_hours':
+      return `${decimal(part.minutes / 60)} ч × ${money(part.salary)} / ${decimal(part.norm_minutes / 60)} ч${tail(part.amount)}`;
+    case 'travel':
+      return `ставка ${money(part.rate)} × ${part.days} / ${part.norm} дн.`;
+    case 'housing':
+      return part.housing === 'apartment' ? 'квартира, сумма за месяц' : 'доплата за общежитие, сумма за месяц';
+    case 'one_time':
+      return 'разовые доплаты месяца';
+    case 'brigade': {
+      if (part.output === null) return 'выработка бригады не внесена';
+      if (part.amount === null) return part.total_weight === 0 ? 'нет учтённых часов бригады' : 'ошибка расчёта бригады';
+      // Вес — КТУ × часы; в БД — КТУ в десятых × минуты, отсюда / 600.
+      const ktu = decimal(part.ktu_tenths / 10);
+      const hours = decimal(part.counted_minutes / 60);
+      return `выработка ${money(part.output)} × КТУ ${ktu} × ${hours} ч / ${decimal(part.total_weight / 600)} `
+        + `(Σ КТУ × ч бригады) = ${money(part.amount)}`;
+    }
+  }
+};
+
+/**
+ * Расшифровка строки расчёта — подстрока на часть: «оклад 150 000,00 × 22 / 22 дн.», у нескольких сегментов —
+ * «с 01.09 по 15.09: … = …»; выходы, добравшие норму, — «22 дн. = 20 раб. + 2 вых. (добор нормы)». Частей нет
+ * (старый бэкенд) — прежняя подпись дней.
+ */
+export const calcLineFormula = (line: IPayrollCalcLine): string[] => {
+  const parts = line.parts ?? [];
+  if (parts.length === 0) {
+    const note = calcLineDaysNote(line);
+    return note ? [note] : [];
+  }
+  const periods = new Set(parts.map(part => ('from' in part ? `${part.from}|${part.to}` : '')));
+  const withPeriod = periods.size > 1;
+  const result = parts.map(part => {
+    const text = partFormula(part, parts.length > 1);
+    return withPeriod && 'from' in part ? `с ${dayMonth(part.from)} по ${dayMonth(part.to)}: ${text}` : text;
+  });
+  if (line.code === 'contract' && line.filled_dayoffs && line.days) {
+    result.push(`${line.days.worked} дн. = ${line.days.worked - line.filled_dayoffs} раб. + ${line.filled_dayoffs} вых. (добор нормы)`);
+  }
+  return result;
+};
+
+/** Блоки 1С листка показывать: суммы 1С за месяц есть или расчёта ФОТ нет — иначе таблицы из одних прочерков. */
+export const payslipShow1c = (hasPaid: boolean, calc: PayrollCalc | undefined): boolean => hasPaid || !isCalcCounted(calc);
+
+/**
+ * «Остаток (с НДФЛ)» — итог ФОТ минус перечисленное по ведомостям 1С, в копейках; минус — переплата. Итога нет или
+ * перечисления не загрузились ('error') — null: нельзя показать весь ФОТ остатком.
+ */
+export const payslipRemainder = (calc: PayrollCalc | undefined, transferred: number | 'error'): number | null => {
+  if (!isCalcCounted(calc) || calc.net === null || transferred === 'error') return null;
+  return (Math.round(Number(calc.net) * 100) - Math.round(transferred * 100)) / 100;
 };

@@ -1,23 +1,32 @@
 import type { FC } from 'react';
 
-import type { IPayrollCalcClosed, PayrollAbsenceStatus, PayrollCalc, PayrollPaidItemCode } from '../../services/payrollService';
+import type {
+  IPayslipSchedule,
+  PayrollAbsenceStatus,
+  PayrollCalc,
+  PayrollCalcCounted,
+  PayrollPaidItemCode,
+} from '../../services/payrollService';
 import {
   calcAbsenceLines,
   calcAmount,
-  calcLineDaysNote,
+  calcLineFormula,
   calcLineLabel,
   calcLinePaidItem,
   calcLines,
   calcMissingNote,
-  calcSourceNote,
+  isCalcCounted,
 } from '../../utils/payrollCalc';
 import { formatPaidAmount, paidCellKey } from '../../utils/payrollPaid';
+import { formatPayslipSchedules } from '../../utils/payrollPayslip';
 import styles from './PaidPayslip.module.css';
 
 interface IPayslipCalcSectionProps {
   month: string;
   /** undefined — листок ещё грузится. */
   calc: PayrollCalc | undefined;
+  /** Графики месяца — справочно; нет у старого бэкенда. */
+  schedules: readonly IPayslipSchedule[] | undefined;
   /** Суммы «Оплачено» (1С) истории: столбец «1С» — если за месяц они есть. */
   amounts: ReadonlyMap<string, number>;
   /** «К выплате» 1С за месяц (начислено − удержано); null — сумм 1С нет. */
@@ -36,19 +45,22 @@ const formatValue = (value: number | null | undefined): string => (
 );
 
 /**
- * Блок «Расчёт ФОТ» расчётного листка: по закрытому табелю — строки начислений с днями, дни отсутствий (суммы —
- * только из 1С), удержания «Справочника» и «Итого без НДФЛ»; рядом столбец «1С» для сравнения построчно, если
- * за месяц есть суммы «Оплачено». Табель не закрыт — только пометка.
+ * Блок «Расчёт ФОТ» расчётного листка — по табелю, закрыт он или нет: строки начислений с расшифровкой (из чего
+ * сумма — по подстроке на часть), дни отсутствий (суммы — только из 1С), удержания «Справочника» и «Итого без
+ * НДФЛ»; рядом столбец «1С» для сравнения построчно, если за месяц есть суммы «Оплачено». Графики месяца —
+ * справочно. Итог неизвестен (выработка бригады не введена…) — «—» и «без: …»; посчитать нечем — «—».
  */
-export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, amounts, payout1c, deducted1c }) => {
+export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, schedules, amounts, payout1c, deducted1c }) => {
   const with1c = payout1c !== null;
   const paid = (code: PayrollPaidItemCode): number | undefined => amounts.get(paidCellKey(month, code));
+  const schedulesNote = formatPayslipSchedules(schedules);
 
-  const renderClosed = (closed: IPayrollCalcClosed) => {
-    const notes = [calcSourceNote(closed), calcMissingNote(closed.missing)].filter(Boolean);
+  const renderClosed = (closed: PayrollCalcCounted) => {
+    const missing = calcMissingNote(closed.missing);
     return (
       <>
-        {notes.length > 0 && <p className={styles.calcNote}>{notes.join(' · ')}</p>}
+        {schedulesNote && <p className={styles.calcNote}>{schedulesNote}</p>}
+        {missing && <p className={styles.calcNote}>{missing}</p>}
         <div className={styles.scroll}>
           <table className={`${styles.table} ${styles.calcTable}`}>
             <colgroup>
@@ -65,13 +77,12 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, 
             </thead>
             <tbody>
               {calcLines(closed).map(line => {
-                const note = calcLineDaysNote(line);
                 const paidItem = calcLinePaidItem(line, closed.lines);
                 return (
                   <tr key={line.code}>
                     <th scope="row" className={styles.kind}>
                       <span className={styles.kindName}>{calcLineLabel(line.code)}</span>
-                      {note && <span className={styles.kindNote}>{note}</span>}
+                      {calcLineFormula(line).map(text => <span key={text} className={styles.kindNote}>{text}</span>)}
                     </th>
                     <td className={styles.num}>{formatValue(calcAmount(line.amount))}</td>
                     {with1c && <td className={styles.num}>{paidItem ? formatValue(paid(paidItem)) : ''}</td>}
@@ -126,8 +137,8 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, 
     <section className={styles.part} aria-label="Расчёт ФОТ">
       <p className={styles.partTitle}>Расчёт ФОТ</p>
       {!calc && <p className={styles.calcNote}>…</p>}
-      {calc?.state === 'not_closed' && <p className={styles.calcNote}>{calcSourceNote(calc)}</p>}
-      {calc?.state === 'closed' && renderClosed(calc)}
+      {calc && !isCalcCounted(calc) && <p className={styles.calcNote}>—</p>}
+      {isCalcCounted(calc) && renderClosed(calc)}
     </section>
   );
 };

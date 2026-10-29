@@ -3,8 +3,9 @@
  * по табелю ФОТ и условия оплаты. Суммы статей 1С — из «Оплачено» (payroll-paid.service), здесь их нет.
  *
  * Месяц с закрытым табелем — дни, проезд и проживание из основы расчёта закрытых подач и «К выплате (ФОТ)»
- * (calc, payroll-calc.service): те же числа, что во вкладке «Табель → Зарплата». Незакрытый месяц — дни из живого
- * табеля, как раньше, calc — «Табель не закрыт».
+ * (calc, payroll-calc.service): те же числа, что во вкладке «Табель → Зарплата». С preliminary (новый фронт) незакрытый
+ * месяц считается так же по живому табелю (getPreliminaryPayoutForEmployees); без него, как раньше, — дни из живого
+ * табеля, calc — not_closed. Графики месяца (schedules) — справочно, по дням всего месяца, как у нормы.
  *
  * Дни — те же, что в колонке «Дни» единого файла 1С (buildEmployeeRowsForOneC): округление часов,
  * УУ/РБ/УД, отсечка увольнения, будущие дни не считаются. Рабочий — день по графику или плановая
@@ -15,22 +16,26 @@
  */
 import { queryOne } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
-import { isWorkingDay } from '../schedule.service.js';
+import { isWorkingDay, resolveSchedulesForPeriod } from '../schedule.service.js';
 import { buildEmployeeRowsForOneC } from '../timesheet-excel.service.js';
 import { fetchTimesheetDataForEmployees, type IDepartmentTimesheetData } from '../timesheet-export.service.js';
 import { countMonthNormDays } from './payroll-basis.service.js';
 import {
   getPayoutForEmployees,
+  getPreliminaryPayoutForEmployees,
   type IPayrollCalcClosed,
   type IPayrollCalcNotClosed,
-  type PayrollCalc,
+  type IPayrollCalcPreliminary,
+  type PayrollCalcWithPreliminary,
 } from './payroll-calc.service.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-month-attribution.service.js';
 import {
+  groupPayslipSchedules,
   lastDayOfMonth,
   payslipPeriod,
   pickPayslipRateAllowances,
   type IPayslipRateAllowance,
+  type IPayslipSchedule,
   type IPayslipTravelDays,
   type IPayslipWorkedDays,
 } from './payroll-payslip.rules.js';
@@ -39,12 +44,14 @@ import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import { getTermsForPeriod, type IPayrollTerms, type PayrollCalcType, type StaffCategory } from './payroll-terms.service.js';
 
 export {
+  groupPayslipSchedules,
   payslipPeriod,
   pickPayslipRateAllowances,
   proratedTravel,
   type IPayslipHousingRecord,
   type IPayslipRateAllowance,
   type IPayslipRateFacts,
+  type IPayslipSchedule,
   type IPayslipTravelDays,
   type IPayslipWorkedDays,
   type PayslipRateAllowanceCode,
@@ -60,7 +67,10 @@ export interface IPayslipTerms {
 }
 
 /** «К выплате (ФОТ)» в листке: расчёт без служебного (условия уже в terms листка). */
-export type PayslipCalc = Omit<IPayrollCalcClosed, 'terms' | 'rate_allowances'> | IPayrollCalcNotClosed;
+export type PayslipCalc =
+  | Omit<IPayrollCalcClosed, 'terms' | 'rate_allowances'>
+  | Omit<IPayrollCalcPreliminary, 'terms' | 'rate_allowances'>
+  | IPayrollCalcNotClosed;
 
 export interface IPayrollPayslipInfo {
   month: string;
@@ -73,9 +83,22 @@ export interface IPayrollPayslipInfo {
   terms: IPayslipTerms[];
   /** «По ставкам ФОТ» за месяц; в «Всего начислено» (ЗУП) не входят. */
   rate_allowances: IPayslipRateAllowance[];
-  /** «К выплате (ФОТ)» по закрытому табелю; незакрытый месяц — state: 'not_closed'. */
+  /** «К выплате (ФОТ)»: по закрытому табелю или предварительно по живому; посчитать нечем — state: 'not_closed'. */
   calc: PayslipCalc;
+  /** Графики месяца по дням — справочно (основа расчёта id графика не хранит). */
+  schedules: IPayslipSchedule[];
 }
+
+export interface IPayslipOptions {
+  /** Незакрытый месяц — предварительно по живому табелю (как «Расчёты»). */
+  preliminary?: boolean;
+}
+
+/** Графики сотрудника по всем дням месяца — те же, по которым считается норма (назначение или по умолчанию). */
+const loadPayslipSchedules = async (employeeId: number, month: string): Promise<IPayslipSchedule[]> => {
+  const schedules = await resolveSchedulesForPeriod([{ id: employeeId }], `${month}-01`, lastDayOfMonth(month));
+  return groupPayslipSchedules([...(schedules.get(employeeId) ?? new Map()).entries()].sort(([a], [b]) => a.localeCompare(b)));
+};
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
@@ -141,8 +164,12 @@ const toPayslipTerms = (rows: readonly IPayrollTerms[]): IPayslipTerms[] => rows
   };
 });
 
-/** Листок месяца с закрытым табелем: всё — из основы расчёта, живой табель не собирается. */
-const closedPayslip = (month: string, calc: IPayrollCalcClosed): IPayrollPayslipInfo => {
+/** Листок посчитанного месяца (закрытого или предварительно): всё — из основы расчёта, табель второй раз не собирается. */
+const calcPayslip = (
+  month: string,
+  calc: IPayrollCalcClosed | IPayrollCalcPreliminary,
+  schedules: IPayslipSchedule[],
+): IPayrollPayslipInfo => {
   const { terms, rate_allowances: rateAllowances, ...publicCalc } = calc;
   return {
     month,
@@ -152,18 +179,27 @@ const closedPayslip = (month: string, calc: IPayrollCalcClosed): IPayrollPayslip
     terms: toPayslipTerms(terms),
     rate_allowances: rateAllowances,
     calc: publicCalc,
+    schedules,
   };
 };
 
-/** Листок сотрудника за месяц YYYY-MM; req — автор фиксации расчёта бригады, если месяц закрыт впервые. */
+/**
+ * Листок сотрудника за месяц YYYY-MM; req — автор фиксации расчёта бригады, если месяц закрыт впервые.
+ * options.preliminary — незакрытый месяц предварительно по живому табелю.
+ */
 export const getPayslipInfo = async (
   employeeId: number,
   month: string,
   req: AuthenticatedRequest,
+  options: IPayslipOptions = {},
 ): Promise<IPayrollPayslipInfo> => {
-  const calc: PayrollCalc = (await getPayoutForEmployees([employeeId], month, req)).get(employeeId)
-    ?? { state: 'not_closed', reason: 'no_period' };
-  if (calc.state === 'closed') return closedPayslip(month, calc);
+  const payouts = options.preliminary ? getPreliminaryPayoutForEmployees : getPayoutForEmployees;
+  const [calcs, schedules] = await Promise.all([
+    payouts([employeeId], month, req),
+    loadPayslipSchedules(employeeId, month),
+  ]);
+  const calc: PayrollCalcWithPreliminary = calcs.get(employeeId) ?? { state: 'not_closed', reason: 'no_period' };
+  if (calc.state !== 'not_closed') return calcPayslip(month, calc, schedules);
 
   // snapshot — сотрудник берётся при любом статусе: уволенный в месяце увольнения тоже со своими днями
   // (обычный состав 1С его не берёт). Дни после увольнения режет cutoff.
@@ -176,7 +212,7 @@ export const getPayslipInfo = async (
   ]);
   const period = payslipPeriod(month, employee?.hire_date ?? null, data.cutoffByEmployeeId?.get(employeeId) ?? null);
   if (!period) {
-    return { month, period_from: null, period_to: null, worked_days: null, terms: [], rate_allowances: [], calc };
+    return { month, period_from: null, period_to: null, worked_days: null, terms: [], rate_allowances: [], calc, schedules };
   }
 
   const [termsByEmployee, category, rateFacts] = await Promise.all([
@@ -201,5 +237,6 @@ export const getPayslipInfo = async (
     terms: toPayslipTerms(termsByEmployee.get(employeeId) ?? []),
     rate_allowances: facts ? pickPayslipRateAllowances({ ...facts, category, travelDays }) : [],
     calc,
+    schedules,
   };
 };

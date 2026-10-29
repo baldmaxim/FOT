@@ -36,10 +36,11 @@ export const CALC_COLUMNS_MAX_MONTHS = 12;
  * Почему закрытый месяц посчитан не полностью. unknown_amount — строка без суммы без причины в missing (страховка
  * на будущее). Отпускные, больничные и учебный отпуск — не неполнота: их суммы — из 1С.
  */
-export type CalcColumnsIssue = 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_error' | 'unknown_amount';
+export type CalcColumnsIssue =
+  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error' | 'unknown_amount';
 
 const CALC_ISSUES: ReadonlySet<PayrollCalcMissing> = new Set<PayrollCalcMissing>([
-  'hourly', 'no_terms', 'no_norm', 'brigade_output', 'brigade_error',
+  'hourly', 'no_terms', 'no_norm', 'brigade_output', 'brigade_no_hours', 'brigade_error',
 ]);
 
 const isCalcIssue = (code: PayrollCalcMissing): code is PayrollCalcMissing & CalcColumnsIssue => CALC_ISSUES.has(code);
@@ -67,7 +68,10 @@ export interface ICalcColumns {
   housing_kinds: HousingKind[];
   supplements: string | null;
   deductions: string | null;
-  /** К выплате: начислено − удержано за закрытые месяцы, без НДФЛ; null — закрытых месяцев нет. */
+  /**
+   * К выплате: начислено − удержано за посчитанные месяцы, без НДФЛ; null — посчитанных месяцев нет или итог хоть
+   * одного месяца неизвестен (сумму строки ФОТ не посчитал): частичная сумма за итог не выдаётся.
+   */
   net: string | null;
   /** Месяцы с незакрытым табелем без суммы (YYYY-MM); месяц, где сотрудник не работал, сюда не входит. */
   open_months: string[];
@@ -104,6 +108,7 @@ export const sumCalcColumns = (
   const openMonths: string[] = [];
   const preliminary: ICalcColumns['preliminary'] = [];
   const incomplete: ICalcColumns['incomplete'] = [];
+  let netUnknown = false;
 
   for (const [month, calc] of byMonth) {
     if (!calc) continue;
@@ -126,7 +131,8 @@ export const sumCalcColumns = (
       sums[key] = addCents(sums[key], line.amount);
     }
     for (const deduction of calc.deductions) sums.deductions = addCents(sums.deductions, deduction.amount);
-    sums.net = addCents(sums.net, calc.net);
+    if (calc.net === null || reasons.has('unknown_amount')) netUnknown = true;
+    else sums.net = addCents(sums.net, calc.net);
     for (const allowance of calc.rate_allowances) {
       if (allowance.code === 'housing') housingKinds.add('apartment');
       else if (allowance.code === 'dormitory_allowance') housingKinds.add('dormitory');
@@ -144,7 +150,7 @@ export const sumCalcColumns = (
     housing_kinds: [...housingKinds],
     supplements: toAmount(sums.supplements),
     deductions: toAmount(sums.deductions),
-    net: toAmount(sums.net),
+    net: netUnknown ? null : toAmount(sums.net),
     open_months: openMonths,
     preliminary,
     incomplete,

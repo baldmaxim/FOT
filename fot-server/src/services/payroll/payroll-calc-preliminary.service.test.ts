@@ -162,7 +162,7 @@ describe('отдел: незакрытый месяц', () => {
     const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8);
 
     expect(calc).toMatchObject({ state: 'preliminary', as_of: '2026-09-30', net: '55000.00', missing: [] });
-    expect(calc?.state === 'preliminary' && calc.lines).toEqual([
+    expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
       { code: 'contract', amount: '55000.00', days: { worked: 11, norm: 22 } },
     ]);
     expect(live.fetchTimesheetDataForEmployees).toHaveBeenCalledWith(
@@ -195,7 +195,7 @@ describe('отдел: незакрытый месяц', () => {
 
     // 110 000 × 120 / 10 560 = 1 250.
     expect(calc).toMatchObject({ state: 'preliminary', net: '111250.00', missing: [] });
-    expect(calc?.state === 'preliminary' && calc.lines).toEqual([
+    expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
       { code: 'contract', amount: '110000.00', days: { worked: 22, norm: 22 } },
       { code: 'overtime', amount: '1250.00', days: { worked: 0, norm: 22 }, hours: 2 },
     ]);
@@ -220,13 +220,13 @@ describe('бригада: незакрытый месяц', () => {
     membership.list.mockResolvedValue([member(7)]);
   });
 
-  it('выработки нет — часы не считаются, доля без суммы (brigade_output), удержания уже в «Сумме»', async () => {
+  it('выработки нет — часы не считаются, доля без суммы (brigade_output), итог неизвестен — не «−удержания»', async () => {
     inputs.loadBrigadeSalaryInputs.mockResolvedValue({ output: null, ktu: new Map([[7, 15]]) });
 
     const calc = (await getPreliminaryPayoutForEmployees([7], '2026-09', req)).get(7);
 
-    expect(calc).toMatchObject({ state: 'preliminary', net: '-3500.00', missing: ['brigade_output'] });
-    expect(calc?.state === 'preliminary' && calc.lines).toEqual([
+    expect(calc).toMatchObject({ state: 'preliminary', net: null, deducted: '3500.00', missing: ['brigade_output'] });
+    expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
       { code: 'brigade', amount: null, brigade: { ktu: '1.5', hours: 0 } },
     ]);
     expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
@@ -268,7 +268,7 @@ describe('бригада: незакрытый месяц', () => {
     const calc = (await getPreliminaryPayoutForEmployees([9], '2026-09', req)).get(9);
 
     // Будни 1–15 сентября — 11 дней: 110 000 × 11 / 22.
-    expect(calc?.state === 'preliminary' && calc.lines).toEqual([
+    expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
       { code: 'contract', amount: '55000.00', days: { worked: 11, norm: 22 } },
       { code: 'brigade', amount: null, brigade: { ktu: '1.0', hours: 0 } },
     ]);

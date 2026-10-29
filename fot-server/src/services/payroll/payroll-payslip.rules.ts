@@ -34,6 +34,8 @@ export interface IPayslipRateAllowance {
   amount: string;
   /** Только у проезда: из скольких дней посчитан. */
   days?: IPayslipTravelDays;
+  /** Только у проезда: ставка «Справочника» за полный месяц — для расшифровки. */
+  rate?: string;
 }
 
 /** Проживание, задевающее период листка: квартира, общежитие или доплата за общежитие; start — YYYY-MM-DD. */
@@ -106,7 +108,7 @@ export const pickPayslipRateAllowances = (facts: IPayslipRateFacts): IPayslipRat
     const amount = proratedTravel(facts.travelRate, facts.travelDays);
     // Дни сверх нормы проезд не увеличивают — и в подписи их нет.
     const days = { worked: Math.min(facts.travelDays.worked, facts.travelDays.norm), norm: facts.travelDays.norm };
-    if (amount !== null) result.push({ code: 'travel', amount, days });
+    if (amount !== null) result.push({ code: 'travel', amount, days, rate: facts.travelRate });
   }
   // Записи одного сотрудника по дням не пересекаются: самая поздняя по началу действует на конец периода.
   const last = facts.housing.reduce<IPayslipHousingRecord | null>(
@@ -119,4 +121,34 @@ export const pickPayslipRateAllowances = (facts: IPayslipRateFacts): IPayslipRat
     result.push({ code: 'dormitory_allowance', amount: facts.dormitoryAllowanceRate });
   }
   return result;
+};
+
+/** График месяца в листке: имя и дни, когда он действовал (YYYY-MM-DD, по — включительно). */
+export interface IPayslipSchedule {
+  name: string;
+  from: string;
+  to: string;
+}
+
+/** Без имени в справочнике — так и пишем. */
+export const UNNAMED_SCHEDULE = 'Стандартный график';
+
+/**
+ * Графики по дням → интервалы: соседние дни с одним графиком и одной точкой отсчёта цикла — один интервал (новая
+ * точка отсчёта — новый интервал, даже при том же имени). days — по возрастанию даты, без пропусков.
+ */
+export const groupPayslipSchedules = (
+  days: ReadonlyArray<readonly [string, { schedule_id: string; name?: string | null; assignment_anchor_date?: string | null }]>,
+): IPayslipSchedule[] => {
+  const result: Array<IPayslipSchedule & { key: string }> = [];
+  for (const [date, schedule] of days) {
+    const key = `${schedule.schedule_id}|${schedule.assignment_anchor_date ?? ''}`;
+    const last = result[result.length - 1];
+    if (last && last.key === key) {
+      last.to = date;
+    } else {
+      result.push({ key, name: schedule.name?.trim() || UNNAMED_SCHEDULE, from: date, to: date });
+    }
+  }
+  return result.map(({ name, from, to }) => ({ name, from, to }));
 };

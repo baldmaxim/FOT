@@ -19,7 +19,8 @@ const rangeQuerySchema = z.object({
   to: monthSchema,
 }).refine(range => range.from <= range.to, 'Начало периода позже конца');
 
-const payslipQuerySchema = z.object({ month: monthSchema });
+// preliminary=1 (новый фронт) — незакрытый месяц предварительно по живому табелю; иначе, как раньше, только закрытый.
+const payslipQuerySchema = z.object({ month: monthSchema, preliminary: z.string().optional() });
 
 /** GET /api/payroll/terms/employee/:empId/paid?from=YYYY-MM&to=YYYY-MM — суммы за месяцы периода. */
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -67,8 +68,10 @@ const getDebtsByEmployee = async (req: AuthenticatedRequest, res: Response): Pro
 };
 
 /**
- * GET /api/payroll/terms/employee/:empId/payslip?month=YYYY-MM — к расчётному листку «Истории выплат»:
- * период, отработанные дни по табелю (рабочие / выходные) и условия оплаты месяца. Суммы — из /paid.
+ * GET /api/payroll/terms/employee/:empId/payslip?month=YYYY-MM[&preliminary=1] — к расчётному листку «Истории выплат»:
+ * период, отработанные дни по табелю (рабочие / выходные), условия оплаты, графики и «К выплате (ФОТ)» месяца.
+ * Суммы 1С — из /paid. preliminary=1 — незакрытый месяц предварительно по живому табелю; любое другое значение и
+ * без параметра — только закрытый, как раньше.
  */
 const getPayslip = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -77,8 +80,8 @@ const getPayslip = async (req: AuthenticatedRequest, res: Response): Promise<voi
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    const { month } = payslipQuerySchema.parse(req.query);
-    const data = await getPayslipInfo(employeeId, month, req);
+    const { month, preliminary } = payslipQuerySchema.parse(req.query);
+    const data = await getPayslipInfo(employeeId, month, req, { preliminary: preliminary === '1' });
     res.json({ success: true, data });
   } catch (err) {
     if (err instanceof z.ZodError) {

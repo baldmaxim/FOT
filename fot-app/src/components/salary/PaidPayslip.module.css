@@ -76,8 +76,9 @@
 
 .note { margin-top: 4px; }
 
-/* «Расчёт ФОТ»: Вид | ФОТ | 1С — уже основной таблицы, без столбцов периода и дней. */
-.table.calcTable { min-width: 18rem; }
+/* «Расчёт ФОТ»: Вид | ФОТ | 1С — уже основной таблицы, без столбцов периода и дней; «Остаток» — одна строка, на телефоне без прокрутки. */
+.table.calcTable,
+.table.remainderTable { min-width: 18rem; }
 .calcNote { margin: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .table .calcMuted { color: var(--text-secondary); }
 .table .calcSubtotal > * { font-weight: 600; }

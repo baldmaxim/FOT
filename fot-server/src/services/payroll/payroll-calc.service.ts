@@ -1,9 +1,10 @@
 /**
- * «К выплате (ФОТ)» за месяц пачкой сотрудников — только по закрытому табелю (основа расчёта, миграция 331;
- * правила — payroll-calc.rules.ts). Незакрытый месяц (подача открыта, не утверждена, половина не подана,
- * уволенный в месяце увольнения) — not_closed: суммы нет, живой табель не считается. Исключение — «Расчёты» и
- * отделы во вкладке «Табель → Зарплата» (getPreliminaryPayoutForEmployees): там незакрытый месяц считается
- * предварительно по живому табелю (payroll-calc-preliminary.service).
+ * «К выплате (ФОТ)» за месяц пачкой сотрудников по закрытому табелю (основа расчёта, миграция 331; правила —
+ * payroll-calc.rules.ts). Незакрытый месяц (подача открыта, не утверждена, половина не подана, уволенный в месяце
+ * увольнения) у getPayoutForEmployees — not_closed: суммы нет. Экраны «Зарплаты» (карточка и листок, «Расчёты»,
+ * отделы во вкладке «Табель → Зарплата») зовут getPreliminaryPayoutForEmployees: незакрытый месяц там считается по
+ * живому табелю (payroll-calc-preliminary.service), без пометки на экране; getPayoutForEmployees остаётся для
+ * старого фронта (запрос без preliminary=1).
  *
  * Отделы — оклад по дням. Бригады — доля «Выработки» по КТУ из зафиксированного расчёта бригады
  * (brigade-salary.service, вкладка «Табель → Зарплата»); бригада не зафиксирована — месяц не закрыт. Начальник
@@ -23,6 +24,7 @@ import { resolvePreliminaryAsOf, type IBrigadeShares } from './brigade-salary.se
 import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
 import { loadLiveMonthBases } from './payroll-calc-preliminary.service.js';
 import {
+  brigadeShareFacts,
   buildPayrollCalc,
   type IBrigadeShareFact,
   type ICalcTermsRow,
@@ -237,12 +239,10 @@ const loadPayoutExtras = async (
   };
 };
 
-const shareFact = (shares: IBrigadeShares, row: IBrigadeShares['rows'][number]): IBrigadeShareFact => ({
-  amount: row.amount,
-  ktu: row.ktu,
-  countedMinutes: row.counted_minutes,
-  distribution: shares.distribution ?? 'error',
-});
+/** Факты долей бригады по сотрудникам: те же строки расчёта, выработка и веса — для расшифровки доли. */
+const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number, IBrigadeShareFact> => (
+  brigadeShareFacts(departmentId, shares.distribution ?? 'error', shares.output_amount, shares.rows)
+);
 
 /** Основа сотрудника месяца: закрытая (closed) или из живого табеля (closed — null). */
 interface ICalcEntry {
@@ -340,6 +340,15 @@ const computePayouts = async (
   ]);
   lap('restMs');
   const plannedByEmployee = groupBy(planned);
+  const factsByBrigade = new Map<string, Map<number, IBrigadeShareFact>>();
+  const brigadeFacts = (departmentId: string): Map<number, IBrigadeShareFact> => {
+    let facts = factsByBrigade.get(departmentId);
+    if (!facts) {
+      facts = shareFactsOf(departmentId, brigades.shares.get(departmentId)!);
+      factsByBrigade.set(departmentId, facts);
+    }
+    return facts;
+  };
 
   for (const employeeId of ids) {
     const { basis, closed } = entries.get(employeeId)!;
@@ -358,10 +367,9 @@ const computePayouts = async (
     const shares: IBrigadeShareFact[] = [];
     const brigadeDates = new Set<string>();
     for (const brigade of basis.brigades) {
-      const brigadeResult = brigades.shares.get(brigade.departmentId)!;
-      const row = brigadeResult.rows.find(item => Number(item.employee_id) === employeeId);
-      if (!row) continue;
-      shares.push(shareFact(brigadeResult, row));
+      const fact = brigadeFacts(brigade.departmentId).get(employeeId);
+      if (!fact) continue;
+      shares.push(fact);
       for (const date of [...brigade.workdayDates, ...brigade.dayoffDates]) brigadeDates.add(date);
     }
     const calc = buildPayrollCalc({

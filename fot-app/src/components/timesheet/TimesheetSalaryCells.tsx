@@ -96,7 +96,7 @@ export const TimesheetSalaryLineCell: FC<ICellProps & { code: SalaryLineCode }> 
   const line = row?.[code];
   const note = salaryOvertimeNote(line);
   return (
-    <td className="ts-col-salary" title={data && row ? salaryLineTitle(data, row, line) : undefined}>
+    <td className="ts-col-salary" title={row ? salaryLineTitle(row, line) : undefined}>
       <SalaryLineAmount amount={line?.amount ?? null} muted={isSalaryRowMuted(data, row)} />
       {note && <span className="ts-salary-line-note">{note}</span>}
     </td>
@@ -129,7 +129,7 @@ export const TimesheetSalaryMobileRow: FC<ICellProps> = ({ salary, employee }) =
       {!isBrigade && ([['contract', 'Оклад'], ['overtime', 'Переработка']] as const).map(([code, label]) => {
         const note = salaryOvertimeNote(row[code]);
         return (
-          <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(data, row, row[code])}>
+          <span key={code} className="ts-salary-mobile-field" title={salaryLineTitle(row, row[code])}>
             {label}
             <span className="ts-salary-mobile-line">
               <SalaryLineAmount amount={row[code]?.amount ?? null} muted={muted} />

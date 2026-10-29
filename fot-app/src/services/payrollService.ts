@@ -45,9 +45,9 @@ export interface IPayrollCardPayoutByMethod {
   amount: string;
 }
 
-/** Почему закрытый месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
+/** Почему месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
 export type PayrollCalcColumnsIssue =
-  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_error' | 'unknown_amount';
+  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error' | 'unknown_amount';
 
 /**
  * Столбцы «Расчётов» по расчёту ФОТ за выбранные месяцы: суммы закрытых и предварительно посчитанных месяцев
@@ -66,7 +66,10 @@ export interface IPayrollCalcColumns {
   housing_kinds: Array<'apartment' | 'dormitory'>;
   supplements: string | null;
   deductions: string | null;
-  /** К выплате: начислено − удержано, без НДФЛ — как «Сумма» во вкладке «Табель → Зарплата». */
+  /**
+   * К выплате: начислено − удержано, без НДФЛ — как «Сумма» во вкладке «Табель → Зарплата»; null — посчитанных
+   * месяцев нет или итог хоть одного неизвестен (сумму строки ФОТ не посчитал).
+   */
   net: string | null;
   /** Табель не закрыт и суммы нет (1-е число текущего месяца). */
   open_months: string[];
@@ -337,17 +340,70 @@ export interface IPayrollPayslipInfo {
   terms: IPayslipTerms[];
   /** «По ставкам ФОТ» за месяц (миграция 324); нет у старого бэкенда. В «Всего начислено» (ЗУП) не входят. */
   rate_allowances?: IPayslipRateAllowance[];
-  /** «К выплате (ФОТ)» по закрытому табелю (миграция 331); нет у старого бэкенда. */
+  /** «К выплате (ФОТ)»: по закрытому табелю или предварительно по живому; нет у старого бэкенда. */
   calc?: PayrollCalc;
+  /** Графики месяца по дням — справочно; нет у старого бэкенда. */
+  schedules?: IPayslipSchedule[];
+}
+
+/** График месяца в листке: имя и дни (YYYY-MM-DD, по — включительно). */
+export interface IPayslipSchedule {
+  name: string;
+  from: string;
+  to: string;
 }
 
 /** Строка расчёта ФОТ — код статьи «Оплачено» (1С), чтобы сравнивать построчно. */
 export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
 
-/** Чего ФОТ не посчитал: дни есть, суммы нет — итог «Расчётная часть». */
+/**
+ * Чего ФОТ не посчитал: дни есть, суммы нет. brigade_output — выработка бригады не введена, brigade_no_hours —
+ * введена, но делить не по чему (нет учтённых часов), brigade_error — ошибка расчёта бригады.
+ */
 export type PayrollCalcMissing =
   | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
-  | 'brigade_output' | 'brigade_error';
+  | 'brigade_output' | 'brigade_no_hours' | 'brigade_error';
+
+/** Из чего сумма строки (сервер, payroll-calc.rules.ts): те же числа; деньги — NUMERIC строкой, периоды — в месяце. */
+export type PayrollCalcLinePart =
+  | {
+    kind: 'salary';
+    from: string;
+    to: string;
+    salary: string;
+    bonus: string;
+    days: number;
+    norm: number;
+    /** whole — полный месяц, оклад как есть; daily_kopeck — дневная ставка до копейки × дни. */
+    rounding: 'whole' | 'ruble' | 'daily_kopeck';
+    daily_rate?: string;
+    amount: string;
+  }
+  | { kind: 'planned_supplement'; from: string; to: string; base: string; days: number; norm: number; amount: string }
+  | { kind: 'overtime_days'; from: string; to: string; salary: string; days: number; norm: number; amount: string }
+  | {
+    kind: 'overtime_hours';
+    from: string;
+    to: string;
+    salary: string;
+    minutes: number;
+    norm_minutes: number;
+    amount: string;
+  }
+  | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
+  | { kind: 'one_time'; amount: string }
+  | {
+    kind: 'brigade';
+    department_id: string;
+    output: string | null;
+    ktu_tenths: number;
+    counted_minutes: number;
+    /** Вес — КТУ в десятых × минуты; total_weight — сумма весов бригады. */
+    weight: number;
+    total_weight: number;
+    amount: string | null;
+  };
 
 export interface IPayrollCalcLine {
   code: PayrollCalcLineCode;
@@ -355,10 +411,14 @@ export interface IPayrollCalcLine {
   amount: string | null;
   /** Рабочих (у переработки — выходов) дней из нормы. */
   days?: { worked: number; norm: number | null };
+  /** Оклад: сколько выходов добрали норму. */
+  filled_dayoffs?: number;
   /** Переработка: часы в будни по корректировкам. */
   hours?: number;
   /** Доля бригады: КТУ и учтённые часы. */
   brigade?: { ktu: string; hours: number };
+  /** Из чего сумма; нет у старого бэкенда. */
+  parts?: PayrollCalcLinePart[];
 }
 
 export interface IPayrollCalcDeduction {
@@ -384,18 +444,27 @@ export interface IPayrollCalcClosed {
   deductions: IPayrollCalcDeduction[];
   accrued: string;
   deducted: string;
-  /** Начислено − удержано, без НДФЛ. */
-  net: string;
+  /** Начислено − удержано, без НДФЛ; null — итог неизвестен (сумму строки ФОТ не посчитал). */
+  net: string | null;
   missing: PayrollCalcMissing[];
 }
 
-/** Табель месяца не закрыт (или сотрудник в месяце не работал) — суммы нет. */
+/** Табель месяца не закрыт — посчитано по живому табелю по as_of (YYYY-MM-DD) включительно; на экране — как закрытый. */
+export interface IPayrollCalcPreliminary extends Omit<IPayrollCalcClosed, 'state' | 'quality' | 'basis_ids' | 'version_ids'> {
+  state: 'preliminary';
+  as_of: string;
+}
+
+/** Посчитать нечем (не работал в месяце, 1-е число текущего месяца) — суммы нет. */
 export interface IPayrollCalcNotClosed {
   state: 'not_closed';
   reason: 'not_covered' | 'norm_conflict' | 'no_period' | 'brigade_open';
 }
 
-export type PayrollCalc = IPayrollCalcClosed | IPayrollCalcNotClosed;
+/** Месяц с расчётом — закрытый или предварительно по живому табелю. */
+export type PayrollCalcCounted = IPayrollCalcClosed | IPayrollCalcPreliminary;
+
+export type PayrollCalc = PayrollCalcCounted | IPayrollCalcNotClosed;
 
 export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowance';
 
@@ -408,6 +477,8 @@ export interface IPayslipRateAllowance {
    * графика за месяц; нет у старого бэкенда.
    */
   days?: { worked: number; norm: number };
+  /** Только у проезда: ставка за полный месяц; нет у старого бэкенда. */
+  rate?: string;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
@@ -466,6 +537,8 @@ export interface IPayrollTermsViewParams {
   q?: string;
   /** Фильтры столбцов, сериализованные serializePayrollColumnFilters ('' — без фильтров). */
   cf?: string;
+  /** Только этот сотрудник (карточка открыта → «Расчёты»); старый бэкенд параметр не знает. */
+  employeeId?: number;
 }
 
 const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewParams): void => {
@@ -473,6 +546,7 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.departmentId) search.set('department_id', params.departmentId);
   if (params.q) search.set('q', params.q);
   if (params.cf) search.set('cf', params.cf);
+  if (params.employeeId) search.set('employee_id', String(params.employeeId));
 };
 
 /** Вид удержания — ответ на добавление и переименование в «Справочнике» (список — с подвидами, IStaffDeductionKind). */
@@ -641,7 +715,8 @@ export const payrollService = {
 
   /** Расчётный листок месяца YYYY-MM: период, дни табеля и условия оплаты. */
   getPayslip: async (employeeId: number, month: string, signal?: AbortSignal): Promise<IPayrollPayslipInfo> => {
-    const search = new URLSearchParams({ month });
+    // preliminary=1 — незакрытый табель тоже считается (по живому); старый бэкенд параметр отбрасывает.
+    const search = new URLSearchParams({ month, preliminary: '1' });
     const res = await apiClient.get<IApiResponse<IPayrollPayslipInfo>>(
       `/payroll/terms/employee/${employeeId}/payslip?${search.toString()}`,
       { signal },

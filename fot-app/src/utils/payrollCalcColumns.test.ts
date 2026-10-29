@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { IPayrollCalcColumns, IPayrollCardPayoutByMethod, IPayrollTermsRow } from '../services/payrollService';
 import {
+  calcBrigadeOutputSub,
   calcIssuesNote,
-  calcNotClosed,
-  calcTimesheetSub,
   cardPayoutLines,
   cardPayoutsTotal,
   emptyPayrollColumns,
@@ -51,9 +50,12 @@ describe('столбцы без данных на «Расчётах»', () => {
     ]);
   });
 
-  it('0 и минус — данные; «не закрыт» — данные «Начислено по табелю»; столбцы условий не скрываются', () => {
+  it('0 и минус — данные; неполный расчёт — данные «Начислено по табелю»; столбцы условий не скрываются', () => {
     const hidden = empty([
-      row({ paid_recalc_prev: '-1200.00', calc: calc({ deductions: '0.00', open_months: ['2026-09'] }) }),
+      row({
+        paid_recalc_prev: '-1200.00',
+        calc: calc({ deductions: '0.00', incomplete: [{ month: '2026-09', reasons: ['brigade_output'] }] }),
+      }),
     ]);
 
     expect(hidden).not.toContain('paid_recalc');
@@ -62,54 +64,45 @@ describe('столбцы без данных на «Расчётах»', () => {
     expect(hidden).not.toContain('department');
   });
 
+  it('незакрытый месяц без суммы (1-е число) — не данные: строки нет, столбец «Начислено по табелю» скрыт', () => {
+    expect(empty([row({ calc: calc({ open_months: ['2026-10'] }) })])).toContain('calc_timesheet');
+  });
+
   it('строк нет — ничего не скрывается', () => {
     expect(empty([])).toEqual([]);
   });
 });
 
 describe('ячейки состава зарплаты', () => {
-  it('подсказка неполного расчёта: месяцы по порядку, причины словами', () => {
+  it('подсказка неполного расчёта: месяцы по порядку, причины словами; про закрытие табеля — ни слова', () => {
     expect(calcIssuesNote(calc({
-      open_months: ['2026-09'],
-      incomplete: [{ month: '2026-08', reasons: ['hourly'] }],
-    }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает; сентябрь — табель не закрыт');
+      open_months: ['2026-10'],
+      preliminary: [{ month: '2026-09', as_of: '2026-09-30' }],
+      incomplete: [{ month: '2026-09', reasons: ['brigade_no_hours'] }, { month: '2026-08', reasons: ['hourly', 'no_terms'] }],
+    }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает, нет условий оплаты; '
+      + 'сентябрь — нет учтённых часов бригады');
+    expect(calcIssuesNote(calc({ preliminary: [{ month: '2026-09', as_of: '2026-09-30' }] }))).toBeNull();
     expect(calcIssuesNote(calc())).toBeNull();
     expect(calcIssuesNote(undefined)).toBeNull();
   });
 
-  it('предварительный расчёт: причины одного месяца — одной частью, текущий месяц — «по 27.10»', () => {
-    expect(calcIssuesNote(calc({
-      timesheet: '55000.00',
-      preliminary: [{ month: '2026-09', as_of: '2026-09-30' }],
-    }))).toBe('Предварительный расчёт: сентябрь — табель не закрыт, предварительно');
-    expect(calcIssuesNote(calc({
-      preliminary: [{ month: '2026-10', as_of: '2026-10-27' }],
-      incomplete: [{ month: '2026-10', reasons: ['brigade_output'] }, { month: '2026-08', reasons: ['hourly'] }],
-    }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает; '
-      + 'октябрь — табель не закрыт, предварительно по 27.10, выработка бригады не введена');
+  it('выработка не введена — без ⚠ (подсказки нет), подпись «выработка не внесена»; ошибка бригады — ⚠', () => {
+    const noOutput = calc({ incomplete: [{ month: '2026-09', reasons: ['brigade_output'] }] });
+    expect(calcIssuesNote(noOutput)).toBeNull();
+    expect(calcBrigadeOutputSub(noOutput)).toBe('выработка не внесена');
+    // С другой причиной в том же месяце — ⚠ только с ней.
+    const mixed = calc({ incomplete: [{ month: '2026-09', reasons: ['brigade_output', 'no_norm'] }] });
+    expect(calcIssuesNote(mixed)).toBe('Неполный расчёт: сентябрь — нет нормы');
+    const error = calc({ incomplete: [{ month: '2026-09', reasons: ['brigade_error'] }] });
+    expect(calcIssuesNote(error)).toBe('Неполный расчёт: сентябрь — ошибка расчёта бригады');
+    expect(calcBrigadeOutputSub(error)).toBeNull();
+    expect(calcBrigadeOutputSub(calc({ timesheet: '1000.00' }))).toBeNull();
   });
 
-  it('подпись «Начислено по табелю»: только у предварительного расчёта', () => {
-    const preliminary = [{ month: '2026-09', as_of: '2026-09-30' }];
-    const noOutput = [{ month: '2026-09', reasons: ['brigade_output' as const] }];
-
-    expect(calcTimesheetSub(calc({ timesheet: '55000.00', preliminary }), '55000.00')).toBe('табель не закрыт');
-    expect(calcTimesheetSub(calc({ preliminary, incomplete: noOutput }), null)).toBe('выработка не внесена');
-    // Закрытый месяц без выработки — как прежде, «—» и ⚠ без подписи.
-    expect(calcTimesheetSub(calc({ incomplete: noOutput }), null)).toBeNull();
-    // Старый бэкенд — поля нет.
-    expect(calcTimesheetSub(calc(), '1000.00')).toBeNull();
-  });
-
-  it('предварительный без суммы по табелю — столбец «Начислено по табелю» не скрывается', () => {
-    expect(empty([row({ calc: calc({ net: '-3500.00', preliminary: [{ month: '2026-09', as_of: '2026-09-30' }] }) })]))
-      .not.toContain('calc_timesheet');
-  });
-
-  it('«не закрыт» — только когда суммы нет', () => {
-    expect(calcNotClosed(calc({ open_months: ['2026-09'] }))).toBe(true);
-    expect(calcNotClosed(calc({ open_months: ['2026-09'], timesheet: '1000.00' }))).toBe(false);
-    expect(calcNotClosed(null)).toBe(false);
+  it('выработка не введена — «Начислено по табелю» и «Сумма» не скрываются, хотя сумм нет', () => {
+    const hidden = empty([row({ calc: calc({ incomplete: [{ month: '2026-09', reasons: ['brigade_output'] }] }) })]);
+    expect(hidden).not.toContain('calc_timesheet');
+    expect(hidden).not.toContain('calc_net');
   });
 
   it('переработка — из чего: выходы и часы', () => {

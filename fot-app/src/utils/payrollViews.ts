@@ -43,3 +43,24 @@ export const dropPayrollDetails = (
   current: IPayrollTermsRow | null,
   changedEmployeeIds: readonly number[],
 ): IPayrollTermsRow | null => (current && changedEmployeeIds.includes(current.employee_id) ? null : current);
+
+/** Сотрудник, открытый в «Подробно» кликом в «Условиях оплаты», — «Расчёты» показывают только его. */
+export interface ICalcFocus {
+  employeeId: number;
+  fullName: string | null;
+}
+
+export interface ICalcViewFilters {
+  /** Только этот сотрудник — по id, тёзки не попадают. */
+  employeeId?: number;
+  search: string;
+  departmentId: string;
+}
+
+/**
+ * Фильтры «Расчётов»: открыта карточка — его ФИО в поиске (видно, кто отобран), «Все отделы» и id; иначе — общие с
+ * «Условиями оплаты» поиск и отдел. Снимается правкой поиска или отдела на «Расчётах» (крестик — общая таблица).
+ */
+export const calcViewFilters = (focus: ICalcFocus | null, search: string, departmentId: string): ICalcViewFilters => (
+  focus ? { employeeId: focus.employeeId, search: focus.fullName ?? '', departmentId: '' } : { search, departmentId }
+);

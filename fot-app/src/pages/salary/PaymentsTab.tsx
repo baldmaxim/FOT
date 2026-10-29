@@ -5,10 +5,12 @@ import { useAuth } from '../../contexts/AuthContext';
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { moscowTodayIso } from '../../utils/moscowDate';
 import {
+  calcViewFilters,
   dropPayrollDetails,
   openPayrollDetails,
   paymentsViewOptions,
   resolvePaymentsView,
+  type ICalcFocus,
   type PaymentsView,
 } from '../../utils/payrollViews';
 import { EmployeePayrollDetails } from '../../components/salary/EmployeePayrollDetails';
@@ -21,7 +23,8 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  * Вкладка «Выплаты». Внутри экраны:
  *  - «Условия оплаты» — список сотрудников с условиями (рабочий экран, по умолчанию);
  *  - «Подробно» — карточка сотрудника, которого открыли кликом по строке списка;
- *  - «Расчёты» — тот же список со «Справочником» удержаний и ставок; карточка — в окне.
+ *  - «Расчёты» — тот же список со «Справочником» удержаний и ставок; карточка — в окне. Открыли карточку в
+ *    «Подробно» — там только этот сотрудник, пока на «Расчётах» не сняли (крестик в поиске, правка, отдел).
  *
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
  * хаба сохраняет остальные параметры. Списки и карточка при смене экрана не размонтируются:
@@ -47,6 +50,9 @@ export const PaymentsTab: FC = () => {
   const [departmentId, setDepartmentId] = useState('');
   // Сотрудник вкладки «Подробно» — строка списка на момент клика.
   const [details, setDetails] = useState<IPayrollTermsRow | null>(null);
+  // «Расчёты» — только сотрудник, открытый кликом в «Условиях оплаты»; сохранение в окне «Расчётов» не снимает.
+  const [calcFocus, setCalcFocus] = useState<ICalcFocus | null>(null);
+  const calcFilters = calcViewFilters(calcFocus, search, departmentId);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
   const [calcMounted, setCalcMounted] = useState(false);
   if (view === 'calc' && !calcMounted) setCalcMounted(true);
@@ -67,9 +73,22 @@ export const PaymentsTab: FC = () => {
   // Иначе React отрисует её раньше экрана: пустая «Подробно» мелькнёт на кадр, а autoFocus
   // сработает на ещё скрытой карточке.
   const openEmployee = useCallback((row: IPayrollTermsRow) => {
-    startTransition(() => setDetails(prev => openPayrollDetails(prev, row)));
+    startTransition(() => {
+      setDetails(prev => openPayrollDetails(prev, row));
+      setCalcFocus({ employeeId: row.employee_id, fullName: row.full_name });
+    });
     selectView('details', true);
   }, [selectView]);
+
+  // Правка поиска или отдела на «Расчётах» снимает «только он»; крестик в поиске — общая таблица.
+  const handleCalcSearch = useCallback((value: string) => {
+    setCalcFocus(null);
+    setSearch(value);
+  }, [setSearch]);
+  const handleCalcDepartment = useCallback((id: string) => {
+    setCalcFocus(null);
+    setDepartmentId(id);
+  }, [setDepartmentId]);
 
   // Сохранение в окне «Расчётов»: карточка «Подробно» в этот момент скрыта, экран не меняется —
   // устаревшая карточка этого сотрудника закрывается.
@@ -136,10 +155,11 @@ export const PaymentsTab: FC = () => {
               <PayrollDeductionsPage
                 date={date}
                 active={view === 'calc'}
-                search={search}
-                onSearchChange={setSearch}
-                departmentId={departmentId}
-                onDepartmentChange={setDepartmentId}
+                employeeId={calcFilters.employeeId}
+                search={calcFilters.search}
+                onSearchChange={handleCalcSearch}
+                departmentId={calcFilters.departmentId}
+                onDepartmentChange={handleCalcDepartment}
                 onSaved={handleCalcSaved}
               />
             </Suspense>

@@ -17,7 +17,7 @@ import type { IDateRange } from './brigade-salary-source.service.js';
 import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
 import { monthBounds } from './brigade-salary-source.service.js';
-import type { IBrigadeShareFact, IPayrollCalcLine, PayrollCalcMissing } from './payroll-calc.rules.js';
+import { brigadeShareFacts, type IBrigadeShareFact, type IPayrollCalcLine, type PayrollCalcMissing } from './payroll-calc.rules.js';
 import {
   getPayoutForEmployees,
   getPreliminaryPayoutForEmployees,
@@ -164,14 +164,9 @@ export async function getTimesheetSalary(
   const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys()])].sort((a, b) => a - b);
   const names = await namesOf([...new Set(result.errors.map(error => error.employee_id))]);
   // «Сумма» — к выплате из доли: доли нет (выработка не введена, ошибка) — суммы нет.
-  const shares = new Map<number, IBrigadeShareFact>(result.rows
-    .filter(row => row.amount !== null)
-    .map(row => [row.employee_id, {
-      amount: row.amount,
-      ktu: row.ktu,
-      countedMinutes: row.counted_minutes,
-      distribution: result.distribution,
-    }]));
+  const shares = new Map<number, IBrigadeShareFact>([...brigadeShareFacts(
+    department.id, result.distribution, result.inputs.output, result.rows,
+  )].filter(([, fact]) => fact.amount !== null));
   const payouts = await previewBrigadePayouts(shares, month);
 
   return {

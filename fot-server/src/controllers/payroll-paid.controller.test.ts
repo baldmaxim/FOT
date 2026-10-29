@@ -145,7 +145,25 @@ describe('Расчётный листок месяца', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual(info);
-    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(42, '2026-07', expect.objectContaining({ user: expect.any(Object) }));
+    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(
+      42, '2026-07', expect.objectContaining({ user: expect.any(Object) }), { preliminary: false },
+    );
+  });
+
+  it.each([
+    [undefined, false],
+    ['1', true],
+    ['0', false],
+    ['true', false],
+  ])('preliminary=%s — предварительный расчёт: %s', async (preliminary, expected) => {
+    payslip.getPayslipInfo.mockResolvedValue({ month: '2026-09' });
+    const res = makeRes();
+    const query = preliminary === undefined ? { month: '2026-09' } : { month: '2026-09', preliminary };
+
+    await payrollPaidController.getPayslip(makeReq({ query } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(payslip.getPayslipInfo).toHaveBeenCalledWith(42, '2026-09', expect.anything(), { preliminary: expected });
   });
 
   it('без доступа к сотруднику — 403, табель не собирается', async () => {

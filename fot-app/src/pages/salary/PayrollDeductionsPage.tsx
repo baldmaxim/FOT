@@ -31,7 +31,9 @@ interface IPayrollDeductionsPageProps {
   date: string;
   /** «Расчёты» на экране. Скрытые не размонтируются: фильтры и прокрутка сохраняются. */
   active: boolean;
-  /** Поиск по ФИО — общий с «Условиями оплаты». */
+  /** Только этот сотрудник — его карточка открыта в «Подробно» (см. PaymentsTab). */
+  employeeId?: number;
+  /** Поиск по ФИО — общий с «Условиями оплаты»; при employeeId — его ФИО. */
   search: string;
   onSearchChange: (value: string) => void;
   /** Отдел или бригада — общие с «Условиями оплаты». */
@@ -58,7 +60,7 @@ interface IPaidItemsWindow {
  * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
-  date, active, search, onSearchChange, departmentId, onDepartmentChange, onSaved,
+  date, active, employeeId, search, onSearchChange, departmentId, onDepartmentChange, onSaved,
 }) => {
   const [employee, setEmployee] = useState<IPayrollTermsRow | null>(null);
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
@@ -145,6 +147,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
       <CompensationTermsPage
         date={date}
         active={active}
+        employeeId={employeeId}
         search={search}
         onSearchChange={onSearchChange}
         departmentId={departmentId}

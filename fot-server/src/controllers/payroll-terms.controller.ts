@@ -550,10 +550,13 @@ const badRequest = (res: Response, error: string, code: string): void => {
  * paid_deductions_total и paid_deductions за эти месяцы, отпускные, больничные, перерасчёт и card_payouts_by_method
  * из 1С, а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service); без параметра
  * этих полей нет.
+ *
+ * ?employee_id=N — только этот сотрудник (карточка открыта в «Подробно» → «Расчёты»): по id, тёзки не попадают.
  */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const parsed = baseQuerySchema.extend({
+      employee_id: z.coerce.number().int().positive().optional(),
       page: z.coerce.number().int().min(1).default(1),
       page_size: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE, `Не больше ${MAX_PAGE_SIZE} строк на страницу`)
         .default(DEFAULT_PAGE_SIZE),
@@ -603,6 +606,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters);
+    if (parsed.employee_id !== undefined) {
+      params.push(parsed.employee_id);
+      whereParts.push(`employee_id = $${params.length}::int`);
+    }
 
     // $11/$12 при сортировке по столбцу всегда NULL, но упомянуты в SQL: неиспользованный
     // параметр PostgreSQL отвергает («could not determine data type of parameter»).

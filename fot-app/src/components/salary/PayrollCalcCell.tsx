@@ -4,10 +4,9 @@ import { AlertTriangle } from 'lucide-react';
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { formatDate } from '../../utils/formatMoney';
 import {
+  calcBrigadeOutputSub,
   calcIssuesNote,
-  calcNotClosed,
   calcSumAmount,
-  calcTimesheetSub,
   cardPayoutLines,
   cardPayoutsTotal,
   formatCalcRate,
@@ -19,7 +18,7 @@ import {
 import { formatPaidAmount } from '../../utils/payrollPaid';
 import styles from './PayrollTermsTable.module.css';
 
-/** Столбцы состава зарплаты «Расчётов»: ФОТ по закрытому табелю и суммы 1С (payrollCalcColumns.ts). */
+/** Столбцы состава зарплаты «Расчётов»: ФОТ по табелю и суммы 1С (payrollCalcColumns.ts). */
 export type PayrollCalcCellColumn =
   | PayrollCalcSumColumn | 'calc_rate' | 'paid_vacation' | 'paid_sick' | 'paid_recalc' | 'card_payouts';
 
@@ -33,10 +32,10 @@ const formatAmount = (value: string | null | undefined): string => (
 );
 
 /**
- * Ячейка состава зарплаты. В столбцах ФОТ незакрытый или неполный месяц — ⚠ с подсказкой «месяц — причина»:
- * сумма частичная или её нет; «Начислено по табелю» без суммы при незакрытом табеле — «не закрыт». Предварительный
- * расчёт (табель не закрыт) — под «Начислено по табелю» подпись «табель не закрыт» или «выработка не внесена»
- * вместо ⚠.
+ * Ячейка состава зарплаты. Закрыт табель или нет — не помечается. В столбцах ФОТ неполный месяц — ⚠ с подсказкой
+ * «месяц — причина» (почасовая ставка, нет условий или нормы, нет учтённых часов или ошибка бригады): сумма
+ * частичная, «Сумма» — «—». Выработка бригады не введена — без ⚠: подпись «выработка не внесена» под «Начислено по
+ * табелю» и «Суммой».
  */
 export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
   // Столбцы ФОТ считаются отдельным запросом после строк: идёт — «…», не удалось — «—» (над таблицей «Повторить»).
@@ -85,11 +84,10 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
     default: {
       const note = calcIssuesNote(row.calc);
       const amount = calcSumAmount(row, column);
-      const notClosed = column === 'calc_timesheet' && amount === null && calcNotClosed(row.calc);
-      // Подпись предварительного расчёта — вместо ⚠ в «Начислено по табелю».
-      const preliminarySub = column === 'calc_timesheet' && !notClosed ? calcTimesheetSub(row.calc, amount) : null;
-      // Вторая строка: вид проживания, из чего переработка.
-      const sub = preliminarySub ?? (amount === null ? null
+      // Выработка бригады не введена — подпись под «Начислено по табелю» и «Суммой» (без ⚠).
+      const outputSub = column === 'calc_timesheet' || column === 'calc_net' ? calcBrigadeOutputSub(row.calc) : null;
+      // Вторая строка: выработка не внесена, вид проживания, из чего переработка.
+      const sub = outputSub ?? (amount === null ? null
         : column === 'calc_housing' ? housingKindsLabel(row.calc)
           : column === 'calc_overtime' ? overtimeNote(row.calc) : null);
       return (
@@ -97,10 +95,8 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
           className={column === 'calc_net' ? `${styles.cellNumber} ${styles.calcTotal}` : styles.cellNumber}
           title={note ?? undefined}
         >
-          {notClosed ? <span className={styles.calcMuted}>не закрыт</span> : formatAmount(amount)}
-          {note && !notClosed && !preliminarySub && (
-            <AlertTriangle size={12} className={styles.calcWarn} role="img" aria-label={note} />
-          )}
+          {formatAmount(amount)}
+          {note && <AlertTriangle size={12} className={styles.calcWarn} role="img" aria-label={note} />}
           {sub && <span className={styles.calcSub}>{sub}</span>}
         </td>
       );

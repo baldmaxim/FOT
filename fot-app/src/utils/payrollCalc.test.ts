@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IPayrollCalcClosed } from '../services/payrollService';
+import type { IPayrollCalcClosed, IPayrollCalcLine, IPayrollCalcPreliminary } from '../services/payrollService';
 import {
   calcAbsenceLines,
   calcLineDaysNote,
+  calcLineFormula,
   calcLineLabel,
   calcLinePaidItem,
   calcLines,
   calcMissingNote,
   calcNetTotal,
-  calcSourceNote,
+  isCalcCounted,
+  payslipRemainder,
+  payslipShow1c,
 } from './payrollCalc';
+
+/** Разделитель тысяч у toLocaleString('ru-RU'). */
+const NBSP = (1000).toLocaleString('ru-RU').charAt(1);
 
 const closed = (over: Partial<IPayrollCalcClosed> = {}): IPayrollCalcClosed => ({
   state: 'closed',
@@ -34,6 +40,14 @@ const closed = (over: Partial<IPayrollCalcClosed> = {}): IPayrollCalcClosed => (
   ...over,
 });
 
+const preliminary = (over: Partial<IPayrollCalcPreliminary> = {}): IPayrollCalcPreliminary => {
+  const { lines, absences, worked_days, period_from, period_to, norm_days, deductions, accrued, deducted, net, missing } = closed();
+  return {
+    state: 'preliminary', as_of: '2026-09-30', lines, absences, worked_days, period_from, period_to, norm_days, deductions,
+    accrued, deducted, net, missing, ...over,
+  };
+};
+
 describe('«К выплате (ФОТ)»: подписи', () => {
   it('строки — как статьи «Оплачено», в порядке листка', () => {
     expect(calcLines(closed()).map(line => calcLineLabel(line.code))).toEqual(['По трудовому договору', 'Проезд']);
@@ -47,12 +61,17 @@ describe('«К выплате (ФОТ)»: подписи', () => {
     expect(calcLineDaysNote({ code: 'supplement', amount: '1.00' })).toBeNull();
   });
 
-  it('чего не хватает и источник', () => {
+  it('чего не хватает', () => {
     expect(calcMissingNote(['vacation_pay', 'sick_pay'])).toBe('без: отпускные, больничные');
+    expect(calcMissingNote(['brigade_no_hours'])).toBe('без: доля бригады — нет учтённых часов');
     expect(calcMissingNote([])).toBeNull();
-    expect(calcSourceNote({ state: 'not_closed', reason: 'not_covered' })).toBe('Табель не закрыт');
-    expect(calcSourceNote(closed({ quality: 'reconstructed' }))).toBe('Восстановлено по текущим графикам');
-    expect(calcSourceNote(closed())).toBeNull();
+  });
+
+  it('посчитан ли месяц: закрытый и предварительный — да; не работал, не загружен — нет', () => {
+    expect(isCalcCounted(closed())).toBe(true);
+    expect(isCalcCounted(preliminary())).toBe(true);
+    expect(isCalcCounted({ state: 'not_closed', reason: 'no_period' })).toBe(false);
+    expect(isCalcCounted(undefined)).toBe(false);
   });
 
   it('отсутствия с днями', () => {
@@ -68,9 +87,14 @@ describe('«К выплате (ФОТ)»: итог за месяцы', () => {
     expect(calcNetTotal([closed({ net: '0.10' }), closed({ net: '0.20' })])).toBe(0.3);
   });
 
-  it('хоть один не закрыт или не загружен — нет итога', () => {
+  it('предварительный месяц — как закрытый', () => {
+    expect(calcNetTotal([closed({ net: '100.00' }), preliminary({ net: '50.50' })])).toBe(150.5);
+  });
+
+  it('хоть один без расчёта, не загружен или с неизвестным итогом — нет итога', () => {
     expect(calcNetTotal([closed(), { state: 'not_closed', reason: 'not_covered' }])).toBeNull();
     expect(calcNetTotal([closed(), undefined])).toBeNull();
+    expect(calcNetTotal([closed(), preliminary({ net: null, missing: ['brigade_output'] })])).toBeNull();
   });
 });
 
@@ -88,5 +112,101 @@ describe('«К выплате (ФОТ)»: доля бригады', () => {
     const contract = { code: 'contract' as const, amount: '1.00' };
     expect(calcLinePaidItem(brigade, [contract, brigade])).toBeNull();
     expect(calcLinePaidItem(contract, [contract, brigade])).toBe('contract');
+  });
+});
+
+describe('«К выплате (ФОТ)»: расшифровка строк', () => {
+  const salaryPart = {
+    kind: 'salary' as const, from: '2026-09-01', to: '2026-09-30', salary: '150000.00', bonus: '0.00', days: 22,
+    norm: 22, rounding: 'whole' as const, amount: '150000.00',
+  };
+
+  it('оклад одним сегментом — «оклад 150 000,00 × 22 / 22 дн.»; с премиальной — в скобках', () => {
+    expect(calcLineFormula({ code: 'contract', amount: '150000.00', parts: [salaryPart] }))
+      .toEqual([`оклад 150${NBSP}000,00 × 22 / 22 дн.`]);
+    expect(calcLineFormula({ code: 'contract', amount: '1.00', parts: [{ ...salaryPart, salary: '140000.00', bonus: '10000.00' }] }))
+      .toEqual([`(оклад 140${NBSP}000,00 + премиальная 10${NBSP}000,00) × 22 / 22 дн.`]);
+  });
+
+  it('смена оклада — по подстроке на период с суммой; добор нормы выходами — отдельной подстрокой', () => {
+    const line: IPayrollCalcLine = {
+      code: 'contract',
+      amount: '66666.00',
+      days: { worked: 11, norm: 21 },
+      filled_dayoffs: 2,
+      parts: [
+        { ...salaryPart, to: '2026-09-10', salary: '100000.00', days: 8, norm: 21, rounding: 'ruble', amount: '38095.00' },
+        { ...salaryPart, from: '2026-09-11', salary: '200000.00', days: 3, norm: 21, rounding: 'ruble', amount: '28571.00' },
+      ],
+    };
+    expect(calcLineFormula(line)).toEqual([
+      `с 01.09 по 10.09: оклад 100${NBSP}000,00 × 8 / 21 дн. = 38${NBSP}095,00`,
+      `с 11.09 по 30.09: оклад 200${NBSP}000,00 × 3 / 21 дн. = 28${NBSP}571,00`,
+      '11 дн. = 9 раб. + 2 вых. (добор нормы)',
+    ]);
+  });
+
+  it('дневная ставка до копейки; переработка выходами и часами; проезд, проживание, разовая', () => {
+    expect(calcLineFormula({ code: 'contract', amount: '130952.36', parts: [{
+      ...salaryPart, salary: '250000.00', days: 11, norm: 21, rounding: 'daily_kopeck', daily_rate: '11904.76', amount: '130952.36',
+    }] })).toEqual([`оклад 250${NBSP}000,00 / 21 дн. = 11${NBSP}904,76 × 11 дн.`]);
+    expect(calcLineFormula({ code: 'overtime', amount: '10000.00', parts: [
+      { kind: 'overtime_days', from: '2026-09-01', to: '2026-09-30', salary: '168000.00', days: 1, norm: 21, amount: '8000.00' },
+      { kind: 'overtime_hours', from: '2026-09-01', to: '2026-09-30', salary: '168000.00', minutes: 90, norm_minutes: 10_080, amount: '1500.00' },
+    ] })).toEqual([
+      `1 вых. × 168${NBSP}000,00 / 21 дн. = 8${NBSP}000,00`,
+      `1,5 ч × 168${NBSP}000,00 / 168 ч = 1${NBSP}500,00`,
+    ]);
+    expect(calcLineFormula({ code: 'travel', amount: '2730.00', parts: [{ kind: 'travel', rate: '2730.00', days: 22, norm: 22, amount: '2730.00' }] }))
+      .toEqual([`ставка 2${NBSP}730,00 × 22 / 22 дн.`]);
+    expect(calcLineFormula({ code: 'housing', amount: '160.00', parts: [{ kind: 'housing', housing: 'dormitory', amount: '160.00' }] }))
+      .toEqual(['доплата за общежитие, сумма за месяц']);
+    expect(calcLineFormula({ code: 'supplement', amount: '5000.00', parts: [{ kind: 'one_time', amount: '5000.00' }] }))
+      .toEqual(['разовые доплаты месяца']);
+  });
+
+  it('доля бригады: выработка × КТУ × часы / Σ весов; не внесена, нет часов, ошибка', () => {
+    const part = {
+      kind: 'brigade' as const, department_id: 'b1', output: '100000.00', ktu_tenths: 15, counted_minutes: 10_595,
+      weight: 158_925, total_weight: 259_455, amount: '61234.57',
+    };
+    expect(calcLineFormula({ code: 'brigade', amount: '61234.57', parts: [part] }))
+      .toEqual([`выработка 100${NBSP}000,00 × КТУ 1,5 × 176,58 ч / 432,43 (Σ КТУ × ч бригады) = 61${NBSP}234,57`]);
+    expect(calcLineFormula({ code: 'brigade', amount: null, parts: [{ ...part, output: null, amount: null }] }))
+      .toEqual(['выработка бригады не внесена']);
+    expect(calcLineFormula({ code: 'brigade', amount: null, parts: [{ ...part, total_weight: 0, amount: null }] }))
+      .toEqual(['нет учтённых часов бригады']);
+    expect(calcLineFormula({ code: 'brigade', amount: null, parts: [{ ...part, amount: null }] }))
+      .toEqual(['ошибка расчёта бригады']);
+  });
+
+  it('старый бэкенд без частей — прежняя подпись дней', () => {
+    expect(calcLineFormula({ code: 'contract', amount: '1.00', days: { worked: 22, norm: 22 } })).toEqual(['22 из 22 дн.']);
+    expect(calcLineFormula({ code: 'supplement', amount: '1.00' })).toEqual([]);
+  });
+});
+
+describe('листок: блоки 1С и «Остаток (с НДФЛ)»', () => {
+  it('блоки 1С: суммы 1С есть или расчёта нет — показываются; только расчёт — нет', () => {
+    expect(payslipShow1c(false, closed())).toBe(false);
+    expect(payslipShow1c(false, preliminary())).toBe(false);
+    expect(payslipShow1c(true, preliminary())).toBe(true);
+    expect(payslipShow1c(false, { state: 'not_closed', reason: 'no_period' })).toBe(true);
+    expect(payslipShow1c(false, undefined)).toBe(true);
+  });
+
+  it('остаток — итог ФОТ минус перечислено, в копейках: несколько ведомостей, без ведомостей, переплата', () => {
+    // Обивальнева, сентябрь: 152 730 − (60 900 + 60 900).
+    expect(payslipRemainder(closed({ net: '152730.00' }), 121_800)).toBe(30_930);
+    expect(payslipRemainder(preliminary({ net: '0.30' }), 0.1)).toBe(0.2);
+    expect(payslipRemainder(closed({ net: '100000.00' }), 0)).toBe(100_000);
+    expect(payslipRemainder(closed({ net: '100000.00' }), 100_000.01)).toBe(-0.01);
+  });
+
+  it('ведомости не загрузились, итог неизвестен или расчёта нет — остатка нет', () => {
+    expect(payslipRemainder(closed(), 'error')).toBeNull();
+    expect(payslipRemainder(preliminary({ net: null }), 0)).toBeNull();
+    expect(payslipRemainder({ state: 'not_closed', reason: 'no_period' }, 0)).toBeNull();
+    expect(payslipRemainder(undefined, 0)).toBeNull();
   });
 });
