@@ -109,6 +109,21 @@ describe('«К выплате (ФОТ)» бригады', () => {
     ]);
   });
 
+  it('«Без переработки» в месяце — переработки нет, итог — оклад', async () => {
+    brigade.getBrigadeShares.mockResolvedValue({ state: 'fixed', distribution: 'ok', rows: [shareRow] });
+    const base = pg.query.getMockImplementation()!;
+    pg.query.mockImplementation(async (sql: string, params?: unknown[]) => (sql.includes('FROM payroll_overtime_stops')
+      ? [{ employee_id: 8, date_from: '2026-08-20', date_to: null }]
+      : base(sql, params)));
+
+    const calc = (await getPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    expect(calc).toMatchObject({ state: 'closed', net: '110000.00', missing: [] });
+    expect(calc?.state === 'closed' && calc.lines.map(line => line.code)).toEqual(['contract']);
+    const stopsCall = pg.query.mock.calls.find(([sql]) => String(sql).includes('FROM payroll_overtime_stops'));
+    expect(stopsCall?.[1]).toEqual([expect.arrayContaining([8]), '2026-09-01', '2026-09-30']);
+  });
+
   it('расчёт бригады не зафиксирован — месяц не закрыт', async () => {
     brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, rows: [] });
 

@@ -27,6 +27,7 @@ import {
   type IBrigadeShareFact,
   type ICalcTermsRow,
   type IPayrollCalcDeduction,
+  type IOvertimeStopPeriod,
   type IPayrollCalcResult,
   type IPlannedSupplementPeriod,
 } from './payroll-calc.rules.js';
@@ -176,21 +177,22 @@ const groupBy = <T extends { employee_id: number }>(rows: readonly T[] | undefin
   return result;
 };
 
-/** То, что не зависит от дней табеля: разовые доплаты, удержания и проживание месяца. */
+/** То, что не зависит от дней табеля: разовые доплаты, удержания, проживание и «Без переработки» месяца. */
 interface IPayoutExtras {
   oneTime: Map<number, string>;
   deductions: Map<number, IPayrollCalcDeduction[]>;
   rateFacts: Map<number, RateFactsRow>;
+  overtimeStops: Map<number, IOvertimeStopPeriod[]>;
 }
 
-/** Разовые доплаты, удержания и факты ставок месяца — одно правило для карточки и вкладки табеля. */
+/** Разовые доплаты, удержания, факты ставок и «Без переработки» месяца — одно правило для карточки и вкладки табеля. */
 const loadPayoutExtras = async (
   ids: readonly number[],
   month: string,
   periods: ReadonlyMap<number, { from: string; to: string }>,
 ): Promise<IPayoutExtras> => {
   const monthStart = `${month}-01`;
-  const [oneTime, deductions, rateFacts] = await Promise.all([
+  const [oneTime, deductions, rateFacts, overtimeStops] = await Promise.all([
     query<{ employee_id: number; amount: string }>(
       `SELECT employee_id, SUM(amount)::text AS amount
          FROM payroll_one_time_supplements
@@ -212,6 +214,14 @@ const loadPayoutExtras = async (
       month,
       lastDayOfMonth(month),
     ),
+    query<IOvertimeStopPeriod & { employee_id: number }>(
+      `SELECT employee_id, to_char(date_from, 'YYYY-MM-DD') AS date_from, to_char(date_to, 'YYYY-MM-DD') AS date_to
+         FROM payroll_overtime_stops
+        WHERE employee_id = ANY($1::int[])
+          AND date_from <= $3::date
+          AND (date_to IS NULL OR date_to >= $2::date)`,
+      [[...ids], monthStart, lastDayOfMonth(month)],
+    ),
   ]);
   return {
     oneTime: new Map((oneTime ?? []).map(row => [Number(row.employee_id), row.amount])),
@@ -220,6 +230,10 @@ const loadPayoutExtras = async (
       rows.map(({ kind_id, kind, amount }) => ({ kind_id: Number(kind_id), kind, amount })),
     ])),
     rateFacts,
+    overtimeStops: new Map([...groupBy(overtimeStops)].map(([id, rows]) => [
+      id,
+      rows.map(({ date_from, date_to }) => ({ date_from, date_to })),
+    ])),
   };
 };
 
@@ -360,6 +374,7 @@ const computePayouts = async (
       overtimeMinutes: Object.fromEntries(
         Object.entries(basis.overtimeMinutes).filter(([date]) => !brigadeDates.has(date)),
       ),
+      overtimeStops: extras.overtimeStops.get(employeeId) ?? [],
       absenceDays: basis.absenceDays,
       // NUMERIC приходит строкой; String() — на случай числа из моков и старых драйверов.
       terms: terms.map((row): ICalcTermsRow => ({

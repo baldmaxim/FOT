@@ -1,5 +1,5 @@
 import { useId, useState, type FC } from 'react';
-import { Ban, BedDouble, CirclePlus, X } from 'lucide-react';
+import { Ban, BedDouble, CirclePlus, TimerOff, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { ModalShell } from '../ui/ModalShell';
@@ -10,6 +10,7 @@ import { CompensationStopRegistry } from './registry/CompensationStopRegistry';
 import { DeductionRegistry } from './registry/DeductionRegistry';
 import { DormitoryRegistry } from './registry/DormitoryRegistry';
 import { HousingAllowanceRegistry } from './registry/HousingAllowanceRegistry';
+import { OvertimeStopRegistry } from './registry/OvertimeStopRegistry';
 import { SupplementRegistry } from './registry/SupplementRegistry';
 import modal from './PayrollModal.module.css';
 import styles from './PayrollDictionary.module.css';
@@ -19,19 +20,19 @@ interface IPayrollDictionaryModalProps {
 }
 
 /** Окно таблицы поверх «Справочника»; открыто одно. */
-type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'housing' | 'deductions';
+type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'overtime' | 'housing' | 'deductions';
 
 /**
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
  * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
  * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие» (кто живёт и кому доплата за общежитие),
- * «Без проезда», «Доплата»; у заголовков «Удержания» («Сотрудники») и «Ставки» («Проживание») — свои таблицы
- * окном поверх.
+ * «Без проезда», «Доплата», «Без переработки»; у заголовков «Удержания» («Сотрудники») и «Ставки» («Проживание») —
+ * свои таблицы окном поверх.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
   const { canEditPage } = useAuth();
-  // Справочники и «Без проезда» — те же ключи, что у сервера (payroll.routes: deductionsEdit).
+  // Справочники, «Без проезда» и «Без переработки» — те же ключи, что у сервера (payroll.routes: deductionsEdit).
   const canEdit = canEditPage('/salary/terms') || canEditPage('/salary/payments');
   // Проживание, доплаты и сумма удержания — это условия оплаты (termsEdit).
   const canEditTerms = canEditPage('/salary/terms');
@@ -66,6 +67,10 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
                 <CirclePlus size={16} aria-hidden="true" />
                 <span>Доплата</span>
               </button>
+              <button type="button" className={styles.headerButton} onClick={() => setOpened('overtime')}>
+                <TimerOff size={16} aria-hidden="true" />
+                <span>Без переработки</span>
+              </button>
             </div>
             <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Закрыть">
               <X size={20} aria-hidden="true" />
@@ -81,6 +86,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
           {opened === 'dormitory' && <DormitoryRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'stops' && <CompensationStopRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'supplements' && <SupplementRegistry canEdit={canEditTerms} onClose={close} />}
+          {opened === 'overtime' && <OvertimeStopRegistry canEdit={canEdit} onClose={close} />}
           {opened === 'housing' && <HousingAllowanceRegistry canEdit={canEditTerms} onClose={close} />}
           {opened === 'deductions' && <DeductionRegistry canEdit={canEditTerms} onClose={close} />}
         </>

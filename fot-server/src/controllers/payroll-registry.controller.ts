@@ -14,6 +14,7 @@ const REGISTRY_SHEETS = new Map<string, ITableSnapshotSheet>([
   ['housing', { sheetName: 'Доплата за проживание', tableName: 'HousingAllowance' }],
   ['supplements', { sheetName: 'Доплата', tableName: 'Supplements' }],
   ['compensation-stops', { sheetName: 'Без проезда', tableName: 'CompensationStops' }],
+  ['overtime-stops', { sheetName: 'Без переработки', tableName: 'OvertimeStops' }],
   ['dormitory-allowances', { sheetName: 'Доплата за общежитие', tableName: 'DormitoryAllowance' }],
   ['deductions', { sheetName: 'Удержания', tableName: 'Deductions' }],
   ['summary', { sheetName: 'Свод', tableName: 'PayrollSummary' }],

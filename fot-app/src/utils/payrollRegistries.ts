@@ -4,6 +4,7 @@ import type {
   IDormitoryAllowanceRow,
   IDormitoryStayPeriod,
   IHousingAllowanceRow,
+  IOvertimeStop,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import type { IPayrollRateValue } from '../services/payrollService';
@@ -124,6 +125,18 @@ export const COMPENSATION_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensat
   },
 ];
 
+export const OVERTIME_STOP_COLUMNS: ReadonlyArray<IRegistryColumn<IOvertimeStop>> = [
+  ...employeeColumns<IOvertimeStop>(),
+  // Заголовок одной строкой: «БЕЗ ПЕРЕРАБОТКИ С» + стрелка и воронка.
+  dateColumn<IOvertimeStop>('date_from', 'Без переработки с', row => row.date_from, 200),
+  {
+    // Пусто — бессрочно: оплату переработки ещё не возобновили.
+    key: 'date_to', label: 'По', type: 'text', width: 112, nowrap: true,
+    text: row => (row.date_to ? formatDate(row.date_to) : 'бессрочно'),
+    sortValue: row => row.date_to,
+  },
+];
+
 /**
  * Строка таблицы «Общежитие»: проживание в общежитии (ведут кадры, здесь только 🗑) или «Доплата за
  * общежитие» — общежитие не назначено, платят значение ставки.
@@ -185,6 +198,7 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
 export const buildHousingExport = buildSnapshot('Доплата за проживание', HOUSING_COLUMNS);
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
+export const buildOvertimeStopExport = buildSnapshot('Без переработки', OVERTIME_STOP_COLUMNS);
 export const buildDormitoryRegistryExport = buildSnapshot('Общежитие', DORMITORY_REGISTRY_COLUMNS);
 
 /**
@@ -281,8 +295,11 @@ export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyA
     : periodIntersectsMonths(row.date_from, row.date_to, months)
 );
 
-/** «Без проезда» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */
-export const stopInMonths = (stop: ICompensationStop, months: ReadonlyArray<string>): boolean => (
+/** «Без проезда» и «Без переработки» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */
+export const stopInMonths = (
+  stop: Pick<ICompensationStop, 'date_from' | 'date_to'>,
+  months: ReadonlyArray<string>,
+): boolean => (
   periodIntersectsMonths(stop.date_from, stop.date_to, months)
 );
 

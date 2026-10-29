@@ -4,12 +4,14 @@ import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
+  IOvertimeStop,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
 import {
   buildCompensationStopExport,
   buildDormitoryRegistryExport,
   buildDormitoryRegistryRows,
+  buildOvertimeStopExport,
   DORMITORY_REGISTRY_COLUMNS,
   dormitoryAllowanceInMonths,
   periodIntersectsMonths,
@@ -229,6 +231,21 @@ describe('выбор месяца в таблицах «Справочника»
     expect(stopInMonths(stop, ['2027-05'])).toBe(true);
     expect(buildCompensationStopExport([stop]).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Без проезда с', 'По']);
+  });
+
+  it('«Без переработки»: закрытый период — только в своих месяцах; «по» пусто — «бессрочно»', () => {
+    const stop: IOvertimeStop = {
+      id: 2, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
+      date_from: '2026-09-15', date_to: '2026-10-31', can_edit: true,
+    };
+    expect(stopInMonths(stop, ['2026-08'])).toBe(false);
+    expect(stopInMonths(stop, ['2026-09'])).toBe(true);
+    expect(stopInMonths(stop, ['2026-10'])).toBe(true);
+    expect(stopInMonths(stop, ['2026-11'])).toBe(false);
+    const snapshot = buildOvertimeStopExport([stop, { ...stop, id: 3, date_from: '2026-11-01', date_to: null }]);
+    expect(snapshot.columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Без переработки с', 'По']);
+    expect(snapshot.rows.map(row => row.cells.slice(-2))).toEqual([['15.09.2026', '31.10.2026'], ['01.11.2026', 'бессрочно']]);
   });
 
   it('«Доплата за общежитие»: месяцы проживания скрыты, в день выезда уже не живёт; «Весь период» — все', () => {

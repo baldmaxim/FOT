@@ -271,3 +271,59 @@ describe('«К выплате (ФОТ)»: переработка в будни �
   });
 });
 
+
+describe('«К выплате (ФОТ)»: «Без переработки»', () => {
+  // Август 2026: 1-е — суббота, будней 21. Не вышел 6 и 7-го: 19 будней, норму добирают выходы 1 и 8-го;
+  // выходы 15, 22 и 29-го — сверх нормы. Часы корректировок: 4-го — 2 ч, 12-го — 1 ч, 24-го — 1 ч.
+  const weekdays = ['03', '04', '05', '10', '11', '12', '13', '14', '17', '18', '19', '20', '21', '24', '25', '26',
+    '27', '28', '31'].map(day => `2026-08-${day}`);
+  const overtimeFacts = (over: Partial<IPayrollCalcFacts> = {}): IPayrollCalcFacts => facts({
+    normDays: 21,
+    normMinutes: 10_080,
+    workdayDates: weekdays,
+    dayoffDates: ['2026-08-01', '2026-08-08', '2026-08-15', '2026-08-22', '2026-08-29'],
+    terms: [terms({ monthly_salary: '168000.00' })],
+    overtimeMinutes: { '2026-08-04': 120, '2026-08-12': 60, '2026-08-24': 60 },
+    ...over,
+  });
+
+  it('без периода — как прежде: 3 выхода × 8 000 + 4 ч × 1 000', () => {
+    const result = buildPayrollCalc(overtimeFacts());
+    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '28000.00', days: { worked: 3, norm: 21 }, hours: 4 });
+    expect(result.net).toBe('196000.00');
+  });
+
+  it('период на весь месяц — строки «Переработка» нет, выходы-добор остаются в окладе', () => {
+    const result = buildPayrollCalc(overtimeFacts({ overtimeStops: [{ date_from: '2026-08-01', date_to: null }] }));
+    expect(result.lines).toEqual([{ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } }]);
+    expect(result.net).toBe('168000.00');
+    expect(result.missing).toEqual([]);
+  });
+
+  it('часть месяца (по — включительно): снимаются выходы и часы только своих дат', () => {
+    const result = buildPayrollCalc(overtimeFacts({ overtimeStops: [{ date_from: '2026-08-08', date_to: '2026-08-22' }] }));
+    // Выход 8-го — добор нормы, он в окладе; 15 и 22-го сняты, 29-го — 8 000. Часы: 4-го и 24-го — 3 ч = 3 000.
+    expect(line(result, 'contract')).toEqual({ code: 'contract', amount: '168000.00', days: { worked: 21, norm: 21 } });
+    expect(line(result, 'overtime')).toEqual({ code: 'overtime', amount: '11000.00', days: { worked: 1, norm: 21 }, hours: 3 });
+    expect(result.net).toBe('179000.00');
+  });
+
+  it('снятая переработка не даёт пометок «нет нормы часов», «нет условий», «почасовая»', () => {
+    const late = { normDays: 5, workdayDates: august(5), dayoffDates: ['2026-08-30'], normMinutes: null,
+      overtimeMinutes: { '2026-08-25': 60 } };
+    const stop = { overtimeStops: [{ date_from: '2026-08-21', date_to: null }] };
+    // Условия до 20-го: выход 30-го и часы 25-го без условий и без нормы часов.
+    const noTerms = facts({ ...late, terms: [terms({ effective_to: '2026-08-20' })] });
+    expect(buildPayrollCalc(noTerms).missing).toEqual(expect.arrayContaining(['no_terms', 'no_norm']));
+    expect(buildPayrollCalc({ ...noTerms, ...stop }).missing).toEqual([]);
+    // С 21-го почасовые условия: выход 30-го почасовой.
+    const hourly = facts({ ...late, terms: [
+      terms({ effective_to: '2026-08-20' }),
+      terms({ effective_from: '2026-08-21', calc_type: 'hourly', monthly_salary: null }),
+    ] });
+    expect(buildPayrollCalc(hourly).missing).toEqual(expect.arrayContaining(['hourly', 'no_norm']));
+    const stopped = buildPayrollCalc({ ...hourly, ...stop });
+    expect(stopped.missing).toEqual([]);
+    expect(line(stopped, 'overtime')).toBeUndefined();
+  });
+});

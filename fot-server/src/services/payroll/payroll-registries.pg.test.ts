@@ -78,6 +78,12 @@ import {
   listCompensationStops,
   updateCompensationStop,
 } from './payroll-compensation-stops.service.js';
+import {
+  addOvertimeStop,
+  deleteOvertimeStop,
+  listOvertimeStops,
+  updateOvertimeStop,
+} from './payroll-overtime-stops.service.js';
 import { listDeductionKindTree } from './payroll-deduction-subkinds.service.js';
 import { deleteDeduction, listDeductions } from '../staff-deductions.service.js';
 import { canWritePayrollRegistryEmployee, isPayrollStaffEmployee } from './payroll-registry-scope.service.js';
@@ -124,7 +130,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
   beforeAll(async () => {
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
-        payroll_dormitory_allowances, payroll_compensation_stops, payroll_one_time_supplements, payroll_paid_amounts,
+        payroll_dormitory_allowances, payroll_compensation_stops, payroll_overtime_stops,
+        payroll_one_time_supplements, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rate_values, payroll_rates,
         payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
@@ -438,6 +445,33 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         [1, '2026-08-01', '2026-08-31'],
         [1, '2026-09-01', null],
       ]);
+    });
+  });
+
+  describe('«Без переработки» (миграция 335)', () => {
+    it('повтор миграции безопасен; периоды не пересекаются, стык — можно; подрядчика в списке нет', async () => {
+      await run(migration('335_payroll_overtime_stops.sql'));
+      await run(migration('335_payroll_overtime_stops.sql'));
+
+      const first = await addOvertimeStop(2, { date_from: '2026-09-15', date_to: null });
+      if (first === 'overlap') throw new Error('первый период не добавился');
+      expect(await addOvertimeStop(2, { date_from: '2026-10-01', date_to: '2026-10-31' })).toBe('overlap');
+      expect(await updateOvertimeStop(first.id, { date_from: '2026-09-15', date_to: '2026-09-30' }))
+        .toMatchObject({ before: { date_to: null }, after: { date_to: '2026-09-30' } });
+      // Включительно: 30.09 занят, с 01.10 — новый период.
+      expect(await addOvertimeStop(2, { date_from: '2026-09-30', date_to: null })).toBe('overlap');
+      const second = await addOvertimeStop(2, { date_from: '2026-10-01', date_to: null });
+      expect(second).toMatchObject({ date_from: '2026-10-01', full_name: 'Борисов А.А.' });
+      await expect(run(`INSERT INTO payroll_overtime_stops (employee_id, date_from, date_to)
+        VALUES (2, '2026-12-10', '2026-12-01')`)).rejects.toThrow(/payroll_overtime_stop_dates/);
+      expect(await addOvertimeStop(3, { date_from: '2026-09-01', date_to: null })).toMatchObject({ employee_id: 3 });
+
+      expect((await listOvertimeStops(SCOPE)).map(row => [row.employee_id, row.date_from, row.date_to])).toEqual([
+        [2, '2026-09-15', '2026-09-30'],
+        [2, '2026-10-01', null],
+      ]);
+      if (second !== 'overlap') expect(await deleteOvertimeStop(second.id)).toMatchObject({ id: second.id });
+      expect((await listOvertimeStops(SCOPE)).length).toBe(1);
     });
   });
 

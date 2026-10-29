@@ -66,6 +66,21 @@ export interface ICompensationStop {
   can_edit: boolean;
 }
 
+/**
+ * «Без переработки» (миграция 335) — кому не оплачивать переработку: период «с — по» (по включительно, null —
+ * бессрочно). В расчёте «К выплате (ФОТ)» выходы сверх нормы и часы по корректировкам в эти даты не оплачиваются.
+ */
+export interface IOvertimeStop {
+  id: number;
+  employee_id: number;
+  full_name: string;
+  department: string | null;
+  position: string | null;
+  date_from: string;
+  date_to: string | null;
+  can_edit: boolean;
+}
+
 /** Проживание в общежитии, задевающее период доплаты: выезд — день выезда (в нём уже не живёт), null — живёт. */
 export interface IDormitoryStayPeriod {
   check_in: string;
@@ -138,7 +153,8 @@ export interface IRegistryPeriodFields {
 }
 
 export type PayrollRegistryTable =
-  | 'housing' | 'supplements' | 'compensation-stops' | 'dormitory-allowances' | 'deductions' | 'summary';
+  | 'housing' | 'supplements' | 'compensation-stops' | 'overtime-stops' | 'dormitory-allowances' | 'deductions'
+  | 'summary';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
@@ -150,6 +166,7 @@ export const PAYROLL_REGISTRY_KEYS = {
   housing: ['payroll-terms', 'registry', 'housing'],
   supplements: ['payroll-terms', 'registry', 'supplements'],
   stops: ['payroll-terms', 'registry', 'compensation-stops'],
+  overtimeStops: ['payroll-terms', 'registry', 'overtime-stops'],
   dormitoryAllowances: ['payroll-terms', 'registry', 'dormitory-allowances'],
   deductions: ['payroll-terms', 'registry', 'deductions'],
 } as const;
@@ -221,6 +238,21 @@ export const payrollRegistryService = {
 
   removeStop: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/compensation-stops/${id}`);
+  },
+
+  listOvertimeStops: (signal?: AbortSignal) => list<IOvertimeStop>('/payroll/overtime-stops', signal),
+
+  /** Пересечение с другим периодом сотрудника — ApiError 409 OVERTIME_STOP_OVERLAP. */
+  addOvertimeStop: async (employeeId: number, fields: IRegistryPeriodFields): Promise<void> => {
+    await apiClient.post('/payroll/overtime-stops', { employee_id: employeeId, ...fields });
+  },
+
+  updateOvertimeStop: async (id: number, fields: IRegistryPeriodFields): Promise<void> => {
+    await apiClient.patch(`/payroll/overtime-stops/${id}`, fields);
+  },
+
+  removeOvertimeStop: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/overtime-stops/${id}`);
   },
 
   listDormitoryAllowances: (signal?: AbortSignal) =>

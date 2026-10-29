@@ -39,6 +39,15 @@ const stops = vi.hoisted(() => ({
 }));
 vi.mock('../services/payroll/payroll-compensation-stops.service.js', () => stops);
 
+const overtimeStops = vi.hoisted(() => ({
+  listOvertimeStops: vi.fn(),
+  getOvertimeStop: vi.fn(),
+  addOvertimeStop: vi.fn(),
+  updateOvertimeStop: vi.fn(),
+  deleteOvertimeStop: vi.fn(),
+}));
+vi.mock('../services/payroll/payroll-overtime-stops.service.js', () => overtimeStops);
+
 // «Удержания» пишут удержания staff_deductions — те же записи, что во вкладке кадров (миграция 321).
 const deductions = vi.hoisted(() => ({
   listPayrollDeductions: vi.fn(),
@@ -62,6 +71,7 @@ import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dor
 import { payrollHousingController as housingC } from './payroll-housing.controller.js';
 import { payrollSupplementsController as supplementsC } from './payroll-supplements.controller.js';
 import { payrollCompensationStopsController as stopsC } from './payroll-compensation-stops.controller.js';
+import { payrollOvertimeStopsController as overtimeStopsC } from './payroll-overtime-stops.controller.js';
 import { payrollRegistryController as registryC } from './payroll-registry.controller.js';
 import { payrollStaffDeductionsController as deductionsC } from './payroll-staff-deductions.controller.js';
 
@@ -505,6 +515,64 @@ describe('«Без проезда»', () => {
   });
 });
 
+describe('«Без переработки»', () => {
+  const STOP = {
+    id: 5, employee_id: 42, full_name: 'Каримов Акмал', department: null, position: null,
+    date_from: '2026-09-15', date_to: null,
+  };
+
+  it('добавлен — 200 и аудит; пересечение — 409; чужой сотрудник — 403', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    overtimeStops.addOvertimeStop.mockResolvedValue(STOP);
+    const res = makeRes();
+    await overtimeStopsC.add(makeReq({ body: { employee_id: 42, date_from: '2026-09-15' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual(STOP);
+    expect(overtimeStops.addOvertimeStop).toHaveBeenCalledWith(42, { date_from: '2026-09-15', date_to: null });
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_OVERTIME_STOP_ADDED',
+      expect.objectContaining({ entityType: 'payroll_overtime_stops', entityId: '5' }),
+    );
+
+    overtimeStops.addOvertimeStop.mockResolvedValue('overlap');
+    const overlap = makeRes();
+    await overtimeStopsC.add(makeReq({ body: { employee_id: 42, date_from: '2026-09-15' } }), overlap);
+    expect(overlap.statusCode).toBe(409);
+    expect(overlap.body.code).toBe('OVERTIME_STOP_OVERLAP');
+
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
+    const denied = makeRes();
+    await overtimeStopsC.add(makeReq({ body: { employee_id: 99, date_from: '2026-09-15' } }), denied);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it('«по» — аудит «было → стало»; удаление ошибочной строки — аудит; нет строки — 404', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    overtimeStops.getOvertimeStop.mockResolvedValue(STOP);
+    overtimeStops.updateOvertimeStop.mockResolvedValue({ before: STOP, after: { ...STOP, date_to: '2026-10-31' } });
+    const res = makeRes();
+    await overtimeStopsC.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-09-15', date_to: '2026-10-31' } }), res);
+    expect(res.body.data.date_to).toBe('2026-10-31');
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_OVERTIME_STOP_UPDATED',
+      expect.objectContaining({ details: expect.objectContaining({ to: expect.objectContaining({ date_to: '2026-10-31' }) }) }),
+    );
+
+    overtimeStops.deleteOvertimeStop.mockResolvedValue(STOP);
+    const removed = makeRes();
+    await overtimeStopsC.remove(makeReq({ params: { id: '5' } }), removed);
+    expect(removed.statusCode).toBe(200);
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'PAYROLL_OVERTIME_STOP_DELETED', expect.objectContaining({ entityId: '5' }),
+    );
+
+    overtimeStops.getOvertimeStop.mockResolvedValue(null);
+    const missing = makeRes();
+    await overtimeStopsC.remove(makeReq({ params: { id: '6' } }), missing);
+    expect(missing.statusCode).toBe(404);
+  });
+});
+
 describe('экспорт', () => {
   it('неизвестная таблица — 404', async () => {
     for (const table of ['unknown', 'constructor', '__proto__']) {
@@ -512,5 +580,11 @@ describe('экспорт', () => {
       await registryC.exportTable(makeReq({ params: { table } }), res);
       expect(res.statusCode, table).toBe(404);
     }
+  });
+
+  it('«Без переработки» — таблица известна: пустой снимок — 400, не 404', async () => {
+    const res = makeRes();
+    await registryC.exportTable(makeReq({ params: { table: 'overtime-stops' } }), res);
+    expect(res.statusCode).toBe(400);
   });
 });

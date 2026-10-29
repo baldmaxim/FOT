@@ -179,6 +179,28 @@ describe('отдел: незакрытый месяц', () => {
     expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
   });
 
+  it('«Без переработки» с 15-го: выход 19-го и час 16-го сняты, 2 ч 1-го оплачены', async () => {
+    live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: weekdays('2026-09') }));
+    basisDrafts.buildBasisDraftsForDays.mockImplementation(async (exec: unknown, source: Parameters<typeof draftsFromDays>[1]) => (
+      (await draftsFromDays(exec, source)).map(draft => ({
+        ...draft, dayoffDates: ['2026-09-19'], overtimeMinutes: { '2026-09-01': 120, '2026-09-16': 60 },
+      }))
+    ));
+    const base = pg.query.getMockImplementation()!;
+    pg.query.mockImplementation(async (sql: string, params?: unknown[]) => (sql.includes('FROM payroll_overtime_stops')
+      ? [{ employee_id: 8, date_from: '2026-09-15', date_to: null }]
+      : base(sql, params)));
+
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    // 110 000 × 120 / 10 560 = 1 250.
+    expect(calc).toMatchObject({ state: 'preliminary', net: '111250.00', missing: [] });
+    expect(calc?.state === 'preliminary' && calc.lines).toEqual([
+      { code: 'contract', amount: '110000.00', days: { worked: 22, norm: 22 } },
+      { code: 'overtime', amount: '1250.00', days: { worked: 0, norm: 22 }, hours: 2 },
+    ]);
+  });
+
   it('1-е число текущего месяца (asOf нет) — «не закрыт»; принят позже asOf — не работал', async () => {
     brigade.resolvePreliminaryAsOf.mockReturnValue(null);
     expect((await getPreliminaryPayoutForEmployees([8], '2026-10', req)).get(8))

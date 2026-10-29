@@ -13,7 +13,7 @@ import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 
-/** Строка таблицы с периодом «с — по»: «Без проезда», «Доплата за общежитие». */
+/** Строка таблицы с периодом «с — по»: «Без проезда», «Без переработки», «Доплата за общежитие». */
 interface IRegistryPeriodRow {
   id: number;
   full_name: string;
@@ -23,9 +23,9 @@ interface IRegistryPeriodRow {
 }
 
 interface IRegistryPeriodFormProps {
-  /** Заголовок окна правки: «Без проезда», «Доплата за общежитие». */
+  /** Заголовок окна правки: «Без проезда», «Без переработки», «Доплата за общежитие». */
   title: string;
-  /** Подпись даты начала: «Без проезда с», «Доплата с». */
+  /** Подпись даты начала: «Без проезда с», «Без переработки с», «Доплата с». */
   fromLabel: string;
   /** Передано — ✎ этого периода (сотрудник не меняется); нет — «Добавить сотрудника». */
   row?: IRegistryPeriodRow;

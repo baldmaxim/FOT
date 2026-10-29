@@ -11,7 +11,8 @@
  * - «Разовая доплата» (supplement) — разовые доплаты месяца целиком;
  * - «Переработка» (overtime) — оклад сегмента даты выхода / норма × число выходов сверх нормы, одинарно, до рубля;
  *   плюс переработка в будни по корректировкам — оклад сегмента даты / норма часов месяца × часы, одинарно, до копейки
- *   (Абраменко, август: 250 000 / 168 × 6 = 8 928,57, как ЗУП);
+ *   (Абраменко, август: 250 000 / 168 × 6 = 8 928,57, как ЗУП). «Без переработки» (миграция 335) снимает выходы
+ *   и часы дат своего периода; выходы, добирающие норму, остаются в окладе;
  * - «Проезд» и «Компенсация проживания» — строки «По ставкам ФОТ» (payroll-payslip.rules.ts);
  * - «Выработка бригады» (brigade) — доля «Выработки» бригады по КТУ из зафиксированного расчёта бригады
  *   (brigade-salary.service); дни подач бригады в оклад не идут. Выработка не введена или расчёт с ошибкой —
@@ -89,6 +90,12 @@ export interface IPlannedSupplementPeriod {
   date_to: string | null;
 }
 
+/** Период «Без переработки»: YYYY-MM-DD, по — включительно, null — бессрочно. */
+export interface IOvertimeStopPeriod {
+  date_from: string;
+  date_to: string | null;
+}
+
 export interface IPayrollCalcFacts {
   monthStart: string;
   monthEnd: string;
@@ -99,6 +106,8 @@ export interface IPayrollCalcFacts {
   normMinutes?: number | null;
   /** Переработка в будни по корректировкам: дата → минуты; дни бригады уже исключены. */
   overtimeMinutes?: Readonly<Record<string, number>>;
+  /** «Без переработки»: в эти даты выходы сверх нормы и часы по корректировкам не оплачиваются. */
+  overtimeStops?: readonly IOvertimeStopPeriod[];
   absenceDays: PayrollAbsenceDays;
   terms: readonly ICalcTermsRow[];
   plannedSupplements: readonly IPlannedSupplementPeriod[];
@@ -212,6 +221,9 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   const segmentOf = (date: string): ICalcSegment | null => (
     segments.find(segment => inRange(date, segment.from, segment.to)) ?? null
   );
+  const overtimeStopped = (date: string): boolean => (
+    (facts.overtimeStops ?? []).some(stop => inRange(date, stop.date_from, stop.date_to))
+  );
 
   // Выходы сверх нормы — только при норме дней.
   let overtimeDays: string[] = [];
@@ -261,7 +273,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
       lines.push({ code: 'bonus', amount: centsToAmount(bonusCents), days: { worked: contractDates.length, norm } });
     }
 
-    overtimeDays = overtimeDates;
+    // «Без переработки» — после добора нормы: выходы в окладе остаются.
+    overtimeDays = overtimeDates.filter(date => !overtimeStopped(date));
   }
 
   // Переработка: выходы сверх нормы — днём, будни по корректировкам — часами; по окладу своей даты, одинарно.
@@ -272,7 +285,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     else daysBySegment.set(segment, (daysBySegment.get(segment) ?? 0) + 1);
   }
   const minutesBySegment = new Map<ICalcSegment, number>();
-  const overtimeMinutes = Object.entries(facts.overtimeMinutes ?? {}).filter(([, minutes]) => minutes > 0);
+  const overtimeMinutes = Object.entries(facts.overtimeMinutes ?? {})
+    .filter(([date, minutes]) => minutes > 0 && !overtimeStopped(date));
   const normMinutes = facts.normMinutes !== null && facts.normMinutes !== undefined && facts.normMinutes > 0
     ? facts.normMinutes
     : null;

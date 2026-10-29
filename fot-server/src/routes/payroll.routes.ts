@@ -11,6 +11,7 @@ import { deductionSubkindsController } from '../controllers/deduction-subkinds.c
 import { payrollDeductionsController } from '../controllers/payroll-deductions.controller.js';
 import { payrollDormitoryAllowancesController } from '../controllers/payroll-dormitory-allowances.controller.js';
 import { payrollHousingController } from '../controllers/payroll-housing.controller.js';
+import { payrollOvertimeStopsController } from '../controllers/payroll-overtime-stops.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
 import { payrollRegistryController } from '../controllers/payroll-registry.controller.js';
@@ -109,6 +110,11 @@ router.get('/compensation-stops', deductionsView, payrollCompensationStopsContro
 router.post('/compensation-stops', deductionsEdit, payrollCompensationStopsController.add);
 router.patch('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.update);
 router.delete('/compensation-stops/:id', deductionsEdit, payrollCompensationStopsController.remove);
+// «Без переработки» (миграция 335): кому не оплачивать переработку, периоды «с — по».
+router.get('/overtime-stops', deductionsView, payrollOvertimeStopsController.list);
+router.post('/overtime-stops', deductionsEdit, payrollOvertimeStopsController.add);
+router.patch('/overtime-stops/:id', deductionsEdit, payrollOvertimeStopsController.update);
+router.delete('/overtime-stops/:id', deductionsEdit, payrollOvertimeStopsController.remove);
 // «Доплата за общежитие» (миграция 317): кому платят за то, что не живёт в общежитии, периоды «с — по».
 router.get('/dormitory-allowances', deductionsView, payrollDormitoryAllowancesController.list);
 router.post('/dormitory-allowances', deductionsEdit, payrollDormitoryAllowancesController.add);
@@ -119,7 +125,7 @@ router.get('/staff-deductions', deductionsView, payrollStaffDeductionsController
 router.post('/staff-deductions', termsEdit, payrollStaffDeductionsController.add);
 router.patch('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.update);
 router.delete('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.remove);
-// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, dormitory-allowances, deductions, summary).
+// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, overtime-stops, dormitory-allowances, deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 
 // ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──
