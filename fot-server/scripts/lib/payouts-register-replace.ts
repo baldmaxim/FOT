@@ -160,9 +160,22 @@ export interface IReplaceTarget {
 
 const docKey = (doc: IRegisterSqlDocument): string => `${doc.guid}|${doc.contentHash}`;
 const linePairKey = (line: IRegisterSqlLine): string => `${normalizePayoutName(line.fullName)}|${(line.department ?? '').trim()}`;
-const lineShape = (line: IRegisterSqlLine): string => JSON.stringify([
-  line.lineNo, line.lineKey, line.fullName, line.department, line.amountCents, line.employeeId,
-]);
+/** Чем строки файла оставляемого документа отличаются от загруженных (без ФИО): «строка 19: сотрудник 8732 → 9999». */
+const lineDiffs = (saved: readonly IRegisterSqlLine[], own: readonly IRegisterSqlLine[]): string[] => {
+  if (saved.length !== own.length) return [`строк в файле ${own.length}, загружено ${saved.length}`];
+  const fields: Array<[string, (line: IRegisterSqlLine) => unknown]> = [
+    ['номер строки', line => line.lineNo],
+    ['ФИО или сумма', line => line.lineKey],
+    ['написание ФИО', line => line.fullName],
+    ['подразделение', line => line.department],
+    ['сотрудник', line => line.employeeId ?? '—'],
+  ];
+  return saved.flatMap((line, index) => fields
+    .filter(([, value]) => value(line) !== value(own[index]))
+    .map(([name, value]) => (name === 'сотрудник'
+      ? `строка ${line.lineNo}: сотрудник ${String(value(line))} → ${String(value(own[index]))}`
+      : `строка ${line.lineNo}: ${name}`)));
+};
 
 /** Набор to из документов и строк файла (с решениями) и снимка from; расхождение со снимком — ошибка. */
 export const buildReplaceTarget = (
@@ -186,9 +199,9 @@ export const buildReplaceTarget = (
     const own = fileLinesByGuid.get(doc.guid) ?? [];
     if (fromKeys.has(docKey(doc))) {
       const saved = [...(fromLines.get(doc.guid) ?? [])].sort((a, b) => a.lineNo - b.lineNo);
-      const ownShape = [...own].sort((a, b) => a.lineNo - b.lineNo).map(lineShape);
-      if (JSON.stringify(ownShape) !== JSON.stringify(saved.map(lineShape))) {
-        problems.push(`${doc.docNumber} от ${doc.docDate}: строки или сопоставление файла ≠ загруженным`);
+      const diffs = lineDiffs(saved, [...own].sort((a, b) => a.lineNo - b.lineNo));
+      if (diffs.length > 0) {
+        problems.push(`${doc.docNumber} от ${doc.docDate}: строки или сопоставление файла ≠ загруженным — ${diffs.join('; ')}`);
       }
       lines.push(...saved);
       continue;
