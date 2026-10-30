@@ -225,6 +225,98 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
   });
 });
 
+describe('«К выплате (ФОТ)»: отпускные и больничные из 1С', () => {
+  const september = (n: number): string[] => Array.from({ length: n }, (_, i) => `2026-09-${String(i + 10).padStart(2, '0')}`);
+  // Гринёв, сентябрь 2026: оклад 180 000 × 16 / 24 + проезд 1 820, отпуск 9 дн., ведомость «Отпуска» 59 709,13.
+  const grinev = (over: Partial<IPayrollCalcFacts> = {}): IPayrollCalcFacts => facts({
+    monthStart: '2026-09-01',
+    monthEnd: '2026-09-30',
+    normDays: 24,
+    workdayDates: september(16),
+    absenceDays: { vacation: 9, sick: 0, educational_leave: 0, unpaid: 0 },
+    terms: [terms({ effective_from: '2026-01-01', monthly_salary: '180000.00' })],
+    rateAllowances: [{ code: 'travel', amount: '1820.00', days: { worked: 16, norm: 24 } }],
+    ...over,
+  });
+  const vacationPayout = { doc_number: '0000-002319', doc_date: '2026-09-02', amount: '59709.13' };
+
+  it('нет сумм 1С — как раньше: дней отпуска нет в итоге', () => {
+    const result = buildPayrollCalc(grinev());
+    expect(line(result, 'vacation')).toBeUndefined();
+    expect(result.missing).toEqual(['vacation_pay']);
+    expect(result.net).toBe('121820.00');
+  });
+
+  it('ведомость «Отпуска» — строка с днями, в «Начислено» и итоге, без «отпускные» в missing', () => {
+    const result = buildPayrollCalc(grinev({ absencePay1c: [{ code: 'vacation', paid: null, payouts: [vacationPayout] }] }));
+    expect(line(result, 'vacation')).toEqual({
+      code: 'vacation',
+      amount: '59709.13',
+      days: { worked: 9, norm: null },
+      parts: [{ kind: 'payout_1c', doc_number: '0000-002319', doc_date: '2026-09-02', amount: '59709.13' }],
+    });
+    expect(result.accrued).toBe('181529.13');
+    expect(result.net).toBe('181529.13');
+    expect(result.missing).toEqual([]);
+  });
+
+  it('строка «Оплачено» есть — берётся она, даже 0; ведомости — нет', () => {
+    const paid = buildPayrollCalc(grinev({
+      absencePay1c: [{ code: 'vacation', paid: '68631.18', payouts: [vacationPayout] }],
+    }));
+    expect(line(paid, 'vacation')?.parts).toEqual([{ kind: 'paid_1c', amount: '68631.18' }]);
+    expect(paid.net).toBe('190451.18');
+    const zero = buildPayrollCalc(grinev({ absencePay1c: [{ code: 'vacation', paid: '0.00', payouts: [vacationPayout] }] }));
+    expect(line(zero, 'vacation')?.amount).toBe('0.00');
+    expect(zero.missing).toEqual([]);
+    expect(zero.net).toBe('121820.00');
+  });
+
+  it('несколько ведомостей — часть на документ; без дней отсутствия — строка без дней', () => {
+    const result = buildPayrollCalc(grinev({
+      absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+      absencePay1c: [{
+        code: 'vacation',
+        paid: null,
+        payouts: [vacationPayout, { doc_number: '0000-002319', doc_date: '2026-09-20', amount: '1000.5' }],
+      }],
+    }));
+    const vacation = line(result, 'vacation')!;
+    expect(vacation.amount).toBe('60709.63');
+    expect(vacation.days).toBeUndefined();
+    expect(vacation.parts?.map(part => part.amount)).toEqual(['59709.13', '1000.50']);
+    expect(result.net).toBe('182529.63');
+  });
+
+  it('больничный — так же; отпуск без сумм 1С остаётся в missing', () => {
+    const result = buildPayrollCalc(grinev({
+      absenceDays: { vacation: 9, sick: 3, educational_leave: 2, unpaid: 0 },
+      absencePay1c: [
+        { code: 'sick_leave', paid: null, payouts: [{ doc_number: '0000-002400', doc_date: '2026-09-25', amount: '4500.00' }] },
+        { code: 'vacation', paid: null, payouts: [] },
+      ],
+    }));
+    expect(line(result, 'sick_leave')).toMatchObject({ amount: '4500.00', days: { worked: 3, norm: null } });
+    expect(line(result, 'vacation')).toBeUndefined();
+    expect(result.missing).toEqual(['vacation_pay', 'educational_pay']);
+    expect(result.net).toBe('126320.00');
+  });
+
+  it('итог неизвестен (выработка бригады не внесена) — отпускные его не восстанавливают', () => {
+    const result = buildPayrollCalc(grinev({
+      workdayDates: [],
+      terms: [],
+      rateAllowances: [],
+      brigadeShares: [{
+        departmentId: 'b1', amount: null, ktu: '1.0', countedMinutes: 0, distribution: 'no_output', output: null, objects: [],
+      }],
+      absencePay1c: [{ code: 'vacation', paid: null, payouts: [vacationPayout] }],
+    }));
+    expect(line(result, 'vacation')?.amount).toBe('59709.13');
+    expect(result.net).toBeNull();
+  });
+});
+
 describe('«К выплате (ФОТ)»: бригада', () => {
   const share: IBrigadeShareFact = {
     departmentId: 'b1', amount: '141818.18', ktu: '1.5', countedMinutes: 10560, distribution: 'ok',

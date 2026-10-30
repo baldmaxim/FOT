@@ -17,9 +17,12 @@
  * - «Выработка бригады» (brigade) — доля «Выработки» бригады по КТУ из зафиксированного расчёта бригады
  *   (brigade-salary.service); дни подач бригады в оклад не идут. Выработка не введена или расчёт с ошибкой —
  *   доли нет, итог помечен неполным;
+ * - «Отпуска» (vacation) и «Больничный» (sick_leave) — суммы из 1С (решение пользователя 30.10.2026): статья
+ *   «Оплачено» месяца (начислено ЗУП), а её строки нет — ведомости выплаты «Отпуска» / «Больничные листы» месяца
+ *   начисления (перечислено). Источник — по наличию строки, не по сумме; дни отсутствия — в строке;
  * - «Удержано» — удержания «Справочника» за месяц по видам.
- * Итог «К выплате (ФОТ)» = начислено − удержано, без НДФЛ — как «Выплачено» из 1С. Отпускные, больничные и
- * учебный отпуск ФОТ не считает: дни есть — итог помечается неполным (missing). Сумму строки посчитать нельзя
+ * Итог «К выплате (ФОТ)» = начислено − удержано, без НДФЛ — как «Выплачено» из 1С. Отпускные и больничные без сумм
+ * 1С и учебный отпуск ФОТ не считает: дни есть — итог помечается неполным (missing). Сумму строки посчитать нельзя
  * (почасовые условия, нет условий или нормы, доли бригады нет) — итог null: частичная сумма за итог не выдаётся.
  * Под строками — части (parts): из чего сумма, те же числа, что в ней.
  *
@@ -32,7 +35,8 @@ import type { IPayslipRateAllowance } from './payroll-payslip.rules.js';
 import { centsToAmount, toCents } from './payroll-summary.attribution.js';
 import type { ProrationRounding } from './payroll-terms.service.js';
 
-export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
+export type PayrollCalcLineCode =
+  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave';
 
 /**
  * brigade_output — выработка не внесена на объекте, где у сотрудника есть учтённые часы (или у бригады ничего не
@@ -75,6 +79,10 @@ export type PayrollCalcLinePart =
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
   | { kind: 'one_time'; amount: string }
+  /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
+  | { kind: 'paid_1c'; amount: string }
+  /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
+  | { kind: 'payout_1c'; doc_number: string; doc_date: string; amount: string }
   | {
     kind: 'brigade';
     department_id: string;
@@ -179,6 +187,23 @@ export const brigadeShareFacts = (
   }]));
 };
 
+/** Ведомость выплаты 1С за отпуск или больничный: сумма сотрудника по документу. */
+export interface IAbsencePayout1c {
+  doc_number: string;
+  /** YYYY-MM-DD. */
+  doc_date: string;
+  amount: string;
+}
+
+/** Суммы 1С за отпуск или больничный месяца. */
+export interface IAbsencePay1c {
+  code: 'vacation' | 'sick_leave';
+  /** Статья «Оплачено» месяца; null — строки нет. */
+  paid: string | null;
+  /** Ведомости «Отпуска» / «Больничные листы» месяца начисления. */
+  payouts: readonly IAbsencePayout1c[];
+}
+
 export interface IPayrollCalcDeduction {
   kind_id: number;
   kind: string;
@@ -238,6 +263,8 @@ export interface IPayrollCalcFacts {
   deductions: readonly IPayrollCalcDeduction[];
   /** Доли бригад; их дни в workdayDates и dayoffDates уже не входят. */
   brigadeShares?: readonly IBrigadeShareFact[];
+  /** Отпускные и больничные из 1С месяца. */
+  absencePay1c?: readonly IAbsencePay1c[];
 }
 
 export interface IPayrollCalcResult {
@@ -348,6 +375,34 @@ const MISSING_BY_ABSENCE: ReadonlyArray<[keyof PayrollAbsenceDays, PayrollCalcMi
   ['sick', 'sick_pay'],
   ['educational_leave', 'educational_pay'],
 ];
+
+/** Статус отсутствия, дни которого оплачивает строка 1С. */
+const ABSENCE_BY_PAY_CODE: Record<IAbsencePay1c['code'], keyof PayrollAbsenceDays> = {
+  vacation: 'vacation',
+  sick_leave: 'sick',
+};
+
+/**
+ * Строка отпускных или больничных из 1С: есть строка «Оплачено» — она (даже 0), нет — ведомости месяца; нет ни
+ * того, ни другого — null.
+ */
+const absencePayLine = (pay: IAbsencePay1c, absenceDays: PayrollAbsenceDays): IPayrollCalcLine | null => {
+  let amount: string;
+  let parts: PayrollCalcLinePart[];
+  if (pay.paid !== null) {
+    amount = centsToAmount(cents(pay.paid));
+    parts = [{ kind: 'paid_1c', amount }];
+  } else if (pay.payouts.length > 0) {
+    amount = centsToAmount(pay.payouts.reduce((sum, payout) => sum + cents(payout.amount), 0));
+    parts = pay.payouts.map(({ doc_number, doc_date, amount: docAmount }) => ({
+      kind: 'payout_1c', doc_number, doc_date, amount: centsToAmount(cents(docAmount)),
+    }));
+  } else {
+    return null;
+  }
+  const days = absenceDays[ABSENCE_BY_PAY_CODE[pay.code]];
+  return { code: pay.code, amount, ...(days > 0 ? { days: { worked: days, norm: null } } : {}), parts };
+};
 
 /** Расчёт месяца по фактам — правила в шапке файла. */
 export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult => {
@@ -576,8 +631,17 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   }
   if (segments.length === 0 && facts.workdayDates.length > 0) missing.add('no_terms');
 
+  // Отпуск, затем больничный — порядок не зависит от того, откуда пришли суммы.
+  const paidAbsences = new Set<keyof PayrollAbsenceDays>();
+  for (const code of ['vacation', 'sick_leave'] as const) {
+    const pay = facts.absencePay1c?.find(item => item.code === code);
+    const line = pay ? absencePayLine(pay, facts.absenceDays) : null;
+    if (!line) continue;
+    lines.push(line);
+    paidAbsences.add(ABSENCE_BY_PAY_CODE[code]);
+  }
   for (const [status, code] of MISSING_BY_ABSENCE) {
-    if (facts.absenceDays[status] > 0) missing.add(code);
+    if (facts.absenceDays[status] > 0 && !paidAbsences.has(status)) missing.add(code);
   }
 
   const accruedCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);

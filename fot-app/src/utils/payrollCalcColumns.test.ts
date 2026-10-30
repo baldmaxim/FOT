@@ -4,6 +4,7 @@ import type { IPayrollCalcColumns, IPayrollCardPayoutByMethod, IPayrollTermsRow 
 import {
   calcBrigadeOutputSub,
   calcIssuesNote,
+  calcSumAmount,
   cardPayoutLines,
   cardPayoutsTotal,
   emptyPayrollColumns,
@@ -45,7 +46,7 @@ describe('столбцы без данных на «Расчётах»', () => {
         }),
       }),
     ])).toEqual([
-      'payout', 'accrued', 'deductions', 'paid_vacation', 'paid_sick', 'calc_housing', 'paid_recalc',
+      'payout', 'accrued', 'deductions', 'calc_vacation', 'calc_sick', 'calc_housing', 'paid_recalc',
       'calc_supplements', 'calc_deductions', 'card_payouts',
     ]);
   });
@@ -66,6 +67,16 @@ describe('столбцы без данных на «Расчётах»', () => {
 
   it('незакрытый месяц без суммы (1-е число) — не данные: строки нет, столбец «Начислено по табелю» скрыт', () => {
     expect(empty([row({ calc: calc({ open_months: ['2026-10'] }) })])).toContain('calc_timesheet');
+  });
+
+  it('отпускные и больничные — из расчёта ФОТ: есть сумма — столбец виден; старый бэкенд без поля — скрыт', () => {
+    const grinev = row({ paid_vacation: '999.00', calc: calc({ vacation: '59709.13', net: '181529.13' }) } as Partial<IPayrollTermsRow>);
+    expect(calcSumAmount(grinev, 'calc_vacation')).toBe('59709.13');
+    expect(calcSumAmount(grinev, 'calc_sick')).toBeNull();
+    const hidden = empty([grinev]);
+    expect(hidden).not.toContain('calc_vacation');
+    expect(hidden).toContain('calc_sick');
+    expect(empty([row({ calc: calc({ net: '100.00' }) })])).toEqual(expect.arrayContaining(['calc_vacation', 'calc_sick']));
   });
 
   it('строк нет — ничего не скрывается', () => {

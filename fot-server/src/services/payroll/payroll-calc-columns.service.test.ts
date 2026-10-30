@@ -81,6 +81,8 @@ describe('sumCalcColumns', () => {
       overtime_days: 1,
       overtime_hours: 6,
       travel: '2730.00',
+      vacation: null,
+      sick_leave: null,
       housing: '15000.00',
       housing_kinds: ['apartment'],
       supplements: '22273.00',
@@ -88,6 +90,31 @@ describe('sumCalcColumns', () => {
       net: '426383.93',
       open_months: [],
       preliminary: [],
+      incomplete: [],
+    });
+  });
+
+  it('отпускные и больничные из 1С — свои столбцы по месяцам, входят в «Сумму»', () => {
+    const result = sumCalcColumns([
+      ['2026-08', closed({
+        lines: [{ code: 'contract', amount: '100000.00' }, { code: 'vacation', amount: '542506.24', days: { worked: 28, norm: null } }],
+        net: '642506.24',
+      })],
+      ['2026-09', closed({
+        lines: [
+          { code: 'contract', amount: '120000.00' },
+          { code: 'vacation', amount: '59709.13', days: { worked: 9, norm: null } },
+          { code: 'sick_leave', amount: '4500.00' },
+        ],
+        net: '184209.13',
+      })],
+    ]);
+
+    expect(result).toMatchObject({
+      timesheet: '220000.00',
+      vacation: '602215.37',
+      sick_leave: '4500.00',
+      net: '826715.37',
       incomplete: [],
     });
   });

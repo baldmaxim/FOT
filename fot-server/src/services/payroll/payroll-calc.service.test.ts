@@ -115,6 +115,40 @@ describe('«К выплате (ФОТ)» бригады', () => {
     expect(tab.get(7)?.net).toBe('138318.18');
   });
 
+  it('отпускные и больничные из 1С: «Оплачено» важнее ведомости; то же число во вкладке табеля', async () => {
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],
+    });
+    const base = pg.query.getMockImplementation()!;
+    pg.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM payroll_paid_amounts')) return [{ employee_id: 7, code: 'sick_leave', amount: '2000.00' }];
+      if (sql.includes('FROM payroll_1c_payout_lines')) {
+        return [
+          { employee_id: 7, payment_method: 'Отпуска', doc_number: '0000-002319', doc_date: '2026-09-02', amount: '10000.00' },
+          { employee_id: 7, payment_method: 'Больничные листы', doc_number: '0000-002400', doc_date: '2026-09-25', amount: '1740.00' },
+        ];
+      }
+      return base(sql, params);
+    });
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+
+    expect(calc?.state === 'closed' && calc.lines.map(line => [line.code, line.amount])).toEqual([
+      ['brigade', '141818.18'],
+      ['vacation', '10000.00'],
+      ['sick_leave', '2000.00'],
+    ]);
+    expect(calc).toMatchObject({ net: '150318.18', missing: [] });
+    const payoutsCall = pg.query.mock.calls.find(([sql]) => String(sql).includes('FROM payroll_1c_payout_lines'));
+    expect(payoutsCall?.[1]).toEqual([expect.arrayContaining([7]), '2026-09-01', ['Отпуска', 'Больничные листы']]);
+
+    const tab = await previewBrigadePayouts(new Map([[7, {
+      departmentId: BRIGADE, amount: shareRow.amount, ktu: shareRow.ktu, countedMinutes: shareRow.counted_minutes,
+      distribution: 'ok', output: '500000.00', objects: [],
+    }]]), '2026-09');
+    expect(tab.get(7)?.net).toBe('150318.18');
+  });
+
   it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {
     brigade.getBrigadeShares.mockResolvedValue({
       state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],

@@ -10,6 +10,7 @@ import type {
 import {
   calcAbsenceLines,
   calcAmount,
+  calcLineAbsence,
   calcLineFormula,
   calcLineLabel,
   calcLinePaidItem,
@@ -46,9 +47,10 @@ const formatValue = (value: number | null | undefined): string => (
 
 /**
  * Блок «Расчёт ФОТ» расчётного листка — по табелю, закрыт он или нет: строки начислений с расшифровкой (из чего
- * сумма — по подстроке на часть), дни отсутствий (суммы — только из 1С), удержания «Справочника» и «Итого без
- * НДФЛ»; рядом столбец «1С» для сравнения построчно, если за месяц есть суммы «Оплачено». Графики месяца —
- * справочно. Итог неизвестен (выработка бригады не введена…) — «—» и «без: …»; посчитать нечем — «—».
+ * сумма — по подстроке на часть), в том числе отпускные и больничные из 1С с днями; дни отсутствий без сумм 1С —
+ * строками «из 1С»; удержания «Справочника» и «Итого без НДФЛ»; рядом столбец «1С» для сравнения построчно, если
+ * за месяц есть суммы «Оплачено». Графики месяца — справочно. Итог неизвестен (выработка бригады не введена…) — «—»
+ * и «без: …»; посчитать нечем — «—».
  */
 export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, schedules, amounts, payout1c, deducted1c }) => {
   const with1c = payout1c !== null;
@@ -57,6 +59,8 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, 
 
   const renderClosed = (closed: PayrollCalcCounted) => {
     const missing = calcMissingNote(closed.missing);
+    // Дни отпуска или больничного, оплаченные строкой 1С, — в ней же; отдельной строкой — только без суммы.
+    const paidAbsences = new Set(closed.lines.map(line => calcLineAbsence(line.code)));
     return (
       <>
         {schedulesNote && <p className={styles.calcNote}>{schedulesNote}</p>}
@@ -89,7 +93,7 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({ month, calc, 
                   </tr>
                 );
               })}
-              {calcAbsenceLines(closed).map(line => {
+              {calcAbsenceLines(closed).filter(line => !paidAbsences.has(line.status)).map(line => {
                 const item = ABSENCE_PAID_ITEM[line.status];
                 return (
                   <tr key={line.status}>

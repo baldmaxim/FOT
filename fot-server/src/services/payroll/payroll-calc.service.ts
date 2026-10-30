@@ -12,7 +12,8 @@
  *
  * Один вызов на отдел: карточка «Зарплаты» (листок) и вкладка «Табель → Зарплата» (столбец «Сумма») получают одно
  * и то же число. Условия, доплаты, ставки и удержания — из их истории с датами действия; категория для проезда —
- * по объектам тех же закрытых редакций, из которых взяты дни.
+ * по объектам тех же закрытых редакций, из которых взяты дни. Отпускные и больничные — суммы 1С месяца
+ * (loadAbsencePay1c).
  */
 import { performance } from 'node:perf_hooks';
 
@@ -26,6 +27,8 @@ import { loadLiveMonthBases } from './payroll-calc-preliminary.service.js';
 import {
   brigadeShareFacts,
   buildPayrollCalc,
+  type IAbsencePay1c,
+  type IAbsencePayout1c,
   type IBrigadeShareFact,
   type ICalcTermsRow,
   type IPayrollCalcDeduction,
@@ -179,12 +182,72 @@ const groupBy = <T extends { employee_id: number }>(rows: readonly T[] | undefin
   return result;
 };
 
-/** То, что не зависит от дней табеля: разовые доплаты, удержания, проживание и «Без переработки» месяца. */
+/** Способ выплаты ведомости 1С → строка расчёта: отпускные и больничные. */
+const ABSENCE_PAYOUT_METHODS: Readonly<Record<string, IAbsencePay1c['code']>> = {
+  'Отпуска': 'vacation',
+  'Больничные листы': 'sick_leave',
+};
+
+/**
+ * Отпускные и больничные сотрудников из 1С за месяц YYYY-MM: статьи «Оплачено» и ведомости выплаты месяца
+ * начисления — по документу (номер ЗУП не уникален), только сопоставленные строки. Выбор источника — в правилах.
+ */
+export const loadAbsencePay1c = async (
+  ids: readonly number[],
+  month: string,
+): Promise<Map<number, IAbsencePay1c[]>> => {
+  const result = new Map<number, IAbsencePay1c[]>();
+  if (ids.length === 0) return result;
+  const monthStart = `${month}-01`;
+  const [paid, payouts] = await Promise.all([
+    query<{ employee_id: number; code: IAbsencePay1c['code']; amount: string }>(
+      `SELECT employee_id, item_code AS code, amount::text AS amount
+         FROM payroll_paid_amounts
+        WHERE employee_id = ANY($1::int[]) AND month = $2::date AND item_code IN ('vacation', 'sick_leave')`,
+      [[...ids], monthStart],
+    ),
+    query<{ employee_id: number; payment_method: string; doc_number: string; doc_date: string; amount: string }>(
+      `SELECT l.employee_id, d.payment_method, d.doc_number, to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date,
+              SUM(l.amount)::text AS amount
+         FROM payroll_1c_payout_lines l
+         JOIN payroll_1c_payout_documents d ON d.id = l.document_id
+        WHERE l.employee_id = ANY($1::int[]) AND d.period_month = $2::date AND d.payment_method = ANY($3::text[])
+        GROUP BY l.employee_id, d.id
+        ORDER BY d.doc_date, d.doc_number, d.id`,
+      [[...ids], monthStart, Object.keys(ABSENCE_PAYOUT_METHODS)],
+    ),
+  ]);
+  // Одна запись на пару (сотрудник, код): «Оплачено» и ведомости сводятся вместе.
+  const entries = new Map<string, { code: IAbsencePay1c['code']; paid: string | null; payouts: IAbsencePayout1c[] }>();
+  const entry = (employeeId: number, code: IAbsencePay1c['code']) => {
+    const key = `${employeeId}|${code}`;
+    let item = entries.get(key);
+    if (!item) {
+      item = { code, paid: null, payouts: [] };
+      entries.set(key, item);
+      const list = result.get(employeeId);
+      if (list) list.push(item);
+      else result.set(employeeId, [item]);
+    }
+    return item;
+  };
+  for (const row of paid ?? []) entry(Number(row.employee_id), row.code).paid = row.amount;
+  for (const row of payouts ?? []) {
+    const code = ABSENCE_PAYOUT_METHODS[row.payment_method];
+    if (!code) continue;
+    const { doc_number, doc_date, amount } = row;
+    entry(Number(row.employee_id), code).payouts.push({ doc_number, doc_date, amount });
+  }
+  return result;
+};
+
+/** То, что не зависит от дней табеля: разовые доплаты, удержания, проживание, «Без переработки» и суммы 1С месяца. */
 interface IPayoutExtras {
   oneTime: Map<number, string>;
   deductions: Map<number, IPayrollCalcDeduction[]>;
   rateFacts: Map<number, RateFactsRow>;
   overtimeStops: Map<number, IOvertimeStopPeriod[]>;
+  absencePay1c: Map<number, IAbsencePay1c[]>;
 }
 
 /** Разовые доплаты, удержания, факты ставок и «Без переработки» месяца — одно правило для карточки и вкладки табеля. */
@@ -194,7 +257,7 @@ const loadPayoutExtras = async (
   periods: ReadonlyMap<number, { from: string; to: string }>,
 ): Promise<IPayoutExtras> => {
   const monthStart = `${month}-01`;
-  const [oneTime, deductions, rateFacts, overtimeStops] = await Promise.all([
+  const [oneTime, deductions, rateFacts, overtimeStops, absencePay1c] = await Promise.all([
     query<{ employee_id: number; amount: string }>(
       `SELECT employee_id, SUM(amount)::text AS amount
          FROM payroll_one_time_supplements
@@ -224,6 +287,7 @@ const loadPayoutExtras = async (
           AND (date_to IS NULL OR date_to >= $2::date)`,
       [[...ids], monthStart, lastDayOfMonth(month)],
     ),
+    loadAbsencePay1c(ids, month),
   ]);
   return {
     oneTime: new Map((oneTime ?? []).map(row => [Number(row.employee_id), row.amount])),
@@ -236,6 +300,7 @@ const loadPayoutExtras = async (
       id,
       rows.map(({ date_from, date_to }) => ({ date_from, date_to })),
     ])),
+    absencePay1c,
   };
 };
 
@@ -400,6 +465,7 @@ const computePayouts = async (
       rateAllowances,
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: shares,
+      absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
     });
     const details: IPayrollCalcDetails = {
       norm_days: basis.normDays,
@@ -485,6 +551,7 @@ export const previewBrigadePayouts = async (
       rateAllowances: facts ? pickPayslipRateAllowances({ ...facts, category: 'worker', travelDays: null }) : [],
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: [shares.get(employeeId)!],
+      absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
     }));
   }
   return result;

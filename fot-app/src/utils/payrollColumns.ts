@@ -9,7 +9,7 @@ import type { PayrollSortKey } from '../services/payrollService';
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
   | 'payout' | 'accrued' | 'deductions'
-  | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'paid_vacation' | 'paid_sick' | 'calc_housing'
+  | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick' | 'calc_housing'
   | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts';
 
 /** Столбцы условий с сортировкой и фильтром; суммы «Выплачено» и «Расчётов» их не имеют. */
@@ -52,8 +52,8 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'calc_timesheet', label: 'Начислено по табелю' },
   { key: 'calc_overtime', label: 'Переработка' },
   { key: 'calc_travel', label: 'Компенсация проезда' },
-  { key: 'paid_vacation', label: 'Отпускные' },
-  { key: 'paid_sick', label: 'Больничные' },
+  { key: 'calc_vacation', label: 'Отпускные' },
+  { key: 'calc_sick', label: 'Больничные' },
   { key: 'calc_housing', label: 'Проживание' },
   { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
   { key: 'calc_supplements', label: 'Доплаты' },

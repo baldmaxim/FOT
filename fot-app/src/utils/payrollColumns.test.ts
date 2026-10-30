@@ -61,6 +61,13 @@ describe('столбцы «Расчётов»', () => {
     expect(keepPayrollTableColumns(parseHiddenPayrollColumns('["salary","accruals"]'), PAYROLL_CALC_TABLE_COLUMNS).size).toBe(0);
   });
 
+  it('«Отпускные» и «Больничные» — столбцы расчёта ФОТ (30.10): прежние сохранённые ключи 1С отбрасываются', () => {
+    expect(PAYROLL_CALC_TABLE_COLUMNS.filter(column => ['Отпускные', 'Больничные'].includes(column.label)).map(column => column.key))
+      .toEqual(['calc_vacation', 'calc_sick']);
+    const stored = parseHiddenPayrollColumns('["paid_vacation","paid_sick","calc_sick"]');
+    expect([...keepPayrollTableColumns(stored, PAYROLL_CALC_TABLE_COLUMNS)]).toEqual(['calc_sick']);
+  });
+
   it('сохраняются в порядке таблицы', () => {
     expect(serializeHiddenPayrollColumns(new Set(['deductions', 'accrued', 'payout', 'schedule'] as const)))
       .toBe('["schedule","payout","accrued","deductions"]');

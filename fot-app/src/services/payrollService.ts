@@ -62,6 +62,9 @@ export interface IPayrollCalcColumns {
   overtime_days: number;
   overtime_hours: number;
   travel: string | null;
+  /** Отпускные и больничные — суммы 1С в расчёте ФОТ; нет поля — старый бэкенд. */
+  vacation?: string | null;
+  sick_leave?: string | null;
   housing: string | null;
   housing_kinds: Array<'apartment' | 'dormitory'>;
   supplements: string | null;
@@ -146,9 +149,10 @@ export interface IPayrollTermsRow {
   paid_deductions_total?: string | null;
   /** Статьи «Удержано» по месяцам — для окна удержаний. */
   paid_deductions?: IPayrollPaidAmount[] | null;
-  /** «Расчёты»: отпускные, больничные и перерасчёт за прошлый период из 1С за месяцы, NUMERIC строкой; null — нет. */
-  paid_vacation?: string | null;
-  paid_sick_leave?: string | null;
+  /**
+   * «Расчёты»: перерасчёт за прошлый период из 1С за месяцы, NUMERIC строкой; null — нет. Отпускные и больничные
+   * сервер ещё присылает (paid_vacation, paid_sick_leave) для старых вкладок — экран берёт их из расчёта ФОТ.
+   */
   paid_recalc_prev?: string | null;
   /** «Расчёты»: перечислено по ведомостям 1С за месяцы, по способам выплаты; null — ведомостей нет. */
   card_payouts_by_method?: IPayrollCardPayoutByMethod[] | null;
@@ -354,7 +358,8 @@ export interface IPayslipSchedule {
 }
 
 /** Строка расчёта ФОТ — код статьи «Оплачено» (1С), чтобы сравнивать построчно. */
-export type PayrollCalcLineCode = 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing';
+export type PayrollCalcLineCode =
+  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave';
 
 /**
  * Чего ФОТ не посчитал: дни есть, суммы нет. brigade_output — выработка бригады не введена, brigade_no_hours —
@@ -393,6 +398,10 @@ export type PayrollCalcLinePart =
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
   | { kind: 'one_time'; amount: string }
+  /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
+  | { kind: 'paid_1c'; amount: string }
+  /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
+  | { kind: 'payout_1c'; doc_number: string; doc_date: string; amount: string }
   | {
     kind: 'brigade';
     department_id: string;

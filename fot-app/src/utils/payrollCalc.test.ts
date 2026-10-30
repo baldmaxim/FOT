@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { IPayrollCalcClosed, IPayrollCalcLine, IPayrollCalcPreliminary } from '../services/payrollService';
 import {
   calcAbsenceLines,
+  calcLineAbsence,
   calcLineDaysNote,
   calcLineFormula,
   calcLineLabel,
@@ -14,6 +15,7 @@ import {
   payslipRemainder,
   payslipShow1c,
 } from './payrollCalc';
+import { formatPaidAmount } from './payrollPaid';
 
 /** Разделитель тысяч у toLocaleString('ru-RU'). */
 const NBSP = (1000).toLocaleString('ru-RU').charAt(1);
@@ -198,6 +200,53 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
   it('старый бэкенд без частей — прежняя подпись дней', () => {
     expect(calcLineFormula({ code: 'contract', amount: '1.00', days: { worked: 22, norm: 22 } })).toEqual(['22 из 22 дн.']);
     expect(calcLineFormula({ code: 'supplement', amount: '1.00' })).toEqual([]);
+  });
+});
+
+describe('«К выплате (ФОТ)»: отпускные и больничные из 1С', () => {
+  // Гринёв, сентябрь 2026: оклад 120 000 + проезд 1 820, отпуск 9 дн. по ведомости «Отпуска» 59 709,13.
+  const vacation: IPayrollCalcLine = {
+    code: 'vacation',
+    amount: '59709.13',
+    days: { worked: 9, norm: null },
+    parts: [{ kind: 'payout_1c', doc_number: '0000-002319', doc_date: '2026-09-02', amount: '59709.13' }],
+  };
+
+  it('строка — после проживания, подпись статьи «Оплачено», сравнение со своей статьёй', () => {
+    const calc = closed({ lines: [vacation, ...closed().lines] });
+    expect(calcLines(calc).map(line => line.code)).toEqual(['contract', 'travel', 'vacation']);
+    expect(calcLineLabel('vacation')).toBe('Отпуска');
+    expect(calcLineLabel('sick_leave')).toBe('Больничный');
+    expect(calcLinePaidItem(vacation, calc.lines)).toBe('vacation');
+  });
+
+  it('расшифровка: дни, затем ведомость; несколько ведомостей — «= сумма»; «Оплачено» — «начислено в 1С»', () => {
+    expect(calcLineFormula(vacation)).toEqual(['9 дн.', 'ведомость № 0000-002319 от 02.09.2026']);
+    expect(calcLineFormula({
+      ...vacation,
+      amount: '60709.63',
+      parts: [
+        { kind: 'payout_1c', doc_number: '0000-002319', doc_date: '2026-09-02', amount: '59709.13' },
+        { kind: 'payout_1c', doc_number: '0000-002330', doc_date: '2026-09-20', amount: '1000.50' },
+      ],
+    })).toEqual([
+      '9 дн.',
+      `ведомость № 0000-002319 от 02.09.2026 = ${formatPaidAmount(59_709.13)}`,
+      `ведомость № 0000-002330 от 20.09.2026 = ${formatPaidAmount(1_000.5)}`,
+    ]);
+    expect(calcLineFormula({
+      code: 'sick_leave', amount: '2000.00', parts: [{ kind: 'paid_1c', amount: '2000.00' }],
+    })).toEqual(['начислено в 1С']);
+  });
+
+  it('статус отсутствия строки: отпускные — отпуск, больничные — больничный, прочие — нет', () => {
+    expect(calcLineAbsence('vacation')).toBe('vacation');
+    expect(calcLineAbsence('sick_leave')).toBe('sick');
+    expect(calcLineAbsence('contract')).toBeNull();
+  });
+
+  it('«Остаток (с НДФЛ)» — с отпускными в итоге ФОТ: 181 529,13 − 195 389,40', () => {
+    expect(payslipRemainder(closed({ net: '181529.13' }), 195_389.4)).toBe(-13_860.27);
   });
 });
 

@@ -3,8 +3,9 @@
  * незакрытый — по живому табелю; на экране одинаково, без пометки о закрытии. Подписи строк, дней, формул и пометок
  * для «Подробно» и расчётного листка. Строки — те же статьи, что в «Оплачено» (1С), с теми же подписями: сравнение
  * построчно. Итог — начислено минус удержано, без НДФЛ, как «Выплачено»; сумму строки ФОТ не посчитал (выработка
- * бригады не введена, почасовые условия…) — итога нет. Отпускные, больничные, KPI и прочие статьи 1С ФОТ не считает:
- * дни отпуска есть — под итогом «без: отпускные».
+ * бригады не введена, почасовые условия…) — итога нет. Отпускные и больничные — суммы 1С («Оплачено», нет его —
+ * ведомости выплаты) строками расчёта; сумм нет, а дни отпуска есть — под итогом «без: отпускные». KPI и прочие
+ * статьи 1С ФОТ не считает.
  */
 import type {
   IPayrollCalcLine,
@@ -20,7 +21,7 @@ import { formatPaidAmount, PAYROLL_PAID_GROUPS } from './payrollPaid';
 
 /** Порядок строк — как в листке ЗУП. */
 export const PAYROLL_CALC_LINE_ORDER: readonly PayrollCalcLineCode[] = [
-  'contract', 'brigade', 'bonus', 'supplement', 'overtime', 'travel', 'housing',
+  'contract', 'brigade', 'bonus', 'supplement', 'overtime', 'travel', 'housing', 'vacation', 'sick_leave',
 ];
 
 const PAID_LABELS = new Map<PayrollPaidItemCode, string>(
@@ -94,6 +95,12 @@ export const isCalcCounted = (calc: PayrollCalc | undefined): calc is PayrollCal
   calc?.state === 'closed' || calc?.state === 'preliminary'
 );
 
+/** Статус отсутствия, дни которого оплачивает строка (отпускные и больничные из 1С); у прочих строк — null. */
+export const calcLineAbsence = (code: PayrollCalcLineCode): PayrollAbsenceStatus | null => {
+  if (code === 'vacation') return 'vacation';
+  return code === 'sick_leave' ? 'sick' : null;
+};
+
 /** Отсутствия месяца с днями: суммы отпускных и больничных — только из 1С. */
 export const calcAbsenceLines = (calc: PayrollCalcCounted): Array<{ status: PayrollAbsenceStatus; label: string; days: number }> => (
   ABSENCE_ORDER
@@ -131,6 +138,9 @@ const decimal = (value: number): string => String(Math.round(value * 100) / 100)
 /** YYYY-MM-DD → ДД.ММ. */
 const dayMonth = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 
+/** YYYY-MM-DD → ДД.ММ.ГГГГ. */
+const fullDate = (iso: string): string => `${dayMonth(iso)}.${iso.slice(0, 4)}`;
+
 /** Одна строка формулы части; equals — дописать «= сумма» (частей у строки несколько). */
 const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
   const tail = (amount: string | null): string => (equals && amount !== null ? ` = ${money(amount)}` : '');
@@ -156,6 +166,10 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       return part.housing === 'apartment' ? 'квартира, сумма за месяц' : 'доплата за общежитие, сумма за месяц';
     case 'one_time':
       return 'разовые доплаты месяца';
+    case 'paid_1c':
+      return 'начислено в 1С';
+    case 'payout_1c':
+      return `ведомость № ${part.doc_number} от ${fullDate(part.doc_date)}${tail(part.amount)}`;
     case 'brigade': {
       // Выработка по объектам (336): часть — объект; без объекта — нет учтённых часов на объектах (или старый бэкенд).
       const objectName = part.object_name ?? null;
@@ -178,8 +192,8 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
 
 /**
  * Расшифровка строки расчёта — подстрока на часть: «оклад 150 000,00 × 22 / 22 дн.», у нескольких сегментов —
- * «с 01.09 по 15.09: … = …»; выходы, добравшие норму, — «22 дн. = 20 раб. + 2 вых. (добор нормы)». Частей нет
- * (старый бэкенд) — прежняя подпись дней.
+ * «с 01.09 по 15.09: … = …»; выходы, добравшие норму, — «22 дн. = 20 раб. + 2 вых. (добор нормы)»; у отпускных и
+ * больничных первой строкой — дни («9 дн.»), ниже — откуда сумма. Частей нет (старый бэкенд) — прежняя подпись дней.
  */
 export const calcLineFormula = (line: IPayrollCalcLine): string[] => {
   const parts = line.parts ?? [];
@@ -196,6 +210,7 @@ export const calcLineFormula = (line: IPayrollCalcLine): string[] => {
   if (line.code === 'contract' && line.filled_dayoffs && line.days) {
     result.push(`${line.days.worked} дн. = ${line.days.worked - line.filled_dayoffs} раб. + ${line.filled_dayoffs} вых. (добор нормы)`);
   }
+  if (calcLineAbsence(line.code) && line.days?.worked) result.unshift(`${line.days.worked} дн.`);
   return result;
 };
 

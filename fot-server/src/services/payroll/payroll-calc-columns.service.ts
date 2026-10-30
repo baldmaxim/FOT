@@ -2,7 +2,8 @@
  * Столбцы «Зарплата → Расчёты» (решение пользователя 27.10.2026): состав зарплаты строки за выбранные месяцы.
  *
  * Расчёт ФОТ по закрытому табелю (getPayoutForEmployees) — «Начислено по табелю» (оклад по дням или доля бригады),
- * переработка, проезд, проживание, доплаты (плановая + разовая), удержания «Справочника» и «Сумма» — к выплате
+ * переработка, проезд, отпускные и больничные (суммы 1С в расчёте ФОТ, решение пользователя 30.10.2026),
+ * проживание, доплаты (плановая + разовая), удержания «Справочника» и «Сумма» — к выплате
  * (начислено − удержано, то же число, что «Сумма» во вкладке «Табель → Зарплата»). Несколько месяцев — сумма
  * по месяцам. Неизвестная сумма в ноль не превращается: незакрытый месяц — open_months, закрытый с неполным
  * расчётом (почасовая ставка, нет условий или нормы, выработка бригады не введена) — incomplete. «Оклад» не
@@ -12,8 +13,8 @@
  * (getPreliminaryPayoutForEmployees): суммы входят в столбцы, месяц — в preliminary с датой, по которую взят табель;
  * в open_months остаются только месяцы, которые посчитать нечем (1-е число текущего месяца, будущий).
  *
- * Из 1С (там, где ФОТ сумму не считает) — отпускные, больничные и перерасчёт (статьи «Оплачено», SQL списка) и
- * «Выплаты на карту» — ведомости выплаты (миграция 328) по каждому способу выплаты 1С, как есть.
+ * Из 1С (там, где ФОТ сумму не считает) — перерасчёт (статья «Оплачено», SQL списка) и «Выплаты на карту» —
+ * ведомости выплаты (миграция 328) по каждому способу выплаты 1С, как есть.
  */
 import { performance } from 'node:perf_hooks';
 
@@ -64,6 +65,9 @@ export interface ICalcColumns {
   overtime_days: number;
   overtime_hours: number;
   travel: string | null;
+  /** Отпускные и больничные — суммы 1С, вошедшие в расчёт ФОТ. */
+  vacation: string | null;
+  sick_leave: string | null;
   housing: string | null;
   housing_kinds: HousingKind[];
   supplements: string | null;
@@ -80,13 +84,15 @@ export interface ICalcColumns {
   incomplete: Array<{ month: string; reasons: CalcColumnsIssue[] }>;
 }
 
-type CalcSumKey = 'timesheet' | 'overtime' | 'travel' | 'housing' | 'supplements';
+type CalcSumKey = 'timesheet' | 'overtime' | 'travel' | 'vacation' | 'sick_leave' | 'housing' | 'supplements';
 
 const LINE_COLUMN: Record<PayrollCalcLineCode, CalcSumKey> = {
   contract: 'timesheet',
   brigade: 'timesheet',
   overtime: 'overtime',
   travel: 'travel',
+  vacation: 'vacation',
+  sick_leave: 'sick_leave',
   housing: 'housing',
   bonus: 'supplements',
   supplement: 'supplements',
@@ -100,7 +106,8 @@ export const sumCalcColumns = (
   byMonth: ReadonlyArray<readonly [string, PayrollCalcWithPreliminary | undefined]>,
 ): Omit<ICalcColumns, 'rate'> => {
   const sums: Record<CalcSumKey | 'deductions' | 'net', number | null> = {
-    timesheet: null, overtime: null, travel: null, housing: null, supplements: null, deductions: null, net: null,
+    timesheet: null, overtime: null, travel: null, vacation: null, sick_leave: null, housing: null, supplements: null,
+    deductions: null, net: null,
   };
   let overtimeDays = 0;
   let overtimeHours = 0;
@@ -146,6 +153,8 @@ export const sumCalcColumns = (
     overtime_days: overtimeDays,
     overtime_hours: Math.round(overtimeHours * 100) / 100,
     travel: toAmount(sums.travel),
+    vacation: toAmount(sums.vacation),
+    sick_leave: toAmount(sums.sick_leave),
     housing: toAmount(sums.housing),
     housing_kinds: [...housingKinds],
     supplements: toAmount(sums.supplements),
