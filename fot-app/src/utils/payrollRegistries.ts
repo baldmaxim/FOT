@@ -106,11 +106,6 @@ export const supplementPeriod = (row: ISupplementPeriodFields): string => (
     : row.date_to ? `${formatDate(row.date_from)} – ${formatDate(row.date_to)}` : `с ${formatDate(row.date_from)}`
 );
 
-/** Разовая — с первого числа месяца: в одном порядке с плановыми. */
-const supplementPeriodSort = (row: ISupplementPeriodFields): string | null => (
-  row.kind === 'one_time' ? (row.month ? `${row.month}-01` : null) : row.date_from
-);
-
 export const SUPPLEMENT_KIND_LABELS: Record<PayrollSupplementKind, string> = {
   planned: 'Плановая',
   one_time: 'Разовая',
@@ -138,19 +133,17 @@ export interface ISupplementRegistryRow extends ISupplementPeriodFields {
   housing: IHousingAllowanceRow | null;
 }
 
-/** Семь столбцов: отдел и должность уже — таблица без прокрутки влезает в окно на 1280px. */
+/**
+ * Шесть столбцов, без «Периода»: месяц выбран над таблицей, срок доплаты — в списках «Плановые доплаты» и
+ * «Квартира».
+ */
 export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
-  ...employeeColumns<ISupplementRegistryRow>({ department: 112, position: 144 }),
+  ...employeeColumns<ISupplementRegistryRow>(),
   {
     key: 'kind', label: 'Вид', type: 'text', width: 92, nowrap: true,
     text: row => supplementKindLabel(row.kind), sortValue: row => supplementKindLabel(row.kind),
   },
   moneyColumn<ISupplementRegistryRow>('Сумма, ₽', row => row.amount, 112),
-  {
-    key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
-    text: supplementPeriod,
-    sortValue: supplementPeriodSort,
-  },
   {
     key: 'reason', label: 'Основание', type: 'text', width: 144,
     text: row => orDash(row.reason), sortValue: row => row.reason,
@@ -164,7 +157,7 @@ export const PLANNED_SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollS
   {
     key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
     text: supplementPeriod,
-    sortValue: supplementPeriodSort,
+    sortValue: row => row.date_from,
   },
 ];
 

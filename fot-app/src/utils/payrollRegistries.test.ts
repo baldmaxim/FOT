@@ -40,7 +40,6 @@ import {
   parsePlannedForm,
 } from './payrollRegistryForms';
 import {
-  applyTableView,
   fitRegistryColumnWidths,
   matchesNameSearch,
   type IRegistryColumn,
@@ -66,15 +65,6 @@ describe('«Доплата»', () => {
     expect(supplementRowKey(supplement({ kind: 'one_time', id: 5 }))).toBe('once-5');
   });
 
-  it('сортировка по периоду ставит разовую по первому числу месяца', () => {
-    const rows = buildSupplementRegistryRows([
-      supplement({ kind: 'one_time', id: 5, month: '2026-11', date_from: null, date_to: null }),
-      supplement({ employee_id: 2, date_from: '2026-10-15' }),
-    ], [], []) ?? [];
-    const sorted = applyTableView(rows, SUPPLEMENT_COLUMNS, { sort: 'period', dir: 'asc', filters: {} });
-    expect(sorted.map(row => row.key)).toEqual(['planned-2', 'once-5']);
-  });
-
   const apartment = (over: Partial<IHousingAllowanceRow>): IHousingAllowanceRow => ({
     id: 5, employee_id: 3, full_name: 'Зиякулов Б.', department: null, position: null, amount: '630.00',
     check_in: '2026-10-01', check_out: '2026-11-01', address: null, can_edit: true,
@@ -93,10 +83,8 @@ describe('«Доплата»', () => {
 
   it('квартира в общей таблице: «Плановая», основание «Квартира», «по» — день до выезда', () => {
     const rows = buildSupplementRegistryRows([], [apartment({}), apartment({ id: 6, check_out: null })], ['2026-10']) ?? [];
-    expect(rows.map(cells)).toEqual([
-      ['Плановая', '630,00', '01.10.2026 – 31.10.2026', 'Квартира'],
-      ['Плановая', '630,00', 'с 01.10.2026', 'Квартира'],
-    ]);
+    expect(rows.map(cells)).toEqual([['Плановая', '630,00', 'Квартира'], ['Плановая', '630,00', 'Квартира']]);
+    expect(rows.map(row => [row.date_from, row.date_to])).toEqual([['2026-10-01', '2026-10-31'], ['2026-10-01', null]]);
     expect(rows.map(row => [row.kind, row.housing?.id, row.supplement])).toEqual([['apartment', 5, null], ['apartment', 6, null]]);
   });
 
@@ -132,7 +120,7 @@ describe('«Доплата»', () => {
     const all = buildSupplementRegistryRows([supplement({})], [apartment({})], ['2026-10']) ?? [];
     expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата', file_name: at('Доплата') });
     expect(buildSupplementExport(all).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание']);
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Основание']);
     expect(buildPlannedSupplementExport([supplement({})])).toMatchObject({
       title: 'Плановые доплаты', file_name: at('Плановые_доплаты'),
     });
