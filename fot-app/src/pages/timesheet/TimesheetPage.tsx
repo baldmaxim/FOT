@@ -75,6 +75,7 @@ import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { useTimesheetSalary } from '../../hooks/useTimesheetSalary';
 import { TimesheetSalaryObjects } from '../../components/timesheet/TimesheetSalaryObjects';
+import { TimesheetBrigadesTab } from '../../components/timesheet/TimesheetBrigadesTab';
 import type { ITimesheetSalaryGridProps } from '../../components/timesheet/TimesheetSalaryCells';
 import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
@@ -377,7 +378,8 @@ export const TimesheetPage: FC = () => {
       ? 'corrections'
       : (queryView === 'transfers' && canViewTransfers && timesheetMode === 'department')
         ? 'transfers'
-        : ((queryView === 'salary' || queryView === 'salary_objects') && canViewTimesheetSalary && timesheetMode !== 'employee')
+        : ((queryView === 'salary' || queryView === 'salary_objects' || queryView === 'brigades')
+          && canViewTimesheetSalary && timesheetMode !== 'employee')
           ? queryView
           : 'employees';
   // Вкладки «Зарплата по отделам» и «Зарплата по объектам»: весь месяц, без массовых правок.
@@ -2417,7 +2419,7 @@ export const TimesheetPage: FC = () => {
   const hasActiveScope = isEmployeeMode
     ? selectedEmployeeModeId
     : isAssignedMode ? selectedAssigneeId : activeGridDeptId;
-  const segmentControl = hasActiveScope && !isSalaryView ? (
+  const segmentControl = hasActiveScope && !isSalaryView && viewMode !== 'brigades' ? (
     <section className="ts-half-toggle" aria-label="Период табеля">
       <button
         type="button"
@@ -2445,23 +2447,35 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
-  // «Зарплата по отделам» (отделы, без бригад) и «Зарплата по объектам» (бригады по объектам, миграция 336).
-  const salaryChips = hasActiveScope && !isEmployeeMode && canViewTimesheetSalary ? (
+  // «Бригады» (выработка бригад месяца, 341 — и без выбранного отдела), «Зарплата по отделам» (отделы, без бригад) и
+  // «Зарплата по объектам» (бригады по объектам, 336) — только 5 учёткам раздела «Зарплата».
+  const salaryChips = !isEmployeeMode && canViewTimesheetSalary ? (
     <>
       <button
         type="button"
-        className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('salary')}
+        className={`ts-view-chip ${viewMode === 'brigades' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('brigades')}
       >
-        Зарплата по отделам
+        Бригады
       </button>
-      <button
-        type="button"
-        className={`ts-view-chip ${viewMode === 'salary_objects' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('salary_objects')}
-      >
-        Зарплата по объектам
-      </button>
+      {hasActiveScope && (
+        <>
+          <button
+            type="button"
+            className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
+            onClick={() => handleViewModeChange('salary')}
+          >
+            Зарплата по отделам
+          </button>
+          <button
+            type="button"
+            className={`ts-view-chip ${viewMode === 'salary_objects' ? ' ts-view-chip--active' : ''}`}
+            onClick={() => handleViewModeChange('salary_objects')}
+          >
+            Зарплата по объектам
+          </button>
+        </>
+      )}
     </>
   ) : null;
 
@@ -2678,7 +2692,7 @@ export const TimesheetPage: FC = () => {
                 {showAllControl}
               </div>
               <div className="ts-header-toolbar-right">
-                {/* «Зарплата по отделам» и «Зарплата по объектам» — слева от «Экспорт». */}
+                {/* «Бригады», «Зарплата по отделам» и «Зарплата по объектам» — слева от «Экспорт». */}
                 {salaryChips && <section className="ts-view-switch">{salaryChips}</section>}
                 {/* Экспорт скрыт для глобального read-флага: экспорт-эндпоинты работают
                     в старом скоупе и вернули бы 403 (follow-up: расширить read-scope). */}
@@ -2745,6 +2759,8 @@ export const TimesheetPage: FC = () => {
 
         {isMobile && segmentControl}
         {isMobile && viewControl}
+        {/* Телефон без отдела: из чипов — только «Бригады» (остальным нужен отдел). */}
+        {isMobile && !hasActiveScope && salaryChips && <section className="ts-view-switch">{salaryChips}</section>}
         {isMobile && showAllControl}
       </div>
 
@@ -2822,7 +2838,9 @@ export const TimesheetPage: FC = () => {
         </section>
       )}
 
-      {viewMode === 'transfers' ? (
+      {viewMode === 'brigades' ? (
+        <TimesheetBrigadesTab month={monthStr} canEdit={canEditTimesheetSalary} />
+      ) : viewMode === 'transfers' ? (
         <div className="ts-table-container">
           <TimesheetTransfersTab
             key={effectiveSelectedDeptId ?? activeGridDeptId ?? 'none'}

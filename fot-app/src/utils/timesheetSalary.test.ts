@@ -207,6 +207,21 @@ describe('«Зарплата по объектам» (336)', () => {
     expect(totalDaysOfEmployee(brigade, 2)).toEqual({ '2026-09-01': 10, '2026-09-16': 12 });
   });
 
+  it('сумма бригаде (341): объекты только для показа — ни «не внесена», ни формулы объекта', () => {
+    const byBrigade = (object: ITimesheetSalaryObject): ITimesheetSalaryObject => ({
+      ...object, output_amount: null, state: 'by_brigade', total_weight: 0,
+      members: object.members.map(member => ({ ...member, share: null })),
+    });
+    const whole: ITimesheetSalaryResponse = {
+      ...brigade, distribution: 'ok', output_mode: 'brigade', brigade_output: '312000.00', output_amount: '312000.00',
+      objects: [byBrigade(stories), byBrigade(wave)],
+    };
+    expect(salaryObjectStateNote(whole.objects![1])).toBeNull();
+    expect(objectShareTitle(whole.objects![1], whole.objects![1].members[0])).toBeUndefined();
+    expect(missingObjectsNote(whole, 2)).toBeNull();
+    expect(salaryAmountTitle(whole, { ...brigade.rows[0], share: null })).not.toContain('выработка не внесена');
+  });
+
   it('часы — целыми, как в сетке табеля; «Часы» — сумма видимых цифр; день по объектам округляется после сложения', () => {
     // Рахмонзода 17.10: 8,5 → 9; Ковальчук 22.10: 0,42 → 0.
     expect(formatDayHours(8.5)).toBe('9');

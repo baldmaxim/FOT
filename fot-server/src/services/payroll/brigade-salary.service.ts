@@ -15,6 +15,9 @@
  * Выработка — по объектам (миграция 336): доля сотрудника = Σ долей на объектах. Зафиксированный результат
  * хранит и дни по объектам, и имена объектов: закрытый месяц показывается целиком из него, поздние проходы СКУД
  * дни и формулу не меняют. Результат format 1 (до 336) не показывается и пересчитывается.
+ *
+ * Или одной суммой на бригаду (341, mode = brigade): доля = сумма × КТУ × учтённые минуты за месяц / Σ, объекты —
+ * только для показа часов (состояние by_brigade, без долей). Обе выработки сразу не бывает — следит триггер БД.
  */
 import type { PoolClient } from 'pg';
 
@@ -41,10 +44,13 @@ import {
   type IMemberMinutes,
 } from './brigade-salary.calc.js';
 import {
+  brigadeOutputMode,
   brigadeSalaryInputsHash,
+  brigadeSalaryLockKey,
   DEFAULT_KTU_TENTHS,
   loadBrigadeSalaryInputs,
   totalBrigadeOutput,
+  type BrigadeOutputMode,
   type IBrigadeSalaryInputs,
 } from './brigade-salary-inputs.service.js';
 import {
@@ -65,8 +71,11 @@ export type BrigadeSalaryState = 'preliminary' | 'fixed' | 'stale';
 /** Ключ псевдо-объекта «Текущая деятельность» — как CURRENT_ACTIVITY_KEY разбивки. */
 const CURRENT_ACTIVITY_OBJECT_KEY = '__current_activity__';
 
-/** Формат сохранённого результата: 2 — по объектам (336). */
+/** Формат сохранённого результата: 2 — по объектам (336); сумма бригаде (341) — тот же формат с mode = brigade. */
 export const BRIGADE_RESULT_FORMAT = 2;
+
+/** Ключ делёжа одной суммой на бригаду: все учтённые минуты месяца — один «объект». Наружу не выходит. */
+const BRIGADE_WHOLE_KEY = '__brigade__';
 
 /** Часть сотрудника на одном объекте. */
 export interface IBrigadeSalaryObjectPart {
@@ -104,6 +113,8 @@ export interface IBrigadeSalaryObjectFacts {
 }
 
 interface IBrigadeComputation {
+  /** По какой выработке посчитано: по объектам или одной суммой на бригаду. */
+  mode: BrigadeOutputMode;
   distribution: BrigadeDistributionState;
   errors: IBrigadeSalaryError[];
   rows: IBrigadeSalaryResultRow[];
@@ -120,6 +131,10 @@ interface IStoredBrigadeResult extends IBrigadeComputation {
 
 export interface IBrigadeSalaryComputed {
   state: BrigadeSalaryState;
+  /** По какой выработке посчитаны показанные доли (у stale — по сохранённой). */
+  mode: BrigadeOutputMode;
+  /** Выработка, по которой посчитаны показанные доли (сумма бригаде или Σ по объектам); null — не внесена. */
+  output_amount: string | null;
   distribution: BrigadeDistributionState;
   as_of: string | null;
   open_ranges: IDateRange[];
@@ -198,21 +213,41 @@ function distribute(
       source,
     };
   });
-  const outputs = new Map([...inputs.outputs].map(([key, output]) => [key, moneyToCents(output.amount)]));
+  // Сумма бригаде (341): вся выработка — один «объект», вес — КТУ × учтённые минуты за месяц (те же минуты, что
+  // в rows[].counted_minutes, — Σ весов восстанавливается из строк). Делёж, копейки и состояния — тем же кодом.
+  const mode = brigadeOutputMode(inputs);
+  const outputs = mode === 'brigade'
+    ? new Map([[BRIGADE_WHOLE_KEY, moneyToCents(inputs.brigadeOutput!)]])
+    : new Map([...inputs.outputs].map(([key, output]) => [key, moneyToCents(output.amount)]));
   const result = buildBrigadeObjectDistribution(
     outputs,
     members.map(member => ({
       employee_id: member.employee_id,
       ktu_tenths: member.ktu_tenths,
-      byObject: member.counted.byObject,
+      byObject: mode === 'brigade'
+        ? new Map([[BRIGADE_WHOLE_KEY, member.counted.minutes]])
+        : member.counted.byObject,
     })),
     errors,
   );
 
   // Объекты: с учтёнными минутами, с выработкой и с часами только для показа (минут нет — ошибка дня и т. п.).
-  const keys = new Set<string>(result.objects.keys());
-  for (const member of members) for (const key of member.counted.days.keys()) keys.add(key);
+  // У суммы бригаде — объекты с минутами или днями, только для показа: без выработки и долей.
+  const keys = new Set<string>(mode === 'brigade' ? [] : result.objects.keys());
+  for (const member of members) {
+    for (const key of member.counted.days.keys()) keys.add(key);
+    if (mode === 'brigade') for (const [key, minutes] of member.counted.byObject) if (minutes > 0) keys.add(key);
+  }
   const objects: IBrigadeSalaryObjectFacts[] = [...keys].map(key => {
+    if (mode === 'brigade') {
+      return {
+        object_key: key,
+        object_name: objectNames.get(key) ?? fallbackObjectName(key, inputs),
+        output: null,
+        state: 'by_brigade' as const,
+        total_weight: 0,
+      };
+    }
     const computed = result.objects.get(key);
     const output = inputs.outputs.get(key)?.amount ?? null;
     return {
@@ -225,6 +260,7 @@ function distribute(
   }).sort(compareBrigadeObjects);
 
   return {
+    mode,
     distribution: result.state,
     errors,
     objects,
@@ -239,7 +275,9 @@ function distribute(
         source: member.source,
         objects: objects.filter(object => memberKeys.has(object.object_key)).map(object => {
           const minutes = member.counted.byObject.get(object.object_key) ?? 0;
-          const share = result.objects.get(object.object_key)?.amounts?.get(member.employee_id);
+          const share = mode === 'brigade'
+            ? undefined
+            : result.objects.get(object.object_key)?.amounts?.get(member.employee_id);
           return {
             object_key: object.object_key,
             days: Object.fromEntries(member.counted.days.get(object.object_key) ?? []),
@@ -380,7 +418,7 @@ async function loadStoredResult(
   exec?: DbExecutor,
 ): Promise<IStoredBrigadeResult | null> {
   const sql = `SELECT status, output_amount::text AS output_amount, inputs_hash, versions, errors, rows, objects,
-                      format, distribution, computed_at::text AS computed_at
+                      format, distribution, mode, computed_at::text AS computed_at
                  FROM brigade_salary_results
                 WHERE department_id = $1 AND month = $2::date`;
   const found = exec
@@ -393,6 +431,7 @@ async function loadStoredResult(
   const errors = row.errors as IBrigadeSalaryError[];
   const objects = (Array.isArray(row.objects) ? row.objects : []) as IBrigadeSalaryObjectFacts[];
   return {
+    mode: row.mode === 'brigade' ? 'brigade' : 'objects',
     distribution: storedDistribution(row.status, row.distribution, rows),
     errors,
     rows,
@@ -447,7 +486,7 @@ async function ensureFixed(
 ): Promise<{ stored: IStoredBrigadeResult; inputs: IBrigadeSalaryInputs } | null> {
   const { start } = monthBounds(month);
   return withTransaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`brigade_salary:${departmentId}:${month}`]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [brigadeSalaryLockKey(departmentId, month)]);
     const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month, client), month);
     if (!closure.closed) return null;
     const inputs = await loadBrigadeSalaryInputs(departmentId, start, client);
@@ -465,16 +504,16 @@ async function ensureFixed(
     const computation = await computeClosed(
       client, departmentId, month, closure.versions.map(item => item.version_id), inputs,
     );
-    const output = totalBrigadeOutput(inputs.outputs);
+    const output = totalBrigadeOutput(inputs);
     const saved = await client.query<{ computed_at: string }>(
       `INSERT INTO brigade_salary_results
          (department_id, month, status, output_amount, inputs_hash, versions, errors, rows, objects, format,
-          distribution, computed_by, computed_at)
-       VALUES ($1, $2::date, $3, $4::numeric, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, now())
+          distribution, mode, computed_by, computed_at)
+       VALUES ($1, $2::date, $3, $4::numeric, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $13, $12, now())
        ON CONFLICT (department_id, month) DO UPDATE SET
          status = EXCLUDED.status, output_amount = EXCLUDED.output_amount, inputs_hash = EXCLUDED.inputs_hash,
          versions = EXCLUDED.versions, errors = EXCLUDED.errors, rows = EXCLUDED.rows, objects = EXCLUDED.objects,
-         format = EXCLUDED.format, distribution = EXCLUDED.distribution,
+         format = EXCLUDED.format, distribution = EXCLUDED.distribution, mode = EXCLUDED.mode,
          computed_by = EXCLUDED.computed_by, computed_at = now()
        RETURNING computed_at::text AS computed_at`,
       [
@@ -490,6 +529,7 @@ async function ensureFixed(
         BRIGADE_RESULT_FORMAT,
         computation.distribution,
         req.user.id,
+        computation.mode,
       ],
     );
 
@@ -529,8 +569,10 @@ async function ensureFixed(
 /** Доли бригады для «К выплате (ФОТ)»: только зафиксированный расчёт закрытого месяца, иначе — open. */
 export interface IBrigadeShares {
   state: 'fixed' | 'open';
+  /** По какой выработке посчитаны доли: по объектам или одной суммой на бригаду. */
+  mode: BrigadeOutputMode;
   distribution: BrigadeDistributionState | null;
-  /** Σ выработок, по которым посчитаны доли; null — ничего не внесено (или расчёта нет). */
+  /** Выработка, по которой посчитаны доли (сумма бригаде или Σ по объектам); null — ничего не внесено. */
   output_amount: string | null;
   rows: IBrigadeSalaryResultRow[];
   /** Объекты расчёта: имя, выработка и Σ весов — для расшифровки доли по объектам. */
@@ -548,9 +590,10 @@ export async function getBrigadeShares(
 ): Promise<IBrigadeShares> {
   const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
   const fixed = closure.closed ? await ensureFixed(req, departmentId, month) : null;
-  if (!fixed) return { state: 'open', distribution: null, output_amount: null, rows: [], objects: [] };
+  if (!fixed) return { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] };
   return {
     state: 'fixed',
+    mode: fixed.stored.mode,
     distribution: fixed.stored.distribution,
     output_amount: fixed.stored.output_amount,
     rows: fixed.stored.rows,
@@ -573,8 +616,9 @@ export async function computeBrigadePreliminaryShares(
   const { computation } = await computePreliminary(departmentId, month, asOf, inputs, members);
   return {
     state: 'open',
+    mode: computation.mode,
     distribution: computation.distribution,
-    output_amount: totalBrigadeOutput(inputs.outputs),
+    output_amount: totalBrigadeOutput(inputs),
     rows: computation.rows,
     objects: computation.objects,
   };
@@ -600,6 +644,8 @@ export async function getBrigadeSalary(
     if (fixed) {
       return {
         state: 'fixed',
+        mode: fixed.stored.mode,
+        output_amount: fixed.stored.output_amount,
         distribution: fixed.stored.distribution,
         as_of: null,
         open_ranges: [],
@@ -618,6 +664,8 @@ export async function getBrigadeSalary(
   if (stored && stored.format === BRIGADE_RESULT_FORMAT) {
     return {
       state: 'stale',
+      mode: stored.mode,
+      output_amount: stored.output_amount,
       distribution: stored.distribution,
       as_of: null,
       open_ranges: closure.open_ranges,
@@ -634,6 +682,8 @@ export async function getBrigadeSalary(
   const { computation, memberIds } = await computePreliminary(departmentId, month, asOf, inputs);
   return {
     state: 'preliminary',
+    mode: computation.mode,
+    output_amount: totalBrigadeOutput(inputs),
     distribution: computation.distribution,
     as_of: asOf,
     open_ranges: closure.open_ranges,

@@ -56,20 +56,24 @@ const nameOf = (data: ITimesheetSalaryResponse, employeeId: number): string => (
 
 const isMuted = (data: ITimesheetSalaryResponse): boolean => isSalaryRowMuted(data, data.rows[0] ?? null);
 
+/** Выработка внесена одной суммой на бригаду (341): у объектов полей нет — «или — или», правка во «Бригадах». */
+const isBrigadeOutput = (data: ITimesheetSalaryResponse): boolean => data.output_mode === 'brigade';
+
 const amountClass = (muted: boolean, amount: string | null | undefined): string => (
   `ts-col-salary${muted && amount ? ' ts-salary-amount--stale' : ''}`
 );
 
 const hoursLabel = (hours: number): string => (hours > 0 ? formatHoursLabel(hours) : '—');
 
-/** Шапка вкладки: заголовок, «Выработка всего», состояние расчёта. */
+/** Шапка вкладки: заголовок, «Выработка всего» (по объектам) или «Выработка бригады» (одной суммой), состояние. */
 export const TimesheetSalaryObjectsHeader: FC<{ data: ITimesheetSalaryResponse }> = ({ data }) => {
   const state = describeSalaryState(data);
   return (
     <div className="ts-salary-objects-head">
       <h3 className="ts-table-title">Зарплата по объектам</h3>
       <span className="ts-salary-objects-total">
-        Выработка всего: <strong>{formatSalaryAmount(data.output_amount)}</strong>
+        {isBrigadeOutput(data) ? 'Выработка бригады' : 'Выработка всего'}:{' '}
+        <strong>{formatSalaryAmount(data.output_amount)}</strong>
       </span>
       {state && (
         <span className={`ts-salary-state ts-salary-state--${state.tone}`} title={state.title}>{state.text}</span>
@@ -82,11 +86,11 @@ interface ISalaryProps {
   salary: ITimesheetObjectsSalary;
 }
 
-/** «Выработка, ₽» объекта расчёта в строке группы; объекта в расчёте нет — ничего. */
+/** «Выработка, ₽» объекта расчёта в строке группы; объекта в расчёте нет или сумма бригаде — ничего. */
 export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetSalaryObject | undefined }> = ({
   salary, object,
 }) => {
-  if (!object) return null;
+  if (!object || isBrigadeOutput(salary.data)) return null;
   const note = salaryObjectStateNote(object);
   return (
     <span className="ts-salary-group-output">

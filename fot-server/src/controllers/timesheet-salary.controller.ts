@@ -1,7 +1,8 @@
 /**
- * «Табель → Зарплата» (миграции 330, 336): КТУ, «Выработка» бригады по объектам и столбец «Сумма».
- * Права страницы /salary/terms решает только список payroll_section_access (гарды в payroll.routes);
- * здесь — скоуп отдела, состав бригады, объекты бригады и право на строку.
+ * «Табель → Зарплата» (миграции 330, 336, 341): КТУ, «Выработка» бригады — по объектам или одной суммой на бригаду
+ * (не обе сразу), список «Бригады» и столбец «Сумма». Права страницы /salary/terms решает только список
+ * payroll_section_access (гарды в payroll.routes); здесь — скоуп отдела, состав бригады, объекты бригады и право на
+ * строку.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -10,13 +11,17 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
 import {
+  BrigadeOutputModeConflictError,
+  isOutputModeConflictDbError,
   loadBrigadeSalaryInputs,
   setBrigadeKtu,
   setBrigadeObjectOutput,
+  setBrigadeOutput,
 } from '../services/payroll/brigade-salary-inputs.service.js';
+import { listBrigadeOutputs } from '../services/payroll/brigade-output-list.service.js';
 import { listBrigadeMemberIds } from '../services/payroll/brigade-salary-source.service.js';
 import { loadBrigadeObjectKeys } from '../services/payroll/brigade-salary.service.js';
-import { canEditPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
+import { canEditPayrollEmployee, resolvePayrollReadableDepartmentIds } from '../services/payroll/payroll-scope.service.js';
 import {
   canReadSalaryDepartment,
   getTimesheetSalary,
@@ -40,6 +45,8 @@ const monthSchema = payrollMonthSchema('Месяц — в формате ГГГ�
 
 const querySchema = z.object({ department_id: departmentIdSchema, month: monthSchema });
 
+const listQuerySchema = z.object({ month: monthSchema });
+
 const OBJECT_KEY_MESSAGE = 'Выберите объект бригады';
 
 /** Ключ объекта — skud_objects.id или служебный («Не определён», «Текущая деятельность»). */
@@ -50,17 +57,27 @@ const objectKeySchema = z.string({ required_error: OBJECT_KEY_MESSAGE, invalid_t
     OBJECT_KEY_MESSAGE,
   );
 
-/** Выработка объекта: null — стереть; 0,00 — разрешено (всем на объекте по 0,00). */
+/** Сумма выработки: null — стереть; 0,00 — разрешено (всем по 0,00). */
+const outputAmountSchema = z.number({ invalid_type_error: 'Сумма должна быть числом' })
+  .finite('Сумма должна быть числом')
+  .min(0, 'Сумма не может быть отрицательной')
+  .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
+  .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE)
+  .nullable();
+
+/** Выработка объекта. */
 const objectOutputSchema = z.object({
   department_id: departmentIdSchema,
   month: monthSchema,
   object_key: objectKeySchema,
-  amount: z.number({ invalid_type_error: 'Сумма должна быть числом' })
-    .finite('Сумма должна быть числом')
-    .min(0, 'Сумма не может быть отрицательной')
-    .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
-    .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE)
-    .nullable(),
+  amount: outputAmountSchema,
+});
+
+/** Выработка одной суммой на бригаду (341). */
+const brigadeOutputSchema = z.object({
+  department_id: departmentIdSchema,
+  month: monthSchema,
+  amount: outputAmountSchema,
 });
 
 const ktuSchema = z.object({
@@ -77,6 +94,15 @@ const ktuSchema = z.object({
 const NOT_FOUND = { success: false, error: 'Отдел не найден' };
 const FORBIDDEN = { success: false, error: 'Нет доступа к этому отделу' };
 const NOT_BRIGADE = { success: false, error: 'Выработка и КТУ — только у бригад', code: 'NOT_BRIGADE' };
+
+/** «Или — или» (341): выработка уже внесена другим способом — 409 с текстом, что стереть. */
+const sendOutputModeConflict = (err: unknown, res: Response): boolean => {
+  if (err instanceof BrigadeOutputModeConflictError || isOutputModeConflictDbError(err)) {
+    res.status(409).json({ success: false, error: (err as Error).message, code: 'OUTPUT_MODE_CONFLICT' });
+    return true;
+  }
+  return false;
+};
 
 /** Отдел из запроса, видимый пользователю; иначе ответ уже отправлен и null. */
 const resolveDepartment = async (
@@ -115,13 +141,51 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   }
 };
 
-/** PUT /api/payroll/timesheet-salary/output — до 336 выработка была одна на бригаду; теперь — по объектам. */
-const setOutput = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
-  res.status(400).json({
-    success: false,
-    error: 'Выработка вводится по объектам — обновите страницу',
-    code: 'OUTPUT_BY_OBJECT',
-  });
+/**
+ * GET /api/payroll/timesheet-salary/brigades?month — вкладка «Бригады»: бригады месяца (с людьми или с внесённой
+ * выработкой) и внесённое — сумма бригаде, Σ и число объектов с выработкой. Долей не считает.
+ */
+const listBrigades = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { month } = listQuerySchema.parse(req.query);
+    const readable = await resolvePayrollReadableDepartmentIds(req);
+    res.json({ success: true, data: await listBrigadeOutputs(month, readable) });
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('timesheetSalary.listBrigades error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки бригад' });
+  }
+};
+
+/**
+ * PUT /api/payroll/timesheet-salary/output { department_id, month, amount|null } — выработка одной суммой на бригаду
+ * (341): делится на всех по КТУ × учтённые часы за месяц. При выработке по объектам — 409 (сначала стереть её).
+ * null — стереть; уже пустую — 200 без изменений. Та же сумма — ни записи, ни аудита.
+ */
+const setOutput = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { department_id: departmentId, month, amount } = brigadeOutputSchema.parse(req.body);
+    const department = await resolveDepartment(req, res, departmentId);
+    if (!department) return;
+    if (department.kind !== 'brigade') {
+      res.status(400).json(NOT_BRIGADE);
+      return;
+    }
+    const { after } = await setBrigadeOutput(
+      department.id, `${month}-01`, amount === null ? null : amount.toFixed(2), req.user.id,
+      (client, change) => auditService.logFromRequestWithClient(client, req, req.user.id, 'BRIGADE_SALARY_OUTPUT_SET', {
+        entityType: 'brigade_salary_brigade_outputs',
+        entityId: `${department.id}:${month}`,
+        details: { department: department.name, month, amount: { from: change.before, to: change.after } },
+      }),
+    );
+    res.json({ success: true, data: { output_amount: after } });
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    if (sendOutputModeConflict(err, res)) return;
+    console.error('timesheetSalary.setOutput error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения выработки' });
+  }
 };
 
 /**
@@ -159,26 +223,29 @@ const setObjectOutput = async (req: AuthenticatedRequest, res: Response): Promis
       });
       return;
     }
-    const { before, after } = await setBrigadeObjectOutput(
+    // Проверка объекта (loadBrigadeObjectKeys фиксирует закрытый месяц под замком) — выше, до своей транзакции с тем
+    // же замком: иначе второе соединение ждало бы замок, который держит первое.
+    const { after } = await setBrigadeObjectOutput(
       department.id, `${month}-01`, objectKey, objectName ?? objectKey,
       amount === null ? null : amount.toFixed(2), req.user.id,
-    );
-    if (before !== after) {
-      await auditService.logFromRequest(req, req.user.id, 'BRIGADE_SALARY_OBJECT_OUTPUT_SET', {
-        entityType: 'brigade_salary_object_outputs',
-        entityId: `${department.id}:${month}:${objectKey}`,
-        details: {
-          department: department.name,
-          month,
-          object_key: objectKey,
-          object: objectName,
-          amount: { from: before, to: after },
+      (client, change) => auditService.logFromRequestWithClient(
+        client, req, req.user.id, 'BRIGADE_SALARY_OBJECT_OUTPUT_SET', {
+          entityType: 'brigade_salary_object_outputs',
+          entityId: `${department.id}:${month}:${objectKey}`,
+          details: {
+            department: department.name,
+            month,
+            object_key: objectKey,
+            object: objectName,
+            amount: { from: change.before, to: change.after },
+          },
         },
-      });
-    }
+      ),
+    );
     res.json({ success: true, data: { object_key: objectKey, output_amount: after } });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
+    if (sendOutputModeConflict(err, res)) return;
     console.error('timesheetSalary.setObjectOutput error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения выработки' });
   }
@@ -227,4 +294,4 @@ const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-export const timesheetSalaryController = { get, setOutput, setObjectOutput, setKtu };
+export const timesheetSalaryController = { get, listBrigades, setOutput, setObjectOutput, setKtu };

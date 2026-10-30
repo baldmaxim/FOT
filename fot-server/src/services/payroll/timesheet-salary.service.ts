@@ -13,7 +13,12 @@
 import { query, queryOne } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 import type { BrigadeDistributionState, BrigadeObjectState, BrigadeSalaryErrorCode } from './brigade-salary.calc.js';
-import { DEFAULT_KTU_TENTHS, totalBrigadeOutput } from './brigade-salary-inputs.service.js';
+import {
+  brigadeOutputMode,
+  DEFAULT_KTU_TENTHS,
+  totalBrigadeOutput,
+  type BrigadeOutputMode,
+} from './brigade-salary-inputs.service.js';
 import type { IDateRange } from './brigade-salary-source.service.js';
 import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
@@ -108,8 +113,12 @@ export interface ITimesheetSalaryResponse {
   distribution: BrigadeDistributionState | null;
   as_of: string | null;
   open_ranges: IDateRange[];
-  /** Σ выработок по объектам; null — ничего не внесено. */
+  /** Внесённая выработка: сумма бригаде или Σ по объектам; null — ничего не внесено. */
   output_amount: string | null;
+  /** Как внесена выработка сейчас (по ней — поля ввода): по объектам или одной суммой на бригаду; у отдела null. */
+  output_mode: BrigadeOutputMode | null;
+  /** Сумма бригаде (341); null — не внесена (или выработка по объектам). */
+  brigade_output: string | null;
   errors: ITimesheetSalaryError[];
   computed_at: string | null;
   rows: ITimesheetSalaryRow[];
@@ -170,6 +179,8 @@ export async function getTimesheetSalary(
       as_of: asOf,
       open_ranges: [],
       output_amount: null,
+      output_mode: null,
+      brigade_output: null,
       errors: [],
       computed_at: null,
       objects: [],
@@ -204,6 +215,7 @@ export async function getTimesheetSalary(
   // «Сумма» — к выплате из доли: доли нет (выработка не внесена, ошибка) — суммы нет.
   const shares = new Map<number, IBrigadeShareFact>([...brigadeShareFacts(
     department.id, result.distribution, result.rows, result.objects,
+    result.mode === 'brigade' ? result.output_amount : undefined,
   )].filter(([, fact]) => fact.amount !== null));
   const payouts = await previewBrigadePayouts(shares, month);
 
@@ -240,7 +252,9 @@ export async function getTimesheetSalary(
     distribution: result.distribution,
     as_of: result.as_of,
     open_ranges: result.open_ranges,
-    output_amount: totalBrigadeOutput(result.inputs.outputs),
+    output_amount: totalBrigadeOutput(result.inputs),
+    output_mode: brigadeOutputMode(result.inputs),
+    brigade_output: result.inputs.brigadeOutput,
     errors: result.errors.map(error => ({ ...error, full_name: names.get(error.employee_id) ?? '' })),
     computed_at: result.computed_at,
     objects,

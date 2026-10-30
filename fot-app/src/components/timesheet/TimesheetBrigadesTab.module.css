@@ -1,0 +1,263 @@
+/* «Табель → Бригады»: список бригад месяца с выработкой. Телефон (базово) — карточки, от 768 px — таблица. */
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.count {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.search {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.search input {
+  font-size: 16px;
+}
+
+.scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.columns {
+  display: none;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  border-bottom: 1px solid var(--border);
+}
+
+/* Телефон: № и название сверху, поля — строками ниже, стрелка справа от названия. */
+.row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 44px;
+  grid-template-areas:
+    'index name toggle'
+    'field field field'
+    'objects objects objects';
+  align-items: center;
+  gap: 8px 8px;
+  padding: 12px 16px;
+}
+
+.index {
+  grid-area: index;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.name {
+  grid-area: name;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.nameInactive {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.field,
+.byObjects,
+.objectField {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.field {
+  grid-area: field;
+}
+
+.byObjects {
+  grid-area: objects;
+}
+
+.fieldLabel {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.field :global(.ts-salary-output-input),
+.objectField :global(.ts-salary-output-input) {
+  flex: 1 1 auto;
+  max-width: 220px;
+  min-width: 0;
+}
+
+.field input,
+.objectField input {
+  font-size: 16px;
+}
+
+.amount {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.toggle {
+  grid-area: toggle;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background var(--transition), color var(--transition);
+}
+
+.toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Раскрытая бригада: объекты. */
+.objects {
+  margin: 0;
+  padding: 0 16px 12px 56px;
+  list-style: none;
+}
+
+.objectRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'objectName objectHours'
+    'objectField objectField';
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.objectName {
+  grid-area: objectName;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.objectHours {
+  grid-area: objectHours;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.objectField {
+  grid-area: objectField;
+}
+
+.objectsNote {
+  padding: 4px 16px 12px 56px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+@media (max-width: 359px) {
+  .objects,
+  .objectsNote {
+    padding-left: 16px;
+  }
+}
+
+/* Планшет и десктоп: таблица «№ | Бригада | Выработка бригады | По объектам | ▸». */
+@media (min-width: 768px) {
+  .search {
+    flex: 0 1 320px;
+    margin-left: auto;
+  }
+
+  .columns,
+  .row {
+    display: grid;
+    grid-template-columns: 40px minmax(160px, 1fr) 240px 180px 44px;
+    grid-template-areas: 'index name field objects toggle';
+    gap: 12px;
+    padding: 8px 16px;
+  }
+
+  .columns {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .field .fieldLabel,
+  .byObjects .fieldLabel {
+    display: none;
+  }
+
+  .field :global(.ts-salary-output-input) {
+    max-width: none;
+  }
+
+  .byObjects {
+    justify-content: flex-end;
+  }
+
+  .objects {
+    padding: 0 16px 12px 68px;
+  }
+
+  .objectsNote {
+    padding-left: 68px;
+  }
+
+  .objectRow {
+    grid-template-columns: minmax(160px, 1fr) 80px 300px;
+    grid-template-areas: 'objectName objectHours objectField';
+  }
+
+  .objectField {
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle {
+    transition: none;
+  }
+}

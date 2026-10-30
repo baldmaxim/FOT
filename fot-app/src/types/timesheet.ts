@@ -325,8 +325,25 @@ export type TimesheetSalaryState = 'preliminary' | 'fixed' | 'stale';
 export type TimesheetSalaryDistribution = 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
 /** object_config — разбивку по объектам собрать нельзя (режим «объект» без закреплённого объекта). */
 export type TimesheetSalaryErrorCode = 'unknown_status' | 'no_schedule' | 'duplicate_day' | 'object_config';
-/** Объект бригады: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых часов нет. */
-export type TimesheetSalaryObjectState = 'ok' | 'no_output' | 'nothing_to_distribute';
+/**
+ * Объект бригады: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых часов нет; by_brigade —
+ * выработка внесена одной суммой на бригаду (341), объект только для показа часов.
+ */
+export type TimesheetSalaryObjectState = 'ok' | 'no_output' | 'nothing_to_distribute' | 'by_brigade';
+/** Как внесена выработка бригады: по объектам или одной суммой на бригаду (341) — не обе сразу. */
+export type TimesheetSalaryOutputMode = 'objects' | 'brigade';
+
+/** Строка вкладки «Табель → Бригады»: бригада месяца и внесённая выработка. */
+export interface ITimesheetBrigadeOutputItem {
+  department_id: string;
+  name: string;
+  is_active: boolean;
+  /** Сумма бригаде; null — не внесена. */
+  brigade_output: string | null;
+  /** Σ выработки по объектам; null — не внесена ни на одном. */
+  objects_output: string | null;
+  objects_with_output: number;
+}
 
 export interface ITimesheetSalaryRow {
   employee_id: number;
@@ -398,8 +415,12 @@ export interface ITimesheetSalaryResponse {
   distribution: TimesheetSalaryDistribution | null;
   as_of: string | null;
   open_ranges: Array<{ start_date: string; end_date: string }>;
-  /** Σ выработок по объектам; null — ничего не внесено. */
+  /** Внесённая выработка: сумма бригаде или Σ по объектам; null — ничего не внесено. */
   output_amount: string | null;
+  /** Как внесена выработка (по ней — поля ввода); у отдела и у старого бэкенда — null / нет. */
+  output_mode?: TimesheetSalaryOutputMode | null;
+  /** Сумма бригаде (341); null — не внесена. */
+  brigade_output?: string | null;
   errors: ITimesheetSalaryError[];
   computed_at: string | null;
   rows: ITimesheetSalaryRow[];

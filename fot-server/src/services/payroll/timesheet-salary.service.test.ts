@@ -142,7 +142,7 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
         objects: [{ object_key: 'wave', days: { '2026-09-01': 10 }, counted_minutes: 12600, weight: 189_000, amount: '273399.53' }],
       }],
       objects: [{ object_key: 'wave', object_name: 'ЖК Wave', output: '1000000.00', state: 'ok', total_weight: 691_300 }],
-      inputs: { outputs: new Map([['wave', { amount: '1000000.00', object_name: 'ЖК Wave' }]]), ktu: new Map([[1951, 15]]) },
+      inputs: { outputs: new Map([['wave', { amount: '1000000.00', object_name: 'ЖК Wave' }]]), brigadeOutput: null, ktu: new Map([[1951, 15]]) },
       member_ids: [1951],
     });
     pg.query.mockResolvedValue([{ id: 1951, full_name: 'Абдуалимов Жахонгир' }]);
@@ -208,7 +208,7 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
         { object_key: 'alia', object_name: 'ЖК Alia', output: '5000.00', state: 'nothing_to_distribute', total_weight: 0 },
         { object_key: '__unknown_object__', object_name: 'Не определён', output: null, state: 'no_output', total_weight: 6000 },
       ],
-      inputs: { outputs: new Map([['alia', { amount: '5000.00', object_name: 'ЖК Alia' }]]), ktu: new Map() },
+      inputs: { outputs: new Map([['alia', { amount: '5000.00', object_name: 'ЖК Alia' }]]), brigadeOutput: null, ktu: new Map() },
       member_ids: [1951],
     });
     calc.previewBrigadePayouts.mockResolvedValue(new Map());

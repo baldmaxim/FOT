@@ -56,10 +56,12 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
                 {object.members.length} чел.{groupHours > 0 ? ` (${groupHours} ч.)` : ''}
               </span>
             </header>
-            <label className="ts-salary-output ts-salary-object-card-output">
-              <span className="ts-salary-output-label">Выработка, ₽</span>
-              {outputField(object)}
-            </label>
+            {data.output_mode !== 'brigade' && (
+              <label className="ts-salary-output ts-salary-object-card-output">
+                <span className="ts-salary-output-label">Выработка, ₽</span>
+                {outputField(object)}
+              </label>
+            )}
             {note && <span className="ts-salary-object-note">{note}</span>}
             <ul className="ts-salary-object-card-list">
               {members.map(member => {

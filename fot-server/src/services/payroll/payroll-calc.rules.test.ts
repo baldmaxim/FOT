@@ -321,6 +321,7 @@ describe('«К выплате (ФОТ)»: бригада', () => {
   const share: IBrigadeShareFact = {
     departmentId: 'b1', amount: '141818.18', ktu: '1.5', countedMinutes: 10560, distribution: 'ok',
     output: '500000.00',
+    whole: null,
     objects: [{
       objectKey: 'wave', objectName: 'ЖК Wave', output: '500000.00', countedMinutes: 10560, weight: 158_400,
       totalWeight: 558_462, amount: '141818.18',
@@ -669,5 +670,46 @@ describe('brigadeShareFacts — доли бригады по объектам с
   it('ничего не внесено — output null', () => {
     const rows = [{ employee_id: 1, ktu: '1.0', counted_minutes: 0, amount: null, objects: [] }];
     expect(brigadeShareFacts('b1', 'no_output', rows, []).get(1)).toMatchObject({ output: null, distribution: 'no_output' });
+  });
+
+  it('сумма бригаде (341): без объектов в расшифровке, вес — КТУ × минуты за месяц, Σ — по всем строкам', () => {
+    const rows = [
+      {
+        employee_id: 1, ktu: '1.5', counted_minutes: 600, amount: '750000.00',
+        objects: [
+          { object_key: 'wave', counted_minutes: 400, weight: 6_000, amount: null, days: { '2026-10-01': 7 } },
+          { object_key: 'stories', counted_minutes: 200, weight: 3_000, amount: null, days: { '2026-10-02': 4 } },
+        ],
+      },
+      {
+        employee_id: 2, ktu: '1.0', counted_minutes: 300, amount: '250000.00',
+        objects: [{ object_key: 'wave', counted_minutes: 300, weight: 3_000, amount: null, days: { '2026-10-01': 5 } }],
+      },
+      { employee_id: 3, ktu: '1.0', counted_minutes: 0, amount: '0.00', objects: [] },
+    ];
+    const byBrigade = [
+      { object_key: 'wave', object_name: 'ЖК Wave', output: null, total_weight: 0 },
+      { object_key: 'stories', object_name: 'ЖК Stories', output: null, total_weight: 0 },
+    ];
+    const facts = brigadeShareFacts('b1', 'ok', rows, byBrigade, '1000000.00');
+    expect(facts.get(1)).toMatchObject({
+      output: '1000000.00', objects: [], whole: { weight: 9_000, totalWeight: 12_000 },
+      workedDates: ['2026-10-01', '2026-10-02'],
+    });
+    expect(facts.get(3)?.whole).toEqual({ weight: 0, totalWeight: 12_000 });
+    // По объектам — whole нет, Σ выработок объектов, как раньше.
+    expect(brigadeShareFacts('b1', 'ok', rows, objects).get(1)?.whole).toBeNull();
+
+    const result = buildPayrollCalc({
+      monthStart: '2026-10-01', monthEnd: '2026-10-31', normDays: null, workdayDates: [], dayoffDates: [],
+      absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
+      oneTimeTotal: null, rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
+    });
+    // Листок: «1 000 000 × КТУ 1,5 × 10 ч / 200 (Σ КТУ × ч бригады) = 750 000».
+    expect(result.lines[0]).toMatchObject({ code: 'brigade', amount: '750000.00' });
+    expect(result.lines[0].parts).toEqual([{
+      kind: 'brigade', department_id: 'b1', object_key: null, object_name: null, output: '1000000.00',
+      ktu_tenths: 15, counted_minutes: 600, weight: 9_000, total_weight: 12_000, amount: '750000.00',
+    }]);
   });
 });

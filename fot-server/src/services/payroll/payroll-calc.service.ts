@@ -307,7 +307,10 @@ const loadPayoutExtras = async (
 
 /** Факты долей бригады по сотрудникам: те же строки расчёта, выработка и веса объектов — для расшифровки доли. */
 const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number, IBrigadeShareFact> => (
-  brigadeShareFacts(departmentId, shares.distribution ?? 'error', shares.rows, shares.objects)
+  brigadeShareFacts(
+    departmentId, shares.distribution ?? 'error', shares.rows, shares.objects,
+    shares.mode === 'brigade' ? shares.output_amount : undefined,
+  )
 );
 
 /**

@@ -157,8 +157,9 @@ router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPa
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
 
-// ─── «Табель → Зарплата» (миграция 330): КТУ, «Выработка» бригады, «Сумма» ─────
+// ─── «Табель → Зарплата» (миграции 330, 336, 341): КТУ, «Выработка» бригады, «Сумма», «Бригады» ─────
 router.get('/timesheet-salary', termsView, timesheetSalaryController.get);
+router.get('/timesheet-salary/brigades', termsView, timesheetSalaryController.listBrigades);
 router.put('/timesheet-salary/output', termsEdit, timesheetSalaryController.setOutput);
 router.put('/timesheet-salary/object-output', termsEdit, timesheetSalaryController.setObjectOutput);
 router.put('/timesheet-salary/ktu', termsEdit, timesheetSalaryController.setKtu);

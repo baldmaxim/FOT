@@ -231,8 +231,11 @@ export const distributeByWeights = (
 
 export type BrigadeDistributionState = 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
 
-/** Состояние объекта: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых минут нет. */
-export type BrigadeObjectState = 'ok' | 'no_output' | 'nothing_to_distribute';
+/**
+ * Состояние объекта: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых минут нет;
+ * by_brigade — выработка внесена одной суммой на бригаду (341), объект только для показа часов.
+ */
+export type BrigadeObjectState = 'ok' | 'no_output' | 'nothing_to_distribute' | 'by_brigade';
 
 export interface IBrigadeObjectMemberInput {
   employee_id: number;

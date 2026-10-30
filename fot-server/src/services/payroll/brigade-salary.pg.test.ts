@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 // (две половины и одна подача на месяц) с долями по объектам из снимков редакций, живые веса для редакции без
 // снимка и их заморозка, config_errors снимка — ошибка бригады, «Требует перерасчёта» при открытой подаче, старый
 // результат (format 1) не показывается, пересчёт без пустого аудита, повторное чтение без пересчёта, уволенный в
-// месяце увольнения — по живому табелю, начальник участка — вне дележа.
+// месяце увольнения — по живому табелю, начальник участка — вне дележа. 341: сумма бригаде — «или — или» с
+// объектами (сервис и триггер под одним замком), фиксация с mode = brigade, повторы без записи, список «Бригады».
 // Состав, живой табель, режимы табелирования и графики подменены: их SQL проверяют свои тесты.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы-заглушки пересоздаются).
 
@@ -131,12 +132,19 @@ vi.mock('../audit.service.js', () => ({
 }));
 
 import { getBrigadeSalary, getBrigadeShares } from './brigade-salary.service.js';
-import { setBrigadeKtu, setBrigadeObjectOutput } from './brigade-salary-inputs.service.js';
+import {
+  BrigadeOutputModeConflictError,
+  setBrigadeKtu,
+  setBrigadeObjectOutput,
+  setBrigadeOutput,
+} from './brigade-salary-inputs.service.js';
+import { listBrigadeOutputs } from './brigade-output-list.service.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}330_brigade_salary.sql`, 'utf8');
 const MIGRATION_336 = readFileSync(`${MIGRATIONS_DIR}336_brigade_salary_object_outputs.sql`, 'utf8');
+const MIGRATION_341 = readFileSync(`${MIGRATIONS_DIR}341_brigade_salary_brigade_outputs.sql`, 'utf8');
 
 const BRIGADE = '5049c2c9-1334-49e6-8d55-7a04bebcaa8c';
 const KHODZHAKULOV = 'bc645c62-4ff1-4f9e-a1ce-503196b1eb8e';
@@ -215,12 +223,18 @@ const sumCents = (rows: Array<{ amount: string | null }>) => rows.reduce(
 describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 336)', () => {
   beforeAll(async () => {
     await q(`
-      DROP TABLE IF EXISTS brigade_salary_object_outputs, brigade_salary_results, brigade_salary_ktu,
-        brigade_salary_outputs, timesheet_version_objects, timesheet_versions, timesheet_approvals, employees,
-        org_departments, user_profiles, skud_objects CASCADE;
+      DROP TABLE IF EXISTS brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
+        brigade_salary_ktu, brigade_salary_outputs, timesheet_version_objects, timesheet_versions, timesheet_approvals,
+        employees, employee_assignments, employee_dismissal_events, org_departments, user_profiles, skud_objects CASCADE;
       CREATE TABLE user_profiles (id uuid PRIMARY KEY);
-      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, kind text);
-      CREATE TABLE employees (id bigint PRIMARY KEY, full_name text);
+      CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, kind text, is_active boolean DEFAULT true);
+      CREATE TABLE employees (
+        id bigint PRIMARY KEY, full_name text, org_department_id uuid, is_archived boolean NOT NULL DEFAULT false,
+        employment_status text NOT NULL DEFAULT 'active', dismissal_date date);
+      CREATE TABLE employee_assignments (
+        employee_id bigint, org_department_id uuid, effective_from date, effective_to date);
+      CREATE TABLE employee_dismissal_events (
+        employee_id bigint, from_department_id uuid, dismissal_date date, cancelled boolean NOT NULL DEFAULT false);
       CREATE TABLE skud_objects (id uuid PRIMARY KEY, name text, alt_name text);
       CREATE TABLE timesheet_approvals (
         id bigserial PRIMARY KEY, department_id uuid, manager_employee_id bigint, status text,
@@ -242,11 +256,15 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     await q(`INSERT INTO brigade_salary_outputs (department_id, month, amount) VALUES ($1, '2026-09-01', 2000000.00)`, [KHODZHAKULOV]);
     await q(MIGRATION_336);
     await q(MIGRATION_336);
+    await q(MIGRATION_341);
+    await q(MIGRATION_341);
+    // 336 после 341 и пустой 330 — повтор тоже проходит.
+    await q(MIGRATION_336);
   });
 
   beforeEach(async () => {
-    await q(`TRUNCATE brigade_salary_object_outputs, brigade_salary_results, brigade_salary_ktu, brigade_salary_outputs,
-      timesheet_version_objects, timesheet_versions, timesheet_approvals`);
+    await q(`TRUNCATE brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
+      brigade_salary_ktu, brigade_salary_outputs, timesheet_version_objects, timesheet_versions, timesheet_approvals`);
     fx.members = [
       { employee_id: A, transferred_out_date: null, joined_date: null },
       { employee_id: B, transferred_out_date: null, joined_date: null },
@@ -417,7 +435,7 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
 
     await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
     expect(await getBrigadeShares(req, BRIGADE, '2026-09')).toEqual({
-      state: 'open', distribution: null, output_amount: null, rows: [], objects: [],
+      state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [],
     });
   });
 
@@ -576,5 +594,168 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     await setOutput(WAVE, '100.00');
     await setOutput(WAVE, null);
     expect(await q('SELECT 1 FROM brigade_salary_object_outputs')).toHaveLength(0);
+  });
+
+  // ─── 341: сумма бригаде ────────────────────────────────────────────────────────────────────────────────────
+  const setWhole = (amount: string | null, auditFn?: Parameters<typeof setBrigadeOutput>[4]) => (
+    setBrigadeOutput(BRIGADE, '2026-09-01', amount, PROFILE, auditFn)
+  );
+
+  it('341: CHECK mode и суммы; триггер не даёт обеим выработкам сразу — в обе стороны, даже прямым SQL', async () => {
+    await expect(q(`INSERT INTO brigade_salary_brigade_outputs (department_id, month, amount) VALUES ($1, '2026-09-02', 1)`,
+      [BRIGADE])).rejects.toThrow(/month_first_day/);
+    await expect(q(`INSERT INTO brigade_salary_brigade_outputs (department_id, month, amount) VALUES ($1, '2026-09-01', -1)`,
+      [BRIGADE])).rejects.toThrow(/amount_non_negative/);
+    await expect(q(`INSERT INTO brigade_salary_results (department_id, month, status, inputs_hash, versions, rows, mode)
+      VALUES ($1, '2026-09-01', 'fixed', 'x', '[]', '[]', 'both')`, [BRIGADE])).rejects.toThrow(/results_mode/);
+
+    await q(`INSERT INTO brigade_salary_brigade_outputs (department_id, month, amount) VALUES ($1, '2026-09-01', 5)`, [BRIGADE]);
+    await expect(q(`INSERT INTO brigade_salary_object_outputs (department_id, month, object_key, object_name, amount)
+      VALUES ($1, '2026-09-01', $2, 'ЖК Wave', 1)`, [BRIGADE, WAVE])).rejects.toThrow(/сотрите её, чтобы вносить по объектам/);
+    // Другой месяц и другая бригада — не мешают.
+    await q(`INSERT INTO brigade_salary_object_outputs (department_id, month, object_key, object_name, amount)
+      VALUES ($1, '2026-10-01', $2, 'ЖК Wave', 1), ($3, '2026-09-01', $2, 'ЖК Wave', 1)`, [BRIGADE, WAVE, KHODZHAKULOV]);
+    await expect(q(`INSERT INTO brigade_salary_brigade_outputs (department_id, month, amount) VALUES ($1, '2026-10-01', 5)`,
+      [BRIGADE])).rejects.toThrow(/сотрите её, чтобы внести на бригаду/);
+  });
+
+  it('341: сервис — 409-ошибка в обе стороны; стереть объекты можно и при сумме бригаде', async () => {
+    await setOutput(WAVE, '100.00');
+    await expect(setWhole('5.00')).rejects.toBeInstanceOf(BrigadeOutputModeConflictError);
+    await setOutput(WAVE, null);
+    await setWhole('5.00');
+    await expect(setOutput(STORIES, '1.00')).rejects.toBeInstanceOf(BrigadeOutputModeConflictError);
+    expect(await setOutput(STORIES, null)).toEqual({ before: null, after: null });
+    expect(await q('SELECT 1 FROM brigade_salary_object_outputs')).toHaveLength(0);
+  });
+
+  it('341: две транзакции одновременно в разные таблицы — проходит ровно одна', async () => {
+    const results = await Promise.allSettled([setWhole('5.00'), setOutput(WAVE, '100.00')]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(BrigadeOutputModeConflictError);
+    const [whole] = await q<{ n: number }>('SELECT count(*)::int AS n FROM brigade_salary_brigade_outputs');
+    const [objects] = await q<{ n: number }>('SELECT count(*)::int AS n FROM brigade_salary_object_outputs');
+    expect(whole.n + objects.n).toBe(1);
+  });
+
+  it('341: та же сумма ещё раз — ни записи (updated_at прежний), ни аудита; стереть пустую — без изменений', async () => {
+    const audited: Array<{ before: string | null; after: string | null }> = [];
+    const auditFn = async (_client: unknown, change: { before: string | null; after: string | null }) => {
+      audited.push(change);
+    };
+    expect(await setWhole('1000000', auditFn)).toEqual({ before: null, after: '1000000.00' });
+    const [first] = await q<{ updated_at: string }>('SELECT updated_at::text AS updated_at FROM brigade_salary_brigade_outputs');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(await setWhole('1000000.00', auditFn)).toEqual({ before: '1000000.00', after: '1000000.00' });
+    const [second] = await q<{ updated_at: string }>('SELECT updated_at::text AS updated_at FROM brigade_salary_brigade_outputs');
+    expect(second.updated_at).toBe(first.updated_at);
+    expect(await setWhole(null, auditFn)).toEqual({ before: '1000000.00', after: null });
+    expect(await setWhole(null, auditFn)).toEqual({ before: null, after: null });
+    expect(audited).toEqual([{ before: null, after: '1000000.00' }, { before: '1000000.00', after: null }]);
+
+    // У объектов — так же: та же сумма не трогает updated_at.
+    await setOutput(WAVE, '100.00');
+    const [objectFirst] = await q<{ updated_at: string }>('SELECT updated_at::text AS updated_at FROM brigade_salary_object_outputs');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(await setOutput(WAVE, '100.00')).toEqual({ before: '100.00', after: '100.00' });
+    const [objectSecond] = await q<{ updated_at: string }>('SELECT updated_at::text AS updated_at FROM brigade_salary_object_outputs');
+    expect(objectSecond.updated_at).toBe(objectFirst.updated_at);
+  });
+
+  it('341: закрытый месяц с суммой бригаде — доли по КТУ × все минуты, mode = brigade; стёрли — снова по объектам', async () => {
+    await closeSeptemberInHalves();
+    // Минуты за месяц: А 1200, Б 1320, уволенный 600 → 312 000 = 120 000 / 132 000 / 60 000.
+    await setWhole('312000.00');
+
+    const result = await getBrigadeSalary(req, BRIGADE, '2026-09');
+
+    expect(result.state).toBe('fixed');
+    expect(result.mode).toBe('brigade');
+    expect(result.output_amount).toBe('312000.00');
+    expect(result.distribution).toBe('ok');
+    expect(amounts(result.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
+    expect(sumCents(result.rows)).toBe(31200000);
+    // Объекты — только для показа: без выработки и долей, часы и минуты на месте (общежитие по дням).
+    expect(result.objects.map(object => [object.object_name, object.state, object.output])).toEqual([
+      ['ЖК Stories', 'by_brigade', null],
+      ['ЖК Wave', 'by_brigade', null],
+    ]);
+    const b = result.rows.find(row => row.employee_id === B)!;
+    expect(b.objects.map(part => [OBJECT_NAMES[part.object_key], part.counted_minutes, part.amount])).toEqual([
+      ['ЖК Stories', 240, null],
+      ['ЖК Wave', 1080, null],
+    ]);
+    const stored = await q<{ mode: string; output_amount: string }>(
+      'SELECT mode, output_amount::text AS output_amount FROM brigade_salary_results',
+    );
+    expect(stored).toEqual([{ mode: 'brigade', output_amount: '312000.00' }]);
+    const shares = await getBrigadeShares(req, BRIGADE, '2026-09');
+    expect(shares).toMatchObject({ state: 'fixed', mode: 'brigade', output_amount: '312000.00' });
+
+    // Повторное чтение — без пересчёта; та же сумма — тоже.
+    await setWhole('312000');
+    await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(audit.calls).toEqual([]);
+
+    // Стёрли сумму бригаде, внесли по объектам — пересчёт по объектам.
+    await setWhole(null);
+    await enterBoth();
+    const byObjects = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(byObjects.mode).toBe('objects');
+    expect(amounts(byObjects.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
+    expect((await q<{ mode: string }>('SELECT mode FROM brigade_salary_results'))[0].mode).toBe('objects');
+  });
+
+  it('341: сумма бригаде 0,00 — всем 0,00; у кого минут нет — тоже 0,00', async () => {
+    const full = await addApproval('2026-09-01', '2026-09-30');
+    const v = await addVersion(full, 1, payload({ [A]: { '2026-09-01': work(10) } }));
+    await addObjects(v, { [A]: { [WAVE]: { '2026-09-01': 10 } } });
+    await setWhole('0.00');
+    const result = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(result.distribution).toBe('ok');
+    expect(amounts(result.rows)).toEqual({ [A]: '0.00', [B]: '0.00', [F]: '0.00' });
+  });
+
+  it('341: список «Бригады» — с людьми в месяце (переведённый — в обеих), с выработкой (и неактивная), без отделов', async () => {
+    const MOVED_TO = '11111111-2222-4333-8444-555555555555';
+    const EMPTY = '22222222-3333-4444-8555-666666666666';
+    const ARCHIVED = '33333333-4444-4555-8666-777777777777';
+    const OFFICE = '44444444-5555-4666-8777-888888888888';
+    try {
+      await q(`INSERT INTO org_departments (id, name, kind, is_active) VALUES
+        ($1, 'бр.Новая', 'brigade', true), ($2, 'бр.Пустая', 'brigade', true),
+        ($3, 'бр.Архив', 'brigade', false), ($4, 'Гарантийный отдел', 'department', true)`, [MOVED_TO, EMPTY, ARCHIVED, OFFICE]);
+      // А: в бр.Аюби до 15.09, с 16.09 — в бр.Новая (текущий отдел — новая).
+      await q(`INSERT INTO employees (id, full_name, org_department_id) VALUES (9001, 'Переведённый', $1)
+        ON CONFLICT (id) DO UPDATE SET org_department_id = EXCLUDED.org_department_id`, [MOVED_TO]);
+      await q(`INSERT INTO employee_assignments (employee_id, org_department_id, effective_from, effective_to) VALUES
+        (9001, $1, '2026-01-01', '2026-09-15'), (9001, $2, '2026-09-16', NULL)`, [BRIGADE, MOVED_TO]);
+      // В бр.Пустая только уволенный в августе — в сентябре её нет.
+      await q(`INSERT INTO employees (id, full_name, org_department_id, employment_status, dismissal_date)
+        VALUES (9002, 'Уволен в августе', $1, 'fired', '2026-08-20') ON CONFLICT (id) DO NOTHING`, [EMPTY]);
+      // В отделе люди есть, но это не бригада.
+      await q(`INSERT INTO employees (id, full_name, org_department_id) VALUES (9003, 'Офис', $1) ON CONFLICT (id) DO NOTHING`, [OFFICE]);
+      // Неактивная бригада без людей, но с выработкой за сентябрь — в списке, чтобы её стереть.
+      await q(`INSERT INTO brigade_salary_brigade_outputs (department_id, month, amount) VALUES ($1, '2026-09-01', 700)`, [ARCHIVED]);
+      await setOutput(WAVE, '100.00');
+      await setOutput(STORIES, '50.50');
+
+      const list = await listBrigadeOutputs('2026-09', 'all');
+
+      expect(list.map(item => item.name)).toEqual(['бр.Архив', 'бр.Аюби М.С.', 'бр.Новая']);
+      expect(list.find(item => item.department_id === BRIGADE)).toEqual({
+        department_id: BRIGADE, name: 'бр.Аюби М.С.', is_active: true,
+        brigade_output: null, objects_output: '150.50', objects_with_output: 2,
+      });
+      expect(list.find(item => item.department_id === ARCHIVED)).toMatchObject({ is_active: false, brigade_output: '700.00' });
+      // Видимые отделы — только они.
+      expect((await listBrigadeOutputs('2026-09', [MOVED_TO])).map(item => item.name)).toEqual(['бр.Новая']);
+      expect(await listBrigadeOutputs('2026-09', [])).toEqual([]);
+    } finally {
+      await q('DELETE FROM employee_assignments WHERE employee_id IN (9001)');
+      await q('DELETE FROM employees WHERE id IN (9001, 9002, 9003)');
+      await q('DELETE FROM org_departments WHERE id = ANY($1::uuid[])', [[MOVED_TO, EMPTY, ARCHIVED, OFFICE]]);
+    }
   });
 });

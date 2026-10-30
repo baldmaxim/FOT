@@ -146,8 +146,9 @@ export const describeSalaryState = (data: ITimesheetSalaryResponse): ISalaryStat
   return null;
 };
 
-/** Пометка объекта под полем «Выработка»: не внесена / некому распределить; внесена — null. */
+/** Пометка объекта под полем «Выработка»: не внесена / некому распределить; внесена (или сумма бригаде) — null. */
 export const salaryObjectStateNote = (object: ITimesheetSalaryObject): string | null => {
+  if (object.state === 'by_brigade') return null;
   if (object.state === 'no_output') return 'не внесена';
   if (object.state === 'nothing_to_distribute') return 'некому распределить — часов нет';
   return null;
@@ -163,7 +164,7 @@ export const objectShareTitle = (
   object: ITimesheetSalaryObject,
   member: ITimesheetSalaryObjectMember,
 ): string | undefined => {
-  if (member.counted_minutes <= 0) return undefined;
+  if (member.counted_minutes <= 0 || object.state === 'by_brigade') return undefined;
   if (object.output_amount === null) return 'выработка не внесена';
   if (member.share === null || object.total_weight <= 0) return undefined;
   const ktu = decimalText(member.weight / member.counted_minutes / 10);
@@ -174,7 +175,7 @@ export const objectShareTitle = (
 /** Объекты, где у сотрудника есть учтённые часы, а выработка не внесена, — «выработка не внесена: ЖК Stories». */
 export const missingObjectsNote = (data: ITimesheetSalaryResponse, employeeId: number): string | null => {
   const names = (data.objects ?? [])
-    .filter(object => object.output_amount === null && object.members.some(member => (
+    .filter(object => object.output_amount === null && object.state !== 'by_brigade' && object.members.some(member => (
       member.employee_id === employeeId && member.counted_minutes > 0
     )))
     .map(object => object.object_name);

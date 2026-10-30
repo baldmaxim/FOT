@@ -148,7 +148,7 @@ beforeEach(() => {
   monthBasis.loadMonthBasisSources.mockResolvedValue(new Map());
   brigade.resolvePreliminaryAsOf.mockImplementation((month: string) => (month === '2026-10' ? '2026-10-27' : `${month}-30`));
   brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, rows: [] });
-  inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), ktu: new Map() });
+  inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), brigadeOutput: null, ktu: new Map() });
   membership.list.mockResolvedValue([]);
   live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({}));
   basisDrafts.buildBasisDraftsForDays.mockImplementation(draftsFromDays);
@@ -222,7 +222,7 @@ describe('бригада: незакрытый месяц', () => {
   });
 
   it('выработки нет — часы не считаются, доля без суммы (brigade_output), итог неизвестен — не «−удержания»', async () => {
-    inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), ktu: new Map([[7, 15]]) });
+    inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), brigadeOutput: null, ktu: new Map([[7, 15]]) });
 
     const calc = (await getPreliminaryPayoutForEmployees([7], '2026-09', req)).get(7);
 
@@ -237,7 +237,7 @@ describe('бригада: незакрытый месяц', () => {
 
   it('выработка есть, у переоткрытой бригады сохранён stale — живой расчёт доли, общий табель рабочего не грузится', async () => {
     inputs.loadBrigadeSalaryInputs.mockResolvedValue({
-      outputs: new Map([['wave', { amount: '100000.00', object_name: 'ЖК Wave' }]]), ktu: new Map(),
+      outputs: new Map([['wave', { amount: '100000.00', object_name: 'ЖК Wave' }]]), brigadeOutput: null, ktu: new Map(),
     });
     const schedule = {
       schedule_id: 's', schedule_type: 'office', work_start: '08:00:00', work_end: '17:00:00', work_hours: 8,
@@ -316,7 +316,7 @@ describe('лимит бригад', () => {
     inputs.loadBrigadeSalaryInputs.mockImplementation(async () => {
       await new Promise(resolve => setTimeout(resolve, 2));
       inFlight -= 1;
-      return { outputs: new Map(), ktu: new Map() };
+      return { outputs: new Map(), brigadeOutput: null, ktu: new Map() };
     });
 
     const result = await getPreliminaryPayoutForEmployees(ids, '2026-09', req);

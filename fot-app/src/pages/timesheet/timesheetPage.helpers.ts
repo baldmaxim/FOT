@@ -41,8 +41,12 @@ export interface IBulkObjectCorrectionTarget {
   objectEntry: TimesheetObjectEntry | null;
 }
 
-/** salary — «Зарплата по отделам» (view=salary, как раньше); salary_objects — «Зарплата по объектам» (бригады, 336). */
-export type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'transfers' | 'salary' | 'salary_objects';
+/**
+ * salary — «Зарплата по отделам» (view=salary, как раньше); salary_objects — «Зарплата по объектам» (бригады, 336);
+ * brigades — «Бригады»: выработка бригад месяца (341), без выбора отдела.
+ */
+export type TimesheetViewMode =
+  | 'employees' | 'objects' | 'corrections' | 'transfers' | 'salary' | 'salary_objects' | 'brigades';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 

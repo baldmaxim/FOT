@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useToast } from '../contexts/ToastContext';
 import { timesheetSalaryService } from '../services/timesheetSalaryService';
+import { invalidateBrigadeOutputs, isOutputModeConflict } from './useTimesheetBrigades';
 
 interface IUseTimesheetSalaryParams {
   departmentId: string | null;
@@ -14,7 +15,7 @@ const errorMessage = (error: unknown, fallback: string): string => (
   error instanceof Error && error.message ? error.message : fallback
 );
 
-/** «Табель → Зарплата»: суммы отдела или бригады и правка КТУ / «Выработки» на объектах. */
+/** «Табель → Зарплата» и раскрытая бригада во «Бригадах»: суммы отдела или бригады и правка КТУ / «Выработки» на объектах. */
 export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimesheetSalaryParams) => {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -42,8 +43,12 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
     mutationFn: ({ objectKey, amount }: { objectKey: string; amount: number | null }) => (
       timesheetSalaryService.setObjectOutput(departmentId as string, month, objectKey, amount)
     ),
-    onSuccess: invalidate,
-    onError: error => toast.error(errorMessage(error, 'Не удалось сохранить выработку')),
+    // Выработка видна и в списке «Бригады» — перечитать и его.
+    onSuccess: () => invalidateBrigadeOutputs(queryClient),
+    onError: error => {
+      toast.error(errorMessage(error, 'Не удалось сохранить выработку'));
+      if (isOutputModeConflict(error)) void invalidateBrigadeOutputs(queryClient);
+    },
   });
 
   const { mutate: mutateKtu } = ktuMutation;

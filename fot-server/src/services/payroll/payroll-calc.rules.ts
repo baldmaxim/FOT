@@ -137,10 +137,12 @@ export interface IBrigadeShareFact {
   ktu: string;
   countedMinutes: number;
   distribution: 'ok' | 'no_output' | 'nothing_to_distribute' | 'error';
-  /** Σ выработок бригады; null — ничего не внесено. */
+  /** Выработка бригады (сумма бригаде или Σ по объектам); null — ничего не внесено. */
   output: string | null;
-  /** Объекты с учтёнными минутами сотрудника — части расшифровки. */
+  /** Объекты с учтёнными минутами сотрудника — части расшифровки; у суммы бригаде (341) — пусто. */
   objects: IBrigadeShareObjectFact[];
+  /** Сумма бригаде (341): вес сотрудника (КТУ в десятых × минуты за месяц) и Σ весов бригады; иначе null. */
+  whole: { weight: number; totalWeight: number } | null;
   /** Дни с часами в бригаде (по объектам расчёта) — доплата за общежитие по дням (миграция 339). */
   workedDates: string[];
 }
@@ -150,7 +152,8 @@ export const ktuTenths = (ktu: string): number => Math.round(Number(ktu) * 10);
 
 /**
  * Факты долей бригады из строк её расчёта (по объектам, 336): у сотрудника — объекты, где у него есть учтённые
- * минуты, с выработкой, весом и Σ весов объекта из того же расчёта.
+ * минуты, с выработкой, весом и Σ весов объекта из того же расчёта. Сумма бригаде (341, wholeOutput не undefined):
+ * объектов в расшифровке нет, вес — КТУ × минуты за месяц, Σ — по всем строкам (те же веса, что у делёжа).
  */
 export const brigadeShareFacts = (
   departmentId: string,
@@ -170,12 +173,17 @@ export const brigadeShareFacts = (
     }>;
   }>,
   objects: ReadonlyArray<{ object_key: string; object_name: string; output: string | null; total_weight: number }>,
+  wholeOutput?: string | null,
 ): Map<number, IBrigadeShareFact> => {
   const byKey = new Map(objects.map(object => [object.object_key, object]));
   const outputs = objects.filter(object => object.output !== null);
-  const output = outputs.length === 0
-    ? null
-    : centsToAmount(outputs.reduce((sum, object) => sum + cents(object.output!), 0));
+  const whole = wholeOutput !== undefined;
+  const output = whole
+    ? (wholeOutput === null ? null : centsToAmount(cents(wholeOutput)))
+    : outputs.length === 0
+      ? null
+      : centsToAmount(outputs.reduce((sum, object) => sum + cents(object.output!), 0));
+  const totalWeight = rows.reduce((sum, row) => sum + ktuTenths(row.ktu) * row.counted_minutes, 0);
   return new Map(rows.map(row => [Number(row.employee_id), {
     departmentId,
     amount: row.amount,
@@ -183,7 +191,8 @@ export const brigadeShareFacts = (
     countedMinutes: row.counted_minutes,
     distribution,
     output,
-    objects: (row.objects ?? [])
+    whole: whole ? { weight: ktuTenths(row.ktu) * row.counted_minutes, totalWeight } : null,
+    objects: (whole ? [] : row.objects ?? [])
       .filter(part => part.counted_minutes > 0)
       .map(part => ({
         objectKey: part.object_key,
@@ -597,7 +606,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
         ktu: shares[0].ktu,
         hours: Math.round((shares.reduce((sum, share) => sum + share.countedMinutes, 0) / 60) * 100) / 100,
       },
-      // Часть — на объект; у сотрудника без учтённых часов на объектах — одна часть бригады целиком.
+      // Часть — на объект; у суммы бригаде (341) и у сотрудника без учтённых часов на объектах — одна часть бригады
+      // целиком (у суммы бригаде — с весом и Σ весов бригады: «… × КТУ × ч / Σ (КТУ × ч бригады)»).
       parts: shares.flatMap((share): PayrollCalcLinePart[] => (share.objects.length > 0
         ? share.objects.map(object => ({
           kind: 'brigade' as const,
@@ -619,8 +629,8 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
           output: share.output,
           ktu_tenths: ktuTenths(share.ktu),
           counted_minutes: share.countedMinutes,
-          weight: 0,
-          total_weight: 0,
+          weight: share.whole?.weight ?? 0,
+          total_weight: share.whole?.totalWeight ?? 0,
           amount: share.amount === null ? null : centsToAmount(cents(share.amount)),
         }])),
     });
