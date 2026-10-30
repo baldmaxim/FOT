@@ -73,7 +73,7 @@ describe('подмешивание столбцов ФОТ', () => {
     const merge = mergeCalcColumns(rows, requests, [{ status: 'error' }, success([{ employee_id: 3, calc: calc('5.00') }])]);
     expect(merge.rows.map(item => item.calc_status ?? null)).toEqual(['error', 'error', null, null]);
     expect(merge).toMatchObject({ ready: false, failed: true });
-    expect(emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready)).not.toContain('calc_overtime');
+    expect(emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready)).not.toContain('calc_supplements');
   });
 
   it('все посчитаны — пустые столбцы ФОТ скрываются', () => {
@@ -83,7 +83,7 @@ describe('подмешивание столбцов ФОТ', () => {
     ]);
     expect(merge.ready).toBe(true);
     const hidden = emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready);
-    expect(hidden).toContain('calc_overtime');
+    expect(hidden).toContain('calc_supplements');
     expect(hidden).not.toContain('calc_net');
   });
 

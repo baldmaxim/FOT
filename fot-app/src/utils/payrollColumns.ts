@@ -41,7 +41,8 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 
 /**
  * «Расчёты»: вместо условий и «Выплачено» — суммы «Оплачено» за выбранные месяцы, затем состав зарплаты
- * (payrollCalcColumns.ts): по расчёту ФОТ закрытого табеля и из 1С, где ФОТ сумму не считает.
+ * (payrollCalcColumns.ts): по расчёту ФОТ закрытого табеля и из 1С, где ФОТ сумму не считает. Переработка, проезд
+ * и проживание — под «+» у «Доплат» (payrollSubColumns.ts, решение 30.10.2026), в шестерёнке их нет.
  */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
@@ -50,11 +51,8 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'deductions', label: 'Удержания' },
   { key: 'calc_rate', label: 'Оклад' },
   { key: 'calc_timesheet', label: 'Начислено по табелю' },
-  { key: 'calc_overtime', label: 'Переработка' },
-  { key: 'calc_travel', label: 'Компенсация проезда' },
   { key: 'calc_vacation', label: 'Отпускные' },
   { key: 'calc_sick', label: 'Больничные' },
-  { key: 'calc_housing', label: 'Проживание' },
   { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
   { key: 'calc_supplements', label: 'Доплаты' },
   { key: 'calc_deductions', label: 'Удержания (ФОТ)' },

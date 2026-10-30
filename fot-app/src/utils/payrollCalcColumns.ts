@@ -1,8 +1,8 @@
 /**
  * Столбцы состава зарплаты на «Расчётах» (решение пользователя 27.10.2026): что показать в ячейке и какие столбцы
- * пусты в выборке. ФОТ — расчёт по табелю (сервер, payroll-calc-columns.service): «Начислено по табелю», проезд,
- * отпускные и больничные (суммы 1С в расчёте, решение 30.10.2026), проживание, доплаты, удержания; только из 1С —
- * перерасчёт и ведомости выплаты по способам.
+ * пусты в выборке. ФОТ — расчёт по табелю (сервер, payroll-calc-columns.service): «Начислено по табелю», отпускные и
+ * больничные (суммы 1С в расчёте, решение 30.10.2026), «Доплаты» (переработка, проезд, проживание, плановая и разовая —
+ * раскрываются «+», payrollSubColumns.ts), удержания; только из 1С — перерасчёт и ведомости выплаты по способам.
  * Закрыт табель или нет — на экране не помечается (решение 29.10.2026: незакрытый сервер считает по живому).
  * Неполный месяц не превращается в ноль: «Сумма» — «—». Выработка бригады не введена — подпись «выработка не
  * внесена» под «Начислено по табелю» и «Суммой», без ⚠; прочие причины (почасовая ставка, нет условий или нормы,
@@ -53,19 +53,31 @@ export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, stri
   calc_sick: 'Из 1С: начислено («Оплачено»), нет — перечислено по ведомости; входит в «Сумму»',
   calc_housing: `${CALC_SOURCE}: квартира или доплата за общежитие`,
   paid_recalc: 'Из 1С, в «Сумму» не входит',
-  calc_supplements: `${CALC_SOURCE}: плановая и разовая доплаты`,
+  calc_supplements: `${CALC_SOURCE}: переработка, проезд, проживание, плановая и разовая доплаты`,
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
-  calc_net: 'К выплате по расчёту ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю + переработка '
-    + '+ проезд + отпускные и больничные (1С) + проживание + доплаты − удержания (ФОТ)',
+  calc_net: 'К выплате по расчёту ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю '
+    + '+ отпускные и больничные (1С) + доплаты − удержания (ФОТ)',
   card_payouts: 'Из 1С: ведомости выплаты по месяцу начисления, по видам выплаты',
 };
 
 const present = (value: string | null | undefined): value is string => value !== null && value !== undefined;
 
-/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. */
-export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcSumColumn): string | null => (
-  row.calc?.[CALC_SUM_FIELD[column]] ?? null
-);
+/** Сумма NUMERIC-строк в копейках: 0,10 + 0,20 = «0.30»; ни одной — null (а не 0). */
+export const sumAmounts = (values: ReadonlyArray<string | null | undefined>): string | null => {
+  const amounts = values.filter(present);
+  if (amounts.length === 0) return null;
+  const cents = amounts.reduce((sum, amount) => sum + Math.round(Number(amount) * 100), 0);
+  return (cents / 100).toFixed(2);
+};
+
+/** Что складывается в свёрнутые «Доплаты» (решение 30.10.2026); supplements — плановая и разовая. */
+const SUPPLEMENTS_GROUP_FIELDS = ['overtime', 'travel', 'housing', 'supplements'] as const;
+
+/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. «Доплаты» — сумма группы. */
+export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcSumColumn): string | null => {
+  if (column === 'calc_supplements') return sumAmounts(SUPPLEMENTS_GROUP_FIELDS.map(field => row.calc?.[field]));
+  return row.calc?.[CALC_SUM_FIELD[column]] ?? null;
+};
 
 /** Есть неполные месяцы — суммы ФОТ строки не окончательные (в том числе выработка бригады не введена). */
 export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;

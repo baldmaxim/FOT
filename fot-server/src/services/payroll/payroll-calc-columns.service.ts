@@ -56,6 +56,13 @@ export interface ICalcRate {
   as_of: string;
 }
 
+/** «Удержания (ФОТ)» по виду «Справочника» за месяцы, NUMERIC текстом. */
+export interface ICalcDeductionByKind {
+  kind_id: number;
+  kind: string;
+  amount: string;
+}
+
 export interface ICalcColumns {
   rate: ICalcRate | null;
   /** Суммы ФОТ за закрытые месяцы, NUMERIC текстом; null — суммы нет ни в одном месяце. */
@@ -71,7 +78,12 @@ export interface ICalcColumns {
   housing: string | null;
   housing_kinds: HousingKind[];
   supplements: string | null;
+  /** Из доплат (раскрытие «Доплат» на «Расчётах», решение 30.10.2026): плановая (по дням оклада) и разовая. */
+  supplements_planned: string | null;
+  supplements_one_time: string | null;
   deductions: string | null;
+  /** Удержания по видам, по названию вида; сумма — deductions. */
+  deductions_by_kind: ICalcDeductionByKind[];
   /**
    * К выплате: начислено − удержано за посчитанные месяцы, без НДФЛ; null — посчитанных месяцев нет или итог хоть
    * одного месяца неизвестен (сумму строки ФОТ не посчитал): частичная сумма за итог не выдаётся.
@@ -109,6 +121,9 @@ export const sumCalcColumns = (
     timesheet: null, overtime: null, travel: null, vacation: null, sick_leave: null, housing: null, supplements: null,
     deductions: null, net: null,
   };
+  let plannedCents: number | null = null;
+  let oneTimeCents: number | null = null;
+  const deductionsByKind = new Map<number, { kind: string; cents: number }>();
   let overtimeDays = 0;
   let overtimeHours = 0;
   const housingKinds = new Set<HousingKind>();
@@ -136,8 +151,17 @@ export const sumCalcColumns = (
         continue;
       }
       sums[key] = addCents(sums[key], line.amount);
+      if (line.code === 'bonus') plannedCents = addCents(plannedCents, line.amount);
+      else if (line.code === 'supplement') oneTimeCents = addCents(oneTimeCents, line.amount);
     }
-    for (const deduction of calc.deductions) sums.deductions = addCents(sums.deductions, deduction.amount);
+    for (const deduction of calc.deductions) {
+      sums.deductions = addCents(sums.deductions, deduction.amount);
+      const byKind = deductionsByKind.get(deduction.kind_id);
+      deductionsByKind.set(deduction.kind_id, {
+        kind: deduction.kind,
+        cents: (byKind?.cents ?? 0) + toCents(deduction.amount),
+      });
+    }
     if (calc.net === null || reasons.has('unknown_amount')) netUnknown = true;
     else sums.net = addCents(sums.net, calc.net);
     for (const allowance of calc.rate_allowances) {
@@ -158,7 +182,12 @@ export const sumCalcColumns = (
     housing: toAmount(sums.housing),
     housing_kinds: [...housingKinds],
     supplements: toAmount(sums.supplements),
+    supplements_planned: toAmount(plannedCents),
+    supplements_one_time: toAmount(oneTimeCents),
     deductions: toAmount(sums.deductions),
+    deductions_by_kind: [...deductionsByKind]
+      .map(([kindId, { kind, cents }]) => ({ kind_id: kindId, kind, amount: centsToAmount(cents) }))
+      .sort((a, b) => a.kind.localeCompare(b.kind, 'ru') || a.kind_id - b.kind_id),
     net: netUnknown ? null : toAmount(sums.net),
     open_months: openMonths,
     preliminary,

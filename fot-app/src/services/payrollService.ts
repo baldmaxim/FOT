@@ -45,6 +45,13 @@ export interface IPayrollCardPayoutByMethod {
   amount: string;
 }
 
+/** «Удержания (ФОТ)» по виду «Справочника» за месяцы, NUMERIC строкой. */
+export interface IPayrollCalcDeductionByKind {
+  kind_id: number;
+  kind: string;
+  amount: string;
+}
+
 /** Почему месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
 export type PayrollCalcColumnsIssue =
   | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error' | 'unknown_amount';
@@ -68,7 +75,12 @@ export interface IPayrollCalcColumns {
   housing: string | null;
   housing_kinds: Array<'apartment' | 'dormitory'>;
   supplements: string | null;
+  /** Из доплат: плановая (по дням оклада) и разовая; нет поля — старый бэкенд (у «Доплат» нет «+»). */
+  supplements_planned?: string | null;
+  supplements_one_time?: string | null;
   deductions: string | null;
+  /** Удержания по видам «Справочника», по названию вида; нет поля — старый бэкенд. */
+  deductions_by_kind?: IPayrollCalcDeductionByKind[];
   /**
    * К выплате: начислено − удержано, без НДФЛ — как «Сумма» во вкладке «Табель → Зарплата»; null — посчитанных
    * месяцев нет или итог хоть одного неизвестен (сумму строки ФОТ не посчитал).

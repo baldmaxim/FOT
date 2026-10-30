@@ -239,8 +239,48 @@
 .paidButton:hover { background: var(--surface-hover); }
 .paidButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* «+»/«−» у «Доплат» и «Удержаний»: раскрывает столбцы справа. Видимая 24px, зона нажатия 44×44 */
+.headToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.expandButton {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out;
+}
+.expandButton::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
+}
+.expandButton:hover { background: var(--surface-hover); }
+.expandButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Шапка раскрытого подстолбца — без капса: отличается от итоговых столбцов */
+.table thead th.subHead {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .paidButton { transition: none; }
+  .paidButton,
+  .expandButton { transition: none; }
 }
 
 @media (max-width: 768px) {

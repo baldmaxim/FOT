@@ -36,7 +36,7 @@ const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({ emplo
 const empty = (rows: IPayrollTermsRow[]) => [...emptyPayrollColumns(rows, PAYROLL_CALC_TABLE_COLUMNS)];
 
 describe('столбцы без данных на «Расчётах»', () => {
-  it('сентябрь «Бухгалтерии»: оклад, по табелю, переработка, проезд и сумма — 1С и пустые ФОТ скрыты', () => {
+  it('сентябрь «Бухгалтерии»: оклад, по табелю, доплаты (переработка, проезд) и сумма — 1С и пустые ФОТ скрыты', () => {
     expect(empty([
       row({
         paid_total: null, paid_deductions_total: null, card_payouts_by_method: null,
@@ -46,9 +46,17 @@ describe('столбцы без данных на «Расчётах»', () => {
         }),
       }),
     ])).toEqual([
-      'payout', 'accrued', 'deductions', 'calc_vacation', 'calc_sick', 'calc_housing', 'paid_recalc',
-      'calc_supplements', 'calc_deductions', 'card_payouts',
+      'payout', 'accrued', 'deductions', 'calc_vacation', 'calc_sick', 'paid_recalc', 'calc_deductions', 'card_payouts',
     ]);
+  });
+
+  it('свёрнутые «Доплаты» — переработка + проезд + проживание + плановая и разовая, в копейках; ни одной — null', () => {
+    expect(calcSumAmount(row({ calc: calc({ overtime: '0.10', travel: '0.20', housing: null, supplements: '-0.05' }) }), 'calc_supplements'))
+      .toBe('0.25');
+    expect(calcSumAmount(row({ calc: calc({ travel: '2340.00' }) }), 'calc_supplements')).toBe('2340.00');
+    expect(calcSumAmount(row({ calc: calc({ supplements: '0.00' }) }), 'calc_supplements')).toBe('0.00');
+    expect(calcSumAmount(row({ calc: calc() }), 'calc_supplements')).toBeNull();
+    expect(empty([row({ calc: calc({ housing: '18900.00' }) })])).not.toContain('calc_supplements');
   });
 
   it('0 и минус — данные; неполный расчёт — данные «Начислено по табелю»; столбцы условий не скрываются', () => {

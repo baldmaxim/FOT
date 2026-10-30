@@ -14,6 +14,7 @@ import {
   type PayrollSortKey,
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { usePayrollExpandedColumns } from '../../hooks/usePayrollExpandedColumns';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
@@ -272,6 +273,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     columns,
     clearHiddenColumnConditions,
   );
+  // «Расчёты»: «+» у «Доплат» и «Удержаний» раскрывает столбцы по видам; что раскрыто — помнит браузер.
+  const { expanded: expandedColumns, toggleExpanded } = usePayrollExpandedColumns();
   // «Расчёты»: столбцы сумм без данных в загруженных строках скрываются сами; выбор шестерёнки не меняется.
   const emptyColumns = useMemo(
     () => (paidMonths === undefined ? new Set<PayrollTableColumn>() : emptyPayrollColumns(tableRows, columns, calcMerge.ready)),
@@ -386,6 +389,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             accrualMonths={accrualMonths}
             paidPeriod={paidPeriod}
             onOpenPaidItems={onOpenPaidItems ? handleOpenPaidItems : undefined}
+            expandedColumns={isCalcScreen ? expandedColumns : undefined}
+            onToggleExpand={isCalcScreen ? toggleExpanded : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

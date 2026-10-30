@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Minus, Plus } from 'lucide-react';
 
 import type {
   IPayrollColumnFilters,
@@ -20,8 +21,17 @@ import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import { formatPaidAmount, paidPayout, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import {
+  isExpandablePayrollColumn,
+  payrollSubColumns,
+  payrollTableColumnList,
+  type PayrollExpandableColumn,
+  type PayrollSubColumn,
+  type PayrollTableColumnEntry,
+} from '../../utils/payrollSubColumns';
 import { PayrollCalcCell } from './PayrollCalcCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
+import { PayrollSubColumnCell } from './PayrollSubColumnCell';
 import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
@@ -46,12 +56,16 @@ interface IPayrollTermsTableProps {
   paidPeriod?: string;
   /** Клик по сумме «Начислено» или «Удержания»: окно со статьями; trigger — куда вернуть фокус. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
+  /** «Расчёты»: раскрытые «+» столбцы («Доплаты», «Удержания», «Удержания (ФОТ)»); без onToggleExpand «+» нет. */
+  expandedColumns?: ReadonlySet<PayrollExpandableColumn>;
+  onToggleExpand?: (column: PayrollExpandableColumn) => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
 /** Всегда видимые столбцы: «№», «Сотрудник» (и чекбокс, если есть). */
 const FIXED_COLUMN_COUNT = 2;
+const NO_EXPANDED: ReadonlySet<PayrollExpandableColumn> = new Set();
 
 /** Класс ширины колонки (colgroup) для скрываемых столбцов. */
 const COL_CLASS: Record<PayrollTableColumn, string> = {
@@ -77,6 +91,12 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   calc_deductions: 'colCalcSum',
   calc_net: 'colCalcSum',
   card_payouts: 'colCardPayouts',
+};
+
+/** Ширина подстолбца: у переработки, проезда и проживания — прежняя, у прочих — как у сумм ФОТ. */
+const colClassOf = (entry: PayrollTableColumnEntry): string => {
+  if (entry.kind === 'column') return COL_CLASS[entry.key];
+  return entry.sub.type === 'column' ? COL_CLASS[entry.sub.column] : 'colCalcSum';
 };
 
 /** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
@@ -149,11 +169,22 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   accrualMonths,
   paidPeriod,
   onOpenPaidItems,
+  expandedColumns = NO_EXPANDED,
+  onToggleExpand,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
   const accrualPeriodLong = useMemo(() => formatAccrualPeriodLong(accrualMonths), [accrualMonths]);
   const accrualsWidth = usePayrollAccrualsColumnWidth(rows, accrualMonths);
+  // Подстолбцы раскрываемых столбцов — по загруженным строкам; без onToggleExpand («Условия оплаты») их нет.
+  const subColumns = useMemo(() => {
+    const result = new Map<PayrollExpandableColumn, PayrollSubColumn[]>();
+    if (!onToggleExpand) return result;
+    for (const { key } of columns) {
+      if (isExpandablePayrollColumn(key)) result.set(key, payrollSubColumns(rows, key));
+    }
+    return result;
+  }, [columns, onToggleExpand, rows]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -179,9 +210,10 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const lastItem = virtualItems[virtualItems.length - 1];
   const bottomSpacer = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
 
-  // Один список видимых столбцов — для colgroup, шапки, ячеек и colSpan.
+  // Один список видимых столбцов с раскрытыми подстолбцами — для colgroup, шапки, ячеек и colSpan.
   const visibleColumns = columns.filter(column => !hiddenColumns.has(column.key));
-  const columnCount = FIXED_COLUMN_COUNT + visibleColumns.length;
+  const tableColumns = payrollTableColumnList(visibleColumns, expandedColumns, subColumns);
+  const columnCount = FIXED_COLUMN_COUNT + tableColumns.length;
 
   const renderSortHeader = (key: PayrollSortKey, label: string, className?: string) => (
     <PayrollSortHeader
@@ -237,15 +269,49 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       );
     }
     // «Оклад» — ставка на конец периода, не сумма за месяцы: периода под подписью нет.
+    const toggle = isExpandablePayrollColumn(column.key) ? renderExpandToggle(column.key, column.label) : null;
     return (
       <th key={column.key} title={PAYROLL_CALC_HEADER_TITLES[column.key]}>
-        {column.label}
+        {toggle ? <span className={styles.headToggle}>{column.label}{toggle}</span> : column.label}
         {paidPeriod && column.key !== 'calc_rate' && (
           <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
         )}
       </th>
     );
   };
+
+  /** «+»/«−» раскрываемого столбца — только когда есть что раскрыть. */
+  const renderExpandToggle = (column: PayrollExpandableColumn, label: string): ReactNode => {
+    if (!onToggleExpand || (subColumns.get(column)?.length ?? 0) === 0) return null;
+    const expanded = expandedColumns.has(column);
+    const Icon = expanded ? Minus : Plus;
+    return (
+      <button
+        type="button"
+        className={styles.expandButton}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? 'Свернуть' : 'Раскрыть'} «${label}»`}
+        onClick={() => onToggleExpand(column)}
+      >
+        <Icon size={14} aria-hidden="true" />
+      </button>
+    );
+  };
+
+  /** Шапка подстолбца: подпись без капса и период, как у соседей; у прежних столбцов ФОТ — их подсказка. */
+  const renderSubHeader = (key: string, sub: PayrollSubColumn): ReactNode => (
+    <th key={key} className={styles.subHead} title={sub.type === 'column' ? PAYROLL_CALC_HEADER_TITLES[sub.column] : undefined}>
+      {sub.label}
+      {paidPeriod && <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>}
+    </th>
+  );
+
+  /** Ячейка подстолбца: переработка, проезд, проживание — прежней ячейкой ФОТ, прочие — своей. */
+  const renderSubCell = (key: string, sub: PayrollSubColumn, row: IPayrollTermsRow): ReactNode => (
+    sub.type === 'column'
+      ? <PayrollCalcCell key={key} column={sub.column} row={row} />
+      : <PayrollSubColumnCell key={key} sub={sub} row={row} />
+  );
 
   const renderCell = (column: PayrollTableColumn, row: IPayrollTermsRow): ReactNode => {
     switch (column) {
@@ -295,11 +361,11 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         <colgroup>
           <col className={styles.colNum} />
           <col className={styles.colName} />
-          {visibleColumns.map(column => (
+          {tableColumns.map(entry => (
             <col
-              key={column.key}
-              className={styles[COL_CLASS[column.key]]}
-              style={column.key === 'accruals' ? { width: accrualsWidth } : undefined}
+              key={entry.key}
+              className={styles[colClassOf(entry)]}
+              style={entry.key === 'accruals' ? { width: accrualsWidth } : undefined}
             />
           ))}
         </colgroup>
@@ -307,7 +373,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
           <tr>
             <th className={`${styles.stickyNum} ${styles.cellNum}`}>№</th>
             {renderSortHeader('name', 'Сотрудник', styles.stickyName)}
-            {visibleColumns.map(renderHeader)}
+            {tableColumns.map(entry => (entry.kind === 'column' ? renderHeader(entry.column) : renderSubHeader(entry.key, entry.sub)))}
           </tr>
         </thead>
         <tbody>
@@ -350,7 +416,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
                     </td>
-                    {visibleColumns.map(column => renderCell(column.key, row))}
+                    {tableColumns.map(entry => (
+                      entry.kind === 'column' ? renderCell(entry.key, row) : renderSubCell(entry.key, entry.sub, row)
+                    ))}
                   </tr>
                 );
               })}

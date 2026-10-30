@@ -86,12 +86,43 @@ describe('sumCalcColumns', () => {
       housing: '15000.00',
       housing_kinds: ['apartment'],
       supplements: '22273.00',
+      supplements_planned: '17273.00',
+      supplements_one_time: '5000.00',
       deductions: '3500.00',
+      deductions_by_kind: [{ kind_id: 1, kind: 'Питание', amount: '3500.00' }],
       net: '426383.93',
       open_months: [],
       preliminary: [],
       incomplete: [],
     });
+  });
+
+  it('раскрытие «Доплат» и «Удержаний (ФОТ)»: плановая + разовая = доплаты, виды по месяцам в копейках = удержания', () => {
+    const result = sumCalcColumns([
+      ['2026-08', closed({
+        lines: [{ code: 'bonus', amount: '0.10' }, { code: 'supplement', amount: '0.00' }],
+        deductions: [
+          { kind_id: 7, kind: 'Спецодежда', amount: '0.20' },
+          { kind_id: 3, kind: 'Питание', amount: '8802.00' },
+        ],
+      })],
+      ['2026-09', closed({
+        lines: [{ code: 'bonus', amount: '0.20' }],
+        deductions: [
+          { kind_id: 7, kind: 'Спецодежда', amount: '0.10' },
+          { kind_id: 9, kind: 'Переплата за предыдущий период', amount: '-150.00' },
+        ],
+      })],
+    ]);
+
+    // 0,10 + 0,20 в рублях дали бы 0,30000000000000004; «0.00» — сумма есть, а не null.
+    expect(result).toMatchObject({ supplements: '0.30', supplements_planned: '0.30', supplements_one_time: '0.00' });
+    expect(result.deductions_by_kind).toEqual([
+      { kind_id: 9, kind: 'Переплата за предыдущий период', amount: '-150.00' },
+      { kind_id: 3, kind: 'Питание', amount: '8802.00' },
+      { kind_id: 7, kind: 'Спецодежда', amount: '0.30' },
+    ]);
+    expect(result.deductions).toBe('8652.30');
   });
 
   it('отпускные и больничные из 1С — свои столбцы по месяцам, входят в «Сумму»', () => {
@@ -224,7 +255,10 @@ describe('sumCalcColumns', () => {
     ]);
 
     expect(result.housing_kinds).toEqual(['dormitory']);
-    expect(result).toMatchObject({ timesheet: null, overtime: null, travel: null, supplements: null, deductions: null });
+    expect(result).toMatchObject({
+      timesheet: null, overtime: null, travel: null, supplements: null, supplements_planned: null,
+      supplements_one_time: null, deductions: null, deductions_by_kind: [],
+    });
   });
 });
 
