@@ -10,7 +10,12 @@ import type {
 import { formatDate, formatMonthLabel } from './formatMoney';
 import { moscowTodayIso, shiftMonth } from './moscowDate';
 import { formatPayrollMoney } from './payrollFormat';
-import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
+import {
+  buildExportTable,
+  type IRegistryColumn,
+  type IRegistryRowGroup,
+  type ITableExportSnapshot,
+} from './tableView';
 
 /**
  * Таблицы окна «Справочник» на «Расчётах»: столбцы для экрана, сортировки, фильтров и выгрузки в xlsx
@@ -104,6 +109,11 @@ export const supplementPeriod = (row: ISupplementPeriodFields): string => (
     : row.date_to ? `${formatDate(row.date_from)} – ${formatDate(row.date_to)}` : `с ${formatDate(row.date_from)}`
 );
 
+/** Начало периода для сортировки: разовая — с первого числа месяца, в одном порядке с плановыми. */
+const supplementPeriodSort = (row: ISupplementPeriodFields): string | null => (
+  row.kind === 'one_time' ? (row.month ? `${row.month}-01` : null) : row.date_from
+);
+
 export const SUPPLEMENT_KIND_LABELS: Record<PayrollSupplementKind, string> = {
   planned: 'Плановая',
   one_time: 'Разовая',
@@ -132,21 +142,35 @@ export interface ISupplementRegistryRow extends ISupplementPeriodFields {
 }
 
 /**
- * Шесть столбцов, без «Периода»: месяц выбран над таблицей, срок доплаты — в списках «Плановые доплаты» и
- * «Квартира».
+ * Семь столбцов: «Период» различает строки одного сотрудника (их ФИО — один раз, SUPPLEMENT_GROUP). Отдел и
+ * должность уже — таблица без прокрутки влезает в окно на 1280px.
  */
 export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
-  ...employeeColumns<ISupplementRegistryRow>(),
+  ...employeeColumns<ISupplementRegistryRow>({ department: 112, position: 144 }),
   {
     key: 'kind', label: 'Вид', type: 'text', width: 92, nowrap: true,
     text: row => supplementKindLabel(row.kind), sortValue: row => supplementKindLabel(row.kind),
   },
   moneyColumn<ISupplementRegistryRow>('Сумма, ₽', row => row.amount, 112),
   {
+    key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
+    text: supplementPeriod,
+    sortValue: supplementPeriodSort,
+  },
+  {
     key: 'reason', label: 'Основание', type: 'text', width: 144,
     text: row => orDash(row.reason), sortValue: row => row.reason,
   },
 ];
+
+/**
+ * Строки одного сотрудника в «Доплате» и «Удержаниях» «Справочника»: ФИО, отдел и должность — один раз, его строки —
+ * под ним (xlsx — с ФИО в каждой строке: фильтр Excel по сотруднику не теряет строк).
+ */
+export const EMPLOYEE_ROW_GROUP: IRegistryRowGroup<{ employee_id: number }> = {
+  key: row => row.employee_id,
+  columns: ['full_name', 'department', 'position'],
+};
 
 /** «Плановые доплаты»: пять столбцов — вид и основание у плановой не нужны. */
 export const PLANNED_SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollSupplementRow>> = [
@@ -357,10 +381,22 @@ export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyA
     : periodIntersectsMonths(row.date_from, row.date_to, months)
 );
 
+/** Порядок доплат сотрудника в «Доплате»: плановые, квартира, разовые. */
+const SUPPLEMENT_KIND_ORDER: Record<SupplementRowKind, number> = { planned: 0, apartment: 1, one_time: 2 };
+
+const compareSupplementRows = (a: ISupplementRegistryRow, b: ISupplementRegistryRow): number => (
+  a.full_name.localeCompare(b.full_name, 'ru')
+  || a.employee_id - b.employee_id
+  || SUPPLEMENT_KIND_ORDER[a.kind] - SUPPLEMENT_KIND_ORDER[b.kind]
+  || (supplementPeriodSort(a) ?? '').localeCompare(supplementPeriodSort(b) ?? '')
+  || Number(b.amount) - Number(a.amount)
+);
+
 /**
  * Строки общей таблицы «Доплата» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths)
- * и квартиры — сервер их уже отобрал по месяцам (?months=); «по» квартиры — день до выезда. Пока один из
- * источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
+ * и квартиры — сервер их уже отобрал по месяцам (?months=); «по» квартиры — день до выезда. Порядок — по сотруднику,
+ * у него — плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки сотрудника идут подряд.
+ * Пока один из источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
  */
 export const buildSupplementRegistryRows = (
   supplements: ReadonlyArray<IPayrollSupplementRow> | undefined,
@@ -368,7 +404,7 @@ export const buildSupplementRegistryRows = (
   months: ReadonlyArray<string>,
 ): ISupplementRegistryRow[] | undefined => {
   if (!supplements || !housing) return undefined;
-  return [
+  const rows: ISupplementRegistryRow[] = [
     ...supplements
       .filter(row => supplementInMonths(row, months))
       .map(row => ({ ...row, key: supplementRowKey(row), supplement: row, housing: null })),
@@ -389,6 +425,7 @@ export const buildSupplementRegistryRows = (
       housing: row,
     })),
   ];
+  return rows.sort(compareSupplementRows);
 };
 
 /** «Без проезда» и «Без переработки» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */

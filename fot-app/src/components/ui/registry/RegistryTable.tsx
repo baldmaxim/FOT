@@ -11,9 +11,11 @@ import {
   REGISTRY_ACTIONS_WIDTH_TOUCH,
   REGISTRY_NAME_MIN_WIDTH,
   REGISTRY_NUM_WIDTH,
+  registryRowGroups,
   setColumnFilter,
   toggleSort,
   type IRegistryColumn,
+  type IRegistryRowGroup,
   type ITableView,
 } from '../../../utils/tableView';
 import styles from './RegistryTable.module.css';
@@ -62,6 +64,11 @@ export interface IRegistryTableProps<Row> {
   onRowClick?: (row: Row) => void;
   /** Строка итогов под таблицей: текст по ключу столбца (первый столбец — «Итого»). */
   footer?: Readonly<Record<string, string>> | null;
+  /**
+   * Передан — строки одного сотрудника подряд одной группой: его столбцы (ФИО, отдел, должность) и «№» (номер
+   * сотрудника) — только в первой строке, фон — общий. Ряды остаются отдельными: у каждого свои ✎ и 🗑.
+   */
+  groupRows?: IRegistryRowGroup<Row>;
 }
 
 /**
@@ -73,7 +80,7 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
-  onRowClick, footer = null,
+  onRowClick, footer = null, groupRows,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
@@ -141,6 +148,9 @@ export const RegistryTable = <Row,>({
   }, [columns, sizeRows, withActions]);
   const columnWidth = (index: number): number | undefined => (fitted ? fitted[index] : columns[index].width);
 
+  const groups = useMemo(() => (groupRows ? registryRowGroups(visibleRows, groupRows.key) : null), [groupRows, visibleRows]);
+  const groupColumns = useMemo(() => new Set(groupRows?.columns ?? []), [groupRows]);
+
   const filterOpen = filterFor !== null;
   useEffect(() => {
     onFilterOpenChange?.(filterOpen);
@@ -194,11 +204,20 @@ export const RegistryTable = <Row,>({
             const key = rowKey(row);
             const editable = canEditRow ? canEditRow(row) : true;
             const deletable = canDeleteRow ? canDeleteRow(row) : editable;
+            const group = groups?.[index] ?? null;
+            // Не первая строка группы: столбцы сотрудника пустые на экране, текст — для экранного диктора.
+            const repeated = group !== null && !group.first;
+            const stripe = group ? group.index : index;
+            const rowClass = [
+              stripe % 2 === 1 ? styles.rowEven : '',
+              group && !group.last ? styles.rowGroupInner : '',
+              onRowClick ? styles.rowClickable : '',
+            ].filter(Boolean).join(' ');
             return (
-              // Чередование — по индексу видимой строки: после фильтра полосы не «слипаются».
+              // Чередование — по индексу видимой строки (с группами — по группе): после фильтра полосы не «слипаются».
               <tr
                 key={key}
-                className={[index % 2 === 1 ? styles.rowEven : '', onRowClick ? styles.rowClickable : ''].filter(Boolean).join(' ') || undefined}
+                className={rowClass || undefined}
                 {...(onRowClick ? {
                   tabIndex: 0,
                   onClick: () => onRowClick(row),
@@ -209,9 +228,13 @@ export const RegistryTable = <Row,>({
                   },
                 } : {})}
               >
-                <td className={styles.cellNum}>{index + 1}</td>
+                <td className={styles.cellNum}>{group ? (group.first ? group.index + 1 : '') : index + 1}</td>
                 {columns.map(column => (
-                  column.nowrap ? (
+                  repeated && groupColumns.has(column.key) ? (
+                    <td key={column.key} className={styles.cellText}>
+                      <span className={styles.srOnly}>{column.text(row)}</span>
+                    </td>
+                  ) : column.nowrap ? (
                     <td key={column.key} className={column.numeric ? `${styles.cellValue} ${styles.cellNumeric}` : styles.cellValue}>
                       {column.text(row)}
                     </td>

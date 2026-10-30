@@ -12,6 +12,7 @@ import {
 } from '../../../services/payrollRegistryService';
 import { invalidateDeductionQueries } from '../../../utils/deductionQueries';
 import { formatMonthLabel } from '../../../utils/formatMoney';
+import { EMPLOYEE_ROW_GROUP } from '../../../utils/payrollRegistries';
 import {
   buildStaffDeductionExport,
   STAFF_DEDUCTION_COLUMNS,
@@ -45,6 +46,7 @@ const PAYROLL_EDITOR_API: IStaffDeductionEditorApi = {
  * «Справочник» → «Удержания» → «Сотрудники»: удержания (вид, подвид, месяц, сумма) выбранных месяцев — те же записи,
  * что во вкладке кадров «Удержания» (миграция 321): добавленное или удалённое здесь видно там, и наоборот. Охват —
  * «штат зарплаты»: прошлые строки уволенных правят кадры. В окне сотрудника — тот же список, только показ.
+ * ФИО, отдел и должность — один раз, удержания сотрудника по месяцам — строками под ним (EMPLOYEE_ROW_GROUP).
  */
 export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClose }) => {
   const toast = useToast();
@@ -100,6 +102,7 @@ export const DeductionRegistry: FC<IDeductionRegistryProps> = ({ canEdit, onClos
         onDelete={canEdit ? row => { void handleRemove(row); } : undefined}
         canEditRow={canEditRow}
         busyKey={busyKey}
+        groupRows={EMPLOYEE_ROW_GROUP}
         raisedFilters
         onFilterOpenChange={setFilterOpen}
       />

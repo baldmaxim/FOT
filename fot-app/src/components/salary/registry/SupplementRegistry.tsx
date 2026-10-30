@@ -12,6 +12,7 @@ import {
   buildSupplementExport,
   buildSupplementRegistryRows,
   canEditSupplementRow,
+  EMPLOYEE_ROW_GROUP,
   SUPPLEMENT_COLUMNS,
   type ISupplementRegistryRow,
 } from '../../../utils/payrollRegistries';
@@ -48,7 +49,8 @@ const rowName = (row: ISupplementRegistryRow): string => row.full_name;
  * «Справочник» → «Доплата»: все доплаты выбранных месяцев — плановые (их период задевает месяц), разовые за месяц
  * и квартиры «Проживания» («Плановая» с основанием «Квартира»). Назначения ведутся в списках справа от поиска:
  * «Плановые доплаты» и «Квартира»; «Добавить сотрудника» здесь — разовая (за месяц — сколько угодно, у каждой
- * основание). ✎ и 🗑 у строки — те же окна и правила, что в списках.
+ * основание). ✎ и 🗑 у строки — те же окна и правила, что в списках. ФИО, отдел и должность — один раз, доплаты
+ * сотрудника (плановые, квартира, разовые) — строками под ним, их различает «Период».
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
   const months = useRegistryMonths();
@@ -119,6 +121,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
         deleteLabel="Убрать"
         canEditRow={canEditSupplementRow}
         busyKey={busyKey}
+        groupRows={EMPLOYEE_ROW_GROUP}
         raisedFilters
         onFilterOpenChange={setFilterOpen}
       />

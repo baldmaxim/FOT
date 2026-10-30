@@ -81,6 +81,22 @@
 
 .table tbody tr:last-child td { border-bottom: none; }
 
+/* Строки одного сотрудника («Доплата», «Удержания»): разделитель внутри группы бледнее, между сотрудниками — обычный. */
+.table tbody tr.rowGroupInner td { border-bottom-color: color-mix(in srgb, var(--border) 40%, transparent); }
+
+/* ФИО повторной строки сотрудника — только для экранного диктора. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Кликабельная строка («Свод» → сотрудники объекта) */
 .table tbody tr.rowClickable { cursor: pointer; }
 .table tbody tr.rowClickable:focus-visible {

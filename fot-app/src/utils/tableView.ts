@@ -48,6 +48,39 @@ export interface IRegistryColumn<Row> extends ITableColumn<Row> {
   numeric?: boolean;
 }
 
+/**
+ * Строки одного сотрудника в таблице-реестре: ФИО, отдел, должность и «№» — только в первой строке группы
+ * («Доплата», «Удержания» «Справочника»). key — чей это ряд, columns — ключи столбцов, которые не повторяются.
+ */
+export interface IRegistryRowGroup<Row> {
+  key: (row: Row) => string | number;
+  columns: ReadonlyArray<string>;
+}
+
+/** Место строки в группе: первая, последняя и номер группы (с 0). */
+export interface IRegistryRowGroupPlace {
+  first: boolean;
+  last: boolean;
+  index: number;
+}
+
+/**
+ * Группы видимых строк: подряд идущие строки с одним ключом. Строки сотрудника, разошедшиеся при сортировке по
+ * другому столбцу, — разные группы (ФИО у каждой).
+ */
+export const registryRowGroups = <Row,>(
+  rows: ReadonlyArray<Row>,
+  key: (row: Row) => string | number,
+): IRegistryRowGroupPlace[] => {
+  const keys = rows.map(key);
+  let index = -1;
+  return keys.map((current, position) => {
+    const first = position === 0 || keys[position - 1] !== current;
+    if (first) index += 1;
+    return { first, last: position === keys.length - 1 || keys[position + 1] !== current, index };
+  });
+};
+
 /** «№», минимум ФИО и столбец ✎ / 🗑 таблицы-реестра (RegistryTable.module.css); на телефоне кнопки 44px. */
 export const REGISTRY_NUM_WIDTH = 48;
 export const REGISTRY_NAME_MIN_WIDTH = 170;
