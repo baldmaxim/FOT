@@ -144,6 +144,12 @@ export interface IOneTimeSupplementFields {
   reason: string;
 }
 
+/** Основание из списка «Основания доплаты» (миграция 340); у доплаты основание — текст, не id. */
+export interface IPayrollSupplementReason {
+  id: number;
+  name: string;
+}
+
 /** Период «с — по» строки «Без проезда» и «Доплаты за общежитие». */
 export interface IRegistryPeriodFields {
   date_from: string;
@@ -167,6 +173,7 @@ export const PAYROLL_REGISTRY_KEYS = {
   overtimeStops: ['payroll-terms', 'registry', 'overtime-stops'],
   dormitoryAllowances: ['payroll-terms', 'registry', 'dormitory-allowances'],
   deductions: ['payroll-terms', 'registry', 'deductions'],
+  supplementReasons: ['payroll-terms', 'registry', 'supplement-reasons'],
 } as const;
 export const PAYROLL_TERMS_PREFIX = ['payroll-terms'] as const;
 
@@ -234,6 +241,22 @@ export const payrollRegistryService = {
 
   removeOneTime: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/supplements/one-time/${id}`);
+  },
+
+  listSupplementReasons: (signal?: AbortSignal) =>
+    list<IPayrollSupplementReason>('/payroll/supplement-reasons', signal),
+
+  /** Такое уже есть — ApiError 409 DUPLICATE_REASON. */
+  addSupplementReason: async (name: string): Promise<IPayrollSupplementReason> =>
+    (await apiClient.post<IApiResponse<IPayrollSupplementReason>>('/payroll/supplement-reasons', { name })).data,
+
+  /** Сервер меняет и основание у разовых доплат с прежним названием; занято — 409 DUPLICATE_REASON. */
+  renameSupplementReason: async (id: number, name: string): Promise<IPayrollSupplementReason> =>
+    (await apiClient.patch<IApiResponse<IPayrollSupplementReason>>(`/payroll/supplement-reasons/${id}`, { name })).data,
+
+  /** Убрать из списка; у внесённых доплат основание остаётся. */
+  removeSupplementReason: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/supplement-reasons/${id}`);
   },
 
   listStops: (signal?: AbortSignal) => list<ICompensationStop>('/payroll/compensation-stops', signal),

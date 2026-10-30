@@ -73,7 +73,7 @@ export const parseOneTimeForm = (draft: {
   const amount = parsePositiveAmount(draft.amount);
   if ('error' in amount) return fail('amount', amount.error);
   const reason = draft.reason.replace(/\s+/g, ' ').trim();
-  if (!reason) return fail('reason', 'Укажите основание');
+  if (!reason) return fail('reason', 'Выберите основание');
   if (reason.length > SUPPLEMENT_REASON_MAX_LENGTH) return fail('reason', 'Основание — не больше 200 символов');
   return { ok: true, payload: { month: draft.month, amount: amount.amount, reason } };
 };
@@ -95,3 +95,25 @@ export const parsePeriodForm = (draft: {
   if (draft.dateTo && draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата «по» раньше даты «с»');
   return { ok: true, payload: { date_from: draft.dateFrom, date_to: draft.dateTo || null } };
 };
+
+/** Основание без регистра и лишних пробелов — так сервер сверяет его при переименовании (миграция 340). */
+const reasonKey = (name: string): string => name.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Основания по алфавиту — и в выпадающем списке, и в окне «Основания доплаты» (кеш после правки не пересортирован). */
+export const sortSupplementReasons = <T extends { name: string }>(reasons: readonly T[]): T[] =>
+  [...reasons].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+/** Варианты «Основания»: основание доплаты не из списка (старое, из импорта 1С, удалённое) — первой строкой. */
+export const supplementReasonOptions = (names: readonly string[], current: string): string[] =>
+  (current && !names.includes(current) ? [current, ...names] : [...names]);
+
+/** Основание в открытой форме после переименования в списке: выбрано прежнее — новое (сервер сменил его и у доплат). */
+export const reasonAfterRename = (current: string, from: string, to: string): string =>
+  (current && reasonKey(current) === reasonKey(from) ? to : current);
+
+/**
+ * Основание в открытой форме после удаления из списка: удалили выбранное — выбор сбрасывается; основание самой
+ * доплаты при ✎ (original) остаётся — у доплаты оно не меняется.
+ */
+export const reasonAfterDelete = (current: string, deleted: string, original: string | null): string =>
+  (current === deleted && current !== original ? '' : current);

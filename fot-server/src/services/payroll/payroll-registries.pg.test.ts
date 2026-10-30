@@ -92,6 +92,12 @@ import { deleteDeduction, listDeductions } from '../staff-deductions.service.js'
 import { canWritePayrollRegistryEmployee, isPayrollStaffEmployee } from './payroll-registry-scope.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
 import { payrollStaffDeductionsController } from '../../controllers/payroll-staff-deductions.controller.js';
+import {
+  listSupplementReasons,
+  removeSupplementReason,
+  renameSupplementReason,
+} from './payroll-supplement-reasons.service.js';
+import { payrollSupplementReasonsController } from '../../controllers/payroll-supplement-reasons.controller.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -134,7 +140,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
         payroll_dormitory_allowances, payroll_compensation_stops, payroll_overtime_stops,
-        payroll_one_time_supplements, payroll_paid_amounts,
+        payroll_one_time_supplements, payroll_supplement_reasons, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rate_values, payroll_rates,
         payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
@@ -530,6 +536,53 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         [2, '2026-10', '2500.50', 'Переработка'],
       ]));
       expect(oneTime).toHaveLength(2);
+    });
+
+    it('340: основания — виды 1С и внесённые (пробелы схлопнуты, длиннее 100 — нет); переименование — и у доплат', async () => {
+      const long = 'Д'.repeat(150);
+      await run(
+        `INSERT INTO payroll_one_time_supplements (employee_id, month, amount, reason) VALUES
+           (1, '2026-09-01', 100, '  Аванс   за  объект '), (1, '2026-09-01', 200, 'ПРЕМИЯ'),
+           (1, '2026-09-01', 300, '  премия '), (1, '2026-09-01', 400, $1), (6, '2026-09-01', 500, 'Резерв')`,
+        [long],
+      );
+      await run(migration('340_payroll_supplement_reasons.sql'));
+      await run(migration('340_payroll_supplement_reasons.sql'));
+      const names = (await listSupplementReasons()).map(row => row.name);
+      expect(names).toEqual(expect.arrayContaining(['Квартира', 'Допработы', 'Резерв', 'Аванс за объект', 'Премия за объект']));
+      expect(names.filter(name => name.toLowerCase() === 'премия')).toEqual(['Премия']);
+      expect(names).not.toContain(long);
+
+      const reasonOf = async (amount: number) => (await run(
+        'SELECT reason, updated_at FROM payroll_one_time_supplements WHERE amount = $1', [amount],
+      )).rows[0] as { reason: string; updated_at: Date };
+      const premia = (await listSupplementReasons()).find(row => row.name === 'Премия')!;
+      const before = await reasonOf(200);
+      expect(await renameSupplementReason(premia.id, 'Премия квартальная')).toEqual({
+        reason: { id: premia.id, name: 'Премия квартальная' }, previousName: 'Премия', supplements: 2,
+      });
+      const after = await reasonOf(200);
+      expect(after.reason).toBe('Премия квартальная');
+      expect(after.updated_at.getTime()).toBeGreaterThan(before.updated_at.getTime());
+      expect((await reasonOf(300)).reason).toBe('Премия квартальная');
+      expect((await reasonOf(100)).reason).toBe('  Аванс   за  объект ');
+      expect((await reasonOf(10000)).reason).toBe('Премия за объект');
+
+      // Занято (регистр и пробелы не в счёт) — 409, переименование доплат откатилось вместе со списком.
+      const taken = makeRes();
+      await payrollSupplementReasonsController.rename(req({ params: { id: String(premia.id) }, body: { name: ' резерв ' } }), taken);
+      expect(taken.statusCode).toBe(409);
+      expect((await reasonOf(200)).reason).toBe('Премия квартальная');
+      const added = makeRes();
+      await payrollSupplementReasonsController.add(req({ body: { name: 'квартира' } }), added);
+      expect(added.statusCode).toBe(409);
+
+      // Удаление — только из списка: доплата с основанием «Резерв» не меняется.
+      const reserve = (await listSupplementReasons()).find(row => row.name === 'Резерв')!;
+      expect(await removeSupplementReason(reserve.id)).toEqual({ id: reserve.id, name: 'Резерв' });
+      expect((await listSupplementReasons()).map(row => row.name)).not.toContain('Резерв');
+      expect((await reasonOf(500)).reason).toBe('Резерв');
+      expect(await removeSupplementReason(reserve.id)).toBeNull();
     });
   });
 

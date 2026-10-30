@@ -15,7 +15,8 @@ import {
   oneTimeMonthOptions,
   parseOneTimeForm,
   parsePlannedForm,
-  SUPPLEMENT_REASON_MAX_LENGTH,
+  reasonAfterDelete,
+  reasonAfterRename,
   type RegistryFormField,
 } from '../../../utils/payrollRegistryForms';
 import { ClearableInput } from '../../ui/ClearableInput';
@@ -23,6 +24,8 @@ import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
+import { SupplementReasonField } from './SupplementReasonField';
+import { SupplementReasonsModal } from './SupplementReasonsModal';
 
 interface ISupplementFormProps {
   /** Передано — ✎ этой доплаты (сотрудник и вид не меняются); нет — «Добавить сотрудника». */
@@ -41,7 +44,7 @@ const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candid
 /**
  * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес и период «с — по» (та же, что «Плановые доплаты» окна
  * сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет сервер); разовая —
- * месяц, сумма и основание (за месяц — сколько угодно).
+ * месяц, сумма и основание из списка (за месяц — сколько угодно); ✎ у основания — окно «Основания доплаты».
  */
 export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, onClose, onSaved }) => {
   const errorId = useId();
@@ -54,6 +57,9 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
   const currentMonth = moscowTodayIso().slice(0, 7);
   const [month, setMonth] = useState(row?.month ?? currentMonth);
   const [reason, setReason] = useState(row?.reason ?? '');
+  // Основание самой доплаты при ✎: удаление из списка его не сбрасывает; переименование меняет и его (как сервер).
+  const [ownReason, setOwnReason] = useState<string | null>(row?.reason ?? null);
+  const [reasonsOpen, setReasonsOpen] = useState(false);
   const [error, setError] = useState<{ field: RegistryFormField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -108,105 +114,115 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
   };
 
   return (
-    <RegistryFormModal
-      title={isEdit ? `${SUPPLEMENT_KIND_LABELS[row.kind]} доплата` : 'Добавить сотрудника'}
-      onClose={onClose}
-      onSubmit={requestClose => { void handleSubmit(requestClose); }}
-      saving={saving}
-      error={error?.message ?? null}
-      errorId={errorId}
-      raised
-    >
-      <div className={styles.field}>
-        <span className={styles.label}>Сотрудник</span>
-        {isEdit ? (
-          <div className={styles.fixed}>
-            <span>
-              {row.full_name}
-              {row.department && <span className={styles.muted}> — {row.department}</span>}
-            </span>
+    <>
+      <RegistryFormModal
+        title={isEdit ? `${SUPPLEMENT_KIND_LABELS[row.kind]} доплата` : 'Добавить сотрудника'}
+        onClose={onClose}
+        onSubmit={requestClose => { void handleSubmit(requestClose); }}
+        saving={saving}
+        error={error?.message ?? null}
+        errorId={errorId}
+        raised
+        closeOnEscape={!reasonsOpen}
+      >
+        <div className={styles.field}>
+          <span className={styles.label}>Сотрудник</span>
+          {isEdit ? (
+            <div className={styles.fixed}>
+              <span>
+                {row.full_name}
+                {row.department && <span className={styles.muted}> — {row.department}</span>}
+              </span>
+            </div>
+          ) : (
+            <EmployeeSearchField
+              value={employee}
+              onChange={value => { setEmployee(value); clearError(); }}
+              search={payrollRegistryService.searchEmployees}
+              isDisabled={isNotEditable}
+              disabled={saving}
+              invalid={error?.field === 'employee'}
+            />
+          )}
+        </div>
+
+        <div className={styles.dates}>
+          <label className={styles.field}>
+            <span className={styles.label}>{kind === 'planned' ? 'Сумма, ₽/мес' : 'Сумма, ₽'}</span>
+            <ClearableInput
+              value={amount}
+              onValueChange={value => { setAmount(value); clearError(); }}
+              inputMode="decimal"
+              autoComplete="off"
+              disabled={saving}
+              aria-invalid={error?.field === 'amount' || undefined}
+              aria-describedby={error ? errorId : undefined}
+              clearLabel="Очистить сумму"
+            />
+          </label>
+          {kind === 'one_time' && (
+            <label className={styles.field}>
+              <span className={styles.label}>Месяц</span>
+              <select
+                className={styles.select}
+                value={month}
+                onChange={event => { setMonth(event.target.value); clearError(); }}
+                disabled={saving}
+                aria-invalid={error?.field === 'month' || undefined}
+              >
+                {monthOptions.map(option => (
+                  <option key={option} value={option}>{formatMonthLabel(option)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+
+        {kind === 'planned' ? (
+          // Не <label>: внутри поля даты — кнопка календаря, клик по подписи открыл бы её.
+          <div className={styles.dates}>
+            <div className={styles.field}>
+              <span className={styles.label}>Дата начала</span>
+              <DateInput
+                value={dateFrom}
+                onChange={value => { setDateFrom(value); clearError(); }}
+                className={dateClass('date_from')}
+                disabled={saving}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Дата окончания</span>
+              <DateInput
+                value={dateTo}
+                onChange={value => { setDateTo(value); clearError(); }}
+                className={dateClass('date_to')}
+                disabled={saving}
+              />
+            </div>
           </div>
         ) : (
-          <EmployeeSearchField
-            value={employee}
-            onChange={value => { setEmployee(value); clearError(); }}
-            search={payrollRegistryService.searchEmployees}
-            isDisabled={isNotEditable}
-            disabled={saving}
-            invalid={error?.field === 'employee'}
-          />
-        )}
-      </div>
-
-      <div className={styles.dates}>
-        <label className={styles.field}>
-          <span className={styles.label}>{kind === 'planned' ? 'Сумма, ₽/мес' : 'Сумма, ₽'}</span>
-          <ClearableInput
-            value={amount}
-            onValueChange={value => { setAmount(value); clearError(); }}
-            inputMode="decimal"
-            autoComplete="off"
-            disabled={saving}
-            aria-invalid={error?.field === 'amount' || undefined}
-            aria-describedby={error ? errorId : undefined}
-            clearLabel="Очистить сумму"
-          />
-        </label>
-        {kind === 'one_time' && (
-          <label className={styles.field}>
-            <span className={styles.label}>Месяц</span>
-            <select
-              className={styles.select}
-              value={month}
-              onChange={event => { setMonth(event.target.value); clearError(); }}
-              disabled={saving}
-              aria-invalid={error?.field === 'month' || undefined}
-            >
-              {monthOptions.map(option => (
-                <option key={option} value={option}>{formatMonthLabel(option)}</option>
-              ))}
-            </select>
-          </label>
-        )}
-      </div>
-
-      {kind === 'planned' ? (
-        // Не <label>: внутри поля даты — кнопка календаря, клик по подписи открыл бы её.
-        <div className={styles.dates}>
-          <div className={styles.field}>
-            <span className={styles.label}>Дата начала</span>
-            <DateInput
-              value={dateFrom}
-              onChange={value => { setDateFrom(value); clearError(); }}
-              className={dateClass('date_from')}
-              disabled={saving}
-            />
-          </div>
-          <div className={styles.field}>
-            <span className={styles.label}>Дата окончания</span>
-            <DateInput
-              value={dateTo}
-              onChange={value => { setDateTo(value); clearError(); }}
-              className={dateClass('date_to')}
-              disabled={saving}
-            />
-          </div>
-        </div>
-      ) : (
-        <label className={styles.field}>
-          <span className={styles.label}>Основание</span>
-          <ClearableInput
+          <SupplementReasonField
             value={reason}
-            onValueChange={value => { setReason(value); clearError(); }}
-            maxLength={SUPPLEMENT_REASON_MAX_LENGTH}
-            autoComplete="off"
+            onChange={value => { setReason(value); clearError(); }}
+            onOpenList={() => setReasonsOpen(true)}
             disabled={saving}
-            aria-invalid={error?.field === 'reason' || undefined}
-            aria-describedby={error ? errorId : undefined}
-            clearLabel="Очистить основание"
+            invalid={error?.field === 'reason'}
+            describedBy={error ? errorId : undefined}
           />
-        </label>
+        )}
+      </RegistryFormModal>
+
+      {/* Соседом формы, не внутри: submit полей списка не должен всплыть в «Сохранить» доплаты. */}
+      {reasonsOpen && (
+        <SupplementReasonsModal
+          onClose={() => setReasonsOpen(false)}
+          onRenamed={(from, to) => {
+            setReason(current => reasonAfterRename(current, from, to));
+            setOwnReason(current => (current === null ? null : reasonAfterRename(current, from, to)));
+          }}
+          onDeleted={name => setReason(current => reasonAfterDelete(current, name, ownReason))}
+        />
       )}
-    </RegistryFormModal>
+    </>
   );
 };

@@ -18,6 +18,8 @@ interface IRegistryFormModalProps {
   raised?: boolean;
   /** «Сохранить» неактивна (например, выбран сотрудник без оклада). */
   submitDisabled?: boolean;
+  /** false — Escape не закрывает форму: поверх открыто её окно («Основания доплаты»). */
+  closeOnEscape?: boolean;
   children: ReactNode;
 }
 
@@ -27,7 +29,8 @@ interface IRegistryFormModalProps {
  * Поля внутри — на классах того же RegistryFormModal.module.css (field, label, dateInput, select…).
  */
 export const RegistryFormModal: FC<IRegistryFormModalProps> = ({
-  title, onClose, onSubmit, saving, error, errorId, raised = false, submitDisabled = false, children,
+  title, onClose, onSubmit, saving, error, errorId, raised = false, submitDisabled = false, closeOnEscape = true,
+  children,
 }) => {
   const titleId = useId();
 
@@ -36,7 +39,7 @@ export const RegistryFormModal: FC<IRegistryFormModalProps> = ({
       onClose={onClose}
       overlayClassName={raised ? `${styles.overlay} ${styles.overlayRaised}` : styles.overlay}
       containerClassName={styles.container}
-      closeOnEscape={!saving}
+      closeOnEscape={closeOnEscape && !saving}
       aria-labelledby={titleId}
     >
       {({ requestClose }) => (

@@ -1,0 +1,68 @@
+/*
+ * «Основание» разовой доплаты: выпадающий список и справа ✎ «Изменить список оснований». Mobile-first: кнопка
+ * 44×44 (тап-цель), как поле; с 769px — 36px, по высоте выпадающего списка.
+ */
+.row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+.row > select { flex: 1 1 auto; min-width: 0; }
+
+.editButton {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out, color 0.15s ease-out;
+}
+.editButton:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.editButton:disabled { opacity: 0.5; cursor: default; }
+.editButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.loadError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.retryButton {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out;
+}
+.retryButton:hover { border-color: var(--primary); }
+.retryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 769px) {
+  .editButton { width: 36px; height: 36px; }
+  .retryButton { min-height: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editButton, .retryButton { transition: none; }
+}

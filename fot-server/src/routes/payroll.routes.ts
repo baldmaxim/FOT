@@ -19,6 +19,7 @@ import { dormitoryStaysController } from '../controllers/dormitory-stays.control
 import { payrollSectionAccessController } from '../controllers/payroll-section-access.controller.js';
 import { payrollStaffDeductionsController } from '../controllers/payroll-staff-deductions.controller.js';
 import { payrollSummaryController } from '../controllers/payroll-summary.controller.js';
+import { payrollSupplementReasonsController } from '../controllers/payroll-supplement-reasons.controller.js';
 import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
@@ -107,6 +108,11 @@ router.delete('/supplements/planned/:id', termsEdit, payrollSupplementsControlle
 router.post('/supplements/one-time', termsEdit, payrollSupplementsController.addOneTime);
 router.patch('/supplements/one-time/:id', termsEdit, payrollSupplementsController.updateOneTime);
 router.delete('/supplements/one-time/:id', termsEdit, payrollSupplementsController.removeOneTime);
+// Основания разовой доплаты (миграция 340): список общий, переименование меняет основание и у доплат.
+router.get('/supplement-reasons', termsView, payrollSupplementReasonsController.list);
+router.post('/supplement-reasons', termsEdit, payrollSupplementReasonsController.add);
+router.patch('/supplement-reasons/:id', termsEdit, payrollSupplementReasonsController.rename);
+router.delete('/supplement-reasons/:id', termsEdit, payrollSupplementReasonsController.remove);
 // «Без проезда»: кому не выплачивать проезд, периоды «с — по».
 router.get('/compensation-stops', deductionsView, payrollCompensationStopsController.list);
 router.post('/compensation-stops', deductionsEdit, payrollCompensationStopsController.add);
