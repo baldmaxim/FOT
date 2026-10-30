@@ -12,10 +12,12 @@ import {
   calcMissingNote,
   calcNetTotal,
   isCalcCounted,
+  calcPaidOnlyAccruals,
+  payslipDeductionRows,
   payslipRemainder,
-  payslipShow1c,
 } from './payrollCalc';
 import { formatPaidAmount } from './payrollPaid';
+import type { IPayslipLine } from './payrollPayslip';
 
 /** Разделитель тысяч у toLocaleString('ru-RU'). */
 const NBSP = (1000).toLocaleString('ru-RU').charAt(1);
@@ -260,15 +262,61 @@ describe('«К выплате (ФОТ)»: отпускные и больничн
   });
 });
 
-describe('листок: блоки 1С и «Остаток (с НДФЛ)»', () => {
-  it('блоки 1С: суммы 1С есть или расчёта нет — показываются; только расчёт — нет', () => {
-    expect(payslipShow1c(false, closed())).toBe(false);
-    expect(payslipShow1c(false, preliminary())).toBe(false);
-    expect(payslipShow1c(true, preliminary())).toBe(true);
-    expect(payslipShow1c(false, { state: 'not_closed', reason: 'no_period' })).toBe(true);
-    expect(payslipShow1c(false, undefined)).toBe(true);
+describe('листок: статьи 1С в «Расчёте ФОТ»', () => {
+  const line = (code: IPayslipLine['code'], label: string, amount: number): IPayslipLine => ({ code, label, amount });
+
+  it('начисления 1С без пары в ФОТ — своими строками; с парой — нет', () => {
+    const paid = [
+      line('contract', 'По трудовому договору', 250000),
+      line('travel', 'Проезд', 2730),
+      line('housing', 'Компенсация проживания', 18900),
+      line('extra_work', 'Допработы', 45000),
+    ];
+    // Строки ФОТ: оклад и проезд — у них пара; квартиры и допработ в расчёте нет.
+    expect(calcPaidOnlyAccruals(closed(), paid).map(item => item.code)).toEqual(['housing', 'extra_work']);
+    // Расчёта нет (уволен до месяца, старый бэкенд) — все начисления 1С.
+    expect(calcPaidOnlyAccruals(null, paid)).toEqual(paid);
   });
 
+  it('доля бригады — пара «По трудовому договору»; отпуск без суммы в расчёте — строкой «из 1С», пара «Отпуска»', () => {
+    const brigade = closed({
+      lines: [{ code: 'brigade', amount: '141818.18' }],
+      absences: { vacation: 5, sick: 0, educational_leave: 0, unpaid: 0 },
+    });
+    const paid = [
+      line('contract', 'По трудовому договору', 141818.18),
+      line('vacation', 'Отпуска', 10000),
+      line('reserve', 'Резерв', 80000),
+    ];
+    expect(calcPaidOnlyAccruals(brigade, paid).map(item => item.code)).toEqual(['reserve']);
+    // Отпуск строкой расчёта (суммы 1С в ФОТ) — пара та же, отдельной строки нет.
+    const withVacation = closed({ ...brigade, lines: [...brigade.lines, { code: 'vacation', amount: '10000.00' }] });
+    expect(calcPaidOnlyAccruals(withVacation, paid).map(item => item.code)).toEqual(['reserve']);
+  });
+
+  it('удержания: одноимённые вид «Справочника» и статья 1С — одной строкой, остальные — своими', () => {
+    const rows = payslipDeductionRows(
+      [
+        { kind_id: 1, kind: 'Питание', amount: '3500.00' },
+        { kind_id: 2, kind: 'Займ', amount: '30000.00' },
+      ],
+      [
+        line('meals', ' питание ', 3600),
+        line('workwear', 'Спецодежда', 2933.58),
+      ],
+    );
+    expect(rows).toEqual([
+      { key: 'kind-1', label: 'Питание', fot: '3500.00', paid: 3600 },
+      { key: 'kind-2', label: 'Займ', fot: '30000.00', paid: null },
+      { key: 'paid-workwear', label: 'Спецодежда', fot: null, paid: 2933.58 },
+    ]);
+    expect(payslipDeductionRows([], [line('fines', 'Штрафы', 500)])).toEqual([
+      { key: 'paid-fines', label: 'Штрафы', fot: null, paid: 500 },
+    ]);
+  });
+});
+
+describe('листок: «Остаток (с НДФЛ)»', () => {
   it('остаток — итог ФОТ минус перечислено, в копейках: несколько ведомостей, без ведомостей, переплата', () => {
     // Обивальнева, сентябрь: 152 730 − (60 900 + 60 900).
     expect(payslipRemainder(closed({ net: '152730.00' }), 121_800)).toBe(30_930);

@@ -1,44 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IPayslipTerms } from '../services/payrollService';
 import { toPaidAmounts } from './payrollPaid';
-import { formatPayslipSchedules, formatPayslipTerms, payslipLines, payslipPeriodParts, payslipRateLines } from './payrollPayslip';
-
-const plain = (value: string | null): string | null => (value === null ? null : value.replace(/\s/g, ' '));
-
-const salary = (amount: string | null, from = '2026-01-01', to: string | null = null): IPayslipTerms => ({
-  effective_from: from,
-  effective_to: to,
-  calc_type: 'salary',
-  amount,
-});
-
-describe('расчётный листок: оклад', () => {
-  it('один оклад — без границ', () => {
-    expect(plain(formatPayslipTerms([salary('130000.00')]))).toBe('Оклад: 130 000,00');
-  });
-
-  it('ставка — ₽/ч', () => {
-    expect(plain(formatPayslipTerms([{ ...salary('500.50'), calc_type: 'hourly' }]))).toBe('Ставка: 500,50 ₽/ч');
-  });
-
-  it('смена в месяце — каждая с границей', () => {
-    const terms = [salary('120000.00', '2026-01-01', '2026-07-14'), salary('130000.00', '2026-07-15')];
-    expect(plain(formatPayslipTerms(terms))).toBe('Оклад: 120 000,00 по 14.07.2026, Оклад: 130 000,00 с 15.07.2026');
-  });
-
-  it('без суммы или условий — null', () => {
-    expect(formatPayslipTerms([])).toBeNull();
-    expect(formatPayslipTerms([salary(null)])).toBeNull();
-  });
-});
-
-describe('расчётный листок: период', () => {
-  it('«с …», «по …»; без периода — null', () => {
-    expect(payslipPeriodParts('2026-07-01', '2026-07-31')).toEqual(['с 01.07.2026', 'по 31.07.2026']);
-    expect(payslipPeriodParts(null, null)).toBeNull();
-  });
-});
+import { formatPayslipSchedules, payslipLines, payslipRateLines } from './payrollPayslip';
 
 describe('расчётный листок: строки статей', () => {
   const amounts = toPaidAmounts([
@@ -51,8 +14,9 @@ describe('расчётный листок: строки статей', () => {
     { month: '2026-08', item: 'housing', amount: '630.00' },
   ]);
 
-  it('начисления месяца — в порядке ведомости, без основной статьи и чужих месяцев', () => {
+  it('начисления месяца — в порядке ведомости, с «По трудовому договору», без чужих месяцев', () => {
     expect(payslipLines('2026-07', amounts, 'accrued')).toEqual([
+      { code: 'contract', label: 'По трудовому договору', amount: 135200 },
       { code: 'bonus', label: 'Премиальная', amount: 5000 },
       { code: 'travel', label: 'Проезд', amount: 2730 },
       { code: 'premium_contract', label: 'Премия % по договору', amount: 83470 },
@@ -87,13 +51,14 @@ describe('расчётный листок: строки статей', () => {
     ]);
   });
 
-  it('статья 327: «Аванс» из ведомости бригады — своей строкой в начислениях, не в основной', () => {
+  it('статья 327: «Аванс» из ведомости бригады — своей строкой в начислениях', () => {
     const may = toPaidAmounts([
       { month: '2026-05', item: 'contract', amount: '226029.72' },
       { month: '2026-05', item: 'housing', amount: '4000.00' },
       { month: '2026-05', item: 'advance_accrual', amount: '31388.64' },
     ]);
     expect(payslipLines('2026-05', may, 'accrued')).toEqual([
+      { code: 'contract', label: 'По трудовому договору', amount: 226029.72 },
       { code: 'housing', label: 'Компенсация проживания', amount: 4000 },
       { code: 'advance_accrual', label: 'Аванс (начисление)', amount: 31388.64 },
     ]);
@@ -108,6 +73,7 @@ describe('расчётный листок: строки статей', () => {
       { month: '2026-06', item: 'property_damage', amount: '8000.00' },
     ]);
     expect(payslipLines('2026-06', june, 'accrued')).toEqual([
+      { code: 'contract', label: 'По трудовому договору', amount: 123302.35 },
       { code: 'housing', label: 'Компенсация проживания', amount: 4320 },
       { code: 'fine_refund', label: 'Возврат штрафа', amount: 13705.62 },
     ]);
@@ -124,7 +90,9 @@ describe('расчётный листок: строки статей', () => {
     expect(payslipLines('2026-05', may, 'deducted')).toEqual([
       { code: 'prior_debts', label: 'Погашение долгов прошлых месяцев', amount: -22559.69 },
     ]);
-    expect(payslipLines('2026-05', may, 'accrued')).toEqual([]);
+    expect(payslipLines('2026-05', may, 'accrued')).toEqual([
+      { code: 'contract', label: 'По трудовому договору', amount: 30379.71 },
+    ]);
   });
 });
 

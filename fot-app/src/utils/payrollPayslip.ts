@@ -1,20 +1,15 @@
 /**
- * Расчётный листок месяца в «Истории выплат» — по подобию листка ЗУП: начислено и удержано по статьям.
- * Суммы — «Оплачено» из 1С; период, дни и оклад — из ФОТ (табель и условия оплаты). «По ставкам ФОТ» —
- * суммы за месяц по ставкам «Справочника» на тот месяц (миграция 324); проезд — пропорционально дням.
+ * Расчётный листок месяца во вкладке «Зарплата» карточки: статьи «Оплачено» (1С) месяца — для столбца «1С»
+ * «Расчёта ФОТ»; «По ставкам ФОТ» — суммы за месяц по ставкам «Справочника» на тот месяц (миграция 324; старый
+ * бэкенд без расчёта); графики месяца — справочно.
  */
 import type {
   IPayslipRateAllowance,
   IPayslipSchedule,
-  IPayslipTerms,
   PayrollPaidItemCode,
   PayslipRateAllowanceCode,
 } from '../services/payrollService';
-import { formatDate } from './formatMoney';
 import { formatPaidAmount, PAYROLL_PAID_GROUPS, paidCellKey, type PayrollPaidTotalKind } from './payrollPaid';
-
-/** Статья «По трудовому договору» — первая строка листка: с должностью, окладом, периодом и днями. */
-export const PAYSLIP_MAIN_ITEM: PayrollPaidItemCode = 'contract';
 
 export interface IPayslipLine {
   code: PayrollPaidItemCode;
@@ -22,7 +17,7 @@ export interface IPayslipLine {
   amount: number;
 }
 
-/** Статьи раздела за месяц — в порядке ведомости ЗУП, только с суммой; основная статья — отдельно, не здесь. */
+/** Статьи раздела «Оплачено» (1С) за месяц — в порядке ведомости ЗУП, только с суммой. */
 export const payslipLines = (
   month: string,
   amounts: ReadonlyMap<string, number>,
@@ -30,7 +25,6 @@ export const payslipLines = (
 ): IPayslipLine[] => PAYROLL_PAID_GROUPS
   .filter(group => group.kind === kind)
   .flatMap(group => group.items)
-  .filter(item => item.code !== PAYSLIP_MAIN_ITEM)
   .flatMap(item => {
     const amount = amounts.get(paidCellKey(month, item.code));
     return amount === undefined ? [] : [{ code: item.code, label: item.label, amount }];
@@ -60,35 +54,6 @@ export const payslipRateLines = (
       : {}),
   }))
   .filter(line => Number.isFinite(line.amount));
-
-const formatTermsAmount = (terms: IPayslipTerms): string | null => {
-  const value = terms.amount === null ? Number.NaN : Number(terms.amount);
-  if (!Number.isFinite(value)) return null;
-  return terms.calc_type === 'hourly' ? `${formatPaidAmount(value)} ₽/ч` : formatPaidAmount(value);
-};
-
-/**
- * Оклад или ставка месяца: «Оклад: 130 000,00», «Ставка: 500,00 ₽/ч». Сменились в месяце — каждая с границей:
- * «Оклад: 120 000,00 по 14.07.2026, Оклад: 130 000,00 с 15.07.2026». null — условий с суммой нет.
- */
-export const formatPayslipTerms = (terms: readonly IPayslipTerms[]): string | null => {
-  const parts = terms.flatMap((item, index) => {
-    const amount = formatTermsAmount(item);
-    if (amount === null) return [];
-    const label = item.calc_type === 'hourly' ? 'Ставка' : 'Оклад';
-    let bound = '';
-    if (terms.length > 1) {
-      bound = index === 0 && item.effective_to ? ` по ${formatDate(item.effective_to)}` : ` с ${formatDate(item.effective_from)}`;
-    }
-    return [`${label}: ${amount}${bound}`];
-  });
-  return parts.length > 0 ? parts.join(', ') : null;
-};
-
-/** Период двумя частями — «с 01.07.2026», «по 31.07.2026»: в узкой колонке каждая на своей строке. null — периода нет. */
-export const payslipPeriodParts = (from: string | null, to: string | null): [string, string] | null => (
-  from && to ? [`с ${formatDate(from)}`, `по ${formatDate(to)}`] : null
-);
 
 /**
  * «Графики месяца: «5+2 (Линия С/О)»» — справочно, под «Расчётом ФОТ»; графиков несколько — с датами:

@@ -8,6 +8,7 @@
  * статьи 1С ФОТ не считает.
  */
 import type {
+  IPayrollCalcDeduction,
   IPayrollCalcLine,
   PayrollAbsenceStatus,
   PayrollCalc,
@@ -18,6 +19,7 @@ import type {
   PayrollPaidItemCode,
 } from '../services/payrollService';
 import { formatPaidAmount, PAYROLL_PAID_GROUPS } from './payrollPaid';
+import type { IPayslipLine } from './payrollPayslip';
 
 /** Порядок строк — как в листке ЗУП. */
 export const PAYROLL_CALC_LINE_ORDER: readonly PayrollCalcLineCode[] = [
@@ -218,8 +220,73 @@ export const calcLineFormula = (line: IPayrollCalcLine): string[] => {
   return result;
 };
 
-/** Блоки 1С листка показывать: суммы 1С за месяц есть или расчёта ФОТ нет — иначе таблицы из одних прочерков. */
-export const payslipShow1c = (hasPaid: boolean, calc: PayrollCalc | undefined): boolean => hasPaid || !isCalcCounted(calc);
+/** Отсутствие без суммы в расчёте — строкой «из 1С»; в столбце «1С» у неё статья «Оплачено» с его суммой. */
+export const ABSENCE_PAID_ITEM: Partial<Record<PayrollAbsenceStatus, PayrollPaidItemCode>> = {
+  vacation: 'vacation',
+  sick: 'sick_leave',
+};
+
+/** Статьи 1С, которые «Расчёт ФОТ» уже показывает в столбце «1С»: пары строк расчёта и строк отсутствий. */
+const calcShownPaidItems = (calc: PayrollCalcCounted): Set<PayrollPaidItemCode> => {
+  const lines = calcLines(calc);
+  const shown = new Set<PayrollPaidItemCode>();
+  for (const line of lines) {
+    const item = calcLinePaidItem(line, calc.lines);
+    if (item) shown.add(item);
+  }
+  // Отсутствие, оплаченное строкой расчёта, отдельной строки не получает (как в листке).
+  const paidAbsences = new Set(lines.map(line => calcLineAbsence(line.code)));
+  for (const line of calcAbsenceLines(calc)) {
+    const item = ABSENCE_PAID_ITEM[line.status];
+    if (item && !paidAbsences.has(line.status)) shown.add(item);
+  }
+  return shown;
+};
+
+/**
+ * Начисления 1С месяца без своей строки в «Расчёте ФОТ» — строками с ФОТ «—» («Допработы», «Премия», «Резерв»…),
+ * чтобы столбец «1С» сходился с «Начислено». Расчёта нет — все начисления 1С.
+ */
+export const calcPaidOnlyAccruals = (calc: PayrollCalcCounted | null, paid: readonly IPayslipLine[]): IPayslipLine[] => {
+  if (!calc) return [...paid];
+  const shown = calcShownPaidItems(calc);
+  return paid.filter(line => !shown.has(line.code));
+};
+
+/** Строка удержаний листка: вид «Справочника» (ФОТ) и/или статья удержаний 1С. null — этой стороны у строки нет. */
+export interface IPayslipDeductionRow {
+  key: string;
+  label: string;
+  /** NUMERIC строкой. */
+  fot: string | null;
+  paid: number | null;
+}
+
+const deductionKey = (name: string): string => name.replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru');
+
+/**
+ * Удержания «Расчёта ФОТ»: виды «Справочника» и статьи удержаний 1С; одноимённые (без регистра и лишних пробелов) —
+ * одной строкой, остальные — своими: сначала виды ФОТ в их порядке, затем статьи 1С без пары — в порядке ведомости.
+ */
+export const payslipDeductionRows = (
+  fot: readonly IPayrollCalcDeduction[],
+  paid: readonly IPayslipLine[],
+): IPayslipDeductionRow[] => {
+  const paidByName = new Map(paid.map(line => [deductionKey(line.label), line]));
+  const paired = new Set<PayrollPaidItemCode>();
+  const rows: IPayslipDeductionRow[] = fot.map(deduction => {
+    const match = paidByName.get(deductionKey(deduction.kind));
+    if (match && !paired.has(match.code)) {
+      paired.add(match.code);
+      return { key: `kind-${deduction.kind_id}`, label: deduction.kind, fot: deduction.amount, paid: match.amount };
+    }
+    return { key: `kind-${deduction.kind_id}`, label: deduction.kind, fot: deduction.amount, paid: null };
+  });
+  for (const line of paid) {
+    if (!paired.has(line.code)) rows.push({ key: `paid-${line.code}`, label: line.label, fot: null, paid: line.amount });
+  }
+  return rows;
+};
 
 /**
  * «Остаток (с НДФЛ)» — итог ФОТ минус перечисленное по ведомостям 1С, в копейках; минус — переплата. Итога нет или

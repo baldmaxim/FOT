@@ -1,6 +1,7 @@
 /*
- * Расчётный листок выбранного месяца вкладки «История выплат»: «Начислено» и «Удержано» друг под другом,
- * одной ширины — суммы в одну линию. Ширина листка — сумма столбцов: «Вид» не шире --kind-w, уже панели — сжимается.
+ * Расчётный листок выбранного месяца вкладки «Зарплата»: «Расчёт ФОТ», ведомости 1С и «Остаток» друг под другом,
+ * одной ширины — суммы в одну линию. Ширина листка — прежняя сумма столбцов (--period-w и --days-w остались от таблицы
+ * 1С «Начислено за N дней», убранной 30.10.2026, — ширина листка не меняется): «Вид» не шире --kind-w, уже панели — сжимается.
  */
 .payslip {
   --kind-w: 10rem;
@@ -32,8 +33,6 @@
   line-height: 1.3;
 }
 /* «с 01.07.2026» / «по 31.07.2026» — каждая часть в строку. Две колонки дней вмещают «Отработано, дн.» одной строкой. */
-.periodCol { width: var(--period-w); }
-.daysCol { width: var(--days-w); }
 .sumCol { width: var(--sum-w); }
 /* «Перечислено (1С)»: дата ведомости ДД.ММ.ГГГГ в строку. */
 .dateCol { width: var(--period-w); }
@@ -65,10 +64,8 @@
 .kindNote { display: block; }
 .table .kindNote { color: var(--text-secondary); }
 
-.table .period { color: var(--text-secondary); }
 .nowrap { white-space: nowrap; }
 
-.table .center { text-align: center; font-variant-numeric: tabular-nums; }
 .table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .table tfoot th,

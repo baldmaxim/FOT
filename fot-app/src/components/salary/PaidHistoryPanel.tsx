@@ -17,8 +17,6 @@ import styles from './PaidHistoryPanel.module.css';
 
 interface IPaidHistoryPanelProps {
   employeeId: number;
-  /** Должность сотрудника — первая строка расчётного листка. */
-  positionName: string | null;
   /** Последний месяц истории — месяц карточки на момент открытия (тот же у «Экспорта»). */
   toMonth: string;
 }
@@ -55,7 +53,7 @@ const CALC_HISTORY_MONTHS = 6;
  * Две колонки — когда хватает ширины карточки (container query), уже — одна: список, тап по месяцу
  * открывает листок, «Все месяцы» — назад. Только чтение.
  */
-export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, positionName, toMonth }) => {
+export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMonth }) => {
   const historyQuery = useQuery(paidHistoryQueryOptions(employeeId, toMonth));
   const payoutsQuery = useQuery(payouts1cHistoryQueryOptions(employeeId, toMonth));
   // Перечисления ещё грузятся — история ждёт их, иначе месяц только с перечислением появился бы позже.
@@ -177,7 +175,6 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, posit
             <PaidPayslip
               employeeId={employeeId}
               month={selected.month}
-              positionName={positionName}
               amounts={history.amounts}
               totals={selected.totals}
               transfers={selected.transfers}

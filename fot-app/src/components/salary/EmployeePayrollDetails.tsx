@@ -294,7 +294,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
         hidden={tab !== 'history'}
       >
         {historyMounted && (
-          <PaidHistoryPanel employeeId={row.employee_id} positionName={row.position_name} toMonth={currentMonth} />
+          <PaidHistoryPanel employeeId={row.employee_id} toMonth={currentMonth} />
         )}
       </div>
 
