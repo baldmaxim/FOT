@@ -1,5 +1,5 @@
 import { useId, useState, type FC } from 'react';
-import { Ban, BedDouble, CirclePlus, TimerOff, X } from 'lucide-react';
+import { Ban, BedDouble, CircleMinus, CirclePlus, TimerOff, X } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { ModalShell } from '../ui/ModalShell';
@@ -24,9 +24,9 @@ type RegistryWindow = 'dormitory' | 'stops' | 'supplements' | 'overtime' | 'dedu
 /**
  * Окно «Справочник» на «Расчётах»: виды удержаний, ставки и кому доступен раздел. Каждая правка
  * сохраняется сразу — общей кнопки «Сохранить» нет. Без права правки списки только показываются;
- * «Доступ к разделу» — всегда только просмотр. В шапке — «Общежитие» (кто живёт и кому доплата за общежитие),
- * «Без проезда», «Доплата» (в ней — списки «Плановые доплаты» и «Квартира»), «Без переработки»; у заголовка
- * «Удержания» — «Сотрудники», своя таблица окном поверх.
+ * «Доступ к разделу» — всегда только просмотр. В шапке слева — «Общежитие» (кто живёт и кому доплата за
+ * общежитие), «Без проезда», «Без переработки»; справа, у крестика, — «Доплата» (в ней — списки «Плановые доплаты»
+ * и «Квартира») и «Удержания» (удержания сотрудников). Каждая — своя таблица окном поверх.
  */
 export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClose }) => {
   const titleId = useId();
@@ -62,14 +62,20 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
                 <Ban size={16} aria-hidden="true" />
                 <span>Без проезда</span>
               </button>
-              <button type="button" className={styles.headerButton} onClick={() => setOpened('supplements')}>
-                <CirclePlus size={16} aria-hidden="true" />
-                <span>Доплата</span>
-              </button>
               <button type="button" className={styles.headerButton} onClick={() => setOpened('overtime')}>
                 <TimerOff size={16} aria-hidden="true" />
                 <span>Без переработки</span>
               </button>
+              <div className={styles.headerActionsEnd}>
+                <button type="button" className={styles.headerButton} onClick={() => setOpened('supplements')}>
+                  <CirclePlus size={16} aria-hidden="true" />
+                  <span>Доплата</span>
+                </button>
+                <button type="button" className={styles.headerButton} onClick={() => setOpened('deductions')}>
+                  <CircleMinus size={16} aria-hidden="true" />
+                  <span>Удержания</span>
+                </button>
+              </div>
             </div>
             <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Закрыть">
               <X size={20} aria-hidden="true" />
@@ -77,7 +83,7 @@ export const PayrollDictionaryModal: FC<IPayrollDictionaryModalProps> = ({ onClo
           </header>
 
           <div className={`${modal.body} ${styles.columns}`}>
-            <DeductionKindsEditor canEdit={canEdit} onOpenList={() => setOpened('deductions')} />
+            <DeductionKindsEditor canEdit={canEdit} />
             <PayrollRatesEditor canEdit={canEdit} />
             <PayrollSectionAccessList />
           </div>

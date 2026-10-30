@@ -3,7 +3,6 @@ import { useId, useState, type FC, type ReactNode } from 'react';
 import type { IPayrollDictionaryPayload } from '../../utils/payrollDictionary';
 import { PayrollDictionaryForm } from './PayrollDictionaryForm';
 import { PayrollDictionaryRow, type IPayrollDictionaryItem } from './PayrollDictionaryRow';
-import { PayrollEmployeesButton } from './PayrollEmployeesButton';
 import styles from './PayrollDictionary.module.css';
 
 interface IPayrollDictionarySectionProps {
@@ -30,8 +29,6 @@ interface IPayrollDictionarySectionProps {
   onDelete: (id: number) => Promise<void>;
   /** Запись, привязанная к функционалу: название не меняется, удалить нельзя. */
   isLocked?: (item: IPayrollDictionaryItem) => boolean;
-  /** Кнопки таблиц сотрудников рядом с заголовком: у «Удержаний» — «Сотрудники». */
-  lists?: ReadonlyArray<IPayrollDictionaryList>;
   /** Передан — у каждой строки «+», раскрывающий под ней этот блок (подвиды вида удержания, миграция 321). */
   renderDetails?: (item: IPayrollDictionaryItem) => ReactNode;
   /** Подпись «+» для диктора: «Подвиды: Спецодежда». */
@@ -40,18 +37,9 @@ interface IPayrollDictionarySectionProps {
   emptyText?: string | null;
 }
 
-/** Кнопка таблицы сотрудников у заголовка колонки. */
-export interface IPayrollDictionaryList {
-  /** Подпись на кнопке: «Сотрудники». */
-  label: string;
-  /** Что за таблица — для экранного диктора: «Сотрудники с удержаниями». */
-  ariaLabel: string;
-  onOpen: () => void;
-}
-
 /**
- * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу; у «Удержаний» рядом
- * с заголовком кнопка таблицы сотрудников.
+ * Колонка окна «Справочник»: список записей с правкой на месте и поле новой записи внизу. Таблицы сотрудников
+ * открываются кнопками в шапке «Справочника».
  */
 export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   title,
@@ -69,7 +57,6 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
   onUpdate,
   onDelete,
   isLocked,
-  lists,
   renderDetails,
   detailsLabel = name => name,
   emptyText = 'Список пуст',
@@ -91,16 +78,7 @@ export const PayrollDictionarySection: FC<IPayrollDictionarySectionProps> = ({
       aria-labelledby={showTitle ? titleId : undefined}
       aria-label={showTitle ? undefined : title}
     >
-      {showTitle && (lists && lists.length > 0 ? (
-        <div className={styles.sectionHead}>
-          <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
-          {lists.map(list => (
-            <PayrollEmployeesButton key={list.label} label={list.label} onClick={list.onOpen} ariaLabel={list.ariaLabel} />
-          ))}
-        </div>
-      ) : (
-        <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>
-      ))}
+      {showTitle && <h3 id={titleId} className={styles.sectionTitle}>{title}</h3>}
 
       {!items && !isError && <p className={styles.state}>Загрузка…</p>}
       {!items && isError && (

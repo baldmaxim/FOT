@@ -10,17 +10,15 @@ import { PayrollDictionarySection } from './PayrollDictionarySection';
 
 interface IDeductionKindsEditorProps {
   canEdit: boolean;
-  /** «Сотрудники» у заголовка: таблица сотрудников с удержаниями. */
-  onOpenList: () => void;
 }
 
 /**
  * «Удержания» в окне «Справочник»: виды удержаний — добавить, переименовать, удалить; «+» у вида раскрывает его
  * подвиды (миграция 321). Справочник общий с кадрами («Управление кадрами» → «Удержания» → «Виды удержаний»); вид
- * и подвид, назначенные сотрудникам, сервер удалить не даст. Кнопка «Сотрудники» у заголовка открывает таблицу
- * удержаний сотрудников — те же записи, что во вкладке кадров.
+ * и подвид, назначенные сотрудникам, сервер удалить не даст. Таблицу удержаний сотрудников (те же записи, что во
+ * вкладке кадров) открывает кнопка «Удержания» в шапке «Справочника».
  */
-export const DeductionKindsEditor: FC<IDeductionKindsEditorProps> = ({ canEdit, onOpenList }) => {
+export const DeductionKindsEditor: FC<IDeductionKindsEditorProps> = ({ canEdit }) => {
   const kinds = usePayrollDeductionKinds();
   const queryClient = useQueryClient();
 
@@ -40,7 +38,6 @@ export const DeductionKindsEditor: FC<IDeductionKindsEditorProps> = ({ canEdit, 
   return (
     <PayrollDictionarySection
       title="Удержания"
-      lists={[{ label: 'Сотрудники', ariaLabel: 'Сотрудники с удержаниями', onOpen: onOpenList }]}
       items={kinds.data}
       isError={kinds.isError}
       onRetry={() => { void kinds.refetch(); }}
