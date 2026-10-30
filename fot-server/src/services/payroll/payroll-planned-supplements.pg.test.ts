@@ -188,6 +188,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Повторный запуск безопасен.
     await pg.pool!.query(migration('322_payroll_planned_supplement_open_end.sql'));
     await pg.pool!.query(migration('322_payroll_planned_supplement_open_end.sql'));
+    await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
+    await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
     // Список берёт «Начисления» из «Оплачено».
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));

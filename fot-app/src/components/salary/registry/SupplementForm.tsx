@@ -78,7 +78,9 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
         return false;
       }
       setSaving(true);
-      if (isEdit) await payrollRegistryService.setPlanned(employeeId, parsed.payload);
+      // Правка — этот период по id строки журнала (любой, не только последний); без id — старый бэкенд.
+      if (isEdit && row.id !== null) await payrollRegistryService.updatePlannedPeriod(row.id, parsed.payload);
+      else if (isEdit) await payrollRegistryService.setPlanned(employeeId, parsed.payload);
       else await payrollRegistryService.addPlanned(employeeId, parsed.payload);
       return true;
     }

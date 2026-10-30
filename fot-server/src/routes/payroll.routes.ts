@@ -102,6 +102,8 @@ router.get('/supplements', termsView, payrollSupplementsController.list);
 router.post('/supplements/planned', termsEdit, payrollSupplementsController.addPlanned);
 router.put('/supplements/planned/employee/:empId', termsEdit, payrollSupplementsController.setPlanned);
 router.delete('/supplements/planned/employee/:empId', termsEdit, payrollSupplementsController.removePlanned);
+router.put('/supplements/planned/:id', termsEdit, payrollSupplementsController.updatePlannedPeriod);
+router.delete('/supplements/planned/:id', termsEdit, payrollSupplementsController.removePlannedPeriod);
 router.post('/supplements/one-time', termsEdit, payrollSupplementsController.addOneTime);
 router.patch('/supplements/one-time/:id', termsEdit, payrollSupplementsController.updateOneTime);
 router.delete('/supplements/one-time/:id', termsEdit, payrollSupplementsController.removeOneTime);

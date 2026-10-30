@@ -18,7 +18,9 @@ import {
   addOneTimeSupplement,
   deleteOneTimeSupplement,
   getOneTimeSupplement,
+  getPlannedPeriodEmployeeId,
   listSupplements,
+  rewritePlannedPeriod,
   savePlannedSupplement,
   updateOneTimeSupplement,
   type IOneTimeSupplement,
@@ -66,6 +68,11 @@ const EXISTS = {
   success: false,
   error: 'У сотрудника уже есть плановая доплата в эти даты — измените её в таблице',
   code: 'SUPPLEMENT_EXISTS',
+};
+const STALE = {
+  success: false,
+  error: 'Доплата уже изменилась — обновите таблицу',
+  code: 'SUPPLEMENT_STALE',
 };
 
 const toPlannedValue = (body: z.infer<typeof plannedSchema>): IPlannedSupplementValue => ({
@@ -174,6 +181,72 @@ const removePlanned = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+/**
+ * Поправить (value) или снять (null) один период плановой доплаты по id строки журнала — любой, не только
+ * последний (миграция 337). Аудит — тем же событием, что запись по сотруднику, с period_id.
+ */
+const writePlannedPeriod = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  periodId: number | null,
+  value: IPlannedSupplementValue | null,
+): Promise<void> => {
+  const employeeId = periodId === null ? null : await getPlannedPeriodEmployeeId(periodId);
+  if (periodId === null || employeeId === null) {
+    res.status(404).json(NOT_FOUND);
+    return;
+  }
+  if (!(await canWritePayrollRegistryEmployee(req, employeeId))) {
+    res.status(403).json(NO_ACCESS);
+    return;
+  }
+  const result = await rewritePlannedPeriod({ employeeId, periodId, value, createdBy: req.user.id });
+  if (result.status === 'stale') {
+    res.status(409).json(STALE);
+    return;
+  }
+  if (result.status === 'exists') {
+    res.status(409).json(EXISTS);
+    return;
+  }
+  if (result.status === 'saved') {
+    await auditService.logFromRequest(req, req.user.id, 'PAYROLL_PLANNED_SUPPLEMENT_SET', {
+      entityType: 'payroll_planned_supplements',
+      entityId: String(employeeId),
+      details: {
+        source: 'supplement_registry_period',
+        employee_id: employeeId,
+        period_id: periodId,
+        planned_supplement: plannedAudit(value),
+        previous: plannedAudit(result.previous),
+      },
+    });
+  }
+  res.json({ success: true, data: { changed: result.status === 'saved' } });
+};
+
+/** PUT /api/payroll/supplements/planned/:id { amount, date_from, date_to } — изменить период. */
+const updatePlannedPeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const value = toPlannedValue(plannedSchema.parse(req.body));
+    await writePlannedPeriod(req, res, parsePayrollDictionaryId(req), value);
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('payrollSupplements.updatePlannedPeriod error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения доплаты' });
+  }
+};
+
+/** DELETE /api/payroll/supplements/planned/:id — снять период. */
+const removePlannedPeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await writePlannedPeriod(req, res, parsePayrollDictionaryId(req), null);
+  } catch (err) {
+    console.error('payrollSupplements.removePlannedPeriod error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка снятия доплаты' });
+  }
+};
+
 /** POST /api/payroll/supplements/one-time { employee_id, month, amount, reason } — разовая доплата. */
 const addOneTime = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -266,6 +339,8 @@ export const payrollSupplementsController = {
   addPlanned,
   setPlanned,
   removePlanned,
+  updatePlannedPeriod,
+  removePlannedPeriod,
   addOneTime,
   updateOneTime,
   removeOneTime,

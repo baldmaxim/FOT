@@ -261,11 +261,8 @@ export const supplementRowKey = (row: IPayrollSupplementRow): string => (
 /** Ключ строки квартиры: в общей таблице «Доплата» рядом с доплатами, id которых могут совпасть. */
 export const housingRowKey = (row: IHousingAllowanceRow): string => `apartment-${row.id}`;
 
-/**
- * ✎ и 🗑 у доплаты: по праву правки сотрудника; у прошлого периода плановой — нет: сервер меняет плановую по
- * сотруднику (текущую версию), а не по версии журнала.
- */
-export const canEditSupplement = (row: IPayrollSupplementRow): boolean => row.can_edit && row.is_current !== false;
+/** ✎ и 🗑 у доплаты — по праву правки сотрудника: любой период плановой правится по id строки (миграция 337). */
+export const canEditSupplement = (row: IPayrollSupplementRow): boolean => row.can_edit;
 
 /** ✎ и 🗑 у строки общей таблицы «Доплата»: доплата — правило canEditSupplement, квартира — право правки. */
 export const canEditSupplementRow = (row: ISupplementRegistryRow): boolean => (

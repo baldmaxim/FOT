@@ -420,7 +420,7 @@ const buildListSql = (options: {
                 LEFT JOIN LATERAL (
                   SELECT s.amount, s.date_from, s.date_to
                     FROM payroll_planned_supplements s
-                   WHERE s.employee_id = page.employee_id
+                   WHERE s.employee_id = page.employee_id AND s.archived_at IS NULL
                    ORDER BY s.id DESC
                    LIMIT 1
                 ) ps ON TRUE${options.paidMonthsParam ? paidJoinSql(options.paidMonthsParam) : PAYOUTS_JOIN_SQL}) p

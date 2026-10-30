@@ -23,8 +23,8 @@ import {
 
 /**
  * 🗑 «Убрать» и перечитывание в «Доплате» и её списках («Плановые доплаты», «Квартира»): одна логика на три окна.
- * Плановая — убрать с 1-го числа текущего месяца (период закрывается, прошлые месяцы остаются) или снять ошибочную;
- * прошлый период плановой не трогаем — сервер меняет текущую версию сотрудника. Разовая — удалить. Квартира —
+ * Плановая (любой период, по id строки журнала) — убрать с 1-го числа текущего месяца (период закрывается, прошлые
+ * месяцы остаются) или снять ошибочную. Разовая — удалить. Квартира —
  * выезд 1-м числом текущего месяца или удалить не начавшееся / прошедшее проживание. busyKey — ключ строки,
  * которая сейчас убирается (supplementRowKey / housingRowKey).
  */
@@ -68,13 +68,12 @@ export const useSupplementRemoval = () => {
     if (!window.confirm(question)) return;
     await run(supplementRowKey(row), async () => {
       if (removal?.action === 'close' && row.date_from !== null) {
-        await payrollRegistryService.setPlanned(row.employee_id, {
-          amount: Number(row.amount),
-          date_from: row.date_from,
-          date_to: removal.dateTo,
-        });
+        const fields = { amount: Number(row.amount), date_from: row.date_from, date_to: removal.dateTo };
+        if (row.id !== null) await payrollRegistryService.updatePlannedPeriod(row.id, fields);
+        else await payrollRegistryService.setPlanned(row.employee_id, fields);
       } else if (row.kind === 'planned') {
-        await payrollRegistryService.removePlanned(row.employee_id);
+        if (row.id !== null) await payrollRegistryService.removePlannedPeriod(row.id);
+        else await payrollRegistryService.removePlanned(row.employee_id);
       } else if (row.id !== null) {
         await payrollRegistryService.removeOneTime(row.id);
       }

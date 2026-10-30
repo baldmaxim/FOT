@@ -49,7 +49,7 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
-  /** Плановая: последняя версия журнала (false — прошлый период, только история). Нет у старого бэкенда. */
+  /** Плановая: последняя строка журнала. С миграцией 337 правятся все периоды — только справочно. */
   is_current?: boolean;
   can_edit: boolean;
 }
@@ -209,6 +209,19 @@ export const payrollRegistryService = {
 
   removePlanned: async (employeeId: number): Promise<void> => {
     await apiClient.delete(`/payroll/supplements/planned/employee/${employeeId}`);
+  },
+
+  /**
+   * Любой период плановой по id строки журнала (миграция 337), не только последний. ApiError 409:
+   * SUPPLEMENT_EXISTS — пересекается с другим периодом сотрудника, SUPPLEMENT_STALE — период уже изменили.
+   */
+  updatePlannedPeriod: async (id: number, fields: IPlannedSupplementFields): Promise<void> => {
+    await apiClient.put(`/payroll/supplements/planned/${id}`, fields);
+  },
+
+  /** Снять один период плановой целиком; SUPPLEMENT_STALE — период уже изменили. */
+  removePlannedPeriod: async (id: number): Promise<void> => {
+    await apiClient.delete(`/payroll/supplements/planned/${id}`);
   },
 
   addOneTime: async (employeeId: number, fields: IOneTimeSupplementFields): Promise<void> => {

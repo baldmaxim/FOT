@@ -102,8 +102,8 @@ describe('«Доплата»', () => {
     expect(rows.map(row => row.key)).toEqual(['planned-5', 'once-5', 'apartment-5']);
   });
 
-  it('✎ и 🗑: у прошлого периода плановой нет, у текущей и разовой — по праву правки, у квартиры — по праву', () => {
-    expect(canEditSupplement(supplement({ is_current: false }))).toBe(false);
+  it('✎ и 🗑: у любого периода плановой, разовой и квартиры — по праву правки (миграция 337)', () => {
+    expect(canEditSupplement(supplement({ is_current: false }))).toBe(true);
     expect(canEditSupplement(supplement({ is_current: true }))).toBe(true);
     expect(canEditSupplement(supplement({ is_current: true, can_edit: false }))).toBe(false);
     expect(canEditSupplement(supplement({ kind: 'one_time', id: 5, month: '2026-10' }))).toBe(true);
@@ -112,7 +112,7 @@ describe('«Доплата»', () => {
       [apartment({}), apartment({ id: 6, can_edit: false })],
       ['2026-10'],
     ) ?? [];
-    expect(rows.map(canEditSupplementRow)).toEqual([false, true, false]);
+    expect(rows.map(canEditSupplementRow)).toEqual([true, true, false]);
   });
 
   it('выгрузки: «Доплата», «Плановые доплаты», «Квартира»', () => {

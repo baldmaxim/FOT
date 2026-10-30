@@ -210,8 +210,9 @@ export interface IPlannedSupplementValue {
 /**
  * Записать доплату сотрудника: value — новая доплата, null — снять.
  *
- * Новая версия пишется, только если отличается от последней: повторное сохранение карточки
- * без правки истории не засоряет; снятие без прежней доплаты ничего не пишет. Сравнение — в SQL
+ * Новая версия пишется, только если отличается от последней неархивной (архив — переписанное расписание,
+ * миграция 337): повторное сохранение карточки без правки истории не засоряет; снятие без прежней доплаты
+ * ничего не пишет. Сравнение — в SQL
  * (NUMERIC с NUMERIC). Вызывать в транзакции под блокировкой сотрудника (lockPayrollEmployee),
  * иначе два параллельных сохранения прочтут одну и ту же последнюю версию.
  *
@@ -225,7 +226,7 @@ export const setPlannedSupplement = async (
     `WITH last AS (
        SELECT amount, date_from, date_to
          FROM payroll_planned_supplements
-        WHERE employee_id = $1
+        WHERE employee_id = $1 AND archived_at IS NULL
         ORDER BY id DESC
         LIMIT 1
      )
@@ -275,17 +276,33 @@ export interface IPlannedSupplementChange {
   changed_at: string;
 }
 
-/** История плановой доплаты, новые сверху. */
+/**
+ * История плановой доплаты, новые сверху. Переписанное расписание (миграция 337): у строки с replaces_id
+ * «было» — заменённая строка, а не предыдущая по id; копии без изменений не показываются; архивная строка
+ * «снята» — снятый период (prev — его значения).
+ */
 export const getPlannedSupplementChanges = async (employeeId: number): Promise<IPlannedSupplementChange[]> =>
   query<IPlannedSupplementChange>(
-    `WITH versions AS (
-       SELECT s.id, s.amount, s.date_from, s.date_to, s.created_by, s.created_at,
-              LAG(s.amount) OVER w AS prev_amount,
-              LAG(s.date_from) OVER w AS prev_date_from,
-              LAG(s.date_to) OVER w AS prev_date_to
+    `WITH ordered AS (
+       SELECT s.id, s.amount, s.date_from, s.date_to, s.created_by, s.created_at, s.replaces_id,
+              LAG(s.amount) OVER w AS lag_amount,
+              LAG(s.date_from) OVER w AS lag_date_from,
+              LAG(s.date_to) OVER w AS lag_date_to
          FROM payroll_planned_supplements s
         WHERE s.employee_id = $1
        WINDOW w AS (ORDER BY s.id)
+     ),
+     versions AS (
+       SELECT o.id, o.amount, o.date_from, o.date_to, o.created_by, o.created_at,
+              CASE WHEN o.replaces_id IS NULL THEN o.lag_amount ELSE r.amount END AS prev_amount,
+              CASE WHEN o.replaces_id IS NULL THEN o.lag_date_from ELSE r.date_from END AS prev_date_from,
+              CASE WHEN o.replaces_id IS NULL THEN o.lag_date_to ELSE r.date_to END AS prev_date_to,
+              o.replaces_id IS NOT NULL
+                AND o.amount IS NOT DISTINCT FROM r.amount
+                AND o.date_from IS NOT DISTINCT FROM r.date_from
+                AND o.date_to IS NOT DISTINCT FROM r.date_to AS is_copy
+         FROM ordered o
+         LEFT JOIN payroll_planned_supplements r ON r.id = o.replaces_id
      )
      SELECT v.id,
             CASE
@@ -303,6 +320,7 @@ export const getPlannedSupplementChanges = async (employeeId: number): Promise<I
             v.created_at AS changed_at
        FROM versions v
        LEFT JOIN user_profiles up ON up.id = v.created_by
+      WHERE NOT v.is_copy
       ORDER BY v.id DESC`,
     [employeeId],
   );

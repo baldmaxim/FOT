@@ -70,9 +70,12 @@ import { listHousingAllowances } from './payroll-housing.service.js';
 import { addStay, getHousingRateAmount } from '../dormitory-stays.service.js';
 import {
   addOneTimeSupplement,
+  getPlannedPeriodEmployeeId,
   listSupplements,
+  rewritePlannedPeriod,
   savePlannedSupplement,
 } from './payroll-supplements.service.js';
+import { getPlannedSupplementChanges } from './payroll-terms.service.js';
 import {
   addCompensationStop,
   listCompensationStops,
@@ -208,6 +211,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     for (const name of [
       '314_employee_dormitory_stays.sql', '318_staff_deductions.sql', '319_dormitory_addresses.sql',
       '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql', '322_payroll_planned_supplement_open_end.sql',
+      '337_payroll_planned_supplement_rewrite.sql',
     ]) {
       await run(migration(name));
     }
@@ -435,6 +439,85 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         expect.objectContaining({ amount: '20000.00', date_to: '2026-09-30', is_current: false }),
         expect.objectContaining({ amount: '25000.00', date_from: '2026-12-01', date_to: null, is_current: true }),
       ]);
+    });
+
+    it('337: любой период плановой (Корж) — правка, перенос, снятие переписывают расписание; история по периоду', async () => {
+      await run(`INSERT INTO employees (id, full_name, org_department_id) VALUES (20, 'Корж И.С.', '${D1}')`);
+      try {
+        const planned = () => listSupplements(SCOPE)
+          .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 20));
+        const periods = async () => (await planned()).map(row => [row.amount, row.date_from, row.date_to]);
+        const idOf = async (dateFrom: string) => (await planned()).find(row => row.date_from === dateFrom)!.id;
+        // Как на проде (скрипт 28.10): бессрочные 20 000 → по 30.09, 30 000 окт–янв, 20 000 с февраля.
+        for (const value of [
+          { amount: 20000, dateFrom: '2023-03-01', dateTo: null },
+          { amount: 20000, dateFrom: '2023-03-01', dateTo: '2026-09-30' },
+          { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' },
+          { amount: 20000, dateFrom: '2027-02-01', dateTo: null },
+        ]) await savePlannedSupplement({ employeeId: 20, value, createdBy: AUTHOR });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30'], ['30000.00', '2026-10-01', '2027-01-31'], ['20000.00', '2027-02-01', null],
+        ]);
+
+        // Добавление сверяется со всеми периодами, а не с последним: ноябрь перекрыл бы 30 000 целиком.
+        expect(await savePlannedSupplement({
+          employeeId: 20, value: { amount: 1000, dateFrom: '2026-11-01', dateTo: '2026-11-30' }, createdBy: AUTHOR, onlyIfNone: true,
+        })).toEqual({ status: 'exists' });
+
+        // Сумма среднего периода; крайние не меняются.
+        const middle = await idOf('2026-10-01');
+        expect(await getPlannedPeriodEmployeeId(middle)).toBe(20);
+        const octJan = { amount: 35000, dateFrom: '2026-10-01', dateTo: '2027-01-31' };
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: middle, value: octJan, createdBy: AUTHOR }))
+          .toEqual({ status: 'saved', previous: { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' } });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30'], ['35000.00', '2026-10-01', '2027-01-31'], ['20000.00', '2027-02-01', null],
+        ]);
+        // Прежний id — уже архив; пересечение с февралём; без изменений.
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: middle, value: octJan, createdBy: AUTHOR }))
+          .toEqual({ status: 'stale' });
+        const edited = await idOf('2026-10-01');
+        expect(await rewritePlannedPeriod({
+          employeeId: 20, periodId: edited, value: { ...octJan, dateTo: '2027-02-15' }, createdBy: AUTHOR,
+        })).toEqual({ status: 'exists' });
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: edited, value: octJan, createdBy: AUTHOR }))
+          .toEqual({ status: 'unchanged' });
+
+        // Перенос дат мимо прежних версий: октябрь и январь не «оживают» прежними 30 000.
+        await rewritePlannedPeriod({
+          employeeId: 20, periodId: edited, value: { amount: 35000, dateFrom: '2026-11-01', dateTo: '2026-12-31' }, createdBy: AUTHOR,
+        });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30'], ['35000.00', '2026-11-01', '2026-12-31'], ['20000.00', '2027-02-01', null],
+        ]);
+
+        // Окно сотрудника после переписывания правит последний по дате период — февральский.
+        expect(await savePlannedSupplement({
+          employeeId: 20, value: { amount: 25000, dateFrom: '2027-02-01', dateTo: null }, createdBy: AUTHOR,
+        })).toMatchObject({ status: 'saved', previous: { amount: 20000, dateFrom: '2027-02-01' } });
+
+        // Снять средний: крайние остаются.
+        expect(await rewritePlannedPeriod({
+          employeeId: 20, periodId: await idOf('2026-11-01'), value: null, createdBy: AUTHOR,
+        })).toMatchObject({ status: 'saved' });
+        expect(await periods()).toEqual([['20000.00', '2023-03-01', '2026-09-30'], ['25000.00', '2027-02-01', null]]);
+
+        // История: «было → стало» по периоду, копии не видны, «снята» — со снятым периодом.
+        const history = (await getPlannedSupplementChanges(20)).map(change => [change.action, change.amount, change.prev_amount]);
+        expect(history).toEqual([
+          ['removed', null, '35000.00'],
+          ['changed', '25000.00', '20000.00'],
+          ['changed', '35000.00', '35000.00'],
+          ['changed', '35000.00', '30000.00'],
+          ['changed', '20000.00', '30000.00'],
+          ['changed', '30000.00', '20000.00'],
+          ['changed', '20000.00', '20000.00'],
+          ['assigned', '20000.00', null],
+        ]);
+      } finally {
+        await run('DELETE FROM payroll_planned_supplements WHERE employee_id = 20');
+        await run('DELETE FROM employees WHERE id = 20');
+      }
     });
 
     it('разовые: несколько за месяц; подрядчик в таблицу не попадает', async () => {

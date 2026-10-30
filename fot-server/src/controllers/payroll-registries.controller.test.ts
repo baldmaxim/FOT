@@ -23,6 +23,8 @@ vi.mock('../services/dormitory-stays.service.js', () => stays);
 const supplements = vi.hoisted(() => ({
   listSupplements: vi.fn(),
   savePlannedSupplement: vi.fn(),
+  getPlannedPeriodEmployeeId: vi.fn(),
+  rewritePlannedPeriod: vi.fn(),
   getOneTimeSupplement: vi.fn(),
   addOneTimeSupplement: vi.fn(),
   updateOneTimeSupplement: vi.fn(),
@@ -403,6 +405,50 @@ describe('«Доплата»: плановая', () => {
     expect(supplements.savePlannedSupplement).toHaveBeenNthCalledWith(2, expect.objectContaining({ value: null }));
     expect(audit.logFromRequest.mock.calls.map(call => call[2]))
       .toEqual(['PAYROLL_PLANNED_SUPPLEMENT_SET', 'PAYROLL_PLANNED_SUPPLEMENT_SET']);
+  });
+
+  it('любой период по id (337): правка и снятие — сотрудник строки, аудит с period_id', async () => {
+    supplements.getPlannedPeriodEmployeeId.mockResolvedValue(42);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    const previous = { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' };
+    supplements.rewritePlannedPeriod.mockResolvedValue({ status: 'saved', previous });
+    const { employee_id: _employeeId, ...fields } = body;
+    const res = makeRes();
+    await supplementsC.updatePlannedPeriod(makeReq({ params: { id: '26' }, body: fields }), res);
+    await supplementsC.removePlannedPeriod(makeReq({ params: { id: '26' } }), makeRes());
+    expect(res.body).toEqual({ success: true, data: { changed: true } });
+    expect(supplements.rewritePlannedPeriod.mock.calls.map(call => call[0])).toEqual([
+      { employeeId: 42, periodId: 26, value: { amount: 5000, dateFrom: '2026-10-01', dateTo: '2026-12-31' }, createdBy: expect.any(String) },
+      { employeeId: 42, periodId: 26, value: null, createdBy: expect.any(String) },
+    ]);
+    expect(registryScope.canWritePayrollRegistryEmployee).toHaveBeenCalledWith(expect.anything(), 42);
+    expect(audit.logFromRequest.mock.calls.map(call => [call[2], call[3].details.period_id, call[3].details.previous]))
+      .toEqual([
+        ['PAYROLL_PLANNED_SUPPLEMENT_SET', 26, { amount: 30000, date_from: '2026-10-01', date_to: '2027-01-31' }],
+        ['PAYROLL_PLANNED_SUPPLEMENT_SET', 26, { amount: 30000, date_from: '2026-10-01', date_to: '2027-01-31' }],
+      ]);
+  });
+
+  it('любой период по id: нет строки — 404, чужой — 403, пересечение и устаревший — 409, без аудита', async () => {
+    const { employee_id: _employeeId, ...fields } = body;
+    // Очереди моков — только то, до чего дойдёт запрос: иначе ответы сдвинутся на следующий вызов.
+    const call = async (status: string | null, canWrite = true) => {
+      supplements.getPlannedPeriodEmployeeId.mockResolvedValueOnce(status === null ? null : 42);
+      if (status) registryScope.canWritePayrollRegistryEmployee.mockResolvedValueOnce(canWrite);
+      if (status && canWrite) supplements.rewritePlannedPeriod.mockResolvedValueOnce({ status });
+      const res = makeRes();
+      await supplementsC.updatePlannedPeriod(makeReq({ params: { id: '26' }, body: fields }), res);
+      return [res.statusCode, res.body.code ?? res.body.error];
+    };
+    expect(await call(null)).toEqual([404, 'Доплата не найдена']);
+    expect(await call('saved', false)).toEqual([403, 'Нет доступа к сотруднику']);
+    expect(await call('exists')).toEqual([409, 'SUPPLEMENT_EXISTS']);
+    expect(await call('stale')).toEqual([409, 'SUPPLEMENT_STALE']);
+    const bad = makeRes();
+    await supplementsC.updatePlannedPeriod(makeReq({ params: { id: 'abc' }, body: fields }), bad);
+    expect(bad.statusCode).toBe(404);
+    expect(supplements.rewritePlannedPeriod).toHaveBeenCalledTimes(2);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
   it('без «по» — бессрочно: dateTo null', async () => {
