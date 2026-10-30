@@ -6155,14 +6155,6 @@
 .ts-table td.ts-section-divider-cell--salary {
   text-align: left;
 }
-.ts-salary-divider {
-  position: sticky;
-  left: 12px;
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-}
 .ts-salary-header {
   display: inline-flex;
   flex-wrap: wrap;
@@ -6285,6 +6277,12 @@
   justify-content: flex-start;
   gap: 8px 16px;
 }
+.ts-salary-objects-head {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
 .ts-salary-objects-total {
   color: var(--text-secondary);
   font-size: 13px;
@@ -6293,23 +6291,37 @@
 .ts-salary-objects-total strong {
   color: var(--text-primary);
 }
-.ts-th-weekday {
-  font-weight: 400;
-}
 /* КТУ закреплён у ФИО и в шапке объектной таблицы (у неё шапка закреплена сверху с z-index 80). */
 .ts-table--salary-objects thead th.ts-col-ktu-sticky {
   z-index: 88;
 }
-/* Клетки дней — только чтение: часы правятся во вкладке «По объектам». */
-.ts-table--salary-objects td.ts-salary-object-day {
+/* Табель здесь только для просмотра: клетки и ФИО не кликаются — правка во вкладке «По объектам». */
+.ts-table--salary-objects td.ts-salary-object-day,
+.ts-table--salary-objects td.ts-object-employee-cell {
   cursor: default;
 }
 .ts-table--salary-objects td.ts-salary-object-day:hover {
   outline: none;
   transform: none;
 }
-.ts-table--salary-objects .ts-object-group-cell {
-  text-align: left;
+/* «Выработка, ₽» — в строке группы, за «N чел. (X ч.)». */
+.ts-salary-group-output {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-left: 16px;
+  vertical-align: middle;
+}
+/* Строки «только в расчёте»: доля есть, а строки в табеле «По объектам» нет. */
+.ts-table--salary-objects .ts-salary-calc-row td.ts-col-sticky,
+.ts-table--salary-objects .ts-salary-calc-row td.ts-col-ktu-sticky,
+.ts-table--salary-objects .ts-salary-calc-row td.ts-col-salary,
+.ts-table--salary-objects .ts-salary-calc-row td.ts-col-sum-sticky {
+  background: var(--bg-secondary);
+}
+.ts-salary-calc-row .ts-object-employee-name {
+  color: var(--text-secondary);
 }
 .ts-salary-object-note {
   color: var(--warning);

@@ -23,6 +23,7 @@ import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { getSalaryLetterHours, type ISalaryLetterHours } from '../../utils/timesheetSalary';
+import { buildSalaryObjectsOverlay, salaryCalcCellText, type ISalaryObjectsOverlay } from '../../utils/timesheetSalaryOverlay';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   TimesheetLetterFraction,
@@ -31,6 +32,17 @@ import {
   TimesheetSalaryMobileRow,
   type ITimesheetSalaryGridProps,
 } from './TimesheetSalaryCells';
+import {
+  TimesheetSalaryCalcGroups,
+  TimesheetSalaryCalcRows,
+  TimesheetSalaryGroupOutput,
+  TimesheetSalaryKtuCell,
+  TimesheetSalaryObjectsHeader,
+  TimesheetSalaryShareCells,
+  TimesheetSalaryTotalRows,
+  type ITimesheetObjectsSalary,
+  type SalaryDaysRenderer,
+} from './TimesheetSalaryObjectsParts';
 import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
@@ -42,7 +54,7 @@ type TimesheetViewMode = 'employees' | 'objects';
  */
 export type BulkBlockReason = 'locked' | 'covered' | 'other';
 
-interface ITimesheetGridProps {
+export interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
   objectEntries: TimesheetObjectEntry[];
@@ -68,6 +80,11 @@ interface ITimesheetGridProps {
   departmentName?: string;
   /** Вкладка «Зарплата»: столбцы КТУ (бригады) и «Сумма», «Выработка» в строке бригады. */
   salary?: ITimesheetSalaryGridProps;
+  /**
+   * «Зарплата по объектам»: та же сетка «По объектам», только просмотр (без кликов и массовых правок), плюс КТУ,
+   * «Выработка, ₽» у объекта, «Доля», «Сумма» и «Итого по бригаде».
+   */
+  objectsSalary?: ITimesheetObjectsSalary;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
   onBulkBlockedSelectionAttempt?: (reason: BulkBlockReason) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
@@ -503,6 +520,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   pendingEmployeeId = null,
   departmentName,
   salary,
+  objectsSalary,
   onBulkSelectionChange,
   onBulkBlockedSelectionAttempt,
   onEmployeeClick,
@@ -728,6 +746,23 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       });
     // showActualHours влияет на getObjectVisibleHours внутри getObjectCellHours.
   }, [days, employees, employeeRows, objectEntries, year, month, showActualHours]);
+
+  // «Зарплата по объектам»: дневные записи сотрудника и расчёт, разложенный по группам сетки.
+  const dailyEntriesByEmployeeId = useMemo(() => (
+    new Map(employeeRows.map(row => [row.employee.id, row.days]))
+  ), [employeeRows]);
+  const salaryOverlay = useMemo<ISalaryObjectsOverlay | null>(() => (
+    objectsSalary
+      ? buildSalaryObjectsOverlay(
+        objectViewGroups.map(group => ({
+          object_key: group.object_key,
+          isSynthetic: group.isSynthetic,
+          employeeIds: group.rows.map(row => row.employee.id),
+        })),
+        objectsSalary.data.objects ?? [],
+      )
+      : null
+  ), [objectsSalary, objectViewGroups]);
 
   const activeExpandedEmployeeIds = useMemo(() => (
     new Set(
@@ -1413,19 +1448,83 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }
 
+  // «Зарплата по объектам»: клетки строк «только в расчёте» и «Итого по бригаде», только просмотр. preferTimesheet и
+  // строка табеля есть — как «По сотрудникам»; иначе часы расчёта целыми, дня в расчёте нет — что в табеле.
+  const renderSalaryDays: SalaryDaysRenderer = (employeeId, calcHours, preferTimesheet) => {
+    const employee = employeeByIdForBulk.get(employeeId) ?? null;
+    const dailyEntries = dailyEntriesByEmployeeId.get(employeeId) ?? null;
+    const asTimesheet = preferTimesheet && employee !== null;
+    let hours = 0;
+    const cells = days.map(day => {
+      const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const sched = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month, day);
+      const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
+      const today = isToday(year, month, day);
+      const future = isFutureDay(year, month, day);
+      const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
+      const entry = dailyEntries?.get(day) ?? null;
+      const baseCls = getDayCellClass(entry, dayOff, today, future, threshold, approvalStatusFor?.(employeeId, isoDate), asTimesheet);
+      if (asTimesheet) {
+        const inactive = isDayInactiveForEmployee(employee, year, month, day);
+        const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
+        if (!inactive) hours += getDayCellHours(entry);
+        const baseTitle = getDayCellTitle(entry, dayOff);
+        return (
+          <td
+            key={day}
+            className={`${baseCls}${inactive ? ' ts-day--inactive' : ''}${preHoliday ? ' ts-day--pre-holiday' : ''} ts-salary-object-day`}
+            title={inactive
+              ? 'Сотрудник не в отделе на эту дату'
+              : (preHoliday ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ') : baseTitle)}
+          >
+            {inactive ? '' : getDayCellText(entry, dayOff)}
+          </td>
+        );
+      }
+      const value = calcHours[isoDate];
+      if (value !== undefined) hours += Math.round(value);
+      // Строки в табеле нет — дневного статуса нет: без «неявки» по пустому дню, зелёным только часы расчёта.
+      const calcCls = dailyEntries
+        ? baseCls
+        : ['ts-day', today ? 'ts-day--today' : '', value !== undefined && Math.round(value) > 0 ? 'ts-day--full' : (dayOff ? 'ts-day--weekend' : '')]
+          .filter(Boolean).join(' ');
+      return (
+        <td
+          key={day}
+          className={`${calcCls} ts-salary-object-day`}
+          title={value === undefined ? undefined : `Часы по расчёту зарплаты: ${formatHoursLabel(Math.round(value))}`}
+        >
+          {salaryCalcCellText(value, getObjectCellText(entry, null, dayOff))}
+        </td>
+      );
+    });
+    return { cells, hours };
+  };
+
   if (viewMode === 'objects') {
+    // «Зарплата по объектам» — только просмотр: ни кликов, ни массовых правок, какие бы обработчики ни пришли.
+    const readOnly = Boolean(objectsSalary);
+    const objectsBulk = bulkEditMode && !readOnly;
+    const objectsColSpan = days.length + 2 + (objectsSalary ? 3 : 0);
     return (
       <div className="ts-table-container">
-        <div className="ts-table-header-bar">
-          <h3 className="ts-table-title">Табель по объектам</h3>
+        <div className={`ts-table-header-bar${objectsSalary ? ' ts-salary-objects-bar' : ''}`}>
+          {objectsSalary
+            ? <TimesheetSalaryObjectsHeader data={objectsSalary.data} />
+            : <h3 className="ts-table-title">Табель по объектам</h3>}
           {tableLegend}
         </div>
 
         <div className="ts-table-scroll">
-          <table className={`ts-table ts-table--objects${bulkEditMode ? ' ts-table--bulk-mode' : ''}`}>
+          <table className={`ts-table ts-table--objects${objectsBulk ? ' ts-table--bulk-mode' : ''}${objectsSalary ? ' ts-table--salary-objects' : ''}`}>
             <thead>
               <tr>
                 <th className="ts-col-sticky">Объект / сотрудник</th>
+                {objectsSalary && (
+                  <th className="ts-col-ktu-sticky" title="Коэффициент трудового участия, 0,5–2,0; один на месяц на всех объектах">
+                    КТУ
+                  </th>
+                )}
                 {days.map(day => {
                   const weekend = isWeekend(year, month, day);
                   const today = isToday(year, month, day);
@@ -1439,20 +1538,34 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     </th>
                   );
                 })}
+                {objectsSalary && (
+                  <>
+                    <th className="ts-col-salary" title="Часть выработки объекта: выработка × КТУ × учтённые часы на объекте / Σ">
+                      Доля
+                    </th>
+                    <th className="ts-col-salary" title="К выплате: доля по всем объектам + доплаты − удержания, без НДФЛ">
+                      Сумма
+                    </th>
+                  </>
+                )}
                 <th className="ts-col-sum-sticky" title="Сумма показываемых часов по сотруднику на объекте">
                   Часы
                 </th>
               </tr>
             </thead>
             <tbody>
-              {objectViewGroups.map(group => (
+              {objectViewGroups.map(group => {
+                const salaryObject = salaryOverlay?.objectByGroup.get(group.object_key);
+                const extraMembers = salaryOverlay?.extraMembersByGroup.get(group.object_key);
+                return (
                 <Fragment key={group.object_key}>
                   <tr className="ts-object-group-row">
-                    <td className="ts-col-sticky ts-object-group-cell" colSpan={days.length + 2}>
+                    <td className="ts-col-sticky ts-object-group-cell" colSpan={objectsColSpan}>
                       <span className="ts-object-group-name">{group.object_name}</span>
                       <span className="ts-object-group-meta">
                         {group.rows.length} чел.{group.totalHours > 0 ? ` (${Math.round(group.totalHours)} ч.)` : ''}
                       </span>
+                      {objectsSalary && <TimesheetSalaryGroupOutput salary={objectsSalary} object={salaryObject} />}
                     </td>
                   </tr>
                   {group.rows.map(row => {
@@ -1465,13 +1578,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <tr key={`${group.object_key}_${row.employee.id}`}>
                       <td
                         className="ts-col-sticky ts-object-employee-cell"
-                        onClick={bulkEditMode ? undefined : () => onEmployeeClick(row.employee)}
+                        onClick={objectsBulk || readOnly ? undefined : () => onEmployeeClick(row.employee)}
                       >
                         <div className="ts-object-employee-name" title={row.employee.full_name}>
                           {formatTimesheetEmployeeName(row.employee.full_name)}
                         </div>
                         {renderTimesheetObject(row.employee)}
                       </td>
+                      {objectsSalary && <TimesheetSalaryKtuCell salary={objectsSalary} employeeId={row.employee.id} />}
                       {days.map(day => {
                         const objectEntry = row.days.get(day) || null;
                         const dailyEntry = row.dailyEntries.get(day) || null;
@@ -1481,9 +1595,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const today = isToday(year, month, day);
                         const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
-                        const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
+                        const targeted = objectsBulk && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
                         const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, row.object_name, dayOff, threshold, future);
-                        const title = bulkEditMode
+                        const title = objectsBulk
                           ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
                             .join(' • ')
@@ -1508,19 +1622,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
-                            className={`${baseCls}${inactiveCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${inactiveCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${objectsBulk && !isBlocked ? ' ts-day--bulk-selectable' : ''}${readOnly ? ' ts-salary-object-day' : ''}`}
                             title={title}
-                            onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
+                            onMouseDown={objectsBulk && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                               blockReason,
                             ) : undefined}
-                            onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
+                            onMouseEnter={objectsBulk && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                             ) : undefined}
-                            onClick={!bulkEditMode && !inactive ? () => {
+                            onClick={!objectsBulk && !readOnly && !inactive ? () => {
                               if (row.isSynthetic) {
                                 onDayClick(row.employee, day, row.dailyEntries.get(day) || null);
                                 return;
@@ -1536,20 +1650,43 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      {objectsSalary && (
+                        <TimesheetSalaryShareCells salary={objectsSalary} object={salaryObject} employeeId={row.employee.id} />
+                      )}
                       <td className="ts-col-sum-sticky">
                         {objRowSum > 0 ? formatHoursLabel(objRowSum) : '—'}
                       </td>
                     </tr>
                     );
                   })}
+                  {objectsSalary && salaryObject && extraMembers && (
+                    <TimesheetSalaryCalcRows
+                      salary={objectsSalary}
+                      object={salaryObject}
+                      members={extraMembers}
+                      renderDays={renderSalaryDays}
+                    />
+                  )}
                 </Fragment>
-              ))}
-              {objectViewGroups.length === 0 && (
+                );
+              })}
+              {objectsSalary && salaryOverlay && (
+                <TimesheetSalaryCalcGroups
+                  salary={objectsSalary}
+                  objects={salaryOverlay.unmatched}
+                  colSpan={objectsColSpan}
+                  renderDays={renderSalaryDays}
+                />
+              )}
+              {objectViewGroups.length === 0 && (salaryOverlay?.unmatched.length ?? 0) === 0 && (
                 <tr>
-                  <td colSpan={days.length + 2} className="ts-loading">
+                  <td colSpan={objectsColSpan} className="ts-loading">
                     Нет объектов для отображения
                   </td>
                 </tr>
+              )}
+              {objectsSalary && (
+                <TimesheetSalaryTotalRows salary={objectsSalary} colSpan={objectsColSpan} renderDays={renderSalaryDays} />
               )}
             </tbody>
           </table>

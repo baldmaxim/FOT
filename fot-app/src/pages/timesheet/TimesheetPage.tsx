@@ -648,6 +648,22 @@ export const TimesheetPage: FC = () => {
     }
     return Array.from({ length: end - start + 1 }, (_, index) => start + index);
   }, [rangeStart, rangeEnd]);
+  // «Зарплата по объектам»: сетка — из самого ответа табеля, без deferred-копии: иначе на миг табель прошлой бригады
+  // с расчётом новой, а ждать отставание deferred — мигание «Загрузки…» при каждом обновлении.
+  const liveTimesheetData = timesheetQuery.data;
+  const salaryObjectsGridData = useMemo(() => (
+    viewMode === 'salary_objects' && liveTimesheetData
+      ? {
+        employees: sortTimesheetRows(liveTimesheetData.employees || []),
+        entries: liveTimesheetData.entries || [],
+        objectEntries: liveTimesheetData.object_entries || [],
+        employeeStats: liveTimesheetData.employee_stats || [],
+        schedules: liveTimesheetData.schedules || EMPTY_SCHEDULES,
+        dailySchedules: liveTimesheetData.daily_schedules || EMPTY_DAILY_SCHEDULES,
+        calendar: liveTimesheetData.calendar || null,
+      }
+      : null
+  ), [viewMode, liveTimesheetData]);
   // Замки закрытого табеля приходят интервалами по сотруднику: в смешанной выборке
   // (табельщица, прямые подчинённые) плоский список дат блокировал бы чужих. Приоритет
   // статуса разрешён на сервере, здесь только поиск. Админ не блокируется — сервер
@@ -2838,8 +2854,21 @@ export const TimesheetPage: FC = () => {
         <TimesheetSalaryObjects
           data={timesheetSalary.data?.kind === 'brigade' ? timesheetSalary.data : undefined}
           loading={timesheetSalary.loading}
-          year={year}
-          month={month}
+          error={timesheetSalary.error}
+          grid={salaryObjectsGridData && {
+            ...salaryObjectsGridData,
+            year,
+            month,
+            visibleDays,
+            approvalStatusFor: lockStatusFor,
+            departmentName: selectedDeptName,
+            onEmployeeClick: handleEmployeeClick,
+            onDayClick: handleDayClick,
+            onObjectDayClick: handleObjectDayClick,
+          }}
+          // Табель прошлой бригады (placeholder) с расчётом новой не смешиваем.
+          gridLoading={timesheetQuery.isLoading || timesheetQuery.isPlaceholderData}
+          gridError={timesheetQuery.isError}
           compact={isMobile}
           showAllEmployees={includeEmptyEmployees}
           canEdit={canEditTimesheetSalary}
