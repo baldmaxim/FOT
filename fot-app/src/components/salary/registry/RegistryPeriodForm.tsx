@@ -13,7 +13,7 @@ import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 
-/** Строка таблицы с периодом «с — по»: «Без проезда», «Без переработки», «Доплата за общежитие». */
+/** Строка таблицы с периодом «с — по»: «Без проезда», «Без переработки». */
 interface IRegistryPeriodRow {
   id: number;
   full_name: string;
@@ -23,12 +23,14 @@ interface IRegistryPeriodRow {
 }
 
 interface IRegistryPeriodFormProps {
-  /** Заголовок окна правки: «Без проезда», «Без переработки», «Доплата за общежитие». */
+  /** Заголовок окна правки: «Без проезда», «Без переработки». */
   title: string;
-  /** Подпись даты начала: «Без проезда с», «Без переработки с», «Доплата с». */
+  /** Подпись даты начала: «Без проезда с», «Без переработки с». */
   fromLabel: string;
   /** Передано — ✎ этого периода (сотрудник не меняется); нет — «Добавить сотрудника». */
   row?: IRegistryPeriodRow;
+  /** «С» при добавлении (YYYY-MM-DD); нет — сегодня (МСК). При ✎ — дата строки. */
+  defaultDateFrom?: string;
   onAdd: (employeeId: number, fields: IRegistryPeriodFields) => Promise<void>;
   onUpdate: (id: number, fields: IRegistryPeriodFields) => Promise<void>;
   onClose: () => void;
@@ -45,6 +47,7 @@ export const RegistryPeriodForm: FC<IRegistryPeriodFormProps> = ({
   title,
   fromLabel,
   row,
+  defaultDateFrom,
   onAdd,
   onUpdate,
   onClose,
@@ -53,7 +56,7 @@ export const RegistryPeriodForm: FC<IRegistryPeriodFormProps> = ({
   const errorId = useId();
   const isEdit = row !== undefined;
   const [employee, setEmployee] = useState<IPayrollRegistryCandidate | null>(null);
-  const [dateFrom, setDateFrom] = useState(row?.date_from ?? moscowTodayIso());
+  const [dateFrom, setDateFrom] = useState(row?.date_from ?? defaultDateFrom ?? moscowTodayIso());
   const [dateTo, setDateTo] = useState(row?.date_to ?? '');
   const [error, setError] = useState<{ field: RegistryFormField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);

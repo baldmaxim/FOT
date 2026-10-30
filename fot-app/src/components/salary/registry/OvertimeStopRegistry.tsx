@@ -58,6 +58,8 @@ export const OvertimeStopRegistry: FC<IOvertimeStopRegistryProps> = ({ canEdit, 
     staleTime: 0,
   });
   const rows = useMemo(() => query.data?.filter(stop => stopInMonths(stop, months.value)), [query.data, months.value]);
+  // «С» при добавлении — 1-е число самого раннего выбранного месяца.
+  const firstMonthStart = `${[...months.value].sort()[0] ?? moscowTodayIso().slice(0, 7)}-01`;
 
   // Период меняет «Переработку» и «Сумму»: префикс 'payroll-terms' — «Расчёты», листок и эта таблица; плюс вкладка табеля.
   const refresh = () => Promise.all([
@@ -119,6 +121,7 @@ export const OvertimeStopRegistry: FC<IOvertimeStopRegistryProps> = ({ canEdit, 
           title="Без переработки"
           fromLabel="Без переработки с"
           row={editor.mode === 'edit' ? editor.stop : undefined}
+          defaultDateFrom={firstMonthStart}
           onAdd={payrollRegistryService.addOvertimeStop}
           onUpdate={payrollRegistryService.updateOvertimeStop}
           onClose={() => setEditor(null)}
