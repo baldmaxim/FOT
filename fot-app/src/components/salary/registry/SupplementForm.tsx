@@ -27,23 +27,26 @@ import styles from '../../ui/registry/RegistryFormModal.module.css';
 interface ISupplementFormProps {
   /** Передано — ✎ этой доплаты (сотрудник и вид не меняются); нет — «Добавить сотрудника». */
   row?: IPayrollSupplementRow;
+  /**
+   * Вид новой доплаты: «Плановые доплаты» — плановая, общая таблица «Доплата» — разовая. При правке —
+   * вид строки.
+   */
+  kind: PayrollSupplementKind;
   onClose: () => void;
   onSaved: () => void;
 }
 
-const KINDS: PayrollSupplementKind[] = ['planned', 'one_time'];
-const PLANNED_EXISTS = 'У сотрудника уже есть плановая доплата — измените её в таблице';
-
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ в «Доплате»: плановая — сумма ₽/мес и период «с — по» (та же, что «Плановые
- * доплаты» окна сотрудника, одна на сотрудника); разовая — месяц, сумма и основание (за месяц — сколько угодно).
+ * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес и период «с — по» (та же, что «Плановые доплаты» окна
+ * сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет сервер); разовая —
+ * месяц, сумма и основание (за месяц — сколько угодно).
  */
-export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved }) => {
+export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, onClose, onSaved }) => {
   const errorId = useId();
   const isEdit = row !== undefined;
-  const [kind, setKind] = useState<PayrollSupplementKind>(row?.kind ?? 'planned');
+  const kind = row?.kind ?? newKind;
   const [employee, setEmployee] = useState<IPayrollRegistryCandidate | null>(null);
   const [amount, setAmount] = useState(rateAmountInputValue(row?.amount));
   const [dateFrom, setDateFrom] = useState(row?.date_from ?? '');
@@ -61,12 +64,9 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
     return editMonth && !options.includes(editMonth) ? [...options, editMonth] : options;
   }, [currentMonth, editMonth]);
 
-  // Плановая уже есть — добавлять нечего: подсказка сразу, а не ответ сервера после «Сохранить».
-  const plannedExists = !isEdit && kind === 'planned' && employee !== null && employee.has_planned_supplement;
-  const shownError = plannedExists ? { field: 'employee' as const, message: PLANNED_EXISTS } : error;
   const clearError = () => setError(null);
   const dateClass = (field: RegistryFormField): string =>
-    (shownError?.field === field ? `${styles.dateInput} ${styles.dateInvalid}` : styles.dateInput);
+    (error?.field === field ? `${styles.dateInput} ${styles.dateInvalid}` : styles.dateInput);
 
   const save = async (): Promise<boolean> => {
     const selected = isEdit || employee !== null;
@@ -111,9 +111,8 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
       saving={saving}
-      error={shownError?.message ?? null}
+      error={error?.message ?? null}
       errorId={errorId}
-      submitDisabled={plannedExists}
       raised
     >
       <div className={styles.field}>
@@ -132,30 +131,10 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
             search={payrollRegistryService.searchEmployees}
             isDisabled={isNotEditable}
             disabled={saving}
-            invalid={shownError?.field === 'employee'}
+            invalid={error?.field === 'employee'}
           />
         )}
       </div>
-
-      {!isEdit && (
-        <div className={styles.field}>
-          <span className={styles.label}>Вид</span>
-          <div className={styles.segmented} role="group" aria-label="Вид доплаты">
-            {KINDS.map(value => (
-              <button
-                key={value}
-                type="button"
-                className={styles.segment}
-                aria-pressed={kind === value}
-                onClick={() => { setKind(value); clearError(); }}
-                disabled={saving}
-              >
-                {SUPPLEMENT_KIND_LABELS[value]}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className={styles.dates}>
         <label className={styles.field}>
@@ -166,8 +145,8 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
             inputMode="decimal"
             autoComplete="off"
             disabled={saving}
-            aria-invalid={shownError?.field === 'amount' || undefined}
-            aria-describedby={shownError ? errorId : undefined}
+            aria-invalid={error?.field === 'amount' || undefined}
+            aria-describedby={error ? errorId : undefined}
             clearLabel="Очистить сумму"
           />
         </label>
@@ -179,7 +158,7 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
               value={month}
               onChange={event => { setMonth(event.target.value); clearError(); }}
               disabled={saving}
-              aria-invalid={shownError?.field === 'month' || undefined}
+              aria-invalid={error?.field === 'month' || undefined}
             >
               {monthOptions.map(option => (
                 <option key={option} value={option}>{formatMonthLabel(option)}</option>
@@ -220,8 +199,8 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, onClose, onSaved
             maxLength={SUPPLEMENT_REASON_MAX_LENGTH}
             autoComplete="off"
             disabled={saving}
-            aria-invalid={shownError?.field === 'reason' || undefined}
-            aria-describedby={shownError ? errorId : undefined}
+            aria-invalid={error?.field === 'reason' || undefined}
+            aria-describedby={error ? errorId : undefined}
             clearLabel="Очистить основание"
           />
         </label>

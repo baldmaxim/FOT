@@ -6,11 +6,12 @@ import { registryMonthOptions, registryMonthsParam } from '../utils/payrollRegis
 
 /**
  * Выбор месяцев таблицы «Справочника»: по умолчанию — текущий месяц (МСК); «Весь период» не выбирается.
- * param — значение ?months= для таблиц с суммами из условий оплаты (входит в ключ запроса).
+ * initial — начальный выбор (список, открытый из «Доплаты», — на её месяцах). param — значение ?months= для
+ * таблиц с суммами из условий оплаты (входит в ключ запроса).
  */
-export const useRegistryMonths = (): IRegistryMonths & { param: string } => {
+export const useRegistryMonths = (initial?: ReadonlyArray<string>): IRegistryMonths & { param: string } => {
   const [currentMonth] = useState(() => moscowTodayIso().slice(0, 7));
-  const [value, setValue] = useState<string[]>([currentMonth]);
+  const [value, setValue] = useState<string[]>(() => (initial && initial.length > 0 ? [...initial] : [currentMonth]));
   const options = useMemo(() => registryMonthOptions(currentMonth), [currentMonth]);
   return { value, options, onChange: setValue, param: registryMonthsParam(value) };
 };

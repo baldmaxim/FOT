@@ -30,7 +30,7 @@ interface IHousingAllowanceFormProps {
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ в «Доплате за проживание»: сотрудник, сумма ₽/мес, въезд, выезд (пусто — живёт),
+ * «Добавить сотрудника» / ✎ в «Квартире» (и ✎ строки квартиры в «Доплате»): сотрудник, сумма ₽/мес, въезд, выезд (пусто — живёт),
  * адрес по желанию. Пишется квартира «Проживания» — та же запись, что во вкладке кадров (миграция 320).
  */
 export const HousingAllowanceForm: FC<IHousingAllowanceFormProps> = ({ row, defaultAmount, onClose, onSaved }) => {
@@ -74,7 +74,7 @@ export const HousingAllowanceForm: FC<IHousingAllowanceFormProps> = ({ row, defa
 
   return (
     <RegistryFormModal
-      title={isEdit ? 'Доплата за проживание' : 'Добавить сотрудника'}
+      title={isEdit ? 'Квартира' : 'Добавить сотрудника'}
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
       saving={saving}

@@ -1,0 +1,52 @@
+/*
+ * «Список:» с кнопками «Плановые доплаты» и «Квартира» справа от поиска в «Доплате» (блок searchAside панели).
+ * Кнопки — как вторичные кнопки панели (RegistryPanel.module.css). Mobile-first: строкой под поиском, кнопки
+ * делят ширину, тап-цели 44px; с 769px — справа от поиска, 36px и поля уже: на 1280px поиск, списки, месяц,
+ * «Экспорт» и «Добавить сотрудника» — одной строкой.
+ */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.caption {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.button:hover { background: var(--bg-secondary); color: var(--text-primary); }
+.button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 769px) {
+  .button { flex: 0 0 auto; min-height: 36px; padding: 0 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button { transition: none; }
+}

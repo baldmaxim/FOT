@@ -4,6 +4,7 @@ import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
   IDormitoryAllowanceRow,
+  IHousingAllowanceRow,
   IOvertimeStop,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
@@ -11,7 +12,13 @@ import {
   buildCompensationStopExport,
   buildDormitoryRegistryExport,
   buildDormitoryRegistryRows,
+  buildHousingExport,
   buildOvertimeStopExport,
+  buildPlannedSupplementExport,
+  buildSupplementExport,
+  buildSupplementRegistryRows,
+  canEditSupplement,
+  canEditSupplementRow,
   DORMITORY_REGISTRY_COLUMNS,
   dormitoryAllowanceInMonths,
   periodIntersectsMonths,
@@ -21,6 +28,7 @@ import {
   stayRemoval,
   stopInMonths,
   SUPPLEMENT_COLUMNS,
+  type ISupplementRegistryRow,
   supplementInMonths,
   supplementPeriod,
   supplementRowKey,
@@ -59,12 +67,78 @@ describe('«Доплата»', () => {
   });
 
   it('сортировка по периоду ставит разовую по первому числу месяца', () => {
-    const rows = [
+    const rows = buildSupplementRegistryRows([
       supplement({ kind: 'one_time', id: 5, month: '2026-11', date_from: null, date_to: null }),
       supplement({ employee_id: 2, date_from: '2026-10-15' }),
-    ];
+    ], [], []) ?? [];
     const sorted = applyTableView(rows, SUPPLEMENT_COLUMNS, { sort: 'period', dir: 'asc', filters: {} });
-    expect(sorted.map(supplementRowKey)).toEqual(['planned-2', 'once-5']);
+    expect(sorted.map(row => row.key)).toEqual(['planned-2', 'once-5']);
+  });
+
+  const apartment = (over: Partial<IHousingAllowanceRow>): IHousingAllowanceRow => ({
+    id: 5, employee_id: 3, full_name: 'Зиякулов Б.', department: null, position: null, amount: '630.00',
+    check_in: '2026-10-01', check_out: '2026-11-01', address: null, can_edit: true,
+    ...over,
+  });
+  const cells = (row: ISupplementRegistryRow): string[] => SUPPLEMENT_COLUMNS.slice(3).map(column => column.text(row));
+
+  it('общая таблица: плановая — в месяцах периода, разовая — в своём месяце', () => {
+    const planned = supplement({ id: 7, date_from: '2026-10-01', date_to: '2027-01-31' });
+    const once = supplement({ kind: 'one_time', id: 8, month: '2026-10', date_from: null, date_to: null, reason: 'Премия' });
+    const keys = (months: string[]) => buildSupplementRegistryRows([planned, once], [], months)?.map(row => row.key);
+    expect(keys(['2026-10'])).toEqual(['planned-7', 'once-8']);
+    expect(keys(['2027-01'])).toEqual(['planned-7']);
+    expect(keys(['2027-02'])).toEqual([]);
+  });
+
+  it('квартира в общей таблице: «Плановая», основание «Квартира», «по» — день до выезда', () => {
+    const rows = buildSupplementRegistryRows([], [apartment({}), apartment({ id: 6, check_out: null })], ['2026-10']) ?? [];
+    expect(rows.map(cells)).toEqual([
+      ['Плановая', '630,00', '01.10.2026 – 31.10.2026', 'Квартира'],
+      ['Плановая', '630,00', 'с 01.10.2026', 'Квартира'],
+    ]);
+    expect(rows.map(row => [row.kind, row.housing?.id, row.supplement])).toEqual([['apartment', 5, null], ['apartment', 6, null]]);
+  });
+
+  it('один источник не загружен — строк нет: из половины данных таблица не строится', () => {
+    expect(buildSupplementRegistryRows([supplement({})], undefined, ['2026-10'])).toBeUndefined();
+    expect(buildSupplementRegistryRows(undefined, [apartment({})], ['2026-10'])).toBeUndefined();
+  });
+
+  it('ключи квартиры, плановой и разовой с одним id различаются', () => {
+    const rows = buildSupplementRegistryRows(
+      [supplement({ id: 5 }), supplement({ kind: 'one_time', id: 5, month: '2026-10', date_from: null, date_to: null })],
+      [apartment({ id: 5 })],
+      ['2026-10'],
+    ) ?? [];
+    expect(rows.map(row => row.key)).toEqual(['planned-5', 'once-5', 'apartment-5']);
+  });
+
+  it('✎ и 🗑: у прошлого периода плановой нет, у текущей и разовой — по праву правки, у квартиры — по праву', () => {
+    expect(canEditSupplement(supplement({ is_current: false }))).toBe(false);
+    expect(canEditSupplement(supplement({ is_current: true }))).toBe(true);
+    expect(canEditSupplement(supplement({ is_current: true, can_edit: false }))).toBe(false);
+    expect(canEditSupplement(supplement({ kind: 'one_time', id: 5, month: '2026-10' }))).toBe(true);
+    const rows = buildSupplementRegistryRows(
+      [supplement({ id: 1, is_current: false })],
+      [apartment({}), apartment({ id: 6, can_edit: false })],
+      ['2026-10'],
+    ) ?? [];
+    expect(rows.map(canEditSupplementRow)).toEqual([false, true, false]);
+  });
+
+  it('выгрузки: «Доплата», «Плановые доплаты», «Квартира»', () => {
+    const at = (name: string) => expect.stringMatching(new RegExp(`^${name}_\\d{4}-\\d{2}-\\d{2}\\.xlsx$`));
+    const all = buildSupplementRegistryRows([supplement({})], [apartment({})], ['2026-10']) ?? [];
+    expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата', file_name: at('Доплата') });
+    expect(buildSupplementExport(all).columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание']);
+    expect(buildPlannedSupplementExport([supplement({})])).toMatchObject({
+      title: 'Плановые доплаты', file_name: at('Плановые_доплаты'),
+    });
+    expect(buildPlannedSupplementExport([supplement({})]).columns.map(column => column.label))
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Сумма, ₽/мес', 'Период']);
+    expect(buildHousingExport([apartment({})])).toMatchObject({ title: 'Квартира', file_name: at('Квартира') });
   });
 });
 

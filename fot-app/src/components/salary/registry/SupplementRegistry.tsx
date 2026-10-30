@@ -1,29 +1,28 @@
 import { useMemo, useState, type FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 
-import { ApiError } from '../../../api/client';
-import { useToast } from '../../../contexts/ToastContext';
 import { useRegistryMonths } from '../../../hooks/useRegistryMonths';
 import {
   PAYROLL_REGISTRY_KEYS,
-  PAYROLL_TERMS_PREFIX,
   payrollRegistryService,
+  type IHousingAllowanceRow,
   type IPayrollSupplementRow,
 } from '../../../services/payrollRegistryService';
-import { formatDate } from '../../../utils/formatMoney';
-import { moscowTodayIso } from '../../../utils/moscowDate';
 import {
   buildSupplementExport,
-  registryRemoval,
-  type RegistryRemoval,
+  buildSupplementRegistryRows,
+  canEditSupplementRow,
   SUPPLEMENT_COLUMNS,
-  supplementInMonths,
-  supplementPeriod,
-  supplementRowKey,
+  type ISupplementRegistryRow,
 } from '../../../utils/payrollRegistries';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
+import { HousingAllowanceForm } from './HousingAllowanceForm';
+import { HousingAllowanceRegistry } from './HousingAllowanceRegistry';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
+import { PlannedSupplementRegistry } from './PlannedSupplementRegistry';
 import { SupplementForm } from './SupplementForm';
+import { SupplementListsBar } from './SupplementListsBar';
+import { useSupplementRemoval } from './useSupplementRemoval';
 
 interface ISupplementRegistryProps {
   /** Право правки условий оплаты (/salary/terms). */
@@ -31,115 +30,115 @@ interface ISupplementRegistryProps {
   onClose: () => void;
 }
 
-type EditorState = { mode: 'add' } | { mode: 'edit'; row: IPayrollSupplementRow } | null;
+type EditorState =
+  | { mode: 'add' }
+  | { mode: 'supplement'; row: IPayrollSupplementRow }
+  | { mode: 'housing'; row: IHousingAllowanceRow }
+  | null;
+
+/** Список назначений, открытый поверх «Доплаты». */
+type OpenedList = 'planned' | 'apartments';
 
 const sendExport = payrollRegistryService.exportTable('supplements');
-const rowName = (row: IPayrollSupplementRow): string => row.full_name;
-// Прошлый период плановой — история: эндпоинты меняют только текущую версию.
-const canEditRow = (row: IPayrollSupplementRow): boolean => row.can_edit && row.is_current !== false;
-
-/** 🗑 у плановой: убрать с 1-го числа (период закрывается) или снять ошибочную; у разовой — удалить. */
-const plannedRemoval = (row: IPayrollSupplementRow): RegistryRemoval | null => (
-  row.kind === 'planned' && row.date_from !== null
-    ? registryRemoval({ date_from: row.date_from, date_to: row.date_to }, moscowTodayIso())
-    : null
-);
+const rowKey = (row: ISupplementRegistryRow): string => row.key;
+const rowName = (row: ISupplementRegistryRow): string => row.full_name;
 
 /**
- * «Справочник» → «Доплата»: плановые (текущая — та же, что в окне сотрудника, и прошлые периоды) и разовые
- * доплаты выбранных месяцев. Ввод — здесь: текущая плановая одна на сотрудника, разовых за месяц — сколько угодно,
- * у каждой основание. 🗑 у плановой — «убрать» с 1-го числа текущего месяца: период закрывается, прошлые месяцы
- * остаются; не начавшаяся или прошлая — снимается как ошибочная.
+ * «Справочник» → «Доплата»: все доплаты выбранных месяцев — плановые (их период задевает месяц), разовые за месяц
+ * и квартиры «Проживания» («Плановая» с основанием «Квартира»). Назначения ведутся в списках справа от поиска:
+ * «Плановые доплаты» и «Квартира»; «Добавить сотрудника» здесь — разовая (за месяц — сколько угодно, у каждой
+ * основание). ✎ и 🗑 у строки — те же окна и правила, что в списках; у прошлого периода плановой их нет.
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
-  const toast = useToast();
-  const queryClient = useQueryClient();
+  const months = useRegistryMonths();
+  const { busyKey, removeSupplement, removeHousing, refreshSupplements, refreshHousing } = useSupplementRemoval();
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const months = useRegistryMonths();
+  const [openedList, setOpenedList] = useState<OpenedList | null>(null);
 
-  const query = useQuery({
+  // Приходят все доплаты: разовые — за свой месяц, плановая — если её период задевает выбранные месяцы.
+  const supplements = useQuery({
     queryKey: PAYROLL_REGISTRY_KEYS.supplements,
     queryFn: ({ signal }) => payrollRegistryService.listSupplements(signal),
     staleTime: 0,
   });
-  // Приходят все доплаты: разовые — за свой месяц, плановая — если её период задевает выбранные месяцы.
+  // Квартиры сервер отбирает по месяцам сам.
+  const housing = useQuery({
+    queryKey: [...PAYROLL_REGISTRY_KEYS.housing, months.param],
+    queryFn: ({ signal }) => payrollRegistryService.listHousing(months.param, signal),
+    staleTime: 0,
+  });
   const rows = useMemo(
-    () => query.data?.filter(row => supplementInMonths(row, months.value)),
-    [query.data, months.value],
+    () => buildSupplementRegistryRows(supplements.data, housing.data, months.value),
+    [supplements.data, housing.data, months.value],
   );
 
-  // Плановая — та же, что в окне сотрудника: перечитать и список «Расчётов», и окно.
-  const refresh = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
-
-  const handleDelete = async (row: IPayrollSupplementRow) => {
-    if (busyKey !== null) return;
-    const removal = plannedRemoval(row);
-    let question: string;
-    if (removal?.action === 'close') {
-      question = `Убрать плановую доплату у ${row.full_name} с ${formatDate(removal.cutoff)}? `
-        + `Период ${formatDate(row.date_from)} – ${formatDate(removal.dateTo)} останется в истории.`;
-    } else if (row.kind === 'planned') {
-      question = `Снять плановую доплату у ${row.full_name} (${supplementPeriod(row)})?`;
-    } else {
-      question = `Удалить разовую доплату у ${row.full_name} за ${supplementPeriod(row)}?`;
-    }
-    if (!window.confirm(question)) return;
-    const key = supplementRowKey(row);
-    setBusyKey(key);
-    try {
-      if (removal?.action === 'close' && row.date_from !== null) {
-        await payrollRegistryService.setPlanned(row.employee_id, {
-          amount: Number(row.amount),
-          date_from: row.date_from,
-          date_to: removal.dateTo,
-        });
-      } else if (row.kind === 'planned') {
-        await payrollRegistryService.removePlanned(row.employee_id);
-      } else if (row.id !== null) {
-        await payrollRegistryService.removeOneTime(row.id);
-      }
-    } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось убрать');
-    } finally {
-      setBusyKey(null);
-      void refresh();
-    }
+  const handleEdit = (row: ISupplementRegistryRow) => {
+    if (row.supplement) setEditor({ mode: 'supplement', row: row.supplement });
+    else if (row.housing) setEditor({ mode: 'housing', row: row.housing });
+  };
+  const handleDelete = (row: ISupplementRegistryRow) => {
+    if (row.supplement) void removeSupplement(row.supplement);
+    else if (row.housing) void removeHousing(row.housing);
   };
 
   return (
-    <PayrollRegistryModal title="Доплата" onClose={onClose} closeOnEscape={!filterOpen && !editor}>
+    <PayrollRegistryModal
+      title="Доплата"
+      onClose={onClose}
+      closeOnEscape={!filterOpen && !editor && openedList === null}
+    >
       <RegistryPanel
         label="Доплата"
         columns={SUPPLEMENT_COLUMNS}
         rows={rows}
-        isLoading={query.isLoading}
-        isError={query.isError}
-        onRetry={() => { void query.refetch(); }}
-        rowKey={supplementRowKey}
+        isLoading={supplements.isLoading || housing.isLoading}
+        isError={supplements.isError || housing.isError}
+        onRetry={() => { void supplements.refetch(); void housing.refetch(); }}
+        rowKey={rowKey}
         rowLabel={rowName}
         searchText={rowName}
         fioSearch
+        searchAside={() => (
+          <SupplementListsBar
+            onOpenPlanned={() => setOpenedList('planned')}
+            onOpenApartments={() => setOpenedList('apartments')}
+          />
+        )}
         buildExport={buildSupplementExport}
         sendExport={sendExport}
         months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
-        onEdit={canEdit ? row => setEditor({ mode: 'edit', row }) : undefined}
-        onDelete={canEdit ? row => { void handleDelete(row); } : undefined}
+        onEdit={canEdit ? handleEdit : undefined}
+        onDelete={canEdit ? handleDelete : undefined}
         deleteLabel="Убрать"
-        canEditRow={canEditRow}
+        canEditRow={canEditSupplementRow}
         busyKey={busyKey}
         raisedFilters
         onFilterOpenChange={setFilterOpen}
       />
 
-      {editor && (
-        <SupplementForm
-          row={editor.mode === 'edit' ? editor.row : undefined}
+      {editor?.mode === 'housing' ? (
+        <HousingAllowanceForm
+          row={editor.row}
+          defaultAmount={null}
           onClose={() => setEditor(null)}
-          onSaved={() => { void refresh(); }}
+          onSaved={() => { void refreshHousing(); }}
         />
+      ) : editor && (
+        <SupplementForm
+          kind="one_time"
+          row={editor.mode === 'supplement' ? editor.row : undefined}
+          onClose={() => setEditor(null)}
+          onSaved={() => { void refreshSupplements(); }}
+        />
+      )}
+
+      {openedList === 'planned' && (
+        <PlannedSupplementRegistry canEdit={canEdit} initialMonths={months.value} onClose={() => setOpenedList(null)} />
+      )}
+      {openedList === 'apartments' && (
+        <HousingAllowanceRegistry canEdit={canEdit} initialMonths={months.value} onClose={() => setOpenedList(null)} />
       )}
     </PayrollRegistryModal>
   );

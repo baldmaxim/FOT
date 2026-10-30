@@ -6,6 +6,7 @@ import type {
   IHousingAllowanceRow,
   IOvertimeStop,
   IPayrollSupplementRow,
+  PayrollSupplementKind,
 } from '../services/payrollRegistryService';
 import type { IPayrollRateValue } from '../services/payrollService';
 import { formatDate, formatMonthLabel } from './formatMoney';
@@ -64,7 +65,7 @@ const dateColumn = <Row,>(key: string, label: string, value: (row: Row) => strin
   sortValue: row => value(row),
 });
 
-/** Квартиры «Проживания»: семь столбцов — отдел и должность уже, как у «Доплаты», без прокрутки в окне на 1280px. */
+/** «Квартира» (квартиры «Проживания»): семь столбцов — отдел и должность уже, как у «Доплаты», без прокрутки в окне на 1280px. */
 export const HOUSING_COLUMNS: ReadonlyArray<IRegistryColumn<IHousingAllowanceRow>> = [
   ...employeeColumns<IHousingAllowanceRow>({ department: 112, position: 144 }),
   moneyColumn<IHousingAllowanceRow>('Сумма, ₽/мес', row => row.amount),
@@ -81,35 +82,89 @@ export const HOUSING_COLUMNS: ReadonlyArray<IRegistryColumn<IHousingAllowanceRow
   },
 ];
 
-/** Период доплаты: плановая — «01.10.2026 – 31.12.2026», разовая — «октябрь 2026». */
-export const supplementPeriod = (row: IPayrollSupplementRow): string => (
+/**
+ * Вид строки общей таблицы «Доплата»: плановая, разовая или квартира «Проживания». 'apartment' — внутренний:
+ * ✎ и 🗑 открывают окно квартиры, а на экране и в xlsx это «Плановая» с основанием «Квартира».
+ */
+export type SupplementRowKind = PayrollSupplementKind | 'apartment';
+
+/** Основание строки квартиры в общей таблице «Доплата». */
+export const APARTMENT_REASON = 'Квартира';
+
+/** Поля периода доплаты: у разовой — месяц, у плановой и квартиры — даты «с — по» включительно. */
+interface ISupplementPeriodFields {
+  kind: SupplementRowKind;
+  month: string | null;
+  date_from: string | null;
+  date_to: string | null;
+}
+
+/** Период доплаты: плановая и квартира — «01.10.2026 – 31.12.2026» или «с 01.10.2026», разовая — «октябрь 2026». */
+export const supplementPeriod = (row: ISupplementPeriodFields): string => (
   row.kind === 'one_time'
     ? (row.month ? formatMonthLabel(row.month) : '—')
     : row.date_to ? `${formatDate(row.date_from)} – ${formatDate(row.date_to)}` : `с ${formatDate(row.date_from)}`
 );
 
-export const SUPPLEMENT_KIND_LABELS: Record<IPayrollSupplementRow['kind'], string> = {
+/** Разовая — с первого числа месяца: в одном порядке с плановыми. */
+const supplementPeriodSort = (row: ISupplementPeriodFields): string | null => (
+  row.kind === 'one_time' ? (row.month ? `${row.month}-01` : null) : row.date_from
+);
+
+export const SUPPLEMENT_KIND_LABELS: Record<PayrollSupplementKind, string> = {
   planned: 'Плановая',
   one_time: 'Разовая',
 };
 
+/** «Вид» на экране и в xlsx: квартира — «Плановая» (её месяц — тоже ежемесячная доплата). */
+const supplementKindLabel = (kind: SupplementRowKind): string => SUPPLEMENT_KIND_LABELS[kind === 'apartment' ? 'planned' : kind];
+
+/**
+ * Строка общей таблицы «Доплата» за выбранные месяцы: плановая или разовая доплата либо квартира «Проживания».
+ * Исходная запись — в supplement или housing: ✎ и 🗑 работают с ней.
+ */
+export interface ISupplementRegistryRow extends ISupplementPeriodFields {
+  /** planned-<id> / once-<id> / apartment-<id> — id таблиц могут совпасть. */
+  key: string;
+  employee_id: number;
+  full_name: string;
+  department: string | null;
+  position: string | null;
+  /** Плановая и квартира — ₽/мес, разовая — ₽; numeric строкой. */
+  amount: string;
+  reason: string | null;
+  can_edit: boolean;
+  supplement: IPayrollSupplementRow | null;
+  housing: IHousingAllowanceRow | null;
+}
+
 /** Семь столбцов: отдел и должность уже — таблица без прокрутки влезает в окно на 1280px. */
-export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollSupplementRow>> = [
-  ...employeeColumns<IPayrollSupplementRow>({ department: 112, position: 144 }),
+export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
+  ...employeeColumns<ISupplementRegistryRow>({ department: 112, position: 144 }),
   {
     key: 'kind', label: 'Вид', type: 'text', width: 92, nowrap: true,
-    text: row => SUPPLEMENT_KIND_LABELS[row.kind], sortValue: row => SUPPLEMENT_KIND_LABELS[row.kind],
+    text: row => supplementKindLabel(row.kind), sortValue: row => supplementKindLabel(row.kind),
   },
-  moneyColumn<IPayrollSupplementRow>('Сумма, ₽', row => row.amount, 112),
+  moneyColumn<ISupplementRegistryRow>('Сумма, ₽', row => row.amount, 112),
   {
     key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
     text: supplementPeriod,
-    // Разовая — с первого числа месяца: в одном порядке с плановыми.
-    sortValue: row => (row.kind === 'one_time' ? (row.month ? `${row.month}-01` : null) : row.date_from),
+    sortValue: supplementPeriodSort,
   },
   {
     key: 'reason', label: 'Основание', type: 'text', width: 144,
     text: row => orDash(row.reason), sortValue: row => row.reason,
+  },
+];
+
+/** «Плановые доплаты»: пять столбцов — вид и основание у плановой не нужны. */
+export const PLANNED_SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollSupplementRow>> = [
+  ...employeeColumns<IPayrollSupplementRow>(),
+  moneyColumn<IPayrollSupplementRow>('Сумма, ₽/мес', row => row.amount),
+  {
+    key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
+    text: supplementPeriod,
+    sortValue: supplementPeriodSort,
   },
 ];
 
@@ -195,8 +250,9 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
     });
   };
 
-export const buildHousingExport = buildSnapshot('Доплата за проживание', HOUSING_COLUMNS);
+export const buildHousingExport = buildSnapshot('Квартира', HOUSING_COLUMNS);
 export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
+export const buildPlannedSupplementExport = buildSnapshot('Плановые доплаты', PLANNED_SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildOvertimeStopExport = buildSnapshot('Без переработки', OVERTIME_STOP_COLUMNS);
 export const buildDormitoryRegistryExport = buildSnapshot('Общежитие', DORMITORY_REGISTRY_COLUMNS);
@@ -207,6 +263,20 @@ export const buildDormitoryRegistryExport = buildSnapshot('Общежитие', 
  */
 export const supplementRowKey = (row: IPayrollSupplementRow): string => (
   row.kind === 'planned' ? `planned-${row.id ?? row.employee_id}` : `once-${row.id}`
+);
+
+/** Ключ строки квартиры: в общей таблице «Доплата» рядом с доплатами, id которых могут совпасть. */
+export const housingRowKey = (row: IHousingAllowanceRow): string => `apartment-${row.id}`;
+
+/**
+ * ✎ и 🗑 у доплаты: по праву правки сотрудника; у прошлого периода плановой — нет: сервер меняет плановую по
+ * сотруднику (текущую версию), а не по версии журнала.
+ */
+export const canEditSupplement = (row: IPayrollSupplementRow): boolean => row.can_edit && row.is_current !== false;
+
+/** ✎ и 🗑 у строки общей таблицы «Доплата»: доплата — правило canEditSupplement, квартира — право правки. */
+export const canEditSupplementRow = (row: ISupplementRegistryRow): boolean => (
+  row.supplement ? canEditSupplement(row.supplement) : row.can_edit
 );
 
 /** Выбор месяца в таблицах «Справочника»: 24 месяца назад и 12 вперёд (доплаты и «Без проезда» бывают будущими). */
@@ -275,6 +345,13 @@ export const stayRemoval = (
   return removal.action === 'close' ? { action: 'close', checkOut: removal.cutoff } : removal;
 };
 
+/** 🗑 у плановой: убрать с 1-го числа (период закрывается) или снять ошибочную; у разовой — null (удаляется). */
+export const plannedRemoval = (row: IPayrollSupplementRow, todayIso: string): RegistryRemoval | null => (
+  row.kind === 'planned' && row.date_from !== null
+    ? registryRemoval({ date_from: row.date_from, date_to: row.date_to }, todayIso)
+    : null
+);
+
 /**
  * Период «с — по» (даты YYYY-MM-DD включительно; null — без границы) задевает хоть один из месяцев.
  * Пустой выбор — «Весь период»: подходит любой.
@@ -294,6 +371,40 @@ export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyA
     ? months.length === 0 || (row.month !== null && months.includes(row.month))
     : periodIntersectsMonths(row.date_from, row.date_to, months)
 );
+
+/**
+ * Строки общей таблицы «Доплата» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths)
+ * и квартиры — сервер их уже отобрал по месяцам (?months=); «по» квартиры — день до выезда. Пока один из
+ * источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
+ */
+export const buildSupplementRegistryRows = (
+  supplements: ReadonlyArray<IPayrollSupplementRow> | undefined,
+  housing: ReadonlyArray<IHousingAllowanceRow> | undefined,
+  months: ReadonlyArray<string>,
+): ISupplementRegistryRow[] | undefined => {
+  if (!supplements || !housing) return undefined;
+  return [
+    ...supplements
+      .filter(row => supplementInMonths(row, months))
+      .map(row => ({ ...row, key: supplementRowKey(row), supplement: row, housing: null })),
+    ...housing.map(row => ({
+      key: housingRowKey(row),
+      kind: 'apartment' as const,
+      employee_id: row.employee_id,
+      full_name: row.full_name,
+      department: row.department,
+      position: row.position,
+      amount: row.amount,
+      date_from: row.check_in,
+      date_to: row.check_out === null ? null : dayBefore(row.check_out),
+      month: null,
+      reason: APARTMENT_REASON,
+      can_edit: row.can_edit,
+      supplement: null,
+      housing: row,
+    })),
+  ];
+};
 
 /** «Без проезда» и «Без переработки» в месяцах: период (пустое «по» — бессрочно) задевает выбранные месяцы. */
 export const stopInMonths = (

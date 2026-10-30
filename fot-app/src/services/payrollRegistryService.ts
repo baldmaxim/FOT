@@ -4,9 +4,9 @@ import { payrollService } from './payrollService';
 import type { IStaffDeduction, IStaffDeductionPayload } from './staffDeductionService';
 
 /**
- * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата за проживание», «Доплата за общежитие»,
- * «Доплата», «Без проезда», «Удержания». Строки — «штат зарплаты» (как список условий оплаты), can_edit — охват
- * правки этого сотрудника (сервер проверит то же при записи).
+ * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата» (со списками «Плановые доплаты» и
+ * «Квартира»), «Доплата за общежитие», «Без проезда», «Удержания». Строки — «штат зарплаты» (как список условий
+ * оплаты), can_edit — охват правки этого сотрудника (сервер проверит то же при записи).
  */
 
 /**
@@ -119,8 +119,6 @@ export interface IPayrollRegistryCandidate {
   position: string | null;
   /** Условий (оклада) на сегодня нет — доплату за проживание не добавить. */
   has_terms: boolean;
-  /** Есть действующая плановая доплата — добавлять нечего, только ✎ в таблице. */
-  has_planned_supplement: boolean;
   can_edit: boolean;
 }
 
@@ -200,7 +198,7 @@ export const payrollRegistryService = {
 
   listSupplements: (signal?: AbortSignal) => list<IPayrollSupplementRow>('/payroll/supplements', signal),
 
-  /** Уже есть плановая — ApiError 409 SUPPLEMENT_EXISTS. */
+  /** Текущая плановая пересекается с новым периодом — ApiError 409 SUPPLEMENT_EXISTS. */
   addPlanned: async (employeeId: number, fields: IPlannedSupplementFields): Promise<void> => {
     await apiClient.post('/payroll/supplements/planned', { employee_id: employeeId, ...fields });
   },
@@ -308,7 +306,6 @@ export const payrollRegistryService = {
       department: row.department_name,
       position: row.position_name,
       has_terms: row.terms_id !== null,
-      has_planned_supplement: row.planned_supplement_amount != null,
       can_edit: row.can_edit !== false,
     }));
   },

@@ -10,18 +10,16 @@ import { PayrollDictionarySection } from './PayrollDictionarySection';
 
 interface IPayrollRatesEditorProps {
   canEdit: boolean;
-  /** «Проживание» у заголовка: таблица «Доплата за проживание». */
-  onOpenHousing: () => void;
 }
 
 /**
  * «Ставки» в окне «Справочник»: значение ставки — изменить с выбранного месяца (миграция 324): прошлые месяцы
  * остаются при прежнем значении. Новых ставок здесь не заводят (миграции 313/315/317/324); у ставки с кодом
  * название не меняется и удалить её нельзя. Значение «Доплаты за проживание» — сумма по умолчанию при добавлении
- * сотрудника в её таблицу. Значение «Доплаты за общежитие» — сумма за месяц всем, у кого в таблице «Общежитие»
+ * сотрудника в список «Квартира» («Доплата» в шапке). Значение «Доплаты за общежитие» — сумма за месяц всем, у кого в таблице «Общежитие»
  * (кнопка в шапке) общежитие не назначено. «Проезд» — сумма за месяц всем, кроме «Рабочих» и «Без проезда».
  */
-export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOpenHousing }) => {
+export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit }) => {
   const rates = usePayrollRates();
   const queryClient = useQueryClient();
   // Текущий месяц — на момент открытия окна: выбор «с какого месяца» начинается с него.
@@ -46,7 +44,6 @@ export const PayrollRatesEditor: FC<IPayrollRatesEditorProps> = ({ canEdit, onOp
   return (
     <PayrollDictionarySection
       title="Ставки"
-      lists={[{ label: 'Проживание', ariaLabel: 'Сотрудники с доплатой за проживание', onOpen: onOpenHousing }]}
       items={rates.data}
       isError={rates.isError}
       onRetry={() => { void rates.refetch(); }}
