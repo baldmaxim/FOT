@@ -119,6 +119,40 @@ export const payrollTableColumnList = (
   return [entry, ...(subColumns.get(parent) ?? []).map(sub => ({ kind: 'sub' as const, key: sub.key, parent, sub }))];
 });
 
+/**
+ * Оформление группы «как в Excel» (решение 30.10.2026): total — итог с «+» (темнее, свёрнутый и раскрытый); inGroup —
+ * раскрытый итог и его подстолбцы (скобка над шапкой, вертикальные линии); first / last — края группы (засечки скобки,
+ * правая линия у last); leftLine — левая линия, кроме итога сразу за другой группой: там уже её правая, двойной не будет.
+ */
+export interface IPayrollGroupMark {
+  total: boolean;
+  inGroup: boolean;
+  first: boolean;
+  last: boolean;
+  leftLine: boolean;
+}
+
+/** Отметки столбцов списка payrollTableColumnList (итог и его подстолбцы там подряд); withPlus — итоги с «+». */
+export const payrollGroupMarks = (
+  list: readonly PayrollTableColumnEntry[],
+  withPlus: ReadonlySet<PayrollExpandableColumn>,
+): IPayrollGroupMark[] => {
+  const isSubOf = (entry: PayrollTableColumnEntry | undefined, parent: string): boolean => (
+    entry?.kind === 'sub' && entry.parent === parent
+  );
+  const marks = list.map((entry, index) => {
+    const parent = entry.kind === 'sub' ? entry.parent : entry.key;
+    const total = entry.kind === 'column' && isExpandablePayrollColumn(entry.key) && withPlus.has(entry.key);
+    const nextInGroup = isSubOf(list[index + 1], parent);
+    const inGroup = entry.kind === 'sub' || (total && nextInGroup);
+    return { total, inGroup, first: inGroup && entry.kind === 'column', last: inGroup && !nextInGroup };
+  });
+  return marks.map((mark, index) => ({
+    ...mark,
+    leftLine: mark.inGroup && !(mark.first && marks[index - 1]?.last),
+  }));
+};
+
 export const toggleExpandedColumn = (
   expanded: ReadonlySet<PayrollExpandableColumn>,
   column: PayrollExpandableColumn,

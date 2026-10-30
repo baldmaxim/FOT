@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react';
 
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { formatDate } from '../../utils/formatMoney';
+import { cx } from '../../utils/motion';
 import {
   calcBrigadeOutputSub,
   calcIssuesNote,
@@ -25,6 +26,8 @@ export type PayrollCalcCellColumn =
 interface IPayrollCalcCellProps {
   column: PayrollCalcCellColumn;
   row: IPayrollTermsRow;
+  /** Оформление группы «+» (тёмный итог, линии), PayrollTermsTable. */
+  className?: string;
 }
 
 const formatAmount = (value: string | null | undefined): string => (
@@ -37,11 +40,12 @@ const formatAmount = (value: string | null | undefined): string => (
  * частичная, «Сумма» — «—». Выработка бригады не введена — без ⚠: подпись «выработка не внесена» под «Начислено по
  * табелю» и «Суммой».
  */
-export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
+export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, className }) => {
+  const cellClass = cx(styles.cellNumber, className);
   // Столбцы ФОТ считаются отдельным запросом после строк: идёт — «…», не удалось — «—» (над таблицей «Повторить»).
   if (row.calc_status && isCalcColumn(column)) {
     return (
-      <td className={styles.cellNumber}>
+      <td className={cellClass}>
         {row.calc_status === 'pending' ? <span className={styles.calcMuted} aria-label="Считается">…</span> : '—'}
       </td>
     );
@@ -50,18 +54,18 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
     case 'calc_rate': {
       const rate = row.calc?.rate ?? null;
       return (
-        <td className={styles.cellNumber} title={rate ? `на ${formatDate(rate.as_of)}` : undefined}>
+        <td className={cellClass} title={rate ? `на ${formatDate(rate.as_of)}` : undefined}>
           {formatCalcRate(rate)}
         </td>
       );
     }
     case 'paid_recalc':
-      return <td className={styles.cellNumber}>{formatAmount(row.paid_recalc_prev)}</td>;
+      return <td className={cellClass}>{formatAmount(row.paid_recalc_prev)}</td>;
     case 'card_payouts': {
       const lines = cardPayoutLines(row.card_payouts_by_method);
       const total = cardPayoutsTotal(lines);
       return (
-        <td className={styles.cellNumber}>
+        <td className={cellClass}>
           {lines.length === 0 ? '—' : lines.map(line => (
             <span key={line.method} className={styles.calcLine}>
               <span className={styles.calcLineLabel}>{line.label}</span>
@@ -88,7 +92,7 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row }) => {
           : column === 'calc_overtime' ? overtimeNote(row.calc) : null);
       return (
         <td
-          className={column === 'calc_net' ? `${styles.cellNumber} ${styles.calcTotal}` : styles.cellNumber}
+          className={cx(cellClass, column === 'calc_net' && styles.calcTotal)}
           title={note ?? undefined}
         >
           {formatAmount(amount)}

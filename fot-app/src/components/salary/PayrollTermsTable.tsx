@@ -17,12 +17,14 @@ import {
   type IAccrualMonthPart,
 } from '../../utils/payrollAccruals';
 import { PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
+import { cx } from '../../utils/motion';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import { formatPaidAmount, paidPayout, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import {
   isExpandablePayrollColumn,
+  payrollGroupMarks,
   payrollSubColumns,
   payrollTableColumnList,
   type PayrollExpandableColumn,
@@ -214,6 +216,18 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const visibleColumns = columns.filter(column => !hiddenColumns.has(column.key));
   const tableColumns = payrollTableColumnList(visibleColumns, expandedColumns, subColumns);
   const columnCount = FIXED_COLUMN_COUNT + tableColumns.length;
+  // Группы «+» как в Excel: итог с «+» темнее, у раскрытой — скобка над шапкой и линии; классы по ключу столбца.
+  const withPlus = new Set([...subColumns].filter(([, subs]) => subs.length > 0).map(([key]) => key));
+  const groupMarks = payrollGroupMarks(tableColumns, withPlus);
+  const groupClasses = new Map(tableColumns.map((entry, index) => {
+    const mark = groupMarks[index];
+    const lines = cx(mark.leftLine && styles.groupLineLeft, mark.last && styles.groupLineRight);
+    return [entry.key, {
+      head: cx(lines, mark.total && styles.groupTotalHead, mark.inGroup && styles.groupHead,
+        mark.first && styles.groupHeadFirst, mark.last && styles.groupHeadLast),
+      cell: cx(lines, mark.total && styles.groupTotal),
+    }] as const;
+  }));
 
   const renderSortHeader = (key: PayrollSortKey, label: string, className?: string) => (
     <PayrollSortHeader
@@ -237,7 +251,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     total: string | null | undefined,
     hasDetails: boolean,
   ): ReactNode => (
-    <td key={column} className={styles.cellNumber}>
+    <td key={column} className={cx(styles.cellNumber, groupClasses.get(column)?.cell)}>
       {hasDetails && onOpenPaidItems ? (
         // Своя кнопка: клик открывает окно статей, а не карточку строки.
         <button
@@ -271,7 +285,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     // «Оклад» — ставка на конец периода, не сумма за месяцы: периода под подписью нет.
     const toggle = isExpandablePayrollColumn(column.key) ? renderExpandToggle(column.key, column.label) : null;
     return (
-      <th key={column.key} title={PAYROLL_CALC_HEADER_TITLES[column.key]}>
+      <th key={column.key} className={groupClasses.get(column.key)?.head || undefined} title={PAYROLL_CALC_HEADER_TITLES[column.key]}>
         {toggle ? <span className={styles.headToggle}>{column.label}{toggle}</span> : column.label}
         {paidPeriod && column.key !== 'calc_rate' && (
           <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
@@ -282,7 +296,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   /** «+»/«−» раскрываемого столбца — только когда есть что раскрыть. */
   const renderExpandToggle = (column: PayrollExpandableColumn, label: string): ReactNode => {
-    if (!onToggleExpand || (subColumns.get(column)?.length ?? 0) === 0) return null;
+    if (!onToggleExpand || !withPlus.has(column)) return null;
     const expanded = expandedColumns.has(column);
     const Icon = expanded ? Minus : Plus;
     return (
@@ -300,7 +314,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   /** Шапка подстолбца: подпись без капса и период, как у соседей; у прежних столбцов ФОТ — их подсказка. */
   const renderSubHeader = (key: string, sub: PayrollSubColumn): ReactNode => (
-    <th key={key} className={styles.subHead} title={sub.type === 'column' ? PAYROLL_CALC_HEADER_TITLES[sub.column] : undefined}>
+    <th key={key} className={cx(styles.subHead, groupClasses.get(key)?.head)} title={sub.type === 'column' ? PAYROLL_CALC_HEADER_TITLES[sub.column] : undefined}>
       {sub.label}
       {paidPeriod && <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>}
     </th>
@@ -309,8 +323,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   /** Ячейка подстолбца: переработка, проезд, проживание — прежней ячейкой ФОТ, прочие — своей. */
   const renderSubCell = (key: string, sub: PayrollSubColumn, row: IPayrollTermsRow): ReactNode => (
     sub.type === 'column'
-      ? <PayrollCalcCell key={key} column={sub.column} row={row} />
-      : <PayrollSubColumnCell key={key} sub={sub} row={row} />
+      ? <PayrollCalcCell key={key} column={sub.column} row={row} className={groupClasses.get(key)?.cell} />
+      : <PayrollSubColumnCell key={key} sub={sub} row={row} className={groupClasses.get(key)?.cell} />
   );
 
   const renderCell = (column: PayrollTableColumn, row: IPayrollTermsRow): ReactNode => {
@@ -351,7 +365,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       }
       default:
         // Состав зарплаты «Расчётов»: ФОТ по закрытому табелю и суммы 1С.
-        return <PayrollCalcCell key={column} column={column} row={row} />;
+        return <PayrollCalcCell key={column} column={column} row={row} className={groupClasses.get(column)?.cell} />;
     }
   };
 

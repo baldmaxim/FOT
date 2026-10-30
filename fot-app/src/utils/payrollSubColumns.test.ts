@@ -5,6 +5,7 @@ import { calcSumAmount, sumAmounts } from './payrollCalcColumns';
 import { PAYROLL_CALC_TABLE_COLUMNS } from './payrollColumns';
 import {
   parseExpandedPayrollColumns,
+  payrollGroupMarks,
   payrollSubColumns,
   payrollTableColumnList,
   subColumnAmount,
@@ -193,6 +194,34 @@ describe('список столбцов таблицы', () => {
     const list = payrollTableColumnList(visible, new Set(['calc_supplements']), subColumns);
     expect(list.map(entry => entry.key).filter(key => key.startsWith('calc_supplements'))).toEqual([]);
     expect(list).toHaveLength(visible.length);
+  });
+
+  it('оформление групп: тёмный итог с «+», края раскрытой, на стыке двух групп — одна линия', () => {
+    const withPlus = new Set<PayrollExpandableColumn>(['deductions', 'calc_supplements', 'calc_deductions']);
+    const columns = PAYROLL_CALC_TABLE_COLUMNS
+      .filter(column => ['deductions', 'calc_supplements', 'calc_deductions', 'calc_net'].includes(column.key));
+    const list = payrollTableColumnList(columns, new Set(['calc_supplements', 'calc_deductions']), subColumns);
+    const marks = payrollGroupMarks(list, withPlus);
+    const byKey = Object.fromEntries(list.map((entry, index) => [entry.key, marks[index]]));
+    const none = { total: false, inGroup: false, first: false, last: false, leftLine: false };
+
+    // Свёрнутые «Удержания» с «+» — только темнее, без скобки и линий.
+    expect(byKey.deductions).toEqual({ ...none, total: true });
+    expect(byKey.calc_supplements).toEqual({ total: true, inGroup: true, first: true, last: false, leftLine: true });
+    expect(byKey['calc_supplements:calc_travel']).toEqual({ ...none, inGroup: true, leftLine: true });
+    expect(byKey['calc_supplements:planned']).toEqual({ ...none, inGroup: true, last: true, leftLine: true });
+    // «Удержания (ФОТ)» сразу за «Доплатами»: левой линии нет — у соседа уже правая.
+    expect(byKey.calc_deductions).toEqual({ total: true, inGroup: true, first: true, last: false, leftLine: false });
+    expect(byKey['calc_deductions:3']).toEqual({ ...none, inGroup: true, last: true, leftLine: true });
+    expect(byKey.calc_net).toEqual(none);
+  });
+
+  it('итог без подстолбцов — без оформления, даже раскрытый', () => {
+    const columns = PAYROLL_CALC_TABLE_COLUMNS.filter(column => column.key === 'calc_supplements');
+    const list = payrollTableColumnList(columns, new Set(['calc_supplements']), new Map());
+    expect(payrollGroupMarks(list, new Set())).toEqual([
+      { total: false, inGroup: false, first: false, last: false, leftLine: false },
+    ]);
   });
 
   it('«+» → «−» → «+»; из хранилища — только известные столбцы, мусор — пусто', () => {

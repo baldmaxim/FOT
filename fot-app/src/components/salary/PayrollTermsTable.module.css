@@ -278,6 +278,52 @@
   letter-spacing: normal;
 }
 
+/*
+ * Группы «+» как в Excel (30.10.2026). Итог с «+» темнее в обеих темах: слой затемнения лежит поверх --row-overlay,
+ * поэтому чередование, hover и фокус строки сохраняются, а итог на hover остаётся темнее соседей.
+ * Тёмная тема — по умолчанию (:root), светлая — [data-theme="light"].
+ */
+.table {
+  --group-total-head: var(--bg-primary);
+  --group-total-shade: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+}
+[data-theme="light"] .table {
+  --group-total-head: var(--bg-elevated);
+  --group-total-shade: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.table thead th.groupTotalHead { background: var(--group-total-head); }
+.table td.groupTotal {
+  background-image:
+    linear-gradient(var(--group-total-shade), var(--group-total-shade)),
+    linear-gradient(var(--row-overlay), var(--row-overlay));
+}
+
+/* Раскрытая группа: линии между столбцами и по краям на всю высоту; на стыке двух групп — одна линия */
+.table .groupLineLeft { border-left: 1px solid var(--border); }
+.table .groupLineRight { border-right: 1px solid var(--border); }
+
+/* Скобка ┌──┐ над шапкой раскрытой группы: сегменты ячеек внахлёст на 1px — без разрывов при любом масштабе */
+.table thead th.groupHead { padding-top: 14px; }
+.table thead th.groupHead::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: -1px;
+  right: -1px;
+  border-top: 2px solid var(--text-secondary);
+  pointer-events: none;
+}
+.table thead th.groupHeadFirst::before {
+  left: 6px;
+  height: 6px;
+  border-left: 2px solid var(--text-secondary);
+}
+.table thead th.groupHeadLast::before {
+  right: 6px;
+  height: 6px;
+  border-right: 2px solid var(--text-secondary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .paidButton,
   .expandButton { transition: none; }
