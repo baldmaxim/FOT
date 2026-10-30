@@ -52,6 +52,8 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
   sendExport: (snapshot: ITableExportSnapshot) => Promise<{ blob: Blob; filename: string }>;
   /** Передан — «Добавить сотрудника» (право «Редактирование»). */
   onAdd?: () => void;
+  /** Подпись кнопки добавления, если она добавляет не сотрудника вообще: «Разовая доплата» в «Доплате». */
+  addLabel?: string;
   /** Начальная сортировка; по умолчанию — ФИО по возрастанию. */
   initialView?: ITableView;
   /** Передан — выбор месяцев перед «Экспортом», той же высоты. */
@@ -71,6 +73,7 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
  */
 export const RegistryPanel = <Row,>({
   rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
+  addLabel = 'Добавить сотрудника',
   initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, ...tableProps
 }: IRegistryPanelProps<Row>): ReactElement => {
   const { columns } = tableProps;
@@ -131,7 +134,7 @@ export const RegistryPanel = <Row,>({
           {onAdd && (
             <button type="button" className={`${styles.button} ${styles.buttonPrimary}`} onClick={onAdd}>
               <UserPlus size={14} aria-hidden="true" />
-              <span>Добавить сотрудника</span>
+              <span>{addLabel}</span>
             </button>
           )}
         </div>

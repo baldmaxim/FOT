@@ -109,6 +109,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
         sendExport={sendExport}
         months={months}
         onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
+        addLabel="Разовая доплата"
         onEdit={canEdit ? handleEdit : undefined}
         onDelete={canEdit ? handleDelete : undefined}
         deleteLabel="Убрать"
