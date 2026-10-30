@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
-  IDormitoryAllowanceRow,
   IHousingAllowanceRow,
   IOvertimeStop,
   IPayrollSupplementRow,
@@ -20,12 +19,12 @@ import {
   canEditSupplement,
   canEditSupplementRow,
   DORMITORY_REGISTRY_COLUMNS,
-  dormitoryAllowanceInMonths,
   periodIntersectsMonths,
   registryMonthOptions,
   registryMonthsParam,
   registryRemoval,
-  stayRemoval,
+  stayCheckoutError,
+  stayRemovalMode,
   stopInMonths,
   SUPPLEMENT_COLUMNS,
   type ISupplementRegistryRow,
@@ -81,9 +80,9 @@ describe('«Доплата»', () => {
     expect(keys(['2027-02'])).toEqual([]);
   });
 
-  it('квартира в общей таблице: «Плановая», основание «Квартира», «по» — день до выезда', () => {
+  it('квартира в общей таблице: «Плановая», основание «Квартира, ₽/день» (ставка за день, 339), «по» — день до выезда', () => {
     const rows = buildSupplementRegistryRows([], [apartment({}), apartment({ id: 6, check_out: null })], ['2026-10']) ?? [];
-    expect(rows.map(cells)).toEqual([['Плановая', '630,00', 'Квартира'], ['Плановая', '630,00', 'Квартира']]);
+    expect(rows.map(cells)).toEqual([['Плановая', '630,00', 'Квартира, ₽/день'], ['Плановая', '630,00', 'Квартира, ₽/день']]);
     expect(rows.map(row => [row.date_from, row.date_to])).toEqual([['2026-10-01', '2026-10-31'], ['2026-10-01', null]]);
     expect(rows.map(row => [row.kind, row.housing?.id, row.supplement])).toEqual([['apartment', 5, null], ['apartment', 6, null]]);
   });
@@ -139,17 +138,24 @@ describe('поиск по ФИО', () => {
 });
 
 describe('формы', () => {
-  it('проживание — квартира или общежитие (🗑): выезд — 1-е число месяца; не начавшееся или прошедшее — удаляется', () => {
-    // Живёт с июля — убрана с 01.10: выезд 01.10 (по 30.09 включительно).
-    expect(stayRemoval({ check_in: '2026-07-01', check_out: null }, '2026-10-20'))
-      .toEqual({ action: 'close', checkOut: '2026-10-01' });
-    expect(stayRemoval({ check_in: '2026-07-01', check_out: '2026-12-01' }, '2026-10-20'))
-      .toEqual({ action: 'close', checkOut: '2026-10-01' });
-    // Выехала 01.10 — в октябре уже не жила: прошедшее проживание.
-    expect(stayRemoval({ check_in: '2026-07-01', check_out: '2026-10-01' }, '2026-10-20')).toEqual({ action: 'delete' });
-    expect(stayRemoval({ check_in: '2026-10-05', check_out: null }, '2026-10-20')).toEqual({ action: 'delete' });
-    // «Тест рабочего»: въезд 25.10, выезд 25.11 — ещё не начиналось к 01.10, ошибочная строка.
-    expect(stayRemoval({ check_in: '2026-10-25', check_out: '2026-11-25' }, '2026-10-22')).toEqual({ action: 'delete' });
+  it('проживание (🗑): идущее — окно «Дата выезда»; не начавшееся (въезд сегодня и позже) или прошедшее — удаляется', () => {
+    expect(stayRemovalMode({ check_in: '2026-07-01', check_out: null }, '2026-10-20')).toBe('checkout');
+    expect(stayRemovalMode({ check_in: '2026-10-05', check_out: '2026-12-01' }, '2026-10-20')).toBe('checkout');
+    // Выехала 20.10 — сегодня уже не живёт.
+    expect(stayRemovalMode({ check_in: '2026-07-01', check_out: '2026-10-20' }, '2026-10-20')).toBe('delete');
+    expect(stayRemovalMode({ check_in: '2026-10-20', check_out: null }, '2026-10-20')).toBe('delete');
+    // «Тест рабочего»: въезд 25.10, выезд 25.11 — ещё не начиналось.
+    expect(stayRemovalMode({ check_in: '2026-10-25', check_out: '2026-11-25' }, '2026-10-22')).toBe('delete');
+  });
+
+  it('дата выезда: позже въезда и не позже прежнего выезда', () => {
+    const stay = { check_in: '2026-09-01', check_out: '2026-11-01' };
+    expect(stayCheckoutError('', stay)).toBe('Укажите дату выезда');
+    expect(stayCheckoutError('2026-09-01', stay)).toBe('Дата выезда — позже въезда (01.09.2026)');
+    expect(stayCheckoutError('2026-11-02', stay)).toBe('Дата выезда — не позже прежней (01.11.2026)');
+    expect(stayCheckoutError('2026-09-02', stay)).toBeNull();
+    expect(stayCheckoutError('2026-11-01', stay)).toBeNull();
+    expect(stayCheckoutError('2030-01-01', { ...stay, check_out: null })).toBeNull();
   });
 
   it('плановая: окончание раньше начала; «по» пусто — бессрочно', () => {
@@ -310,70 +316,24 @@ describe('выбор месяца в таблицах «Справочника»
     expect(snapshot.rows.map(row => row.cells.slice(-2))).toEqual([['15.09.2026', '31.10.2026'], ['01.11.2026', 'бессрочно']]);
   });
 
-  it('«Доплата за общежитие»: месяцы проживания скрыты, в день выезда уже не живёт; «Весь период» — все', () => {
-    const row: IDormitoryAllowanceRow = {
-      id: 1, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
-      date_from: '2026-11-01', date_to: null, amount: '500.00', can_edit: true,
-      // Заселили позже: живёт с 10.12 по 31.01 (выезд 01.02).
-      dormitory_stays: [{ check_in: '2026-12-10', check_out: '2027-02-01' }],
-    };
-    expect(dormitoryAllowanceInMonths(row, ['2026-10'])).toBe(false);
-    expect(dormitoryAllowanceInMonths(row, ['2026-11'])).toBe(true);
-    expect(dormitoryAllowanceInMonths(row, ['2026-12'])).toBe(false);
-    expect(dormitoryAllowanceInMonths(row, ['2027-01'])).toBe(false);
-    expect(dormitoryAllowanceInMonths(row, ['2027-02'])).toBe(true);
-    expect(dormitoryAllowanceInMonths(row, ['2026-12', '2027-02'])).toBe(true);
-    expect(dormitoryAllowanceInMonths(row, [])).toBe(true);
-    // Живёт и сейчас (выезда нет) — дальше не показывается.
-    const living = { ...row, dormitory_stays: [{ check_in: '2026-12-10', check_out: null }] };
-    expect(dormitoryAllowanceInMonths(living, ['2030-01'])).toBe(false);
-  });
-
-  it('«Общежитие»: в одной таблице живущие (адрес, без доплаты) и «Не назначено» с доплатой', () => {
+  it('«Общежитие»: только живущие, задевающие выбранные месяцы; в день выезда уже не живёт', () => {
     const stay: IPayrollDormitoryStay = {
       id: 7, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null, kind: 'dormitory',
       check_in: '2026-09-01', check_out: '2026-10-01', address: 'Общ. Мал.Почтовая 2\\2', amount: null, can_edit: true,
     };
-    // Выехал 01.10 — с октября доплата; id совпадает с проживанием, ключи разные.
-    const allowance: IDormitoryAllowanceRow = {
-      id: 7, employee_id: 1, full_name: 'Акимов С.Ю.', department: null, position: null,
-      date_from: '2026-10-01', date_to: null, amount: '160.00', can_edit: true, dormitory_stays: [],
-    };
-    const text = (months: string[]) => buildDormitoryRegistryRows([stay], [allowance], months)
+    const living = { ...stay, id: 8, check_in: '2026-09-15', check_out: null, address: 'Кв. Ляпидевского 12-58' };
+    const text = (months: string[]) => buildDormitoryRegistryRows([stay, living], months)
       .map(row => DORMITORY_REGISTRY_COLUMNS.slice(3).map(column => column.text(row)));
 
-    expect(text(['2026-09'])).toEqual([['Общ. Мал.Почтовая 2\\2', '01.09.2026', '01.10.2026', '—']]);
-    // В день выезда уже не живёт.
-    expect(text(['2026-10'])).toEqual([['Не назначено', '01.10.2026', 'бессрочно', '160,00']]);
-    const all = buildDormitoryRegistryRows([stay], [allowance], []);
-    expect(all.map(row => row.key)).toEqual(['stay:7', 'allowance:7']);
-    expect(all.map(row => row.allowance)).toEqual([null, allowance]);
-    // У проживания — только 🗑 по его строке.
-    expect(all.map(row => row.stay)).toEqual([stay, null]);
+    expect(text(['2026-09'])).toEqual([
+      ['Общ. Мал.Почтовая 2\\2', '01.09.2026', '01.10.2026'],
+      ['Кв. Ляпидевского 12-58', '15.09.2026', '—'],
+    ]);
+    expect(text(['2026-10'])).toEqual([['Кв. Ляпидевского 12-58', '15.09.2026', '—']]);
+    const all = buildDormitoryRegistryRows([stay, living], []);
+    expect(all.map(row => [row.key, row.stay])).toEqual([['stay:7', stay], ['stay:8', living]]);
     expect(buildDormitoryRegistryExport(all).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Общежитие', 'С', 'По', 'Доплата, ₽/мес']);
-  });
-
-  it('сумма доплаты — ставка последнего выбранного месяца, в который доплата положена (миграция 324)', () => {
-    // Ставка 160 «с начала», с ноября — 200; в ноябре сотрудник уже живёт в общежитии.
-    const values = [{ effective_from: '2000-01', amount: '160.00' }, { effective_from: '2026-11', amount: '200.00' }];
-    const allowance: IDormitoryAllowanceRow = {
-      id: 8, employee_id: 2, full_name: 'Борисов А.А.', department: null, position: null,
-      date_from: '2026-09-01', date_to: null, amount: '200.00', can_edit: true,
-      dormitory_stays: [{ check_in: '2026-11-10', check_out: null }],
-    };
-    const amounts = (months: string[]) => buildDormitoryRegistryRows([], [allowance], months, values)
-      .map(row => row.amount);
-
-    expect(amounts(['2026-09'])).toEqual(['160.00']);
-    // Сентябрь и октябрь — ставка октября; ноябрь исключён общежитием — строка по октябрю, не по ноябрю.
-    expect(amounts(['2026-09', '2026-10'])).toEqual(['160.00']);
-    expect(amounts(['2026-10', '2026-11'])).toEqual(['160.00']);
-    expect(amounts(['2026-11'])).toEqual([]);
-    // Ставка прошлого месяца не меняется будущей сменой; без истории ставки — сумма сервера.
-    const moved = { ...allowance, dormitory_stays: [] };
-    expect(buildDormitoryRegistryRows([], [moved], ['2026-10', '2026-12'], values).map(row => row.amount)).toEqual(['200.00']);
-    expect(buildDormitoryRegistryRows([], [moved], ['2026-10']).map(row => row.amount)).toEqual(['200.00']);
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Общежитие', 'Въезд', 'Выезд']);
   });
 });
 

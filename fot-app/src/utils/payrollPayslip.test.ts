@@ -143,6 +143,15 @@ describe('расчётный листок: «По ставкам ФОТ»', () =
     expect(payslipRateLines(undefined)).toEqual([]);
   });
 
+  it('проживание по дням — подпись «630,00 × 9 дн.», без ставки — «30 дн.»', () => {
+    expect(payslipRateLines([{ code: 'housing', amount: '5670.00', rate: '630.00', housing_days: 9 }]))
+      .toEqual([{ code: 'housing', label: 'Доплата за проживание', amount: 5670, note: '630,00 × 9 дн.' }]);
+    expect(payslipRateLines([{ code: 'dormitory_allowance', amount: '4160.00', rate: '160.00', housing_days: 26 }]))
+      .toEqual([{ code: 'dormitory_allowance', label: 'Доплата за общежитие', amount: 4160, note: '160,00 × 26 дн.' }]);
+    expect(payslipRateLines([{ code: 'housing', amount: '19950.00', housing_days: 30 }]))
+      .toEqual([{ code: 'housing', label: 'Доплата за проживание', amount: 19950, note: '30 дн.' }]);
+  });
+
   it('проезд с днями — подпись «22 из 23 дн.»', () => {
     expect(payslipRateLines([{ code: 'travel', amount: '2611.00', days: { worked: 22, norm: 23 } }]))
       .toEqual([{ code: 'travel', label: 'Проезд', amount: 2611, note: '22 из 23 дн.' }]);

@@ -18,6 +18,7 @@ import {
   splitWorkedDays,
   type IPayslipRateFacts,
 } from './payroll-payslip.service.js';
+import { housingAllowances } from './payroll-payslip.rules.js';
 
 // «5+2» с двумя плановыми субботами в месяц — как у прорабов в июле 2026.
 const schedule: IResolvedSchedule = {
@@ -144,15 +145,30 @@ describe('расчётный листок: период', () => {
 });
 
 describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
+  // Сентябрь 2026 целиком, без отсутствий и дней бригады; авто-доплата за общежитие с сентября.
   const facts = (over: Partial<IPayslipRateFacts> = {}): IPayslipRateFacts => ({
     category: 'office',
     travelRate: '2730.00',
     travelStopped: false,
     travelDays: { worked: 21, norm: 21 },
     dormitoryAllowanceRate: '160.00',
+    dormitoryAllowanceFrom: '2026-09-01',
     housing: [],
+    housingDays: { from: '2026-09-01', to: '2026-09-30', absenceDates: [], brigadeDates: [] },
     ...over,
   });
+  const days = (over: Partial<IPayslipRateFacts['housingDays']>): IPayslipRateFacts['housingDays'] => ({
+    from: '2026-09-01', to: '2026-09-30', absenceDates: [], brigadeDates: [], ...over,
+  });
+  const apartment = (start: string, end: string | null = null, amount = '630.00') => (
+    { kind: 'apartment' as const, start, end, amount }
+  );
+  const dormitory = (start: string, end: string | null = null) => ({ kind: 'dormitory' as const, start, end, amount: null });
+  /** Дни с 01 по n месяца YYYY-MM. */
+  const dates = (month: string, from: number, to: number): string[] => Array.from(
+    { length: to - from + 1 },
+    (_, index) => `${month}-${String(from + index).padStart(2, '0')}`,
+  );
 
   const fullTravel = { code: 'travel', amount: '2730.00', days: { worked: 21, norm: 21 }, rate: '2730.00' };
 
@@ -179,35 +195,77 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 5, norm: 0 } }))).toEqual([]);
   });
 
-  it('две квартиры в месяце — одна сумма, по поздней', () => {
-    const housing = [
-      { kind: 'apartment' as const, start: '2026-10-16', amount: '700.00' },
-      { kind: 'apartment' as const, start: '2026-09-01', amount: '630.00' },
-    ];
-    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing }))).toEqual([{ code: 'housing', amount: '700.00' }]);
+  it('квартира — ставка × календарные дни проживания: полный месяц 30 и 31 день', () => {
+    expect(housingAllowances(facts({ housing: [apartment('2026-09-01')] })))
+      .toEqual([{ code: 'housing', amount: '18900.00', rate: '630.00', housing_days: 30 }]);
+    expect(housingAllowances(facts({
+      housing: [apartment('2026-09-01')],
+      housingDays: days({ from: '2026-10-01', to: '2026-10-31' }),
+    }))).toEqual([{ code: 'housing', amount: '19530.00', rate: '630.00', housing_days: 31 }]);
   });
 
-  it('квартира, затем доплата за общежитие — доплата по ставке месяца; затем общежитие — ничего', () => {
-    const toAllowance = [
-      { kind: 'apartment' as const, start: '2026-10-01', amount: '630.00' },
-      { kind: 'dormitory_allowance' as const, start: '2026-10-16', amount: null },
-    ];
-    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing: toAllowance })))
-      .toEqual([{ code: 'dormitory_allowance', amount: '160.00' }]);
-
-    const toDormitory = [
-      { kind: 'dormitory_allowance' as const, start: '2026-10-01', amount: null },
-      { kind: 'dormitory' as const, start: '2026-10-16', amount: null },
-    ];
-    expect(pickPayslipRateAllowances(facts({ travelRate: null, housing: toDormitory }))).toEqual([]);
+  it('квартира — без дней отсутствий (Крумина, сентябрь: отпуск 1–21 → 9 дн. = 5 670)', () => {
+    expect(housingAllowances(facts({
+      housing: [apartment('2026-09-01')],
+      housingDays: days({ absenceDates: dates('2026-09', 1, 21) }),
+    }))).toEqual([{ code: 'housing', amount: '5670.00', rate: '630.00', housing_days: 9 }]);
   });
 
-  it('доплата за общежитие без ставки — строки нет; проезд и проживание — обе строки', () => {
-    const housing = [{ kind: 'dormitory_allowance' as const, start: '2026-01-01', amount: null }];
-    expect(pickPayslipRateAllowances(facts({ travelRate: null, dormitoryAllowanceRate: null, housing }))).toEqual([]);
-    expect(pickPayslipRateAllowances(facts({ housing }))).toEqual([
+  it('квартира — въезд и выезд внутри месяца, окно периода (принят 08.09, уволен — по отсечку)', () => {
+    // Выезд 21.09 — 21-го уже не живёт: 10..20 = 11 дн.
+    expect(housingAllowances(facts({ housing: [apartment('2026-09-10', '2026-09-21')] })))
+      .toEqual([{ code: 'housing', amount: '6930.00', rate: '630.00', housing_days: 11 }]);
+    // Асроров: принят 08.09 — окно с 08.09, 23 дн. = 14 490.
+    expect(housingAllowances(facts({ housing: [apartment('2026-09-01')], housingDays: days({ from: '2026-09-08' }) })))
+      .toEqual([{ code: 'housing', amount: '14490.00', rate: '630.00', housing_days: 23 }]);
+    // Текущий месяц — по вчера: окно до 29.10.
+    expect(housingAllowances(facts({
+      housing: [apartment('2026-09-01')],
+      housingDays: days({ from: '2026-10-01', to: '2026-10-29' }),
+    }))).toEqual([{ code: 'housing', amount: '18270.00', rate: '630.00', housing_days: 29 }]);
+    // Пустое окно (будущий месяц, 1-е число текущего) — ничего.
+    expect(housingAllowances(facts({ housing: [apartment('2026-09-01')], housingDays: days({ to: '0000-00-00' }) }))).toEqual([]);
+  });
+
+  it('две ставки квартиры в месяце — сумма по дням, ставки в строке нет', () => {
+    const housing = [apartment('2026-09-01', '2026-09-16'), apartment('2026-09-16', null, '700.00')];
+    // 15 × 630 + 15 × 700 = 9 450 + 10 500.
+    expect(housingAllowances(facts({ housing }))).toEqual([{ code: 'housing', amount: '19950.00', housing_days: 30 }]);
+  });
+
+  it('доплата за общежитие — ставка × дни в бригаде, кроме дней в общежитии и квартире', () => {
+    const brigadeDates = dates('2026-09', 1, 26);
+    expect(housingAllowances(facts({ housingDays: days({ brigadeDates }) })))
+      .toEqual([{ code: 'dormitory_allowance', amount: '4160.00', rate: '160.00', housing_days: 26 }]);
+    // Заселён в общежитие 11.09: платятся только 1..10.
+    expect(housingAllowances(facts({ housing: [dormitory('2026-09-11')], housingDays: days({ brigadeDates }) })))
+      .toEqual([{ code: 'dormitory_allowance', amount: '1600.00', rate: '160.00', housing_days: 10 }]);
+    // Живёт в общежитии весь месяц — ничего; квартира с 21.09 — 160 за 1..20, квартира за 21..30.
+    expect(housingAllowances(facts({ housing: [dormitory('2026-08-01')], housingDays: days({ brigadeDates }) }))).toEqual([]);
+    expect(housingAllowances(facts({ housing: [apartment('2026-09-21')], housingDays: days({ brigadeDates }) }))).toEqual([
+      { code: 'housing', amount: '6300.00', rate: '630.00', housing_days: 10 },
+      { code: 'dormitory_allowance', amount: '3200.00', rate: '160.00', housing_days: 20 },
+    ]);
+  });
+
+  it('доплата за общежитие — только с месяца включателя, со ставкой и днями бригады; дни вне окна не считаются', () => {
+    const brigadeDates = dates('2026-08', 1, 31);
+    const august = days({ from: '2026-08-01', to: '2026-08-31', brigadeDates });
+    expect(housingAllowances(facts({ housingDays: august }))).toEqual([]);
+    expect(housingAllowances(facts({ housingDays: august, dormitoryAllowanceFrom: '2026-08-01' })))
+      .toEqual([{ code: 'dormitory_allowance', amount: '4960.00', rate: '160.00', housing_days: 31 }]);
+    expect(housingAllowances(facts({ housingDays: days({ brigadeDates: dates('2026-09', 1, 5) }), dormitoryAllowanceFrom: null })))
+      .toEqual([]);
+    expect(housingAllowances(facts({ housingDays: days({ brigadeDates: dates('2026-09', 1, 5) }), dormitoryAllowanceRate: null })))
+      .toEqual([]);
+    expect(housingAllowances(facts({ housingDays: days({ to: '2026-09-03', brigadeDates: dates('2026-09', 1, 5) }) })))
+      .toEqual([{ code: 'dormitory_allowance', amount: '480.00', rate: '160.00', housing_days: 3 }]);
+  });
+
+  it('проезд и проживание — обе строки', () => {
+    expect(pickPayslipRateAllowances(facts({ housing: [apartment('2026-09-01')] }))).toEqual([
       fullTravel,
-      { code: 'dormitory_allowance', amount: '160.00' },
+      { code: 'housing', amount: '18900.00', rate: '630.00', housing_days: 30 },
     ]);
   });
 });

@@ -324,6 +324,7 @@ export type PayrollPaidItemCode =
   | 'housing' | 'travel' | 'overtime' | 'recalc_prev' | 'severance' | 'supplement' | 'planned_supplement' | 'loan'
   | 'kpi' | 'premium' | 'premium_contract' | 'gph' | 'extra_work' | 'substitution' | 'car_compensation' | 'deposit'
   | 'day_rate' | 'workwear_accrual' | 'advance_accrual' | 'fine_refund'
+  | 'reserve' | 'material_aid' | 'imprest_overspend' | 'salary_extra'
   | 'meals' | 'workwear' | 'safety_fine' | 'fines' | 'writ_deduction'
   | 'vacation_deduction' | 'loan_repayment' | 'loan_interest' | 'apartment' | 'imprest' | 'third_party'
   | 'transport' | 'mobile' | 'bank_fees' | 'alimony' | 'tmc' | 'car_rent' | 'property_damage' | 'prior_debts';
@@ -408,7 +409,8 @@ export type PayrollCalcLinePart =
     amount: string;
   }
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
-  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
+  /** Проживание по дням (миграция 339): ставка за день и дни; у квартиры со сменой ставки в месяце и у старого бэкенда — нет. */
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
   | { kind: 'one_time'; amount: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
   | { kind: 'paid_1c'; amount: string }
@@ -501,8 +503,10 @@ export interface IPayslipRateAllowance {
    * графика за месяц; нет у старого бэкенда.
    */
   days?: { worked: number; norm: number };
-  /** Только у проезда: ставка за полный месяц; нет у старого бэкенда. */
+  /** У проезда — ставка за полный месяц, у проживания — ставка за день; нет у старого бэкенда. */
   rate?: string;
+  /** Только у проживания: за сколько дней (миграция 339); нет у старого бэкенда. */
+  housing_days?: number;
 }
 
 interface IApiResponse<T> { success: boolean; data: T }

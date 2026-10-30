@@ -77,7 +77,16 @@ vi.mock('../audit.service.js', () => ({
 
 import { currentRateMonth, listRates, shiftRateMonth, updateRate } from './payroll-rates.service.js';
 import { addStay, updateStay } from '../dormitory-stays.service.js';
-import { DormitoryAllowanceConflictError, listDormitoryAllowances } from './payroll-dormitory-allowances.service.js';
+import {
+  addDormitoryAllowance,
+  DormitoryAllowanceConflictError,
+  listDormitoryAllowances,
+  PG_EXCLUSION_VIOLATION,
+  updateDormitoryAllowance,
+} from './payroll-dormitory-allowances.service.js';
+import { hasPgCode } from './payroll-pg-errors.js';
+import { loadRateFacts } from './payroll-rate-facts.service.js';
+import { withTransaction } from '../../config/postgres.js';
 import { payrollDormitoryAllowancesController as controller } from '../../controllers/payroll-dormitory-allowances.controller.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
 
@@ -103,16 +112,27 @@ const req = (over: Record<string, unknown> = {}) => ({
   user: { id: AUTHOR }, params: {}, query: {}, body: {}, ...over,
 } as unknown as AuthenticatedRequest);
 
-const add = async (employeeId: number, dateFrom: string, dateTo: string | null = null) => {
+/**
+ * Ручную доплату контроллер с миграции 339 не принимает (409); правила таблицы проверяются через сервис —
+ * ответом в том же виде, что отдавал контроллер: 200 со строкой, 409 с кодом правила или пересечения.
+ */
+const viaService = async (work: (client: import('pg').PoolClient) => Promise<{ allowance: unknown } | null>) => {
   const res = makeRes();
-  await controller.add(req({ body: { employee_id: employeeId, date_from: dateFrom, date_to: dateTo } }), res);
+  try {
+    const saved = await withTransaction(work);
+    if (saved) res.json({ success: true, data: saved.allowance });
+    else res.status(404).json({ success: false });
+  } catch (err) {
+    if (err instanceof DormitoryAllowanceConflictError) res.status(409).json({ code: err.code, error: err.message });
+    else if (hasPgCode(err, PG_EXCLUSION_VIOLATION)) res.status(409).json({ code: 'ALLOWANCE_OVERLAP' });
+    else throw err;
+  }
   return res;
 };
-const patch = async (id: number, dateFrom: string, dateTo: string | null) => {
-  const res = makeRes();
-  await controller.update(req({ params: { id: String(id) }, body: { date_from: dateFrom, date_to: dateTo } }), res);
-  return res;
-};
+const add = (employeeId: number, dateFrom: string, dateTo: string | null = null) =>
+  viaService(client => addDormitoryAllowance(client, employeeId, { date_from: dateFrom, date_to: dateTo }));
+const patch = (id: number, dateFrom: string, dateTo: string | null) =>
+  viaService(client => updateDormitoryAllowance(client, id, { date_from: dateFrom, date_to: dateTo }));
 
 /** Квартира (доплата за проживание, миграция 320) — через сервис проживаний, как пишут кадры и «Зарплата». */
 const addApartment = (employeeId: number, checkIn: string, checkOut: string | null = null) =>
@@ -248,7 +268,18 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     ]);
   });
 
-  it('добавление и повтор того же запроса — одна строка, одна запись аудита', async () => {
+  it('339: добавить и изменить через «Справочник» нельзя — 409 DORMITORY_ALLOWANCE_AUTO, ничего не пишется', async () => {
+    const added = makeRes();
+    await controller.add(req({ body: { employee_id: 1, date_from: '2026-11-01' } }), added);
+    expect(added.statusCode).toBe(409);
+    expect(added.body.code).toBe('DORMITORY_ALLOWANCE_AUTO');
+    const updated = makeRes();
+    await controller.update(req({ params: { id: '1' }, body: { date_from: '2026-11-01' } }), updated);
+    expect(updated.statusCode).toBe(409);
+    expect(await periods(1)).toEqual([]);
+  });
+
+  it('добавление и повтор того же запроса — одна строка', async () => {
     const first = await add(1, '2026-11-01');
     expect(first.statusCode).toBe(200);
     expect(first.body.data).toMatchObject({ employee_id: 1, date_from: '2026-11-01', date_to: null, amount: '450.00' });
@@ -256,16 +287,14 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     expect(again.statusCode).toBe(200);
     expect(again.body.data.id).toBe(first.body.data.id);
     expect(await periods(1)).toEqual([['2026-11-01', null]]);
-    expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_ADDED')).toBe(1);
 
-    // Другой, пересекающийся период — 409, без записи и аудита.
+    // Другой, пересекающийся период — 409, без записи.
     const overlap = await add(1, '2026-12-01', '2026-12-31');
     expect(overlap.statusCode).toBe(409);
     expect(overlap.body.code).toBe('ALLOWANCE_OVERLAP');
-    expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_ADDED')).toBe(1);
   });
 
-  it('в дни проживания — 409 с датами; со дня выезда — можно; подрядчика нет в списке', async () => {
+  it('в дни проживания — 409 с датами; со дня выезда — можно', async () => {
     const living = await add(2, '2026-11-01');
     expect(living.statusCode).toBe(409);
     expect(living.body).toMatchObject({ code: 'LIVES_IN_DORMITORY' });
@@ -275,8 +304,6 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     expect((await add(2, '2026-10-01', '2026-10-24')).statusCode).toBe(200);
     expect((await add(2, '2026-11-25')).statusCode).toBe(200);
     expect(await periods(2)).toEqual([['2026-10-01', '2026-10-24'], ['2026-11-25', null]]);
-
-    expect((await add(6, '2026-11-01')).statusCode).toBe(403);
   });
 
   it('проживание появилось позже: строка видна с ним; сократить можно, расширить в него — 409', async () => {
@@ -287,10 +314,7 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
 
     const shrink = await patch(row.id, '2026-11-01', '2026-12-15');
     expect(shrink.statusCode).toBe(200);
-    expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_UPDATED')).toBe(1);
-    // Те же даты — без записи аудита.
     expect((await patch(row.id, '2026-11-01', '2026-12-15')).statusCode).toBe(200);
-    expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_UPDATED')).toBe(1);
     // Раньше начать — дни без проживания: можно.
     expect((await patch(row.id, '2026-10-20', '2026-12-15')).statusCode).toBe(200);
 
@@ -300,7 +324,6 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
       expect(extend.body.code).toBe('LIVES_IN_DORMITORY');
     }
     expect(await periods(1)).toEqual([['2026-10-20', '2026-12-15']]);
-    expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_UPDATED')).toBe(2);
   });
 
   describe('одна доплата из двух: квартира или доплата за общежитие (миграция 320)', () => {
@@ -402,5 +425,21 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     await controller.remove(req({ params: { id: String(row.id) } }), again);
     expect(again.statusCode).toBe(404);
     expect(await auditCount('PAYROLL_DORMITORY_ALLOWANCE_DELETED')).toBe(1);
+  });
+
+  it('339: факты ставок — проживания с выездом, включатель авто-доплаты (ставит загрузка, только 1-е число)', async () => {
+    await run(migration('339_payroll_housing_by_days.sql'));
+    await run(migration('339_payroll_housing_by_days.sql'));
+    const facts = async () => (await loadRateFacts(
+      [{ employeeId: 2, period: { from: '2026-10-01', to: '2026-10-31' } }], '2026-10', '2026-10-31',
+    )).get(2);
+    expect(await facts()).toMatchObject({
+      dormitoryAllowanceFrom: null,
+      housing: [{ kind: 'dormitory', start: '2026-10-25', end: '2026-11-25', amount: null }],
+    });
+    await run(`INSERT INTO payroll_switches (key, active_from) VALUES ('dormitory_allowance_auto', '2026-09-01')`);
+    expect((await facts())?.dormitoryAllowanceFrom).toBe('2026-09-01');
+    await expect(run(`INSERT INTO payroll_switches (key, active_from) VALUES ('other', '2026-09-01')`)).rejects.toThrow();
+    await expect(run(`UPDATE payroll_switches SET active_from = '2026-09-15'`)).rejects.toThrow();
   });
 });

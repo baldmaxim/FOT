@@ -22,6 +22,7 @@ import { PayrollRegistryModal } from './PayrollRegistryModal';
 import { PlannedSupplementRegistry } from './PlannedSupplementRegistry';
 import { SupplementForm } from './SupplementForm';
 import { SupplementListsBar } from './SupplementListsBar';
+import { StayCheckoutModal } from './StayCheckoutModal';
 import { useSupplementRemoval } from './useSupplementRemoval';
 
 interface ISupplementRegistryProps {
@@ -51,7 +52,10 @@ const rowName = (row: ISupplementRegistryRow): string => row.full_name;
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
   const months = useRegistryMonths();
-  const { busyKey, removeSupplement, removeHousing, refreshSupplements, refreshHousing } = useSupplementRemoval();
+  const {
+    busyKey, removeSupplement, removeHousing, refreshSupplements, refreshHousing,
+    housingCheckout, closeHousingCheckout, checkoutHousing,
+  } = useSupplementRemoval();
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [openedList, setOpenedList] = useState<OpenedList | null>(null);
@@ -86,7 +90,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
     <PayrollRegistryModal
       title="Доплата"
       onClose={onClose}
-      closeOnEscape={!filterOpen && !editor && openedList === null}
+      closeOnEscape={!filterOpen && !editor && openedList === null && !housingCheckout}
     >
       <RegistryPanel
         label="Доплата"
@@ -133,6 +137,10 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
           onClose={() => setEditor(null)}
           onSaved={() => { void refreshSupplements(); }}
         />
+      )}
+
+      {housingCheckout && (
+        <StayCheckoutModal stay={housingCheckout} onClose={closeHousingCheckout} onSubmit={checkoutHousing} />
       )}
 
       {openedList === 'planned' && (

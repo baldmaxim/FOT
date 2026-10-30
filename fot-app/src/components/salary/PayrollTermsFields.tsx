@@ -309,7 +309,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                 <div className={styles.row}>
                   {renderMoney(
                     'housing',
-                    'Проживание, ₽/мес',
+                    'Проживание, ₽/день',
                     form.money.housing,
                     value => form.changeMoney('housing', value),
                     true,

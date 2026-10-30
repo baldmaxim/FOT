@@ -2,7 +2,7 @@
  * «Оплачено» в карточке «Зарплата → Подробно»: статьи «Сводной ведомости» ЗУП строками, месяц
  * столбцом. Статьи — в двух разделах ведомости: начислено (1) и удержано (3). Только чтение:
  * суммы приходят из 1С (API или выгрузка); показываются лишь статьи, по которым сумма есть.
- * Коды статей — те же, что в CHECK миграции 334 и в payroll-paid.service.ts на сервере.
+ * Коды статей — те же, что в CHECK миграции 338 и в payroll-paid.service.ts на сервере.
  */
 import type { IEmployeePayout1c } from '../services/payroll1cPayoutsService';
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
@@ -61,6 +61,10 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'workwear_accrual', label: 'Спецодежда (начисление)' }, // Спецодежда в начислениях
       { code: 'advance_accrual', label: 'Аванс (начисление)' }, // «Аванс» — доп. начисление в ведомости бригады
       { code: 'fine_refund', label: 'Возврат штрафа' }, // «Возврат штрафа» — доп. начисление в ведомости бригады
+      { code: 'reserve', label: 'Резерв' }, // «Резерв» — доп. начисление ЗУП (бригады)
+      { code: 'material_aid', label: 'Матпомощь' }, // «Матпомощь»
+      { code: 'imprest_overspend', label: 'Перерасход п/о средств' }, // возмещение перерасхода подотчёта
+      { code: 'salary_extra', label: 'Зарплата (доп. начисление)' }, // «Зарплата» отдельным доп. начислением
     ],
   },
   {

@@ -162,8 +162,12 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       return `${decimal(part.minutes / 60)} ч × ${money(part.salary)} / ${decimal(part.norm_minutes / 60)} ч${tail(part.amount)}`;
     case 'travel':
       return `ставка ${money(part.rate)} × ${part.days} / ${part.norm} дн.`;
-    case 'housing':
-      return part.housing === 'apartment' ? 'квартира, сумма за месяц' : 'доплата за общежитие, сумма за месяц';
+    case 'housing': {
+      const what = part.housing === 'apartment' ? 'квартира' : 'доплата за общежитие';
+      // Старый бэкенд — сумма за месяц без дней; у квартиры со сменой ставки в месяце — только дни.
+      if (part.days === undefined) return `${what}, сумма за месяц`;
+      return part.rate === undefined ? `${what}: ${part.days} дн.` : `${what}: ${money(part.rate)} × ${part.days} дн.`;
+    }
     case 'one_time':
       return 'разовые доплаты месяца';
     case 'paid_1c':

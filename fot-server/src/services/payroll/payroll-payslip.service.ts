@@ -23,6 +23,7 @@ import { countMonthNormDays } from './payroll-basis.service.js';
 import {
   getPayoutForEmployees,
   getPreliminaryPayoutForEmployees,
+  housingDaysOf,
   type IPayrollCalcClosed,
   type IPayrollCalcNotClosed,
   type IPayrollCalcPreliminary,
@@ -235,7 +236,16 @@ export const getPayslipInfo = async (
     period_to: period.to,
     worked_days: workedDays,
     terms: toPayslipTerms(termsByEmployee.get(employeeId) ?? []),
-    rate_allowances: facts ? pickPayslipRateAllowances({ ...facts, category, travelDays }) : [],
+    // Старый путь (без preliminary): дни табеля не классифицируются — квартира по дням проживания без вычета
+    // отсутствий, доплаты за общежитие нет (дней бригады нет).
+    rate_allowances: facts
+      ? pickPayslipRateAllowances({
+        ...facts,
+        category,
+        travelDays,
+        housingDays: housingDaysOf(period, month, [], []),
+      })
+      : [],
     calc,
     schedules,
   };

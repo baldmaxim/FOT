@@ -30,7 +30,8 @@ interface IHousingAllowanceFormProps {
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ в «Квартире» (и ✎ строки квартиры в «Доплате»): сотрудник, сумма ₽/мес, въезд, выезд (пусто — живёт),
+ * «Добавить сотрудника» / ✎ в «Квартире» (и ✎ строки квартиры в «Доплате»): сотрудник, ставка ₽/день (миграция 339:
+ * расчёт — ставка × дни проживания без отпуска и больничного), въезд, выезд (пусто — живёт),
  * адрес по желанию. Пишется квартира «Проживания» — та же запись, что во вкладке кадров (миграция 320).
  */
 export const HousingAllowanceForm: FC<IHousingAllowanceFormProps> = ({ row, defaultAmount, onClose, onSaved }) => {
@@ -127,7 +128,7 @@ export const HousingAllowanceForm: FC<IHousingAllowanceFormProps> = ({ row, defa
 
       <div className={styles.dates}>
         <label className={styles.field}>
-          <span className={styles.label}>Сумма, ₽/мес</span>
+          <span className={styles.label}>Ставка, ₽/день</span>
           <ClearableInput
             value={amount}
             onValueChange={value => { setAmount(value); clearError(); }}
@@ -136,7 +137,7 @@ export const HousingAllowanceForm: FC<IHousingAllowanceFormProps> = ({ row, defa
             disabled={saving}
             aria-invalid={invalid('amount')}
             aria-describedby={error ? errorId : undefined}
-            clearLabel="Очистить сумму"
+            clearLabel="Очистить ставку"
           />
         </label>
         <label className={styles.field}>

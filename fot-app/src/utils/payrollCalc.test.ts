@@ -163,6 +163,16 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
       .toEqual([`ставка 2${NBSP}730,00 × 22 / 22 дн.`]);
     expect(calcLineFormula({ code: 'housing', amount: '160.00', parts: [{ kind: 'housing', housing: 'dormitory', amount: '160.00' }] }))
       .toEqual(['доплата за общежитие, сумма за месяц']);
+    // Проживание по дням (миграция 339): ставка × дни; у квартиры со сменой ставки — только дни.
+    expect(calcLineFormula({ code: 'housing', amount: '5670.00', parts: [
+      { kind: 'housing', housing: 'apartment', amount: '5670.00', rate: '630.00', days: 9 },
+    ] })).toEqual(['квартира: 630,00 × 9 дн.']);
+    expect(calcLineFormula({ code: 'housing', amount: '4160.00', parts: [
+      { kind: 'housing', housing: 'dormitory', amount: '4160.00', rate: '160.00', days: 26 },
+    ] })).toEqual(['доплата за общежитие: 160,00 × 26 дн.']);
+    expect(calcLineFormula({ code: 'housing', amount: '19950.00', parts: [
+      { kind: 'housing', housing: 'apartment', amount: '19950.00', days: 30 },
+    ] })).toEqual(['квартира: 30 дн.']);
     expect(calcLineFormula({ code: 'supplement', amount: '5000.00', parts: [{ kind: 'one_time', amount: '5000.00' }] }))
       .toEqual(['разовые доплаты месяца']);
   });

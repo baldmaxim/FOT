@@ -636,9 +636,15 @@ describe('brigadeShareFacts — доли бригады по объектам с
       {
         employee_id: 2, ktu: '1.0', counted_minutes: 10_053, amount: '38765.43',
         objects: [
-          { object_key: 'wave', counted_minutes: 10_053, weight: 100_530, amount: '38765.43' },
-          // Часы только для показа (минут нет) — в расшифровку доли не идут.
-          { object_key: '__unknown_object__', counted_minutes: 0, weight: 0, amount: null },
+          {
+            object_key: 'wave', counted_minutes: 10_053, weight: 100_530, amount: '38765.43',
+            days: { '2026-08-03': 8, '2026-08-04': 0 },
+          },
+          // Часы только для показа (минут нет) — в расшифровку доли не идут, но день с часами — день в бригаде.
+          {
+            object_key: '__unknown_object__', counted_minutes: 0, weight: 0, amount: null,
+            days: { '2026-08-01': 4, '2026-08-03': 2 },
+          },
         ],
       },
     ], objects);
@@ -647,6 +653,9 @@ describe('brigadeShareFacts — доли бригады по объектам с
       objectKey: 'wave', objectName: 'ЖК Wave', output: '100000.00', countedMinutes: 10_053, weight: 100_530,
       totalWeight: 259_455, amount: '38765.43',
     }]);
+    // Дни с часами в бригаде (доплата за общежитие, миграция 339): без нулевых, без повторов, по порядку.
+    expect(facts.get(2)?.workedDates).toEqual(['2026-08-01', '2026-08-03']);
+    expect(facts.get(1)?.workedDates).toEqual([]);
     const result = buildPayrollCalc({
       monthStart: '2026-08-01', monthEnd: '2026-08-31', normDays: null, workdayDates: [], dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],

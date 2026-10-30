@@ -109,9 +109,9 @@ const formatSalary = (row: IPayrollTermsRow): string => {
   return row.calc_type === 'salary' ? `${money} ₽/мес` : `${money} ₽/час`;
 };
 
-const formatMonthly = (row: IPayrollTermsRow, value: string | number | null): string => {
+const formatMonthly = (row: IPayrollTermsRow, value: string | number | null, unit = '₽/мес'): string => {
   const money = row.terms_id ? formatPayrollMoney(value) : null;
-  return money === null ? '—' : `${money} ₽/мес`;
+  return money === null ? '—' : `${money} ${unit}`;
 };
 
 /** Подпись кнопки суммы для экранного диктора. */
@@ -344,7 +344,8 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       case 'bonus':
         return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.bonus_amount)}</td>;
       case 'housing':
-        return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation)}</td>;
+        // Ставка квартиры — за день (миграция 339).
+        return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation, '₽/день')}</td>;
       case 'accruals':
         return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
       case 'payout':

@@ -1,11 +1,11 @@
 /**
  * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей «Сводной ведомости» ЗУП —
- * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325, 326, 327, 329, 334). Только чтение: суммы
+ * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325, 326, 327, 329, 334, 338). Только чтение: суммы
  * приходят из 1С (API или выгрузка). В расчёте зарплаты не участвуют. Суммы нет — строки нет.
  */
 import { query } from '../../config/postgres.js';
 
-/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 334 и в fot-app/src/utils/payrollPaid.ts. */
+/** Статьи — в порядке строк таблицы. Тот же список в CHECK миграции 338 и в fot-app/src/utils/payrollPaid.ts. */
 export const PAYROLL_PAID_ITEM_CODES = [
   // Начислено.
   'contract',
@@ -33,6 +33,10 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'workwear_accrual',
   'advance_accrual',
   'fine_refund',
+  'reserve',
+  'material_aid',
+  'imprest_overspend',
+  'salary_extra',
   // Удержано.
   'meals',
   'workwear',
@@ -86,6 +90,10 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'workwear_accrual',
   'advance_accrual',
   'fine_refund',
+  'reserve',
+  'material_aid',
+  'imprest_overspend',
+  'salary_extra',
 ];
 
 /**

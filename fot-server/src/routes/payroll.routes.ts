@@ -86,9 +86,12 @@ router.get('/rates', deductionsView, payrollRatesController.list);
 router.post('/rates', deductionsEdit, payrollRatesController.add);
 router.patch('/rates/:id', deductionsEdit, payrollRatesController.update);
 router.delete('/rates/:id', deductionsEdit, payrollRatesController.remove);
-// Кто живёт в общежитии — кнопка «Общежитие» в шапке «Справочника»; ведётся в «Управлении кадрами»,
-// «Зарплата» только убирает: выезд 1-м числом месяца (PATCH) или ошибочная строка (DELETE).
+// Кто живёт в общежитии — кнопка «Общежитие» в шапке «Справочника» (те же записи, что у кадров «Проживание»):
+// заселить (POST), выселить с даты (PATCH), удалить ошибочную строку (DELETE); подсказки адресов — для окна заселения.
+// Живущие не получают авто-доплату за общежитие (миграция 339).
 router.get('/dormitory-stays', deductionsView, dormitoryStaysController.listForPayroll);
+router.post('/dormitory-stays', deductionsEdit, dormitoryStaysController.addForPayroll);
+router.get('/dormitory-addresses', deductionsEdit, dormitoryStaysController.listAddresses);
 router.patch('/dormitory-stays/:id', deductionsEdit, dormitoryStaysController.closeForPayroll);
 router.delete('/dormitory-stays/:id', deductionsEdit, dormitoryStaysController.removeForPayroll);
 
@@ -123,7 +126,7 @@ router.get('/overtime-stops', deductionsView, payrollOvertimeStopsController.lis
 router.post('/overtime-stops', deductionsEdit, payrollOvertimeStopsController.add);
 router.patch('/overtime-stops/:id', deductionsEdit, payrollOvertimeStopsController.update);
 router.delete('/overtime-stops/:id', deductionsEdit, payrollOvertimeStopsController.remove);
-// «Доплата за общежитие» (миграция 317): кому платят за то, что не живёт в общежитии, периоды «с — по».
+// «Доплата за общежитие» (миграция 317): ручной список; с миграции 339 доплата автоматическая — POST/PATCH 409.
 router.get('/dormitory-allowances', deductionsView, payrollDormitoryAllowancesController.list);
 router.post('/dormitory-allowances', deductionsEdit, payrollDormitoryAllowancesController.add);
 router.patch('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.update);
@@ -133,7 +136,8 @@ router.get('/staff-deductions', deductionsView, payrollStaffDeductionsController
 router.post('/staff-deductions', termsEdit, payrollStaffDeductionsController.add);
 router.patch('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.update);
 router.delete('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.remove);
-// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, overtime-stops, dormitory-allowances, deductions, summary).
+// «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, overtime-stops, dormitory-allowances,
+// dormitory-stays, deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 
 // ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──

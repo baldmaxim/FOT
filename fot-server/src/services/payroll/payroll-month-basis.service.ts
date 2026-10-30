@@ -10,7 +10,13 @@
  * Дни подач бригады собраны ещё и по бригадам: их оплачивает доля «Выработки» по КТУ (brigade-salary), а не оклад.
  */
 import { query } from '../../config/postgres.js';
-import { emptyAbsenceDays, PAYROLL_ABSENCE_STATUSES, type PayrollAbsenceDays, type PayrollBasisQuality } from './payroll-basis.service.js';
+import {
+  emptyAbsenceDays,
+  PAYROLL_ABSENCE_STATUSES,
+  type PayrollAbsenceDates,
+  type PayrollAbsenceDays,
+  type PayrollBasisQuality,
+} from './payroll-basis.service.js';
 
 /** Основа одной подачи: её период в месяце и дни сотрудника в ней. */
 export interface IMonthBasisSource {
@@ -23,6 +29,8 @@ export interface IMonthBasisSource {
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: Partial<PayrollAbsenceDays>;
+  /** Даты отсутствий; null — основа до миграции 339. */
+  absenceDates: Partial<PayrollAbsenceDates> | null;
   overtimeMinutes: Record<string, number>;
   quality: PayrollBasisQuality;
   /** Отдел подачи; у персональной — null. */
@@ -46,6 +54,8 @@ export interface ICalcMonthBasis {
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: PayrollAbsenceDays;
+  /** Даты отсутствий любого вида (отпуск, учебный, без содержания, больничный) — дни «Квартиры» их не считают. */
+  absenceDates: string[];
   /** Переработка в будни по корректировкам: дата → минуты. */
   overtimeMinutes: Record<string, number>;
   /** Дни в бригадах — по бригадам: у закрытой основы — дни подач бригад, у живой — дни в окнах членства. */
@@ -104,9 +114,13 @@ export const assembleMonthBasis = (
     brigades.set(source.departmentId, entry);
   }
   const absenceDays = emptyAbsenceDays();
+  const absenceDates = new Set<string>();
   const overtimeMinutes: Record<string, number> = {};
   for (const source of sources) {
-    for (const status of PAYROLL_ABSENCE_STATUSES) absenceDays[status] += Number(source.absenceDays[status] ?? 0);
+    for (const status of PAYROLL_ABSENCE_STATUSES) {
+      absenceDays[status] += Number(source.absenceDays[status] ?? 0);
+      for (const date of source.absenceDates?.[status] ?? []) if (inPeriod(date)) absenceDates.add(date);
+    }
     for (const [date, minutes] of Object.entries(source.overtimeMinutes)) {
       if (inPeriod(date)) overtimeMinutes[date] = Number(minutes);
     }
@@ -121,6 +135,7 @@ export const assembleMonthBasis = (
     workdayDates: sources.flatMap(source => source.workdayDates).filter(inPeriod).sort(),
     dayoffDates: sources.flatMap(source => source.dayoffDates).filter(inPeriod).sort(),
     absenceDays,
+    absenceDates: [...absenceDates].sort(),
     overtimeMinutes,
     brigades: [...brigades.values()].map(entry => ({
       ...entry,
@@ -142,6 +157,7 @@ interface IBasisSourceRow {
   workday_dates: string[] | null;
   dayoff_dates: string[] | null;
   absence_days: Partial<PayrollAbsenceDays> | null;
+  absence_dates: Partial<PayrollAbsenceDates> | null;
   quality: PayrollBasisQuality;
   department_id: string | null;
   is_brigade: boolean;
@@ -164,6 +180,7 @@ export const loadMonthBasisSources = async (
             b.workday_dates::text[] AS workday_dates,
             b.dayoff_dates::text[] AS dayoff_dates,
             b.absence_days,
+            b.absence_dates,
             b.quality,
             v.department_id::text AS department_id,
             COALESCE(d.kind = 'brigade', false) AS is_brigade
@@ -201,6 +218,7 @@ export const loadMonthBasisSources = async (
       workdayDates: row.workday_dates ?? [],
       dayoffDates: row.dayoff_dates ?? [],
       absenceDays: row.absence_days ?? {},
+      absenceDates: row.absence_dates ?? null,
       quality: row.quality,
       departmentId: row.department_id ?? null,
       isBrigade: row.is_brigade === true,

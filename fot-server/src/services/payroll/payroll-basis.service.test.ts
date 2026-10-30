@@ -139,6 +139,13 @@ describe('основа расчёта: дни месяца', () => {
       '2026-09-08': day('absent'),
     });
     expect(result.absenceDays).toEqual({ vacation: 3, sick: 1, educational_leave: 1, unpaid: 1 });
+    // Даты — те же дни по статусам (миграция 339: дни «Квартиры» без отсутствий).
+    expect(result.absenceDates).toEqual({
+      vacation: ['2026-09-01', '2026-09-02', '2026-09-05'],
+      sick: ['2026-09-03'],
+      educational_leave: ['2026-09-04'],
+      unpaid: ['2026-09-07'],
+    });
     expect(result.workdayDates).toEqual([]);
   });
 
@@ -278,9 +285,13 @@ describe('основа расчёта: служебное', () => {
       workdayDates: ['2026-09-01'],
       dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+      absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
       overtimeMinutes: {},
     };
     expect(computeBasisHash(draft)).toBe(computeBasisHash({ ...draft, absenceDays: { unpaid: 0, sick: 0, vacation: 0, educational_leave: 0 } }));
+    expect(computeBasisHash(draft)).not.toBe(computeBasisHash({
+      ...draft, absenceDates: { vacation: ['2026-09-02'], sick: [], educational_leave: [], unpaid: [] },
+    }));
     expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, normDays: 23 }));
     expect(computeBasisHash(draft)).not.toBe(computeBasisHash({ ...draft, overtimeMinutes: { '2026-09-01': 60 } }));
   });

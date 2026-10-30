@@ -18,7 +18,7 @@ export interface IDormitoryStay {
   check_out: string | null;
   /** У общежития — всегда; у квартиры — если указали. */
   address: string | null;
-  /** Только у квартиры: ₽/мес, numeric строкой. */
+  /** Только у квартиры: ставка ₽/день (миграция 339), numeric строкой. */
   amount: string | null;
 }
 
@@ -64,7 +64,25 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** «Зарплата» убирает из общежития: выезд — только раньше прежнего, въезд и адрес не меняются. */
+  /**
+   * «Зарплата» заселяет в общежитие (миграция 339: живущие не получают авто-доплату за общежитие). Пересечение с
+   * другим проживанием — ApiError 409.
+   */
+  addForPayroll: async (employeeId: number, payload: IDormitoryStayPayload): Promise<IPayrollDormitoryStay> => {
+    const res = await apiClient.post<IApiResponse<IPayrollDormitoryStay>>(
+      '/payroll/dormitory-stays',
+      { employee_id: employeeId, ...payload },
+    );
+    return res.data;
+  },
+
+  /** Подсказки «Адрес / номер» окну заселения «Зарплаты» — те же сохранённые адреса, что у кадров. */
+  listAddressesForPayroll: async (signal?: AbortSignal): Promise<string[]> => {
+    const res = await apiClient.get<IApiResponse<string[]>>('/payroll/dormitory-addresses', { signal });
+    return res.data;
+  },
+
+  /** «Зарплата» выселяет из общежития: выезд — только раньше прежнего, въезд и адрес не меняются. */
   closeForPayroll: async (stayId: number, checkOut: string): Promise<void> => {
     await apiClient.patch(`/payroll/dormitory-stays/${stayId}`, { check_out: checkOut });
   },

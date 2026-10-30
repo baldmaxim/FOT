@@ -61,6 +61,8 @@ describe('payrollFormat', () => {
     expect(formatPayrollFilterValue('salary', 'мес:175000.00')).toBe(`${money(175000)} ₽/мес`);
     expect(formatPayrollFilterValue('salary', 'час:450.0000')).toBe(`${money(450)} ₽/час`);
     expect(formatPayrollFilterValue('bonus', '0.00')).toBe(`${money(0)} ₽/мес`);
+    // Ставка квартиры — за день (миграция 339).
+    expect(formatPayrollFilterValue('housing', '630.00')).toBe(`${money(630)} ₽/день`);
     expect(formatPayrollFilterValue('salary', null)).toBe('Оклад не задан');
     expect(formatPayrollFilterValue('schedule', null)).toBe('Без графика');
     expect(formatPayrollFilterValue('position', 'Монтажник')).toBe('Монтажник');

@@ -11,7 +11,7 @@ export interface IDormitoryStayDraft {
   checkOut: string;
   address: string;
   /**
-   * Только у квартиры в «Зарплате»: сумма ₽/мес как в поле («1 250,5»). Не передана — окно суммы не спрашивает
+   * Только у квартиры в «Зарплате»: ставка ₽/день как в поле («630»; миграция 339). Не передана — окно суммы не спрашивает
    * (вкладка кадров): квартира без суммы, её задаёт «Зарплата».
    */
   amount?: string;
@@ -56,7 +56,7 @@ export const isCalendarDate = (value: string): boolean => {
 };
 
 /**
- * Общежитие: адрес обязателен, суммы нет. Квартира: адрес — по желанию (пусто — null); сумма ₽/мес больше нуля
+ * Общежитие: адрес обязателен, суммы нет. Квартира: адрес — по желанию (пусто — null); ставка ₽/день больше нуля
  * обязательна, если её спрашивают («Зарплата»), у кадров — null. Даты у обоих: въезд обязателен, выезд позже въезда
  * или пусто (живёт).
  */
@@ -84,10 +84,10 @@ export const parseDormitoryStay = (
   if (draft.amount === undefined) return { ok: true, payload: { ...dates, address: address || null, amount: null } };
   const parsed = parseRateAmount(draft.amount);
   if (parsed.error !== null) {
-    return { ok: false, field: 'amount', message: 'Сумма — число больше нуля, до двух знаков после запятой' };
+    return { ok: false, field: 'amount', message: 'Ставка — число больше нуля, до двух знаков после запятой' };
   }
-  if (parsed.amount === null) return { ok: false, field: 'amount', message: 'Укажите сумму доплаты' };
-  if (parsed.amount <= 0) return { ok: false, field: 'amount', message: 'Сумма должна быть больше нуля' };
+  if (parsed.amount === null) return { ok: false, field: 'amount', message: 'Укажите ставку за день' };
+  if (parsed.amount <= 0) return { ok: false, field: 'amount', message: 'Ставка должна быть больше нуля' };
   return { ok: true, payload: { ...dates, address: address || null, amount: parsed.amount } };
 };
 

@@ -13,6 +13,7 @@ import { buildHousingExport, HOUSING_COLUMNS, housingRowKey } from '../../../uti
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { HousingAllowanceForm } from './HousingAllowanceForm';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
+import { StayCheckoutModal } from './StayCheckoutModal';
 import { useSupplementRemoval } from './useSupplementRemoval';
 
 interface IHousingAllowanceRegistryProps {
@@ -32,14 +33,14 @@ const canEditRow = (row: IHousingAllowanceRow): boolean => row.can_edit;
 /**
  * «Справочник» → «Доплата» → «Квартира»: квартиры «Проживания» (миграция 320), задевающие выбранные месяцы, —
  * те же записи, что во вкладке кадров «Проживание»: правка здесь видна там, и наоборот. В общей таблице «Доплата»
- * квартира — строкой «Плановая» с основанием «Квартира»; в окне сотрудника «Компенсация → Проживание» — сумма на
- * дату (только показ). 🗑 «Убрать» — выезд 1-м числом текущего месяца (прошлые месяцы остаются); не начавшееся
- * или прошедшее проживание удаляется как ошибочное.
+ * квартира — строкой «Плановая» с основанием «Квартира, ₽/день»; в окне сотрудника «Компенсация → Проживание» — ставка
+ * на дату (только показ). Ставка — за день (миграция 339). 🗑 «Убрать» — окно «Дата выезда» (по умолчанию сегодня);
+ * не начавшееся или прошедшее проживание удаляется как ошибочное.
  */
 export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ canEdit, initialMonths, onClose }) => {
   const rates = usePayrollRates();
   const months = useRegistryMonths(initialMonths);
-  const { busyKey, removeHousing, refreshHousing } = useSupplementRemoval();
+  const { busyKey, removeHousing, refreshHousing, housingCheckout, closeHousingCheckout, checkoutHousing } = useSupplementRemoval();
   const [filterOpen, setFilterOpen] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
 
@@ -55,7 +56,7 @@ export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ c
       title="Квартира"
       backLabel="Назад к доплате"
       onClose={onClose}
-      closeOnEscape={!filterOpen && !editor}
+      closeOnEscape={!filterOpen && !editor && !housingCheckout}
     >
       <RegistryPanel
         label="Квартира"
@@ -88,6 +89,10 @@ export const HousingAllowanceRegistry: FC<IHousingAllowanceRegistryProps> = ({ c
           onClose={() => setEditor(null)}
           onSaved={() => { void refreshHousing(); }}
         />
+      )}
+
+      {housingCheckout && (
+        <StayCheckoutModal stay={housingCheckout} onClose={closeHousingCheckout} onSubmit={checkoutHousing} />
       )}
     </PayrollRegistryModal>
   );

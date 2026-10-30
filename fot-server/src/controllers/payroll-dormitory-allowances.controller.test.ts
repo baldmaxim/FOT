@@ -31,7 +31,6 @@ vi.mock('../config/postgres.js', () => ({ withTransaction: vi.fn(async (fn: (cli
 const audit = vi.hoisted(() => ({ logFromRequestWithClient: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
-import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { payrollDormitoryAllowancesController as controller } from './payroll-dormitory-allowances.controller.js';
 
 const makeRes = () => {
@@ -69,120 +68,37 @@ describe('«Доплата за общежитие»: список', () => {
   });
 });
 
-describe('«Доплата за общежитие»: добавление', () => {
-  const body = { employee_id: 42, date_from: '2026-11-01' };
+describe('«Доплата за общежитие»: ручной ввод закрыт (миграция 339)', () => {
+  it('добавление и правка — 409 DORMITORY_ALLOWANCE_AUTO, ничего не пишется и не проверяется', async () => {
+    const added = makeRes();
+    await controller.add(makeReq({ body: { employee_id: 42, date_from: '2026-11-01' } }), added);
+    expect(added.statusCode).toBe(409);
+    expect(added.body).toEqual(expect.objectContaining({ code: 'DORMITORY_ALLOWANCE_AUTO' }));
 
-  it('не «штат зарплаты» — 403, ничего не пишется', async () => {
-    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
-    const res = makeRes();
-    await controller.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(403);
+    const updated = makeRes();
+    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-11-01' } }), updated);
+    expect(updated.statusCode).toBe(409);
+    expect(updated.body.code).toBe('DORMITORY_ALLOWANCE_AUTO');
+
     expect(allowances.addDormitoryAllowance).not.toHaveBeenCalled();
-  });
-
-  it('«по» раньше «с», нет даты — 400', async () => {
-    for (const bad of [{ ...body, date_to: '2026-10-31' }, { employee_id: 42 }, { ...body, date_from: '2026-02-31' }]) {
-      const res = makeRes();
-      await controller.add(makeReq({ body: bad }), res);
-      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
-    }
-    expect(allowances.addDormitoryAllowance).not.toHaveBeenCalled();
-  });
-
-  it('добавлено — аудит тем же клиентом транзакции; «по» не передано — бессрочно', async () => {
-    allowances.addDormitoryAllowance.mockResolvedValue({ status: 'saved', allowance: ROW });
-    const res = makeRes();
-    await controller.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual(ROW);
-    expect(allowances.addDormitoryAllowance).toHaveBeenCalledWith(TX_CLIENT, 42, { date_from: '2026-11-01', date_to: null });
-    expect(audit.logFromRequestWithClient).toHaveBeenCalledWith(
-      TX_CLIENT, expect.anything(), 'user-1', 'PAYROLL_DORMITORY_ALLOWANCE_ADDED',
-      expect.objectContaining({ entityId: '5', details: expect.objectContaining({ employee_id: 42, date_to: null }) }),
-    );
-  });
-
-  it('повтор того же периода — 200 с той же строкой, аудит не пишется', async () => {
-    allowances.addDormitoryAllowance.mockResolvedValue({ status: 'unchanged', allowance: ROW });
-    const res = makeRes();
-    await controller.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual(ROW);
+    expect(allowances.updateDormitoryAllowance).not.toHaveBeenCalled();
     expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
-  });
-
-  it('правила — 409 с кодом и текстом сервиса; пересечение периодов (23P01) — 409 ALLOWANCE_OVERLAP', async () => {
-    for (const code of ['LIVES_IN_DORMITORY', 'HAS_HOUSING'] as const) {
-      allowances.addDormitoryAllowance.mockRejectedValueOnce(new DormitoryAllowanceConflictError(code, `текст ${code}`));
-      const res = makeRes();
-      await controller.add(makeReq({ body }), res);
-      expect(res.statusCode).toBe(409);
-      expect(res.body).toEqual({ success: false, error: `текст ${code}`, code });
-    }
-    allowances.addDormitoryAllowance.mockRejectedValueOnce(Object.assign(new Error('exclusion'), { code: '23P01' }));
-    const overlap = makeRes();
-    await controller.add(makeReq({ body }), overlap);
-    expect(overlap.statusCode).toBe(409);
-    expect(overlap.body.code).toBe('ALLOWANCE_OVERLAP');
-    expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
-  });
-
-  it('сбой аудита — 500: запись откатывается вместе с транзакцией', async () => {
-    allowances.addDormitoryAllowance.mockResolvedValue({ status: 'saved', allowance: ROW });
-    audit.logFromRequestWithClient.mockRejectedValueOnce(new Error('audit down'));
-    const res = makeRes();
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await controller.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(500);
   });
 });
 
-describe('«Доплата за общежитие»: правка и удаление', () => {
+describe('«Доплата за общежитие»: удаление', () => {
   it('нет записи — 404; чужой сотрудник — 403', async () => {
     allowances.getDormitoryAllowance.mockResolvedValueOnce(null);
     const missing = makeRes();
-    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-11-01' } }), missing);
+    await controller.remove(makeReq({ params: { id: '5' } }), missing);
     expect(missing.statusCode).toBe(404);
 
     allowances.getDormitoryAllowance.mockResolvedValue(ROW);
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(false);
     const foreign = makeRes();
-    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-11-01' } }), foreign);
+    await controller.remove(makeReq({ params: { id: '5' } }), foreign);
     expect(foreign.statusCode).toBe(403);
-    const foreignDelete = makeRes();
-    await controller.remove(makeReq({ params: { id: '5' } }), foreignDelete);
-    expect(foreignDelete.statusCode).toBe(403);
-    expect(allowances.updateDormitoryAllowance).not.toHaveBeenCalled();
     expect(allowances.deleteDormitoryAllowance).not.toHaveBeenCalled();
-  });
-
-  it('«по» — аудит «было → стало»; те же даты — без аудита', async () => {
-    allowances.getDormitoryAllowance.mockResolvedValue(ROW);
-    const after = { ...ROW, date_to: '2026-12-31' };
-    allowances.updateDormitoryAllowance.mockResolvedValueOnce({ status: 'saved', allowance: after, before: ROW });
-    const res = makeRes();
-    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-11-01', date_to: '2026-12-31' } }), res);
-    expect(res.body.data).toEqual(after);
-    expect(allowances.updateDormitoryAllowance).toHaveBeenCalledWith(TX_CLIENT, 5, { date_from: '2026-11-01', date_to: '2026-12-31' });
-    expect(audit.logFromRequestWithClient).toHaveBeenCalledWith(
-      TX_CLIENT, expect.anything(), 'user-1', 'PAYROLL_DORMITORY_ALLOWANCE_UPDATED',
-      expect.objectContaining({ details: { from: expect.objectContaining({ date_to: null }), to: expect.objectContaining({ date_to: '2026-12-31' }) } }),
-    );
-
-    allowances.updateDormitoryAllowance.mockResolvedValueOnce({ status: 'unchanged', allowance: after, before: after });
-    const same = makeRes();
-    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-11-01', date_to: '2026-12-31' } }), same);
-    expect(same.statusCode).toBe(200);
-    expect(audit.logFromRequestWithClient).toHaveBeenCalledTimes(1);
-  });
-
-  it('правка в дни проживания — 409', async () => {
-    allowances.getDormitoryAllowance.mockResolvedValue(ROW);
-    allowances.updateDormitoryAllowance.mockRejectedValue(new DormitoryAllowanceConflictError('LIVES_IN_DORMITORY', 'живёт'));
-    const res = makeRes();
-    await controller.update(makeReq({ params: { id: '5' }, body: { date_from: '2026-10-01' } }), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.body.code).toBe('LIVES_IN_DORMITORY');
   });
 
   it('удаление — аудит в транзакции; уже удалена — 404 без аудита', async () => {

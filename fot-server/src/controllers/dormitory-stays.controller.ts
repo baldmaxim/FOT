@@ -7,8 +7,10 @@
  * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — «штат зарплаты»
  * (работающие, без подрядчиков, охват условий оплаты). Запись — canWriteEmployeeInScope; уволенному (его
  * назначения отделов сняты) дату выезда ставит тот, кто видит его в «Уволенных» кадров.
- * «Зарплата» общежитие не правит, только убирает (🗑): выезд 1-м числом месяца или удаление ошибочной строки —
- * право /salary/terms или /salary/payments и запись в «Справочник» (canWritePayrollRegistryEmployee).
+ * «Зарплата» («Справочник» → «Общежитие», список живущих — миграция 339: он гасит авто-доплату за общежитие)
+ * заселяет (POST), выселяет с даты (PATCH, выезд только раньше прежнего) и удаляет ошибочную строку — право
+ * /salary/terms или /salary/payments и запись в «Справочник» (canWritePayrollRegistryEmployee); адреса и въезд
+ * при заселении — те же правила, что у кадров.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -284,6 +286,50 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/**
+ * POST /api/payroll/dormitory-stays { employee_id, check_in, check_out?, address } — «Зарплата» заселяет в общежитие:
+ * работающий не подрядчик, запись в «Справочник»; пересечение с другим проживанием — 409.
+ */
+const addForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { employee_id: employeeId } = stayEmployeeIdSchema.parse(req.body);
+    const input = { kind: 'dormitory' as const, ...parseStayFields('dormitory', req.body) };
+    // Поиск отдаёт только «штат зарплаты», но тело запроса могут собрать и руками.
+    const employee = await getEmployeeState(employeeId);
+    if (!employee) {
+      res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+      return;
+    }
+    if (employee.employment_status !== 'active' || employee.is_archived) {
+      res.status(400).json({ success: false, error: 'Добавить можно только работающего сотрудника' });
+      return;
+    }
+    if (employee.is_contractor) {
+      res.status(400).json({ success: false, error: 'Подрядчика добавить нельзя' });
+      return;
+    }
+    if (!(await canWritePayrollRegistryEmployee(req, employeeId))) {
+      res.status(403).json(NO_ACCESS);
+      return;
+    }
+    const stay = await addStay(employeeId, input);
+    if (stay === 'overlap') {
+      res.status(409).json(OVERLAP);
+      return;
+    }
+    await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_ADDED', {
+      entityType: 'employee_dormitory_stays',
+      entityId: String(stay.id),
+      details: { source: PAYROLL_AUDIT_SOURCE, ...dormitoryStayAuditDetails(stay) },
+    });
+    res.json({ success: true, data: { ...stay, can_edit: true } });
+  } catch (err) {
+    if (handleStayError(err, res)) return;
+    console.error('dormitory.addForPayroll error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка добавления' });
+  }
+};
+
 /** Общежитие по :id, которое «Зарплата» может убрать; иначе ответ отправлен и null. */
 const payrollRemovableDormitory = async (req: AuthenticatedRequest, res: Response) => {
   const id = parseId(req);
@@ -381,6 +427,7 @@ const exportTable = async (req: AuthenticatedRequest, res: Response): Promise<vo
 export const dormitoryStaysController = {
   list,
   listForPayroll,
+  addForPayroll,
   closeForPayroll,
   removeForPayroll,
   searchEmployees,

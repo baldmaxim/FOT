@@ -165,14 +165,15 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
     ]);
   });
 
-  // Последним: 325, 326, 327, 329 и 334 расширяют CHECK, тест 301 выше проверяет прежний состав.
-  it('325 + 326 + 327 + 329 + 334: все статьи каталога сервера вставляются; выплаты (и «Аванс» 8.3) и минус у новых — нет', async () => {
+  // Последним: 325, 326, 327, 329, 334 и 338 расширяют CHECK, тест 301 выше проверяет прежний состав.
+  it('325 + 326 + 327 + 329 + 334 + 338: все статьи каталога сервера вставляются; выплаты (и «Аванс» 8.3) и минус у новых — нет', async () => {
     await pg.pool!.query(migration('325_payroll_paid_more_items.sql'));
     await pg.pool!.query(migration('326_payroll_paid_july_items.sql'));
     await pg.pool!.query(migration('327_payroll_paid_advance_accrual.sql'));
     await pg.pool!.query(migration('329_payroll_paid_fine_refund_property_damage.sql'));
     await pg.pool!.query(migration('334_payroll_paid_prior_debts.sql'));
-    await pg.pool!.query(migration('334_payroll_paid_prior_debts.sql'));
+    await pg.pool!.query(migration('338_payroll_paid_extra_accruals_sep.sql'));
+    await pg.pool!.query(migration('338_payroll_paid_extra_accruals_sep.sql'));
     await insert(3, PAYROLL_PAID_ITEM_CODES.map(code => ['2026-08', code, 1] as [string, string, number]));
     const saved = await getPaidAmounts(3, '2026-08', '2026-08');
     expect(saved.map(row => row.item).sort()).toEqual([...PAYROLL_PAID_ITEM_CODES].sort());
@@ -182,6 +183,8 @@ describe.skipIf(!PG_URL)('«Оплачено» на PostgreSQL', () => {
     await expect(insert(3, [['2026-09', 'advance_accrual', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
     await expect(insert(3, [['2026-09', 'fine_refund', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
     await expect(insert(3, [['2026-09', 'property_damage', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
+    await expect(insert(3, [['2026-09', 'reserve', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
+    await expect(insert(3, [['2026-09', 'imprest_overspend', -1]])).rejects.toThrow(/payroll_paid_amount_sign/);
     // 334: «Погашение долгов прошлых месяцев» с минусом — можно (перенесено больше долга), как recalc_prev.
     await insert(3, [['2026-09', 'prior_debts', -22559.69], ['2026-09', 'recalc_prev', -1]]);
     expect(await getPaidAmounts(3, '2026-09', '2026-09')).toEqual(expect.arrayContaining([

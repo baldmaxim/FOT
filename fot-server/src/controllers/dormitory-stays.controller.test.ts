@@ -382,6 +382,60 @@ describe('удаление', () => {
   });
 });
 
+describe('«Зарплата» заселяет в общежитие', () => {
+  const body = { employee_id: 42, check_in: '2026-09-01', address: ' Общ. Свободы 35 ', kind: 'apartment', amount: 999 };
+
+  it('работающий из «Справочника» — общежитие (вид и сумма из тела не читаются), аудит с источником', async () => {
+    svc.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    svc.addStay.mockResolvedValue({ ...STAY, address: 'Общ. Свободы 35' });
+    const res = makeRes();
+
+    await c.addForPayroll(makeReq({ body }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual(expect.objectContaining({ id: 7, can_edit: true }));
+    expect(svc.addStay).toHaveBeenCalledWith(42, {
+      kind: 'dormitory', check_in: '2026-09-01', check_out: null, address: 'Общ. Свободы 35', amount: null,
+    });
+    expect(scope.canWritePayrollRegistryEmployee).toHaveBeenCalledWith(expect.anything(), 42);
+    expect(scope.canWriteEmployeeInScope).not.toHaveBeenCalled();
+    expect(audit.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', 'DORMITORY_STAY_ADDED',
+      expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'payroll_dormitory_registry' }) }),
+    );
+  });
+
+  it('без адреса — 400; уволенный, подрядчик, нет, не из «Справочника» — отказ; пересечение — 409', async () => {
+    const empty = makeRes();
+    await c.addForPayroll(makeReq({ body: { ...body, address: '' } }), empty);
+    expect(empty.statusCode).toBe(400);
+
+    const cases: Array<[unknown, boolean, number]> = [
+      [DISMISSED, true, 400],
+      [{ ...ACTIVE, is_contractor: true }, true, 400],
+      [null, true, 404],
+      [ACTIVE, false, 403],
+    ];
+    for (const [state, canWrite, status] of cases) {
+      svc.getEmployeeState.mockResolvedValue(state);
+      scope.canWritePayrollRegistryEmployee.mockResolvedValue(canWrite);
+      const res = makeRes();
+      await c.addForPayroll(makeReq({ body }), res);
+      expect(res.statusCode, JSON.stringify(state)).toBe(status);
+    }
+    expect(svc.addStay).not.toHaveBeenCalled();
+
+    svc.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    svc.addStay.mockResolvedValue('overlap');
+    const overlap = makeRes();
+    await c.addForPayroll(makeReq({ body }), overlap);
+    expect(overlap.statusCode).toBe(409);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe('«Зарплата» убирает общежитие', () => {
   const LIVING = { ...STAY, check_in: '2026-07-01', check_out: null };
 

@@ -114,6 +114,7 @@ const draftsFromDays = async (_exec: unknown, source: {
   workdayDates: Object.keys(employee.days).filter(date => employee.days[date].hours > 0).sort(),
   dayoffDates: [],
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+  absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
   overtimeMinutes: {},
 }));
 

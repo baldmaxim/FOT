@@ -48,6 +48,7 @@ import {
   lastDayOfMonth,
   payslipPeriod,
   pickPayslipRateAllowances,
+  type IPayslipHousingDays,
   type IPayslipRateAllowance,
   type IPayslipWorkedDays,
 } from './payroll-payslip.rules.js';
@@ -309,6 +310,22 @@ const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number,
   brigadeShareFacts(departmentId, shares.distribution ?? 'error', shares.rows, shares.objects)
 );
 
+/**
+ * Дни проживания (миграция 339): период сотрудника в месяце по вчера МСК (текущий месяц — как живой табель, будущий —
+ * ничего), отсутствия основы и дни с часами в бригадах (из расчёта доли — и у закрытой, и у предварительной бригады).
+ */
+export const housingDaysOf = (
+  period: { from: string; to: string },
+  month: string,
+  absenceDates: readonly string[],
+  brigadeDates: readonly string[],
+): IPayslipHousingDays => {
+  const limit = resolvePreliminaryAsOf(month);
+  const to = limit === null ? null : (limit < period.to ? limit : period.to);
+  // Нечего считать — пустое окно: from позже to.
+  return { from: period.from, to: to ?? '0000-00-00', absenceDates, brigadeDates };
+};
+
 /** Основа сотрудника месяца: закрытая (closed) или из живого табеля (closed — null). */
 interface ICalcEntry {
   basis: ICalcMonthBasis;
@@ -421,13 +438,6 @@ const computePayouts = async (
     const terms = termsByEmployee.get(employeeId) ?? [];
     const facts = extras.rateFacts.get(employeeId);
     const worked = basis.workdayDates.length + basis.dayoffDates.length;
-    const rateAllowances = facts
-      ? pickPayslipRateAllowances({
-        ...facts,
-        category: closedCategories.get(employeeId) ?? liveCategories.get(employeeId) ?? 'office',
-        travelDays: { worked, norm: basis.normDays ?? 0 },
-      })
-      : [];
     // Дни бригад, где сотрудник делит выработку, оплачивает доля; начальник участка (его нет в строках) — оклад.
     const shares: IBrigadeShareFact[] = [];
     const brigadeDates = new Set<string>();
@@ -437,6 +447,14 @@ const computePayouts = async (
       shares.push(fact);
       for (const date of [...brigade.workdayDates, ...brigade.dayoffDates]) brigadeDates.add(date);
     }
+    const rateAllowances = facts
+      ? pickPayslipRateAllowances({
+        ...facts,
+        category: closedCategories.get(employeeId) ?? liveCategories.get(employeeId) ?? 'office',
+        travelDays: { worked, norm: basis.normDays ?? 0 },
+        housingDays: housingDaysOf(period, month, basis.absenceDates, shares.flatMap(share => share.workedDates)),
+      })
+      : [];
     const calc = buildPayrollCalc({
       monthStart,
       monthEnd,
@@ -525,7 +543,8 @@ export const getPreliminaryPayoutForEmployees = (
 /**
  * «Сумма» бригады во вкладке табеля из доли (зафиксированной или предварительной): доля + разовые доплаты и
  * проживание − удержания месяца — те же строки, что в «К выплате (ФОТ)» карточки рабочего. Проезда «Рабочим» нет,
- * плановых доплат у рабочих бригад нет — день табеля здесь не нужен.
+ * плановых доплат у рабочих бригад нет — день табеля здесь не нужен. Дни доплаты за общежитие — дни с часами из
+ * доли; отсутствий без табеля нет — квартиру рабочего (редкость) превью считает по дням проживания без вычета.
  */
 export const previewBrigadePayouts = async (
   shares: ReadonlyMap<number, IBrigadeShareFact>,
@@ -538,6 +557,8 @@ export const previewBrigadePayouts = async (
   const extras = await loadPayoutExtras(ids, month, periods);
   for (const employeeId of ids) {
     const facts = extras.rateFacts.get(employeeId);
+    const period = periods.get(employeeId);
+    const share = shares.get(employeeId)!;
     result.set(employeeId, buildPayrollCalc({
       monthStart: `${month}-01`,
       monthEnd: lastDayOfMonth(month),
@@ -548,9 +569,16 @@ export const previewBrigadePayouts = async (
       terms: [],
       plannedSupplements: [],
       oneTimeTotal: extras.oneTime.get(employeeId) ?? null,
-      rateAllowances: facts ? pickPayslipRateAllowances({ ...facts, category: 'worker', travelDays: null }) : [],
+      rateAllowances: facts && period
+        ? pickPayslipRateAllowances({
+          ...facts,
+          category: 'worker',
+          travelDays: null,
+          housingDays: housingDaysOf(period, month, [], share.workedDates),
+        })
+        : [],
       deductions: extras.deductions.get(employeeId) ?? [],
-      brigadeShares: [shares.get(employeeId)!],
+      brigadeShares: [share],
       absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
     }));
   }

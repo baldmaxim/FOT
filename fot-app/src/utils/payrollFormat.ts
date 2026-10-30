@@ -68,7 +68,8 @@ export const formatPayrollFilterValue = (column: PayrollValueFilterColumn, value
   }
   if (column === 'bonus' || column === 'housing') {
     const money = formatPayrollMoney(value);
-    return money === null ? value : `${money} ₽/мес`;
+    // Ставка квартиры — за день (миграция 339).
+    return money === null ? value : `${money} ${column === 'housing' ? '₽/день' : '₽/мес'}`;
   }
   return value;
 };

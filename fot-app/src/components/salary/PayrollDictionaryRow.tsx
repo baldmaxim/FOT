@@ -24,6 +24,8 @@ interface IPayrollDictionaryRowProps {
   nameLabel: string;
   /** Подпись значения (ставки). Не передана — у записи значения нет. */
   amountLabel?: string;
+  /** Единица значения за числом: «₽/день» у ставок проживания (миграция 339); нет — без единицы. */
+  amountUnit?: string | null;
   /**
    * Ставки с историей: месяцы «с какого» для правки (первый — текущий). У ставки ещё без значения выбора нет —
    * первое значение действует «с начала». Под строкой — запланированное значение.
@@ -57,6 +59,7 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
   item,
   nameLabel,
   amountLabel,
+  amountUnit = null,
   monthOptions,
   canEdit,
   locked,
@@ -124,7 +127,10 @@ export const PayrollDictionaryRow: FC<IPayrollDictionaryRowProps> = ({
     <li className={styles.row}>
       <span className={styles.rowName}>{item.name}</span>
       {amountLabel !== undefined && (
-        <span className={styles.rowAmount}>{formatPayrollMoney(item.amount) ?? '—'}</span>
+        <span className={styles.rowAmount}>
+          {formatPayrollMoney(item.amount) ?? '—'}
+          {amountUnit && item.amount !== null && item.amount !== undefined ? ` ${amountUnit}` : ''}
+        </span>
       )}
       {(canEdit || details) && (
         <span className={styles.rowActions}>

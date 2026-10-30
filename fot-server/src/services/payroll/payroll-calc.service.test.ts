@@ -19,12 +19,17 @@ vi.mock('./payroll-month-basis.service.js', async importOriginal => ({
 }));
 
 const brigade = vi.hoisted(() => ({ getBrigadeShares: vi.fn() }));
-vi.mock('./brigade-salary.service.js', () => brigade);
+// По какой день считается проживание — настоящее правило (прошлый месяц — целиком).
+vi.mock('./brigade-salary.service.js', async importOriginal => ({
+  ...brigade,
+  resolvePreliminaryAsOf: (await importOriginal<typeof import('./brigade-salary.service.js')>()).resolvePreliminaryAsOf,
+}));
 
 const terms = vi.hoisted(() => ({ getTermsForPeriod: vi.fn() }));
 vi.mock('./payroll-terms.service.js', () => terms);
 
-vi.mock('./payroll-rate-facts.service.js', () => ({ loadRateFacts: vi.fn(async () => new Map()) }));
+const rateFacts = vi.hoisted(() => ({ loadRateFacts: vi.fn() }));
+vi.mock('./payroll-rate-facts.service.js', () => rateFacts);
 vi.mock('./payroll-month-attribution.service.js', () => ({
   loadMonthBreakdown: vi.fn(async () => new Map()),
   attributeMonths: vi.fn(async () => new Map()),
@@ -79,6 +84,7 @@ beforeEach(() => {
     return [];
   });
   basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [source()]], [8, [source()]]]));
+  rateFacts.loadRateFacts.mockResolvedValue(new Map());
   terms.getTermsForPeriod.mockResolvedValue(new Map([[8, [{
     effective_from: '2026-01-01', effective_to: null, calc_type: 'salary', monthly_salary: '110000.00',
     bonus_amount: null, proration_rounding: 'ruble',
@@ -147,6 +153,37 @@ describe('«К выплате (ФОТ)» бригады', () => {
       distribution: 'ok', output: '500000.00', objects: [],
     }]]), '2026-09');
     expect(tab.get(7)?.net).toBe('150318.18');
+  });
+
+  it('доплата за общежитие с включателя — 160 × дни с часами в доле; живущему в общежитии — нет; то же во вкладке', async () => {
+    const days = Object.fromEntries(septemberWeekdays.slice(0, 20).map(date => [date, 8]));
+    const row = { ...shareRow, objects: [{ ...shareRow.objects[0], days: { ...days, '2026-09-26': 6, '2026-09-27': 0 } }] };
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [row], objects: [waveObject],
+    });
+    const facts = (housing: unknown[]) => new Map([[7, {
+      travelRate: null, travelStopped: false, dormitoryAllowanceRate: '160.00', dormitoryAllowanceFrom: '2026-09-01', housing,
+    }]]);
+    rateFacts.loadRateFacts.mockResolvedValue(facts([]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+    // 20 будних + суббота 26-го с часами; воскресенье без часов не считается: 21 × 160 = 3 360.
+    expect(calc?.state === 'closed' && calc.lines.find(line => line.code === 'housing')).toEqual({
+      code: 'housing', amount: '3360.00',
+      parts: [{ kind: 'housing', housing: 'dormitory', amount: '3360.00', rate: '160.00', days: 21 }],
+    });
+    expect(calc).toMatchObject({ net: '141678.18' });
+
+    const fact = {
+      departmentId: BRIGADE, amount: row.amount, ktu: row.ktu, countedMinutes: row.counted_minutes,
+      distribution: 'ok' as const, output: '500000.00', objects: [],
+      workedDates: Object.keys(row.objects[0].days).filter(date => row.objects[0].days[date] > 0).sort(),
+    };
+    expect((await previewBrigadePayouts(new Map([[7, fact]]), '2026-09')).get(7)?.net).toBe('141678.18');
+
+    rateFacts.loadRateFacts.mockResolvedValue(facts([{ kind: 'dormitory', start: '2026-08-01', end: null, amount: null }]));
+    const living = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+    expect(living?.state === 'closed' && living.lines.map(line => line.code)).toEqual(['brigade']);
   });
 
   it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {

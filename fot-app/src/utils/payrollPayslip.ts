@@ -44,7 +44,8 @@ const RATE_ALLOWANCE_LABELS: Record<PayslipRateAllowanceCode, string> = {
 
 /**
  * «По ставкам ФОТ»: подпись и сумма; нет строк (или старый бэкенд) — пусто, секции нет. У проезда — дни,
- * из которых он посчитан: «22 из 23 дн.»; старый бэкенд дней не отдаёт — без подписи.
+ * из которых он посчитан: «22 из 23 дн.»; у проживания — «630,00 × 9 дн.» (без ставки — «9 дн.»); старый бэкенд
+ * дней не отдаёт — без подписи.
  */
 export const payslipRateLines = (
   allowances: readonly IPayslipRateAllowance[] | undefined,
@@ -54,6 +55,9 @@ export const payslipRateLines = (
     label: RATE_ALLOWANCE_LABELS[item.code],
     amount: Number(item.amount),
     ...(item.days ? { note: `${item.days.worked} из ${item.days.norm} дн.` } : {}),
+    ...(item.housing_days !== undefined
+      ? { note: item.rate ? `${formatPaidAmount(Number(item.rate))} × ${item.housing_days} дн.` : `${item.housing_days} дн.` }
+      : {}),
   }))
   .filter(line => Number.isFinite(line.amount));
 

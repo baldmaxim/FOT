@@ -19,6 +19,7 @@ const source = (over: Partial<IMonthBasisSource>): IMonthBasisSource => ({
   workdayDates: [],
   dayoffDates: [],
   absenceDays: {},
+  absenceDates: null,
   overtimeMinutes: {},
   quality: 'materialized',
   departmentId: 'dept-1',
@@ -35,7 +36,10 @@ describe('основа месяца из закрытых подач', () => {
         basisId: 2, versionId: 11, coverFrom: '2026-09-16', coverTo: '2026-09-30', workdayDates: ['2026-09-16'],
         overtimeMinutes: { '2026-09-16': 180 },
       }),
-      source({ workdayDates: ['2026-09-01'], dayoffDates: ['2026-09-05'], absenceDays: { vacation: 2 } }),
+      source({
+        workdayDates: ['2026-09-01'], dayoffDates: ['2026-09-05'], absenceDays: { vacation: 2 },
+        absenceDates: { vacation: ['2026-09-03', '2026-09-02'] },
+      }),
     ], september);
     expect(basis).toEqual({
       state: 'closed',
@@ -47,9 +51,18 @@ describe('основа месяца из закрытых подач', () => {
       workdayDates: ['2026-09-01', '2026-09-16'],
       dayoffDates: ['2026-09-05'],
       absenceDays: { vacation: 2, sick: 0, educational_leave: 0, unpaid: 0 },
+      absenceDates: ['2026-09-02', '2026-09-03'],
       overtimeMinutes: { '2026-09-16': 180 },
       brigades: [],
     });
+  });
+
+  it('даты отсутствий всех видов — одним списком, только период сотрудника; основа до 339 (null) — без дат', () => {
+    const basis = assembleMonthBasis([
+      source({ absenceDates: { vacation: ['2026-09-14'], sick: ['2026-09-02'], unpaid: ['2026-09-15'] } }),
+      source({ basisId: 2, versionId: 11, coverFrom: '2026-09-16', coverTo: '2026-09-30', absenceDays: { sick: 3 } }),
+    ], { from: '2026-09-02', to: '2026-09-14' });
+    expect(basis.state === 'closed' && basis.absenceDates).toEqual(['2026-09-02', '2026-09-14']);
   });
 
   it('дни подач бригады — ещё и по бригадам', () => {

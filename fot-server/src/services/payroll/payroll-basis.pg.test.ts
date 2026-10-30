@@ -52,10 +52,13 @@ import { fixPayrollBasisOvertime } from './payroll-basis-overtime-fix.service.js
 import { loadMonthBasisSources } from './payroll-month-basis.service.js';
 import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
 
-const MIGRATION = readFileSync(
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../docs/migrations/331_payroll_version_basis.sql'),
+const migration = (name: string): string => readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), `../../../../docs/migrations/${name}`),
   'utf8',
 );
+const MIGRATION = migration('331_payroll_version_basis.sql');
+// 339 — даты отсутствий в основе (absence_dates).
+const MIGRATION_339 = migration('339_payroll_housing_by_days.sql');
 
 const q = async <T extends import('pg').QueryResultRow>(sql: string, params?: unknown[]) =>
   (await pg.pool!.query<T>(sql, params)).rows;
@@ -68,6 +71,7 @@ const draft = (employeeId: number, over: Partial<IPayrollBasisDraft> = {}): IPay
   workdayDates: ['2026-09-01', '2026-09-02'],
   dayoffDates: [],
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+  absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
   overtimeMinutes: { '2026-09-02': 180 },
   ...over,
 });
@@ -111,6 +115,8 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
     // Повторный запуск миграции безопасен.
     await q(MIGRATION);
     await q(MIGRATION);
+    await q(MIGRATION_339);
+    await q(MIGRATION_339);
   });
 
   beforeEach(async () => {
@@ -223,6 +229,28 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
       ['2026-09-01', '2026-09-15', ['2026-09-03']],
       ['2026-09-16', '2026-09-30', ['2026-09-16']],
     ]);
+  });
+
+  it('339: даты отсутствий пишутся при закрытии, переносятся в новую редакцию и читаются расчётом', async () => {
+    const [first, second] = await seedApproval({ start: '2026-09-01', end: '2026-09-30' }, {}, 2);
+    const absenceDates = { vacation: ['2026-09-10', '2026-09-11'], sick: ['2026-09-14'], educational_leave: [], unpaid: [] };
+    await insertPayrollBasis(pg.pool!, first, [draft(71, {
+      absenceDays: { vacation: 2, sick: 1, educational_leave: 0, unpaid: 0 }, absenceDates,
+    })], { quality: 'materialized', reason: 'close', mode: 'changed' });
+    const client = await pg.pool!.connect();
+    try {
+      await client.query('BEGIN');
+      await copyPayrollBasis(client, first, second);
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+    const [copied] = await q<{ absence_dates: unknown }>(
+      'SELECT absence_dates FROM timesheet_version_payroll_basis WHERE version_id = $1', [second],
+    );
+    expect(copied.absence_dates).toEqual(absenceDates);
+    const [source] = (await loadMonthBasisSources([71], '2026-09')).get(71) ?? [];
+    expect(source.absenceDates).toEqual(absenceDates);
   });
 
   it('исправление переработки: новая revision только с уменьшением, поля и качество прежние, повтор — без эффекта', async () => {

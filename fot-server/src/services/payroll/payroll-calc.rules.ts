@@ -77,7 +77,8 @@ export type PayrollCalcLinePart =
     amount: string;
   }
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
-  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string }
+  // Ставка за день и дни (миграция 339); у квартиры со сменой ставки в месяце ставки нет.
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
   | { kind: 'one_time'; amount: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
   | { kind: 'paid_1c'; amount: string }
@@ -140,6 +141,8 @@ export interface IBrigadeShareFact {
   output: string | null;
   /** Объекты с учтёнными минутами сотрудника — части расшифровки. */
   objects: IBrigadeShareObjectFact[];
+  /** Дни с часами в бригаде (по объектам расчёта) — доплата за общежитие по дням (миграция 339). */
+  workedDates: string[];
 }
 
 /** КТУ '1.5' → 15 десятых. */
@@ -157,7 +160,14 @@ export const brigadeShareFacts = (
     ktu: string;
     counted_minutes: number;
     amount: string | null;
-    objects?: ReadonlyArray<{ object_key: string; counted_minutes: number; weight: number; amount: string | null }>;
+    objects?: ReadonlyArray<{
+      object_key: string;
+      counted_minutes: number;
+      weight: number;
+      amount: string | null;
+      /** Часы по дням на объекте. */
+      days?: Readonly<Record<string, number>>;
+    }>;
   }>,
   objects: ReadonlyArray<{ object_key: string; object_name: string; output: string | null; total_weight: number }>,
 ): Map<number, IBrigadeShareFact> => {
@@ -184,6 +194,9 @@ export const brigadeShareFacts = (
         totalWeight: byKey.get(part.object_key)?.total_weight ?? 0,
         amount: part.amount,
       })),
+    workedDates: [...new Set((row.objects ?? []).flatMap(part => Object.entries(part.days ?? {})
+      .filter(([, hours]) => Number(hours) > 0)
+      .map(([date]) => date)))].sort(),
   }]));
 };
 
@@ -626,7 +639,14 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     } else {
       // Квартира и доплата за общежитие — одна статья 1С «Компенсация проживания».
       const housing = allowance.code === 'housing' ? 'apartment' : 'dormitory';
-      lines.push({ code: 'housing', amount: allowance.amount, parts: [{ kind: 'housing', housing, amount: allowance.amount }] });
+      const part: PayrollCalcLinePart = {
+        kind: 'housing',
+        housing,
+        amount: allowance.amount,
+        ...(allowance.rate !== undefined ? { rate: allowance.rate } : {}),
+        ...(allowance.housing_days !== undefined ? { days: allowance.housing_days } : {}),
+      };
+      lines.push({ code: 'housing', amount: allowance.amount, parts: [part] });
     }
   }
   if (segments.length === 0 && facts.workdayDates.length > 0) missing.add('no_terms');

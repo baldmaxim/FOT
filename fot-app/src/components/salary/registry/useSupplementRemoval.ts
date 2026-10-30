@@ -16,7 +16,7 @@ import {
   canEditSupplement,
   housingRowKey,
   plannedRemoval,
-  stayRemoval,
+  stayRemovalMode,
   supplementPeriod,
   supplementRowKey,
 } from '../../../utils/payrollRegistries';
@@ -24,14 +24,16 @@ import {
 /**
  * 🗑 «Убрать» и перечитывание в «Доплате» и её списках («Плановые доплаты», «Квартира»): одна логика на три окна.
  * Плановая (любой период, по id строки журнала) — убрать с 1-го числа текущего месяца (период закрывается, прошлые
- * месяцы остаются) или снять ошибочную. Разовая — удалить. Квартира —
- * выезд 1-м числом текущего месяца или удалить не начавшееся / прошедшее проживание. busyKey — ключ строки,
- * которая сейчас убирается (supplementRowKey / housingRowKey).
+ * месяцы остаются) или снять ошибочную. Разовая — удалить. Квартира — окно «Дата выезда» (housingCheckout; деньги
+ * по дням, миграция 339) или удалить не начавшееся / прошедшее проживание. busyKey — ключ строки, которая сейчас
+ * убирается (supplementRowKey / housingRowKey).
  */
 export const useSupplementRemoval = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /** Квартира, из которой выселяют, — окно «Дата выезда» открыто. */
+  const [housingCheckout, setHousingCheckout] = useState<IHousingAllowanceRow | null>(null);
 
   // Плановая — та же, что в окне сотрудника: префикс перечитывает и список «Расчётов», и окно, и таблицы «Справочника».
   const refreshSupplements = () => queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
@@ -82,21 +84,35 @@ export const useSupplementRemoval = () => {
 
   const removeHousing = async (row: IHousingAllowanceRow) => {
     if (busyKey !== null) return;
-    const removal = stayRemoval(row, moscowTodayIso());
-    const question = removal.action === 'close'
-      ? `Убрать квартиру у ${row.full_name} с ${formatDate(removal.checkOut)}? Прошлые месяцы останутся в истории.`
-      : `Удалить ошибочную строку: ${row.full_name}, въезд ${formatDate(row.check_in)}?`;
-    if (!window.confirm(question)) return;
-    await run(housingRowKey(row), async () => {
-      if (removal.action === 'close') {
-        await payrollRegistryService.updateHousing(row.id, {
-          check_in: row.check_in, check_out: removal.checkOut, amount: Number(row.amount), address: row.address,
-        });
-      } else {
-        await payrollRegistryService.removeHousing(row.id);
-      }
-    }, refreshHousing);
+    if (stayRemovalMode(row, moscowTodayIso()) === 'checkout') {
+      setHousingCheckout(row);
+      return;
+    }
+    if (!window.confirm(`Удалить ошибочную строку: ${row.full_name}, въезд ${formatDate(row.check_in)}?`)) return;
+    await run(housingRowKey(row), () => payrollRegistryService.removeHousing(row.id), refreshHousing);
   };
 
-  return { busyKey, removeSupplement, removeHousing, refreshSupplements, refreshHousing };
+  /** Выезд из окна: въезд, ставка и адрес прежние; ошибка — в окне. */
+  const checkoutHousing = async (checkOut: string) => {
+    const row = housingCheckout;
+    if (!row) return;
+    try {
+      await payrollRegistryService.updateHousing(row.id, {
+        check_in: row.check_in, check_out: checkOut, amount: Number(row.amount), address: row.address,
+      });
+    } finally {
+      void refreshHousing();
+    }
+  };
+
+  return {
+    busyKey,
+    removeSupplement,
+    removeHousing,
+    refreshSupplements,
+    refreshHousing,
+    housingCheckout,
+    closeHousingCheckout: () => setHousingCheckout(null),
+    checkoutHousing,
+  };
 };

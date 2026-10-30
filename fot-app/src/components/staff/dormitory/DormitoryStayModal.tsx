@@ -6,6 +6,7 @@ import {
   type DormitoryStayKind,
   type IDormitoryCandidate,
   type IDormitoryStay,
+  type IDormitoryStayPayload,
 } from '../../../services/dormitoryService';
 import {
   DORMITORY_ADDRESS_MAX_LENGTH,
@@ -20,11 +21,19 @@ import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 import { DormitoryAddressField } from './DormitoryAddressField';
 
+/** Заселение из «Зарплаты» («Справочник» → «Общежитие»): только общежитие, свои поиск и запись. */
+export interface IDormitoryStayModalPayroll {
+  search: (term: string, signal: AbortSignal) => Promise<IDormitoryCandidate[]>;
+  add: (employeeId: number, payload: IDormitoryStayPayload) => Promise<IDormitoryStay>;
+}
+
 interface IDormitoryStayModalProps {
   /** Передано — правка этого проживания (сотрудник не меняется); нет — добавление. */
   stay?: IDormitoryStay;
   /** Сохранённые адреса общежитий — подсказки под полем «Адрес / номер». */
   addresses: readonly string[];
+  /** Передано — заселение из «Зарплаты» (окно поверх таблицы «Справочника»); нет — вкладка кадров. */
+  payroll?: IDormitoryStayModalPayroll;
   onClose: () => void;
   onSaved: (stay: IDormitoryStay) => void;
 }
@@ -35,9 +44,10 @@ const KINDS: DormitoryStayKind[] = ['dormitory', 'apartment'];
  * «Добавить сотрудника» и ✎ во вкладке «Проживание»: сотрудник (поиск по ФИО), вид (общежитие или квартира —
  * при правке не меняется), дата въезда, дата выезда (пусто — живёт). Общежитие — адрес или номер (сохранённые —
  * списком под полем); квартира — адрес по желанию. Сумму квартиры кадры не задают: новой сервер ставит ставку
- * «Доплата за проживание», меняет её «Зарплата». Ошибка сервера — под полями, ввод не теряется.
+ * «Доплата за проживание», меняет её «Зарплата». Ошибка сервера — под полями, ввод не теряется. Из «Зарплаты»
+ * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника».
  */
-export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, addresses, onClose, onSaved }) => {
+export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, addresses, payroll, onClose, onSaved }) => {
   const errorId = useId();
   const addressId = useId();
   const isEdit = stay !== undefined;
@@ -76,9 +86,10 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
     setSaving(true);
     setError(null);
     try {
-      const saved = isEdit
-        ? await dormitoryService.update(stay.id, parsed.payload)
-        : await dormitoryService.add(employee!.id, kind, parsed.payload);
+      let saved: IDormitoryStay;
+      if (isEdit) saved = await dormitoryService.update(stay.id, parsed.payload);
+      else if (payroll) saved = await payroll.add(employee!.id, parsed.payload);
+      else saved = await dormitoryService.add(employee!.id, kind, parsed.payload);
       onSaved(saved);
       requestClose();
     } catch (err) {
@@ -95,6 +106,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
       saving={saving}
       error={error?.message ?? null}
       errorId={errorId}
+      raised={payroll !== undefined}
     >
       <div className={styles.field}>
         <span className={styles.label}>Сотрудник</span>
@@ -110,14 +122,14 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
           <EmployeeSearchField
             value={employee}
             onChange={value => { setEmployee(value); clearError(); }}
-            search={dormitoryService.searchEmployees}
+            search={payroll?.search ?? dormitoryService.searchEmployees}
             disabled={saving}
             invalid={error?.field === 'employee'}
           />
         )}
       </div>
 
-      {!isEdit && (
+      {!isEdit && !payroll && (
         <div className={styles.field}>
           <div className={styles.segmented} role="group" aria-label="Где живёт">
             {KINDS.map(value => (

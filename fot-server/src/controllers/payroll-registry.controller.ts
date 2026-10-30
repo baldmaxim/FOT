@@ -15,7 +15,9 @@ const REGISTRY_SHEETS = new Map<string, ITableSnapshotSheet>([
   ['supplements', { sheetName: 'Доплата', tableName: 'Supplements' }],
   ['compensation-stops', { sheetName: 'Без проезда', tableName: 'CompensationStops' }],
   ['overtime-stops', { sheetName: 'Без переработки', tableName: 'OvertimeStops' }],
+  // Прежняя таблица «Общежитие» (с ручной доплатой) — старый фронт во время выкладки; новая — только живущие (339).
   ['dormitory-allowances', { sheetName: 'Доплата за общежитие', tableName: 'DormitoryAllowance' }],
+  ['dormitory-stays', { sheetName: 'Общежитие', tableName: 'DormitoryStays' }],
   ['deductions', { sheetName: 'Удержания', tableName: 'Deductions' }],
   ['summary', { sheetName: 'Свод', tableName: 'PayrollSummary' }],
 ]);
