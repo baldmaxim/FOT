@@ -12,7 +12,7 @@ import { TimesheetSalaryOutputInput } from './TimesheetSalaryOutputInput';
 /** Данные сетки «По объектам» — те же, что у вкладки «По объектам»; режим и правки задаёт эта вкладка. */
 export type TimesheetSalaryObjectsGridProps = Omit<
   ITimesheetGridProps,
-  'viewMode' | 'compact' | 'bulkEditMode' | 'salary' | 'objectsSalary'
+  'viewMode' | 'compact' | 'bulkEditMode' | 'readOnly' | 'salary' | 'objectsSalary'
 >;
 
 export interface ITimesheetSalaryObjectsProps {
@@ -66,7 +66,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
 
   if (!compact) {
     if (gridLoading || !grid) return <Message text="Загрузка…" />;
-    return <TimesheetGrid {...grid} viewMode="objects" objectsSalary={objectsSalary} />;
+    return <TimesheetGrid {...grid} viewMode="objects" readOnly objectsSalary={objectsSalary} />;
   }
 
   const salary: ITimesheetSalaryGridProps = objectsSalary;

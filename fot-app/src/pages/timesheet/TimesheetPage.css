@@ -6295,15 +6295,6 @@
 .ts-table--salary-objects thead th.ts-col-ktu-sticky {
   z-index: 88;
 }
-/* Табель здесь только для просмотра: клетки и ФИО не кликаются — правка во вкладке «По объектам». */
-.ts-table--salary-objects td.ts-salary-object-day,
-.ts-table--salary-objects td.ts-object-employee-cell {
-  cursor: default;
-}
-.ts-table--salary-objects td.ts-salary-object-day:hover {
-  outline: none;
-  transform: none;
-}
 /* «Выработка, ₽» — в строке группы, за «N чел. (X ч.)». */
 .ts-salary-group-output {
   display: inline-flex;
@@ -6402,4 +6393,15 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Только просмотр (вкладки «Зарплата»): дни и ФИО не кликаются — корректировки во «По сотрудникам» и «По объектам». */
+.ts-day--readonly,
+.ts-table--readonly td.ts-employee-cell,
+.ts-table--readonly td.ts-object-employee-cell {
+  cursor: default;
+}
+.ts-day--readonly:hover {
+  outline: none;
+  transform: none;
 }

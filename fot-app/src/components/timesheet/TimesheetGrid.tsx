@@ -67,6 +67,11 @@ export interface ITimesheetGridProps {
   calendar?: IProductionCalendarMonth | null;
   compact?: boolean;
   bulkEditMode?: boolean;
+  /**
+   * Только просмотр (вкладки «Зарплата»): без кликов по дням и ФИО, без «Исключить» и массовых правок —
+   * корректировки делаются во «По сотрудникам» и «По объектам». «Зарплата по объектам» (objectsSalary) — всегда так.
+   */
+  readOnly?: boolean;
   visibleDays?: number[];
   selectedCellKeys?: Set<string>;
   splitDayKeys?: Set<string>;
@@ -508,7 +513,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   dailySchedules = {},
   calendar = null,
   compact = false,
-  bulkEditMode = false,
+  bulkEditMode: bulkEditModeProp = false,
+  readOnly: readOnlyProp = false,
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
@@ -529,6 +535,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   onObjectDayClick,
 }) => {
   const { showActualHours } = useAuth();
+  const viewOnly = readOnlyProp || Boolean(objectsSalary);
+  const bulkEditMode = bulkEditModeProp && !viewOnly;
   // Синхронизируем module-level flag, к которому обращаются helper-функции
   // верхнего уровня (getVisibleHours/getObjectVisibleHours и зависящие от них
   // getDayCellClass/Text/Title). Flag намеренно живёт вне компонента, чтобы
@@ -1199,8 +1207,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <button
                             key={`obj-${row.employee.id}-${day}`}
                             type="button"
-                            className={classes.join(' ')}
-                            onClick={() => {
+                            className={`${classes.join(' ')}${viewOnly ? ' ts-day--readonly' : ''}`}
+                            aria-disabled={viewOnly || undefined}
+                            tabIndex={viewOnly ? -1 : undefined}
+                            onClick={viewOnly ? undefined : () => {
                               if (clickEntry && clickObj) {
                                 onObjectDayClick(row.employee, day, {
                                   object_key: clickObj.object_key,
@@ -1339,16 +1349,18 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     </button>
                   </div>
                   <div className="ts-mobile-header-actions">
-                    <button
-                      type="button"
-                      className="ts-mobile-chip-btn"
-                      onClick={() => onEmployeeClick(row.employee)}
-                      title="Детализация"
-                      aria-label="Детализация"
-                    >
-                      <Menu size={16} />
-                    </button>
-                    {canManageTeam && onExcludeEmployee && (
+                    {!viewOnly && (
+                      <button
+                        type="button"
+                        className="ts-mobile-chip-btn"
+                        onClick={() => onEmployeeClick(row.employee)}
+                        title="Детализация"
+                        aria-label="Детализация"
+                      >
+                        <Menu size={16} />
+                      </button>
+                    )}
+                    {canManageTeam && onExcludeEmployee && !viewOnly && (
                       <button
                         type="button"
                         className="ts-mobile-exclude-btn"
@@ -1370,9 +1382,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   const firstDayOffset = (jsDow + 6) % 7;
                   return (
                   <div className="ts-mobile-days-wrap">
-                    <div className="ts-mobile-days-caption">
-                      Нажмите на день, чтобы посмотреть или скорректировать отметку
-                    </div>
+                    {!viewOnly && (
+                      <div className="ts-mobile-days-caption">
+                        Нажмите на день, чтобы посмотреть или скорректировать отметку
+                      </div>
+                    )}
                     <div className="ts-mobile-weekdays-header" aria-hidden>
                       <span>Пн</span>
                       <span>Вт</span>
@@ -1417,10 +1431,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <button
                             key={day}
                             type="button"
-                            className={`${baseCls}${inactiveCls}${preHolidayCls}${problemCls}${outCls} ts-mobile-day-btn`}
+                            className={`${baseCls}${inactiveCls}${preHolidayCls}${problemCls}${outCls} ts-mobile-day-btn${viewOnly ? ' ts-day--readonly' : ''}`}
                             title={title}
                             disabled={inactive}
-                            onClick={() => !inactive && onDayClick(row.employee, day, entry)}
+                            // Только просмотр — не disabled: у браузера свой серый цвет, цвета клеток должны остаться.
+                            aria-disabled={viewOnly || undefined}
+                            tabIndex={viewOnly ? -1 : undefined}
+                            onClick={viewOnly ? undefined : () => !inactive && onDayClick(row.employee, day, entry)}
                           >
                             <span className="ts-mobile-day-num">{day}</span>
                             <span className="ts-mobile-day-value">
@@ -1472,7 +1489,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         return (
           <td
             key={day}
-            className={`${baseCls}${inactive ? ' ts-day--inactive' : ''}${preHoliday ? ' ts-day--pre-holiday' : ''} ts-salary-object-day`}
+            className={`${baseCls}${inactive ? ' ts-day--inactive' : ''}${preHoliday ? ' ts-day--pre-holiday' : ''} ts-day--readonly`}
             title={inactive
               ? 'Сотрудник не в отделе на эту дату'
               : (preHoliday ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ') : baseTitle)}
@@ -1491,7 +1508,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       return (
         <td
           key={day}
-          className={`${calcCls} ts-salary-object-day`}
+          className={`${calcCls} ts-day--readonly`}
           title={value === undefined ? undefined : `Часы по расчёту зарплаты: ${formatHoursLabel(Math.round(value))}`}
         >
           {salaryCalcCellText(value, getObjectCellText(entry, null, dayOff))}
@@ -1503,8 +1520,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
   if (viewMode === 'objects') {
     // «Зарплата по объектам» — только просмотр: ни кликов, ни массовых правок, какие бы обработчики ни пришли.
-    const readOnly = Boolean(objectsSalary);
-    const objectsBulk = bulkEditMode && !readOnly;
     const objectsColSpan = days.length + 2 + (objectsSalary ? 3 : 0);
     return (
       <div className="ts-table-container">
@@ -1516,7 +1531,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         </div>
 
         <div className="ts-table-scroll">
-          <table className={`ts-table ts-table--objects${objectsBulk ? ' ts-table--bulk-mode' : ''}${objectsSalary ? ' ts-table--salary-objects' : ''}`}>
+          <table className={`ts-table ts-table--objects${bulkEditMode ? ' ts-table--bulk-mode' : ''}${objectsSalary ? ' ts-table--salary-objects' : ''}${viewOnly ? ' ts-table--readonly' : ''}`}>
             <thead>
               <tr>
                 <th className="ts-col-sticky">Объект / сотрудник</th>
@@ -1578,7 +1593,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <tr key={`${group.object_key}_${row.employee.id}`}>
                       <td
                         className="ts-col-sticky ts-object-employee-cell"
-                        onClick={objectsBulk || readOnly ? undefined : () => onEmployeeClick(row.employee)}
+                        onClick={bulkEditMode || viewOnly ? undefined : () => onEmployeeClick(row.employee)}
                       >
                         <div className="ts-object-employee-name" title={row.employee.full_name}>
                           {formatTimesheetEmployeeName(row.employee.full_name)}
@@ -1595,9 +1610,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const today = isToday(year, month, day);
                         const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
-                        const targeted = objectsBulk && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
+                        const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
                         const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, row.object_name, dayOff, threshold, future);
-                        const title = objectsBulk
+                        const title = bulkEditMode
                           ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
                             .join(' • ')
@@ -1622,19 +1637,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
-                            className={`${baseCls}${inactiveCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${objectsBulk && !isBlocked ? ' ts-day--bulk-selectable' : ''}${readOnly ? ' ts-salary-object-day' : ''}`}
+                            className={`${baseCls}${inactiveCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}${viewOnly ? ' ts-day--readonly' : ''}`}
                             title={title}
-                            onMouseDown={objectsBulk && isBulkClickable ? (event) => handleBulkCellMouseDown(
+                            onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                               blockReason,
                             ) : undefined}
-                            onMouseEnter={objectsBulk && isBulkClickable ? () => handleBulkCellMouseEnter(
+                            onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                             ) : undefined}
-                            onClick={!objectsBulk && !readOnly && !inactive ? () => {
+                            onClick={!bulkEditMode && !viewOnly && !inactive ? () => {
                               if (row.isSynthetic) {
                                 onDayClick(row.employee, day, row.dailyEntries.get(day) || null);
                                 return;
@@ -1707,7 +1722,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       </div>
 
       <div className="ts-table-scroll" ref={tableScrollRef}>
-        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}`}>
+        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${viewOnly ? ' ts-table--readonly' : ''}`}>
           <thead>
             <tr>
               <th className="ts-col-sticky">Сотрудник</th>
@@ -1807,7 +1822,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   <tr>
                     <td
                       className={`ts-col-sticky ts-employee-cell${bulkEditMode ? ' ts-employee-cell--bulk' : ''}`}
-                      onClick={bulkEditMode ? undefined : () => onEmployeeClick(row.employee)}
+                      onClick={bulkEditMode || viewOnly ? undefined : () => onEmployeeClick(row.employee)}
                     >
                       <div className="ts-employee-cell-content">
                         {row.hasExpandableObjects ? (
@@ -1842,7 +1857,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             Искл. {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
                           </span>
                         )}
-                        {canManageTeam && onExcludeEmployee && (
+                        {canManageTeam && onExcludeEmployee && !viewOnly && (
                           <button
                             type="button"
                             className={`ts-employee-inline-btn${compactInlineExclude ? ' ts-employee-inline-btn--icon' : ''}`}
@@ -1885,7 +1900,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         && highlightedCell.date === isoDate
                         ? ' ts-day--flash'
                         : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}${viewOnly ? ' ts-day--readonly' : ''}`;
                       const letterHours = inactive ? null : getSalaryLetterCell(row.employee.id, day, entry);
                       const text = inactive
                         ? ''
@@ -1923,7 +1938,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
                           ) : undefined}
-                          onClick={bulkEditMode || inactive ? undefined : () => onDayClick(row.employee, day, entry)}
+                          onClick={bulkEditMode || viewOnly || inactive ? undefined : () => onDayClick(row.employee, day, entry)}
                         >
                           {text}
                         </td>
@@ -1997,7 +2012,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
-                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !objectDayLocked ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !objectDayLocked ? ' ts-day--bulk-selectable' : ''}${viewOnly ? ' ts-day--readonly' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
@@ -2009,7 +2024,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),
                               day,
                             ) : undefined}
-                            onClick={!bulkEditMode ? () => onObjectDayClick(row.employee, day, {
+                            onClick={!bulkEditMode && !viewOnly ? () => onObjectDayClick(row.employee, day, {
                               object_key: objectRow.object_key,
                               object_id: objectRow.object_id,
                               object_name: objectRow.object_name,

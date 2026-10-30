@@ -2954,6 +2954,7 @@ export const TimesheetPage: FC = () => {
             pendingEmployeeId={teamPendingEmployeeId}
             departmentName={selectedDeptName}
             salary={salaryGridProps}
+            readOnly={isSalaryView}
             onBulkSelectionChange={handleBulkSelectionChange}
             onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
             onEmployeeClick={handleEmployeeClick}
@@ -2992,6 +2993,7 @@ export const TimesheetPage: FC = () => {
           pendingEmployeeId={teamPendingEmployeeId}
           departmentName={selectedDeptName}
           salary={salaryGridProps}
+          readOnly={isSalaryView}
           onBulkSelectionChange={handleBulkSelectionChange}
           onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
           onEmployeeClick={handleEmployeeClick}
