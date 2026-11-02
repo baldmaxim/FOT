@@ -4,12 +4,14 @@ import type { IPayrollCalcColumns, IPayrollCardPayoutByMethod, IPayrollTermsRow 
 import {
   calcBrigadeOutputSub,
   calcIssuesNote,
+  calcRemainderAmount,
   calcSumAmount,
   cardPayoutLines,
   cardPayoutsTotal,
   emptyPayrollColumns,
   formatCalcRate,
   housingKindsLabel,
+  isCalcColumn,
   overtimeNote,
 } from './payrollCalcColumns';
 import { PAYROLL_CALC_TABLE_COLUMNS } from './payrollColumns';
@@ -36,7 +38,7 @@ const row = (over: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({ emplo
 const empty = (rows: IPayrollTermsRow[]) => [...emptyPayrollColumns(rows, PAYROLL_CALC_TABLE_COLUMNS)];
 
 describe('столбцы без данных на «Расчётах»', () => {
-  it('сентябрь «Бухгалтерии»: оклад, по табелю, доплаты (переработка, проезд) и сумма — 1С и пустые ФОТ скрыты', () => {
+  it('сентябрь «Бухгалтерии»: остаток, сумма и выплаты видны, хотя выплат нет; удержания 1С и пустые ФОТ скрыты', () => {
     expect(empty([
       row({
         paid_total: null, paid_deductions_total: null, card_payouts_by_method: null,
@@ -45,9 +47,14 @@ describe('столбцы без данных на «Расчётах»', () => {
           timesheet: '250000.00', overtime: '1420.45', overtime_hours: 1, travel: '2730.00', net: '254150.45',
         }),
       }),
-    ])).toEqual([
-      'payout', 'accrued', 'deductions', 'calc_vacation', 'calc_sick', 'paid_recalc', 'calc_deductions', 'card_payouts',
-    ]);
+    ])).toEqual(['deductions', 'calc_vacation', 'calc_sick', 'paid_recalc', 'calc_deductions']);
+  });
+
+  it('«Остаток» и «Сумма» видны и у строк без итога ФОТ; «Выплаты на карту» не скрываются никогда', () => {
+    const hidden = empty([row({ calc: null, card_payouts_by_method: null })]);
+    expect(hidden).not.toContain('calc_remainder');
+    expect(hidden).not.toContain('calc_net');
+    expect(hidden).not.toContain('card_payouts');
   });
 
   it('свёрнутые «Доплаты» — переработка + проезд + проживание + плановая и разовая, в копейках; ни одной — null', () => {
@@ -89,6 +96,51 @@ describe('столбцы без данных на «Расчётах»', () => {
 
   it('строк нет — ничего не скрывается', () => {
     expect(empty([])).toEqual([]);
+  });
+});
+
+describe('«Остаток к выплате»', () => {
+  const pay = (...amounts: string[]): IPayrollCardPayoutByMethod[] => amounts.map((amount, index) => ({ method: `Вид ${index}`, amount }));
+
+  it('«Сумма» минус все виды выплат: Алюшева, Абдурахманов Б., Калязин за сентябрь', () => {
+    expect(calcRemainderAmount(row({
+      calc: calc({ net: '185926.20' }), card_payouts_by_method: pay('60504.45', '52595.19', '36998.20'),
+    }))).toBe('35828.36');
+    expect(calcRemainderAmount(row({ calc: calc({ net: '181630.00' }), card_payouts_by_method: pay('35000.00', '35000.00') }))).toBe('111630.00');
+    expect(calcRemainderAmount(row({
+      calc: calc({ net: '244856.71' }), card_payouts_by_method: pay('84930.71', '24913.36', '10246.28'),
+    }))).toBe('124766.36');
+  });
+
+  it('единственный вид выплаты тоже вычитается, хотя «Итого» у него нет', () => {
+    const payouts = pay('167000.00');
+    expect(cardPayoutsTotal(cardPayoutLines(payouts))).toBeNull();
+    expect(calcRemainderAmount(row({ calc: calc({ net: '200000.00' }), card_payouts_by_method: payouts }))).toBe('33000.00');
+  });
+
+  it('выплат нет — вся «Сумма», ноль — ноль', () => {
+    expect(calcRemainderAmount(row({ calc: calc({ net: '256260.00' }), card_payouts_by_method: null }))).toBe('256260.00');
+    expect(calcRemainderAmount(row({ calc: calc({ net: '256260.00' }), card_payouts_by_method: [] }))).toBe('256260.00');
+    expect(calcRemainderAmount(row({ calc: calc({ net: '0.00' }), card_payouts_by_method: [] }))).toBe('0.00');
+  });
+
+  it('выплачено больше расчёта — минус; счёт в копейках', () => {
+    expect(calcRemainderAmount(row({ calc: calc({ net: '110630.00' }), card_payouts_by_method: pay('161630.00') }))).toBe('-51000.00');
+    expect(calcRemainderAmount(row({ calc: calc({ net: '0.30' }), card_payouts_by_method: pay('0.10', '0.20') }))).toBe('0.00');
+  });
+
+  it('итог ФОТ неизвестен — суммы нет, даже если выплаты есть', () => {
+    const payouts = pay('58132.18');
+    expect(calcRemainderAmount(row({ calc: calc({ net: null }), card_payouts_by_method: payouts }))).toBeNull();
+    expect(calcRemainderAmount(row({ calc: null, card_payouts_by_method: payouts }))).toBeNull();
+    expect(calcRemainderAmount(row({ card_payouts_by_method: payouts }))).toBeNull();
+  });
+
+  it('столбец расчёта ФОТ: пока считается — «…»; calcSumAmount отдаёт то же число', () => {
+    expect(isCalcColumn('calc_remainder')).toBe(true);
+    const item = row({ calc: calc({ net: '100.00' }), card_payouts_by_method: pay('40.00') });
+    expect(calcSumAmount(item, 'calc_remainder')).toBe('60.00');
+    expect(calcSumAmount(item, 'calc_net')).toBe('100.00');
   });
 });
 

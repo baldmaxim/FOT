@@ -66,14 +66,19 @@ describe('подмешивание столбцов ФОТ', () => {
       [1, '10.00', null], [2, null, null], [3, null, 'pending'], [4, null, 'pending'],
     ]);
     expect(merge).toMatchObject({ ready: false, failed: false });
-    expect(emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready)).not.toContain('calc_net');
+    const hidden = emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready);
+    expect(hidden).not.toContain('calc_net');
+    expect(hidden).not.toContain('calc_remainder');
+    expect(hidden).not.toContain('card_payouts');
   });
 
   it('ошибка одной порции — «—» у её строк, «Повторить», столбцы ФОТ не скрываются', () => {
     const merge = mergeCalcColumns(rows, requests, [{ status: 'error' }, success([{ employee_id: 3, calc: calc('5.00') }])]);
     expect(merge.rows.map(item => item.calc_status ?? null)).toEqual(['error', 'error', null, null]);
     expect(merge).toMatchObject({ ready: false, failed: true });
-    expect(emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready)).not.toContain('calc_supplements');
+    const hidden = emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready);
+    expect(hidden).not.toContain('calc_supplements');
+    expect(hidden).not.toContain('calc_remainder');
   });
 
   it('все посчитаны — пустые столбцы ФОТ скрываются', () => {
@@ -85,12 +90,17 @@ describe('подмешивание столбцов ФОТ', () => {
     const hidden = emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready);
     expect(hidden).toContain('calc_supplements');
     expect(hidden).not.toContain('calc_net');
+    expect(hidden).not.toContain('calc_remainder');
+    expect(hidden).not.toContain('card_payouts');
   });
 
-  it('«ФОТ недоступен» — на весь период: строки без «…», столбцы ФОТ скрыты', () => {
+  it('«ФОТ недоступен» — на весь период: строки без «…», столбцы ФОТ скрыты, «Выплаты на карту» видны', () => {
     const merge = mergeCalcColumns(rows, requests, [success([], false), { status: 'pending' }]);
     expect(merge.rows.every(item => !item.calc_status && !('calc' in item))).toBe(true);
     expect(merge).toMatchObject({ ready: true, failed: false });
-    expect(emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready)).toContain('calc_net');
+    const hidden = emptyPayrollColumns(merge.rows, PAYROLL_CALC_TABLE_COLUMNS, merge.ready);
+    expect(hidden).toContain('calc_net');
+    expect(hidden).toContain('calc_remainder');
+    expect(hidden).not.toContain('card_payouts');
   });
 });

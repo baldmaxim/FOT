@@ -44,12 +44,12 @@ describe('столбцы «Условий оплаты»', () => {
 });
 
 describe('столбцы «Расчётов»', () => {
-  it('вместо оклада, премии, проживания и «Выплачено» — суммы 1С, затем состав зарплаты (27.10); переработка, проезд '
+  it('после графика — остаток, сумма и выплаты (02.11), затем удержания 1С и состав зарплаты; переработка, проезд '
     + 'и проживание — под «+» у «Доплат» (30.10)', () => {
     expect(PAYROLL_CALC_TABLE_COLUMNS.map(column => column.label)).toEqual([
-      'Подразделение', 'Должность', 'График работы', 'К выплате', 'Начислено', 'Удержания',
-      'Оклад', 'Начислено по табелю', 'Отпускные', 'Больничные',
-      'Перерасчёт за пред. месяц', 'Доплаты', 'Удержания (ФОТ)', 'Сумма', 'Выплаты на карту',
+      'Подразделение', 'Должность', 'График работы', 'Остаток к выплате', 'Сумма', 'Выплаты на карту (1С)',
+      'Удержания (1С)', 'Оклад', 'Начислено по табелю', 'Отпускные', 'Больничные',
+      'Перерасчёт за пред. месяц', 'Доплаты', 'Удержания (ФОТ)',
     ]);
     // Прежняя «скрытость» переработки в шестерёнке отбрасывается: столбца на верхнем уровне больше нет.
     expect(keepPayrollTableColumns(parseHiddenPayrollColumns('["calc_overtime","calc_net"]'), PAYROLL_CALC_TABLE_COLUMNS))
@@ -72,8 +72,13 @@ describe('столбцы «Расчётов»', () => {
     expect([...keepPayrollTableColumns(stored, PAYROLL_CALC_TABLE_COLUMNS)]).toEqual(['calc_sick']);
   });
 
+  it('убранные «К выплате» и «Начислено» из сохранённых скрытых отбрасываются (02.11)', () => {
+    const stored = parseHiddenPayrollColumns('["payout","accrued","calc_rate"]');
+    expect([...keepPayrollTableColumns(stored, PAYROLL_CALC_TABLE_COLUMNS)]).toEqual(['calc_rate']);
+  });
+
   it('сохраняются в порядке таблицы', () => {
-    expect(serializeHiddenPayrollColumns(new Set(['deductions', 'accrued', 'payout', 'schedule'] as const)))
-      .toBe('["schedule","payout","accrued","deductions"]');
+    expect(serializeHiddenPayrollColumns(new Set(['deductions', 'calc_remainder', 'schedule'] as const)))
+      .toBe('["schedule","calc_remainder","deductions"]');
   });
 });

@@ -6,7 +6,8 @@
  * Закрыт табель или нет — на экране не помечается (решение 29.10.2026: незакрытый сервер считает по живому).
  * Неполный месяц не превращается в ноль: «Сумма» — «—». Выработка бригады не введена — подпись «выработка не
  * внесена» под «Начислено по табелю» и «Суммой», без ⚠; прочие причины (почасовая ставка, нет условий или нормы,
- * нет учтённых часов или ошибка бригады) — ⚠ с подсказкой.
+ * нет учтённых часов или ошибка бригады) — ⚠ с подсказкой. «Остаток к выплате» (решение 02.11.2026) — «Сумма» минус
+ * ведомости выплаты 1С: сколько осталось доплатить.
  */
 import type {
   IPayrollCalcColumns,
@@ -39,6 +40,9 @@ const CALC_SUM_FIELD: Record<
 
 export const isCalcSumColumn = (column: PayrollTableColumn): column is PayrollCalcSumColumn => column in CALC_SUM_FIELD;
 
+/** Суммы столбцов ФОТ: поля расчёта и вычисляемый на экране «Остаток к выплате» (своего поля на сервере нет). */
+export type PayrollCalcAmountColumn = PayrollCalcSumColumn | 'calc_remainder';
+
 /** Источник столбцов ФОТ в подсказке шапки. */
 const CALC_SOURCE = 'Расчёт ФОТ по табелю';
 
@@ -55,9 +59,12 @@ export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, stri
   paid_recalc: 'Из 1С, в «Сумму» не входит',
   calc_supplements: `${CALC_SOURCE}: переработка, проезд, проживание, плановая и разовая доплаты`,
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
-  calc_net: 'К выплате по расчёту ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю '
+  calc_remainder: 'Сколько осталось доплатить: «Сумма» минус «Выплаты на карту». Выплат нет — вся «Сумма»; '
+    + 'минус — выплачено больше расчёта',
+  calc_net: 'Автоматический расчёт ФОТ, без НДФЛ — как «Сумма» в «Табель → Зарплата»: начислено по табелю '
     + '+ отпускные и больничные (1С) + доплаты − удержания (ФОТ)',
   card_payouts: 'Из 1С: ведомости выплаты по месяцу начисления, по видам выплаты',
+  deductions: 'Из 1С: статьи удержаний за выбранные месяцы',
 };
 
 const present = (value: string | null | undefined): value is string => value !== null && value !== undefined;
@@ -72,12 +79,6 @@ export const sumAmounts = (values: ReadonlyArray<string | null | undefined>): st
 
 /** Что складывается в свёрнутые «Доплаты» (решение 30.10.2026); supplements — плановая и разовая. */
 const SUPPLEMENTS_GROUP_FIELDS = ['overtime', 'travel', 'housing', 'supplements'] as const;
-
-/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. «Доплаты» — сумма группы. */
-export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcSumColumn): string | null => {
-  if (column === 'calc_supplements') return sumAmounts(SUPPLEMENTS_GROUP_FIELDS.map(field => row.calc?.[field]));
-  return row.calc?.[CALC_SUM_FIELD[column]] ?? null;
-};
 
 /** Есть неполные месяцы — суммы ФОТ строки не окончательные (в том числе выработка бригады не введена). */
 export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;
@@ -180,6 +181,24 @@ export const cardPayoutsTotal = (lines: readonly ICardPayoutLine[]): string | nu
   return (cents / 100).toFixed(2);
 };
 
+/**
+ * «Остаток к выплате»: «Сумма» минус все ведомости выплаты тех же месяцев, в копейках, NUMERIC строкой. Выплат нет —
+ * вся «Сумма»; итог ФОТ неизвестен — null. cardPayoutsTotal здесь не годится: при одном виде выплаты он null.
+ */
+export const calcRemainderAmount = (row: IPayrollTermsRow): string | null => {
+  const net = row.calc?.net;
+  if (!present(net)) return null;
+  const paid = sumAmounts(cardPayoutLines(row.card_payouts_by_method).map(line => line.amount)) ?? '0.00';
+  return ((Math.round(Number(net) * 100) - Math.round(Number(paid) * 100)) / 100).toFixed(2);
+};
+
+/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. «Доплаты» — сумма группы. */
+export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcAmountColumn): string | null => {
+  if (column === 'calc_remainder') return calcRemainderAmount(row);
+  if (column === 'calc_supplements') return sumAmounts(SUPPLEMENTS_GROUP_FIELDS.map(field => row.calc?.[field]));
+  return row.calc?.[CALC_SUM_FIELD[column]] ?? null;
+};
+
 /** Ставка «Оклада»: оклад — с копейками, почасовая — до 4 знаков и «₽/ч». */
 export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
   if (!rate) return '—';
@@ -190,33 +209,35 @@ export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
   return rate.calc_type === 'hourly' ? `${text} ₽/ч` : text;
 };
 
-/** Столбцы сумм «Расчётов»: без данных ни в одной загруженной строке — скрываются сами. */
+/**
+ * Столбцы сумм «Расчётов», которые скрываются сами, если данных нет ни в одной загруженной строке. «Выплаты на карту»
+ * здесь нет: остаток считается из них, поэтому столбец виден и без выплат (решение 02.11.2026).
+ */
 const SUM_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
-  'payout', 'accrued', 'deductions', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation',
-  'calc_sick', 'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'calc_net', 'card_payouts',
+  'deductions', 'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation',
+  'calc_sick', 'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'calc_net',
 ]);
 
 /**
- * Данные строки в столбце сумм: любая сумма, в том числе 0 и минус; у «Начислено по табелю» и «Суммы» — и неполный
- * расчёт (там «—» с подписью или ⚠: выборка из одних бригад без выработки не теряет столбцы).
+ * Данные строки в столбце сумм: любая сумма, в том числе 0 и минус; у «Начислено по табелю» — и неполный расчёт (там
+ * «—» с подписью или ⚠: выборка из одних бригад без выработки не теряет столбцы). «Остаток» и «Сумма» скрываются,
+ * только если ФОТ за период не считается вообще: у строк нет ответа расчёта, даже calc: null.
  */
 const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boolean => {
   switch (column) {
-    case 'payout': return present(row.paid_total) || present(row.paid_deductions_total);
-    case 'accrued': return present(row.paid_total);
     case 'deductions': return present(row.paid_deductions_total);
     case 'calc_rate': return Boolean(row.calc?.rate);
     case 'calc_timesheet': return present(row.calc?.timesheet) || calcHasIssues(row.calc);
-    case 'calc_net': return present(row.calc?.net) || calcHasIssues(row.calc);
+    case 'calc_remainder':
+    case 'calc_net': return 'calc' in row;
     case 'paid_recalc': return present(row.paid_recalc_prev);
-    case 'card_payouts': return cardPayoutLines(row.card_payouts_by_method).length > 0;
     default: return isCalcSumColumn(column) && present(calcSumAmount(row, column));
   }
 };
 
 /** Столбцы по расчёту ФОТ — считаются отдельным запросом после строк. */
 const CALC_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
-  'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation', 'calc_sick', 'calc_housing',
+  'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation', 'calc_sick', 'calc_housing',
   'calc_supplements', 'calc_deductions', 'calc_net',
 ]);
 

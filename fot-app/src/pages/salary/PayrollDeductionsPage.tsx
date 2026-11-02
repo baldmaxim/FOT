@@ -16,7 +16,6 @@ import {
 import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
-import { PayrollPaidAccrualsModal } from '../../components/salary/PayrollPaidAccrualsModal';
 import { PayrollPaidItemsModal } from '../../components/salary/PayrollPaidItemsModal';
 import { CompensationTermsPage } from './CompensationTermsPage';
 import styles from './PayrollDeductionsPage.module.css';
@@ -43,7 +42,7 @@ interface IPayrollDeductionsPageProps {
   onSaved: (employeeId: number) => void;
 }
 
-/** Окно статей «Начислено» / «Удержания»: строка, раздел, кнопка-сумма (вернуть фокус) и месяцы сумм строки. */
+/** Окно статей «Удержания (1С)»: строка, раздел, кнопка-сумма (вернуть фокус) и месяцы сумм строки. */
 interface IPaidItemsWindow {
   row: IPayrollTermsRow;
   kind: PayrollPaidTotalKind;
@@ -52,9 +51,9 @@ interface IPaidItemsWindow {
 }
 
 /**
- * «Зарплата → Расчёты»: текущий штат, как у «Условий оплаты», но вместо условий — «К выплате», «Начислено» и
- * «Удержания» («Оплачено» ЗУП) за месяцы, выбранные рядом со «Сводом»; «К выплате» — начислено минус удержано,
- * как в «Своде». Клик по сумме «Начислено» или «Удержания» — окно со статьями.
+ * «Зарплата → Расчёты»: текущий штат, как у «Условий оплаты», но вместо условий — суммы за месяцы, выбранные рядом
+ * со «Сводом»: «Остаток к выплате» («Сумма» ФОТ минус «Выплаты на карту»), состав зарплаты и удержания 1С. Клик по
+ * сумме «Удержания (1С)» — окно со статьями.
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
  * ставки и таблицы. «Загрузить из 1С» — ведомость выплаты (миграция 328), только тем, кому сервер разрешает
  * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
@@ -221,14 +220,6 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
           row={paidItems.row}
           period={formatPaidPeriod(paidItems.months)}
           amounts={paidItems.row.paid_deductions ?? []}
-          onClose={closePaidItems}
-        />
-      )}
-      {paidItems?.kind === 'accrued' && (
-        <PayrollPaidAccrualsModal
-          row={paidItems.row}
-          months={paidItems.months}
-          period={formatPaidPeriod(paidItems.months)}
           onClose={closePaidItems}
         />
       )}

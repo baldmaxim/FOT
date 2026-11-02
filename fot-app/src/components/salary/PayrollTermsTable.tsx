@@ -21,7 +21,7 @@ import { cx } from '../../utils/motion';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { formatPaidAmount, paidPayout, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import { formatPaidAmount, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import {
   isExpandablePayrollColumn,
   payrollGroupMarks,
@@ -54,9 +54,9 @@ interface IPayrollTermsTableProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   /** Месяцы столбца «Выплачено» (YYYY-MM) по порядку. */
   accrualMonths: string[];
-  /** Период сумм «К выплате», «Начислено» и «Удержаний» — тех, что пришли в строках. */
+  /** Период сумм «Расчётов» — тех, что пришли в строках. */
   paidPeriod?: string;
-  /** Клик по сумме «Начислено» или «Удержания»: окно со статьями; trigger — куда вернуть фокус. */
+  /** Клик по сумме «Удержания (1С)»: окно со статьями; trigger — куда вернуть фокус. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
   /** «Расчёты»: раскрытые «+» столбцы («Доплаты», «Удержания», «Удержания (ФОТ)»); без onToggleExpand «+» нет. */
   expandedColumns?: ReadonlySet<PayrollExpandableColumn>;
@@ -78,9 +78,8 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   bonus: 'colBonus',
   housing: 'colHousing',
   accruals: 'colAccruals',
-  payout: 'colPayout',
-  accrued: 'colAccrued',
   deductions: 'colDeductions',
+  calc_remainder: 'colCalcSum',
   calc_rate: 'colCalcRate',
   calc_timesheet: 'colCalcTimesheet',
   calc_overtime: 'colCalcSum',
@@ -120,11 +119,6 @@ const PAID_KIND_LABELS: Record<PayrollPaidTotalKind, string> = { accrued: 'На�
 /** Сумма «Оплачено» строки «Расчётов» (с сервера — NUMERIC строкой): нет — «—». */
 const formatPaid = (value: string | number | null | undefined): string => (
   value === null || value === undefined ? '—' : formatPaidAmount(Number(value))
-);
-
-/** NUMERIC-строка «Оплачено» → число для «К выплате» (вычитание дальше — в копейках); нет — null. */
-const paidNumber = (value: string | null | undefined): number | null => (
-  value === null || value === undefined ? null : Number(value)
 );
 
 
@@ -243,7 +237,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     />
   );
 
-  /** Сумма «Начислено» / «Удержания»: со статьями — кнопка, открывающая окно со статьями. */
+  /** Сумма «Удержания (1С)»: со статьями — кнопка, открывающая окно со статьями. */
   const renderPaidCell = (
     column: PayrollTableColumn,
     row: IPayrollTermsRow,
@@ -348,18 +342,6 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation, '₽/день')}</td>;
       case 'accruals':
         return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
-      case 'payout':
-        // «К выплате» — начислено минус удержано, как в «Своде».
-        return (
-          <td key={column} className={styles.cellNumber}>
-            {formatPaid(paidPayout({ accrued: paidNumber(row.paid_total), deducted: paidNumber(row.paid_deductions_total) }))}
-          </td>
-        );
-      case 'accrued': {
-        // Статей начислений в строке нет — окно загрузит их само.
-        const total = row.paid_total;
-        return renderPaidCell(column, row, 'accrued', total, total !== null && total !== undefined);
-      }
       case 'deductions': {
         const total = row.paid_deductions_total;
         return renderPaidCell(column, row, 'deducted', total, total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0);

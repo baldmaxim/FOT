@@ -14,14 +14,14 @@ import {
   housingKindsLabel,
   isCalcColumn,
   overtimeNote,
-  type PayrollCalcSumColumn,
+  type PayrollCalcAmountColumn,
 } from '../../utils/payrollCalcColumns';
 import { formatPaidAmount } from '../../utils/payrollPaid';
 import styles from './PayrollTermsTable.module.css';
 
 /** Столбцы состава зарплаты «Расчётов»: ФОТ по табелю и суммы 1С (payrollCalcColumns.ts). */
 export type PayrollCalcCellColumn =
-  | PayrollCalcSumColumn | 'calc_rate' | 'paid_recalc' | 'card_payouts';
+  | PayrollCalcAmountColumn | 'calc_rate' | 'paid_recalc' | 'card_payouts';
 
 interface IPayrollCalcCellProps {
   column: PayrollCalcCellColumn;
@@ -37,8 +37,8 @@ const formatAmount = (value: string | null | undefined): string => (
 /**
  * Ячейка состава зарплаты. Закрыт табель или нет — не помечается. В столбцах ФОТ неполный месяц — ⚠ с подсказкой
  * «месяц — причина» (почасовая ставка, нет условий или нормы, нет учтённых часов или ошибка бригады): сумма
- * частичная, «Сумма» — «—». Выработка бригады не введена — без ⚠: подпись «выработка не внесена» под «Начислено по
- * табелю» и «Суммой».
+ * частичная, «Сумма» и «Остаток к выплате» — «—». Выработка бригады не введена — без ⚠: подпись «выработка не внесена»
+ * под «Начислено по табелю», «Суммой» и «Остатком».
  */
 export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, className }) => {
   const cellClass = cx(styles.cellNumber, className);
@@ -84,15 +84,16 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
     default: {
       const note = calcIssuesNote(row.calc);
       const amount = calcSumAmount(row, column);
-      // Выработка бригады не введена — подпись под «Начислено по табелю» и «Суммой» (без ⚠).
-      const outputSub = column === 'calc_timesheet' || column === 'calc_net' ? calcBrigadeOutputSub(row.calc) : null;
+      const isResult = column === 'calc_net' || column === 'calc_remainder';
+      // Выработка бригады не введена — подпись под «Начислено по табелю», «Суммой» и «Остатком» (без ⚠).
+      const outputSub = column === 'calc_timesheet' || isResult ? calcBrigadeOutputSub(row.calc) : null;
       // Вторая строка: выработка не внесена, вид проживания, из чего переработка.
       const sub = outputSub ?? (amount === null ? null
         : column === 'calc_housing' ? housingKindsLabel(row.calc)
           : column === 'calc_overtime' ? overtimeNote(row.calc) : null);
       return (
         <td
-          className={cx(cellClass, column === 'calc_net' && styles.calcTotal)}
+          className={cx(cellClass, isResult && styles.calcTotal)}
           title={note ?? undefined}
         >
           {formatAmount(amount)}

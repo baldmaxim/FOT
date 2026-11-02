@@ -84,11 +84,11 @@ interface ICompensationTermsPageProps {
   /** Столбцы таблицы; по умолчанию — «Условия оплаты». */
   columns?: PayrollTableColumns;
   /**
-   * «Расчёты»: месяцы сумм «К выплате», «Начислено» и «Удержаний»; null — месяцы ещё грузятся, список ждёт.
+   * «Расчёты»: месяцы сумм таблицы; null — месяцы ещё грузятся, список ждёт.
    * Не передан — «Условия оплаты», сумм нет.
    */
   paidMonths?: PayrollPaidMonths | null;
-  /** Клик по сумме «Начислено» или «Удержания»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
+  /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
 }
 

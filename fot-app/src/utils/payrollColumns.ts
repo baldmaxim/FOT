@@ -8,7 +8,7 @@ import type { PayrollSortKey } from '../services/payrollService';
 /** Столбцы, которые можно скрыть. Чекбокс выбора, «№» и «Сотрудник» видны всегда. */
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
-  | 'payout' | 'accrued' | 'deductions'
+  | 'deductions' | 'calc_remainder'
   | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick' | 'calc_housing'
   | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts';
 
@@ -40,15 +40,16 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 ];
 
 /**
- * «Расчёты»: вместо условий и «Выплачено» — суммы «Оплачено» за выбранные месяцы, затем состав зарплаты
- * (payrollCalcColumns.ts): по расчёту ФОТ закрытого табеля и из 1С, где ФОТ сумму не считает. Переработка, проезд
+ * «Расчёты»: вместо условий и «Выплачено» — сначала сколько осталось доплатить и из чего это число («Сумма» ФОТ и
+ * выплаты 1С, решение 02.11.2026), затем удержания 1С и состав зарплаты (payrollCalcColumns.ts). Переработка, проезд
  * и проживание — под «+» у «Доплат» (payrollSubColumns.ts, решение 30.10.2026), в шестерёнке их нет.
  */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
-  { key: 'payout', label: 'К выплате' },
-  { key: 'accrued', label: 'Начислено' },
-  { key: 'deductions', label: 'Удержания' },
+  { key: 'calc_remainder', label: 'Остаток к выплате' },
+  { key: 'calc_net', label: 'Сумма' },
+  { key: 'card_payouts', label: 'Выплаты на карту (1С)' },
+  { key: 'deductions', label: 'Удержания (1С)' },
   { key: 'calc_rate', label: 'Оклад' },
   { key: 'calc_timesheet', label: 'Начислено по табелю' },
   { key: 'calc_vacation', label: 'Отпускные' },
@@ -56,8 +57,6 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
   { key: 'calc_supplements', label: 'Доплаты' },
   { key: 'calc_deductions', label: 'Удержания (ФОТ)' },
-  { key: 'calc_net', label: 'Сумма' },
-  { key: 'card_payouts', label: 'Выплаты на карту' },
 ];
 
 /** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */

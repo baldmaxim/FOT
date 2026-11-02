@@ -51,8 +51,6 @@
 /* «Выплачено»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
 /* «Расчёты»: сумма до «12 345 678,90» и период под заголовком в две строки */
-.colPayout     { width: 150px; }
-.colAccrued    { width: 150px; }
 .colDeductions { width: 150px; }
 /* Состав зарплаты: «КОМПЕНСАЦИЯ» 102px и паддинги; суммы до «12 345 678,90» + ⚠ */
 .colCalcRate      { width: 150px; }
