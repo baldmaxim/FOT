@@ -1,0 +1,55 @@
+/*
+ * Вкладки окна «Доплата» и их панели. Вид — как у вкладок карточки сотрудника: подчёркивание тенью, без сдвига текста.
+ * Mobile-first: тап-цели 44px, на 360px полоса вкладок прокручивается сама, страница — нет.
+ */
+.tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 150ms ease-out;
+}
+.tab:hover { color: var(--text-primary); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
+.tabActive,
+.tabActive:hover { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+
+/* Панель занимает остаток окна: таблица прокручивается внутри неё (data-registry-fill), шапка закреплена. */
+.tabPanel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* Неактивная панель смонтирована (поиск и фильтры целы), но скрыта: display: flex выше перебил бы hidden. */
+.tabPanel[hidden] { display: none; }
+
+@media (min-width: 769px) {
+  .tab { min-height: 40px; padding: 0 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab { transition: none; }
+}
