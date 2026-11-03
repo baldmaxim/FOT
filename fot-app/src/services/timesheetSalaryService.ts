@@ -1,11 +1,11 @@
 import { apiClient } from '../api/client';
-import type { ITimesheetBrigadeOutputItem, ITimesheetSalaryResponse } from '../types/timesheet';
+import type { ITimesheetBrigadeObjectOutputs, ITimesheetBrigadeOutputItem, ITimesheetSalaryResponse } from '../types/timesheet';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
 /**
  * «Табель → Зарплата» и «Бригады»: КТУ, «Выработка» бригады — по объектам или одной суммой на бригаду, столбец «Сумма»
- * (раздел «Зарплата», 5 учёток).
+ * (раздел «Зарплата», 5 учёток; «Бригады» и «Зарплата по объектам» — ещё и по галочке «Выработка», миграция 342).
  */
 export const timesheetSalaryService = {
   get: async (departmentId: string, month: string, signal?: AbortSignal): Promise<ITimesheetSalaryResponse> => {
@@ -23,6 +23,16 @@ export const timesheetSalaryService = {
     const params = new URLSearchParams({ month });
     const res = await apiClient.get<IApiResponse<ITimesheetBrigadeOutputItem[]>>(
       `/payroll/timesheet-salary/brigades?${params.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Стрелка во «Бригадах»: объекты бригады за месяц, часы и внесённая выработка, без людей и их сумм. */
+  getBrigadeObjects: async (departmentId: string, month: string, signal?: AbortSignal): Promise<ITimesheetBrigadeObjectOutputs> => {
+    const params = new URLSearchParams({ department_id: departmentId, month });
+    const res = await apiClient.get<IApiResponse<ITimesheetBrigadeObjectOutputs>>(
+      `/payroll/timesheet-salary/brigade-objects?${params.toString()}`,
       { signal },
     );
     return res.data;

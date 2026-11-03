@@ -173,6 +173,9 @@ export const TimesheetPage: FC = () => {
   // только список payroll_section_access, роль админа его не даёт.
   const canViewTimesheetSalary = canViewPage('/salary/terms');
   const canEditTimesheetSalary = canEditPage('/salary/terms');
+  // «Бригады» с вводом выработки и «Зарплата по объектам» на просмотр — ещё и по галочке «Выработка» (миграция 342).
+  // «Зарплата по отделам» и правка в сетке — только по праву раздела.
+  const canOpenBrigades = canViewTimesheetSalary || profile?.has_brigade_output_access === true;
   // Флаг роли view_all_departments (миграция 237): просмотр всех отделов ТОЛЬКО в табеле.
   // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
   // обрабатываем локально, окно месяцев роли при этом остаётся включённым.
@@ -379,7 +382,7 @@ export const TimesheetPage: FC = () => {
       : (queryView === 'transfers' && canViewTransfers && timesheetMode === 'department')
         ? 'transfers'
         : ((queryView === 'salary' || queryView === 'salary_objects' || queryView === 'brigades')
-          && canViewTimesheetSalary && timesheetMode !== 'employee')
+          && (queryView === 'salary' ? canViewTimesheetSalary : canOpenBrigades) && timesheetMode !== 'employee')
           ? queryView
           : 'employees';
   // Вкладки «Зарплата по отделам» и «Зарплата по объектам»: весь месяц, без массовых правок.
@@ -2447,9 +2450,10 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
-  // «Бригады» (выработка бригад месяца, 341 — и без выбранного отдела), «Зарплата по отделам» (отделы, без бригад) и
-  // «Зарплата по объектам» (бригады по объектам, 336) — только 5 учёткам раздела «Зарплата».
-  const salaryChips = !isEmployeeMode && canViewTimesheetSalary ? (
+  // «Бригады» (выработка бригад месяца, 341 — и без выбранного отдела) и «Зарплата по объектам» (бригады по объектам,
+  // 336) — 5 учёткам раздела «Зарплата» и по галочке «Выработка» (342); «Зарплата по отделам» (отделы, без бригад) —
+  // только 5 учёткам.
+  const salaryChips = !isEmployeeMode && canOpenBrigades ? (
     <>
       <button
         type="button"
@@ -2460,13 +2464,15 @@ export const TimesheetPage: FC = () => {
       </button>
       {hasActiveScope && (
         <>
-          <button
-            type="button"
-            className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
-            onClick={() => handleViewModeChange('salary')}
-          >
-            Зарплата по отделам
-          </button>
+          {canViewTimesheetSalary && (
+            <button
+              type="button"
+              className={`ts-view-chip ${viewMode === 'salary' ? ' ts-view-chip--active' : ''}`}
+              onClick={() => handleViewModeChange('salary')}
+            >
+              Зарплата по отделам
+            </button>
+          )}
           <button
             type="button"
             className={`ts-view-chip ${viewMode === 'salary_objects' ? ' ts-view-chip--active' : ''}`}
@@ -2839,7 +2845,7 @@ export const TimesheetPage: FC = () => {
       )}
 
       {viewMode === 'brigades' ? (
-        <TimesheetBrigadesTab month={monthStr} canEdit={canEditTimesheetSalary} />
+        <TimesheetBrigadesTab month={monthStr} canEdit={canOpenBrigades} />
       ) : viewMode === 'transfers' ? (
         <div className="ts-table-container">
           <TimesheetTransfersTab

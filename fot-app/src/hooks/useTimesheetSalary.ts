@@ -15,7 +15,7 @@ const errorMessage = (error: unknown, fallback: string): string => (
   error instanceof Error && error.message ? error.message : fallback
 );
 
-/** «Табель → Зарплата» и раскрытая бригада во «Бригадах»: суммы отдела или бригады и правка КТУ / «Выработки» на объектах. */
+/** «Табель → Зарплата»: суммы отдела или бригады и правка КТУ / «Выработки» на объектах. */
 export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimesheetSalaryParams) => {
   const queryClient = useQueryClient();
   const toast = useToast();

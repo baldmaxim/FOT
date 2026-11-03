@@ -4,6 +4,7 @@ import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middle
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
+import { requireBrigadeOutputAccess } from '../middleware/brigadeOutputAccess.js';
 import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
@@ -158,10 +159,13 @@ router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPa
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
 
 // ─── «Табель → Зарплата» (миграции 330, 336, 341): КТУ, «Выработка» бригады, «Сумма», «Бригады» ─────
-router.get('/timesheet-salary', termsView, timesheetSalaryController.get);
-router.get('/timesheet-salary/brigades', termsView, timesheetSalaryController.listBrigades);
-router.put('/timesheet-salary/output', termsEdit, timesheetSalaryController.setOutput);
-router.put('/timesheet-salary/object-output', termsEdit, timesheetSalaryController.setObjectOutput);
+// Список «Зарплаты» или галочка «Выработка» (342). Полный расчёт для галочки дополнительно ограничен в контроллере:
+// только бригада, читаемая в табеле, в окне месяцев. КТУ — только список.
+router.get('/timesheet-salary', requireBrigadeOutputAccess, timesheetSalaryController.get);
+router.get('/timesheet-salary/brigades', requireBrigadeOutputAccess, timesheetSalaryController.listBrigades);
+router.get('/timesheet-salary/brigade-objects', requireBrigadeOutputAccess, timesheetSalaryController.brigadeObjects);
+router.put('/timesheet-salary/output', requireBrigadeOutputAccess, timesheetSalaryController.setOutput);
+router.put('/timesheet-salary/object-output', requireBrigadeOutputAccess, timesheetSalaryController.setObjectOutput);
 router.put('/timesheet-salary/ktu', termsEdit, timesheetSalaryController.setKtu);
 
 export default router;

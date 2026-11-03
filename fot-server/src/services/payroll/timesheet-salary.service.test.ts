@@ -31,7 +31,7 @@ const scope = vi.hoisted(() => ({
 }));
 vi.mock('./payroll-scope.service.js', () => scope);
 
-import { getTimesheetSalary } from './timesheet-salary.service.js';
+import { getBrigadeObjectOutputs, getTimesheetSalary } from './timesheet-salary.service.js';
 
 const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
 const DEPARTMENT = { id: 'dept-1', name: 'Бухгалтерия', kind: 'department' };
@@ -220,5 +220,52 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       ['Не определён', 1, 'no_output'],
     ]);
     expect(result.rows[0]).toMatchObject({ amount: null, share: null });
+  });
+});
+
+describe('getBrigadeObjectOutputs — стрелка во «Бригадах»', () => {
+  const salary = {
+    inputs: { brigadeOutput: null, outputs: new Map(), ktu: new Map() },
+    objects: [
+      { object_key: 'wave', object_name: 'ЖК Wave', output: '1000.00', state: 'distributed', total_weight: 10 },
+      { object_key: 'old', object_name: 'ЖК Старый', output: '50.00', state: 'distributed', total_weight: 0 },
+      { object_key: 'empty', object_name: 'ЖК Новый', output: null, state: 'distributed', total_weight: 0 },
+    ],
+    rows: [
+      {
+        employee_id: 1,
+        amount: '600.00',
+        objects: [{ object_key: 'wave', days: { '2026-11-02': 8.4, '2026-11-03': 7.6 }, counted_minutes: 960, weight: 6, amount: '600.00' }],
+      },
+      {
+        employee_id: 2,
+        amount: '400.00',
+        objects: [{ object_key: 'wave', days: { '2026-11-02': 3.5 }, counted_minutes: 210, weight: 4, amount: '400.00' }],
+      },
+    ],
+  };
+
+  it('часы как на экране: дневные округлены, сумма по рабочим; без часов с выработкой — только стереть', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue(salary);
+    const data = await getBrigadeObjectOutputs(req, BRIGADE, '2026-11');
+    expect(data).toEqual({
+      department_id: 'brigade-1',
+      month: '2026-11',
+      output_mode: 'objects',
+      objects: [
+        { object_key: 'wave', object_name: 'ЖК Wave', output_amount: '1000.00', hours: 20, clear_only: false },
+        { object_key: 'old', object_name: 'ЖК Старый', output_amount: '50.00', hours: 0, clear_only: true },
+        { object_key: 'empty', object_name: 'ЖК Новый', output_amount: null, hours: 0, clear_only: false },
+      ],
+    });
+  });
+
+  it('в ответе нет людей и их денег', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue(salary);
+    const text = JSON.stringify(await getBrigadeObjectOutputs(req, BRIGADE, '2026-11'));
+    for (const key of ['rows', 'members', 'employee_id', 'full_name', 'ktu', 'share', 'deducted', '"amount"', 'weight']) {
+      expect(text).not.toContain(key);
+    }
+    expect(calc.previewBrigadePayouts).not.toHaveBeenCalled();
   });
 });

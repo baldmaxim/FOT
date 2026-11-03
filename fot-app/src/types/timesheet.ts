@@ -345,6 +345,24 @@ export interface ITimesheetBrigadeOutputItem {
   objects_with_output: number;
 }
 
+/** Объект под стрелкой во «Бригадах» — без людей и денег, кроме внесённой выработки. */
+export interface ITimesheetBrigadeObjectOutput {
+  object_key: string;
+  object_name: string;
+  output_amount: string | null;
+  /** Σ часов как на экране: сумма дневных часов, округлённых до целых. */
+  hours: number;
+  /** На объекте нет часов бригады: внесённую выработку можно только стереть. */
+  clear_only: boolean;
+}
+
+export interface ITimesheetBrigadeObjectOutputs {
+  department_id: string;
+  month: string;
+  output_mode: TimesheetSalaryOutputMode;
+  objects: ITimesheetBrigadeObjectOutput[];
+}
+
 export interface ITimesheetSalaryRow {
   employee_id: number;
   /** ФИО — у бригады (группы по объектам рисуются без сетки табеля); у отдела null. */

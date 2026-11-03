@@ -3,6 +3,7 @@ import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { timesheetOfficeController } from '../controllers/timesheet-office.controller.js';
 import { timesheetViewAccessController } from '../controllers/timesheet-view-access.controller.js';
+import { brigadeOutputAccessController } from '../controllers/brigade-output-access.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
@@ -163,6 +164,11 @@ router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access
 // только на чтение. Права — как у «Объектов».
 router.get('/employees/:id/timesheet-view-employees', requirePageAccess('/admin/users/access', 'view'), noStore, timesheetViewAccessController.list);
 router.put('/employees/:id/timesheet-view-employees', requirePageAccess('/admin/users/access', 'edit'), timesheetViewAccessController.replace);
+
+// «Выработка» (миграция 342, вкладка в панели назначений): ввод выработки бригад и «Зарплата по объектам». Выдают
+// только учётки списка «Зарплаты»: /admin/users/access есть и у других админов, /salary/terms решает только список.
+router.get('/employees/:id/brigade-output-access', requirePageAccess('/admin/users/access', 'view'), requirePageAccess('/salary/terms', 'edit'), noStore, brigadeOutputAccessController.get);
+router.put('/employees/:id/brigade-output-access', requirePageAccess('/admin/users/access', 'edit'), requirePageAccess('/salary/terms', 'edit'), brigadeOutputAccessController.set);
 
 // «Режим табелирования» в «Управлении кадрами»: «Офис» отделу или сотруднику с блокировкой
 // выбора объекта (миграция 291). Отдельное право — только администратор и кадровый админ.

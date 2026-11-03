@@ -150,11 +150,12 @@ const salaryAccess = (canEdit: boolean): PageAccess => Object.fromEntries(
 const loadProfile = async () => {
   const res = makeRes();
   await authController.getMe(makeReq(), res);
-  return res.body?.profile as { page_access: PageAccess; has_admin_access: boolean };
+  return res.body?.profile as { page_access: PageAccess; has_admin_access: boolean; has_brigade_output_access: boolean };
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pgQuery.mockImplementation((async () => []) as never);
   pgQueryOne.mockResolvedValue(PROFILE_ROW);
   mocked.getRoleById.mockResolvedValue(OFFICE_ROLE);
   mocked.getRolePageAccess.mockResolvedValue({ '/employee': { can_view: true, can_edit: true } });
@@ -215,5 +216,36 @@ describe('/auth/me: раздел «Зарплата» по списку', () => 
     mocked.hasPayrollSectionAccess.mockResolvedValue(true);
     const profile = await loadProfile();
     expect(profile.page_access).toEqual(salaryAccess(true));
+  });
+});
+
+describe('/auth/me: «Выработка» (миграция 342)', () => {
+  const grant = () => pgQuery.mockImplementation((async (sql: string) => (
+    String(sql).includes('FROM employee_brigade_output_access') ? [{ employee_id: 501 }] : []
+  )) as never);
+
+  it('нет ни списка, ни галочки — флага нет', async () => {
+    expect((await loadProfile()).has_brigade_output_access).toBe(false);
+  });
+
+  it('галочка: флаг есть, ключей раздела и входа в админку от неё нет', async () => {
+    grant();
+    const profile = await loadProfile();
+    expect(profile.has_brigade_output_access).toBe(true);
+    expect(profile.page_access['/salary/terms']).toBeUndefined();
+    expect(profile.has_admin_access).toBe(false);
+  });
+
+  it('список «Зарплаты» — флаг есть и без галочки', async () => {
+    mocked.hasPayrollSectionAccess.mockResolvedValue(true);
+    expect((await loadProfile()).has_brigade_output_access).toBe(true);
+  });
+
+  it('база недоступна (таблица до миграции) — нет доступа, а не ошибка профиля', async () => {
+    pgQuery.mockImplementation((async (sql: string) => {
+      if (String(sql).includes('FROM employee_brigade_output_access')) throw new Error('relation does not exist');
+      return [];
+    }) as never);
+    expect((await loadProfile()).has_brigade_output_access).toBe(false);
   });
 });

@@ -133,6 +133,24 @@ export async function loadSalaryDepartment(departmentId: string): Promise<ITimes
   );
 }
 
+/** Объект бригады под стрелкой во «Бригадах» — без людей и денег, кроме внесённой выработки. */
+export interface IBrigadeObjectOutput {
+  object_key: string;
+  object_name: string;
+  output_amount: string | null;
+  /** Σ часов как на экране: сумма дневных часов, округлённых до целых. */
+  hours: number;
+  /** На объекте нет часов бригады: внесённую выработку можно только стереть. */
+  clear_only: boolean;
+}
+
+export interface IBrigadeObjectOutputs {
+  department_id: string;
+  month: string;
+  output_mode: BrigadeOutputMode;
+  objects: IBrigadeObjectOutput[];
+}
+
 /** Отдел виден в «Зарплате» этому пользователю (тот же скоуп, что у списка условий оплаты). */
 export async function canReadSalaryDepartment(req: AuthenticatedRequest, departmentId: string): Promise<boolean> {
   const readable = await resolvePayrollReadableDepartmentIds(req);
@@ -275,6 +293,36 @@ export async function getTimesheetSalary(
         source: row?.source ?? null,
         // КТУ правят только текущему составу (без начальника участка) и не себе.
         can_edit: members.has(employeeId) && canEdit(employeeId),
+      };
+    }),
+  };
+}
+
+/**
+ * Стрелка во «Бригадах»: объекты бригады за месяц, часы и внесённая выработка. Ни ФИО, ни КТУ, ни долей, ни сумм:
+ * маршрут открыт на все бригады, а полный расчёт — только на читаемые в табеле.
+ */
+export async function getBrigadeObjectOutputs(
+  req: AuthenticatedRequest,
+  department: ITimesheetSalaryDepartment,
+  month: string,
+): Promise<IBrigadeObjectOutputs> {
+  const result = await getBrigadeSalary(req, department.id, month);
+  return {
+    department_id: department.id,
+    month,
+    output_mode: brigadeOutputMode(result.inputs),
+    objects: result.objects.map(object => {
+      const parts = result.rows.flatMap(row => row.objects.filter(part => part.object_key === object.object_key));
+      return {
+        object_key: object.object_key,
+        object_name: object.object_name,
+        output_amount: object.output,
+        hours: parts.reduce(
+          (sum, part) => sum + Object.values(part.days).reduce((daySum, value) => daySum + Math.round(value), 0),
+          0,
+        ),
+        clear_only: parts.length === 0 && object.output !== null,
       };
     }),
   };

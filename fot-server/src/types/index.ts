@@ -93,6 +93,8 @@ export interface UserProfileResponse {
   has_direct_reports?: boolean;
   /** «Просмотр табеля» (миграция 309): есть люди, чей табель открыт только на чтение. */
   has_timesheet_view_employees?: boolean;
+  /** «Выработка» (миграция 342): список «Зарплаты» или галочка — «Бригады» и «Зарплата по объектам» в табеле. */
+  has_brigade_output_access?: boolean;
   /** Назначен ответственным за согласование выходных хотя бы по одному таргету. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;
@@ -177,6 +179,8 @@ export interface AuthenticatedRequest extends Request {
     __deputy_head_department_ids?: string[];
     /** Учётка в списке доступа к «Зарплате» (миграция 310) — один запрос на HTTP-запрос. */
     __payroll_section_access?: boolean;
+    /** Список «Зарплаты» или галочка «Выработка» (миграция 342) — один запрос на HTTP-запрос. */
+    __brigade_output_access?: boolean;
     /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */
     __non_deputy_subtree_ids?: string[];
     /** Отделы, где можно ВЕСТИ ТАБЕЛЬ: full-поддерево + поддерево заместителя (миграция 283). */

@@ -20,6 +20,7 @@ import {
   resolveAccessibleDepartmentIds,
   resolveEditableEmployeeIds,
 } from '../data-scope.service.js';
+import { getRequestBrigadeOutputAccess } from './brigade-output-access.service.js';
 import { getRequestPayrollSectionAccess } from './payroll-access.service.js';
 
 const isSelf = (req: AuthenticatedRequest, employeeId: number): boolean => (
@@ -32,6 +33,18 @@ export async function resolvePayrollReadableDepartmentIds(
 ): Promise<string[] | 'all'> {
   if (req.user.is_admin) return resolveAccessibleDepartmentIds(req);
   if (await getRequestPayrollSectionAccess(req)) return 'all';
+  return resolveAccessibleDepartmentIds(req);
+}
+
+/**
+ * Бригады для списка «Бригады» и ввода выработки (миграция 342): админ — своя компания, остальные с правом — все.
+ * Только для них: полный расчёт бригады проверяется иначе (timesheet-salary.controller, canReadBrigadeSalaryByGrant).
+ */
+export async function resolveBrigadeOutputDepartmentIds(
+  req: AuthenticatedRequest,
+): Promise<string[] | 'all'> {
+  if (req.user.is_admin) return resolveAccessibleDepartmentIds(req);
+  if (await getRequestBrigadeOutputAccess(req)) return 'all';
   return resolveAccessibleDepartmentIds(req);
 }
 

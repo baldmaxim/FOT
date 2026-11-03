@@ -104,6 +104,8 @@ export interface UserProfile {
   has_direct_reports?: boolean;
   /** «Просмотр табеля» (миграция 309): есть люди, чей табель открыт только на чтение. */
   has_timesheet_view_employees?: boolean;
+  /** «Выработка» (миграция 342): список «Зарплаты» или галочка — «Бригады» и «Зарплата по объектам» в табеле. */
+  has_brigade_output_access?: boolean;
   /** Назначен ответственным за согласование выходных — доступ к «Согласованиям» без /timesheet-hr. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;

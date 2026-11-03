@@ -37,6 +37,7 @@ import { isActiveWeekendResponsible } from '../services/weekend-approval-assignm
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
+import { hasBrigadeOutputGrant } from '../services/payroll/brigade-output-access.service.js';
 import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -227,6 +228,9 @@ async function buildProfileResponse(
     else delete page_access[key];
   }
 
+  // «Выработка» (миграция 342): кнопки «Бригады» и «Зарплата по объектам» в табеле. Галочка page-ключей раздела не даёт.
+  const has_brigade_output_access = payrollSectionAccess || await hasBrigadeOutputGrant(profile.employee_id);
+
   // Вход в админку: по роли либо по списку «Зарплаты» — раздел живёт в админке, и человеку
   // на роли только с личным кабинетом иначе в него не попасть. Админ-ключи роли выше
   // режутся по-прежнему только флагом роли.
@@ -257,6 +261,7 @@ async function buildProfileResponse(
     managed_department_ids,
     has_direct_reports,
     has_timesheet_view_employees,
+    has_brigade_output_access,
     is_weekend_responsible,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',

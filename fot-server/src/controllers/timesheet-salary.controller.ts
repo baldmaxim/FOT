@@ -3,6 +3,10 @@
  * (не обе сразу), список «Бригады» и столбец «Сумма». Права страницы /salary/terms решает только список
  * payroll_section_access (гарды в payroll.routes); здесь — скоуп отдела, состав бригады, объекты бригады и право на
  * строку.
+ *
+ * Галочка «Выработка» (342) открывает два уровня: список, объекты и ввод выработки — все бригады
+ * (resolveBrigadeOutputDepartmentIds), полный расчёт — только бригады, читаемые в табеле, в окне месяцев
+ * (canReadBrigadeSalaryByGrant). Учётка из списка остаётся на прежнем пути canReadSalaryDepartment. КТУ — только список.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -21,13 +25,23 @@ import {
 import { listBrigadeOutputs } from '../services/payroll/brigade-output-list.service.js';
 import { listBrigadeMemberIds } from '../services/payroll/brigade-salary-source.service.js';
 import { loadBrigadeObjectKeys } from '../services/payroll/brigade-salary.service.js';
-import { canEditPayrollEmployee, resolvePayrollReadableDepartmentIds } from '../services/payroll/payroll-scope.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { getRequestPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
+import { canEditPayrollEmployee, resolveBrigadeOutputDepartmentIds } from '../services/payroll/payroll-scope.service.js';
 import {
   canReadSalaryDepartment,
+  getBrigadeObjectOutputs,
   getTimesheetSalary,
   loadSalaryDepartment,
   type ITimesheetSalaryDepartment,
 } from '../services/payroll/timesheet-salary.service.js';
+import { resolveTimesheetReadableDepartmentId, resolveTimesheetScope } from '../services/timesheet-scope.service.js';
+import {
+  DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
+  isDepartmentMonthAllowed,
+  isTimesheetWindowExempt,
+  monthAccessFromUser,
+} from '../utils/timesheet-month-access.js';
 import {
   MONEY_DECIMALS_MESSAGE,
   PAYROLL_MAX_MONEY,
@@ -104,22 +118,77 @@ const sendOutputModeConflict = (err: unknown, res: Response): boolean => {
   return false;
 };
 
-/** Отдел из запроса, видимый пользователю; иначе ответ уже отправлен и null. */
+/** Отдел из запроса, прошедший проверку охвата; иначе ответ уже отправлен и null. */
 const resolveDepartment = async (
   req: AuthenticatedRequest,
   res: Response,
   departmentId: string,
+  canRead: (req: AuthenticatedRequest, departmentId: string) => Promise<boolean>,
 ): Promise<ITimesheetSalaryDepartment | null> => {
   const department = await loadSalaryDepartment(departmentId);
   if (!department) {
     res.status(404).json(NOT_FOUND);
     return null;
   }
-  if (!(await canReadSalaryDepartment(req, department.id))) {
+  if (!(await canRead(req, department.id))) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
   return department;
+};
+
+/** Отдел входит в охват списка «Бригады» и ввода выработки (342). */
+const canAccessBrigadeOutput = async (req: AuthenticatedRequest, departmentId: string): Promise<boolean> => {
+  const readable = await resolveBrigadeOutputDepartmentIds(req);
+  return readable === 'all' || readable.includes(departmentId);
+};
+
+/** Бригада из запроса для списка объектов и ввода выработки: 404, 403, 400 — до вызова расчёта. */
+const resolveOutputBrigade = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  departmentId: string,
+): Promise<ITimesheetSalaryDepartment | null> => {
+  const department = await resolveDepartment(req, res, departmentId, canAccessBrigadeOutput);
+  if (!department) return null;
+  if (department.kind !== 'brigade') {
+    res.status(400).json(NOT_BRIGADE);
+    return null;
+  }
+  return department;
+};
+
+/**
+ * Полный расчёт по галочке «Выработка» (342), без списка «Зарплаты»: нужна страница табеля, только бригада, читаемая в
+ * табеле, в окне месяцев роли. Проверка страницы отдельно: resolveTimesheetReadableDepartmentId для глобального просмотра
+ * её не делает. Обычный отдел закрыт: в его ответе оклады и «К выплате» сотрудников. Иначе ответ уже отправлен и false.
+ */
+const canReadBrigadeSalaryByGrant = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  department: ITimesheetSalaryDepartment,
+  month: string,
+): Promise<boolean> => {
+  const hasTimesheetPage = await resolveEffectivePageAccess(req, '/timesheet', 'view')
+    || await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
+  if (
+    !hasTimesheetPage
+    || department.kind !== 'brigade'
+    || (await resolveTimesheetReadableDepartmentId(req, department.id)) !== department.id
+  ) {
+    res.status(403).json(FORBIDDEN);
+    return false;
+  }
+  const scope = await resolveTimesheetScope(req);
+  const [year, monthNumber] = month.split('-').map(Number);
+  if (
+    !isTimesheetWindowExempt(req.user, scope)
+    && !isDepartmentMonthAllowed(year, monthNumber, monthAccessFromUser(req.user))
+  ) {
+    res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
+    return false;
+  }
+  return true;
 };
 
 /**
@@ -131,8 +200,18 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month } = querySchema.parse(req.query);
     const preliminary = (req.query as Record<string, unknown>).preliminary === '1';
-    const department = await resolveDepartment(req, res, departmentId);
-    if (!department) return;
+    let department: ITimesheetSalaryDepartment | null;
+    if (await getRequestPayrollSectionAccess(req)) {
+      department = await resolveDepartment(req, res, departmentId, canReadSalaryDepartment);
+      if (!department) return;
+    } else {
+      department = await loadSalaryDepartment(departmentId);
+      if (!department) {
+        res.status(404).json(NOT_FOUND);
+        return;
+      }
+      if (!(await canReadBrigadeSalaryByGrant(req, res, department, month))) return;
+    }
     res.json({ success: true, data: await getTimesheetSalary(req, department, month, { preliminary }) });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
@@ -148,12 +227,29 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
 const listBrigades = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { month } = listQuerySchema.parse(req.query);
-    const readable = await resolvePayrollReadableDepartmentIds(req);
+    const readable = await resolveBrigadeOutputDepartmentIds(req);
     res.json({ success: true, data: await listBrigadeOutputs(month, readable) });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
     console.error('timesheetSalary.listBrigades error:', err);
     res.status(500).json({ success: false, error: 'Ошибка загрузки бригад' });
+  }
+};
+
+/**
+ * GET /api/payroll/timesheet-salary/brigade-objects?department_id&month — стрелка во «Бригадах»: объекты бригады за
+ * месяц, часы и внесённая выработка, без людей и их сумм.
+ */
+const brigadeObjects = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { department_id: departmentId, month } = querySchema.parse(req.query);
+    const department = await resolveOutputBrigade(req, res, departmentId);
+    if (!department) return;
+    res.json({ success: true, data: await getBrigadeObjectOutputs(req, department, month) });
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('timesheetSalary.brigadeObjects error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки объектов бригады' });
   }
 };
 
@@ -165,12 +261,8 @@ const listBrigades = async (req: AuthenticatedRequest, res: Response): Promise<v
 const setOutput = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month, amount } = brigadeOutputSchema.parse(req.body);
-    const department = await resolveDepartment(req, res, departmentId);
+    const department = await resolveOutputBrigade(req, res, departmentId);
     if (!department) return;
-    if (department.kind !== 'brigade') {
-      res.status(400).json(NOT_BRIGADE);
-      return;
-    }
     const { after } = await setBrigadeOutput(
       department.id, `${month}-01`, amount === null ? null : amount.toFixed(2), req.user.id,
       (client, change) => auditService.logFromRequestWithClient(client, req, req.user.id, 'BRIGADE_SALARY_OUTPUT_SET', {
@@ -196,12 +288,8 @@ const setOutput = async (req: AuthenticatedRequest, res: Response): Promise<void
 const setObjectOutput = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month, object_key: objectKey, amount } = objectOutputSchema.parse(req.body);
-    const department = await resolveDepartment(req, res, departmentId);
+    const department = await resolveOutputBrigade(req, res, departmentId);
     if (!department) return;
-    if (department.kind !== 'brigade') {
-      res.status(400).json(NOT_BRIGADE);
-      return;
-    }
     const stored = (await loadBrigadeSalaryInputs(department.id, `${month}-01`)).outputs.get(objectKey) ?? null;
     let objectName = stored?.object_name ?? null;
     if (amount !== null) {
@@ -255,7 +343,7 @@ const setObjectOutput = async (req: AuthenticatedRequest, res: Response): Promis
 const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month, employee_id: employeeId, ktu } = ktuSchema.parse(req.body);
-    const department = await resolveDepartment(req, res, departmentId);
+    const department = await resolveDepartment(req, res, departmentId, canReadSalaryDepartment);
     if (!department) return;
     if (department.kind !== 'brigade') {
       res.status(400).json(NOT_BRIGADE);
@@ -294,4 +382,4 @@ const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-export const timesheetSalaryController = { get, listBrigades, setOutput, setObjectOutput, setKtu };
+export const timesheetSalaryController = { get, listBrigades, brigadeObjects, setOutput, setObjectOutput, setKtu };

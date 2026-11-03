@@ -22,10 +22,12 @@ import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useTimesheetViewEmployeesDraft } from '../../hooks/useTimesheetViewEmployeesDraft';
+import { useBrigadeOutputAccessDraft } from '../../hooks/useBrigadeOutputAccessDraft';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDate } from '../../utils/formatMoney';
 import { createFioMatcher, withFioFallback, type FioSearchMode } from '../../utils/fioSearch';
 import { TimesheetViewEmployeesTab } from './TimesheetViewEmployeesTab';
+import { BrigadeOutputAccessTab } from './BrigadeOutputAccessTab';
 import styles from '../../pages/admin/Admin.module.css';
 
 const AUTO_EXPAND_ALL_THRESHOLD = 40;
@@ -44,9 +46,9 @@ interface IEmployeeAssignmentPanelProps {
   allowedTabs?: readonly Tab[];
 }
 
-type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'timesheet_view';
+type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'timesheet_view' | 'brigade_output';
 
-const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend', 'timesheet_view'];
+const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend', 'timesheet_view', 'brigade_output'];
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -97,11 +99,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   // запускаем — часть их эндпоинтов кадровой роли закрыта и вернула бы 403.
   // «Выходные» — только админу: роутер weekend-approvals за requireAdmin, кадровый админ
   // получил бы 403 на загрузке и частичное сохранение панели.
-  const { profile } = useAuth();
+  // «Выработка» (миграция 342) — только учёткам из списка «Зарплаты»: выдача открывает ввод сумм, влияющих на зарплату.
+  const { profile, canEditPage } = useAuth();
   const isAdmin = profile?.is_admin === true;
+  const canGrantBrigadeOutput = canEditPage('/salary/terms');
   const tabAllowed = useCallback(
-    (tab: Tab) => allowedTabs.includes(tab) && (tab !== 'weekend' || isAdmin),
-    [allowedTabs, isAdmin],
+    (tab: Tab) => allowedTabs.includes(tab)
+      && (tab !== 'weekend' || isAdmin)
+      && (tab !== 'brigade_output' || canGrantBrigadeOutput),
+    [allowedTabs, isAdmin, canGrantBrigadeOutput],
   );
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -175,6 +181,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const timesheetView = useTimesheetViewEmployeesDraft({
     employeeId: employee?.employee_id ?? null,
     enabled: isOpen && tabAllowed('timesheet_view'),
+  });
+  const brigadeOutput = useBrigadeOutputAccessDraft({
+    employeeId: employee?.employee_id ?? null,
+    enabled: isOpen && tabAllowed('brigade_output'),
   });
 
   const initialDepartmentIds = useMemo(
@@ -354,7 +364,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const hasWeekendChanges = !arraysEqual(draftWeekendDeptIds, initialWeekendDeptIds)
     || !numbersEqual(draftWeekendEmpIds, initialWeekendEmpIds);
   const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDeputyChanges || hasDirectChanges
-    || hasObjectChanges || hasWeekendChanges || timesheetView.hasChanges;
+    || hasObjectChanges || hasWeekendChanges || timesheetView.hasChanges || brigadeOutput.hasChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -427,6 +437,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     setDraftWeekendDeptIds(initialWeekendDeptIds);
     setDraftWeekendEmpIds(initialWeekendEmpIds);
     timesheetView.reset();
+    brigadeOutput.reset();
     setSearchQuery('');
   };
 
@@ -496,6 +507,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       // 5) «Просмотр табеля» — полная замена списка, только если он изменён (и уже был загружен).
       if (timesheetView.hasChanges) {
         await timesheetView.save();
+      }
+      // 6) «Выработка» — только если галочка изменена (и значение уже было загружено).
+      if (brigadeOutput.hasChanges) {
+        await brigadeOutput.save();
       }
       toast.success('Назначения сохранены');
       // Панель не закрываем: сбрасываем только поиск, добавленный человек остаётся
@@ -629,6 +644,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               Просмотр табеля ({timesheetView.ids.length})
             </button>
           )}
+          {tabAllowed('brigade_output') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'brigade_output' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('brigade_output'); setSearchQuery(''); }}
+            >
+              Выработка ({brigadeOutput.granted ? 1 : 0})
+            </button>
+          )}
         </nav>
 
         <div className={styles.assignmentPanelBody}>
@@ -662,16 +686,18 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               )}
             </div>
           )}
-          <input
-            type="text"
-            placeholder={activeTab === 'person' || activeTab === 'timesheet_view'
-              || (activeTab === 'weekend' && weekendMode === 'employee')
-              ? 'Поиск по ФИО, должности, отделу...'
-              : 'Поиск...'}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className={styles.assignmentPanelSearch}
-          />
+          {activeTab !== 'brigade_output' && (
+            <input
+              type="text"
+              placeholder={activeTab === 'person' || activeTab === 'timesheet_view'
+                || (activeTab === 'weekend' && weekendMode === 'employee')
+                ? 'Поиск по ФИО, должности, отделу...'
+                : 'Поиск...'}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={styles.assignmentPanelSearch}
+            />
+          )}
 
           {activeTab === 'department' && (
             <DepartmentList
@@ -754,6 +780,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               onToggle={timesheetView.toggle}
               loading={timesheetView.isLoading}
               error={timesheetView.isError}
+            />
+          )}
+
+          {activeTab === 'brigade_output' && (
+            <BrigadeOutputAccessTab
+              checked={brigadeOutput.granted}
+              onToggle={brigadeOutput.toggle}
+              loading={brigadeOutput.isLoading}
+              error={brigadeOutput.isError}
             />
           )}
         </div>

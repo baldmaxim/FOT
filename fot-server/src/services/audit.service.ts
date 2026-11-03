@@ -292,6 +292,8 @@ export const AUDIT_ACTIONS = {
   PAYROLL_DORMITORY_ALLOWANCE_DELETED: 'PAYROLL_DORMITORY_ALLOWANCE_DELETED',
   // «Просмотр табеля» (миграция 309): кого добавили и кого сняли у смотрящего.
   EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED: 'EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED',
+  // «Выработка» (миграция 342): галочка поставлена или снята.
+  EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED: 'EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED',
   // «Общежитие» (миграция 314): проживание сотрудника — добавлено, изменено (было → стало), удалено.
   DORMITORY_STAY_ADDED: 'DORMITORY_STAY_ADDED',
   DORMITORY_STAY_UPDATED: 'DORMITORY_STAY_UPDATED',

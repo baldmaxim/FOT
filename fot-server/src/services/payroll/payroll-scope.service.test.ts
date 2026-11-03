@@ -8,6 +8,7 @@ import type { AuthenticatedRequest } from '../../types/index.js';
 
 const h = vi.hoisted(() => ({
   inList: vi.fn(async (): Promise<boolean> => false),
+  hasOutputAccess: vi.fn(async (): Promise<boolean> => false),
   resolveAccessibleDepartmentIds: vi.fn(async (): Promise<string[] | 'all'> => ['own-dept']),
   canAccessEmployeeInScope: vi.fn(async () => false),
   canEditEmployeeInScope: vi.fn(async () => false),
@@ -15,6 +16,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('./payroll-access.service.js', () => ({ getRequestPayrollSectionAccess: h.inList }));
+vi.mock('./brigade-output-access.service.js', () => ({ getRequestBrigadeOutputAccess: h.hasOutputAccess }));
 vi.mock('../data-scope.service.js', () => ({
   resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
@@ -25,6 +27,7 @@ vi.mock('../data-scope.service.js', () => ({
 import {
   canEditPayrollEmployee,
   canReadPayrollEmployee,
+  resolveBrigadeOutputDepartmentIds,
   resolvePayrollEditPredicate,
   resolvePayrollReadableDepartmentIds,
 } from './payroll-scope.service.js';
@@ -112,5 +115,33 @@ describe('администратор', () => {
     await expect(canEditPayrollEmployee(req, SELF)).resolves.toBe(true);
     const canEditRow = await resolvePayrollEditPredicate(req);
     expect(canEditRow(SELF)).toBe(true);
+  });
+});
+
+describe('resolveBrigadeOutputDepartmentIds — охват выработки (342)', () => {
+  const req = (over: Record<string, unknown>): AuthenticatedRequest => (
+    { user: { id: 'user-1', employee_id: 5, ...over } } as unknown as AuthenticatedRequest
+  );
+
+  beforeEach(() => { h.hasOutputAccess.mockReset(); });
+
+  it('не-админ с галочкой — все бригады, охват «Зарплаты» при этом не расширяется', async () => {
+    h.hasOutputAccess.mockResolvedValueOnce(true);
+    h.inList.mockResolvedValueOnce(false);
+    h.resolveAccessibleDepartmentIds.mockResolvedValueOnce(['own-dept']);
+    await expect(resolveBrigadeOutputDepartmentIds(req({ is_admin: false }))).resolves.toBe('all');
+    await expect(resolvePayrollReadableDepartmentIds(req({ is_admin: false }))).resolves.toEqual(['own-dept']);
+  });
+
+  it('админ компании с галочкой — только своя компания', async () => {
+    h.hasOutputAccess.mockResolvedValue(true);
+    h.resolveAccessibleDepartmentIds.mockResolvedValueOnce(['company-dept']);
+    await expect(resolveBrigadeOutputDepartmentIds(req({ is_admin: true }))).resolves.toEqual(['company-dept']);
+  });
+
+  it('без права — свои отделы', async () => {
+    h.hasOutputAccess.mockResolvedValueOnce(false);
+    h.resolveAccessibleDepartmentIds.mockResolvedValueOnce(['own-dept']);
+    await expect(resolveBrigadeOutputDepartmentIds(req({ is_admin: false }))).resolves.toEqual(['own-dept']);
   });
 });
