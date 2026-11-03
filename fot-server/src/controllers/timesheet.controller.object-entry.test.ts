@@ -92,6 +92,8 @@ vi.mock('../services/correction-restrictions.service.js', async (importActual) =
   ...(await importActual<typeof import('../services/correction-restrictions.service.js')>()),
   assertObjectCorrectionsAllowed: vi.fn(async () => undefined),
   assertCorrectionAllowed: vi.fn(async () => undefined),
+  resolveCorrectionDayLimits: vi.fn(async () => ({ normHours: 8, capHours: 8, capEnabled: true })),
+  assertDayCorrectionsWithinCap: vi.fn(async () => undefined),
 }));
 
 vi.mock('../services/audit.service.js', () => ({
@@ -119,6 +121,7 @@ vi.mock('../services/skud-realtime.service.js', () => ({
 }));
 
 import { timesheetController } from './timesheet.controller.js';
+import { assertDayCorrectionsWithinCap, CorrectionRestrictionError } from '../services/correction-restrictions.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const EMP = 6006;
@@ -267,6 +270,53 @@ describe('upsertObjectEntry — резолвер согласования и adv
  * корректировки на весь день слала сюда запрос, сервер удалял 0 строк manual_object
  * и отвечал «успехом» с аудитом — часы оставались на месте.
  */
+describe('upsertObjectEntry — предел часов дня', () => {
+  const save = async (hours: number) => {
+    const res = buildRes();
+    await timesheetController.upsertObjectEntry(
+      buildReq({
+        employee_id: EMP, work_date: DATE, object_key: OBJECT_KEY,
+        object_name: 'ЖК Stories', hours_worked: hours, notes: 'причина',
+      }),
+      res as never,
+    );
+    return res;
+  };
+
+  it('новые часы: сумма дня проверяется под локом, без своей строки', async () => {
+    existingRow = { id: 1085379, status: 'manual', hours_override: '6.00' };
+    await save(8);
+    expect(assertDayCorrectionsWithinCap).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.any(Function) }),
+      expect.objectContaining({ employeeId: EMP, workDate: DATE, hours: 8, correctionCapHours: 8, excludeAdjustmentId: 1085379 }),
+    );
+  });
+
+  it('заметка к старой объектной правке 14 ч: те же часы, предел и сумма не проверяются', async () => {
+    existingRow = { id: 1085379, status: 'manual', hours_override: '14.00' };
+    const res = await save(14);
+    expect(assertDayCorrectionsWithinCap).not.toHaveBeenCalled();
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalledWith(422);
+  });
+
+  it('сверх графика: 422, дневные строки не сняты и ничего не записано', async () => {
+    vi.mocked(assertDayCorrectionsWithinCap).mockRejectedValueOnce(
+      new CorrectionRestrictionError('hours_exceed_norm', 'Сумма часов корректировок дня (12) больше графика дня (8).'),
+    );
+    const res = await save(6);
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(txQueries.some(q => /DELETE FROM attendance_adjustments/i.test(q.sql))).toBe(false);
+  });
+
+  it('0 часов снимает правку без проверки предела', async () => {
+    existingRow = { id: 1085379, status: 'manual', hours_override: '14.00' };
+    await save(0);
+    expect(assertDayCorrectionsWithinCap).not.toHaveBeenCalled();
+  });
+});
+
 describe('deleteObjectEntry — пустое удаление не выдаётся за успех', () => {
   const deleteBody = { employee_id: EMP, work_date: DATE, object_key: OBJECT_KEY };
 

@@ -17,6 +17,7 @@ vi.mock('../config/postgres.js', () => ({
 import {
   computeCappedFactHours,
   countNormHoursForSchedule,
+  getCorrectionCapHours,
   getCycleSlot,
   getDayNormHours,
   getFullDayThresholdHoursForDate,
@@ -191,6 +192,47 @@ describe('schedule.service pre-holidays', () => {
     mandatory_holidays: [],
     pre_holidays: ['2026-12-30'],
   };
+
+  describe('getCorrectionCapHours — предел часов корректировки дня', () => {
+    const cycleSchedule = {
+      ...baseSchedule,
+      work_hours: 8,
+      pattern_type: 'cycle',
+      cycle_length: 7,
+      // Пн 2026-11-02 — якорь: пн–чт 8 ч, пт 7 ч, сб–вс выходные.
+      anchor_date: '2026-11-02',
+      cycle_days: [
+        { work_hours: 8 }, { work_hours: 8 }, { work_hours: 8 }, { work_hours: 8 },
+        { work_hours: 7 }, { work_hours: 0 }, { work_hours: 0 },
+      ],
+    } as IResolvedSchedule;
+    const november: IProductionCalendarMonth = {
+      ...calendar,
+      month: 11,
+      holidays: ['2026-11-18'],
+      pre_holidays: ['2026-11-13'],
+    };
+
+    it('обычный рабочий день — норма дня', () => {
+      expect(getCorrectionCapHours(cycleSchedule, new Date(2026, 10, 9), november)).toBe(8);
+    });
+
+    it('короткая пятница графика — 7 ч', () => {
+      expect(getCorrectionCapHours(cycleSchedule, new Date(2026, 10, 6), november)).toBe(7);
+    });
+
+    it('короткая пятница, она же предпраздничная — 6 ч', () => {
+      expect(getCorrectionCapHours(cycleSchedule, new Date(2026, 10, 13), november)).toBe(6);
+    });
+
+    it('выходной цикла (норма 0) — длина смены', () => {
+      expect(getCorrectionCapHours(cycleSchedule, new Date(2026, 10, 7), november)).toBe(8);
+    });
+
+    it('праздник в будни (норма 0) — длина смены', () => {
+      expect(getCorrectionCapHours(cycleSchedule, new Date(2026, 10, 18), november)).toBe(8);
+    });
+  });
 
   it('getDayNormHours: обычный будний день — work_hours без вычета', () => {
     expect(getDayNormHours(baseSchedule, new Date(2026, 11, 29), calendar)).toBe(8);

@@ -256,6 +256,7 @@ async function buildProfileResponse(
     timesheet_show_full_period: role.timesheet_show_full_period !== false,
     weekend_memo_required: !!role.weekend_memo_required,
     corrections_disable_object_entries: !!role.corrections_disable_object_entries,
+    corrections_cap_by_schedule_norm: !!role.corrections_cap_by_schedule_norm,
     employee_id: profile.employee_id,
     department_id: departmentId,
     managed_department_ids,

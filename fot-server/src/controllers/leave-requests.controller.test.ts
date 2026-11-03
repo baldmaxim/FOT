@@ -33,6 +33,16 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: pgTx,
 }));
 
+const { dayLimitsMock, dayCapMock } = vi.hoisted(() => ({
+  dayLimitsMock: vi.fn(async (..._args: unknown[]) => ({ normHours: 8, capHours: 8, capEnabled: true })),
+  dayCapMock: vi.fn(async (..._args: unknown[]) => undefined),
+}));
+vi.mock('../services/correction-restrictions.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/correction-restrictions.service.js')>()),
+  resolveCorrectionDayLimits: dayLimitsMock,
+  assertDayCorrectionsWithinCap: dayCapMock,
+}));
+
 const { upsertSpy } = vi.hoisted(() => ({ upsertSpy: vi.fn(async (..._args: unknown[]) => ({ id: 1 })) }));
 vi.mock('../services/attendance.service.js', () => ({
   upsertAttendanceAdjustment: upsertSpy,
@@ -134,6 +144,7 @@ vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSub
 // tx-клиента, что и остальной код, — так тесты видят INSERT в leave_request_history.
 import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 import { hasPageView } from '../services/access-control.service.js';
+import { CorrectionRestrictionError } from '../services/correction-restrictions.service.js';
 const { selectableObjectsMock } = vi.hoisted(() => ({
   selectableObjectsMock: vi.fn(async () => [] as Array<{ object_id: string; object_name: string }>),
 }));
@@ -565,6 +576,212 @@ describe('leaveRequestsController.approve', () => {
       work_date: '2026-06-06',
       approval_status: 'approved',
       approved_by: 'reviewer-uuid',
+    });
+  });
+});
+
+describe('заявление «Корректировка табеля» — предел графика', () => {
+  const capError = () => new CorrectionRestrictionError(
+    'hours_exceed_norm',
+    'Часы корректировки (10) больше графика дня (8).',
+    { correctionCapHours: 8 },
+  );
+
+  beforeEach(() => {
+    dayLimitsMock.mockClear();
+    dayCapMock.mockClear();
+  });
+
+  // Чужие сценарии ниже ждут, что предел проходит: отказ не должен протекать из этого блока.
+  afterEach(() => {
+    dayCapMock.mockReset();
+    dayCapMock.mockResolvedValue(undefined);
+  });
+
+  it('согласование сверх графика: 422, заявление не согласовано, в табель не пишем', async () => {
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 10,
+      correction_object_id: 'obj-a', correction_object_name: 'Объект А',
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    dayCapMock.mockRejectedValue(capError());
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(422);
+    expect(res._json).toMatchObject({ success: false, code: 'hours_exceed_schedule' });
+    // Исключение откатывает транзакцию: UPDATE заявления не закоммитится, строк табеля нет.
+    expect(upsertSpy).not.toHaveBeenCalledWith(expect.objectContaining({ source_type: 'manual_object' }));
+  });
+
+  it('согласование в пределах графика проходит и пишет строку объекта', async () => {
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 8,
+      correction_object_id: 'obj-a', correction_object_name: 'Объект А',
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(dayCapMock).toHaveBeenCalledWith(txClient, expect.objectContaining({
+      employeeId: 247, workDate: '2026-06-01', hours: 8, correctionCapHours: 8, includeObjectRows: true,
+    }));
+    expect(upsertSpy).toHaveBeenCalledWith(expect.objectContaining({
+      source_type: 'manual_object', source_id: 'obj-a', hours_override: 8,
+    }), expect.anything());
+  });
+
+  it('заявление без объекта (старое): только предел строки, без суммы', async () => {
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 8,
+      correction_object_id: null,
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await leaveRequestsController.approve(makeReq(), makeRes());
+
+    expect(dayCapMock).toHaveBeenCalledWith(txClient, expect.objectContaining({ includeObjectRows: false }));
+  });
+
+  it('галочка роли снята: сумма не проверяется', async () => {
+    dayLimitsMock.mockResolvedValueOnce({ normHours: 8, capHours: 8, capEnabled: false });
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 14,
+      correction_object_id: 'obj-a', correction_object_name: 'Объект А',
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(dayCapMock).not.toHaveBeenCalled();
+  });
+
+  describe('правка часов согласующим', () => {
+    const makeReqHours = (hours: unknown) => makeReq({
+      body: { hours } as AuthenticatedRequest['body'],
+      headers: { 'user-agent': 'vitest' },
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Partial<AuthenticatedRequest>);
+    const ROW = {
+      id: 708, employee_id: 247, request_type: 'time_correction', status: 'pending',
+      correction_date: '2026-06-01', correction_object_id: 'obj-a',
+      start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+    };
+
+    beforeEach(() => {
+      pgQueryOne.mockImplementation(async (sql: string) => (
+        String(sql).includes('FROM leave_requests') ? ROW : null
+      ));
+    });
+
+    const mockFlow = (lockedHours: number) => {
+      txClient.query.mockReset();
+      txClient.query.mockImplementation(async (sql: string) => {
+        const text = String(sql);
+        if (text.includes('FOR UPDATE')) {
+          return { rows: [{ status: 'pending', correction_hours: lockedHours }], rowCount: 1 };
+        }
+        if (text.includes('UPDATE leave_requests')) return { rows: [{ ...ROW }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+    };
+
+    it('сверх графика: 422 с кодом, а не 500; заявление не меняется', async () => {
+      mockFlow(8);
+      dayCapMock.mockRejectedValue(capError());
+      const res = makeRes();
+
+      await leaveRequestsController.updateCorrectionHours(makeReqHours(10), res);
+
+      expect(res._status).toBe(422);
+      expect(res._json).toMatchObject({ success: false, code: 'hours_exceed_norm', details: { correctionCapHours: 8 } });
+      expect(txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'))).toBeUndefined();
+    });
+
+    it('те же часы: предел не проверяем', async () => {
+      mockFlow(10);
+      const res = makeRes();
+
+      await leaveRequestsController.updateCorrectionHours(makeReqHours(10), res);
+
+      expect(res._status).toBe(200);
+      expect(dayCapMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('подача', () => {
+    const makeCreateReq = (correctionHours: unknown) => makeReq({
+      body: {
+        request_type: 'time_correction',
+        start_date: '2026-06-01', end_date: '2026-06-01',
+        correction_date: '2026-06-01', correction_status: 'work',
+        correction_hours: correctionHours,
+        correction_object_id: 'obj-a',
+        reason: 'забыл отметиться',
+      },
+      headers: { 'user-agent': 'vitest' },
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Partial<AuthenticatedRequest>);
+
+    it('correction_hours: "abc" — 400', async () => {
+      const res = makeRes();
+      await leaveRequestsController.create(makeCreateReq('abc'), res);
+      expect(res._status).toBe(400);
+      expect(dayCapMock).not.toHaveBeenCalled();
+    });
+
+    it('сверх графика: 422 с кодом, а не 500', async () => {
+      selectableObjectsMock.mockResolvedValueOnce([{ object_id: 'obj-a', object_name: 'Объект А' }]);
+      dayCapMock.mockRejectedValue(capError());
+      pgTx.mockClear();
+      const res = makeRes();
+
+      await leaveRequestsController.create(makeCreateReq(10), res);
+
+      expect(res._status).toBe(422);
+      expect(res._json).toMatchObject({ success: false, code: 'hours_exceed_norm' });
+      expect(pgTx).not.toHaveBeenCalled();
     });
   });
 });

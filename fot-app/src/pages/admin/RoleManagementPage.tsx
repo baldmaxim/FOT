@@ -64,7 +64,7 @@ interface IEditState extends ICorrectionRestrictionsForm {
 
 const DEFAULT_CORRECTION_RESTRICTIONS: ICorrectionRestrictionsForm = {
   corrections_anomalies_only: false,
-  corrections_cap_by_schedule_norm: false,
+  corrections_cap_by_schedule_norm: true,
   corrections_allow_zero_short_attendance: false,
   corrections_disable_bulk: false,
   corrections_disable_object_entries: false,
@@ -183,7 +183,7 @@ const CorrectionRestrictionsBlock: FC<ICorrectionRestrictionsBlockProps> = ({ va
         />
         <span>Только в дни-аномалии СКУД</span>
       </label>
-      <label className={styles.inlineCheckbox} title="hours_override корректировки не может превысить плановые часы дня (с учётом графика и предпраздничного −1ч).">
+      <label className={styles.inlineCheckbox} title="Часы корректировки не могут превысить плановые часы дня (с учётом графика и предпраздничного −1ч), а в выходной по графику — длину смены.">
         <input
           type="checkbox"
           checked={value.corrections_cap_by_schedule_norm}

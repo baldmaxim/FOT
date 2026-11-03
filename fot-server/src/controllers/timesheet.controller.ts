@@ -100,10 +100,12 @@ import {
   assertCorrectionAllowed,
   assertBulkAllowed,
   assertBulkCorrectionAllowed,
+  assertDayCorrectionsWithinCap,
   assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   computeCorrectionEligibility,
   loadRoleRestrictions,
+  resolveCorrectionDayLimits,
 } from '../services/correction-restrictions.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
@@ -413,14 +415,39 @@ export const resolveWriteHours = (
   status: TimeStatus,
   requestedHours: number | null | undefined,
   plannedHours: number | null,
+  // Предел дня при включённой галочке роли; подстановка удалёнки его не превышает
+  // (в предпраздничный день часы графика больше нормы).
+  capHours: number | null = null,
 ): number | null | undefined => {
   // Неявка — всегда 0 часов (attendance.service), поэтому в записи часам взяться неоткуда.
   // Отдельно от SCHEDULE_NORM_STATUSES: там смысл «часы из нормы графика», у неявки норма
   // ни при чём. Без этого PATCH manual(5 ч) → absent оставил бы чужие 5 ч в hours_override.
   if (status === 'absent') return null;
   if (SCHEDULE_NORM_STATUSES.has(status)) return null;
-  if (status === 'remote') return requestedHours ?? (plannedHours || 8);
+  if (status === 'remote') {
+    if (requestedHours != null) return requestedHours;
+    const fallback = plannedHours || 8;
+    return capHours != null ? Math.min(fallback, capHours) : fallback;
+  }
   return requestedHours;
+};
+
+/**
+ * Какие часы сверять с пределом дня: только реально записываемые и изменённые. null — не
+ * сверять: часов нет (work из СКУД, норма графика) или у строки те же статус и часы (в сотых:
+ * форма шлёт 7:40 как 7,6667 при записанных 7,67). Иначе заметка к старой правке сверх
+ * графика перестала бы сохраняться: форма всегда шлёт статус, часы и заметку вместе.
+ */
+export const resolveCapHoursToCheck = (
+  status: TimeStatus,
+  writeHours: number | null | undefined,
+  existing: { status?: unknown; hours_override?: unknown } | null | undefined,
+): number | null => {
+  if (typeof writeHours !== 'number' || !(writeHours > 0)) return null;
+  const sameStatus = existing != null && String(existing.status) === status;
+  const sameHours = existing?.hours_override != null
+    && Math.round(Number(existing.hours_override) * 100) === Math.round(writeHours * 100);
+  return sameStatus && sameHours ? null : writeHours;
 };
 
 /**
@@ -1462,16 +1489,6 @@ async function assertNotLockedInTx(
   throw new ApprovalLockedError([...locks.values()][0]!);
 }
 
-/** Норма часов дня с учётом графика и предпраздничного -1ч (см. getDayNormHours). */
-async function resolveScheduledNormHours(employeeId: number, workDate: string): Promise<number> {
-  const schedules = await resolveSchedulesForPeriod([{ id: employeeId }], workDate, workDate);
-  const schedule = schedules.get(employeeId)?.get(workDate);
-  if (!schedule) return 0;
-  const date = new Date(`${workDate}T00:00:00`);
-  const calendarMonth = await loadCalendarMonth(date.getFullYear(), date.getMonth() + 1);
-  return getDayNormHours(schedule, date, calendarMonth);
-}
-
 async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; work_date: string }>): Promise<Map<string, number>> {
   const uniqueItems = Array.from(
     new Map(items.map(item => [`${item.employee_id}_${item.work_date}`, item] as const)).values(),
@@ -1880,25 +1897,30 @@ async function applyObjectEntryMutation(
     const allowedHours = Math.max(0, item.hours_worked);
 
     // Defense-in-depth: для ролей, где объектные правки РАЗРЕШЕНЫ, но задан лимит/только-
-    // аномалии/не-больше-нормы — объектная правка тоже обязана подчиняться ограничениям.
-    // Для site_supervisor путь уже закрыт assertObjectCorrectionsAllowed выше; здесь — на
-    // случай будущих ролей. Проверяем ДО mutex-DELETE, чтобы при блокировке ничего не удалить.
-    // Существующую объектную строку исключаем из счётчика (повторная правка не задваивает).
-    if (allowedHours > 0) {
+    // аномалии — объектная правка тоже обязана подчиняться ограничениям. Для site_supervisor
+    // путь уже закрыт assertObjectCorrectionsAllowed выше; здесь — на случай будущих ролей.
+    // Проверяем ДО mutex-DELETE, чтобы при блокировке ничего не удалить. Существующую объектную
+    // строку исключаем из счётчика (повторная правка не задваивает). Предел часов дня — ниже,
+    // под локом: ему нужны старые часы строки и сумма других объектов.
+    const dayLimits = allowedHours > 0
+      ? await resolveCorrectionDayLimits(req.user.system_role_id, item.employee_id, item.work_date)
+      : null;
+    if (dayLimits) {
       const existingObjRows = await query<{ id: number | string }>(
         `SELECT id FROM attendance_adjustments
           WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
           LIMIT 1`,
         [item.employee_id, item.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, item.object_key],
       );
-      const scheduledNormObj = await resolveScheduledNormHours(item.employee_id, item.work_date);
       await assertCorrectionAllowed({
         systemRoleId: req.user.system_role_id,
         createdBy: req.user.id,
         employeeId: item.employee_id,
         workDate: item.work_date,
         hoursOverride: allowedHours,
-        scheduledNormHours: scheduledNormObj,
+        scheduledNormHours: dayLimits.normHours,
+        correctionCapHours: dayLimits.capHours,
+        capHoursToCheck: null,
         excludeAdjustmentId: existingObjRows[0] ? Number(existingObjRows[0].id) : null,
       });
     }
@@ -1943,6 +1965,19 @@ async function applyObjectEntryMutation(
         );
         if (dayRows.some(row => hasObjectAllocations(row.metadata))) {
           throw new DayAllocationConflictError();
+        }
+
+        // Предел часов дня: под локом, иначе два сохранения разных объектов не увидят друг
+        // друга. Те же часы у строки не проверяем: заметка к старой правке должна сохраняться.
+        if (dayLimits && resolveCapHoursToCheck('manual', allowedHours, existingRow) != null) {
+          await assertDayCorrectionsWithinCap(exec, {
+            systemRoleId: req.user.system_role_id,
+            employeeId: item.employee_id,
+            workDate: item.work_date,
+            hours: allowedHours,
+            correctionCapHours: dayLimits.capHours,
+            excludeAdjustmentId: existingRow ? Number(existingRow.id) : null,
+          });
         }
 
         // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
@@ -3120,34 +3155,51 @@ export const timesheetController = {
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
+      const dayLimits = POSITIVE_TIME_STATUSES.has(parsed.status)
+        ? await resolveCorrectionDayLimits(req.user.system_role_id, parsed.employee_id, parsed.work_date)
+        : null;
       // Удалёнка: начальник отдела вводит фактические часы вручную (в т.ч. в выходной
       // поверх согласованного выхода). Если часы не заданы — полный день по графику
-      // (для выходного work_hours=0, поэтому `|| 8`, а не `??`).
+      // (для выходного work_hours=0, поэтому `|| 8`, а не `??`), но не больше предела дня.
       // sick_worked/study_day: часы всегда из нормы графика, присланные игнорируем (null) —
       // нормализация ДО гарда, иначе hours_worked=0 обошёл бы assertCorrectionAllowed.
-      const normalizedHours = resolveWriteHours(parsed.status, parsed.hours_worked, plannedHours) ?? null;
+      const normalizedHours = resolveWriteHours(
+        parsed.status,
+        parsed.hours_worked,
+        plannedHours,
+        dayLimits?.capEnabled ? dayLimits.capHours : null,
+      ) ?? null;
 
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
       // Правка часов через модалку идёт со status='manual', а work/sick_worked/study_day могут
       // прийти без явных часов и доначислиться на бэке — все они обязаны проходить гард
       // (см. guardsRestriction).
-      if (guardsRestriction(parsed.status, normalizedHours)) {
-        const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
+      if (dayLimits && guardsRestriction(parsed.status, normalizedHours)) {
         // Для статусов с неявными часами (work) подставляем положительное значение — точная
         // величина не важна: при лимите=0 monthly_limit сработает при любом hours>0. Для
         // SCHEDULE_NORM_STATUSES — норма как есть (в выходной 0, гард пропустит проверки).
-        const guardHours = resolveGuardHours(parsed.status, normalizedHours, scheduledNorm);
-        // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем (но лимит — да).
-        const skipNormAndAnomalyChecks = parsed.status === 'remote'
+        const guardHours = resolveGuardHours(parsed.status, normalizedHours, dayLimits.normHours);
+        // Удалёнка поверх согласованного выхода — аномалию не проверяем (предел и лимит — да).
+        const skipAnomalyCheck = parsed.status === 'remote'
           && await hasApprovedWorkOnDate(parsed.employee_id, parsed.work_date);
+        const existingDayRow = dayLimits.capEnabled
+          ? await query<{ status: string; hours_override: number | string | null }>(
+              `SELECT status, hours_override FROM attendance_adjustments
+                WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual' AND source_id = 'manual'
+                LIMIT 1`,
+              [parsed.employee_id, parsed.work_date],
+            ).then(rows => rows[0] ?? null)
+          : null;
         await assertCorrectionAllowed({
           systemRoleId: req.user.system_role_id,
           createdBy: req.user.id,
           employeeId: parsed.employee_id,
           workDate: parsed.work_date,
           hoursOverride: guardHours,
-          scheduledNormHours: scheduledNorm,
-          skipNormAndAnomalyChecks,
+          scheduledNormHours: dayLimits.normHours,
+          correctionCapHours: dayLimits.capHours,
+          capHoursToCheck: resolveCapHoursToCheck(parsed.status, normalizedHours, existingDayRow),
+          skipAnomalyCheck,
         });
       }
 
@@ -3646,7 +3698,15 @@ export const timesheetController = {
         // записи, и в гарде — иначе смена manual(5 ч) → study_day без hours_worked оставила бы
         // старые 5 ч, а hours_worked=0 обошёл бы assertCorrectionAllowed.
         const isScheduleNormStatus = SCHEDULE_NORM_STATUSES.has(nextStatus);
-        const normalizedHours = resolveWriteHours(nextStatus, parsed.hours_worked, plannedHours);
+        const dayLimitsUpd = POSITIVE_TIME_STATUSES.has(nextStatus)
+          ? await resolveCorrectionDayLimits(req.user.system_role_id, Number(existing.employee_id), String(existing.work_date))
+          : null;
+        const normalizedHours = resolveWriteHours(
+          nextStatus,
+          parsed.hours_worked,
+          plannedHours,
+          dayLimitsUpd?.capEnabled ? dayLimitsUpd.capHours : null,
+        );
 
         // Часы «для проверки» ≠ часы «для записи». В гард передаём эффективные часы
         // (что реально будет в строке), но пишем строго присланное (см. блок update ниже).
@@ -3673,15 +3733,11 @@ export const timesheetController = {
           : (hoursProvided
             ? (nextStatus === 'remote' ? effectiveHours : (parsed.hours_worked ?? null))
             : (statusChangedToCounted ? undefined : effectiveHours));
-        if (guardsRestriction(nextStatus, guardInputHours) && (hoursProvided || statusChangedToCounted)) {
-          const scheduledNormUpd = await resolveScheduledNormHours(
-            Number(existing.employee_id),
-            String(existing.work_date),
-          );
+        if (dayLimitsUpd && guardsRestriction(nextStatus, guardInputHours) && (hoursProvided || statusChangedToCounted)) {
           // Для неявных часов (work без часов) — положительный fallback на норму; для
           // SCHEDULE_NORM_STATUSES — норма как есть (в выходной 0, без ложного 422).
-          const guardHours = resolveGuardHours(nextStatus, effectiveHours, scheduledNormUpd);
-          const skipNormAndAnomalyChecks = nextStatus === 'remote'
+          const guardHours = resolveGuardHours(nextStatus, effectiveHours, dayLimitsUpd.normHours);
+          const skipAnomalyCheck = nextStatus === 'remote'
             && await hasApprovedWorkOnDate(Number(existing.employee_id), String(existing.work_date));
           await assertCorrectionAllowed({
             systemRoleId: req.user.system_role_id,
@@ -3689,9 +3745,11 @@ export const timesheetController = {
             employeeId: Number(existing.employee_id),
             workDate: String(existing.work_date),
             hoursOverride: guardHours,
-            scheduledNormHours: scheduledNormUpd,
+            scheduledNormHours: dayLimitsUpd.normHours,
+            correctionCapHours: dayLimitsUpd.capHours,
+            capHoursToCheck: resolveCapHoursToCheck(nextStatus, effectiveHours, existing),
             excludeAdjustmentId: id,
-            skipNormAndAnomalyChecks,
+            skipAnomalyCheck,
           });
         }
 
@@ -3983,8 +4041,9 @@ export const timesheetController = {
       }> = [];
       const existingAllocationRows = await query<{
         employee_id: number; work_date: string; metadata: Record<string, unknown> | null;
+        status: string; hours_override: number | string | null; source_id: string;
       }>(
-        `SELECT employee_id, work_date::text AS work_date, metadata
+        `SELECT employee_id, work_date::text AS work_date, metadata, status, hours_override, source_id
            FROM attendance_adjustments
           WHERE source_type = 'manual'
             AND employee_id = ANY($1::int[])
@@ -4030,22 +4089,52 @@ export const timesheetController = {
       const isBulkScheduleNormStatus = SCHEDULE_NORM_STATUSES.has(parsed.status);
       const bulkExplicitHours = isBulkScheduleNormStatus ? null : parsed.hours_worked;
       const bulkCounts = guardsRestriction(parsed.status, bulkExplicitHours);
+      const dayLimitsByItem = new Map<string, Awaited<ReturnType<typeof resolveCorrectionDayLimits>>>();
+      // Часы, которые реально запишутся: присланные, а у удалёнки без часов — по графику,
+      // но не больше предела дня. Preflight и запись обязаны видеть одно и то же значение.
+      const resolveBulkWriteHours = (item: { employee_id: number; work_date: string }) => {
+        const limits = dayLimitsByItem.get(`${item.employee_id}_${item.work_date}`);
+        return resolveWriteHours(
+          parsed.status,
+          parsed.hours_worked,
+          plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
+          limits?.capEnabled ? limits.capHours : null,
+        );
+      };
       if (bulkCounts) {
-        const preflightItems = await Promise.all(uniqueItems.map(async item => {
-          const scheduledNormHours = await resolveScheduledNormHours(item.employee_id, item.work_date);
+        await Promise.all(uniqueItems.map(async item => {
+          dayLimitsByItem.set(
+            `${item.employee_id}_${item.work_date}`,
+            await resolveCorrectionDayLimits(req.user.system_role_id, item.employee_id, item.work_date),
+          );
+        }));
+        const existingDayRowByKey = new Map(
+          existingAllocationRows
+            .filter(row => row.source_id === 'manual')
+            .map(row => [`${Number(row.employee_id)}_${String(row.work_date).slice(0, 10)}`, row]),
+        );
+        const preflightItems = uniqueItems.map(item => {
+          const key = `${item.employee_id}_${item.work_date}`;
+          const limits = dayLimitsByItem.get(key)!;
+          const writeHours = resolveBulkWriteHours(item);
           // work без явных часов доначисляется на бэке — для preflight берём положительный
           // fallback на норму (иначе 0 отфильтруется и обход лимита пройдёт). Для
           // SCHEDULE_NORM_STATUSES — норма как есть: рабочий день → норма, выходной → 0.
           const hours = parsed.status === 'remote'
-            ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
-            : resolveGuardHours(parsed.status, bulkExplicitHours, scheduledNormHours);
+            ? writeHours
+            : resolveGuardHours(parsed.status, bulkExplicitHours, limits.normHours);
           return {
             employeeId: item.employee_id,
             workDate: item.work_date,
             hoursOverride: Number(hours) || 0,
-            scheduledNormHours,
+            scheduledNormHours: limits.normHours,
+            correctionCapHours: limits.capHours,
+            // Многообъектные дни массовая правка пропускает: их часы не запишутся.
+            capHoursToCheck: multiObjectKeys.has(key)
+              ? null
+              : resolveCapHoursToCheck(parsed.status, writeHours, existingDayRowByKey.get(key)),
           };
-        }));
+        });
         await assertBulkCorrectionAllowed({
           systemRoleId: req.user.system_role_id,
           createdBy: req.user.id,
@@ -4060,11 +4149,7 @@ export const timesheetController = {
       const isQuotaBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
       const bulkTail: IReapprovalTransition[] = [];
       const buildUpsert = async (item: typeof uniqueItems[number]) => {
-        const itemHoursOverride = resolveWriteHours(
-          parsed.status,
-          parsed.hours_worked,
-          plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
-        ) ?? null;
+        const itemHoursOverride = resolveBulkWriteHours(item) ?? null;
         // Ограничения роли уже проверены целиком в PREFLIGHT выше (assertBulkCorrectionAllowed).
         const precheck = await resolveAdjustmentApprovalPrecheck(
           item.employee_id,

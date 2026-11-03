@@ -28,6 +28,7 @@ import { PresenceTimeline } from '../skud/PresenceTimeline';
 import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '../../utils/correctionStatus';
 import { distributeHours, syncAllocationsWithHours, type IAllocationDraft } from '../../utils/correctionAllocations';
+import { isOverCorrectionCap } from '../../utils/scheduleUtils';
 
 interface ICorrectionModalProps {
   open: boolean;
@@ -528,7 +529,9 @@ const CorrectionTab: FC<{
   onUpdateReason,
 }) => {
   const [addingRemote, setAddingRemote] = useState(false);
-  const [remoteHours, setRemoteHours] = useState<number>(remoteDefaultHours || 8);
+  // Подстановка не больше предела дня: при смене 6 ч в выходной форма не предложит 8.
+  const remoteStartHours = maxHours != null ? Math.min(remoteDefaultHours || 8, maxHours) : (remoteDefaultHours || 8);
+  const [remoteHours, setRemoteHours] = useState<number>(remoteStartHours);
   const [remoteNotes, setRemoteNotes] = useState('');
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(
@@ -590,7 +593,9 @@ const CorrectionTab: FC<{
       prev, hours, allocationMode, allocationsTouched, objectChoice?.suggestedDistribution ?? [],
     ));
   }, [hours, allocationMode, allocationsTouched, objectChoice?.suggestedDistribution]);
-  const exceedsMax = needsHoursForStatus && maxHours != null && hours > maxHours;
+  // Неизменённые часы старой правки не блокируем: к ней можно поправить заметку.
+  const unchangedHours = hasExistingCorrection && selectedStatus === initialStatus ? initialHours : null;
+  const exceedsMax = needsHoursForStatus && isOverCorrectionCap(hours, maxHours, unchangedHours);
   const canSave = trimmedNotes.length > 0 && !exceedsMax;
 
   // Объекты показываем для статусов с часами по объекту, когда есть из чего выбрать
@@ -762,7 +767,7 @@ const CorrectionTab: FC<{
               type="button"
               className="ts-btn ts-btn--primary"
               style={{ marginTop: 8 }}
-              onClick={() => { setRemoteHours(remoteDefaultHours || 8); setRemoteNotes(''); setAddingRemote(true); }}
+              onClick={() => { setRemoteHours(remoteStartHours); setRemoteNotes(''); setAddingRemote(true); }}
             >
               + Добавить корректировку (Удалёнка)
             </button>
@@ -774,7 +779,8 @@ const CorrectionTab: FC<{
               const clampedM = Math.max(0, Math.min(59, m));
               setRemoteHours(Math.max(0, h) + clampedM / 60);
             };
-            const remoteCanSave = remoteNotes.trim().length > 0 && remoteHours > 0;
+            const remoteExceedsMax = isOverCorrectionCap(remoteHours, maxHours);
+            const remoteCanSave = remoteNotes.trim().length > 0 && remoteHours > 0 && !remoteExceedsMax;
             return (
               <div className="ts-form-group" style={{ marginTop: 8 }}>
                 <label className="ts-form-label">Удалёнка — часы</label>
@@ -786,6 +792,9 @@ const CorrectionTab: FC<{
                     onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)} min={0} max={59} />
                   <span className="ts-hours-separator">м</span>
                 </div>
+                {remoteExceedsMax && maxHours != null && (
+                  <span className="ts-form-hint ts-form-hint--error">Больше графика дня ({formatHM(maxHours)})</span>
+                )}
                 <label className="ts-form-label" style={{ marginTop: 8 }}>Комментарий <span className="ts-form-required">*</span></label>
                 <input type="text" className="ts-form-input" value={remoteNotes}
                   onChange={e => setRemoteNotes(e.target.value)} placeholder="Причина (удалённая работа)..." />
@@ -973,11 +982,11 @@ const CorrectionTab: FC<{
                 <span className="ts-hours-separator">м</span>
               </div>
               {maxHours != null && !exceedsMax && (
-                <span className="ts-hours-hint">Максимум по смене {formatHM(maxHours)}</span>
+                <span className="ts-hours-hint">Максимум по графику {formatHM(maxHours)}</span>
               )}
               {exceedsMax && maxHours != null && (
                 <span className="ts-form-hint ts-form-hint--error">
-                  Превышает длительность смены ({formatHM(maxHours)})
+                  Больше графика дня ({formatHM(maxHours)})
                 </span>
               )}
             </div>
@@ -1019,7 +1028,7 @@ const CorrectionTab: FC<{
           disabled={!canSaveWithObject}
           title={
             exceedsMax && maxHours != null
-              ? `Часы превышают длительность смены (${formatHM(maxHours)})`
+              ? `Часы больше графика дня (${formatHM(maxHours)})`
               : (canSave ? undefined : 'Заполните комментарий')
           }
         >
@@ -1049,6 +1058,8 @@ interface IObjectCorrectionsListProps {
   dayLevelStatus?: TimesheetStatus | null;
   onDeleteDayLevel?: () => void;
   plannedHours?: number | null;
+  // Предел часов дня при включённой галочке роли; null — не ограничиваем.
+  maxDayHours?: number | null;
   onSaveObject: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
   // Сохранение дневной (не объектной) корректировки: статус Удалёнка/Отпуск/… или
@@ -1086,6 +1097,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   dayLevelStatus,
   onDeleteDayLevel,
   plannedHours,
+  maxDayHours,
   onSaveObject,
   onDeleteObject,
   onSaveDayLevel,
@@ -1201,16 +1213,29 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       setAddObjectKey(key);
       setAddHours(key ? baseHoursForObject(key) : 0);
     } else if (status === 'remote') {
-      // Удалёнка: дефолт — полный день по графику (в выходной plannedHours=0 → 8).
-      setAddHours((plannedHours ?? 0) || 8);
+      // Удалёнка: дефолт — полный день по графику (в выходной plannedHours=0 → 8), не больше предела дня.
+      const remoteDefault = (plannedHours ?? 0) || 8;
+      setAddHours(maxDayHours != null ? Math.min(remoteDefault, maxDayHours) : remoteDefault);
     }
   };
 
   const addIsManual = addStatus === 'manual';
   const addHoursEditable = HOURS_EDITABLE_STATUSES.has(addStatus);
+  const savedEntryHours = (entry: TimesheetObjectEntry): number =>
+    Number(entry.display_hours_worked ?? entry.hours_worked ?? 0);
+  // Сумма сохранённых правок других объектов дня — то же, что считает сервер.
+  const otherObjectsHours = (objectKey: string): number => correctedEntries.reduce(
+    (sum, entry) => (entry.object_key === objectKey ? sum : sum + savedEntryHours(entry)),
+    0,
+  );
+  // Объектная правка складывается с другими объектами, а дневная удалёнка их снимает.
+  const addExceedsCap = addIsManual
+    ? isOverCorrectionCap(otherObjectsHours(addObjectKey) + addHours, maxDayHours)
+    : (addStatus === 'remote' && isOverCorrectionCap(addHours, maxDayHours));
   const addCanSave = addNotes.trim().length > 0
     && (!addIsManual || (Boolean(addObjectKey) && addHours > 0))
-    && (addStatus !== 'remote' || addHours > 0);
+    && (addStatus !== 'remote' || addHours > 0)
+    && !addExceedsCap;
 
   const saveAdd = () => {
     const notes = addNotes.trim();
@@ -1240,12 +1265,14 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
     cancelAdd();
   };
 
-  // Σ — учитываем сохранённые + форму добавления (только для manual).
+  // Σ — учитываем сохранённые, черновики раскрытых строк и форму добавления (только для manual).
   const totalHours = correctedEntries.reduce(
-    (sum, e) => sum + Number(e.display_hours_worked ?? e.hours_worked ?? 0),
+    (sum, e) => sum + (expanded.has(e.object_key)
+      ? (rowState[e.object_key]?.hours ?? savedEntryHours(e))
+      : savedEntryHours(e)),
     0,
   ) + (adding && addIsManual ? (addHours || 0) : 0);
-  const planned = plannedHours ?? null;
+  const planned = maxDayHours ?? plannedHours ?? null;
   const exceedsPlanned = planned != null && totalHours > planned + 0.001;
 
   const handleHoursChange = (key: string, hours: number) => {
@@ -1453,11 +1480,17 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         // Редактируемый ряд (нажали «Изменить»).
         const trimmedNotes = state.notes.trim();
         const isZero = state.hours <= 0;
-        const canSave = isZero ? hasExisting : trimmedNotes.length > 0;
+        // Те же часы старой правки не блокируем: к ней можно поправить заметку.
+        const rowExceedsCap = !isZero
+          && Math.round(state.hours * 100) !== Math.round(savedEntryHours(entry) * 100)
+          && isOverCorrectionCap(otherObjectsHours(entry.object_key) + state.hours, maxDayHours);
+        const canSave = isZero ? hasExisting : (trimmedNotes.length > 0 && !rowExceedsCap);
         const saveLabel = isZero ? 'Снять корректировку' : 'Сохранить объект';
         const saveTitle = isZero
           ? (hasExisting ? '0 часов — корректировка будет снята' : 'Нечего сохранять: 0 часов')
-          : (canSave ? undefined : 'Укажите комментарий');
+          : (rowExceedsCap
+            ? 'Сумма часов дня больше графика'
+            : (canSave ? undefined : 'Укажите комментарий'));
         return (
           <div key={entry.object_key} style={FORM_CARD_STYLE}>
             <div style={{ fontWeight: 500, marginBottom: 6 }}>{entry.object_name}</div>
@@ -1565,7 +1598,9 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
               className="ts-btn ts-btn--primary"
               onClick={saveAdd}
               disabled={!addCanSave}
-              title={addCanSave ? undefined : 'Заполните поля и комментарий'}
+              title={addExceedsCap
+                ? 'Сумма часов дня больше графика'
+                : (addCanSave ? undefined : 'Заполните поля и комментарий')}
             >
               Сохранить
             </button>
@@ -1586,7 +1621,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         >
           {exceedsPlanned ? '⚠ ' : '✓ '}
           Σ корректировок = {formatHM(totalHours)} / план {formatHM(planned)}
-          {exceedsPlanned && ' — превышение, согласующий увидит'}
+          {exceedsPlanned && ' — больше графика'}
         </div>
       )}
     </div>
@@ -1857,6 +1892,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           dayLevelStatus={timesheetEntry?.status ?? null}
           onDeleteDayLevel={hasDayLevelCorrection ? onDelete : undefined}
           plannedHours={plannedHours ?? null}
+          maxDayHours={maxHours ?? null}
           onSaveObject={onSaveObject!}
           onDeleteObject={onDeleteObject!}
           onSaveDayLevel={onSave}

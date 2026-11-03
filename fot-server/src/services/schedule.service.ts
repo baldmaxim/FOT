@@ -285,6 +285,17 @@ export const getDayNormHours = (
 };
 
 /**
+ * Предел часов корректировки дня: норма дня по графику, а в нерабочий день графика
+ * (норма 0: выходной, праздник) — длина смены. Для «только аномалии» этот предел не годится:
+ * там день определяется нормой (getDayNormHours).
+ */
+export const getCorrectionCapHours = (
+  schedule: IResolvedSchedule,
+  date: Date,
+  calendar: IProductionCalendarMonth | null = null,
+): number => getDayNormHours(schedule, date, calendar) || schedule.work_hours;
+
+/**
  * Статусы записей табеля, при которых день считается «не рабочим» — он
  * не идёт ни в план (norm), ни в факт (fact). На выходных просто игнорируется.
  * absent (прогул) сюда НЕ входит: план остаётся, факт=0 → красная недоработка.

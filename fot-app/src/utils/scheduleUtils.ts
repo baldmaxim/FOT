@@ -253,6 +253,36 @@ export const getCorrectionDefaultHoursForDay = (
   day: number,
 ): number => getDayNormHoursForDay(sched, calendar, year, month, day) || getWorkHoursForDay(sched, year, month, day);
 
+/**
+ * Предел часов корректировки дня — зеркало getCorrectionCapHours на сервере: норма дня,
+ * а в нерабочий день графика (норма 0) — длина смены. Без графика предел знает только сервер.
+ */
+export const getCorrectionMaxHoursForDay = (
+  sched: IResolvedSchedule | undefined,
+  calendar: IProductionCalendarMonth | null,
+  year: number,
+  month: number,
+  day: number,
+): number | null => {
+  if (!sched) return null;
+  return getDayNormHoursForDay(sched, calendar, year, month, day) || sched.work_hours;
+};
+
+/**
+ * Часы больше предела? Сравнение в сотых, как на сервере: форма шлёт 7:40 как 7,6667.
+ * Неизменённые часы старой правки не блокируем: иначе к ней нельзя было бы поправить заметку.
+ */
+export const isOverCorrectionCap = (
+  hours: number,
+  capHours: number | null | undefined,
+  unchangedHours?: number | null,
+): boolean => {
+  if (capHours == null) return false;
+  const hundredths = Math.round(hours * 100);
+  if (unchangedHours != null && Math.round(unchangedHours * 100) === hundredths) return false;
+  return hundredths > Math.round(capHours * 100);
+};
+
 export const getEffectiveLateThresholdForDay = (
   sched: IResolvedSchedule | undefined,
   year: number,

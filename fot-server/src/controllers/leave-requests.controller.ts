@@ -1,6 +1,11 @@
 import type { Response } from 'express';
 import * as Sentry from '@sentry/node';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
+import {
+  assertDayCorrectionsWithinCap,
+  CorrectionRestrictionError,
+  resolveCorrectionDayLimits,
+} from '../services/correction-restrictions.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -781,6 +786,45 @@ function broadcastPendingChanged(): void {
   if (io) io.emit('leave_request_pending_changed');
 }
 
+/** Часы заявления «Корректировка табеля»: от 0 до 24 с шагом 0,5 — и при подаче, и при правке. */
+const isValidCorrectionHours = (hours: unknown): hours is number =>
+  typeof hours === 'number' && Number.isFinite(hours) && hours >= 0 && hours <= 24 && Number.isInteger(hours * 2);
+
+/**
+ * Часы заявления не больше графика дня с учётом других объектов. Согласованное заявление
+ * становится такой же правкой, как в табеле: без этой проверки через него шли бы сверхчасы.
+ * Заявление с объектом перепишет строку этого объекта, поэтому она в сумму не входит.
+ */
+async function assertLeaveCorrectionWithinCap(
+  exec: DbExecutor | null,
+  input: { systemRoleId: string; employeeId: number; workDate: string; hours: number; objectId: string | null },
+): Promise<void> {
+  if (!(input.hours > 0)) return;
+  const limits = await resolveCorrectionDayLimits(input.systemRoleId, input.employeeId, input.workDate, exec ?? undefined);
+  if (!limits.capEnabled) return;
+  let excludeAdjustmentId: number | null = null;
+  if (input.objectId) {
+    const sql = `SELECT id FROM attendance_adjustments
+                  WHERE employee_id = $1 AND work_date = $2::date
+                    AND source_type = $3 AND source_id = $4
+                  LIMIT 1`;
+    const params = [input.employeeId, input.workDate, OBJECT_ADJUSTMENT_SOURCE_TYPE, input.objectId];
+    const row = exec
+      ? (await exec.query<{ id: number | string }>(sql, params)).rows[0]
+      : await queryOne<{ id: number | string }>(sql, params);
+    excludeAdjustmentId = row ? Number(row.id) : null;
+  }
+  await assertDayCorrectionsWithinCap(exec, {
+    systemRoleId: input.systemRoleId,
+    employeeId: input.employeeId,
+    workDate: input.workDate,
+    hours: input.hours,
+    correctionCapHours: limits.capHours,
+    excludeAdjustmentId,
+    includeObjectRows: Boolean(input.objectId),
+  });
+}
+
 /** Создание заявления (worker+) */
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -823,6 +867,10 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           success: false,
           error: 'Корректировка подаётся на один день: даты периода должны совпадать с датой корректировки',
         });
+        return;
+      }
+      if (correction_hours !== undefined && correction_hours !== null && !isValidCorrectionHours(correction_hours)) {
+        res.status(400).json({ success: false, error: 'Часы: от 0 до 24 с шагом 0.5' });
         return;
       }
     }
@@ -894,6 +942,16 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         return;
       }
       correctionObjectName = match.object_name;
+      // Ранняя проверка, чтобы человек сразу увидел предел. Главная — при согласовании, под локом.
+      if (canonicalCorrectionDate) {
+        await assertLeaveCorrectionWithinCap(null, {
+          systemRoleId: req.user.system_role_id,
+          employeeId,
+          workDate: canonicalCorrectionDate,
+          hours: correction_hours ?? 0,
+          objectId: correction_object_id,
+        });
+      }
     }
 
     if (attachmentIds.length > 0) {
@@ -1134,6 +1192,10 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     res.json({ success: true, data });
   } catch (err) {
+    if (err instanceof CorrectionRestrictionError) {
+      res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
+      return;
+    }
     console.error('leave-requests.create error:', err);
     res.status(500).json({ success: false, error: 'Ошибка создания заявления' });
   }
@@ -1685,7 +1747,9 @@ type DecisionFail =
   | 'invalid_period' | 'timesheet_locked' | 'stale'
   // Объектная корректировка пришла на день, размеченный дневной корректировкой
   // с распределением по объектам: согласование перезаписало бы ручную разметку.
-  | 'day_allocation_conflict';
+  | 'day_allocation_conflict'
+  // Часы корректировки больше графика дня: согласующий сначала исправляет их в заявлении.
+  | 'hours_exceed_schedule';
 
 /**
  * Отказ внутри транзакции. Именно исключение, а не возврат значения: withTransaction
@@ -1708,6 +1772,7 @@ const DECISION_HTTP_STATUS: Record<DecisionFail, number> = {
   timesheet_locked: 409,
   stale: 409,
   day_allocation_conflict: 409,
+  hours_exceed_schedule: 422,
 };
 
 type DecisionResult =
@@ -1981,6 +2046,21 @@ async function approveLeaveRequestById(
           // и должна быть дополнительно одобрена админом на /approvals.
           // Исключение — схлопывание: одобряющий сам ответственный за выходные.
           await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, [approvedRequest.correction_date]);
+          // Главная проверка предела: под локом и до записи. Исключение откатывает согласование.
+          try {
+            await assertLeaveCorrectionWithinCap(client, {
+              systemRoleId: req.user.system_role_id,
+              employeeId: approvedRequest.employee_id,
+              workDate: String(approvedRequest.correction_date).slice(0, 10),
+              hours: Number(approvedRequest.correction_hours ?? 0),
+              objectId: approvedRequest.correction_object_id ?? null,
+            });
+          } catch (capErr) {
+            if (capErr instanceof CorrectionRestrictionError) {
+              throw new LeaveDecisionError('hours_exceed_schedule', capErr.message);
+            }
+            throw capErr;
+          }
           const resolvedApproval = await resolveAdjustmentApprovalStatus(
             approvedRequest.employee_id,
             approvedRequest.correction_date,
@@ -2193,6 +2273,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         success: false,
         error: result.error,
         ...(result.code === 'timesheet_locked' ? { code: TIMESHEET_PERIOD_CLOSED } : {}),
+        ...(result.code === 'hours_exceed_schedule' ? { code: result.code } : {}),
         // Транзакция откатилась: заявление осталось на согласовании, дневная корректировка
         // и её вложения не тронуты.
         ...(result.code === 'day_allocation_conflict' ? { code: 'DAY_ALLOCATION_CONFLICT' } : {}),
@@ -2446,14 +2527,14 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
     const { id } = req.params;
     const { hours } = req.body as { hours?: unknown };
 
-    if (typeof hours !== 'number' || !Number.isFinite(hours)
-      || hours < 0 || hours > 24 || !Number.isInteger(hours * 2)) {
+    if (!isValidCorrectionHours(hours)) {
       res.status(400).json({ success: false, error: 'Часы: от 0 до 24 с шагом 0.5' });
       return;
     }
 
     const request = await queryOne<LeaveRequestDatesRow & {
       status: string; reviewer_id: string | null; correction_status: string | null;
+      correction_object_id: string | null;
     }>(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
     if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
@@ -2513,6 +2594,20 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
             return { conflict: 'timesheet_locked' as const };
           }
         }
+      }
+
+      // Предел — до записи: те же часы не проверяем, у согласованного заявления его строка
+      // табеля в сумму не входит, а quota-lock выше не даёт разойтись с другими объектами.
+      const hoursChanged = locked.correction_hours == null
+        || Math.round(Number(locked.correction_hours) * 100) !== Math.round(hours * 100);
+      if (hoursChanged && request.correction_date) {
+        await assertLeaveCorrectionWithinCap(client, {
+          systemRoleId: req.user.system_role_id,
+          employeeId: request.employee_id,
+          workDate: String(request.correction_date).slice(0, 10),
+          hours,
+          objectId: request.correction_object_id ?? null,
+        });
       }
 
       const updated = (await client.query(
@@ -2617,6 +2712,10 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
 
     res.json({ success: true, data: result.row });
   } catch (err) {
+    if (err instanceof CorrectionRestrictionError) {
+      res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
+      return;
+    }
     console.error('leave-requests.updateCorrectionHours error:', err);
     res.status(500).json({ success: false, error: 'Ошибка правки часов корректировки' });
   }

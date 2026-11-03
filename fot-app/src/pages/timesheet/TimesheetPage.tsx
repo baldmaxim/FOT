@@ -55,6 +55,7 @@ import {
 import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
   getCorrectionDefaultHoursForDay,
+  getCorrectionMaxHoursForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
   getWorkHoursForDay,
@@ -163,6 +164,9 @@ export const TimesheetPage: FC = () => {
   // Флаг роли: запрет корректировок «По объектам» (см. миграцию 179). Просмотр режима остаётся,
   // блокируются только записи (внесение/изменение/удаление объектных правок во всех точках входа).
   const objectEntriesDisabled = profile?.corrections_disable_object_entries === true;
+  // Флаг роли: корректировка часов не больше графика дня (см. миграцию 343). Форма только
+  // подсказывает — отказывает сервер.
+  const correctionCapEnabled = profile?.corrections_cap_by_schedule_norm === true;
   const OBJECT_ENTRIES_DISABLED_MESSAGE = 'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».';
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
   // «Переводы» — просмотр и откат кадровых перемещений: тот же ключ, что у бэка
@@ -1510,8 +1514,11 @@ export const TimesheetPage: FC = () => {
     return getCorrectionDefaultHoursForDay(sched, calendar, year, month, modalDay);
   }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, calendar, year, month, modalDay, showActualHours]);
 
-  // Корректировки могут превышать длительность смены по графику — лимит снят.
-  const modalMaxHours = null;
+  const modalMaxHours = useMemo(() => {
+    if (!correctionCapEnabled || !modalEmployee) return null;
+    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
+    return getCorrectionMaxHoursForDay(sched, calendar, year, month, modalDay);
+  }, [correctionCapEnabled, modalEmployee, schedules, dailySchedules, calendar, year, month, modalDay]);
 
   const handleBulkModeToggle = useCallback(() => {
     if (bulkModeEnabled) {
@@ -1691,8 +1698,21 @@ export const TimesheetPage: FC = () => {
     return getWorkHoursForDay(sched, year, month, firstTarget.day);
   }, [isObjectBulkOperation, bulkObjectTargets, bulkTargets, schedules, dailySchedules, year, month]);
 
-  // Массовые корректировки тоже не ограничены графиком.
-  const bulkMaxHours = null;
+  // Одно число на много дней: наибольший предел среди выбранных. Наименьший срезал бы всем
+  // часы до пятничных; точный отказ по конкретному дню — с ФИО и датой — даёт сервер.
+  const bulkMaxHours = useMemo(() => {
+    if (!correctionCapEnabled) return null;
+    const targets = isObjectBulkOperation ? bulkObjectTargets : bulkTargets;
+    if (targets.length === 0) return null;
+    let max = 0;
+    for (const target of targets) {
+      const sched = getScheduleForTimesheetDay(schedules, dailySchedules, target.employee.id, year, month, target.day);
+      const cap = getCorrectionMaxHoursForDay(sched, calendar, year, month, target.day);
+      if (cap == null) return null;
+      max = Math.max(max, cap);
+    }
+    return max;
+  }, [correctionCapEnabled, isObjectBulkOperation, bulkObjectTargets, bulkTargets, schedules, dailySchedules, calendar, year, month]);
 
   const handleOpenBulkModal = useCallback(() => {
     if (viewMode === 'employees' && bulkTargets.length > 0 && bulkObjectTargets.length > 0) {

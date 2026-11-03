@@ -87,6 +87,8 @@ vi.mock('../services/correction-restrictions.service.js', async (importActual) =
   ...(await importActual<typeof import('../services/correction-restrictions.service.js')>()),
   assertObjectCorrectionsAllowed: vi.fn(async () => undefined),
   assertCorrectionAllowed: vi.fn(async () => undefined),
+  resolveCorrectionDayLimits: vi.fn(async () => ({ normHours: 8, capHours: 8, capEnabled: true })),
+  assertDayCorrectionsWithinCap: vi.fn(async () => undefined),
 }));
 
 vi.mock('../services/audit.service.js', () => ({

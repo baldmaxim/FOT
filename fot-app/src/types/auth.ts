@@ -98,6 +98,8 @@ export interface UserProfile {
   weekend_memo_required: boolean;
   /** true → роль не может вносить корректировки «По объектам» (см. миграцию 179). */
   corrections_disable_object_entries: boolean;
+  /** true → корректировка часов не больше графика дня (см. миграцию 343). */
+  corrections_cap_by_schedule_norm?: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

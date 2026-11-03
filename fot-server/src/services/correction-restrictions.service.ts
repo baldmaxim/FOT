@@ -1,4 +1,10 @@
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
+import {
+  getCorrectionCapHours,
+  getDayNormHours,
+  loadCalendarMonth,
+  resolveSchedulesForPeriod,
+} from './schedule.service.js';
 
 /**
  * Гард-сервис «Ограничения корректировок табеля» (см. миграцию 132).
@@ -82,6 +88,45 @@ export function invalidateCorrectionRestrictionsCache(systemRoleId?: string): vo
   else cache.clear();
 }
 
+/** Часы сравниваем в сотых: колонка NUMERIC(5,2), а форма шлёт 7:40 как 7,6667. */
+const toHundredths = (hours: number): number => Math.round(hours * 100);
+
+const isOverCap = (hours: number, capHours: number): boolean => toHundredths(hours) > toHundredths(capHours);
+
+const formatHoursForMessage = (hours: number): string =>
+  String(toHundredths(hours) / 100).replace('.', ',');
+
+const formatDateForMessage = (isoDate: string): string => isoDate.split('-').reverse().join('.');
+
+/** Значения дня для гардов: норма решает «рабочий ли день», предел — сколько часов можно поставить. */
+export interface ICorrectionDayLimits {
+  normHours: number;
+  capHours: number;
+  /** Галочка роли «Не больше плановых часов дня». */
+  capEnabled: boolean;
+}
+
+/** Норма и предел дня по графику сотрудника плюс галочка роли действующего пользователя. */
+export async function resolveCorrectionDayLimits(
+  systemRoleId: string,
+  employeeId: number,
+  workDate: string,
+  exec?: DbExecutor,
+): Promise<ICorrectionDayLimits> {
+  const restrictions = await loadRoleRestrictions(systemRoleId);
+  const schedules = await resolveSchedulesForPeriod([{ id: employeeId }], workDate, workDate, exec);
+  const schedule = schedules.get(employeeId)?.get(workDate);
+  const capEnabled = restrictions.corrections_cap_by_schedule_norm;
+  if (!schedule) return { normHours: 0, capHours: 0, capEnabled };
+  const date = new Date(`${workDate}T00:00:00`);
+  const calendar = await loadCalendarMonth(date.getFullYear(), date.getMonth() + 1, exec);
+  return {
+    normHours: getDayNormHours(schedule, date, calendar),
+    capHours: getCorrectionCapHours(schedule, date, calendar),
+    capEnabled,
+  };
+}
+
 async function isSkudAnomalousDay(employeeId: number, workDate: string, scheduled: boolean): Promise<boolean> {
   const row = await queryOne<{ anomalous: boolean }>(
     `SELECT public.is_skud_anomalous_day($1::bigint, $2::date, $3::boolean) AS anomalous`,
@@ -122,18 +167,24 @@ export interface IAssertCorrectionAllowedInput {
   workDate: string;
   /** Округлённое значение часов, которое будет записано в hours_override. */
   hoursOverride: number;
-  /** Норма часов дня по графику (0 → нерабочий по графику). */
+  /** Норма часов дня по графику: только чтобы понять, рабочий ли день (0 → нерабочий по графику). */
   scheduledNormHours: number;
+  /** Предел часов дня: норма, а в нерабочий день — длина смены (getCorrectionCapHours). */
+  correctionCapHours: number;
+  /**
+   * Часы, которые сверяем с пределом: явно введённые и изменённые. null — предел не проверяем
+   * (те же часы и статус у существующей строки, work без часов, объектная правка до лока).
+   */
+  capHoursToCheck: number | null;
   /** При update — id строки, которую правим (исключаем из подсчёта лимита). */
   excludeAdjustmentId?: number | null;
   /**
-   * Пропустить проверки cap-by-norm и anomalies-only (НО НЕ месячный лимит). Ставится для
-   * корректировки «Удалёнка» поверх УЖЕ согласованного выхода в выходной: норма дня = 0,
-   * СКУД-аномалии нет, но выход одобрен ответственным — норму/аномалию проверять не нужно.
-   * Месячный лимит (max_corrections_per_month) при этом ОСТАЁТСЯ в силе: роль с лимитом=0
-   * не должна добавлять часы в выходной даже поверх согласованного выхода.
+   * Пропустить проверку anomalies-only. Ставится для корректировки «Удалёнка» поверх УЖЕ
+   * согласованного выхода в выходной: СКУД-аномалии нет, но выход одобрен ответственным.
+   * Предел часов и месячный лимит остаются: роль с лимитом=0 не должна добавлять часы в
+   * выходной даже поверх согласованного выхода.
    */
-  skipNormAndAnomalyChecks?: boolean;
+  skipAnomalyCheck?: boolean;
 }
 
 /**
@@ -156,10 +207,9 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
   const isScheduled = scheduledNorm > 0;
 
   if (hours > 0) {
-    // Удалёнка поверх согласованного выхода: норму/аномалию НЕ проверяем (выход уже одобрен
-    // ответственным), но месячный лимит ниже — проверяем всегда (роль с лимитом=0 не должна
-    // добавлять часы в выходной даже так).
-    if (!input.skipNormAndAnomalyChecks && restrictions.corrections_anomalies_only) {
+    // Удалёнка поверх согласованного выхода: аномалию НЕ проверяем (выход уже одобрен
+    // ответственным), предел и месячный лимит ниже — проверяем всегда.
+    if (!input.skipAnomalyCheck && restrictions.corrections_anomalies_only) {
       const anomalous = await isSkudAnomalousDay(input.employeeId, input.workDate, isScheduled);
       if (!anomalous) {
         throw new CorrectionRestrictionError(
@@ -169,11 +219,15 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
       }
     }
 
-    if (!input.skipNormAndAnomalyChecks && restrictions.corrections_cap_by_schedule_norm && hours > scheduledNorm) {
+    if (
+      restrictions.corrections_cap_by_schedule_norm
+      && input.capHoursToCheck != null
+      && isOverCap(input.capHoursToCheck, input.correctionCapHours)
+    ) {
       throw new CorrectionRestrictionError(
         'hours_exceed_norm',
-        `Часы корректировки (${hours}) превышают плановые часы дня (${scheduledNorm}).`,
-        { scheduledNormHours: scheduledNorm },
+        `Часы корректировки (${formatHoursForMessage(input.capHoursToCheck)}) больше графика дня (${formatHoursForMessage(input.correctionCapHours)}).`,
+        { correctionCapHours: input.correctionCapHours },
       );
     }
 
@@ -204,10 +258,14 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
 export interface IBulkCorrectionItem {
   employeeId: number;
   workDate: string;
-  /** Часы, которые будут записаны (для remote — плановые/8, для work/manual — присланные). */
+  /** Часы, которые будут записаны (для remote — присланные или по графику, для work/manual — присланные). */
   hoursOverride: number;
-  /** Норма часов дня по графику (для cap-by-norm). */
+  /** Норма часов дня по графику: только чтобы понять, рабочий ли день. */
   scheduledNormHours: number;
+  /** Предел часов дня (getCorrectionCapHours). */
+  correctionCapHours: number;
+  /** Часы, которые сверяем с пределом; null — не проверяем (см. IAssertCorrectionAllowedInput). */
+  capHoursToCheck: number | null;
 }
 
 /**
@@ -245,11 +303,20 @@ export async function assertBulkCorrectionAllowed(input: {
         );
       }
     }
-    if (r.corrections_cap_by_schedule_norm && it.hoursOverride > norm) {
+    if (
+      r.corrections_cap_by_schedule_norm
+      && it.capHoursToCheck != null
+      && isOverCap(it.capHoursToCheck, it.correctionCapHours)
+    ) {
+      const employee = await queryOne<{ full_name: string | null }>(
+        `SELECT full_name FROM employees WHERE id = $1`,
+        [it.employeeId],
+      );
+      const who = employee?.full_name ?? `Сотрудник №${it.employeeId}`;
       throw new CorrectionRestrictionError(
         'hours_exceed_norm',
-        `Часы корректировки (${it.hoursOverride}) превышают плановые часы дня (${norm}).`,
-        { employeeId: it.employeeId, workDate: it.workDate, scheduledNormHours: norm },
+        `${who}, ${formatDateForMessage(it.workDate)}: часы корректировки (${formatHoursForMessage(it.capHoursToCheck)}) больше графика дня (${formatHoursForMessage(it.correctionCapHours)}). Ничего не сохранено.`,
+        { employeeId: it.employeeId, workDate: it.workDate, correctionCapHours: it.correctionCapHours },
       );
     }
   }
@@ -297,6 +364,62 @@ export async function assertBulkCorrectionAllowed(input: {
       }
     }
   }
+}
+
+/**
+ * Предел часов дня с учётом других объектов: сумма строк manual_object этого дня плюс новые
+ * часы. Положительная объектная правка снимает СКУД других объектов дня, поэтому итог дня
+ * равен сумме правок. Вызывать под локом (сотрудник, месяц): два параллельных сохранения
+ * разных объектов иначе не увидят друг друга. exec = null — ранняя проверка без лока.
+ *
+ * Мигрированная из day-level строка семантически дневная и в сумму не идёт, отклонённая
+ * предел не занимает. Галочка роли выключена — ничего не проверяем.
+ */
+export async function assertDayCorrectionsWithinCap(
+  exec: DbExecutor | null,
+  input: {
+    systemRoleId: string;
+    employeeId: number;
+    workDate: string;
+    hours: number;
+    correctionCapHours: number;
+    /** Строка, которую эта правка перепишет. */
+    excludeAdjustmentId?: number | null;
+    /** false — день без объектов (старое заявление без объекта): только предел самой строки. */
+    includeObjectRows?: boolean;
+  },
+): Promise<void> {
+  const restrictions = await loadRoleRestrictions(input.systemRoleId);
+  if (!restrictions.corrections_cap_by_schedule_norm || !(input.hours > 0)) return;
+
+  let otherHours = 0;
+  if (input.includeObjectRows !== false) {
+    const sql = `SELECT COALESCE(SUM(hours_override), 0)::text AS total
+                   FROM attendance_adjustments
+                  WHERE employee_id = $1
+                    AND work_date = $2::date
+                    AND source_type = 'manual_object'
+                    AND hours_override > 0
+                    AND approval_status IN ('pending', 'approved', 'auto_approved')
+                    AND COALESCE(metadata ->> 'migrated_from_day_level', '') <> 'true'
+                    AND id IS DISTINCT FROM $3::bigint`;
+    const params = [input.employeeId, input.workDate, input.excludeAdjustmentId ?? null];
+    const rows = exec
+      ? (await exec.query<{ total: string }>(sql, params)).rows
+      : await query<{ total: string }>(sql, params);
+    otherHours = Number(rows[0]?.total ?? 0);
+  }
+
+  const dayHours = otherHours + input.hours;
+  if (!isOverCap(dayHours, input.correctionCapHours)) return;
+  const cap = formatHoursForMessage(input.correctionCapHours);
+  throw new CorrectionRestrictionError(
+    'hours_exceed_norm',
+    otherHours > 0
+      ? `Сумма часов корректировок дня (${formatHoursForMessage(dayHours)}) больше графика дня (${cap}): на других объектах уже ${formatHoursForMessage(otherHours)}.`
+      : `Часы корректировки (${formatHoursForMessage(input.hours)}) больше графика дня (${cap}).`,
+    { employeeId: input.employeeId, workDate: input.workDate, correctionCapHours: input.correctionCapHours, otherHours },
+  );
 }
 
 /** Проверка для bulk-эндпоинта. Кидает 'bulk_disabled' если у роли corrections_disable_bulk=true. */

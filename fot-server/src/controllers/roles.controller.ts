@@ -81,7 +81,7 @@ const createRoleSchema = z.object({
   timesheet_months_forward: timesheetMonthsSchema.optional().default(1),
   timesheet_show_full_period: z.boolean().optional().default(true),
   corrections_anomalies_only: z.boolean().optional().default(false),
-  corrections_cap_by_schedule_norm: z.boolean().optional().default(false),
+  corrections_cap_by_schedule_norm: z.boolean().optional().default(true),
   corrections_allow_zero_short_attendance: z.boolean().optional().default(false),
   corrections_disable_bulk: z.boolean().optional().default(false),
   corrections_disable_object_entries: z.boolean().optional().default(false),

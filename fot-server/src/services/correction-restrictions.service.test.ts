@@ -16,6 +16,7 @@ import {
   assertCorrectionAllowed,
   assertBulkAllowed,
   assertBulkCorrectionAllowed,
+  assertDayCorrectionsWithinCap,
   assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   invalidateCorrectionRestrictionsCache,
@@ -75,6 +76,8 @@ const BASE = {
   createdBy: '00000000-0000-0000-0000-000000000aaa',
   employeeId: 42,
   workDate: '2026-05-12',
+  correctionCapHours: 8,
+  capHoursToCheck: null as number | null,
 };
 
 describe('correction-restrictions.service', () => {
@@ -108,16 +111,88 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 10,
       scheduledNormHours: 8,
+      capHoursToCheck: 10,
     })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
   });
 
-  it('skipNormAndAnomalyChecks: удалёнка поверх согласованного выхода в выходной (норма 0) не блокируется', async () => {
+  it('skipAnomalyCheck: удалёнка поверх согласованного выхода в выходной (норма 0) — до длины смены', async () => {
     setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
     await expect(assertCorrectionAllowed({
       ...BASE,
-      hoursOverride: 8,
+      hoursOverride: 10,
       scheduledNormHours: 0, // выходной
-      skipNormAndAnomalyChecks: true,
+      correctionCapHours: 10,
+      capHoursToCheck: 10,
+      skipAnomalyCheck: true,
+    })).resolves.toBeUndefined();
+  });
+
+  it('skipAnomalyCheck не снимает предел: 11 ч при смене 10 ч → hours_exceed_norm', async () => {
+    setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 11,
+      scheduledNormHours: 0,
+      correctionCapHours: 10,
+      capHoursToCheck: 11,
+      skipAnomalyCheck: true,
+    })).rejects.toMatchObject({ code: 'hours_exceed_norm', details: { correctionCapHours: 10 } });
+  });
+
+  it('норма и предел независимы: на выходном аномалия проверяется с scheduled=false, хотя предел 10', async () => {
+    setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: true, totalMinutes: 0, monthCount: 0 });
+    await assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 10,
+      scheduledNormHours: 0,
+      correctionCapHours: 10,
+      capHoursToCheck: 10,
+    });
+    const anomalyCall = pgQueryOne.mock.calls.find(call => /is_skud_anomalous_day/.test(String(call[0])));
+    expect(anomalyCall?.[1]).toEqual([BASE.employeeId, BASE.workDate, false]);
+  });
+
+  it('capHoursToCheck=null: неизменная правка 14 ч при пределе 12 проходит', async () => {
+    setupQueryOne({ restrictions: { ...ROLE_OFF, corrections_cap_by_schedule_norm: true }, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 14,
+      scheduledNormHours: 12,
+      correctionCapHours: 12,
+      capHoursToCheck: null,
+    })).resolves.toBeUndefined();
+  });
+
+  it('снижение старой правки 14 → 13 при пределе 12 — отказ', async () => {
+    setupQueryOne({ restrictions: { ...ROLE_OFF, corrections_cap_by_schedule_norm: true }, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 13,
+      scheduledNormHours: 12,
+      correctionCapHours: 12,
+      capHoursToCheck: 13,
+    })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
+  });
+
+  it('сравнение в сотых: 7,6667 при пределе 7,67 не превышение', async () => {
+    setupQueryOne({ restrictions: { ...ROLE_OFF, corrections_cap_by_schedule_norm: true }, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 7.6667,
+      scheduledNormHours: 7.67,
+      correctionCapHours: 7.67,
+      capHoursToCheck: 7.6667,
+    })).resolves.toBeUndefined();
+  });
+
+  it('галочка роли снята: часы сверх графика проходят', async () => {
+    setupQueryOne({ restrictions: ROLE_OFF, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 14,
+      scheduledNormHours: 12,
+      correctionCapHours: 12,
+      capHoursToCheck: 14,
     })).resolves.toBeUndefined();
   });
 
@@ -141,7 +216,7 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 8,
       scheduledNormHours: 0, // выходной
-      skipNormAndAnomalyChecks: true,
+      skipAnomalyCheck: true,
     })).rejects.toMatchObject({ code: 'monthly_limit', details: { limit: 0 } });
   });
 
@@ -156,7 +231,7 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 8,
       scheduledNormHours: 0,
-      skipNormAndAnomalyChecks: true,
+      skipAnomalyCheck: true,
     })).resolves.toBeUndefined();
   });
 
@@ -171,7 +246,7 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 8,
       scheduledNormHours: 0,
-      skipNormAndAnomalyChecks: true,
+      skipAnomalyCheck: true,
     })).rejects.toMatchObject({ code: 'monthly_limit', details: { limit: 2, used: 2 } });
   });
 
@@ -269,11 +344,13 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 7,
       scheduledNormHours: 8,
+      capHoursToCheck: 7,
     })).resolves.toBeUndefined();
     await expect(assertCorrectionAllowed({
       ...BASE,
       hoursOverride: 9,
       scheduledNormHours: 8,
+      capHoursToCheck: 9,
     })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
   });
 
@@ -327,7 +404,7 @@ describe('correction-restrictions.service', () => {
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
         items: ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04'].map(d => ({
-          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null,
         })),
       })).rejects.toMatchObject({ code: 'monthly_limit', details: { employeeId: 42 } });
     });
@@ -337,7 +414,7 @@ describe('correction-restrictions.service', () => {
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
         items: [10, 11, 12, 13].map(emp => ({
-          employeeId: emp, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8,
+          employeeId: emp, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null,
         })),
       })).resolves.toBeUndefined();
     });
@@ -355,7 +432,7 @@ describe('correction-restrictions.service', () => {
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
         items: ['2026-06-01', '2026-06-02'].map(d => ({
-          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null,
         })),
       })).rejects.toMatchObject({ code: 'monthly_limit' });
     });
@@ -373,7 +450,7 @@ describe('correction-restrictions.service', () => {
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
         items: ['2026-06-10', '2026-06-11'].map(d => ({
-          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null,
         })),
       })).resolves.toBeUndefined();
     });
@@ -382,7 +459,7 @@ describe('correction-restrictions.service', () => {
       setupBulk({ restrictions: ROLE_LIMIT3, anomalous: false });
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
-        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8 }],
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null }],
       })).rejects.toMatchObject({ code: 'not_anomalous' });
     });
 
@@ -390,15 +467,53 @@ describe('correction-restrictions.service', () => {
       setupBulk({ restrictions: ROLE_LIMIT3, anomalous: true });
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
-        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 10, scheduledNormHours: 8 }],
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 10, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: 10 }],
       })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
+    });
+
+    it('отказ называет человека и день: пн–пт по 8 ч при пятнице 7 ч', async () => {
+      setupBulk({ restrictions: { ...ROLE_OFF, corrections_cap_by_schedule_norm: true }, anomalous: false });
+      pgQueryOne.mockImplementation(async (sql: string) => {
+        if (/FROM\s+system_roles/i.test(sql)) return { ...ROLE_OFF, corrections_cap_by_schedule_norm: true };
+        if (/FROM employees/.test(sql)) return { full_name: 'Иванов Иван' };
+        return null;
+      });
+      const week = ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13'].map((workDate, i) => ({
+        employeeId: 42,
+        workDate,
+        hoursOverride: 8,
+        scheduledNormHours: i === 4 ? 7 : 8,
+        correctionCapHours: i === 4 ? 7 : 8,
+        capHoursToCheck: 8,
+      }));
+      await expect(assertBulkCorrectionAllowed({ ...bulkBase, items: week })).rejects.toMatchObject({
+        code: 'hours_exceed_norm',
+        message: 'Иванов Иван, 13.11.2026: часы корректировки (8) больше графика дня (7). Ничего не сохранено.',
+        details: { employeeId: 42, workDate: '2026-11-13', correctionCapHours: 7 },
+      });
+    });
+
+    it('повторная массовая правка старых часов (capHoursToCheck=null) проходит', async () => {
+      setupBulk({ restrictions: { ...ROLE_OFF, corrections_cap_by_schedule_norm: true }, anomalous: false });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 14, scheduledNormHours: 12, correctionCapHours: 12, capHoursToCheck: null }],
+      })).resolves.toBeUndefined();
     });
 
     it('роль без ограничений — no-op', async () => {
       setupBulk({ restrictions: ROLE_OFF, anomalous: false });
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
-        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8 }],
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null }],
+      })).resolves.toBeUndefined();
+    });
+
+    it('галочка роли снята: сверх графика проходит', async () => {
+      setupBulk({ restrictions: ROLE_OFF, anomalous: false });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 14, scheduledNormHours: 12, correctionCapHours: 12, capHoursToCheck: 14 }],
       })).resolves.toBeUndefined();
     });
 
@@ -407,9 +522,54 @@ describe('correction-restrictions.service', () => {
       await expect(assertBulkCorrectionAllowed({
         ...bulkBase,
         items: ['2026-06-01', '2026-06-02', '2026-06-03'].map(d => ({
-          employeeId: 42, workDate: d, hoursOverride: 0, scheduledNormHours: 8,
+          employeeId: 42, workDate: d, hoursOverride: 0, scheduledNormHours: 8, correctionCapHours: 8, capHoursToCheck: null,
         })),
       })).resolves.toBeUndefined();
+    });
+  });
+
+  describe('assertDayCorrectionsWithinCap', () => {
+    const dayInput = { ...BASE, hours: 6, correctionCapHours: 8 };
+    const ROLE_CAP: IRoleRow = { ...ROLE_OFF, corrections_cap_by_schedule_norm: true };
+
+    const setup = (restrictions: IRoleRow, total: string) => {
+      setupQueryOne({ restrictions, anomalous: false, totalMinutes: 0, monthCount: 0 });
+      pgQuery.mockResolvedValue([{ total }]);
+    };
+
+    it('6 ч на объекте А + 6 ч на объекте Б при графике 8 ч — отказ', async () => {
+      setup(ROLE_CAP, '6.00');
+      await expect(assertDayCorrectionsWithinCap(null, dayInput)).rejects.toMatchObject({
+        code: 'hours_exceed_norm',
+        details: { otherHours: 6, correctionCapHours: 8 },
+      });
+    });
+
+    it('сумма ровно по графику проходит', async () => {
+      setup(ROLE_CAP, '2.00');
+      await expect(assertDayCorrectionsWithinCap(null, dayInput)).resolves.toBeUndefined();
+    });
+
+    it('галочка роли снята: ни сумма, ни запрос не выполняются', async () => {
+      setup(ROLE_OFF, '6.00');
+      await expect(assertDayCorrectionsWithinCap(null, dayInput)).resolves.toBeUndefined();
+      expect(pgQuery).not.toHaveBeenCalled();
+    });
+
+    it('под локом читает через exec и исключает правимую строку', async () => {
+      setup(ROLE_CAP, '0');
+      const exec = { query: vi.fn(async () => ({ rows: [{ total: '1.50' }] })) };
+      await assertDayCorrectionsWithinCap(exec as never, { ...dayInput, excludeAdjustmentId: 77 });
+      expect(pgQuery).not.toHaveBeenCalled();
+      expect(exec.query).toHaveBeenCalledWith(expect.stringContaining('IS DISTINCT FROM'), [42, '2026-05-12', 77]);
+    });
+
+    it('заявление без объекта: только предел самой строки', async () => {
+      setup(ROLE_CAP, '6.00');
+      await expect(assertDayCorrectionsWithinCap(null, { ...dayInput, includeObjectRows: false })).resolves.toBeUndefined();
+      expect(pgQuery).not.toHaveBeenCalled();
+      await expect(assertDayCorrectionsWithinCap(null, { ...dayInput, hours: 9, includeObjectRows: false }))
+        .rejects.toMatchObject({ code: 'hours_exceed_norm' });
     });
   });
 });

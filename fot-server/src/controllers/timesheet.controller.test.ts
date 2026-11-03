@@ -4,6 +4,7 @@ import {
   guardsRestriction,
   resolveWriteHours,
   resolveGuardHours,
+  resolveCapHoursToCheck,
   resolveTimesheetScope,
   resolveEmployeeTimesheetSource,
 } from './timesheet.controller.js';
@@ -305,6 +306,56 @@ describe('resolveWriteHours — что реально пишется в hours_ov
     expect(resolveWriteHours('remote', null, 0)).toBe(8); // выходной: work_hours=0 → полный день
     expect(resolveWriteHours('manual', 5, 8)).toBe(5);
     expect(resolveWriteHours('manual', undefined, 8)).toBeUndefined();
+  });
+});
+
+describe('resolveWriteHours — удалёнка и предел дня', () => {
+  it('часы не переданы: подстановка не больше предела (предпраздничный день, график 8, норма 7)', () => {
+    expect(resolveWriteHours('remote', null, 8, 7)).toBe(7);
+    expect(resolveWriteHours('remote', undefined, 8, 7)).toBe(7);
+  });
+
+  it('выходной при смене 6 ч: вместо 8 — длина смены', () => {
+    expect(resolveWriteHours('remote', null, 0, 6)).toBe(6);
+  });
+
+  it('часы переданы: пишем присланное, отказ — дело гарда, а не тихая срезка', () => {
+    expect(resolveWriteHours('remote', 12, 8, 7)).toBe(12);
+    expect(resolveWriteHours('manual', 14, 12, 12)).toBe(14);
+  });
+
+  it('галочка снята (предел null): как раньше', () => {
+    expect(resolveWriteHours('remote', null, 8, null)).toBe(8);
+    expect(resolveWriteHours('remote', null, 0, null)).toBe(8);
+  });
+});
+
+describe('resolveCapHoursToCheck — какие часы сверять с пределом дня', () => {
+  it('новая правка: сверяем записываемые часы', () => {
+    expect(resolveCapHoursToCheck('manual', 13, null)).toBe(13);
+    expect(resolveCapHoursToCheck('manual', 13, undefined)).toBe(13);
+  });
+
+  it('те же статус и часы: заметка к старой правке 14 ч сохраняется', () => {
+    expect(resolveCapHoursToCheck('manual', 14, { status: 'manual', hours_override: '14.00' })).toBeNull();
+  });
+
+  it('сравнение в сотых: форма шлёт 7:40 как 7,6667 при записанных 7,67', () => {
+    expect(resolveCapHoursToCheck('manual', 46 / 6, { status: 'manual', hours_override: 7.67 })).toBeNull();
+  });
+
+  it('снижение 14 → 13 — изменение, сверяем', () => {
+    expect(resolveCapHoursToCheck('manual', 13, { status: 'manual', hours_override: 14 })).toBe(13);
+  });
+
+  it('смена статуса при тех же часах — изменение, сверяем', () => {
+    expect(resolveCapHoursToCheck('remote', 14, { status: 'manual', hours_override: 14 })).toBe(14);
+  });
+
+  it('часов нет: work из СКУД, норма графика, обнуление — не сверяем', () => {
+    expect(resolveCapHoursToCheck('work', undefined, null)).toBeNull();
+    expect(resolveCapHoursToCheck('sick_worked', null, null)).toBeNull();
+    expect(resolveCapHoursToCheck('manual', 0, null)).toBeNull();
   });
 });
 
