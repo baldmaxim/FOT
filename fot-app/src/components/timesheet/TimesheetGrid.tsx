@@ -1520,7 +1520,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
   if (viewMode === 'objects') {
     // «Зарплата по объектам» — только просмотр: ни кликов, ни массовых правок, какие бы обработчики ни пришли.
-    const objectsColSpan = days.length + 2 + (objectsSalary ? 3 : 0);
+    const objectsColSpan = days.length + 2 + (objectsSalary ? 4 : 0);
     return (
       <div className="ts-table-container">
         <div className={`ts-table-header-bar${objectsSalary ? ' ts-salary-objects-bar' : ''}`}>
@@ -1560,6 +1560,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     </th>
                     <th className="ts-col-salary" title="К выплате: доля по всем объектам + доплаты − удержания, без НДФЛ">
                       Сумма
+                    </th>
+                    <th className="ts-col-salary" title="Средняя в час: доля ÷ учтённые часы, те же, что в формуле доли">
+                      Средняя
                     </th>
                   </>
                 )}

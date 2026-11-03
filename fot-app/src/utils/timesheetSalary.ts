@@ -172,6 +172,62 @@ export const objectShareTitle = (
     + ` / ${decimalText(object.total_weight / 600)} (Σ КТУ × ч объекта) = ${formatSalaryAmount(member.share)}`;
 };
 
+/**
+ * Средняя в час, ₽/ч: сумма ÷ учтённые минуты. Это те же минуты, по которым считается доля и которые стоят в формуле
+ * раздела «Зарплата»; они не зависят от экрана и настройки показа часов (столбец «Часы» — фактические, другие).
+ * Только для показа: округление одно, до копейки, нигде не хранится. Суммы или минут нет — null; внесённый 0,00 — 0,00.
+ */
+export const averagePerHour = (amount: string | null | undefined, minutes: number): string | null => {
+  if (amount === null || amount === undefined || minutes <= 0) return null;
+  const cents = Math.round(Number(amount) * 100);
+  return (Math.round((cents * 60) / minutes) / 100).toFixed(2);
+};
+
+/** Учтённые минуты всех рабочих на объекте. */
+export const objectCountedMinutes = (object: ITimesheetSalaryObject): number => (
+  object.members.reduce((sum, member) => sum + member.counted_minutes, 0)
+);
+
+/** Учтённые минуты сотрудника по всем объектам: сервер делит минуты дня между объектами без остатка, Σ = его итог. */
+export const employeeCountedMinutes = (data: ITimesheetSalaryResponse, employeeId: number): number => (
+  (data.objects ?? []).reduce((sum, object) => (
+    sum + (object.members.find(member => member.employee_id === employeeId)?.counted_minutes ?? 0)
+  ), 0)
+);
+
+/**
+ * Средняя объекта: выработка ÷ учтённые минуты. Только если выработка распределена хотя бы одному рабочему: без долей
+ * (не внесена, сумма бригаде, ошибка, нет учтённых часов) средней нет.
+ */
+export const objectAverage = (object: ITimesheetSalaryObject): string | null => (
+  object.members.some(member => member.share !== null)
+    ? averagePerHour(object.output_amount, objectCountedMinutes(object))
+    : null
+);
+
+/** Средняя рабочего на объекте: его доля ÷ его учтённые минуты на нём. */
+export const memberAverage = (member: ITimesheetSalaryObjectMember): string | null => (
+  averagePerHour(member.share, member.counted_minutes)
+);
+
+/**
+ * Средняя рабочего в «Итого по бригаде»: его доля по всем объектам ÷ его учтённые минуты. Долю считает сервер: объект без
+ * внесённой выработки — доли и средней нет, частичную на фронте не складываем.
+ */
+export const rowAverage = (data: ITimesheetSalaryResponse, row: ITimesheetSalaryRow): string | null => (
+  averagePerHour(row.share, employeeCountedMinutes(data, row.employee_id))
+);
+
+/** «11793,72 ч» — подпись; расчёт идёт по целым минутам. */
+export const countedHoursLabel = (minutes: number): string => `${decimalText(minutes / 60)} ч`;
+
+/** Подсказка средней из точных минут: «156 693,61 ÷ 308 учтённых ч (18480 мин)». */
+export const averageTitle = (amount: string | null | undefined, minutes: number): string | undefined => (
+  averagePerHour(amount, minutes) === null
+    ? undefined
+    : `${formatSalaryAmount(amount ?? null)} ÷ ${decimalText(minutes / 60)} учтённых ч (${minutes} мин)`
+);
+
 /** Объекты, где у сотрудника есть учтённые часы, а выработка не внесена, — «выработка не внесена: ЖК Stories». */
 export const missingObjectsNote = (data: ITimesheetSalaryResponse, employeeId: number): string | null => {
   const names = (data.objects ?? [])

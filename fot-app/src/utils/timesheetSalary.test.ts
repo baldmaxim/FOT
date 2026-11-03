@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { TimesheetEmployee, TimesheetStatus } from '../types';
 import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../types/timesheet';
 import {
-  describeSalaryState, displayedHours, findSalaryRow, formatDayHours, formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly,
-  isSalaryRowMuted, missingObjectsNote, objectShareTitle, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote,
-  salaryOvertimeNote, sortSalaryRows, totalDaysOfEmployee,
+  averagePerHour, averageTitle, countedHoursLabel, describeSalaryState, displayedHours, employeeCountedMinutes, findSalaryRow, formatDayHours,
+  formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly, isSalaryRowMuted, memberAverage, missingObjectsNote, objectAverage,
+  objectCountedMinutes, objectShareTitle, rowAverage, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote, salaryOvertimeNote,
+  sortSalaryRows, totalDaysOfEmployee,
 } from './timesheetSalary';
 
 const NBSP = ' ';
@@ -256,5 +257,124 @@ describe('«Зарплата по объектам» (336)', () => {
       tone: 'error',
       title: 'Бобокулов С. Э.: не задан объект табелирования',
     });
+  });
+});
+
+describe('средняя в час — по учтённым минутам', () => {
+  // Числа настоящего расчёта: бр.Менгбоев, октябрь 2026. У Асадбоева два объекта, на Метрополии часы другие.
+  const dom: ITimesheetSalaryObject = {
+    object_key: 'dom56', object_name: 'ЖК Дом 56', output_amount: '6000000.00', state: 'ok',
+    total_hours: 12550, total_weight: 7_076_230,
+    members: [
+      { employee_id: 1, days: { '2026-10-01': 358 }, hours: 358, counted_minutes: 18_480, weight: 184_800, share: '156693.61' },
+      { employee_id: 2, days: { '2026-10-01': 23 }, hours: 23, counted_minutes: 1320, weight: 13_200, share: '11192.40' },
+      { employee_id: 3, days: { '2026-10-01': 12169 }, hours: 12169, counted_minutes: 687_823, weight: 6_878_230, share: '5832113.99' },
+    ],
+  };
+  const metropolia: ITimesheetSalaryObject = {
+    object_key: 'metropolia', object_name: 'ЖК Метрополия', output_amount: '500000.00', state: 'ok',
+    total_hours: 197, total_weight: 118_000,
+    members: [
+      { employee_id: 2, days: { '2026-10-02': 197 }, hours: 197, counted_minutes: 11_800, weight: 118_000, share: '111287.16' },
+    ],
+  };
+  const unknown: ITimesheetSalaryObject = {
+    object_key: '__unknown_object__', object_name: 'Не определён', output_amount: '900000.00', state: 'nothing_to_distribute',
+    total_hours: 1551, total_weight: 0,
+    members: [
+      { employee_id: 1, days: { '2026-10-03': 11 }, hours: 11, counted_minutes: 0, weight: 0, share: null },
+    ],
+  };
+  const row = (employee_id: number, share: string | null) => ({
+    employee_id, full_name: `Рабочий ${employee_id}`, ktu: '1.0', counted_hours: 1, amount: share, share, source: 'live' as const, can_edit: false,
+  });
+  const brigade: ITimesheetSalaryResponse = {
+    ...data,
+    objects: [dom, metropolia, unknown],
+    rows: [row(1, '156693.61'), row(2, '122479.56'), row(3, '5832113.99')],
+  };
+
+  it('сумма ÷ минуты, округление одно до копейки', () => {
+    expect(averagePerHour('6000000.00', 707_623)).toBe('508.75');
+    expect(averagePerHour('156693.61', 18_480)).toBe('508.75');
+    expect(averagePerHour('100.00', 180)).toBe('33.33');
+    expect(averagePerHour('1000.00', 7)).toBe('8571.43');
+  });
+
+  it('нет суммы или минут — null; внесённый 0,00 при часах — 0,00', () => {
+    expect(averagePerHour(null, 600)).toBeNull();
+    expect(averagePerHour(undefined, 600)).toBeNull();
+    expect(averagePerHour('100.00', 0)).toBeNull();
+    expect(averagePerHour('100.00', -1)).toBeNull();
+    expect(averagePerHour('0.00', 600)).toBe('0.00');
+  });
+
+  it('заголовок объекта, строка и «Итого» считаются из одних минут: Σ строк = заголовок, Σ объектов = итог', () => {
+    expect(objectCountedMinutes(dom)).toBe(707_623);
+    expect(dom.members.reduce((sum, member) => sum + member.counted_minutes, 0)).toBe(objectCountedMinutes(dom));
+    expect(employeeCountedMinutes(brigade, 2)).toBe(13_120);
+    expect(objectAverage(dom)).toBe('508.75');
+    expect(memberAverage(dom.members[0])).toBe('508.75');
+    expect(memberAverage(dom.members[1])).toBe('508.75');
+    expect(memberAverage(metropolia.members[0])).toBe('565.87');
+    expect(rowAverage(brigade, brigade.rows[1])).toBe('560.12');
+  });
+
+  it('фактические часы на средней не сказываются: другие «Часы» при тех же минутах — та же средняя', () => {
+    const member = dom.members[0];
+    expect(memberAverage({ ...member, days: { '2026-10-01': 300 }, hours: 300 })).toBe(memberAverage(member));
+  });
+
+  it('повторный расчёт даёт то же и не меняет данные', () => {
+    const before = JSON.stringify(brigade);
+    const first = [objectAverage(dom), memberAverage(dom.members[0]), rowAverage(brigade, brigade.rows[1])];
+    const second = [objectAverage(dom), memberAverage(dom.members[0]), rowAverage(brigade, brigade.rows[1])];
+    expect(second).toEqual(first);
+    expect(JSON.stringify(brigade)).toBe(before);
+  });
+
+  it('выработка внесена, а делить не на кого: средней нет, сколько бы часов ни было на экране', () => {
+    expect(objectAverage(unknown)).toBeNull();
+    expect(memberAverage(unknown.members[0])).toBeNull();
+    expect(objectAverage({ ...unknown, members: [] })).toBeNull();
+  });
+
+  it('выработка не внесена или расчёт с ошибкой (долей нет): средней объекта нет', () => {
+    const noShares = { ...dom, members: dom.members.map(member => ({ ...member, share: null })) };
+    expect(objectAverage({ ...noShares, output_amount: null, state: 'no_output' })).toBeNull();
+    expect(objectAverage(noShares)).toBeNull();
+  });
+
+  it('внесённый 0,00 распределён: средняя 0,00', () => {
+    const zero = { ...dom, output_amount: '0.00', members: dom.members.map(member => ({ ...member, share: '0.00' })) };
+    expect(objectAverage(zero)).toBe('0.00');
+    expect(memberAverage(zero.members[0])).toBe('0.00');
+  });
+
+  it('у рабочего объект без выработки: в «Итого» доли нет — и средней нет; строка объекта с долей считается', () => {
+    const partial: ITimesheetSalaryResponse = { ...brigade, rows: [row(2, null)] };
+    expect(rowAverage(partial, partial.rows[0])).toBeNull();
+    expect(memberAverage(dom.members[1])).toBe('508.75');
+  });
+
+  it('выработка одной суммой на бригаду: у объекта и строки средней нет, в «Итого» есть', () => {
+    const byBrigade = (object: ITimesheetSalaryObject): ITimesheetSalaryObject => ({
+      ...object, output_amount: null, state: 'by_brigade', total_weight: 0,
+      members: object.members.map(member => ({ ...member, share: null })),
+    });
+    const whole: ITimesheetSalaryResponse = {
+      ...brigade, output_mode: 'brigade', brigade_output: '612000.00', objects: [byBrigade(dom), byBrigade(metropolia)],
+    };
+    expect(objectAverage(whole.objects![0])).toBeNull();
+    expect(memberAverage(whole.objects![0].members[1])).toBeNull();
+    expect(rowAverage(whole, whole.rows[1])).toBe('560.12');
+  });
+
+  it('подписи: часы до сотых, в подсказке точные минуты', () => {
+    expect(countedHoursLabel(707_623)).toBe('11793,72 ч');
+    expect(countedHoursLabel(18_480)).toBe('308 ч');
+    expect(averageTitle('156693.61', 18_480)).toBe(`156${NBSP}693,61 ÷ 308 учтённых ч (18480 мин)`);
+    expect(averageTitle(null, 18_480)).toBeUndefined();
+    expect(averageTitle('156693.61', 0)).toBeUndefined();
   });
 });

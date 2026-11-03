@@ -9,12 +9,19 @@ import type {
 import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
+  averageTitle,
+  countedHoursLabel,
   describeSalaryState,
   displayedHours,
+  employeeCountedMinutes,
   formatSalaryAmount,
   isOutputClearOnly,
   isSalaryRowMuted,
+  memberAverage,
+  objectAverage,
+  objectCountedMinutes,
   objectShareTitle,
+  rowAverage,
   salaryAmountTitle,
   salaryObjectStateNote,
   sortSalaryRows,
@@ -86,12 +93,14 @@ interface ISalaryProps {
   salary: ITimesheetObjectsSalary;
 }
 
-/** «Выработка, ₽» объекта расчёта в строке группы; объекта в расчёте нет или сумма бригаде — ничего. */
+/** «Выработка, ₽» объекта расчёта в строке группы и его средняя в час; объекта в расчёте нет или сумма бригаде — ничего. */
 export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetSalaryObject | undefined }> = ({
   salary, object,
 }) => {
   if (!object || isBrigadeOutput(salary.data)) return null;
   const note = salaryObjectStateNote(object);
+  const average = objectAverage(object);
+  const minutes = objectCountedMinutes(object);
   return (
     <span className="ts-salary-group-output">
       <label className="ts-salary-output">
@@ -106,6 +115,16 @@ export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetS
         />
       </label>
       {note && <span className="ts-salary-object-note">{note}</span>}
+      {average !== null && (
+        <span className="ts-salary-output" title={averageTitle(object.output_amount, minutes)}>
+          <span className="ts-salary-output-label">Учтено</span>
+          <span className="ts-salary-output-value">{countedHoursLabel(minutes)}</span>
+          <span className="ts-salary-output-label">Средняя, ₽/ч</span>
+          <span className={`ts-salary-output-value${isMuted(salary.data) ? ' ts-salary-amount--stale' : ''}`}>
+            {formatSalaryAmount(average)}
+          </span>
+        </span>
+      )}
     </span>
   );
 };
@@ -120,21 +139,26 @@ export const TimesheetSalaryKtuCell: FC<ISalaryProps & { employeeId: number }> =
   );
 };
 
-/** «Доля» сотрудника на объекте группы и пустая «Сумма» (она — в «Итого по бригаде»). */
+/** «Доля» сотрудника на объекте группы, пустая «Сумма» (она — в «Итого по бригаде») и «Средняя». */
 export const TimesheetSalaryShareCells: FC<ISalaryProps & {
   object: ITimesheetSalaryObject | undefined;
   employeeId: number;
 }> = ({ salary, object, employeeId }) => {
   const member = object?.members.find(item => item.employee_id === employeeId) ?? null;
+  const muted = isMuted(salary.data);
+  const average = member ? memberAverage(member) : null;
   return (
     <>
       <td
-        className={amountClass(isMuted(salary.data), member?.share)}
+        className={amountClass(muted, member?.share)}
         title={object && member ? objectShareTitle(object, member) : undefined}
       >
         {formatSalaryAmount(member?.share ?? null)}
       </td>
       <td className="ts-col-salary" />
+      <td className={amountClass(muted, average)} title={member ? averageTitle(member.share, member.counted_minutes) : undefined}>
+        {formatSalaryAmount(average)}
+      </td>
     </>
   );
 };
@@ -228,6 +252,7 @@ export const TimesheetSalaryTotalRows: FC<ISectionProps> = ({ salary, colSpan, r
       </tr>
       {rendered.map(({ row, days }) => {
         const name = nameOf(data, row.employee_id);
+        const average = rowAverage(data, row);
         return (
           <tr key={`total_${row.employee_id}`}>
             <td className="ts-col-sticky ts-object-employee-cell">
@@ -238,6 +263,9 @@ export const TimesheetSalaryTotalRows: FC<ISectionProps> = ({ salary, colSpan, r
             <td className={amountClass(muted, row.share)}>{formatSalaryAmount(row.share ?? null)}</td>
             <td className={amountClass(muted, row.amount)} title={salaryAmountTitle(data, row)}>
               {formatSalaryAmount(row.amount)}
+            </td>
+            <td className={amountClass(muted, average)} title={averageTitle(row.share, employeeCountedMinutes(data, row.employee_id))}>
+              {formatSalaryAmount(average)}
             </td>
             <td className="ts-col-sum-sticky">{hoursLabel(days.hours)}</td>
           </tr>

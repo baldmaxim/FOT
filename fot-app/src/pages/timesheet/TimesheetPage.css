@@ -6176,6 +6176,11 @@
 .ts-salary-output-input {
   width: 168px;
 }
+/* Поле выработки в тёмной теме: --border сливается с фоном (контраст ≈ 1,1:1), поля не видно. Светлая тема и остальные
+   поля портала — без изменений; при фокусе рамка синяя, как у всех полей. */
+:root:not([data-theme="light"]) .ts-salary-output-input input:not(:focus-visible) {
+  border-color: var(--text-muted);
+}
 .ts-salary-output-value {
   color: var(--text-primary);
   font-weight: 600;
@@ -6387,6 +6392,13 @@
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* «Учтено … · Средняя» — своей строкой: на 360 px переносится, а не вылезает за карточку. */
+.ts-salary-object-card-average {
+  flex: 1 1 100%;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .ts-salary-object-card-amount {
   margin-left: auto;

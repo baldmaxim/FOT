@@ -4,9 +4,15 @@ import type { ITimesheetSalaryObject, ITimesheetSalaryResponse, ITimesheetSalary
 import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
+  countedHoursLabel,
   displayedHours,
+  employeeCountedMinutes,
   formatSalaryAmount,
+  memberAverage,
+  objectAverage,
+  objectCountedMinutes,
   objectShareTitle,
+  rowAverage,
   salaryAmountTitle,
   salaryObjectStateNote,
   totalDaysOfEmployee,
@@ -30,9 +36,18 @@ const amountClass = (muted: boolean, amount: string | null | undefined): string 
   `ts-salary-object-card-amount${muted && amount ? ' ts-salary-amount--stale' : ''}`
 );
 
+/** «Учтено 308 ч» и средняя у рабочего: подсказок на телефоне нет, а часы рядом — фактические. */
+const AverageNote: FC<{ average: string | null; minutes: number }> = ({ average, minutes }) => (
+  average === null ? null : (
+    <span className="ts-salary-object-card-average">
+      Учтено {countedHoursLabel(minutes)} · Средняя, ₽/ч {formatSalaryAmount(average)}
+    </span>
+  )
+);
+
 /**
- * «Зарплата по объектам» на телефоне: карточка на объект — «Выработка, ₽» и рабочие строкой «ФИО · КТУ · ч · доля»;
- * внизу «Итого по бригаде» с «Суммой». Часы по дням — во вкладке «По объектам».
+ * «Зарплата по объектам» на телефоне: карточка на объект — «Выработка, ₽», средняя и рабочие строкой «ФИО · КТУ · ч ·
+ * доля · средняя»; внизу «Итого по бригаде» с «Суммой». Часы по дням — во вкладке «По объектам».
  */
 export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps> = ({
   data, rows, totalRows, salary, muted, nameOf, order, outputField,
@@ -63,6 +78,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
               </label>
             )}
             {note && <span className="ts-salary-object-note">{note}</span>}
+            <AverageNote average={objectAverage(object)} minutes={objectCountedMinutes(object)} />
             <ul className="ts-salary-object-card-list">
               {members.map(member => {
                 const row = rowById.get(member.employee_id);
@@ -80,6 +96,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
                     <span className={amountClass(muted, member.share)} title={objectShareTitle(object, member)}>
                       {formatSalaryAmount(member.share)}
                     </span>
+                    <AverageNote average={memberAverage(member)} minutes={member.counted_minutes} />
                   </li>
                 );
               })}
@@ -108,6 +125,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
                   <span className={amountClass(muted, row.amount)} title={salaryAmountTitle(data, row)}>
                     {formatSalaryAmount(row.amount)}
                   </span>
+                  <AverageNote average={rowAverage(data, row)} minutes={employeeCountedMinutes(data, row.employee_id)} />
                 </li>
               );
             })}
