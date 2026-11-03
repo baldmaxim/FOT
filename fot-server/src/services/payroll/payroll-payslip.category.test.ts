@@ -125,6 +125,21 @@ describe('getPayslipInfo — категория месяца по табелю',
     expect(info.rate_allowances).toEqual([{ code: 'travel', amount: '2606.00', days: { worked: 21, norm: 22 }, rate: '2730.00' }]);
   });
 
+  it('квартира без расчёта — отработанные живого табеля + выходные по норме графика', async () => {
+    category.resolveMonthStaffCategories.mockResolvedValue(['worker']);
+    pg.query.mockImplementation(async (sql: string) => (sql.includes('payroll_rate_value')
+      ? [{
+        employee_id: 42, travel_rate: null, dormitory_allowance_rate: null, travel_stopped: false,
+        housing: [{ kind: 'apartment', start: '2026-09-01', end: null, amount: '630.00' }],
+      }]
+      : []));
+
+    const info = await getPayslipInfo(42, '2026-09', req);
+
+    // 21 + (30 − 22) = 29 × 630 = 18 270.
+    expect(info.rate_allowances).toEqual([{ code: 'housing', amount: '18270.00', rate: '630.00', housing_days: 29 }]);
+  });
+
   it('объект месяца «Не определён» — категория по нему, объект «Свода» по часам листок не считает', async () => {
     attribution.attributeMonths.mockResolvedValue(new Map([['42|2026-09', {
       object: { key: 'unknown', name: 'Не определён' },

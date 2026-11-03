@@ -8,10 +8,15 @@
  *   дней графика, до рубля (половина — вверх). Отработанные — рабочие дни плюс плановые и согласованные выходы
  *   в выходные (несогласованные выгрузка обнуляет), не больше нормы. Норма — дни по графику за весь месяц +
  *   плановые субботы/воскресенья (в августе 2026 у «5+2» с двумя субботами — 23);
- * - проживание — по дням (решения пользователя 30.10.2026, миграция 339), окно — период сотрудника в месяце, у живого
- *   табеля — по asOf: квартира — её ставка за день × календарные дни проживания, кроме дней отсутствий (отпуск
- *   любого вида, больничный); общежитие — ничего; доплата за общежитие — ставка «Доплата за общежитие» × дни,
- *   отработанные в бригаде, кроме дней в общежитии и квартире, с месяца включателя payroll_switches (до него — нет).
+ * - проживание — по дням (миграция 339), окно — период сотрудника в месяце, у живого табеля — по asOf:
+ *   квартира (решения пользователя 03.11.2026; 1С за сентябрь 2026 совпала у 68 из 80) — ставка за день × (отработанные
+ *   дни за время проживания + выходные месяца), всего не больше дней месяца. Отработанные — те же дни, что для оклада и
+ *   проезда: явка, согласованные выходы, УУ, РБ, УД; Н, отпуск, больничный и выход без корректировки — нет. Выходные —
+ *   числом, без дат: дни месяца − норма дней графика (сентябрь 2026: 30 − 24 = 6), и при заселении или выезде внутри
+ *   месяца целиком. За месяц отработано меньше недели (меньше 7 дней) — только отработанные; за время проживания ни
+ *   одного — строки нет;
+ *   общежитие — ничего; доплата за общежитие (решения 30.10.2026) — ставка «Доплата за общежитие» × дни, отработанные
+ *   в бригаде, кроме дней в общежитии и квартире, с месяца включателя payroll_switches (до него — нет).
  *   Счёт в целых копейках: ставка × дни, без округления.
  */
 import type { StaffCategory } from './payroll-terms.service.js';
@@ -60,8 +65,10 @@ export interface IPayslipHousingDays {
   /** Окно счёта: период сотрудника в месяце, у живого табеля — по asOf. */
   from: string;
   to: string;
-  /** Дни отсутствий (отпуск любого вида, больничный) — квартира за них не платится. */
-  absenceDates: readonly string[];
+  /** Отработанные дни месяца, могут повторяться — квартира. */
+  workedDates: readonly string[];
+  /** Норма дней графика за весь месяц — выходные квартиры; null или 0 — неизвестна, выходных нет. */
+  normDays: number | null;
   /** Дни, отработанные в бригаде, — доплата за общежитие. */
   brigadeDates: readonly string[];
 }
@@ -135,31 +142,74 @@ const stayOn = (records: readonly IPayslipHousingRecord[], date: string): IPaysl
   records.find(record => record.start <= date && (record.end === null || date < record.end)) ?? null
 );
 
+/** С какого числа отработанных за месяц дней к квартире прибавляются выходные: меньше недели — только отработанные. */
+const HOUSING_WEEKENDS_MIN_WORKED_DAYS = 7;
+
+/**
+ * Выходные между ставками квартиры: пропорционально дням проживания при ставке, остаток — большей дробной части,
+ * при равенстве — более поздней ставке. Счёт в целых. stayDays — ставки в порядке дат.
+ */
+const splitHousingWeekends = (stayDays: ReadonlyMap<string, number>, weekends: number): Map<string, number> => {
+  const total = [...stayDays.values()].reduce((sum, days) => sum + days, 0);
+  const shares = [...stayDays].map(([rate, days], order) => ({
+    rate,
+    order,
+    whole: Math.floor((weekends * days) / total),
+    rest: (weekends * days) % total,
+  }));
+  const remainder = weekends - shares.reduce((sum, share) => sum + share.whole, 0);
+  const extra = new Set(
+    [...shares].sort((a, b) => b.rest - a.rest || b.order - a.order).slice(0, remainder).map(share => share.rate),
+  );
+  return new Map(shares.map(share => [share.rate, share.whole + (extra.has(share.rate) ? 1 : 0)]));
+};
+
+/** Квартира: отработанные дни за время проживания + выходные месяца — правила в шапке файла. */
+const apartmentAllowance = (
+  facts: Pick<IPayslipRateFacts, 'housing' | 'housingDays'>,
+): IPayslipRateAllowance | null => {
+  const { from, to, workedDates, normDays } = facts.housingDays;
+  const worked = new Set(workedDates.filter(date => date >= from && date <= to));
+  // Ставка → дни проживания и оплачиваемые из них: у квартиры ставка могла смениться в месяце.
+  const stayDays = new Map<string, number>();
+  const paidDays = new Map<string, number>();
+  for (let date = from; date <= to; date = shiftIsoDay(date, 1)) {
+    const stay = stayOn(facts.housing, date);
+    if (stay?.kind !== 'apartment' || !positive(stay.amount)) continue;
+    stayDays.set(stay.amount, (stayDays.get(stay.amount) ?? 0) + 1);
+    if (worked.has(date)) paidDays.set(stay.amount, (paidDays.get(stay.amount) ?? 0) + 1);
+  }
+  const workedInStay = [...paidDays.values()].reduce((sum, days) => sum + days, 0);
+  if (workedInStay === 0) return null;
+
+  const monthDays = Number(lastDayOfMonth(from.slice(0, 7)).slice(8));
+  const monthWeekends = normDays !== null && normDays > 0 && worked.size >= HOUSING_WEEKENDS_MIN_WORKED_DAYS
+    ? Math.max(0, monthDays - normDays)
+    : 0;
+  const weekends = Math.min(monthWeekends, monthDays - workedInStay);
+  for (const [rate, days] of splitHousingWeekends(stayDays, weekends)) {
+    paidDays.set(rate, (paidDays.get(rate) ?? 0) + days);
+  }
+
+  const rates = [...paidDays].filter(([, days]) => days > 0);
+  return {
+    code: 'housing',
+    amount: fromCents(rates.reduce((sum, [rate, days]) => sum + toCents(rate) * days, 0)),
+    housing_days: rates.reduce((sum, [, days]) => sum + days, 0),
+    ...(rates.length === 1 ? { rate: rates[0][0] } : {}),
+  };
+};
+
 /** Квартира и доплата за общежитие по дням — правила в шапке файла. */
 export const housingAllowances = (
   facts: Pick<IPayslipRateFacts, 'housing' | 'housingDays' | 'dormitoryAllowanceRate' | 'dormitoryAllowanceFrom'>,
 ): IPayslipRateAllowance[] => {
   const result: IPayslipRateAllowance[] = [];
-  const { from, to, absenceDates, brigadeDates } = facts.housingDays;
+  const { from, to, brigadeDates } = facts.housingDays;
   if (from > to) return result;
 
-  const absent = new Set(absenceDates);
-  // Ставка → дни: у квартиры ставка могла смениться в месяце.
-  const apartmentDays = new Map<string, number>();
-  for (let date = from; date <= to; date = shiftIsoDay(date, 1)) {
-    const stay = stayOn(facts.housing, date);
-    if (stay?.kind !== 'apartment' || !positive(stay.amount) || absent.has(date)) continue;
-    apartmentDays.set(stay.amount, (apartmentDays.get(stay.amount) ?? 0) + 1);
-  }
-  if (apartmentDays.size > 0) {
-    const rates = [...apartmentDays];
-    result.push({
-      code: 'housing',
-      amount: fromCents(rates.reduce((sum, [rate, days]) => sum + toCents(rate) * days, 0)),
-      housing_days: rates.reduce((sum, [, days]) => sum + days, 0),
-      ...(rates.length === 1 ? { rate: rates[0][0] } : {}),
-    });
-  }
+  const apartment = apartmentAllowance(facts);
+  if (apartment) result.push(apartment);
 
   const rate = facts.dormitoryAllowanceRate;
   if (positive(rate) && facts.dormitoryAllowanceFrom !== null && `${from.slice(0, 7)}-01` >= facts.dormitoryAllowanceFrom) {

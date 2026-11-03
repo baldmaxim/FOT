@@ -126,7 +126,12 @@ export const splitWorkedDays = (
   return { workday, dayoff };
 };
 
-/** Норма дней месяца для проезда (countMonthNormDays); нет ни графика, ни календаря — 0. */
+/** Отработанные даты сотрудника из собранного табеля — те же дни, что у splitWorkedDays. */
+const workedDatesOf = (data: IDepartmentTimesheetData, employeeId: number): string[] => (
+  buildEmployeeRowsForOneC(data).find(candidate => candidate.employeeId === employeeId)?.workedDayNumbers ?? []
+).map(day => `${data.year}-${pad2(data.mon)}-${pad2(day)}`);
+
+/** Норма дней месяца для проезда и выходных квартиры (countMonthNormDays); нет ни графика, ни календаря — 0. */
 export const countPayslipNormDays = (data: IDepartmentTimesheetData, employeeId: number): number => (
   countMonthNormDays(data.dailySchedulesMap.get(employeeId), `${data.year}-${pad2(data.mon)}`, data.calendarMonth) ?? 0
 );
@@ -224,9 +229,10 @@ export const getPayslipInfo = async (
   ]);
 
   const workedDays = splitWorkedDays(data, employeeId);
+  const normDays = countPayslipNormDays(data, employeeId);
   // Выходы в выходные проезд считают, как ЗУП: 22 рабочих + 8 выходных при норме 23 — полная ставка.
   const travelDays: IPayslipTravelDays | null = workedDays
-    ? { worked: workedDays.workday + workedDays.dayoff, norm: countPayslipNormDays(data, employeeId) }
+    ? { worked: workedDays.workday + workedDays.dayoff, norm: normDays }
     : null;
   const facts = rateFacts.get(employeeId);
 
@@ -236,14 +242,13 @@ export const getPayslipInfo = async (
     period_to: period.to,
     worked_days: workedDays,
     terms: toPayslipTerms(termsByEmployee.get(employeeId) ?? []),
-    // Старый путь (без preliminary): дни табеля не классифицируются — квартира по дням проживания без вычета
-    // отсутствий, доплаты за общежитие нет (дней бригады нет).
+    // Старый путь (без preliminary): дни и норма — из живого табеля, доплаты за общежитие нет (дней бригады нет).
     rate_allowances: facts
       ? pickPayslipRateAllowances({
         ...facts,
         category,
         travelDays,
-        housingDays: housingDaysOf(period, month, [], []),
+        housingDays: housingDaysOf(period, month, workedDatesOf(data, employeeId), normDays, []),
       })
       : [],
     calc,

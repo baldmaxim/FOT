@@ -54,7 +54,7 @@ export interface ICalcMonthBasis {
   workdayDates: string[];
   dayoffDates: string[];
   absenceDays: PayrollAbsenceDays;
-  /** Даты отсутствий любого вида (отпуск, учебный, без содержания, больничный) — дни «Квартиры» их не считают. */
+  /** Даты отсутствий любого вида (отпуск, учебный, без содержания, больничный); в расчёте сумм не участвуют. */
   absenceDates: string[];
   /** Переработка в будни по корректировкам: дата → минуты. */
   overtimeMinutes: Record<string, number>;

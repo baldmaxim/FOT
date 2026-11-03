@@ -186,6 +186,52 @@ describe('«К выплате (ФОТ)» бригады', () => {
     expect(living?.state === 'closed' && living.lines.map(line => line.code)).toEqual(['brigade']);
   });
 
+  it('квартира рабочего: дни основы и доли без повторов + выходные по норме; вкладка без нормы — только отработанные', async () => {
+    const workdays = septemberWeekdays.slice(0, 20);
+    const row = { ...shareRow, objects: [{ ...shareRow.objects[0], days: Object.fromEntries(workdays.map(date => [date, 8])) }] };
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [row], objects: [waveObject],
+    });
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [source({ normDays: 24, workdayDates: workdays })]]]));
+    rateFacts.loadRateFacts.mockResolvedValue(new Map([[7, {
+      travelRate: null, travelStopped: false, dormitoryAllowanceRate: null, dormitoryAllowanceFrom: null,
+      housing: [{ kind: 'apartment', start: '2026-09-01', end: null, amount: '630.00' }],
+    }]]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+    // 20 + (30 − 24) = 26 × 630 = 16 380.
+    expect(calc?.state === 'closed' && calc.lines.find(line => line.code === 'housing')).toEqual({
+      code: 'housing', amount: '16380.00',
+      parts: [{ kind: 'housing', housing: 'apartment', amount: '16380.00', rate: '630.00', days: 26 }],
+    });
+
+    const fact = {
+      departmentId: BRIGADE, amount: row.amount, ktu: row.ktu, countedMinutes: row.counted_minutes,
+      distribution: 'ok' as const, output: '500000.00', objects: [], workedDates: workdays,
+    };
+    const tab = await previewBrigadePayouts(new Map([[7, fact]]), '2026-09');
+    // 20 × 630 = 12 600.
+    expect(tab.get(7)?.lines.find(line => line.code === 'housing')?.amount).toBe('12600.00');
+  });
+
+  it('квартира окладника: рабочие дни + выходы основы + выходные по норме основы', async () => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [source({
+      normDays: 24, workdayDates: septemberWeekdays.slice(0, 12), dayoffDates: ['2026-09-05'],
+      departmentId: 'dept-1', isBrigade: false,
+    })]]]));
+    rateFacts.loadRateFacts.mockResolvedValue(new Map([[8, {
+      travelRate: null, travelStopped: false, dormitoryAllowanceRate: null, dormitoryAllowanceFrom: null,
+      housing: [{ kind: 'apartment', start: '2026-09-01', end: null, amount: '630.00' }],
+    }]]));
+
+    const calc = (await getPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    // 12 + 1 выход + (30 − 24) = 19 × 630 = 11 970.
+    expect(calc?.state === 'closed' && calc.rate_allowances).toEqual([
+      { code: 'housing', amount: '11970.00', rate: '630.00', housing_days: 19 },
+    ]);
+  });
+
   it('начальник участка в делёж не входит — его дни бригады идут в оклад, переработка в будни — часами', async () => {
     brigade.getBrigadeShares.mockResolvedValue({
       state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],

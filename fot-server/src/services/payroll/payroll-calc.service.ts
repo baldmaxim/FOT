@@ -315,18 +315,20 @@ const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number,
 
 /**
  * Дни проживания (миграция 339): период сотрудника в месяце по вчера МСК (текущий месяц — как живой табель, будущий —
- * ничего), отсутствия основы и дни с часами в бригадах (из расчёта доли — и у закрытой, и у предварительной бригады).
+ * ничего), отработанные дни и норма графика — квартира, дни с часами в бригадах (из расчёта доли — и у закрытой, и у
+ * предварительной бригады) — доплата за общежитие.
  */
 export const housingDaysOf = (
   period: { from: string; to: string },
   month: string,
-  absenceDates: readonly string[],
+  workedDates: readonly string[],
+  normDays: number | null,
   brigadeDates: readonly string[],
 ): IPayslipHousingDays => {
   const limit = resolvePreliminaryAsOf(month);
   const to = limit === null ? null : (limit < period.to ? limit : period.to);
   // Нечего считать — пустое окно: from позже to.
-  return { from: period.from, to: to ?? '0000-00-00', absenceDates, brigadeDates };
+  return { from: period.from, to: to ?? '0000-00-00', workedDates, normDays, brigadeDates };
 };
 
 /** Основа сотрудника месяца: закрытая (closed) или из живого табеля (closed — null). */
@@ -450,12 +452,15 @@ const computePayouts = async (
       shares.push(fact);
       for (const date of [...brigade.workdayDates, ...brigade.dayoffDates]) brigadeDates.add(date);
     }
+    const shareDates = shares.flatMap(share => share.workedDates);
     const rateAllowances = facts
       ? pickPayslipRateAllowances({
         ...facts,
         category: closedCategories.get(employeeId) ?? liveCategories.get(employeeId) ?? 'office',
         travelDays: { worked, norm: basis.normDays ?? 0 },
-        housingDays: housingDaysOf(period, month, basis.absenceDates, shares.flatMap(share => share.workedDates)),
+        housingDays: housingDaysOf(
+          period, month, [...basis.workdayDates, ...basis.dayoffDates, ...shareDates], basis.normDays, shareDates,
+        ),
       })
       : [];
     const calc = buildPayrollCalc({
@@ -546,8 +551,8 @@ export const getPreliminaryPayoutForEmployees = (
 /**
  * «Сумма» бригады во вкладке табеля из доли (зафиксированной или предварительной): доля + разовые доплаты и
  * проживание − удержания месяца — те же строки, что в «К выплате (ФОТ)» карточки рабочего. Проезда «Рабочим» нет,
- * плановых доплат у рабочих бригад нет — день табеля здесь не нужен. Дни доплаты за общежитие — дни с часами из
- * доли; отсутствий без табеля нет — квартиру рабочего (редкость) превью считает по дням проживания без вычета.
+ * плановых доплат у рабочих бригад нет — день табеля здесь не нужен. Дни доплаты за общежитие и отработанные дни
+ * квартиры — дни с часами из доли; нормы без табеля нет — квартира рабочего (редкость) в превью без выходных.
  */
 export const previewBrigadePayouts = async (
   shares: ReadonlyMap<number, IBrigadeShareFact>,
@@ -577,7 +582,7 @@ export const previewBrigadePayouts = async (
           ...facts,
           category: 'worker',
           travelDays: null,
-          housingDays: housingDaysOf(period, month, [], share.workedDates),
+          housingDays: housingDaysOf(period, month, share.workedDates, null, share.workedDates),
         })
         : [],
       deductions: extras.deductions.get(employeeId) ?? [],

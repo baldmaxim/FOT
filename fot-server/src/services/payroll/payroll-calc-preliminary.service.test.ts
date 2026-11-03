@@ -71,6 +71,7 @@ vi.mock('./payroll-staff-category.js', () => ({
 }));
 
 import { getPayoutForEmployees, getPreliminaryPayoutForEmployees } from './payroll-calc.service.js';
+import { loadRateFacts } from './payroll-rate-facts.service.js';
 
 const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
 const BRIGADE = 'brigade-1';
@@ -199,6 +200,21 @@ describe('отдел: незакрытый месяц', () => {
     expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
       { code: 'contract', amount: '110000.00', days: { worked: 22, norm: 22 } },
       { code: 'overtime', amount: '1250.00', days: { worked: 0, norm: 22 }, hours: 2 },
+    ]);
+  });
+
+  it('квартира — отработанные живого табеля + выходные по норме', async () => {
+    live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: weekdays('2026-09').slice(0, 13) }));
+    vi.mocked(loadRateFacts).mockResolvedValueOnce(new Map([[8, {
+      travelRate: null, travelStopped: false, dormitoryAllowanceRate: null, dormitoryAllowanceFrom: null,
+      housing: [{ kind: 'apartment' as const, start: '2026-09-01', end: null, amount: '630.00' }],
+    }]]));
+
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    // 13 + (30 − 22) = 21 × 630 = 13 230.
+    expect(calc?.state === 'preliminary' && calc.rate_allowances).toEqual([
+      { code: 'housing', amount: '13230.00', rate: '630.00', housing_days: 21 },
     ]);
   });
 
