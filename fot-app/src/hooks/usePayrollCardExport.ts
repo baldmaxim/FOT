@@ -7,7 +7,9 @@ import { payrollService, type IPayrollTermsRow } from '../services/payrollServic
 import { triggerBlobDownload } from '../utils/download';
 import { moscowTodayIso } from '../utils/moscowDate';
 import { buildPayrollCardExport } from '../utils/payrollCardExport';
-import { paidHistoryQueryOptions, payouts1cHistoryQueryOptions } from './usePayrollPaid';
+import { calcMonthSums } from '../utils/payrollCalc';
+import { paidHistory, recentHistoryMonths } from '../utils/payrollPaid';
+import { paidHistoryQueryOptions, payouts1cHistoryQueryOptions, payslipQueryOptions } from './usePayrollPaid';
 
 /**
  * «Экспорт» карточки сотрудника: xlsx с условиями (row на момент открытия карточки) и историей выплат.
@@ -28,7 +30,19 @@ export const usePayrollCardExport = (row: IPayrollTermsRow, asOfDate: string, to
         queryClient.fetchQuery(paidHistoryQueryOptions(row.employee_id, toMonth)),
         queryClient.fetchQuery(payouts1cHistoryQueryOptions(row.employee_id, toMonth)),
       ]);
-      const snapshot = buildPayrollCardExport({ row, paidRows, payouts, asOfDate, exportedAt: moscowTodayIso() });
+      // Те же месяцы и суммы, что на вкладке «Зарплата»; расчёт месяца не загрузился — суммы 1С, выгрузка не падает.
+      const recentMonths = recentHistoryMonths(toMonth);
+      const months = paidHistory(paidRows, payouts, recentMonths).months.map(entry => entry.month);
+      const payslips = await Promise.allSettled(
+        months.map(month => queryClient.fetchQuery(payslipQueryOptions(row.employee_id, month))),
+      );
+      const byMonth = new Map(months.map((month, index) => {
+        const payslip = payslips[index];
+        return [month, payslip.status === 'fulfilled' ? calcMonthSums(payslip.value.calc) : null];
+      }));
+      const snapshot = buildPayrollCardExport({
+        row, paidRows, payouts, fot: { recentMonths, byMonth }, asOfDate, exportedAt: moscowTodayIso(),
+      });
       const { blob, filename } = await payrollService.exportCard(snapshot);
       triggerBlobDownload(blob, filename);
     } catch (err) {

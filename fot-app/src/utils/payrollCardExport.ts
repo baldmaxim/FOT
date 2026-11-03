@@ -12,13 +12,26 @@ import {
 } from '../services/payrollService';
 import { formatDate } from './formatMoney';
 import { formatAccrualMonthLabel } from './payrollAccruals';
-import { paidCellKey, paidHistory, paidItemTotal, visiblePaidGroups } from './payrollPaid';
+import {
+  paidCellKey,
+  paidHistory,
+  paidHistoryShown,
+  paidItemTotal,
+  visiblePaidGroups,
+  type IPaidMonthSums,
+} from './payrollPaid';
 import { travelAllowance } from './payrollRates';
 import { payrollRowCategory } from './payrollTermsForm';
 import type { ITableExportSnapshot } from './tableView';
 
 /** Лист книги: снимок таблицы без имени файла. */
 export type PayrollCardSheet = Omit<ITableExportSnapshot, 'file_name'>;
+
+/** Расчёт ФОТ для листа «История выплат»: месяцы, которые есть и без сумм 1С, и суммы по месяцам (null — итога нет). */
+export interface IPaidHistoryFot {
+  recentMonths: readonly string[];
+  byMonth: ReadonlyMap<string, IPaidMonthSums | null>;
+}
 
 export interface IPayrollCardExport {
   file_name: string;
@@ -94,17 +107,20 @@ export const buildPayrollTermsSheet = (row: IPayrollTermsRow, asOfDate: string):
 };
 
 /**
- * Лист «История выплат»: месяц — строка (новые сверху), «Начислено», «Удержано», «К выплате» и статьи 1С,
- * по которым есть сумма хоть в одном месяце (порядок и подписи — PAYROLL_PAID_GROUPS). Внизу «Итого» по всем
- * столбцам в копейках. Сумм нет — одна строка «Выплат из 1С пока нет».
+ * Лист «История выплат» — те же месяцы и суммы, что левая таблица вкладки «Зарплата»: месяц — строка (новые сверху),
+ * «Начислено», «Удержано», «К выплате» из расчёта ФОТ (итога ФОТ нет — суммы 1С) и статьи 1С, по которым есть сумма
+ * хоть в одном месяце (порядок и подписи — PAYROLL_PAID_GROUPS). Внизу «Итого» по всем столбцам в копейках.
+ * Сумм нет — одна строка «Выплат из 1С пока нет». fot не передан — только суммы 1С их месяцев.
  */
 export const buildPaidHistorySheet = (
   fullName: string | null,
   paidRows: readonly IPayrollPaidAmount[],
   payouts: readonly IEmployeePayout1c[] = [],
+  fot?: IPaidHistoryFot,
 ): PayrollCardSheet => {
-  const history = paidHistory(paidRows, payouts);
+  const history = paidHistory(paidRows, payouts, fot?.recentMonths);
   const months = history.months.map(entry => entry.month);
+  const shown = paidHistoryShown(history, new Map(months.map(month => [month, fot?.byMonth.get(month) ?? null])));
   const items = visiblePaidGroups(months, history.amounts).flatMap(group => group.items);
   const columns: PayrollCardSheet['columns'] = [
     { label: 'Месяц', type: 'text' },
@@ -116,7 +132,11 @@ export const buildPaidHistorySheet = (
   ];
   const base = { title: 'История выплат', subtitle: (fullName ?? 'Сотрудник').slice(0, MAX_SUBTITLE), columns };
 
-  if (history.months.length === 0) {
+  const hasSums = history.months.some(entry => {
+    const sums = shown.byMonth.get(entry.month);
+    return entry.transferred !== null || sums?.accrued != null || sums?.deducted != null || sums?.payout != null;
+  });
+  if (!hasSums) {
     return { ...base, rows: [{ cells: [PAYROLL_CARD_NO_PAYOUTS, null, null, null, null] }] };
   }
 
@@ -126,9 +146,9 @@ export const buildPaidHistorySheet = (
       ...history.months.map(entry => ({
         cells: [
           formatAccrualMonthLabel(entry.month, true),
-          entry.totals.accrued,
-          entry.totals.deducted,
-          entry.payout,
+          shown.byMonth.get(entry.month)?.accrued ?? null,
+          shown.byMonth.get(entry.month)?.deducted ?? null,
+          shown.byMonth.get(entry.month)?.payout ?? null,
           entry.transferred,
           ...items.map(item => history.amounts.get(paidCellKey(entry.month, item.code)) ?? null),
         ],
@@ -136,9 +156,9 @@ export const buildPaidHistorySheet = (
       {
         cells: [
           'Итого',
-          history.overall.accrued,
-          history.overall.deducted,
-          history.overallPayout,
+          shown.overall.accrued,
+          shown.overall.deducted,
+          shown.overall.payout,
           history.overallTransferred,
           ...items.map(item => paidItemTotal(months, history.amounts, item.code)),
         ],
@@ -153,12 +173,14 @@ export const buildPayrollCardExport = (params: {
   paidRows: readonly IPayrollPaidAmount[];
   /** «Перечислено (1С)» — ведомости выплаты по месяцам начисления (справочно). */
   payouts?: readonly IEmployeePayout1c[];
+  /** Расчёт ФОТ месяцев — те же суммы, что на вкладке «Зарплата». */
+  fot?: IPaidHistoryFot;
   asOfDate: string;
   exportedAt: string;
 }): IPayrollCardExport => {
-  const { row, paidRows, payouts = [], asOfDate, exportedAt } = params;
+  const { row, paidRows, payouts = [], fot, asOfDate, exportedAt } = params;
   return {
     file_name: `Зарплата_${row.full_name ?? 'Сотрудник'}_${exportedAt}.xlsx`.replace(/[\s/\\:*?"<>|]+/g, '_'),
-    sheets: [buildPayrollTermsSheet(row, asOfDate), buildPaidHistorySheet(row.full_name, paidRows, payouts)],
+    sheets: [buildPayrollTermsSheet(row, asOfDate), buildPaidHistorySheet(row.full_name, paidRows, payouts, fot)],
   };
 };

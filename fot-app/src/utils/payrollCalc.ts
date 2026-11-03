@@ -18,7 +18,7 @@ import type {
   PayrollCalcMissing,
   PayrollPaidItemCode,
 } from '../services/payrollService';
-import { formatPaidAmount, PAYROLL_PAID_GROUPS } from './payrollPaid';
+import { formatPaidAmount, PAYROLL_PAID_GROUPS, type IPaidMonthSums } from './payrollPaid';
 import type { IPayslipLine } from './payrollPayslip';
 
 /** Порядок строк — как в листке ЗУП. */
@@ -124,6 +124,19 @@ export const calcAmount = (amount: string | null | undefined): number | null => 
   if (amount === null || amount === undefined) return null;
   const value = Number(amount);
   return Number.isFinite(value) ? value : null;
+};
+
+/**
+ * Суммы месяца для левой таблицы вкладки «Зарплата» — те же, что в «Расчёте ФОТ» справа. null — итога нет (нет условий,
+ * выработка бригады не введена) или считать нечего (месяц без начислений и удержаний): таблица покажет суммы 1С.
+ */
+export const calcMonthSums = (calc: PayrollCalc | undefined): IPaidMonthSums | null => {
+  if (!isCalcCounted(calc)) return null;
+  const accrued = calcAmount(calc.accrued);
+  const deducted = calcAmount(calc.deducted);
+  const payout = calcAmount(calc.net);
+  if (accrued === null || deducted === null || payout === null) return null;
+  return accrued === 0 && deducted === 0 ? null : { accrued, deducted, payout };
 };
 
 /** Сумма «К выплате (ФОТ)» за месяцы — только если итог известен в каждом; иначе null. Счёт в копейках. */

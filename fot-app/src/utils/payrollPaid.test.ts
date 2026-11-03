@@ -9,6 +9,8 @@ import {
   paidAmountMonths,
   paidCellKey,
   paidHistory,
+  paidHistoryShown,
+  recentHistoryMonths,
   paidItemTotal,
   paidMonthOptions,
   paidPayout,
@@ -179,6 +181,71 @@ describe('«Расчёты»: месяцы и период сумм', () => {
     ]);
     expect(paidItemTotal(months, amounts, 'meals')).toBe(0);
     expect(paidTotals(months, amounts).overall).toEqual({ accrued: null, deducted: 0.3 });
+  });
+});
+
+describe('левая таблица вкладки «Зарплата»: расчёт ФОТ', () => {
+  const fot = (accrued: number, deducted = 0) => ({ accrued, deducted, payout: Math.round((accrued - deducted) * 100) / 100 });
+  // Абдурахмонов: 1С — июль и август с основной ведомостью, сентябрь только квартира.
+  const rows = [
+    { month: '2026-07', item: 'contract' as const, amount: '378820.00' },
+    { month: '2026-08', item: 'contract' as const, amount: '710497.00' },
+    { month: '2026-09', item: 'housing' as const, amount: '18900.00' },
+  ];
+  const months = recentHistoryMonths('2026-11');
+
+  it('последние шесть месяцев, новые сверху, без текущего', () => {
+    expect(months).toEqual(['2026-10', '2026-09', '2026-08', '2026-07', '2026-06', '2026-05']);
+  });
+
+  it('Абдурахмонов: расчёт ФОТ важнее сумм 1С, месяц без итога и без 1С — «—», строка года по показанным', () => {
+    const history = paidHistory(rows, [], months);
+    const shown = paidHistoryShown(history, new Map([
+      ['2026-10', fot(204260)],
+      ['2026-09', fot(211213)],
+      ['2026-08', fot(176698)],
+      ['2026-07', fot(199290)],
+      ['2026-06', null],
+      ['2026-05', null],
+    ]));
+    expect(shown.byMonth.get('2026-09')).toEqual({ accrued: 211213, deducted: 0, payout: 211213, source: 'fot' });
+    expect(shown.byMonth.get('2026-08')).toEqual({ accrued: 176698, deducted: 0, payout: 176698, source: 'fot' });
+    expect(shown.byMonth.get('2026-06')).toEqual({ accrued: null, deducted: null, payout: null, source: '1c' });
+    expect(shown.byYear.get('2026')).toEqual({ accrued: 791461, deducted: 0, payout: 791461, pending: false });
+    // Столбец «1С» справа читает прежние суммы.
+    expect(history.months.find(entry => entry.month === '2026-08')?.totals.accrued).toBe(710497);
+    expect(history.months.find(entry => entry.month === '2026-09')?.totals.accrued).toBe(18900);
+  });
+
+  it('рабочий бригады: итога ФОТ нет — суммы 1С с признаком источника', () => {
+    const shown = paidHistoryShown(paidHistory([
+      { month: '2026-08', item: 'contract', amount: '146890.00' },
+      { month: '2026-08', item: 'fines', amount: '100.50' },
+    ]), new Map([['2026-08', null]]));
+    expect(shown.byMonth.get('2026-08')).toEqual({ accrued: 146890, deducted: 100.5, payout: 146789.5, source: '1c' });
+    expect(shown.overall).toEqual({ accrued: 146890, deducted: 100.5, payout: 146789.5, pending: false });
+  });
+
+  it('расчёт ещё идёт — суммы месяца не показываются, строка года не окончательная', () => {
+    const shown = paidHistoryShown(paidHistory(rows), new Map([
+      ['2026-09', fot(211213)],
+      ['2026-08', undefined],
+      ['2026-07', fot(199290)],
+    ]));
+    expect(shown.byMonth.get('2026-08')).toEqual({ accrued: null, deducted: null, payout: null, source: 'pending' });
+    expect(shown.byYear.get('2026')).toMatchObject({ accrued: 410503, pending: true });
+  });
+
+  it('итоги в копейках, удержание минусом уменьшает к выплате; годы считаются отдельно', () => {
+    const history = paidHistory([], [], ['2026-01', '2025-12', '2025-11']);
+    const shown = paidHistoryShown(history, new Map([
+      ['2026-01', fot(1000)],
+      ['2025-12', fot(0.1, 0.05)],
+      ['2025-11', fot(0.2)],
+    ]));
+    expect(shown.byYear.get('2025')).toEqual({ accrued: 0.3, deducted: 0.05, payout: 0.25, pending: false });
+    expect(shown.byYear.get('2026')).toEqual({ accrued: 1000, deducted: 0, payout: 1000, pending: false });
+    expect(shown.overall).toMatchObject({ accrued: 1000.3, deducted: 0.05, payout: 1000.25 });
   });
 });
 

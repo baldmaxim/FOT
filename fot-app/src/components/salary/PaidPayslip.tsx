@@ -1,8 +1,8 @@
 import type { FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { payslipQueryOptions } from '../../hooks/usePayrollPaid';
 import type { IEmployeePayout1c } from '../../services/payroll1cPayoutsService';
-import { payrollService } from '../../services/payrollService';
 import { isCalcCounted, payslipRemainder } from '../../utils/payrollCalc';
 import { formatPaidAmount, paidPayout, type PayrollPaidTotals } from '../../utils/payrollPaid';
 import { payslipRateLines } from '../../utils/payrollPayslip';
@@ -40,12 +40,7 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
 export const PaidPayslip: FC<IPaidPayslipProps> = ({
   employeeId, month, amounts, totals, transfers, transferred, transfersFailed,
 }) => {
-  const payslipQuery = useQuery({
-    // Под префиксом 'payroll-terms': сохранение карточки перечитывает и листок (оклад).
-    queryKey: ['payroll-terms', 'payslip', employeeId, month],
-    queryFn: ({ signal }) => payrollService.getPayslip(employeeId, month, signal),
-    staleTime: 30_000,
-  });
+  const payslipQuery = useQuery(payslipQueryOptions(employeeId, month));
   const info = payslipQuery.data;
   const rateLines = payslipRateLines(info?.rate_allowances);
   const calc = info?.calc;

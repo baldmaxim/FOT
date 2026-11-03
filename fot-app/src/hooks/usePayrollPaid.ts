@@ -32,6 +32,16 @@ export const payouts1cHistoryQueryOptions = (employeeId: number, toMonth: string
 });
 
 /**
+ * Расчётный листок месяца: правая часть вкладки «Зарплата», суммы её левой таблицы и «Экспорт» — один запрос, числа
+ * не расходятся. Префикс 'payroll-terms': сохранение карточки перечитывает и листок (оклад).
+ */
+export const payslipQueryOptions = (employeeId: number, month: string) => queryOptions({
+  queryKey: ['payroll-terms', 'payslip', employeeId, month],
+  queryFn: ({ signal }) => payrollService.getPayslip(employeeId, month, signal),
+  staleTime: 30_000,
+});
+
+/**
  * Долги прошлых месяцев (справочно, миграция 332) за месяцы from — to: «Подробно» и расчётный листок месяца.
  * Префикс 'payroll-terms' — как у сумм «Оплачено».
  */

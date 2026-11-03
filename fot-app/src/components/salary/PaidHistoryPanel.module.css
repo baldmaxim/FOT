@@ -42,7 +42,7 @@
   margin-top: 12px;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
 }
@@ -50,7 +50,7 @@
 /* Телефон: столбцы плотные — пять сумм помещаются в ширину окна; с 480px — свободнее. */
 .list th,
 .list td {
-  padding: 6px 3px;
+  padding: 6px 2px;
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   vertical-align: middle;
@@ -59,6 +59,7 @@
 }
 .list tr > :first-child { padding-left: 6px; }
 .list .num { text-align: right; white-space: nowrap; }
+.pending { color: var(--text-secondary); }
 /* «Перечислено (1С)» — длинная подпись: в шапке переносится, суммы — в строку. */
 .list thead th.wrapHead { white-space: normal; min-width: 6.5em; }
 .listNote { margin-top: 12px; }
@@ -70,7 +71,7 @@
   z-index: 1;
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   white-space: nowrap;
   box-shadow: inset 0 -1px 0 var(--border);
@@ -144,6 +145,11 @@
 }
 .backButton:hover { background: var(--surface-hover); }
 .backButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 400px) {
+  .list { font-size: 12px; }
+  .list thead th { font-size: 11px; }
+}
 
 @media (min-width: 480px) {
   .listPane,

@@ -163,6 +163,43 @@ describe('лист «История выплат»', () => {
   });
 });
 
+describe('лист «История выплат»: те же суммы, что на вкладке «Зарплата»', () => {
+  const paid = [amount('2026-08', 'contract', '710497.00'), amount('2026-09', 'housing', '18900.00')];
+  const sums = (accrued: number) => ({ accrued, deducted: 0, payout: accrued });
+  const recentMonths = ['2026-10', '2026-09', '2026-08'];
+
+  it('Абдурахмонов: начислено, удержано, к выплате и «Итого» — расчёт ФОТ, статьи 1С на месте', () => {
+    const { rows } = buildPaidHistorySheet('Абдурахмонов', paid, [], {
+      recentMonths,
+      byMonth: new Map([['2026-10', sums(204260)], ['2026-09', sums(211213)], ['2026-08', sums(176698)]]),
+    });
+    expect(rows.map(r => r.cells)).toEqual([
+      ['Октябрь 2026', 204260, 0, 204260, null, null, null],
+      ['Сентябрь 2026', 211213, 0, 211213, null, null, 18900],
+      ['Август 2026', 176698, 0, 176698, null, 710497, null],
+      ['Итого', 592171, 0, 592171, null, 710497, 18900],
+    ]);
+  });
+
+  it('расчёт месяца не загрузился или итога нет — суммы 1С этого месяца', () => {
+    const { rows } = buildPaidHistorySheet('Абдурахмонов', paid, [], {
+      recentMonths,
+      byMonth: new Map([['2026-10', sums(204260)], ['2026-09', null]]),
+    });
+    expect(rows.map(r => r.cells.slice(0, 4))).toEqual([
+      ['Октябрь 2026', 204260, 0, 204260],
+      ['Сентябрь 2026', 18900, null, 18900],
+      ['Август 2026', 710497, null, 710497],
+      ['Итого', 933657, 0, 933657],
+    ]);
+  });
+
+  it('месяцы есть, а сумм нет ни в расчёте, ни в 1С — прежняя строка', () => {
+    const { rows } = buildPaidHistorySheet('Вайцишук', [], [], { recentMonths, byMonth: new Map() });
+    expect(rows).toEqual([{ cells: ['Выплат из 1С пока нет', null, null, null, null] }]);
+  });
+});
+
 describe('снимок карточки', () => {
   it('имя файла — по дате выгрузки, без пробелов; листы — условия и история', () => {
     const snapshot = buildPayrollCardExport({ row: row(), paidRows: [], asOfDate: '2026-10-20', exportedAt: '2026-10-26' });

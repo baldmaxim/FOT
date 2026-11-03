@@ -10,6 +10,7 @@ import {
   calcLinePaidItem,
   calcLines,
   calcMissingNote,
+  calcMonthSums,
   calcNetTotal,
   isCalcCounted,
   calcPaidOnlyAccruals,
@@ -51,6 +52,27 @@ const preliminary = (over: Partial<IPayrollCalcPreliminary> = {}): IPayrollCalcP
     accrued, deducted, net, missing, ...over,
   };
 };
+
+describe('«К выплате (ФОТ)»: суммы месяца для левой таблицы карточки', () => {
+  it('те же числа, что «Начислено», «Удержано» и «Итого без НДФЛ»; у предварительного — тоже', () => {
+    expect(calcMonthSums(closed({ accrued: '204878.00', deducted: '0.00', net: '204878.00' })))
+      .toEqual({ accrued: 204878, deducted: 0, payout: 204878 });
+    expect(calcMonthSums(preliminary({ accrued: '1000.50', deducted: '100.25', net: '900.25' })))
+      .toEqual({ accrued: 1000.5, deducted: 100.25, payout: 900.25 });
+  });
+
+  it('итога нет, месяц не посчитан или считать нечего — null: таблица покажет суммы 1С', () => {
+    expect(calcMonthSums(closed({ accrued: '1409.00', net: null, missing: ['no_terms'] }))).toBeNull();
+    expect(calcMonthSums({ state: 'not_closed', reason: 'not_covered' })).toBeNull();
+    expect(calcMonthSums(undefined)).toBeNull();
+    expect(calcMonthSums(closed({ accrued: '0.00', deducted: '0.00', net: '0.00' }))).toBeNull();
+  });
+
+  it('только удержание — месяц считается, к выплате с минусом', () => {
+    expect(calcMonthSums(closed({ accrued: '0.00', deducted: '500.00', net: '-500.00' })))
+      .toEqual({ accrued: 0, deducted: 500, payout: -500 });
+  });
+});
 
 describe('«К выплате (ФОТ)»: подписи', () => {
   it('строки — как статьи «Оплачено», в порядке листка', () => {

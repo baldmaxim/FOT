@@ -333,6 +333,75 @@ export const paidHistory = (
   };
 };
 
+/** Сколько прошлых месяцев видно в истории и без сумм 1С: у них есть расчёт ФОТ. */
+const RECENT_HISTORY_MONTHS = 6;
+
+/** Прошлые месяцы, которые всегда есть в таблице месяцев, новые сверху; текущий не считаем. */
+export const recentHistoryMonths = (toMonth: string): string[] => (
+  Array.from({ length: RECENT_HISTORY_MONTHS }, (_, index) => shiftMonth(toMonth, -1 - index))
+);
+
+/** Суммы строки таблицы месяцев. */
+export interface IPaidMonthSums {
+  accrued: number | null;
+  deducted: number | null;
+  payout: number | null;
+}
+
+/** Откуда суммы месяца: расчёт ФОТ, 1С (итога ФОТ нет), ещё считается. */
+export type PaidShownSource = 'fot' | '1c' | 'pending';
+
+export interface IPaidShownMonth extends IPaidMonthSums {
+  source: PaidShownSource;
+}
+
+export interface IPaidShownTotal extends IPaidMonthSums {
+  /** Хоть один месяц ещё считается: итог не окончательный. */
+  pending: boolean;
+}
+
+export interface IPaidHistoryShown {
+  byMonth: ReadonlyMap<string, IPaidShownMonth>;
+  byYear: ReadonlyMap<string, IPaidShownTotal>;
+  overall: IPaidShownTotal;
+}
+
+const SHOWN_SUMS = ['accrued', 'deducted', 'payout'] as const;
+
+/** Итог месяцев в копейках; месяцы без суммы не входят, ничего нет — null. */
+const sumShownMonths = (months: readonly IPaidShownMonth[]): IPaidShownTotal => {
+  const total: IPaidShownTotal = { accrued: null, deducted: null, payout: null, pending: months.some(month => month.source === 'pending') };
+  for (const key of SHOWN_SUMS) {
+    const values = months.flatMap(month => (month[key] === null ? [] : [month[key]]));
+    total[key] = values.length === 0 ? null : values.reduce((sum, value) => sum + Math.round(value * 100), 0) / 100;
+  }
+  return total;
+};
+
+/**
+ * Суммы левой таблицы вкладки «Зарплата» (решение пользователя 03.11.2026): расчёт ФОТ месяца, те же числа, что справа;
+ * итога ФОТ нет (null) — суммы 1С, как раньше. undefined — расчёт ещё идёт. Суммы 1С самой истории не меняются:
+ * их читает столбец «1С» листка.
+ */
+export const paidHistoryShown = (
+  history: IPaidHistory,
+  fotByMonth: ReadonlyMap<string, IPaidMonthSums | null | undefined>,
+): IPaidHistoryShown => {
+  const byMonth = new Map(history.months.map((entry): [string, IPaidShownMonth] => {
+    const fot = fotByMonth.get(entry.month);
+    if (fot === undefined) return [entry.month, { accrued: null, deducted: null, payout: null, source: 'pending' }];
+    return [entry.month, fot
+      ? { ...fot, source: 'fot' }
+      : { accrued: entry.totals.accrued, deducted: entry.totals.deducted, payout: entry.payout, source: '1c' }];
+  }));
+  const monthsOf = (entries: readonly IPaidHistoryMonth[]): IPaidShownMonth[] => entries.map(entry => byMonth.get(entry.month)!);
+  return {
+    byMonth,
+    byYear: new Map(history.years.map(year => [year.year, sumShownMonths(monthsOf(year.months))])),
+    overall: sumShownMonths(monthsOf(history.months)),
+  };
+};
+
 /** Начало окна «за всё время» — раньше любых сумм ЗУП. */
 export const PAYROLL_PAID_ALL_FROM = '2000-01';
 
