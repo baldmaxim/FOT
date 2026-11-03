@@ -40,14 +40,14 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 ];
 
 /**
- * «Расчёты»: вместо условий и «Выплачено» — сначала сколько осталось доплатить и из чего это число («Сумма» ФОТ и
- * выплаты 1С, решение 02.11.2026), затем удержания 1С и состав зарплаты (payrollCalcColumns.ts). Переработка, проезд
- * и проживание — под «+» у «Доплат» (payrollSubColumns.ts, решение 30.10.2026), в шестерёнке их нет.
+ * «Расчёты»: вместо условий и «Выплачено» — сначала «Сумма» ФОТ, остаток и выплаты 1С (решение 02.11.2026, порядок —
+ * 03.11.2026), затем удержания 1С и состав зарплаты (payrollCalcColumns.ts). Переработка, проезд и проживание —
+ * под «+» у «Доплат» (payrollSubColumns.ts, решение 30.10.2026), в шестерёнке их нет.
  */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,
-  { key: 'calc_remainder', label: 'Остаток к выплате' },
   { key: 'calc_net', label: 'Сумма' },
+  { key: 'calc_remainder', label: 'Остаток к выплате' },
   { key: 'card_payouts', label: 'Выплаты на карту (1С)' },
   { key: 'deductions', label: 'Удержания (1С)' },
   { key: 'calc_rate', label: 'Оклад' },
