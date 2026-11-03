@@ -480,6 +480,15 @@ describe('payrollTermsController.assign: точность сумм', () => {
     expect(pgTx).not.toHaveBeenCalled();
   });
 
+  it('премиальная часть у почасовой — 400 до записи: расчёт её не читает, тихо терять нельзя', async () => {
+    const res = await assign({ calc_type: 'hourly', hourly_rate: 730, bonus_amount: 10000 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('У почасовой ставки нет премиальной части — оформите «Плановую доплату»');
+    expect(pgTx).not.toHaveBeenCalled();
+    const zero = await assign({ calc_type: 'hourly', hourly_rate: 730, bonus_amount: 0 });
+    expect(zero.statusCode).toBe(200);
+  });
+
   it('часовая ставка — до 4 знаков после запятой, пятый — 400', async () => {
     const ok = await assign({ calc_type: 'hourly', hourly_rate: 450.125 });
     expect(ok.statusCode).toBe(200);

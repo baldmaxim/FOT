@@ -62,6 +62,8 @@ describe('«К выплате (ФОТ)»: подписи', () => {
     expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 4, norm: 23 } })).toBe('4 вых.');
     expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 2, norm: 21 }, hours: 6 })).toBe('2 вых. · 6 ч');
     expect(calcLineDaysNote({ code: 'overtime', amount: '1.00', days: { worked: 0, norm: 21 }, hours: 6.5 })).toBe('6,5 ч');
+    expect(calcLineDaysNote({ code: 'contract', amount: '1.00', days: { worked: 25, norm: 30 }, hours: 250 })).toBe('25 дн. · 250 ч');
+    expect(calcLineDaysNote({ code: 'contract', amount: '1.00', days: { worked: 5, norm: null }, hours: 46.5 })).toBe('5 дн. · 46,5 ч');
     expect(calcLineDaysNote({ code: 'supplement', amount: '1.00' })).toBeNull();
   });
 
@@ -130,6 +132,24 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
       .toEqual([`оклад 150${NBSP}000,00 × 22 / 22 дн.`]);
     expect(calcLineFormula({ code: 'contract', amount: '1.00', parts: [{ ...salaryPart, salary: '140000.00', bonus: '10000.00' }] }))
       .toEqual([`(оклад 140${NBSP}000,00 + премиальная 10${NBSP}000,00) × 22 / 22 дн.`]);
+  });
+
+  it('почасовая — «250 ч × 730 ₽/ч»; смена ставки — по подстроке на период с суммой', () => {
+    const part = {
+      kind: 'hourly' as const, from: '2026-09-01', to: '2026-09-30', rate: '730.0000', minutes: 15000, amount: '182500.00',
+    };
+    expect(calcLineFormula({ code: 'contract', amount: '182500.00', parts: [part] })).toEqual(['250 ч × 730 ₽/ч']);
+    expect(calcLineFormula({
+      code: 'contract',
+      amount: '19000.00',
+      parts: [
+        { ...part, to: '2026-09-15', rate: '600.5000', minutes: 1230, amount: '12310.25' },
+        { ...part, from: '2026-09-16', rate: '700.0000', minutes: 600, amount: '7000.00' },
+      ],
+    })).toEqual([
+      `с 01.09 по 15.09: 20,5 ч × 600,5 ₽/ч = 12${NBSP}310,25`,
+      `с 16.09 по 30.09: 10 ч × 700 ₽/ч = 7${NBSP}000,00`,
+    ]);
   });
 
   it('смена оклада — по подстроке на период с суммой; добор нормы выходами — отдельной подстрокой', () => {

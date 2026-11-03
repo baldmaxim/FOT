@@ -473,6 +473,10 @@ const computePayouts = async (
       overtimeMinutes: Object.fromEntries(
         Object.entries(basis.overtimeMinutes).filter(([date]) => !brigadeDates.has(date)),
       ),
+      // Дни бригады оплачивает доля: их минуты в почасовую сумму не идут.
+      paidMinutes: basis.paidMinutes === null ? null : Object.fromEntries(
+        Object.entries(basis.paidMinutes).filter(([date]) => !brigadeDates.has(date)),
+      ),
       overtimeStops: extras.overtimeStops.get(employeeId) ?? [],
       absenceDays: basis.absenceDays,
       // NUMERIC приходит строкой; String() — на случай числа из моков и старых драйверов.
@@ -481,6 +485,7 @@ const computePayouts = async (
         effective_to: row.effective_to,
         calc_type: row.calc_type,
         monthly_salary: row.monthly_salary === null ? null : String(row.monthly_salary),
+        hourly_rate: (row.hourly_rate ?? null) === null ? null : String(row.hourly_rate),
         bonus_amount: row.bonus_amount === null ? null : String(row.bonus_amount),
         proration_rounding: row.proration_rounding ?? 'ruble',
       })),

@@ -57,6 +57,7 @@ const source = (over: Record<string, unknown> = {}) => ({
   dayoffDates: [],
   absenceDays: {},
   overtimeMinutes: { '2026-09-01': 180 },
+  paidMinutes: {},
   quality: 'materialized',
   departmentId: BRIGADE,
   isBrigade: true,
@@ -89,6 +90,72 @@ beforeEach(() => {
     effective_from: '2026-01-01', effective_to: null, calc_type: 'salary', monthly_salary: '110000.00',
     bonus_amount: null, proration_rounding: 'ruble',
   }]]]));
+});
+
+describe('«К выплате (ФОТ)» почасовая ставка', () => {
+  const hourlyTerms = [{
+    effective_from: '2026-01-01', effective_to: null, calc_type: 'hourly', monthly_salary: null, hourly_rate: '730.0000',
+    bonus_amount: null, proration_rounding: 'ruble',
+  }];
+  const firstHalf = septemberWeekdays.filter(date => date <= '2026-09-15');
+  const secondHalf = septemberWeekdays.filter(date => date > '2026-09-15');
+  const minutes = (dates: readonly string[]): Record<string, number> => Object.fromEntries(dates.map(date => [date, 600]));
+
+  beforeEach(() => {
+    terms.getTermsForPeriod.mockResolvedValue(new Map([[7, hourlyTerms]]));
+    brigade.getBrigadeShares.mockResolvedValue({
+      state: 'fixed', distribution: 'ok', output_amount: '500000.00', rows: [shareRow], objects: [waveObject],
+    });
+  });
+
+  it('вне бригады: ставка × часы основы, ⚠ нет', async () => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [source({
+      isBrigade: false, departmentId: 'dept-1', overtimeMinutes: {}, paidMinutes: minutes(septemberWeekdays),
+    })]]]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+
+    expect(calc?.state === 'closed' && calc.lines.find(line => line.code === 'contract')).toMatchObject({
+      amount: '160600.00', hours: 220, days: { worked: 22, norm: 22 },
+    });
+    expect(calc).toMatchObject({ missing: [] });
+  });
+
+  it('дни бригады оплачивает доля, почасовая сумма — только за остальные: двойной оплаты нет', async () => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [
+      source({ coverTo: '2026-09-15', workdayDates: firstHalf, overtimeMinutes: {}, paidMinutes: minutes(firstHalf) }),
+      source({
+        basisId: 2, versionId: 11, coverFrom: '2026-09-16', isBrigade: false, departmentId: 'dept-1',
+        workdayDates: secondHalf, overtimeMinutes: {}, paidMinutes: minutes(secondHalf),
+      }),
+    ]]]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+    const lines = calc?.state === 'closed' ? calc.lines : [];
+
+    expect(lines.find(line => line.code === 'brigade')?.amount).toBe('141818.18');
+    // Вторая половина — 11 будней × 10 ч × 730.
+    expect(lines.find(line => line.code === 'contract')).toMatchObject({ amount: '80300.00', hours: 110 });
+    expect(calc).toMatchObject({ missing: [] });
+  });
+
+  it('основа до 344, но все почасовые даты в бригаде — ⚠ нет', async () => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [source({ overtimeMinutes: {}, paidMinutes: null })]]]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+
+    expect(calc).toMatchObject({ missing: [] });
+  });
+
+  it('основа до 344 и почасовые даты вне бригады — ⚠, суммы нет', async () => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[7, [source({
+      isBrigade: false, departmentId: 'dept-1', overtimeMinutes: {}, paidMinutes: null,
+    })]]]));
+
+    const calc = (await getPayoutForEmployees([7], '2026-09', req)).get(7);
+
+    expect(calc).toMatchObject({ missing: ['hourly'], net: null });
+  });
 });
 
 describe('«К выплате (ФОТ)» бригады', () => {

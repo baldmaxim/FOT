@@ -397,6 +397,8 @@ export type PayrollCalcLinePart =
     daily_rate?: string;
     amount: string;
   }
+  /** Почасовые условия: ставка ₽/ч × минуты к оплате сегмента / 60. */
+  | { kind: 'hourly'; from: string; to: string; rate: string; minutes: number; amount: string }
   | { kind: 'planned_supplement'; from: string; to: string; base: string; days: number; norm: number; amount: string }
   | { kind: 'overtime_days'; from: string; to: string; salary: string; days: number; norm: number; amount: string }
   | {

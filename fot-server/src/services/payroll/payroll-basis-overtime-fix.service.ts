@@ -20,6 +20,7 @@ import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
 import {
   buildPayrollBasisDrafts,
   computeBasisHash,
+  type BasisHashInput,
   type IPayrollBasisDraft,
   type PayrollAbsenceDates,
   type PayrollAbsenceDays,
@@ -42,6 +43,7 @@ interface IBasisRow {
   /** null — основа до миграции 339. */
   absence_dates: PayrollAbsenceDates | null;
   overtime_minutes: Record<string, number>;
+  paid_minutes: Record<string, number> | null;
   quality: PayrollBasisQuality;
   /** Только remote: дни «УУ» с правкой часов > 0 в месяце основы. */
   remote_dates: string[];
@@ -122,7 +124,7 @@ const BASIS_COLUMNS = `b.version_id::text AS version_id, b.employee_id, e.full_n
             b.revision, b.norm_days, b.norm_minutes,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.workday_dates) d ORDER BY d) AS workday_dates,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.dayoff_dates) d ORDER BY d) AS dayoff_dates,
-            b.absence_days, b.absence_dates, b.overtime_minutes, b.quality`;
+            b.absence_days, b.absence_dates, b.overtime_minutes, b.paid_minutes, b.quality`;
 
 const LATEST_BASIS = `SELECT DISTINCT ON (version_id, employee_id, month) *
            FROM timesheet_version_payroll_basis
@@ -209,7 +211,7 @@ export const fixPayrollBasisOvertime = async (options: {
         };
         if (options.sampleEmployeeIds?.has(row.employee_id)) samples.push(report);
         if (sameOvertime(overtime, row.overtime_minutes)) continue;
-        const draft: Omit<IPayrollBasisDraft, 'absenceDates'> & { absenceDates: PayrollAbsenceDates | null } = {
+        const draft: BasisHashInput = {
           employeeId: row.employee_id,
           month: row.month,
           normDays: row.norm_days === null ? null : Number(row.norm_days),
@@ -219,6 +221,7 @@ export const fixPayrollBasisOvertime = async (options: {
           absenceDays: row.absence_days,
           absenceDates: row.absence_dates ?? null,
           overtimeMinutes: overtime,
+          paidMinutes: row.paid_minutes,
         };
         fixes.push({ row, overtime, hash: computeBasisHash(draft) });
         changes.push(report);
@@ -240,10 +243,11 @@ export const fixPayrollBasisOvertime = async (options: {
           const result = await client.query(
             `INSERT INTO timesheet_version_payroll_basis (
                version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, quality, reason
+               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
              )
              SELECT b.version_id, b.employee_id, b.month, b.revision + 1, $5, b.norm_days, b.norm_minutes,
-                    b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, $6::jsonb, b.quality, 'backfill'
+                    b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, $6::jsonb, b.paid_minutes,
+                    b.quality, 'backfill'
                FROM timesheet_version_payroll_basis b
               WHERE b.version_id = $1 AND b.employee_id = $2 AND b.month = $3::date AND b.revision = $4
              ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,

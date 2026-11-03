@@ -88,6 +88,8 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   const fieldId = (key: PayrollTermsFieldKey | 'category') => payrollFieldId(idPrefix, key);
   const travelId = `${idPrefix}-travel`;
   const totalValue = total ? payrollTermsTotal(form) : null;
+  // Премиальная часть и «Итого» — за месяц, у почасовой ставки их нет: доплата — «Плановой доплатой».
+  const salaryTerms = form.calcType === 'salary';
 
   /** Денежное поле с подписью сверху и ошибкой снизу. Без числовых подсказок: подсказка — не значение. */
   const renderMoney = (
@@ -244,16 +246,20 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                     {form.calcType === 'salary' ? formatTermsRubles(form.amount) : formatTermsMoney(form.amount, '₽/час')}
                   </dd>
                 </div>
-                <div>
-                  <dt className={styles.label}>Премиальная часть:</dt>
-                  {' '}
-                  <dd className={styles.inlineValue}>{formatTermsRubles(form.money.bonus)}</dd>
-                </div>
-                <div>
-                  <dt className={styles.label}>Итого:</dt>
-                  {' '}
-                  <dd className={styles.inlineValue}>{formatTermsRubles(totalValue)}</dd>
-                </div>
+                {salaryTerms && (
+                  <>
+                    <div>
+                      <dt className={styles.label}>Премиальная часть:</dt>
+                      {' '}
+                      <dd className={styles.inlineValue}>{formatTermsRubles(form.money.bonus)}</dd>
+                    </div>
+                    <div>
+                      <dt className={styles.label}>Итого:</dt>
+                      {' '}
+                      <dd className={styles.inlineValue}>{formatTermsRubles(totalValue)}</dd>
+                    </div>
+                  </>
+                )}
                 {termsFrom && (
                   <div>
                     <dt className={styles.label}>Действует с</dt>
@@ -268,15 +274,15 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           {!detailsOnly && (
             <div className={styles.half}>
               {/* Два отдельных поля: оклад (или ставка) и премия. Сохраняются раздельно; «Итого» — их сумма. */}
-              <div className={total ? `${styles.pair} ${styles.pairWithTotal}` : styles.pair}>
+              <div className={total && salaryTerms ? `${styles.pair} ${styles.pairWithTotal}` : styles.pair}>
                 {renderMoney(
                   'amount',
-                  form.calcType === 'salary' ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
+                  salaryTerms ? 'Оклад, ₽/мес' : 'Часовая ставка, ₽/час',
                   form.amount,
                   form.setAmount,
                 )}
-                {renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
-                {total && (
+                {salaryTerms && renderMoney('bonus', 'Премиальная часть, ₽/мес', form.money.bonus, value => form.changeMoney('bonus', value))}
+                {total && salaryTerms && (
                   <div className={styles.field}>
                     <label htmlFor={`${idPrefix}-total`} className={styles.label}>Итого, ₽/мес</label>
                     <input

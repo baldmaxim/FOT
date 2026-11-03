@@ -31,6 +31,7 @@ interface IBasisRow {
   dayoff_dates: string[];
   absence_days: Partial<PayrollAbsenceDays>;
   overtime_minutes: Record<string, number>;
+  paid_minutes: Record<string, number> | null;
 }
 
 export interface IAbsenceDatesSkip {
@@ -57,7 +58,7 @@ const CANDIDATES_SQL = `SELECT b.version_id::text AS version_id, b.employee_id, 
             to_char(b.month, 'YYYY-MM-DD') AS month, b.revision, b.norm_days, b.norm_minutes,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.workday_dates) d ORDER BY d) AS workday_dates,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(b.dayoff_dates) d ORDER BY d) AS dayoff_dates,
-            b.absence_days, b.overtime_minutes
+            b.absence_days, b.overtime_minutes, b.paid_minutes
        FROM (
          SELECT DISTINCT ON (version_id, employee_id, month) *
            FROM timesheet_version_payroll_basis
@@ -129,6 +130,7 @@ export const backfillPayrollBasisAbsenceDates = async (options: {
           absenceDays: { ...countsOf(dates) },
           absenceDates: dates,
           overtimeMinutes: row.overtime_minutes,
+          paidMinutes: row.paid_minutes,
         });
         fixes.push({ row, dates, hash });
       }
@@ -142,10 +144,11 @@ export const backfillPayrollBasisAbsenceDates = async (options: {
           const result = await client.query(
             `INSERT INTO timesheet_version_payroll_basis (
                version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, quality, reason
+               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
              )
              SELECT b.version_id, b.employee_id, b.month, b.revision + 1, $5, b.norm_days, b.norm_minutes,
-                    b.workday_dates, b.dayoff_dates, b.absence_days, $6::jsonb, b.overtime_minutes, b.quality, 'backfill'
+                    b.workday_dates, b.dayoff_dates, b.absence_days, $6::jsonb, b.overtime_minutes, b.paid_minutes,
+                    b.quality, 'backfill'
                FROM timesheet_version_payroll_basis b
               WHERE b.version_id = $1 AND b.employee_id = $2 AND b.month = $3::date AND b.revision = $4
                 AND b.absence_dates IS NULL

@@ -32,6 +32,8 @@ export interface IMonthBasisSource {
   /** Даты отсутствий; null — основа до миграции 339. */
   absenceDates: Partial<PayrollAbsenceDates> | null;
   overtimeMinutes: Record<string, number>;
+  /** Минуты к оплате при почасовой ставке; null — основа до миграции 344. */
+  paidMinutes: Record<string, number> | null;
   quality: PayrollBasisQuality;
   /** Отдел подачи; у персональной — null. */
   departmentId: string | null;
@@ -58,6 +60,8 @@ export interface ICalcMonthBasis {
   absenceDates: string[];
   /** Переработка в будни по корректировкам: дата → минуты. */
   overtimeMinutes: Record<string, number>;
+  /** Минуты к оплате при почасовой ставке: дата → минуты; null — основа до миграции 344 или подачи разошлись. */
+  paidMinutes: Record<string, number> | null;
   /** Дни в бригадах — по бригадам: у закрытой основы — дни подач бригад, у живой — дни в окнах членства. */
   brigades: IMonthBrigadeDays[];
 }
@@ -92,6 +96,28 @@ export const coversPeriod = (
     if (reached > period.to) return true;
   }
   return reached > period.to;
+};
+
+/**
+ * Минуты к оплате из подач — по дате, а не суммой: день принадлежит одной подаче, но одна дата в двух подачах не должна
+ * оплатиться дважды. Основа без минут или разные значения одной даты — null: у почасового это ⚠, окладнику закрытый
+ * месяц не ломает.
+ */
+const mergePaidMinutes = (
+  sources: readonly IMonthBasisSource[],
+  inPeriod: (date: string) => boolean,
+): Record<string, number> | null => {
+  const merged: Record<string, number> = {};
+  for (const source of sources) {
+    if (source.paidMinutes === null) return null;
+    for (const [date, minutes] of Object.entries(source.paidMinutes)) {
+      if (!inPeriod(date)) continue;
+      const value = Number(minutes);
+      if (merged[date] !== undefined && merged[date] !== value) return null;
+      merged[date] = value;
+    }
+  }
+  return merged;
 };
 
 /** Основа месяца из основ подач — правила в шапке файла. */
@@ -137,6 +163,7 @@ export const assembleMonthBasis = (
     absenceDays,
     absenceDates: [...absenceDates].sort(),
     overtimeMinutes,
+    paidMinutes: mergePaidMinutes(sources, inPeriod),
     brigades: [...brigades.values()].map(entry => ({
       ...entry,
       workdayDates: entry.workdayDates.sort(),
@@ -154,6 +181,7 @@ interface IBasisSourceRow {
   norm_days: number | null;
   norm_minutes: number | null;
   overtime_minutes: Record<string, number> | null;
+  paid_minutes: Record<string, number> | null;
   workday_dates: string[] | null;
   dayoff_dates: string[] | null;
   absence_days: Partial<PayrollAbsenceDays> | null;
@@ -177,6 +205,7 @@ export const loadMonthBasisSources = async (
             b.norm_days,
             b.norm_minutes,
             b.overtime_minutes,
+            b.paid_minutes,
             b.workday_dates::text[] AS workday_dates,
             b.dayoff_dates::text[] AS dayoff_dates,
             b.absence_days,
@@ -215,6 +244,7 @@ export const loadMonthBasisSources = async (
       normDays: row.norm_days === null ? null : Number(row.norm_days),
       normMinutes: row.norm_minutes === null || row.norm_minutes === undefined ? null : Number(row.norm_minutes),
       overtimeMinutes: row.overtime_minutes ?? {},
+      paidMinutes: row.paid_minutes ?? null,
       workdayDates: row.workday_dates ?? [],
       dayoffDates: row.dayoff_dates ?? [],
       absenceDays: row.absence_days ?? {},

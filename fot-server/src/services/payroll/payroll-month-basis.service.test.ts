@@ -21,6 +21,7 @@ const source = (over: Partial<IMonthBasisSource>): IMonthBasisSource => ({
   absenceDays: {},
   absenceDates: null,
   overtimeMinutes: {},
+  paidMinutes: {},
   quality: 'materialized',
   departmentId: 'dept-1',
   isBrigade: false,
@@ -28,6 +29,43 @@ const source = (over: Partial<IMonthBasisSource>): IMonthBasisSource => ({
 });
 
 const september = { from: '2026-09-01', to: '2026-09-30' };
+
+describe('основа месяца: минуты к оплате', () => {
+  const half = { coverFrom: '2026-09-16', coverTo: '2026-09-30', basisId: 2, versionId: 11 };
+
+  it('две половины — объединяются по дате; дата вне периода сотрудника отбрасывается', () => {
+    const basis = assembleMonthBasis([
+      source({ paidMinutes: { '2026-09-01': 600 } }),
+      source({ ...half, paidMinutes: { '2026-09-16': 360 } }),
+    ], { from: '2026-09-02', to: '2026-09-30' });
+    expect(basis).toMatchObject({ state: 'closed', paidMinutes: { '2026-09-16': 360 } });
+    expect(basis.state === 'closed' && basis.paidMinutes?.['2026-09-01']).toBeUndefined();
+  });
+
+  it('одна дата в двух подачах с одним значением — один раз, а не дважды', () => {
+    const basis = assembleMonthBasis([
+      source({ coverTo: '2026-09-30', paidMinutes: { '2026-09-01': 600 } }),
+      source({ ...half, paidMinutes: { '2026-09-01': 600 } }),
+    ], september);
+    expect(basis).toMatchObject({ state: 'closed', paidMinutes: { '2026-09-01': 600 } });
+  });
+
+  it('разные значения одной даты — минут нет, а месяц закрыт: окладника это не задевает', () => {
+    const basis = assembleMonthBasis([
+      source({ coverTo: '2026-09-30', workdayDates: ['2026-09-01'], paidMinutes: { '2026-09-01': 600 } }),
+      source({ ...half, paidMinutes: { '2026-09-01': 540 } }),
+    ], september);
+    expect(basis).toMatchObject({ state: 'closed', paidMinutes: null, workdayDates: ['2026-09-01'] });
+  });
+
+  it('подача без колонки (основа до 344) — минут нет на весь месяц', () => {
+    const basis = assembleMonthBasis([
+      source({ paidMinutes: { '2026-09-01': 600 } }),
+      source({ ...half, paidMinutes: null }),
+    ], september);
+    expect(basis).toMatchObject({ state: 'closed', paidMinutes: null });
+  });
+});
 
 describe('основа месяца из закрытых подач', () => {
   it('две закрытые половины покрывают месяц — дни складываются', () => {
@@ -53,6 +91,7 @@ describe('основа месяца из закрытых подач', () => {
       absenceDays: { vacation: 2, sick: 0, educational_leave: 0, unpaid: 0 },
       absenceDates: ['2026-09-02', '2026-09-03'],
       overtimeMinutes: { '2026-09-16': 180 },
+      paidMinutes: {},
       brigades: [],
     });
   });

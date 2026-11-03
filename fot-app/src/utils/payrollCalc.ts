@@ -3,7 +3,7 @@
  * незакрытый — по живому табелю; на экране одинаково, без пометки о закрытии. Подписи строк, дней, формул и пометок
  * для «Подробно» и расчётного листка. Строки — те же статьи, что в «Оплачено» (1С), с теми же подписями: сравнение
  * построчно. Итог — начислено минус удержано, без НДФЛ, как «Выплачено»; сумму строки ФОТ не посчитал (выработка
- * бригады не введена, почасовые условия…) — итога нет. Отпускные и больничные — суммы 1С («Оплачено», нет его —
+ * бригады не введена, нет часов почасовой даты…) — итога нет. Отпускные и больничные — суммы 1С («Оплачено», нет его —
  * ведомости выплаты) строками расчёта; сумм нет, а дни отпуска есть — под итогом «без: отпускные». KPI и прочие
  * статьи 1С ФОТ не считает.
  */
@@ -52,7 +52,10 @@ const formatBrigadeNote = (brigade: { ktu: string; hours: number }): string => (
   `КТУ ${brigade.ktu.replace('.', ',')} · ${String(brigade.hours).replace('.', ',')} ч`
 );
 
-/** «22 из 23 дн.», у переработки — «2 вых. · 6 ч», у доли бригады — «КТУ 1,5 · 176 ч»; дней нет — null. */
+/**
+ * «22 из 23 дн.», у почасовых — «25 дн. · 250 ч», у переработки — «2 вых. · 6 ч», у доли бригады — «КТУ 1,5 · 176 ч»;
+ * дней нет — null.
+ */
 export const calcLineDaysNote = (line: IPayrollCalcLine): string | null => {
   if (line.brigade) return formatBrigadeNote(line.brigade);
   if (line.code === 'overtime') {
@@ -63,6 +66,7 @@ export const calcLineDaysNote = (line: IPayrollCalcLine): string | null => {
     return parts.length > 0 ? parts.join(' · ') : null;
   }
   if (!line.days) return null;
+  if (line.hours) return `${line.days.worked} дн. · ${String(line.hours).replace('.', ',')} ч`;
   return line.days.norm === null ? null : `${line.days.worked} из ${line.days.norm} дн.`;
 };
 
@@ -70,7 +74,7 @@ const MISSING_LABELS: Record<PayrollCalcMissing, string> = {
   vacation_pay: 'отпускные',
   sick_pay: 'больничные',
   educational_pay: 'учебный отпуск',
-  hourly: 'почасовая оплата',
+  hourly: 'часы табеля по почасовой ставке',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы графика',
   brigade_output: 'выработка бригады',
@@ -156,6 +160,8 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       }
       return `${base} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
     }
+    case 'hourly':
+      return `${decimal(part.minutes / 60)} ч × ${Number(part.rate).toLocaleString('ru-RU', { maximumFractionDigits: 4 })} ₽/ч${tail(part.amount)}`;
     case 'planned_supplement':
       return `плановая доплата ${money(part.base)} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
     case 'overtime_days':

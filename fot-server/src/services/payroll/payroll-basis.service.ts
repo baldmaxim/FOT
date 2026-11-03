@@ -21,6 +21,10 @@
  *
  * Отсутствия (отпуск любого вида, больничный) — и счётчиками, и датами (миграция 339): даты нужны дням «Квартиры».
  *
+ * Минуты к оплате (миграция 344) — у каждого рабочего дня и выхода, для почасовой ставки (решения пользователя
+ * 03.11.2026): те же целые часы, что «Единый 1С», но не больше смены по графику; правка часов — как есть. Подробно —
+ * paidHoursOfDay. Заполняются у всех: почасовую ставку могут назначить задним числом.
+ *
  * Запись — под SAVEPOINT: сбой основы не мешает закрыть табель и отдать его в 1С (основы нет — месяц
  * «Табель не закрыт»). Строки неизменяемы: новая revision — только при другом basis_hash.
  */
@@ -31,7 +35,13 @@ import type { PoolClient } from 'pg';
 import type { DbExecutor } from '../../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../../types/index.js';
 import { canonicalJson } from '../../utils/canonical-json.js';
-import { getDayNormHours, isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from '../schedule.service.js';
+import {
+  getCorrectionCapHours,
+  getDayNormHours,
+  isWorkingDay,
+  loadCalendarMonth,
+  resolveSchedulesForPeriod,
+} from '../schedule.service.js';
 import { compute1CDayHours, isStudentSchedule, isWorkedDayForOneC, STATUS_LABELS } from '../timesheet-excel.service.js';
 import { computeExportWeekendExemptions } from '../timesheet-export.service.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
@@ -95,6 +105,8 @@ export interface IBasisDays {
   absenceDates: PayrollAbsenceDates;
   /** Переработка в будни по корректировкам: дата → минуты. */
   overtimeMinutes: Record<string, number>;
+  /** Минуты к оплате при почасовой ставке: дата → минуты; даты нет — часы определить нельзя. */
+  paidMinutes: Record<string, number>;
 }
 
 export interface IClassifyBasisInput {
@@ -110,6 +122,29 @@ export interface IClassifyBasisInput {
   cutoff: string | null;
 }
 
+/**
+ * Целые часы отработанного дня к оплате при почасовой ставке.
+ * - Правка часов — как есть: она авторитетна (у «УУ» — округлённая правка, в 1С день уходит буквой).
+ * - Без правки и без графика — null: ограничить часы нечем, это неполный расчёт, а не весь СКУД и не ноль.
+ * - «УУ» без правки и день без часов (учебный, работа на больничном) — смена по графику.
+ * - Остальное — часы «Единого 1С», не больше смены: у выхода в выходной норма дня 0, и 1С срезала бы его не по графику.
+ */
+const paidHoursOfDay = (input: {
+  status: string;
+  overridden: boolean;
+  exportedHours: number;
+  correctedHours: number;
+  schedule: IResolvedSchedule | undefined;
+  date: Date;
+  calendar: IProductionCalendarMonth | null;
+}): number | null => {
+  if (input.overridden && input.correctedHours > 0) return input.correctedHours;
+  if (!input.schedule) return null;
+  const shift = Math.round(getCorrectionCapHours(input.schedule, input.date, input.calendar));
+  if (input.status === 'remote' || input.exportedHours <= 0) return shift > 0 ? shift : null;
+  return shift > 0 ? Math.min(input.exportedHours, shift) : input.exportedHours;
+};
+
 /** Дни сотрудника за месяц: рабочие для оклада, выходы в выходные, отсутствия. Правила — в шапке файла. */
 export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
   const workdayDates: string[] = [];
@@ -117,6 +152,7 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
   const absenceDays = emptyAbsenceDays();
   const absenceDates = emptyAbsenceDates();
   const overtimeMinutes: Record<string, number> = {};
+  const paidMinutes: Record<string, number> = {};
   let quotaUsed = 0;
   const dates = Object.keys(input.days).filter(date => date.startsWith(`${input.month}-`)).sort();
   for (const date of dates) {
@@ -142,25 +178,47 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
     const overtimeHours = day.status === 'remote' && day.hours_overridden && hours > 0.001
       ? compute1CDayHours(hours, dayNorm, preHoliday, isStudentSchedule(schedule), true)
       : exportedHours;
+    const recordPaidMinutes = (): void => {
+      const paidHours = paidHoursOfDay({
+        status: day.status,
+        overridden: Boolean(day.hours_overridden),
+        exportedHours,
+        correctedHours: overtimeHours,
+        schedule,
+        date: dateObj,
+        calendar: input.calendar,
+      });
+      if (paidHours !== null) paidMinutes[date] = paidHours * 60;
+    };
     // Без графика выгрузка считает день рабочим — так же и здесь.
     if (!schedule || isWorkingDay(schedule, dateObj, input.calendar)) {
       workdayDates.push(date);
+      recordPaidMinutes();
       // Порог — не ниже 8 ч: короткая пятница графика (7 ч) и предпраздничный день с правкой 8 ч — не переработка.
       const overtimeFrom = Math.max(Math.round(dayNorm), CALENDAR_DAY_HOURS);
       const extra = overtimeHours - overtimeFrom;
       if (schedule && day.hours_overridden && extra > 0) overtimeMinutes[date] = extra * 60;
     } else if (input.plannedWeekendDays.has(`${input.employeeId}|${date}`)) {
       workdayDates.push(date);
+      recordPaidMinutes();
       quotaUsed += 1;
     } else if (DAYOFF_WORK_STATUSES.has(day.status) && hours > 0.001) {
       dayoffDates.push(date);
+      recordPaidMinutes();
     }
   }
   // Свободная квота Сб/Вс графика последнего дня (как в норме) — первые выходы месяца.
   const last = input.schedules?.get(`${input.month}-${pad2(daysInMonth(input.month))}`);
   const quota = (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
   const intoQuota = dayoffDates.splice(0, Math.max(0, quota - quotaUsed));
-  return { workdayDates: [...workdayDates, ...intoQuota].sort(), dayoffDates, absenceDays, absenceDates, overtimeMinutes };
+  return {
+    workdayDates: [...workdayDates, ...intoQuota].sort(),
+    dayoffDates,
+    absenceDays,
+    absenceDates,
+    overtimeMinutes,
+    paidMinutes,
+  };
 };
 
 /**
@@ -219,13 +277,18 @@ export interface IPayrollBasisDraft extends IBasisDays {
   normMinutes: number | null;
 }
 
+/** Вход хэша: у копий старых основ дат отсутствий (до 339) и минут к оплате (до 344) может не быть. */
+export type BasisHashInput = Omit<IPayrollBasisDraft, 'absenceDates' | 'paidMinutes'> & {
+  absenceDates: PayrollAbsenceDates | null;
+  paidMinutes?: Readonly<Record<string, number>> | null;
+};
+
 /**
  * Хэш содержимого основы: одинаковая основа повторного закрытия новой revision не даёт. absenceDates null — основа
- * до миграции 339 (дат нет), её копии с правкой переработки (payroll-basis-overtime-fix).
+ * до миграции 339 (дат нет), её копии с правкой переработки (payroll-basis-overtime-fix). Минуты к оплате входят в хэш,
+ * когда они есть: иначе правка часов при тех же датах не дала бы новой revision; копия основы до 344 хэш не меняет.
  */
-export const computeBasisHash = (
-  draft: Omit<IPayrollBasisDraft, 'absenceDates'> & { absenceDates: PayrollAbsenceDates | null },
-): string => crypto
+export const computeBasisHash = (draft: BasisHashInput): string => crypto
   .createHash('sha256')
   .update(canonicalJson({
     normDays: draft.normDays,
@@ -235,6 +298,7 @@ export const computeBasisHash = (
     absenceDays: draft.absenceDays,
     absenceDates: draft.absenceDates,
     overtimeMinutes: draft.overtimeMinutes,
+    ...(draft.paidMinutes ? { paidMinutes: draft.paidMinutes } : {}),
   }))
   .digest('hex');
 
@@ -353,21 +417,23 @@ export const insertPayrollBasis = async (
       absence_days: draft.absenceDays,
       absence_dates: draft.absenceDates,
       overtime_minutes: draft.overtimeMinutes,
+      paid_minutes: draft.paidMinutes,
     });
   }
   if (rows.length === 0) return 0;
   await exec.query(
     `INSERT INTO timesheet_version_payroll_basis (
        version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, quality, reason
+       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
      )
      SELECT $1, r.employee_id, r.month, r.revision, r.basis_hash, r.norm_days, r.norm_minutes,
             ARRAY(SELECT jsonb_array_elements_text(r.workday_dates))::date[],
             ARRAY(SELECT jsonb_array_elements_text(r.dayoff_dates))::date[],
-            r.absence_days, r.absence_dates, r.overtime_minutes, $3, $4
+            r.absence_days, r.absence_dates, r.overtime_minutes, r.paid_minutes, $3, $4
        FROM jsonb_to_recordset($2::jsonb) AS r(
          employee_id int, month date, revision int, basis_hash text, norm_days int, norm_minutes int,
-         workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb, absence_dates jsonb, overtime_minutes jsonb)
+         workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb, absence_dates jsonb, overtime_minutes jsonb,
+         paid_minutes jsonb)
      ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,
     [versionId, JSON.stringify(rows), options.quality, options.reason],
   );
@@ -418,10 +484,11 @@ export const copyPayrollBasis = async (
   await client.query(
     `INSERT INTO timesheet_version_payroll_basis (
        version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, quality, reason
+       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
      )
      SELECT $2, b.employee_id, b.month, 1, b.basis_hash, b.norm_days, b.norm_minutes,
-            b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, b.overtime_minutes, b.quality, 'rebuild'
+            b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, b.overtime_minutes, b.paid_minutes,
+            b.quality, 'rebuild'
        FROM (
          SELECT DISTINCT ON (employee_id, month) *
            FROM timesheet_version_payroll_basis

@@ -49,6 +49,7 @@ import {
   type IPayrollBasisDraft,
 } from './payroll-basis.service.js';
 import { fixPayrollBasisOvertime } from './payroll-basis-overtime-fix.service.js';
+import { backfillPayrollBasisPaidMinutes } from './payroll-basis-paid-minutes.service.js';
 import { loadMonthBasisSources } from './payroll-month-basis.service.js';
 import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
 
@@ -59,6 +60,8 @@ const migration = (name: string): string => readFileSync(
 const MIGRATION = migration('331_payroll_version_basis.sql');
 // 339 — даты отсутствий в основе (absence_dates).
 const MIGRATION_339 = migration('339_payroll_housing_by_days.sql');
+// 344 — минуты к оплате в основе (paid_minutes).
+const MIGRATION_344 = migration('344_payroll_basis_paid_minutes.sql');
 
 const q = async <T extends import('pg').QueryResultRow>(sql: string, params?: unknown[]) =>
   (await pg.pool!.query<T>(sql, params)).rows;
@@ -73,6 +76,7 @@ const draft = (employeeId: number, over: Partial<IPayrollBasisDraft> = {}): IPay
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
   absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
   overtimeMinutes: { '2026-09-02': 180 },
+  paidMinutes: { '2026-09-01': 480, '2026-09-02': 660 },
   ...over,
 });
 
@@ -117,6 +121,8 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
     await q(MIGRATION);
     await q(MIGRATION_339);
     await q(MIGRATION_339);
+    await q(MIGRATION_344);
+    await q(MIGRATION_344);
   });
 
   beforeEach(async () => {
@@ -229,6 +235,70 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
       ['2026-09-01', '2026-09-15', ['2026-09-03']],
       ['2026-09-16', '2026-09-30', ['2026-09-16']],
     ]);
+  });
+
+  it('344: минуты пишутся при закрытии, меняют revision, переносятся в новую редакцию и читаются расчётом', async () => {
+    const [from, to] = await seedApproval({ start: '2026-09-01', end: '2026-09-30' }, {}, 2);
+    const options = { quality: 'materialized', reason: 'close', mode: 'changed' } as const;
+    expect(await insertPayrollBasis(pg.pool!, from, [draft(71)], options)).toBe(1);
+    expect(await insertPayrollBasis(pg.pool!, from, [draft(71)], options)).toBe(0);
+    // Те же даты, другие часы — новая revision: иначе правка часов не дошла бы до почасового.
+    const changed = { '2026-09-01': 480, '2026-09-02': 600 };
+    expect(await insertPayrollBasis(pg.pool!, from, [draft(71, { paidMinutes: changed })], options)).toBe(1);
+
+    const client = await pg.pool!.connect();
+    await client.query('BEGIN');
+    await copyPayrollBasis(client, from, to);
+    await client.query('COMMIT');
+    client.release();
+    expect(await q('SELECT paid_minutes FROM timesheet_version_payroll_basis WHERE version_id = $1', [to]))
+      .toEqual([{ paid_minutes: changed }]);
+
+    const sources = (await loadMonthBasisSources([71], '2026-09')).get(71);
+    expect(sources?.map(source => source.paidMinutes)).toEqual([changed]);
+  });
+
+  it('344: дозаполнение основы до 344 — новая revision с минутами только по её датам, поля прежние, повтор — без эффекта', async () => {
+    const [versionId] = await seedApproval({ start: '2026-09-01', end: '2026-09-30' });
+    await insertPayrollBasis(pg.pool!, versionId, [draft(71)], { quality: 'reconstructed', reason: 'backfill', mode: 'missing' });
+    await q('UPDATE timesheet_version_payroll_basis SET paid_minutes = NULL');
+    await q('UPDATE timesheet_versions SET payload = $1::jsonb', [JSON.stringify({ employees: [] })]);
+    const rebuild = async () => [draft(71, { paidMinutes: { '2026-09-01': 600, '2026-09-02': 360, '2026-09-03': 600 } })];
+
+    const dry = await backfillPayrollBasisPaidMinutes({ apply: false, fromMonth: '2026-05', rebuild });
+    expect(dry).toEqual({ candidates: 1, matched: 1, written: 0, uncovered: 0, failedVersions: [] });
+    expect((await q('SELECT 1 FROM timesheet_version_payroll_basis')).length).toBe(1);
+
+    expect((await backfillPayrollBasisPaidMinutes({ apply: true, fromMonth: '2026-05', rebuild })).written).toBe(1);
+    expect(await q(`SELECT revision, norm_days, workday_dates::text[] AS workday_dates, overtime_minutes, paid_minutes,
+                           quality, reason
+                      FROM timesheet_version_payroll_basis ORDER BY revision`)).toEqual([
+      {
+        revision: 1, norm_days: 22, workday_dates: ['2026-09-01', '2026-09-02'], overtime_minutes: { '2026-09-02': 180 },
+        paid_minutes: null, quality: 'reconstructed', reason: 'backfill',
+      },
+      {
+        revision: 2, norm_days: 22, workday_dates: ['2026-09-01', '2026-09-02'], overtime_minutes: { '2026-09-02': 180 },
+        paid_minutes: { '2026-09-01': 600, '2026-09-02': 360 }, quality: 'reconstructed', reason: 'backfill',
+      },
+    ]);
+    expect(await backfillPayrollBasisPaidMinutes({ apply: true, fromMonth: '2026-05', rebuild }))
+      .toEqual({ candidates: 0, matched: 0, written: 0, uncovered: 0, failedVersions: [] });
+  });
+
+  it('344: копии старых служебных скриптов сохраняют минуты', async () => {
+    const [versionId] = await seedApproval({ start: '2026-09-01', end: '2026-09-30' });
+    await insertPayrollBasis(pg.pool!, versionId, [draft(71)], { quality: 'materialized', reason: 'close', mode: 'changed' });
+    await q('UPDATE timesheet_versions SET payload = $1::jsonb', [JSON.stringify({ employees: [] })]);
+    await fixPayrollBasisOvertime({
+      apply: true,
+      rebuild: async () => [draft(71, { overtimeMinutes: {} })],
+    });
+    expect(await q(`SELECT revision, overtime_minutes, paid_minutes FROM timesheet_version_payroll_basis ORDER BY revision`))
+      .toEqual([
+        { revision: 1, overtime_minutes: { '2026-09-02': 180 }, paid_minutes: { '2026-09-01': 480, '2026-09-02': 660 } },
+        { revision: 2, overtime_minutes: {}, paid_minutes: { '2026-09-01': 480, '2026-09-02': 660 } },
+      ]);
   });
 
   it('339: даты отсутствий пишутся при закрытии, переносятся в новую редакцию и читаются расчётом', async () => {

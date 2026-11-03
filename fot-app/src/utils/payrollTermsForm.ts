@@ -187,6 +187,8 @@ export const validatePayrollTerms = (
 
   const optional: Partial<Record<PayrollMoneyField, number>> = {};
   for (const field of PAYROLL_MONEY_FIELDS) {
+    // У почасовой поля премии нет: значение от прежнего вида оплаты не проверяем и не отправляем.
+    if (field === 'bonus' && values.calcType === 'hourly') continue;
     const result = parseOptionalMoney(values.money[field]);
     if (result === undefined) continue;
     if ('error' in result) errors[field] = result.error;

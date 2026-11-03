@@ -186,6 +186,7 @@ export const loadLiveMonthBases = async (
         absenceDays: emptyAbsenceDays(),
         absenceDates: [],
         overtimeMinutes: {},
+        paidMinutes: {},
         brigades: [...new Set(brigadeIds as string[])].map(departmentId => ({
           departmentId, workdayDates: [], dayoffDates: [],
         })),
@@ -234,6 +235,7 @@ export const loadLiveMonthBases = async (
       absenceDays: draft.absenceDays,
       absenceDates: Object.values(draft.absenceDates).flat().filter(inPeriod).sort(),
       overtimeMinutes: Object.fromEntries(Object.entries(draft.overtimeMinutes).filter(([date]) => inPeriod(date))),
+      paidMinutes: Object.fromEntries(Object.entries(draft.paidMinutes).filter(([date]) => inPeriod(date))),
       brigades: [...brigades.values()],
     });
   }

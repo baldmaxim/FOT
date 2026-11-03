@@ -117,6 +117,9 @@ const draftsFromDays = async (_exec: unknown, source: {
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
   absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
   overtimeMinutes: {},
+  paidMinutes: Object.fromEntries(Object.keys(employee.days)
+    .filter(date => employee.days[date].hours > 0)
+    .map(date => [date, 600])),
 }));
 
 const member = (employeeId: number, over: Record<string, unknown> = {}) => ({
@@ -157,6 +160,23 @@ beforeEach(() => {
 });
 
 describe('отдел: незакрытый месяц', () => {
+  it('почасовая ставка — сумма из минут живого табеля, только дни периода сотрудника', async () => {
+    fx.employees = [{ id: 8, hire_date: '2026-09-10', org_department_id: OFFICE }];
+    live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: weekdays('2026-09').slice(0, 11) }));
+    terms.getTermsForPeriod.mockResolvedValue(new Map([[8, [{
+      effective_from: '2026-09-01', effective_to: null, calc_type: 'hourly', monthly_salary: null, hourly_rate: '730.0000',
+      bonus_amount: null, proration_rounding: 'ruble',
+    }]]]));
+
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    // С приёма 10-го: 10, 11, 14, 15 сентября — 4 дня × 10 ч × 730.
+    expect(calc).toMatchObject({ state: 'preliminary', net: '29200.00', missing: [] });
+    expect(calc?.state === 'preliminary' && calc.lines).toMatchObject([
+      { code: 'contract', amount: '29200.00', hours: 40, days: { worked: 4, norm: 22 } },
+    ]);
+  });
+
   it('«Расчёты» — предварительно по живому табелю; карточка — «не закрыт», живой табель не читается', async () => {
     const days = weekdays('2026-09').slice(0, 11);
     live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: days }));
@@ -347,7 +367,7 @@ describe('закрытый месяц', () => {
     const source = {
       basisId: 1, versionId: 10, coverFrom: '2026-09-01', coverTo: '2026-09-30', normDays: 22, normMinutes: 10560,
       workdayDates: weekdays('2026-09'), dayoffDates: [], absenceDays: {}, overtimeMinutes: { '2026-09-01': 180 },
-      quality: 'materialized', departmentId: OFFICE, isBrigade: false,
+      paidMinutes: {}, quality: 'materialized', departmentId: OFFICE, isBrigade: false,
     };
     monthBasis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [source]]]));
 

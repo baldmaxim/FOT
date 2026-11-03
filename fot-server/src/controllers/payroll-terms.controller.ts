@@ -129,6 +129,13 @@ const termsBodySchema = z.object({
   if (value.calc_type === 'hourly' && value.hourly_rate === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Для почасовой оплаты нужна часовая ставка' });
   }
+  // Премиальная часть — за месяц, расчёт почасовых её не читает: тихо не теряем, доплата — отдельной «Плановой доплатой».
+  if (value.calc_type === 'hourly' && (value.bonus_amount ?? 0) > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'У почасовой ставки нет премиальной части — оформите «Плановую доплату»',
+    });
+  }
 });
 
 /** Календарная дата: «2026-02-31» по форме верна, но PostgreSQL отверг бы её ошибкой 500. */

@@ -72,6 +72,140 @@ const classify = (days: IClassifyBasisInput['days'], over: Partial<IClassifyBasi
   ...over,
 });
 
+// «7+0» как на проде: 6 дней по 10 ч, седьмой (воскресенье при якоре в понедельник) — 6 ч, праздники не учитываются.
+const sevenZero: IResolvedSchedule = {
+  ...fiveTwo,
+  schedule_id: 'sched-7-0',
+  schedule_type: 'shift',
+  work_start: '08:00:00',
+  work_end: '19:00:00',
+  work_hours: 10,
+  lunch_minutes: 60,
+  respects_holidays: false,
+  pattern_type: 'cycle',
+  cycle_length: 7,
+  cycle_days: [
+    ...Array.from({ length: 6 }, () => ({ work_start: '08:00', work_end: '19:00', work_hours: 10, lunch_minutes: 60 })),
+    { work_start: '08:00', work_end: '14:00', work_hours: 6, lunch_minutes: 0 },
+  ],
+  anchor_date: '2026-08-31',
+};
+const sevenZeroSchedules = new Map(septemberDates.map(date => [date, sevenZero]));
+
+describe('основа расчёта: минуты к оплате при почасовой ставке', () => {
+  it('«7+0»: СКУД сверх смены срезается, день 10 ч, короткий день 6 ч; меньше смены — целые часы, как «Единый 1С»', () => {
+    const { paidMinutes, workdayDates } = classify({
+      '2026-09-01': day('work', 11.4),
+      '2026-09-02': day('work', 9.4),
+      '2026-09-03': day('work', 9.6),
+      '2026-09-06': day('work', 10.75),
+      '2026-09-13': day('work', 4.2),
+    }, { schedules: sevenZeroSchedules });
+    expect(workdayDates).toHaveLength(5);
+    expect(paidMinutes).toEqual({
+      '2026-09-01': 600,
+      '2026-09-02': 540,
+      '2026-09-03': 600,
+      '2026-09-06': 360,
+      '2026-09-13': 240,
+    });
+  });
+
+  it('правка часов — как есть, в том числе сверх смены и на коротком дне', () => {
+    const { paidMinutes } = classify({
+      '2026-09-01': day('work', 11, true),
+      '2026-09-06': day('work', 8, true),
+    }, { schedules: sevenZeroSchedules });
+    expect(paidMinutes).toEqual({ '2026-09-01': 660, '2026-09-06': 480 });
+  });
+
+  it('«УУ» без правки — смена, какими бы ни были часы; с правкой — округлённые введённые часы', () => {
+    const { paidMinutes } = classify({
+      '2026-09-01': day('remote'),
+      '2026-09-02': day('remote', 3),
+      '2026-09-03': day('remote', 9.4, true),
+    });
+    expect(paidMinutes).toEqual({ '2026-09-01': 480, '2026-09-02': 480, '2026-09-03': 540 });
+  });
+
+  it('учебный день и работа на больничном: есть часы — часы «Единого 1С», нет — смена', () => {
+    const { paidMinutes } = classify({
+      '2026-09-01': day('study_day'),
+      '2026-09-02': day('sick_worked'),
+      '2026-09-03': day('study_day', 8),
+      '2026-09-04': day('sick_worked', 4),
+    });
+    expect(paidMinutes).toEqual({ '2026-09-01': 480, '2026-09-02': 480, '2026-09-03': 480, '2026-09-04': 240 });
+  });
+
+  it('отпуск, учебный отпуск, больничный, без сохранения, неявка, выходной и работа без часов — минут нет', () => {
+    const { paidMinutes } = classify({
+      '2026-09-01': day('vacation', 8),
+      '2026-09-02': day('educational_leave', 8),
+      '2026-09-03': day('sick', 8),
+      '2026-09-04': day('unpaid'),
+      '2026-09-07': day('absent'),
+      '2026-09-08': day('dayoff'),
+      '2026-09-09': day('work', 0),
+    });
+    expect(paidMinutes).toEqual({});
+  });
+
+  it('выход в выходной при «5+2» — не больше смены без правки; с правкой — как есть', () => {
+    const { paidMinutes, dayoffDates } = classify({
+      '2026-09-05': day('work', 12.5),
+      '2026-09-06': day('work', 3.2),
+      '2026-09-12': day('work', 10, true),
+    });
+    expect(dayoffDates).toEqual(['2026-09-05', '2026-09-06', '2026-09-12']);
+    expect(paidMinutes).toEqual({ '2026-09-05': 480, '2026-09-06': 180, '2026-09-12': 600 });
+  });
+
+  it('плановая суббота и выход в квоте — те же правила', () => {
+    const planned = classify({ '2026-09-05': day('work', 9.2) }, { plannedWeekendDays: new Set(['71|2026-09-05']) });
+    expect(planned.workdayDates).toEqual(['2026-09-05']);
+    expect(planned.paidMinutes).toEqual({ '2026-09-05': 480 });
+    const quota = classify(
+      { '2026-09-05': day('work', 9.2) },
+      { schedules: new Map(septemberDates.map(date => [date, { ...fiveTwo, expected_saturdays_per_month: 1 }])) },
+    );
+    expect(quota.workdayDates).toEqual(['2026-09-05']);
+    expect(quota.paidMinutes).toEqual({ '2026-09-05': 480 });
+  });
+
+  it('графика нет: без правки минут нет, день в основе есть (расчёт почасового — неполный); с правкой — как есть', () => {
+    const { paidMinutes, workdayDates } = classify({
+      '2026-09-01': day('work', 8.4),
+      '2026-09-02': day('remote'),
+      '2026-09-03': day('work', 9, true),
+    }, { schedules: new Map() });
+    expect(workdayDates).toEqual(['2026-09-01', '2026-09-02', '2026-09-03']);
+    expect(paidMinutes).toEqual({ '2026-09-03': 540 });
+  });
+
+  it('несогласованный выход, день после отсечки увольнения — минут нет', () => {
+    const { paidMinutes } = classify({
+      '2026-09-05': day('work', 0),
+      '2026-09-14': day('work', 8),
+      '2026-09-15': day('work', 8),
+    }, { cutoff: '2026-09-15' });
+    expect(paidMinutes).toEqual({ '2026-09-14': 480 });
+  });
+
+  it('минуты в хэше: основа без них — прежний хэш, разные минуты — разный хэш', () => {
+    const base = {
+      employeeId: 71, month: '2026-09-01', normDays: 22, normMinutes: 10560, workdayDates: ['2026-09-01'], dayoffDates: [],
+      absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
+      absenceDates: { vacation: [], sick: [], educational_leave: [], unpaid: [] },
+      overtimeMinutes: {},
+    };
+    expect(computeBasisHash({ ...base, paidMinutes: null })).toBe(computeBasisHash(base));
+    expect(computeBasisHash({ ...base, paidMinutes: { '2026-09-01': 480 } })).not.toBe(computeBasisHash(base));
+    expect(computeBasisHash({ ...base, paidMinutes: { '2026-09-01': 480 } }))
+      .not.toBe(computeBasisHash({ ...base, paidMinutes: { '2026-09-01': 420 } }));
+  });
+});
+
 describe('основа расчёта: дни месяца', () => {
   it('будни с часами и УУ без часов — рабочие; Абраменко, сентябрь: 10 «Я» + 12 «УУ» = 22', () => {
     const days: Record<string, ReturnType<typeof day>> = {};

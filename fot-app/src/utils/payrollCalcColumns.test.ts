@@ -150,7 +150,7 @@ describe('ячейки состава зарплаты', () => {
       open_months: ['2026-10'],
       preliminary: [{ month: '2026-09', as_of: '2026-09-30' }],
       incomplete: [{ month: '2026-09', reasons: ['brigade_no_hours'] }, { month: '2026-08', reasons: ['hourly', 'no_terms'] }],
-    }))).toBe('Неполный расчёт: август — почасовая ставка, ФОТ не считает, нет условий оплаты; '
+    }))).toBe('Неполный расчёт: август — почасовая ставка: нет часов табеля, нет условий оплаты; '
       + 'сентябрь — нет учтённых часов бригады');
     expect(calcIssuesNote(calc({ preliminary: [{ month: '2026-09', as_of: '2026-09-30' }] }))).toBeNull();
     expect(calcIssuesNote(calc())).toBeNull();

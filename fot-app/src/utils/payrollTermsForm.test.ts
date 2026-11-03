@@ -51,36 +51,47 @@ describe('validatePayrollTerms: состав запроса сохранения
     });
   });
 
-  it('часы: сумма в hourly_rate, запятая как разделитель, явный 0 уходит нулём', () => {
+  it('часы: сумма в hourly_rate, запятая как разделитель; премиальная часть от прежнего вида оплаты не уходит', () => {
     const result = validatePayrollTerms(values({
       calcType: 'hourly',
       amount: '450,5',
-      money: { bonus: '0', housing: '12000' },
+      money: { bonus: '15000', housing: '12000' },
     }));
     expect(wire(result.payload)).toEqual({
       calc_type: 'hourly',
       hourly_rate: 450.5,
-      bonus_amount: 0,
       // Проживание — только показ (квартира «Проживания», миграция 320), проезд — ставка «Справочника» (324):
       // в условия не уходят; удержаний в условиях с миграции 321 нет.
       effective_from: '2026-09-24',
     });
   });
 
+  it('оклад: явный 0 премиальной части уходит нулём', () => {
+    const result = validatePayrollTerms(values({ calcType: 'salary', amount: '100000', money: { bonus: '0', housing: '' } }));
+    expect(result.payload?.bonus_amount).toBe(0);
+  });
+
+  it('часы: мусор в скрытой премиальной части сохранению не мешает', () => {
+    const result = validatePayrollTerms(values({ calcType: 'hourly', amount: '730', money: { bonus: 'abc', housing: '' } }));
+    expect(result.errors).toBeNull();
+    expect(result.payload?.bonus_amount).toBeUndefined();
+  });
+
   it('ошибки — по полям, все сразу; первая по порядку на экране', () => {
     const result = validatePayrollTerms(values({
-      calcType: 'hourly',
+      calcType: 'salary',
       amount: '',
       money: { ...EMPTY_MONEY, bonus: 'abc' },
       effectiveFrom: '',
     }));
     expect(result.payload).toBeNull();
     expect(result.errors).toEqual({
-      amount: 'Укажите часовую ставку',
+      amount: 'Укажите оклад',
       bonus: 'Введите число не меньше нуля',
       effectiveFrom: 'Укажите дату «Действует с»',
     });
     expect(firstInvalidField(result.errors ?? {})).toBe('effectiveFrom');
+    expect(validatePayrollTerms(values({ calcType: 'hourly', amount: '' })).errors?.amount).toBe('Укажите часовую ставку');
   });
 
   it('копейки: пробелы между разрядами допустимы, третий знак — ошибка, а не молчаливое округление', () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   brigadeShareFacts,
   buildPayrollCalc,
+  hourlyAmountCents,
   mergeTermsSegments,
   prorateDailyKopeckCents,
   prorateMinutesCents,
@@ -18,10 +19,20 @@ const terms = (over: Partial<ICalcTermsRow> = {}): ICalcTermsRow => ({
   effective_to: null,
   calc_type: 'salary',
   monthly_salary: '250000.00',
+  hourly_rate: null,
   bonus_amount: null,
   proration_rounding: 'ruble',
   ...over,
 });
+
+const hourly = (rate: string, over: Partial<ICalcTermsRow> = {}): ICalcTermsRow => terms({
+  calc_type: 'hourly', monthly_salary: null, hourly_rate: rate, ...over,
+});
+
+/** Минуты к оплате: у каждой даты — одно значение. */
+const minutesOf = (dates: readonly string[], minutes = 600): Record<string, number> => (
+  Object.fromEntries(dates.map(date => [date, minutes]))
+);
 
 const august = (n: number): string[] => Array.from({ length: n }, (_, i) => `2026-08-${String(i + 3).padStart(2, '0')}`);
 
@@ -139,12 +150,6 @@ describe('«К выплате (ФОТ)»: оклад', () => {
     ]);
   });
 
-  it('почасовые условия — суммы нет, итог неполный', () => {
-    const result = buildPayrollCalc(facts({ terms: [terms({ calc_type: 'hourly', monthly_salary: null })] }));
-    expect(line(result, 'contract')?.amount).toBeNull();
-    expect(result.missing).toContain('hourly');
-  });
-
   it('нет условий на часть дней или вовсе — no_terms', () => {
     const gap = buildPayrollCalc(facts({ terms: [terms({ effective_from: '2026-08-10' })] }));
     expect(gap.missing).toContain('no_terms');
@@ -157,6 +162,262 @@ describe('«К выплате (ФОТ)»: оклад', () => {
     const result = buildPayrollCalc(facts({ normDays: 0 }));
     expect(result.missing).toEqual(['no_norm']);
     expect(result.lines).toEqual([]);
+  });
+});
+
+describe('«К выплате (ФОТ)»: почасовая ставка', () => {
+  it('Беляев, сентябрь: 250 ч × 730 = 182 500; норма дней и добор не участвуют', () => {
+    const dates = august(25);
+    const result = buildPayrollCalc(facts({
+      normDays: 31,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [hourly('730.0000')],
+    }));
+    expect(line(result, 'contract')).toEqual({
+      code: 'contract',
+      amount: '182500.00',
+      days: { worked: 25, norm: 31 },
+      hours: 250,
+      parts: [{
+        kind: 'hourly', from: '2026-08-01', to: '2026-08-31', rate: '730.0000', minutes: 15000, amount: '182500.00',
+      }],
+    });
+    expect(result.missing).toEqual([]);
+    expect(result.net).toBe('182500.00');
+  });
+
+  it('часы разной длины суммируются по дням: 10 ч и короткий день 6 ч', () => {
+    const result = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-08', '2026-08-09'],
+      paidMinutes: { '2026-08-08': 600, '2026-08-09': 360 },
+      terms: [hourly('610.0000')],
+    }));
+    expect(line(result, 'contract')).toMatchObject({ amount: '9760.00', hours: 16 });
+  });
+
+  it('округление один раз на сегмент, половина вверх до копейки; ставка до 4 знаков', () => {
+    expect(hourlyAmountCents(3000, 1)).toBe(1);
+    expect(hourlyAmountCents(2999, 1)).toBe(0);
+    // 730,1235 × 61 / 60 = 742,2922… → 742,29.
+    expect(hourlyAmountCents(7_301_235, 61)).toBe(74_229);
+    // Верх ставки NUMERIC(12,4) × месяц минут не теряет точность.
+    expect(hourlyAmountCents(999_999_999_999, 44_640)).toBe(7_439_999_999_993);
+    const result = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-08', '2026-08-09', '2026-08-10'],
+      paidMinutes: { '2026-08-08': 20, '2026-08-09': 20, '2026-08-10': 20 },
+      terms: [hourly('0.5000')],
+    }));
+    // По дням вышло бы 0,17 × 3 = 0,51; один раз на сегмент: 0,50 ₽/ч × 1 ч = 0,50.
+    expect(line(result, 'contract')?.amount).toBe('0.50');
+  });
+
+  it('выход в выходной — те же часы, одинарно: «Переработки» нет', () => {
+    const result = buildPayrollCalc(facts({
+      normDays: 2,
+      workdayDates: ['2026-08-10', '2026-08-11', '2026-08-12'],
+      dayoffDates: ['2026-08-08'],
+      paidMinutes: minutesOf(['2026-08-10', '2026-08-11', '2026-08-12'], 480),
+      terms: [hourly('500.0000')],
+    }));
+    // Минут у выхода нет — сумма неизвестна, а не занижена.
+    expect(result.missing).toEqual(['hourly']);
+    const full = buildPayrollCalc(facts({
+      normDays: 2,
+      workdayDates: ['2026-08-10', '2026-08-11', '2026-08-12'],
+      dayoffDates: ['2026-08-08'],
+      paidMinutes: { ...minutesOf(['2026-08-10', '2026-08-11', '2026-08-12'], 480), '2026-08-08': 480 },
+      terms: [hourly('500.0000')],
+    }));
+    expect(line(full, 'contract')).toMatchObject({ amount: '16000.00', days: { worked: 4, norm: 2 }, hours: 32 });
+    expect(line(full, 'overtime')).toBeUndefined();
+  });
+
+  it('правка часов сверх нормы — только в сумме часов, переработкой второй раз не платится', () => {
+    const result = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-10'],
+      paidMinutes: { '2026-08-10': 660 },
+      overtimeMinutes: { '2026-08-10': 60 },
+      normMinutes: 10080,
+      terms: [hourly('600.0000')],
+    }));
+    expect(line(result, 'contract')?.amount).toBe('6600.00');
+    expect(line(result, 'overtime')).toBeUndefined();
+    expect(result.net).toBe('6600.00');
+  });
+
+  it('две ставки в месяце — два сегмента, каждый по своим часам', () => {
+    const dates = ['2026-08-10', '2026-08-11', '2026-08-20'];
+    const result = buildPayrollCalc(facts({
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [hourly('600.0000', { effective_to: '2026-08-15' }), hourly('700.0000', { effective_from: '2026-08-16' })],
+    }));
+    expect(line(result, 'contract')?.amount).toBe('19000.00');
+    expect(line(result, 'contract')?.parts).toEqual([
+      expect.objectContaining({ kind: 'hourly', from: '2026-08-01', to: '2026-08-15', rate: '600.0000', minutes: 1200, amount: '12000.00' }),
+      expect.objectContaining({ kind: 'hourly', from: '2026-08-16', to: '2026-08-31', rate: '700.0000', minutes: 600, amount: '7000.00' }),
+    ]);
+  });
+
+  it('соседние строки с той же ставкой — один сегмент; с другой — два', () => {
+    const same = [hourly('600.0000', { effective_to: '2026-08-15' }), hourly('600.0000', { effective_from: '2026-08-16' })];
+    expect(mergeTermsSegments(same)).toHaveLength(1);
+    const other = [hourly('600.0000', { effective_to: '2026-08-15' }), hourly('600.5000', { effective_from: '2026-08-16' })];
+    expect(mergeTermsSegments(other)).toHaveLength(2);
+  });
+
+  it('оклад → часы: оклад за свои дни, часы за свои, сумма одной строкой', () => {
+    const dates = august(22);
+    const result = buildPayrollCalc(facts({
+      normDays: 22,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [
+        terms({ effective_to: '2026-08-15', monthly_salary: '220000.00' }),
+        hourly('500.0000', { effective_from: '2026-08-16' }),
+      ],
+    }));
+    // 3–15 августа — 13 дней × 220 000 / 22 = 130 000; 16–24 — 9 дней × 10 ч × 500 = 45 000.
+    expect(line(result, 'contract')).toMatchObject({ amount: '175000.00', days: { worked: 22, norm: 22 }, hours: 90 });
+    expect(line(result, 'overtime')).toBeUndefined();
+    expect(result.net).toBe('175000.00');
+  });
+
+  it('часы → оклад: ранние почасовые дни не вытесняют окладные в переработку', () => {
+    const dates = august(28);
+    const result = buildPayrollCalc(facts({
+      normDays: 22,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [
+        hourly('500.0000', { effective_to: '2026-08-15' }),
+        terms({ effective_from: '2026-08-16', monthly_salary: '220000.00' }),
+      ],
+    }));
+    // 3–15 — 13 дней × 10 ч × 500 = 65 000; 16–30 — 15 окладных из нормы 22: 150 000, все в окладе.
+    expect(line(result, 'contract')?.parts).toEqual([
+      expect.objectContaining({ kind: 'hourly', minutes: 7800, amount: '65000.00' }),
+      expect.objectContaining({ kind: 'salary', days: 15, norm: 22, amount: '150000.00' }),
+    ]);
+    expect(line(result, 'contract')?.amount).toBe('215000.00');
+    expect(line(result, 'overtime')).toBeUndefined();
+  });
+
+  it('чистому почасовому месяцу норма дней не нужна; окладным датам — нужна', () => {
+    const dates = august(5);
+    const hourlyOnly = buildPayrollCalc(facts({
+      normDays: null, workdayDates: dates, paidMinutes: minutesOf(dates), terms: [hourly('500.0000')],
+    }));
+    expect(hourlyOnly.missing).toEqual([]);
+    expect(line(hourlyOnly, 'contract')).toMatchObject({ amount: '25000.00', days: { worked: 5, norm: null } });
+    const mixed = buildPayrollCalc(facts({
+      normDays: null,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [terms({ effective_to: '2026-08-04' }), hourly('500.0000', { effective_from: '2026-08-05' })],
+    }));
+    expect(mixed.missing).toEqual(['no_norm']);
+    expect(mixed.net).toBeNull();
+  });
+
+  it('нет минут у даты или у всей основы (до 344) — ⚠, итог неизвестен, частичная сумма не выдаётся', () => {
+    const noBasis = buildPayrollCalc(facts({ paidMinutes: null, terms: [hourly('500.0000')] }));
+    expect(line(noBasis, 'contract')?.amount).toBeNull();
+    expect(noBasis.missing).toEqual(['hourly']);
+    expect(noBasis.net).toBeNull();
+    const noField = buildPayrollCalc(facts({ terms: [hourly('500.0000')] }));
+    expect(noField.missing).toEqual(['hourly']);
+    const noDate = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-10', '2026-08-11'],
+      paidMinutes: { '2026-08-10': 600 },
+      terms: [hourly('500.0000')],
+    }));
+    expect(noDate.missing).toEqual(['hourly']);
+    expect(noDate.net).toBeNull();
+    // Окладника отсутствие минут не касается.
+    expect(buildPayrollCalc(facts({ paidMinutes: null })).missing).toEqual([]);
+  });
+
+  it('все почасовые даты в бригаде — ⚠ нет, дважды не платится: оплачивает доля', () => {
+    const share: IBrigadeShareFact = {
+      departmentId: 'brigade-1',
+      amount: '90000.00',
+      ktu: '1.0',
+      countedMinutes: 9600,
+      distribution: 'ok',
+      output: '900000.00',
+      objects: [],
+      whole: null,
+      workedDates: [],
+    };
+    // Дни бригады уже сняты с дат и минут в сервисе.
+    const allInBrigade = buildPayrollCalc(facts({
+      workdayDates: [], paidMinutes: null, brigadeShares: [share], terms: [hourly('500.0000')],
+    }));
+    expect(allInBrigade.missing).toEqual([]);
+    expect(line(allInBrigade, 'contract')).toBeUndefined();
+    expect(allInBrigade.net).toBe('90000.00');
+    const partly = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-20'], paidMinutes: { '2026-08-20': 600 }, brigadeShares: [share], terms: [hourly('500.0000')],
+    }));
+    expect(partly.net).toBe('95000.00');
+  });
+
+  it('«Без переработки»: на 6-часовом дне правка 8 ч → 8 ч, 9 ч → 8 ч; выход в выходной не оплачивается', () => {
+    const stop = [{ date_from: '2026-08-01', date_to: null }];
+    const eight = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-09'], paidMinutes: { '2026-08-09': 480 }, overtimeMinutes: {}, overtimeStops: stop, terms: [hourly('600.0000')],
+    }));
+    expect(line(eight, 'contract')?.amount).toBe('4800.00');
+    const nine = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-09'], paidMinutes: { '2026-08-09': 540 }, overtimeMinutes: { '2026-08-09': 60 }, overtimeStops: stop, terms: [hourly('600.0000')],
+    }));
+    expect(line(nine, 'contract')?.amount).toBe('4800.00');
+    const dayoff = buildPayrollCalc(facts({
+      workdayDates: ['2026-08-10'],
+      dayoffDates: ['2026-08-08'],
+      paidMinutes: { '2026-08-10': 480, '2026-08-08': 480 },
+      overtimeStops: stop,
+      terms: [hourly('600.0000')],
+    }));
+    expect(line(dayoff, 'contract')).toMatchObject({ amount: '4800.00', hours: 8 });
+  });
+
+  it('плановая доплата — × почасовые дни / норма, не больше нормы', () => {
+    const dates = august(11);
+    const result = buildPayrollCalc(facts({
+      normDays: 22,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [hourly('500.0000')],
+      plannedSupplements: [{ amount: '20000.00', date_from: '2026-07-01', date_to: null }],
+    }));
+    expect(line(result, 'bonus')?.amount).toBe('10000.00');
+    const over = buildPayrollCalc(facts({
+      normDays: 2,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [hourly('500.0000')],
+      plannedSupplements: [{ amount: '20000.00', date_from: '2026-07-01', date_to: null }],
+    }));
+    expect(line(over, 'bonus')).toMatchObject({ amount: '20000.00', days: { worked: 2, norm: 2 } });
+    const noNorm = buildPayrollCalc(facts({
+      normDays: null,
+      workdayDates: dates,
+      paidMinutes: minutesOf(dates),
+      terms: [hourly('500.0000')],
+      plannedSupplements: [{ amount: '20000.00', date_from: '2026-07-01', date_to: null }],
+    }));
+    expect(noNorm.missing).toEqual(['no_norm']);
+  });
+
+  it('премиальная часть почасовых условий в сумму не идёт', () => {
+    const dates = august(1);
+    const result = buildPayrollCalc(facts({
+      workdayDates: dates, paidMinutes: minutesOf(dates), terms: [hourly('500.0000', { bonus_amount: '10000.00' })],
+    }));
+    expect(line(result, 'contract')?.amount).toBe('5000.00');
   });
 });
 
@@ -513,12 +774,12 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
     const noTerms = facts({ ...late, terms: [terms({ effective_to: '2026-08-20' })] });
     expect(buildPayrollCalc(noTerms).missing).toEqual(expect.arrayContaining(['no_terms', 'no_norm']));
     expect(buildPayrollCalc({ ...noTerms, ...stop }).missing).toEqual([]);
-    // С 21-го почасовые условия: выход 30-го почасовой.
+    // С 21-го почасовые условия: выход 30-го почасовой, минут нет; часы переработки 25-го — не переработка.
     const hourly = facts({ ...late, terms: [
       terms({ effective_to: '2026-08-20' }),
-      terms({ effective_from: '2026-08-21', calc_type: 'hourly', monthly_salary: null }),
+      terms({ effective_from: '2026-08-21', calc_type: 'hourly', monthly_salary: null, hourly_rate: '500.0000' }),
     ] });
-    expect(buildPayrollCalc(hourly).missing).toEqual(expect.arrayContaining(['hourly', 'no_norm']));
+    expect(buildPayrollCalc(hourly).missing).toEqual(['hourly']);
     const stopped = buildPayrollCalc({ ...hourly, ...stop });
     expect(stopped.missing).toEqual([]);
     expect(line(stopped, 'overtime')).toBeUndefined();
