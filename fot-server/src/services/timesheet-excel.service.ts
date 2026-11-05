@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { getFullDayThresholdHoursForDate, getDayNormHours } from './schedule.service.js';
+import { getCorrectionCapHours, getFullDayThresholdHoursForDate, getDayNormHours } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import { isDateInEmployeeWindows } from './timesheet-day-windows.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
@@ -352,7 +352,11 @@ const getDayNormForEmployeeOnDate = (
   const schedule = data.dailySchedulesMap.get(employeeId)?.get(dateStr) || fallbackSchedule;
   if (!schedule) return 0;
   const [year, month, day] = dateStr.split('-').map(Number);
-  return getDayNormHours(schedule, new Date(year, month - 1, day), data.calendarMonth);
+  const date = new Date(year, month - 1, day);
+  // Суббота/воскресенье в квоте графика: день нерабочий и норма 0, но это работа по графику — предел равен смене.
+  return data.scheduledWeekendDays?.has(`${employeeId}|${dateStr}`)
+    ? getCorrectionCapHours(schedule, date, data.calendarMonth)
+    : getDayNormHours(schedule, date, data.calendarMonth);
 };
 
 const ensureOneCBodyRows = (worksheet: ExcelJS.Worksheet, lastRow: number): void => {
@@ -507,12 +511,17 @@ export const buildObjectRowsForOneC = (
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
           const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
-          const roundedHours = compute1CDayHours(
-            hours,
-            dayNormHours,
-            isPreHolidayDate(data, dateStr),
-            isStudentSchedule(effectiveSchedule),
-            Boolean(statusEntry?.hoursOverridden),
+          // Суббота в квоте на нескольких объектах: сумма строк за день не больше смены.
+          const objectLimit = data.scheduledWeekendObjectLimits?.get(`${employee.id}|${dateStr}|${target.object_key}`);
+          const roundedHours = Math.min(
+            compute1CDayHours(
+              hours,
+              dayNormHours,
+              isPreHolidayDate(data, dateStr),
+              isStudentSchedule(effectiveSchedule),
+              Boolean(statusEntry?.hoursOverridden),
+            ),
+            objectLimit ?? Number.POSITIVE_INFINITY,
           );
           if (roundedHours) {
             const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);

@@ -795,3 +795,140 @@ describe('timesheet-excel.service — объектные строки уважа
     expect(row.totalHours).toBe(8);
   });
 });
+
+// Суббота в квоте графика: день нерабочий, норма 0, но это работа по графику — предел равен смене.
+describe('timesheet-excel.service — суббота в квоте графика не выше смены', () => {
+  // 04.04.2026 — суббота, 03.04.2026 — пятница. График как на проде: цикл со слотом субботы 0 ч.
+  const SATURDAY = '2026-04-04';
+  const FRIDAY = '2026-04-03';
+  const KEY = `1|${SATURDAY}`;
+
+  const makeQuotaSchedule = (): IResolvedSchedule => ({
+    ...makeSchedule(),
+    work_start: '08:00:00',
+    work_end: '19:00:00',
+    work_hours: 10,
+    lunch_minutes: 60,
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 2,
+    cycle_length: 7,
+    cycle_days: [
+      ...Array.from({ length: 5 }, () => ({ work_start: '08:00', work_end: '19:00', work_hours: 10, lunch_minutes: 60 })),
+      { work_hours: 0 },
+      { work_hours: 0 },
+    ],
+    anchor_date: '2026-03-30',
+  });
+
+  const objectEntry = (objectKey: string, hours: number, workDate = SATURDAY) => ({
+    adjustment_id: null,
+    employee_id: 1,
+    work_date: workDate,
+    object_key: objectKey,
+    object_id: objectKey,
+    object_name: objectKey,
+    hours_worked: hours,
+    display_hours_worked: hours,
+    base_hours_worked: hours,
+    is_correction: false,
+  });
+
+  const makeQuotaData = (
+    hours: number,
+    options: {
+      date?: string;
+      overridden?: boolean;
+      scheduled?: boolean;
+      objects?: Array<[string, number]>;
+      limits?: Array<[string, number]>;
+    } = {},
+  ): IDepartmentTimesheetData => {
+    const date = options.date ?? SATURDAY;
+    const schedule = makeQuotaSchedule();
+    const data = makeBaseData();
+    data.exportDays = [Number(date.slice(-2))];
+    data.employees = [data.employees[0]];
+    data.schedulesMap = new Map([[1, schedule]]);
+    data.dailySchedulesMap = new Map([[1, new Map([[date, schedule]])]]);
+    data.dataMap = new Map([[1, new Map([[date, {
+      status: options.overridden ? 'manual' : 'work',
+      hours,
+      corrected: Boolean(options.overridden),
+      hoursOverridden: Boolean(options.overridden),
+      hoursDropped: false,
+    }]])]]);
+    data.objectEntries = (options.objects ?? [['obj-a', hours]]).map(([key, value]) => objectEntry(key, value, date));
+    data.scheduledWeekendDays = new Set(options.scheduled === false ? [] : [`1|${date}`]);
+    data.scheduledWeekendObjectLimits = new Map(options.limits ?? []);
+    return data;
+  };
+
+  const employeeRow = (data: IDepartmentTimesheetData) => buildEmployeeRowsForOneC(data)[0];
+  const objectRow = (data: IDepartmentTimesheetData, objectKey = 'obj-a') => {
+    const target = listObjectExportTargets(data).find(item => item.object_key === objectKey);
+    return buildObjectRowsForOneC(data, target!)[0];
+  };
+
+  it('выше графика → часы графика в строке сотрудника и объекта, итог и «Дни»', () => {
+    const data = makeQuotaData(16.45);
+    for (const row of [employeeRow(data), objectRow(data)]) {
+      expect(row.dayValues.get(4)?.hours).toBe(10);
+      expect(row.totalHours).toBe(10);
+      expect(row.workedDays).toBe(1);
+    }
+  });
+
+  it('меньше графика → факт, как на буднях', () => {
+    const data = makeQuotaData(8);
+    expect(employeeRow(data).dayValues.get(4)?.hours).toBe(8);
+    expect(objectRow(data).dayValues.get(4)?.hours).toBe(8);
+  });
+
+  it('ручная правка выше графика → как есть', () => {
+    const data = makeQuotaData(11, { overridden: true });
+    expect(employeeRow(data).dayValues.get(4)?.hours).toBe(11);
+    expect(objectRow(data).dayValues.get(4)?.hours).toBe(11);
+  });
+
+  it('выход сверх квоты → факт, предел не применяется', () => {
+    const data = makeQuotaData(12.4, { scheduled: false });
+    expect(employeeRow(data).dayValues.get(4)?.hours).toBe(12);
+    expect(objectRow(data).dayValues.get(4)?.hours).toBe(12);
+  });
+
+  it('будний день не меняется', () => {
+    const before = makeQuotaData(11.5, { date: FRIDAY, scheduled: false });
+    const after = makeQuotaData(11.5, { date: FRIDAY });
+    expect(employeeRow(before).dayValues.get(3)?.hours).toBe(10);
+    expect(employeeRow(after).dayValues.get(3)?.hours).toBe(10);
+  });
+
+  it('два объекта: лимиты держат сумму строк в пределах смены', () => {
+    const data = makeQuotaData(13, {
+      objects: [['obj-a', 6], ['obj-b', 7]],
+      limits: [[`${KEY}|obj-a`, 5], [`${KEY}|obj-b`, 5]],
+    });
+    expect(objectRow(data, 'obj-a').dayValues.get(4)?.hours).toBe(5);
+    expect(objectRow(data, 'obj-b').dayValues.get(4)?.hours).toBe(5);
+  });
+
+  it('файл по одному объекту получает ту же долю', () => {
+    const data = makeQuotaData(13, {
+      objects: [['obj-a', 6], ['obj-b', 7]],
+      limits: [[`${KEY}|obj-a`, 5], [`${KEY}|obj-b`, 5]],
+    });
+    data.objectEntries = data.objectEntries.filter(entry => entry.object_key === 'obj-b');
+    expect(objectRow(data, 'obj-b').totalHours).toBe(5);
+  });
+
+  it('доля, округлившаяся до нуля: ячейка пустая, день в этой строке не считается', () => {
+    const data = makeQuotaData(14, {
+      objects: [['obj-a', 13.6], ['obj-b', 0.4]],
+      limits: [[`${KEY}|obj-a`, 10], [`${KEY}|obj-b`, 0]],
+    });
+    const row = objectRow(data, 'obj-b');
+    expect(row.dayValues.get(4)?.hours ?? 0).toBe(0);
+    expect(row.workedDays).toBe(0);
+    expect(objectRow(data, 'obj-a').totalHours).toBe(10);
+  });
+});

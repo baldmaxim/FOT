@@ -1,9 +1,18 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
-import { isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
+import { getCorrectionCapHours, isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
-import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from './attendance.service.js';
-import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
+import {
+  buildAttendanceEntries,
+  hasRealActivity,
+  type IAttendanceBuildResult,
+  type IAttendanceEntry,
+} from './attendance.service.js';
+import {
+  computeMandatoryExemptions,
+  pickApprovedWeekendDaysInQuota,
+  splitShiftBetweenObjects,
+} from './timesheet-mandatory-weekend.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import { buildFiredCutoffMap, firedEligibleSql } from './timesheet-fired-cutoff.service.js';
 import { isDateInEmployeeWindows, type IDayWindow } from './timesheet-day-windows.service.js';
@@ -98,6 +107,12 @@ export interface IDepartmentTimesheetData {
   // Плановые (по квоте графика) выходные месяца — `${employeeId}|${date}`, тот же набор, по которому
   // includeExportDayHours оставляет часы выходного. Нужен расчётному листку: плановая суббота — рабочий день.
   plannedWeekendDays?: Set<string>;
+  // Выходные в квоте графика, `${employeeId}|${date}`: плановые и согласованные выходы на свободных местах квоты.
+  // Только для предела часов в файлах 1С: такой день не выше смены. Часы в dataMap не меняет — API и версии те же.
+  scheduledWeekendDays?: ReadonlySet<string>;
+  // Лимит строки объекта в такой день, `${employeeId}|${date}|${object_key}`: сумма строк за день не выше смены.
+  // Считается до фильтра объектов выгрузки, поэтому файл по одному объекту получает ту же долю.
+  scheduledWeekendObjectLimits?: ReadonlyMap<string, number>;
 }
 
 
@@ -251,6 +266,130 @@ export function includeExportDayHours(
   return exemptions.has(`${employeeId}|${date}`);
 }
 
+// Статусы выхода, которые занимают квоту выходных, — как DAYOFF_WORK_STATUSES в payroll-basis.service.
+const QUOTA_WEEKEND_WORK_STATUSES = new Set(['work', 'remote', 'manual']);
+
+/**
+ * Согласованные выходы с итоговыми часами у графиков с квотой: нерабочий по графику день, рабочий статус,
+ * часы больше нуля, день прошёл includeExportDayHours и не входит в плановые. Считается по итогу табеля, а не по
+ * строкам корректировок: заявка без факта квоту не занимает, а заявка и правка за один день дают одну запись.
+ */
+const collectApprovedWeekendWork = (
+  byEmployeeDate: IAttendanceBuildResult['byEmployeeDate'],
+  schedules: Map<number, Map<string, IResolvedSchedule>>,
+  calendar: IProductionCalendarMonth | null,
+  plannedDays: Set<string>,
+): Array<{ employeeId: number; date: string }> => {
+  const result: Array<{ employeeId: number; date: string }> = [];
+  for (const [employeeId, dateMap] of byEmployeeDate) {
+    for (const [date, entry] of dateMap) {
+      const schedule = schedules.get(employeeId)?.get(date);
+      if (!schedule) continue;
+      const hasQuota = (schedule.expected_saturdays_per_month ?? 0) > 0
+        || (schedule.expected_sundays_per_month ?? 0) > 0;
+      if (!hasQuota || !QUOTA_WEEKEND_WORK_STATUSES.has(entry.status)) continue;
+      if (typeof entry.hours_worked !== 'number' || entry.hours_worked <= 0.001) continue;
+      if (plannedDays.has(`${employeeId}|${date}`)) continue;
+      const [y, m, d] = date.split('-').map(Number);
+      if (isWorkingDay(schedule, new Date(y, m - 1, d), calendar)) continue;
+      if (includeExportDayHours(entry, schedule, employeeId, date, calendar, plannedDays)) {
+        result.push({ employeeId, date });
+      }
+    }
+  }
+  return result;
+};
+
+interface IScheduledWeekendParams {
+  attendance: IAttendanceBuildResult;
+  employees: IExportEmployee[];
+  dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>;
+  calendarMonth: IProductionCalendarMonth | null;
+  plannedDays: Set<string>;
+  year: number;
+  mon: number;
+  startDate: string;
+  endDate: string;
+  todayStr: string;
+  showActualHours: boolean;
+  exec?: DbExecutor;
+}
+
+/**
+ * Выходные в квоте графика и лимиты объектов для файлов 1С (см. поля IDepartmentTimesheetData). Квота считается
+ * за весь месяц, иначе «первые N» при выгрузке части месяца определились бы неверно. Выгрузке за полный месяц
+ * новые запросы не нужны; за часть месяца табель дособирается только людям с таким выходом в периоде.
+ */
+async function computeScheduledWeekendData(
+  params: IScheduledWeekendParams,
+): Promise<Pick<IDepartmentTimesheetData, 'scheduledWeekendDays' | 'scheduledWeekendObjectLimits'>> {
+  const {
+    attendance, employees, dailySchedulesMap, calendarMonth, plannedDays,
+    year, mon, startDate, endDate, todayStr, showActualHours, exec,
+  } = params;
+  const mm = String(mon).padStart(2, '0');
+  const monthStart = `${year}-${mm}-01`;
+  const monthEnd = `${year}-${mm}-${String(new Date(year, mon, 0).getDate()).padStart(2, '0')}`;
+
+  let candidates = collectApprovedWeekendWork(attendance.byEmployeeDate, dailySchedulesMap, calendarMonth, plannedDays);
+  let monthSchedules = dailySchedulesMap;
+  if (candidates.length > 0 && (startDate !== monthStart || endDate !== monthEnd)) {
+    const candidateIds = new Set(candidates.map(candidate => candidate.employeeId));
+    const monthEmployees = employees
+      .filter(employee => candidateIds.has(employee.id))
+      .map(employee => ({ id: employee.id, full_name: employee.full_name }));
+    monthSchedules = await resolveSchedulesForPeriod(
+      monthEmployees.map(employee => ({ id: employee.id })), monthStart, monthEnd, exec,
+    );
+    const monthAttendance = await buildAttendanceEntries({
+      employees: monthEmployees,
+      startDate: monthStart,
+      endDate: monthEnd,
+      dailySchedulesMap: monthSchedules,
+      calendarMonth,
+      todayStr,
+      displayMode: 'actual',
+      persistTravelSegments: false,
+      synthesizeObjectOnlyDays: true,
+      synthesizeObjectOnlyDaysUpTo: todayStr,
+      exec,
+    });
+    candidates = collectApprovedWeekendWork(monthAttendance.byEmployeeDate, monthSchedules, calendarMonth, plannedDays);
+  }
+
+  const approvedInQuota = candidates.length > 0
+    ? pickApprovedWeekendDaysInQuota(
+      candidates, plannedDays, (employeeId, date) => monthSchedules.get(employeeId)?.get(date), calendarMonth,
+    )
+    : [];
+  const scheduledWeekendDays = new Set([...plannedDays, ...approvedInQuota]);
+
+  // Часы дня по объектам — те же, что идут в строки объектов (buildObjectRowsForOneC). Ручная правка не делится.
+  const hoursByDayObject = new Map<string, Map<string, number>>();
+  for (const entry of attendance.objectEntries) {
+    const dayKey = `${entry.employee_id}|${entry.work_date}`;
+    if (!scheduledWeekendDays.has(dayKey)) continue;
+    if (attendance.byEmployeeDate.get(entry.employee_id)?.get(entry.work_date)?.hours_overridden) continue;
+    const visibleHours = showActualHours ? entry.hours_worked : (entry.display_hours_worked ?? entry.hours_worked);
+    const byObject = hoursByDayObject.get(dayKey) ?? new Map<string, number>();
+    byObject.set(entry.object_key, (byObject.get(entry.object_key) ?? 0) + visibleHours);
+    hoursByDayObject.set(dayKey, byObject);
+  }
+  const scheduledWeekendObjectLimits = new Map<string, number>();
+  for (const [dayKey, hoursByObject] of hoursByDayObject) {
+    if (hoursByObject.size < 2) continue;
+    const [employeeId, date] = dayKey.split('|');
+    const schedule = dailySchedulesMap.get(Number(employeeId))?.get(date);
+    if (!schedule) continue;
+    const [y, m, d] = date.split('-').map(Number);
+    const shift = getCorrectionCapHours(schedule, new Date(y, m - 1, d), calendarMonth);
+    for (const [objectKey, limit] of splitShiftBetweenObjects(hoursByObject, shift)) {
+      scheduledWeekendObjectLimits.set(`${dayKey}|${objectKey}`, limit);
+    }
+  }
+  return { scheduledWeekendDays, scheduledWeekendObjectLimits };
+}
+
 export async function fetchTimesheetDataForDepartment(
   month: string,
   departmentId: string | null,
@@ -402,6 +541,20 @@ export async function fetchTimesheetDataForDepartment(
   }
 
   const skudMap = attendance.skudMap;
+  const scheduledWeekendData = await computeScheduledWeekendData({
+    attendance,
+    employees: empArr,
+    dailySchedulesMap,
+    calendarMonth,
+    plannedDays: weekendExemptions,
+    year,
+    mon,
+    startDate,
+    endDate,
+    todayStr,
+    showActualHours,
+    exec,
+  });
 
   // Positions
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
@@ -436,6 +589,7 @@ export async function fetchTimesheetDataForDepartment(
     showActualHours,
     cutoffByEmployeeId,
     plannedWeekendDays: weekendExemptions,
+    ...scheduledWeekendData,
   }, options);
 }
 
@@ -576,6 +730,21 @@ export async function fetchTimesheetDataForEmployees(
     }
   }
 
+  const scheduledWeekendData = await computeScheduledWeekendData({
+    attendance,
+    employees: empArr,
+    dailySchedulesMap,
+    calendarMonth,
+    plannedDays: weekendExemptions,
+    year,
+    mon,
+    startDate,
+    endDate,
+    todayStr,
+    showActualHours,
+    exec,
+  });
+
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
   const posMap = new Map<string, string>();
   if (positionIds.length > 0) {
@@ -608,6 +777,7 @@ export async function fetchTimesheetDataForEmployees(
     showActualHours,
     cutoffByEmployeeId,
     plannedWeekendDays: weekendExemptions,
+    ...scheduledWeekendData,
   }, options);
 }
 

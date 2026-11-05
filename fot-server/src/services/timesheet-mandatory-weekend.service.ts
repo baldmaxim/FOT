@@ -1,3 +1,4 @@
+import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { resolveSchedulesForPeriod, loadCalendarMonth, isHolidayOnWorkday } from './schedule.service.js';
 import { listNonHolidayWeekendDays, type WeekendDow } from './timesheet-weekend-days.util.js';
 
@@ -117,3 +118,105 @@ export async function computeMandatoryExemptions(
 
   return exemptions;
 }
+
+/**
+ * Корзина квоты для выхода: праздник-будень считается субботой, как в computeMandatoryExemptions;
+ * праздничные Сб/Вс в квоту не входят (null).
+ */
+const quotaBucketOf = (
+  schedule: IResolvedSchedule,
+  date: string,
+  dateObj: Date,
+  calendar: IProductionCalendarMonth | null,
+): WeekendDow | null => {
+  if (isHolidayOnWorkday(schedule, dateObj, calendar)) return 6;
+  const dow = dateObj.getDay();
+  if (dow !== 0 && dow !== 6) return null;
+  const validDays = listNonHolidayWeekendDays(
+    dateObj.getFullYear(),
+    dateObj.getMonth() + 1,
+    calendar,
+    schedule.respects_holidays ?? true,
+    dow,
+  );
+  return validDays.includes(date) ? dow : null;
+};
+
+/**
+ * Согласованные выходы месяца, занимающие свободные места квоты графика: `${employeeId}|${date}`.
+ * Плановые дни (computeMandatoryExemptions) занимают квоту первыми, свободные места получают самые
+ * ранние выходы. Субботняя и воскресная квоты раздельные: воскресенье при квоте только на субботы
+ * не занимает её и в набор не попадает.
+ *
+ * candidates — выходы за весь месяц с итоговыми часами (их отбирает вызывающий): иначе согласованная
+ * заявка без факта заняла бы место настоящей субботы.
+ */
+export const pickApprovedWeekendDaysInQuota = (
+  candidates: ReadonlyArray<{ employeeId: number; date: string }>,
+  plannedDays: ReadonlySet<string>,
+  scheduleOf: (employeeId: number, date: string) => IResolvedSchedule | undefined,
+  calendar: IProductionCalendarMonth | null,
+): Set<string> => {
+  const buckets = new Map<string, { employeeId: number; dow: WeekendDow; dates: Set<string> }>();
+  for (const { employeeId, date } of candidates) {
+    const schedule = scheduleOf(employeeId, date);
+    if (!schedule) continue;
+    const dow = quotaBucketOf(schedule, date, new Date(`${date}T00:00:00`), calendar);
+    if (dow === null) continue;
+    const key = `${employeeId}|${dow}`;
+    const bucket = buckets.get(key) ?? { employeeId, dow, dates: new Set<string>() };
+    bucket.dates.add(date);
+    buckets.set(key, bucket);
+  }
+
+  // Плановый будний день — это праздник-будень, он в субботней корзине.
+  const usedByBucket = new Map<string, number>();
+  for (const plannedKey of plannedDays) {
+    const [employeeId, date] = plannedKey.split('|');
+    const dow = new Date(`${date}T00:00:00`).getDay() === 0 ? 0 : 6;
+    const key = `${employeeId}|${dow}`;
+    usedByBucket.set(key, (usedByBucket.get(key) ?? 0) + 1);
+  }
+
+  const picked = new Set<string>();
+  for (const [key, { employeeId, dow, dates }] of buckets) {
+    const sorted = [...dates].sort();
+    const schedule = scheduleOf(employeeId, sorted[0]!);
+    const expected = dow === 6
+      ? (schedule?.expected_saturdays_per_month ?? 0)
+      : (schedule?.expected_sundays_per_month ?? 0);
+    const free = Math.max(0, expected - (usedByBucket.get(key) ?? 0));
+    for (const date of sorted.slice(0, free)) picked.add(`${employeeId}|${date}`);
+  }
+  return picked;
+};
+
+/**
+ * Лимиты строк по объектам, чтобы сумма сотрудника за день не превысила смену: смена делится
+ * пропорционально часам, в целых часах, методом наибольшего остатка; при равенстве решает object_key.
+ * Пустая карта — делить не нужно: объект один или округлённые строки и так укладываются в смену.
+ */
+export const splitShiftBetweenObjects = (
+  hoursByObject: ReadonlyMap<string, number>,
+  shiftHours: number,
+): Map<string, number> => {
+  const worked = [...hoursByObject].filter(([, hours]) => hours > 0);
+  const shift = Math.round(shiftHours);
+  const roundedSum = worked.reduce((sum, [, hours]) => sum + Math.round(hours), 0);
+  if (worked.length < 2 || roundedSum <= shift) return new Map();
+
+  const totalHours = worked.reduce((sum, [, hours]) => sum + hours, 0);
+  const shares = worked.map(([objectKey, hours]) => {
+    const exact = (shift * hours) / totalHours;
+    return { objectKey, whole: Math.floor(exact), rest: exact - Math.floor(exact) };
+  });
+  const limits = new Map(shares.map(share => [share.objectKey, share.whole]));
+  const undistributed = shift - shares.reduce((sum, share) => sum + share.whole, 0);
+  const byLargestRest = [...shares].sort((a, b) => (
+    b.rest - a.rest || (a.objectKey < b.objectKey ? -1 : 1)
+  ));
+  for (const share of byLargestRest.slice(0, undistributed)) {
+    limits.set(share.objectKey, share.whole + 1);
+  }
+  return limits;
+};
