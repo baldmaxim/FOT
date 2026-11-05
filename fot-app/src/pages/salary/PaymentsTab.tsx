@@ -1,16 +1,20 @@
 import { lazy, startTransition, Suspense, useCallback, useState, type FC } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '../../contexts/AuthContext';
-import type { IPayrollTermsRow } from '../../services/payrollService';
+import { payrollService, type IPayrollTermsRow } from '../../services/payrollService';
 import { moscowTodayIso } from '../../utils/moscowDate';
 import {
   calcViewFilters,
   dropPayrollDetails,
   openPayrollDetails,
   paymentsViewOptions,
+  readPayrollReturn,
   resolvePaymentsView,
   type ICalcFocus,
+  type IPayrollCardView,
+  type IPayrollReturn,
   type PaymentsView,
 } from '../../utils/payrollViews';
 import { EmployeePayrollDetails } from '../../components/salary/EmployeePayrollDetails';
@@ -29,10 +33,17 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  * Экран хранится в ?view=, а не в ?tab=: tab занят HubShell, и setSearchParams
  * хаба сохраняет остальные параметры. Списки и карточка при смене экрана не размонтируются:
  * фильтры, прокрутка и введённое в карточке сохраняются.
+ *
+ * Клик по ФИО в «Подробно» уводит на карточку посещаемости, и страница размонтируется: перед уходом запись истории
+ * браузера запоминает сотрудника, месяцы, поиск и отдел. На возврате строку сотрудника читаем заново с сервера.
  */
 export const PaymentsTab: FC = () => {
   const { canViewPage } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const [restore] = useState(() => readPayrollReturn(location.state));
+  // Сотрудник, чью строку ещё ждём после возврата с карточки посещаемости.
+  const [restoreId, setRestoreId] = useState(restore?.employeeId ?? null);
 
   const canTerms = canViewPage('/salary/terms');
   // «Расчёты» — список и карточка условий оплаты: нужен и ключ /salary/terms.
@@ -45,17 +56,37 @@ export const PaymentsTab: FC = () => {
   // предзаполняет «Действует с».
   const [date] = useState(moscowTodayIso);
   // Поиск по ФИО — один на «Условия оплаты» и «Расчёты».
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(restore?.search ?? '');
   // Отдел или бригада — тоже один на оба списка.
-  const [departmentId, setDepartmentId] = useState('');
+  const [departmentId, setDepartmentId] = useState(restore?.departmentId ?? '');
   // Сотрудник вкладки «Подробно» — строка списка на момент клика.
   const [details, setDetails] = useState<IPayrollTermsRow | null>(null);
   // «Расчёты» — только сотрудник, открытый кликом в «Условиях оплаты»; сохранение в окне «Расчётов» не снимает.
-  const [calcFocus, setCalcFocus] = useState<ICalcFocus | null>(null);
+  const [calcFocus, setCalcFocus] = useState<ICalcFocus | null>(restore?.calcFocus ?? null);
   const calcFilters = calcViewFilters(calcFocus, search, departmentId);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
   const [calcMounted, setCalcMounted] = useState(false);
   if (view === 'calc' && !calcMounted) setCalcMounted(true);
+
+  const returnRow = useQuery({
+    queryKey: ['payroll-terms', 'return-row', restoreId, date],
+    queryFn: ({ signal }) => payrollService.listTerms(
+      { date, employeeId: restoreId as number, sort: 'name', dir: 'asc', pageSize: 1 },
+      signal,
+    ),
+    enabled: canTerms && restoreId !== null,
+    // Строку не кэшируем: на возврате нужна свежая, а в приложении refetchOnMount: false — кэш вернулся бы без запроса.
+    gcTime: 0,
+  });
+  // Ждём конца запроса. Условие разовое: restoreId сразу сбрасывается.
+  if (restoreId !== null && !returnRow.isFetching) {
+    setRestoreId(null);
+    // Сверка id: сервер, не знающий фильтра, вернул бы другого человека.
+    const row = returnRow.isSuccess
+      ? returnRow.data.rows.find(item => item.employee_id === restoreId)
+      : undefined;
+    if (row) setDetails(prev => prev ?? row);
+  }
 
   /**
    * Клики по вкладкам пишутся в историю браузера. Открытие и закрытие карточки — нет (replace),
@@ -95,6 +126,13 @@ export const PaymentsTab: FC = () => {
   const handleCalcSaved = useCallback((employeeId: number) => {
     setDetails(prev => dropPayrollDetails(prev, [employeeId]));
   }, []);
+
+  // Клик по ФИО: стрелка назад вернётся на эту запись истории — кладём в неё, что показать.
+  const rememberReturn = useCallback((card: IPayrollCardView) => {
+    if (!details) return;
+    const payrollReturn: IPayrollReturn = { employeeId: details.employee_id, card, search, departmentId, calcFocus };
+    setSearchParams(prev => prev, { replace: true, state: { payrollReturn } });
+  }, [details, search, departmentId, calcFocus, setSearchParams]);
 
   return (
     <div className={styles.tab}>
@@ -139,13 +177,17 @@ export const PaymentsTab: FC = () => {
               row={details}
               defaultDate={date}
               active={view === 'details'}
+              initialView={details.employee_id === restore?.employeeId ? restore.card : undefined}
+              onLeaveToEmployeeCard={rememberReturn}
             />
           </div>
         )}
 
         {view === 'details' && !details && (
           <div className={styles.view}>
-            <p className={styles.empty}>Выберите сотрудника в «Условиях оплаты»</p>
+            {restoreId !== null
+              ? <div className={styles.loading}>Загрузка…</div>
+              : <p className={styles.empty}>Выберите сотрудника в «Условиях оплаты»</p>}
           </div>
         )}
 

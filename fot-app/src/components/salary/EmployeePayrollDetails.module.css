@@ -35,6 +35,20 @@
 .monthsHidden { visibility: hidden; }
 /* Фокус на ФИО ставится программно (режим просмотра) — обводка не нужна. */
 .name:focus { outline: none; }
+/* ФИО в «Подробно» — ссылка на карточку посещаемости. Подчёркивание постоянное: на телефоне наведения нет. */
+.nameLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 3px;
+  touch-action: manipulation;
+  transition: color 150ms ease-out;
+}
+.nameLink:hover { color: var(--primary); text-decoration-color: currentColor; }
+.nameLink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 .meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 /* «Экспорт» — xlsx условий и истории выплат; на телефоне — только иконка. */
@@ -174,6 +188,7 @@
 @media (min-width: 768px) {
   .details { --payroll-control-h: 40px; }
   .nameRow .monthsTrigger { min-height: 32px; }
+  .nameLink { min-height: 32px; }
   .header { padding: 14px 20px 10px; }
   .tabs { padding: 0 12px; }
   .tab { min-height: 40px; }
@@ -191,5 +206,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .primaryButton, .secondaryButton, .exportButton, .tab { transition: none; }
+  .primaryButton, .secondaryButton, .exportButton, .tab, .nameLink { transition: none; }
 }

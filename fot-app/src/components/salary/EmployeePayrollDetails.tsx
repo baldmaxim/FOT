@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC, type FormEvent, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Download, X } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -17,6 +18,7 @@ import { moscowCurrentMonth, shiftMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
 import { travelAllowance } from '../../utils/payrollRates';
 import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/payrollTermsForm';
+import { employeeCardPath, type IPayrollCardView, type PayrollCardTab } from '../../utils/payrollViews';
 import { MonthsPicker } from '../ui/MonthsPicker';
 import { PayrollPaidTable } from './PayrollPaidTable';
 import { PayrollTermsFields } from './PayrollTermsFields';
@@ -27,9 +29,7 @@ import { StaffDeductionsList } from './StaffDeductionsList';
 import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
 
-type CardTab = 'terms' | 'history';
-
-const CARD_TABS: ReadonlyArray<{ key: CardTab; label: string }> = [
+const CARD_TABS: ReadonlyArray<{ key: PayrollCardTab; label: string }> = [
   { key: 'terms', label: 'Условия' },
   { key: 'history', label: 'Зарплата' },
 ];
@@ -55,6 +55,10 @@ interface IEmployeePayrollDetailsProps {
    * или открыли другого сотрудника — только закрыть устаревшую карточку этого.
    */
   onSaved?: (employeeId: number, onScreen: boolean) => void;
+  /** Месяцы и вкладка при возврате с карточки посещаемости (только «Подробно»). */
+  initialView?: IPayrollCardView;
+  /** Клик по ФИО (только «Подробно»): запомнить, что показать при возврате. */
+  onLeaveToEmployeeCard?: (view: IPayrollCardView) => void;
 }
 
 /**
@@ -69,6 +73,9 @@ interface IEmployeePayrollDetailsProps {
  * «Оплачено» (только «Подробно») — только чтение: суммы приходят из 1С; над ними «К выплате (ФОТ)» — расчёт по
  * закрытому табелю. Категория — по отделу, в окне её можно сменить (сохраняется с условиями). Месяцы у ФИО
  * (один или несколько) задают таблицу «Оплачено».
+ * ФИО в «Подробно» — ссылка на карточку посещаемости в этой же вкладке браузера; только администратору: у него охват
+ * «Зарплаты» и карточки один, а у остальных карточка могла бы отказать и показать пустую страницу. В окне «Расчётов»
+ * ссылки нет: переход стёр бы введённые суммы.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -78,8 +85,11 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   active,
   onClose,
   onSaved,
+  initialView,
+  onLeaveToEmployeeCard,
 }) => {
-  const { canEditPage } = useAuth();
+  const { canEditPage, canViewPage, isAdmin } = useAuth();
+  const location = useLocation();
   const { success, error: showError } = useToast();
   const queryClient = useQueryClient();
   const titleId = useId();
@@ -96,21 +106,27 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const monthOptions = useMemo(() => [...payrollMonthOptions(currentMonth)].reverse(), [currentMonth]);
   // По умолчанию — прошлый месяц: текущий табель ещё не закрыт.
   const defaultMonth = shiftMonth(currentMonth, -1);
-  const [pickedMonths, setPickedMonths] = useState<string[] | null>(null);
+  // На возврате с карточки посещаемости: месяц мог выйти из окна (страницу перезагрузили после смены месяца).
+  const [pickedMonths, setPickedMonths] = useState<string[] | null>(() => {
+    const valid = initialView?.months?.filter(month => monthOptions.includes(month));
+    return valid?.length ? valid : null;
+  });
   const months = useMemo(() => pickedMonths ?? [defaultMonth], [pickedMonths, defaultMonth]);
   const paid = usePayrollPaid(row.employee_id, months, !editable);
   const calc = usePayrollCalc(row.employee_id, months, !editable);
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
+  const fullName = row.full_name ?? 'Сотрудник';
+  const canOpenEmployeeCard = !editable && isAdmin && canViewPage('/employees');
   const tabsId = useId();
-  const [tab, setTab] = useState<CardTab>('terms');
+  const [tab, setTab] = useState<PayrollCardTab>(initialView?.tab ?? 'terms');
   // История монтируется при первом открытии вкладки и дальше остаётся: выбранный месяц и прокрутка целы.
-  const [historyMounted, setHistoryMounted] = useState(false);
-  const tabRefs = useRef<Partial<Record<CardTab, HTMLButtonElement | null>>>({});
+  const [historyMounted, setHistoryMounted] = useState(initialView?.tab === 'history');
+  const tabRefs = useRef<Partial<Record<PayrollCardTab, HTMLButtonElement | null>>>({});
   const { exporting, exportCard } = usePayrollCardExport(row, defaultDate, currentMonth);
-  const tabId = (key: CardTab) => `${tabsId}-tab-${key}`;
-  const panelId = (key: CardTab) => `${tabsId}-panel-${key}`;
+  const tabId = (key: PayrollCardTab) => `${tabsId}-tab-${key}`;
+  const panelId = (key: PayrollCardTab) => `${tabsId}-panel-${key}`;
 
-  const selectTab = useCallback((key: CardTab) => {
+  const selectTab = useCallback((key: PayrollCardTab) => {
     setTab(key);
     if (key === 'history') setHistoryMounted(true);
   }, []);
@@ -189,7 +205,18 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
       <header className={styles.header}>
         <div className={styles.headerMain}>
           <div className={styles.nameRow}>
-            <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>{row.full_name ?? 'Сотрудник'}</h2>
+            <h2 ref={nameRef} id={titleId} className={styles.name} tabIndex={-1}>
+              {canOpenEmployeeCard ? (
+                <Link
+                  to={employeeCardPath(row.employee_id, months)}
+                  state={{ label: 'Зарплата', from: `${location.pathname}${location.search}` }}
+                  className={styles.nameLink}
+                  onClick={() => onLeaveToEmployeeCard?.({ months: pickedMonths, tab })}
+                >
+                  {fullName}
+                </Link>
+              ) : fullName}
+            </h2>
             {/* Месяцы задают «Оплачено» на «Условиях»; истории они не касаются. */}
             {!editable && (
               <MonthsPicker

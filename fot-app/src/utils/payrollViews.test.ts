@@ -4,8 +4,10 @@ import type { IPayrollTermsRow } from '../services/payrollService';
 import {
   calcViewFilters,
   dropPayrollDetails,
+  employeeCardPath,
   openPayrollDetails,
   paymentsViewOptions,
+  readPayrollReturn,
   resolvePaymentsView,
 } from './payrollViews';
 
@@ -105,5 +107,76 @@ describe('«Расчёты» после открытия карточки — т
 
   it('фокус снят — общие с «Условиями оплаты» поиск и отдел', () => {
     expect(calcViewFilters(null, 'Абдук', 'dept-1')).toEqual({ search: 'Абдук', departmentId: 'dept-1' });
+  });
+});
+
+describe('возврат с карточки посещаемости: запись истории браузера', () => {
+  const saved = {
+    employeeId: 2301,
+    card: { months: ['2026-09', '2026-10'], tab: 'history' },
+    search: 'Абду',
+    departmentId: 'dept-1',
+    calcFocus: { employeeId: 2301, fullName: 'Абдувохидов' },
+  };
+  const read = (patch: Record<string, unknown>) => readPayrollReturn({ payrollReturn: { ...saved, ...patch } });
+
+  it('верная запись читается целиком', () => {
+    expect(readPayrollReturn({ payrollReturn: saved })).toEqual(saved);
+  });
+
+  it('месяцы по умолчанию и снятый отбор «Расчётов» — допустимы', () => {
+    expect(read({ card: { months: null, tab: 'terms' }, calcFocus: null })).toEqual({
+      ...saved,
+      card: { months: null, tab: 'terms' },
+      calcFocus: null,
+    });
+  });
+
+  it('записи нет — прямое открытие раздела', () => {
+    expect(readPayrollReturn(null)).toBeNull();
+    expect(readPayrollReturn(undefined)).toBeNull();
+    expect(readPayrollReturn({ label: 'Зарплата', from: '/salary' })).toBeNull();
+    expect(readPayrollReturn('payrollReturn')).toBeNull();
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '2301', null])('плохой id сотрудника %s — запись отбрасывается', employeeId => {
+    expect(read({ employeeId })).toBeNull();
+  });
+
+  it.each([
+    [['2026-13']],
+    [['2026-10-01']],
+    [['2026-10', 7]],
+    [[]],
+    ['2026-10'],
+  ])('плохие месяцы %j — запись отбрасывается', months => {
+    expect(read({ card: { months, tab: 'terms' } })).toBeNull();
+  });
+
+  it('чужая вкладка, поиск и отдел не строкой — запись отбрасывается', () => {
+    expect(read({ card: { months: null, tab: 'calc' } })).toBeNull();
+    expect(read({ card: null })).toBeNull();
+    expect(read({ search: null })).toBeNull();
+    expect(read({ departmentId: 1 })).toBeNull();
+  });
+
+  it('отбор «Расчётов» по другому сотруднику — запись отбрасывается', () => {
+    expect(read({ calcFocus: { employeeId: 7, fullName: 'Другой' } })).toBeNull();
+    expect(read({ calcFocus: { employeeId: 2301, fullName: 7 } })).toBeNull();
+    expect(read({ calcFocus: 'Абдувохидов' })).toBeNull();
+  });
+});
+
+describe('адрес карточки посещаемости', () => {
+  it('один месяц — календарь на нём', () => {
+    expect(employeeCardPath(2301, ['2026-10'])).toBe('/employees/2301?date=2026-10-01');
+  });
+
+  it('несколько месяцев — на последнем, в каком бы порядке их ни выбрали', () => {
+    expect(employeeCardPath(2301, ['2026-10', '2025-12', '2026-03'])).toBe('/employees/2301?date=2026-10-01');
+  });
+
+  it('месяцев нет — без даты, карточка откроет текущий', () => {
+    expect(employeeCardPath(2301, [])).toBe('/employees/2301');
   });
 });
