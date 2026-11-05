@@ -628,9 +628,11 @@ describe('экспорт', () => {
     }
   });
 
-  it('«Без переработки» — таблица известна: пустой снимок — 400, не 404', async () => {
-    const res = makeRes();
-    await registryC.exportTable(makeReq({ params: { table: 'overtime-stops' } }), res);
-    expect(res.statusCode).toBe(400);
+  it('«Без переработки» и «Расчёты» — таблицы известны: пустой снимок — 400, не 404', async () => {
+    for (const table of ['overtime-stops', 'calc']) {
+      const res = makeRes();
+      await registryC.exportTable(makeReq({ params: { table } }), res);
+      expect(res.statusCode, table).toBe(400);
+    }
   });
 });

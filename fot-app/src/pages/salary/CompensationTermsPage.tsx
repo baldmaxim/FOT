@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { keepPreviousData, useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
-import { Settings } from 'lucide-react';
+import { Download, Settings } from 'lucide-react';
 
 import {
   payrollService,
@@ -14,16 +14,18 @@ import {
   type PayrollSortKey,
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { usePayrollCalcExport } from '../../hooks/usePayrollCalcExport';
 import { usePayrollExpandedColumns } from '../../hooks/usePayrollExpandedColumns';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { shouldLoadMore } from '../../utils/staffLoadMore';
-import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { filterDepartmentTreeByIds, findDepartmentName } from '../../utils/departmentUtils';
 import { payrollAccrualMonths } from '../../utils/payrollAccruals';
 import {
   countActivePayrollColumnFilters,
   isPayrollColumnFilterActive,
+  PAYROLL_FILTER_COLUMN_LABELS,
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
 } from '../../utils/payrollColumnFilters';
@@ -50,17 +52,6 @@ import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import styles from './CompensationTermsPage.module.css';
-
-/** Подписи столбцов для заголовка окна фильтра. */
-const COLUMN_LABELS: Record<PayrollSortKey, string> = {
-  name: 'Сотрудник',
-  department: 'Подразделение',
-  position: 'Должность',
-  schedule: 'График работы',
-  salary: 'Оклад',
-  bonus: 'Премиальная часть',
-  housing: 'Компенсация проживания',
-};
 
 interface ICompensationTermsPageProps {
   /** Дата выборки — одна на список и карточку «Подробно» (см. PaymentsTab). */
@@ -309,6 +300,26 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 
   const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}`;
 
+  // «Экспорт» «Расчётов» — вся выборка экрана. Пока новая выборка не загрузилась или поиск не применён, на экране
+  // прежние строки: кнопка неактивна, чтобы файл не разошёлся с тем, что выбрано.
+  const { exporting, exportCalc } = usePayrollCalcExport();
+  const handleExport = () => {
+    if (!data || shownPaidMonths === null) return;
+    void exportCalc({
+      pages: data.pages,
+      months: shownPaidMonths,
+      viewParams,
+      sort,
+      dir,
+      columns,
+      hidden: hiddenColumns,
+      expanded: expandedColumns,
+      departmentName: departmentId ? findDepartmentName(departments, departmentId) ?? 'выбранный отдел' : null,
+      search: debouncedSearch,
+      filters: columnFilters,
+    });
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.toolbar}>
@@ -333,6 +344,17 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         )}
         <div className={styles.actions}>
           {actionsExtra}
+          {isCalcScreen && (
+            <button
+              type="button"
+              className={styles.exportButton}
+              disabled={exporting || isPlaceholderData || total === 0 || search.trim() !== debouncedSearch}
+              onClick={handleExport}
+            >
+              <Download size={14} aria-hidden="true" />
+              {exporting ? 'Готовим…' : 'Экспорт'}
+            </button>
+          )}
           <button
             type="button"
             className={hiddenColumns.size > 0 ? `${styles.iconButton} ${styles.iconButtonActive}` : styles.iconButton}
@@ -413,7 +435,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         <PayrollColumnFilterPopover
           key={openFilter.column}
           column={openFilter.column}
-          label={COLUMN_LABELS[openFilter.column]}
+          label={PAYROLL_FILTER_COLUMN_LABELS[openFilter.column]}
           filters={columnFilters}
           viewParams={viewParams}
           anchor={openFilter.anchor}

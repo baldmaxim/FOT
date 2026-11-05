@@ -158,7 +158,7 @@ export interface IRegistryPeriodFields {
 
 export type PayrollRegistryTable =
   | 'housing' | 'supplements' | 'compensation-stops' | 'overtime-stops' | 'dormitory-allowances' | 'dormitory-stays'
-  | 'deductions' | 'summary';
+  | 'deductions' | 'summary' | 'calc';
 
 interface IApiResponse<T> { success: boolean; data: T }
 

@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { TABLE_SNAPSHOT_MAX_CELL_LENGTH, tableSnapshotSchema, tableSnapshotsSchema } from './table-snapshot-export.js';
+import {
+  TABLE_SNAPSHOT_MAX_CELL_LENGTH,
+  TABLE_SNAPSHOT_MAX_COLUMNS,
+  TABLE_SNAPSHOT_MAX_ROWS,
+  tableSnapshotSchema,
+  tableSnapshotsSchema,
+} from './table-snapshot-export.js';
 
 const table = () => ({
   title: 'Иванов Иван',
@@ -67,6 +73,22 @@ describe('tableSnapshotSchema', () => {
     expect(TABLE_SNAPSHOT_MAX_CELL_LENGTH).toBe(3000);
     expect(tableSnapshotSchema.safeParse(snapshot('x'.repeat(3000))).success).toBe(true);
     expect(tableSnapshotSchema.safeParse(snapshot('x'.repeat(3001))).success).toBe(false);
+  });
+
+  it('«Расчёты»: весь штат и все раскрытые «+» проходят, сверх лимитов — отказ', () => {
+    const snapshot = (columnCount: number, rowCount: number) => ({
+      title: 'Расчёты',
+      subtitle: '',
+      file_name: 'Расчёты.xlsx',
+      columns: Array.from({ length: columnCount }, (_, index) => ({ label: `Столбец ${index}`, type: 'money' })),
+      rows: Array.from({ length: rowCount }, () => ({ cells: Array.from({ length: columnCount }, () => '100.00') })),
+    });
+    expect(TABLE_SNAPSHOT_MAX_ROWS).toBe(5000);
+    expect(TABLE_SNAPSHOT_MAX_COLUMNS).toBe(100);
+    expect(tableSnapshotSchema.safeParse(snapshot(68, 1382)).success).toBe(true);
+    expect(tableSnapshotSchema.safeParse(snapshot(1, TABLE_SNAPSHOT_MAX_ROWS)).success).toBe(true);
+    expect(tableSnapshotSchema.safeParse(snapshot(1, TABLE_SNAPSHOT_MAX_ROWS + 1)).success).toBe(false);
+    expect(tableSnapshotSchema.safeParse(snapshot(TABLE_SNAPSHOT_MAX_COLUMNS + 1, 1)).success).toBe(false);
   });
 
   it('одиночный снимок — по-прежнему с file_name и теми же проверками', () => {

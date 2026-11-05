@@ -9,6 +9,17 @@ export const PAYROLL_VALUE_FILTER_COLUMNS: readonly PayrollValueFilterColumn[] =
   'department', 'position', 'schedule', 'salary', 'bonus', 'housing',
 ];
 
+/** Подписи столбцов: заголовок окна фильтра и подзаголовок выгрузки. */
+export const PAYROLL_FILTER_COLUMN_LABELS: Record<PayrollSortKey, string> = {
+  name: 'Сотрудник',
+  department: 'Подразделение',
+  position: 'Должность',
+  schedule: 'График работы',
+  salary: 'Оклад',
+  bonus: 'Премиальная часть',
+  housing: 'Компенсация проживания',
+};
+
 /** Лимиты сервера (payroll-terms-list.helpers.ts). */
 export const MAX_PAYROLL_FILTER_VALUES = 200;
 export const MAX_PAYROLL_FILTER_TEXT = 200;

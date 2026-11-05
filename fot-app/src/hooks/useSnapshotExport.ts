@@ -6,7 +6,7 @@ import { triggerBlobDownload } from '../utils/download';
 import type { ITableExportSnapshot } from '../utils/tableView';
 
 /** Предел снимка xlsx на сервере (TABLE_SNAPSHOT_MAX_ROWS). */
-export const SNAPSHOT_EXPORT_MAX_ROWS = 1000;
+export const SNAPSHOT_EXPORT_MAX_ROWS = 5000;
 
 /**
  * «Экспорт» клиентской таблицы (общежитие, таблицы «Справочника» «Зарплаты»): ровно видимые строки —

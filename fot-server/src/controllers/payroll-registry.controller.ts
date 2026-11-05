@@ -1,5 +1,5 @@
 /**
- * «Экспорт» видимых строк любой из таблиц окна «Справочник» на «Расчётах» (миграция 315) и «Свода».
+ * «Экспорт» видимых строк любой из таблиц окна «Справочник» на «Расчётах» (миграция 315), «Свода» и самих «Расчётов».
  * Сами таблицы — свои контроллеры («Удержания» — payroll-staff-deductions.controller.ts, миграция 321).
  */
 import type { Response } from 'express';
@@ -20,11 +20,12 @@ const REGISTRY_SHEETS = new Map<string, ITableSnapshotSheet>([
   ['dormitory-stays', { sheetName: 'Общежитие', tableName: 'DormitoryStays' }],
   ['deductions', { sheetName: 'Удержания', tableName: 'Deductions' }],
   ['summary', { sheetName: 'Свод', tableName: 'PayrollSummary' }],
+  ['calc', { sheetName: 'Расчёты', tableName: 'PayrollCalc' }],
 ]);
 
 /**
  * POST /api/payroll/registry/:table/export — xlsx ровно как на экране: сортировка и фильтры применены
- * на клиенте, сервер только оформляет лист (до 1000 строк).
+ * на клиенте, сервер только оформляет лист (лимиты — table-snapshot-export.ts).
  */
 const exportTable = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
