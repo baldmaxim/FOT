@@ -471,16 +471,13 @@ export const writePayrollBasisForVersion = async (
   await insertPayrollBasis(client, versionId, drafts, { quality: 'materialized', reason: 'close', mode: 'changed' });
 });
 
-/**
- * Перенос основы в новую редакцию с теми же днями (пересборка объектов или без части сотрудников): последняя
- * revision каждого сотрудника и месяца прежней редакции — revision 1 новой, качество прежнее.
- */
-export const copyPayrollBasis = async (
+const copyBasisRows = async (
   client: PoolClient,
   fromVersionId: number,
   toVersionId: number,
-  excludeEmployeeIds: readonly number[] = [],
-): Promise<void> => withBasisSavepoint(client, `copy ${fromVersionId} → ${toVersionId}`, async () => {
+  employeeFilterSql: string,
+  employeeIds: readonly number[],
+): Promise<void> => {
   await client.query(
     `INSERT INTO timesheet_version_payroll_basis (
        version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
@@ -492,10 +489,33 @@ export const copyPayrollBasis = async (
        FROM (
          SELECT DISTINCT ON (employee_id, month) *
            FROM timesheet_version_payroll_basis
-          WHERE version_id = $1 AND NOT (employee_id = ANY($3::int[]))
+          WHERE version_id = $1 AND ${employeeFilterSql}
           ORDER BY employee_id, month, revision DESC
        ) b
      ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,
-    [fromVersionId, toVersionId, [...excludeEmployeeIds]],
+    [fromVersionId, toVersionId, [...employeeIds]],
   );
+};
+
+/**
+ * Перенос основы в новую редакцию с теми же днями (пересборка объектов или без части сотрудников): последняя
+ * revision каждого сотрудника и месяца прежней редакции — revision 1 новой, качество прежнее.
+ */
+export const copyPayrollBasis = async (
+  client: PoolClient,
+  fromVersionId: number,
+  toVersionId: number,
+  excludeEmployeeIds: readonly number[] = [],
+): Promise<void> => withBasisSavepoint(client, `copy ${fromVersionId} → ${toVersionId}`, async () => {
+  await copyBasisRows(client, fromVersionId, toVersionId, 'NOT (employee_id = ANY($3::int[]))', excludeEmployeeIds);
+});
+
+/** То же, что copyPayrollBasis, но только для указанных сотрудников: основа едет с ними в редакцию другой подачи. */
+export const copyPayrollBasisOfEmployees = async (
+  client: PoolClient,
+  fromVersionId: number,
+  toVersionId: number,
+  employeeIds: readonly number[],
+): Promise<void> => withBasisSavepoint(client, `copy employees ${fromVersionId} → ${toVersionId}`, async () => {
+  await copyBasisRows(client, fromVersionId, toVersionId, 'employee_id = ANY($3::int[])', employeeIds);
 });
