@@ -1621,7 +1621,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         >
           {exceedsPlanned ? '⚠ ' : '✓ '}
           Σ корректировок = {formatHM(totalHours)} / план {formatHM(planned)}
-          {exceedsPlanned && ' — больше графика'}
+          {exceedsPlanned && (maxDayHours != null ? ' — больше графика' : ' — превышение, согласующий увидит')}
         </div>
       )}
     </div>
