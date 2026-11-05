@@ -17,12 +17,15 @@
 --   LINIYA       2026-04-01..07-05     not touched
 --   Obshchestroy 2026-07-06..open      LINIYA 2026-07-06..open
 --
--- Closed approvals are NOT changed here. In the same sitting, after COMMIT, run
+-- Closed approvals are NOT changed here, and their status or revision does not matter:
+-- HR may reopen and close them at any time. In the same sitting, after COMMIT, run
 --   fot-server/scripts/fix-liniya-version-employees.ts
 -- which moves their hours from the Obshchestroy revisions to the LINIYA ones. Payroll
--- does not change in between (checked on a copy), but until then the days belong to
--- LINIYA while the hours lie in Obshchestroy: closing LINIYA again at that moment would
--- put the same days into two approvals, and the script would refuse.
+-- does not change in between (checked on a copy).
+--
+-- Pairs, Obshchestroy -> LINIYA: 2512 -> 2304 and 2513 -> 2305 (September),
+-- 2806 -> 2772 and 2807 -> 2773 (October). The audit row of 6550 keeps the latest version
+-- of these 8 approvals: the undo file relies on it.
 --
 -- Any difference from the expected state raises STOP and nothing is applied.
 --
@@ -50,6 +53,7 @@ DECLARE
   c_p_obsh     CONSTANT uuid := '72935066-9280-408c-97f7-eae219e01126';
   c_s_open     CONSTANT uuid := 'bb46a137-54a6-4e56-ae98-ca16508b8764';
   v_actual text;
+  v_latest jsonb;
 BEGIN
   PERFORM 1 FROM employees WHERE id IN (6550, 1700) FOR UPDATE;
   PERFORM 1 FROM employee_assignments WHERE employee_id IN (6550, 1700) FOR UPDATE;
@@ -79,20 +83,25 @@ BEGIN
     RAISE EXCEPTION 'STOP: assignments differ from expected:%', E'\n' || COALESCE(v_actual, '(none)');
   END IF;
 
+  -- The 8 approvals exist with the right departments and periods. Status and revision are
+  -- not checked on purpose: they are printed below for information.
   SELECT string_agg(
-           a.id::text || ' ' || a.status
-             || CASE WHEN a.unlocked_at IS NULL AND a.version_dirty_at IS NULL
-                     THEN ' closed' ELSE ' open_or_dirty' END
-             || ' v' || (SELECT max(v.id)::text FROM timesheet_versions v WHERE v.approval_id = a.id),
-           ', ' ORDER BY a.id)
+           id::text || ' ' || department_id::text || ' ' || start_date::text || ' ' || end_date::text,
+           E'\n' ORDER BY id)
     INTO v_actual
-    FROM timesheet_approvals a
-   WHERE a.id IN (2304, 2305, 2512, 2513, 2772, 2773, 2806, 2807);
-  IF v_actual IS DISTINCT FROM
-     '2304 approved closed v1711, 2305 approved closed v1713, 2512 approved closed v1817, '
-     || '2513 approved closed v1819, 2772 approved closed v1948, 2773 approved closed v1949, '
-     || '2806 approved closed v2022, 2807 approved closed v2023' THEN
-    RAISE EXCEPTION 'STOP: approvals differ from expected: %', COALESCE(v_actual, '(none)');
+    FROM timesheet_approvals
+   WHERE id IN (2304, 2305, 2512, 2513, 2772, 2773, 2806, 2807);
+  IF v_actual IS DISTINCT FROM concat_ws(E'\n',
+    '2304 60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4 2026-09-01 2026-09-15',
+    '2305 60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4 2026-09-16 2026-09-30',
+    '2512 0b24809e-5f04-45e1-bbe2-8a82990d6bdd 2026-09-01 2026-09-15',
+    '2513 0b24809e-5f04-45e1-bbe2-8a82990d6bdd 2026-09-16 2026-09-30',
+    '2772 60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4 2026-10-01 2026-10-15',
+    '2773 60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4 2026-10-16 2026-10-31',
+    '2806 0b24809e-5f04-45e1-bbe2-8a82990d6bdd 2026-10-01 2026-10-15',
+    '2807 0b24809e-5f04-45e1-bbe2-8a82990d6bdd 2026-10-16 2026-10-31'
+  ) THEN
+    RAISE EXCEPTION 'STOP: approvals differ from expected:%', E'\n' || COALESCE(v_actual, '(none)');
   END IF;
 
   IF EXISTS (
@@ -101,6 +110,20 @@ BEGIN
      WHERE v.approval_id IN (2304, 2305, 2512, 2513, 2772, 2773, 2806, 2807)
   ) THEN
     RAISE EXCEPTION 'STOP: 1C has already acknowledged one of the approvals';
+  END IF;
+
+  SELECT jsonb_object_agg(a.id::text, l.id)
+    INTO v_latest
+    FROM timesheet_approvals a
+    JOIN LATERAL (
+      SELECT v.id FROM timesheet_versions v
+       WHERE v.approval_id = a.id
+       ORDER BY v.revision DESC
+       LIMIT 1
+    ) l ON true
+   WHERE a.id IN (2304, 2305, 2512, 2513, 2772, 2773, 2806, 2807);
+  IF (SELECT count(*) FROM jsonb_object_keys(v_latest)) <> 8 THEN
+    RAISE EXCEPTION 'STOP: not all 8 approvals have a version: %', v_latest;
   END IF;
 
   -- Assignments: this order keeps the overlap trigger satisfied at every step.
@@ -120,7 +143,8 @@ BEGIN
        'assignment_new_id', c_p_transfer,
        'assignment_old_id', c_p_obsh,
        'new_effective_from', '2026-07-01',
-       'new_effective_to_old', '2026-06-30')),
+       'new_effective_to_old', '2026-06-30',
+       'latest_versions', v_latest)),
     (NULL, 'UPDATE_TRANSFER', 'employee', '1700', jsonb_build_object(
        'source', 'manual_sql',
        'employee_id', 1700,
@@ -162,10 +186,25 @@ SELECT a.employee_id, d.name AS department, a.effective_from, a.effective_to
  WHERE a.employee_id IN (6550, 1700)
  ORDER BY a.employee_id, a.effective_from;
 
+-- For information only.
+SELECT a.id, d.name AS department, a.start_date, a.end_date, a.status,
+       a.unlocked_at IS NOT NULL AS opened, l.id AS latest_version, l.revision, l.total_hours
+  FROM timesheet_approvals a
+  LEFT JOIN org_departments d ON d.id = a.department_id
+  LEFT JOIN LATERAL (
+    SELECT v.id, v.revision, v.total_hours FROM timesheet_versions v
+     WHERE v.approval_id = a.id
+     ORDER BY v.revision DESC
+     LIMIT 1
+  ) l ON true
+ WHERE a.id IN (2304, 2305, 2512, 2513, 2772, 2773, 2806, 2807)
+ ORDER BY a.start_date, a.id;
+
 \echo
-\echo Expected 6 rows.
+\echo Expected first table, 6 rows.
 \echo 1700: Obshchestroy 2025-12-31 .. 2025-12-31, Obshchestroy 2026-01-01 .. 2026-03-31,
 \echo LINIYA 2026-04-01 .. 2026-07-05, LINIYA 2026-07-06 .. empty.
 \echo 6550: Obshchestroy 2026-05-22 .. 2026-06-30, LINIYA 2026-07-01 .. empty.
-\echo If it matches type COMMIT; otherwise type ROLLBACK;
+\echo The second table is for information, 8 rows.
+\echo If the first table matches type COMMIT; otherwise type ROLLBACK;
 \echo After COMMIT run fix-liniya-version-employees.ts in the same sitting.
