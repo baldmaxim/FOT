@@ -746,19 +746,23 @@ describe('timesheet-excel.service — объектные строки уважа
 
   const makeWeekendData = (
     day: { hours: number; corrected: boolean; hoursDropped: boolean },
+    date = SATURDAY,
   ): IDepartmentTimesheetData => {
+    const [year, mon, dayOfMonth] = date.split('-').map(Number);
     const data = makeBaseData();
-    data.exportDays = [4];
-    data.dailySchedulesMap = new Map([[1, new Map([[SATURDAY, makeSchedule()]])]]);
+    data.year = year;
+    data.mon = mon;
+    data.exportDays = [dayOfMonth];
+    data.dailySchedulesMap = new Map([[1, new Map([[date, makeSchedule()]])]]);
     data.employees = [data.employees[0]];
-    data.dataMap = new Map([[1, new Map([[SATURDAY, {
+    data.dataMap = new Map([[1, new Map([[date, {
       status: 'work', hours: day.hours, corrected: day.corrected,
       hoursOverridden: day.corrected, hoursDropped: day.hoursDropped,
     }]])]]);
     data.objectEntries = [{
       adjustment_id: day.corrected ? 1090038 : null,
       employee_id: 1,
-      work_date: SATURDAY,
+      work_date: date,
       object_key: 'obj-a',
       object_id: 'obj-a',
       object_name: 'ЖК Сад 69',
@@ -789,10 +793,31 @@ describe('timesheet-excel.service — объектные строки уважа
     expect(row.workedDays).toBe(0);
   });
 
-  it('сырое СКУД-присутствие в выходной guard НЕ трогает (отдельный, более широкий случай)', () => {
+  it('сырое СКУД-присутствие до 01.10.2026 остаётся: старые месяцы уже загружены в 1С', () => {
     const row = objectRowFor(makeWeekendData({ hours: 0, corrected: false, hoursDropped: true }));
     expect(row.dayValues.get(4)?.hours).toBe(8);
     expect(row.totalHours).toBe(8);
+    expect(row.hasFilteredWeekendHours).toBe(false);
+  });
+
+  it('сырое СКУД-присутствие с 01.10.2026 обнуляется, как в общей строке сотрудника', () => {
+    const row = objectRowFor(makeWeekendData({ hours: 0, corrected: false, hoursDropped: true }, '2026-10-17'));
+    expect(row.dayValues.get(17)?.hours ?? 0).toBe(0);
+    expect(row.totalHours).toBe(0);
+    expect(row.workedDays).toBe(0);
+    expect(row.hasFilteredWeekendHours).toBe(true);
+  });
+
+  it('граница правила: 30.09 остаётся, 01.10 обнуляется', () => {
+    const day = { hours: 0, corrected: false, hoursDropped: true };
+    expect(objectRowFor(makeWeekendData(day, '2026-09-30')).totalHours).toBe(8);
+    expect(objectRowFor(makeWeekendData(day, '2026-10-01')).totalHours).toBe(0);
+  });
+
+  it('день, который фильтр не обнулил, с 01.10.2026 остаётся и признака не даёт', () => {
+    const row = objectRowFor(makeWeekendData({ hours: 8, corrected: false, hoursDropped: false }, '2026-10-17'));
+    expect(row.totalHours).toBe(8);
+    expect(row.hasFilteredWeekendHours).toBe(false);
   });
 });
 

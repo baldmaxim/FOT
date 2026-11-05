@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type ExcelJS from 'exceljs';
-import { buildUnified1CWorkbook } from './timesheet-1c-unified.service.js';
+import { buildUnified1CRows, buildUnified1CWorkbook } from './timesheet-1c-unified.service.js';
+import { classifyDepartmentCandidates, serializeUnifiedRowsForLog } from './timesheet-1c-export-log.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
@@ -934,5 +935,212 @@ describe('buildUnified1CWorkbook — object-only день (суббота без
 
     const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
     expect(readRows(ws)).toHaveLength(1);
+  });
+});
+
+// С 01.10.2026 строка по объекту следует фильтру выходных и без корректировки.
+describe('buildUnified1CRows — строки по объектам и фильтр выходных', () => {
+  const SUNDAY = '2026-10-11';
+  const MONDAY = '2026-10-12';
+  const TUESDAY = '2026-10-13';
+  const OLD_SUNDAY = '2026-09-13';
+
+  interface ITestDay {
+    status?: string;
+    hours: number;
+    corrected?: boolean;
+    dropped?: boolean;
+  }
+
+  const makeData = (
+    days: Record<string, ITestDay>,
+    objectHours: Array<{ date: string; object: string; hours: number }>,
+  ): IDepartmentTimesheetData => {
+    const dates = Object.keys(days);
+    const [year, mon] = dates[0].split('-').map(Number);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    const schedule = makeSchedule();
+    return {
+      departmentName: 'Отдел',
+      departmentId: 'dept-1',
+      isBrigade: false,
+      employees: [{
+        id: 1,
+        full_name: 'Тестов Т.',
+        position_id: null,
+        org_department_id: 'dept-1',
+        sigur_employee_id: null,
+      }],
+      schedulesMap: new Map([[1, schedule]]),
+      dailySchedulesMap: new Map([[1, new Map(dates.map(date => [date, schedule] as const))]]),
+      calendarMonth: null,
+      entries: [],
+      dataMap: new Map([[1, new Map(dates.map(date => {
+        const day = days[date];
+        return [date, {
+          status: day.status ?? 'work',
+          hours: day.dropped ? 0 : day.hours,
+          corrected: Boolean(day.corrected),
+          hoursDropped: Boolean(day.dropped),
+        }] as const;
+      }))]]),
+      objectEntries: objectHours.map(item => ({
+        adjustment_id: null,
+        employee_id: 1,
+        work_date: item.date,
+        object_key: item.object,
+        object_id: item.object,
+        object_name: item.object,
+        hours_worked: item.hours,
+        display_hours_worked: item.hours,
+        base_hours_worked: item.hours,
+        is_correction: false,
+      })),
+      skudMap: new Map(),
+      posMap: new Map(),
+      year,
+      mon,
+      daysInMonth,
+      exportHalf: 'FULL',
+      exportDays: Array.from({ length: daysInMonth }, (_, index) => index + 1),
+      showActualHours: true,
+    };
+  };
+
+  beforeEach(() => {
+    queryMock.mockReset();
+    queryMock.mockImplementation((sql: string) => {
+      if (isModeQuery(sql)) return Promise.resolve([modeRow(1)]);
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([
+          { id: 'obj-a', alt_name: null, name: 'ЖК Сад 69' },
+          { id: 'obj-b', alt_name: null, name: 'Склад 7' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('строка только с лишним выходным не выводится, общей строки без адреса вместо неё нет', async () => {
+    const data = makeData(
+      { [SUNDAY]: { hours: 10, dropped: true }, [MONDAY]: { hours: 8 } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }],
+    );
+
+    const rows = await buildUnified1CRows([data]);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('журнал: удалённая строка не записана как выгруженная, кандидат получает no_row', async () => {
+    const data = makeData(
+      { [SUNDAY]: { hours: 10, dropped: true } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }],
+    );
+
+    const rows = await buildUnified1CRows([data]);
+    const [logged] = classifyDepartmentCandidates({
+      candidates: [{
+        employeeId: 1,
+        departmentId: 'dept-1',
+        source: 'assignment',
+        notArchived: true,
+        firedEligible: true,
+        notExcluded: true,
+      }],
+      memberByEmp: new Map<number, string | null>([[1, 'dept-1']]),
+      bucketedEmployeeIds: new Set([1]),
+      roster: { ineligibleIds: [], zeroActivityIds: [] },
+      dataEmployeeIds: new Set(data.employees.map(employee => employee.id)),
+      rowEmployeeIds: new Set(rows.map(row => row.oneCRow.employeeId)),
+    });
+
+    expect(serializeUnifiedRowsForLog(rows)).toEqual([]);
+    expect(logged.drop_stage).toBe('no_row');
+  });
+
+  it('пропадает только опустевшая строка, строка другого объекта остаётся', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [SUNDAY]: { hours: 10, dropped: true }, [MONDAY]: { hours: 8 } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }, { date: MONDAY, object: 'obj-b', hours: 8 }],
+    )]);
+
+    expect(rows.map(row => row.objectId)).toEqual(['obj-b']);
+    expect(rows[0].oneCRow.totalHours).toBe(8);
+  });
+
+  it('два объекта: лишний день пропадает в обеих строках, рабочий день остаётся', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [SUNDAY]: { hours: 10, dropped: true }, [MONDAY]: { hours: 8 } },
+      [
+        { date: SUNDAY, object: 'obj-a', hours: 5 },
+        { date: SUNDAY, object: 'obj-b', hours: 5 },
+        { date: MONDAY, object: 'obj-a', hours: 4 },
+        { date: MONDAY, object: 'obj-b', hours: 4 },
+      ],
+    )]);
+
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.oneCRow.dayValues.get(11)?.hours ?? 0).toBe(0);
+      expect(row.oneCRow.totalHours).toBe(4);
+      expect(row.oneCRow.workedDays).toBe(1);
+    }
+  });
+
+  it('строка с буквой отпуска остаётся', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [SUNDAY]: { hours: 10, dropped: true }, [TUESDAY]: { status: 'vacation', hours: 0 } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }],
+    )]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].objectId).toBe('obj-a');
+    expect(rows[0].oneCRow.dayValues.get(13)?.label).toBe('От');
+  });
+
+  it('строка с одними «Н» остаётся пустой, как и раньше', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [SUNDAY]: { hours: 10, dropped: true }, [TUESDAY]: { status: 'absent', hours: 0 } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }],
+    )]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].oneCRow.dayValues.get(13)).toBeUndefined();
+  });
+
+  it('пустая строка от округления не трогается', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [MONDAY]: { hours: 0.3 } },
+      [{ date: MONDAY, object: 'obj-a', hours: 0.3 }],
+    )]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].oneCRow.totalHours).toBe(0);
+  });
+
+  it('несогласованная правка с 01.10.2026 тоже не оставляет пустой строки', async () => {
+    const rows = await buildUnified1CRows([makeData(
+      { [SUNDAY]: { hours: 10, corrected: true, dropped: true } },
+      [{ date: SUNDAY, object: 'obj-a', hours: 10 }],
+    )]);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('месяц до 01.10.2026: день без корректировки в файле, пустая строка с корректировкой на месте', async () => {
+    const raw = await buildUnified1CRows([makeData(
+      { [OLD_SUNDAY]: { hours: 10, dropped: true } },
+      [{ date: OLD_SUNDAY, object: 'obj-a', hours: 10 }],
+    )]);
+    const corrected = await buildUnified1CRows([makeData(
+      { [OLD_SUNDAY]: { hours: 10, corrected: true, dropped: true } },
+      [{ date: OLD_SUNDAY, object: 'obj-a', hours: 10 }],
+    )]);
+
+    expect(raw).toHaveLength(1);
+    expect(raw[0].oneCRow.dayValues.get(13)?.hours).toBe(10);
+    expect(corrected).toHaveLength(1);
+    expect(corrected[0].oneCRow.totalHours).toBe(0);
   });
 });

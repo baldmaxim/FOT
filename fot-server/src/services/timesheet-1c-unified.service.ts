@@ -238,6 +238,10 @@ const buildRowsForDepartment = (
       : '';
     for (const oneCRow of objectRows) {
       seenEmployeeIds.add(oneCRow.employeeId);
+      // На объекте были только дни, обнулённые фильтром выходных: пустая строка в файле не нужна.
+      // Отметка выше остаётся, иначе вместо неё появилась бы общая строка без адреса.
+      // Другие пустые строки (ноль от округления, одни «Н») не трогаем.
+      if (oneCRow.hasFilteredWeekendHours && isOneCRowEmpty(oneCRow)) continue;
       const empId = oneCRow.employeeId;
       const managerName = managerFor(empId);
       rows.push({

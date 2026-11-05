@@ -376,3 +376,103 @@ describe('выгрузка части месяца — квота считает
     expect(h.buildAttendance).toHaveBeenCalledTimes(1);
   });
 });
+
+// Полный путь: includeExportDayHours → dataMap → buildObjectRowsForOneC.
+describe('строка по объекту следует правилу выходных с 01.10.2026', () => {
+  const OBJECT = { object_key: 'obj-a', object_id: 'obj-a', object_name: 'obj-a' };
+
+  const scheduleOfMonth = (month: string, schedule: IResolvedSchedule | null) => async (
+    employees: Array<{ id: number }>,
+    startDate: string,
+    endDate: string,
+  ) => {
+    const daily = new Map<string, IResolvedSchedule>();
+    if (schedule) {
+      for (let day = Number(startDate.slice(-2)); day <= Number(endDate.slice(-2)); day++) {
+        daily.set(`${month}-${String(day).padStart(2, '0')}`, schedule);
+      }
+    }
+    return new Map(employees.map(employee => [employee.id, daily]));
+  };
+
+  const loadMonth = async (
+    month: string,
+    days: IDay[],
+    adjustedDates: string[] = [],
+    schedule: IResolvedSchedule | null = QUOTA_SCHEDULE,
+  ): Promise<IDepartmentTimesheetData> => {
+    h.resolveSchedules.mockImplementation(scheduleOfMonth(month, schedule));
+    useDb(days.filter(day => !day.approval).map(day => day.date), adjustedDates);
+    h.buildAttendance.mockResolvedValue(
+      attendanceOf(1, days, days.map(day => objectEntry(day.date, 'obj-a', day.hours))),
+    );
+    return fetchTimesheetDataForEmployees(month, [1], 'Сводный 1С', 'FULL', 'actual', true);
+  };
+
+  const objectRow = (data: IDepartmentTimesheetData) => buildObjectRowsForOneC(data, OBJECT)[0];
+
+  it('обязательные субботы остаются, суббота сверх квоты и воскресенье без корректировки обнуляются', async () => {
+    const row = objectRow(await loadMonth('2026-10', [
+      { date: '2026-10-03', hours: 10.2 },
+      { date: '2026-10-05', hours: 10.7 },
+      { date: '2026-10-10', hours: 9.7 },
+      { date: '2026-10-11', hours: 10.6 },
+      { date: '2026-10-17', hours: 10.2 },
+      { date: '2026-10-25', hours: 10.3 },
+    ]));
+
+    expect(row.dayValues.get(3)?.hours).toBe(10);
+    expect(row.dayValues.get(5)?.hours).toBe(10);
+    expect(row.dayValues.get(10)?.hours).toBe(10);
+    for (const day of [11, 17, 25]) {
+      expect(row.dayValues.get(day)).toEqual({ hours: 0, isUnderwork: false, isWeekend: true });
+    }
+    expect(row.totalHours).toBe(30);
+    expect(row.workedDays).toBe(3);
+  });
+
+  it('выход approved и auto_approved остаётся, pending обнуляется', async () => {
+    const row = objectRow(await loadMonth('2026-10', [
+      { date: '2026-10-03', hours: 10 },
+      { date: '2026-10-10', hours: 10 },
+      { date: '2026-10-11', hours: 9, approval: 'approved' },
+      { date: '2026-10-17', hours: 12, approval: 'auto_approved' },
+      { date: '2026-10-24', hours: 12, approval: 'approved' },
+      { date: '2026-10-31', hours: 12, approval: 'pending' },
+    ], ['2026-10-11', '2026-10-17', '2026-10-24', '2026-10-31']));
+
+    expect(row.dayValues.get(11)?.hours).toBe(9);
+    expect(row.dayValues.get(17)?.hours).toBe(12);
+    expect(row.dayValues.get(24)?.hours).toBe(12);
+    expect(row.dayValues.get(31)?.hours ?? 0).toBe(0);
+    expect(row.totalHours).toBe(53);
+  });
+
+  it('графика нет, выходной определить нельзя: часы остаются', async () => {
+    const row = objectRow(await loadMonth('2026-10', [{ date: '2026-10-11', hours: 9.6 }], [], null));
+
+    expect(row.dayValues.get(11)?.hours).toBe(10);
+    expect(row.hasFilteredWeekendHours).toBe(false);
+  });
+
+  it('будний нерабочий день по сменному графику обнуляется, рабочий остаётся', async () => {
+    // Цикл с началом в пятницу: среда и четверг нерабочие.
+    const shift: IResolvedSchedule = { ...QUOTA_SCHEDULE, expected_saturdays_per_month: 0, anchor_date: '2026-05-01' };
+
+    const row = objectRow(await loadMonth('2026-10', [
+      { date: '2026-10-08', hours: 10.5 },
+      { date: '2026-10-09', hours: 10.5 },
+    ], [], shift));
+
+    expect(row.dayValues.get(8)?.hours ?? 0).toBe(0);
+    expect(row.dayValues.get(9)?.hours).toBe(10);
+    expect(row.totalHours).toBe(10);
+  });
+
+  it('сентябрь: лишний выходной остаётся в строке по объекту, в общей строке ноль, как раньше', async () => {
+    const data = await loadMonth(MONTH, [{ date: '2026-09-13', hours: 9.6 }]);
+
+    expect(objectRow(data).dayValues.get(13)?.hours).toBe(10);
+    expect(dayHours(data, 13) ?? 0).toBe(0);
+  });
+});

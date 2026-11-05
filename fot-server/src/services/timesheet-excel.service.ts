@@ -123,6 +123,10 @@ const hasPositiveHours = (value: number): boolean => value > 0.001;
 // совпадать с тем, что видит табельщица на экране.
 const WORKED_DAY_STATUSES = new Set(['remote', 'sick_worked', STUDY_DAY_STATUS]);
 
+// С этой даты выходной, обнулённый фильтром (includeExportDayHours), исчезает и из строки по объекту,
+// даже если на нём нет корректировки. Более ранние месяцы не меняются: они уже загружены в 1С.
+export const OBJECT_ROW_WEEKEND_FILTER_FROM = '2026-10-01';
+
 /**
  * День идёт в колонку «Дни» единого файла для 1С.
  * exportedHours — именно те часы, что уходят в ячейку (после compute1CDayHours),
@@ -245,6 +249,8 @@ export interface IOneCExportRow {
   workedDays: number;
   /** Числа месяца, вошедшие в workedDays, по возрастанию (расчётный листок делит их на рабочие и выходные). */
   workedDayNumbers: number[];
+  /** Строка по объекту: с OBJECT_ROW_WEEKEND_FILTER_FROM фильтр выходных обнулил день, в котором на объекте были часы. */
+  hasFilteredWeekendHours?: boolean;
 }
 
 let oneCTemplateBufferPromise: Promise<Buffer> | null = null;
@@ -480,6 +486,7 @@ export const buildObjectRowsForOneC = (
       const dayValues = new Map<number, IOneCDisplayDayValue>();
       let totalHours = 0;
       const workedDayNumbers: number[] = [];
+      let hasFilteredWeekendHours = false;
 
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
@@ -498,15 +505,20 @@ export const buildObjectRowsForOneC = (
           continue;
         }
 
-        // Часы объектной строки берутся из objectEntries, минуя includeExportDayHours.
-        // Для дня, который держится на КОРРЕКТИРОВКЕ и был обнулён фильтром выходных
-        // (несогласованный выход вне квоты плановых суббот), объектная строка обязана
-        // показать тот же ноль, что и общая строка сотрудника. Сырые СКУД-присутствия
-        // (corrected = false) намеренно не трогаем — это отдельный, гораздо более
-        // широкий случай, и менять его молча нельзя.
-        const hoursDroppedByWeekendFilter = Boolean(statusEntry?.hoursDropped && statusEntry?.corrected);
+        // Часы объектной строки берутся из objectEntries, минуя includeExportDayHours. День, обнулённый
+        // фильтром выходных (несогласованный выход вне квоты плановых суббот), обязан и здесь дать тот же
+        // ноль, что в общей строке сотрудника. С OBJECT_ROW_WEEKEND_FILTER_FROM это касается и сырых
+        // СКУД-присутствий без корректировки, до этой даты — только дней с корректировкой.
+        const isFilterDate = dateStr >= OBJECT_ROW_WEEKEND_FILTER_FROM;
+        const hoursDroppedByWeekendFilter = Boolean(
+          statusEntry?.hoursDropped && (statusEntry?.corrected || isFilterDate),
+        );
 
-        const hours = hoursDroppedByWeekendFilter ? 0 : (employeeDays.get(dateStr) ?? 0);
+        const objectHours: number = employeeDays.get(dateStr) ?? 0;
+        if (hoursDroppedByWeekendFilter && isFilterDate && hasPositiveHours(objectHours)) {
+          hasFilteredWeekendHours = true;
+        }
+        const hours = hoursDroppedByWeekendFilter ? 0 : objectHours;
         let exportedHours = 0;
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
@@ -553,6 +565,7 @@ export const buildObjectRowsForOneC = (
         totalHours,
         workedDays: workedDayNumbers.length,
         workedDayNumbers,
+        hasFilteredWeekendHours,
       };
     });
 };
