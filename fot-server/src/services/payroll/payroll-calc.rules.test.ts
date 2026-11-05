@@ -45,7 +45,7 @@ const facts = (over: Partial<IPayrollCalcFacts> = {}): IPayrollCalcFacts => ({
   absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 },
   terms: [terms()],
   plannedSupplements: [],
-  oneTimeTotal: null,
+  oneTimeItems: [],
   rateAllowances: [],
   deductions: [],
   ...over,
@@ -458,7 +458,7 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
     const result = buildPayrollCalc(facts({
       normDays: 22,
       workdayDates: august(22),
-      oneTimeTotal: '5000.00',
+      oneTimeItems: [{ reason: 'Премия', amount: '5000.00' }],
       rateAllowances: [
         { code: 'travel', amount: '2730.00', days: { worked: 22, norm: 22 } },
         { code: 'dormitory_allowance', amount: '160.00' },
@@ -797,7 +797,7 @@ describe('«К выплате (ФОТ)»: нет дней в табеле', () =
   });
 
   it('только разовая доплата — сумма остаётся, причина тоже', () => {
-    expect(buildPayrollCalc(facts({ ...noDays, oneTimeTotal: '25000.00' }))).toMatchObject({
+    expect(buildPayrollCalc(facts({ ...noDays, oneTimeItems: [{ reason: 'Премия', amount: '25000.00' }] }))).toMatchObject({
       net: '25000.00', missing: ['no_days'],
     });
   });
@@ -851,7 +851,7 @@ describe('«К выплате (ФОТ)»: части строк и неизве�
       ],
       overtimeMinutes: { '2026-08-04': 90, '2026-08-20': 45 },
       plannedSupplements: [{ amount: '20000.00', date_from: '2026-08-10', date_to: null }],
-      oneTimeTotal: '5000.00',
+      oneTimeItems: [{ reason: 'Премия', amount: '5000.00' }],
       rateAllowances: [
         { code: 'travel', amount: '2600.00', days: { worked: 20, norm: 21 }, rate: '2730.00' },
         { code: 'housing', amount: '15000.00' },
@@ -871,7 +871,7 @@ describe('«К выплате (ФОТ)»: части строк и неизве�
     expect(line(result, 'contract')?.filled_dayoffs).toBe(1);
     expect(line(result, 'travel')?.parts).toEqual([{ kind: 'travel', rate: '2730.00', days: 20, norm: 21, amount: '2600.00' }]);
     expect(line(result, 'housing')?.parts).toEqual([{ kind: 'housing', housing: 'apartment', amount: '15000.00' }]);
-    expect(line(result, 'supplement')?.parts).toEqual([{ kind: 'one_time', amount: '5000.00' }]);
+    expect(line(result, 'supplement')?.parts).toEqual([{ kind: 'one_time', amount: '5000.00', reason: 'Премия' }]);
     expect(line(result, 'bonus')?.parts).toEqual([
       expect.objectContaining({ kind: 'planned_supplement', from: '2026-08-10', to: '2026-08-31', base: '20000.00' }),
     ]);
@@ -959,7 +959,7 @@ describe('brigadeShareFacts — доли бригады по объектам с
     const result = buildPayrollCalc({
       monthStart: '2026-08-01', monthEnd: '2026-08-31', normDays: null, workdayDates: [], dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
-      oneTimeTotal: null, rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
+      oneTimeItems: [], rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
     });
     expect(result.lines[0].parts).toEqual([expect.objectContaining({
       object_name: 'ЖК Wave', weight: 158_925, total_weight: 259_455, counted_minutes: 10_595,
@@ -1002,7 +1002,7 @@ describe('brigadeShareFacts — доли бригады по объектам с
     const result = buildPayrollCalc({
       monthStart: '2026-10-01', monthEnd: '2026-10-31', normDays: null, workdayDates: [], dayoffDates: [],
       absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
-      oneTimeTotal: null, rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
+      oneTimeItems: [], rateAllowances: [], deductions: [], brigadeShares: [facts.get(1)!],
     });
     // Листок: «1 000 000 × КТУ 1,5 × 10 ч / 200 (Σ КТУ × ч бригады) = 750 000».
     expect(result.lines[0]).toMatchObject({ code: 'brigade', amount: '750000.00' });

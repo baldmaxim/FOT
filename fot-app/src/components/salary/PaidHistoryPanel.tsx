@@ -13,6 +13,7 @@ import {
   type IPaidMonthSums,
 } from '../../utils/payrollPaid';
 import { PaidPayslip } from './PaidPayslip';
+import { PayslipRecalcSection } from './PayslipRecalcSection';
 import disclosure from './PayrollDisclosure.module.css';
 import styles from './PaidHistoryPanel.module.css';
 
@@ -45,9 +46,10 @@ const renderSum = (value: number | null, pending: boolean, kind: SumKind): React
  * «Удержано», «К выплате» — из расчёта ФОТ, те же числа, что справа (решение пользователя 03.11.2026); итога ФОТ нет
  * (нет условий, выработка бригады не введена) — суммы 1С. «Перечислено (1С)» — справочно, по месяцу начисления
  * (миграция 328). Таблица не ждёт расчёта: месяцы заполняются по мере ответов.
- * Справа — расчётный листок выбранного месяца (PaidPayslip), по умолчанию последнего.
+ * Справа — расчётный листок выбранного месяца (PaidPayslip), по умолчанию последнего, и блок «Пересчёт»: рядом, если
+ * хватает ширины, иначе под листком.
  * Две колонки — когда хватает ширины карточки (container query), уже — одна: список, тап по месяцу
- * открывает листок, «Все месяцы» — назад. Только чтение.
+ * открывает листок, «Все месяцы» — назад. Записывает только «Доплачено» в «Пересчёте».
  */
 export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMonth }) => {
   const historyQuery = useQuery(paidHistoryQueryOptions(employeeId, toMonth));
@@ -180,15 +182,18 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMon
               </button>
               <h3 className={styles.detailTitle}>{formatAccrualMonthLabel(selected.month, true)}</h3>
             </div>
-            <PaidPayslip
-              employeeId={employeeId}
-              month={selected.month}
-              amounts={history.amounts}
-              totals={selected.totals}
-              transfers={selected.transfers}
-              transferred={selected.transferred}
-              transfersFailed={payoutsQuery.isError}
-            />
+            <div className={styles.detailBody}>
+              <PaidPayslip
+                employeeId={employeeId}
+                month={selected.month}
+                amounts={history.amounts}
+                totals={selected.totals}
+                transfers={selected.transfers}
+                transferred={selected.transferred}
+                transfersFailed={payoutsQuery.isError}
+              />
+              <PayslipRecalcSection employeeId={employeeId} />
+            </div>
           </section>
         </div>
       )}

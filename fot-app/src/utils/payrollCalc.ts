@@ -191,7 +191,7 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       return part.rate === undefined ? `${what}: ${part.days} дн.` : `${what}: ${money(part.rate)} × ${part.days} дн.`;
     }
     case 'one_time':
-      return 'разовые доплаты месяца';
+      return `${part.reason ?? 'разовые доплаты месяца'}${tail(part.amount)}`;
     case 'paid_1c':
       return 'начислено в 1С';
     case 'payout_1c':

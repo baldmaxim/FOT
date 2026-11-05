@@ -63,6 +63,7 @@ import {
   payrollMonthStarts,
 } from './payroll-dictionary.helpers.js';
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
+import { recordTermsRecalc } from '../services/payroll/payroll-terms-recalc.service.js';
 import {
   payrollContractorDeptsCte,
   payrollStaffWhereSql,
@@ -813,6 +814,19 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       // Категория — снимок на дату сохранения: по табелю на сейчас; категорию и «Проезд» он не решает.
       const category = (await resolveCurrentStaffCategories([employeeId], client)).get(employeeId) ?? 'office';
       const previousTerms = await getTermsOnDate(employeeId, body.effective_from, client);
+      // Правка задним числом: прежние условия — до assignTerms, он обрежет и удалит строки (блок «Пересчёт»).
+      await recordTermsRecalc(client, {
+        employeeId,
+        effectiveFrom: body.effective_from,
+        next: {
+          calc_type: body.calc_type,
+          monthly_salary: body.calc_type === 'salary' ? body.monthly_salary ?? null : null,
+          hourly_rate: body.calc_type === 'hourly' ? body.hourly_rate ?? null : null,
+          bonus_amount: body.bonus_amount ?? null,
+          proration_rounding: body.proration_rounding ?? previousTerms?.proration_rounding ?? 'ruble',
+        },
+        createdBy: req.user.id,
+      });
       const id = await assignTerms({
         employeeId,
         staffCategory: category,

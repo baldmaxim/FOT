@@ -31,7 +31,9 @@ import {
   type IAbsencePayout1c,
   type IBrigadeShareFact,
   type ICalcTermsRow,
+  type IOneTimeSupplementFact,
   type IPayrollCalcDeduction,
+  type IPayrollCalcFacts,
   type IOvertimeStopPeriod,
   type IPayrollCalcResult,
   type IPlannedSupplementPeriod,
@@ -68,6 +70,8 @@ interface IPayrollCalcDetails extends IPayrollCalcResult {
   rate_allowances: IPayslipRateAllowance[];
   /** Условия, задевающие период, — листку (строка оклада). */
   terms: IPayrollTerms[];
+  /** Итог того же месяца по прежним условиям (блок «Пересчёт»); только если их передали. */
+  previous_net?: string | null;
 }
 
 export interface IPayrollCalcClosed extends IPayrollCalcDetails {
@@ -244,7 +248,7 @@ export const loadAbsencePay1c = async (
 
 /** То, что не зависит от дней табеля: разовые доплаты, удержания, проживание, «Без переработки» и суммы 1С месяца. */
 interface IPayoutExtras {
-  oneTime: Map<number, string>;
+  oneTime: Map<number, IOneTimeSupplementFact[]>;
   deductions: Map<number, IPayrollCalcDeduction[]>;
   rateFacts: Map<number, RateFactsRow>;
   overtimeStops: Map<number, IOvertimeStopPeriod[]>;
@@ -259,11 +263,12 @@ const loadPayoutExtras = async (
 ): Promise<IPayoutExtras> => {
   const monthStart = `${month}-01`;
   const [oneTime, deductions, rateFacts, overtimeStops, absencePay1c] = await Promise.all([
-    query<{ employee_id: number; amount: string }>(
-      `SELECT employee_id, SUM(amount)::text AS amount
+    query<IOneTimeSupplementFact & { employee_id: number }>(
+      `SELECT employee_id, btrim(reason) AS reason, SUM(amount)::text AS amount
          FROM payroll_one_time_supplements
         WHERE employee_id = ANY($1::int[]) AND month = $2::date
-        GROUP BY employee_id`,
+        GROUP BY employee_id, btrim(reason)
+        ORDER BY employee_id, btrim(reason)`,
       [[...ids], monthStart],
     ),
     query<IPayrollCalcDeduction & { employee_id: number }>(
@@ -291,7 +296,10 @@ const loadPayoutExtras = async (
     loadAbsencePay1c(ids, month),
   ]);
   return {
-    oneTime: new Map((oneTime ?? []).map(row => [Number(row.employee_id), row.amount])),
+    oneTime: new Map([...groupBy(oneTime)].map(([id, rows]) => [
+      id,
+      rows.map(({ reason, amount }) => ({ reason, amount })),
+    ])),
     deductions: new Map([...groupBy(deductions)].map(([id, rows]) => [
       id,
       rows.map(({ kind_id, kind, amount }) => ({ kind_id: Number(kind_id), kind, amount })),
@@ -337,6 +345,22 @@ interface ICalcEntry {
   closed: IClosedMonthBasis | null;
 }
 
+/** Условия из БД → строка расчёта. NUMERIC приходит строкой; String() — на случай числа из моков и старых драйверов. */
+export const toCalcTermsRow = (row: IPayrollTerms): ICalcTermsRow => ({
+  effective_from: row.effective_from,
+  effective_to: row.effective_to,
+  calc_type: row.calc_type,
+  monthly_salary: row.monthly_salary === null ? null : String(row.monthly_salary),
+  hourly_rate: (row.hourly_rate ?? null) === null ? null : String(row.hourly_rate),
+  bonus_amount: row.bonus_amount === null ? null : String(row.bonus_amount),
+  proration_rounding: row.proration_rounding ?? 'ruble',
+});
+
+/** Прежние условия сотрудников месяца: те же факты считаются ещё раз с ними — previous_net (блок «Пересчёт»). */
+export interface IPayoutOptions {
+  previousTerms?: ReadonlyMap<number, readonly ICalcTermsRow[]>;
+}
+
 /**
  * Расчёт месяца. preliminary — режим «Расчётов»: незакрытый месяц по живому табелю на asOf, открытая бригада —
  * предварительной долей. Без него — только закрытый табель (карточка, листок, вкладка табеля).
@@ -347,6 +371,7 @@ const computePayouts = async (
   req: AuthenticatedRequest,
   metrics: IPayoutMetrics | undefined,
   preliminary: boolean,
+  options: IPayoutOptions = {},
 ): Promise<Map<number, PayrollCalcWithPreliminary>> => {
   const result = new Map<number, PayrollCalcWithPreliminary>();
   if (employeeIds.length === 0) return result;
@@ -463,7 +488,7 @@ const computePayouts = async (
         ),
       })
       : [];
-    const calc = buildPayrollCalc({
+    const calcFacts: IPayrollCalcFacts = {
       monthStart,
       monthEnd,
       normDays: basis.normDays,
@@ -479,25 +504,17 @@ const computePayouts = async (
       ),
       overtimeStops: extras.overtimeStops.get(employeeId) ?? [],
       absenceDays: basis.absenceDays,
-      // NUMERIC приходит строкой; String() — на случай числа из моков и старых драйверов.
-      terms: terms.map((row): ICalcTermsRow => ({
-        effective_from: row.effective_from,
-        effective_to: row.effective_to,
-        calc_type: row.calc_type,
-        monthly_salary: row.monthly_salary === null ? null : String(row.monthly_salary),
-        hourly_rate: (row.hourly_rate ?? null) === null ? null : String(row.hourly_rate),
-        bonus_amount: row.bonus_amount === null ? null : String(row.bonus_amount),
-        proration_rounding: row.proration_rounding ?? 'ruble',
-      })),
+      terms: terms.map(toCalcTermsRow),
       plannedSupplements: (plannedByEmployee.get(employeeId) ?? []).map(({ amount, date_from, date_to }) => ({
         amount, date_from, date_to,
       })),
-      oneTimeTotal: extras.oneTime.get(employeeId) ?? null,
+      oneTimeItems: extras.oneTime.get(employeeId) ?? [],
       rateAllowances,
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: shares,
       absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
-    });
+    };
+    const previousTerms = options.previousTerms?.get(employeeId);
     const details: IPayrollCalcDetails = {
       norm_days: basis.normDays,
       period_from: period.from,
@@ -506,7 +523,8 @@ const computePayouts = async (
       absences: basis.absenceDays,
       rate_allowances: rateAllowances,
       terms,
-      ...calc,
+      ...buildPayrollCalc(calcFacts),
+      ...(previousTerms ? { previous_net: buildPayrollCalc({ ...calcFacts, terms: previousTerms }).net } : {}),
     };
     // Живой табель или предварительная доля бригады — предварительно; иначе — закрытый расчёт, как всегда.
     const preliminaryAsOf = !closed || basis.brigades.some(item => brigades.preliminary.has(item.departmentId)) ? asOf : null;
@@ -551,7 +569,8 @@ export const getPreliminaryPayoutForEmployees = (
   month: string,
   req: AuthenticatedRequest,
   metrics?: IPayoutMetrics,
-): Promise<Map<number, PayrollCalcWithPreliminary>> => computePayouts(employeeIds, month, req, metrics, true);
+  options?: IPayoutOptions,
+): Promise<Map<number, PayrollCalcWithPreliminary>> => computePayouts(employeeIds, month, req, metrics, true, options);
 
 /**
  * «Сумма» бригады во вкладке табеля из доли (зафиксированной или предварительной): доля + разовые доплаты и
@@ -581,7 +600,7 @@ export const previewBrigadePayouts = async (
       absenceDays: emptyAbsenceDays(),
       terms: [],
       plannedSupplements: [],
-      oneTimeTotal: extras.oneTime.get(employeeId) ?? null,
+      oneTimeItems: extras.oneTime.get(employeeId) ?? [],
       rateAllowances: facts && period
         ? pickPayslipRateAllowances({
           ...facts,

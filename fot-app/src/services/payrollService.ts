@@ -415,7 +415,8 @@ export type PayrollCalcLinePart =
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   /** Проживание по дням (миграция 339): ставка за день и дни; у квартиры со сменой ставки в месяце и у старого бэкенда — нет. */
   | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
-  | { kind: 'one_time'; amount: string }
+  /** Разовая доплата: часть на основание; старый бэкенд — одна часть без основания. */
+  | { kind: 'one_time'; amount: string; reason?: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
   | { kind: 'paid_1c'; amount: string }
   /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
@@ -514,6 +515,37 @@ export interface IPayslipRateAllowance {
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
+
+/** Условия для подписи месяца блока «Пересчёт». */
+export interface IPayrollRecalcTerms {
+  calc_type: PayrollCalcType;
+  /** Оклад или ставка, NUMERIC строкой. */
+  amount: string | null;
+  bonus: string | null;
+}
+
+/** Месяц блока «Пересчёт»: итог по прежним и текущим условиям; null — посчитать нельзя. */
+export interface IPayrollRecalcMonth {
+  /** YYYY-MM. */
+  month: string;
+  was: string | null;
+  became: string | null;
+  /** Стало минус было; null — в итог не идёт. */
+  difference: string | null;
+  terms_from: IPayrollRecalcTerms | null;
+  terms_to: IPayrollRecalcTerms | null;
+}
+
+/** Блок «Пересчёт» карточки (миграция 348). */
+export interface IPayrollRecalc {
+  /** Новые сверху; пусто — блока нет. */
+  months: IPayrollRecalcMonth[];
+  /** Сумма известных разниц; минус — переплата. */
+  total: string;
+  /** Что закрывает «Доплачено». */
+  record_ids: number[];
+  can_settle: boolean;
+}
 
 /** Итоги считаются сервером по всей отфильтрованной выборке, а не по странице. */
 export interface IPayrollTermsListMeta {
@@ -831,6 +863,18 @@ export const payrollService = {
   listSectionAccess: async (signal?: AbortSignal): Promise<IPayrollSectionUser[]> => {
     const res = await apiClient.get<IApiResponse<IPayrollSectionUser[]>>('/payroll/section-access', { signal });
     return res.data;
+  },
+
+  getRecalc: async (employeeId: number, signal?: AbortSignal): Promise<IPayrollRecalc> => {
+    const res = await apiClient.get<IApiResponse<IPayrollRecalc>>(`/payroll/terms/employee/${employeeId}/recalc`, { signal });
+    return res.data;
+  },
+
+  settleRecalc: async (employeeId: number, recordIds: readonly number[]): Promise<void> => {
+    await apiClient.post<IApiResponse<{ settled: number }>>(
+      `/payroll/terms/employee/${employeeId}/recalc/settle`,
+      { record_ids: recordIds },
+    );
   },
 
   assign: async (employeeId: number, payload: IAssignTermsPayload): Promise<{ terms_id: number }> => {

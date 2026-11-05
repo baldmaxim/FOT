@@ -252,6 +252,8 @@ export const AUDIT_ACTIONS = {
   // Кадровое основание, а не секрет — суммы пишем в details.
   PAYROLL_TERMS_ASSIGNED: 'PAYROLL_TERMS_ASSIGNED',
   PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
+  // Блок «Пересчёт» (миграция 348): нажали «Доплачено» — закрытые записи и сумма, посчитанная сервером.
+  PAYROLL_TERMS_RECALC_SETTLED: 'PAYROLL_TERMS_RECALC_SETTLED',
   // Справочник видов удержаний (миграция 299): добавленный, переименованный (было → стало), удалённый вид.
   PAYROLL_DEDUCTION_KIND_ADDED: 'PAYROLL_DEDUCTION_KIND_ADDED',
   PAYROLL_DEDUCTION_KIND_RENAMED: 'PAYROLL_DEDUCTION_KIND_RENAMED',

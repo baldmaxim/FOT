@@ -42,6 +42,16 @@ export const payslipQueryOptions = (employeeId: number, month: string) => queryO
 });
 
 /**
+ * Блок «Пересчёт» карточки (миграция 348). Префикс 'payroll-terms': сохранение условий и загрузка ведомостей 1С
+ * перечитывают и его.
+ */
+export const payrollRecalcQueryOptions = (employeeId: number) => queryOptions({
+  queryKey: ['payroll-terms', 'recalc', employeeId],
+  queryFn: ({ signal }) => payrollService.getRecalc(employeeId, signal),
+  staleTime: 30_000,
+});
+
+/**
  * Долги прошлых месяцев (справочно, миграция 332) за месяцы from — to: «Подробно» и расчётный листок месяца.
  * Префикс 'payroll-terms' — как у сумм «Оплачено».
  */

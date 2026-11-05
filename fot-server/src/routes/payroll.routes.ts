@@ -23,6 +23,7 @@ import { payrollSummaryController } from '../controllers/payroll-summary.control
 import { payrollSupplementReasonsController } from '../controllers/payroll-supplement-reasons.controller.js';
 import { payrollSupplementsController } from '../controllers/payroll-supplements.controller.js';
 import { payrollTermsController } from '../controllers/payroll-terms.controller.js';
+import { payrollTermsRecalcController } from '../controllers/payroll-terms-recalc.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 import { timesheetSalaryController } from '../controllers/timesheet-salary.controller.js';
 
@@ -65,6 +66,9 @@ router.get('/terms/employee/:empId/paid', termsView, payrollPaidController.getBy
 router.get('/terms/employee/:empId/paid-debts', termsView, payrollPaidController.getDebtsByEmployee);
 // Расчётный листок месяца в «Истории выплат»: период, дни табеля (рабочие / выходные), условия оплаты.
 router.get('/terms/employee/:empId/payslip', termsView, payrollPaidController.getPayslip);
+// Блок «Пересчёт» карточки (миграция 348): сколько доплатить после правки оклада задним числом; «Доплачено».
+router.get('/terms/employee/:empId/recalc', termsView, payrollTermsRecalcController.getByEmployee);
+router.post('/terms/employee/:empId/recalc/settle', termsEdit, payrollTermsRecalcController.settle);
 // «Перечислено (1С)» сотрудника по месяцам начисления (миграция 328, только чтение).
 router.get('/terms/employee/:empId/payouts-1c', termsView, payroll1cPayoutsController.getByEmployee);
 // «Экспорт» карточки сотрудника: условия и история выплат — два листа xlsx из снимка экрана.

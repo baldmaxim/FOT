@@ -50,6 +50,13 @@ const staffCategory = vi.hoisted(() => ({
 
 vi.mock('../services/payroll/payroll-staff-category.js', () => staffCategory);
 
+// Запись «Пересчёта» (миграция 348) — отдельный PG-тест; здесь — только что она идёт до назначения и с чем.
+const recalc = vi.hoisted(() => ({
+  recordTermsRecalc: vi.fn(async (..._args: unknown[]) => null as number | null),
+}));
+
+vi.mock('../services/payroll/payroll-terms-recalc.service.js', () => recalc);
+
 // Отдел «Уволенные» — «Расчёты» за месяцы показывают только работавших в них.
 vi.mock('../services/employee-archive-department.service.js', () => ({
   getKnownArchiveDepartment: vi.fn(async () => ({ id: 'archive-dept', name: 'Уволенные' })),
@@ -266,6 +273,31 @@ describe('payrollTermsController.getSalaryHistory', () => {
 });
 
 describe('payrollTermsController.assign', () => {
+  it('прежние условия для «Пересчёта» сохраняются в той же транзакции и до назначения', async () => {
+    recalc.recordTermsRecalc.mockClear();
+    txClient.query.mockClear();
+    const res = makeRes();
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { calc_type: 'salary', monthly_salary: 200000, bonus_amount: 5000, effective_from: '2026-09-01' },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(recalc.recordTermsRecalc).toHaveBeenCalledTimes(1);
+    const [client, input] = recalc.recordTermsRecalc.mock.calls[0];
+    expect(client).toBe(txClient);
+    expect(input).toMatchObject({
+      employeeId: 42,
+      effectiveFrom: '2026-09-01',
+      next: {
+        calc_type: 'salary', monthly_salary: 200000, hourly_rate: null, bonus_amount: 5000, proration_rounding: 'ruble',
+      },
+    });
+    const update = txClient.query.mock.calls.findIndex(call => /UPDATE payroll_compensation_terms/i.test(String(call[0])));
+    expect(recalc.recordTermsRecalc.mock.invocationCallOrder[0])
+      .toBeLessThan(txClient.query.mock.invocationCallOrder[update]);
+  });
+
   it('переводит сотрудника с оклада на часы: закрывает прежние условия и вставляет новые', async () => {
 
     const req = makeReq({

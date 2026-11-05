@@ -39,7 +39,7 @@ vi.mock('./payroll-staff-category.js', () => ({
   resolveMonthStaffCategories: vi.fn(async (items: unknown[]) => items.map(() => 'worker')),
 }));
 
-import { getPayoutForEmployees, previewBrigadePayouts } from './payroll-calc.service.js';
+import { getPayoutForEmployees, getPreliminaryPayoutForEmployees, previewBrigadePayouts } from './payroll-calc.service.js';
 
 const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
 const BRIGADE = 'brigade-1';
@@ -90,6 +90,65 @@ beforeEach(() => {
     effective_from: '2026-01-01', effective_to: null, calc_type: 'salary', monthly_salary: '110000.00',
     bonus_amount: null, proration_rounding: 'ruble',
   }]]]));
+});
+
+describe('«К выплате (ФОТ)» с прежними условиями (блок «Пересчёт»)', () => {
+  const salary = (amount: string) => ({
+    effective_from: '2026-08-01', effective_to: null, calc_type: 'salary' as const, monthly_salary: amount,
+    hourly_rate: null, bonus_amount: null, proration_rounding: 'ruble' as const,
+  });
+
+  beforeEach(() => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [source({
+      departmentId: 'office', isBrigade: false, overtimeMinutes: {},
+    })]]]));
+    terms.getTermsForPeriod.mockResolvedValue(new Map([[8, [salary('200000.00')]]]));
+    pg.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employees')) {
+        return [{
+          id: 8, hire_date: null, org_department_id: 'office', employment_status: 'active',
+          dismissal_date: null, excluded_from_timesheet_date: null,
+        }];
+      }
+      if (sql.includes('FROM payroll_one_time_supplements')) {
+        return [
+          { employee_id: 8, reason: 'Допработы', amount: '3000.00' },
+          { employee_id: 8, reason: 'Премия', amount: '5000.00' },
+        ];
+      }
+      return [];
+    });
+  });
+
+  it('те же дни и разовые доплаты с прежним окладом: разница — только оклад', async () => {
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req, undefined, {
+      previousTerms: new Map([[8, [salary('180000.00')]]]),
+    })).get(8);
+
+    expect(calc).toMatchObject({ state: 'closed', net: '208000.00', previous_net: '188000.00' });
+  });
+
+  it('прежних условий на месяц нет — итог «было» неизвестен', async () => {
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req, undefined, {
+      previousTerms: new Map([[8, []]]),
+    })).get(8);
+
+    expect(calc).toMatchObject({ net: '208000.00', previous_net: null });
+  });
+
+  it('без прежних условий поля нет; основания — частями одной строки', async () => {
+    const calc = (await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8);
+
+    expect(calc).not.toHaveProperty('previous_net');
+    expect(calc && 'lines' in calc && calc.lines.find(line => line.code === 'supplement')).toEqual({
+      code: 'supplement',
+      amount: '8000.00',
+      parts: [
+        { kind: 'one_time', amount: '3000.00', reason: 'Допработы' },
+        { kind: 'one_time', amount: '5000.00', reason: 'Премия' },
+      ],
+    });
+  });
 });
 
 describe('«К выплате (ФОТ)» почасовая ставка', () => {

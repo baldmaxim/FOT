@@ -91,7 +91,8 @@ export type PayrollCalcLinePart =
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   // Ставка за день и дни (миграция 339); у квартиры со сменой ставки в месяце ставки нет.
   | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
-  | { kind: 'one_time'; amount: string }
+  /** Разовая доплата: часть на основание («Допработы», «Премия»…). */
+  | { kind: 'one_time'; amount: string; reason: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
   | { kind: 'paid_1c'; amount: string }
   /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
@@ -274,6 +275,13 @@ export interface IPlannedSupplementPeriod {
   date_to: string | null;
 }
 
+/** Разовые доплаты месяца с одним основанием. */
+export interface IOneTimeSupplementFact {
+  reason: string;
+  /** NUMERIC текстом. */
+  amount: string;
+}
+
 /** Период «Без переработки»: YYYY-MM-DD, по — включительно, null — бессрочно. */
 export interface IOvertimeStopPeriod {
   date_from: string;
@@ -297,8 +305,8 @@ export interface IPayrollCalcFacts {
   absenceDays: PayrollAbsenceDays;
   terms: readonly ICalcTermsRow[];
   plannedSupplements: readonly IPlannedSupplementPeriod[];
-  /** Разовые доплаты месяца, сумма; null — нет. */
-  oneTimeTotal: string | null;
+  /** Разовые доплаты месяца: сумма на основание; нет — пусто. */
+  oneTimeItems: readonly IOneTimeSupplementFact[];
   rateAllowances: readonly IPayslipRateAllowance[];
   deductions: readonly IPayrollCalcDeduction[];
   /** Доли бригад; их дни в workdayDates и dayoffDates уже не входят. */
@@ -704,9 +712,17 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     });
   }
 
-  if (facts.oneTimeTotal !== null && cents(facts.oneTimeTotal) > 0) {
-    const amount = centsToAmount(cents(facts.oneTimeTotal));
-    lines.push({ code: 'supplement', amount, parts: [{ kind: 'one_time', amount }] });
+  const oneTimeCents = facts.oneTimeItems.reduce((sum, item) => sum + cents(item.amount), 0);
+  if (oneTimeCents > 0) {
+    lines.push({
+      code: 'supplement',
+      amount: centsToAmount(oneTimeCents),
+      parts: facts.oneTimeItems.map(item => ({
+        kind: 'one_time' as const,
+        amount: centsToAmount(cents(item.amount)),
+        reason: item.reason,
+      })),
+    });
   }
   for (const allowance of facts.rateAllowances) {
     if (allowance.code === 'travel') {

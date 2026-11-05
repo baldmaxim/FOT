@@ -222,6 +222,16 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
       .toEqual(['разовые доплаты месяца']);
   });
 
+  it('разовая доплата: основание вместо общей подписи, при нескольких — с суммой', () => {
+    expect(calcLineFormula({ code: 'supplement', amount: '20167.00', parts: [
+      { kind: 'one_time', amount: '20167.00', reason: 'Компенсация использования личного а/м' },
+    ] })).toEqual(['Компенсация использования личного а/м']);
+    expect(calcLineFormula({ code: 'supplement', amount: '8000.00', parts: [
+      { kind: 'one_time', amount: '3000.00', reason: 'Допработы' },
+      { kind: 'one_time', amount: '5000.00', reason: 'Премия' },
+    ] })).toEqual([`Допработы = 3${NBSP}000,00`, `Премия = 5${NBSP}000,00`]);
+  });
+
   it('доля бригады: выработка × КТУ × часы / Σ весов; не внесена, нет часов, ошибка', () => {
     const part = {
       kind: 'brigade' as const, department_id: 'b1', output: '100000.00', ktu_tenths: 15, counted_minutes: 10_595,

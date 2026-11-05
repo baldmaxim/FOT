@@ -126,6 +126,14 @@
 }
 .detailTitle { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
 
+/* Листок и блок «Пересчёт»: друг под другом, при широкой карточке — рядом. */
+.detailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .backButton {
   display: inline-flex;
   align-items: center;
@@ -186,6 +194,16 @@
 
 @container paid-history (min-width: 1150px) {
   .body { grid-template-columns: minmax(0, 34rem) minmax(0, 1fr); }
+}
+
+/* Справа от листка свободно место на блок «Пересчёт»: 34rem списка + листок + блок и отступы. */
+@container paid-history (min-width: 1540px) {
+  .detailBody {
+    display: grid;
+    grid-template-columns: minmax(0, 34.25rem) minmax(0, 1fr);
+    align-items: start;
+    gap: 24px;
+  }
 }
 
 /* Тап-цель строки месяца на сенсорных экранах. */
