@@ -1,6 +1,6 @@
 /**
- * «Свод» на «Расчётах» — суммы «Оплачено» (ЗУП) по объектам и категориям за выбранные месяцы. Только
- * чтение; xlsx — через POST /payroll/registry/summary/export (снимок экрана).
+ * «Свод» на «Расчётах» — суммы по объектам и категориям за выбранные месяцы: расчёт ФОТ, загруженное из 1С его заменяет.
+ * Только чтение; xlsx — через POST /payroll/registry/summary/export (снимок экрана).
  */
 import type { Response } from 'express';
 
@@ -26,8 +26,8 @@ const months = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 };
 
 /**
- * GET /api/payroll/summary?months=2026-07,2026-08 — строки «Свода»: сотрудник × объект × категория,
- * суммы статей за месяцы. months=all или без параметра — все месяцы с суммами.
+ * GET /api/payroll/summary?months=2026-07,2026-08 — строки «Свода»: сотрудник × объект × категория × отдел,
+ * суммы статей за месяцы. months=all или без параметра — все месяцы с суммами 1С.
  */
 const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -36,7 +36,7 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const scope = await resolvePayrollStaffScope(req);
     // Замер шагов — в Server-Timing (DevTools → Network → Timing), дольше 2 с — и в лог.
     const timing = emptySummaryTiming();
-    const data = await loadPayrollSummary({ scope, monthStarts, timing });
+    const data = await loadPayrollSummary({ scope, monthStarts, req, timing });
     res.setHeader('Server-Timing', summaryServerTiming(timing));
     res.json({ success: true, data });
   } catch (err) {

@@ -37,7 +37,28 @@ vi.mock('../timesheet-export-mode.service.js', async importOriginal => ({
   },
 }));
 
-import { listPayrollSummaryMonths, loadPayrollSummary } from './payroll-summary.service.js';
+// Расчёт ФОТ — своя большая схема и свои тесты (payroll-calc.*); здесь — кого считать и как суммы сводятся с 1С.
+const calc = vi.hoisted(() => ({
+  byPair: new Map<string, unknown>(),
+  calls: [] as Array<{ ids: number[]; month: string }>,
+}));
+vi.mock('./payroll-calc.service.js', () => ({
+  getPreliminaryPayoutForEmployees: async (ids: number[], month: string) => {
+    calc.calls.push({ ids: [...ids].sort((a, b) => a - b), month });
+    return new Map(ids.filter(id => calc.byPair.has(`${id}|${month}`)).map(id => [id, calc.byPair.get(`${id}|${month}`)]));
+  },
+}));
+
+// Отдел «Уволенные»: сервис архива тянет Sigur-модули.
+vi.mock('../employee-archive-department.service.js', () => ({
+  getKnownArchiveDepartment: async () => ({ id: '00000000-0000-0000-0000-0000000000d3' }),
+}));
+
+import type { AuthenticatedRequest } from '../../types/index.js';
+import { listPayrollSummaryMonths, loadPayrollSummary as loadSummary } from './payroll-summary.service.js';
+
+const REQ = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
+const loadPayrollSummary = (input: Omit<Parameters<typeof loadSummary>[0], 'req'>) => loadSummary({ ...input, req: REQ });
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -57,6 +78,7 @@ const TECH_ROOT = '00000000-0000-0000-0000-0000000000b0';
 const SU10_ROOT = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
 const BRIGADES_FOLDER = '00000000-0000-0000-0000-0000000000b1';
 const BRIGADE = '00000000-0000-0000-0000-0000000000b2';
+const BRIGADE_NO_PAYROLL = '00000000-0000-0000-0000-0000000000b3';
 const AUTO = '00000000-0000-0000-0000-0000000000d4'; // Отдел автотехники — офис по отделу
 const ROLE_WORKER = '00000000-0000-0000-0000-0000000000a1';
 const ROLE_OFFICE = '00000000-0000-0000-0000-0000000000a2';
@@ -97,6 +119,7 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
       DROP TABLE IF EXISTS timesheet_version_objects, timesheet_versions, skud_objects, payroll_paid_amounts,
         payroll_compensation_terms, payroll_compensation_stops, payroll_one_time_supplements, payroll_planned_supplements,
         payroll_settings, payroll_item_types, payroll_rates, payroll_employee_deductions, payroll_deduction_kinds,
+        staff_deductions, employee_assignments,
         employee_schedule_assignments, work_schedules, positions, user_profiles, system_roles,
         employee_dismissal_events, timesheet_object_auto_state, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -108,13 +131,21 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
         org_department_id uuid REFERENCES org_departments(id),
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
-        is_archived boolean NOT NULL DEFAULT false
+        is_archived boolean NOT NULL DEFAULT false,
+        hire_date date
+      );
+      CREATE TABLE employee_assignments (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, org_department_id uuid,
+        effective_from date NOT NULL, effective_to date
       );
       CREATE TABLE system_roles (id uuid PRIMARY KEY, code text NOT NULL);
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text, employee_id integer, system_role_id uuid);
       CREATE TABLE employee_dismissal_events (
-        id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid,
+        id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
         cancelled boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE payroll_one_time_supplements (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, month date NOT NULL, amount numeric(12,2) NOT NULL, reason text NOT NULL
       );
       CREATE TABLE timesheet_object_auto_state (
         singleton boolean PRIMARY KEY DEFAULT true, enabled boolean NOT NULL, baseline_month date NOT NULL,
@@ -180,6 +211,12 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
     ]) {
       await run(migration(name));
     }
+    await run(`
+      CREATE TABLE staff_deductions (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id),
+        month date NOT NULL, amount numeric(12,2) NOT NULL
+      );
+    `);
 
     // Июль. Подача ЛИНИИ: ревизия 1 устарела (весь Акимов на Мытищах), в ревизии 2 — Химки 100 ч + Мытищи 60 ч.
     await version(1, 10, 1, LINE, '2026-07-01', [
@@ -312,5 +349,127 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
     expect(await listPayrollSummaryMonths(SCOPE)).toEqual(['2026-07', '2026-08', '2026-09']);
     expect(await listPayrollSummaryMonths({ ...SCOPE, departmentIds: [] })).toEqual([]);
     expect(await listPayrollSummaryMonths({ ...SCOPE, departmentIds: [CONTRACTOR_CO] })).toEqual([]);
+  });
+
+  describe('автоматический расчёт и замена данными 1С', () => {
+    const OCTOBER = ['2026-10-01'];
+    const lines = (...items: Array<[string, string | null]>) => items.map(([code, amount]) => ({ code, amount }));
+    const counted = (items: Array<{ code: string; amount: string | null }>, missing: string[] = []) => ({
+      state: 'closed', lines: items, missing, deductions: [],
+    });
+    const rowOf = (rows: Awaited<ReturnType<typeof loadPayrollSummary>>['rows'], id: number) => rows.filter(row => row.employee_id === id);
+
+    beforeAll(async () => {
+      // Морозов: расчёт + разовая + удержания; вид без статьи 1С — «Прочие удержания».
+      calc.byPair.set('12|2026-10', counted(lines(['contract', '120000.50'], ['overtime', '1000.00'])));
+      await run(`INSERT INTO payroll_one_time_supplements (employee_id, month, amount, reason) VALUES (12, '2026-10-01', 5000, 'Премия')`);
+      const kinds = await run(`SELECT id, name FROM payroll_deduction_kinds WHERE name IN ('Питание', 'Штраф за мусор')`);
+      const kindId = (name: string) => kinds.rows.find((row: { name: string }) => row.name === name).id;
+      await run('INSERT INTO staff_deductions (employee_id, kind_id, month, amount) VALUES ($1, $2, $3, $4), ($1, $5, $3, $6)', [
+        12, kindId('Питание'), '2026-10-01', 700, kindId('Штраф за мусор'), 100.25,
+      ]);
+
+      // Ильин: статья 1С заменяет расчёт только по себе; разовая и та же статья 1С не удваиваются.
+      calc.byPair.set('9|2026-10', counted(lines(['contract', '100000.00'], ['housing', '12600.00'], ['supplement', '50000.00'])));
+      await run(`INSERT INTO payroll_one_time_supplements (employee_id, month, amount, reason) VALUES (9, '2026-10-01', 50000, 'Доплата')`);
+      await paid(9, '2026-10-01', 'housing', 18900);
+      await paid(9, '2026-10-01', 'supplement', 50000);
+
+      // Козлов: выработка не внесена — суммы нет, причина есть.
+      calc.byPair.set('10|2026-10', counted(lines(['brigade', null]), ['brigade_output']));
+
+      // Лебедев: не работал в месяце — ни суммы, ни строки.
+      calc.byPair.set('11|2026-10', { state: 'not_closed', reason: 'no_period' });
+
+      // Григорьев: перешёл в другой отдел между июлем и октябрём, объект тот же.
+      calc.byPair.set('4|2026-10', counted(lines(['contract', '40000.00'])));
+      await version(8, 16, 1, AUTO, '2026-10-01', [
+        { employee_id: 4, objects: [{ key: MYTISHCHI, id: MYTISHCHI, name: 'ЖК Мытищи', address: 'Мытищи', hours: 100 }] },
+        // Объект остальных — из подачи: часы СКУД здесь не проверяются.
+        ...[9, 10, 12].map(employeeId => ({
+          employee_id: employeeId,
+          objects: [{ key: KHIMKI, id: KHIMKI, name: 'ЖК Химки', address: 'Химки', hours: 100 }],
+        })),
+      ]);
+
+      // Июль и август загружены из 1С: Морозов с условиями и без зарплаты 1С в июле — считается.
+      await run(`INSERT INTO payroll_compensation_terms (employee_id, staff_category, calc_type, monthly_salary, effective_from)
+                 VALUES (12, 'office', 'salary', 120000, '2026-01-01')`);
+
+      // Рабочие без условий: Новиков — в бригаде с ведомостью (Жуков), Орлов — в бригаде, по которой её нет.
+      await run(`
+        INSERT INTO org_departments (id, name, parent_id, kind) VALUES ('${BRIGADE_NO_PAYROLL}', 'бр.Без ведомости', '${BRIGADES_FOLDER}', 'brigade');
+        INSERT INTO employees (id, full_name, org_department_id, employment_status, is_archived) VALUES
+          (13, 'Новиков Бригадник', '${BRIGADE}', 'active', false),
+          (14, 'Орлов Бригадник', '${BRIGADE_NO_PAYROLL}', 'active', false);
+      `);
+      calc.byPair.set('14|2026-07', counted(lines(['brigade', null]), ['brigade_output']));
+      modes.byEmployee.set(14, { mode: 'object', pinnedObjectId: KHIMKI, source: 'employee_explicit' });
+    });
+
+    it('месяц без 1С считается сам: расчёт, разовая по основанию, удержания по видам', async () => {
+      calc.calls.length = 0;
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: OCTOBER });
+      expect(summary.months).toEqual(['2026-10']);
+      expect(rowOf(summary.rows, 12).map(row => [row.amounts, row.issues])).toEqual([[{
+        contract: '120000.50', overtime: '1000.00', premium: '5000.00', meals: '700.00', other_deductions: '100.25',
+      }, []]]);
+      // Подрядчик и архивный в расчёт не идут.
+      const ids = calc.calls.flatMap(call => call.ids);
+      expect(ids).not.toContain(5);
+      expect(ids).not.toContain(3);
+    });
+
+    it('статья 1С заменяет расчёт только по себе; разовая и та же статья не удваиваются', async () => {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: OCTOBER });
+      expect(rowOf(summary.rows, 9)[0].amounts).toEqual({ contract: '100000.00', housing: '18900.00', supplement: '50000.00' });
+    });
+
+    it('сумму посчитать нельзя — строка с причиной и без суммы; не работал — строки нет', async () => {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: OCTOBER });
+      expect(rowOf(summary.rows, 10).map(row => [row.amounts, row.issues])).toEqual([[{}, ['brigade_output']]]);
+      expect(rowOf(summary.rows, 11)).toEqual([]);
+    });
+
+    it('зарплата 1С загружена — весь месяц из 1С; в таком месяце считаем людей с условиями и бригады без ведомости', async () => {
+      calc.byPair.set('1|2026-07', counted(lines(['contract', '999.00'], ['overtime', '34821.43'])));
+      calc.calls.length = 0;
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: ['2026-07-01'] });
+      expect(rowOf(summary.rows, 1)[0].amounts).toEqual({ contract: '100000.00', meals: '1200.00', travel: '3000.50' });
+      // Морозов — с условиями и без зарплаты 1С; Орлов — бригада без ведомости. Лебедев с зарплатой 1С, Подрядчик не в
+      // составе, Новиков — его бригада уже загружена, считать нечем.
+      expect(calc.calls).toEqual([{ ids: [12, 14], month: '2026-07' }]);
+    });
+
+    it('ведомость отделов не снимает бригаду с расчёта: рабочий без условий виден с причиной', async () => {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: ['2026-07-01'] });
+      expect(rowOf(summary.rows, 14).map(row => [row.department, row.amounts, row.issues])).toEqual([
+        ['бр.Без ведомости', {}, ['brigade_output']],
+      ]);
+      expect(rowOf(summary.rows, 13)).toEqual([]);
+    });
+
+    it('сменил отдел между месяцами — по строке на отдел; суммы не теряются', async () => {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: ['2026-07-01', '2026-10-01'] });
+      expect(rowOf(summary.rows, 4)
+        .map(row => [row.object_name, row.department_id, row.department, row.amounts.contract])
+        .sort((left, right) => String(left[2]).localeCompare(String(right[2]), 'ru')))
+        .toEqual([
+          ['ЖК Мытищи', ACCOUNTING, 'Бухгалтерия', '40000.00'],
+          ['ЖК Мытищи', AUTO, 'Отдел автотехники', '40000.00'],
+        ]);
+    });
+
+    it('сумма по отделам равна сумме всех отделов', async () => {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: ['2026-07-01', '2026-10-01'] });
+      const total = (rows: typeof summary.rows) => rows.reduce(
+        (sum, row) => sum + Object.values(row.amounts).reduce((inner, amount) => inner + Math.round(Number(amount) * 100), 0),
+        0,
+      );
+      const departments = [...new Set(summary.rows.map(row => row.department_id))];
+      expect(departments.reduce((sum, id) => sum + total(summary.rows.filter(row => row.department_id === id)), 0))
+        .toBe(total(summary.rows));
+      expect(departments.length).toBeGreaterThan(1);
+    });
   });
 });

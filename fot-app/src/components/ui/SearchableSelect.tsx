@@ -122,6 +122,8 @@ export const SearchableSelect: FC<ISearchableSelectProps> = memo(({
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      // Окно вокруг (ModalShell) слушает Escape на window: закрыть надо только список.
+      e.stopPropagation();
       closePanel();
     }
   }, [closePanel]);

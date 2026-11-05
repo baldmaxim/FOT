@@ -5,10 +5,14 @@ import { PAYROLL_PAID_GROUPS } from './payrollPaid';
 import {
   buildSummarySnapshot,
   filterSummaryByCategory,
+  filterSummaryByDepartment,
   groupSummaryByObject,
+  SUMMARY_NO_DEPARTMENT,
   summaryCategoryTable,
+  summaryDepartmentOptions,
   summaryEmployeeColumns,
   summaryEmployeeTotals,
+  summaryHasIssues,
   summaryItems,
   summaryObjectColumns,
   summaryObjectTotals,
@@ -21,12 +25,14 @@ import { applyTableView, matchesNameSearch } from './tableView';
 const row = (over: Partial<IPayrollSummaryRow>): IPayrollSummaryRow => ({
   employee_id: 1,
   full_name: 'Акимов Прораб',
+  department_id: 'line',
   department: 'ЛИНИЯ',
   position: 'Прораб',
   category: 'itr',
   object_key: 'khimki',
   object_name: 'ЖК Химки',
   amounts: { contract: '100000.00' },
+  issues: [],
   ...over,
 });
 
@@ -82,7 +88,7 @@ describe('«Свод»: объекты', () => {
     expect(payout.text(byKey('khimki'))).toMatch(/^146\s800,50$/);
     expect(payout.exportValue?.(byKey('khimki'))).toBe(146800.5);
     expect(payout.text(byKey('mytishchi'))).toMatch(/^47\s499,75$/);
-    expect(payout.text({ object_key: 'x', object_name: 'X', employee_ids: [], cents: {} })).toBe('—');
+    expect(payout.text({ object_key: 'x', object_name: 'X', employee_ids: [], not_counted_ids: [], cents: {} })).toBe('—');
     expect(summaryObjectTotals(items)(objects)?.export.payout).toBe(294300.25);
   });
 
@@ -114,6 +120,120 @@ describe('«Свод»: объекты', () => {
     expect(payout('itr')).toMatch(/^101\s800,50$/);
     expect(payout('worker')).toMatch(/^45\s000,00$/);
     expect(payout('office')).toBe('—');
+  });
+});
+
+describe('«Свод»: отдел', () => {
+  const DEPARTMENT_ROWS: IPayrollSummaryRow[] = [
+    row({ department_id: 'line', department: 'ЛИНИЯ', amounts: { contract: '100000.00' } }),
+    row({ employee_id: 2, department_id: 'accounting', department: 'Бухгалтерия', amounts: { contract: '80000.50' } }),
+    row({ employee_id: 3, department_id: 'line', department: 'ЛИНИЯ', object_key: 'mytishchi', object_name: 'ЖК Мытищи', amounts: { contract: '50000.25' } }),
+    row({ employee_id: 4, department_id: null, department: null, amounts: { contract: '1000.00' } }),
+  ];
+
+  it('список — отделы строк по алфавиту, без повторов; без отдела — свой вариант', () => {
+    expect(summaryDepartmentOptions(DEPARTMENT_ROWS)).toEqual([
+      { value: SUMMARY_NO_DEPARTMENT, label: 'Без отдела' },
+      { value: 'accounting', label: 'Бухгалтерия' },
+      { value: 'line', label: 'ЛИНИЯ' },
+    ]);
+    expect(summaryDepartmentOptions([])).toEqual([]);
+  });
+
+  it('фильтр: объекты, «Чел.» и суммы только выбранного отдела; пусто — все', () => {
+    expect(filterSummaryByDepartment(DEPARTMENT_ROWS, '')).toHaveLength(4);
+    expect(filterSummaryByDepartment(DEPARTMENT_ROWS, SUMMARY_NO_DEPARTMENT).map(r => r.employee_id)).toEqual([4]);
+
+    const objects = groupSummaryByObject(filterSummaryByDepartment(DEPARTMENT_ROWS, 'line'));
+    expect(objects.map(object => [object.object_name, object.employee_ids, object.cents.contract])).toEqual([
+      ['ЖК Химки', [1], 10000000],
+      ['ЖК Мытищи', [3], 5000025],
+    ]);
+  });
+
+  it('сумма по всем отделам равна итогу «Все отделы»', () => {
+    const payout = (rows: IPayrollSummaryRow[]) => groupSummaryByObject(rows)
+      .reduce((sum, object) => sum + (object.cents.contract ?? 0), 0);
+    const byDepartments = summaryDepartmentOptions(DEPARTMENT_ROWS)
+      .reduce((sum, option) => sum + payout(filterSummaryByDepartment(DEPARTMENT_ROWS, option.value)), 0);
+    expect(byDepartments).toBe(payout(DEPARTMENT_ROWS));
+    expect(byDepartments).toBe(23100075);
+  });
+
+  it('итоги вкладок считаются от строк отдела', () => {
+    const lineRows = filterSummaryByDepartment(DEPARTMENT_ROWS, 'line');
+    expect(summaryPayoutText(summaryCategoryTable(lineRows, 'itr').objects)).toMatch(/^150\s000,25$/);
+    expect(summaryPayoutText(summaryCategoryTable(lineRows, 'worker').objects)).toBe('—');
+  });
+
+  it('сменивший отдел — две строки одного человека с разными ключами, в «Чел.» он один', () => {
+    const moved = [
+      row({ department_id: 'line', department: 'ЛИНИЯ', amounts: { contract: '100.00' } }),
+      row({ department_id: 'accounting', department: 'Бухгалтерия', amounts: { contract: '200.00' } }),
+    ];
+    const keys = toSummaryEmployeeRows(moved).map(employee => employee.key);
+    expect(new Set(keys).size).toBe(2);
+    expect(groupSummaryByObject(moved)[0].employee_ids).toEqual([1]);
+    expect(groupSummaryByObject(moved)[0].cents.contract).toBe(30000);
+  });
+
+  it('экспорт: отдел в подзаголовке и имени файла; без отдела — как раньше', () => {
+    const columns = summaryObjectColumns(['contract']);
+    const objects = groupSummaryByObject(DEPARTMENT_ROWS);
+    const withDepartment = buildSummarySnapshot({
+      title: 'Свод', subject: 'ЛИНИЯ Все', periodLabel: 'июль 2026', categoryLabel: 'Все', departmentLabel: 'ЛИНИЯ', columns,
+    })(objects);
+    expect(withDepartment.subtitle).toMatch(/^Период: июль 2026\. Отдел: ЛИНИЯ\. Категория: Все\. Дата выгрузки: /);
+    expect(withDepartment.file_name).toMatch(/^Свод_ЛИНИЯ_Все_\d{4}-\d{2}-\d{2}\.xlsx$/);
+
+    const all = buildSummarySnapshot({ title: 'Свод', subject: 'Все', periodLabel: 'июль 2026', categoryLabel: 'Все', columns })(objects);
+    expect(all.subtitle).toMatch(/^Период: июль 2026\. Категория: Все\. Дата выгрузки: /);
+  });
+});
+
+describe('«Свод»: «Не посчитано» и «Прочие удержания»', () => {
+  const ISSUE_ROWS: IPayrollSummaryRow[] = [
+    row({ employee_id: 1, amounts: { contract: '100.00' } }),
+    row({ employee_id: 2, amounts: {}, issues: ['brigade_output'] }),
+    row({ employee_id: 3, amounts: { contract: '50.00' }, issues: ['vacation_pay', 'sick_pay'] }),
+  ];
+
+  it('столбца нет, если все посчитаны; у старого бэкенда (без issues) — тоже', () => {
+    expect(summaryHasIssues(ROWS)).toBe(false);
+    expect(summaryHasIssues([{ ...row({}), issues: undefined }])).toBe(false);
+    expect(summaryObjectColumns(summaryItems(ROWS)).map(column => column.key)).not.toContain('not_counted');
+    expect(summaryCategoryTable(ROWS, 'all').columns.map(column => column.key)).not.toContain('not_counted');
+  });
+
+  it('объекты: число людей после «Чел.», итог — уникальные; сумма неизвестного не становится нулём', () => {
+    expect(summaryHasIssues(ISSUE_ROWS)).toBe(true);
+    const items = summaryItems(ISSUE_ROWS);
+    const columns = summaryObjectColumns(items, true);
+    expect(columns.map(column => column.key).slice(0, 4)).toEqual(['object_name', 'employees', 'not_counted', 'payout']);
+    const [object] = groupSummaryByObject(ISSUE_ROWS);
+    expect(object.employee_ids).toEqual([1, 2, 3]);
+    expect(object.not_counted_ids).toEqual([2, 3]);
+    expect(columns.find(column => column.key === 'not_counted')?.text(object)).toBe('2');
+    expect(summaryObjectTotals(items)([object])?.export).toMatchObject({ employees: 3, not_counted: 2, contract: 150 });
+  });
+
+  it('сотрудники: причины подписями; всё посчитано — «—»; итог без числа людей', () => {
+    const items = summaryItems(ISSUE_ROWS);
+    const employees = toSummaryEmployeeRows(ISSUE_ROWS);
+    const column = summaryEmployeeColumns(items, false, true).find(item => item.key === 'not_counted')!;
+    expect(employees.map(employee => column.text(employee))).toEqual(['—', 'выработка бригады', 'отпускные, больничные']);
+    expect(summaryEmployeeColumns(items, false).map(item => item.key)).not.toContain('not_counted');
+  });
+
+  it('«Прочие удержания» — столбец после статей 1С, входит во «Всего удержано» и вычитается из «К выплате»', () => {
+    const rows = [row({ amounts: { contract: '1000.00', meals: '100.00', other_deductions: '50.25' } })];
+    const items = summaryItems(rows);
+    expect(items).toEqual(['contract', 'meals', 'other_deductions']);
+    const columns = summaryObjectColumns(items);
+    expect(columns.map(column => column.label)).toContain('Прочие удержания');
+    const [object] = groupSummaryByObject(rows);
+    expect(columns.find(column => column.key === 'deducted')?.exportValue?.(object)).toBe(150.25);
+    expect(columns.find(column => column.key === 'payout')?.exportValue?.(object)).toBe(849.75);
   });
 });
 

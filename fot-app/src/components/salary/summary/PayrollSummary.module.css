@@ -1,8 +1,8 @@
 /*
  * Окно «Свод» на «Расчётах»: оверлей, шапка и тело — из PayrollModal.module.css. Размер — как у «Справочника»
  * (PayrollDictionary.module.css): на телефоне вся область, с 768px — 90% ширины и высоты.
- * Шапка: на телефоне заголовок с крестиком, под ними переключатель категорий во всю ширину (тап-цели 44px);
- * с 769px — переключатель справа от заголовка, 36px.
+ * Шапка: на телефоне заголовок с крестиком, под ними отдел и переключатель категорий во всю ширину (тап-цели 44px);
+ * с 769px — отдел и переключатель справа от заголовка, 36px.
  */
 .container {
   box-sizing: border-box;
@@ -31,8 +31,17 @@
   row-gap: 10px;
 }
 
-.categories {
+.department {
   order: 3;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* Тап-цель 44px, как у категорий: поле общего SearchableSelect ниже, и на других экранах оно не меняется. */
+.department > div > div:first-child { height: 44px; }
+
+.categories {
+  order: 4;
   flex: 1 1 100%;
   display: grid;
   grid-auto-flow: column;
@@ -102,6 +111,11 @@
 }
 
 @media (min-width: 769px) {
+  .department {
+    order: 0;
+    flex: 0 1 280px;
+  }
+  .department > div > div:first-child { height: 36px; }
   .categories {
     order: 0;
     flex: 0 0 auto;

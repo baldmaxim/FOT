@@ -8,9 +8,12 @@ import { registryMonthsParam } from '../../../utils/payrollRegistries';
 import {
   buildSummarySnapshot,
   filterSummaryByCategory,
+  filterSummaryByDepartment,
   groupSummaryByObject,
   SUMMARY_CATEGORIES,
   summaryCategoryTable,
+  summaryDepartmentOptions,
+  summaryHasIssues,
   summaryItems,
   summaryObjectColumns,
   summaryObjectTotals,
@@ -22,6 +25,7 @@ import {
 import type { ITableView } from '../../../utils/tableView';
 import { ModalShell } from '../../ui/ModalShell';
 import { RegistryPanel, type RegistryVisibleOf } from '../../ui/registry/RegistryPanel';
+import { SearchableSelect } from '../../ui/SearchableSelect';
 import { PayrollSummaryObjectModal } from './PayrollSummaryObjectModal';
 import modal from '../PayrollModal.module.css';
 import styles from './PayrollSummary.module.css';
@@ -38,40 +42,59 @@ const objectKey = (row: ISummaryObjectRow): string => row.object_key;
 const objectName = (row: ISummaryObjectRow): string => row.object_name;
 
 /**
- * Окно «Свод»: суммы «Оплачено» (ЗУП) за выбранные месяцы по объектам — строки объекты, столбцы статьи,
- * «Начислено», «Удержано» и строка «Итого». Сверху — Все / ИТР / Офис / Рабочие; справа от поиска — «К выплате»
- * всех четырёх по текущим поиску и фильтрам. Клик по объекту — окно с его сотрудниками.
+ * Окно «Свод»: суммы за выбранные месяцы по объектам — автоматический расчёт, загруженное из 1С его заменяет. Строки
+ * объекты, столбцы статьи, «Начислено», «Удержано» и строка «Итого». Сверху — отдел и Все / ИТР / Офис / Рабочие; справа
+ * от поиска — «К выплате» всех четырёх по отделу, поиску и фильтрам. Клик по объекту — окно с его сотрудниками.
  */
 export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onClose }) => {
   const titleId = useId();
   const monthsParam = registryMonthsParam(months);
   const [category, setCategory] = useState<SummaryCategory>('all');
+  const [chosenDepartment, setChosenDepartment] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [opened, setOpened] = useState<ISummaryObjectRow | null>(null);
 
+  // Сервер считает зарплату месяца: повторное открытие в течение минуты считать заново незачем.
   const query = useQuery({
     queryKey: PAYROLL_SUMMARY_KEYS.data(monthsParam),
     queryFn: ({ signal }) => payrollSummaryService.get(monthsParam, signal),
-    staleTime: 0,
+    staleTime: 60_000,
   });
+
+  const departmentOptions = useMemo(() => summaryDepartmentOptions(query.data?.rows ?? []), [query.data]);
+  // Отдела могло не стать после обновления данных — тогда все отделы, а не поле с его id.
+  const department = departmentOptions.some(option => option.value === chosenDepartment) ? chosenDepartment : '';
+  const departmentLabel = departmentOptions.find(option => option.value === department)?.label;
+  const departmentRows = useMemo(
+    () => (query.data ? filterSummaryByDepartment(query.data.rows, department) : undefined),
+    [query.data, department],
+  );
 
   const periodLabel = summaryPeriodLabel(months);
   const categoryLabel = SUMMARY_CATEGORIES.find(option => option.key === category)?.label ?? '';
   const categoryRows = useMemo(
-    () => (query.data ? filterSummaryByCategory(query.data.rows, category) : undefined),
-    [query.data, category],
+    () => (departmentRows ? filterSummaryByCategory(departmentRows, category) : undefined),
+    [departmentRows, category],
   );
   const items = useMemo(() => summaryItems(categoryRows ?? []), [categoryRows]);
   const objects = useMemo(() => (categoryRows ? groupSummaryByObject(categoryRows) : undefined), [categoryRows]);
-  const columns = useMemo(() => summaryObjectColumns(items), [items]);
+  const withNotCounted = useMemo(() => summaryHasIssues(categoryRows ?? []), [categoryRows]);
+  const columns = useMemo(() => summaryObjectColumns(items, withNotCounted), [items, withNotCounted]);
   const totals = useMemo(() => summaryObjectTotals(items), [items]);
   const buildExport = useMemo(
-    () => buildSummarySnapshot({ title: 'Свод', subject: categoryLabel, periodLabel, categoryLabel, columns }),
-    [categoryLabel, periodLabel, columns],
+    () => buildSummarySnapshot({
+      title: 'Свод',
+      subject: departmentLabel ? `${departmentLabel} ${categoryLabel}` : categoryLabel,
+      periodLabel,
+      categoryLabel,
+      departmentLabel,
+      columns,
+    }),
+    [categoryLabel, departmentLabel, periodLabel, columns],
   );
   const categoryTables = useMemo(
-    () => SUMMARY_CATEGORIES.map(option => ({ ...option, ...summaryCategoryTable(query.data?.rows ?? [], option.key) })),
-    [query.data],
+    () => SUMMARY_CATEGORIES.map(option => ({ ...option, ...summaryCategoryTable(departmentRows ?? [], option.key) })),
+    [departmentRows],
   );
   // Итог вкладки — «К выплате» её строки «Итого» после переключения (поиск и фильтры столбцов те же).
   const renderCategoryTotals = (visibleOf: RegistryVisibleOf<ISummaryObjectRow>) => query.data && (
@@ -102,6 +125,16 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
           <header className={`${modal.header} ${styles.header}`}>
             <div className={modal.headerText}>
               <h2 id={titleId} className={modal.title}>Свод · {periodLabel}</h2>
+            </div>
+            <div className={styles.department}>
+              <SearchableSelect
+                options={departmentOptions}
+                value={department}
+                onChange={setChosenDepartment}
+                allLabel="Все отделы"
+                placeholder="Поиск отдела..."
+                ariaLabel="Отдел"
+              />
             </div>
             <div className={styles.categories} role="radiogroup" aria-label="Категория">
               {SUMMARY_CATEGORIES.map(option => (
@@ -154,6 +187,7 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
               withCategory={category === 'all'}
               periodLabel={periodLabel}
               categoryLabel={categoryLabel}
+              departmentLabel={departmentLabel}
               onClose={() => setOpened(null)}
             />
           )}

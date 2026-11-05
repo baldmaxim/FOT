@@ -47,15 +47,17 @@ describe('«Свод»', () => {
   });
 
   it('список месяцев — первые числа; all или без параметра — все месяцы', async () => {
-    await payrollSummaryController.get(makeReq({ months: '2026-08,2026-07' }), makeRes());
+    const req = makeReq({ months: '2026-08,2026-07' });
+    await payrollSummaryController.get(req, makeRes());
     await payrollSummaryController.get(makeReq({ months: 'all' }), makeRes());
     await payrollSummaryController.get(makeReq(), makeRes());
-    // Третье поле — замер шагов (Server-Timing).
+    // timing — замер шагов (Server-Timing), req — расчёту ФОТ.
     expect(summary.loadPayrollSummary.mock.calls.map(call => call[0])).toMatchObject([
       { scope: SCOPE, monthStarts: ['2026-07-01', '2026-08-01'], timing: expect.objectContaining({ totalMs: 0 }) },
       { scope: SCOPE, monthStarts: null },
       { scope: SCOPE, monthStarts: null },
     ]);
+    expect(summary.loadPayrollSummary.mock.calls[0][0].req).toBe(req);
   });
 
   it('неверный месяц — 400', async () => {
