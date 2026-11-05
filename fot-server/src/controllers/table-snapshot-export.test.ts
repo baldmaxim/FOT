@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { tableSnapshotSchema, tableSnapshotsSchema } from './table-snapshot-export.js';
+import { TABLE_SNAPSHOT_MAX_CELL_LENGTH, tableSnapshotSchema, tableSnapshotsSchema } from './table-snapshot-export.js';
 
 const table = () => ({
   title: 'Иванов Иван',
@@ -56,6 +56,19 @@ describe('tableSnapshotsSchema', () => {
 });
 
 describe('tableSnapshotSchema', () => {
+  it('длина ячейки: список дат за 12 месяцев проходит, сверх лимита — отказ', () => {
+    const snapshot = (cell: string) => ({
+      ...table(),
+      file_name: 'Выходные.xlsx',
+      rows: [{ cells: [cell, 1] }],
+    });
+    // 366 дат «04.10, » — наибольший список вкладки «Выходные».
+    expect(tableSnapshotSchema.safeParse(snapshot('04.10, '.repeat(366))).success).toBe(true);
+    expect(TABLE_SNAPSHOT_MAX_CELL_LENGTH).toBe(3000);
+    expect(tableSnapshotSchema.safeParse(snapshot('x'.repeat(3000))).success).toBe(true);
+    expect(tableSnapshotSchema.safeParse(snapshot('x'.repeat(3001))).success).toBe(false);
+  });
+
   it('одиночный снимок — по-прежнему с file_name и теми же проверками', () => {
     expect(tableSnapshotSchema.safeParse({ ...table(), file_name: 'Свод.xlsx' }).success).toBe(true);
     expect(tableSnapshotSchema.safeParse(table()).success).toBe(false);

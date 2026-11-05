@@ -240,7 +240,7 @@ export const RegistryTable = <Row,>({
                     </td>
                   ) : (
                     <td key={column.key} className={styles.cellText}>
-                      <span className={styles.clamp2}>{column.text(row)}</span>
+                      <span className={column.wrap ? styles.fullText : styles.clamp2}>{column.text(row)}</span>
                     </td>
                   )
                 ))}

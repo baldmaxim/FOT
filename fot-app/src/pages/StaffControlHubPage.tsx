@@ -1,6 +1,6 @@
 import { lazy, useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Users, Briefcase, UserPlus, BedDouble, CircleMinus } from 'lucide-react';
+import { Users, Briefcase, CalendarOff, UserPlus, BedDouble, CircleMinus } from 'lucide-react';
 import { HubShell, type IHubTab } from '../components/hub/HubShell';
 import { useAuth } from '../contexts/AuthContext';
 import { hrProfileService } from '../services/hrProfileService';
@@ -10,6 +10,7 @@ import '../styles/FilterBar.css';
 
 const StaffControlPage = lazy(() => import('./StaffControlPage').then(m => ({ default: m.StaffControlPage })));
 const HiringRequestsBoard = lazy(() => import('../components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));
+const WeekendsTab = lazy(() => import('../components/staff/weekends/WeekendsTab').then(m => ({ default: m.WeekendsTab })));
 const NewEmployeeTab = lazy(() => import('../components/staff/hr/NewEmployeeTab').then(m => ({ default: m.NewEmployeeTab })));
 const DormitoryTab = lazy(() => import('../components/staff/dormitory/DormitoryTab').then(m => ({ default: m.DormitoryTab })));
 const DeductionsTab = lazy(() => import('../components/staff/deductions/DeductionsTab').then(m => ({ default: m.DeductionsTab })));
@@ -49,6 +50,13 @@ export const StaffControlHubPage: FC = () => {
       accessPath: '/staff-control/hiring',
       icon: Briefcase,
       render: () => <HiringRequestsBoard />,
+    },
+    {
+      key: 'weekends',
+      label: 'Выходные',
+      accessPath: '/staff-control/weekends',
+      icon: CalendarOff,
+      render: () => <WeekendsTab />,
     },
     ...(newEmployeeTabAvailable ? [{
       key: 'new-employee',

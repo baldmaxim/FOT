@@ -93,6 +93,7 @@ export const PAGE_PATHS = {
   STAFF_CONTROL_TIMESHEET_OFFICE: '/staff-control/timesheet-office',
   STAFF_CONTROL_DORMITORY: '/staff-control/dormitory',
   STAFF_CONTROL_DEDUCTIONS: '/staff-control/deductions',
+  STAFF_CONTROL_WEEKENDS: '/staff-control/weekends',
   EMPLOYEES_CARD: '/employees',
   TIMESHEET_EVENTS: '/timesheet/events',
   TIMESHEET_LOCK_TOGGLE: '/timesheet/lock-toggle',
@@ -179,6 +180,8 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/feedback-review',            label: 'Обратная связь (разбор)',              group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 131, is_active: true },
   { key: '/testing-review',             label: 'Тестирование (разбор)',                group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 132, is_active: true },
   { key: '/employees',                  label: 'Карточка сотрудника',                  group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 140, is_active: true },
+  // Вкладка «Выходные» (миграция 346): ЛИНИЯ и ЛИНИЯ-Общестрой, работа в выходной без корректировки; только просмотр.
+  { key: '/staff-control/weekends',     label: 'Управление кадрами — Выходные',        group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: false, sort_order: 104, is_active: true },
   { key: '/staff-control/hiring',       label: 'Управление кадрами — Заявки на поиск сотрудников',   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 105, is_active: true },
   { key: '/staff-control/induction',    label: 'Управление кадрами — Вводный инструктаж (вкладка)', group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 106, is_active: true },
   { key: '/staff-control/hr-profiles',  label: 'Управление кадрами — Реквизиты (кадровые данные)',   group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 107, is_active: true },

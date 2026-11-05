@@ -17,8 +17,13 @@ import { sanitizeExportFileName } from '../services/skud-export.service.js';
  */
 export const TABLE_SNAPSHOT_MAX_COLUMNS = 60;
 export const TABLE_SNAPSHOT_MAX_ROWS = 1000;
+/**
+ * Самая длинная ячейка — список дат вкладки «Выходные» кадров: за 12 месяцев не больше 366 дат
+ * по 7 символов («04.10, »), это около 2562.
+ */
+export const TABLE_SNAPSHOT_MAX_CELL_LENGTH = 3000;
 
-const cellSchema = z.union([z.string().max(300), z.number().finite(), z.null()]);
+const cellSchema = z.union([z.string().max(TABLE_SNAPSHOT_MAX_CELL_LENGTH), z.number().finite(), z.null()]);
 
 /** Таблица снимка без имени файла: лист книги. */
 const snapshotTableShape = {

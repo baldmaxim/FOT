@@ -70,6 +70,8 @@ describe('изоляция прав «все объекты», «все отде
       'controllers/schedule.controller.ts',
       // Вкладка «Удержания» «Управления кадрами» (миграция 318): список и правка — в круге списка кадров.
       'controllers/staff-deductions.controller.ts',
+      // Вкладка «Выходные» «Управления кадрами» (миграция 346): кому виден список — по кругу списка кадров.
+      'controllers/staff-weekends.controller.ts',
       'services/employee-section-filter.service.ts',
       'services/employees-export.service.ts',
       'services/hr-documents-access.service.ts',

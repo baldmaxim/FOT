@@ -150,6 +150,13 @@
   line-height: 1.3;
 }
 
+/* Весь текст, строка таблицы растёт по нему: список дат, который нельзя обрезать */
+.fullText {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
 .table td.cellActions { text-overflow: clip; }
 
 .actions {
