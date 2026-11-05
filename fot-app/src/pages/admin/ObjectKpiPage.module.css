@@ -271,7 +271,7 @@
 }
 
 .overdue {
-  color: var(--danger-color, #dc2626);
+  color: var(--error);
   font-weight: 600;
 }
 
@@ -339,6 +339,12 @@
 
 /* Приглушённое значение в ячейке: «загружается», «нет плана», «н/д». */
 .muted {
+  color: var(--text-secondary);
+}
+
+/* Вторая строка ячейки «Контрольная дата»: фактический ЗОС. */
+.controlFact {
+  display: block;
   color: var(--text-secondary);
 }
 

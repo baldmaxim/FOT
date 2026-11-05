@@ -70,6 +70,13 @@ export interface IObjectKpiObjectStat {
   fact_amount: number;
   plan_amount: number | null;
   completion_pct: number | null;
+  /** Контрольные даты месяцев по порядку; две и больше — ЗОС переносили. Старый бэкенд полей ЗОС не отдаёт. */
+  control_dates?: string[];
+  /** Один месяц в расчёте: расчётные месяцы, при просрочке — минус число месяцев. Несколько месяцев — null. */
+  zos_months?: number | null;
+  /** Дата прошла в последнем месяце выборки. */
+  is_overdue?: boolean;
+  actual_zos_date?: string | null;
 }
 
 export type ObjectKpiExportColumnType = 'text' | 'money' | 'percent' | 'int';

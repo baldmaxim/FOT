@@ -561,7 +561,39 @@ export interface ObjectKpiObjectStat {
   /** null — ни в одном месяце плана нет (неполные данные договора). */
   plan_amount: number | null;
   completion_pct: number | null;
+  /** Контрольные даты месяцев по порядку, без пустых и подряд идущих повторов; две и больше — ЗОС переносили. */
+  control_dates: string[];
+  /**
+   * Только у объекта с одним месяцем в расчёте: расчётные месяцы (п. 2.5), при просрочке — минус
+   * сколько месяцев прошло. При нескольких месяцах null: план там — сумма, одно число его не объясняет.
+   */
+  zos_months: number | null;
+  /** Контрольная дата прошла в последнем месяце выборки: после переноса ЗОС важно текущее состояние. */
+  is_overdue: boolean;
+  /** Фактический ЗОС из договора: в снимок месяца он не входит. */
+  actual_zos_date: string | null;
 }
+
+const monthNumber = (date: string): number => {
+  const [year, month] = date.split('-').map(Number);
+  return year * 12 + month;
+};
+
+/** Просроченной строке делитель плана равен 1 (п. 2.7), поэтому показывается сама просрочка, а не он. */
+const zosMonths = (row: ObjectKpiReportRow): number | null => {
+  if (!row.control_date) return null;
+  return row.is_overdue
+    ? monthNumber(row.control_date) - monthNumber(row.period_month)
+    : row.months_remaining;
+};
+
+const uniqueControlDates = (sorted: ObjectKpiReportRow[]): string[] => {
+  const dates: string[] = [];
+  for (const { control_date: date } of sorted) {
+    if (date && date !== dates.at(-1)) dates.push(date);
+  }
+  return dates;
+};
 
 /**
  * Сводка по каждому объекту — та же summarizeCompletion, что у плиток: % = Σфакт / Σплан по
@@ -597,6 +629,10 @@ export function summarizeByObject(rows: ObjectKpiReportRow[]): ObjectKpiObjectSt
       fact_amount: Number((totals.total_fact + totals.total_fact_unplanned).toFixed(2)),
       plan_amount: sorted.some((row) => row.plan_amount !== null) ? totals.total_plan : null,
       completion_pct: totals.completion_pct,
+      control_dates: uniqueControlDates(sorted),
+      zos_months: sorted.length === 1 ? zosMonths(first) : null,
+      is_overdue: Boolean(sorted.at(-1)?.is_overdue),
+      actual_zos_date: first.actual_zos_date ?? null,
     };
   });
 }

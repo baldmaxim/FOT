@@ -26,6 +26,7 @@ import {
   buildObjectColumns,
   defaultMonths,
   listWindowMonths,
+  objectControlCell,
   objectPremiumCell,
   objectPremiumRequest,
   objectPremiumTotal,
@@ -209,6 +210,15 @@ export const ObjectKpiPage: FC = () => {
     column: IKpiColumn<IObjectKpiObjectStat>,
     row: IObjectKpiObjectStat,
   ): ReactNode | undefined => {
+    if (column.key === 'control') {
+      const cell = objectControlCell(row);
+      return (
+        <>
+          <span className={cell.overdue ? styles.overdue : undefined}>{cell.date}</span>
+          {cell.fact && <span className={styles.controlFact}>{cell.fact}</span>}
+        </>
+      );
+    }
     if (column.key !== 'premium') return undefined;
     const cell = objectPremiumCell(row, premiumView);
     return <span className={cell.muted ? styles.muted : undefined} title={cell.title}>{cell.text}</span>;

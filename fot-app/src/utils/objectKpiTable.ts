@@ -4,7 +4,7 @@ import type {
   IPeriod,
   IReportPremiumRow,
 } from '../api/objectKpi';
-import { formatMoneyShort, formatMonthLabel, formatPercent } from './formatMoney';
+import { formatDateShort, formatMoneyShort, formatMonthLabel, formatPercent } from './formatMoney';
 import { shiftMonth } from './moscowDate';
 import { PREMIUM_STATUS_SHORT, PREMIUM_STATUS_TEXT } from './premiumStatus';
 import type { ITableColumn, ITableView } from './tableView';
@@ -30,7 +30,14 @@ export type { IFilterOption, SortDir } from './tableView';
 export type IKpiTableView = ITableView;
 
 /** Класс ширины колонки в ObjectKpiTable.module.css. */
-export type KpiColumnWidth = 'colObject' | 'colManager' | 'colMonth' | 'colMoney' | 'colPercent' | 'colShort';
+export type KpiColumnWidth =
+  | 'colObject'
+  | 'colManager'
+  | 'colMonth'
+  | 'colMoney'
+  | 'colControl'
+  | 'colPercent'
+  | 'colShort';
 
 export interface IKpiColumn<Row> extends ITableColumn<Row> {
   width: KpiColumnWidth;
@@ -249,6 +256,34 @@ export const objectPremiumTotal = (
   return formatKopecks(kopecks);
 };
 
+export interface IControlCell {
+  /** «15.02.27 (+5 мес.)», «30.06.26 (просрочено 4 мес.)», при переносе ЗОС — «27.03.28 → 30.09.28». */
+  date: string;
+  /** «ЗОС факт: 20.01.27»; null — фактического ЗОС нет. */
+  fact: string | null;
+  overdue: boolean;
+}
+
+const zosMonthsLabel = (months: number | null | undefined): string => {
+  if (months === null || months === undefined) return '';
+  return months < 0 ? ` (просрочено ${-months} мес.)` : ` (+${months} мес.)`;
+};
+
+/**
+ * «Контрольная дата» в строке объекта. Дату, месяцы и просрочку считает сервер. Фактический ЗОС
+ * её не заменяет: план месяца посчитан по контрольной дате, и столбец обязан это показывать.
+ */
+export const objectControlCell = (row: IObjectKpiObjectStat): IControlCell => {
+  const dates = row.control_dates ?? [];
+  const fact = row.actual_zos_date ? `ЗОС факт: ${formatDateShort(row.actual_zos_date)}` : null;
+  if (dates.length === 0) return { date: '—', fact, overdue: false };
+  return {
+    date: `${dates.map(date => formatDateShort(date)).join(' → ')}${zosMonthsLabel(row.zos_months)}`,
+    fact,
+    overdue: row.is_overdue === true,
+  };
+};
+
 /**
  * Таблица «Все объекты»: строка на объект за выбранные месяцы. «Премия» — после руководителя:
  * она принадлежит ему, а не объекту (п. 3.5).
@@ -278,6 +313,18 @@ export const buildObjectColumns = (premium: IPremiumView): Array<IKpiColumn<IObj
     text: row => objectPremiumCell(row, premium).text,
     sortValue: row => toSortNumber(objectPremiumCell(row, premium).amount),
     exportValue: row => objectPremiumCell(row, premium).amount,
+  },
+  {
+    key: 'control',
+    label: 'Контрольная дата (ЗОС + 3 мес.)',
+    type: 'text',
+    width: 'colControl',
+    text: (row) => {
+      const cell = objectControlCell(row);
+      return cell.fact ? `${cell.date}, ${cell.fact}` : cell.date;
+    },
+    // ISO-дата: текст ячейки сортировал бы по дню месяца.
+    sortValue: row => row.control_dates?.at(-1) ?? null,
   },
   moneyColumn('contract', 'Договор с ДС', row => row.contract_total),
   moneyColumn('ks6', 'КС-6', row => row.ks2_cumulative_before),

@@ -32,7 +32,12 @@ vi.mock('../config/postgres.js', async () => {
   };
 });
 
-import { filterRowsByMonths, OBJECT_KPI_REPORT_SQL, type ObjectKpiReportRow } from './object-kpi-report.service.js';
+import {
+  filterRowsByMonths,
+  OBJECT_KPI_REPORT_SQL,
+  summarizeByObject,
+  type ObjectKpiReportRow,
+} from './object-kpi-report.service.js';
 import { fetchObjectKpiForecast } from './object-kpi-forecast.service.js';
 
 const ALIA = '00000000-0000-0000-0000-00000000a11a';
@@ -315,6 +320,87 @@ describe.skipIf(!PG_URL)('отчёт и прогноз KPI объектов на
     await exec(`UPDATE object_contracts SET plan_start_month = '2026-10-01' WHERE id = $1`, [ALIA_CONTRACT]);
     expect(await report('2026-09-01', '2026-09-01', ALIA)).toEqual([]);
     expect(await fetchObjectKpiForecast(ALIA, '2026-09')).toEqual([]);
+  });
+
+  describe('столбец «Контрольная дата» таблицы «Все объекты»', () => {
+    const setZos = async (planned: string, actual: string | null = null) => {
+      await exec(`DELETE FROM object_kpi_month_plans WHERE skud_object_id = $1`, [ALIA]);
+      await exec(
+        `UPDATE object_contracts SET planned_zos_date = $1, actual_zos_date = $2 WHERE id = $3`,
+        [planned, actual, ALIA_CONTRACT],
+      );
+    };
+
+    it('конец месяца и високосный год: + 3 месяца — на последний день месяца', async () => {
+      await setZos('2027-07-31');
+      expect(byMonth(await report('2026-10-01', '2026-10-01', ALIA), '2026-10-01'))
+        .toMatchObject({ control_date: '2027-10-31', months_remaining: 13 });
+
+      await setZos('2027-11-30');
+      const [leap] = summarizeByObject(await report('2026-10-01', '2026-10-01', ALIA));
+      expect(leap).toMatchObject({ control_dates: ['2028-02-29'], zos_months: 17, is_overdue: false });
+    });
+
+    it('контрольная дата в этом же месяце — +1; через месяц — просрочено 1', async () => {
+      await setZos('2026-04-30');
+
+      const [july] = summarizeByObject(await report('2026-07-01', '2026-07-01', ALIA));
+      expect(july).toMatchObject({ control_dates: ['2026-07-30'], zos_months: 1, is_overdue: false });
+
+      const [august] = summarizeByObject(await report('2026-08-01', '2026-08-01', ALIA));
+      expect(august).toMatchObject({ control_dates: ['2026-07-30'], zos_months: -1, is_overdue: true });
+    });
+
+    it('просрочка считается и у зафиксированного месяца: снимок держит делитель плана 1', async () => {
+      await exec(
+        `INSERT INTO object_kpi_month_plans (
+           skud_object_id, period_month, status, planned_zos_date_used, control_date, months_remaining)
+         VALUES ($1, '2026-10-01', 'fixed', '2026-03-30', '2026-06-30', 1)`,
+        [WAVE],
+      );
+      const rows = await report('2026-10-01', '2026-10-01', WAVE);
+      expect(byMonth(rows, '2026-10-01')).toMatchObject({ months_remaining: 1, is_overdue: true });
+      expect(summarizeByObject(rows)[0]).toMatchObject({ control_dates: ['2026-06-30'], zos_months: -4 });
+    });
+
+    it('перенос ЗОС между зафиксированным и открытым месяцем даёт две даты без счётчика', async () => {
+      await exec(`UPDATE object_contracts SET planned_zos_date = '2028-06-30' WHERE id = $1`, [ALIA_CONTRACT]);
+
+      const [stat] = summarizeByObject(await report('2026-09-01', '2026-10-01', ALIA));
+      expect(stat).toMatchObject({
+        control_dates: ['2028-03-27', '2028-09-30'],
+        zos_months: null,
+        is_overdue: false,
+      });
+
+      // Только зафиксированный месяц: дата и число из снимка, перенос их не трогает (п. 6.3).
+      const [september] = summarizeByObject(await report('2026-09-01', '2026-09-01', ALIA));
+      expect(september).toMatchObject({ control_dates: ['2028-03-27'], zos_months: 19 });
+    });
+
+    it('фактический ЗОС внутри месяца: строка месяца есть, со следующего объекта нет', async () => {
+      await setZos('2027-12-27', '2026-10-20');
+
+      const [october] = summarizeByObject(await report('2026-10-01', '2026-10-01', ALIA));
+      expect(october).toMatchObject({
+        control_dates: ['2028-03-27'],
+        zos_months: 18,
+        actual_zos_date: '2026-10-20',
+      });
+
+      expect(summarizeByObject(await report('2026-11-01', '2026-11-01', ALIA))).toEqual([]);
+      // В широком окне месяц после факта в сумму и счётчик не попадает.
+      const wide = await report('2026-10-01', '2026-11-01', ALIA);
+      expect(wide.map((row) => row.period_month)).toEqual(['2026-10-01']);
+      expect(summarizeByObject(wide)[0].zos_months).toBe(18);
+    });
+
+    it('плановая ЗОС очищена, снимка нет: дат нет', async () => {
+      await exec(`DELETE FROM object_kpi_month_plans WHERE skud_object_id = $1`, [ALIA]);
+      await exec(`UPDATE object_contracts SET planned_zos_date = NULL WHERE id = $1`, [ALIA_CONTRACT]);
+      const [stat] = summarizeByObject(await report('2026-10-01', '2026-10-01', ALIA));
+      expect(stat).toMatchObject({ control_dates: [], zos_months: null, is_overdue: false });
+    });
   });
 
   it('контрольная дата прошла: без актов договор закрывается в текущем месяце', async () => {

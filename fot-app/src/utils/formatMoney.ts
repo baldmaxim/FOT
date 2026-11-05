@@ -76,3 +76,10 @@ export const formatDate = (value: string | null | undefined): string => {
   const [year, month, day] = value.split('-');
   return day ? `${day}.${month}.${year}` : value;
 };
+
+/** Дата с коротким годом: 15.02.27. */
+export const formatDateShort = (value: string | null | undefined): string => {
+  if (!value) return '—';
+  const [year, month, day] = value.split('-');
+  return day ? `${day}.${month}.${year.slice(-2)}` : value;
+};

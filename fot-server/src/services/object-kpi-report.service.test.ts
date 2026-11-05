@@ -152,6 +152,91 @@ describe('summarizeByObject', () => {
     const [noPlan] = summarizeByObject([objectRow({ plan_amount: null, fact_amount: '30.00' })]);
     expect(noPlan).toMatchObject({ plan_amount: null, fact_amount: 30, completion_pct: null });
   });
+
+  describe('контрольная дата', () => {
+    const zosRow = (over: Partial<ObjectKpiReportRow>): ObjectKpiReportRow => objectRow({
+      control_date: '2027-02-15',
+      months_remaining: 5,
+      is_overdue: false,
+      actual_zos_date: null,
+      period_month: '2026-10-01',
+      ...over,
+    });
+
+    it('один месяц: дата и расчётные месяцы (Дом 56, октябрь)', () => {
+      const [stat] = summarizeByObject([zosRow({})]);
+      expect(stat).toMatchObject({ control_dates: ['2027-02-15'], zos_months: 5, is_overdue: false });
+    });
+
+    it('контрольная дата в этом же месяце: +1, не просрочка (Марк, июль)', () => {
+      const [stat] = summarizeByObject([
+        zosRow({ period_month: '2026-07-01', control_date: '2026-07-30', months_remaining: 1 }),
+      ]);
+      expect(stat).toMatchObject({ zos_months: 1, is_overdue: false });
+    });
+
+    it('просрочка: минус число месяцев, а не делитель плана (Марк, август; Wave, октябрь)', () => {
+      const [mark] = summarizeByObject([
+        zosRow({ period_month: '2026-08-01', control_date: '2026-07-30', months_remaining: 1, is_overdue: true }),
+      ]);
+      expect(mark).toMatchObject({ zos_months: -1, is_overdue: true });
+
+      const [wave] = summarizeByObject([
+        zosRow({ control_date: '2026-06-30', months_remaining: 1, is_overdue: true }),
+      ]);
+      expect(wave).toMatchObject({ zos_months: -4, is_overdue: true });
+    });
+
+    it('просрочка через границу года считается по месяцам', () => {
+      const [stat] = summarizeByObject([
+        zosRow({ period_month: '2027-02-01', control_date: '2026-12-30', months_remaining: 1, is_overdue: true }),
+      ]);
+      expect(stat.zos_months).toBe(-2);
+    });
+
+    it('несколько месяцев с одной датой: счётчика нет (Alia, сентябрь + октябрь)', () => {
+      const [stat] = summarizeByObject([
+        zosRow({ period_month: '2026-09-01', control_date: '2028-03-27', months_remaining: 19 }),
+        zosRow({ period_month: '2026-10-01', control_date: '2028-03-27', months_remaining: 18 }),
+      ]);
+      expect(stat).toMatchObject({ control_dates: ['2028-03-27'], zos_months: null });
+    });
+
+    it('ЗОС перенесли между месяцами: обе даты по порядку, просрочка — по последнему месяцу', () => {
+      const [moved] = summarizeByObject([
+        // Перемешанные строки: порядок дат — по месяцам.
+        zosRow({ period_month: '2026-10-01', control_date: '2028-09-30', months_remaining: 24 }),
+        zosRow({ period_month: '2026-09-01', control_date: '2026-06-30', months_remaining: 1, is_overdue: true }),
+      ]);
+      expect(moved).toMatchObject({ control_dates: ['2026-06-30', '2028-09-30'], zos_months: null, is_overdue: false });
+
+      const [overdueAtEnd] = summarizeByObject([
+        zosRow({ period_month: '2026-07-01', control_date: '2026-07-30', months_remaining: 1 }),
+        zosRow({ period_month: '2026-08-01', control_date: '2026-07-30', months_remaining: 1, is_overdue: true }),
+      ]);
+      expect(overdueAtEnd).toMatchObject({ control_dates: ['2026-07-30'], zos_months: null, is_overdue: true });
+    });
+
+    it('нет плановой ЗОС: дат и счётчика нет; пустой месяц среди заполненных пропускается', () => {
+      const [none] = summarizeByObject([zosRow({ control_date: null, months_remaining: null })]);
+      expect(none).toMatchObject({ control_dates: [], zos_months: null, is_overdue: false });
+
+      const [partial] = summarizeByObject([
+        zosRow({ period_month: '2026-09-01' }),
+        zosRow({ period_month: '2026-10-01', control_date: null, months_remaining: null }),
+      ]);
+      expect(partial.control_dates).toEqual(['2027-02-15']);
+    });
+
+    it('фактический ЗОС не подменяет контрольную дату и расчётные месяцы', () => {
+      const [stat] = summarizeByObject([zosRow({ actual_zos_date: '2026-10-20' })]);
+      expect(stat).toMatchObject({
+        control_dates: ['2027-02-15'],
+        zos_months: 5,
+        actual_zos_date: '2026-10-20',
+      });
+    });
+  });
 });
 
 describe('resolveCalcWindow', () => {

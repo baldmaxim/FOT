@@ -9,6 +9,7 @@ import {
   columnFilterOptions,
   defaultMonths,
   listWindowMonths,
+  objectControlCell,
   objectPremiumCell,
   objectPremiumRequest,
   objectPremiumTotal,
@@ -98,9 +99,9 @@ describe('buildExportTable', () => {
     });
 
     expect(table.columns.map(column => column.label)).toEqual(
-      ['№', 'Объект', 'Руководитель', 'Премия', 'Договор с ДС', 'КС-6', 'Остаток', 'КС-2', 'План', '%'],
+      ['№', 'Объект', 'Руководитель', 'Премия', 'Контрольная дата (ЗОС + 3 мес.)', 'Договор с ДС', 'КС-6', 'Остаток', 'КС-2', 'План', '%'],
     );
-    expect(table.rows[0].cells).toEqual([1, 'ЖК Alia', 'Иванов И. И.', '—', '1000.00', '100.00', '900.00', 50, 100, 147.5]);
+    expect(table.rows[0].cells).toEqual([1, 'ЖК Alia', 'Иванов И. И.', '—', '—', '1000.00', '100.00', '900.00', 50, 100, 147.5]);
     expect(table.rows[3].cells.slice(0, 3)).toEqual([4, 'База Химки', '—']);
     expect(table.rows[3].cells.at(-1)).toBe('—');
   });
@@ -116,11 +117,84 @@ describe('buildExportTable', () => {
     });
     expect(table.rows).toHaveLength(5);
     expect(table.rows[4]).toEqual({
-      cells: [null, 'Итого', null, null, '4000.00', '400.00', '3600.00', '200.00', '400.00', null],
+      cells: [null, 'Итого', null, null, null, '4000.00', '400.00', '3600.00', '200.00', '400.00', null],
     });
     // Без видимых строк итогов нет — в файле только шапка.
     expect(buildExportTable({ title: 't', subtitle: 's', fileName: 'f', columns: OBJECT_COLUMNS, rows: [], totals: { object: 'Итого' } }).rows)
       .toEqual([]);
+  });
+});
+
+describe('столбец «Контрольная дата»', () => {
+  const column = OBJECT_COLUMNS.find(item => item.key === 'control')!;
+
+  it('стоит между «Премией» и «Договором с ДС»', () => {
+    const keys = OBJECT_COLUMNS.map(item => item.key);
+    expect(keys.slice(keys.indexOf('premium'), keys.indexOf('contract') + 1)).toEqual(['premium', 'control', 'contract']);
+  });
+
+  it('один месяц: дата и расчётные месяцы, +1 в месяце самой даты', () => {
+    expect(objectControlCell(stat({ control_dates: ['2027-02-15'], zos_months: 5 })))
+      .toEqual({ date: '15.02.27 (+5 мес.)', fact: null, overdue: false });
+    expect(objectControlCell(stat({ control_dates: ['2026-07-30'], zos_months: 1 })).date)
+      .toBe('30.07.26 (+1 мес.)');
+    expect(objectControlCell(stat({ control_dates: ['2028-02-29'], zos_months: 17 })).date)
+      .toBe('29.02.28 (+17 мес.)');
+  });
+
+  it('дата прошла: словом и признак красного', () => {
+    expect(objectControlCell(stat({ control_dates: ['2026-06-30'], zos_months: -4, is_overdue: true })))
+      .toEqual({ date: '30.06.26 (просрочено 4 мес.)', fact: null, overdue: true });
+    expect(objectControlCell(stat({ control_dates: ['2026-07-30'], zos_months: -1, is_overdue: true })).date)
+      .toBe('30.07.26 (просрочено 1 мес.)');
+  });
+
+  it('несколько месяцев: только дата, красный — по концу периода; перенос — обе даты', () => {
+    expect(objectControlCell(stat({ control_dates: ['2028-03-27'], zos_months: null })))
+      .toEqual({ date: '27.03.28', fact: null, overdue: false });
+    expect(objectControlCell(stat({ control_dates: ['2026-07-30'], zos_months: null, is_overdue: true })))
+      .toEqual({ date: '30.07.26', fact: null, overdue: true });
+    expect(objectControlCell(stat({ control_dates: ['2028-03-27', '2028-09-30'], zos_months: null })).date)
+      .toBe('27.03.28 → 30.09.28');
+  });
+
+  it('нет плановой ЗОС и старый бэкенд без полей — прочерк', () => {
+    expect(objectControlCell(stat({ control_dates: [], zos_months: null })))
+      .toEqual({ date: '—', fact: null, overdue: false });
+    expect(objectControlCell(stat({}))).toEqual({ date: '—', fact: null, overdue: false });
+  });
+
+  it('фактический ЗОС — отдельной строкой и не заменяет контрольную дату; в тексте для файла оба', () => {
+    const row = stat({ control_dates: ['2027-02-15'], zos_months: 5, actual_zos_date: '2027-01-20' });
+    expect(objectControlCell(row))
+      .toEqual({ date: '15.02.27 (+5 мес.)', fact: 'ЗОС факт: 20.01.27', overdue: false });
+    expect(column.text(row)).toBe('15.02.27 (+5 мес.), ЗОС факт: 20.01.27');
+  });
+
+  it('сортировка по дате, а не по тексту; при переносе — по последней, пустые в конце', () => {
+    const list = [
+      stat({ skud_object_id: 'feb27', control_dates: ['2027-02-15'] }),
+      stat({ skud_object_id: 'none', control_dates: [] }),
+      stat({ skud_object_id: 'jun26', control_dates: ['2026-06-30'] }),
+      stat({ skud_object_id: 'moved', control_dates: ['2026-01-01', '2028-09-30'] }),
+    ];
+    const sorted = (dir: 'asc' | 'desc') => ids(applyTableView(list, OBJECT_COLUMNS, view({ sort: 'control', dir })));
+    expect(sorted('asc')).toEqual(['jun26', 'feb27', 'moved', 'none']);
+    expect(sorted('desc')).toEqual(['moved', 'feb27', 'jun26', 'none']);
+  });
+
+  it('фильтр и экспорт — текст ячейки, «Итого» пустое и не суммируется', () => {
+    const list = [
+      stat({ skud_object_id: 'a', control_dates: ['2027-02-15'], zos_months: 5 }),
+      stat({ skud_object_id: 'b', control_dates: ['2026-06-30'], zos_months: -4, is_overdue: true }),
+    ];
+    const filtered = setColumnFilter(view(), 'control', ['30.06.26 (просрочено 4 мес.)']);
+    expect(ids(applyTableView(list, OBJECT_COLUMNS, filtered))).toEqual(['b']);
+    expect(sumMoneyColumns(list, OBJECT_COLUMNS)).not.toHaveProperty('control');
+
+    const table = buildExportTable({ title: 't', subtitle: 's', fileName: 'f', columns: OBJECT_COLUMNS, rows: list });
+    expect(table.rows[1].cells[4]).toBe('30.06.26 (просрочено 4 мес.)');
+    expect(table.columns[4]).toEqual({ label: 'Контрольная дата (ЗОС + 3 мес.)', type: 'text' });
   });
 });
 
