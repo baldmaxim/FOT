@@ -19,6 +19,9 @@
   scroll-padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* С «Итого»: строка в фокусе клавиатуры не прячется под закреплённый подвал */
+.wrapTotals { scroll-padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+
 .table {
   width: 100%;
   /* separate + spacing 0: у collapse границы sticky-ячеек «уезжают» при прокрутке */
@@ -148,6 +151,15 @@
 }
 
 .table td.cellName { font-weight: 500; }
+
+/* Уволенный: подпись с датой под ФИО */
+.dismissedMark {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--error);
+}
 
 /* Перенос вместо обрезки: ФИО до двух строк, подразделение и должность — до трёх */
 .clamp2,
@@ -321,6 +333,25 @@
   height: 6px;
   border-right: 2px solid var(--text-secondary);
 }
+
+/*
+ * «Итого» «Расчётов» — подвал той же таблицы: столбцы совпадают сами, прокрутка вбок общая. Закреплён снизу обёртки, как
+ * шапка сверху; в потоке таблицы он идёт после строк, поэтому в конце списка последняя строка не уходит под него.
+ */
+.table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--bg-secondary);
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+}
+.table tfoot td.stickyNum,
+.table tfoot td.stickyName { z-index: 3; }
+.table tfoot td.groupTotal { background: var(--group-total-head); }
+.table tfoot .calcSub { font-weight: 500; }
 
 @media (prefers-reduced-motion: reduce) {
   .paidButton,

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   payrollService,
   type IPayrollColumnFilters,
-  type IPayrollTermsViewParams,
+  type IPayrollColumnValuesParams,
   type PayrollSortKey,
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
@@ -27,7 +27,7 @@ interface IPayrollColumnFilterPopoverProps {
   label: string;
   filters: IPayrollColumnFilters;
   /** Выборка экрана — для вариантов значений (сервер не применяет фильтр самого столбца). */
-  viewParams: IPayrollTermsViewParams;
+  viewParams: IPayrollColumnValuesParams;
   /** Кнопка-воронка, под которой открывается окно. */
   anchor: HTMLElement;
   /** Список значений, текст ФИО или null — снять фильтр столбца. */

@@ -107,6 +107,9 @@ export interface IPayrollCalcColumnsResult {
 export type PayrollCalcStatus = 'pending' | 'error';
 
 export interface IPayrollTermsRow {
+  /** «Расчёты» за месяцы: 'fired' — уволенный, под ФИО подпись с dismissal_date (YYYY-MM-DD). Нет у старого бэкенда. */
+  employment_status?: string | null;
+  dismissal_date?: string | null;
   employee_id: number;
   full_name: string | null;
   tab_number: string | null;
@@ -670,6 +673,11 @@ export const PAYROLL_TERMS_PAGE_SIZE = 500;
 /** Месяцы сумм «Расчётов» (YYYY-MM); пусто или 'all' — весь период, как у «Свода». */
 export type PayrollPaidMonths = string[] | 'all';
 
+/** Варианты фильтра столбца: на «Расчётах» — по тем же людям, что в строках за эти месяцы. */
+export interface IPayrollColumnValuesParams extends IPayrollTermsViewParams {
+  paidMonths?: PayrollPaidMonths;
+}
+
 export const payrollService = {
   listTerms: async (params: IPayrollTermsViewParams & {
     sort: PayrollSortKey;
@@ -728,13 +736,17 @@ export const payrollService = {
   getColumnValues: async (
     column: PayrollValueFilterColumn,
     valueSearch: string,
-    params: IPayrollTermsViewParams,
+    params: IPayrollColumnValuesParams,
     signal?: AbortSignal,
   ): Promise<IPayrollColumnValues> => {
     const search = new URLSearchParams();
     appendViewParams(search, params);
     search.set('column', column);
     if (valueSearch) search.set('value_q', valueSearch);
+    if (params.paidMonths) {
+      const { paidMonths } = params;
+      search.set('paid_months', paidMonths === 'all' || paidMonths.length === 0 ? 'all' : paidMonths.join(','));
+    }
     const res = await apiClient.get<IApiResponse<IPayrollColumnValues>>(
       `/payroll/terms/column-values?${search.toString()}`,
       { signal },

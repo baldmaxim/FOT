@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { keepPreviousData, useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { Download, Settings } from 'lucide-react';
 
@@ -6,6 +6,7 @@ import {
   payrollService,
   PAYROLL_TERMS_PAGE_SIZE,
   type IPayrollColumnFilters,
+  type IPayrollColumnValuesParams,
   type IPayrollTermsCursor,
   type IPayrollTermsRow,
   type IPayrollTermsViewParams,
@@ -45,6 +46,7 @@ import {
   toCalcQueryState,
   type CalcQueryState,
 } from '../../utils/payrollCalcPages';
+import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
@@ -145,7 +147,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   });
 
   const {
-    data, hasNextPage, isFetchingNextPage, isFetchNextPageError, isPlaceholderData, fetchNextPage,
+    data, hasNextPage, isFetching, isFetchingNextPage, isFetchNextPageError, isPlaceholderData, fetchNextPage,
   } = termsQuery;
 
   const rows = useMemo(() => data?.pages.flatMap(page => page.rows) ?? [], [data]);
@@ -222,6 +224,14 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
   }, [rows.length, hasNextPage, isFetchingNextPage, isPlaceholderData, isFetchNextPageError, fetchNextPage]);
 
+  // «Расчёты»: «Итого» — по всей выборке, поэтому порции грузятся сами, не дожидаясь прокрутки. По isFetching, а не по
+  // inFlightRef: ref сбросится после рендера, и эффект, не увидев перемены, остановил бы догрузку. Упавшая — по кнопке.
+  useEffect(() => {
+    if (!isCalcScreen || !active || !hasNextPage) return;
+    if (isFetching || isPlaceholderData || isFetchNextPageError) return;
+    void fetchNextPage({ cancelRefetch: false });
+  }, [isCalcScreen, active, hasNextPage, isFetching, isPlaceholderData, isFetchNextPageError, fetchNextPage]);
+
   /** Повтор упавшей порции — только по кнопке: автоповтор у нижней границы дал бы цикл запросов. */
   const retryNextPage = () => {
     if (inFlightRef.current) return;
@@ -266,10 +276,12 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   );
   // «Расчёты»: «+» у «Доплат» и «Удержаний» раскрывает столбцы по видам; что раскрыто — помнит браузер.
   const { expanded: expandedColumns, toggleExpanded } = usePayrollExpandedColumns();
-  // «Расчёты»: столбцы сумм без данных в загруженных строках скрываются сами; выбор шестерёнки не меняется.
+  // «Расчёты»: столбцы сумм без данных скрываются сами, когда загружены все порции; выбор шестерёнки не меняется.
   const emptyColumns = useMemo(
-    () => (paidMonths === undefined ? new Set<PayrollTableColumn>() : emptyPayrollColumns(tableRows, columns, calcMerge.ready)),
-    [paidMonths, tableRows, columns, calcMerge.ready],
+    () => (paidMonths === undefined || hasNextPage
+      ? new Set<PayrollTableColumn>()
+      : emptyPayrollColumns(tableRows, columns, calcMerge.ready)),
+    [paidMonths, hasNextPage, tableRows, columns, calcMerge.ready],
   );
   const tableHiddenColumns = useMemo(
     () => (emptyColumns.size === 0 ? hiddenColumns : new Set([...hiddenColumns, ...emptyColumns])),
@@ -297,6 +309,21 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   }
 
   const resetColumnFilters = () => setColumnFilters({});
+
+  // «Итого» — только на «Расчётах». Прежние строки другого фильтра (keepPreviousData) считать нельзя: «…».
+  const rowsStatus: IPayrollTotalsStatus['rows'] = isFetchNextPageError ? 'failed'
+    : hasNextPage || isPlaceholderData ? 'pending' : 'ready';
+  const calcStatus: IPayrollTotalsStatus['calc'] = calcMerge.failed ? 'failed' : calcMerge.ready ? 'ready' : 'pending';
+  const totalsStatus = useMemo<IPayrollTotalsStatus | undefined>(
+    () => (isCalcScreen ? { rows: rowsStatus, calc: calcStatus } : undefined),
+    [isCalcScreen, rowsStatus, calcStatus],
+  );
+
+  // Варианты фильтра столбца — по тем же людям, что в строках за выбранные месяцы.
+  const columnValuesParams = useMemo<IPayrollColumnValuesParams>(
+    () => (paidMonths ? { ...viewParams, paidMonths } : viewParams),
+    [viewParams, paidMonths],
+  );
 
   const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}`;
 
@@ -413,6 +440,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onOpenPaidItems={onOpenPaidItems ? handleOpenPaidItems : undefined}
             expandedColumns={isCalcScreen ? expandedColumns : undefined}
             onToggleExpand={isCalcScreen ? toggleExpanded : undefined}
+            totalsStatus={totalsStatus}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -437,7 +465,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           column={openFilter.column}
           label={PAYROLL_FILTER_COLUMN_LABELS[openFilter.column]}
           filters={columnFilters}
-          viewParams={viewParams}
+          viewParams={columnValuesParams}
           anchor={openFilter.anchor}
           onApply={applyColumnFilter}
           onClose={closeFilter}

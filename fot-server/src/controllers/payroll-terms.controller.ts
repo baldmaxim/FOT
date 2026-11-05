@@ -65,12 +65,14 @@ import {
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
 import { recordTermsRecalc } from '../services/payroll/payroll-terms-recalc.service.js';
 import {
+  payrollCalcStaffWhereSql,
   payrollContractorDeptsCte,
   payrollStaffWhereSql,
   payrollWorkedInMonthsSql,
   resolvePayrollArchiveDepartmentId,
   resolvePayrollStaffScope,
 } from '../services/payroll/payroll-registry-scope.service.js';
+import { effectiveDepartmentSql } from '../services/employees-export.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   buildFioSearch,
@@ -255,9 +257,19 @@ const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, c
  *
  * График — имя графика на дату выборки, как у «Текущих сотрудников»: последнее действующее
  * назначение по дате начала, иначе график по умолчанию. Считается в SQL, чтобы ячейка,
- * сортировка и фильтр по графику совпадали.
+ * сортировка и фильтр по графику совпадали. Уволенному — на день увольнения: назначение может быть закрыто.
+ *
+ * calcMonthsParam — «Расчёты» за месяцы (date[]): вместе со штатом уволенные, видимые в них (payrollCalcStaffWhereSql),
+ * их подразделение, фильтр и охват — по отделу, из которого уволены, а не «Уволенные». Без него — только работающие.
  */
-export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string => `
+export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE', calcMonthsParam?: string): string => {
+  // Отдел считается один раз на строку: у уволенного это запрос к событиям увольнения.
+  const departmentSql = calcMonthsParam ? 'work_dept.id' : 'e.org_department_id';
+  const staffSql = calcMonthsParam
+    ? payrollCalcStaffWhereSql('e', departmentSql, '$7', calcMonthsParam)
+    : payrollStaffWhereSql('e', '$7');
+  const scheduleDate = `LEAST($1::date, CASE WHEN e.employment_status = 'fired' THEN e.dismissal_date END)`;
+  return `
   WITH ${payrollContractorDeptsCte('$6')},
   -- Фильтр подразделения — поддерево: выбрали департамент, видны все его бригады.
   filter_depts AS (
@@ -271,6 +283,8 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
     SELECT e.id   AS employee_id,
            e.full_name,
            e.tab_number,
+           e.employment_status,
+           to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date,
            d.id   AS department_id,
            d.name AS department_name,
            p.name AS position_name,
@@ -279,8 +293,8 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
                 FROM (SELECT a.schedule_id
                         FROM employee_schedule_assignments a
                        WHERE a.employee_id = e.id
-                         AND a.effective_from <= $1::date
-                         AND (a.effective_to IS NULL OR a.effective_to >= $1::date)
+                         AND a.effective_from <= ${scheduleDate}
+                         AND (a.effective_to IS NULL OR a.effective_to >= ${scheduleDate})
                        ORDER BY a.effective_from DESC, a.id DESC
                        LIMIT 1) cur
                 LEFT JOIN work_schedules ws ON ws.id = cur.schedule_id),
@@ -306,15 +320,16 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
            t.staff_units,
            t.effective_from,
            t.effective_to
-      FROM employees e
-      LEFT JOIN org_departments d ON d.id = e.org_department_id
+      FROM employees e${calcMonthsParam ? `
+      CROSS JOIN LATERAL (SELECT ${effectiveDepartmentSql('e')} AS id) work_dept` : ''}
+      LEFT JOIN org_departments d ON d.id = ${departmentSql}
       LEFT JOIN positions p ON p.id = e.position_id
       LEFT JOIN payroll_compensation_terms t
              ON t.employee_id = e.id
             AND t.effective_from <= $1::date
             AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
-     WHERE ${payrollStaffWhereSql('e', '$7')}
-       AND ($2::uuid IS NULL OR e.org_department_id IN (SELECT id FROM filter_depts))
+     WHERE ${staffSql}
+       AND ($2::uuid IS NULL OR ${departmentSql} IN (SELECT id FROM filter_depts))
        AND ($8::text IS NULL OR ${fioSql} OR e.tab_number ILIKE $8::text)
   ),
   filtered AS (
@@ -323,6 +338,7 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE'): string
        AND ($4::text IS NULL OR calc_type = $4::text)
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)${columnFilterSql ? `\n       AND ${columnFilterSql}` : ''}
   )`;
+};
 
 /** Коды статей «Начислено» и «Удержано» литералом SQL: константы из кода, не ввод пользователя. */
 const ACCRUAL_CODES_SQL = PAYROLL_PAID_ACCRUAL_CODES.map(code => `'${code}'`).join(', ');
@@ -393,7 +409,9 @@ const buildListSql = (options: {
   orderSql: string;
   /** Параметр месяцев «Расчётов» ($N): с ним вместо «Выплачено» — «К выплате» и «Удержания». */
   paidMonthsParam?: string;
-}): string => `${buildBaseCtes(options.columnFilterSql, options.fioSql)},
+  /** «Расчёты» за месяцы списком: вместе со штатом — уволенные (buildBaseCtes). */
+  calcMonthsParam?: string;
+}): string => `${buildBaseCtes(options.columnFilterSql, options.fioSql, options.calcMonthsParam)},
   keyed AS (
     SELECT filtered.*, ${options.sortKeySql} AS sort_key FROM filtered
   )
@@ -444,6 +462,9 @@ interface IPayrollTermsListRow {
   employee_id: number;
   full_name: string | null;
   tab_number: string | null;
+  /** fired — только в «Расчётах» за месяцы; под ФИО подпись с dismissal_date (YYYY-MM-DD). */
+  employment_status: string | null;
+  dismissal_date: string | null;
   department_id: string | null;
   department_name: string | null;
   position_name: string | null;
@@ -521,12 +542,24 @@ export const buildBaseParams = async (req: AuthenticatedRequest, query: BaseQuer
   return { onDate, contractorRootId, params, fio };
 };
 
-/** «Расчёты» за месяцы: только работавшие в них (payrollWorkedInMonthsSql). */
+/** «Расчёты» за месяцы: работающие — только работавшие в них (payrollWorkedInMonthsSql), плюс уволенные (buildBaseCtes). */
 interface IPayrollWorkedIn {
   /** Первые числа месяцев, YYYY-MM-DD. */
   months: string[];
   archiveId: string | null;
 }
+
+/** Условие filtered: уволенного уже отобрал scoped по своему правилу, «работал в месяце» — только для работающих. */
+const payrollWorkedFilterSql = (monthsParam: string, archiveParam: string): string => (
+  `(scoped.employment_status = 'fired' OR ${payrollWorkedInMonthsSql('scoped.employee_id', monthsParam, archiveParam)})`
+);
+
+/** ?paid_months списком месяцев → условие «Расчётов»; «весь период» и без параметра — весь штат, как раньше. */
+const resolvePayrollWorkedIn = async (paidMonths: ReturnType<typeof parsePayrollMonthsQuery>): Promise<IPayrollWorkedIn | null> => (
+  paidMonths !== null && paidMonths !== 'all'
+    ? { months: payrollMonthStarts(paidMonths), archiveId: await resolvePayrollArchiveDepartmentId() }
+    : null
+);
 
 /**
  * Поиск ФИО «Условий оплаты»: точно; если точного (ФИО или табельный) нет во всём `filtered` — после скоупа,
@@ -544,13 +577,15 @@ const resolvePayrollFioMode = async (
   const params = baseParams.slice(0, 8);
   const whereParts: string[] = [];
   appendPayrollColumnFilters(whereParts, params, filters, { exclude: options.exclude });
+  let calcMonthsParam: string | undefined;
   if (options.workedIn) {
     params.push(options.workedIn.months, options.workedIn.archiveId);
-    whereParts.push(payrollWorkedInMonthsSql('scoped.employee_id', `$${params.length - 1}`, `$${params.length}`));
+    calcMonthsParam = `$${params.length - 1}`;
+    whereParts.push(payrollWorkedFilterSql(calcMonthsParam, `$${params.length}`));
   }
   const fioSql = fioExactConditionSql('e', params, fio);
   const row = await queryOne<{ found: boolean }>(
-    `${buildBaseCtes(whereParts.join('\n       AND '), fioSql)}
+    `${buildBaseCtes(whereParts.join('\n       AND '), fioSql, calcMonthsParam)}
      SELECT EXISTS (SELECT 1 FROM filtered) AS found`,
     params,
   );
@@ -572,8 +607,8 @@ const badRequest = (res: Response, error: string, code: string): void => {
  *
  * ?paid_months=2026-07,2026-08 | all («Расчёты») — вместо «Выплачено» строки несут paid_total,
  * paid_deductions_total и paid_deductions за эти месяцы, отпускные, больничные, перерасчёт и card_payouts_by_method
- * из 1С, а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service); без параметра
- * этих полей нет.
+ * из 1С, а по списку месяцев (не all) — calc: столбцы расчёта ФОТ (payroll-calc-columns.service) и уволенные, видимые в
+ * этих месяцах (employment_status 'fired', dismissal_date); без параметра этих полей и уволенных нет.
  *
  * ?employee_id=N — только этот сотрудник (карточка открыта в «Подробно» → «Расчёты»): по id, тёзки не попадают.
  */
@@ -597,10 +632,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     // «Расчёты»: месяцы «К выплате» и «Удержаний». Без параметра — прежний список с «Выплачено».
     const paidMonths = parsePayrollMonthsQuery(query.paid_months);
-    // За месяцы списком — только работавшие в них; «весь период» и «Условия оплаты» — весь штат, как раньше.
-    const workedIn: IPayrollWorkedIn | null = paidMonths !== null && paidMonths !== 'all'
-      ? { months: payrollMonthStarts(paidMonths), archiveId: await resolvePayrollArchiveDepartmentId() }
-      : null;
+    // За месяцы списком — только работавшие в них и уволенные; «весь период» и «Условия оплаты» — весь штат, как раньше.
+    const workedIn = await resolvePayrollWorkedIn(paidMonths);
 
     const { onDate, contractorRootId, params, fio } = await buildBaseParams(req, parsed);
     const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { workedIn });
@@ -653,7 +686,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     }
     if (workedIn && paidMonthsParam) {
       params.push(workedIn.archiveId);
-      whereParts.push(payrollWorkedInMonthsSql('scoped.employee_id', paidMonthsParam, `$${params.length}`));
+      whereParts.push(payrollWorkedFilterSql(paidMonthsParam, `$${params.length}`));
     }
 
     const fioSql = fio ? fioConditionSql('e', params, fio, fioMode) : undefined;
@@ -664,6 +697,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       cursorSql,
       orderSql: sort ? buildPayrollOrderSql('k', sort.dir) : LEGACY_ORDER_SQL,
       paidMonthsParam,
+      calcMonthsParam: workedIn ? paidMonthsParam : undefined,
     });
 
     const result = await queryOne<{
@@ -739,7 +773,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
  *
  * Та же выборка, что у списка (скоуп, подрядчики, подразделение, поиск, фильтры других
  * столбцов), но без фильтра самого столбца — иначе после выбора одного значения остальные
- * исчезли бы из списка и снять выбор было бы не из чего.
+ * исчезли бы из списка и снять выбор было бы не из чего. ?paid_months списком месяцев — варианты «Расчётов»: те же
+ * работавшие в месяцах и уволенные, что в строках.
  */
 const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -756,11 +791,18 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     const filtersResult = parsePayrollColumnFilters((req.query as Record<string, unknown>).cf);
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
 
+    const workedIn = await resolvePayrollWorkedIn(parsePayrollMonthsQuery((req.query as Record<string, unknown>).paid_months));
     const { params, fio } = await buildBaseParams(req, parsed);
     // Режим поиска — по своему набору: без фильтра самого столбца, как и варианты.
-    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { exclude: column });
+    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { exclude: column, workedIn });
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters, { exclude: column });
+    let calcMonthsParam: string | undefined;
+    if (workedIn) {
+      params.push(workedIn.months, workedIn.archiveId);
+      calcMonthsParam = `$${params.length - 1}`;
+      whereParts.push(payrollWorkedFilterSql(calcMonthsParam, `$${params.length}`));
+    }
     const fioSql = fio ? fioConditionSql('e', params, fio, fioMode) : undefined;
 
     params.push(parsed.value_q ? toIlikePattern(parsed.value_q) : null);
@@ -768,7 +810,7 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     params.push(COLUMN_VALUES_LIMIT + 1);
     const limitIdx = params.length;
 
-    const sql = `${buildBaseCtes(whereParts.join('\n       AND '), fioSql)}
+    const sql = `${buildBaseCtes(whereParts.join('\n       AND '), fioSql, calcMonthsParam)}
       SELECT v.value, count(*)::int AS count
         FROM (SELECT ${payrollValueKeySql(column)} AS value, ${payrollValueOrderSql(column)} AS ord FROM filtered) v
        WHERE ($${valueSearchIdx}::text IS NULL OR v.value ILIKE $${valueSearchIdx}::text)
@@ -914,9 +956,10 @@ const CALC_COLUMNS_MAX_IDS = 500;
 
 /**
  * GET /api/payroll/terms/calc-columns?employee_ids=1,2&paid_months=2026-08 — столбцы ФОТ «Расчётов» для порции списка
- * (список с defer_calc=1 отдаёт строки сразу, без расчёта). Считаются только сотрудники «штата зарплаты» в охвате
- * пользователя — те же правила, что у списка: работает, не в архиве, не подрядчик, отдел в охвате; остальные id
- * в расчёт не идут и в ответе их нет. Больше 12 месяцев или «весь период» — { available: false }: ФОТ не считается.
+ * (список с defer_calc=1 отдаёт строки сразу, без расчёта). Считаются только сотрудники «Расчётов» в охвате
+ * пользователя — те же правила, что у списка: работает или уволен (по отделу, из которого уволен), не в архиве, не
+ * подрядчик, отдел в охвате; остальные id в расчёт не идут и в ответе их нет. Больше 12 месяцев или «весь период» —
+ * { available: false }: ФОТ не считается.
  * preliminary=1 — незакрытый месяц предварительно по живому табелю (calc.preliminary); без него — как раньше, чтобы
  * старый фронт не показал предварительные суммы без пометки.
  */
@@ -945,7 +988,8 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const uniqueIds = [...new Set(ids)];
     const allowedRows = scope.departmentIds?.length === 0 ? [] : await query<{ id: number }>(
       `WITH ${payrollContractorDeptsCte('$1')}
-       SELECT e.id FROM employees e WHERE e.id = ANY($3::int[]) AND ${payrollStaffWhereSql('e', '$2')}`,
+       SELECT e.id FROM employees e
+        WHERE e.id = ANY($3::int[]) AND ${payrollCalcStaffWhereSql('e', effectiveDepartmentSql('e'), '$2')}`,
       [scope.contractorRootId, scope.departmentIds, uniqueIds],
     );
     const allowed = new Set(allowedRows.map(row => Number(row.id)));

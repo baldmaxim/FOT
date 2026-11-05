@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Minus, Plus } from 'lucide-react';
 
@@ -17,6 +17,8 @@ import {
   type IAccrualMonthPart,
 } from '../../utils/payrollAccruals';
 import { PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
+import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
+import { formatDate } from '../../utils/formatMoney';
 import { cx } from '../../utils/motion';
 import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
@@ -34,6 +36,7 @@ import {
 import { PayrollCalcCell } from './PayrollCalcCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import { PayrollSubColumnCell } from './PayrollSubColumnCell';
+import { PayrollTotalsRow } from './PayrollTotalsRow';
 import styles from './PayrollTermsTable.module.css';
 
 interface IPayrollTermsTableProps {
@@ -61,6 +64,8 @@ interface IPayrollTermsTableProps {
   /** «Расчёты»: раскрытые «+» столбцы («Доплаты», «Удержания», «Удержания (ФОТ)»); без onToggleExpand «+» нет. */
   expandedColumns?: ReadonlySet<PayrollExpandableColumn>;
   onToggleExpand?: (column: PayrollExpandableColumn) => void;
+  /** «Расчёты»: закреплённая снизу строка «Итого» и что для неё готово; нет — строки нет. */
+  totalsStatus?: IPayrollTotalsStatus;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
@@ -167,6 +172,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onOpenPaidItems,
   expandedColumns = NO_EXPANDED,
   onToggleExpand,
+  totalsStatus,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -207,21 +213,30 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   const bottomSpacer = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
 
   // Один список видимых столбцов с раскрытыми подстолбцами — для colgroup, шапки, ячеек и colSpan.
-  const visibleColumns = columns.filter(column => !hiddenColumns.has(column.key));
-  const tableColumns = payrollTableColumnList(visibleColumns, expandedColumns, subColumns);
+  // В useMemo: виртуализация перерисовывает таблицу при каждой прокрутке, а «Итого» считается по этому списку.
+  const tableColumns = useMemo(
+    () => payrollTableColumnList(columns.filter(column => !hiddenColumns.has(column.key)), expandedColumns, subColumns),
+    [columns, hiddenColumns, expandedColumns, subColumns],
+  );
   const columnCount = FIXED_COLUMN_COUNT + tableColumns.length;
   // Группы «+» как в Excel: итог с «+» темнее, у раскрытой — скобка над шапкой и линии; классы по ключу столбца.
-  const withPlus = new Set([...subColumns].filter(([, subs]) => subs.length > 0).map(([key]) => key));
-  const groupMarks = payrollGroupMarks(tableColumns, withPlus);
-  const groupClasses = new Map(tableColumns.map((entry, index) => {
-    const mark = groupMarks[index];
-    const lines = cx(mark.leftLine && styles.groupLineLeft, mark.last && styles.groupLineRight);
-    return [entry.key, {
-      head: cx(lines, mark.total && styles.groupTotalHead, mark.inGroup && styles.groupHead,
-        mark.first && styles.groupHeadFirst, mark.last && styles.groupHeadLast),
-      cell: cx(lines, mark.total && styles.groupTotal),
-    }] as const;
-  }));
+  const withPlus = useMemo(
+    () => new Set([...subColumns].filter(([, subs]) => subs.length > 0).map(([key]) => key)),
+    [subColumns],
+  );
+  const groupClasses = useMemo(() => {
+    const groupMarks = payrollGroupMarks(tableColumns, withPlus);
+    return new Map(tableColumns.map((entry, index) => {
+      const mark = groupMarks[index];
+      const lines = cx(mark.leftLine && styles.groupLineLeft, mark.last && styles.groupLineRight);
+      return [entry.key, {
+        head: cx(lines, mark.total && styles.groupTotalHead, mark.inGroup && styles.groupHead,
+          mark.first && styles.groupHeadFirst, mark.last && styles.groupHeadLast),
+        cell: cx(lines, mark.total && styles.groupTotal),
+      }] as const;
+    }));
+  }, [tableColumns, withPlus]);
+  const groupCellClass = useCallback((key: string) => groupClasses.get(key)?.cell, [groupClasses]);
 
   const renderSortHeader = (key: PayrollSortKey, label: string, className?: string) => (
     <PayrollSortHeader
@@ -353,7 +368,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   };
 
   return (
-    <div className={styles.wrap} ref={scrollRef}>
+    <div className={cx(styles.wrap, totalsStatus && styles.wrapTotals)} ref={scrollRef}>
       <table className={styles.table}>
         <colgroup>
           <col className={styles.colNum} />
@@ -412,6 +427,11 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyNum} ${styles.cellNum}`}>{item.index + 1}</td>
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
+                      {row.employment_status === 'fired' && (
+                        <span className={styles.dismissedMark}>
+                          {row.dismissal_date ? `Уволен ${formatDate(row.dismissal_date)}` : 'Уволен'}
+                        </span>
+                      )}
                     </td>
                     {tableColumns.map(entry => (
                       entry.kind === 'column' ? renderCell(entry.key, row) : renderSubCell(entry.key, entry.sub, row)
@@ -427,6 +447,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
             </>
           )}
         </tbody>
+        {totalsStatus && rows.length > 0 && (
+          <PayrollTotalsRow rows={rows} columns={tableColumns} status={totalsStatus} groupCellClass={groupCellClass} />
+        )}
       </table>
     </div>
   );

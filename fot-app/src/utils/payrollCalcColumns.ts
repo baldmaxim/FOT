@@ -83,7 +83,7 @@ const SUPPLEMENTS_GROUP_FIELDS = ['overtime', 'travel', 'housing', 'supplements'
 /** Есть неполные месяцы — суммы ФОТ строки не окончательные (в том числе выработка бригады не введена). */
 export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;
 
-const ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
+export const CALC_ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
   hourly: 'почасовая ставка: нет часов табеля',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы',
@@ -104,7 +104,7 @@ export const calcIssuesNote = (calc: IPayrollCalcColumns | null | undefined): st
   const byMonth = new Map<string, string[]>();
   for (const item of calc.incomplete) {
     const reasons = item.reasons.filter(reason => reason !== 'brigade_output');
-    if (reasons.length > 0) byMonth.set(item.month, reasons.map(reason => ISSUE_LABELS[reason]));
+    if (reasons.length > 0) byMonth.set(item.month, reasons.map(reason => CALC_ISSUE_LABELS[reason]));
   }
   if (byMonth.size === 0) return null;
   const months = [...byMonth.keys()].sort();
@@ -245,10 +245,9 @@ const CALC_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn
 export const isCalcColumn = (column: PayrollTableColumn): boolean => CALC_COLUMNS.has(column);
 
 /**
- * Столбцы сумм без данных ни в одной загруженной строке. Строк нет — ничего не скрывается (шапка не скачет).
- * Видимость — по загруженным строкам: отдел целиком в первой порции (500), на корнях компаний и «Все отделы»
- * столбец может появиться при прокрутке (продуктовое ограничение, план 27.10). Пока ФОТ считается или расчёт
- * не удался (calcReady false), столбцы ФОТ не скрываются — иначе пропадали бы и появлялись.
+ * Столбцы сумм без данных ни в одной строке. Строк нет — ничего не скрывается (шапка не скачет). Вызывать, когда
+ * загружены все порции (они грузятся сами, ради «Итого»): по части строк столбец скрылся бы и появился снова. Пока ФОТ
+ * считается или расчёт не удался (calcReady false), столбцы ФОТ не скрываются — иначе пропадали бы и появлялись.
  */
 export const emptyPayrollColumns = (
   rows: readonly IPayrollTermsRow[],

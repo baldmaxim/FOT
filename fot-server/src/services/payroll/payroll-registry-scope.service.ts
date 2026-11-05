@@ -74,6 +74,51 @@ export const payrollWorkedInMonthsSql = (employeeIdSql: string, monthsParam: str
        )`;
 
 /**
+ * «Расчёты» за месяцы: виден ли уволенный alias (решение пользователя 05.11.2026, ему тоже платили) — за месяц есть суммы
+ * 1С («Оплачено» или ведомость выплаты; дата увольнения тут не важна: расчёт при увольнении приходит и месяцем позже)
+ * или он работал в месяце: принят не позже конца месяца и до дня увольнения включительно есть проход или корректировка
+ * (тот же день отсечки, что у табеля). Без сумм и без дней строка была бы пустой, а итогу нечего добавить.
+ */
+export const payrollDismissedInMonthsSql = (alias: string, monthsParam: string): string => `EXISTS (
+         SELECT 1
+           FROM unnest(${monthsParam}::date[]) AS dm(month_start)
+          CROSS JOIN LATERAL (SELECT (dm.month_start + INTERVAL '1 month - 1 day')::date AS month_end) dme
+          WHERE EXISTS (SELECT 1 FROM payroll_paid_amounts dp
+                         WHERE dp.employee_id = ${alias}.id AND dp.month = dm.month_start)
+             OR EXISTS (SELECT 1 FROM payroll_1c_payout_lines dl
+                          JOIN payroll_1c_payout_documents dd ON dd.id = dl.document_id
+                         WHERE dl.employee_id = ${alias}.id AND dd.period_month = dm.month_start)
+             OR (${alias}.dismissal_date >= dm.month_start
+                 AND (${alias}.hire_date IS NULL OR ${alias}.hire_date <= dme.month_end)
+                 AND (EXISTS (SELECT 1 FROM skud_daily_summary ds
+                               WHERE ds.employee_id = ${alias}.id
+                                 AND ds.date BETWEEN dm.month_start AND LEAST(dme.month_end, ${alias}.dismissal_date)
+                                 AND ds.total_minutes > 0)
+                      OR EXISTS (SELECT 1 FROM attendance_adjustments da
+                                  WHERE da.employee_id = ${alias}.id
+                                    AND da.work_date BETWEEN dm.month_start AND LEAST(dme.month_end, ${alias}.dismissal_date))))
+       )`;
+
+/**
+ * «Штат» экрана «Расчёты» (нужен CTE contractor_depts): работающие — как payrollStaffWhereSql, уволенные — по отделу, из
+ * которого уволены (departmentSql — выражение effectiveDepartmentSql; у работающих это отдел карточки). С monthsParam
+ * уволенный должен быть виден в этих месяцах (payrollDismissedInMonthsSql), без него — любой: так проверяется доступ к
+ * расчёту ФОТ по id. payrollStaffWhereSql не меняем: в таблицах «Справочника» и в записи в них уволенных нет.
+ */
+export const payrollCalcStaffWhereSql = (
+  alias: string,
+  departmentSql: string,
+  departmentsParam: string,
+  monthsParam?: string,
+): string => (
+  `${alias}.is_archived IS NOT TRUE
+       AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = ${departmentSql})
+       AND (${departmentsParam}::uuid[] IS NULL OR ${departmentSql} = ANY(${departmentsParam}::uuid[]))
+       AND (${alias}.employment_status = 'active'
+            OR (${alias}.employment_status = 'fired'${monthsParam ? ` AND ${payrollDismissedInMonthsSql(alias, monthsParam)}` : ''}))`
+);
+
+/**
  * Отдел «Уволенные» для payrollWorkedInMonthsSql. Нет в БД — null: архивных назначений тогда нет и правило верно.
  * Ошибка поиска — тоже null (остаётся правило даты приёма), но с предупреждением в лог и Sentry: экран не падает.
  */

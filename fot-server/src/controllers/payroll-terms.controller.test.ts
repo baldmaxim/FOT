@@ -871,7 +871,7 @@ describe('payrollTermsController.list', () => {
     expect(date).toBe('2026-09-15');
     expect(sql).toMatch(/LEFT JOIN positions p ON p\.id = e\.position_id/);
     // Как у «Текущих сотрудников»: последнее действующее назначение на дату, иначе график по умолчанию.
-    expect(sql).toMatch(/FROM employee_schedule_assignments a\s+WHERE a\.employee_id = e\.id\s+AND a\.effective_from <= \$1::date/);
+    expect(sql).toMatch(/FROM employee_schedule_assignments a\s+WHERE a\.employee_id = e\.id\s+AND a\.effective_from <= LEAST\(\$1::date/);
     expect(sql).toMatch(/ORDER BY a\.effective_from DESC, a\.id DESC/);
     expect(sql).toMatch(/WHERE w\.is_default/);
     expect(res.body.data).toEqual([
@@ -1222,6 +1222,19 @@ describe('payrollTermsController.columnValues', () => {
     expectPlaceholdersMatch(sql, params);
   });
 
+  it('paid_months списком — варианты «Расчётов»: работавшие в месяцах и уволенные, номера сходятся', async () => {
+    await payrollTermsController.columnValues(makeReq({
+      query: { column: 'department', paid_months: '2026-09', value_q: 'бух' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+
+    const [sql, params] = pgQuery.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params).toContainEqual(['2026-09-01']);
+    expect(params).toContain('archive-dept');
+    expect(sql).toMatch(/AS dm\(month_start\)/);
+    expect(sql).toMatch(/AS wm\(month_start\)/);
+    expectPlaceholdersMatch(sql, params);
+  });
+
   it('суммы упорядочены по числу, поиск по значениям экранируется', async () => {
     await payrollTermsController.columnValues(makeReq({
       query: { column: 'salary', value_q: '4_5' },
@@ -1312,7 +1325,11 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).toMatch(/IS DISTINCT FROM \$14::uuid/);
     // «Выплачено» (pay.payouts) нет; card_payouts_raw — ведомости в банк, другое поле.
     expect(sql).not.toMatch(/\bpayouts\b/);
-    expect(sql.match(/FROM payroll_paid_amounts/g)).toHaveLength(1);
+    expect(sql.match(/FROM payroll_paid_amounts pa/g)).toHaveLength(1);
+    // Вместе со штатом — уволенные, видимые в этих месяцах; отдел — из которого уволены.
+    expect(sql).toMatch(/unnest\(\$13::date\[\]\) AS dm\(month_start\)/);
+    expect(sql).toMatch(/CROSS JOIN LATERAL \(SELECT \(CASE WHEN e\.employment_status = 'fired'/);
+    expect(sql).toMatch(/scoped\.employment_status = 'fired' OR EXISTS/);
     // Отпускные, больничные, перерасчёт — из той же выборки; ведомости — своим LATERAL за те же месяцы.
     expect(sql).toMatch(/FILTER \(WHERE pa\.item_code = 'vacation'\)\)::text AS paid_vacation/);
     expect(sql).toMatch(/d\.period_month = ANY\(\$13::date\[\]\)/);
@@ -1344,8 +1361,11 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(params[12]).toBeNull();
     expect(params).toHaveLength(13);
     expect(sql).toMatch(/\$13::date\[\] IS NULL OR/);
-    // «Весь период» — весь штат, без условия «работал в месяце».
+    // «Весь период» — весь штат, без условия «работал в месяце» и без уволенных.
     expect(sql).not.toMatch(/AS wm\(month_start\)/);
+    expect(sql).not.toMatch(/AS dm\(month_start\)/);
+    expect(sql).toMatch(/e\.employment_status = 'active'/);
+    expect(sql).not.toMatch(/work_dept/);
     expectPlaceholdersMatch(sql, params);
   });
 

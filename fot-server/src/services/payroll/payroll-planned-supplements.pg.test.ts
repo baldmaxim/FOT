@@ -137,7 +137,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
   beforeAll(async () => {
     await pg.pool!.query(`
       DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
-        employee_hr_profiles, employee_assignments, employee_dismissal_events,
+        employee_hr_profiles, employee_assignments, employee_dismissal_events, skud_daily_summary, attendance_adjustments,
         employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_compensation_terms, payroll_employee_deductions, payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
@@ -154,7 +154,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
-        hire_date date
+        hire_date date,
+        dismissal_date date
       );
       -- Состав «Расчётов» за месяцы (payrollWorkedInMonthsSql): назначения и увольнения.
       CREATE TABLE employee_assignments (
@@ -163,8 +164,11 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       );
       CREATE TABLE employee_dismissal_events (
         id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
-        cancelled boolean NOT NULL DEFAULT false
+        cancelled boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()
       );
+      -- Дни уволенного без сумм 1С (payrollDismissedInMonthsSql).
+      CREATE TABLE skud_daily_summary (employee_id integer NOT NULL, date date NOT NULL, total_minutes integer);
+      CREATE TABLE attendance_adjustments (employee_id integer NOT NULL, work_date date NOT NULL);
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);
       CREATE TABLE employee_schedule_assignments (
@@ -619,9 +623,9 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       expect(inline.every(row => 'calc' in row)).toBe(true);
     });
 
-    it('считаются только «штат зарплаты» в охвате: без уволенного, архивного, подрядчика и чужого отдела', async () => {
+    it('считаются только работающие в охвате: без архивного, подрядчика и чужого отдела (уволенные — тест ниже)', async () => {
       scopeMock.contractorRootId = D_CONTRACTOR;
-      // 5 — уволен (тест ведомостей выше), 999 — нет такого; повтор 33 — один раз.
+      // 5 — статус не «работает» и не «уволен» (тест ведомостей выше), 999 — нет такого; повтор 33 — один раз.
       const all = await calcColumns({ employee_ids: '33,30,31,32,5,1,33,999', paid_months: '2026-09' });
       expect(all.statusCode).toBe(200);
       expect(scopeMock.payoutCalls).toEqual([{ ids: [33, 32, 1], month: '2026-09' }]);
@@ -703,6 +707,127 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         expect((await listIds({ paid_months: '2026-09', q: 'Кузьмина' })).ids).toEqual([43]);
         // В октябре Кузьмина работает — точное совпадение, без ошибки.
         expect((await listIds({ paid_months: '2026-10', q: 'Кузьмина' })).ids).toEqual([40]);
+      });
+    });
+
+    describe('уволенные — в месяцах, где есть суммы 1С или дни табеля', () => {
+      const listRows = async (extra: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.list({
+          user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', defer_calc: '1', ...extra },
+        } as unknown as AuthenticatedRequest, res);
+        expect(res.statusCode).toBe(200);
+        return res.body.data as Array<Record<string, unknown>>;
+      };
+      const firedIds = async (extra: Record<string, string>) => (await listRows(extra))
+        .filter(row => row.employment_status === 'fired').map(row => Number(row.employee_id)).sort((a, b) => a - b);
+
+      beforeAll(async () => {
+        await pg.pool!.query(`
+          INSERT INTO org_departments (id, name) VALUES ('${ARCHIVE_DEPARTMENT}', 'Уволенные');
+          INSERT INTO work_schedules (id, name) VALUES (900, 'Смена 6+0');
+          INSERT INTO employees (id, full_name, org_department_id, employment_status, hire_date, dismissal_date, is_archived) VALUES
+            (50, 'Давуров Ш.М.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-08-20', false),
+            (51, 'Самиев А.А.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', false),
+            (52, 'Каландарбеков А.С.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-01', false),
+            (53, 'Проходов П.П.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', false),
+            (54, 'Правкин П.П.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', false),
+            (55, 'Подрядов П.П.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', false),
+            (56, 'Чужов Ч.Ч.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', false),
+            (57, 'Архивный У.У.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-09-10', true),
+            (58, 'Безсобытный Б.Б.', '${D_MINE}', 'fired', '2024-01-01', NULL, false);
+          INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date) VALUES
+            (50, '${D_MINE}', '2026-08-20'), (51, '${D_MINE}', '2026-09-10'), (52, '${D_MINE}', '2026-09-01'),
+            (53, '${D_MINE}', '2026-09-10'), (54, '${D_MINE}', '2026-09-10'), (55, '${D_CONTRACTOR}', '2026-09-10'),
+            (56, '${D_OTHER}', '2026-09-10'), (57, '${D_MINE}', '2026-09-10');
+          INSERT INTO employee_schedule_assignments (employee_id, schedule_id, effective_from, effective_to) VALUES
+            (50, 900, '2026-01-01', '2026-08-20');
+          -- 50 уволен в августе, расчёт при увольнении пришёл сентябрём; 55 — подрядчик, 57 — архивный, 58 — без даты.
+          INSERT INTO payroll_paid_amounts (employee_id, month, item_code, amount) VALUES
+            (50, '2026-09-01', 'contract', 216634.47), (55, '2026-09-01', 'contract', 100),
+            (57, '2026-09-01', 'contract', 100), (58, '2026-09-01', 'contract', 100);
+          INSERT INTO payroll_1c_payout_documents
+            (id, doc_guid, doc_number, doc_date, period_month, payment_method, organization_inn, total_amount, content_hash, revision)
+          VALUES (50, gen_random_uuid(), '0050', '2026-10-05', '2026-09-01', 'Увольнения', '7736255508', 200, repeat('9', 64), 1);
+          INSERT INTO payroll_1c_payout_lines (document_id, line_no, line_key, full_name_1c, amount, employee_id, resolution)
+          VALUES (50, 1, 'k1', 'Чужов Ч.Ч.', 200, 56, 'auto_id_all');
+          -- 51 ходил до увольнения; 53 — только после него; 52 — нулевой день; 54 — правка без прохода.
+          INSERT INTO skud_daily_summary (employee_id, date, total_minutes) VALUES
+            (51, '2026-09-05', 480), (53, '2026-09-15', 480), (52, '2026-09-01', 0);
+          INSERT INTO attendance_adjustments (employee_id, work_date) VALUES (54, '2026-09-03');
+        `);
+      });
+
+      afterAll(async () => {
+        await pg.pool!.query(`
+          DELETE FROM payroll_1c_payout_lines WHERE document_id = 50;
+          DELETE FROM payroll_1c_payout_documents WHERE id = 50;
+          DELETE FROM payroll_paid_amounts WHERE employee_id BETWEEN 50 AND 58;
+          DELETE FROM skud_daily_summary; DELETE FROM attendance_adjustments;
+          DELETE FROM employee_schedule_assignments WHERE employee_id = 50;
+          DELETE FROM employee_dismissal_events WHERE employee_id BETWEEN 50 AND 58;
+          DELETE FROM employees WHERE id BETWEEN 50 AND 58;
+          DELETE FROM work_schedules WHERE id = 900;
+          DELETE FROM org_departments WHERE id = '${ARCHIVE_DEPARTMENT}';
+        `);
+      });
+
+      it('сентябрь: суммы 1С или дни до увольнения; без них, после увольнения и архивный — нет', async () => {
+        expect(await firedIds({ paid_months: '2026-09' })).toEqual([50, 51, 54, 55, 56, 58]);
+        // Октябрь: сумм и дней нет ни у кого.
+        expect(await firedIds({ paid_months: '2026-10' })).toEqual([]);
+        expect(await firedIds({ paid_months: '2026-09,2026-10' })).toEqual([50, 51, 54, 55, 56, 58]);
+      });
+
+      it('подрядчик и чужой отдел отсекаются по отделу увольнения, а не по «Уволенным»', async () => {
+        scopeMock.contractorRootId = D_CONTRACTOR;
+        expect(await firedIds({ paid_months: '2026-09' })).toEqual([50, 51, 54, 56, 58]);
+        scopeMock.departments = [D_MINE];
+        expect(await firedIds({ paid_months: '2026-09' })).toEqual([50, 51, 54, 58]);
+        // Выбор подразделения — тоже по отделу увольнения.
+        scopeMock.departments = 'all';
+        expect(await firedIds({ paid_months: '2026-09', department_id: D_OTHER })).toEqual([56]);
+      });
+
+      it('строка: отдел, из которого уволен, дата и график на день увольнения', async () => {
+        const [row] = await listRows({ paid_months: '2026-09', employee_id: '50' });
+        expect(row).toMatchObject({
+          employment_status: 'fired',
+          dismissal_date: '2026-08-20',
+          department_name: 'Свой',
+          schedule_name: 'Смена 6+0',
+        });
+      });
+
+      it('без месяцев — как раньше: ни «Условия оплаты», ни «весь период», ни строка по id', async () => {
+        expect(await firedIds({})).toEqual([]);
+        expect(await firedIds({ paid_months: 'all' })).toEqual([]);
+        expect(await listRows({ employee_id: '50', sort: 'name', dir: 'asc', page_size: '1' })).toEqual([]);
+      });
+
+      it('поиск ФИО находит уволенного', async () => {
+        expect(await firedIds({ paid_months: '2026-09', q: 'Давуров' })).toEqual([50]);
+      });
+
+      it('фильтр столбца: варианты с месяцами включают уволенных, без месяцев — нет', async () => {
+        const values = async (extra: Record<string, string>) => {
+          const res = makeRes();
+          await payrollTermsController.columnValues({
+            user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', column: 'department', ...extra },
+          } as unknown as AuthenticatedRequest, res);
+          expect(res.statusCode).toBe(200);
+          return res.body.data.values as Array<{ value: string | null; count: number }>;
+        };
+        const mine = async (extra: Record<string, string>) => (await values(extra)).find(item => item.value === 'Свой')?.count;
+        // «Свой» в сентябре: работающий 33 и уволенные 50, 51, 54, 58; без месяцев — один 33.
+        expect(await mine({})).toBe(1);
+        expect(await mine({ paid_months: '2026-09' })).toBe(5);
+      });
+
+      it('расчёт ФОТ: уволенный — по отделу увольнения; архивный и чужой — нет', async () => {
+        scopeMock.departments = [D_MINE];
+        const res = await calcColumns({ employee_ids: '50,56,57', paid_months: '2026-09' });
+        expect((res.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([50]);
       });
     });
 

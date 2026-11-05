@@ -156,7 +156,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         org_department_id uuid REFERENCES org_departments(id),
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
-        is_archived boolean NOT NULL DEFAULT false
+        is_archived boolean NOT NULL DEFAULT false,
+        dismissal_date date
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);

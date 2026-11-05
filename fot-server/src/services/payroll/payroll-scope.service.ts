@@ -14,6 +14,8 @@
  * запрета бухгалтер из списка менял бы себе оклад.
  */
 import type { AuthenticatedRequest } from '../../types/index.js';
+import { queryOne } from '../../config/postgres.js';
+import { effectiveDepartmentSql } from '../employees-export.service.js';
 import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
@@ -48,13 +50,30 @@ export async function resolveBrigadeOutputDepartmentIds(
   return resolveAccessibleDepartmentIds(req);
 }
 
+/**
+ * Уволенный из отдела в охвате: карточка лежит в «Уволенных», вне отделов админа компании, но в «Расчётах» он виден по
+ * отделу, из которого уволен, — и его окно должно открываться.
+ */
+const isFiredFromReadableDepartment = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
+  const departments = await resolvePayrollReadableDepartmentIds(req);
+  if (departments === 'all' || departments.length === 0) return false;
+  const row = await queryOne<{ id: number }>(
+    `SELECT e.id FROM employees e
+      WHERE e.id = $1 AND e.employment_status = 'fired' AND ${effectiveDepartmentSql('e')} = ANY($2::uuid[])`,
+    [employeeId, departments],
+  );
+  return Boolean(row);
+};
+
 /** Можно ли смотреть условия оплаты, историю оклада и отпуск сотрудника. */
 export async function canReadPayrollEmployee(
   req: AuthenticatedRequest,
   employeeId: number | null | undefined,
 ): Promise<boolean> {
   if (!employeeId) return false;
-  if (req.user.is_admin) return canAccessEmployeeInScope(req, employeeId);
+  if (req.user.is_admin) {
+    return (await canAccessEmployeeInScope(req, employeeId)) || isFiredFromReadableDepartment(req, employeeId);
+  }
   if (await getRequestPayrollSectionAccess(req)) return true;
   return canAccessEmployeeInScope(req, employeeId);
 }

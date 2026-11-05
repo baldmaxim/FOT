@@ -13,7 +13,10 @@ const h = vi.hoisted(() => ({
   canAccessEmployeeInScope: vi.fn(async () => false),
   canEditEmployeeInScope: vi.fn(async () => false),
   resolveEditableEmployeeIds: vi.fn(async (): Promise<Set<number> | 'all'> => new Set<number>()),
+  queryOne: vi.fn(async (): Promise<{ id: number } | null> => null),
 }));
+
+vi.mock('../../config/postgres.js', () => ({ query: vi.fn(), queryOne: h.queryOne }));
 
 vi.mock('./payroll-access.service.js', () => ({ getRequestPayrollSectionAccess: h.inList }));
 vi.mock('./brigade-output-access.service.js', () => ({ getRequestBrigadeOutputAccess: h.hasOutputAccess }));
@@ -46,6 +49,7 @@ beforeEach(() => {
   h.canAccessEmployeeInScope.mockResolvedValue(false);
   h.canEditEmployeeInScope.mockResolvedValue(false);
   h.resolveEditableEmployeeIds.mockResolvedValue(new Set<number>());
+  h.queryOne.mockResolvedValue(null);
 });
 
 describe('не-админ из списка: весь штат', () => {
@@ -143,5 +147,35 @@ describe('resolveBrigadeOutputDepartmentIds — охват выработки (3
     h.hasOutputAccess.mockResolvedValueOnce(false);
     h.resolveAccessibleDepartmentIds.mockResolvedValueOnce(['own-dept']);
     await expect(resolveBrigadeOutputDepartmentIds(req({ is_admin: false }))).resolves.toEqual(['own-dept']);
+  });
+});
+
+describe('админ компании: уволенный из отдела в охвате', () => {
+  it('окно открывается по отделу, из которого уволен; правки это не даёт', async () => {
+    h.resolveAccessibleDepartmentIds.mockResolvedValue(['company-dept']);
+    h.queryOne.mockResolvedValue({ id: OTHER });
+    const req = makeReq(true);
+
+    await expect(canReadPayrollEmployee(req, OTHER)).resolves.toBe(true);
+    const [sql, params] = h.queryOne.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toMatch(/e\.employment_status = 'fired'/);
+    expect(params).toEqual([OTHER, ['company-dept']]);
+    await expect(canEditPayrollEmployee(req, OTHER)).resolves.toBe(false);
+  });
+
+  it('чужой или работающий вне охвата — по-прежнему нет; без отделов запроса нет', async () => {
+    h.resolveAccessibleDepartmentIds.mockResolvedValue(['company-dept']);
+    await expect(canReadPayrollEmployee(makeReq(true), OTHER)).resolves.toBe(false);
+
+    h.queryOne.mockClear();
+    h.resolveAccessibleDepartmentIds.mockResolvedValue([]);
+    await expect(canReadPayrollEmployee(makeReq(true), OTHER)).resolves.toBe(false);
+    expect(h.queryOne).not.toHaveBeenCalled();
+  });
+
+  it('в охвате по общим правилам — без запроса', async () => {
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    await expect(canReadPayrollEmployee(makeReq(true), OTHER)).resolves.toBe(true);
+    expect(h.queryOne).not.toHaveBeenCalled();
   });
 });
