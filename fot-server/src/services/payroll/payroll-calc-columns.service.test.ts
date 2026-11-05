@@ -210,6 +210,15 @@ describe('sumCalcColumns', () => {
     ]);
   });
 
+  it('нет дней в табеле — неполнота для ⚠, а итог месяца остаётся', () => {
+    const result = sumCalcColumns([
+      ['2026-10', closed({ lines: [], accrued: '0.00', net: '0.00', missing: ['no_days'] })],
+    ]);
+
+    expect(result.incomplete).toEqual([{ month: '2026-10', reasons: ['no_days'] }]);
+    expect(result.net).toBe('0.00');
+  });
+
   it('no_terms и no_norm — неполнота; строка без суммы без причины — unknown_amount', () => {
     const result = sumCalcColumns([
       ['2026-08', closed({ lines: [{ code: 'contract', amount: '50000.00' }], missing: ['no_terms', 'no_norm'] })],

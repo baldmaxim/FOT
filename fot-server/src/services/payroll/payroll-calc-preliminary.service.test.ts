@@ -378,4 +378,28 @@ describe('закрытый месяц', () => {
     expect(preliminary).toEqual(closed);
     expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
   });
+
+  it('закрыта только чужая подача — сумма по живому табелю, а не ноль; все дни закрыты — по закрытому', async () => {
+    const dates = Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
+    const foreign = {
+      basisId: 1, versionId: 10, coverFrom: '2026-09-01', coverTo: '2026-09-30', normDays: 22, normMinutes: 10560,
+      workdayDates: [], dayoffDates: [], absenceDays: {}, overtimeMinutes: {}, paidMinutes: {}, quality: 'materialized',
+      departmentId: 'liniya', isBrigade: false, notOwnedDates: dates,
+    };
+    monthBasis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [foreign]]]));
+    live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: weekdays('2026-09') }));
+
+    expect((await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8))
+      .toMatchObject({ state: 'preliminary', net: '110000.00' });
+    expect((await getPayoutForEmployees([8], '2026-09', req)).get(8)).toEqual({ state: 'not_closed', reason: 'not_covered' });
+
+    monthBasis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [foreign, {
+      ...foreign, basisId: 2, versionId: 11, departmentId: 'obshchestroy', workdayDates: weekdays('2026-09'), notOwnedDates: [],
+    }]]]));
+    live.fetchTimesheetDataForEmployees.mockClear();
+
+    expect((await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8))
+      .toMatchObject({ state: 'closed', net: '110000.00', worked_days: { workday: 22, dayoff: 0 } });
+    expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
+  });
 });

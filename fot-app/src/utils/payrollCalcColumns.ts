@@ -87,6 +87,7 @@ const ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
   hourly: 'почасовая ставка: нет часов табеля',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы',
+  no_days: 'нет дней в табеле',
   brigade_output: 'выработка бригады не введена',
   brigade_no_hours: 'нет учтённых часов бригады',
   brigade_error: 'ошибка расчёта бригады',

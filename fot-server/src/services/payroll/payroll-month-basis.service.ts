@@ -1,15 +1,26 @@
 /**
  * Основа расчёта месяца сотрудника из закрытых подач (миграция 330). Берутся последние редакции подач
  * в статусе approved под замком (unlocked_at IS NULL), задевающих месяц, и в каждой — последняя revision основы
- * сотрудника. День сотрудника принадлежит одной подаче (владение днём версии), поэтому дни подач складываются.
+ * сотрудника. Дни подач складываются без повторов: дата в двух подачах (отдел и персональная, июль–август 2026)
+ * оплачивается один раз.
  *
- * Месяц закрыт, только если периоды таких подач покрывают весь период сотрудника в месяце (с приёма по отсечку
- * увольнения) и нормы основ совпадают. Иначе — not_closed: суммы нет, дни закрытой половины с живым табелем
- * не смешиваются. Подачу открыли — она выпадает из выборки, месяц снова не закрыт.
+ * Месяц закрыт, только если каждая дата периода сотрудника в месяце (с приёма по отсечку увольнения) лежит в подаче,
+ * где он числится и которой эта дата принадлежит, и нормы основ совпадают. Принадлежность — то же правило, что у сборки
+ * редакции (resolveDayOwnership + ownsDay, «неизвестно» — своя): подача, которая числит сотрудника, но отдала его дни
+ * другому отделу, месяц не закрывает (Стеняев, октябрь 2026: закрытая «ЛИНИЯ» при назначении в ещё открытую
+ * «ЛИНИЯ-Общестрой» давала 0 дней вместо живого табеля). Иначе — not_closed: суммы нет, дни закрытой половины с живым
+ * табелем не смешиваются. Подачу открыли — она выпадает из выборки, месяц снова не закрыт.
  *
  * Дни подач бригады собраны ещё и по бригадам: их оплачивает доля «Выработки» по КТУ (brigade-salary), а не оклад.
  */
 import { query } from '../../config/postgres.js';
+import {
+  enumerateDatesInclusive,
+  ownershipKey,
+  ownsDay,
+  resolveDayOwnership,
+  type IOwnershipRequest,
+} from '../timesheet-day-ownership.service.js';
 import {
   emptyAbsenceDays,
   PAYROLL_ABSENCE_STATUSES,
@@ -38,6 +49,8 @@ export interface IMonthBasisSource {
   /** Отдел подачи; у персональной — null. */
   departmentId: string | null;
   isBrigade: boolean;
+  /** Даты периода подачи, которые принадлежат другой подаче; нет — все свои. */
+  notOwnedDates?: readonly string[];
 }
 
 /** Дни сотрудника в подачах одной бригады за месяц. */
@@ -83,19 +96,17 @@ const nextIsoDay = (iso: string): string => {
   return date.toISOString().slice(0, 10);
 };
 
-/** Периоды подач покрывают [from, to] целиком. */
+/** Каждая дата [from, to] лежит в периоде подачи, которой эта дата принадлежит. */
 export const coversPeriod = (
-  sources: ReadonlyArray<{ coverFrom: string; coverTo: string }>,
+  sources: ReadonlyArray<{ coverFrom: string; coverTo: string; notOwnedDates?: readonly string[] }>,
   period: { from: string; to: string },
 ): boolean => {
-  let reached = period.from;
-  const sorted = [...sources].sort((a, b) => a.coverFrom.localeCompare(b.coverFrom));
-  for (const source of sorted) {
-    if (source.coverFrom > reached) return false;
-    if (source.coverTo >= reached) reached = nextIsoDay(source.coverTo);
-    if (reached > period.to) return true;
+  const owning = sources.map(source => ({ ...source, notOwned: new Set(source.notOwnedDates ?? []) }));
+  for (let date = period.from; date <= period.to; date = nextIsoDay(date)) {
+    const covered = owning.some(source => source.coverFrom <= date && date <= source.coverTo && !source.notOwned.has(date));
+    if (!covered) return false;
   }
-  return reached > period.to;
+  return true;
 };
 
 /**
@@ -151,6 +162,9 @@ export const assembleMonthBasis = (
       if (inPeriod(date)) overtimeMinutes[date] = Number(minutes);
     }
   }
+  // Дата в двух подачах — один день; рабочий в одной и выход в другой — рабочий.
+  const workdayDates = new Set(sources.flatMap(source => source.workdayDates).filter(inPeriod));
+  const dayoffDates = new Set(sources.flatMap(source => source.dayoffDates).filter(date => inPeriod(date) && !workdayDates.has(date)));
   return {
     state: 'closed',
     quality: sources.some(source => source.quality === 'reconstructed') ? 'reconstructed' : 'materialized',
@@ -158,8 +172,8 @@ export const assembleMonthBasis = (
     versionIds: [...new Set(sources.map(source => source.versionId))].sort((a, b) => a - b),
     normDays: norms.size === 1 ? [...norms][0] : null,
     normMinutes: normMinutes.size === 1 ? [...normMinutes][0] : null,
-    workdayDates: sources.flatMap(source => source.workdayDates).filter(inPeriod).sort(),
-    dayoffDates: sources.flatMap(source => source.dayoffDates).filter(inPeriod).sort(),
+    workdayDates: [...workdayDates].sort(),
+    dayoffDates: [...dayoffDates].sort(),
     absenceDays,
     absenceDates: [...absenceDates].sort(),
     overtimeMinutes,
@@ -175,6 +189,8 @@ export const assembleMonthBasis = (
 interface IBasisSourceRow {
   basis_id: string;
   version_id: string;
+  approval_id: string;
+  manager_employee_id: number | null;
   employee_id: number;
   cover_from: string;
   cover_to: string;
@@ -191,6 +207,27 @@ interface IBasisSourceRow {
   is_brigade: boolean;
 }
 
+/** Запросы владения днём: по одному на подачу — её сотрудники и даты её периода в месяце. */
+const ownershipRequests = (rows: readonly IBasisSourceRow[]): IOwnershipRequest[] => {
+  const requests = new Map<number, IOwnershipRequest & { employeeIds: number[] }>();
+  for (const row of rows) {
+    const approvalId = Number(row.approval_id);
+    const request = requests.get(approvalId);
+    if (request) {
+      request.employeeIds.push(Number(row.employee_id));
+    } else {
+      requests.set(approvalId, {
+        approvalId,
+        departmentId: row.department_id ?? null,
+        managerEmployeeId: row.manager_employee_id === null ? null : Number(row.manager_employee_id),
+        employeeIds: [Number(row.employee_id)],
+        dates: enumerateDatesInclusive(row.cover_from, row.cover_to),
+      });
+    }
+  }
+  return [...requests.values()];
+};
+
 /** Основы закрытых подач месяца YYYY-MM по сотрудникам. */
 export const loadMonthBasisSources = async (
   employeeIds: readonly number[],
@@ -199,7 +236,8 @@ export const loadMonthBasisSources = async (
   const result = new Map<number, IMonthBasisSource[]>();
   if (employeeIds.length === 0) return result;
   const rows = await query<IBasisSourceRow>(
-    `SELECT b.id::text AS basis_id, v.id::text AS version_id, b.employee_id,
+    `SELECT b.id::text AS basis_id, v.id::text AS version_id, a.id::text AS approval_id, a.manager_employee_id,
+            b.employee_id,
             to_char(GREATEST(a.start_date, $2::date), 'YYYY-MM-DD') AS cover_from,
             to_char(LEAST(a.end_date, ($2::date + INTERVAL '1 month - 1 day')::date), 'YYYY-MM-DD') AS cover_to,
             b.norm_days,
@@ -235,7 +273,10 @@ export const loadMonthBasisSources = async (
         AND a.end_date >= $2::date`,
     [[...employeeIds], `${month}-01`],
   );
+  const ownership = await resolveDayOwnership(ownershipRequests(rows ?? []), undefined);
   for (const row of rows ?? []) {
+    const employeeId = Number(row.employee_id);
+    const approvalId = Number(row.approval_id);
     const source: IMonthBasisSource = {
       basisId: Number(row.basis_id),
       versionId: Number(row.version_id),
@@ -252,8 +293,9 @@ export const loadMonthBasisSources = async (
       quality: row.quality,
       departmentId: row.department_id ?? null,
       isBrigade: row.is_brigade === true,
+      notOwnedDates: enumerateDatesInclusive(row.cover_from, row.cover_to)
+        .filter(date => !ownsDay(ownership.get(ownershipKey(approvalId, employeeId, date)))),
     };
-    const employeeId = Number(row.employee_id);
     const list = result.get(employeeId);
     if (list) list.push(source);
     else result.set(employeeId, [source]);

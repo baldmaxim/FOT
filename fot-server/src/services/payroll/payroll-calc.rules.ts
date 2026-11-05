@@ -48,12 +48,13 @@ export type PayrollCalcLineCode =
 
 /**
  * hourly — у почасовой даты нет минут к оплате (нет графика и правки, основа до миграции 344 без дозаполнения);
+ * no_days — условия есть, а в табеле ни рабочего дня, ни выхода, ни отсутствия: итог известен, но ноль надо заметить;
  * brigade_output — выработка не внесена на объекте, где у сотрудника есть учтённые часы (или у бригады ничего не
  * внесено); brigade_no_hours — до 336: выработка введена, делить не по чему (с 336 не выставляется, тип оставлен для
  * старых клиентов); brigade_error — расчёт бригады с ошибкой.
  */
 export type PayrollCalcMissing =
-  | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
+  | 'no_norm' | 'no_terms' | 'hourly' | 'no_days' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
   | 'brigade_output' | 'brigade_no_hours' | 'brigade_error';
 
 /**
@@ -739,6 +740,17 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   }
   for (const [status, code] of MISSING_BY_ABSENCE) {
     if (facts.absenceDays[status] > 0 && !paidAbsences.has(status)) missing.add(code);
+  }
+
+  if (
+    segments.length > 0
+    && shares.length === 0
+    && facts.workdayDates.length === 0
+    && facts.dayoffDates.length === 0
+    && !Object.values(facts.overtimeMinutes ?? {}).some(minutes => minutes > 0)
+    && Object.values(facts.absenceDays).every(days => days === 0)
+  ) {
+    missing.add('no_days');
   }
 
   const accruedCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);

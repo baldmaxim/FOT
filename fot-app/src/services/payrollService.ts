@@ -54,7 +54,8 @@ export interface IPayrollCalcDeductionByKind {
 
 /** Почему месяц посчитан не полностью (сервер, payroll-calc-columns.service). */
 export type PayrollCalcColumnsIssue =
-  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error' | 'unknown_amount';
+  | 'hourly' | 'no_terms' | 'no_norm' | 'no_days' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error'
+  | 'unknown_amount';
 
 /**
  * Столбцы «Расчётов» по расчёту ФОТ за выбранные месяцы: суммы закрытых и предварительно посчитанных месяцев
@@ -376,10 +377,11 @@ export type PayrollCalcLineCode =
 
 /**
  * Чего ФОТ не посчитал: дни есть, суммы нет. brigade_output — выработка бригады не введена, brigade_no_hours —
- * введена, но делить не по чему (нет учтённых часов), brigade_error — ошибка расчёта бригады.
+ * введена, но делить не по чему (нет учтённых часов), brigade_error — ошибка расчёта бригады, no_days — условия есть,
+ * а в табеле нет дней (итог при этом есть).
  */
 export type PayrollCalcMissing =
-  | 'no_norm' | 'no_terms' | 'hourly' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
+  | 'no_norm' | 'no_terms' | 'hourly' | 'no_days' | 'vacation_pay' | 'sick_pay' | 'educational_pay'
   | 'brigade_output' | 'brigade_no_hours' | 'brigade_error';
 
 /** Из чего сумма строки (сервер, payroll-calc.rules.ts): те же числа; деньги — NUMERIC строкой, периоды — в месяце. */

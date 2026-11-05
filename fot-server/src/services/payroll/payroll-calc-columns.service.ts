@@ -35,13 +35,15 @@ export const CALC_COLUMNS_MAX_MONTHS = 12;
 
 /**
  * Почему закрытый месяц посчитан не полностью. unknown_amount — строка без суммы без причины в missing (страховка
- * на будущее). Отпускные, больничные и учебный отпуск — не неполнота: их суммы — из 1С.
+ * на будущее); no_days — итог есть, ⚠ только помечает, что в табеле нет дней. Отпускные, больничные и учебный отпуск —
+ * не неполнота: их суммы — из 1С.
  */
 export type CalcColumnsIssue =
-  | 'hourly' | 'no_terms' | 'no_norm' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error' | 'unknown_amount';
+  | 'hourly' | 'no_terms' | 'no_norm' | 'no_days' | 'brigade_output' | 'brigade_no_hours' | 'brigade_error'
+  | 'unknown_amount';
 
 const CALC_ISSUES: ReadonlySet<PayrollCalcMissing> = new Set<PayrollCalcMissing>([
-  'hourly', 'no_terms', 'no_norm', 'brigade_output', 'brigade_no_hours', 'brigade_error',
+  'hourly', 'no_terms', 'no_norm', 'no_days', 'brigade_output', 'brigade_no_hours', 'brigade_error',
 ]);
 
 const isCalcIssue = (code: PayrollCalcMissing): code is PayrollCalcMissing & CalcColumnsIssue => CALC_ISSUES.has(code);

@@ -77,6 +77,7 @@ const MISSING_LABELS: Record<PayrollCalcMissing, string> = {
   hourly: 'часы табеля по почасовой ставке',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы графика',
+  no_days: 'нет дней в табеле',
   brigade_output: 'выработка бригады',
   brigade_no_hours: 'доля бригады — нет учтённых часов',
   brigade_error: 'расчёт бригады',

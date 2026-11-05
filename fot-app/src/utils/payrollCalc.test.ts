@@ -92,6 +92,7 @@ describe('«К выплате (ФОТ)»: подписи', () => {
   it('чего не хватает', () => {
     expect(calcMissingNote(['vacation_pay', 'sick_pay'])).toBe('без: отпускные, больничные');
     expect(calcMissingNote(['brigade_no_hours'])).toBe('без: доля бригады — нет учтённых часов');
+    expect(calcMissingNote(['no_days'])).toBe('без: нет дней в табеле');
     expect(calcMissingNote([])).toBeNull();
   });
 

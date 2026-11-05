@@ -145,6 +145,13 @@ describe('«Остаток к выплате»', () => {
 });
 
 describe('ячейки состава зарплаты', () => {
+  it('нет дней в табеле: ⚠ с причиной, а «Сумма» и «Остаток» остаются числом', () => {
+    const item = row({ calc: calc({ net: '0.00', incomplete: [{ month: '2026-10', reasons: ['no_days'] }] }) });
+    expect(calcIssuesNote(item.calc)).toBe('Неполный расчёт: октябрь — нет дней в табеле');
+    expect(calcSumAmount(item, 'calc_net')).toBe('0.00');
+    expect(calcSumAmount(item, 'calc_remainder')).toBe('0.00');
+  });
+
   it('подсказка неполного расчёта: месяцы по порядку, причины словами; про закрытие табеля — ни слова', () => {
     expect(calcIssuesNote(calc({
       open_months: ['2026-10'],

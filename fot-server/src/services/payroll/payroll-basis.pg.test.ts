@@ -11,6 +11,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const PG_URL = process.env.FOT_TEST_PG_URL;
 
 const pg = vi.hoisted(() => ({ pool: null as import('pg').Pool | null }));
+// Покрытие руководителем отдела — своим сервисом (timesheet-version-ownership.service.test): здесь только его ответ.
+const coverage = vi.hoisted(() => ({ map: new Map<number, { intervals: never[]; snapshotCovered: boolean }>() }));
+
+vi.mock('../direct-report-coverage.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../direct-report-coverage.service.js')>()),
+  loadCoverage: vi.fn(async () => coverage.map),
+}));
 
 vi.mock('../../config/postgres.js', async () => {
   const { Pool } = await import('pg');
@@ -50,7 +57,7 @@ import {
 } from './payroll-basis.service.js';
 import { fixPayrollBasisOvertime } from './payroll-basis-overtime-fix.service.js';
 import { backfillPayrollBasisPaidMinutes } from './payroll-basis-paid-minutes.service.js';
-import { loadMonthBasisSources } from './payroll-month-basis.service.js';
+import { assembleMonthBasis, loadMonthBasisSources } from './payroll-month-basis.service.js';
 import type { ITimesheetVersionPayload } from '../timesheet-version.service.js';
 
 const migration = (name: string): string => readFileSync(
@@ -83,19 +90,19 @@ const draft = (employeeId: number, over: Partial<IPayrollBasisDraft> = {}): IPay
 /** Подача и её редакции; возвращает id редакций по возрастанию revision. */
 const seedApproval = async (
   period: { start: string; end: string },
-  state: { status?: string; unlocked?: boolean } = {},
+  state: { status?: string; unlocked?: boolean; departmentId?: string; managerEmployeeId?: number } = {},
   revisions = 1,
 ): Promise<number[]> => {
   const [approval] = await q<{ id: string }>(
-    `INSERT INTO timesheet_approvals (status, unlocked_at, start_date, end_date)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [state.status ?? 'approved', state.unlocked ? new Date() : null, period.start, period.end],
+    `INSERT INTO timesheet_approvals (status, unlocked_at, start_date, end_date, manager_employee_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [state.status ?? 'approved', state.unlocked ? new Date() : null, period.start, period.end, state.managerEmployeeId ?? null],
   );
   const ids: number[] = [];
   for (let revision = 1; revision <= revisions; revision++) {
     const [version] = await q<{ id: string }>(
-      'INSERT INTO timesheet_versions (approval_id, revision) VALUES ($1, $2) RETURNING id',
-      [approval.id, revision],
+      'INSERT INTO timesheet_versions (approval_id, revision, department_id) VALUES ($1, $2, $3) RETURNING id',
+      [approval.id, revision, state.departmentId ?? null],
     );
     ids.push(Number(version.id));
   }
@@ -105,12 +112,16 @@ const seedApproval = async (
 describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
   beforeAll(async () => {
     await q(`DROP TABLE IF EXISTS timesheet_version_payroll_basis, timesheet_versions, timesheet_approvals,
-             payroll_compensation_terms, employees, org_departments CASCADE`);
-    await q('CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, kind text)');
+             payroll_compensation_terms, employees, org_departments, employee_assignments, system_settings CASCADE`);
+    await q('CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, kind text, parent_id uuid)');
+    await q(`CREATE TABLE employee_assignments (
+               id bigserial PRIMARY KEY, employee_id int NOT NULL, org_department_id uuid,
+               effective_from date NOT NULL, effective_to date)`);
+    await q('CREATE TABLE system_settings (key text PRIMARY KEY, value text)');
     await q('CREATE TABLE employees (id int PRIMARY KEY, full_name text)');
     await q(`CREATE TABLE timesheet_approvals (
                id bigserial PRIMARY KEY, status text NOT NULL, unlocked_at timestamptz,
-               start_date date NOT NULL, end_date date NOT NULL)`);
+               start_date date NOT NULL, end_date date NOT NULL, manager_employee_id int)`);
     await q(`CREATE TABLE timesheet_versions (
                id bigserial PRIMARY KEY, approval_id bigint NOT NULL, revision int NOT NULL, department_id uuid,
                payload jsonb)`);
@@ -126,7 +137,9 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await q('TRUNCATE timesheet_version_payroll_basis, timesheet_versions, timesheet_approvals RESTART IDENTITY');
+    await q(`TRUNCATE timesheet_version_payroll_basis, timesheet_versions, timesheet_approvals, employee_assignments,
+             org_departments RESTART IDENTITY`);
+    coverage.map = new Map();
   });
 
   afterAll(async () => {
@@ -235,6 +248,77 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
       ['2026-09-01', '2026-09-15', ['2026-09-03']],
       ['2026-09-16', '2026-09-30', ['2026-09-16']],
     ]);
+  });
+
+  describe('чьи это дни: месяц закрывает только подача, которой дата принадлежит', () => {
+    const LINIYA = '00000000-0000-0000-0000-00000000000a';
+    const OBSHCHESTROY = '00000000-0000-0000-0000-00000000000b';
+    const UCHASTOK = '00000000-0000-0000-0000-00000000000c';
+    const september = { from: '2026-09-01', to: '2026-09-30' };
+    const whole = { start: '2026-09-01', end: '2026-09-30' };
+    const close = { quality: 'materialized', reason: 'close', mode: 'changed' } as const;
+    const noDays = { workdayDates: [], overtimeMinutes: {}, paidMinutes: {} };
+    const sourcesOf71 = async () => (await loadMonthBasisSources([71], '2026-09')).get(71) ?? [];
+
+    beforeEach(async () => {
+      await q(`INSERT INTO org_departments (id, name, kind, parent_id) VALUES
+               ($1, 'ЛИНИЯ', 'department', NULL), ($2, 'ЛИНИЯ-Общестрой', 'department', NULL),
+               ($3, 'Участок ЛИНИИ', 'department', $1)`, [LINIYA, OBSHCHESTROY, UCHASTOK]);
+    });
+
+    it('назначение в другой отдел: закрытая подача без дней месяц не закрывает, его подача закрылась — закрыт', async () => {
+      await q(`INSERT INTO employee_assignments (employee_id, org_department_id, effective_from)
+               VALUES (71, $1, '2026-07-06')`, [OBSHCHESTROY]);
+      const [foreign] = await seedApproval(whole, { departmentId: LINIYA });
+      await insertPayrollBasis(pg.pool!, foreign, [draft(71, noDays)], close);
+
+      const onlyForeign = await sourcesOf71();
+      expect(onlyForeign[0].notOwnedDates).toHaveLength(30);
+      expect(assembleMonthBasis(onlyForeign, september)).toEqual({ state: 'not_closed', reason: 'not_covered' });
+
+      const [own] = await seedApproval(whole, { departmentId: OBSHCHESTROY });
+      await insertPayrollBasis(pg.pool!, own, [draft(71)], close);
+
+      const both = await sourcesOf71();
+      expect(both.find(source => source.departmentId === OBSHCHESTROY)?.notOwnedDates).toEqual([]);
+      expect(assembleMonthBasis(both, september)).toMatchObject({
+        state: 'closed', workdayDates: ['2026-09-01', '2026-09-02'],
+      });
+    });
+
+    it('перевод внутри подачи: чужие только даты после перевода', async () => {
+      await q(`INSERT INTO employee_assignments (employee_id, org_department_id, effective_from, effective_to) VALUES
+               (71, $1, '2026-07-01', '2026-09-20'), (71, $2, '2026-09-21', NULL)`, [LINIYA, OBSHCHESTROY]);
+      const [before] = await seedApproval(whole, { departmentId: LINIYA });
+      await insertPayrollBasis(pg.pool!, before, [draft(71)], close);
+
+      const [source] = await sourcesOf71();
+      expect(source.notOwnedDates).toEqual(Array.from({ length: 10 }, (_, i) => `2026-09-${21 + i}`));
+    });
+
+    it('назначение в подотдел — подача отдела своя; истории назначений нет — все даты свои', async () => {
+      await q(`INSERT INTO employee_assignments (employee_id, org_department_id, effective_from)
+               VALUES (71, $1, '2026-07-01')`, [UCHASTOK]);
+      const [versionId] = await seedApproval(whole, { departmentId: LINIYA });
+      await insertPayrollBasis(pg.pool!, versionId, [draft(71), draft(72)], close);
+
+      const sources = await loadMonthBasisSources([71, 72], '2026-09');
+      expect(sources.get(71)?.[0].notOwnedDates).toEqual([]);
+      expect(sources.get(72)?.[0].notOwnedDates).toEqual([]);
+    });
+
+    it('личная подача: при руководителе отдела даты чужие, у самого руководителя — свои', async () => {
+      coverage.map = new Map([
+        [71, { intervals: [], snapshotCovered: true }],
+        [72, { intervals: [], snapshotCovered: true }],
+      ]);
+      const [versionId] = await seedApproval(whole, { managerEmployeeId: 72 });
+      await insertPayrollBasis(pg.pool!, versionId, [draft(71), draft(72)], close);
+
+      const sources = await loadMonthBasisSources([71, 72], '2026-09');
+      expect(sources.get(71)?.[0].notOwnedDates).toHaveLength(30);
+      expect(sources.get(72)?.[0].notOwnedDates).toEqual([]);
+    });
   });
 
   it('344: минуты пишутся при закрытии, меняют revision, переносятся в новую редакцию и читаются расчётом', async () => {

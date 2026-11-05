@@ -786,6 +786,44 @@ describe('«К выплате (ФОТ)»: «Без переработки»', ()
   });
 });
 
+describe('«К выплате (ФОТ)»: нет дней в табеле', () => {
+  const noDays = { workdayDates: [], dayoffDates: [] };
+  const absent = (over: Partial<IPayrollCalcFacts['absenceDays']>) => ({
+    absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0, ...over },
+  });
+
+  it('условия есть, дней нет — итог 0,00 и причина, а не прочерк', () => {
+    expect(buildPayrollCalc(facts(noDays))).toMatchObject({ lines: [], net: '0.00', missing: ['no_days'] });
+  });
+
+  it('только разовая доплата — сумма остаётся, причина тоже', () => {
+    expect(buildPayrollCalc(facts({ ...noDays, oneTimeTotal: '25000.00' }))).toMatchObject({
+      net: '25000.00', missing: ['no_days'],
+    });
+  });
+
+  it.each([
+    ['есть рабочие дни', {}],
+    ['есть выход', { workdayDates: [], dayoffDates: ['2026-08-08'] }],
+    ['есть переработка', { ...noDays, overtimeMinutes: { '2026-08-03': 60 } }],
+    ['отпуск', { ...noDays, ...absent({ vacation: 3 }) }],
+    ['больничный', { ...noDays, ...absent({ sick: 2 }) }],
+    ['учебный отпуск', { ...noDays, ...absent({ educational_leave: 1 }) }],
+    ['без содержания', { ...noDays, ...absent({ unpaid: 22 }) }],
+    ['нет условий', { ...noDays, terms: [] }],
+    ['условия начались позже месяца', { ...noDays, terms: [terms({ effective_from: '2026-09-01' })] }],
+    ['бригада', {
+      ...noDays,
+      brigadeShares: [{
+        departmentId: 'b1', amount: null, ktu: '1.0', countedMinutes: 0, distribution: 'no_output', output: null,
+        objects: [], whole: null, workedDates: [],
+      } satisfies IBrigadeShareFact],
+    }],
+  ] satisfies Array<[string, Partial<IPayrollCalcFacts>]>)('%s — причины нет', (_name, over) => {
+    expect(buildPayrollCalc(facts(over)).missing).not.toContain('no_days');
+  });
+});
+
 describe('«К выплате (ФОТ)»: части строк и неизвестный итог', () => {
   const brigadeShare = (over: Partial<IBrigadeShareFact> = {}): IBrigadeShareFact => ({
     departmentId: 'b1', amount: '100000.00', ktu: '1.0', countedMinutes: 9_600, distribution: 'ok',

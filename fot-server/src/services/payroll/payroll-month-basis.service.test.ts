@@ -67,6 +67,80 @@ describe('основа месяца: минуты к оплате', () => {
   });
 });
 
+describe('основа месяца: чьи это дни', () => {
+  const dates = (from: number, to: number): string[] => Array.from(
+    { length: to - from + 1 },
+    (_, index) => `2026-09-${String(from + index).padStart(2, '0')}`,
+  );
+  const half = { coverFrom: '2026-09-16', coverTo: '2026-09-30', basisId: 2, versionId: 11 };
+  const notCovered = { state: 'not_closed', reason: 'not_covered' };
+
+  it('Стеняев: закрыта подача, которая числит его без его дней, а его подача открыта — месяц не закрыт', () => {
+    const basis = assembleMonthBasis([
+      source({ departmentId: 'liniya', notOwnedDates: dates(1, 15) }),
+      source({ ...half, departmentId: 'liniya', notOwnedDates: dates(16, 30) }),
+    ], september);
+    expect(basis).toEqual(notCovered);
+  });
+
+  it('Стеняев: его подача закрылась — месяц закрыт, дни из неё', () => {
+    const basis = assembleMonthBasis([
+      source({ departmentId: 'liniya', notOwnedDates: dates(1, 15) }),
+      source({ ...half, departmentId: 'liniya', notOwnedDates: dates(16, 30) }),
+      source({ basisId: 3, versionId: 12, departmentId: 'obshchestroy', workdayDates: dates(1, 11) }),
+      source({ ...half, basisId: 4, versionId: 13, departmentId: 'obshchestroy', workdayDates: dates(16, 27) }),
+    ], september);
+    expect(basis.state === 'closed' && basis.workdayDates).toHaveLength(23);
+  });
+
+  it('Смолина: первая половина чужая, подача своего отдела закрыта без неё — месяц не закрыт', () => {
+    const basis = assembleMonthBasis([
+      source({ departmentId: 'snab', notOwnedDates: dates(1, 15) }),
+      source({ ...half, departmentId: 'dmto', workdayDates: dates(16, 26) }),
+    ], september);
+    expect(basis).toEqual(notCovered);
+  });
+
+  it('без истории назначений все даты свои — месяц закрыт, как раньше', () => {
+    const basis = assembleMonthBasis([
+      source({ notOwnedDates: [], workdayDates: ['2026-09-01'] }),
+      source({ ...half, notOwnedDates: [], workdayDates: ['2026-09-16'] }),
+    ], september);
+    expect(basis.state === 'closed' && basis.workdayDates).toEqual(['2026-09-01', '2026-09-16']);
+  });
+
+  it('принят 20-го — чужие даты до приёма месяцу не мешают', () => {
+    const basis = assembleMonthBasis([
+      source({ notOwnedDates: dates(1, 15) }),
+      source({ ...half, notOwnedDates: dates(16, 19), workdayDates: ['2026-09-21'] }),
+    ], { from: '2026-09-20', to: '2026-09-30' });
+    expect(basis.state).toBe('closed');
+  });
+
+  it('перевод внутри половины: чужие даты закрывает подача нового отдела, без неё месяц не закрыт', () => {
+    const before = source({ coverTo: '2026-09-30', notOwnedDates: dates(10, 30), workdayDates: dates(1, 9) });
+    const after = source({ basisId: 2, versionId: 11, coverTo: '2026-09-30', notOwnedDates: dates(1, 9), workdayDates: dates(10, 12) });
+    expect(assembleMonthBasis([before], september)).toEqual(notCovered);
+    expect(assembleMonthBasis([before, after], september).state).toBe('closed');
+  });
+
+  it('день в отдельской и личной подачах — один раз: оплата по дням не удваивается', () => {
+    const basis = assembleMonthBasis([
+      source({ coverTo: '2026-09-30', workdayDates: ['2026-09-01', '2026-09-02'], dayoffDates: ['2026-09-05'] }),
+      source({ basisId: 2, versionId: 11, coverTo: '2026-09-30', departmentId: null, workdayDates: ['2026-09-02'], dayoffDates: ['2026-09-05'] }),
+    ], september);
+    expect(basis).toMatchObject({ workdayDates: ['2026-09-01', '2026-09-02'], dayoffDates: ['2026-09-05'] });
+  });
+
+  it('одна дата — рабочий в одной подаче и выход в другой: остаётся рабочим', () => {
+    const basis = assembleMonthBasis([
+      source({ coverTo: '2026-09-30', workdayDates: ['2026-09-05'] }),
+      source({ basisId: 2, versionId: 11, coverTo: '2026-09-30', dayoffDates: ['2026-09-05', '2026-09-06'] }),
+    ], september);
+    expect(basis).toMatchObject({ workdayDates: ['2026-09-05'], dayoffDates: ['2026-09-06'] });
+  });
+});
+
 describe('основа месяца из закрытых подач', () => {
   it('две закрытые половины покрывают месяц — дни складываются', () => {
     const basis = assembleMonthBasis([
