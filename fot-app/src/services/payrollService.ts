@@ -137,6 +137,11 @@ export interface IPayrollTermsRow {
   /** Тип договора (миграция 352); null — условий нет, поля нет у старого бэкенда. */
   contract_type?: ContractType | null;
   /**
+   * ГПХ для пометки под ФИО и «Только ГПХ»: «Расчёты» — хоть в одном выбранном месяце, «Условия оплаты» — на дату.
+   * Нет у старого бэкенда — тогда по contract_type (isPayrollGphRow).
+   */
+  is_gph?: boolean;
+  /**
    * Проезд (миграция 324): ставка «Проезд» за месяц даты выборки, NUMERIC строкой; null — не задана. Положен ли
    * сотруднику — по категории и travel_stopped (travelAllowance). Нет у старого бэкенда.
    */
@@ -593,6 +598,8 @@ export type PayrollValueFilterColumn = Exclude<PayrollSortKey, 'name'>;
 export interface IPayrollColumnFilters {
   values?: Partial<Record<PayrollValueFilterColumn, (string | null)[]>>;
   text?: { name?: string };
+  /** Галочка «Только ГПХ» в окне фильтра «Сотрудник». */
+  contract?: 'gph';
 }
 
 export interface IPayrollColumnValues {

@@ -25,7 +25,12 @@ import {
   sumAmounts,
   type PayrollCalcAmountColumn,
 } from './payrollCalcColumns';
-import { normalizePayrollColumnFilters, PAYROLL_FILTER_COLUMN_LABELS, PAYROLL_VALUE_FILTER_COLUMNS } from './payrollColumnFilters';
+import {
+  isPayrollGphRow,
+  normalizePayrollColumnFilters,
+  PAYROLL_FILTER_COLUMN_LABELS,
+  PAYROLL_VALUE_FILTER_COLUMNS,
+} from './payrollColumnFilters';
 import type { PayrollTableColumn, PayrollTableColumns } from './payrollColumns';
 import { formatPaidPeriod } from './payrollPaid';
 import {
@@ -137,7 +142,7 @@ const isCalcEntry = (entry: PayrollTableColumnEntry): boolean => (
 
 /** Договор, как подпись под ФИО на экране (миграция 352): ГПХ — «ГПХ», трудовой — пусто. */
 const contractCellText = (row: IPayrollTermsRow): string => (
-  row.contract_type === 'gph' ? CONTRACT_TYPE_LABELS.gph : ''
+  isPayrollGphRow(row) ? CONTRACT_TYPE_LABELS.gph : ''
 );
 
 /** Подписи шапки: в умной таблице Excel они уникальны без учёта регистра и не длиннее лимита сервера. */
@@ -176,7 +181,7 @@ export const payrollCalcExportColumns = (params: {
     expanded,
     subColumns,
   );
-  const withContract = rows.some(row => row.contract_type === 'gph');
+  const withContract = rows.some(isPayrollGphRow);
   const withNote = entries.some(isCalcEntry) && rows.some(row => rowNote(row) !== null);
   return withUniqueLabels([
     exportColumn('name', PAYROLL_FILTER_COLUMN_LABELS.name, 'text', row => row.full_name ?? NO_VALUE),
@@ -188,9 +193,10 @@ export const payrollCalcExportColumns = (params: {
 
 /** Фильтры столбцов текстом: «Должность: Монтажник, Маляр; Сотрудник: Иванов»; нет — ''. */
 export const describePayrollColumnFilters = (filters: IPayrollColumnFilters): string => {
-  const { values, text } = normalizePayrollColumnFilters(filters);
+  const { values, text, contract } = normalizePayrollColumnFilters(filters);
   return [
     ...(text?.name ? [`${PAYROLL_FILTER_COLUMN_LABELS.name}: ${text.name}`] : []),
+    ...(contract ? [`Договор: ${CONTRACT_TYPE_LABELS[contract]}`] : []),
     ...PAYROLL_VALUE_FILTER_COLUMNS.flatMap(column => {
       const selected = values?.[column];
       return selected

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countActivePayrollColumnFilters,
   isPayrollColumnFilterActive,
+  isPayrollGphRow,
   normalizePayrollColumnFilters,
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
@@ -31,7 +32,7 @@ describe('payrollColumnFilters', () => {
 
   it('установка и снятие фильтра столбца, подсчёт активных', () => {
     let filters = setPayrollColumnFilter({}, 'schedule', ['6+0 (10ч)', null]);
-    filters = setPayrollColumnFilter(filters, 'name', 'Абд');
+    filters = setPayrollColumnFilter(filters, 'name', { name: 'Абд', gph: false });
     expect(isPayrollColumnFilterActive(filters, 'schedule')).toBe(true);
     expect(isPayrollColumnFilterActive(filters, 'name')).toBe(true);
     expect(isPayrollColumnFilterActive(filters, 'bonus')).toBe(false);
@@ -41,6 +42,31 @@ describe('payrollColumnFilters', () => {
     filters = setPayrollColumnFilter(filters, 'name', null);
     expect(filters).toEqual({});
     expect(countActivePayrollColumnFilters(filters)).toBe(0);
+  });
+
+  it('«Только ГПХ» в фильтре «Сотрудник»: одна галочка — тоже фильтр; null снимает и текст, и галочку', () => {
+    let filters = setPayrollColumnFilter({}, 'name', { name: '  ', gph: true });
+    expect(filters).toEqual({ contract: 'gph' });
+    expect(JSON.parse(serializePayrollColumnFilters(filters))).toEqual({ contract: 'gph' });
+    expect(isPayrollColumnFilterActive(filters, 'name')).toBe(true);
+    expect(countActivePayrollColumnFilters(filters)).toBe(1);
+
+    filters = setPayrollColumnFilter(filters, 'name', { name: 'Абд', gph: true });
+    expect(filters).toEqual({ text: { name: 'Абд' }, contract: 'gph' });
+    expect(countActivePayrollColumnFilters(filters)).toBe(2);
+
+    // Галочку сняли — текст остался.
+    expect(setPayrollColumnFilter(filters, 'name', { name: 'Абд', gph: false })).toEqual({ text: { name: 'Абд' } });
+    // Фильтр другого столбца галочку не трогает.
+    expect(setPayrollColumnFilter(filters, 'position', ['Маляр']).contract).toBe('gph');
+    expect(setPayrollColumnFilter(filters, 'name', null)).toEqual({});
+  });
+
+  it('ГПХ строки: is_gph сервера важнее договора на дату; без поля (старый бэкенд) — по contract_type', () => {
+    expect(isPayrollGphRow({ is_gph: true, contract_type: 'labor' })).toBe(true);
+    expect(isPayrollGphRow({ is_gph: false, contract_type: 'gph' })).toBe(false);
+    expect(isPayrollGphRow({ contract_type: 'gph' })).toBe(true);
+    expect(isPayrollGphRow({ contract_type: null })).toBe(false);
   });
 
   it('не больше 200 значений в фильтре столбца (лимит сервера)', () => {

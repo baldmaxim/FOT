@@ -29,6 +29,7 @@ import {
   PAYROLL_FILTER_COLUMN_LABELS,
   serializePayrollColumnFilters,
   setPayrollColumnFilter,
+  type PayrollColumnFilterValue,
 } from '../../utils/payrollColumnFilters';
 import {
   isSortablePayrollColumn,
@@ -249,7 +250,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setOpenFilter({ column, anchor });
   }, []);
 
-  const applyColumnFilter = useCallback((column: PayrollSortKey, value: (string | null)[] | string | null) => {
+  const applyColumnFilter = useCallback((column: PayrollSortKey, value: PayrollColumnFilterValue) => {
     setColumnFilters(prev => setPayrollColumnFilter(prev, column, value));
   }, []);
 

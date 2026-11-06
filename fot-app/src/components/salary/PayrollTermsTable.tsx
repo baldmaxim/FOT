@@ -21,7 +21,7 @@ import { PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
 import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatDate } from '../../utils/formatMoney';
 import { cx } from '../../utils/motion';
-import { isPayrollColumnFilterActive } from '../../utils/payrollColumnFilters';
+import { isPayrollColumnFilterActive, isPayrollGphRow } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
 import { formatPaidAmount, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
@@ -428,7 +428,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyNum} ${styles.cellNum}`}>{item.index + 1}</td>
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
-                      {row.contract_type === 'gph' && (
+                      {isPayrollGphRow(row) && (
                         <span className={styles.contractMark}>{CONTRACT_TYPE_LABELS.gph}</span>
                       )}
                       {row.employment_status === 'fired' && (

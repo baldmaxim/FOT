@@ -264,6 +264,32 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     expect(await found({ cf: JSON.stringify({ text: { name: 'акмов' } }) })).toEqual([]);
   });
 
+  it('«Только ГПХ» в фильтре «Сотрудник» — договор условий на дату выборки; с «Содержит» — пересечение', async () => {
+    // Борисов: трудовой до сентября, с сентября — ГПХ; Акимов — трудовой.
+    await run(`
+      INSERT INTO payroll_compensation_terms
+        (employee_id, staff_category, calc_type, monthly_salary, contract_type, effective_from, effective_to, created_by)
+      VALUES (1, 'itr', 'salary', 100000, 'labor', '2026-08-01', '2026-08-31', '${AUTHOR}'),
+             (2, 'itr', 'salary', 100000, 'labor', '2026-08-01', '2026-08-31', '${AUTHOR}'),
+             (2, 'itr', 'salary', 100000, 'gph',   '2026-09-01', '2026-09-30', '${AUTHOR}');
+    `);
+    try {
+      const found = async (query: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.list(req({ query }), res);
+        return res.body.data.map((r: { employee_id: number; contract_type: string | null }) => [r.employee_id, r.contract_type]);
+      };
+      const gph = JSON.stringify({ contract: 'gph' });
+      expect(await found({ date: '2026-09-15', cf: gph })).toEqual([[2, 'gph']]);
+      // В августе Борисов ещё на трудовом — как и пометка под ФИО.
+      expect(await found({ date: '2026-08-15', cf: gph })).toEqual([]);
+      expect(await found({ date: '2026-09-15', cf: JSON.stringify({ text: { name: 'Борисов' }, contract: 'gph' }) })).toEqual([[2, 'gph']]);
+      expect(await found({ date: '2026-09-15', cf: JSON.stringify({ text: { name: 'Акимов' }, contract: 'gph' }) })).toEqual([]);
+    } finally {
+      await run(`DELETE FROM payroll_compensation_terms WHERE employee_id IN (1, 2) AND effective_from IN ('2026-08-01', '2026-09-01')`);
+    }
+  });
+
   it('«Расчёты» из карточки: employee_id — ровно один сотрудник, тёзки не попадают; без ФИО — тоже по id', async () => {
     await run(`INSERT INTO employees (id, full_name, org_department_id) VALUES
       (7, 'Тёзкин Иван Иванович', '${D1}'), (8, 'Тёзкин Иван Иванович', '${D1}'), (9, NULL, '${D1}')`);

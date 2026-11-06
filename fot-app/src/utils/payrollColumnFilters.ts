@@ -1,8 +1,14 @@
 import type {
   IPayrollColumnFilters,
+  IPayrollTermsRow,
   PayrollSortKey,
   PayrollValueFilterColumn,
 } from '../services/payrollService';
+
+/** Пометка «ГПХ» под ФИО и столбец «Договор» экспорта — то же, по чему отбирает «Только ГПХ» (is_gph сервера). */
+export const isPayrollGphRow = (row: Pick<IPayrollTermsRow, 'is_gph' | 'contract_type'>): boolean => (
+  row.is_gph ?? row.contract_type === 'gph'
+);
 
 /** Порядок совпадает со столбцами таблицы. */
 export const PAYROLL_VALUE_FILTER_COLUMNS: readonly PayrollValueFilterColumn[] = [
@@ -49,35 +55,49 @@ export const normalizePayrollColumnFilters = (filters: IPayrollColumnFilters): I
   }
   const name = filters.text?.name?.trim().slice(0, MAX_PAYROLL_FILTER_TEXT);
   if (name) result.text = { name };
+  if (filters.contract === 'gph') result.contract = 'gph';
   return result;
 };
 
 /** '' — фильтров нет (параметр cf не отправляется). */
 export const serializePayrollColumnFilters = (filters: IPayrollColumnFilters): string => {
   const normalized = normalizePayrollColumnFilters(filters);
-  return normalized.values || normalized.text ? JSON.stringify(normalized) : '';
+  return normalized.values || normalized.text || normalized.contract ? JSON.stringify(normalized) : '';
 };
 
 export const countActivePayrollColumnFilters = (filters: IPayrollColumnFilters): number => {
   const normalized = normalizePayrollColumnFilters(filters);
-  return Object.keys(normalized.values ?? {}).length + (normalized.text?.name ? 1 : 0);
+  return Object.keys(normalized.values ?? {}).length + (normalized.text?.name ? 1 : 0) + (normalized.contract ? 1 : 0);
 };
 
 export const isPayrollColumnFilterActive = (filters: IPayrollColumnFilters, column: PayrollSortKey): boolean => (
   column === 'name'
-    ? Boolean(filters.text?.name?.trim())
+    ? Boolean(filters.text?.name?.trim()) || filters.contract === 'gph'
     : (filters.values?.[column]?.length ?? 0) > 0
 );
 
-/** Фильтр одного столбца: список значений или текст ФИО; null — снять фильтр столбца. */
+/** «Сотрудник»: текст «Содержит» и галочка «Только ГПХ». */
+export interface IPayrollNameFilter {
+  name: string;
+  gph: boolean;
+}
+
+/** Значение фильтра столбца: список значений, «Сотрудник» или null — снять фильтр столбца. */
+export type PayrollColumnFilterValue = (string | null)[] | IPayrollNameFilter | null;
+
+/** Фильтр одного столбца; у «Сотрудника» null снимает и текст, и галочку «Только ГПХ». */
 export const setPayrollColumnFilter = (
   filters: IPayrollColumnFilters,
   column: PayrollSortKey,
-  value: (string | null)[] | string | null,
+  value: PayrollColumnFilterValue,
 ): IPayrollColumnFilters => {
   if (column === 'name') {
-    const name = typeof value === 'string' ? value : '';
-    return normalizePayrollColumnFilters({ ...filters, text: { name } });
+    const nameFilter = value !== null && !Array.isArray(value) ? value : null;
+    return normalizePayrollColumnFilters({
+      ...filters,
+      text: { name: nameFilter?.name ?? '' },
+      contract: nameFilter?.gph ? 'gph' : undefined,
+    });
   }
   const list = Array.isArray(value) ? value : [];
   return normalizePayrollColumnFilters({ ...filters, values: { ...filters.values, [column]: list } });

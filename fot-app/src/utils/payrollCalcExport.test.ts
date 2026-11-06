@@ -268,6 +268,16 @@ describe('столбец «Договор»', () => {
     expect(labels()).not.toContain('Договор');
     expect(labels({ rows: [row({ contract_type: 'labor' })] })).not.toContain('Договор');
   });
+
+  it('«Расчёты» — по is_gph за месяцы: ГПХ в сентябре при трудовом сейчас — «ГПХ», и наоборот — пусто', () => {
+    const rows = [
+      row({ employee_id: 3, contract_type: 'labor', is_gph: true }),
+      row({ employee_id: 4, contract_type: 'gph', is_gph: false }),
+    ];
+    expect(cell({ rows }, 'Договор', 0)).toBe('ГПХ');
+    expect(cell({ rows }, 'Договор', 1)).toBe('');
+    expect(labels({ rows: [row({ contract_type: 'gph', is_gph: false })] })).not.toContain('Договор');
+  });
 });
 
 describe('подзаголовок и имя файла', () => {
@@ -277,6 +287,8 @@ describe('подзаголовок и имя файла', () => {
       text: { name: 'Абду' },
       values: { position: ['Монтажник', null], schedule: ['6+0 (10ч)'] },
     })).toBe('Сотрудник: Абду; Должность: Монтажник, (пусто); График работы: 6+0 (10ч)');
+    expect(describePayrollColumnFilters({ text: { name: 'Абду' }, contract: 'gph', values: { position: ['Маляр'] } }))
+      .toBe('Сотрудник: Абду; Договор: ГПХ; Должность: Маляр');
   });
 
   it('период, отдел, поиск и фильтры — в подзаголовке', () => {

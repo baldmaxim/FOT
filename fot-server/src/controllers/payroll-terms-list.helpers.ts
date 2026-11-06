@@ -154,6 +154,8 @@ const columnFiltersSchema = z.object({
       Record<PayrollValueFilterColumn, z.ZodOptional<typeof valueListSchema>>,
   ).strict().optional(),
   text: z.object({ name: z.string().max(MAX_TEXT_LENGTH).optional() }).strict().optional(),
+  /** Галочка «Только ГПХ» в окне фильтра «Сотрудник» (миграция 352): колонка is_gph, см. appendPayrollColumnFilters. */
+  contract: z.literal('gph').optional(),
 }).strict();
 
 export type IPayrollColumnFilters = z.infer<typeof columnFiltersSchema>;
@@ -205,5 +207,10 @@ export function appendPayrollColumnFilters(
   const nameSearch = filters.text?.name ? buildFioSearch(filters.text.name.slice(0, MAX_TEXT_LENGTH)) : null;
   if (nameSearch && exclude !== 'name') {
     whereParts.push(fioExactConditionSql('employees', params, nameSearch));
+  }
+
+  // is_gph — колонка scoped, та же, что у пометки «ГПХ» под ФИО: в «Расчётах» — за выбранные месяцы, иначе на дату.
+  if (filters.contract === 'gph' && exclude !== 'name') {
+    whereParts.push('is_gph');
   }
 }

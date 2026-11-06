@@ -710,6 +710,53 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         // В октябре Кузьмина работает — точное совпадение, без ошибки.
         expect((await listIds({ paid_months: '2026-10', q: 'Кузьмина' })).ids).toEqual([40]);
       });
+
+      it('«Только ГПХ» и пометка — ГПХ хоть в одном выбранном месяце; «Условия оплаты» — договор на дату', async () => {
+        // Кузмина: ГПХ в сентябре, с октября — трудовой.
+        await pg.pool!.query(`
+          INSERT INTO payroll_compensation_terms
+            (employee_id, staff_category, calc_type, monthly_salary, contract_type, effective_from, effective_to, created_by)
+          VALUES (43, 'itr', 'salary', 100000, 'gph',   '2026-09-01', '2026-09-30', '${AUTHOR}'),
+                 (43, 'itr', 'salary', 100000, 'labor', '2026-10-01', NULL,         '${AUTHOR}');
+        `);
+        try {
+          const gph = JSON.stringify({ contract: 'gph' });
+          expect((await listIds({ paid_months: '2026-09', cf: gph })).ids).toEqual([43]);
+          expect((await listIds({ paid_months: '2026-08,2026-09', cf: gph })).ids).toEqual([43]);
+          expect((await listIds({ paid_months: '2026-10', cf: gph })).ids).toEqual([]);
+          expect((await listIds({ paid_months: 'all', cf: gph })).ids).toEqual([43]);
+          // «Условия оплаты» (без месяцев) — на дату 01.10: трудовой.
+          expect((await listIds({ cf: gph })).ids).toEqual([]);
+          // Поиск ФИО вместе с галочкой — тот же набор.
+          expect((await listIds({ paid_months: '2026-09', cf: gph, q: 'Кузмина' })).ids).toEqual([43]);
+
+          // Пометка в строке — по месяцам; contract_type — договор на дату (для формы карточки).
+          const row = async (extra: Record<string, string>) => {
+            const res = makeRes();
+            await payrollTermsController.list({
+              user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', defer_calc: '1', employee_id: '43', ...extra },
+            } as unknown as AuthenticatedRequest, res);
+            return (res.body.data as Array<Record<string, unknown>>)[0];
+          };
+          expect(await row({ paid_months: '2026-09' })).toMatchObject({ is_gph: true, contract_type: 'labor' });
+          expect(await row({ paid_months: '2026-10' })).toMatchObject({ is_gph: false });
+          expect(await row({})).toMatchObject({ is_gph: false, contract_type: 'labor' });
+
+          // Варианты фильтра другого столбца считаются с галочкой по тем же месяцам.
+          const valuesTotal = async (extra: Record<string, string>) => {
+            const res = makeRes();
+            await payrollTermsController.columnValues({
+              user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01', column: 'department', cf: gph, ...extra },
+            } as unknown as AuthenticatedRequest, res);
+            expect(res.statusCode).toBe(200);
+            return (res.body.data.values as Array<{ count: number }>).reduce((sum, item) => sum + item.count, 0);
+          };
+          expect(await valuesTotal({ paid_months: '2026-09' })).toBe(1);
+          expect(await valuesTotal({ paid_months: '2026-10' })).toBe(0);
+        } finally {
+          await pg.pool!.query('DELETE FROM payroll_compensation_terms WHERE employee_id = 43');
+        }
+      });
     });
 
     describe('уволенные — в месяцах, где есть суммы 1С или дни табеля', () => {

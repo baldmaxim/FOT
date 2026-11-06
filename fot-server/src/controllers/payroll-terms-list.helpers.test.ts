@@ -125,6 +125,8 @@ describe('parsePayrollColumnFilters', () => {
     expect(parsePayrollColumnFilters('')).toEqual({ ok: true, filters: {} });
     const filters = { values: { position: ['Монтажник', null], bonus: ['0.00'] }, text: { name: 'ов' } };
     expect(parsePayrollColumnFilters(JSON.stringify(filters))).toEqual({ ok: true, filters });
+    const gph = { text: { name: 'ов' }, contract: 'gph' };
+    expect(parsePayrollColumnFilters(JSON.stringify(gph))).toEqual({ ok: true, filters: gph });
   });
 
   it('неизвестные столбцы, лишние ключи, пустые и слишком большие списки — ошибка', () => {
@@ -139,6 +141,10 @@ describe('parsePayrollColumnFilters', () => {
       JSON.stringify({ text: { department: 'x' } }),
       JSON.stringify({ text: { name: 'x'.repeat(201) } }),
       JSON.stringify({ dates: {} }),
+      // «Только ГПХ» — только 'gph': трудовой договор и прочие значения не фильтруются.
+      JSON.stringify({ contract: 'labor' }),
+      JSON.stringify({ contract: true }),
+      JSON.stringify({ contract: ['gph'] }),
       'x'.repeat(8193),
     ];
     for (const raw of bad) expect(parsePayrollColumnFilters(raw).ok, raw.slice(0, 60)).toBe(false);
@@ -185,5 +191,25 @@ describe('appendPayrollColumnFilters', () => {
     const noName: string[] = [];
     appendPayrollColumnFilters(noName, [], { text: { name: 'ов' } }, { exclude: 'name' });
     expect(noName).toEqual([]);
+  });
+
+  it('«Только ГПХ» — условие по договору без параметров; вместе с ФИО — оба; exclude name снимает оба', () => {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    appendPayrollColumnFilters(where, params, { values: { position: ['Монтажник'] }, contract: 'gph' });
+    expect(where).toEqual([
+      "(NULLIF(btrim(position_name), '') = ANY($1::text[]))",
+      'is_gph',
+    ]);
+    expect(params).toEqual([['Монтажник']]);
+
+    const withName: string[] = [];
+    appendPayrollColumnFilters(withName, [], { text: { name: 'ов' }, contract: 'gph' });
+    expect(withName).toHaveLength(2);
+    expect(withName[1]).toBe('is_gph');
+
+    const excluded: string[] = [];
+    appendPayrollColumnFilters(excluded, [], { text: { name: 'ов' }, contract: 'gph' }, { exclude: 'name' });
+    expect(excluded).toEqual([]);
   });
 });

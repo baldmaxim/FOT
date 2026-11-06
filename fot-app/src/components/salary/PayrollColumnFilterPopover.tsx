@@ -14,6 +14,7 @@ import {
   isPayrollValueFilterColumn,
   MAX_PAYROLL_FILTER_TEXT,
   MAX_PAYROLL_FILTER_VALUES,
+  type PayrollColumnFilterValue,
 } from '../../utils/payrollColumnFilters';
 import { formatPayrollFilterValue } from '../../utils/payrollFormat';
 import styles from './PayrollColumnFilterPopover.module.css';
@@ -30,8 +31,8 @@ interface IPayrollColumnFilterPopoverProps {
   viewParams: IPayrollColumnValuesParams;
   /** Кнопка-воронка, под которой открывается окно. */
   anchor: HTMLElement;
-  /** Список значений, текст ФИО или null — снять фильтр столбца. */
-  onApply: (column: PayrollSortKey, value: (string | null)[] | string | null) => void;
+  /** Список значений, «Сотрудник» (текст и «Только ГПХ») или null — снять фильтр столбца. */
+  onApply: (column: PayrollSortKey, value: PayrollColumnFilterValue) => void;
   onClose: () => void;
 }
 
@@ -42,6 +43,7 @@ export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = 
   const valueColumn = isPayrollValueFilterColumn(column) ? column : null;
   const [selected, setSelected] = useState<(string | null)[]>(() => (valueColumn ? filters.values?.[valueColumn] ?? [] : []));
   const [text, setText] = useState(() => filters.text?.name ?? '');
+  const [gph, setGph] = useState(() => filters.contract === 'gph');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300).trim();
   const dismiss = useOverlayDismiss(onClose);
@@ -84,7 +86,7 @@ export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = 
 
   const apply = () => {
     if (valueColumn) onApply(column, selected.length > 0 ? selected : null);
-    else onApply(column, text.trim() ? text.trim() : null);
+    else onApply(column, { name: text.trim(), gph });
     onClose();
   };
   const reset = () => {
@@ -146,19 +148,26 @@ export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = 
             {selected.length > 0 && <div className={styles.hint}>Выбрано: {selected.length}</div>}
           </>
         ) : (
-          <label className={styles.field}>
-            <span>Содержит</span>
-            <input
-              className={styles.input}
-              type="search"
-              value={text}
-              maxLength={MAX_PAYROLL_FILTER_TEXT}
-              onChange={event => setText(event.target.value)}
-              onKeyDown={event => { if (event.key === 'Enter') apply(); }}
-              placeholder="Часть ФИО"
-              autoFocus
-            />
-          </label>
+          <>
+            <label className={styles.field}>
+              <span>Содержит</span>
+              <input
+                className={styles.input}
+                type="search"
+                value={text}
+                maxLength={MAX_PAYROLL_FILTER_TEXT}
+                onChange={event => setText(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Enter') apply(); }}
+                placeholder="Часть ФИО"
+                autoFocus
+              />
+            </label>
+            {/* Тот же признак, что серая пометка «ГПХ» под ФИО: в «Расчётах» — за выбранные месяцы, иначе на дату. */}
+            <label className={styles.option}>
+              <input type="checkbox" checked={gph} onChange={event => setGph(event.target.checked)} />
+              <span className={styles.optionLabel}>Только ГПХ</span>
+            </label>
+          </>
         )}
 
         <div className={styles.footer}>
