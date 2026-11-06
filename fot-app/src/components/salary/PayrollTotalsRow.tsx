@@ -32,12 +32,7 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
     const state = payrollTotalState(status, total.fromCalc);
     if (state === 'pending') return <span className={styles.calcMuted} aria-label="Считается">…</span>;
     if (state === 'failed' || total.amount === null) return '—';
-    return (
-      <>
-        {formatPaidAmount(Number(total.amount))}
-        {total.missing > 0 && <span className={styles.calcSub}>без {total.missing} чел.</span>}
-      </>
-    );
+    return formatPaidAmount(Number(total.amount));
   };
 
   return (

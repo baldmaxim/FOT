@@ -360,7 +360,6 @@
 .table tfoot td.stickyNum,
 .table tfoot td.stickyName { z-index: 3; }
 .table tfoot td.groupTotal { background: var(--group-total-head); }
-.table tfoot .calcSub { font-weight: 500; }
 
 @media (prefers-reduced-motion: reduce) {
   .paidButton,

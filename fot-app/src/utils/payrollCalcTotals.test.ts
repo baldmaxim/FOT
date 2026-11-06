@@ -57,7 +57,7 @@ describe('payrollColumnTotals', () => {
     expect(payrollColumnTotals([row({ calc: calc() })], [column('calc_vacation')]).get('calc_vacation')?.amount).toBeNull();
   });
 
-  it('«Сумма» без выработки и без условий — «без N», причины в подсказке, в сумму не входят', () => {
+  it('«Сумма» без выработки и без условий — в сумму не входят, число и причины в подсказке', () => {
     const rows = [
       row({ calc: calc({ net: '100.00' }) }),
       row({ calc: calc({ incomplete: [{ month: '2026-10', reasons: ['brigade_output'] }] }) }),
@@ -90,7 +90,7 @@ describe('payrollColumnTotals', () => {
     expect(payrollColumnTotals(rows, [column('calc_net')]).get('calc_net')?.missing).toBe(2);
   });
 
-  it('«Без N» только у «Суммы», «Остатка» и «Начислено»: у доплат «—» — не пропуск', () => {
+  it('пропуск считается только у «Суммы», «Остатка» и «Начислено»: у доплат «—» — не пропуск', () => {
     const rows = [row({ calc: calc({ incomplete: [{ month: '2026-10', reasons: ['no_terms'] }] }) })];
     const totals = payrollColumnTotals(rows, [column('calc_supplements'), column('calc_remainder'), column('calc_timesheet')]);
     expect(totals.get('calc_supplements')?.missing).toBe(0);
