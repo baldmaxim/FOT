@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   hasPageView: vi.fn(),
   hasPageEdit: vi.fn(),
   logFromRequest: vi.fn(),
+  logWithClient: vi.fn(),
   isDryRun: vi.fn(),
   bgConn: vi.fn(),
   delEmp: vi.fn(),
@@ -64,7 +65,7 @@ vi.mock('../services/contractor-pass-rename.service.js', async (importOriginal) 
   renamePassHolder: h.renamePassHolder,
 }));
 vi.mock('../services/audit.service.js', () => ({
-  auditService: { logFromRequest: h.logFromRequest },
+  auditService: { logFromRequest: h.logFromRequest, logWithClient: h.logWithClient },
   AUDIT_ACTIONS: {
     CONTRACTOR_SUBMISSION_APPROVED: 'CONTRACTOR_SUBMISSION_APPROVED',
     CONTRACTOR_SUBMISSION_REJECTED: 'CONTRACTOR_SUBMISSION_REJECTED',
@@ -196,6 +197,40 @@ describe('contractorAdminController.approveSubmission', () => {
     const body = res.body as { data: { status: string; applied: number } };
     expect(body.data.status).toBe('approved');
     expect(body.data.applied).toBe(2);
+  });
+
+  it('снятие блокировки попадает в журнал той же транзакцией, что и выдача', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'submitted', pass_sigur_id: 11, holder_name: 'Иванов И.', access_point_names: null, card_uid: '168,15956' },
+    ]);
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(h.logWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'UPDATE_EMPLOYEE',
+      entity_type: 'sigur_employee',
+      entity_id: '11',
+      details: { action: 'unblock', source: 'contractor_approve', pass_id: 'p1' },
+    }));
+  });
+
+  it('журнал не записался → транзакция откатывается, пропуск не считается выданным', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'submitted', pass_sigur_id: 11, holder_name: 'Иванов И.', access_point_names: null, card_uid: '168,15956' },
+    ]);
+    h.logWithClient.mockRejectedValueOnce(new Error('insert failed'));
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    const body = res.body as { data: { status: string; applied: number; apply_error?: string } };
+    expect(body.data.applied).toBe(0);
+    expect(body.data.status).toBe('partially_applied');
   });
 
   it('частичный сбой rename → partially_applied + apply_error', async () => {
@@ -384,6 +419,40 @@ describe('contractorAdminController.decideSubmission — срок действи
     expect(passUpd).toBeTruthy();
     expect(String(passUpd?.[0])).toContain('expires_at = COALESCE');
     expect((passUpd?.[1] as unknown[])).toContain('2027-01-15');
+  });
+
+  it('снятие блокировки попадает в журнал; журнал не записался — пропуск не выдан', async () => {
+    const seedApprove = () => {
+      h.queryOne
+        .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+        .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
+      h.query.mockResolvedValueOnce([
+        { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+          submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
+      ]);
+    };
+
+    seedApprove();
+    const ok = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }] }),
+      ok as never,
+    );
+    expect(h.logWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'UPDATE_EMPLOYEE',
+      entity_id: '11',
+      details: { action: 'unblock', source: 'contractor_approve', pass_id: PASS_ID },
+    }));
+    expect((ok.body as { data: { applied: number } }).data.applied).toBe(1);
+
+    h.logWithClient.mockRejectedValueOnce(new Error('insert failed'));
+    seedApprove();
+    const failed = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }] }),
+      failed as never,
+    );
+    expect((failed.body as { data: { applied: number } }).data.applied).toBe(0);
   });
 
   it('без expires_at — серверный дефолт 31.12 текущего года (не раньше завтра)', async () => {
@@ -1943,7 +2012,8 @@ describe('contractorAdminController — статистика пропусков 
 
   const idleRow = (over: Partial<Record<string, unknown>> = {}) => ({
     pass_id: 'p1', org_department_id: ORG, org_name: 'АЛЬФА ООО', pass_number: '101', holder_name: 'Иванов И.',
-    last_event_date: '2026-10-10', last_access_point: 'кпп ASTERUS', days_idle: 16, ...over,
+    last_event_date: '2026-10-10', last_access_point: 'кпп ASTERUS', days_idle: 16,
+    idle_blocked_on: null, blocked_manually: false, ...over,
   });
 
   it('passStats: idle_new из счётчика сервиса на сегодня по МСК, подрядчик без не ходящих — 0', async () => {
@@ -1980,8 +2050,14 @@ describe('contractorAdminController — статистика пропусков 
     expect(res.body).toEqual({
       success: true,
       data: [
-        { pass_id: 'p1', pass_number: '101', holder_name: 'Иванов И.', last_event_date: '2026-10-10', last_access_point: 'кпп ASTERUS', days_idle: 16 },
-        { pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null, days_idle: 40 },
+        {
+          pass_id: 'p1', pass_number: '101', holder_name: 'Иванов И.', last_event_date: '2026-10-10',
+          last_access_point: 'кпп ASTERUS', days_idle: 16, idle_blocked_on: null, blocked_manually: false,
+        },
+        {
+          pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null,
+          last_access_point: null, days_idle: 40, idle_blocked_on: null, blocked_manually: false,
+        },
       ],
     });
   });
@@ -1990,8 +2066,12 @@ describe('contractorAdminController — статистика пропусков 
     // Сводка (выданных за период 0), точек нет, детализация выданных пуста.
     h.query.mockResolvedValueOnce([statRow({ issued_new: 0, active_new: 2, old_total: 0, old_used: 0 })]);
     h.fetchIdleContractorPasses.mockResolvedValueOnce([
-      idleRow({ pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null, days_idle: 40 }),
-      idleRow(),
+      idleRow({
+        pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', last_event_date: null, last_access_point: null,
+        days_idle: 40, idle_blocked_on: '2026-11-06',
+      }),
+      idleRow({ blocked_manually: true }),
+      idleRow({ pass_id: 'p3', pass_number: '103', holder_name: 'Сидоров С.' }),
     ]);
     const res = makeExportRes();
     await contractorAdminController.exportPassStats(
@@ -2007,14 +2087,16 @@ describe('contractorAdminController — статистика пропусков 
     expect(stat.getRow(1).values).toEqual([
       undefined, 'Подрядчик', 'Выдано новых', 'Активные', 'Не ходят > 5 дн.', 'Всего старых', 'Используются старые (14 дн.)',
     ]);
-    expect(stat.getRow(2).values).toEqual([undefined, 'АЛЬФА ООО', 0, 2, 2, 0, 0]);
+    expect(stat.getRow(2).values).toEqual([undefined, 'АЛЬФА ООО', 0, 2, 3, 0, 0]);
     expect(stat.getRow(3).values).toEqual([]);
     expect(stat.getRow(4).getCell(1).value).toBe('Не ходят больше 5 дней');
     expect(stat.getRow(5).values).toEqual([
       undefined, 'Подрядчик', 'ФИО', '№ пропуска ФОТ', 'Последний проход', 'Точка последнего прохода', 'Дней без проходов',
+      'Заблокирован',
     ]);
-    expect(stat.getRow(6).values).toEqual([undefined, 'АЛЬФА ООО', 'Петров П.', '102', 'не было', '—', 40]);
-    expect(stat.getRow(7).values).toEqual([undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '2026-10-10', 'кпп ASTERUS', 16]);
+    expect(stat.getRow(6).values).toEqual([undefined, 'АЛЬФА ООО', 'Петров П.', '102', 'не было', '—', 40, '06.11.2026, авто']);
+    expect(stat.getRow(7).values).toEqual([undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '2026-10-10', 'кпп ASTERUS', 16, 'вручную']);
+    expect(stat.getRow(8).values).toEqual([undefined, 'АЛЬФА ООО', 'Сидоров С.', '103', '2026-10-10', 'кпп ASTERUS', 16, '—']);
   });
 });
 

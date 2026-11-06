@@ -4,6 +4,7 @@ import { assertSigurDepartmentAssignable } from '../services/department-assignab
 import { settingsService } from '../services/settings.service.js';
 import { auditService } from '../services/audit.service.js';
 import { BlacklistBlockedError, withSigurProfileGuard } from '../services/blacklist.service.js';
+import { markContractorPassUnblocked } from '../services/contractor-pass-idle.service.js';
 import {
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
@@ -807,15 +808,19 @@ export const sigurAdminController = {
       const connection = parseConnection(req.body.connection);
       // Чёрный список (273): вручную разблокировать человека из списка нельзя —
       // сначала снимают запись. Проверка идёт под локом профиля.
-      const data = await withSigurProfileGuard(
-        sigurEmployeeId,
-        () => updateSigurEmployee(sigurEmployeeId, { blocked: false }, connection),
-      );
-
-      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
-        entityType: 'sigur_employee',
-        entityId: String(sigurEmployeeId),
-        details: { action: 'unblock' },
+      // Запись «unblock» обязательна: от неё считаются новые 5 дней автоблокировки подрядных
+      // пропусков, а отметки держателя — состояние этого же пропуска. Поэтому журнал и отметки
+      // строго в одной транзакции, Sigur — последним: сбой записи — профиль остаётся заблокирован
+      // и кнопку можно нажать ещё раз. Если Sigur снял блокировку, а commit упал, клиент получит
+      // ошибку и перечитает профиль.
+      const data = await withSigurProfileGuard(sigurEmployeeId, async client => {
+        await auditService.logFromRequestWithClient(client, req, req.user.id, 'UPDATE_EMPLOYEE', {
+          entityType: 'sigur_employee',
+          entityId: String(sigurEmployeeId),
+          details: { action: 'unblock' },
+        });
+        await markContractorPassUnblocked(client, sigurEmployeeId);
+        return updateSigurEmployee(sigurEmployeeId, { blocked: false }, connection);
       });
 
       res.json({ success: true, data });

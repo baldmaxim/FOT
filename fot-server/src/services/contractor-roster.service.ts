@@ -39,6 +39,8 @@ export interface IContractorPassRow {
   status: ContractorPassStatus;
   approval_status: ContractorPassApprovalStatus;
   is_active: boolean;
+  /** МСК-дата автоблокировки за простой, YYYY-MM-DD; null — не было. */
+  idle_blocked_on: string | null;
   sigur_employee_id: number | null;
   card_uid: string | null;
   holder_name: string | null;
@@ -149,6 +151,7 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.status,
             p.approval_status,
             p.is_active,
+            to_char(h.idle_blocked_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS idle_blocked_on,
             p.sigur_employee_id,
             p.card_uid,
             COALESCE(h.holder_name, p.holder_name) AS holder_name,

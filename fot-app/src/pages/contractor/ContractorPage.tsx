@@ -2,7 +2,7 @@ import { useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { contractorService, type IRosterRow, type IPassRow, type IPassDocuments } from '../../services/contractorService';
+import { contractorService, formatIdleBlockNote, type IRosterRow, type IPassRow, type IPassDocuments } from '../../services/contractorService';
 import { citizenshipRequiresPatent } from '../../services/citizenship';
 import { ContractorDocumentsBlock } from '../../components/contractor/ContractorDocumentsBlock';
 import { PassDocumentsModal } from '../../components/contractor/PassDocumentsModal';
@@ -18,7 +18,9 @@ const stateBadge = (state: IRosterRow['state']): { cls: string; label: string } 
   }
 };
 
-const passBadge = (status: IPassRow['status']): { cls: string; label: string } => {
+const passBadge = (status: IPassRow['status'], isActive: boolean): { cls: string; label: string } => {
+  // Выданный, но не активный — заблокирован автоматически или вручную; «выдан» обманул бы.
+  if (status === 'applied' && !isActive) return { cls: styles.badgeRemove, label: 'заблокирован' };
   switch (status) {
     case 'applied': return { cls: styles.badgeActive, label: 'выдан' };
     case 'submitted': return { cls: styles.badgePending, label: 'на согласовании' };
@@ -336,7 +338,7 @@ export const ContractorPage: FC = () => {
                   </thead>
                   <tbody>
                     {passes.map(p => {
-                      const b = passBadge(p.status);
+                      const b = passBadge(p.status, p.is_active);
                       const ap = approvalBadge(p.approval_status);
                       const editable = p.status === 'assigned' && !p.submission_id;
                       const canChangeOwner = p.status === 'applied' || (p.status === 'blocked' && !p.submission_id);
@@ -366,6 +368,9 @@ export const ContractorPage: FC = () => {
                           <td>
                             <span className={`${styles.badge} ${b.cls}`}>{b.label}</span>
                             {ap && <>{' '}<span className={`${styles.badge} ${ap.cls}`}>{ap.label}</span></>}
+                            {p.idle_blocked_on && !p.is_active && (
+                              <div className={styles.idleBlockNote}>{formatIdleBlockNote(p.idle_blocked_on)}</div>
+                            )}
                           </td>
                           <td>
                             <div className={styles.actionsCell}>

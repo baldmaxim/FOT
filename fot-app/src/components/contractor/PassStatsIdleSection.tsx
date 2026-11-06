@@ -16,6 +16,12 @@ interface IPassStatsIdleSectionProps {
 /** YYYY-MM-DD → ДД.ММ.ГГГГ. */
 const formatIsoDate = (iso: string): string => iso.split('-').reverse().join('.');
 
+/** Как в Excel: «06.11.2026, авто», «вручную» или «—». */
+const formatBlockedCell = (row: IContractorIdlePass): string => {
+  if (row.idle_blocked_on) return `${formatIsoDate(row.idle_blocked_on)}, авто`;
+  return row.blocked_manually ? 'вручную' : '—';
+};
+
 const COLUMNS: ReadonlyArray<IRegistryColumn<IContractorIdlePass>> = [
   {
     key: 'pass_number', label: '№ пропуска', type: 'text', width: 110, nowrap: true,
@@ -42,13 +48,18 @@ const COLUMNS: ReadonlyArray<IRegistryColumn<IContractorIdlePass>> = [
     text: row => String(row.days_idle),
     sortValue: row => row.days_idle,
   },
+  {
+    key: 'blocked', label: 'Заблокирован', type: 'text', width: 150, nowrap: true,
+    text: formatBlockedCell,
+    sortValue: row => row.idle_blocked_on ?? (row.blocked_manually ? 'вручную' : null),
+  },
 ];
 
 const INITIAL_VIEW: ITableView = { sort: 'days_idle', dir: 'desc', filters: {} };
 
 /**
- * «Не ходят больше 5 дней» выбранного подрядчика: активные пропуска без проходов по СКУД,
- * сначала те, кто не ходит дольше всех. Состояние «на сейчас» — период модалки не влияет.
+ * «Не ходят больше 5 дней» выбранного подрядчика: пропуска без проходов по СКУД, включая
+ * заблокированные автоматически и вручную, сначала те, кто не ходит дольше всех. Состояние «на сейчас» — период модалки не влияет.
  * Смена подрядчика — новый key у компонента: сортировка и фильтры прежнего не переносятся.
  */
 export const PassStatsIdleSection: FC<IPassStatsIdleSectionProps> = ({ orgId }) => {

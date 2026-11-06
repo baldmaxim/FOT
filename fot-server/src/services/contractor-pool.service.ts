@@ -1150,7 +1150,7 @@ export interface IRevokeToPoolResult {
  *   тоже трактуем как «orphan». Использовать ТОЛЬКО для probe-чтения; на PUT/POST
  *   422 — это настоящая validation error.
  */
-function isSigurNotFound(error: unknown): boolean {
+export function isSigurNotFound(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const e = error as { response?: { status?: number }; status?: number; message?: string };
   const status = e.response?.status ?? e.status;

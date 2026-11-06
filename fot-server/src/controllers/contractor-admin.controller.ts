@@ -498,6 +498,12 @@ interface IContractorAccessPointStatsRow {
   points: IContractorAccessPointStat[];
 }
 
+/** Столбец «Заблокирован» в Excel, как на экране: «06.11.2026, авто», «вручную» или «—». */
+const formatIdleBlockedCell = (row: { idle_blocked_on: string | null; blocked_manually: boolean }): string => {
+  if (row.idle_blocked_on) return `${row.idle_blocked_on.split('-').reverse().join('.')}, авто`;
+  return row.blocked_manually ? 'вручную' : '—';
+};
+
 /**
  * Разбивка АКТИВНЫХ пропусков по точкам доступа — по строке на подрядчика (снапшот
  * contractor_passes.access_point_names, Sigur не дёргается). База — тот же фильтр
@@ -1882,6 +1888,17 @@ export const contractorAdminController = {
                 WHERE pass_id = $2::uuid AND valid_until IS NULL AND approved_at IS NULL`,
               [req.user.id, row.pass_id],
             );
+            // Одобрение снимает блокировку профиля: без этой записи после следующего отзыва
+            // карточка SIGUR показала бы причину старой блокировки прежнего держателя.
+            if (!dryRun) {
+              await auditService.logWithClient(client, {
+                user_id: req.user.id,
+                action: 'UPDATE_EMPLOYEE',
+                entity_type: 'sigur_employee',
+                entity_id: String(row.pass_sigur_id),
+                details: { action: 'unblock', source: 'contractor_approve', pass_id: row.pass_id },
+              });
+            }
             await client.query(
               `INSERT INTO contractor_submission_decisions
                  (submission_id, pass_id, decision, decided_by, access_point_names)
@@ -1984,6 +2001,7 @@ export const contractorAdminController = {
                p.status,
                p.approval_status,
                p.is_active,
+               to_char(h.idle_blocked_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS idle_blocked_on,
                p.sigur_employee_id,
                p.card_uid,
                COALESCE(h.holder_name, p.holder_name) AS holder_name,
@@ -2142,8 +2160,9 @@ export const contractorAdminController = {
   },
 
   /**
-   * GET /passes/stats/idle?org_department_id= — активные пропуска подрядчика без проходов СКУД
-   * больше IDLE_PASS_DAYS дней: № пропуска, ФИО, последний проход и его точка, дней без проходов.
+   * GET /passes/stats/idle?org_department_id= — пропуска подрядчика без проходов СКУД больше
+   * IDLE_PASS_DAYS дней, включая заблокированные: № пропуска, ФИО, последний проход и его точка,
+   * дней без проходов, отметка блокировки.
    * Период не принимается: как и «Активные», это состояние «на сейчас».
    */
   async passStatsIdle(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -2160,6 +2179,8 @@ export const contractorAdminController = {
         last_event_date: r.last_event_date,
         last_access_point: r.last_access_point,
         days_idle: r.days_idle,
+        idle_blocked_on: r.idle_blocked_on,
+        blocked_manually: r.blocked_manually,
       }));
       res.json({ success: true, data });
     } catch (error) {
@@ -2306,12 +2327,14 @@ export const contractorAdminController = {
         ws.addRow([`Не ходят больше ${IDLE_PASS_DAYS} дней`]).font = { bold: true };
         const idleHeader = ws.addRow([
           'Подрядчик', 'ФИО', '№ пропуска ФОТ', 'Последний проход', 'Точка последнего прохода', 'Дней без проходов',
+          'Заблокирован',
         ]);
         idleHeader.font = { bold: true };
         for (const i of idle) {
           ws.addRow([
             i.org_name, i.holder_name, i.pass_number,
             i.last_event_date ?? 'не было', i.last_access_point ?? '—', i.days_idle,
+            formatIdleBlockedCell(i),
           ]);
         }
       }
@@ -2923,6 +2946,16 @@ export const contractorAdminController = {
                   WHERE pass_id = $2::uuid AND valid_until IS NULL AND approved_at IS NULL`,
                 [req.user.id, pass.id],
               );
+              // См. комментарий в approveSubmission: без записи вернулась бы старая причина блокировки.
+              if (!dryRun) {
+                await auditService.logWithClient(client, {
+                  user_id: req.user.id,
+                  action: 'UPDATE_EMPLOYEE',
+                  entity_type: 'sigur_employee',
+                  entity_id: String(pass.sigur_employee_id),
+                  details: { action: 'unblock', source: 'contractor_approve', pass_id: pass.id },
+                });
+              }
               await client.query(
                 `INSERT INTO contractor_submission_decisions
                    (submission_id, pass_id, decision, decided_by, reason, access_point_names)

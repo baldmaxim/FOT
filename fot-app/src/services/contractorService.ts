@@ -70,6 +70,8 @@ export interface IPassRow {
   status: ContractorPassStatus;
   approval_status: ContractorPassApprovalStatus;
   is_active: boolean;
+  /** МСК-дата автоблокировки за простой, YYYY-MM-DD; null — не было. */
+  idle_blocked_on: string | null;
   sigur_employee_id: number | null;
   card_uid: string | null;
   holder_name: string | null;
@@ -243,6 +245,8 @@ export interface IMonitorPassRow {
   status: ContractorPassStatus;
   approval_status: ContractorPassApprovalStatus;
   is_active: boolean;
+  /** МСК-дата автоблокировки за простой, YYYY-MM-DD; null — не было. */
+  idle_blocked_on: string | null;
   sigur_employee_id: number | null;
   card_uid: string | null;
   w26: string | null;
@@ -273,7 +277,7 @@ export interface IContractorPassStat {
   issued_new: number;
   /** Активные новые номерные пропуска. */
   active_new: number;
-  /** Из активных — без проходов по СКУД больше IDLE_PASS_DAYS дней (без проходов — от даты выдачи). */
+  /** Без проходов по СКУД больше IDLE_PASS_DAYS дней, включая заблокированные (они не входят в active_new). */
   idle_new: number;
   /** Старые «белые» пропуска — сотрудники в папке подрядчика без нового номерного пропуска. */
   old_total: number;
@@ -295,7 +299,7 @@ export interface IContractorPassDetail {
 /** Больше стольких дней без проходов — пропуск в «Не ходят» (зеркален бэкенду contractor-pass-idle.service). */
 export const IDLE_PASS_DAYS = 5;
 
-/** Активный пропуск без проходов по СКУД больше IDLE_PASS_DAYS дней. */
+/** Пропуск без проходов по СКУД больше IDLE_PASS_DAYS дней: активный или уже заблокированный. */
 export interface IContractorIdlePass {
   pass_id: string;
   pass_number: string;
@@ -303,9 +307,17 @@ export interface IContractorIdlePass {
   /** Последний проход после выдачи текущему держателю (МСК), YYYY-MM-DD; null — проходов не было. */
   last_event_date: string | null;
   last_access_point: string | null;
-  /** От последнего прохода, без него — от даты выдачи. */
+  /** От самого позднего из: последний проход, дата выдачи, разблокировка. */
   days_idle: number;
+  /** МСК-дата автоблокировки, YYYY-MM-DD; null — автоблокировки не было. */
+  idle_blocked_on: string | null;
+  /** Заблокирован вручную с причиной: автоблокировка его только увидела. */
+  blocked_manually: boolean;
 }
+
+/** Подпись у пропуска с автоблокировкой: Мониторинг и кабинет подрядчика. */
+export const formatIdleBlockNote = (idleBlockedOn: string): string =>
+  `Автоблокировка ${idleBlockedOn.split('-').reverse().join('.')}: не ходит больше ${IDLE_PASS_DAYS} дней`;
 
 /** Точка доступа и число активных пропусков подрядчика на ней. */
 export interface IContractorPassAccessPointStat {

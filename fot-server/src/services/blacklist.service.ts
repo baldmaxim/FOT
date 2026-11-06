@@ -612,7 +612,7 @@ export async function removeEntryIn(
  */
 export async function withSigurProfileGuard<T>(
   sigurEmployeeId: number,
-  action: () => Promise<T>,
+  action: (client: PoolClient) => Promise<T>,
   options: { skipBlacklistCheck?: boolean; canSeeReason?: boolean } = {},
 ): Promise<T> {
   const { withTransaction } = await import('../config/postgres.js');
@@ -629,6 +629,6 @@ export async function withSigurProfileGuard<T>(
       }
     }
 
-    return action();
+    return action(client);
   });
 }

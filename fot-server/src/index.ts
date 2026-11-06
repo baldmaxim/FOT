@@ -28,6 +28,10 @@ import {
   startContractorPassExpirySyncScheduler,
   stopContractorPassExpirySyncScheduler,
 } from './services/contractor-pass-expiry-sync.scheduler.js';
+import {
+  startContractorPassIdleBlockScheduler,
+  stopContractorPassIdleBlockScheduler,
+} from './services/contractor-pass-idle-block.scheduler.js';
 import { startBlacklistSigurScheduler, stopBlacklistSigurScheduler } from './services/blacklist-sigur.scheduler.js';
 import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newdb-pending-poller.service.js';
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
@@ -180,6 +184,9 @@ httpServer.listen(PORT, HOST, () => {
   startContractorPassSyncScheduler();
   // «Срок» пропусков подрядчиков в «Мониторинге» — ночью подтягивается из Sigur.
   void startContractorPassExpirySyncScheduler();
+  // Автоблокировка пропусков, которые не ходят больше 5 дней. Сама по себе не работает:
+  // включается настройкой (system_settings.contractor_pass_idle_block_enabled, по умолчанию false).
+  void startContractorPassIdleBlockScheduler();
   startBlacklistSigurScheduler();
   // Фиксация месячного плана KPI объектов. Сам по себе не работает: включается
   // в настройках (system_settings.object_kpi_freezer_enabled, по умолчанию false).
@@ -256,7 +263,8 @@ const gracefulShutdown = (signal: string): void => {
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopAccessPointZoneReconcileWorker,
     stopDismissalScheduler,
-    stopContractorPassSyncScheduler, stopContractorPassExpirySyncScheduler, stopBlacklistSigurScheduler,
+    stopContractorPassSyncScheduler, stopContractorPassExpirySyncScheduler, stopContractorPassIdleBlockScheduler,
+    stopBlacklistSigurScheduler,
     stopObjectKpiPlanFreezer,
     stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsForwardingOperationsWorker, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,

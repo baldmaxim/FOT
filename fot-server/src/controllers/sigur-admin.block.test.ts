@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   logFromRequest: vi.fn(),
   clientQuery: vi.fn(),
   blockInfo: vi.fn(),
+  commitError: null as Error | null,
 }));
 
 vi.mock('../services/sigur-live-employees-crud.service.js', () => ({
@@ -44,7 +45,11 @@ vi.mock('../config/postgres.js', () => ({
   query: vi.fn(),
   queryOne: vi.fn(),
   execute: vi.fn(),
-  withTransaction: vi.fn(async (fn: (client: unknown) => Promise<unknown>) => fn({ query: h.clientQuery })),
+  withTransaction: vi.fn(async (fn: (client: unknown) => Promise<unknown>) => {
+    const value = await fn({ query: h.clientQuery });
+    if (h.commitError) throw h.commitError;
+    return value;
+  }),
 }));
 
 const { sigurAdminController } = await import('./sigur-admin.controller.js');
@@ -156,6 +161,105 @@ describe('sigurAdminController.blockEmployee', () => {
 
     expect(res.statusCode).toBe(500);
     expect(res.body.success).toBe(false);
+  });
+});
+
+describe('sigurAdminController.unblockEmployee', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    h.updateEmployee.mockResolvedValue(PROFILE);
+    h.logWithClient.mockResolvedValue(undefined);
+    h.clientQuery.mockResolvedValue({ rows: [] });
+    h.commitError = null;
+  });
+
+  const holderUpdates = () =>
+    h.clientQuery.mock.calls.filter(call => String(call[0]).includes('UPDATE contractor_pass_holders'));
+
+  it('журнал и отметки держателя в транзакции, Sigur последним', async () => {
+    const res = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ success: true, data: PROFILE });
+    expect(h.clientQuery).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['blacklist:sigur:90329'],
+    );
+    expect(h.logWithClient).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'user-1',
+      'UPDATE_EMPLOYEE',
+      { entityType: 'sigur_employee', entityId: '90329', details: { action: 'unblock' } },
+    );
+    expect(holderUpdates()).toHaveLength(1);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+    expect(h.updateEmployee).toHaveBeenCalledWith(90329, { blocked: false }, undefined);
+    expect(h.logWithClient.mock.invocationCallOrder[0]).toBeLessThan(h.updateEmployee.mock.invocationCallOrder[0]);
+    expect(Math.max(...h.clientQuery.mock.invocationCallOrder)).toBeLessThan(h.updateEmployee.mock.invocationCallOrder[0]);
+  });
+
+  it('вставка журнала упала: Sigur не вызван, успеха нет, повтор проходит', async () => {
+    h.logWithClient.mockRejectedValueOnce(new Error('insert failed'));
+    const failed = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), failed);
+
+    expect(failed.statusCode).toBe(500);
+    expect(failed.body.success).toBe(false);
+    expect(h.updateEmployee).not.toHaveBeenCalled();
+
+    const retried = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), retried);
+    expect(retried.statusCode).toBe(200);
+    expect(h.updateEmployee).toHaveBeenCalledTimes(1);
+  });
+
+  it('запись отметок упала: Sigur не вызван, успеха нет', async () => {
+    h.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('UPDATE contractor_pass_holders')) throw new Error('update failed');
+      return { rows: [] };
+    });
+    const res = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(h.updateEmployee).not.toHaveBeenCalled();
+  });
+
+  it('сбой Sigur: ошибка из транзакции (журнал и отметки откатятся), успеха нет', async () => {
+    h.updateEmployee.mockRejectedValue(new Error('Sigur unavailable'));
+    const res = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('COMMIT упал после Sigur: успеха нет', async () => {
+    h.commitError = new Error('commit failed');
+    const res = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), res);
+
+    expect(h.updateEmployee).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(500);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('человек в чёрном списке: 409, журнала и Sigur нет', async () => {
+    h.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('person_blacklist')) {
+        return { rows: [{ id: 'b1', full_name: 'Иванов', reason: 'Нарушение', created_by_name: 'Гладкая' }] };
+      }
+      return { rows: [] };
+    });
+    const res = makeRes();
+    await sigurAdminController.unblockEmployee(makeReq({ sigurEmployeeId: '90329' }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.logWithClient).not.toHaveBeenCalled();
+    expect(h.updateEmployee).not.toHaveBeenCalled();
   });
 });
 

@@ -7,6 +7,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { BarChart3 } from 'lucide-react';
 import {
   contractorAdminService,
+  formatIdleBlockNote,
   type IMonitorPassRow,
   type IPassDocuments,
 } from '../../services/contractorService';
@@ -314,6 +315,9 @@ export const MonitorTab: FC = () => {
                     <span className={`${styles.badge} ${p.is_active ? styles.badgeActive : styles.badgeRemove}`}>
                       {p.is_active ? 'активен' : 'не активен'}
                     </span>
+                    {p.idle_blocked_on && !p.is_active && (
+                      <div className={styles.idleBlockNote}>{formatIdleBlockNote(p.idle_blocked_on)}</div>
+                    )}
                   </td>
                   <td>{p.object_label || '—'}</td>
                   <td>{(p.access_point_names ?? []).join(', ') || '—'}</td>
