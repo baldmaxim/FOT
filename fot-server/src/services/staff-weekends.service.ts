@@ -23,7 +23,7 @@ export const STAFF_WEEKENDS_BRANCH_IDS: readonly string[] = [
   '0b24809e-5f04-45e1-bbe2-8a82990d6bdd',
 ];
 
-/** Месяцев за один запрос — столько же предлагает выбор на вкладке. */
+/** Месяцев за один запрос прежнего списка (?months=), пока старая вкладка не выведена. */
 export const STAFF_WEEKENDS_MAX_MONTHS = 12;
 
 export interface IStaffWeekendRow {
@@ -37,6 +37,21 @@ export interface IStaffWeekendRow {
   days: string[];
   /** Минуты СКУД за эти дни. */
   total_minutes: number;
+}
+
+/** Строка сетки вкладки. Часов нет намеренно: часы показывает табель, в сводке СКУД обед не вычтен. */
+export interface IStaffWeekendGridRow {
+  employee_id: number;
+  full_name: string;
+  position: string | null;
+  /** Дни этого отдела, YYYY-MM-DD по возрастанию. */
+  days: string[];
+}
+
+export interface IStaffWeekendBranch {
+  id: string;
+  name: string;
+  rows: IStaffWeekendGridRow[];
 }
 
 interface IBranchWindows {
@@ -90,6 +105,61 @@ const collectMonthDays = async (month: string, branchIds: readonly string[], res
   }
 };
 
+interface IEmployeeDetails {
+  id: number;
+  full_name: string | null;
+  position: string | null;
+}
+
+const loadEmployeeDetails = (employeeIds: readonly number[]): Promise<IEmployeeDetails[]> => query<IEmployeeDetails>(
+  `SELECT e.id, e.full_name, p.name AS position
+     FROM employees e
+     LEFT JOIN positions p ON p.id = e.position_id
+    WHERE e.id = ANY($1::int[])`,
+  [employeeIds],
+);
+
+/**
+ * Сетка вкладки за месяц YYYY-MM: каждый отдел отдельно, в порядке branchIds, в том числе без людей.
+ * Переведённый между отделами внутри месяца — по строке в каждом, со своими днями. Квота плановых суббот при этом
+ * общая на человека: проверка одна на оба отдела (collectMonthDays).
+ */
+export const listWeekendsByBranch = async (
+  month: string,
+  branchIds: readonly string[],
+): Promise<IStaffWeekendBranch[]> => {
+  if (branchIds.length === 0) return [];
+
+  const daysByEmployee: DaysByEmployee = new Map();
+  await collectMonthDays(month, branchIds, daysByEmployee);
+  const employeeIds = [...daysByEmployee.keys()];
+
+  const [employees, branches] = await Promise.all([
+    employeeIds.length > 0 ? loadEmployeeDetails(employeeIds) : Promise.resolve([]),
+    query<{ id: string; name: string }>(
+      'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+      [[...branchIds]],
+    ),
+  ]);
+  const branchName = new Map(branches.map(branch => [branch.id, branch.name]));
+
+  return branchIds.map((branchId): IStaffWeekendBranch => ({
+    id: branchId,
+    name: branchName.get(branchId) ?? '',
+    rows: employees
+      .map((employee): IStaffWeekendGridRow => {
+        const employeeId = Number(employee.id);
+        const days = [...(daysByEmployee.get(employeeId) ?? new Map<string, string>())]
+          .filter(([, dayBranch]) => dayBranch === branchId)
+          .map(([day]) => day)
+          .sort();
+        return { employee_id: employeeId, full_name: employee.full_name ?? '', position: employee.position, days };
+      })
+      .filter(row => row.days.length > 0)
+      .sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru')),
+  }));
+};
+
 /**
  * Строка на сотрудника за выбранные месяцы (YYYY-MM), по ФИО. branchIds — отделы в охвате пользователя;
  * пустой — пустой список без запросов к БД.
@@ -109,13 +179,7 @@ export const listWeekendsWithoutCorrection = async (
   const allDates = [...new Set([...daysByEmployee.values()].flatMap(days => [...days.keys()]))];
 
   const [employees, summaries, branches] = await Promise.all([
-    query<{ id: number; full_name: string | null; position: string | null }>(
-      `SELECT e.id, e.full_name, p.name AS position
-         FROM employees e
-         LEFT JOIN positions p ON p.id = e.position_id
-        WHERE e.id = ANY($1::int[])`,
-      [employeeIds],
-    ),
+    loadEmployeeDetails(employeeIds),
     query<{ employee_id: number; date: string; total_minutes: number }>(
       `SELECT employee_id, date::text AS date, total_minutes
          FROM skud_daily_summary

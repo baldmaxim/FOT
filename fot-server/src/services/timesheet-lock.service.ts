@@ -117,16 +117,15 @@ function buildOwnershipRequests(
 }
 
 /**
- * Батч-проверка замка. Один SQL на весь набор пар — вызывается в том числе из
- * bulk-путей, где раньше был Promise.all с запросом на каждый элемент.
+ * Закрытые подачи, которые держат переданные пары: один SQL на весь набор и проверка владения днём.
+ * Строки идут по приоритету: утверждённая первой, затем поздние.
  */
-export async function findApprovalLocksForEmployeeDates(
+async function loadOwningLockRows(
   pairs: readonly ITimesheetLockPair[],
   exec?: DbExecutor,
-): Promise<Map<string, IApprovalLockInfo>> {
-  const locks = new Map<string, IApprovalLockInfo>();
+): Promise<ILockRow[]> {
   const normalized = normalizePairs(pairs);
-  if (normalized.length === 0) return locks;
+  if (normalized.length === 0) return [];
 
   const rows = await queryWith<ILockRow>(
     exec,
@@ -198,21 +197,46 @@ export async function findApprovalLocksForEmployeeDates(
 
   // Владение считаем ПОСЛЕ отбора кандидатов и ДО выбора приоритетной подачи:
   // иначе approved-подача, которая днём не владеет, вытеснила бы владеющую и день
-  // остался бы закрытым. Строки уже отсортированы по приоритету (approved первым),
-  // поэтому первая владеющая на пару и есть искомый замок.
+  // остался бы закрытым.
   const ownership = await resolveDayOwnership(buildOwnershipRequests(rows), exec);
+  return rows.filter(row => ownsDay(ownership.get(ownershipKey(Number(row.id), Number(row.employee_id), row.work_date))));
+}
 
-  for (const row of rows) {
-    const employeeId = Number(row.employee_id);
-    const key = lockKey(employeeId, row.work_date);
-    if (locks.has(key)) continue;
-    if (!ownsDay(ownership.get(ownershipKey(Number(row.id), employeeId, row.work_date)))) continue;
-    locks.set(key, {
-      id: Number(row.id),
-      start_date: row.start_date,
-      end_date: row.end_date,
-      status: row.status,
-    });
+const toLockInfo = (row: ILockRow): IApprovalLockInfo => ({
+  id: Number(row.id),
+  start_date: row.start_date,
+  end_date: row.end_date,
+  status: row.status,
+});
+
+/**
+ * Батч-проверка замка: на пару — приоритетная подача (первая владеющая). Вызывается в том числе из
+ * bulk-путей, где раньше был Promise.all с запросом на каждый элемент.
+ */
+export async function findApprovalLocksForEmployeeDates(
+  pairs: readonly ITimesheetLockPair[],
+  exec?: DbExecutor,
+): Promise<Map<string, IApprovalLockInfo>> {
+  const locks = new Map<string, IApprovalLockInfo>();
+  for (const row of await loadOwningLockRows(pairs, exec)) {
+    const key = lockKey(Number(row.employee_id), row.work_date);
+    if (!locks.has(key)) locks.set(key, toLockInfo(row));
+  }
+  return locks;
+}
+
+/**
+ * ВСЕ закрытые подачи, которые держат день. Чтобы день стал правиться, снять замок нужно со всех: снятие одной
+ * открывает следующую (табель отдела и личный табель руководителя, например).
+ */
+export async function listLockingApprovalsForEmployeeDates(
+  pairs: readonly ITimesheetLockPair[],
+  exec?: DbExecutor,
+): Promise<Map<string, IApprovalLockInfo[]>> {
+  const locks = new Map<string, IApprovalLockInfo[]>();
+  for (const row of await loadOwningLockRows(pairs, exec)) {
+    const key = lockKey(Number(row.employee_id), row.work_date);
+    locks.set(key, [...(locks.get(key) ?? []), toLockInfo(row)]);
   }
   return locks;
 }

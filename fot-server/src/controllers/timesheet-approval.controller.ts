@@ -145,7 +145,7 @@ function respondVersionError(res: Response, err: unknown): boolean {
  * write-through сброс кэша роутера /api/timesheet их не покрывает — иначе сетка
  * (с блокировками дней) отдаётся из кэша ещё до 5 минут после отзыва/утверждения.
  */
-const invalidateTimesheetGridCaches = (): void =>
+export const invalidateTimesheetGridCaches = (): void =>
   invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today');
 
 async function emitTimesheetApprovalChanged(params: {
@@ -310,7 +310,7 @@ async function loadApprovalById(id: string): Promise<TimesheetApproval | null> {
  * для персональной подачи (department_id NULL) — пускаем самого автора (manager)
  * и всех, у кого scope='all' (admin/HR с data.scope.all).
  */
-async function ensureApprovalAccess(
+export async function ensureApprovalAccess(
   req: AuthenticatedRequest,
   approval: Pick<TimesheetApproval, 'department_id' | 'manager_employee_id'>,
 ): Promise<boolean> {
@@ -3352,7 +3352,32 @@ const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): 
 
 
 /** Максимальная длина причины открытия периода (как CANCEL_REASON_MAX_LENGTH в заявлениях). */
-const UNLOCK_REASON_MAX_LENGTH = 500;
+export const UNLOCK_REASON_MAX_LENGTH = 500;
+
+/** После снятия замка: аудит и уведомления. details — причина и, при групповом открытии, откуда оно. */
+export async function announceApprovalOpened(
+  req: AuthenticatedRequest,
+  updated: TimesheetApproval,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_OPENED', {
+    department_id: updated.department_id,
+    manager_employee_id: updated.manager_employee_id,
+    start_date: updated.start_date,
+    end_date: updated.end_date,
+    status: updated.status,
+    ...details,
+  });
+
+  void emitTimesheetApprovalChanged({
+    approvalId: updated.id,
+    departmentId: updated.department_id,
+    submittedBy: updated.submitted_by,
+    reviewerUserId: updated.reviewed_by ?? req.user.id,
+    action: 'open',
+    recipientKinds: ['submit', 'review', 'monitor'],
+  });
+}
 
 /**
  * Открыть закрытый период для правок. Статус подачи НЕ меняется — снимается только замок
@@ -3416,23 +3441,7 @@ const openPeriod = async (req: AuthenticatedRequest, res: Response): Promise<voi
       return;
     }
 
-    await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_OPENED', {
-      department_id: updated.department_id,
-      manager_employee_id: updated.manager_employee_id,
-      start_date: updated.start_date,
-      end_date: updated.end_date,
-      status: updated.status,
-      reason,
-    });
-
-    void emitTimesheetApprovalChanged({
-      approvalId: updated.id,
-      departmentId: updated.department_id,
-      submittedBy: updated.submitted_by,
-      reviewerUserId: updated.reviewed_by ?? req.user.id,
-      action: 'open',
-      recipientKinds: ['submit', 'review', 'monitor'],
-    });
+    await announceApprovalOpened(req, updated, { reason });
 
     invalidateTimesheetGridCaches();
     res.json({ success: true, data: updated });
@@ -3453,10 +3462,133 @@ class ClosePendingDecisionsError extends Error {
   }
 }
 
+/** Итог закрытия подачи: штатный отказ — со статусом и телом ответа, как отвечает роут. */
+export type TCloseApprovalResult =
+  | { ok: true; approval: TimesheetApproval }
+  | { ok: false; status: number; body: { success: false; error: string; code?: string; [key: string]: unknown } };
+
+/** Штатный отказ сборки редакции — те же статус и текст, что у ответа роута. */
+const captureVersionError = (err: unknown): Extract<TCloseApprovalResult, { ok: false }> | null => {
+  let captured: Extract<TCloseApprovalResult, { ok: false }> | null = null;
+  let status = 500;
+  const collector = {
+    status(code: number) {
+      status = code;
+      return collector;
+    },
+    json(body: Extract<TCloseApprovalResult, { ok: false }>['body']) {
+      captured = { ok: false, status, body };
+      return collector;
+    },
+  };
+  return respondVersionError(collector as unknown as Response, err) ? captured : null;
+};
+
 /**
  * Закрыть период обратно. Берём те же advisory-локи (сотрудник, месяц), что и пишущие пути
  * табеля: иначе правка, начатая до закрытия, успела бы закоммититься уже после него.
+ * Доступ к подаче проверяет вызывающий. Непредвиденная ошибка — исключение.
  */
+export async function closeApprovalPeriod(
+  req: AuthenticatedRequest,
+  approval: TimesheetApproval,
+): Promise<TCloseApprovalResult> {
+  const id = approval.id;
+  const anchors = monthAnchorsInRange(approval.start_date, approval.end_date);
+  // Состав для advisory-локов читаем ДО транзакции: локи должны быть взяты раньше,
+  // чем зафиксируется snapshot REPEATABLE READ (см. timesheet-snapshot-tx.ts).
+  const lockSnapshot = await query<{ employee_id: number | string }>(
+    `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
+    [approval.id],
+  );
+  const lockPairs = lockSnapshot.flatMap(row => anchors.map(workDate => ({
+    employeeId: Number(row.employee_id),
+    workDate,
+  })));
+
+  let updated: TimesheetApproval | null = null;
+  try {
+    updated = await withTimesheetSnapshotTransaction(lockPairs, async client => {
+      const locked = await client.query<TimesheetApproval>(
+        'SELECT * FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      const current = locked.rows[0];
+      if (!current || current.unlocked_at == null) return null;
+
+      // Утверждённый табель с нерешёнными выходными под замок не возвращаем: решение
+      // осталось бы за замком, и часы выходного не дошли бы до редакции для 1С.
+      // Поданный закрывается свободно — решать выходные в нём замок не мешает.
+      if (current.status === 'approved') {
+        const pendingCount = await countPendingDecisionsForApproval(current, client);
+        if (pendingCount > 0) throw new ClosePendingDecisionsError(pendingCount);
+      }
+
+      const result = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals
+            SET unlocked_at = NULL,
+                unlocked_by = NULL,
+                unlock_reason = NULL,
+                updated_at = NOW()
+          WHERE id = $1
+            AND unlocked_at IS NOT NULL
+          RETURNING *`,
+        [id],
+      );
+      const row = result.rows[0] ?? null;
+      if (!row) return null;
+
+      // Официальный снимок создаётся только для утверждённого табеля: закрытие
+      // ещё не согласованного периода версии для 1С не порождает.
+      if (row.status === 'approved') {
+        await materializeVersion(client, toVersionApproval(row), 'close', req.user.id);
+        await clearVersionDirty(client, Number(row.id));
+      }
+      return row;
+    });
+  } catch (err) {
+    if (err instanceof ClosePendingDecisionsError) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          success: false,
+          error: 'Табель ждёт согласования выходных — закрыть можно после решения по ним',
+          code: 'PENDING_CORRECTIONS_EXIST',
+          pending_count: err.pendingCount,
+        },
+      };
+    }
+    const handled = captureVersionError(err);
+    if (handled) return handled;
+    throw err;
+  }
+
+  if (!updated) {
+    return { ok: false, status: 409, body: { success: false, error: 'Период уже закрыт', code: 'ALREADY_LOCKED' } };
+  }
+
+  await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_CLOSED', {
+    department_id: updated.department_id,
+    manager_employee_id: updated.manager_employee_id,
+    start_date: updated.start_date,
+    end_date: updated.end_date,
+    status: updated.status,
+  });
+
+  void emitTimesheetApprovalChanged({
+    approvalId: updated.id,
+    departmentId: updated.department_id,
+    submittedBy: updated.submitted_by,
+    reviewerUserId: updated.reviewed_by ?? req.user.id,
+    action: 'close',
+    recipientKinds: ['submit', 'review', 'monitor'],
+  });
+
+  invalidateTimesheetGridCaches();
+  return { ok: true, approval: updated };
+}
+
 const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -3470,97 +3602,12 @@ const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    const anchors = monthAnchorsInRange(approval.start_date, approval.end_date);
-    // Состав для advisory-локов читаем ДО транзакции: локи должны быть взяты раньше,
-    // чем зафиксируется snapshot REPEATABLE READ (см. timesheet-snapshot-tx.ts).
-    const lockSnapshot = await query<{ employee_id: number | string }>(
-      `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
-      [approval.id],
-    );
-    const lockPairs = lockSnapshot.flatMap(row => anchors.map(workDate => ({
-      employeeId: Number(row.employee_id),
-      workDate,
-    })));
-
-    let updated: TimesheetApproval | null = null;
-    try {
-      updated = await withTimesheetSnapshotTransaction(lockPairs, async client => {
-        const locked = await client.query<TimesheetApproval>(
-          'SELECT * FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
-          [id],
-        );
-        const current = locked.rows[0];
-        if (!current || current.unlocked_at == null) return null;
-
-        // Утверждённый табель с нерешёнными выходными под замок не возвращаем: решение
-        // осталось бы за замком, и часы выходного не дошли бы до редакции для 1С.
-        // Поданный закрывается свободно — решать выходные в нём замок не мешает.
-        if (current.status === 'approved') {
-          const pendingCount = await countPendingDecisionsForApproval(current, client);
-          if (pendingCount > 0) throw new ClosePendingDecisionsError(pendingCount);
-        }
-
-        const result = await client.query<TimesheetApproval>(
-          `UPDATE timesheet_approvals
-              SET unlocked_at = NULL,
-                  unlocked_by = NULL,
-                  unlock_reason = NULL,
-                  updated_at = NOW()
-            WHERE id = $1
-              AND unlocked_at IS NOT NULL
-            RETURNING *`,
-          [id],
-        );
-        const row = result.rows[0] ?? null;
-        if (!row) return null;
-
-        // Официальный снимок создаётся только для утверждённого табеля: закрытие
-        // ещё не согласованного периода версии для 1С не порождает.
-        if (row.status === 'approved') {
-          await materializeVersion(client, toVersionApproval(row), 'close', req.user.id);
-          await clearVersionDirty(client, Number(row.id));
-        }
-        return row;
-      });
-    } catch (err) {
-      if (err instanceof ClosePendingDecisionsError) {
-        res.status(409).json({
-          success: false,
-          error: 'Табель ждёт согласования выходных — закрыть можно после решения по ним',
-          code: 'PENDING_CORRECTIONS_EXIST',
-          pending_count: err.pendingCount,
-        });
-        return;
-      }
-      const handled = respondVersionError(res, err);
-      if (handled) return;
-      throw err;
-    }
-
-    if (!updated) {
-      res.status(409).json({ success: false, error: 'Период уже закрыт', code: 'ALREADY_LOCKED' });
+    const result = await closeApprovalPeriod(req, approval);
+    if (!result.ok) {
+      res.status(result.status).json(result.body);
       return;
     }
-
-    await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_CLOSED', {
-      department_id: updated.department_id,
-      manager_employee_id: updated.manager_employee_id,
-      start_date: updated.start_date,
-      end_date: updated.end_date,
-      status: updated.status,
-    });
-
-    void emitTimesheetApprovalChanged({
-      approvalId: updated.id,
-      departmentId: updated.department_id,
-      submittedBy: updated.submitted_by,
-      reviewerUserId: updated.reviewed_by ?? req.user.id,
-      action: 'close',
-      recipientKinds: ['submit', 'review', 'monitor'],
-    });
-
-    invalidateTimesheetGridCaches();
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: result.approval });
   } catch (err) {
     console.error('timesheet-approval.closePeriod error:', err);
     res.status(500).json({ success: false, error: 'Ошибка закрытия табеля' });

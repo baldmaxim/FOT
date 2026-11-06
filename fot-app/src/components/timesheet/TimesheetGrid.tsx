@@ -90,6 +90,22 @@ export interface ITimesheetGridProps {
    * «Выработка, ₽» у объекта, «Доля», «Сумма» и «Итого по бригаде».
    */
   objectsSalary?: ITimesheetObjectsSalary;
+  /** Заголовок вместо стандартного: на вкладке кадров «Выходные» — название отдела. */
+  headerTitle?: string;
+  /** Кнопки справа в шапке сетки. */
+  headerActions?: ReactNode;
+  /** Легенда одна на экран, если сеток несколько. */
+  hideLegend?: boolean;
+  /** Без строки-разделителя с отделом: он уже в шапке. */
+  hideSectionLabels?: boolean;
+  /** Что значит рамка дня из problemDates.red: строка легенды и подпись метки у ФИО. */
+  problemLegendLabel?: string;
+  /** Подсказка дня из problemDates.red. */
+  problemTitle?: string;
+  /** Метка рядом с ФИО. */
+  employeeBadge?: (employeeId: number) => string | null;
+  /** Клик по ФИО ничего не открывает: без кнопки «Детализация» и подсветки. */
+  hideEmployeeDetails?: boolean;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
   onBulkBlockedSelectionAttempt?: (reason: BulkBlockReason) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
@@ -527,6 +543,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   departmentName,
   salary,
   objectsSalary,
+  headerTitle,
+  headerActions,
+  hideLegend = false,
+  hideSectionLabels = false,
+  problemLegendLabel,
+  problemTitle,
+  employeeBadge,
+  hideEmployeeDetails = false,
   onBulkSelectionChange,
   onBulkBlockedSelectionAttempt,
   onEmployeeClick,
@@ -1115,8 +1139,24 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       <div className="ts-legend-item">
         <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Превышение лимита или проблема объекта
       </div>
+      {problemLegendLabel && (
+        <div className="ts-legend-item">
+          <span className="ts-legend-dot ts-legend-dot--problem" />{problemLegendLabel}
+        </div>
+      )}
     </div>
   );
+  const withProblemTitle = (title: string | undefined, cellKey: string): string | undefined => (
+    problemTitle && problemDates?.red?.has(cellKey)
+      ? [title, problemTitle].filter(Boolean).join(' • ')
+      : title
+  );
+  const renderEmployeeBadge = (employeeId: number): ReactNode => {
+    const badge = employeeBadge?.(employeeId);
+    return badge
+      ? <span className="ts-employee-badge ts-employee-badge--problem" title={problemLegendLabel}>{badge}</span>
+      : null;
+  };
 
   if (compact && viewMode === 'objects') {
     const firstDay = days[0] ?? 1;
@@ -1268,10 +1308,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     return (
       <div className="ts-table-container">
         <div className="ts-table-header-bar ts-table-header-bar--mobile">
-          <h3 className="ts-table-title">Сотрудники</h3>
+          <h3 className="ts-table-title">{headerTitle ?? 'Сотрудники'}</h3>
           <div className="ts-mobile-list-hint">
             {employeeRows.length > 0 ? `${employeeRows.length} чел. • откройте дни по сотруднику` : 'Нет данных за месяц'}
           </div>
+          {headerActions}
         </div>
 
         <div className="ts-mobile-list">
@@ -1281,7 +1322,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             const employeeIndex = index + 1;
             const displayName = formatTimesheetEmployeeName(row.employee.full_name);
             const stat = employeeStatsMap.get(rowKey);
-            const sectionLabel = resolveSectionLabel(
+            const sectionLabel = hideSectionLabels ? null : resolveSectionLabel(
               row,
               index > 0 ? employeeRows[index - 1] : null,
               departmentName,
@@ -1303,6 +1344,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <div className="ts-mobile-card-name-block">
                       <div className="ts-mobile-card-name" title={row.employee.full_name}>{displayName}</div>
                       {renderTimesheetObject(row.employee)}
+                      {renderEmployeeBadge(row.employee.id)}
                     </div>
                     {row.employee.transferred_out_date && showTransferBadge(row.employee) && (
                       <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
@@ -1349,7 +1391,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     </button>
                   </div>
                   <div className="ts-mobile-header-actions">
-                    {!viewOnly && (
+                    {!viewOnly && !hideEmployeeDetails && (
                       <button
                         type="button"
                         className="ts-mobile-chip-btn"
@@ -1432,7 +1474,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             key={day}
                             type="button"
                             className={`${baseCls}${inactiveCls}${preHolidayCls}${problemCls}${outCls} ts-mobile-day-btn${viewOnly ? ' ts-day--readonly' : ''}`}
-                            title={title}
+                            title={withProblemTitle(title, cellKey)}
                             disabled={inactive}
                             // Только просмотр — не disabled: у браузера свой серый цвет, цвета клеток должны остаться.
                             aria-disabled={viewOnly || undefined}
@@ -1719,9 +1761,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
   return (
     <div className="ts-table-container">
-      <div className="ts-table-header-bar">
-        <h3 className="ts-table-title">Табель учёта рабочего времени</h3>
-        {tableLegend}
+      <div className={`ts-table-header-bar${headerActions ? ' ts-table-header-bar--with-actions' : ''}`}>
+        <h3 className="ts-table-title">{headerTitle ?? 'Табель учёта рабочего времени'}</h3>
+        {!hideLegend && tableLegend}
+        {headerActions}
       </div>
 
       <div className="ts-table-scroll" ref={tableScrollRef}>
@@ -1797,7 +1840,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               const employeeIndex = index + 1;
               const displayName = formatTimesheetEmployeeName(row.employee.full_name);
               const expanded = activeExpandedEmployeeIds.has(rowKey);
-              const sectionLabel = resolveSectionLabel(
+              const sectionLabel = hideSectionLabels ? null : resolveSectionLabel(
                 row,
                 index > 0 ? employeeRows[index - 1] : null,
                 departmentName,
@@ -1824,8 +1867,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   )}
                   <tr>
                     <td
-                      className={`ts-col-sticky ts-employee-cell${bulkEditMode ? ' ts-employee-cell--bulk' : ''}`}
-                      onClick={bulkEditMode || viewOnly ? undefined : () => onEmployeeClick(row.employee)}
+                      className={`ts-col-sticky ts-employee-cell${bulkEditMode || hideEmployeeDetails ? ' ts-employee-cell--bulk' : ''}`}
+                      onClick={bulkEditMode || viewOnly || hideEmployeeDetails ? undefined : () => onEmployeeClick(row.employee)}
                     >
                       <div className="ts-employee-cell-content">
                         {row.hasExpandableObjects ? (
@@ -1850,6 +1893,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </div>
                           {renderTimesheetObject(row.employee)}
                         </div>
+                        {renderEmployeeBadge(row.employee.id)}
                         {row.employee.transferred_out_date && showTransferBadge(row.employee) && (
                           <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
                             Пер. {formatBadgeDate(row.employee.transferred_out_date)}
@@ -1918,7 +1962,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         ? [title, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки']
                           .filter(Boolean)
                           .join(' • ')
-                        : title;
+                        : withProblemTitle(title, cellKey);
 
                       return (
                         <td

@@ -28,6 +28,7 @@ vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) 
 }));
 
 const {
+  listWeekendsByBranch,
   listWeekendsWithoutCorrection,
   STAFF_WEEKENDS_BRANCH_IDS,
   STAFF_WEEKENDS_MAX_MONTHS,
@@ -252,5 +253,87 @@ describe('listWeekendsWithoutCorrection', () => {
     const rows = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
 
     expect(rows.map(row => row.full_name)).toEqual(['Абдуллаев', 'Яковлев']);
+  });
+});
+
+describe('listWeekendsByBranch', () => {
+  it('каждый отдел своей строкой, в том числе без людей, порядок — как в охвате', async () => {
+    givenMembers({ [GENERAL]: [{ employee_id: 1 }] });
+    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-04'));
+    givenDetails([{ id: 1, full_name: 'Джумаев А. Х.', position: 'Начальник участка' }]);
+
+    expect(await listWeekendsByBranch('2026-10', BOTH)).toEqual([
+      { id: LINE, name: 'ЛИНИЯ', rows: [] },
+      {
+        id: GENERAL,
+        name: 'ЛИНИЯ-Общестрой',
+        rows: [{ employee_id: 1, full_name: 'Джумаев А. Х.', position: 'Начальник участка', days: ['2026-10-04', '2026-10-11'] }],
+      },
+    ]);
+  });
+
+  it('часов СКУД в ответе нет: в сводке не вычтен обед, часы показывает табель', async () => {
+    givenMembers({ [LINE]: [{ employee_id: 1 }] });
+    givenDays(weekendDay(1, '2026-10-04'));
+    givenDetails([{ id: 1, full_name: 'Иванов' }]);
+
+    const [branch] = await listWeekendsByBranch('2026-10', [LINE]);
+
+    expect(branch?.rows[0]).not.toHaveProperty('total_minutes');
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('skud_daily_summary'))).toBe(false);
+  });
+
+  it('перевод между отделами: строка в каждом со своими днями, проверка одна на человека', async () => {
+    givenMembers({
+      [LINE]: [{ employee_id: 1, transferred_out_date: '2026-10-16' }],
+      [GENERAL]: [{ employee_id: 1, joined_date: '2026-10-16', joined_via_transfer: true }],
+    });
+    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-25'));
+    givenDetails([{ id: 1, full_name: 'Иванов' }]);
+
+    const [line, general] = await listWeekendsByBranch('2026-10', BOTH);
+
+    expect(line?.rows[0]?.days).toEqual(['2026-10-11']);
+    expect(general?.rows[0]?.days).toEqual(['2026-10-25']);
+    expect(h.validate).toHaveBeenCalledTimes(1);
+    expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [1] });
+  });
+
+  it('уволенный — в отделе, где был, с днями до даты увольнения', async () => {
+    givenMembers({ [GENERAL]: [{ employee_id: 2, transferred_out_date: '2026-10-31' }] });
+    givenDays(weekendDay(2, '2026-10-25'), weekendDay(2, '2026-10-31'));
+    givenDetails([{ id: 2, full_name: 'Тошмуродов' }]);
+
+    const [branch] = await listWeekendsByBranch('2026-10', [GENERAL]);
+
+    expect(branch?.rows[0]?.days).toEqual(['2026-10-25']);
+    expect(h.memberships).toHaveBeenCalledWith(GENERAL, '2026-10-01', '2026-10-31', undefined, { firedInDismissalMonth: true });
+  });
+
+  it('никого нет: отделы всё равно приходят, сотрудников не запрашиваем', async () => {
+    givenMembers({});
+    givenDetails([]);
+
+    expect(await listWeekendsByBranch('2026-10', BOTH)).toEqual([
+      { id: LINE, name: 'ЛИНИЯ', rows: [] },
+      { id: GENERAL, name: 'ЛИНИЯ-Общестрой', rows: [] },
+    ]);
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('FROM employees'))).toBe(false);
+  });
+
+  it('вне охвата — пусто и без запросов', async () => {
+    expect(await listWeekendsByBranch('2026-10', [])).toEqual([]);
+    expect(h.memberships).not.toHaveBeenCalled();
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('порядок внутри отдела — по ФИО', async () => {
+    givenMembers({ [LINE]: [{ employee_id: 1 }, { employee_id: 2 }] });
+    givenDays(weekendDay(1, '2026-10-04'), weekendDay(2, '2026-10-04'));
+    givenDetails([{ id: 1, full_name: 'Яковлев' }, { id: 2, full_name: 'Абдуллаев' }]);
+
+    const [branch] = await listWeekendsByBranch('2026-10', [LINE]);
+
+    expect(branch?.rows.map(row => row.full_name)).toEqual(['Абдуллаев', 'Яковлев']);
   });
 });

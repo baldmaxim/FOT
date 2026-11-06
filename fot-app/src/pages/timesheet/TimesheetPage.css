@@ -1201,6 +1201,11 @@
   color: var(--text-primary);
 }
 
+.ts-table-header-bar--with-actions {
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+
 .ts-table-header-bar--mobile {
   flex-direction: column;
   align-items: flex-start;
@@ -3127,6 +3132,11 @@
   color: var(--text-tertiary);
 }
 
+.ts-employee-badge--problem {
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+
 /* ===== Exclude employee modal ===== */
 .ts-exclude-modal-overlay {
   position: fixed;
@@ -3380,12 +3390,29 @@
 [data-theme="light"] .ts-day--in-approved-period {
   box-shadow: inset 0 0 0 9999px rgba(34, 197, 94, 0.20);
 }
+/* Заливка закрытого дня объявлена позже рамки и перекрыла бы её: рамка — первым слоем. */
+.ts-day--problem-red.ts-day--in-submitted-period {
+  box-shadow: inset 0 0 0 2px var(--error), inset 0 0 0 9999px rgba(59, 130, 246, 0.16);
+}
+.ts-day--problem-red.ts-day--in-approved-period {
+  box-shadow: inset 0 0 0 2px var(--error), inset 0 0 0 9999px rgba(34, 197, 94, 0.16);
+}
+[data-theme="light"] .ts-day--problem-red.ts-day--in-submitted-period {
+  box-shadow: inset 0 0 0 2px var(--error), inset 0 0 0 9999px rgba(59, 130, 246, 0.20);
+}
+[data-theme="light"] .ts-day--problem-red.ts-day--in-approved-period {
+  box-shadow: inset 0 0 0 2px var(--error), inset 0 0 0 9999px rgba(34, 197, 94, 0.20);
+}
 
 @keyframes ts-day-flash {
   0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
   20%, 80% { box-shadow: inset 0 0 0 3px var(--primary); }
 }
 .ts-day--flash { animation: ts-day-flash 1.5s ease-in-out 1; }
+
+.ts-legend-dot--problem {
+  box-shadow: inset 0 0 0 2px var(--error);
+}
 
 .ts-legend-dot--corrected {
   position: relative;

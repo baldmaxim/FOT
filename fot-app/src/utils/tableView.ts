@@ -44,8 +44,6 @@ export interface IRegistryColumn<Row> extends ITableColumn<Row> {
   width?: number;
   /** Одной строкой (даты, суммы); иначе текст переносится до двух строк. */
   nowrap?: boolean;
-  /** Переносится весь текст, без обрезки на двух строках: список дат «Выходных». */
-  wrap?: boolean;
   /** Число — по правому краю. */
   numeric?: boolean;
 }
