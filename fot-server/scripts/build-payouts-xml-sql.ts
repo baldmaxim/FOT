@@ -5,8 +5,9 @@
  *
  * Разбор — payroll-1c-payouts.month-xml.ts (руководство один раз, ключи и хеш — как у кнопки «Загрузить из 1С»).
  * Сотрудник — по физлицу (ФИО + id_all), кандидаты — matchPayoutLines (подрядчик в месяце не кандидат):
- * авто по id_all → один кандидат по ФИО → тёзки: «работал в месяце» → ранее подтверждён под этим ФИО в
- * «Перечислено (1С)» → иначе без сотрудника (лист «Тёзки»). Нет в ФОТ — без сотрудника (лист «Не найдены»).
+ * авто по id_all → один кандидат по ФИО → тёзки: «работал в месяце» (по датам приёма и увольнения; уволенный без даты
+ * увольнения — не работал) → ранее подтверждён под этим ФИО в «Перечислено (1С)» → иначе без сотрудника (лист «Тёзки»).
+ * Нет в ФОТ — без сотрудника (лист «Не найдены»).
  *
  * Догрузка: ведомости, уже лежащие в БД с тем же ГУИДом и хешем, пропускаются; тот же ГУИД с другим содержимым или
  * тот же номер с датой под другим ГУИДом — ошибка.
@@ -139,13 +140,15 @@ interface IPerson {
   entries: Array<{ doc: IPayout1cMonthDocument; line: IPayout1cLine }>;
 }
 
-const decide = (candidates: readonly IPayoutCandidate[], autoId: number | null, earlier: ReadonlySet<number>): IDecision => {
+const decide = (
+  candidates: readonly IPayoutCandidate[], autoId: number | null, earlier: ReadonlySet<number>, firedNoDate: ReadonlySet<number>,
+): IDecision => {
   if (autoId !== null) return { employeeId: autoId, kind: 'id_all' };
   if (candidates.length === 0) return { employeeId: null, kind: 'none' };
   if (candidates.length === 1) return { employeeId: candidates[0].employee_id, kind: 'single' };
   let pool = [...candidates];
   const stages: Array<[DecisionKind, (c: IPayoutCandidate) => boolean]> = [
-    ['worked', c => c.worked_in_month],
+    ['worked', c => c.worked_in_month && !firedNoDate.has(c.employee_id)],
     ['earlier', c => earlier.has(c.employee_id)],
   ];
   for (const [kind, keep] of stages) {
@@ -235,8 +238,14 @@ const main = async (): Promise<void> => {
     }
     const candidatesOf = (person: IPerson): IPayoutCandidate[] => matches.get(person.key)?.candidates ?? [];
     const earlierOf = (person: IPerson): Set<number> => earlierByName.get(normalizePayoutName(person.fullName)) ?? new Set();
+    // Уволенный без даты увольнения (старые карточки) по датам «работал в любом месяце» — для тёзок это не так.
+    const candidateIds = [...new Set([...persons.values()].flatMap(person => candidatesOf(person).map(c => c.employee_id)))];
+    const firedNoDate = new Set((await query<{ id: number }>(
+      `SELECT id FROM employees WHERE id = ANY($1::int[]) AND employment_status = 'fired' AND dismissal_date IS NULL`,
+      [candidateIds],
+    )).map(row => Number(row.id)));
     const decisions = new Map([...persons.values()].map(person => [
-      person.key, decide(candidatesOf(person), matches.get(person.key)?.auto_employee_id ?? null, earlierOf(person)),
+      person.key, decide(candidatesOf(person), matches.get(person.key)?.auto_employee_id ?? null, earlierOf(person), firedNoDate),
     ]));
     const decisionOf = (person: IPerson): IDecision => {
       const decision = decisions.get(person.key);
@@ -411,6 +420,7 @@ const main = async (): Promise<void> => {
     const personDocs = (person: IPerson) => person.entries.map(entry => `${entry.doc.docNumber} от ${ruDate(entry.doc.docDate)}`).join('; ');
     const candidateText = (list: readonly IPayoutCandidate[]) => list.map(c => (
       `${c.employee_id} ${c.full_name} — ${c.department ?? 'без отдела'}${c.worked_in_month ? '' : ', не работал в месяце'}`
+      + `${firedNoDate.has(c.employee_id) ? ', уволен без даты увольнения' : ''}`
     )).join('\n');
 
     const notFound: unknown[][] = [['ФИО 1С', 'Сумма', 'Виды', 'В ФОТ под этим ФИО', 'Ведомости']];
