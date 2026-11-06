@@ -11,6 +11,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { addStay, deleteStay, getStay, updateStay } from '../services/dormitory-stays.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
+import { listHousingMonthAmounts } from '../services/payroll/payroll-housing-month.service.js';
 import { listHousingAllowances } from '../services/payroll/payroll-housing.service.js';
 import {
   canWritePayrollRegistryEmployee,
@@ -22,6 +23,7 @@ import { dormitoryStayAuditDetails, dormitoryStayChanged, parseStayFields } from
 import {
   handlePayrollZodError,
   parsePayrollDictionaryId,
+  parsePayrollMonthsQuery,
   payrollEmployeeIdSchema,
   payrollRegistryTermsPeriod,
   withCanEdit,
@@ -75,6 +77,27 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     if (handlePayrollZodError(err, res)) return;
     console.error('payrollHousing.list error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения списка' });
+  }
+};
+
+/**
+ * GET /api/payroll/housing-allowances/by-month?months=… — «Доплата за месяц»: квартира сотрудника в каждом месяце с
+ * суммой за месяц из расчёта ФОТ (listHousingMonthAmounts). Нужен список месяцев: без него и all — 400.
+ */
+const monthAmounts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const months = parsePayrollMonthsQuery(req.query.months);
+    if (months === null || months === 'all') {
+      res.status(400).json({ success: false, error: 'Выберите месяц' });
+      return;
+    }
+    const [scope, canEdit] = await Promise.all([resolvePayrollStaffScope(req), resolvePayrollEditPredicate(req)]);
+    const rows = await listHousingMonthAmounts(scope, months, req);
+    res.json({ success: true, data: withCanEdit(rows, canEdit) });
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('payrollHousing.monthAmounts error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка расчёта доплаты за месяц' });
   }
 };
 
@@ -158,4 +181,4 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-export const payrollHousingController = { list, add, update, remove };
+export const payrollHousingController = { list, monthAmounts, add, update, remove };

@@ -20,7 +20,7 @@ export interface IHousingAllowanceRow {
   full_name: string;
   department: string | null;
   position: string | null;
-  /** ₽/мес, numeric строкой. */
+  /** Ставка ₽/день (миграция 339), numeric строкой. */
   amount: string;
   /** YYYY-MM-DD. */
   check_in: string;
@@ -28,6 +28,17 @@ export interface IHousingAllowanceRow {
   check_out: string | null;
   address: string | null;
   can_edit: boolean;
+}
+
+/**
+ * Квартира сотрудника в месяце для «Доплаты за месяц»: последнее проживание месяца и сумма за месяц из расчёта ФОТ —
+ * та же, что у квартиры в «Расчётах» (открытый месяц — по вчера МСК).
+ */
+export interface IHousingMonthRow extends IHousingAllowanceRow {
+  /** YYYY-MM. */
+  month: string;
+  /** Сумма за месяц, numeric строкой; null — месяц не посчитан (будущий, 1-е число, больше 12 месяцев). */
+  month_amount: string | null;
 }
 
 export type PayrollSupplementKind = 'planned' | 'one_time';
@@ -189,6 +200,10 @@ export const payrollRegistryService = {
   /** months — registryMonthsParam выбора. */
   listHousing: (months: string, signal?: AbortSignal) =>
     list<IHousingAllowanceRow>(withMonths('/payroll/housing-allowances', months), signal),
+
+  /** «Доплата за месяц»: квартиры по месяцам с суммой за месяц; months — registryMonthsParam выбора (не 'all'). */
+  listHousingByMonth: (months: string, signal?: AbortSignal) =>
+    list<IHousingMonthRow>(withMonths('/payroll/housing-allowances/by-month', months), signal),
 
   /** Пересечение с другим проживанием или «Доплатой за общежитие» — ApiError 409. */
   addHousing: async (employeeId: number, payload: IHousingAllowancePayload): Promise<void> => {

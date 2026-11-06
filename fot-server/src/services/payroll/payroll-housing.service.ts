@@ -16,7 +16,7 @@ export interface IHousingAllowanceRow {
   full_name: string;
   department: string | null;
   position: string | null;
-  /** ₽/мес, numeric строкой. */
+  /** Ставка ₽/день (миграция 339), numeric строкой. */
   amount: string;
   /** YYYY-MM-DD. */
   check_in: string;

@@ -41,7 +41,7 @@ interface ISupplementRegistryProps {
   onClose: () => void;
 }
 
-/** Вид операции, а не вкладка: из «Все доплаты» правятся строки всех видов. */
+/** Вид операции, а не вкладка: из «Доплаты за месяц» правятся строки всех видов. */
 type EditorState =
   | { mode: 'add-one-time' }
   | { mode: 'add-planned' }
@@ -58,9 +58,10 @@ const canEditHousing = (row: IHousingAllowanceRow): boolean => row.can_edit;
 
 /**
  * «Справочник» → «Доплата», вкладки одного окна; месяц общий, поиск и фильтры столбцов у каждой свои.
- * «Все доплаты» — все доплаты выбранных месяцев: плановые (их период задевает месяц), разовые за месяц и квартиры
- * «Проживания» («Плановая» с основанием «Квартира»); кнопка добавления — разовая (за месяц — сколько угодно, у каждой
- * основание). ФИО, отдел и должность — один раз, доплаты сотрудника (плановые, квартира, разовые) — строками под ним.
+ * «Доплата за месяц» — все доплаты выбранных месяцев: плановые (их период задевает месяц), разовые за месяц и квартиры
+ * «Проживания» («Плановая» с основанием «Квартира», строка на месяц с суммой за месяц из расчёта ФОТ — как в
+ * «Расчётах»); кнопка добавления — разовая (за месяц — сколько угодно, у каждой основание). ФИО, отдел и должность —
+ * один раз, доплаты сотрудника (плановые, квартира, разовые) — строками под ним.
  * «Плановые доплаты» — кому назначена плановая (та же, что в окне сотрудника) и на какой период; ✎ и 🗑 — у любого
  * периода (миграция 337). «Квартира» — те же записи, что во вкладке кадров «Проживание» (миграция 320): ставка за день
  * (миграция 339), в окне сотрудника «Компенсация → Проживание» — только показ. ✎ и 🗑 у строки — те же окна и правила
@@ -92,9 +93,15 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
     queryFn: ({ signal }) => payrollRegistryService.listHousing(months.param, signal),
     staleTime: 0,
   });
+  // «Доплата за месяц»: квартира в каждом месяце с суммой за месяц — сервер считает её расчётом ФОТ.
+  const housingByMonth = useQuery({
+    queryKey: [...PAYROLL_REGISTRY_KEYS.housing, 'by-month', months.param],
+    queryFn: ({ signal }) => payrollRegistryService.listHousingByMonth(months.param, signal),
+    staleTime: 0,
+  });
   const rows = useMemo(
-    () => buildSupplementRegistryRows(supplements.data, housing.data, months.value),
-    [supplements.data, housing.data, months.value],
+    () => buildSupplementRegistryRows(supplements.data, housingByMonth.data, months.value),
+    [supplements.data, housingByMonth.data, months.value],
   );
   const plannedRows = useMemo(
     () => supplements.data?.filter(row => row.kind === 'planned' && supplementInMonths(row, months.value)),
@@ -108,7 +115,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
   };
   const handleDelete = (row: ISupplementRegistryRow) => {
     if (row.supplement) void removeSupplement(row.supplement);
-    else if (row.housing) void removeHousing(row.housing);
+    else if (row.housing) void removeHousing(row.housing, row.key);
   };
   const tabPanelProps = (key: SupplementTab) => ({
     className: styles.tabPanel,
@@ -130,12 +137,12 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
 
       <div {...tabPanelProps('all')}>
         <RegistryPanel
-          label="Доплата"
+          label="Доплата за месяц"
           columns={SUPPLEMENT_COLUMNS}
           rows={rows}
-          isLoading={supplements.isLoading || housing.isLoading}
-          isError={supplements.isError || housing.isError}
-          onRetry={() => { void supplements.refetch(); void housing.refetch(); }}
+          isLoading={supplements.isLoading || housingByMonth.isLoading}
+          isError={supplements.isError || housingByMonth.isError}
+          onRetry={() => { void supplements.refetch(); void housingByMonth.refetch(); }}
           rowKey={rowKey}
           rowLabel={rowName}
           searchText={rowName}

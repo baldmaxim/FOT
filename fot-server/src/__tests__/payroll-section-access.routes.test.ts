@@ -108,6 +108,7 @@ const ROUTES = [
   '/api/payroll/rates',
   '/api/payroll/dormitory-stays',
   '/api/payroll/housing-allowances',
+  '/api/payroll/housing-allowances/by-month?months=2026-10',
   '/api/payroll/supplements',
   '/api/payroll/compensation-stops',
   '/api/payroll/staff-deductions',
@@ -137,7 +138,7 @@ describe('раздел «Зарплата» по списку', () => {
     }
     expect(h.calls).toEqual([
       'terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll',
-      'housing.list', 'supplements.list', 'stops.list', 'staffDeductions.list', 'subkinds.listKindTree',
+      'housing.list', 'housing.monthAmounts', 'supplements.list', 'stops.list', 'staffDeductions.list', 'subkinds.listKindTree',
     ]);
   });
 

@@ -14,6 +14,10 @@ vi.mock('../services/payroll/payroll-scope.service.js', () => payrollScope);
 const housing = vi.hoisted(() => ({ listHousingAllowances: vi.fn() }));
 vi.mock('../services/payroll/payroll-housing.service.js', () => housing);
 
+// «Доплата за месяц»: квартира с суммой из расчёта ФОТ.
+const housingMonth = vi.hoisted(() => ({ listHousingMonthAmounts: vi.fn() }));
+vi.mock('../services/payroll/payroll-housing-month.service.js', () => housingMonth);
+
 // «Доплата за проживание» пишет квартиры «Проживания» (миграция 320).
 const stays = vi.hoisted(() => ({
   getStay: vi.fn(), addStay: vi.fn(), updateStay: vi.fn(), deleteStay: vi.fn(), getEmployeeState: vi.fn(),
@@ -157,6 +161,55 @@ describe('месяцы в «Доплате за проживание» и «Уд
       expect(res.statusCode, JSON.stringify(months)).toBe(400);
     }
     expect(deductions.listPayrollDeductions).not.toHaveBeenCalled();
+  });
+});
+
+describe('«Доплата за месяц»: квартира с суммой за месяц', () => {
+  const monthsFrom = (count: number) => Array.from(
+    { length: count },
+    (_, index) => new Date(Date.UTC(2024, 10 + index, 1)).toISOString().slice(0, 7),
+  );
+
+  it('без months и all — 400, расчёт не идёт', async () => {
+    for (const query of [{}, { months: 'all' }, { months: '2026-13' }, { months: '' }]) {
+      const res = makeRes();
+      await housingC.monthAmounts(makeReq({ query: query as never }), res);
+      expect(res.statusCode, JSON.stringify(query)).toBe(400);
+    }
+    expect(housingMonth.listHousingMonthAmounts).not.toHaveBeenCalled();
+  });
+
+  it('месяцы без повторов по возрастанию, охват «штата зарплаты», can_edit по строке', async () => {
+    housingMonth.listHousingMonthAmounts.mockResolvedValue([
+      { id: 7, employee_id: 42, full_name: 'Каримов Акмал', amount: '630.00', month: '2026-10', month_amount: '19530.00' },
+      { id: 8, employee_id: 99, full_name: 'Сам Себе', amount: '630.00', month: '2026-10', month_amount: null },
+    ]);
+    const req = makeReq({ query: { months: '2026-10,2026-09,2026-10' } });
+    const res = makeRes();
+    await housingC.monthAmounts(req, res);
+    expect(housingMonth.listHousingMonthAmounts).toHaveBeenCalledWith(SCOPE, ['2026-09', '2026-10'], req);
+    expect(res.body.data.map((row: { month_amount: string | null; can_edit: boolean }) => [row.month_amount, row.can_edit]))
+      .toEqual([['19530.00', true], [null, false]]);
+  });
+
+  it('все 37 месяцев пикера — 200 (не «Слишком много месяцев»); 38 — 400', async () => {
+    housingMonth.listHousingMonthAmounts.mockResolvedValue([]);
+    const all = makeRes();
+    await housingC.monthAmounts(makeReq({ query: { months: monthsFrom(37).join(',') } }), all);
+    expect(all.statusCode).toBe(200);
+    expect((housingMonth.listHousingMonthAmounts.mock.calls[0][1] as string[])).toHaveLength(37);
+    const tooMany = makeRes();
+    await housingC.monthAmounts(makeReq({ query: { months: monthsFrom(38).join(',') } }), tooMany);
+    expect(tooMany.statusCode).toBe(400);
+  });
+
+  it('ошибка расчёта — 500', async () => {
+    housingMonth.listHousingMonthAmounts.mockRejectedValue(new Error('boom'));
+    const res = makeRes();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await housingC.monthAmounts(makeReq({ query: { months: '2026-10' } }), res);
+    spy.mockRestore();
+    expect(res.statusCode).toBe(500);
   });
 });
 

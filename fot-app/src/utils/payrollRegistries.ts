@@ -3,6 +3,7 @@ import type {
   ICompensationStop,
   IDormitoryStayPeriod,
   IHousingAllowanceRow,
+  IHousingMonthRow,
   IOvertimeStop,
   IPayrollSupplementRow,
   PayrollSupplementKind,
@@ -86,15 +87,18 @@ export const HOUSING_COLUMNS: ReadonlyArray<IRegistryColumn<IHousingAllowanceRow
 ];
 
 /**
- * Вид строки общей таблицы «Доплата»: плановая, разовая или квартира «Проживания». 'apartment' — внутренний:
+ * Вид строки «Доплаты за месяц»: плановая, разовая или квартира «Проживания». 'apartment' — внутренний:
  * ✎ и 🗑 открывают окно квартиры, а на экране и в xlsx это «Плановая» с основанием «Квартира».
  */
 export type SupplementRowKind = PayrollSupplementKind | 'apartment';
 
-/** Основание строки квартиры в общей таблице «Доплата»: сумма у неё — ставка за день, а не за месяц. */
-export const APARTMENT_REASON = 'Квартира, ₽/день';
+/** Основание строки квартиры в «Доплате за месяц»: сумма у неё — за месяц из расчёта ФОТ. */
+export const APARTMENT_REASON = 'Квартира';
 
-/** Поля периода доплаты: у разовой — месяц, у плановой и квартиры — даты «с — по» включительно. */
+/** Месячная строка: разовая и квартира (сумма за месяц); у плановой — период «с — по». */
+const isMonthRow = (kind: SupplementRowKind): boolean => kind !== 'planned';
+
+/** Поля периода доплаты: у разовой и квартиры — месяц, у плановой — даты «с — по» включительно. */
 interface ISupplementPeriodFields {
   kind: SupplementRowKind;
   month: string | null;
@@ -102,16 +106,16 @@ interface ISupplementPeriodFields {
   date_to: string | null;
 }
 
-/** Период доплаты: плановая и квартира — «01.10.2026 – 31.12.2026» или «с 01.10.2026», разовая — «октябрь 2026». */
+/** Период доплаты: плановая — «01.10.2026 – 31.12.2026» или «с 01.10.2026», разовая и квартира — «октябрь 2026». */
 export const supplementPeriod = (row: ISupplementPeriodFields): string => (
-  row.kind === 'one_time'
+  isMonthRow(row.kind)
     ? (row.month ? formatMonthLabel(row.month) : '—')
     : row.date_to ? `${formatDate(row.date_from)} – ${formatDate(row.date_to)}` : `с ${formatDate(row.date_from)}`
 );
 
-/** Начало периода для сортировки: разовая — с первого числа месяца, в одном порядке с плановыми. */
+/** Начало периода для сортировки: разовая и квартира — с первого числа месяца, в одном порядке с плановыми. */
 const supplementPeriodSort = (row: ISupplementPeriodFields): string | null => (
-  row.kind === 'one_time' ? (row.month ? `${row.month}-01` : null) : row.date_from
+  isMonthRow(row.kind) ? (row.month ? `${row.month}-01` : null) : row.date_from
 );
 
 export const SUPPLEMENT_KIND_LABELS: Record<PayrollSupplementKind, string> = {
@@ -123,18 +127,21 @@ export const SUPPLEMENT_KIND_LABELS: Record<PayrollSupplementKind, string> = {
 const supplementKindLabel = (kind: SupplementRowKind): string => SUPPLEMENT_KIND_LABELS[kind === 'apartment' ? 'planned' : kind];
 
 /**
- * Строка общей таблицы «Доплата» за выбранные месяцы: плановая или разовая доплата либо квартира «Проживания».
+ * Строка «Доплаты за месяц» за выбранные месяцы: плановая или разовая доплата либо квартира «Проживания» в месяце.
  * Исходная запись — в supplement или housing: ✎ и 🗑 работают с ней.
  */
 export interface ISupplementRegistryRow extends ISupplementPeriodFields {
-  /** planned-<id> / once-<id> / apartment-<id> — id таблиц могут совпасть. */
+  /** planned-<id> / once-<id> / apartment-<id>-<YYYY-MM> — id таблиц могут совпасть, квартира — строка на месяц. */
   key: string;
   employee_id: number;
   full_name: string;
   department: string | null;
   position: string | null;
-  /** Плановая — ₽/мес, разовая — ₽, квартира — ставка ₽/день; numeric строкой. */
-  amount: string;
+  /**
+   * Плановая — ₽/мес, разовая — ₽, квартира — сумма за месяц из расчёта ФОТ; numeric строкой. null — у квартиры
+   * месяц не посчитан (будущий, 1-е число, больше 12 месяцев): «—».
+   */
+  amount: string | null;
   reason: string | null;
   can_edit: boolean;
   supplement: IPayrollSupplementRow | null;
@@ -142,7 +149,7 @@ export interface ISupplementRegistryRow extends ISupplementPeriodFields {
 }
 
 /**
- * Семь столбцов: «Период» различает строки одного сотрудника (их ФИО — один раз, SUPPLEMENT_GROUP). Отдел и
+ * «Доплата за месяц», семь столбцов: «Период» различает строки одного сотрудника (их ФИО — один раз, EMPLOYEE_ROW_GROUP). Отдел и
  * должность уже — таблица без прокрутки влезает в окно на 1280px.
  */
 export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
@@ -256,7 +263,7 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
   };
 
 export const buildHousingExport = buildSnapshot('Квартира', HOUSING_COLUMNS);
-export const buildSupplementExport = buildSnapshot('Доплата', SUPPLEMENT_COLUMNS);
+export const buildSupplementExport = buildSnapshot('Доплата за месяц', SUPPLEMENT_COLUMNS);
 export const buildPlannedSupplementExport = buildSnapshot('Плановые доплаты', PLANNED_SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildOvertimeStopExport = buildSnapshot('Без переработки', OVERTIME_STOP_COLUMNS);
@@ -325,12 +332,6 @@ export const registryRemoval = (
   return { action: 'close', cutoff, dateTo: monthEnd(shiftMonth(month, -1)) };
 };
 
-/** День до даты YYYY-MM-DD: «2026-12-01» → «2026-11-30». */
-const dayBefore = (iso: string): string => {
-  const [year, month, day] = iso.split('-').map(Number);
-  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
-};
-
 /**
  * 🗑 у проживания — квартиры и общежития (миграция 339: деньги по дням, выезд 1-м числом обнулил бы месяц): идущее
  * проживание — окно «Дата выезда» (по умолчанию сегодня), не начавшееся (въезд сегодня или позже) или уже
@@ -381,7 +382,7 @@ export const supplementInMonths = (row: IPayrollSupplementRow, months: ReadonlyA
     : periodIntersectsMonths(row.date_from, row.date_to, months)
 );
 
-/** Порядок доплат сотрудника в «Доплате»: плановые, квартира, разовые. */
+/** Порядок доплат сотрудника в «Доплате за месяц»: плановые, квартира, разовые. */
 const SUPPLEMENT_KIND_ORDER: Record<SupplementRowKind, number> = { planned: 0, apartment: 1, one_time: 2 };
 
 const compareSupplementRows = (a: ISupplementRegistryRow, b: ISupplementRegistryRow): number => (
@@ -393,14 +394,14 @@ const compareSupplementRows = (a: ISupplementRegistryRow, b: ISupplementRegistry
 );
 
 /**
- * Строки общей таблицы «Доплата» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths)
- * и квартиры — сервер их уже отобрал по месяцам (?months=); «по» квартиры — день до выезда. Порядок — по сотруднику,
- * у него — плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки сотрудника идут подряд.
+ * Строки «Доплаты за месяц» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths) и квартиры —
+ * сервер их уже разложил по месяцам с суммой за месяц (listHousingByMonth). Порядок — по сотруднику, у него —
+ * плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки сотрудника идут подряд.
  * Пока один из источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
  */
 export const buildSupplementRegistryRows = (
   supplements: ReadonlyArray<IPayrollSupplementRow> | undefined,
-  housing: ReadonlyArray<IHousingAllowanceRow> | undefined,
+  housing: ReadonlyArray<IHousingMonthRow> | undefined,
   months: ReadonlyArray<string>,
 ): ISupplementRegistryRow[] | undefined => {
   if (!supplements || !housing) return undefined;
@@ -409,16 +410,16 @@ export const buildSupplementRegistryRows = (
       .filter(row => supplementInMonths(row, months))
       .map(row => ({ ...row, key: supplementRowKey(row), supplement: row, housing: null })),
     ...housing.map(row => ({
-      key: housingRowKey(row),
+      key: `${housingRowKey(row)}-${row.month}`,
       kind: 'apartment' as const,
       employee_id: row.employee_id,
       full_name: row.full_name,
       department: row.department,
       position: row.position,
-      amount: row.amount,
-      date_from: row.check_in,
-      date_to: row.check_out === null ? null : dayBefore(row.check_out),
-      month: null,
+      amount: row.month_amount,
+      date_from: null,
+      date_to: null,
+      month: row.month,
       reason: APARTMENT_REASON,
       can_edit: row.can_edit,
       supplement: null,

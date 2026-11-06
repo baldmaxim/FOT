@@ -103,6 +103,8 @@ router.delete('/dormitory-stays/:id', deductionsEdit, dormitoryStaysController.r
 // ─── Таблицы окна «Справочник» (миграция 315) ────────────────────────────────
 // «Доплата за проживание» — квартиры «Проживания» (миграция 320): те же записи, что во вкладке кадров.
 router.get('/housing-allowances', termsView, payrollHousingController.list);
+// «Доплата за месяц»: квартира с суммой за месяц из расчёта ФОТ — доступ как у столбцов «Расчётов».
+router.get('/housing-allowances/by-month', termsView, payrollHousingController.monthAmounts);
 router.post('/housing-allowances', termsEdit, payrollHousingController.add);
 router.patch('/housing-allowances/:id', termsEdit, payrollHousingController.update);
 router.delete('/housing-allowances/:id', termsEdit, payrollHousingController.remove);

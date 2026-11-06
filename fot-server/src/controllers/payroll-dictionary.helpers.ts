@@ -61,8 +61,8 @@ export const payrollDateSchema = (message: string) => z.string({ required_error:
 export const payrollMonthSchema = (message: string) => z.string({ required_error: message, invalid_type_error: message })
   .regex(/^(19\d{2}|20\d{2}|2100)-(0[1-9]|1[0-2])$/, message);
 
-/** Больше месяцев в ?months= не принимаем: выбор пикера — до трёх лет. */
-export const PAYROLL_REGISTRY_MAX_MONTHS = 36;
+/** Больше месяцев в ?months= не принимаем: пикер даёт 24 месяца назад, текущий и 12 вперёд (registryMonthOptions). */
+export const PAYROLL_REGISTRY_MAX_MONTHS = 37;
 
 /**
  * ?months= таблиц «Справочника» и «Свода»: параметра нет — null (прежнее «на сегодня» у старого клиента),

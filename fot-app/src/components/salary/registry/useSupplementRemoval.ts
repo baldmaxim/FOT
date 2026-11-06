@@ -22,11 +22,11 @@ import {
 } from '../../../utils/payrollRegistries';
 
 /**
- * 🗑 «Убрать» и перечитывание на вкладках «Доплаты» («Все доплаты», «Плановые доплаты», «Квартира»): одна логика.
+ * 🗑 «Убрать» и перечитывание на вкладках «Доплаты» («Доплата за месяц», «Плановые доплаты», «Квартира»): одна логика.
  * Плановая (любой период, по id строки журнала) — убрать с 1-го числа текущего месяца (период закрывается, прошлые
  * месяцы остаются) или снять ошибочную. Разовая — удалить. Квартира — окно «Дата выезда» (housingCheckout; деньги
  * по дням, миграция 339) или удалить не начавшееся / прошедшее проживание. busyKey — ключ строки, которая сейчас
- * убирается (supplementRowKey / housingRowKey).
+ * убирается (supplementRowKey / housingRowKey; в «Доплате за месяц» у квартиры — ключ нажатой строки месяца).
  */
 export const useSupplementRemoval = () => {
   const toast = useToast();
@@ -82,14 +82,15 @@ export const useSupplementRemoval = () => {
     }, refreshSupplements);
   };
 
-  const removeHousing = async (row: IHousingAllowanceRow) => {
+  /** key — ключ нажатой строки: одно проживание в «Доплате за месяц» — строка на каждый месяц. */
+  const removeHousing = async (row: IHousingAllowanceRow, key = housingRowKey(row)) => {
     if (busyKey !== null) return;
     if (stayRemovalMode(row, moscowTodayIso()) === 'checkout') {
       setHousingCheckout(row);
       return;
     }
     if (!window.confirm(`Удалить ошибочную строку: ${row.full_name}, въезд ${formatDate(row.check_in)}?`)) return;
-    await run(housingRowKey(row), () => payrollRegistryService.removeHousing(row.id), refreshHousing);
+    await run(key, () => payrollRegistryService.removeHousing(row.id), refreshHousing);
   };
 
   /** Выезд из окна: въезд, ставка и адрес прежние; ошибка — в окне. */

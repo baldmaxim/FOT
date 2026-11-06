@@ -5,7 +5,7 @@ import styles from './SupplementTabs.module.css';
 export type SupplementTab = 'all' | 'planned' | 'apartments';
 
 const SUPPLEMENT_TABS: ReadonlyArray<{ key: SupplementTab; label: string }> = [
-  { key: 'all', label: 'Все доплаты' },
+  { key: 'all', label: 'Доплата за месяц' },
   { key: 'planned', label: 'Плановые доплаты' },
   { key: 'apartments', label: 'Квартира' },
 ];

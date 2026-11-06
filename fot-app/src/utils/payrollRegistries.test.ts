@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { IPayrollDormitoryStay } from '../services/dormitoryService';
 import type {
   ICompensationStop,
-  IHousingAllowanceRow,
+  IHousingMonthRow,
   IOvertimeStop,
   IPayrollSupplementRow,
 } from '../services/payrollRegistryService';
@@ -66,9 +66,9 @@ describe('«Доплата»', () => {
     expect(supplementRowKey(supplement({ kind: 'one_time', id: 5 }))).toBe('once-5');
   });
 
-  const apartment = (over: Partial<IHousingAllowanceRow>): IHousingAllowanceRow => ({
+  const apartment = (over: Partial<IHousingMonthRow>): IHousingMonthRow => ({
     id: 5, employee_id: 3, full_name: 'Зиякулов Б.', department: null, position: null, amount: '630.00',
-    check_in: '2026-10-01', check_out: '2026-11-01', address: null, can_edit: true,
+    check_in: '2026-10-01', check_out: '2026-11-01', address: null, can_edit: true, month: '2026-10', month_amount: '19530.00',
     ...over,
   });
   const cells = (row: ISupplementRegistryRow): string[] => SUPPLEMENT_COLUMNS.slice(3).map(column => column.text(row));
@@ -82,14 +82,30 @@ describe('«Доплата»', () => {
     expect(keys(['2027-02'])).toEqual([]);
   });
 
-  it('квартира в общей таблице: «Плановая», основание «Квартира, ₽/день» (ставка за день, 339), «по» — день до выезда', () => {
-    const rows = buildSupplementRegistryRows([], [apartment({}), apartment({ id: 6, check_out: null })], ['2026-10']) ?? [];
+  it('квартира в «Доплате за месяц»: «Плановая», сумма за месяц из расчёта, период — месяц, основание «Квартира»', () => {
+    const rows = buildSupplementRegistryRows(
+      [],
+      [apartment({}), apartment({ id: 6, employee_id: 4, full_name: 'Зуев А.', check_out: null, month_amount: null })],
+      ['2026-10'],
+    ) ?? [];
+    // Месяц не посчитан (будущий, 1-е число) — «—», а не ставка за день.
     expect(rows.map(cells)).toEqual([
-      ['Плановая', '630,00', '01.10.2026 – 31.10.2026', 'Квартира, ₽/день'],
-      ['Плановая', '630,00', 'с 01.10.2026', 'Квартира, ₽/день'],
+      ['Плановая', '19\u00a0530,00', 'октябрь 2026', 'Квартира'],
+      ['Плановая', '—', 'октябрь 2026', 'Квартира'],
     ]);
-    expect(rows.map(row => [row.date_from, row.date_to])).toEqual([['2026-10-01', '2026-10-31'], ['2026-10-01', null]]);
     expect(rows.map(row => [row.kind, row.housing?.id, row.supplement])).toEqual([['apartment', 5, null], ['apartment', 6, null]]);
+  });
+
+  it('квартира в нескольких месяцах — строка на месяц со своей суммой, ✎ и 🗑 — одно проживание', () => {
+    const rows = buildSupplementRegistryRows(
+      [],
+      [apartment({ month: '2026-10', month_amount: '19530.00' }), apartment({ month: '2026-09', month_amount: '18900.00' })],
+      ['2026-09', '2026-10'],
+    ) ?? [];
+    expect(rows.map(row => [row.key, supplementPeriod(row), row.amount, row.housing?.id])).toEqual([
+      ['apartment-5-2026-09', 'сентябрь 2026', '18900.00', 5],
+      ['apartment-5-2026-10', 'октябрь 2026', '19530.00', 5],
+    ]);
   });
 
   it('один источник не загружен — строк нет: из половины данных таблица не строится', () => {
@@ -103,7 +119,7 @@ describe('«Доплата»', () => {
       [apartment({ id: 5 })],
       ['2026-10'],
     ) ?? [];
-    expect(rows.map(row => row.key)).toEqual(['planned-5', 'once-5', 'apartment-5']);
+    expect(rows.map(row => row.key)).toEqual(['planned-5', 'once-5', 'apartment-5-2026-10']);
   });
 
   it('✎ и 🗑: у любого периода плановой, разовой и квартиры — по праву правки (миграция 337)', () => {
@@ -127,24 +143,29 @@ describe('«Доплата»', () => {
     });
     const rows = buildSupplementRegistryRows(
       [once(11, '5000.00'), supplement({ ...kalyazin, id: 7, amount: '50000.00' }), once(12, '25000.00'), once(13, '15000.00')],
-      [apartment({ ...kalyazin, id: 9, check_in: '2026-09-01', check_out: null })],
+      [
+        apartment({ ...kalyazin, id: 9, check_in: '2026-09-01', check_out: null, month: '2026-10' }),
+        apartment({ ...kalyazin, id: 9, check_in: '2026-09-01', check_out: null, month: '2026-09' }),
+      ],
       ['2026-09', '2026-10'],
     ) ?? [];
-    expect(rows.map(row => row.key)).toEqual(['planned-7', 'apartment-9', 'once-12', 'once-13', 'once-11']);
+    expect(rows.map(row => row.key)).toEqual([
+      'planned-7', 'apartment-9-2026-09', 'apartment-9-2026-10', 'once-12', 'once-13', 'once-11',
+    ]);
     expect(rows.map(row => supplementPeriod(row))).toEqual([
-      '01.10.2026 – 31.12.2026', 'с 01.09.2026', 'сентябрь 2026', 'сентябрь 2026', 'сентябрь 2026',
+      '01.10.2026 – 31.12.2026', 'сентябрь 2026', 'октябрь 2026', 'сентябрь 2026', 'сентябрь 2026', 'сентябрь 2026',
     ]);
     expect(registryRowGroups(rows, EMPLOYEE_ROW_GROUP.key).map(place => (place.first ? place.index + 1 : null)))
-      .toEqual([1, null, 2, null, null]);
+      .toEqual([1, null, null, 2, null, null]);
     expect(buildSupplementExport(rows).rows.map(row => row.cells[1])).toEqual([
-      'Калязин С.А.', 'Калязин С.А.', 'Квасова Т.Г.', 'Квасова Т.Г.', 'Квасова Т.Г.',
+      'Калязин С.А.', 'Калязин С.А.', 'Калязин С.А.', 'Квасова Т.Г.', 'Квасова Т.Г.', 'Квасова Т.Г.',
     ]);
   });
 
-  it('выгрузки: «Доплата», «Плановые доплаты», «Квартира»', () => {
+  it('выгрузки: «Доплата за месяц», «Плановые доплаты», «Квартира»', () => {
     const at = (name: string) => expect.stringMatching(new RegExp(`^${name}_\\d{4}-\\d{2}-\\d{2}\\.xlsx$`));
     const all = buildSupplementRegistryRows([supplement({})], [apartment({})], ['2026-10']) ?? [];
-    expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата', file_name: at('Доплата') });
+    expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата за месяц', file_name: at('Доплата_за_месяц') });
     expect(buildSupplementExport(all).columns.map(column => column.label))
       .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание']);
     expect(buildPlannedSupplementExport([supplement({})])).toMatchObject({
