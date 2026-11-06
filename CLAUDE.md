@@ -244,3 +244,11 @@ CSS media queries для всех целевых устройств.
 - Без приписок "Generated with Claude Code" и "Co-Authored-By"
 - Push только в `personal` (origin — чужой/устаревший форк)
 - Из SSH/Claude-сессии при ошибке `wincredman` сразу: `GCM_CREDENTIAL_STORE=dpapi git push personal main` (bash) или `$env:GCM_CREDENTIAL_STORE='dpapi'; git push personal main` (PowerShell). Не перебирать альтернативы.
+
+## Коммит, пуш, выкатка — без опроса сессий
+
+Правило общего `Odintsov/CLAUDE.md` «только с согласия всех сессий проекта» в FOT не действует (решение 06.11.2026): других сессий не опрашивать и ответов не ждать. Проверять самому:
+
+- коммитить только свои пути и хунки (`git commit -- <пути>`), чужие незакоммиченные правки не трогать, без `git stash`;
+- номер новой миграции сверить с `docs/migrations`;
+- сборку и тесты прогнать на чистой копии HEAD (worktree) с одними своими правками: свой код не должен опираться на чужие незакоммиченные правки.
