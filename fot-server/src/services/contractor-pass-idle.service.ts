@@ -104,6 +104,10 @@ export interface IIdlePassRow {
  * Не ходящие с последним проходом. Последний проход — только после approved_at текущего держателя
  * (пропуск — переиспользуемый слот) и до конца сегодняшнего дня; при равном event_at — больший id,
  * чтобы точка не менялась от запроса к запросу.
+ *
+ * Последний проход и последняя разблокировка ищутся LATERAL-ом на строку, а не отдельными CTE с
+ * соединением обратно по id: планировщик оценивал `idle` в 1 строку и соединял их вложенным циклом,
+ * пересчитывая подзапрос на каждый пропуск — на 2233 пропусках больше 30 с (прод, 06.11.2026).
  */
 const fetchIdleRows = (
   orgIds: string[],
@@ -120,11 +124,11 @@ const fetchIdleRows = (
        ${IDLE_PASSES_FROM_SQL}
        ${extraWhereSql}
      ),
-     last_event AS (
-       SELECT DISTINCT ON (i.id) i.id AS pass_id, le.event_date, le.access_point
+     with_event AS (
+       SELECT DISTINCT ON (i.id) i.*, le.event_date, le.access_point
          FROM idle i
-         JOIN employees e ON e.sigur_employee_id = i.sigur_employee_id
-         CROSS JOIN LATERAL (
+         LEFT JOIN employees e ON e.sigur_employee_id = i.sigur_employee_id
+         LEFT JOIN LATERAL (
            SELECT se.id, se.event_at, (se.event_at AT TIME ZONE 'Europe/Moscow')::date AS event_date,
                   se.access_point
              FROM skud_events se
@@ -135,22 +139,8 @@ const fetchIdleRows = (
               AND se.direction IN ('entry', 'exit')
             ORDER BY se.event_at DESC, se.id DESC
             LIMIT 1
-         ) le
-        ORDER BY i.id, le.event_at DESC, le.id DESC
-     ),
-     last_unblock AS (
-       SELECT i.id AS pass_id, (u.created_at AT TIME ZONE 'Europe/Moscow')::date AS unblocked_on
-         FROM idle i
-         CROSS JOIN LATERAL (
-           SELECT a.created_at
-             FROM audit_logs a
-            WHERE a.entity_type = 'sigur_employee'
-              AND a.entity_id = i.sigur_employee_id::text
-              AND a.created_at < ($2::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'
-              AND a.details->>'action' = 'unblock'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-         ) u
+         ) le ON true
+        ORDER BY i.id, le.event_at DESC NULLS LAST, le.id DESC NULLS LAST
      )
      SELECT i.id AS pass_id,
             i.holder_id::text AS holder_id,
@@ -160,14 +150,22 @@ const fetchIdleRows = (
             i.sigur_employee_id::int AS sigur_employee_id,
             i.holder_name,
             to_char(i.issued_on, 'YYYY-MM-DD') AS issued_on,
-            to_char(l.event_date, 'YYYY-MM-DD') AS last_event_date,
-            NULLIF(btrim(l.access_point), '') AS last_access_point,
-            ($2::date - GREATEST(l.event_date, i.issued_on, u.unblocked_on))::int AS days_idle,
+            to_char(i.event_date, 'YYYY-MM-DD') AS last_event_date,
+            NULLIF(btrim(i.access_point), '') AS last_access_point,
+            ($2::date - GREATEST(i.event_date, i.issued_on, u.unblocked_on))::int AS days_idle,
             to_char(i.idle_blocked_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS idle_blocked_on,
             (i.external_blocked_seen_at IS NOT NULL) AS blocked_manually
-       FROM idle i
-       LEFT JOIN last_event l ON l.pass_id = i.id
-       LEFT JOIN last_unblock u ON u.pass_id = i.id
+       FROM with_event i
+       LEFT JOIN LATERAL (
+         SELECT (a.created_at AT TIME ZONE 'Europe/Moscow')::date AS unblocked_on
+           FROM audit_logs a
+          WHERE a.entity_type = 'sigur_employee'
+            AND a.entity_id = i.sigur_employee_id::text
+            AND a.created_at < ($2::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'
+            AND a.details->>'action' = 'unblock'
+          ORDER BY a.created_at DESC
+          LIMIT 1
+       ) u ON true
        LEFT JOIN org_departments od ON od.id = i.org_department_id
       ORDER BY ${orderBySql}`,
     [orgIds, today, IDLE_PASS_DAYS],
