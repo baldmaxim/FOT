@@ -468,25 +468,36 @@ export async function fetchManagerPremium(
     // Один снимок на все запросы: иначе состав закреплений меняется между чтениями и
     // премия считается по другому составу, чем показанная таблица.
     await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
-
-    const scales = await loadScales(client, params.monthTo);
-    const shareRows = await loadRowsWithShares(client, params);
-    const days = await loadAssignmentDays(client, params, shareRows);
-    const premium = await computePremium(client, shareRows, days, scales);
-
-    const rows: ObjectKpiReportRowWithShare[] = shareRows.map(
-      ({ my_plan_exact: _plan, my_fact_exact: _fact, ...row }) => row,
-    );
-
-    return {
-      rows,
-      premium: premium.months,
-      period_totals: premium.totals,
-      // Наружу отдаём только версии, которые реально применены хотя бы к одному месяцу.
-      scales: scales.filter((scale) =>
-        premium.months.some((month) => month.scale_version_id === scale.id)),
-    };
+    return computeManagerPremium(client, params);
   });
+}
+
+/**
+ * Тот же расчёт на клиенте вызывающего, в его транзакции: видит незаписанные правки этой
+ * транзакции. Нужен разовой правке данных, чтобы показать премию до COMMIT. Изоляцию
+ * задаёт вызывающий; портал ходит через fetchManagerPremium.
+ */
+export async function computeManagerPremium(
+  client: PoolClient,
+  params: ManagerPremiumParams,
+): Promise<ManagerPremiumResult> {
+  const scales = await loadScales(client, params.monthTo);
+  const shareRows = await loadRowsWithShares(client, params);
+  const days = await loadAssignmentDays(client, params, shareRows);
+  const premium = await computePremium(client, shareRows, days, scales);
+
+  const rows: ObjectKpiReportRowWithShare[] = shareRows.map(
+    ({ my_plan_exact: _plan, my_fact_exact: _fact, ...row }) => row,
+  );
+
+  return {
+    rows,
+    premium: premium.months,
+    period_totals: premium.totals,
+    // Наружу отдаём только версии, которые реально применены хотя бы к одному месяцу.
+    scales: scales.filter((scale) =>
+      premium.months.some((month) => month.scale_version_id === scale.id)),
+  };
 }
 
 async function loadScales(client: PoolClient, monthTo: string): Promise<PremiumScaleVersion[]> {

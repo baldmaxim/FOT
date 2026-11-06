@@ -41,7 +41,7 @@ export interface ObjectKpiMonthPlanRow {
   created_at: string;
 }
 
-const PLAN_COLUMNS = `
+export const PLAN_COLUMNS = `
   id, skud_object_id, to_char(period_month, 'YYYY-MM-DD') AS period_month, revision, is_current,
   contract_total, ks2_cumulative_before, remainder,
   to_char(planned_zos_date_used, 'YYYY-MM-DD') AS planned_zos_date_used,
@@ -111,7 +111,7 @@ async function loadReportRow(
  * Смешение «часть из снимка, часть пересчётом» ломает тождество
  * remainder / months_remaining = plan_amount прямо в строке отчёта.
  */
-function snapshotValues(row: ObjectKpiReportRow) {
+export function snapshotValues(row: ObjectKpiReportRow) {
   const incomplete = row.data_quality !== 'ok' || row.plan_amount_calc === null;
   return {
     status: incomplete ? ('data_incomplete' as const) : ('fixed' as const),
