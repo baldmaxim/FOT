@@ -44,8 +44,10 @@ const STAFF_EDITOR_API: IStaffDeductionEditorApi = {
  * «Экспорт» — ровно таблица экрана.
  */
 export const DeductionsTab: FC = () => {
-  const { isAdmin, canEditPage } = useAuth();
+  const { isAdmin, canEditPage, profile } = useAuth();
   const canEdit = isAdmin || canEditPage('/staff-control/deductions');
+  // Справочник видов общий с «Зарплатой»: правит только роль, персональная галочка (миграция 351) — нет.
+  const canEditKinds = isAdmin || profile?.staff_tab_role_edit?.deductions === true;
   const toast = useToast();
   const queryClient = useQueryClient();
   const [editor, setEditor] = useState<EditorState>(null);
@@ -116,7 +118,7 @@ export const DeductionsTab: FC = () => {
         />
       )}
 
-      {kindsOpen && <DeductionKindsModal canEdit={canEdit} onClose={() => setKindsOpen(false)} />}
+      {kindsOpen && <DeductionKindsModal canEdit={canEditKinds} onClose={() => setKindsOpen(false)} />}
     </>
   );
 };

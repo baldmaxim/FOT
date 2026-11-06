@@ -40,6 +40,9 @@ vi.mock('../services/payroll/payroll-registry-scope.service.js', () => ({
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
+const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
+vi.mock('../services/staff-tab-access.service.js', () => grant);
+
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { dormitoryStaysController as c } from './dormitory-stays.controller.js';
 
@@ -520,5 +523,67 @@ describe('«Зарплата» убирает общежитие', () => {
       expect.anything(), 'user-1', 'DORMITORY_STAY_DELETED',
       expect.objectContaining({ entityId: '7', details: expect.objectContaining({ source: 'payroll_dormitory_registry' }) }),
     );
+  });
+});
+
+describe('галочка «Проживание» в назначениях (миграция 351) — вся организация', () => {
+  const body = { employee_id: 42, check_in: '2026-10-01', check_out: null, address: 'Общежитие №2' };
+  const onlyTab = (tab: string) => async (_req: unknown, asked: string) => asked === tab;
+
+  it('список и поиск кадров без ограничения; список «Зарплаты» галочку не читает', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('dormitory'));
+    svc.listStays.mockResolvedValue([STAY]);
+    await c.list(makeReq(), makeRes());
+    expect(svc.listStays).toHaveBeenLastCalledWith({ employeeIds: null });
+
+    svc.searchCandidates.mockResolvedValue([]);
+    await c.searchEmployees(makeReq({ query: { q: 'Кар' } }), makeRes());
+    expect(svc.searchCandidates).toHaveBeenCalledWith('Кар', null);
+    expect(scope.resolveStaffRosterEmployeeIds).not.toHaveBeenCalled();
+
+    grant.getRequestStaffTabGrant.mockClear();
+    scope.resolvePayrollStaffScope.mockResolvedValue({ contractorRootId: 'root', departmentIds: [] });
+    scope.resolvePayrollEditPredicate.mockResolvedValue(() => false);
+    svc.listPayrollDormitoryStays.mockResolvedValue([]);
+    await c.listForPayroll(makeReq(), makeRes());
+    expect(grant.getRequestStaffTabGrant).not.toHaveBeenCalled();
+  });
+
+  it('заселить, изменить, удалить сотрудника вне отделов человека — можно', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('dormitory'));
+    scope.canWriteEmployeeInScope.mockResolvedValue(false);
+    svc.getEmployeeState.mockResolvedValue(ACTIVE);
+    svc.addStay.mockResolvedValue(STAY);
+    const added = makeRes();
+    await c.add(makeReq({ body }), added);
+    expect(added.statusCode).toBe(200);
+
+    svc.getStay.mockResolvedValue(STAY);
+    svc.updateStay.mockResolvedValue({ before: STAY, after: { ...STAY, check_out: '2026-10-20' } });
+    const updated = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { check_in: '2026-10-01', check_out: '2026-10-20', address: 'Общежитие №2' } }), updated);
+    expect(updated.statusCode).toBe(200);
+
+    svc.deleteStay.mockResolvedValue(STAY);
+    const removed = makeRes();
+    await c.remove(makeReq({ params: { id: '7' } }), removed);
+    expect(removed.statusCode).toBe(200);
+  });
+
+  it('подрядчика не заселить и с галочкой — прежний отказ', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('dormitory'));
+    svc.getEmployeeState.mockResolvedValue({ ...ACTIVE, is_contractor: true });
+    const res = makeRes();
+    await c.add(makeReq({ body }), res);
+    expect(res.statusCode).toBe(400);
+    expect(svc.addStay).not.toHaveBeenCalled();
+  });
+
+  it('галочка «Удержания» охват проживания не расширяет', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('deductions'));
+    scope.resolveStaffRosterEmployeeIds.mockResolvedValue(new Set([42]));
+    svc.listStays.mockResolvedValue([]);
+    await c.list(makeReq(), makeRes());
+    expect(svc.listStays).toHaveBeenLastCalledWith({ employeeIds: [42] });
   });
 });

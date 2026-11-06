@@ -399,6 +399,8 @@ describe('runOperation — dismiss', () => {
     expect(tx.some(c => c.sql.includes('UPDATE employee_department_access'))).toBe(true);
     expect(tx.some(c => c.sql.includes('UPDATE employee_direct_reports'))).toBe(true);
     expect(tx.some(c => c.sql.includes('employee_lifecycle_revocations'))).toBe(true);
+    // Галочки «Проживание»/«Удержания» (миграция 351) снимаются там же — доступ ко всей организации не переживает увольнение.
+    expect(tx.some(c => c.sql.includes('DELETE FROM employee_staff_tab_access'))).toBe(true);
     // Выданные токены отзываются — иначе уволенный доработал бы на старом access.
     expect(tx.some(c => c.sql.includes('token_version = token_version + 1'))).toBe(true);
 
@@ -440,6 +442,7 @@ describe('runOperation — dismiss', () => {
 
     expect(tx.some(c => c.sql.includes('UPDATE employee_department_access'))).toBe(false);
     expect(tx.some(c => c.sql.includes('UPDATE employee_direct_reports'))).toBe(false);
+    expect(tx.some(c => c.sql.includes('DELETE FROM employee_staff_tab_access'))).toBe(false);
     expect(tx.some(c => c.sql.includes('token_version = token_version + 1'))).toBe(false);
   });
 

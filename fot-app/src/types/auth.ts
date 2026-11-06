@@ -1,6 +1,8 @@
 export type EmployeePositionType = string;
 export type ChatInboundMode = 'open' | 'requests_only' | 'disabled';
 export type EmployeeVariant = 'object' | 'office' | 'contractor';
+/** Вкладки «Управления кадрами», которые выдаются сотруднику персональной галочкой (миграция 351). */
+export type StaffTab = 'dormitory' | 'deductions';
 
 export type UserRole = EmployeePositionType;
 
@@ -108,6 +110,13 @@ export interface UserProfile {
   has_timesheet_view_employees?: boolean;
   /** «Выработка» (миграция 342): список «Зарплаты» или галочка — «Бригады» и «Зарплата по объектам» в табеле. */
   has_brigade_output_access?: boolean;
+  /**
+   * Правка вкладок «Проживание»/«Удержания» по РОЛИ (миграция 351), без персональной галочки: по нему решается правка
+   * справочника видов удержаний.
+   */
+  staff_tab_role_edit?: Record<StaffTab, boolean>;
+  /** Может ставить галочки «Проживание»/«Удержания» в назначениях: правка вкладки по роли + вся организация. */
+  can_grant_staff_tabs?: Record<StaffTab, boolean>;
   /** Назначен ответственным за согласование выходных — доступ к «Согласованиям» без /timesheet-hr. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;

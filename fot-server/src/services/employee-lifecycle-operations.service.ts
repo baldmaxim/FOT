@@ -20,6 +20,7 @@ import {
   findLastAppliedDismissOperationId,
   restoreFromSnapshot,
   revokeDepartmentAccessWithSnapshot,
+  revokeStaffTabAccessWithSnapshot,
   revokeDirectReportsWithSnapshot,
   type IRestoreConflict,
 } from './lifecycle-revocations.service.js';
@@ -728,6 +729,7 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
     // Снимок пишется до деактивации — по нему восстановление вернёт ровно эти строки.
     await revokeDepartmentAccessWithSnapshot(client, op.id, op.employee_id);
     orphanedSubordinateIds = await revokeDirectReportsWithSnapshot(client, op.id, op.employee_id);
+    await revokeStaffTabAccessWithSnapshot(client, op.id, op.employee_id);
 
     // Отзыв выданных сессий: access-токен живёт 7 дней, refresh — 30, и без этого
     // уволенный доработал бы на старом токене. Счётчик, а не удаление: после
@@ -917,12 +919,14 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
     if (dismissOperationId) {
       const restored = await restoreFromSnapshot(client, dismissOperationId, op.employee_id);
       restoreConflicts = restored.conflicts;
-      if (restored.departmentAccessRestored > 0 || restored.directReportsRestored > 0) {
+      if (restored.departmentAccessRestored > 0 || restored.directReportsRestored > 0
+        || restored.staffTabAccessRestored > 0) {
         console.log('[lifecycle-ops] rehire: восстановлены полномочия', {
           employeeId: op.employee_id,
           dismissOperationId,
           departmentAccess: restored.departmentAccessRestored,
           directReports: restored.directReportsRestored,
+          staffTabAccess: restored.staffTabAccessRestored,
         });
       }
     }

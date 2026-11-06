@@ -4,7 +4,14 @@ import { adminSystemResourcesController } from '../controllers/admin-system-reso
 import { timesheetOfficeController } from '../controllers/timesheet-office.controller.js';
 import { timesheetViewAccessController } from '../controllers/timesheet-view-access.controller.js';
 import { brigadeOutputAccessController } from '../controllers/brigade-output-access.controller.js';
-import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { staffTabAccessController } from '../controllers/staff-tab-access.controller.js';
+import {
+  authenticate,
+  requireAnyPageAccess,
+  requireCritical2FA,
+  requirePageAccess,
+  requireRolePageAccess,
+} from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { acceptMemoFile } from '../middleware/blacklistMemoUpload.js';
@@ -169,6 +176,14 @@ router.put('/employees/:id/timesheet-view-employees', requirePageAccess('/admin/
 // только учётки списка «Зарплаты»: /admin/users/access есть и у других админов, /salary/terms решает только список.
 router.get('/employees/:id/brigade-output-access', requirePageAccess('/admin/users/access', 'view'), requirePageAccess('/salary/terms', 'edit'), noStore, brigadeOutputAccessController.get);
 router.put('/employees/:id/brigade-output-access', requirePageAccess('/admin/users/access', 'edit'), requirePageAccess('/salary/terms', 'edit'), brigadeOutputAccessController.set);
+
+// «Проживание» и «Удержания» (миграция 351, вкладки в панели назначений): персональная правка вкладки кадров по всей
+// организации. Второй гард — правка вкладки ПО РОЛИ: персональная галочка право выдавать её не даёт. Охват «вся
+// организация» у выдающего проверяет контроллер.
+router.get('/employees/:id/dormitory-access', requirePageAccess('/admin/users/access', 'view'), requireRolePageAccess('/staff-control/dormitory', 'edit'), noStore, staffTabAccessController.dormitory.get);
+router.put('/employees/:id/dormitory-access', requirePageAccess('/admin/users/access', 'edit'), requireRolePageAccess('/staff-control/dormitory', 'edit'), staffTabAccessController.dormitory.set);
+router.get('/employees/:id/deductions-access', requirePageAccess('/admin/users/access', 'view'), requireRolePageAccess('/staff-control/deductions', 'edit'), noStore, staffTabAccessController.deductions.get);
+router.put('/employees/:id/deductions-access', requirePageAccess('/admin/users/access', 'edit'), requireRolePageAccess('/staff-control/deductions', 'edit'), staffTabAccessController.deductions.set);
 
 // «Режим табелирования» в «Управлении кадрами»: «Офис» отделу или сотруднику с блокировкой
 // выбора объекта (миграция 291). Отдельное право — только администратор и кадровый админ.

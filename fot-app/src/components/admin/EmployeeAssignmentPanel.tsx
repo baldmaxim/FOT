@@ -23,11 +23,13 @@ import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useTimesheetViewEmployeesDraft } from '../../hooks/useTimesheetViewEmployeesDraft';
 import { useBrigadeOutputAccessDraft } from '../../hooks/useBrigadeOutputAccessDraft';
+import { useStaffTabAccessDraft } from '../../hooks/useStaffTabAccessDraft';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDate } from '../../utils/formatMoney';
 import { createFioMatcher, withFioFallback, type FioSearchMode } from '../../utils/fioSearch';
 import { TimesheetViewEmployeesTab } from './TimesheetViewEmployeesTab';
 import { BrigadeOutputAccessTab } from './BrigadeOutputAccessTab';
+import { StaffTabAccessTab } from './StaffTabAccessTab';
 import styles from '../../pages/admin/Admin.module.css';
 
 const AUTO_EXPAND_ALL_THRESHOLD = 40;
@@ -46,9 +48,16 @@ interface IEmployeeAssignmentPanelProps {
   allowedTabs?: readonly Tab[];
 }
 
-type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'timesheet_view' | 'brigade_output';
+type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend' | 'timesheet_view' | 'brigade_output'
+  | 'dormitory_access' | 'deductions_access';
 
-const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend', 'timesheet_view', 'brigade_output'];
+const ALL_TABS: readonly Tab[] = [
+  'department', 'brigade', 'person', 'object', 'weekend', 'timesheet_view', 'brigade_output',
+  'dormitory_access', 'deductions_access',
+];
+
+/** Вкладки из одной галочки: строка поиска им не нужна. */
+const SINGLE_CHECKBOX_TABS: ReadonlySet<Tab> = new Set(['brigade_output', 'dormitory_access', 'deductions_access']);
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -103,11 +112,17 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const { profile, canEditPage } = useAuth();
   const isAdmin = profile?.is_admin === true;
   const canGrantBrigadeOutput = canEditPage('/salary/terms');
+  // «Проживание»/«Удержания» (миграция 351) — по праву роли и охвату «вся организация», не по canEditPage: тот
+  // включает и персональную галочку, а раздавать её дальше получивший не может (сервер ответит 403).
+  const canGrantDormitory = profile?.can_grant_staff_tabs?.dormitory === true;
+  const canGrantDeductions = profile?.can_grant_staff_tabs?.deductions === true;
   const tabAllowed = useCallback(
     (tab: Tab) => allowedTabs.includes(tab)
       && (tab !== 'weekend' || isAdmin)
-      && (tab !== 'brigade_output' || canGrantBrigadeOutput),
-    [allowedTabs, isAdmin, canGrantBrigadeOutput],
+      && (tab !== 'brigade_output' || canGrantBrigadeOutput)
+      && (tab !== 'dormitory_access' || canGrantDormitory)
+      && (tab !== 'deductions_access' || canGrantDeductions),
+    [allowedTabs, isAdmin, canGrantBrigadeOutput, canGrantDormitory, canGrantDeductions],
   );
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -185,6 +200,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const brigadeOutput = useBrigadeOutputAccessDraft({
     employeeId: employee?.employee_id ?? null,
     enabled: isOpen && tabAllowed('brigade_output'),
+  });
+  const dormitoryAccess = useStaffTabAccessDraft({
+    tab: 'dormitory',
+    employeeId: employee?.employee_id ?? null,
+    enabled: isOpen && tabAllowed('dormitory_access'),
+  });
+  const deductionsAccess = useStaffTabAccessDraft({
+    tab: 'deductions',
+    employeeId: employee?.employee_id ?? null,
+    enabled: isOpen && tabAllowed('deductions_access'),
   });
 
   const initialDepartmentIds = useMemo(
@@ -364,7 +389,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const hasWeekendChanges = !arraysEqual(draftWeekendDeptIds, initialWeekendDeptIds)
     || !numbersEqual(draftWeekendEmpIds, initialWeekendEmpIds);
   const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDeputyChanges || hasDirectChanges
-    || hasObjectChanges || hasWeekendChanges || timesheetView.hasChanges || brigadeOutput.hasChanges;
+    || hasObjectChanges || hasWeekendChanges || timesheetView.hasChanges || brigadeOutput.hasChanges
+    || dormitoryAccess.hasChanges || deductionsAccess.hasChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -438,6 +464,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     setDraftWeekendEmpIds(initialWeekendEmpIds);
     timesheetView.reset();
     brigadeOutput.reset();
+    dormitoryAccess.reset();
+    deductionsAccess.reset();
     setSearchQuery('');
   };
 
@@ -511,6 +539,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       // 6) «Выработка» — только если галочка изменена (и значение уже было загружено).
       if (brigadeOutput.hasChanges) {
         await brigadeOutput.save();
+      }
+      // 7) «Проживание» и «Удержания» — каждая галочка отдельно, только если изменена.
+      if (dormitoryAccess.hasChanges) {
+        await dormitoryAccess.save();
+      }
+      if (deductionsAccess.hasChanges) {
+        await deductionsAccess.save();
       }
       toast.success('Назначения сохранены');
       // Панель не закрываем: сбрасываем только поиск, добавленный человек остаётся
@@ -653,6 +688,24 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               Выработка ({brigadeOutput.granted ? 1 : 0})
             </button>
           )}
+          {tabAllowed('dormitory_access') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'dormitory_access' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('dormitory_access'); setSearchQuery(''); }}
+            >
+              Проживание ({dormitoryAccess.granted ? 1 : 0})
+            </button>
+          )}
+          {tabAllowed('deductions_access') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'deductions_access' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('deductions_access'); setSearchQuery(''); }}
+            >
+              Удержания ({deductionsAccess.granted ? 1 : 0})
+            </button>
+          )}
         </nav>
 
         <div className={styles.assignmentPanelBody}>
@@ -686,7 +739,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               )}
             </div>
           )}
-          {activeTab !== 'brigade_output' && (
+          {!SINGLE_CHECKBOX_TABS.has(activeTab) && (
             <input
               type="text"
               placeholder={activeTab === 'person' || activeTab === 'timesheet_view'
@@ -789,6 +842,26 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               onToggle={brigadeOutput.toggle}
               loading={brigadeOutput.isLoading}
               error={brigadeOutput.isError}
+            />
+          )}
+
+          {activeTab === 'dormitory_access' && (
+            <StaffTabAccessTab
+              label="Вносить и править проживание"
+              checked={dormitoryAccess.granted}
+              onToggle={dormitoryAccess.toggle}
+              loading={dormitoryAccess.isLoading}
+              error={dormitoryAccess.isError}
+            />
+          )}
+
+          {activeTab === 'deductions_access' && (
+            <StaffTabAccessTab
+              label="Вносить и править удержания"
+              checked={deductionsAccess.granted}
+              onToggle={deductionsAccess.toggle}
+              loading={deductionsAccess.isLoading}
+              error={deductionsAccess.isError}
             />
           )}
         </div>

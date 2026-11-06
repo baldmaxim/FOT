@@ -35,6 +35,9 @@ vi.mock('../services/employee-scope-filter.service.js', () => ({
 const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
+const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
+vi.mock('../services/staff-tab-access.service.js', () => grant);
+
 import { staffDeductionsController as c } from './staff-deductions.controller.js';
 
 const makeRes = () => {
@@ -378,5 +381,66 @@ describe('виды удержаний', () => {
     await c.deleteKind(makeReq({ params: { id: '3' } }), missing);
     expect(missing.statusCode).toBe(404);
     expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('галочка «Удержания» в назначениях (миграция 351) — вся организация', () => {
+  const body = { employee_id: 42, kind_id: 3, month: '2026-10', amount: 5000 };
+  const onlyTab = (tab: string) => async (_req: unknown, asked: string) => asked === tab;
+
+  it('список и поиск без ограничения, охват роли не спрашивается', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('deductions'));
+    svc.listDeductions.mockResolvedValue([DEDUCTION]);
+    await c.list(makeReq(), makeRes());
+    expect(svc.listDeductions).toHaveBeenLastCalledWith({ employeeIds: null });
+
+    employees.searchCandidates.mockResolvedValue([]);
+    await c.searchEmployees(makeReq({ query: { q: 'Кар' } }), makeRes());
+    expect(employees.searchCandidates).toHaveBeenCalledWith('Кар', null);
+    expect(scope.resolveStaffRosterEmployeeIds).not.toHaveBeenCalled();
+  });
+
+  it('добавить и изменить сотрудника вне отделов человека — можно', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('deductions'));
+    scope.canWriteEmployeeInScope.mockResolvedValue(false);
+    employees.getEmployeeState.mockResolvedValue(ACTIVE);
+    svc.addDeduction.mockResolvedValue(DEDUCTION);
+    const added = makeRes();
+    await c.add(makeReq({ body }), added);
+    expect(added.statusCode).toBe(200);
+
+    svc.getDeduction.mockResolvedValue(DEDUCTION);
+    svc.updateDeduction.mockResolvedValue({ before: DEDUCTION, after: { ...DEDUCTION, amount: '6000.00' } });
+    const updated = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { kind_id: 3, month: '2026-10', amount: 6000 } }), updated);
+    expect(updated.statusCode).toBe(200);
+
+    svc.deleteDeduction.mockResolvedValue(DEDUCTION);
+    const removed = makeRes();
+    await c.remove(makeReq({ params: { id: '7' } }), removed);
+    expect(removed.statusCode).toBe(200);
+  });
+
+  it('уволенному добавить нельзя и с галочкой — прежний отказ', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('deductions'));
+    employees.getEmployeeState.mockResolvedValue(DISMISSED);
+    const res = makeRes();
+    await c.add(makeReq({ body }), res);
+    expect(res.statusCode).toBe(400);
+    expect(svc.addDeduction).not.toHaveBeenCalled();
+  });
+
+  it('галочка «Проживание» охват удержаний не расширяет', async () => {
+    grant.getRequestStaffTabGrant.mockImplementation(onlyTab('dormitory'));
+    scope.resolveStaffRosterEmployeeIds.mockResolvedValue(new Set([42]));
+    svc.listDeductions.mockResolvedValue([]);
+    await c.list(makeReq(), makeRes());
+    expect(svc.listDeductions).toHaveBeenLastCalledWith({ employeeIds: [42] });
+
+    scope.canWriteEmployeeInScope.mockResolvedValue(false);
+    employees.getEmployeeState.mockResolvedValue(ACTIVE);
+    const res = makeRes();
+    await c.add(makeReq({ body }), res);
+    expect(res.statusCode).toBe(403);
   });
 });

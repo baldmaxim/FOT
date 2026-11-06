@@ -117,7 +117,10 @@ export const buildAuthHeaders = (headers: HeadersInit = {}): HeadersInit => {
 const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
   if (method.toUpperCase() !== 'GET') return false;
   const path = endpoint.split('?')[0];
-  return path === '/skud/presence'
+  // Профиль: по сокет-событию profile:access_changed права переснимаются, и ответ из HTTP-кэша (в том числе
+  // закэшированный до деплоя, когда сервер ещё не слал no-store) вернул бы прежние — галочка не применилась бы.
+  return path === '/auth/me'
+    || path === '/skud/presence'
     || path === '/skud/dashboard-stats'
     || path === '/sigur/monitor/status'
     || path === '/sigur/monitor/checks'

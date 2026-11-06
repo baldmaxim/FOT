@@ -3,6 +3,7 @@ import {
   restoreFromSnapshot,
   revokeDepartmentAccessWithSnapshot,
   revokeDirectReportsWithSnapshot,
+  revokeStaffTabAccessWithSnapshot,
 } from './lifecycle-revocations.service.js';
 
 /**
@@ -140,6 +141,70 @@ describe('lifecycle-revocations: восстановление по снимку'
   it('пустой снимок → ничего не восстанавливаем', async () => {
     const { client } = makeClient(() => undefined);
     const result = await restoreFromSnapshot(client, 'op-1', 1656);
-    expect(result).toEqual({ departmentAccessRestored: 0, directReportsRestored: 0, conflicts: [] });
+    expect(result).toEqual({
+      departmentAccessRestored: 0,
+      directReportsRestored: 0,
+      staffTabAccessRestored: 0,
+      conflicts: [],
+    });
+  });
+
+  it('галочки «Проживание»/«Удержания» возвращаются с прежним автором и датой, повтор не задваивает', async () => {
+    const { client, calls } = makeClient((sql) => {
+      if (sql.includes('FROM employee_lifecycle_revocations')) {
+        return {
+          rows: [
+            { kind: 'staff_tab_access', row_id: 'dormitory', payload: { tab: 'dormitory', created_by: 'u-1', created_at: '2026-11-01T10:00:00.000Z' } },
+            { kind: 'staff_tab_access', row_id: 'deductions', payload: { tab: 'deductions', created_by: null, created_at: '2026-11-02T10:00:00.000Z' } },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (sql.includes('INSERT INTO employee_staff_tab_access')) return { rows: [], rowCount: 1 };
+      return undefined;
+    });
+
+    const result = await restoreFromSnapshot(client, 'op-1', 441);
+
+    expect(result.staffTabAccessRestored).toBe(2);
+    const inserts = calls.filter(c => c.sql.includes('INSERT INTO employee_staff_tab_access'));
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0].params).toEqual([441, 'dormitory', 'u-1', '2026-11-01T10:00:00.000Z']);
+    expect(inserts[1].params).toEqual([441, 'deductions', null, '2026-11-02T10:00:00.000Z']);
+    expect(inserts[0].sql).toContain('ON CONFLICT (employee_id, tab) DO NOTHING');
+  });
+});
+
+describe('lifecycle-revocations: галочки «Проживание»/«Удержания» (миграция 351)', () => {
+  it('увольнение удаляет обе галочки и пишет каждую в снимок', async () => {
+    const { client, calls } = makeClient((sql) => {
+      if (sql.includes('DELETE FROM employee_staff_tab_access')) {
+        return {
+          rows: [
+            { tab: 'dormitory', created_by: 'u-1', created_at: new Date('2026-11-01T10:00:00.000Z') },
+            { tab: 'deductions', created_by: null, created_at: '2026-11-02T10:00:00.000Z' },
+          ],
+          rowCount: 2,
+        };
+      }
+      return undefined;
+    });
+
+    expect(await revokeStaffTabAccessWithSnapshot(client, 'op-1', 441)).toBe(2);
+    const snapshots = calls.filter(c => c.sql.includes('INSERT INTO employee_lifecycle_revocations'));
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0].sql).toContain("'staff_tab_access'");
+    expect(snapshots[0].sql).toContain('ON CONFLICT');
+    expect(snapshots[0].params[2]).toBe('dormitory');
+    expect(JSON.parse(String(snapshots[0].params[3]))).toEqual({
+      tab: 'dormitory', created_by: 'u-1', created_at: '2026-11-01T10:00:00.000Z',
+    });
+    expect(JSON.parse(String(snapshots[1].params[3])).created_by).toBeNull();
+  });
+
+  it('галочек нет → снимок пустой', async () => {
+    const { client, calls } = makeClient(() => undefined);
+    expect(await revokeStaffTabAccessWithSnapshot(client, 'op-1', 441)).toBe(0);
+    expect(calls.some(c => c.sql.includes('INSERT INTO employee_lifecycle_revocations'))).toBe(false);
   });
 });

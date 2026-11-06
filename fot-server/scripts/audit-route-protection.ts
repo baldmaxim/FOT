@@ -15,6 +15,7 @@ const ROUTES_DIR = join(process.cwd(), 'src', 'routes');
 const PROTECTION_MARKERS = [
   'requirePageAccess',
   'requireAnyPageAccess',
+  'requireRolePageAccess',
   'requireAdmin',
   'requireSystemAdmin',
   'requireBrigadeOutputAccess',

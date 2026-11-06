@@ -38,6 +38,11 @@ import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-a
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
 import { hasBrigadeOutputGrant } from '../services/payroll/brigade-output-access.service.js';
+import {
+  listStaffTabGrants,
+  resolveStaffTabProfileFlags,
+  STAFF_TAB_PAGES,
+} from '../services/staff-tab-access.service.js';
 import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -166,6 +171,17 @@ async function buildProfileResponse(
     }
   }
 
+  // «Проживание»/«Удержания» (миграция 351): права по РОЛИ — до инъекции персональных галочек ниже. Охват «вся
+  // организация» — зеркало resolveAccessibleDepartmentIds === 'all' (админ без ограничения по компании, роль hr,
+  // роль с all_departments_scope).
+  const staffTabFlags = resolveStaffTabProfileFlags({
+    isAdmin: !!role.is_admin,
+    rolePageAccess: page_access,
+    orgWide: role.is_admin
+      ? company_scope.roots === 'all'
+      : role.code === 'hr' || role.all_departments_scope === true,
+  });
+
   // Авто-выдача «руководительских» страниц отключается флагом роли (миграция 221):
   // узкие роли (например «Менеджер МТС») не должны получать «Управление кадрами»
   // только из-за того, что человеку назначен отдел.
@@ -231,10 +247,17 @@ async function buildProfileResponse(
   // «Выработка» (миграция 342): кнопки «Бригады» и «Зарплата по объектам» в табеле. Галочка page-ключей раздела не даёт.
   const has_brigade_output_access = payrollSectionAccess || await hasBrigadeOutputGrant(profile.employee_id);
 
-  // Вход в админку: по роли либо по списку «Зарплаты» — раздел живёт в админке, и человеку
-  // на роли только с личным кабинетом иначе в него не попасть. Админ-ключи роли выше
-  // режутся по-прежнему только флагом роли.
-  const has_admin_access = roleHasAdminArea || payrollSectionAccess;
+  // Галочки «Проживание»/«Удержания» в назначениях (миграция 351) — зеркало ветки в resolveEffectivePageAccess:
+  // без этих строк бэк запрос пропустит, а фронт вкладку не покажет.
+  const staffTabGrants = role.is_admin ? [] : await listStaffTabGrants(profile.employee_id);
+  for (const tab of staffTabGrants) {
+    page_access[STAFF_TAB_PAGES[tab]] = { can_view: true, can_edit: true };
+  }
+
+  // Вход в админку: по роли, по списку «Зарплаты» или по галочке вкладки кадров — эти разделы живут в админке, и
+  // человеку на роли только с личным кабинетом иначе в них не попасть. Админ-ключи роли выше режутся по-прежнему
+  // только флагом роли.
+  const has_admin_access = roleHasAdminArea || payrollSectionAccess || staffTabGrants.length > 0;
 
   const response: UserProfileResponse = {
     id: profile.id,
@@ -263,6 +286,8 @@ async function buildProfileResponse(
     has_direct_reports,
     has_timesheet_view_employees,
     has_brigade_output_access,
+    staff_tab_role_edit: staffTabFlags.roleEdit,
+    can_grant_staff_tabs: staffTabFlags.canGrant,
     is_weekend_responsible,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',

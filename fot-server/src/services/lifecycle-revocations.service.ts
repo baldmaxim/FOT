@@ -25,6 +25,8 @@ export interface IRestoreConflict {
 export interface IRestoreResult {
   departmentAccessRestored: number;
   directReportsRestored: number;
+  /** Галочки «Проживание»/«Удержания» (миграция 351). */
+  staffTabAccessRestored: number;
   conflicts: IRestoreConflict[];
 }
 
@@ -95,6 +97,37 @@ export async function revokeDirectReportsWithSnapshot(
   return revoked.rows.map(r => Number(r.subordinate_employee_id));
 }
 
+/**
+ * Снимает галочки «Проживание»/«Удержания» (миграция 351) с сохранением снимка: доступ к удержаниям и проживанию всей
+ * организации не должен пережить увольнение. Строки удаляются (флага активности у таблицы нет) — снимок хранит их
+ * поля, восстановление вставляет обратно.
+ */
+export async function revokeStaffTabAccessWithSnapshot(
+  client: Client,
+  operationId: string,
+  employeeId: number,
+): Promise<number> {
+  const revoked = await client.query<{ tab: string; created_by: string | null; created_at: string | Date }>(
+    `DELETE FROM employee_staff_tab_access
+      WHERE employee_id = $1
+      RETURNING tab, created_by, created_at`,
+    [employeeId],
+  );
+  for (const row of revoked.rows) {
+    await client.query(
+      `INSERT INTO employee_lifecycle_revocations (operation_id, employee_id, kind, row_id, payload)
+       VALUES ($1, $2, 'staff_tab_access', $3, $4::jsonb)
+       ON CONFLICT (operation_id, kind, row_id) DO NOTHING`,
+      [operationId, employeeId, row.tab, JSON.stringify({
+        tab: row.tab,
+        created_by: row.created_by,
+        created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      })],
+    );
+  }
+  return revoked.rowCount ?? 0;
+}
+
 /** Последнее применённое увольнение сотрудника — источник снимка для восстановления. */
 export async function findLastAppliedDismissOperationId(
   client: Client,
@@ -134,6 +167,7 @@ export async function restoreFromSnapshot(
   const conflicts: IRestoreConflict[] = [];
   let departmentAccessRestored = 0;
   let directReportsRestored = 0;
+  let staffTabAccessRestored = 0;
 
   for (const row of snapshot.rows) {
     if (row.kind === 'department_access') {
@@ -178,8 +212,23 @@ export async function restoreFromSnapshot(
         [row.row_id, employeeId],
       );
       directReportsRestored += res.rowCount ?? 0;
+      continue;
+    }
+
+    if (row.kind === 'staff_tab_access') {
+      // Галочку, которую за время увольнения поставили снова, не трогаем: ON CONFLICT делает возврат идемпотентным.
+      // Автор удалён (created_by исчез) — FK обнулил бы его и так, вставляем NULL.
+      const res = await client.query(
+        `INSERT INTO employee_staff_tab_access (employee_id, tab, created_by, created_at)
+         SELECT $1::bigint, $2::text, up.id, COALESCE($4::timestamptz, now())
+           FROM (SELECT 1) AS one
+           LEFT JOIN user_profiles up ON up.id = $3::uuid
+         ON CONFLICT (employee_id, tab) DO NOTHING`,
+        [employeeId, row.row_id, row.payload?.created_by ?? null, row.payload?.created_at ?? null],
+      );
+      staffTabAccessRestored += res.rowCount ?? 0;
     }
   }
 
-  return { departmentAccessRestored, directReportsRestored, conflicts };
+  return { departmentAccessRestored, directReportsRestored, staffTabAccessRestored, conflicts };
 }

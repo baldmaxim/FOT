@@ -5,7 +5,7 @@ import { env } from '../config/env.js';
 import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
 import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
-import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { resolveEffectivePageAccess, resolveRolePageAccess } from '../services/access-control.service.js';
 import { resolveCompanyScope } from '../services/data-scope.service.js';
 import { canToggleTimesheetLock } from '../utils/timesheet-lock-toggle.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
@@ -161,6 +161,31 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
       next();
     } catch (error) {
       console.error('requirePageAccess error:', error);
+      res.status(500).json({ success: false, error: 'Authorization check failed' });
+    }
+  };
+};
+
+/**
+ * Право страницы только по РОЛИ (resolveRolePageAccess): обход is_admin и матрица роли с гейтом admin_access, без
+ * персональных назначений. Для действий, которые персональная галочка открывать не должна: справочник видов удержаний и
+ * выдача самих галочек «Проживание»/«Удержания» (миграция 351) — иначе получивший галочку раздавал бы её дальше.
+ */
+export const requireRolePageAccess = (pagePath: string, action: AccessAction = 'view') => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    try {
+      if (!(await resolveRolePageAccess(req, pagePath, action))) {
+        res.status(403).json({ success: false, error: 'Недостаточно прав' });
+        return;
+      }
+      next();
+    } catch (error) {
+      console.error('requireRolePageAccess error:', error);
       res.status(500).json({ success: false, error: 'Authorization check failed' });
     }
   };

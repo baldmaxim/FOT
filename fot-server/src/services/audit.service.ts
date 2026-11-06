@@ -298,6 +298,8 @@ export const AUDIT_ACTIONS = {
   EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED: 'EMPLOYEE_TIMESHEET_VIEW_ACCESS_CHANGED',
   // «Выработка» (миграция 342): галочка поставлена или снята.
   EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED: 'EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED',
+  // «Проживание»/«Удержания» в назначениях (миграция 351): галочка вкладки поставлена или снята.
+  EMPLOYEE_STAFF_TAB_ACCESS_CHANGED: 'EMPLOYEE_STAFF_TAB_ACCESS_CHANGED',
   // «Общежитие» (миграция 314): проживание сотрудника — добавлено, изменено (было → стало), удалено.
   DORMITORY_STAY_ADDED: 'DORMITORY_STAY_ADDED',
   DORMITORY_STAY_UPDATED: 'DORMITORY_STAY_UPDATED',

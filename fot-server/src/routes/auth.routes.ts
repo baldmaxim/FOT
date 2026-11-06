@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authController } from '../controllers/auth.controller.js';
 import { auth2faSelfController } from '../controllers/auth-2fa-self.controller.js';
 import { authenticate } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 import {
   authLimiter,
   refreshLimiter,
@@ -37,7 +38,9 @@ router.post(
   authController.useRecoveryCode
 );
 
-router.get('/me', authenticate, authController.getMe);
+// Без HTTP-кэша: по сокет-событию profile:access_changed фронт пересняет профиль, и ответ из общего max-age=30
+// (app.ts) вернул бы прежние права — вкладка, выданная или снятая в назначениях, не появилась бы до перезахода.
+router.get('/me', authenticate, noStore, authController.getMe);
 
 // Self-service 2FA
 router.post('/2fa/setup', authenticate, auth2faSelfController.setup2FA);

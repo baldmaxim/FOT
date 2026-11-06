@@ -16,6 +16,7 @@ import {
   getRequestPayrollSectionAccess,
   isPayrollSectionPage,
 } from './payroll/payroll-access.service.js';
+import { getRequestStaffTabGrant, staffTabByPage } from './staff-tab-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
@@ -293,6 +294,12 @@ export async function resolveEffectivePageAccess(
   if (isPayrollSectionPage(pagePath)) return getRequestPayrollSectionAccess(req);
 
   if (req.user.is_admin) return true;
+
+  // Галочки «Проживание»/«Удержания» в назначениях (миграция 351): view и edit своей вкладки. Стоит ДО гейта
+  // admin_access — галочку дают сотруднику с любой ролью, в том числе только с личным кабинетом. Сравнение ключа
+  // первым условием: на других страницах ветка не делает запроса.
+  const staffTab = staffTabByPage(pagePath);
+  if (staffTab && await getRequestStaffTabGrant(req, staffTab)) return true;
 
   if (await isDeputyRoleDepartmentPageBlocked(req, pagePath)) return false;
 

@@ -6,7 +6,8 @@
  *
  * Охват: список — как список кадров (resolveStaffRosterEmployeeIds), в «Зарплате» — «штат зарплаты»
  * (работающие, без подрядчиков, охват условий оплаты). Запись — canWriteEmployeeInScope; уволенному (его
- * назначения отделов сняты) дату выезда ставит тот, кто видит его в «Уволенных» кадров.
+ * назначения отделов сняты) дату выезда ставит тот, кто видит его в «Уволенных» кадров. Персональная галочка
+ * «Проживание» (миграция 351) — вся организация на список и запись вкладки кадров; хендлеры «Зарплаты» её не читают.
  * «Зарплата» («Справочник» → «Общежитие», список живущих — миграция 339: он гасит авто-доплату за общежитие)
  * заселяет (POST), выселяет с даты (PATCH, выезд только раньше прежнего) и удаляет ошибочную строку — право
  * /salary/terms или /salary/payments и запись в «Справочник» (canWritePayrollRegistryEmployee); адреса и въезд
@@ -18,6 +19,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { canWriteEmployeeInScope } from '../services/data-scope.service.js';
+import { getRequestStaffTabGrant } from '../services/staff-tab-access.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import {
   addStay,
@@ -89,18 +91,27 @@ const parseId = (req: AuthenticatedRequest): number | null => {
   return Number.isInteger(id) && id > 0 ? id : null;
 };
 
-/** Охват списка кадров набором id; 'all' — null (без ограничения). */
+/** Галочка «Проживание» в назначениях (миграция 351): охват вкладки кадров — вся организация. */
+const hasDormitoryGrant = (req: AuthenticatedRequest): Promise<boolean> => getRequestStaffTabGrant(req, 'dormitory');
+
+/** Охват списка кадров набором id; 'all' и галочка — null (без ограничения). */
 const rosterEmployeeIds = async (req: AuthenticatedRequest): Promise<number[] | null> => {
+  if (await hasDormitoryGrant(req)) return null;
   const roster = await resolveStaffRosterEmployeeIds(req);
   return roster === 'all' ? null : [...roster];
 };
+
+/** Можно ли заселить работающего сотрудника: галочка или охват роли. */
+const canAddStay = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => (
+  await hasDormitoryGrant(req) || canWriteEmployeeInScope(req, employeeId)
+);
 
 /**
  * Можно ли менять проживание сотрудника. Уволенного увольнение выводит из назначений отделов,
  * и canWriteEmployeeInScope админу компании откажет — тогда решает «виден ли в списке кадров».
  */
 const canWriteStay = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
-  if (await canWriteEmployeeInScope(req, employeeId)) return true;
+  if (await canAddStay(req, employeeId)) return true;
   const employee = await getEmployeeState(employeeId);
   if (!employee || employee.employment_status === 'active') return false;
   return canSeeEmployeeInStaffList(req, employeeId);
@@ -179,7 +190,7 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
       res.status(400).json({ success: false, error: 'Подрядчика добавить нельзя' });
       return;
     }
-    if (!(await canWriteEmployeeInScope(req, employeeId))) {
+    if (!(await canAddStay(req, employeeId))) {
       res.status(403).json(NO_ACCESS);
       return;
     }

@@ -55,6 +55,9 @@ export interface RolePageAccess {
   can_edit: boolean;
 }
 
+/** Вкладки «Управления кадрами», которые выдаются сотруднику персональной галочкой (миграция 351). */
+export type StaffTab = 'dormitory' | 'deductions';
+
 // Профиль, отправляемый клиенту (зеркало fot-app/src/types/auth.ts::UserProfile).
 // position_type оставлен как алиас role_code для обратной совместимости UI.
 export interface UserProfileResponse {
@@ -97,6 +100,13 @@ export interface UserProfileResponse {
   has_timesheet_view_employees?: boolean;
   /** «Выработка» (миграция 342): список «Зарплаты» или галочка — «Бригады» и «Зарплата по объектам» в табеле. */
   has_brigade_output_access?: boolean;
+  /**
+   * Правка вкладок «Проживание»/«Удержания» по РОЛИ (миграция 351): is_admin либо роль с админкой и правкой в
+   * матрице. Персональная галочка не учитывается — по этому полю решается правка справочника видов удержаний.
+   */
+  staff_tab_role_edit?: Record<StaffTab, boolean>;
+  /** Может ставить галочки «Проживание»/«Удержания» в назначениях: правка вкладки по роли + охват «вся организация». */
+  can_grant_staff_tabs?: Record<StaffTab, boolean>;
   /** Назначен ответственным за согласование выходных хотя бы по одному таргету. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;
@@ -183,6 +193,8 @@ export interface AuthenticatedRequest extends Request {
     __payroll_section_access?: boolean;
     /** Список «Зарплаты» или галочка «Выработка» (миграция 342) — один запрос на HTTP-запрос. */
     __brigade_output_access?: boolean;
+    /** Галочки «Проживание»/«Удержания» в назначениях (миграция 351) — один запрос на HTTP-запрос. */
+    __staff_tab_grants?: StaffTab[];
     /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */
     __non_deputy_subtree_ids?: string[];
     /** Отделы, где можно ВЕСТИ ТАБЕЛЬ: full-поддерево + поддерево заместителя (миграция 283). */

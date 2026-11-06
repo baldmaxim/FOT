@@ -5,12 +5,14 @@
  *
  * Охват — как у «Проживания»: список — как список кадров (resolveStaffRosterEmployeeIds), запись —
  * canWriteEmployeeInScope; уволенного (его назначения отделов сняты) правит тот, кто видит его в «Уволенных».
+ * Персональная галочка «Удержания» (миграция 351) — вся организация и на список, и на запись.
  */
 import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { canWriteEmployeeInScope } from '../services/data-scope.service.js';
+import { getRequestStaffTabGrant } from '../services/staff-tab-access.service.js';
 import { getEmployeeState, searchCandidates } from '../services/dormitory-stays.service.js';
 import {
   canSeeEmployeeInStaffList,
@@ -50,18 +52,27 @@ const NO_ACCESS = { success: false, error: 'Нет доступа к сотру�
 const KIND_NOT_FOUND = { success: false, error: 'Вид удержания не найден' };
 const DUPLICATE_KIND = { success: false, error: 'Такой вид удержания уже есть', code: 'DUPLICATE_KIND' };
 
-/** Охват списка кадров набором id; 'all' — null (без ограничения). */
+/** Галочка «Удержания» в назначениях (миграция 351): охват — вся организация. */
+const hasDeductionsGrant = (req: AuthenticatedRequest): Promise<boolean> => getRequestStaffTabGrant(req, 'deductions');
+
+/** Охват списка кадров набором id; 'all' и галочка — null (без ограничения). */
 const rosterEmployeeIds = async (req: AuthenticatedRequest): Promise<number[] | null> => {
+  if (await hasDeductionsGrant(req)) return null;
   const roster = await resolveStaffRosterEmployeeIds(req);
   return roster === 'all' ? null : [...roster];
 };
+
+/** Можно ли добавить удержание работающему сотруднику: галочка или охват роли. */
+const canAddDeduction = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => (
+  await hasDeductionsGrant(req) || canWriteEmployeeInScope(req, employeeId)
+);
 
 /**
  * Можно ли менять удержание сотрудника. Уволенного увольнение выводит из назначений отделов,
  * и canWriteEmployeeInScope админу компании откажет — тогда решает «виден ли в списке кадров».
  */
 const canWriteDeduction = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
-  if (await canWriteEmployeeInScope(req, employeeId)) return true;
+  if (await canAddDeduction(req, employeeId)) return true;
   const employee = await getEmployeeState(employeeId);
   if (!employee || employee.employment_status === 'active') return false;
   return canSeeEmployeeInStaffList(req, employeeId);
@@ -103,7 +114,7 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
       res.status(refusal.status).json(refusal.body);
       return;
     }
-    if (!(await canWriteEmployeeInScope(req, employeeId))) {
+    if (!(await canAddDeduction(req, employeeId))) {
       res.status(403).json(NO_ACCESS);
       return;
     }
