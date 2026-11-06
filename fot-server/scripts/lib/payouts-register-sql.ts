@@ -10,6 +10,10 @@
  *  - после вставки суммы по сотрудникам сверяются с файлом.
  * Откат — только при том же полном совпадении, все ведомости сразу.
  *
+ * Ведомости из XML (build-payouts-xml-sql.ts) несут ещё зарплатный проект и id_all строк; у регистра они NULL.
+ * Режим «транзакция открыта» (open): проверка базы, lock_timeout, в конце — КОНТРОЛЬ и без COMMIT: COMMIT или
+ * ROLLBACK оператор пишет сам, сверив вывод (\i в интерактивном psql).
+ *
  * Замена месяца (from → to, оба — полные наборы месяца): документы месяца в БД обязаны быть ровно from (или уже to —
  * тогда без изменений); удаляются документы from, которых (ГУИД + хеш) нет в to, вставляются недостающие документы to.
  * Кроме advisory lock — SHARE ROW EXCLUSIVE на таблицы «Перечислено (1С)»: любая чужая запись ждёт конца транзакции.
@@ -27,6 +31,8 @@ export interface IRegisterSqlDocument {
   contentHash: string;
   lineCount: number;
   lockKey: string;
+  /** Зарплатный проект (только XML); у регистра — NULL. */
+  salaryProject?: string | null;
 }
 
 export interface IRegisterSqlLine {
@@ -41,6 +47,8 @@ export interface IRegisterSqlLine {
   employeeName: string | null;
   resolution: 'confirmed' | 'unmatched';
   reason: string;
+  /** Код физлица 1С (только XML); у регистра — NULL. */
+  personIdAll?: string | null;
 }
 
 export interface IRegisterSqlInput {
@@ -48,6 +56,14 @@ export interface IRegisterSqlInput {
   header: string[];
   documents: IRegisterSqlDocument[];
   lines: IRegisterSqlLine[];
+}
+
+/** Транзакция остаётся открытой: COMMIT или ROLLBACK оператор пишет сам после сверки вывода. */
+export interface IOpenTransaction {
+  /** current_database(), в которой разрешён запуск. */
+  database: string;
+  /** Контрольные запросы после записи — с `\echo` ожидаемого результата. */
+  controls: string[];
 }
 
 const lit = (value: string | null): string => (value === null ? 'NULL' : `'${value.replace(/'/g, "''")}'`);
@@ -65,11 +81,27 @@ const insertValues = (table: string, columns: string, rows: readonly string[]): 
 
 const PAYOUT_TABLES = 'payroll_1c_payout_documents, payroll_1c_payout_lines, payroll_1c_payout_imports';
 
+/** Проверка базы и lock_timeout в начале открытой транзакции. */
+const openGuard = (open: IOpenTransaction | undefined): string => (open ? `SET LOCAL lock_timeout = '5s';
+DO $$ BEGIN
+  IF current_database() <> ${lit(open.database)} THEN RAISE EXCEPTION 'База %, ожидалась ${open.database.replace(/'/g, "''")}', current_database(); END IF;
+END $$;
+` : '');
+
+/** Конец транзакции: COMMIT или (open) контрольные запросы и подсказка оператору. */
+const finish = (open: IOpenTransaction | undefined): string => (open ? `${open.controls.join('\n')}
+
+\\echo
+\\echo 'Транзакция ОТКРЫТА. Сверьте вывод: COMMIT; если всё верно, ROLLBACK; если нет.'
+` : 'COMMIT;\n');
+
 /** Начало транзакции: lock по номеру и дате документов по порядку; для замены — ещё и таблицы целиком. */
-const begin = (lockKeys: readonly string[], lockTables: boolean): string => `\\set ON_ERROR_STOP on
-
+const begin = (lockKeys: readonly string[], lockTables: boolean, open?: IOpenTransaction): string => `\\set ON_ERROR_STOP on
+${open ? `SET client_encoding = 'UTF8';
+SELECT current_database() AS db, current_user AS usr, inet_server_addr() AS server, inet_server_port() AS port;
+` : ''}
 BEGIN;
-
+${openGuard(open)}
 -- Lock по номеру и дате каждой ведомости, по порядку: параллельная загрузка XML той же ведомости ждёт.
 DO $$
 DECLARE k text;
@@ -99,23 +131,25 @@ const createSet = (p: string, input: IRegisterSqlInput): string => {
   return `
 CREATE TEMP TABLE ${p}_docs (
   doc_guid uuid PRIMARY KEY, doc_number text NOT NULL, doc_date date NOT NULL, period_month date NOT NULL,
-  payment_method text NOT NULL, total_amount numeric(12,2) NOT NULL, content_hash text NOT NULL, line_count integer NOT NULL
+  payment_method text NOT NULL, total_amount numeric(12,2) NOT NULL, content_hash text NOT NULL, line_count integer NOT NULL,
+  salary_project text
 ) ON COMMIT DROP;
-${insertValues(`${p}_docs`, 'doc_guid, doc_number, doc_date, period_month, payment_method, total_amount, content_hash, line_count',
+${insertValues(`${p}_docs`, 'doc_guid, doc_number, doc_date, period_month, payment_method, total_amount, content_hash, line_count, salary_project',
     input.documents.map(doc => [
       lit(doc.guid), lit(doc.docNumber), lit(doc.docDate), lit(doc.periodMonth), lit(doc.paymentMethod),
-      money(doc.totalCents), lit(doc.contentHash), String(doc.lineCount),
+      money(doc.totalCents), lit(doc.contentHash), String(doc.lineCount), lit(doc.salaryProject ?? null),
     ].join(', ')))}
 
 CREATE TEMP TABLE ${p}_lines (
   doc_guid uuid NOT NULL, line_no integer NOT NULL, line_key text NOT NULL, full_name_1c text NOT NULL, brigade_1c text,
   amount numeric(12,2) NOT NULL CHECK (amount > 0), employee_id integer, employee_name text, resolution text NOT NULL,
-  resolution_reason text NOT NULL, PRIMARY KEY (doc_guid, line_no)
+  resolution_reason text NOT NULL, person_id_all uuid, PRIMARY KEY (doc_guid, line_no)
 ) ON COMMIT DROP;
 ${insertValues(`${p}_lines`, `doc_guid, line_no, line_key, full_name_1c, brigade_1c, amount, employee_id, employee_name, resolution,
-  resolution_reason`, input.lines.map(line => [
+  resolution_reason, person_id_all`, input.lines.map(line => [
     lit(line.guid), String(line.lineNo), lit(line.lineKey), lit(line.fullName), lit(line.department), money(line.amountCents),
     line.employeeId === null ? 'NULL' : String(line.employeeId), lit(line.employeeName), lit(line.resolution), lit(line.reason),
+    lit(line.personIdAll ?? null),
   ].join(', ')))}
 
 CREATE TEMP TABLE ${p}_methods (payment_method text PRIMARY KEY, docs integer NOT NULL, total numeric(14,2) NOT NULL) ON COMMIT DROP;
@@ -130,7 +164,7 @@ ${insertValues(`${p}_employees`, 'employee_id, total', [...employees].map(([id, 
 /** Сохранённое состояние документов набора ровно такое, как после загрузки, и после неё ничего не менялось. */
 const sameState = (p: string): string => `(
     NOT EXISTS (
-      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, NULL::text, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
+      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
               total_amount, content_hash, 1, NULL::uuid FROM ${p}_docs)
       EXCEPT
       (SELECT d.doc_guid, d.doc_number, d.zup2_number, d.doc_date, d.period_month, d.payment_method, d.salary_project,
@@ -141,10 +175,10 @@ const sameState = (p: string): string => `(
               d.organization_inn, d.total_amount, d.content_hash, d.revision, d.updated_by
          FROM payroll_1c_payout_documents d JOIN ${p}_docs r ON r.doc_guid = d.doc_guid)
       EXCEPT
-      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, NULL::text, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
+      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
               total_amount, content_hash, 1, NULL::uuid FROM ${p}_docs))
     AND NOT EXISTS (
-      (SELECT doc_guid, line_no, line_key, full_name_1c, NULL::uuid, brigade_1c, amount, employee_id, resolution, resolution_reason
+      (SELECT doc_guid, line_no, line_key, full_name_1c, person_id_all, brigade_1c, amount, employee_id, resolution, resolution_reason
          FROM ${p}_lines)
       EXCEPT
       (SELECT d.doc_guid, l.line_no, l.line_key, l.full_name_1c, l.person_id_all, l.brigade_1c, l.amount, l.employee_id,
@@ -157,7 +191,7 @@ const sameState = (p: string): string => `(
          FROM payroll_1c_payout_lines l JOIN payroll_1c_payout_documents d ON d.id = l.document_id
          JOIN ${p}_docs r ON r.doc_guid = d.doc_guid)
       EXCEPT
-      (SELECT doc_guid, line_no, line_key, full_name_1c, NULL::uuid, brigade_1c, amount, employee_id, resolution, resolution_reason
+      (SELECT doc_guid, line_no, line_key, full_name_1c, person_id_all, brigade_1c, amount, employee_id, resolution, resolution_reason
          FROM ${p}_lines))
     AND NOT EXISTS (
       SELECT 1 FROM payroll_1c_payout_imports i JOIN payroll_1c_payout_documents d ON d.id = i.document_id
@@ -226,13 +260,13 @@ const checks = (p: string, input: IRegisterSqlInput): string => {
 /** Вставка документов набора, отобранных условием по `r` (документ набора), и их строк; n — документов, m — строк. */
 const insertSet = (p: string, where: string): string => `    INSERT INTO payroll_1c_payout_documents (doc_guid, doc_number, zup2_number, doc_date, period_month, payment_method,
                                              salary_project, organization_inn, total_amount, content_hash, revision, updated_by)
-    SELECT r.doc_guid, r.doc_number, NULL, r.doc_date, r.period_month, r.payment_method, NULL, '${PAYOUTS_1C_ORGANIZATION_INN}',
+    SELECT r.doc_guid, r.doc_number, NULL, r.doc_date, r.period_month, r.payment_method, r.salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}',
            r.total_amount, r.content_hash, 1, NULL
       FROM ${p}_docs r WHERE ${where};
     GET DIAGNOSTICS n = ROW_COUNT;
     INSERT INTO payroll_1c_payout_lines (document_id, line_no, line_key, full_name_1c, person_id_all, brigade_1c, amount,
                                          employee_id, resolution, resolution_reason)
-    SELECT d.id, l.line_no, l.line_key, l.full_name_1c, NULL, l.brigade_1c, l.amount, l.employee_id, l.resolution, l.resolution_reason
+    SELECT d.id, l.line_no, l.line_key, l.full_name_1c, l.person_id_all, l.brigade_1c, l.amount, l.employee_id, l.resolution, l.resolution_reason
       FROM ${p}_lines l JOIN ${p}_docs r ON r.doc_guid = l.doc_guid JOIN payroll_1c_payout_documents d ON d.doc_guid = r.doc_guid
      WHERE ${where};
     GET DIAGNOSTICS m = ROW_COUNT;`;
@@ -250,11 +284,11 @@ const employeeTotalsSaved = (p: string, message: string): string => `    SELECT 
         WHERE l.employee_id IS NOT NULL GROUP BY l.employee_id)) x;
     IF n <> 0 THEN RAISE EXCEPTION '${message}: %', n; END IF;`;
 
-export const buildRegisterLoadSql = (input: IRegisterSqlInput): string => {
+export const buildRegisterLoadSql = (input: IRegisterSqlInput, open?: IOpenTransaction): string => {
   const docs = input.documents.length;
   return `${comment(input.header)}
 
-${begin(input.documents.map(doc => doc.lockKey), false)}
+${begin(input.documents.map(doc => doc.lockKey), false, open)}
 ${createSet('reg', input)}
 DO $$
 DECLARE n integer; m integer; t numeric; bad text; existing integer;
@@ -276,15 +310,14 @@ ${employeeTotalsSaved('reg', 'После вставки суммы по сотр
   END IF;
 END $$;
 
-COMMIT;
-`;
+${finish(open)}`;
 };
 
-export const buildRegisterRollbackSql = (input: IRegisterSqlInput): string => {
+export const buildRegisterRollbackSql = (input: IRegisterSqlInput, open?: IOpenTransaction): string => {
   const docs = input.documents.length;
   return `${comment(input.header)}
 
-${begin(input.documents.map(doc => doc.lockKey), false)}
+${begin(input.documents.map(doc => doc.lockKey), false, open)}
 ${createSet('reg', input)}
 DO $$
 DECLARE n integer; existing integer;
@@ -299,8 +332,7 @@ BEGIN
   RAISE NOTICE 'Удалено ведомостей: ${docs} (строки — каскадом)';
 END $$;
 
-COMMIT;
-`;
+${finish(open)}`;
 };
 
 /** Документ набора, которого (ГУИД + хеш) нет в другом наборе. */

@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from 'pg';
 import {
   buildRegisterLoadSql,
   buildRegisterReplaceSql,
+  buildRegisterRollbackSql,
   type IRegisterSqlDocument,
   type IRegisterSqlInput,
   type IRegisterSqlLine,
@@ -52,14 +53,14 @@ const ROLLBACK = buildRegisterReplaceSql(['откат'], TO, FROM, MONTH);
 describe.skipIf(!PG_URL)('регистр выплат ЗУП: SQL замены месяца на PostgreSQL', () => {
   let pool: Pool;
 
-  /** SQL генератора через node-pg (без мета-команды psql): NOTICE наружу; ошибка — ROLLBACK и исключение. */
+  /** SQL генератора через node-pg (без мета-команд psql): NOTICE наружу; ошибка — ROLLBACK и исключение. */
   const runScript = async (sql: string, own?: PoolClient): Promise<string[]> => {
     const client = own ?? await pool.connect();
     const notices: string[] = [];
     const onNotice = (msg: { message?: string }) => notices.push(msg.message ?? '');
     client.on('notice', onNotice);
     try {
-      await client.query(sql.replace(/^\\set ON_ERROR_STOP on$/m, ''));
+      await client.query(sql.replace(/^\\.*$/gm, ''));
       return notices;
     } catch (err) {
       await client.query('ROLLBACK');
@@ -195,6 +196,53 @@ describe.skipIf(!PG_URL)('регистр выплат ЗУП: SQL замены �
       replacer.release();
       await pool.query('DELETE FROM payroll_1c_payout_documents WHERE doc_guid = $1', ['f0000000-0000-5000-8000-000000000009']);
     }
+  });
+
+  it('XML: id_all и зарплатный проект сохраняются; транзакция открыта, чужая база — отказ, повтор — без изменений', async () => {
+    const xml = part('a1000000-0000-5000-8000-000000000011', '0000-000011', 'Аванс', [['Иванов Иван', 3000, 1], ['Товбин Михаил', 7000, null]],
+      '2026-10-01');
+    const ID_ALL = 'aaaaaaaa-0000-0000-0000-000000000001';
+    const input: IRegisterSqlInput = {
+      header: ['xml'], documents: [{ ...xml.doc, salaryProject: 'Банк №1' }],
+      lines: xml.lines.map((line, index) => ({ ...line, department: null, personIdAll: index === 0 ? ID_ALL : null })),
+    };
+    const { db } = (await pool.query<{ db: string }>('SELECT current_database() AS db')).rows[0];
+    const open = { database: db, controls: ["\\echo 'КОНТРОЛЬ'", 'SELECT 1;'] };
+    const load = buildRegisterLoadSql(input, open);
+    expect(load).not.toMatch(/^COMMIT;$/m);
+    expect(load).toMatch(/^\\echo 'Транзакция ОТКРЫТА/m);
+    await expectRejected(buildRegisterLoadSql(input, { database: 'FOT_Prod_нет', controls: [] }), /ожидалась FOT_Prod_нет/);
+
+    const runOpen = async (sql: string): Promise<string[]> => {
+      const client = await pool.connect();
+      try {
+        const notices = await runScript(sql, client);
+        expect((await client.query<{ s: string }>('SELECT now() <> statement_timestamp() AS s')).rows[0].s).toBe(true);
+        await client.query('COMMIT');
+        return notices;
+      } finally {
+        client.release();
+      }
+    };
+    expect(await runOpen(load)).toContain('Вставлено ведомостей: 1, строк: 2');
+    const saved = (await pool.query(
+      `SELECT d.salary_project, l.line_no, l.person_id_all::text AS id_all, l.brigade_1c, l.employee_id
+         FROM payroll_1c_payout_documents d JOIN payroll_1c_payout_lines l ON l.document_id = d.id
+        WHERE d.doc_guid = $1 ORDER BY l.line_no`,
+      [xml.doc.guid],
+    )).rows;
+    expect(saved).toEqual([
+      { salary_project: 'Банк №1', line_no: 1, id_all: ID_ALL, brigade_1c: null, employee_id: 1 },
+      { salary_project: 'Банк №1', line_no: 2, id_all: null, brigade_1c: null, employee_id: null },
+    ]);
+    expect(await runOpen(load)).toContain('Без изменений: этот набор уже загружен');
+
+    // Тот же набор без id_all — уже не «ровно этот»: отказ без записи.
+    const noIdAll = { ...input, lines: input.lines.map(line => ({ ...line, personIdAll: null })) };
+    await expectRejected(buildRegisterLoadSql(noIdAll), /Состояние не то/);
+
+    expect(await runOpen(buildRegisterRollbackSql(input, open))).toContain('Удалено ведомостей: 1 (строки — каскадом)');
+    expect(await guids()).toEqual([A.doc.guid, B.doc.guid, AUG.doc.guid]);
   });
 
   it('сбой после удаления (строки вставились не такими) — откатывается вся транзакция', async () => {
