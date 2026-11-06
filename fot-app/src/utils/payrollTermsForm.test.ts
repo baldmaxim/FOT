@@ -19,7 +19,7 @@ const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
   calcType: 'salary',
   amount: '175000',
-  prorationRounding: 'ruble',
+  contractType: 'labor',
   money: EMPTY_MONEY,
   supplement: EMPTY_SUPPLEMENT,
   effectiveFrom: '2026-09-24',
@@ -46,7 +46,7 @@ describe('validatePayrollTerms: состав запроса сохранения
       calc_type: 'salary',
       monthly_salary: 175000,
       bonus_amount: 20000,
-      proration_rounding: 'ruble',
+      contract_type: 'labor',
       effective_from: '2026-09-24',
     });
   });
@@ -60,6 +60,7 @@ describe('validatePayrollTerms: состав запроса сохранения
     expect(wire(result.payload)).toEqual({
       calc_type: 'hourly',
       hourly_rate: 450.5,
+      contract_type: 'labor',
       // Проживание — только показ (квартира «Проживания», миграция 320), проезд — ставка «Справочника» (324):
       // в условия не уходят; удержаний в условиях с миграции 321 нет.
       effective_from: '2026-09-24',
@@ -212,25 +213,25 @@ describe('validatePayrollTerms: плановая доплата', () => {
 });
 
 describe('initialPayrollTermsValues', () => {
-  it('округление оклада — из условий; без условий — до рубля', () => {
-    expect(initialPayrollTermsValues(row({ proration_rounding: 'daily_kopeck' }), '2026-09-24').prorationRounding)
-      .toBe('daily_kopeck');
-    expect(initialPayrollTermsValues(row({ terms_id: null, proration_rounding: 'daily_kopeck' }), '2026-09-24').prorationRounding)
-      .toBe('ruble');
+  it('договор — из условий; без условий — трудовой', () => {
+    expect(initialPayrollTermsValues(row({ contract_type: 'gph' }), '2026-09-24').contractType).toBe('gph');
+    expect(initialPayrollTermsValues(row({ terms_id: null, contract_type: 'gph' }), '2026-09-24').contractType)
+      .toBe('labor');
   });
 
-  it('смена округления — правка условий, дневная ставка уходит в запрос', () => {
+  it('смена договора — правка условий, ГПХ уходит в запрос и у почасовой ставки; округление оклада не шлём', () => {
     const initial = values();
-    expect(isPayrollTermsChanged(values({ prorationRounding: 'daily_kopeck' }), initial)).toBe(true);
-    expect(validatePayrollTerms(values({ prorationRounding: 'daily_kopeck' })).payload)
-      .toMatchObject({ proration_rounding: 'daily_kopeck' });
+    expect(isPayrollTermsChanged(values({ contractType: 'gph' }), initial)).toBe(true);
+    const payload = wire(validatePayrollTerms(values({ calcType: 'hourly', amount: '450', contractType: 'gph' })).payload);
+    expect(payload).toMatchObject({ contract_type: 'gph' });
+    expect(payload).not.toHaveProperty('proration_rounding');
   });
 
   it('из условий сотрудника: хвост нулей NUMERIC убирается, пустые суммы остаются пустыми', () => {
     expect(initialPayrollTermsValues(row(), '2026-09-24')).toEqual({
       calcType: 'hourly',
       amount: '450',
-      prorationRounding: 'ruble',
+      contractType: 'labor',
       // Проезд условий (travel_compensation) с миграции 324 в форму не попадает.
       money: { bonus: '15000', housing: '' },
       supplement: EMPTY_SUPPLEMENT,
@@ -264,7 +265,7 @@ describe('initialPayrollTermsValues', () => {
       '2026-09-24',
     );
     expect(initial).toEqual({
-      calcType: 'salary', amount: '', prorationRounding: 'ruble', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
+      calcType: 'salary', amount: '', contractType: 'labor', money: EMPTY_MONEY, supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
   });

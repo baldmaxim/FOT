@@ -133,6 +133,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) здесь не нужно.
     await pg.pool!.query(`ALTER TABLE payroll_compensation_terms
       ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Тип договора (352) — колонка условий: список и сохранение читают и пишут её.
+    await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
     await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));

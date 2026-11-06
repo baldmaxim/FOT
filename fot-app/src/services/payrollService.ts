@@ -11,8 +11,8 @@ import type {
 export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты: «по графику» (оклад) или «по часам». */
 export type PayrollCalcType = 'salary' | 'hourly';
-/** Округление оклада за неполный месяц, как в ЗУП: до рубля или дневная ставка до копейки × дни (миграция 331). */
-export type ProrationRounding = 'ruble' | 'daily_kopeck';
+/** Тип договора (миграция 352): трудовой или ГПХ. Пометка, на расчёт не влияет. */
+export type ContractType = 'labor' | 'gph';
 
 export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
   office: 'Офис',
@@ -25,10 +25,9 @@ export const CALC_TYPE_LABELS: Record<PayrollCalcType, string> = {
   hourly: 'По часам',
 };
 
-/** Округление оклада за неполный месяц — как в ЗУП у сотрудника. */
-export const PRORATION_ROUNDING_LABELS: Record<ProrationRounding, string> = {
-  ruble: 'До рубля',
-  daily_kopeck: 'Дневная ставка',
+export const CONTRACT_TYPE_LABELS: Record<ContractType, string> = {
+  labor: 'Трудовой',
+  gph: 'ГПХ',
 };
 
 /** Выплачено сотруднику за месяц: начислено минус удержано («К выплате» месяца). */
@@ -135,8 +134,8 @@ export interface IPayrollTermsRow {
   /** Компенсации проезда и связи, ₽/мес. Проезд условий с миграции 324 не используется — см. travel_rate. */
   travel_compensation?: string | number | null;
   communication_compensation?: string | number | null;
-  /** Округление оклада за неполный месяц, как в ЗУП (миграция 331); null — условий нет, поля нет у старого бэкенда. */
-  proration_rounding?: ProrationRounding | null;
+  /** Тип договора (миграция 352); null — условий нет, поля нет у старого бэкенда. */
+  contract_type?: ContractType | null;
   /**
    * Проезд (миграция 324): ставка «Проезд» за месяц даты выборки, NUMERIC строкой; null — не задана. Положен ли
    * сотруднику — по категории и travel_stopped (travelAllowance). Нет у старого бэкенда.
@@ -213,8 +212,11 @@ export interface IAssignTermsPayload {
   housing_compensation?: number;
   communication_compensation?: number;
   staff_units?: number;
-  /** Не передано — как у прежних условий. */
-  proration_rounding?: ProrationRounding;
+  /**
+   * Не передано — как у прежних условий. Округление оклада (миграция 331) клиент не шлёт: признак ставит скрипт
+   * по ЗУП, сервер переносит его из прежних условий.
+   */
+  contract_type?: ContractType;
   effective_from: string;
   /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
   planned_supplement?: IPlannedSupplementPayload | null;
@@ -239,6 +241,9 @@ export interface ISalaryChange {
   /** Оклад + премия; у почасовой — null. */
   total: string | null;
   prev_calc_type: PayrollCalcType | null;
+  /** Договор записи и прежний; null — записи раньше нет. Нет у старого бэкенда. */
+  contract_type?: ContractType;
+  prev_contract_type?: ContractType | null;
   prev_amount: string | null;
   prev_bonus: string | null;
   prev_total: string | null;

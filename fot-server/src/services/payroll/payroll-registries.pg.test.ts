@@ -213,6 +213,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) здесь не нужно.
     await run(`ALTER TABLE payroll_compensation_terms
       ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Тип договора (352) — колонка условий: список и сохранение читают и пишут её.
+    await run(migration('352_payroll_terms_contract_type.sql'));
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Сварщик', 520), ('Проживание общежития', 630)`);
     await run(migration('313_payroll_rate_code.sql'));
     for (const name of [

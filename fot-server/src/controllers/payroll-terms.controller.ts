@@ -35,6 +35,7 @@ import { auditService } from '../services/audit.service.js';
 import { resolveCurrentStaffCategories } from '../services/payroll/payroll-staff-category.js';
 import {
   assignTerms,
+  CONTRACT_TYPES,
   getSalaryChanges,
   getTermsChanges,
   getTermsHistory,
@@ -42,6 +43,7 @@ import {
   lockPayrollEmployee,
   PRORATION_ROUNDINGS,
   setPlannedSupplement,
+  type ContractType,
   type ProrationRounding,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
@@ -119,6 +121,8 @@ const termsBodySchema = z.object({
   deduction_amount: optionalMoneySchema,
   staff_units: z.coerce.number().positive().max(2).optional(),
   proration_rounding: z.enum(PRORATION_ROUNDINGS as [ProrationRounding, ...ProrationRounding[]]).optional(),
+  // Тип договора (миграция 352); не передан (прежний клиент) — как в прежних условиях.
+  contract_type: z.enum(CONTRACT_TYPES as [ContractType, ...ContractType[]]).optional(),
   organization_id: z.string().uuid().nullable().optional(),
   effective_from: dateSchema,
   change_reason: z.string().trim().max(500).optional(),
@@ -317,6 +321,7 @@ export const buildBaseCtes = (columnFilterSql: string, fioSql = 'FALSE', calcMon
            t.travel_compensation,
            t.communication_compensation,
            t.proration_rounding,
+           t.contract_type,
            t.staff_units,
            t.effective_from,
            t.effective_to
@@ -480,6 +485,8 @@ interface IPayrollTermsListRow {
   communication_compensation: string | number | null;
   /** Округление оклада за неполный месяц (миграция 331); без условий — null. */
   proration_rounding: ProrationRounding | null;
+  /** Тип договора (миграция 352); без условий — null. */
+  contract_type: ContractType | null;
   staff_units: string | number | null;
   effective_from: string | null;
   effective_to: string | null;
@@ -885,6 +892,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         staffUnits: body.staff_units,
         // Прежний клиент поля не знает — как у условий на дату: признак ставит скрипт по ЗУП, сохранение не сбрасывает.
         prorationRounding: body.proration_rounding ?? previousTerms?.proration_rounding,
+        contractType: body.contract_type ?? previousTerms?.contract_type,
         organizationId: body.organization_id ?? null,
         effectiveFrom: body.effective_from,
         changeReason: body.change_reason ?? null,
@@ -922,6 +930,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         travel_compensation: body.travel_compensation ?? null,
         communication_compensation: body.communication_compensation ?? null,
         proration_rounding: body.proration_rounding ?? null,
+        contract_type: body.contract_type ?? null,
         // undefined — доплату не трогали (в аудите ключа нет), null — снята.
         planned_supplement: supplement,
         planned_supplement_changed: supplementChanged,

@@ -213,6 +213,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) списку не нужно.
     await pg.pool!.query(`ALTER TABLE payroll_compensation_terms
       ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Тип договора (352) — колонка условий: список и сохранение читают и пишут её.
+    await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     // Ведомости в банк (328) — «Выплаты на карту» на «Расчётах»; профиль нужен только для индекса миграции.
     await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
     await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));

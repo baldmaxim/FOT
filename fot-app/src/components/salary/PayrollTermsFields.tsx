@@ -2,10 +2,10 @@ import type { FC, ReactNode } from 'react';
 
 import {
   CALC_TYPE_LABELS,
-  PRORATION_ROUNDING_LABELS,
+  CONTRACT_TYPE_LABELS,
   STAFF_CATEGORY_LABELS,
+  type ContractType,
   type PayrollCalcType,
-  type ProrationRounding,
   type StaffCategory,
 } from '../../services/payrollService';
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
@@ -62,7 +62,7 @@ const formatTermsMoney = (value: string | number | null, unit: string): string =
 const formatTermsRubles = (value: string | number | null): string => formatPayrollRubles(value) ?? '—';
 
 const CALC_TYPES = Object.keys(CALC_TYPE_LABELS) as PayrollCalcType[];
-const PRORATION_ROUNDINGS = Object.keys(PRORATION_ROUNDING_LABELS) as ProrationRounding[];
+const CONTRACT_TYPES = Object.keys(CONTRACT_TYPE_LABELS) as ContractType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
@@ -204,32 +204,31 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                     </div>
                   </div>
 
-                  {/* Как ЗУП округляет оклад за неполный месяц — для «К выплате (ФОТ)». */}
-                  {form.calcType === 'salary' && (
-                    <div className={styles.field}>
-                      <span id={`${idPrefix}-rounding`} className={styles.label}>Округление оклада</span>
-                      <div
-                        role="radiogroup"
-                        aria-labelledby={`${idPrefix}-rounding`}
-                        className={readOnly ? `${styles.segmented} ${styles.segmentedDisabled}` : styles.segmented}
-                      >
-                        {PRORATION_ROUNDINGS.map(key => (
-                          <label key={key} className={styles.segment}>
-                            <input
-                              type="radio"
-                              className={styles.segmentInput}
-                              name={`${idPrefix}-rounding`}
-                              value={key}
-                              checked={form.prorationRounding === key}
-                              disabled={readOnly}
-                              onChange={() => form.setProrationRounding(key)}
-                            />
-                            <span className={styles.segmentLabel}>{PRORATION_ROUNDING_LABELS[key]}</span>
-                          </label>
-                        ))}
-                      </div>
+                  {/* Тип договора (миграция 352) — пометка, на расчёт не влияет. Округление оклада не выбирают:
+                      признак ставит скрипт по ЗУП, сервер переносит его из прежних условий. */}
+                  <div className={styles.field}>
+                    <span id={`${idPrefix}-contract`} className={styles.label}>Договор</span>
+                    <div
+                      role="radiogroup"
+                      aria-labelledby={`${idPrefix}-contract`}
+                      className={readOnly ? `${styles.segmented} ${styles.segmentedDisabled}` : styles.segmented}
+                    >
+                      {CONTRACT_TYPES.map(key => (
+                        <label key={key} className={styles.segment}>
+                          <input
+                            type="radio"
+                            className={styles.segmentInput}
+                            name={`${idPrefix}-contract`}
+                            value={key}
+                            checked={form.contractType === key}
+                            disabled={readOnly}
+                            onChange={() => form.setContractType(key)}
+                          />
+                          <span className={styles.segmentLabel}>{CONTRACT_TYPE_LABELS[key]}</span>
+                        </label>
+                      ))}
                     </div>
-                  )}
+                  </div>
 
                   {renderDate('effectiveFrom', 'Действует с', form.effectiveFrom, form.setEffectiveFrom, true)}
                 </>

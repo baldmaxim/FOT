@@ -22,6 +22,11 @@ export type ProrationRounding = 'ruble' | 'daily_kopeck';
 
 export const PRORATION_ROUNDINGS: readonly ProrationRounding[] = ['ruble', 'daily_kopeck'];
 
+/** Тип договора: трудовой или ГПХ (миграция 352). Пометка, в расчёте не участвует. */
+export type ContractType = 'labor' | 'gph';
+
+export const CONTRACT_TYPES: readonly ContractType[] = ['labor', 'gph'];
+
 export interface IPayrollTerms {
   id: number;
   employee_id: number;
@@ -42,6 +47,8 @@ export interface IPayrollTerms {
   deduction_amount: number | null;
   /** Округление оклада за неполный месяц, как в ЗУП (миграция 331). */
   proration_rounding: ProrationRounding;
+  /** Тип договора (миграция 352). */
+  contract_type: ContractType;
   staff_units: number;
   time_accounting_mode: 'daily' | 'summarized';
   accounting_period_months: number | null;
@@ -72,6 +79,8 @@ export interface IAssignTermsInput {
   deductionAmount?: number | null;
   /** Не передано — ruble. */
   prorationRounding?: ProrationRounding;
+  /** Не передано — labor. */
+  contractType?: ContractType;
   staffUnits?: number;
   organizationId?: string | null;
   effectiveFrom: string;
@@ -85,7 +94,7 @@ export interface IAssignTermsInput {
 const TERMS_COLUMNS = `
   id, employee_id, organization_id, staff_category, calc_type,
   monthly_salary, hourly_rate, bonus_amount, housing_compensation,
-  travel_compensation, communication_compensation, deduction_amount, proration_rounding, staff_units,
+  travel_compensation, communication_compensation, deduction_amount, proration_rounding, contract_type, staff_units,
   time_accounting_mode, accounting_period_months,
   effective_from, effective_to,
   change_reason, order_number, order_date, note,
@@ -114,6 +123,9 @@ export interface ISalaryChange {
   /** Оклад + премия; у почасовой — null: ₽/ч с ₽/мес не складываются. */
   total: string | null;
   prev_calc_type: PayrollCalcType | null;
+  /** Тип договора записи и прежний; null — записи раньше нет. */
+  contract_type: ContractType;
+  prev_contract_type: ContractType | null;
   prev_amount: string | null;
   prev_bonus: string | null;
   prev_total: string | null;
@@ -131,13 +143,14 @@ export interface ISalaryChange {
  * История оклада / ставки, новые сверху.
  *
  * Новая строка условий появляется и при смене одной компенсации, поэтому подряд идущие строки
- * с тем же видом оплаты, суммой и премией склеиваются в одно изменение (острова по флагу смены).
+ * с тем же видом оплаты, суммой, премией и договором склеиваются в одно изменение (острова по флагу смены).
+ * Смена одного договора (Трудовой ↔ ГПХ) — отдельная запись: иначе в истории её не видно.
  * Деньги считаются в SQL: NUMERIC приходит строкой, арифметика в JS запрещена.
  */
 export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChange[]> =>
   query<ISalaryChange>(
     `WITH terms AS (
-       SELECT t.id, t.effective_from, t.effective_to, t.calc_type, t.created_by, t.created_at,
+       SELECT t.id, t.effective_from, t.effective_to, t.calc_type, t.contract_type, t.created_by, t.created_at,
               COALESCE(t.monthly_salary, t.hourly_rate) AS amount,
               NULLIF(t.bonus_amount, 0) AS bonus,
               CASE
@@ -145,6 +158,7 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
                  AND LAG(COALESCE(t.monthly_salary, t.hourly_rate)) OVER w
                      = COALESCE(t.monthly_salary, t.hourly_rate)
                  AND LAG(NULLIF(t.bonus_amount, 0)) OVER w IS NOT DISTINCT FROM NULLIF(t.bonus_amount, 0)
+                 AND LAG(t.contract_type) OVER w = t.contract_type
                 THEN 0 ELSE 1
               END AS is_change
          FROM payroll_compensation_terms t
@@ -157,6 +171,7 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
        SELECT MIN(effective_from) AS effective_from,
               CASE WHEN bool_or(effective_to IS NULL) THEN NULL ELSE MAX(effective_to) END AS effective_to,
               (array_agg(calc_type ORDER BY effective_from, id))[1] AS calc_type,
+              (array_agg(contract_type ORDER BY effective_from, id))[1] AS contract_type,
               (array_agg(amount ORDER BY effective_from, id))[1] AS amount,
               (array_agg(bonus ORDER BY effective_from, id))[1] AS bonus,
               (array_agg(created_by ORDER BY effective_from, id))[1] AS created_by,
@@ -172,6 +187,7 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
      ), compared AS (
        SELECT paid.*,
               LAG(calc_type) OVER o AS prev_calc_type,
+              LAG(contract_type) OVER o AS prev_contract_type,
               LAG(amount) OVER o AS prev_amount,
               LAG(bonus) OVER o AS prev_bonus,
               LAG(total) OVER o AS prev_total,
@@ -184,6 +200,8 @@ export const getSalaryChanges = async (employeeId: number): Promise<ISalaryChang
             c.bonus::text AS bonus,
             c.total::text AS total,
             c.prev_calc_type,
+            c.contract_type,
+            c.prev_contract_type,
             c.prev_amount::text AS prev_amount,
             c.prev_bonus::text AS prev_bonus,
             c.prev_total::text AS prev_total,
@@ -453,9 +471,9 @@ export const assignTerms = async (
           monthly_salary, hourly_rate, staff_units,
           effective_from, change_reason, order_number, order_date, note, created_by,
           bonus_amount, housing_compensation,
-          travel_compensation, communication_compensation, deduction_amount, proration_rounding)
+          travel_compensation, communication_compensation, deduction_amount, proration_rounding, contract_type)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 1.000), $8, $9, $10, $11, $12, $13, $14, $15,
-               $16, $17, $18, $19)
+               $16, $17, $18, $19, $20)
        RETURNING id`,
       [
         input.employeeId,
@@ -477,6 +495,7 @@ export const assignTerms = async (
         input.communicationCompensation ?? null,
         input.deductionAmount ?? null,
         input.prorationRounding ?? 'ruble',
+        input.contractType ?? 'labor',
       ],
     );
     return inserted.rows[0].id;

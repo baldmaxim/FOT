@@ -1,10 +1,10 @@
 import { useState } from 'react';
 
 import type {
+  ContractType,
   IAssignTermsPayload,
   IPayrollTermsRow,
   PayrollCalcType,
-  ProrationRounding,
 } from '../services/payrollService';
 import {
   firstInvalidField,
@@ -57,8 +57,8 @@ export const usePayrollTermsForm = ({
     clearError('amount');
   };
 
-  const setProrationRounding = (next: ProrationRounding) => {
-    setValues(prev => ({ ...prev, prorationRounding: next }));
+  const setContractType = (next: ContractType) => {
+    setValues(prev => ({ ...prev, contractType: next }));
   };
 
   const setAmount = (value: string) => {
@@ -101,7 +101,7 @@ export const usePayrollTermsForm = ({
     plannedSupplement,
     fieldErrors,
     setCalcType,
-    setProrationRounding,
+    setContractType,
     setAmount,
     changeMoney,
     changeSupplement,

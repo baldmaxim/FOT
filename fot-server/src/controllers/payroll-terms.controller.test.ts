@@ -389,6 +389,50 @@ describe('payrollTermsController.assign', () => {
   });
 });
 
+describe('payrollTermsController.assign: тип договора (миграция 352)', () => {
+  /** $20 INSERT условий — contract_type. */
+  const insertedContract = () => (txClient.query.mock.calls[SINGLE_INSERT][1] as unknown[])[19];
+  const assign = async (body: Record<string, unknown>) => {
+    const res = makeRes();
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' },
+      body: { calc_type: 'salary', monthly_salary: 160000, effective_from: '2026-11-01', ...body },
+    } as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+
+  it('ГПХ из окна пишется в условия и в аудит', async () => {
+    const res = await assign({ contract_type: 'gph' });
+    expect(res.statusCode).toBe(200);
+    expect(insertedContract()).toBe('gph');
+    expect(audit.logFromRequest.mock.calls[0][3]).toMatchObject({ details: { contract_type: 'gph' } });
+  });
+
+  it('прежний клиент без поля — договор прежних условий: ГПХ не сбрасывается', async () => {
+    txClient.query.mockResolvedValue({ rows: [{ id: 77, contract_type: 'gph' }] });
+    const res = await assign({});
+    expect(res.statusCode).toBe(200);
+    expect(insertedContract()).toBe('gph');
+  });
+
+  it('без поля и без прежних условий — трудовой', async () => {
+    const res = await assign({});
+    expect(res.statusCode).toBe(200);
+    expect(insertedContract()).toBe('labor');
+  });
+
+  it('смена договора не уходит в «Пересчёт»: next без contract_type', async () => {
+    await assign({ contract_type: 'gph' });
+    expect(recalc.recordTermsRecalc.mock.calls[0][1]).not.toHaveProperty('next.contract_type');
+  });
+
+  it('неизвестный тип договора — 400 до записи', async () => {
+    const res = await assign({ contract_type: 'contractor' });
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+});
+
 describe('payrollTermsController.assign: плановая доплата', () => {
   const baseBody = {
     staff_category: 'itr', calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01',

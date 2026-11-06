@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react';
 
 import {
   CALC_TYPE_LABELS,
+  CONTRACT_TYPE_LABELS,
   payrollService,
   type IPayrollTermsChange,
   type IPlannedSupplementChange,
@@ -132,6 +133,26 @@ const renderPart = (label: string, value: string | null, prev: string | null | u
 const renderSalaryChange = (change: ISalaryChange & { kind: 'salary' }) => {
   const isFirst = change.prev_calc_type === null;
   const calcChanged = change.prev_calc_type !== null && change.prev_calc_type !== change.calc_type;
+  // Договор (миграция 352): первая запись — только ГПХ (трудовой по умолчанию не подписываем), дальше — смена.
+  const contract = change.contract_type ?? 'labor';
+  const prevContract = change.prev_contract_type ?? null;
+  const contractChanged = prevContract !== null && prevContract !== contract;
+  const contractNote = contractChanged
+    ? `Смена договора: ${CONTRACT_TYPE_LABELS[prevContract]} → ${CONTRACT_TYPE_LABELS[contract]}`
+    : isFirst && contract === 'gph' ? `Договор: ${CONTRACT_TYPE_LABELS.gph}` : null;
+  // Сменился только договор — оклад тот же: без «было → стало» и «итого без изменений».
+  if (contractChanged && !calcChanged && change.prev_amount === change.amount
+    && change.prev_bonus === change.bonus) {
+    return (
+      <li key={`salary-${change.effective_from}`} className={styles.item}>
+        <div className={styles.itemHead}>
+          <span className={styles.itemSecondary}>{formatPeriod(change)}</span>
+        </div>
+        <div className={styles.itemMeta}>{contractNote}</div>
+        <div className={styles.itemMeta}>{formatAuthor(change)}</div>
+      </li>
+    );
+  }
   const hasBonus = Boolean(change.bonus ?? change.prev_bonus);
   const delta = formatDelta(change);
   const totalUnchanged = change.total !== null && change.diff !== null && isZeroDiff(change.diff);
@@ -172,6 +193,7 @@ const renderSalaryChange = (change: ISalaryChange & { kind: 'salary' }) => {
           Смена вида оплаты: {CALC_TYPE_LABELS[change.prev_calc_type]} → {CALC_TYPE_LABELS[change.calc_type]}
         </div>
       )}
+      {contractNote && <div className={styles.itemMeta}>{contractNote}</div>}
       <div className={styles.itemMeta}>{formatAuthor(change)}</div>
     </li>
   );

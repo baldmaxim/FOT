@@ -232,6 +232,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     // Округление оклада (331) — колонка условий; остальное 331 (основа расчёта) здесь не нужно.
     await run(`ALTER TABLE payroll_compensation_terms
       ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Тип договора (352) — колонка условий: список и сохранение читают и пишут её.
+    await run(migration('352_payroll_terms_contract_type.sql'));
     // Ставку «Доплата за общежитие» завели руками до 317 — миграция должна взять её, а не создать вторую.
     await run(`INSERT INTO payroll_rates (name, amount) VALUES ('Проживание общежития', 630), (' Доплата за общежитие', 450)`);
     for (const name of [

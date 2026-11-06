@@ -201,6 +201,8 @@ describe.skipIf(!PG_URL)('блок «Пересчёт» на PostgreSQL', () => 
     await pg.pool!.query(migration('286_payroll_terms_compensations.sql'));
     await pg.pool!.query(`ALTER TABLE payroll_compensation_terms
       ADD COLUMN IF NOT EXISTS proration_rounding TEXT NOT NULL DEFAULT 'ruble'`);
+    // Тип договора (352) — колонка условий: список и сохранение читают и пишут её.
+    await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     await pg.pool!.query(migration('348_payroll_terms_recalcs.sql'));
     // Повторный запуск миграции безопасен.
     await pg.pool!.query(migration('348_payroll_terms_recalcs.sql'));

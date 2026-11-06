@@ -2,11 +2,12 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, type FC, type 
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Minus, Plus } from 'lucide-react';
 
-import type {
-  IPayrollColumnFilters,
-  IPayrollTermsRow,
-  PayrollSortDir,
-  PayrollSortKey,
+import {
+  CONTRACT_TYPE_LABELS,
+  type IPayrollColumnFilters,
+  type IPayrollTermsRow,
+  type PayrollSortDir,
+  type PayrollSortKey,
 } from '../../services/payrollService';
 import { usePayrollAccrualsColumnWidth } from '../../hooks/usePayrollAccrualsColumnWidth';
 import {
@@ -427,6 +428,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                     <td className={`${styles.stickyNum} ${styles.cellNum}`}>{item.index + 1}</td>
                     <td className={`${styles.stickyName} ${styles.cellName}`}>
                       <span className={styles.clamp2}>{row.full_name ?? '—'}</span>
+                      {row.contract_type === 'gph' && (
+                        <span className={styles.contractMark}>{CONTRACT_TYPE_LABELS.gph}</span>
+                      )}
                       {row.employment_status === 'fired' && (
                         <span className={styles.dismissedMark}>
                           {row.dismissal_date ? `Уволен ${formatDate(row.dismissal_date)}` : 'Уволен'}

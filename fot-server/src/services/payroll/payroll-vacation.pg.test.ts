@@ -175,6 +175,7 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
     await pg.pool!.query(migration('271_payroll_terms.sql'));
     await pg.pool!.query(migration('282_payroll_terms_bonus_housing.sql'));
     await pg.pool!.query(migration('286_payroll_terms_compensations.sql'));
+    await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     await pg.pool!.query(migration('323_payroll_vacation_balances.sql'));
     await pg.pool!.query(
       `INSERT INTO payroll_vacation_balances (employee_id, as_of_date, days) VALUES (3, '2026-09-30', 6.95)`,
@@ -308,5 +309,36 @@ describe.skipIf(!PG_URL)('отпуск и история зарплаты на P
         diff: null, pct: null, by: 'Петрова А.А.',
       },
     ]);
+  });
+
+  it('история зарплаты: смена одного договора — отдельная запись с прежним договором, оклад тот же', async () => {
+    await pg.pool!.query(`
+      INSERT INTO payroll_compensation_terms
+        (employee_id, staff_category, calc_type, monthly_salary, effective_from, effective_to, contract_type,
+         created_by, created_at)
+      VALUES
+        (4, 'office', 'salary', 160000, '2026-07-01', '2026-07-31', 'labor', '${AUTHOR}', '2026-06-30T10:00:00Z'),
+        (4, 'office', 'salary', 160000, '2026-08-01', '2026-09-30', 'labor', '${AUTHOR}', '2026-07-30T10:00:00Z'),
+        (4, 'office', 'salary', 160000, '2026-10-01', NULL, 'gph', '${REVIEWER}', '2026-11-06T10:00:00Z');
+    `);
+
+    const changes = await getSalaryChanges(4);
+
+    expect(changes.map(c => ({
+      from: c.effective_from, to: c.effective_to, contract: c.contract_type, prevContract: c.prev_contract_type,
+      amount: c.amount, prev: c.prev_amount, diff: c.diff,
+    }))).toEqual([
+      { from: '2026-10-01', to: null, contract: 'gph', prevContract: 'labor', amount: '160000.00', prev: '160000.00', diff: '0.00' },
+      // Июль и август–сентябрь — тот же оклад и договор: одна запись, как раньше.
+      { from: '2026-07-01', to: '2026-09-30', contract: 'labor', prevContract: null, amount: '160000.00', prev: null, diff: null },
+    ]);
+  });
+
+  it('миграция 352 повторно применяется без ошибок и не пускает неизвестный договор', async () => {
+    await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
+    await expect(pg.pool!.query(
+      `INSERT INTO payroll_compensation_terms (employee_id, staff_category, calc_type, monthly_salary, effective_from, contract_type)
+       VALUES (2, 'office', 'salary', 100000, '2027-01-01', 'contractor')`,
+    )).rejects.toThrow(/payroll_terms_contract_type/);
   });
 });

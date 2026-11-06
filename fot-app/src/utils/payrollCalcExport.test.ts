@@ -255,6 +255,21 @@ describe('ячейки файла «Расчётов»', () => {
   });
 });
 
+describe('столбец «Договор»', () => {
+  it('ГПХ — «ГПХ», как подпись под ФИО; трудовой — пусто; столбец сразу за «Сотрудником»', () => {
+    const rows = [abdullaev(), row({ employee_id: 3, full_name: 'Озджан Э.', contract_type: 'gph' })];
+    expect(labels({ rows }).slice(0, 2)).toEqual(['Сотрудник', 'Договор']);
+    expect(cell({ rows }, 'Договор', 1)).toBe('ГПХ');
+    expect(cell({ rows }, 'Сотрудник', 1)).toBe('Озджан Э.');
+    expect(cell({ rows }, 'Договор', 0)).toBe('');
+  });
+
+  it('ГПХ в выборке нет, в том числе у старого бэкенда без поля, — столбца нет', () => {
+    expect(labels()).not.toContain('Договор');
+    expect(labels({ rows: [row({ contract_type: 'labor' })] })).not.toContain('Договор');
+  });
+});
+
 describe('подзаголовок и имя файла', () => {
   it('фильтры столбцов текстом; пустое значение — «(пусто)»', () => {
     expect(describePayrollColumnFilters({})).toBe('');

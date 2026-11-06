@@ -6,7 +6,12 @@
  * Отличия от экрана, потому что в ячейке Excel одно значение: «Выплаты на карту» — итог и столбцы по видам выплаты,
  * подсказка ⚠ — столбец «Примечание», подписи под суммами («квартира», «2 вых. · 6 ч») не выгружаются.
  */
-import type { IPayrollColumnFilters, IPayrollTermsRow, PayrollPaidMonths } from '../services/payrollService';
+import {
+  CONTRACT_TYPE_LABELS,
+  type IPayrollColumnFilters,
+  type IPayrollTermsRow,
+  type PayrollPaidMonths,
+} from '../services/payrollService';
 import { moscowTodayIso } from './moscowDate';
 import {
   calcBrigadeOutputSub,
@@ -130,6 +135,11 @@ const isCalcEntry = (entry: PayrollTableColumnEntry): boolean => (
   entry.kind === 'sub' ? entry.sub.type !== 'paid' : isCalcColumn(entry.key)
 );
 
+/** Договор, как подпись под ФИО на экране (миграция 352): ГПХ — «ГПХ», трудовой — пусто. */
+const contractCellText = (row: IPayrollTermsRow): string => (
+  row.contract_type === 'gph' ? CONTRACT_TYPE_LABELS.gph : ''
+);
+
 /** Подписи шапки: в умной таблице Excel они уникальны без учёта регистра и не длиннее лимита сервера. */
 const withUniqueLabels = (columns: readonly ExportColumn[]): ExportColumn[] => {
   const used = new Set<string>();
@@ -146,8 +156,8 @@ const withUniqueLabels = (columns: readonly ExportColumn[]): ExportColumn[] => {
 };
 
 /**
- * Столбцы файла: «Сотрудник», видимые столбцы экрана (без скрытых шестерёнкой и пустых во всей выборке), за раскрытыми
- * «+» — их подстолбцы; «Примечание» — если в выборке есть подсказки ⚠.
+ * Столбцы файла: «Сотрудник», «Договор» (если в выборке есть ГПХ), видимые столбцы экрана (без скрытых шестерёнкой
+ * и пустых во всей выборке), за раскрытыми «+» — их подстолбцы; «Примечание» — если в выборке есть подсказки ⚠.
  */
 export const payrollCalcExportColumns = (params: {
   rows: readonly IPayrollTermsRow[];
@@ -166,9 +176,11 @@ export const payrollCalcExportColumns = (params: {
     expanded,
     subColumns,
   );
+  const withContract = rows.some(row => row.contract_type === 'gph');
   const withNote = entries.some(isCalcEntry) && rows.some(row => rowNote(row) !== null);
   return withUniqueLabels([
     exportColumn('name', PAYROLL_FILTER_COLUMN_LABELS.name, 'text', row => row.full_name ?? NO_VALUE),
+    ...(withContract ? [exportColumn('contract', 'Договор', 'text', contractCellText)] : []),
     ...entries.flatMap(entry => entryColumns(entry, rows)),
     ...(withNote ? [exportColumn('note', 'Примечание', 'text', row => rowNote(row) ?? '')] : []),
   ]);
