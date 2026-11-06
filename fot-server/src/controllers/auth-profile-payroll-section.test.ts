@@ -249,3 +249,37 @@ describe('/auth/me: «Выработка» (миграция 342)', () => {
     expect((await loadProfile()).has_brigade_output_access).toBe(false);
   });
 });
+
+describe('/auth/me: расчётный лист в ЛК (миграция 353)', () => {
+  const PAYSLIP = '/employee/payslip';
+  const allow = () => pgQuery.mockImplementation((async (sql: string) => (
+    String(sql).includes('employee_payslip_access') ? [{ allowed: true }] : []
+  )) as never);
+  const payslipQueries = () => pgQuery.mock.calls.filter(
+    (call: unknown[]) => String(call[0]).includes('employee_payslip_access'),
+  );
+
+  it('не в списке — ключа нет, даже если его дала роль', async () => {
+    mocked.getRolePageAccess.mockResolvedValue({ [PAYSLIP]: { can_view: true, can_edit: true } });
+    expect((await loadProfile()).page_access[PAYSLIP]).toBeUndefined();
+  });
+
+  it('в списке или «всем» — только просмотр, по сотруднику учётки', async () => {
+    allow();
+    expect((await loadProfile()).page_access[PAYSLIP]).toEqual({ can_view: true, can_edit: false });
+    expect(payslipQueries()[0][1]).toEqual([501, 'employee_payslip_for_all']);
+  });
+
+  it('администратор не из списка — ключа нет', async () => {
+    mocked.getRoleById.mockResolvedValue(ADMIN_ROLE);
+    mocked.getRolePageAccess.mockResolvedValue({ [PAYSLIP]: { can_view: true, can_edit: true } });
+    expect((await loadProfile()).page_access[PAYSLIP]).toBeUndefined();
+  });
+
+  it('учётка без сотрудника — ключа нет даже при «всем», база не читается', async () => {
+    allow();
+    pgQueryOne.mockResolvedValue({ ...PROFILE_ROW, employee_id: null });
+    expect((await loadProfile()).page_access[PAYSLIP]).toBeUndefined();
+    expect(payslipQueries()).toHaveLength(0);
+  });
+});

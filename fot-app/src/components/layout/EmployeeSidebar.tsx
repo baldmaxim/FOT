@@ -42,6 +42,21 @@ const navGroups: INavGroup[] = [
         ),
       },
       {
+        // Расчётный лист и остаток отпуска: по списку или всем (миграция 353), роль не даёт.
+        id: 'payslip',
+        path: '/employee/payslip',
+        label: 'Расчётный лист',
+        requiredPage: '/employee/payslip',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M6 2h9l5 5v15H6z"/>
+            <path d="M14 2v6h6"/>
+            <path d="M9 13h6"/>
+            <path d="M9 17h6"/>
+          </svg>
+        ),
+      },
+      {
         id: 'tasks',
         path: '/employee/tasks',
         label: 'Мои задачи',

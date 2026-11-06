@@ -602,6 +602,38 @@ export async function getBrigadeShares(
 }
 
 /**
+ * Доли бригады только для чтения (расчётный лист в ЛК): зафиксированный расчёт закрытого месяца, если он актуален —
+ * тот же формат, inputs_hash и редакции, что проверяет ensureFixed. Нет записи или она устарела — open: фиксирует
+ * getBrigadeShares («Расчёты», вкладка табеля), здесь ни INSERT, ни UPDATE, ни аудита.
+ */
+export async function peekBrigadeShares(departmentId: string, month: string): Promise<IBrigadeShares> {
+  const open: IBrigadeShares = { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] };
+  const { start } = monthBounds(month);
+  const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
+  if (!closure.closed) return open;
+  const [inputs, stored] = await Promise.all([
+    loadBrigadeSalaryInputs(departmentId, start),
+    loadStoredResult(departmentId, start),
+  ]);
+  if (
+    !stored
+    || stored.format !== BRIGADE_RESULT_FORMAT
+    || stored.inputs_hash !== brigadeSalaryInputsHash(inputs)
+    || !sameVersions(stored.versions, closure.versions)
+  ) {
+    return open;
+  }
+  return {
+    state: 'fixed',
+    mode: stored.mode,
+    distribution: stored.distribution,
+    output_amount: stored.output_amount,
+    rows: stored.rows,
+    objects: stored.objects,
+  };
+}
+
+/**
  * Предварительные доли открытой бригады для «Расчётов» — живой расчёт по табелю на asOf. Сохранённый результат не
  * читается и не пишется: у переоткрытого месяца прежний (stale) расчёт не берётся — незакрытый месяц считается по
  * живому табелю. Состав — из контекста бригады, членство второй раз не читается.

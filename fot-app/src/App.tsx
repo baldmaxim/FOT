@@ -110,6 +110,7 @@ const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').th
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
 const MySimPage = lazy(() => import('./pages/employee/MySimPage').then(m => ({ default: m.MySimPage })));
+const PayslipPage = lazy(() => import('./pages/employee/PayslipPage').then(m => ({ default: m.PayslipPage })));
 const MyTestResultsPage = lazy(() => import('./pages/employee/MyTestResultsPage').then(m => ({ default: m.MyTestResultsPage })));
 const PhonebookPage = lazy(() => import('./pages/employee/PhonebookPage').then(m => ({ default: m.PhonebookPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
@@ -301,6 +302,17 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Редактирование заявки">
                 <SalaryRaiseFormPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/employee/payslip" />}>
+          <Route
+            path="/employee/payslip"
+            element={
+              <EmployeeLayout title="Расчётный лист">
+                <PayslipPage />
               </EmployeeLayout>
             }
           />

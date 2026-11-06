@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { UserProfile } from '../types/auth';
-import { PAYROLL_SECTION_PAGES, isPayrollSectionPage, profileCanEditPage, profileCanViewPage } from './pageAccess';
+import {
+  EMPLOYEE_PAYSLIP_PAGE,
+  PAYROLL_SECTION_PAGES,
+  isPayrollSectionPage,
+  profileCanEditPage,
+  profileCanViewPage,
+} from './pageAccess';
 
 type Profile = Pick<UserProfile, 'is_admin' | 'page_access'>;
 
@@ -62,5 +68,28 @@ describe('раздел «Зарплата» — только по page_access, �
   it('без профиля — ничего', () => {
     expect(profileCanViewPage(null, '/employees')).toBe(false);
     expect(profileCanEditPage(undefined, '/employees')).toBe(false);
+  });
+});
+
+describe('расчётный лист в ЛК — только по page_access, даже у администратора (миграция 353)', () => {
+  it('ключ — /employee/payslip', () => {
+    expect(EMPLOYEE_PAYSLIP_PAGE).toBe('/employee/payslip');
+  });
+
+  it('админ без ключа (не в списке) пункт не видит', () => {
+    expect(profileCanViewPage(admin(), EMPLOYEE_PAYSLIP_PAGE)).toBe(false);
+    expect(profileCanEditPage(admin(), EMPLOYEE_PAYSLIP_PAGE)).toBe(false);
+  });
+
+  it('админ и сотрудник с ключом — видят, правки нет', () => {
+    const access = { [EMPLOYEE_PAYSLIP_PAGE]: { can_view: true, can_edit: false } };
+    expect(profileCanViewPage(admin(access), EMPLOYEE_PAYSLIP_PAGE)).toBe(true);
+    expect(profileCanViewPage(office(access), EMPLOYEE_PAYSLIP_PAGE)).toBe(true);
+    expect(profileCanEditPage(office(access), EMPLOYEE_PAYSLIP_PAGE)).toBe(false);
+  });
+
+  it('сотрудник без ключа — нет; прочие страницы ЛК админу открыты как раньше', () => {
+    expect(profileCanViewPage(office(), EMPLOYEE_PAYSLIP_PAGE)).toBe(false);
+    expect(profileCanViewPage(admin(), '/employee/sim')).toBe(true);
   });
 });

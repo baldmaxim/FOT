@@ -19,10 +19,13 @@ import { performance } from 'node:perf_hooks';
 
 import { query } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
-import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
 import { emptyAbsenceDays, type PayrollAbsenceDays, type PayrollBasisQuality } from './payroll-basis.service.js';
 import { resolvePreliminaryAsOf, type IBrigadeShares } from './brigade-salary.service.js';
-import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
+import {
+  loadFixedBrigadeShares,
+  loadPreliminaryBrigadeShares,
+  peekFixedBrigadeShares,
+} from './payroll-calc-brigades.service.js';
 import { loadLiveMonthBases } from './payroll-calc-preliminary.service.js';
 import {
   brigadeShareFacts,
@@ -38,6 +41,7 @@ import {
   type IPayrollCalcResult,
   type IPlannedSupplementPeriod,
 } from './payroll-calc.rules.js';
+import { loadEmployeePeriods, type IPayrollEmployeeRow } from './payroll-employee-period.service.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-month-attribution.service.js';
 import {
   assembleMonthBasis,
@@ -48,7 +52,6 @@ import {
 } from './payroll-month-basis.service.js';
 import {
   lastDayOfMonth,
-  payslipPeriod,
   pickPayslipRateAllowances,
   type IPayslipHousingDays,
   type IPayslipRateAllowance,
@@ -114,38 +117,6 @@ export interface IPayoutMetrics {
   buildMs: number;
 }
 
-interface IEmployeeRow {
-  id: number;
-  hire_date: string | null;
-  org_department_id: string | null;
-  employment_status: string | null;
-  dismissal_date: string | null;
-  excluded_from_timesheet_date: string | null;
-}
-
-/** Сотрудники и их период в месяце: с приёма по отсечку увольнения; не работал в месяце — периода нет. */
-const loadEmployeePeriods = async (
-  employeeIds: readonly number[],
-  month: string,
-): Promise<{ employees: Map<number, IEmployeeRow>; periods: Map<number, { from: string; to: string }> }> => {
-  const employeeRows = await query<IEmployeeRow>(
-    `SELECT id, to_char(hire_date, 'YYYY-MM-DD') AS hire_date, org_department_id::text AS org_department_id,
-            employment_status, to_char(dismissal_date, 'YYYY-MM-DD') AS dismissal_date,
-            to_char(excluded_from_timesheet_date, 'YYYY-MM-DD') AS excluded_from_timesheet_date
-       FROM employees WHERE id = ANY($1::int[])`,
-    [[...employeeIds]],
-  );
-  const employees = new Map((employeeRows ?? []).map(row => [Number(row.id), row]));
-  // Отсечка увольнения — та же формула, что у табеля (день увольнения включительно — рабочий).
-  const cutoffs = buildFiredCutoffMap([...employees.values()].map(row => ({ ...row })), `${month}-01`);
-  const periods = new Map<number, { from: string; to: string }>();
-  for (const employee of employees.values()) {
-    const period = payslipPeriod(month, employee.hire_date, cutoffs.get(employee.id) ?? null);
-    if (period) periods.set(employee.id, period);
-  }
-  return { employees, periods };
-};
-
 /**
  * Категория месяца — как в «Своде» и листке. versionIds — объект только из этих закрытых редакций основы; без них
  * (предварительный расчёт) — из последних сохранённых редакций месяца, как в «Своде», нет их — по режиму и отделу.
@@ -154,7 +125,7 @@ const loadMonthCategories = async (
   month: string,
   ids: readonly number[],
   versionIds: readonly number[] | undefined,
-  employees: ReadonlyMap<number, IEmployeeRow>,
+  employees: ReadonlyMap<number, IPayrollEmployeeRow>,
 ): Promise<Map<number, StaffCategory>> => {
   if (ids.length === 0) return new Map();
   const breakdown = await loadMonthBreakdown([`${month}-01`], [...ids], versionIds);
@@ -359,6 +330,11 @@ export const toCalcTermsRow = (row: IPayrollTerms): ICalcTermsRow => ({
 /** Прежние условия сотрудников месяца: те же факты считаются ещё раз с ними — previous_net (блок «Пересчёт»). */
 export interface IPayoutOptions {
   previousTerms?: ReadonlyMap<number, readonly ICalcTermsRow[]>;
+  /**
+   * false — закрытый расчёт без записи (расчётный лист в ЛК): доли бригад только из уже зафиксированного актуального
+   * расчёта (peekFixedBrigadeShares), иначе бригада open. По умолчанию — как раньше: закрытый месяц фиксируется.
+   */
+  fixBrigades?: boolean;
 }
 
 /**
@@ -408,9 +384,11 @@ const computePayouts = async (
   // Доли бригад — по одному расчёту на бригаду, не больше трёх одновременно. Бригада не зафиксирована (и не посчитана
   // предварительно) — месяц её людей не закрыт.
   const brigadeIds = [...new Set([...entries.values()].flatMap(entry => entry.basis.brigades.map(item => item.departmentId)))];
-  const brigades = asOf === null
-    ? await loadFixedBrigadeShares(req, month, brigadeIds)
-    : await loadPreliminaryBrigadeShares(req, month, asOf, brigadeIds, liveIds);
+  const brigades = asOf !== null
+    ? await loadPreliminaryBrigadeShares(req, month, asOf, brigadeIds, liveIds)
+    : options.fixBrigades === false
+      ? await peekFixedBrigadeShares(month, brigadeIds)
+      : await loadFixedBrigadeShares(req, month, brigadeIds);
   if (metrics) metrics.brigades += brigades.shares.size;
   lap('brigadesMs');
 
@@ -550,9 +528,10 @@ export const getPayoutForEmployees = async (
   month: string,
   req: AuthenticatedRequest,
   metrics?: IPayoutMetrics,
+  options?: Pick<IPayoutOptions, 'fixBrigades'>,
 ): Promise<Map<number, PayrollCalc>> => {
   const result = new Map<number, PayrollCalc>();
-  for (const [employeeId, calc] of await computePayouts(employeeIds, month, req, metrics, false)) {
+  for (const [employeeId, calc] of await computePayouts(employeeIds, month, req, metrics, false, options)) {
     // Без режима «Расчётов» предварительных нет; страховка — суммы нет, как у незакрытого месяца.
     result.set(employeeId, calc.state === 'preliminary' ? { state: 'not_closed', reason: 'not_covered' } : calc);
   }

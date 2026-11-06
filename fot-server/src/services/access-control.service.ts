@@ -16,6 +16,7 @@ import {
   getRequestPayrollSectionAccess,
   isPayrollSectionPage,
 } from './payroll/payroll-access.service.js';
+import { EMPLOYEE_PAYSLIP_PAGE, getRequestEmployeePayslipAccess } from './employee-payslip-access.service.js';
 import { getRequestStaffTabGrant, staffTabByPage } from './staff-tab-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -164,6 +165,8 @@ function mergePageCatalog(dbPages: PageCatalogItem[] | null): PageCatalogItem[] 
   // (миграция 310). Каталог — это матрица «Роли»: без них ключ нельзя ни показать, ни
   // сохранить ролью («Неизвестная страница»). На проверку доступа каталог не влияет.
   for (const key of PAYROLL_SECTION_PAGES) merged.delete(key);
+  // Расчётный лист в ЛК (миграция 353) — тоже только список / «всем», ролью не выдаётся.
+  merged.delete(EMPLOYEE_PAYSLIP_PAGE);
   // Область (ЛК / админка) считаем в коде, а не берём из БД: от неё зависит гейт
   // admin_access, и она не должна расходиться с ключом страницы.
   return [...merged.values()]
@@ -292,6 +295,10 @@ export async function resolveEffectivePageAccess(
   // ключи раздела не открывают. Сравнение ключа первым условием — на других страницах
   // ветка не делает запроса.
   if (isPayrollSectionPage(pagePath)) return getRequestPayrollSectionAccess(req);
+
+  // Расчётный лист в ЛК (миграция 353) — только просмотр и только по списку employee_payslip_access или настройке
+  // «всем»; учётке без сотрудника — нет. Тоже до обхода is_admin: иначе пункт сразу получили бы все администраторы.
+  if (pagePath === EMPLOYEE_PAYSLIP_PAGE) return action === 'view' && getRequestEmployeePayslipAccess(req);
 
   if (req.user.is_admin) return true;
 

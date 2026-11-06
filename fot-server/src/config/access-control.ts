@@ -68,6 +68,7 @@ export const PAGE_PATHS = {
   EMPLOYEE_FEEDBACK: '/employee/feedback',
   EMPLOYEE_TESTING: '/employee/testing',
   EMPLOYEE_OBJECTS: '/employee/objects',
+  EMPLOYEE_PAYSLIP: '/employee/payslip',
   FEEDBACK_REVIEW: '/feedback-review',
   TESTING_REVIEW: '/testing-review',
   DASHBOARD: '/dashboard',
@@ -153,6 +154,8 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/employee/testing',           label: 'Тестирование',                         group_code: 'lk',    group_label: 'Личный кабинет',       area: 'personal', surface: 'page',      supports_edit: true,  sort_order: 19,  is_active: true },
   { key: '/contractor',                 label: 'Кабинет подрядчика: пропуска',         group_code: 'lk',    group_label: 'Личный кабинет',       area: 'personal', surface: 'page',      supports_edit: true,  sort_order: 18,  is_active: true },
   { key: '/employee/objects',           label: 'Мои объекты (KPI)',                    group_code: 'lk',    group_label: 'Личный кабинет',       area: 'personal', surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
+  // Расчётный лист: только по списку employee_payslip_access или всем (system_settings), роль не даёт (миграция 353).
+  { key: '/employee/payslip',           label: 'Расчётный лист',                       group_code: 'lk',    group_label: 'Личный кабинет',       area: 'personal', surface: 'page',      supports_edit: false, sort_order: 21,  is_active: true },
   // ── Админка: обзор и заявления ──
   { key: '/dashboard',                  label: 'Обзор',                                group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
   // Выбор любого отдела на «Обзоре» (присутствие и статистика). Действует только вместе с /dashboard;

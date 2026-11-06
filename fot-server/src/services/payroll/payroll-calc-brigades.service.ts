@@ -7,7 +7,7 @@
  */
 import type { AuthenticatedRequest } from '../../types/index.js';
 import { createConcurrencyLimiter } from '../../utils/concurrency-limiter.js';
-import { getBrigadeShares, type IBrigadeShares } from './brigade-salary.service.js';
+import { getBrigadeShares, peekBrigadeShares, type IBrigadeShares } from './brigade-salary.service.js';
 import {
   loadBrigadeCandidates,
   loadBrigadeContext,
@@ -33,6 +33,24 @@ export const loadFixedBrigadeShares = async (
 ): Promise<IBrigadeStep> => {
   const results = await Promise.all(brigadeIds.map(departmentId => (
     withBrigadeSlot(() => getBrigadeShares(req, departmentId, month))
+  )));
+  return {
+    shares: new Map(brigadeIds.map((departmentId, index) => [departmentId, results[index]])),
+    preliminary: new Set(),
+    contexts: [],
+  };
+};
+
+/**
+ * Закрытый расчёт без записи (расчётный лист в ЛК): только уже зафиксированные актуальные доли (peekBrigadeShares),
+ * иначе бригада open. Слот тот же — чтение входов бригады не дешевле.
+ */
+export const peekFixedBrigadeShares = async (
+  month: string,
+  brigadeIds: readonly string[],
+): Promise<IBrigadeStep> => {
+  const results = await Promise.all(brigadeIds.map(departmentId => (
+    withBrigadeSlot(() => peekBrigadeShares(departmentId, month))
   )));
   return {
     shares: new Map(brigadeIds.map((departmentId, index) => [departmentId, results[index]])),

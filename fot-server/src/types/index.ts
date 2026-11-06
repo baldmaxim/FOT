@@ -195,6 +195,8 @@ export interface AuthenticatedRequest extends Request {
     __brigade_output_access?: boolean;
     /** Галочки «Проживание»/«Удержания» в назначениях (миграция 351) — один запрос на HTTP-запрос. */
     __staff_tab_grants?: StaffTab[];
+    /** Расчётный лист в ЛК (миграция 353): список или «всем» — один запрос на HTTP-запрос. */
+    __employee_payslip_access?: boolean;
     /** Видимые отделы без «заместительских» — база нетабельных write-гейтов. */
     __non_deputy_subtree_ids?: string[];
     /** Отделы, где можно ВЕСТИ ТАБЕЛЬ: full-поддерево + поддерево заместителя (миграция 283). */

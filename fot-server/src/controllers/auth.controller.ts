@@ -36,6 +36,7 @@ import { listTimesheetViewEmployeeIds } from '../services/employee-timesheet-vie
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
+import { EMPLOYEE_PAYSLIP_PAGE, hasEmployeePayslipAccess } from '../services/employee-payslip-access.service.js';
 import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
 import { hasBrigadeOutputGrant } from '../services/payroll/brigade-output-access.service.js';
 import {
@@ -242,6 +243,14 @@ async function buildProfileResponse(
   for (const key of PAYROLL_SECTION_PAGES) {
     if (payrollSectionAccess) page_access[key] = { can_view: true, can_edit: true };
     else delete page_access[key];
+  }
+
+  // Расчётный лист в ЛК (миграция 353) — зеркало ветки в resolveEffectivePageAccess: ключ решает только список /
+  // «всем» и привязанный сотрудник, роль его не даёт (и админу тоже). Фронт смотрит этот ключ в page_access и у админа.
+  if (await hasEmployeePayslipAccess(profile.employee_id)) {
+    page_access[EMPLOYEE_PAYSLIP_PAGE] = { can_view: true, can_edit: false };
+  } else {
+    delete page_access[EMPLOYEE_PAYSLIP_PAGE];
   }
 
   // «Выработка» (миграция 342): кнопки «Бригады» и «Зарплата по объектам» в табеле. Галочка page-ключей раздела не даёт.

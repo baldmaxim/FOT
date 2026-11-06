@@ -131,7 +131,7 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { getBrigadeSalary, getBrigadeShares } from './brigade-salary.service.js';
+import { getBrigadeSalary, getBrigadeShares, peekBrigadeShares } from './brigade-salary.service.js';
 import {
   BrigadeOutputModeConflictError,
   setBrigadeKtu,
@@ -437,6 +437,43 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(await getBrigadeShares(req, BRIGADE, '2026-09')).toEqual({
       state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [],
     });
+  });
+
+  // Расчётный лист в ЛК (353): доли только из уже зафиксированного актуального расчёта, без записи и аудита.
+  it('peekBrigadeShares: нет записи / другой ввод / другая редакция — open, в brigade_salary_results ничего не меняется', async () => {
+    const OPEN = { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] };
+    const stored = async () => q('SELECT * FROM brigade_salary_results ORDER BY department_id, month');
+    const { h2 } = await closeSeptemberInHalves();
+    await enterBoth();
+
+    // Закрыт, но ещё не зафиксирован — open, строка не создаётся.
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(OPEN);
+    expect(await stored()).toHaveLength(0);
+
+    // Зафиксировали «Расчётами» — peek отдаёт то же, что getBrigadeShares, ничего не трогая.
+    const fixed = await getBrigadeShares(req, BRIGADE, '2026-09');
+    const before = await stored();
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(fixed);
+    expect(await stored()).toEqual(before);
+
+    // Другой ввод (выработка поменялась) — open, запись и аудит прежние.
+    await setOutput(WAVE, '228000.01');
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(OPEN);
+    expect(await stored()).toEqual(before);
+    await setOutput(WAVE, '228000.00');
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(fixed);
+
+    // Новая редакция подачи — open, запись прежняя.
+    const v3 = await addVersion(h2, 2, payload({ [A]: { '2026-09-16': work(10) }, [B]: { '2026-09-16': work(12) } }));
+    await addObjects(v3, { [A]: { [STORIES]: { '2026-09-16': 10 } }, [B]: { [WAVE]: { '2026-09-16': 12 } } });
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(OPEN);
+    expect(await stored()).toEqual(before);
+
+    // Подачу открыли — open.
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(OPEN);
+    expect(await stored()).toEqual(before);
+    expect(audit.calls).toEqual([]);
   });
 
   it('половина не закрыта и результата не было → «Предварительно» по живому табелю и живой разбивке, ничего не сохраняется', async () => {
