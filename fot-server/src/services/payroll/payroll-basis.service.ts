@@ -42,6 +42,7 @@ import {
   loadCalendarMonth,
   resolveSchedulesForPeriod,
 } from '../schedule.service.js';
+import { getHolidayLunchHours } from '../holiday-lunch.util.js';
 import { compute1CDayHours, isStudentSchedule, isWorkedDayForOneC, STATUS_LABELS } from '../timesheet-excel.service.js';
 import { computeExportWeekendExemptions } from '../timesheet-export.service.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
@@ -140,7 +141,10 @@ const paidHoursOfDay = (input: {
 }): number | null => {
   if (input.overridden && input.correctedHours > 0) return input.correctedHours;
   if (!input.schedule) return null;
-  const shift = Math.round(getCorrectionCapHours(input.schedule, input.date, input.calendar));
+  const shift = Math.round(
+    getCorrectionCapHours(input.schedule, input.date, input.calendar)
+    + getHolidayLunchHours(input.schedule, input.date, input.calendar),
+  );
   if (input.status === 'remote' || input.exportedHours <= 0) return shift > 0 ? shift : null;
   return shift > 0 ? Math.min(input.exportedHours, shift) : input.exportedHours;
 };
@@ -169,10 +173,14 @@ export const classifyBasisDays = (input: IClassifyBasisInput): IBasisDays => {
     const hours = typeof day.hours === 'number' ? day.hours : 0;
     const dayNorm = schedule ? getDayNormHours(schedule, dateObj, input.calendar) : 0;
     const preHoliday = Boolean(input.calendar?.pre_holidays?.includes(date));
+    // Предел часов выше нормы только в праздник без вычета обеда; порог переработки ниже — от обычной нормы.
+    const hoursLimit = schedule && dayNorm > 0
+      ? dayNorm + getHolidayLunchHours(schedule, dateObj, input.calendar)
+      : dayNorm;
     // Буква (УУ, Н, В) уходит в 1С без часов — как в buildEmployeeRowsForOneC.
     const exportedHours = STATUS_LABELS[day.status] || hours <= 0.001
       ? 0
-      : compute1CDayHours(hours, dayNorm, preHoliday, isStudentSchedule(schedule), Boolean(day.hours_overridden));
+      : compute1CDayHours(hours, hoursLimit, preHoliday, isStudentSchedule(schedule), Boolean(day.hours_overridden));
     if (!isWorkedDayForOneC(day.status, exportedHours)) continue;
     // Часы для переработки: у «УУ» с правкой — округлённая правка, хотя в 1С день уходит буквой.
     const overtimeHours = day.status === 'remote' && day.hours_overridden && hours > 0.001

@@ -206,6 +206,49 @@ describe('основа расчёта: минуты к оплате при по�
   });
 });
 
+describe('основа расчёта: праздник без вычета обеда (с 01.11.2026)', () => {
+  const calendar: IProductionCalendarMonth = {
+    year: 2026,
+    month: 11,
+    norm_days: 20,
+    norm_hours: 159,
+    holidays: ['2026-11-04'],
+    mandatory_holidays: [],
+    pre_holidays: ['2026-11-03'],
+  };
+  const office: IResolvedSchedule = { ...fiveTwo, lunch_minutes: 60 };
+  const worker: IResolvedSchedule = { ...sevenZero, anchor_date: '2026-11-02' };
+  const november = (date: string, schedule: IResolvedSchedule, status = 'work', hours = 0, overridden = false) => classify(
+    { [date]: day(status, hours, overridden) },
+    { month: '2026-11', calendar, schedules: new Map([[date, schedule]]) },
+  );
+
+  it('«учитывает»: выход в праздник 9 ч оплачивается 9 ч', () => {
+    expect(november('2026-11-04', office, 'work', 9).paidMinutes).toEqual({ '2026-11-04': 540 });
+  });
+
+  it('«учитывает»: часы сверх смены с обедом срезаются', () => {
+    expect(november('2026-11-04', office, 'work', 11).paidMinutes).toEqual({ '2026-11-04': 540 });
+  });
+
+  it('«игнорирует»: рабочий день в праздник — предел норма + обед', () => {
+    expect(november('2026-11-04', worker, 'work', 12).paidMinutes).toEqual({ '2026-11-04': 660 });
+  });
+
+  it('«игнорирует»: обычный и предпраздничный день — предел прежний', () => {
+    expect(november('2026-11-05', worker, 'work', 12).paidMinutes).toEqual({ '2026-11-05': 600 });
+    expect(november('2026-11-03', worker, 'work', 12).paidMinutes).toEqual({ '2026-11-03': 600 });
+  });
+
+  it('порог переработки — от обычной нормы, а не от поднятого предела', () => {
+    expect(november('2026-11-04', worker, 'work', 12, true).overtimeMinutes).toEqual({ '2026-11-04': 120 });
+  });
+
+  it('ручная правка — как есть', () => {
+    expect(november('2026-11-04', worker, 'work', 13, true).paidMinutes).toEqual({ '2026-11-04': 780 });
+  });
+});
+
 describe('основа расчёта: дни месяца', () => {
   it('будни с часами и УУ без часов — рабочие; Абраменко, сентябрь: 10 «Я» + 12 «УУ» = 22', () => {
     const days: Record<string, ReturnType<typeof day>> = {};

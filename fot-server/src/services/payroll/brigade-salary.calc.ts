@@ -11,6 +11,7 @@
  * объекта равна его выработке до копейки.
  */
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../../types/index.js';
+import { getHolidayLunchHours } from '../holiday-lunch.util.js';
 import { getDayNormHours, isWorkingDay } from '../schedule.service.js';
 
 /** День табеля так, как он лежит в редакции (timesheet_versions.payload) и в живом dataMap. */
@@ -76,11 +77,12 @@ export const countedMinutesForDay = (
   if (!schedule) return { error: 'no_schedule' };
 
   const localDate = toLocalDate(date);
+  const holidayLunchHours = getHolidayLunchHours(schedule, localDate, calendar);
   if (!isWorkingDay(schedule, localDate, calendar)) {
     if (day.corrected) return { minutes: factMinutes };
-    return { minutes: Math.min(factMinutes, hoursToMinutes(schedule.work_hours)) };
+    return { minutes: Math.min(factMinutes, hoursToMinutes(schedule.work_hours + holidayLunchHours)) };
   }
-  return { minutes: Math.min(factMinutes, hoursToMinutes(getDayNormHours(schedule, localDate, calendar))) };
+  return { minutes: Math.min(factMinutes, hoursToMinutes(getDayNormHours(schedule, localDate, calendar) + holidayLunchHours)) };
 };
 
 /** Весы объектов дня в сотых часа: только положительные, ключи по порядку. */

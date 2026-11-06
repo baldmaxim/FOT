@@ -25,6 +25,7 @@ async function sqlOne<T extends import('pg').QueryResultRow = import('pg').Query
   return queryOne<T>(sql, params);
 }
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
+import { getHolidayLunchHours, getPaidLunchMinutes } from './holiday-lunch.util.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { moscowNowHms, moscowTodayIso } from '../utils/date.utils.js';
 import {
@@ -665,10 +666,10 @@ export async function buildAttendanceEntries(params: {
     const skudMapSchedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
     const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
     const dateObject = new Date(yearPart, monthPart - 1, dayPart);
-    const effectiveLunchMinutes = skudMapSchedule
-      ? getScheduleForDate(skudMapSchedule, dateObject).lunch_minutes
+    const paidLunchMinutes = skudMapSchedule
+      ? getPaidLunchMinutes(skudMapSchedule, dateObject, calendarMonth)
       : 0;
-    const hours = computeSummaryPaidHours(summary, effectiveLunchMinutes);
+    const hours = computeSummaryPaidHours(summary, paidLunchMinutes);
     if (!skudMap.has(summary.employee_id)) {
       skudMap.set(summary.employee_id, new Map());
     }
@@ -760,7 +761,7 @@ export async function buildAttendanceEntries(params: {
         const rawSummary = objectAttendanceData.rawFallbackSummaries
           .get(adjustment.employee_id)?.get(adjustment.work_date);
         if (rawSummary) {
-          const lunchMinutes = adjSchedule ? getScheduleForDate(adjSchedule, adjDate).lunch_minutes : 0;
+          const lunchMinutes = adjSchedule ? getPaidLunchMinutes(adjSchedule, adjDate, calendarMonth) : 0;
           effectiveHours = computeSummaryPaidHours(rawSummary, lunchMinutes);
         } else {
           effectiveHours = null;
@@ -788,7 +789,7 @@ export async function buildAttendanceEntries(params: {
         const rawSummary = objectAttendanceData.rawFallbackSummaries
           .get(adjustment.employee_id)?.get(adjustment.work_date);
         if (rawSummary) {
-          const lunchMinutes = adjSchedule ? getScheduleForDate(adjSchedule, adjDate).lunch_minutes : 0;
+          const lunchMinutes = adjSchedule ? getPaidLunchMinutes(adjSchedule, adjDate, calendarMonth) : 0;
           effectiveHours = computeSummaryPaidHours(rawSummary, lunchMinutes);
         } else {
           effectiveHours = null;
@@ -861,9 +862,11 @@ export async function buildAttendanceEntries(params: {
     const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
     const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
     const dateObject = new Date(yearPart, monthPart - 1, dayPart);
+    // Обед графика — для проверки покрытия смены, к вычету — с учётом праздника (holiday-lunch.util).
     const effectiveLunchMinutes = schedule ? getScheduleForDate(schedule, dateObject).lunch_minutes : 0;
-    const baseHours = computeSummaryPaidHours(summary, effectiveLunchMinutes);
-    lunchCutByKey.set(key, roundHours(Math.max(0, effectiveLunchMinutes - getSummaryBreakMinutes(summary)) / 60));
+    const paidLunchMinutes = schedule ? getPaidLunchMinutes(schedule, dateObject, calendarMonth) : 0;
+    const baseHours = computeSummaryPaidHours(summary, paidLunchMinutes);
+    lunchCutByKey.set(key, roundHours(Math.max(0, paidLunchMinutes - getSummaryBreakMinutes(summary)) / 60));
     const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
@@ -956,9 +959,11 @@ export async function buildAttendanceEntries(params: {
           const dayParams = getScheduleForDate(schedule, dateObject);
           const plannedHours = dayParams.work_hours;
           const effectiveLunchMinutes = dayParams.lunch_minutes;
-          const baseHours = computeSummaryPaidHours(rawSummary, effectiveLunchMinutes);
-          lunchCutByKey.set(key, roundHours(Math.max(0, effectiveLunchMinutes - getSummaryBreakMinutes(rawSummary)) / 60));
-          const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, plannedHours));
+          const paidLunchMinutes = getPaidLunchMinutes(schedule, dateObject, calendarMonth);
+          const baseHours = computeSummaryPaidHours(rawSummary, paidLunchMinutes);
+          lunchCutByKey.set(key, roundHours(Math.max(0, paidLunchMinutes - getSummaryBreakMinutes(rawSummary)) / 60));
+          const hoursLimit = plannedHours + getHolidayLunchHours(schedule, dateObject, calendarMonth);
+          const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, hoursLimit));
           const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
 
           if (!skudMap.has(employee.id)) {

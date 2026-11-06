@@ -312,6 +312,44 @@ describe.each(FETCHERS)('%s — выходные в квоте графика', 
   });
 });
 
+describe('праздник без вычета обеда: лимиты объектов', () => {
+  const NOVEMBER = '2026-11';
+  const HOLIDAY_SATURDAY = '2026-11-07';
+
+  const useNovember = (holidays: string[]): void => {
+    h.loadCalendar.mockResolvedValue({ ...CALENDAR, month: 11, holidays });
+    h.resolveSchedules.mockImplementation(async (employees: Array<{ id: number }>) => {
+      const daily = new Map<string, IResolvedSchedule>();
+      for (let day = 1; day <= 30; day++) {
+        daily.set(`${NOVEMBER}-${String(day).padStart(2, '0')}`, { ...QUOTA_SCHEDULE, respects_holidays: false });
+      }
+      return new Map(employees.map(employee => [employee.id, daily]));
+    });
+    useDb([HOLIDAY_SATURDAY], []);
+    h.buildAttendance.mockResolvedValue(attendanceOf(1, [{ date: HOLIDAY_SATURDAY, hours: 13 }], [
+      objectEntry(HOLIDAY_SATURDAY, 'obj-a', 6),
+      objectEntry(HOLIDAY_SATURDAY, 'obj-b', 7),
+    ]));
+  };
+
+  const limitsTotal = (data: IDepartmentTimesheetData): number => (
+    (data.scheduledWeekendObjectLimits?.get(`1|${HOLIDAY_SATURDAY}|obj-a`) ?? 0)
+    + (data.scheduledWeekendObjectLimits?.get(`1|${HOLIDAY_SATURDAY}|obj-b`) ?? 0)
+  );
+
+  it('в праздник сумма лимитов — смена с обедом', async () => {
+    useNovember([HOLIDAY_SATURDAY]);
+    const data = await fetchTimesheetDataForEmployees(NOVEMBER, [1], 'Сводный 1С', 'FULL', 'actual', true);
+    expect(limitsTotal(data)).toBe(11);
+  });
+
+  it('в обычную субботу сумма лимитов — смена', async () => {
+    useNovember([]);
+    const data = await fetchTimesheetDataForEmployees(NOVEMBER, [1], 'Сводный 1С', 'FULL', 'actual', true);
+    expect(limitsTotal(data)).toBe(10);
+  });
+});
+
 describe('выгрузка части месяца — квота считается по всему месяцу', () => {
   const MONTH_DAYS: IDay[] = [
     { date: '2026-09-05', hours: 12.2, approval: 'auto_approved' },

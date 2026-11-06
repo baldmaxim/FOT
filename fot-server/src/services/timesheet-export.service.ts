@@ -1,6 +1,7 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
 import { getCorrectionCapHours, isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
+import { getHolidayLunchHours } from './holiday-lunch.util.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import {
   buildAttendanceEntries,
@@ -382,7 +383,9 @@ async function computeScheduledWeekendData(
     const schedule = dailySchedulesMap.get(Number(employeeId))?.get(date);
     if (!schedule) continue;
     const [y, m, d] = date.split('-').map(Number);
-    const shift = getCorrectionCapHours(schedule, new Date(y, m - 1, d), calendarMonth);
+    const dayDate = new Date(y, m - 1, d);
+    const shift = getCorrectionCapHours(schedule, dayDate, calendarMonth)
+      + getHolidayLunchHours(schedule, dayDate, calendarMonth);
     for (const [objectKey, limit] of splitShiftBetweenObjects(hoursByObject, shift)) {
       scheduledWeekendObjectLimits.set(`${dayKey}|${objectKey}`, limit);
     }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { getCorrectionCapHours, getFullDayThresholdHoursForDate, getDayNormHours } from './schedule.service.js';
+import { getHolidayLunchHours } from './holiday-lunch.util.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import { isDateInEmployeeWindows } from './timesheet-day-windows.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
@@ -360,9 +361,10 @@ const getDayNormForEmployeeOnDate = (
   const [year, month, day] = dateStr.split('-').map(Number);
   const date = new Date(year, month - 1, day);
   // Суббота/воскресенье в квоте графика: день нерабочий и норма 0, но это работа по графику — предел равен смене.
-  return data.scheduledWeekendDays?.has(`${employeeId}|${dateStr}`)
+  const limit = data.scheduledWeekendDays?.has(`${employeeId}|${dateStr}`)
     ? getCorrectionCapHours(schedule, date, data.calendarMonth)
     : getDayNormHours(schedule, date, data.calendarMonth);
+  return limit > 0 ? limit + getHolidayLunchHours(schedule, date, data.calendarMonth) : 0;
 };
 
 const ensureOneCBodyRows = (worksheet: ExcelJS.Worksheet, lastRow: number): void => {

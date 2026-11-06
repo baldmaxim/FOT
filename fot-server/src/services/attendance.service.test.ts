@@ -2139,6 +2139,128 @@ describe('attendance.service', () => {
       });
     });
 
+    describe('праздник без вычета обеда (с 01.11.2026)', () => {
+      const HOLIDAY = '2026-11-04';
+      const calendarMonth = {
+        holidays: [HOLIDAY, '2026-06-12'],
+        mandatory_holidays: [],
+        pre_holidays: ['2026-11-03'],
+        norm_days: 20,
+      } as unknown as IProductionCalendarMonth;
+      const schedule = { work_hours: 8, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+
+      const build = (date: string) => buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A' }],
+        startDate: date,
+        endDate: date,
+        dailySchedulesMap: new Map([[1, new Map([[date, schedule]])]]),
+        calendarMonth,
+        todayStr: '2026-11-05',
+      });
+
+      const summaryOf = (date: string, totalMinutes: number, breakMinutes = 0): Record<string, unknown> => ({
+        employee_id: 1,
+        date,
+        first_entry: '09:00:00',
+        last_exit: '18:00:00',
+        total_hours: totalMinutes / 60,
+        total_minutes: totalMinutes,
+        break_minutes: breakMinutes,
+      });
+
+      it.each([
+        [HOLIDAY, 9, 'праздник: обед не вычитается'],
+        ['2026-11-03', 8, 'предпраздничный день: вычитается'],
+        ['2026-06-12', 8, 'праздник до 01.11: вычитается'],
+        ['2026-11-05', 8, 'обычный день: вычитается'],
+      ])('%s, СКУД 9 ч → %s ч (%s)', async (date, expected) => {
+        setSummary(summaryOf(date, 540));
+        const result = await build(date);
+        expect(result.entries[0].hours_worked).toBe(expected);
+        expect(result.skudMap.get(1)?.get(date)?.hours).toBe(expected);
+      });
+
+      it('перерыв короче обеда: в праздник вычета нет, в обычный день добирается до обеда', async () => {
+        setSummary(summaryOf(HOLIDAY, 510, 30));
+        expect((await build(HOLIDAY)).entries[0].hours_worked).toBe(8.5);
+        setSummary(summaryOf('2026-11-05', 510, 30));
+        expect((await build('2026-11-05')).entries[0].hours_worked).toBe(8);
+      });
+
+      it('перерыв длиннее обеда: часы те же, что в обычный день', async () => {
+        setSummary(summaryOf(HOLIDAY, 470, 70));
+        const holiday = (await build(HOLIDAY)).entries[0].hours_worked;
+        setSummary(summaryOf('2026-11-05', 470, 70));
+        expect(holiday).toBe((await build('2026-11-05')).entries[0].hours_worked);
+      });
+
+      it('покрытие смены считается по обеду графика: перерыв 60 мин не становится длинным', async () => {
+        mockedState.isWorkingDay = true;
+        setSummary(summaryOf(HOLIDAY, 480, 60));
+        const { entries } = await build(HOLIDAY);
+        expect(entries[0].hours_worked).toBe(8);
+        expect(entries[0].presence_covers_shift).toBe(true);
+        expect(entries[0].underwork_reason).toBeNull();
+      });
+
+      it('raw-fallback: предел поднят на обед, но не выше', async () => {
+        mockedState.needsSkudCheck = true;
+        const rawOf = (date: string, totalMinutes: number) => new Map([[1, new Map([[date, summaryOf(date, totalMinutes) as never]])]]);
+
+        mockedState.objectAttendanceData.rawFallbackSummaries = rawOf(HOLIDAY, 540);
+        expect((await build(HOLIDAY)).entries[0].hours_worked).toBe(9);
+
+        mockedState.objectAttendanceData.rawFallbackSummaries = rawOf(HOLIDAY, 600);
+        expect((await build(HOLIDAY)).entries[0].hours_worked).toBe(9);
+
+        mockedState.objectAttendanceData.rawFallbackSummaries = rawOf('2026-11-05', 540);
+        expect((await build('2026-11-05')).entries[0].hours_worked).toBe(8);
+      });
+
+      it('чистые объекты: сумма по объектам равна дню без вычета обеда', async () => {
+        const entryOf = (key: string, hours: number) => ({
+          adjustment_id: null, employee_id: 1, work_date: HOLIDAY,
+          object_key: key, object_id: key, object_name: key,
+          hours_worked: hours, display_hours_worked: hours, base_hours_worked: hours, is_correction: false,
+        });
+        const objects = [entryOf('obj-a', 5), entryOf('obj-b', 4)];
+        mockedState.objectAttendanceData = {
+          objectEntries: objects,
+          objectEntriesByEmployeeDate: new Map([[1, new Map([[HOLIDAY, objects]])]]),
+          employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+          legacyBlockedDays: new Map(),
+          rawFallbackSummaries: new Map(),
+        };
+        setSummary(summaryOf(HOLIDAY, 540));
+
+        const result = await build(HOLIDAY);
+
+        expect(result.entries[0].hours_worked).toBe(9);
+        const total = result.objectEntries.reduce((sum, entry) => sum + entry.hours_worked, 0);
+        expect(total).toBeCloseTo(9, 2);
+      });
+
+      it('ручная правка часов остаётся как внесена', async () => {
+        setSummary(summaryOf(HOLIDAY, 540));
+        mockedState.adjustmentRows = [{
+          id: 7001,
+          employee_id: 1,
+          work_date: HOLIDAY,
+          status: 'work',
+          hours_override: 7,
+          source_type: 'manual',
+          source_id: 'manual',
+          reason: 'Правка',
+          created_by: 'user-1',
+          approval_status: 'approved',
+          created_at: '2026-11-05T07:00:00.000Z',
+          updated_at: '2026-11-05T07:00:00.000Z',
+          metadata: {},
+        }];
+        expect((await build(HOLIDAY)).entries[0].hours_worked).toBe(7);
+      });
+    });
+
     it('preserves presence_covers_shift flag in capped_to_schedule mode', async () => {
       setSummary({
         employee_id: 1,

@@ -115,6 +115,36 @@ describe('countedMinutesForDay', () => {
     const counted = countedMinutesForDay(day({ hours: 8 }), undefined, THURSDAY, calendar);
     expect(counted).toEqual({ error: 'no_schedule' });
   });
+
+  describe('праздник без вычета обеда (с 01.11.2026)', () => {
+    const lunchSchedule: IResolvedSchedule = { ...schedule, lunch_minutes: 60, respects_holidays: false };
+    const november: IProductionCalendarMonth = {
+      ...calendar,
+      month: 11,
+      holidays: ['2026-11-04'],
+      pre_holidays: ['2026-11-03'],
+    };
+    const counted = (date: string, value: IBrigadeDayValue, plan = lunchSchedule): number | string => {
+      const result = countedMinutesForDay(value, plan, date, november);
+      return 'error' in result ? result.error : result.minutes;
+    };
+
+    it('«игнорирует», рабочий день: предел норма + обед', () => {
+      expect(counted('2026-11-04', day({ hours: 12 }))).toBe(660);
+    });
+
+    it('«учитывает», нерабочий день: предел смена + обед', () => {
+      expect(counted('2026-11-04', day({ hours: 12 }), { ...lunchSchedule, respects_holidays: true })).toBe(660);
+    });
+
+    it('обычный день — предел прежний', () => {
+      expect(counted('2026-11-05', day({ hours: 12 }))).toBe(600);
+    });
+
+    it('правка часов — как есть', () => {
+      expect(counted('2026-11-04', day({ hours: 13, corrected: true, hours_overridden: true }))).toBe(780);
+    });
+  });
 });
 
 describe('countMemberMinutes', () => {

@@ -956,4 +956,62 @@ describe('timesheet-excel.service — суббота в квоте график�
     expect(row.workedDays).toBe(0);
     expect(objectRow(data, 'obj-a').totalHours).toBe(10);
   });
+
+  describe('праздник без вычета обеда (с 01.11.2026)', () => {
+    const inMonth = (
+      date: string,
+      hours: number,
+      options: { respects: boolean; scheduled: boolean; overridden?: boolean },
+    ): IDepartmentTimesheetData => {
+      const data = makeQuotaData(hours, { date, scheduled: options.scheduled, overridden: options.overridden });
+      data.dailySchedulesMap.get(1)!.get(date)!.respects_holidays = options.respects;
+      data.mon = Number(date.slice(5, 7));
+      data.calendarMonth = {
+        year: 2026,
+        month: data.mon,
+        norm_days: 20,
+        norm_hours: 159,
+        holidays: ['2026-11-04', '2026-06-12'],
+        mandatory_holidays: [],
+        pre_holidays: ['2026-11-03'],
+      };
+      return data;
+    };
+    const dayOf = (date: string): number => Number(date.slice(-2));
+
+    it('график «игнорирует»: предел норма + обед в строке сотрудника и объекта', () => {
+      const data = inMonth('2026-11-04', 12.4, { respects: false, scheduled: false });
+      expect(employeeRow(data).dayValues.get(4)?.hours).toBe(11);
+      expect(objectRow(data).dayValues.get(4)?.hours).toBe(11);
+    });
+
+    it('график «игнорирует»: день без лишних часов — факт', () => {
+      const data = inMonth('2026-11-04', 11, { respects: false, scheduled: false });
+      expect(employeeRow(data).dayValues.get(4)?.hours).toBe(11);
+    });
+
+    it.each([
+      ['2026-11-03', 'предпраздничный', 10],
+      ['2026-11-05', 'обычный', 10],
+      ['2026-06-12', 'праздник до 01.11', 10],
+    ])('%s (%s): предел прежний', (date, _label, expected) => {
+      const data = inMonth(date, 12.4, { respects: false, scheduled: false });
+      expect(employeeRow(data).dayValues.get(dayOf(date))?.hours).toBe(expected);
+    });
+
+    it('график «учитывает», день в квоте: предел смена + обед', () => {
+      const data = inMonth('2026-11-04', 12.4, { respects: true, scheduled: true });
+      expect(employeeRow(data).dayValues.get(4)?.hours).toBe(11);
+    });
+
+    it('график «учитывает», день вне квоты: факт, без предела', () => {
+      const data = inMonth('2026-11-04', 12.4, { respects: true, scheduled: false });
+      expect(employeeRow(data).dayValues.get(4)?.hours).toBe(12);
+    });
+
+    it('ручная правка выше предела — как есть', () => {
+      const data = inMonth('2026-11-04', 13, { respects: false, scheduled: false, overridden: true });
+      expect(employeeRow(data).dayValues.get(4)?.hours).toBe(13);
+    });
+  });
 });
