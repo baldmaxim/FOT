@@ -64,6 +64,11 @@ import {
   getCalcColumns,
 } from '../services/payroll/payroll-calc-columns.service.js';
 import {
+  emptyTermsPayoutsTiming,
+  getTermsPayouts,
+  termsPayoutsServerTiming,
+} from '../services/payroll/payroll-terms-payouts.service.js';
+import {
   HOURLY_RATE_DECIMALS_MESSAGE,
   MONEY_DECIMALS_MESSAGE,
   PAYROLL_MAX_HOURLY_RATE,
@@ -1129,6 +1134,38 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 const CALC_COLUMNS_MAX_IDS = 500;
 
 /**
+ * id из ?employee_ids=1,2: от 1 до CALC_COLUMNS_MAX_IDS (лимит — до снятия повторов: 501 одинаковый id — тоже лишний),
+ * целые больше нуля. Иначе — null (400).
+ */
+const parseEmployeeIdsQuery = (value: unknown): number[] | null => {
+  const rawIds = typeof value === 'string' ? value.split(',').map(item => item.trim()).filter(Boolean) : [];
+  if (rawIds.length === 0 || rawIds.length > CALC_COLUMNS_MAX_IDS) return null;
+  const ids = rawIds.map(Number);
+  return ids.every(id => Number.isInteger(id) && id > 0) ? ids : null;
+};
+
+/**
+ * Кого из ids можно считать: сотрудники «Расчётов» в охвате пользователя — работает или уволен (по отделу, из
+ * которого уволен), не в архиве, не подрядчик, отдел в охвате; без повторов, в порядке ids. Общая проверка столбцов ФОТ
+ * «Расчётов» и «Выплачено» «Условий оплаты».
+ */
+const loadAllowedCalcEmployeeIds = async (
+  req: AuthenticatedRequest,
+  ids: readonly number[],
+): Promise<{ ids: number[]; contractorRootId: string | null }> => {
+  const scope = await resolvePayrollStaffScope(req);
+  const uniqueIds = [...new Set(ids)];
+  const allowedRows = scope.departmentIds?.length === 0 ? [] : await query<{ id: number }>(
+    `WITH ${payrollContractorDeptsCte('$1')}
+     SELECT e.id FROM employees e
+      WHERE e.id = ANY($3::int[]) AND ${payrollCalcStaffWhereSql('e', effectiveDepartmentSql('e'), '$2')}`,
+    [scope.contractorRootId, scope.departmentIds, uniqueIds],
+  );
+  const allowed = new Set(allowedRows.map(row => Number(row.id)));
+  return { ids: uniqueIds.filter(id => allowed.has(id)), contractorRootId: scope.contractorRootId };
+};
+
+/**
  * GET /api/payroll/terms/calc-columns?employee_ids=1,2&paid_months=2026-08 — столбцы ФОТ «Расчётов» для порции списка
  * (список с defer_calc=1 отдаёт строки сразу, без расчёта). Считаются только сотрудники «Расчётов» в охвате
  * пользователя — те же правила, что у списка: работает или уволен (по отделу, из которого уволен), не в архиве, не
@@ -1140,16 +1177,9 @@ const CALC_COLUMNS_MAX_IDS = 500;
 const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const params = req.query as Record<string, unknown>;
-    const rawIds = typeof params.employee_ids === 'string'
-      ? params.employee_ids.split(',').map(value => value.trim()).filter(Boolean)
-      : [];
-    // Лимит — до снятия повторов: 501 одинаковый id — тоже лишний.
-    if (rawIds.length === 0 || rawIds.length > CALC_COLUMNS_MAX_IDS) {
-      return badRequest(res, `Нужно от 1 до ${CALC_COLUMNS_MAX_IDS} сотрудников`, 'INVALID_EMPLOYEE_IDS');
-    }
-    const ids = rawIds.map(Number);
-    if (!ids.every(id => Number.isInteger(id) && id > 0)) {
-      return badRequest(res, 'Некорректный id сотрудника', 'INVALID_EMPLOYEE_IDS');
+    const ids = parseEmployeeIdsQuery(params.employee_ids);
+    if (!ids) {
+      return badRequest(res, `Нужно от 1 до ${CALC_COLUMNS_MAX_IDS} сотрудников (целые id)`, 'INVALID_EMPLOYEE_IDS');
     }
     if (params.paid_months === undefined) return badRequest(res, 'Не выбраны месяцы', 'INVALID_MONTHS');
     const months = parsePayrollMonthsQuery(params.paid_months);
@@ -1158,16 +1188,7 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    const scope = await resolvePayrollStaffScope(req);
-    const uniqueIds = [...new Set(ids)];
-    const allowedRows = scope.departmentIds?.length === 0 ? [] : await query<{ id: number }>(
-      `WITH ${payrollContractorDeptsCte('$1')}
-       SELECT e.id FROM employees e
-        WHERE e.id = ANY($3::int[]) AND ${payrollCalcStaffWhereSql('e', effectiveDepartmentSql('e'), '$2')}`,
-      [scope.contractorRootId, scope.departmentIds, uniqueIds],
-    );
-    const allowed = new Set(allowedRows.map(row => Number(row.id)));
-    const allowedIds = uniqueIds.filter(id => allowed.has(id));
+    const { ids: allowedIds } = await loadAllowedCalcEmployeeIds(req, ids);
 
     const timing = emptyCalcColumnsTiming();
     const columns = await getCalcColumns(allowedIds, months, req, timing, { preliminary: params.preliminary === '1' });
@@ -1183,6 +1204,45 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
   }
 };
 
+/**
+ * GET /api/payroll/terms/payouts?employee_ids=1,2&date=2026-11-09 — «Выплачено» «Условий оплаты» для порции списка
+ * (решение пользователя 09.11.2026): за 6 закрытых месяцев перед месяцем даты — месяц из 1С, иначе расчёт ФОТ, как
+ * «Свод» (payroll-terms-payouts.rules.ts). Охват — как у столбцов ФОТ «Расчётов» (loadAllowedCalcEmployeeIds): чужих
+ * id в ответе нет. Список /terms по-прежнему отдаёт суммы 1С в payouts — их фронт показывает, пока идёт расчёт.
+ */
+const payouts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const params = req.query as Record<string, unknown>;
+    const ids = parseEmployeeIdsQuery(params.employee_ids);
+    if (!ids) {
+      return badRequest(res, `Нужно от 1 до ${CALC_COLUMNS_MAX_IDS} сотрудников (целые id)`, 'INVALID_EMPLOYEE_IDS');
+    }
+    const date = calendarDateSchema.safeParse(params.date);
+    if (!date.success) return badRequest(res, 'Некорректная дата', 'INVALID_DATE');
+
+    const allowed = await loadAllowedCalcEmployeeIds(req, ids);
+    const timing = emptyTermsPayoutsTiming();
+    const result = await getTermsPayouts({
+      employeeIds: allowed.ids,
+      date: date.data,
+      contractorRootId: allowed.contractorRootId,
+      req,
+      timing,
+    });
+    res.setHeader('Server-Timing', termsPayoutsServerTiming(timing));
+    res.json({
+      success: true,
+      data: {
+        months: result.months,
+        rows: allowed.ids.map(id => ({ employee_id: id, payouts: result.payouts.get(id) ?? [] })),
+      },
+    });
+  } catch (err) {
+    console.error('payrollTerms.payouts error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка расчёта «Выплачено»' });
+  }
+};
+
 export const payrollTermsController = {
-  list, columnValues, monthObjects, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns,
+  list, columnValues, monthObjects, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns, payouts,
 };

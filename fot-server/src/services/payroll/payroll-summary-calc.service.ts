@@ -34,60 +34,72 @@ const pushTo = <T,>(target: Map<string, T[]>, key: string, value: T): void => {
 /**
  * Кто работал в месяце — то же условие, что у списка «Расчётов» (payrollWorkedInMonthsSql), без подрядчиков: по отделу
  * карточки и по отделу, из которого уволен. Охват пользователя проверяет filterScope «Свода», он один на все суммы.
+ * employeeIds — только среди них («Выплачено» «Условий оплаты» — порция списка); null — все.
  */
 const loadWorkedInMonth = async (
   month: string,
   contractorRootId: string | null,
   archiveId: string | null,
+  employeeIds: readonly number[] | null,
 ): Promise<number[]> => {
   const rows = await query<{ id: number }>(
     `WITH ${payrollContractorDeptsCte('$3')}
      SELECT e.id
        FROM employees e
       WHERE e.is_archived IS NOT TRUE
+        AND ($4::int[] IS NULL OR e.id = ANY($4::int[]))
         AND ${payrollWorkedInMonthsSql('e.id', '$1', '$2')}
         AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
         AND NOT EXISTS (SELECT 1
                           FROM employee_dismissal_events de
                           JOIN contractor_depts c ON c.id = de.from_department_id
                          WHERE de.employee_id = e.id AND de.cancelled = false)`,
-    [[`${month}-01`], archiveId, contractorRootId],
+    [[`${month}-01`], archiveId, contractorRootId, employeeIds === null ? null : [...employeeIds]],
   );
   return rows.map(row => Number(row.id));
 };
 
-/** Состав месяцев: месяц YYYY-MM → кто в нём работал. */
+/** Состав месяцев: месяц YYYY-MM → кто в нём работал; employeeIds — только среди них, null — все. */
 export const loadSummaryRoster = async (
   months: readonly string[],
   contractorRootId: string | null,
+  employeeIds: readonly number[] | null = null,
 ): Promise<Map<string, number[]>> => {
   const archiveId = await resolvePayrollArchiveDepartmentId();
   const result = new Map<string, number[]>();
   // По очереди: условие тяжёлое, на всех сотрудниках.
-  for (const month of months) result.set(month, await loadWorkedInMonth(month, contractorRootId, archiveId));
+  for (const month of months) {
+    result.set(month, await loadWorkedInMonth(month, contractorRootId, archiveId, employeeIds));
+  }
   return result;
 };
 
-/** Разовые доплаты и удержания месяцев: одна запись на основание или вид. */
-export const loadSummaryExtras = async (months: readonly string[]): Promise<ISummaryExtras> => {
+/** Разовые доплаты и удержания месяцев: одна запись на основание или вид; employeeIds — только их, null — все. */
+export const loadSummaryExtras = async (
+  months: readonly string[],
+  employeeIds: readonly number[] | null = null,
+): Promise<ISummaryExtras> => {
   const extras: ISummaryExtras = { oneTime: new Map(), deductions: new Map() };
   if (months.length === 0) return extras;
   const monthStarts = months.map(month => `${month}-01`);
+  const ids = employeeIds === null ? null : [...employeeIds];
   const [oneTime, deductions] = await Promise.all([
     query<{ employee_id: number; month: string; reason: string; amount: string }>(
       `SELECT s.employee_id, to_char(s.month, 'YYYY-MM') AS month, btrim(s.reason) AS reason, SUM(s.amount)::text AS amount
          FROM payroll_one_time_supplements s
         WHERE s.month = ANY($1::date[])
+          AND ($2::int[] IS NULL OR s.employee_id = ANY($2::int[]))
         GROUP BY s.employee_id, s.month, btrim(s.reason)`,
-      [monthStarts],
+      [monthStarts, ids],
     ),
     query<{ employee_id: number; month: string; kind: string; amount: string }>(
       `SELECT d.employee_id, to_char(d.month, 'YYYY-MM') AS month, k.name AS kind, SUM(d.amount)::text AS amount
          FROM staff_deductions d
          JOIN payroll_deduction_kinds k ON k.id = d.kind_id
         WHERE d.month = ANY($1::date[])
+          AND ($2::int[] IS NULL OR d.employee_id = ANY($2::int[]))
         GROUP BY d.employee_id, d.month, k.name`,
-      [monthStarts],
+      [monthStarts, ids],
     ),
   ]);
   for (const { employee_id, month, reason, amount } of oneTime) {

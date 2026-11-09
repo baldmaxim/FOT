@@ -158,8 +158,13 @@ export interface IPayrollTermsRow {
   planned_supplement_amount?: string | number | null;
   planned_supplement_from?: string | null;
   planned_supplement_to?: string | null;
-  /** «Выплачено» по месяцам из «Оплачено» (1С ЗУП); без поля ячейка «Выплачено» показывает «—». */
+  /**
+   * «Выплачено» по месяцам. Список присылает «Оплачено» 1С; «Условия оплаты» заменяют их ответом termsPayouts (месяц
+   * из 1С, иначе расчёт ФОТ, решение 09.11.2026), когда порция посчитана. Без поля ячейка «Выплачено» — «—».
+   */
   payouts?: IPayrollMonthlyAccrual[] | null;
+  /** «Условия оплаты»: расчёт «Выплачено» порции ещё идёт или не удался — в payouts пока суммы 1С из списка. */
+  payouts_status?: PayrollCalcStatus;
   /**
    * «Расчёты» (список с paidMonths) — суммы «Оплачено» за месяцы, ₽, NUMERIC строкой; null — сумм нет («—»).
    * Итог «Начислено»; «К выплате» — он минус paid_deductions_total, как в «Своде».
@@ -185,6 +190,12 @@ export interface IPayrollTermsRow {
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.
    */
   can_edit?: boolean;
+}
+
+/** Ответ termsPayouts: месяцы окна (YYYY-MM) и суммы по сотрудникам, NUMERIC строкой. */
+export interface IPayrollTermsPayoutsResult {
+  months: string[];
+  rows: Array<{ employee_id: number; payouts: Array<{ month: string; amount: string }> }>;
 }
 
 export interface IPayrollTermsHistoryRow {
@@ -753,6 +764,22 @@ export const payrollService = {
     search.set('preliminary', '1');
     return (await apiClient.get<IApiResponse<IPayrollCalcColumnsResult>>(
       `/payroll/terms/calc-columns?${search.toString()}`,
+      { signal },
+    )).data;
+  },
+
+  /**
+   * «Выплачено» «Условий оплаты» для порции списка за 6 закрытых месяцев перед месяцем date: месяц из 1С, иначе
+   * расчёт ФОТ, как «Свод». Только сотрудники в охвате; месяцы без суммы в payouts не входят.
+   */
+  termsPayouts: async (
+    employeeIds: readonly number[],
+    date: string,
+    signal?: AbortSignal,
+  ): Promise<IPayrollTermsPayoutsResult> => {
+    const search = new URLSearchParams({ employee_ids: employeeIds.join(','), date });
+    return (await apiClient.get<IApiResponse<IPayrollTermsPayoutsResult>>(
+      `/payroll/terms/payouts?${search.toString()}`,
       { signal },
     )).data;
   },

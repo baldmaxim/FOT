@@ -105,12 +105,18 @@ export interface IAccrualMonthPart {
   name: string;
   /** «165 230,40» ₽; null — за месяц данных нет. */
   amount: string | null;
+  /** Суммы нет, но расчёт ФОТ ещё идёт — «…» вместо «—». */
+  pending?: boolean;
 }
 
-/** Месяцы окна для ячейки «Выплачено»; данных нет ни за один месяц — null. */
+/**
+ * Месяцы окна для ячейки «Выплачено»; данных нет ни за один месяц — null. pending — расчёт «Выплачено» порции ещё
+ * идёт: месяц без суммы помечается pending («…»).
+ */
 export const accrualsByMonthParts = (
   months: string[],
   accruals: IPayrollMonthlyAccrual[] | null | undefined,
+  pending = false,
 ): IAccrualMonthPart[] | null => {
   const { values, total } = summarizeAccruals(months, accruals);
   if (total === null) return null;
@@ -120,6 +126,7 @@ export const accrualsByMonthParts = (
       month,
       name: MONTHS_SHORT_RU[monthIndex(month)],
       amount: value === null ? null : formatPayrollMoney(value),
+      ...(value === null && pending ? { pending: true } : {}),
     };
   });
 };

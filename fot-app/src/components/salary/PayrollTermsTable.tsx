@@ -128,21 +128,25 @@ const formatPaid = (value: string | number | null | undefined): string => (
 );
 
 
-const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount }, index) => (
+const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount, pending }, index) => (
   <Fragment key={month}>
     {index > 0 && <span className={styles.accrualSep}>; </span>}
     <span className={styles.accrualMonth}>{name}</span>
-    {amount === null ? '\u00a0—' : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
+    {amount === null
+      ? (pending ? '\u00a0…' : '\u00a0—')
+      : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
   </Fragment>
 ));
 
 /**
  * «Выплачено»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP.
- * Ширину содержимого считает usePayrollAccrualsColumnWidth — разметку менять вместе с accrualsCellWidth.
+ * Ширину содержимого считает usePayrollAccrualsColumnWidth — разметку менять вместе с accrualsCellWidth («…» там
+ * меряется как «—», ширина почти та же). Пока расчёт ФОТ порции идёт — суммы 1С списка, месяц без суммы — «…».
  */
 const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
-  const parts = accrualsByMonthParts(months, row.payouts);
-  if (parts === null) return '—';
+  const pending = row.payouts_status === 'pending';
+  const parts = accrualsByMonthParts(months, row.payouts, pending);
+  if (parts === null) return pending ? '…' : '—';
   const [first, second] = accrualLines(parts);
   return (
     <span className={styles.accruals}>

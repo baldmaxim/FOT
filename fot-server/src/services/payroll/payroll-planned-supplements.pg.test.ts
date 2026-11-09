@@ -89,6 +89,19 @@ vi.mock('./payroll-calc.service.js', () => ({
   },
 }));
 
+// «Выплачено» «Условий оплаты» (решение 09.11.2026): здесь — только охват и проверка запроса; сведение — свои тесты.
+const termsPayoutsMock = vi.hoisted(() => ({ calls: [] as Array<{ ids: number[]; date: string; contractorRootId: string | null }> }));
+vi.mock('./payroll-terms-payouts.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./payroll-terms-payouts.service.js')>(),
+  getTermsPayouts: async (input: { employeeIds: readonly number[]; date: string; contractorRootId: string | null }) => {
+    termsPayoutsMock.calls.push({ ids: [...input.employeeIds], date: input.date, contractorRootId: input.contractorRootId });
+    return {
+      months: ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09'],
+      payouts: new Map(input.employeeIds.map(id => [id, [{ month: '2026-09', amount: '100.00' }]])),
+    };
+  },
+}));
+
 import { withTransaction } from '../../config/postgres.js';
 import {
   getPlannedSupplementChanges,
@@ -640,6 +653,50 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       const mine = await calcColumns({ employee_ids: '33,32,1', paid_months: '2026-09' });
       expect(scopeMock.payoutCalls).toEqual([{ ids: [33], month: '2026-09' }]);
       expect((mine.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([33]);
+    });
+
+    describe('«Выплачено» «Условий оплаты»: GET /terms/payouts', () => {
+      const payouts = async (query: Record<string, string>) => {
+        const res = makeRes();
+        await payrollTermsController.payouts({
+          user: { id: AUTHOR }, params: {}, body: {}, query,
+        } as unknown as AuthenticatedRequest, res);
+        return res;
+      };
+
+      beforeEach(() => {
+        termsPayoutsMock.calls = [];
+      });
+
+      it('считаются только сотрудники в охвате, как у столбцов ФОТ: без архивного, подрядчика и чужого отдела', async () => {
+        scopeMock.contractorRootId = D_CONTRACTOR;
+        const all = await payouts({ employee_ids: '33,30,31,32,5,1,33,999', date: '2026-10-15' });
+        expect(all.statusCode).toBe(200);
+        expect(termsPayoutsMock.calls).toEqual([{ ids: [33, 32, 1], date: '2026-10-15', contractorRootId: D_CONTRACTOR }]);
+        expect(all.body.data.rows).toEqual([33, 32, 1].map(id => ({
+          employee_id: id, payouts: [{ month: '2026-09', amount: '100.00' }],
+        })));
+        expect(all.headers['Server-Timing']).toMatch(/payouts_total;dur=/);
+
+        termsPayoutsMock.calls = [];
+        scopeMock.departments = [D_MINE];
+        const mine = await payouts({ employee_ids: '33,32,1', date: '2026-10-15' });
+        expect(termsPayoutsMock.calls[0].ids).toEqual([33]);
+        expect((mine.body.data.rows as Array<{ employee_id: number }>).map(row => row.employee_id)).toEqual([33]);
+      });
+
+      it('400: нет id, 501 id, не число, нет даты, дата не по форме и несуществующая (2026-02-31)', async () => {
+        const bad = [
+          { date: '2026-10-15' },
+          { employee_ids: Array(501).fill('1').join(','), date: '2026-10-15' },
+          { employee_ids: 'abc', date: '2026-10-15' },
+          { employee_ids: '1' },
+          { employee_ids: '1', date: '15.10.2026' },
+          { employee_ids: '1', date: '2026-02-31' },
+        ];
+        for (const query of bad) expect((await payouts(query)).statusCode, JSON.stringify(query)).toBe(400);
+        expect(termsPayoutsMock.calls).toEqual([]);
+      });
     });
 
     it('preliminary=1 — предварительный расчёт; без параметра — по закрытому табелю (старый фронт)', async () => {

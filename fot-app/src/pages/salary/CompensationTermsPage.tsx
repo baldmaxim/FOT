@@ -17,6 +17,7 @@ import {
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollCalcExport } from '../../hooks/usePayrollCalcExport';
 import { usePayrollCalcPageColumns } from '../../hooks/usePayrollCalcPageColumns';
+import { usePayrollTermsPayouts } from '../../hooks/usePayrollTermsPayouts';
 import { usePayrollExpandedColumns } from '../../hooks/usePayrollExpandedColumns';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
@@ -106,8 +107,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   monthFilter,
   onMonthFilterChange,
 }) => {
-  // «Выплачено» — за закрытые месяцы перед месяцем этой даты.
-  const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
   const [sort, setSort] = useState<PayrollSortKey>('name');
   const [dir, setDir] = useState<PayrollSortDir>('asc');
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
@@ -159,6 +158,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
         deferCalc: paidMonths !== undefined,
       }, signal),
       paidMonths: paidMonths ?? null,
+      // Дата порции: по ней считается «Выплачено» и подписи месяцев — строки прежней даты не смешаются с новой.
+      date,
     }),
     initialPageParam: null as IPayrollTermsCursor | null,
     getNextPageParam: last => last.meta.next_cursor ?? undefined,
@@ -176,7 +177,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   // «Расчёты»: столбцы ФОТ — по порциям, по одной (usePayrollCalcPageColumns).
   const isCalcScreen = paidMonths !== undefined;
   const { calcMerge, retryCalc } = usePayrollCalcPageColumns({ pages: data?.pages, rows, enabled: isCalcScreen, active });
-  const tableRows = isCalcScreen ? calcMerge.rows : rows;
+  // «Выплачено» — за закрытые месяцы перед месяцем даты показанных строк.
+  const shownDate = data?.pages[0]?.date ?? date;
+  const accrualMonths = useMemo(() => payrollAccrualMonths(shownDate), [shownDate]);
   const meta = data?.pages[0]?.meta;
   const total = meta?.total ?? 0;
   // Период сумм «Расчётов» — тех строк, что на экране.
@@ -269,6 +272,15 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     columns,
     clearHiddenColumnConditions,
   );
+  // «Условия оплаты»: «Выплачено» — месяц из 1С, иначе расчёт ФОТ, по порциям (usePayrollTermsPayouts); столбец скрыт —
+  // не считается.
+  const { payoutsMerge } = usePayrollTermsPayouts({
+    pages: data?.pages,
+    rows,
+    enabled: !isCalcScreen && !hiddenColumns.has('accruals'),
+    active,
+  });
+  const tableRows = isCalcScreen ? calcMerge.rows : payoutsMerge.rows;
   // «Расчёты»: «+» у «Доплат» и «Удержаний» раскрывает столбцы по видам; что раскрыто — помнит браузер.
   const { expanded: expandedColumns, toggleExpanded } = usePayrollExpandedColumns();
   // «Расчёты»: столбцы сумм без данных скрываются сами, когда загружены все порции; выбор шестерёнки не меняется.

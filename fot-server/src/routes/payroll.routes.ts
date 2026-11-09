@@ -54,6 +54,8 @@ const paymentsEdit = requirePageAccess('/salary/payments', 'edit');
 router.get('/terms', termsView, serverTiming('payroll_terms_list'), payrollTermsController.list);
 // Столбцы ФОТ порции «Расчётов» — отдельно от списка (список с defer_calc=1 отдаёт строки сразу).
 router.get('/terms/calc-columns', termsView, serverTiming('payroll_calc_columns'), payrollTermsController.calcColumns);
+// «Выплачено» «Условий оплаты» порции списка: месяц из 1С, иначе расчёт ФОТ, как «Свод» (решение 09.11.2026).
+router.get('/terms/payouts', termsView, serverTiming('payroll_terms_payouts'), payrollTermsController.payouts);
 // Варианты фильтра столбца (воронка в заголовке таблицы условий).
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
 // Варианты поля «Все объекты» «Расчётов»: объекты месяцев, как у «Свода».
