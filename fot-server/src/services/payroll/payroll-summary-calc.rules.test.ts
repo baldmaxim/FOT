@@ -27,6 +27,18 @@ describe('«Свод»: сведение расчёта и 1С', () => {
     expect(needsSummaryCalc(new Map([['contract', '402381.00']]))).toBe(false);
   });
 
+  it('в 1С есть ГПХ без «Зарплаты» — тоже весь месяц из 1С, оклад расчёта не добавляется (Баллиев, август)', () => {
+    const result = merge({
+      paid: new Map([['gph', '150075.00']]),
+      calc: closed([{ code: 'contract', amount: '146087.00' }]),
+      oneTime: [{ reason: 'Премия', amount: '1000.00' }],
+    });
+    expect(result.cents).toEqual({ gph: 15007500 });
+    expect(result.issues).toEqual([]);
+    expect(needsSummaryCalc(new Map([['gph', '150075.00']]))).toBe(false);
+    expect(needsSummaryCalc(new Map([['vacation', '30000.00']]))).toBe(true);
+  });
+
   it('в 1С ничего нет — только расчёт, разовые по основаниям и удержания по видам', () => {
     const result = merge({
       calc: closed([

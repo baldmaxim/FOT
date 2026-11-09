@@ -2,12 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PayrollCalcWithPreliminary } from './payroll-calc.service.js';
 import { mergeSummaryMonth } from './payroll-summary-calc.rules.js';
-import {
-  isTermsPayoutFrom1c,
-  summaryPayoutCents,
-  termsPayoutMonth,
-  type ITermsPayoutFacts,
-} from './payroll-terms-payouts.rules.js';
+import { summaryPayoutCents, termsPayoutMonth, type ITermsPayoutFacts } from './payroll-terms-payouts.rules.js';
 
 const calc = (
   lines: Array<{ code: string; amount: string | null }>,
@@ -48,10 +43,6 @@ describe('«Выплачено»: месяц из 1С, иначе расчёт �
       calc: calc([{ code: 'contract', amount: '146087.00' }]),
       fotKnown: true,
     })).toBe(15007500);
-    expect(isTermsPayoutFrom1c(new Map([['gph', '1.00']]))).toBe(true);
-    expect(isTermsPayoutFrom1c(new Map([['contract', '1.00']]))).toBe(true);
-    expect(isTermsPayoutFrom1c(new Map([['vacation', '1.00']]))).toBe(false);
-    expect(isTermsPayoutFrom1c(undefined)).toBe(false);
   });
 
   it('1. итог 1С ноль — 0, а не «—»', () => {

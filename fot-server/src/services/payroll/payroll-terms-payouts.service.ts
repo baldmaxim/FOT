@@ -12,9 +12,9 @@ import type { AuthenticatedRequest } from '../../types/index.js';
 import { sumCalcColumns } from './payroll-calc-columns.service.js';
 import { monthPairKey } from './payroll-month-attribution.service.js';
 import { calcSummaryMonths, loadSummaryExtras, loadSummaryRoster } from './payroll-summary-calc.service.js';
-import { SUMMARY_PAYROLL_ITEM } from './payroll-summary-calc.rules.js';
+import { needsSummaryCalc, SUMMARY_PAYROLL_ITEM } from './payroll-summary-calc.rules.js';
 import { centsToAmount } from './payroll-summary.attribution.js';
-import { isTermsPayoutFrom1c, termsPayoutMonth } from './payroll-terms-payouts.rules.js';
+import { termsPayoutMonth } from './payroll-terms-payouts.rules.js';
 
 /** Сколько закрытых месяцев перед месяцем даты — как SQL списка и payrollAccrualMonths на фронте. */
 export const TERMS_PAYOUT_MONTHS = 6;
@@ -122,7 +122,7 @@ export const getTermsPayouts = async (input: {
   // Расчёт — только работавшим в месяце, у кого месяц не из 1С (нет «Зарплаты» и ГПХ).
   const candidates = new Map<string, number[]>();
   for (const month of months) {
-    const worked = (roster.get(month) ?? []).filter(id => !isTermsPayoutFrom1c(paid.get(monthPairKey(id, month))));
+    const worked = (roster.get(month) ?? []).filter(id => needsSummaryCalc(paid.get(monthPairKey(id, month))));
     if (worked.length > 0) candidates.set(month, worked);
   }
   const { calcs, employees } = await calcSummaryMonths(candidates, loadedMonths, input.req);

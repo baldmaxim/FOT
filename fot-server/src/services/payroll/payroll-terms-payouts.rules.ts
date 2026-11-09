@@ -3,8 +3,7 @@
  * иначе расчёт ФОТ, как «Свод» (payroll-summary-calc.rules.ts). Чистые функции, счёт в целых копейках.
  *
  *   1. В 1С есть «Зарплата» (contract) или вознаграждение по ГПХ (gph) — весь месяц из 1С: начислено − удержано, как
- *      было. ГПХ — оплата месяца человека на договоре ГПХ: расчёт ФОТ по окладу поверх неё задвоил бы месяц (прод
- *      09.11.2026: Баллиев, август — ГПХ 150 075 + оклад ФОТ). «Свод» пока смотрит только на «Зарплату».
+ *      было (needsSummaryCalc — то же правило, что у «Свода»).
  *   2. Иначе ФОТ посчитан и его итог известен (то же условие, что у «Суммы» «Расчётов») — «К выплате» «Свода»:
  *      расчёт, разовые доплаты и удержания «Справочника», загруженная статья 1С заменяет свою. Без статей 1С это
  *      ровно «Сумма» «Расчётов»; ноль — ноль.
@@ -15,7 +14,7 @@
  */
 import type { PayrollCalcWithPreliminary } from './payroll-calc.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from './payroll-paid.service.js';
-import { mergeSummaryMonth, SUMMARY_OTHER_DEDUCTIONS, SUMMARY_PAYROLL_ITEM } from './payroll-summary-calc.rules.js';
+import { mergeSummaryMonth, needsSummaryCalc, SUMMARY_OTHER_DEDUCTIONS } from './payroll-summary-calc.rules.js';
 import { toCents } from './payroll-summary.attribution.js';
 
 const ACCRUAL_ITEMS: ReadonlySet<string> = new Set(PAYROLL_PAID_ACCRUAL_CODES);
@@ -35,14 +34,6 @@ export const summaryPayoutCents = (cents: ReadonlyMap<string, number>): number |
   return accrued === null && deducted === null ? null : (accrued ?? 0) - (deducted ?? 0);
 };
 
-/** Статьи 1С, по которым месяц человека посчитан в 1С: «Зарплата» или вознаграждение по ГПХ. */
-const ONE_C_PAY_ITEMS: readonly string[] = [SUMMARY_PAYROLL_ITEM, 'gph'];
-
-/** Месяц человека из 1С целиком (правило 1): расчёт ФОТ ему не нужен. */
-export const isTermsPayoutFrom1c = (paid: ReadonlyMap<string, string> | undefined): boolean => (
-  ONE_C_PAY_ITEMS.some(item => paid?.has(item) ?? false)
-);
-
 const paidCents = (paid: ReadonlyMap<string, string>): Map<string, number> => (
   new Map([...paid].map(([item, amount]) => [item, toCents(amount)]))
 );
@@ -61,7 +52,7 @@ export interface ITermsPayoutFacts {
 
 /** «Выплачено» за месяц в копейках; null — данных нет («—»). Известный ноль — 0. */
 export const termsPayoutMonth = (facts: ITermsPayoutFacts): number | null => {
-  if (isTermsPayoutFrom1c(facts.paid)) return summaryPayoutCents(paidCents(facts.paid));
+  if (!needsSummaryCalc(facts.paid)) return summaryPayoutCents(paidCents(facts.paid));
   if (facts.calc !== undefined && !facts.fotKnown) {
     return facts.paid.size > 0 ? summaryPayoutCents(paidCents(facts.paid)) : null;
   }
