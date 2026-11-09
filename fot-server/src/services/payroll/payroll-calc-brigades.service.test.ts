@@ -10,7 +10,7 @@ vi.mock('./brigade-salary.service.js', () => brigade);
 
 const preliminary = vi.hoisted(() => ({
   loadBrigadeCandidates: vi.fn(),
-  loadBrigadeContext: vi.fn(),
+  loadBrigadeContexts: vi.fn(),
   resolveOpenBrigadeShares: vi.fn(),
 }));
 vi.mock('./payroll-calc-preliminary.service.js', () => preliminary);
@@ -33,7 +33,7 @@ const prelimShares = (departmentId: string) => ({ ...open(), distribution: 'no_o
 beforeEach(() => {
   vi.clearAllMocks();
   preliminary.loadBrigadeCandidates.mockResolvedValue([]);
-  preliminary.loadBrigadeContext.mockImplementation(async (departmentId: string) => contextOf(departmentId));
+  preliminary.loadBrigadeContexts.mockImplementation(async (ids: string[]) => new Map(ids.map(id => [id, contextOf(id)])));
   preliminary.resolveOpenBrigadeShares.mockImplementation(async (context: { departmentId: string }) => (
     prelimShares(context.departmentId)
   ));
@@ -50,8 +50,8 @@ describe('loadPreliminaryBrigadeShares', () => {
     const step = await loadPreliminaryBrigadeShares(req, MONTH, AS_OF, ['b-plain'], [7]);
 
     expect(brigade.getBrigadeShares).not.toHaveBeenCalled();
-    expect(preliminary.loadBrigadeContext).toHaveBeenCalledTimes(1);
-    expect(preliminary.loadBrigadeContext).toHaveBeenCalledWith('b-cand', '2026-09-01', AS_OF);
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledTimes(1);
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledWith(['b-cand'], '2026-09-01', AS_OF);
     expect(preliminary.resolveOpenBrigadeShares).not.toHaveBeenCalled();
     expect(step.shares.get('b-cand')).toEqual(fixed('100.00'));
     expect(step.shares.get('b-plain')).toEqual(fixed('200.00'));
@@ -67,6 +67,7 @@ describe('loadPreliminaryBrigadeShares', () => {
     const step = await loadPreliminaryBrigadeShares(req, MONTH, AS_OF, ['b-open'], []);
 
     expect(brigade.getBrigadeShares).not.toHaveBeenCalled();
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledWith(['b-open'], '2026-09-01', AS_OF);
     expect(preliminary.resolveOpenBrigadeShares).toHaveBeenCalledWith(contextOf('b-open'), MONTH, AS_OF, inputs);
     expect(step.shares.get('b-open')).toEqual(prelimShares('b-open'));
     expect([...step.preliminary]).toEqual(['b-open']);
@@ -85,10 +86,31 @@ describe('loadPreliminaryBrigadeShares', () => {
 
     expect(brigade.getBrigadeShares).toHaveBeenCalledTimes(2);
     expect(step.shares.get('b-fix')).toEqual(fixed('300.00'));
-    expect(preliminary.loadBrigadeContext).toHaveBeenCalledTimes(1);
-    expect(preliminary.loadBrigadeContext).toHaveBeenCalledWith('b-reopened', '2026-09-01', AS_OF);
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledTimes(1);
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledWith(['b-reopened'], '2026-09-01', AS_OF);
     expect(preliminary.resolveOpenBrigadeShares).toHaveBeenCalledWith(contextOf('b-reopened'), MONTH, AS_OF, undefined);
     expect([...step.preliminary]).toEqual(['b-reopened']);
+  });
+});
+
+describe('loadPreliminaryBrigadeShares: состав одним вызовом', () => {
+  it('needs_fix → fixed у кандидата — состав есть, долей нет; все нужные бригады — в одном вызове', async () => {
+    preliminary.loadBrigadeCandidates.mockResolvedValue(['b-fix-cand', 'b-open']);
+    brigade.peekBrigadeSharesMany.mockResolvedValue(new Map([
+      ['b-fix-cand', { state: 'needs_fix' }],
+      ['b-fixed', { state: 'fixed', shares: fixed('100.00') }],
+      ['b-open', { state: 'open', shares: open(), inputs: inputsOf(10) }],
+    ]));
+    brigade.getBrigadeShares.mockResolvedValue(fixed('300.00'));
+
+    const step = await loadPreliminaryBrigadeShares(req, MONTH, AS_OF, ['b-fixed', 'b-fix-cand'], [7]);
+
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledTimes(1);
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledWith(['b-fix-cand', 'b-open'], '2026-09-01', AS_OF);
+    expect(step.shares.get('b-fix-cand')).toEqual(fixed('300.00'));
+    expect([...step.preliminary]).toEqual(['b-open']);
+    expect(step.contexts.map(context => context.departmentId)).toEqual(['b-fix-cand', 'b-open']);
+    expect(preliminary.resolveOpenBrigadeShares).toHaveBeenCalledTimes(1);
   });
 });
 

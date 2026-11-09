@@ -410,11 +410,37 @@ export async function listBrigadeSupervisorEmployeeIdsForDepartments(
   return new Set(rows.map(row => Number(row.id)).filter(Number.isFinite));
 }
 
+/**
+ * Начальники участка по бригадам ($1 — бригады): одна раскладка на много бригад («Свод», «Расчёты» — состав бригад
+ * месяца). Пустой Set у каждой запрошенной бригады без начальника; начальник двух бригад — в обеих. Условие —
+ * общее с listBrigadeSupervisorEmployeeIdsForDepartments (SUPERVISOR_FROM_WHERE_SQL).
+ */
+export async function listBrigadeSupervisorsByDepartment(
+  departmentIds: readonly string[],
+  exec?: DbExecutor,
+): Promise<Map<string, Set<number>>> {
+  const ids = [...new Set(departmentIds)];
+  const result = new Map<string, Set<number>>(ids.map(id => [id, new Set()]));
+  if (ids.length === 0) return result;
+  const sql = `SELECT DISTINCT eda.department_id::text AS department_id, e.id ${SUPERVISOR_FROM_WHERE_SQL}`;
+  const rows: Array<{ department_id: string; id: number }> = exec
+    ? (await exec.query<{ department_id: string; id: number }>(sql, [ids])).rows
+    : await query<{ department_id: string; id: number }>(sql, [ids]);
+  // БД отдаёт uuid в нижнем регистре — ключ результата всё равно переданный id, как бы он ни был записан.
+  const requested = new Map(ids.map(id => [id.toLowerCase(), id]));
+  for (const row of rows) {
+    const id = Number(row.id);
+    const key = requested.get(row.department_id.toLowerCase());
+    if (Number.isFinite(id) && key !== undefined) result.get(key)!.add(id);
+  }
+  return result;
+}
+
 /** Экспортируется только для теста инварианта «начальник участка = full-назначение». */
 export const SUPERVISOR_IDS_SQL_FOR_TESTS = (): string => SUPERVISOR_IDS_SQL;
 
-const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
-       FROM employee_department_access eda
+/** Кто начальник участка бригад $1 — общее условие union-списка и раскладки по бригадам. */
+const SUPERVISOR_FROM_WHERE_SQL = `FROM employee_department_access eda
        INNER JOIN employees e        ON e.id = eda.employee_id
        INNER JOIN org_departments od ON od.id = eda.department_id
        INNER JOIN user_profiles up   ON up.employee_id = e.id
@@ -426,6 +452,9 @@ const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
         AND e.is_archived = false
         AND od.is_active = true
         AND sr.code = 'site_supervisor'`;
+
+const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
+       ${SUPERVISOR_FROM_WHERE_SQL}`;
 
 /**
  * GET /api/timesheet/department-supervisor?department_id=UUID

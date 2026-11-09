@@ -12,11 +12,11 @@
  * период по asOf в бригаде, общий живой табель не грузит: дни нужны только расчёту доли.
  */
 import { getPool, query } from '../../config/postgres.js';
-import { listBrigadeSupervisorEmployeeIdsForDepartments } from '../../controllers/timesheet-assigned-export.controller.js';
+import { listBrigadeSupervisorsByDepartment } from '../../controllers/timesheet-assigned-export.controller.js';
 import {
   buildMembershipWindowMap,
   isWithinMembershipWindow,
-  listEmployeeMembershipsForDepartmentPeriod,
+  listEmployeeMembershipsForDepartmentsPeriod,
   type IDepartmentEmployeeMembership,
   type IMembershipWindow,
 } from '../timesheet-department-assignments.service.js';
@@ -77,24 +77,36 @@ export const loadBrigadeCandidates = async (
   return (rows ?? []).map(row => row.department_id);
 };
 
-/** Состав бригады за [monthStart, asOf] — как у сетки табеля (уволенный виден в месяце увольнения), без начальников. */
-export const loadBrigadeContext = async (
-  departmentId: string,
+/**
+ * Состав бригад за [monthStart, asOf] — как у сетки табеля (уволенный виден в месяце увольнения): членство и
+ * начальники участка всех бригад разом (7 запросов на все, а не на каждую). memberships — полный список (с
+ * начальниками: так его получает живой расчёт доли), memberIds и windows — без начальников своей бригады.
+ * Запись на каждую запрошенную бригаду.
+ */
+export const loadBrigadeContexts = async (
+  departmentIds: readonly string[],
   monthStart: string,
   asOf: string,
-): Promise<IBrigadeContext> => {
-  // По очереди: контекст грузится внутри слота бригады, одно соединение на слот.
-  const memberships = await listEmployeeMembershipsForDepartmentPeriod(
-    departmentId, monthStart, asOf, undefined, { firedInDismissalMonth: true },
+): Promise<Map<string, IBrigadeContext>> => {
+  const ids = [...new Set(departmentIds)];
+  const result = new Map<string, IBrigadeContext>();
+  if (ids.length === 0) return result;
+  const membershipsByBrigade = await listEmployeeMembershipsForDepartmentsPeriod(
+    ids, monthStart, asOf, { firedInDismissalMonth: true },
   );
-  const supervisors = await listBrigadeSupervisorEmployeeIdsForDepartments([departmentId]);
-  const members = memberships.filter(row => !supervisors.has(Number(row.employee_id)));
-  return {
-    departmentId,
-    memberIds: members.map(row => Number(row.employee_id)).sort((a, b) => a - b),
-    memberships,
-    windows: buildMembershipWindowMap(members),
-  };
+  const supervisorsByBrigade = await listBrigadeSupervisorsByDepartment(ids);
+  for (const departmentId of ids) {
+    const memberships = membershipsByBrigade.get(departmentId) ?? [];
+    const supervisors = supervisorsByBrigade.get(departmentId) ?? new Set<number>();
+    const members = memberships.filter(row => !supervisors.has(Number(row.employee_id)));
+    result.set(departmentId, {
+      departmentId,
+      memberIds: members.map(row => Number(row.employee_id)).sort((a, b) => a - b),
+      memberships,
+      windows: buildMembershipWindowMap(members),
+    });
+  }
+  return result;
 };
 
 /**

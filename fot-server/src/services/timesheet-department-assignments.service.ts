@@ -414,6 +414,199 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   return result;
 }
 
+/**
+ * То же членство для многих отделов сразу — 6 запросов на все («Свод» и «Расчёты»: состав бригад месяца).
+ * Правила — те же, что у listEmployeeMembershipsForDepartmentPeriod выше: МЕНЯТЬ ТОЛЬКО ВМЕСТЕ. Каждый корень — со
+ * своим поддеревом (collectDeptIds), ключ всех шагов — (корень, сотрудник): корни друг на друга не влияют, даже
+ * родитель и его дочерний отдел в одном запросе. Запись на каждый запрошенный отдел (никого — пустой список),
+ * внутри — по employee_id.
+ *
+ * Отличие одно: при нескольких входах переводом в поддерево joined_via_transfer = «среди них есть дата joined».
+ * Одиночная берёт даты без ORDER BY и оставляет последнюю попавшуюся — при двух входах результат случайный (на
+ * проде 09.11.2026 такой один, №2203, и на дни не влияет: joined у него всегда раньше начала периода).
+ */
+export async function listEmployeeMembershipsForDepartmentsPeriod(
+  departmentIds: readonly string[],
+  startDate: string,
+  endDate: string,
+  options?: IMembershipOptions,
+): Promise<Map<string, IDepartmentEmployeeMembership[]>> {
+  const roots = [...new Set(departmentIds)];
+  const result = new Map<string, IDepartmentEmployeeMembership[]>(roots.map(root => [root, []]));
+  if (roots.length === 0) return result;
+
+  // Пары (корень, отдел поддерева); дерево — справочник за in-memory кэшем.
+  const pairRoots: string[] = [];
+  const pairDepts: string[] = [];
+  for (const root of roots) {
+    for (const deptId of await collectDeptIds(root)) {
+      pairRoots.push(root);
+      pairDepts.push(deptId);
+    }
+  }
+  const PAIRS = 'unnest($1::text[], $2::uuid[]) AS p(root, dept)';
+  const TREES = `(SELECT root, array_agg(dept) AS depts FROM unnest($1::text[], $2::uuid[]) AS u(root, dept) GROUP BY root)`;
+
+  // Назначения, чей период пересекается с [startDate, endDate] (как у одиночной).
+  const assignments = await query<{
+    root: string;
+    employee_id: number;
+    effective_from: string;
+    effective_to: string | null;
+  }>(
+    `SELECT p.root, a.employee_id, a.effective_from, a.effective_to
+       FROM ${PAIRS}
+       JOIN employee_assignments a ON a.org_department_id = p.dept
+      WHERE a.effective_from <= $3
+        AND (a.effective_to IS NULL OR a.effective_to >= $4)`,
+    [pairRoots, pairDepts, endDate, startDate],
+  );
+  // Уволенные из отдела — последнее событие по сотруднику в поддереве корня.
+  const firedFromDept = await query<{ root: string; employee_id: number; dismissal_date: string }>(
+    `SELECT DISTINCT ON (p.root, de.employee_id) p.root, de.employee_id, de.dismissal_date
+       FROM ${PAIRS}
+       JOIN employee_dismissal_events de ON de.from_department_id = p.dept
+      WHERE de.dismissal_date IS NOT NULL
+        AND de.dismissal_date >= $3::date
+        AND de.cancelled = false
+      ORDER BY p.root, de.employee_id, de.created_at DESC`,
+    [pairRoots, pairDepts, startDate],
+  );
+  // Вошёл в поддерево корня после периода — встык из отдела ВНЕ поддерева ЭТОГО корня (или из NULL).
+  const transferredInAfter = await query<{ root: string; employee_id: number }>(
+    `SELECT DISTINCT p.root, cur.employee_id
+       FROM ${PAIRS}
+       JOIN ${TREES} t ON t.root = p.root
+       JOIN employee_assignments cur ON cur.org_department_id = p.dept
+       JOIN employee_assignments prev
+         ON prev.employee_id = cur.employee_id
+        AND prev.effective_to = cur.effective_from - 1
+        AND (prev.org_department_id IS NULL
+             OR NOT (prev.org_department_id = ANY(t.depts)))
+      WHERE cur.effective_from > $3::date`,
+    [pairRoots, pairDepts, endDate],
+  );
+  const snapshotEmployees = await query<{ root: string; id: number }>(
+    `SELECT p.root, e.id FROM ${PAIRS} JOIN employees e ON e.org_department_id = p.dept`,
+    [pairRoots, pairDepts],
+  );
+
+  // Сборка по корню — те же шаги и тот же порядок источников, что у одиночной.
+  const maps = new Map<string, Map<number, IDepartmentEmployeeMembership>>(roots.map(root => [root, new Map()]));
+  for (const row of assignments) {
+    const map = maps.get(row.root)!;
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const effTo = (row.effective_to as string | null) ?? null;
+    const effFrom = (row.effective_from as string | null) ?? null;
+    const transferDate = effTo ? formatDateShift(effTo, 1) : null;
+    const existing = map.get(empId);
+    if (!existing) {
+      map.set(empId, { employee_id: empId, transferred_out_date: transferDate, joined_date: effFrom });
+    } else {
+      if (effFrom && (existing.joined_date == null || effFrom < existing.joined_date)) {
+        existing.joined_date = effFrom;
+      }
+      if (effTo == null) {
+        existing.transferred_out_date = null;
+      } else if (
+        existing.transferred_out_date != null
+        && transferDate != null
+        && transferDate > existing.transferred_out_date
+      ) {
+        existing.transferred_out_date = transferDate;
+      }
+    }
+  }
+  for (const row of firedFromDept) {
+    const map = maps.get(row.root)!;
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const transferDate = formatDateShift(row.dismissal_date, 1);
+    if (!map.has(empId)) {
+      map.set(empId, { employee_id: empId, transferred_out_date: transferDate, joined_date: null });
+    }
+  }
+  const transferredInAfterPeriod = new Set(transferredInAfter.map(row => `${row.root}|${Number(row.employee_id)}`));
+  for (const row of snapshotEmployees) {
+    const map = maps.get(row.root)!;
+    const empId = Number(row.id);
+    if (!Number.isFinite(empId)) continue;
+    if (transferredInAfterPeriod.has(`${row.root}|${empId}`)) continue;
+    if (!map.has(empId)) {
+      map.set(empId, { employee_id: empId, transferred_out_date: null, joined_date: null });
+    } else {
+      map.get(empId)!.transferred_out_date = null;
+    }
+  }
+
+  const candidateRoots: string[] = [];
+  const candidateIds: number[] = [];
+  for (const [root, map] of maps) {
+    for (const empId of map.keys()) {
+      candidateRoots.push(root);
+      candidateIds.push(empId);
+    }
+  }
+  if (candidateIds.length === 0) return result;
+
+  // Вход переводом: встык после закрытого периода в другом отделе; пары (корень, кандидат) — поддерево своего корня.
+  const transferJoins = await query<{ root: string; employee_id: number; effective_from: string }>(
+    `SELECT DISTINCT c.root, cur.employee_id, cur.effective_from::text AS effective_from
+       FROM unnest($3::text[], $4::int[]) AS c(root, employee_id)
+       JOIN ${TREES} t ON t.root = c.root
+       JOIN employee_assignments cur
+         ON cur.employee_id = c.employee_id
+        AND cur.org_department_id = ANY(t.depts)
+       JOIN employee_assignments prev
+         ON prev.employee_id = cur.employee_id
+        AND prev.effective_to = cur.effective_from - 1
+        AND prev.org_department_id IS DISTINCT FROM cur.org_department_id`,
+    [pairRoots, pairDepts, candidateRoots, candidateIds],
+  );
+  const transferJoinDates = new Set(transferJoins.map(row => (
+    `${row.root}|${Number(row.employee_id)}|${String(row.effective_from)}`
+  )));
+
+  // Активность зависит только от сотрудника и начала периода — один запрос на всех кандидатов.
+  const firedSql = options?.firedInDismissalMonth
+    ? firedPortalEligibleSql(null, '$2')
+    : firedEligibleSql(null, '$2');
+  const activeRows = await query<{
+    id: number;
+    excluded_from_timesheet: boolean;
+    excluded_from_timesheet_date: string | null;
+  }>(
+    `SELECT id, excluded_from_timesheet, excluded_from_timesheet_date
+       FROM employees
+      WHERE id = ANY($1::int[])
+        AND is_archived = false
+        AND ${firedSql}`,
+    [[...new Set(candidateIds)], startDate],
+  );
+  const active = new Map<number, { excluded: boolean; excludedDate: string | null }>();
+  for (const row of activeRows) {
+    active.set(Number(row.id), {
+      excluded: !!row.excluded_from_timesheet,
+      excludedDate: row.excluded_from_timesheet_date ?? null,
+    });
+  }
+
+  for (const [root, map] of maps) {
+    const list: IDepartmentEmployeeMembership[] = [];
+    for (const [empId, m] of map) {
+      const row = active.get(empId);
+      if (!row) continue;
+      if (row.excluded && (!row.excludedDate || row.excludedDate <= startDate)) continue;
+      const joinedViaTransfer = m.joined_date != null
+        && transferJoinDates.has(`${root}|${empId}|${m.joined_date}`);
+      list.push({ ...m, joined_via_transfer: joinedViaTransfer });
+    }
+    result.set(root, list.sort((a, b) => a.employee_id - b.employee_id));
+  }
+  return result;
+}
+
 // Источники членства набора отделов за период ($1 — отделы, $2/$3 — границы периода) и допуск
 // в состав. Общие для состава выгрузки (listScopedMembersByDepartment) и диагностического
 // снимка журнала выгрузок (listScopedMembershipCandidates) — менять только вместе.

@@ -95,10 +95,12 @@ const scheduleMaps = (ids: number[], start: string, end: string) => {
 vi.mock('../timesheet-department-assignments.service.js', async importOriginal => ({
   ...(await importOriginal<typeof import('../timesheet-department-assignments.service.js')>()),
   listEmployeeMembershipsForDepartmentPeriod: vi.fn(async () => fx.members),
+  listEmployeeMembershipsForDepartmentsPeriod: vi.fn(async (ids: string[]) => new Map(ids.map(id => [id, fx.members]))),
 }));
 
 vi.mock('../../controllers/timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: vi.fn(async () => fx.supervisors),
+  listBrigadeSupervisorsByDepartment: vi.fn(async (ids: string[]) => new Map(ids.map(id => [id, fx.supervisors]))),
 }));
 
 vi.mock('../schedule.service.js', async importOriginal => ({
@@ -156,7 +158,7 @@ import {
 } from './brigade-salary-inputs.service.js';
 import { loadBrigadeMonthApprovals, loadBrigadeMonthApprovalsMany } from './brigade-salary-source.service.js';
 import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
-import { loadBrigadeContext, resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
+import { loadBrigadeContexts, resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
 import { listBrigadeOutputs } from './brigade-output-list.service.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
@@ -628,7 +630,7 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
 
     const step = await loadPreliminaryBrigadeShares(req, '2026-09', '2026-09-30', [BRIGADE], []);
-    const context = await loadBrigadeContext(BRIGADE, '2026-09-01', '2026-09-30');
+    const context = (await loadBrigadeContexts([BRIGADE], '2026-09-01', '2026-09-30')).get(BRIGADE)!;
     const old = await resolveOpenBrigadeShares(context, '2026-09', '2026-09-30');
 
     expect([...step.preliminary]).toEqual([BRIGADE]);

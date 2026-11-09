@@ -41,14 +41,20 @@ vi.mock('./brigade-salary-source.service.js', async importOriginal => ({
   loadLiveDays: brigadeSource.loadLiveDays,
 }));
 
-const membership = vi.hoisted(() => ({ list: vi.fn() }));
+// Состав бригад грузится пакетом (listEmployeeMembershipsForDepartmentsPeriod) — здесь он раскладывается на
+// membership.list по бригаде: так видно, за какой период и с каким видом состава его просят. Пакет = одиночная —
+// timesheet-department-assignments.batch.pg.test.
+const membership = vi.hoisted(() => ({ list: vi.fn(), batch: vi.fn() }));
 vi.mock('../timesheet-department-assignments.service.js', async importOriginal => ({
   ...(await importOriginal<typeof import('../timesheet-department-assignments.service.js')>()),
   listEmployeeMembershipsForDepartmentPeriod: membership.list,
+  listEmployeeMembershipsForDepartmentsPeriod: membership.batch,
 }));
 
+const supervisors = vi.hoisted(() => ({ byDepartment: vi.fn() }));
 vi.mock('../../controllers/timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: vi.fn(async () => new Set<number>()),
+  listBrigadeSupervisorsByDepartment: supervisors.byDepartment,
 }));
 
 const live = vi.hoisted(() => ({ fetchTimesheetDataForEmployees: vi.fn() }));
@@ -73,7 +79,7 @@ vi.mock('./payroll-staff-category.js', () => ({
 }));
 
 import { getPayoutForEmployees, getPreliminaryPayoutForEmployees } from './payroll-calc.service.js';
-import { resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
+import { loadBrigadeContexts, resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
 import { loadRateFacts } from './payroll-rate-facts.service.js';
 
 const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
@@ -157,6 +163,10 @@ beforeEach(() => {
   brigade.getBrigadeShares.mockResolvedValue({ state: 'open', distribution: null, rows: [] });
   inputs.loadBrigadeSalaryInputs.mockResolvedValue({ outputs: new Map(), brigadeOutput: null, ktu: new Map() });
   membership.list.mockResolvedValue([]);
+  supervisors.byDepartment.mockImplementation(async (ids: string[]) => new Map(ids.map(id => [id, new Set<number>()])));
+  membership.batch.mockImplementation(async (ids: string[], start: string, end: string, options: unknown) => new Map(
+    await Promise.all(ids.map(async id => [id, await membership.list(id, start, end, undefined, options)] as const)),
+  ));
   live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({}));
   basisDrafts.buildBasisDraftsForDays.mockImplementation(draftsFromDays);
   terms.getTermsForPeriod.mockResolvedValue(new Map([[8, salary('110000.00')], [9, salary('110000.00')]]));
@@ -340,27 +350,33 @@ describe('бригада: незакрытый месяц', () => {
 });
 
 describe('лимит бригад', () => {
-  it('10 открытых бригад: весь путь бригады — не больше трёх одновременно, все досчитываются', async () => {
+  it('10 открытых бригад: фиксация и доли — не больше трёх одновременно, состав — одним вызовом, все досчитываются', async () => {
     const ids = Array.from({ length: 10 }, (_, i) => 101 + i);
     fx.employees = ids.map(id => ({ id, hire_date: null, org_department_id: `brigade-${id}` }));
     fx.candidates = ids.map(id => `brigade-${id}`);
     membership.list.mockImplementation(async (departmentId: string) => [member(Number(departmentId.replace('brigade-', '')))]);
-    let inFlight = 0;
-    let maxInFlight = 0;
-    brigade.getBrigadeShares.mockImplementation(async () => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      return { state: 'open', distribution: null, rows: [] };
-    });
-    inputs.loadBrigadeSalaryInputs.mockImplementation(async () => {
-      await new Promise(resolve => setTimeout(resolve, 2));
-      inFlight -= 1;
-      return { outputs: new Map(), brigadeOutput: null, ktu: new Map() };
-    });
+    const limited = <T,>(value: T) => {
+      const state = { inFlight: 0, max: 0 };
+      const run = async (): Promise<T> => {
+        state.inFlight += 1;
+        state.max = Math.max(state.max, state.inFlight);
+        await new Promise(resolve => setTimeout(resolve, 2));
+        state.inFlight -= 1;
+        return value;
+      };
+      return { run, state };
+    };
+    const fixing = limited({ state: 'open', distribution: null, rows: [] });
+    const reading = limited({ outputs: new Map(), brigadeOutput: null, ktu: new Map() });
+    brigade.getBrigadeShares.mockImplementation(fixing.run);
+    inputs.loadBrigadeSalaryInputs.mockImplementation(reading.run);
 
     const result = await getPreliminaryPayoutForEmployees(ids, '2026-09', req);
 
-    expect(maxInFlight).toBe(3);
+    expect(fixing.state.max).toBe(3);
+    expect(reading.state.max).toBe(3);
+    expect(membership.batch).toHaveBeenCalledTimes(1);
+    expect(membership.list).toHaveBeenCalledTimes(10);
     expect(ids.map(id => result.get(id)?.state)).toEqual(ids.map(() => 'preliminary'));
   });
 });
@@ -420,5 +436,29 @@ describe('resolveOpenBrigadeShares', () => {
     inputs.loadBrigadeSalaryInputs.mockResolvedValueOnce(prefetched);
     expect(await resolveOpenBrigadeShares(context, '2026-09', '2026-09-30')).toEqual(shares);
     expect(inputs.loadBrigadeSalaryInputs).toHaveBeenCalledWith(BRIGADE, '2026-09-01');
+  });
+});
+
+describe('loadBrigadeContexts', () => {
+  it('memberships — полный список, memberIds и окна — без начальников своей бригады; начальник А в бригаде Б остаётся', async () => {
+    const A = 'brigade-a';
+    const B = 'brigade-b';
+    membership.list.mockImplementation(async (departmentId: string) => (departmentId === A
+      ? [member(20), member(7, { joined_date: '2026-09-16', joined_via_transfer: true })]
+      : [member(20), member(9)]));
+    supervisors.byDepartment.mockResolvedValue(new Map([[A, new Set([20])], [B, new Set<number>()]]));
+
+    const contexts = await loadBrigadeContexts([B, A, A], '2026-09-01', '2026-09-30');
+
+    expect(membership.batch).toHaveBeenCalledTimes(1);
+    expect(membership.batch).toHaveBeenCalledWith([B, A], '2026-09-01', '2026-09-30', { firedInDismissalMonth: true });
+    expect(supervisors.byDepartment).toHaveBeenCalledWith([B, A]);
+    const a = contexts.get(A)!;
+    expect(a.memberIds).toEqual([7]);
+    expect(a.memberships.map(row => row.employee_id)).toEqual([20, 7]);
+    expect([...a.windows.keys()]).toEqual([7]);
+    expect(a.windows.get(7)).toEqual({ joined: '2026-09-16', transferredOut: null, joinedViaTransfer: true });
+    expect(contexts.get(B)!.memberIds).toEqual([9, 20]);
+    expect(await loadBrigadeContexts([], '2026-09-01', '2026-09-30')).toEqual(new Map());
   });
 });

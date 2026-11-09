@@ -16,7 +16,7 @@ import {
 } from './brigade-salary.service.js';
 import {
   loadBrigadeCandidates,
-  loadBrigadeContext,
+  loadBrigadeContexts,
   resolveOpenBrigadeShares,
   type IBrigadeContext,
 } from './payroll-calc-preliminary.service.js';
@@ -71,11 +71,11 @@ export const peekFixedBrigadeShares = async (
 };
 
 /**
- * Предварительный расчёт: бригады основ и кандидаты сотрудников с незакрытым месяцем. Доли — из пакета, фиксация
- * (needs_fix) — getBrigadeShares; она может вернуть и open, если подачу успели открыть. Слот — один на весь путь
- * бригады (фиксация → состав → выработка → доли); внутри лимитер не берётся: вложенный захват трёх слотов ждал бы
- * сам себя. Состав грузится, если бригада открыта или в ней могли быть дни незакрытых сотрудников; предварительные
- * доли — только у открытой (ввод открытой из пакета, после фиксации — читается заново).
+ * Предварительный расчёт: бригады основ и кандидаты сотрудников с незакрытым месяцем — в три шага.
+ * 1. Итоговые доли: из пакета; фиксация (needs_fix) — getBrigadeShares в слоте, она может вернуть и open, если
+ *    подачу успели открыть.
+ * 2. Состав — одним вызовом на все бригады, где итог не fixed или в ней могли быть дни незакрытых сотрудников.
+ * 3. Предварительные доли — только у итоговой open, в слоте: ввод открытой из пакета, после фиксации — читается заново.
  */
 export const loadPreliminaryBrigadeShares = async (
   req: AuthenticatedRequest,
@@ -87,16 +87,27 @@ export const loadPreliminaryBrigadeShares = async (
   const candidates = new Set(await loadBrigadeCandidates(liveIds, `${month}-01`, asOf));
   const ids = [...new Set([...brigadeIds, ...candidates])].sort();
   const peeked = await peekBrigadeSharesMany(ids, month);
-  const results = await Promise.all(ids.map(departmentId => withBrigadeSlot(async () => {
+  const fixed = await Promise.all(ids.map(departmentId => {
     const peek = peeked.get(departmentId)!;
-    const fixed = peek.state === 'needs_fix' ? await getBrigadeShares(req, departmentId, month) : peek.shares;
-    const context = fixed.state !== 'fixed' || candidates.has(departmentId)
-      ? await loadBrigadeContext(departmentId, `${month}-01`, asOf)
-      : null;
-    if (fixed.state === 'fixed' || !context) return { shares: fixed, context, preliminary: false };
+    return peek.state === 'needs_fix' ? withBrigadeSlot(() => getBrigadeShares(req, departmentId, month)) : peek.shares;
+  }));
+  const contexts = await loadBrigadeContexts(
+    ids.filter((departmentId, index) => fixed[index].state !== 'fixed' || candidates.has(departmentId)),
+    `${month}-01`,
+    asOf,
+  );
+  const results = await Promise.all(ids.map(async (departmentId, index) => {
+    const shares = fixed[index];
+    const context = contexts.get(departmentId) ?? null;
+    if (shares.state === 'fixed' || !context) return { shares, context, preliminary: false };
+    const peek = peeked.get(departmentId)!;
     const inputs = peek.state === 'open' ? peek.inputs : undefined;
-    return { shares: await resolveOpenBrigadeShares(context, month, asOf, inputs), context, preliminary: true };
-  })));
+    return {
+      shares: await withBrigadeSlot(() => resolveOpenBrigadeShares(context, month, asOf, inputs)),
+      context,
+      preliminary: true,
+    };
+  }));
   return {
     shares: new Map(ids.map((departmentId, index) => [departmentId, results[index].shares])),
     preliminary: new Set(ids.filter((_, index) => results[index].preliminary)),
