@@ -1919,6 +1919,17 @@
   color: var(--text-tertiary);
 }
 
+/* Почта для входа: длинный адрес переносится, а не распирает карточку. */
+.emailEditText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.emailEditField {
+  flex: 0 1 320px;
+}
+
 .saveBtn {
   padding: 6px 12px;
   background: var(--success);
@@ -2280,6 +2291,10 @@
   .editNameBtn {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .emailEditField {
+    flex: 1 1 100%;
   }
 
   .controlActions {

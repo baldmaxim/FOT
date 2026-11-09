@@ -46,12 +46,15 @@ export const authenticate = async (
     // Старые JWT без поля (выпущенные до миграции 095) приходят как undefined →
     // нормализуются в 0, fresh.token_version тоже 0 (DEFAULT) → совпадают.
     const decodedVersion = Number.isFinite(decoded.token_version) ? decoded.token_version : 0;
-    // employment_status тянем тем же запросом: отдельного похода в БД не появляется.
+    // employment_status и почту тянем тем же запросом: отдельного похода в БД не появляется.
     // LEFT JOIN — профиль без employee_id (подрядчики, сервисные) даёт NULL и проходит.
-    const fresh = await queryOne<{ token_version: number; employment_status: string | null }>(
-      `SELECT up.token_version, e.employment_status
+    // Почта — из app_auth.users, а не из токена: админ мог сменить её, а access-токен
+    // живёт 7 дней (сессии при смене почты не рвём).
+    const fresh = await queryOne<{ token_version: number; employment_status: string | null; email: string | null }>(
+      `SELECT up.token_version, e.employment_status, au.email
          FROM user_profiles up
          LEFT JOIN employees e ON e.id = up.employee_id
+         LEFT JOIN app_auth.users au ON au.id = up.id
         WHERE up.id = $1::uuid`,
       [decoded.sub],
     );
@@ -77,7 +80,7 @@ export const authenticate = async (
 
     req.user = {
       id: decoded.sub,
-      email: decoded.email,
+      email: fresh.email ?? decoded.email,
       system_role_id: decoded.system_role_id,
       role_code: decoded.role_code,
       is_admin: !!decoded.is_admin,

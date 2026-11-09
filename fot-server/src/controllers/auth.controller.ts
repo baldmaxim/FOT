@@ -51,6 +51,7 @@ import {
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenFromRequest,
+  resolveSessionEmail,
   setSessionCookies,
   verifyRefreshToken,
 } from '../utils/auth-session.js';
@@ -776,8 +777,9 @@ async function refresh(req: Request, res: Response): Promise<void> {
     const profile = profileRow;
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
-    const accessToken = generateAccessToken(profile, role, decoded.email, true, departmentId);
-    const nextRefreshToken = generateRefreshToken(profile.id, decoded.email, profile.token_version);
+    const email = await resolveSessionEmail(profile.id, decoded.email);
+    const accessToken = generateAccessToken(profile, role, email, true, departmentId);
+    const nextRefreshToken = generateRefreshToken(profile.id, email, profile.token_version);
 
     setSessionCookies(res, accessToken, nextRefreshToken);
 
@@ -785,7 +787,7 @@ async function refresh(req: Request, res: Response): Promise<void> {
       success: true,
       access_token: accessToken,
       refresh_token: nextRefreshToken,
-      user: { id: profile.id, email: decoded.email },
+      user: { id: profile.id, email },
       profile: { ...response, created_at: profile.created_at },
     });
   } catch (error) {

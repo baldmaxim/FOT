@@ -157,6 +157,7 @@ router.post('/users/:id/reset-link', requirePageAccess('/admin/users', 'edit'), 
 router.get('/users/:id/peek', requirePageAccess('/admin/users', 'view'), adminController.peekUser);
 router.patch('/users/:id/position', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserPosition);
 router.patch('/users/:id/name', requirePageAccess('/admin/users', 'edit'), adminController.updateUserName);
+router.patch('/users/:id/email', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.updateUserEmail);
 router.patch('/users/:id/chat-inbound-mode', requirePageAccess('/admin/users', 'edit'), adminController.updateUserChatInboundMode);
 router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployee);
 router.put('/users/:id/department-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserDepartmentAccess);

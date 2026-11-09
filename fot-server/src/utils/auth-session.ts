@@ -2,6 +2,7 @@ import type { Request, Response, CookieOptions } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import type { JWTPayload, SystemRole, UserProfile } from '../types/index.js';
+import { localAuthService } from '../services/local-auth.service.js';
 
 export const ACCESS_TOKEN_COOKIE_NAME = 'fot_access_token';
 export const REFRESH_TOKEN_COOKIE_NAME = 'fot_refresh_token';
@@ -102,6 +103,15 @@ export function generateRefreshToken(userId: string, email: string, tokenVersion
     refreshSecret,
     { expiresIn: env.JWT_REFRESH_EXPIRES_IN } as jwt.SignOptions,
   );
+}
+
+/**
+ * Почта для новых токенов при продлении сессии: из app_auth.users, а не из старого
+ * refresh-токена. Админ мог сменить почту, а сессии при этом не рвутся — без сверки
+ * старый адрес жил бы в токенах до 30 дней.
+ */
+export async function resolveSessionEmail(userId: string, tokenEmail: string): Promise<string> {
+  return (await localAuthService.getEmailByUserId(userId)) ?? tokenEmail;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {

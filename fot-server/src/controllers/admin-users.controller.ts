@@ -58,6 +58,7 @@ import {
   checkTargetUserManageable,
 } from '../services/assignable-roles.service.js';
 import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
+import { AccountEmailError, changeAccountEmail } from '../services/account-email.service.js';
 import { getContractorRootId } from '../config/contractor.js';
 
 /**
@@ -1808,6 +1809,52 @@ export const adminUsersController = {
       }
       console.error('Update name error:', error);
       res.status(500).json({ success: false, error: 'Failed to update name' });
+    }
+  },
+
+  async updateUserEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { email } = z.object({
+        email: z.string().trim().toLowerCase().email('Некорректная почта').max(254),
+      }).parse(req.body);
+
+      if (isTombstoneUser(id)) {
+        res.status(400).json({
+          success: false,
+          error: 'У служебного профиля «Удалённый пользователь» почту менять нельзя',
+        });
+        return;
+      }
+
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
+        return;
+      }
+
+      const result = await changeAccountEmail({ req, userId: id, newEmail: email, actorId: req.user.id });
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      if (error instanceof AccountEmailError) {
+        const status = error.code === 'NOT_FOUND' ? 404 : 409;
+        res.status(status).json({ success: false, error: error.message });
+        return;
+      }
+      console.error('Update email error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сменить почту' });
     }
   },
 

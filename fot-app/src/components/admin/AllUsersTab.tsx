@@ -22,6 +22,7 @@ import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
 import { TimekeeperObjectAccessSection } from './TimekeeperObjectAccessSection';
 import { TimekeeperFolderAccessSection } from './TimekeeperFolderAccessSection';
 import { PasswordResetLinkModal } from './PasswordResetLinkModal';
+import { UserEmailEdit } from './UserEmailEdit';
 import styles from '../../pages/admin/Admin.module.css';
 
 export interface IUserFromApi {
@@ -72,7 +73,11 @@ interface IUserRowExpandedProps {
   canManageAccess: boolean;
   /** Привязка подрядчика к организации: системный админ или ключ /admin/users/accounts. */
   canManageContractorOrg: boolean;
+  /** Право edit на /admin/users: без него почту для входа менять нельзя. */
+  canEditUsers: boolean;
   onUpdateName: (userId: string, name: string) => Promise<void>;
+  /** Бросает при ошибке — поле почты остаётся открытым. */
+  onUpdateEmail: (userId: string, email: string) => Promise<void>;
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
   onLinkEmployee: (userId: string, employeeId: number | null, empName?: string) => Promise<void>;
@@ -89,7 +94,9 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   canManageCompanies,
   canManageAccess,
   canManageContractorOrg,
+  canEditUsers,
   onUpdateName,
+  onUpdateEmail,
   onChangePosition,
   onChangeChatMode,
   onLinkEmployee,
@@ -205,6 +212,15 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
             </svg>
           </button>
         )}
+      </div>
+
+      <div className={styles.controlGroup}>
+        <label>Email:</label>
+        <UserEmailEdit
+          email={user.email ?? ''}
+          canEdit={canEditUsers}
+          onSave={(email) => onUpdateEmail(user.id, email)}
+        />
       </div>
 
       {canManageAccess && (
@@ -414,6 +430,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   // Админ компании обходит матрицу в canEditPage, но бэкенд его не пускает — поэтому !is_admin.
   const canManageContractorOrg = canManageCompanies
     || (!profile?.is_admin && canEditPage('/admin/users/accounts'));
+  // Почта для входа: тот же гейт, что у PATCH /admin/users/:id/email.
+  const canEditUsers = canEditPage('/admin/users');
 
   // Порядок ролей не зависит от counts (сортировка по is_admin + label),
   // поэтому считаем его только из списка ролей — без цикла с pageQuery.
@@ -627,6 +645,22 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
       toast.error('Ошибка обновления ФИО');
     }
   }, [patchUserInPageCaches, toast]);
+
+  const handleEmailSave = useCallback(async (userId: string, email: string) => {
+    try {
+      const result = await adminService.updateUserEmail(userId, email);
+      patchUserInPageCaches(userId, { email: result.email, email_confirmed: result.emailConfirmed });
+      if (result.unchanged) return;
+      toast.success('Почта изменена');
+      // Почта меняет поиск, slim-список и «Запросы на сброс» (ссылка сброса гаснет) —
+      // серверный кеш сброшен мутацией, а React Query в браузере перечитываем сами.
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      if (profile?.id === userId) await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка смены почты');
+      throw error;
+    }
+  }, [patchUserInPageCaches, profile, queryClient, refreshProfile, toast]);
 
   const handlePositionChange = useCallback(async (userId: string, positionType: EmployeePositionType) => {
     try {
@@ -867,7 +901,9 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   canManageCompanies={canManageCompanies}
                   canManageAccess={canManageAccess}
                   canManageContractorOrg={canManageContractorOrg}
+                  canEditUsers={canEditUsers}
                   onUpdateName={handleNameSave}
+                  onUpdateEmail={handleEmailSave}
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}
                   onLinkEmployee={handleEmpLink}

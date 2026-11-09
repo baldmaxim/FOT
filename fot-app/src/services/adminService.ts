@@ -49,6 +49,15 @@ interface PendingUserFromApi {
   created_at: string;
 }
 
+/** Итог смены почты для входа (PATCH /admin/users/:id/email). */
+export interface IUserEmailChangeResult {
+  unchanged: boolean;
+  email: string;
+  emailConfirmed: boolean;
+  cardUpdated: boolean;
+  allowlistUpdated: boolean;
+}
+
 export interface IPasswordResetRequest {
   id: string;
   email: string;
@@ -439,6 +448,14 @@ export const adminService = {
 
   async updateUserName(userId: string, fullName: string): Promise<void> {
     await apiClient.patch(`/admin/users/${userId}/name`, { full_name: fullName });
+  },
+
+  async updateUserEmail(userId: string, email: string): Promise<IUserEmailChangeResult> {
+    const response = await apiClient.patch<ApiResponse<IUserEmailChangeResult>>(
+      `/admin/users/${userId}/email`,
+      { email },
+    );
+    return response.data;
   },
 
   async updateUserChatInboundMode(userId: string, chatInboundMode: ChatInboundMode): Promise<void> {
