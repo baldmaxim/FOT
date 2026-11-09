@@ -55,18 +55,17 @@ describe('createLiniaResolver', () => {
 });
 
 describe('categoryByTimesheet', () => {
-  it('объект «Офис» — офис, даже у рабочего из ЛИНИИ', () => {
-    expect(categoryByTimesheet({ officeObject: true, timesheetWorker: true, linia: true })).toBe('office');
+  it('объект «Офис» — офис, даже у рабочего', () => {
+    expect(categoryByTimesheet({ officeObject: true, timesheetWorker: true })).toBe('office');
+    expect(categoryByTimesheet({ officeObject: true, timesheetWorker: false })).toBe('office');
   });
 
-  it('рабочий табеля — рабочие, в том числе в ЛИНИИ', () => {
-    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: true, linia: true })).toBe('worker');
-    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: true, linia: false })).toBe('worker');
+  it('рабочий табеля вне «Офиса» — рабочие', () => {
+    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: true })).toBe('worker');
   });
 
-  it('не рабочий: ЛИНИЯ — ИТР, остальные — офис (машинист СМ на стройке тоже)', () => {
-    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: false, linia: true })).toBe('itr');
-    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: false, linia: false })).toBe('office');
+  it('не «Офис» и не рабочий — ИТР при любом отделе (офисный отдел на объекте, машинист СМ на стройке, без режима)', () => {
+    expect(categoryByTimesheet({ officeObject: false, timesheetWorker: false })).toBe('itr');
   });
 });
 

@@ -1,11 +1,10 @@
 /**
- * Категория персонала в «Зарплате» — та же, что ведёт табель (решение 22.10.2026), не выбирается.
- * Порядок:
- *   1. объект табелирования «Офис» («Текущая деятельность», офисный адрес, «Офис» отдела или из окна
- *      «Режим табелирования») — «Офис»;
+ * Категория персонала в «Зарплате» — по режиму табелирования (решения 22.10 и 09.11.2026), не выбирается;
+ * отдел её не решает. Порядок:
+ *   1. объект табелирования «Офис» («Текущая деятельность», офисный адрес; автоматически по часам, «Офис»
+ *      отдела или личный из окна «Режим табелирования») — «Офис»;
  *   2. табель ведёт сотрудника как рабочего (разбивка по проходам, timesheet-object-worker-rule.ts) — «Рабочие»;
- *   3. отдел внутри «ЛИНИЯ» / «ЛИНИЯ-Общестрой» — «ИТР на объектах»;
- *   4. остальные — «Офис».
+ *   3. остальные — режим «объект» любого отдела и сотрудники без режима — «ИТР».
  *
  * Рабочий: с эпохи авторасчёта (месяц после baseline_month, 288) при личном режиме — режим skud/auto,
  * его пишет только правило рабочих, закреплённые в окне его не имеют. До неё или без личного режима
@@ -34,7 +33,10 @@ import type { StaffCategory } from './payroll-terms.service.js';
 
 const ITR_DEPARTMENT_NAMES: ReadonlySet<string> = new Set(['линия', 'линия-общестрой']);
 
-/** Отдел → внутри «ЛИНИЯ» / «ЛИНИЯ-Общестрой» (по имени предков). Ответ кэшируется по отделу. */
+/**
+ * Отдел → внутри «ЛИНИЯ» / «ЛИНИЯ-Общестрой» (по имени предков). Это группа «ИТР» «Расчётов»
+ * (payroll-department-groups.ts), категорию не решает. Ответ кэшируется по отделу.
+ */
 export const createLiniaResolver = (
   departments: IExportDepartmentRow[],
 ): ((departmentId: string | null) => boolean) => {
@@ -64,11 +66,9 @@ export const createLiniaResolver = (
 export const categoryByTimesheet = (input: {
   officeObject: boolean;
   timesheetWorker: boolean;
-  linia: boolean;
 }): StaffCategory => {
   if (input.officeObject) return 'office';
-  if (input.timesheetWorker) return 'worker';
-  return input.linia ? 'itr' : 'office';
+  return input.timesheetWorker ? 'worker' : 'itr';
 };
 
 /**
@@ -100,7 +100,6 @@ const isAutoEra = (monthStart: string, baselineMonth: string | null): boolean =>
 );
 
 interface IStructure {
-  isLinia: (departmentId: string | null) => boolean;
   brigadeIds: string[];
   baselineMonth: string | null;
 }
@@ -113,7 +112,6 @@ const loadStructure = async (exec?: DbExecutor): Promise<IStructure> => {
     readTimesheetObjectState(exec),
   ]);
   return {
-    isLinia: createLiniaResolver(departments),
     brigadeIds: listSectionDepartmentIds(departments, 'brigades'),
     baselineMonth: state?.baseline_month ?? null,
   };
@@ -178,7 +176,6 @@ export const resolveCurrentStaffCategories = async (
         autoEra,
         workerRule: workers.has(workerPairKey(id, departmentId)),
       }),
-      linia: structure.isLinia(departmentId),
     })];
   }));
 };
@@ -190,7 +187,7 @@ export interface IMonthCategoryInput {
   monthStart: string;
   /** Объект месяца — «Офис». */
   officeObject: boolean;
-  /** Отдел месяца. */
+  /** Отдел месяца — для правила рабочих. */
   departmentId: string | null;
   /** Режим табелирования месяца (фиксация для прошедшего). */
   mode: IResolvedExportMode | undefined;
@@ -210,6 +207,5 @@ export const resolveMonthStaffCategories = async (
       autoEra: isAutoEra(item.monthStart, structure.baselineMonth),
       workerRule: workers.has(workerPairKey(item.employeeId, item.departmentId)),
     }),
-    linia: structure.isLinia(item.departmentId),
   }));
 };

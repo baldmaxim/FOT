@@ -57,8 +57,11 @@ beforeEach(() => {
 });
 
 describe('loadPayrollSummary — объект строки и категория', () => {
-  it('базовый «Не определён», по часам — «Офис»: строка в «Офисе», категория прежняя (по базовому объекту)', async () => {
+  it('базовый «Не определён», по часам — «Офис»: строка «Офис» и категория «Офис» (определён по часам)', async () => {
     summaryObject.resolveSummaryObjects.mockResolvedValue(new Map([['265|2026-08', { key: 'office', name: 'Офис' }]]));
+    category.resolveMonthStaffCategories.mockImplementation(async (items: Array<{ officeObject: boolean }>) => (
+      items.map(item => (item.officeObject ? 'office' : 'itr'))
+    ));
 
     const summary = await loadPayrollSummary(INPUT);
 
@@ -66,13 +69,13 @@ describe('loadPayrollSummary — объект строки и категория
       employee_id: 265,
       object_key: 'office',
       object_name: 'Офис',
-      category: 'itr',
+      category: 'office',
       department_id: 'dep-1',
       department: 'Отдел проектирования',
       amounts: { contract: '170000.00' },
       issues: [],
     })]);
-    expect(category.resolveMonthStaffCategories.mock.calls[0][0][0]).toMatchObject({ officeObject: false });
+    expect(category.resolveMonthStaffCategories.mock.calls[0][0][0]).toMatchObject({ officeObject: true });
     expect(summaryObject.resolveSummaryObjects.mock.calls[0][0]).toBe(BASE);
   });
 

@@ -8,9 +8,9 @@
  * текущий отдел или отдел его подачи за месяц.
  *
  * Объект и отдел месяца — payroll-month-attribution.service.ts (объектная разбивка закрытого табеля, иначе
- * режим табелирования месяца); категория — по табелю месяца (payroll-staff-category.ts), не из условий оплаты.
- * Объект месяца «Не определён» — строке «Свода» объект по часам месяца (payroll-summary-object.service.ts);
- * категория при этом остаётся по базовому объекту.
+ * режим табелирования месяца). Объект месяца «Не определён» — строке «Свода» объект по часам месяца
+ * (payroll-summary-object.service.ts). Категория — по режиму табелирования месяца (payroll-staff-category.ts), не из
+ * условий оплаты и не по отделу: объект строки «Офис» — «Офис», рабочий табеля — «Рабочие», остальные — «ИТР».
  */
 import { performance } from 'node:perf_hooks';
 
@@ -302,7 +302,7 @@ const buildSummary = async (
   }
   if (amountsByPair.size === 0) return { months: [], rows: [] };
 
-  // Объект, отдел и режим месяца пары; категория — по табелю месяца.
+  // Объект, отдел и режим месяца пары; категория — по режиму табелирования месяца.
   const pairs = [...amountsByPair.keys()].map(key => {
     const [employeeId, month] = key.split('|');
     return { employeeId: Number(employeeId), month };
@@ -310,21 +310,24 @@ const buildSummary = async (
   const months = [...new Set(pairs.map(pair => pair.month))].sort();
   const attribution = await attributeMonths(pairs, breakdown, employees);
   lap('attributionMs');
+  // Объект строки, где базовый «Не определён»: режим месяца, затем часы.
+  const summaryObjects = await resolveSummaryObjects(attribution, undefined, timing);
+  lap('objectsMs');
+  // «Офис» — по объекту строки: без режима, но с часами в офисе — тоже «Офис» (определён по часам, как ночью).
+  // Так вкладка «Офис» — ровно строки «Офис», а у ИТР и рабочих строки «Офис» нет.
   const categories = await resolveMonthStaffCategories(pairs.map(pair => {
-    const item = attribution.get(pairKey(pair.employeeId, pair.month));
+    const key = pairKey(pair.employeeId, pair.month);
+    const item = attribution.get(key);
     return {
       employeeId: pair.employeeId,
       monthStart: `${pair.month}-01`,
-      officeObject: item?.object.key === 'office',
+      officeObject: (summaryObjects.get(key) ?? item?.object)?.key === 'office',
       departmentId: item?.departmentId ?? null,
       mode: item?.mode,
     };
   }));
   const categoryByPair = new Map(pairs.map((pair, index) => [pairKey(pair.employeeId, pair.month), categories[index]]));
   lap('categoriesMs');
-  // Объект строки, где базовый «Не определён»: режим месяца, затем часы. Категорию не меняет.
-  const summaryObjects = await resolveSummaryObjects(attribution, undefined, timing);
-  lap('objectsMs');
 
   // Отдел месяца — и для категории, и для подписи «Отдел» (уволенный — отдел, где работал).
   const departmentIds = [...new Set([...attribution.values()]
