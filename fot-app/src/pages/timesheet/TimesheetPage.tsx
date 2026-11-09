@@ -56,6 +56,7 @@ import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
   getCorrectionDefaultHoursForDay,
   getCorrectionMaxHoursForDay,
+  getDayNormHoursForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
   getWorkHoursForDay,
@@ -605,9 +606,11 @@ export const TimesheetPage: FC = () => {
     // Персональный режим: строки уже собраны по периодам и упорядочены по дате входа —
     // пересортировка по source схлопнула бы порядок отделов.
     if (isEmployeeMode) return employeeModeData.employees;
-    // Группировка строк по секциям — utils/timesheetRowOrder.
-    return sortTimesheetRows(deferredTimesheetData?.employees || []);
-  }, [deferredTimesheetData, isEmployeeMode, employeeModeData]);
+    // Группировка строк по секциям — utils/timesheetRowOrder: переведённые и уволенные — под своими.
+    return sortTimesheetRows(deferredTimesheetData?.employees || [], {
+      departmentId: activeGridDeptId === DIRECT_REPORTS_DEPT ? null : activeGridDeptId,
+    });
+  }, [deferredTimesheetData, isEmployeeMode, employeeModeData, activeGridDeptId]);
   const canBulkEdit = canUseBulkCorrections({
     canWriteActiveDept,
     canEditTimesheet,
@@ -1519,6 +1522,14 @@ export const TimesheetPage: FC = () => {
     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
     return getCorrectionMaxHoursForDay(sched, calendar, year, month, modalDay);
   }, [correctionCapEnabled, modalEmployee, schedules, dailySchedules, calendar, year, month, modalDay]);
+
+  // Удалёнка в рабочий день — без поля часов: норма дня по графику (предпраздничный −1),
+  // сервер пишет то же. Нерабочий день графика или графика нет — null, поле часов остаётся.
+  const modalRemoteAutoHours = useMemo(() => {
+    if (!modalEmployee) return null;
+    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
+    return getDayNormHoursForDay(sched, calendar, year, month, modalDay) || null;
+  }, [modalEmployee, schedules, dailySchedules, calendar, year, month, modalDay]);
 
   const handleBulkModeToggle = useCallback(() => {
     if (bulkModeEnabled) {
@@ -3223,6 +3234,7 @@ export const TimesheetPage: FC = () => {
                 ) || 8)
               : 8}
             onAddRemote={handleAddRemoteOverWork}
+            remoteAutoHours={modalRemoteAutoHours}
             dataRefreshState={
               modalRefreshStatus === 'idle' ? null : (modalRefreshStatus === 'error' ? 'error' : 'loading')
             }
@@ -3244,6 +3256,7 @@ export const TimesheetPage: FC = () => {
             confirmLabel="Применить"
             hideSkudTab
             maxHours={bulkMaxHours}
+            remoteAutoHours="per-day"
             allowAttachmentsOnCreate
           />
         </Suspense>

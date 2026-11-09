@@ -26,8 +26,9 @@ const STATUS_OPTIONS: { value: TimesheetStatus; label: string }[] = CREATABLE_ST
   label: `${meta.icon} ${meta.label}`,
 }));
 
-// work/manual («Корректировка табеля») требуют часы; remote — опционально (пусто = из графика).
-const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
+// work/manual («Корректировка табеля») — часы вводятся; remote — без поля: сервер ставит
+// график каждого дня (в рабочий день — норма, в выходной — часы смены).
+const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'manual']);
 const MAX_RANGE_DAYS = 60;
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
@@ -154,6 +155,9 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
               ))}
             </select>
           </div>
+          {status === 'remote' && (
+            <div className="ts-bulk-modal-info">Часы — по графику каждого дня</div>
+          )}
           {showHours && (
             <div className="ts-bulk-modal-row">
               <label htmlFor="ts-bulk-hours">Часы (необязательно)</label>

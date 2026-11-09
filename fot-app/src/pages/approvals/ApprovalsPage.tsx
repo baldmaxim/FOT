@@ -22,6 +22,7 @@ import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
 import { documentService } from '../../services/documentService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { sortTimesheetRows } from '../../utils/timesheetRowOrder';
 import { DepartmentTimesheetModal } from '../../components/timesheet/DepartmentTimesheetModal';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { CorrectionApprovalSettingsModal } from './CorrectionApprovalSettingsModal';
@@ -665,6 +666,13 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     enabled: !isPersonal || personalEmployeeIds.length > 0,
     staleTime: 30_000,
   });
+  // Порядок строк как в табеле: свои → переведённые → уволенные.
+  const gridEmployees = useMemo(
+    () => sortTimesheetRows(tsQuery.data?.employees ?? [], {
+      departmentId: isPersonal ? null : (row.department_id ?? null),
+    }),
+    [tsQuery.data?.employees, isPersonal, row.department_id],
+  );
 
   const outOfPeriodDates = useMemo(() => {
     const set = new Set<string>();
@@ -771,7 +779,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
           </div>
         ) : tsQuery.data ? (
           <TimesheetGrid
-            employees={tsQuery.data.employees}
+            employees={gridEmployees}
             entries={tsQuery.data.entries}
             objectEntries={tsQuery.data.object_entries}
             employeeStats={tsQuery.data.employee_stats}

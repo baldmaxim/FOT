@@ -3,12 +3,13 @@ import {
   isMandatoryWeekendSlotAvailable,
   guardsRestriction,
   resolveWriteHours,
+  resolveRemoteScheduleHours,
   resolveGuardHours,
   resolveCapHoursToCheck,
   resolveTimesheetScope,
   resolveEmployeeTimesheetSource,
 } from './timesheet.controller.js';
-import type { AuthenticatedRequest } from '../types/index.js';
+import type { AuthenticatedRequest, IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 
 const baseSchedule = {
   pattern_type: '5+2',
@@ -306,6 +307,59 @@ describe('resolveWriteHours — что реально пишется в hours_ov
     expect(resolveWriteHours('remote', null, 0)).toBe(8); // выходной: work_hours=0 → полный день
     expect(resolveWriteHours('manual', 5, 8)).toBe(5);
     expect(resolveWriteHours('manual', undefined, 8)).toBeUndefined();
+  });
+});
+
+describe('resolveRemoteScheduleHours — удалёнка без часов = график дня', () => {
+  // Пн 2026-11-02 — якорь: пн–чт 8 ч, пт 7 ч, сб–вс выходные; 13.11 — предпраздничный.
+  const schedule = {
+    schedule_id: 's-1',
+    schedule_type: 'office',
+    work_start: '09:00:00',
+    work_end: '18:00:00',
+    work_hours: 8,
+    work_days: [1, 2, 3, 4, 5],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: true,
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: 7,
+    cycle_days: [
+      { work_hours: 8 }, { work_hours: 8 }, { work_hours: 8 }, { work_hours: 8 },
+      { work_hours: 7 }, { work_hours: 0 }, { work_hours: 0 },
+    ],
+    anchor_date: '2026-11-02',
+    assignment_anchor_date: null,
+    source: 'default',
+  } as IResolvedSchedule;
+  const november: IProductionCalendarMonth = {
+    year: 2026,
+    month: 11,
+    norm_days: 20,
+    norm_hours: 159,
+    holidays: [],
+    mandatory_holidays: [],
+    pre_holidays: ['2026-11-13'],
+  };
+
+  it('чт 8 ч, пт 7 ч — у каждого дня свой график (массовая удалёнка чт+пт)', () => {
+    expect(resolveRemoteScheduleHours(schedule, dateOf('2026-11-05'), november)).toBe(8);
+    expect(resolveRemoteScheduleHours(schedule, dateOf('2026-11-06'), november)).toBe(7);
+  });
+
+  it('предпраздничный день — норма с −1 ч, независимо от галочки роли', () => {
+    expect(resolveRemoteScheduleHours(schedule, dateOf('2026-11-13'), november)).toBe(6);
+  });
+
+  it('выходной графика — длина смены, без графика — 8', () => {
+    expect(resolveRemoteScheduleHours(schedule, dateOf('2026-11-07'), november)).toBe(8);
+    expect(resolveRemoteScheduleHours(undefined, dateOf('2026-11-05'), november)).toBe(8);
   });
 });
 

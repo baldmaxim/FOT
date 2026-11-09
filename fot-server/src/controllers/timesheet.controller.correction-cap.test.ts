@@ -282,6 +282,20 @@ describe('POST /timesheet — предел часов', () => {
     expect(statusOf(res)).toBe(200);
     expect(upsertMock.mock.calls.at(-1)![0]).toMatchObject({ status: 'remote', hours_override: 8 });
   });
+
+  it('галочка роли снята: удалёнка без часов в предпраздничный день — норма 7, как в окне', async () => {
+    fixture.capEnabled = false;
+    setLimits(7, 7);
+    const preHolidayCalendar = calendar as { pre_holidays?: string[] };
+    preHolidayCalendar.pre_holidays = [DATE];
+    try {
+      const res = await post({ status: 'remote' });
+      expect(statusOf(res)).toBe(200);
+      expect(upsertMock.mock.calls.at(-1)![0]).toMatchObject({ status: 'remote', hours_override: 7 });
+    } finally {
+      delete preHolidayCalendar.pre_holidays;
+    }
+  });
 });
 
 describe('PATCH /timesheet/:id — предел часов', () => {

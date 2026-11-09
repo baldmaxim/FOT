@@ -17,7 +17,7 @@ import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mas
 import { exportTimesheetAssigned, exportTimesheetAssignedUnified, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor, listBrigadeSupervisorEmployeeIds } from './timesheet-assigned-export.controller.js';
 import { exportTimesheetDepartmentUnified } from './timesheet-department-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getDayNormHours, getCorrectionCapHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   hasGlobalDepartmentReadScope,
@@ -408,8 +408,8 @@ export const SCHEDULE_NORM_STATUSES = new Set<TimeStatus>(['sick_worked', 'study
 /**
  * Часы для записи в hours_override (POST/bulk; в PATCH — та же логика плюс безусловная
  * запись, см. ниже). Единая точка нормализации: absent и SCHEDULE_NORM_STATUSES → всегда
- * null, remote → присланные или полный день по графику (в выходной work_hours=0, поэтому
- * `|| 8`), остальные → строго присланные.
+ * null, remote → присланные или полный день по графику (resolveRemoteScheduleHours; `|| 8` —
+ * страховка от смены 0 ч), остальные → строго присланные.
  */
 export const resolveWriteHours = (
   status: TimeStatus,
@@ -1489,6 +1489,17 @@ async function assertNotLockedInTx(
   throw new ApprovalLockedError([...locks.values()][0]!);
 }
 
+/**
+ * Часы удалёнки без явного числа — те же, что окно корректировки показывает «по графику»:
+ * норма рабочего дня (предпраздничный −1, короткая пятница графика), в нерабочий день
+ * графика — длина смены, без графика — 8. Не зависит от галочки роли «не больше графика».
+ */
+export const resolveRemoteScheduleHours = (
+  schedule: IResolvedSchedule | null | undefined,
+  date: Date,
+  calendar: IProductionCalendarMonth | null,
+): number => (schedule ? getCorrectionCapHours(schedule, date, calendar) : 8);
+
 async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; work_date: string }>): Promise<Map<string, number>> {
   const uniqueItems = Array.from(
     new Map(items.map(item => [`${item.employee_id}_${item.work_date}`, item] as const)).values(),
@@ -1508,12 +1519,19 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
   const startDate = uniqueItems.reduce((min, item) => (item.work_date < min ? item.work_date : min), uniqueItems[0].work_date);
   const endDate = uniqueItems.reduce((max, item) => (item.work_date > max ? item.work_date : max), uniqueItems[0].work_date);
   const schedules = await resolveSchedulesForPeriod(employeeRows, startDate, endDate);
+  // Производственный календарь — по разу на месяц (массовая правка — до 60 дней).
+  const months = [...new Set(uniqueItems.map(item => item.work_date.slice(0, 7)))];
+  const calendarByMonth = new Map(await Promise.all(months.map(async ym => [
+    ym,
+    await loadCalendarMonth(Number(ym.slice(0, 4)), Number(ym.slice(5, 7))),
+  ] as const)));
 
   return new Map(uniqueItems.map(item => {
-    const schedule = schedules.get(item.employee_id)?.get(item.work_date);
-    const plannedHours = schedule
-      ? getScheduleForDate(schedule, new Date(`${item.work_date}T00:00:00`)).work_hours
-      : 8;
+    const plannedHours = resolveRemoteScheduleHours(
+      schedules.get(item.employee_id)?.get(item.work_date),
+      new Date(`${item.work_date}T00:00:00`),
+      calendarByMonth.get(item.work_date.slice(0, 7)) ?? null,
+    );
     return [`${item.employee_id}_${item.work_date}`, plannedHours] as const;
   }));
 }
@@ -3158,9 +3176,9 @@ export const timesheetController = {
       const dayLimits = POSITIVE_TIME_STATUSES.has(parsed.status)
         ? await resolveCorrectionDayLimits(req.user.system_role_id, parsed.employee_id, parsed.work_date)
         : null;
-      // Удалёнка: начальник отдела вводит фактические часы вручную (в т.ч. в выходной
-      // поверх согласованного выхода). Если часы не заданы — полный день по графику
-      // (для выходного work_hours=0, поэтому `|| 8`, а не `??`), но не больше предела дня.
+      // Удалёнка: в рабочий день окно часов не шлёт — полный день по графику (норма дня,
+      // resolveRemoteScheduleHours), но не больше предела дня. Явные часы — в выходной
+      // поверх согласованного выхода и от старых клиентов.
       // sick_worked/study_day: часы всегда из нормы графика, присланные игнорируем (null) —
       // нормализация ДО гарда, иначе hours_worked=0 обошёл бы assertCorrectionAllowed.
       const normalizedHours = resolveWriteHours(

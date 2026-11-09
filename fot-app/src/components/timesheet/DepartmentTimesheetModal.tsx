@@ -7,6 +7,7 @@ import { timesheetService } from '../../services/timesheetService';
 import { getMonthBounds, formatMonthLabel } from '../../utils/timesheetApprovalPeriod';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { sortTimesheetRows } from '../../utils/timesheetRowOrder';
 import { TimesheetGrid } from './TimesheetGrid';
 import styles from './DepartmentTimesheetModal.module.css';
 
@@ -65,6 +66,11 @@ export const DepartmentTimesheetModal: FC<IDepartmentTimesheetModalProps> = ({
     }),
     staleTime: 30_000,
   });
+  // Порядок строк как в табеле: свои → переведённые → уволенные.
+  const gridEmployees = useMemo(
+    () => sortTimesheetRows(tsQuery.data?.employees ?? [], { departmentId: departmentId ?? null }),
+    [tsQuery.data?.employees, departmentId],
+  );
 
   const [dayModal, setDayModal] = useState<{
     employee: TimesheetEmployee;
@@ -102,7 +108,7 @@ export const DepartmentTimesheetModal: FC<IDepartmentTimesheetModalProps> = ({
               </div>
             ) : tsQuery.data ? (
               <TimesheetGrid
-                employees={tsQuery.data.employees}
+                employees={gridEmployees}
                 entries={tsQuery.data.entries}
                 objectEntries={tsQuery.data.object_entries}
                 employeeStats={tsQuery.data.employee_stats}

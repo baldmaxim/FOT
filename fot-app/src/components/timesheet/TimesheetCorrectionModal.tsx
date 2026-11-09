@@ -130,6 +130,12 @@ interface ICorrectionModalProps {
   canAddRemote?: boolean;
   remoteDefaultHours?: number;
   onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
+  /**
+   * Удалёнка без ввода часов: число — норма рабочего дня по графику (окно дня), 'per-day' —
+   * массовая правка, у каждого дня свой график. Часы не шлём (null) — их ставит сервер.
+   * null/undefined — графика на день нет (выходной): поле часов остаётся.
+   */
+  remoteAutoHours?: RemoteAutoHours;
   // День заперт согласованием периода (submitted/approved) — модалка открывается
   // в режиме «только просмотр»: скрыты все кнопки правки/удаления/добавления,
   // события СКУД и текст заявки остаются видны.
@@ -151,6 +157,12 @@ interface ICorrectionModalProps {
 }
 
 type ModalTab = 'events' | 'correction';
+
+type RemoteAutoHours = number | 'per-day' | null;
+
+const remoteAutoHint = (auto: number | 'per-day'): string => (
+  auto === 'per-day' ? 'Часы — по графику каждого дня' : `Часы: ${formatHM(auto)} — по графику`
+);
 
 const formatHM = (decimal: number): string => {
   const h = Math.floor(decimal);
@@ -498,6 +510,8 @@ const CorrectionTab: FC<{
   remoteDefaultHours?: number;
   // Создаёт ОТДЕЛЬНУЮ remote-корректировку (через create, не update заявки).
   onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
+  // Удалёнка в рабочий день — часы по графику, без поля ввода (см. ICorrectionModalProps).
+  remoteAutoHours?: RemoteAutoHours;
   readOnly?: boolean;
   /** «Просмотр табеля»: заявление-источник не запрашивается (403 для смотрящего). */
   viewOnly?: boolean;
@@ -523,6 +537,7 @@ const CorrectionTab: FC<{
   canAddRemote,
   remoteDefaultHours,
   onAddRemote,
+  remoteAutoHours = null,
   readOnly,
   viewOnly = false,
   canEditReasonText,
@@ -562,7 +577,9 @@ const CorrectionTab: FC<{
   const showStagedPicker = Boolean(allowAttachmentsOnCreate && !hasExistingCorrection);
 
   const trimmedNotes = notes.trim();
-  const needsHoursForStatus = HOURS_EDITABLE_STATUSES.has(selectedStatus);
+  // Удалёнка в рабочий день: часы ставит сервер по графику, поля нет.
+  const remoteAuto = selectedStatus === 'remote' && remoteAutoHours != null ? remoteAutoHours : null;
+  const needsHoursForStatus = HOURS_EDITABLE_STATUSES.has(selectedStatus) && remoteAuto == null;
   // Приоритет инициализации: СОХРАНЁННОЕ распределение → подсказка → пусто.
   // Иначе открытие корректировки ради правки комментария молча переназначило бы
   // вручную выбранный объект на свежую подсказку СКУД.
@@ -833,7 +850,11 @@ const CorrectionTab: FC<{
         )}
 
         {selectedStatus === 'remote' && (
-          <div className="ts-hours-hint">По умолчанию полный день по графику — при необходимости измените часы.</div>
+          <div className="ts-hours-hint">
+            {remoteAuto != null
+              ? remoteAutoHint(remoteAuto)
+              : 'По умолчанию полный день по графику — при необходимости измените часы.'}
+          </div>
         )}
 
         {selectedStatus === 'work' && (
@@ -950,7 +971,7 @@ const CorrectionTab: FC<{
           </div>
         )}
 
-        {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (() => {
+        {needsHoursForStatus && (() => {
           const wholeHours = Math.floor(hours);
           const minutes = Math.round((hours - wholeHours) * 60);
           const applyHM = (h: number, m: number) => {
@@ -1080,6 +1101,8 @@ interface IObjectCorrectionsListProps {
   readOnly?: boolean;
   /** «Просмотр табеля»: заявление-источник не запрашивается (403 для смотрящего). */
   viewOnly?: boolean;
+  // Удалёнка в рабочий день — часы по графику, без поля ввода (см. ICorrectionModalProps).
+  remoteAutoHours?: RemoteAutoHours;
 }
 
 // Серая скруглённая карточка для inline-форм (единый стиль с «День целиком»/«Удалёнка»).
@@ -1107,6 +1130,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   allowedStatuses,
   readOnly,
   viewOnly = false,
+  remoteAutoHours = null,
 }) => {
   const addStatusOptions = useMemo(
     () => CREATABLE_STATUS_META.filter(meta => !allowedStatuses || allowedStatuses.includes(meta.status)),
@@ -1220,7 +1244,9 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   };
 
   const addIsManual = addStatus === 'manual';
-  const addHoursEditable = HOURS_EDITABLE_STATUSES.has(addStatus);
+  // Удалёнка в рабочий день: часы ставит сервер по графику, поля нет.
+  const addRemoteAuto = addStatus === 'remote' && remoteAutoHours != null ? remoteAutoHours : null;
+  const addHoursEditable = HOURS_EDITABLE_STATUSES.has(addStatus) && addRemoteAuto == null;
   const savedEntryHours = (entry: TimesheetObjectEntry): number =>
     Number(entry.display_hours_worked ?? entry.hours_worked ?? 0);
   // Сумма сохранённых правок других объектов дня — то же, что считает сервер.
@@ -1231,10 +1257,10 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   // Объектная правка складывается с другими объектами, а дневная удалёнка их снимает.
   const addExceedsCap = addIsManual
     ? isOverCorrectionCap(otherObjectsHours(addObjectKey) + addHours, maxDayHours)
-    : (addStatus === 'remote' && isOverCorrectionCap(addHours, maxDayHours));
+    : (addStatus === 'remote' && addRemoteAuto == null && isOverCorrectionCap(addHours, maxDayHours));
   const addCanSave = addNotes.trim().length > 0
     && (!addIsManual || (Boolean(addObjectKey) && addHours > 0))
-    && (addStatus !== 'remote' || addHours > 0)
+    && (addStatus !== 'remote' || addRemoteAuto != null || addHours > 0)
     && !addExceedsCap;
 
   const saveAdd = () => {
@@ -1566,7 +1592,11 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           )}
 
           {addStatus === 'remote' && (
-            <div className="ts-hours-hint">По умолчанию полный день по графику — при необходимости измените часы.</div>
+            <div className="ts-hours-hint">
+              {addRemoteAuto != null
+                ? remoteAutoHint(addRemoteAuto)
+                : 'По умолчанию полный день по графику — при необходимости измените часы.'}
+            </div>
           )}
 
           {addStatus === 'work' && (
@@ -1671,6 +1701,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   canAddRemote,
   remoteDefaultHours,
   onAddRemote,
+  remoteAutoHours,
   readOnly,
   viewOnly = false,
   canEditReasonText,
@@ -1875,6 +1906,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           canAddRemote={canAddRemote}
           remoteDefaultHours={remoteDefaultHours}
           onAddRemote={onAddRemote}
+          remoteAutoHours={remoteAutoHours}
           readOnly={readOnly}
           viewOnly={viewOnly}
           canEditReasonText={canEditReasonText}
@@ -1902,6 +1934,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           allowedStatuses={allowedStatuses}
           readOnly={readOnly}
           viewOnly={viewOnly}
+          remoteAutoHours={remoteAutoHours}
         />
       )}
       {hasObjectsBlock && attachmentsNode}
