@@ -9,6 +9,8 @@ import type {
 
 /** Категория персонала — по отделу сотрудника (её ставит сервер); на расчёт не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
+/** Группа отделов «Расчётов» в списке «Все отделы»: ИТР (ЛИНИЯ и остальные СУ-10) или Рабочие (бригады). */
+export type PayrollDepartmentGroup = 'itr' | 'worker';
 /** Вид оплаты: «по графику» (оклад) или «по часам». */
 export type PayrollCalcType = 'salary' | 'hourly';
 /** Тип договора (миграция 352): трудовой или ГПХ. Пометка, на расчёт не влияет. */
@@ -629,8 +631,8 @@ export interface IPayrollTermsViewParams {
   cf?: string;
   /** Только этот сотрудник (карточка открыта → «Расчёты»); старый бэкенд параметр не знает. */
   employeeId?: number;
-  /** «Расчёты»: группа отделов — ИТР (ЛИНИЯ), Офис (остальные СУ-10), Рабочие (бригады); по отделу, не по табелю. */
-  group?: StaffCategory;
+  /** «Расчёты»: группа отделов — ИТР (ЛИНИЯ и остальные СУ-10), Рабочие (бригады); по отделу, не по табелю. */
+  group?: PayrollDepartmentGroup;
   /** «Расчёты» за месяцы: объект месяца, как в «Своде» — id объекта СКУД, 'office' или 'unknown'; без месяцев — 400. */
   objectKey?: string;
 }
@@ -789,7 +791,7 @@ export const payrollService = {
    * Поиск, фильтры столбцов и выбранный объект сервер не применяет — их и не передаём.
    */
   monthObjects: async (
-    params: { months: string[]; date: string; departmentId?: string; group?: StaffCategory },
+    params: { months: string[]; date: string; departmentId?: string; group?: PayrollDepartmentGroup },
     signal?: AbortSignal,
   ): Promise<IPayrollMonthObject[]> => {
     const search = new URLSearchParams();

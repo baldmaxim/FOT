@@ -1,5 +1,5 @@
 /**
- * Фильтры «Расчётов»: группа отделов (?group — ИТР / Офис / Рабочие, payroll-department-groups.ts) и объект месяца
+ * Фильтры «Расчётов»: группа отделов (?group — ИТР / Рабочие, payroll-department-groups.ts) и объект месяца
  * (?object, как у «Свода»; профиль пары — payroll-month-profile.service / .rules). Разбор параметров и SQL пар
  * «сотрудник + месяц».
  *

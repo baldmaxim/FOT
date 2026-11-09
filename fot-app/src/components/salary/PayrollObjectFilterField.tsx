@@ -1,7 +1,7 @@
 import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { payrollService, type StaffCategory } from '../../services/payrollService';
+import { payrollService, type PayrollDepartmentGroup } from '../../services/payrollService';
 import type { ICalcObject } from '../../utils/payrollViews';
 import { SearchableSelect, type ISearchableSelectOption } from '../ui/SearchableSelect';
 import styles from './PayrollObjectFilterField.module.css';
@@ -12,7 +12,7 @@ interface IPayrollObjectFilterFieldProps {
   date: string;
   /** Отдел или группа отделов «Расчётов»: объекты — их сотрудников. */
   departmentId: string;
-  group: StaffCategory | null;
+  group: PayrollDepartmentGroup | null;
   value: ICalcObject | null;
   onChange: (next: ICalcObject | null) => void;
 }

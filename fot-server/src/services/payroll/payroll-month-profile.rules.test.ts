@@ -70,10 +70,10 @@ describe('countMonthObjects', () => {
 });
 
 describe('parseDepartmentGroupQuery', () => {
-  it('группа — из трёх; не задана — null; от месяцев не зависит', () => {
+  it('группа — ИТР или Рабочие; не задана — null; от месяцев не зависит', () => {
     expect(parseDepartmentGroupQuery(undefined)).toEqual({ ok: true, group: null });
     expect(parseDepartmentGroupQuery('itr')).toEqual({ ok: true, group: 'itr' });
-    expect(parseDepartmentGroupQuery('office')).toEqual({ ok: true, group: 'office' });
+    expect(parseDepartmentGroupQuery('office')).toMatchObject({ ok: false, code: 'INVALID_DEPARTMENT_GROUP' });
     expect(parseDepartmentGroupQuery('worker')).toEqual({ ok: true, group: 'worker' });
     expect(parseDepartmentGroupQuery('boss')).toMatchObject({ ok: false, code: 'INVALID_DEPARTMENT_GROUP' });
     expect(parseDepartmentGroupQuery(['itr', 'worker'])).toMatchObject({ ok: false });

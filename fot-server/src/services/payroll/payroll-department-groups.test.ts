@@ -27,22 +27,22 @@ const DEPARTMENTS = [
 describe('payrollDepartmentGroupIds', () => {
   const groups = payrollDepartmentGroupIds(DEPARTMENTS);
 
-  it('ИТР — ЛИНИЯ и ЛИНИЯ-Общестрой с подотделами', () => {
-    expect(groups.itr.sort()).toEqual(['linia', 'linia-site', 'obshchestroy']);
+  it('ИТР — ЛИНИЯ, ЛИНИЯ-Общестрой с подотделами и остальные отделы СУ-10, кроме бригад', () => {
+    expect(groups.itr.sort()).toEqual([SU10, 'build', 'finance', 'guarantee', 'linia', 'linia-site', 'obshchestroy'].sort());
   });
 
   it('Рабочие — все бригады, СУ-10 и СМ', () => {
     expect(groups.worker.sort()).toEqual(['brigade-1', 'brigades', 'sm-brigade']);
   });
 
-  it('Офис — остальные отделы СУ-10; СМ, подрядчики и корень — ни в одной группе', () => {
-    expect(groups.office.sort()).toEqual([SU10, 'build', 'finance', 'guarantee'].sort());
-    const all = new Set([...groups.itr, ...groups.office, ...groups.worker]);
+  it('СМ, подрядчики и корень — ни в одной группе; групп две', () => {
+    expect(Object.keys(groups).sort()).toEqual(['itr', 'worker']);
+    const all = new Set([...groups.itr, ...groups.worker]);
     for (const id of [SM, 'sm-gpm', 'contractors', 'contractor-co', TECH]) expect(all.has(id)).toBe(false);
   });
 
   it('группы не пересекаются', () => {
-    const ids = [...groups.itr, ...groups.office, ...groups.worker];
+    const ids = [...groups.itr, ...groups.worker];
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Экраны вкладки «Выплаты» раздела «Зарплата» (?view=) и сотрудник вкладки «Подробно».
  */
-import type { IPayrollTermsRow, StaffCategory } from '../services/payrollService';
+import type { IPayrollTermsRow, PayrollDepartmentGroup } from '../services/payrollService';
 
 export type PaymentsView = 'terms' | 'details' | 'calc';
 
@@ -72,11 +72,11 @@ export interface ICalcObject {
 }
 
 /**
- * Фильтры «Расчётов» сверх отдела: группа отделов из списка «Все отделы» (ИТР / Офис / Рабочие — по отделу, выбирается
+ * Фильтры «Расчётов» сверх отдела: группа отделов из списка «Все отделы» (ИТР / Рабочие — по отделу, выбирается
  * вместо отдела) и объект месяца, как в «Своде». null — «Все».
  */
 export interface ICalcMonthFilter {
-  group: StaffCategory | null;
+  group: PayrollDepartmentGroup | null;
   object: ICalcObject | null;
 }
 
@@ -110,7 +110,7 @@ export interface IPayrollReturn {
   calcMonthFilter?: ICalcMonthFilter;
 }
 
-const STAFF_CATEGORIES: readonly StaffCategory[] = ['itr', 'office', 'worker'];
+const DEPARTMENT_GROUPS: readonly PayrollDepartmentGroup[] = ['itr', 'worker'];
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -130,11 +130,13 @@ const readCardView = (value: unknown): IPayrollCardView | null => {
 const readMonthFilter = (value: unknown): ICalcMonthFilter | null | undefined => {
   if (value === undefined) return undefined;
   if (!isRecord(value)) return null;
-  const { group, object } = value;
-  if (group !== null && !STAFF_CATEGORIES.includes(group as StaffCategory)) return null;
-  if (object === null) return { group: group as StaffCategory | null, object: null };
+  const { object } = value;
+  // Запись до 09.11.2026: группа «Офис» с тех пор влита в «ИТР».
+  const group = value.group === 'office' ? 'itr' : value.group;
+  if (group !== null && !DEPARTMENT_GROUPS.includes(group as PayrollDepartmentGroup)) return null;
+  if (object === null) return { group: group as PayrollDepartmentGroup | null, object: null };
   if (!isRecord(object) || typeof object.key !== 'string' || typeof object.name !== 'string') return null;
-  return { group: group as StaffCategory | null, object: { key: object.key, name: object.name } };
+  return { group: group as PayrollDepartmentGroup | null, object: { key: object.key, name: object.name } };
 };
 
 /** Запись истории браузера → что показать при возврате; любое несоответствие — null целиком. */

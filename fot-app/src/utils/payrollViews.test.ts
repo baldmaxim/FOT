@@ -183,6 +183,12 @@ describe('возврат с карточки посещаемости: запи�
     expect(read({})).not.toHaveProperty('calcMonthFilter');
   });
 
+  it('группа «Офис» старой записи — теперь «ИТР»', () => {
+    expect(read({ calcMonthFilter: { group: 'office', object: null } })).toEqual({
+      ...saved, calcMonthFilter: { group: 'itr', object: null },
+    });
+  });
+
   it('группа или объект не такие — запись отбрасывается', () => {
     expect(read({ calcMonthFilter: { group: 'boss', object: null } })).toBeNull();
     expect(read({ calcMonthFilter: { group: null, object: { key: 'office' } } })).toBeNull();

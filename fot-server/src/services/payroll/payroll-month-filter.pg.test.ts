@@ -241,9 +241,8 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     await pg.pool?.end();
   });
 
-  it('группа — по отделу: ИТР — ЛИНИЯ и ЛИНИЯ-Общестрой, Офис — остальные СУ-10, Рабочие — бригады; СМ — ни в одной', async () => {
-    expect(await listIds({ paid_months: SEP_OCT, group: 'itr' })).toMatchObject({ ids: [1, 4], total: 2 });
-    expect(await listIds({ paid_months: SEP_OCT, group: 'office' })).toMatchObject({ ids: [2, 5], total: 2 });
+  it('группа — по отделу: ИТР — ЛИНИЯ, ЛИНИЯ-Общестрой и остальные СУ-10, Рабочие — бригады; СМ — ни в одной', async () => {
+    expect(await listIds({ paid_months: SEP_OCT, group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 5], total: 4 });
     // Уволенный — по отделу, из которого уволен (бригада), а не «Уволенные».
     expect(await listIds({ paid_months: SEP_OCT, group: 'worker' })).toMatchObject({ ids: [3, 6], total: 2 });
     expect((await listIds({ paid_months: SEP_OCT })).total).toBe(7);
@@ -252,7 +251,7 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
   });
 
   it('группа без месяцев («Условия оплаты») — по отделу на дату', async () => {
-    expect(await listIds({ group: 'office' })).toMatchObject({ ids: [2, 5], total: 2 });
+    expect(await listIds({ group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 5], total: 4 });
   });
 
   it('пары — только месяцы, где строка видна: принятый в октябре и уволенный в сентябре без фантомных месяцев', async () => {
@@ -282,10 +281,9 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
   });
 
   it('группа и объект вместе; фантомные месяцы не учитываются', async () => {
+    // Фантомный сентябрь Борисова на Химках и октябрь Васильева в Мытищах — не в счёт.
     expect(await listIds({ paid_months: SEP_OCT, group: 'itr', object: KHIMKI })).toMatchObject({ ids: [1], total: 1 });
     expect(await listIds({ paid_months: SEP_OCT, group: 'itr', object: MYTISHCHI })).toMatchObject({ ids: [1, 4], total: 2 });
-    // Фантомный сентябрь Борисова на Химках и октябрь Васильева в Мытищах — не в счёт.
-    expect(await listIds({ paid_months: SEP_OCT, group: 'office', object: KHIMKI })).toMatchObject({ ids: [], total: 0 });
     expect(await listIds({ paid_months: SEP_OCT, group: 'worker', object: MYTISHCHI })).toMatchObject({ ids: [6], total: 1 });
     // Объект без группы — и СМ тоже.
     expect(await listIds({ paid_months: SEP_OCT, object: KHIMKI })).toMatchObject({ ids: [1, 3, 7], total: 3 });
@@ -306,14 +304,16 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
 
   it('точный ФИО, скрытый группой, переводит поиск в fuzzy', async () => {
     expect((await listIds({ paid_months: SEP_OCT, q: 'Сидоров' })).ids).toEqual([5]);
-    // Сидоров — офис: среди рабочих точного совпадения нет, находится Сидаров с одной ошибкой.
+    // Сидоров — ИТР (Гарантийный отдел): среди рабочих точного совпадения нет, находится Сидаров с одной ошибкой.
     expect((await listIds({ paid_months: SEP_OCT, q: 'Сидоров', group: 'worker' })).ids).toEqual([6]);
   });
 
   it('варианты фильтра столбца — только по группе', async () => {
     const res = await call(payrollTermsController.columnValues, { paid_months: SEP_OCT, column: 'department', group: 'itr' });
     expect(res.statusCode).toBe(200);
-    expect(res.body.data.values).toEqual([{ value: 'ЛИНИЯ', count: 1 }, { value: 'ЛИНИЯ-Общестрой', count: 1 }]);
+    expect(res.body.data.values).toEqual([
+      { value: 'Гарантийный отдел', count: 2 }, { value: 'ЛИНИЯ', count: 1 }, { value: 'ЛИНИЯ-Общестрой', count: 1 },
+    ]);
   });
 
   it('параметры: объект — только со списком месяцев; группа и объект — из допустимых', async () => {
@@ -322,6 +322,8 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     expect((await list({ paid_months: 'all', object: 'office' })).body.code).toBe('MONTH_FILTER_NEEDS_MONTHS');
     expect((await list({ paid_months: SEP_OCT, object: 'Химки' })).body.code).toBe('INVALID_MONTH_FILTER');
     expect((await list({ paid_months: SEP_OCT, group: 'boss' })).body.code).toBe('INVALID_DEPARTMENT_GROUP');
+    // «Офис» влит в ИТР — такой группы больше нет.
+    expect((await list({ paid_months: SEP_OCT, group: 'office' })).body.code).toBe('INVALID_DEPARTMENT_GROUP');
     expect((await call(payrollTermsController.monthObjects, { paid_months: SEP_OCT, group: 'boss' })).statusCode).toBe(400);
     expect((await call(payrollTermsController.monthObjects, { paid_months: 'all' })).statusCode).toBe(400);
   });

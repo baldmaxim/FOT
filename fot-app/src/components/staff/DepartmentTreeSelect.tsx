@@ -44,7 +44,7 @@ interface IDepartmentTreeSelectProps {
    */
   flattenSingleRoot?: boolean;
   /**
-   * Группы отделов — строки сразу под «Все отделы», над деревом («Расчёты»: ИТР, Офис, Рабочие). value группы не должно
+   * Группы отделов — строки под деревом отделов («Расчёты»: ИТР, Рабочие). value группы не должно
    * совпадать с id отдела; выбранная группа — в поле её подписью. Ищутся поиском, как отделы.
    */
   groups?: ReadonlyArray<{ value: string; label: string }>;
@@ -346,6 +346,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
                   {ALL_LABEL}
                 </div>
               )}
+              {visibleTree.map(node => renderNode(node, rootDepth))}
               {visibleGroups.length > 0 && (
                 <div className={styles.groups}>
                   {visibleGroups.map(group => (
@@ -359,7 +360,6 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
                   ))}
                 </div>
               )}
-              {visibleTree.map(node => renderNode(node, rootDepth))}
               {showLoadingState && (
                 <div className={styles.empty}>Загрузка отделов...</div>
               )}

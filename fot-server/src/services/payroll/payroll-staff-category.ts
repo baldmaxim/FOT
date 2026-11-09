@@ -34,7 +34,7 @@ import type { StaffCategory } from './payroll-terms.service.js';
 const ITR_DEPARTMENT_NAMES: ReadonlySet<string> = new Set(['линия', 'линия-общестрой']);
 
 /**
- * Отдел → внутри «ЛИНИЯ» / «ЛИНИЯ-Общестрой» (по имени предков). Это группа «ИТР» «Расчётов»
+ * Отдел → внутри «ЛИНИЯ» / «ЛИНИЯ-Общестрой» (по имени предков). Это часть группы «ИТР» «Расчётов»
  * (payroll-department-groups.ts), категорию не решает. Ответ кэшируется по отделу.
  */
 export const createLiniaResolver = (

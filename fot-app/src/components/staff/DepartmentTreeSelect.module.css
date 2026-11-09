@@ -182,9 +182,9 @@
   background: var(--bg-secondary);
 }
 
-/* Группы отделов («Расчёты»: ИТР, Офис, Рабочие) — под «Все отделы», отделены от дерева линией. */
+/* Группы отделов («Расчёты»: ИТР, Рабочие) — под деревом, отделены от него линией. */
 .groups {
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .groupOption {

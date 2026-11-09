@@ -664,7 +664,7 @@ const resolvePayrollFioMode = async (
   return row?.found ? 'exact' : 'fuzzy';
 };
 
-/** Фильтры «Расчётов» в filtered: отделы группы (ИТР / Офис / Рабочие) и сотрудники с выбранным объектом месяца. */
+/** Фильтры «Расчётов» в filtered: отделы группы (ИТР / Рабочие) и сотрудники с выбранным объектом месяца. */
 interface ICalcFilters {
   /** null — группа не выбрана. department_id выборки — отдел работы, у уволенного — из увольнения. */
   groupDepartmentIds: string[] | null;
