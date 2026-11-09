@@ -21,9 +21,11 @@ vi.mock('./payroll-month-basis.service.js', async importOriginal => ({
 }));
 
 const brigade = vi.hoisted(() => ({ getBrigadeShares: vi.fn(), resolvePreliminaryAsOf: vi.fn() }));
+// Пакетное чтение долей — needs_fix у всех: тесты идут через getBrigadeShares; пакет — payroll-calc-brigades.service.test.
 vi.mock('./brigade-salary.service.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./brigade-salary.service.js')>()),
   getBrigadeShares: brigade.getBrigadeShares,
+  peekBrigadeSharesMany: async (ids: string[]) => new Map(ids.map(id => [id, { state: 'needs_fix' }])),
   resolvePreliminaryAsOf: brigade.resolvePreliminaryAsOf,
 }));
 
@@ -71,6 +73,7 @@ vi.mock('./payroll-staff-category.js', () => ({
 }));
 
 import { getPayoutForEmployees, getPreliminaryPayoutForEmployees } from './payroll-calc.service.js';
+import { resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
 import { loadRateFacts } from './payroll-rate-facts.service.js';
 
 const req = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
@@ -401,5 +404,21 @@ describe('закрытый месяц', () => {
     expect((await getPreliminaryPayoutForEmployees([8], '2026-09', req)).get(8))
       .toMatchObject({ state: 'closed', net: '110000.00', worked_days: { workday: 22, dayoff: 0 } });
     expect(live.fetchTimesheetDataForEmployees).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveOpenBrigadeShares', () => {
+  const context = { departmentId: BRIGADE, memberIds: [7], memberships: [], windows: new Map() };
+
+  it('ввод передан (пакет) — второй раз не читается; не передан — читается сам', async () => {
+    const prefetched = { outputs: new Map(), brigadeOutput: null, ktu: new Map([[7, 15]]) };
+
+    const shares = await resolveOpenBrigadeShares(context, '2026-09', '2026-09-30', prefetched);
+    expect(inputs.loadBrigadeSalaryInputs).not.toHaveBeenCalled();
+    expect(shares).toMatchObject({ state: 'open', distribution: 'no_output', rows: [{ employee_id: 7, ktu: '1.5', amount: null }] });
+
+    inputs.loadBrigadeSalaryInputs.mockResolvedValueOnce(prefetched);
+    expect(await resolveOpenBrigadeShares(context, '2026-09', '2026-09-30')).toEqual(shares);
+    expect(inputs.loadBrigadeSalaryInputs).toHaveBeenCalledWith(BRIGADE, '2026-09-01');
   });
 });

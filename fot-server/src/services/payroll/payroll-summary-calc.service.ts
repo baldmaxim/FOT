@@ -15,8 +15,11 @@ import {
 } from './payroll-registry-scope.service.js';
 import { SUMMARY_PAYROLL_ITEM } from './payroll-summary-calc.rules.js';
 
-/** Порция расчёта — как у «Расчётов» (≤ 500 id): иначе один запрос держит слишком большой массив сотрудников. */
-const CALC_CHUNK_SIZE = 500;
+/**
+ * Месяц считается одним вызовом: порции заново грузили бы те же бригады (сентябрь 2026 — 1806 человек одним вызовом:
+ * запросов к БД втрое меньше, суммы те же). Больше — порциями: страховка от неограниченного массива сотрудников.
+ */
+const CALC_SINGLE_CALL_LIMIT = 3000;
 
 export interface ISummaryExtras {
   /** Разовые доплаты пары «сотрудник|YYYY-MM». */
@@ -157,8 +160,8 @@ const selectCalcInLoadedMonth = async (ids: readonly number[], month: string): P
 
 /**
  * Расчёт ФОТ по месяцам. candidates — месяц → у кого нет зарплаты 1С (needsSummaryCalc). В месяце, где ведомость уже
- * загружена (payrollLoadedMonths), — только selectCalcInLoadedMonth. Месяцы — по очереди: расчёт порции сам идёт пачкой
- * запросов.
+ * загружена (payrollLoadedMonths), — только selectCalcInLoadedMonth. Месяцы — по очереди, месяц — одним вызовом
+ * (CALC_SINGLE_CALL_LIMIT): расчёт сам идёт пачкой запросов.
  */
 export const calcSummaryMonths = async (
   candidates: ReadonlyMap<string, readonly number[]>,
@@ -170,8 +173,11 @@ export const calcSummaryMonths = async (
   for (const [month, monthIds] of candidates) {
     const ids = payrollLoadedMonths.has(month) ? await selectCalcInLoadedMonth(monthIds, month) : [...monthIds];
     employees += ids.length;
-    for (let start = 0; start < ids.length; start += CALC_CHUNK_SIZE) {
-      const payouts = await getPreliminaryPayoutForEmployees(ids.slice(start, start + CALC_CHUNK_SIZE), month, req);
+    if (ids.length > CALC_SINGLE_CALL_LIMIT) {
+      console.warn(`[payroll-summary] ${month}: ${ids.length} чел. — расчёт порциями по ${CALC_SINGLE_CALL_LIMIT}`);
+    }
+    for (let start = 0; start < ids.length; start += CALC_SINGLE_CALL_LIMIT) {
+      const payouts = await getPreliminaryPayoutForEmployees(ids.slice(start, start + CALC_SINGLE_CALL_LIMIT), month, req);
       for (const [employeeId, calc] of payouts) calcs.set(monthPairKey(employeeId, month), calc);
     }
   }

@@ -21,7 +21,11 @@ import {
   type IMembershipWindow,
 } from '../timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForEmployees, type IExportDayValue } from '../timesheet-export.service.js';
-import { DEFAULT_KTU_TENTHS, loadBrigadeSalaryInputs } from './brigade-salary-inputs.service.js';
+import {
+  DEFAULT_KTU_TENTHS,
+  loadBrigadeSalaryInputs,
+  type IBrigadeSalaryInputs,
+} from './brigade-salary-inputs.service.js';
 import { computeBrigadePreliminaryShares, type IBrigadeShares } from './brigade-salary.service.js';
 import { buildBasisDraftsForDays, emptyAbsenceDays, type IBasisDayValue } from './payroll-basis.service.js';
 import type { ICalcMonthBasis, IMonthBrigadeDays } from './payroll-month-basis.service.js';
@@ -95,14 +99,16 @@ export const loadBrigadeContext = async (
 
 /**
  * Доли открытой бригады: выработка не внесена ни на одном объекте и не внесена суммой бригаде — технические доли без
- * суммы (часы не считаются, КТУ — введённый или 1,0); есть — живой расчёт по табелю на asOf.
+ * суммы (часы не считаются, КТУ — введённый или 1,0); есть — живой расчёт по табелю на asOf. prefetched — ввод
+ * бригады, уже прочитанный пакетом (peekBrigadeSharesMany); нет — читается здесь.
  */
 export const resolveOpenBrigadeShares = async (
   context: IBrigadeContext,
   month: string,
   asOf: string,
+  prefetched?: IBrigadeSalaryInputs,
 ): Promise<IBrigadeShares> => {
-  const inputs = await loadBrigadeSalaryInputs(context.departmentId, `${month}-01`);
+  const inputs = prefetched ?? await loadBrigadeSalaryInputs(context.departmentId, `${month}-01`);
   if (inputs.outputs.size === 0 && inputs.brigadeOutput === null) {
     return {
       state: 'open',

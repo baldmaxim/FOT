@@ -19,9 +19,11 @@ vi.mock('./payroll-month-basis.service.js', async importOriginal => ({
 }));
 
 const brigade = vi.hoisted(() => ({ getBrigadeShares: vi.fn() }));
-// По какой день считается проживание — настоящее правило (прошлый месяц — целиком).
+// По какой день считается проживание — настоящее правило (прошлый месяц — целиком). Пакетное чтение долей — needs_fix
+// у всех: тесты идут через getBrigadeShares; пакет проверяет payroll-calc-brigades.service.test.
 vi.mock('./brigade-salary.service.js', async importOriginal => ({
   ...brigade,
+  peekBrigadeSharesMany: async (ids: string[]) => new Map(ids.map(id => [id, { state: 'needs_fix' }])),
   resolvePreliminaryAsOf: (await importOriginal<typeof import('./brigade-salary.service.js')>()).resolvePreliminaryAsOf,
 }));
 

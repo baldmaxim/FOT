@@ -58,30 +58,16 @@ async function rows<T extends import('pg').QueryResultRow>(
   return query<T>(sql, params);
 }
 
-export async function loadBrigadeSalaryInputs(
-  departmentId: string,
-  monthStart: string,
-  exec?: DbExecutor,
-): Promise<IBrigadeSalaryInputs> {
-  // Последовательно: на клиенте транзакции параллельные запросы не нужны.
-  const outputRows = await rows<{ object_key: string; object_name: string; amount: string }>(
-    exec,
-    `SELECT object_key, object_name, amount::text AS amount
-       FROM brigade_salary_object_outputs
-      WHERE department_id = $1 AND month = $2::date
-      ORDER BY object_key`,
-    [departmentId, monthStart],
-  );
-  const ktuRows = await rows<{ employee_id: string | number; ktu: string }>(
-    exec,
-    'SELECT employee_id, ktu::text AS ktu FROM brigade_salary_ktu WHERE department_id = $1 AND month = $2::date',
-    [departmentId, monthStart],
-  );
-  const brigadeRows = await rows<{ amount: string }>(
-    exec,
-    'SELECT amount::text AS amount FROM brigade_salary_brigade_outputs WHERE department_id = $1 AND month = $2::date',
-    [departmentId, monthStart],
-  );
+interface IOutputDbRow { department_id: string; object_key: string; object_name: string; amount: string }
+interface IKtuDbRow { department_id: string; employee_id: string | number; ktu: string }
+interface IBrigadeOutputDbRow { department_id: string; amount: string }
+
+/** Ввод бригады из строк трёх таблиц (одной бригады): одно правило для одиночной и пакетной загрузки. */
+const buildBrigadeSalaryInputs = (
+  outputRows: readonly IOutputDbRow[],
+  ktuRows: readonly IKtuDbRow[],
+  brigadeRows: readonly IBrigadeOutputDbRow[],
+): IBrigadeSalaryInputs => {
   const ktu = new Map<number, number>();
   for (const row of ktuRows) {
     const tenths = Math.round(Number(row.ktu) * 10);
@@ -90,6 +76,73 @@ export async function loadBrigadeSalaryInputs(
   const outputs = new Map<string, IBrigadeObjectOutput>();
   for (const row of outputRows) outputs.set(row.object_key, { amount: row.amount, object_name: row.object_name });
   return { outputs, brigadeOutput: brigadeRows[0]?.amount ?? null, ktu };
+};
+
+/**
+ * Строки ввода бригад месяца; выработка по объектам — по бригаде в порядке object_key. department_id — ровно та строка,
+ * что передана (не текст uuid из БД): по ней ищет вызывающий.
+ */
+const loadInputRows = async (
+  departmentIds: readonly string[],
+  monthStart: string,
+  exec?: DbExecutor,
+): Promise<{ outputRows: IOutputDbRow[]; ktuRows: IKtuDbRow[]; brigadeRows: IBrigadeOutputDbRow[] }> => {
+  const params = [[...departmentIds], monthStart];
+  // Последовательно: на клиенте транзакции параллельные запросы не нужны.
+  const outputRows = await rows<IOutputDbRow>(
+    exec,
+    `SELECT r.key AS department_id, o.object_key, o.object_name, o.amount::text AS amount
+       FROM unnest($1::text[]) AS r(key)
+       JOIN brigade_salary_object_outputs o ON o.department_id = r.key::uuid AND o.month = $2::date
+      ORDER BY r.key, o.object_key`,
+    params,
+  );
+  const ktuRows = await rows<IKtuDbRow>(
+    exec,
+    `SELECT r.key AS department_id, k.employee_id, k.ktu::text AS ktu
+       FROM unnest($1::text[]) AS r(key)
+       JOIN brigade_salary_ktu k ON k.department_id = r.key::uuid AND k.month = $2::date
+      ORDER BY r.key, k.employee_id`,
+    params,
+  );
+  const brigadeRows = await rows<IBrigadeOutputDbRow>(
+    exec,
+    `SELECT r.key AS department_id, b.amount::text AS amount
+       FROM unnest($1::text[]) AS r(key)
+       JOIN brigade_salary_brigade_outputs b ON b.department_id = r.key::uuid AND b.month = $2::date`,
+    params,
+  );
+  return { outputRows, ktuRows, brigadeRows };
+};
+
+export async function loadBrigadeSalaryInputs(
+  departmentId: string,
+  monthStart: string,
+  exec?: DbExecutor,
+): Promise<IBrigadeSalaryInputs> {
+  const { outputRows, ktuRows, brigadeRows } = await loadInputRows([departmentId], monthStart, exec);
+  return buildBrigadeSalaryInputs(outputRows, ktuRows, brigadeRows);
+}
+
+/**
+ * Ввод многих бригад месяца тремя запросами («Свод», «Расчёты»): запись на каждую запрошенную бригаду, у бригады без
+ * строк — ничего не внесено (как у loadBrigadeSalaryInputs).
+ */
+export async function loadBrigadeSalaryInputsMany(
+  departmentIds: readonly string[],
+  monthStart: string,
+  exec?: DbExecutor,
+): Promise<Map<string, IBrigadeSalaryInputs>> {
+  const ids = [...new Set(departmentIds)];
+  if (ids.length === 0) return new Map();
+  const { outputRows, ktuRows, brigadeRows } = await loadInputRows(ids, monthStart, exec);
+  const of = <T extends { department_id: string }>(list: readonly T[], id: string): T[] => (
+    list.filter(row => row.department_id === id)
+  );
+  return new Map(ids.map(id => [
+    id,
+    buildBrigadeSalaryInputs(of(outputRows, id), of(ktuRows, id), of(brigadeRows, id)),
+  ]));
 }
 
 /** Версия отпечатка: 'v2:' — выработка по объектам (336). Расчёт с другим отпечатком пересчитывается. */

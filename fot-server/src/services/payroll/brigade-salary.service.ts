@@ -22,7 +22,7 @@
 import type { PoolClient } from 'pg';
 
 import type { DbExecutor } from '../../config/postgres.js';
-import { query, withTransaction } from '../../config/postgres.js';
+import { query, withReadOnlySnapshot, withTransaction } from '../../config/postgres.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from '../../controllers/timesheet-assigned-export.controller.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 import { moscowTodayIso } from '../../utils/date.utils.js';
@@ -49,6 +49,7 @@ import {
   brigadeSalaryLockKey,
   DEFAULT_KTU_TENTHS,
   loadBrigadeSalaryInputs,
+  loadBrigadeSalaryInputsMany,
   totalBrigadeOutput,
   type BrigadeOutputMode,
   type IBrigadeSalaryInputs,
@@ -57,12 +58,14 @@ import {
   attachLiveObjects,
   listBrigadeMemberIds,
   loadBrigadeMonthApprovals,
+  loadBrigadeMonthApprovalsMany,
   loadLiveDays,
   loadLiveObjectEntries,
   loadVersionDays,
   monthBounds,
   resolveBrigadeMonthClosure,
   type DaysByEmployee,
+  type IBrigadeMonthClosure,
   type IDateRange,
 } from './brigade-salary-source.service.js';
 
@@ -412,20 +415,11 @@ const dedupeErrors = (errors: readonly IBrigadeSalaryError[]): IBrigadeSalaryErr
   });
 };
 
-async function loadStoredResult(
-  departmentId: string,
-  monthStart: string,
-  exec?: DbExecutor,
-): Promise<IStoredBrigadeResult | null> {
-  const sql = `SELECT status, output_amount::text AS output_amount, inputs_hash, versions, errors, rows, objects,
-                      format, distribution, mode, computed_at::text AS computed_at
-                 FROM brigade_salary_results
-                WHERE department_id = $1 AND month = $2::date`;
-  const found = exec
-    ? (await exec.query<Record<string, unknown>>(sql, [departmentId, monthStart])).rows
-    : await query<Record<string, unknown>>(sql, [departmentId, monthStart]);
-  const row = found[0];
-  if (!row) return null;
+const STORED_RESULT_COLUMNS = `status, output_amount::text AS output_amount, inputs_hash, versions, errors, rows,
+                      objects, format, distribution, mode, computed_at::text AS computed_at`;
+
+/** Строка brigade_salary_results → сохранённый расчёт: одно правило для одной и многих бригад. */
+const toStoredResult = (row: Record<string, unknown>): IStoredBrigadeResult => {
   const format = Number(row.format ?? 1);
   const rows = (row.rows as IBrigadeSalaryResultRow[]).map(item => ({ ...item, objects: item.objects ?? [] }));
   const errors = row.errors as IBrigadeSalaryError[];
@@ -442,7 +436,54 @@ async function loadStoredResult(
     computed_at: String(row.computed_at),
     format,
   };
+};
+
+async function loadStoredResult(
+  departmentId: string,
+  monthStart: string,
+  exec?: DbExecutor,
+): Promise<IStoredBrigadeResult | null> {
+  const sql = `SELECT ${STORED_RESULT_COLUMNS}
+                 FROM brigade_salary_results
+                WHERE department_id = $1 AND month = $2::date`;
+  const found = exec
+    ? (await exec.query<Record<string, unknown>>(sql, [departmentId, monthStart])).rows
+    : await query<Record<string, unknown>>(sql, [departmentId, monthStart]);
+  const row = found[0];
+  return row ? toStoredResult(row) : null;
 }
+
+/**
+ * Сохранённые расчёты многих бригад месяца одним запросом; нет строки — нет ключа. Ключ — ровно переданная строка id
+ * (не текст uuid из БД).
+ */
+async function loadStoredResultsMany(
+  departmentIds: readonly string[],
+  monthStart: string,
+  exec: DbExecutor,
+): Promise<Map<string, IStoredBrigadeResult>> {
+  const found = (await exec.query<Record<string, unknown>>(
+    `SELECT r.key AS request_key, ${STORED_RESULT_COLUMNS}
+       FROM unnest($1::text[]) AS r(key)
+       JOIN brigade_salary_results ON department_id = r.key::uuid AND month = $2::date`,
+    [[...departmentIds], monthStart],
+  )).rows;
+  return new Map(found.map(row => [String(row.request_key), toStoredResult(row)]));
+}
+
+/**
+ * Сохранённый расчёт закрытого месяца актуален: формат, отпечаток ввода и редакции подач те же. Одно условие у
+ * фиксации (ensureFixed), чтения в ЛК (peekBrigadeShares) и пакетного чтения (peekBrigadeSharesMany).
+ */
+const isStoredCurrent = (
+  stored: IStoredBrigadeResult,
+  inputs: IBrigadeSalaryInputs,
+  closure: IBrigadeMonthClosure,
+): boolean => (
+  stored.format === BRIGADE_RESULT_FORMAT
+  && stored.inputs_hash === brigadeSalaryInputsHash(inputs)
+  && sameVersions(stored.versions, closure.versions)
+);
 
 /** Общий итог сохранённого расчёта: у format 2 — сохранённый; у format 1 — как было до 336. */
 const storedDistribution = (
@@ -492,14 +533,7 @@ async function ensureFixed(
     const inputs = await loadBrigadeSalaryInputs(departmentId, start, client);
     const inputsHash = brigadeSalaryInputsHash(inputs);
     const previous = await loadStoredResult(departmentId, start, client);
-    if (
-      previous
-      && previous.format === BRIGADE_RESULT_FORMAT
-      && previous.inputs_hash === inputsHash
-      && sameVersions(previous.versions, closure.versions)
-    ) {
-      return { stored: previous, inputs };
-    }
+    if (previous && isStoredCurrent(previous, inputs, closure)) return { stored: previous, inputs };
 
     const computation = await computeClosed(
       client, departmentId, month, closure.versions.map(item => item.version_id), inputs,
@@ -579,6 +613,21 @@ export interface IBrigadeShares {
   objects: IBrigadeSalaryObjectFacts[];
 }
 
+/** Долей нет: месяц не закрыт (или его открыли, пока ждали замок). */
+const openShares = (): IBrigadeShares => (
+  { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] }
+);
+
+/** Доли из сохранённого расчёта закрытого месяца. */
+const fixedShares = (stored: IStoredBrigadeResult): IBrigadeShares => ({
+  state: 'fixed',
+  mode: stored.mode,
+  distribution: stored.distribution,
+  output_amount: stored.output_amount,
+  rows: stored.rows,
+  objects: stored.objects,
+});
+
 /**
  * Зафиксированные доли бригады за месяц — тот же расчёт, что во вкладке (закрытый месяц фиксируется при первом
  * чтении). Месяц открыт или открыли, пока ждали замок, — open: доли не окончательные.
@@ -590,15 +639,7 @@ export async function getBrigadeShares(
 ): Promise<IBrigadeShares> {
   const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
   const fixed = closure.closed ? await ensureFixed(req, departmentId, month) : null;
-  if (!fixed) return { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] };
-  return {
-    state: 'fixed',
-    mode: fixed.stored.mode,
-    distribution: fixed.stored.distribution,
-    output_amount: fixed.stored.output_amount,
-    rows: fixed.stored.rows,
-    objects: fixed.stored.objects,
-  };
+  return fixed ? fixedShares(fixed.stored) : openShares();
 }
 
 /**
@@ -607,30 +648,58 @@ export async function getBrigadeShares(
  * getBrigadeShares («Расчёты», вкладка табеля), здесь ни INSERT, ни UPDATE, ни аудита.
  */
 export async function peekBrigadeShares(departmentId: string, month: string): Promise<IBrigadeShares> {
-  const open: IBrigadeShares = { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] };
   const { start } = monthBounds(month);
   const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
-  if (!closure.closed) return open;
+  if (!closure.closed) return openShares();
   const [inputs, stored] = await Promise.all([
     loadBrigadeSalaryInputs(departmentId, start),
     loadStoredResult(departmentId, start),
   ]);
-  if (
-    !stored
-    || stored.format !== BRIGADE_RESULT_FORMAT
-    || stored.inputs_hash !== brigadeSalaryInputsHash(inputs)
-    || !sameVersions(stored.versions, closure.versions)
-  ) {
-    return open;
+  return stored && isStoredCurrent(stored, inputs, closure) ? fixedShares(stored) : openShares();
+}
+
+/**
+ * Доли бригады по пакетному чтению: fixed — актуальный сохранённый расчёт (то, что вернул бы getBrigadeShares без
+ * записи); open — месяц не закрыт, с прочитанным вводом (для предварительных долей); needs_fix — месяц закрыт, а
+ * расчёта нет или он не актуален: фиксирует только getBrigadeShares под замком бригады. Слово stale не берём —
+ * у вкладки табеля оно значит «месяц переоткрыт».
+ */
+export type BrigadeSharesPeek =
+  | { state: 'fixed'; shares: IBrigadeShares }
+  | { state: 'open'; shares: IBrigadeShares; inputs: IBrigadeSalaryInputs }
+  | { state: 'needs_fix' };
+
+/**
+ * Доли многих бригад месяца одним снимком БД (5 запросов вместо около 9 на бригаду): «Свод» и «Расчёты». Ничего не
+ * пишет. Замок бригады не берётся: правку КТУ или выработки, закоммиченную после снимка, увидит следующее чтение —
+ * так же читает peekBrigadeShares. Запись на каждую запрошенную бригаду (дубли схлопываются, порядок не важен).
+ */
+export async function peekBrigadeSharesMany(
+  departmentIds: readonly string[],
+  month: string,
+): Promise<Map<string, BrigadeSharesPeek>> {
+  const ids = [...new Set(departmentIds)].sort();
+  const result = new Map<string, BrigadeSharesPeek>();
+  if (ids.length === 0) return result;
+  const { start } = monthBounds(month);
+  const { approvals, inputs, stored } = await withReadOnlySnapshot(async client => ({
+    approvals: await loadBrigadeMonthApprovalsMany(ids, month, client),
+    inputs: await loadBrigadeSalaryInputsMany(ids, start, client),
+    stored: await loadStoredResultsMany(ids, start, client),
+  }));
+  for (const departmentId of ids) {
+    const closure = resolveBrigadeMonthClosure(approvals.get(departmentId) ?? [], month);
+    const brigadeInputs = inputs.get(departmentId)!;
+    const saved = stored.get(departmentId);
+    if (!closure.closed) {
+      result.set(departmentId, { state: 'open', shares: openShares(), inputs: brigadeInputs });
+    } else if (saved && isStoredCurrent(saved, brigadeInputs, closure)) {
+      result.set(departmentId, { state: 'fixed', shares: fixedShares(saved) });
+    } else {
+      result.set(departmentId, { state: 'needs_fix' });
+    }
   }
-  return {
-    state: 'fixed',
-    mode: stored.mode,
-    distribution: stored.distribution,
-    output_amount: stored.output_amount,
-    rows: stored.rows,
-    objects: stored.objects,
-  };
+  return result;
 }
 
 /**

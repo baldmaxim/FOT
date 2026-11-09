@@ -43,6 +43,20 @@ vi.mock('../../config/postgres.js', async () => {
         client.release();
       }
     },
+    withReadOnlySnapshot: async <T>(fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> => {
+      const client = await pg.pool!.connect();
+      try {
+        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        const out = await fn(client);
+        await client.query('COMMIT');
+        return out;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
 });
 
@@ -131,13 +145,18 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { getBrigadeSalary, getBrigadeShares, peekBrigadeShares } from './brigade-salary.service.js';
+import { getBrigadeSalary, getBrigadeShares, peekBrigadeShares, peekBrigadeSharesMany } from './brigade-salary.service.js';
 import {
   BrigadeOutputModeConflictError,
+  loadBrigadeSalaryInputs,
+  loadBrigadeSalaryInputsMany,
   setBrigadeKtu,
   setBrigadeObjectOutput,
   setBrigadeOutput,
 } from './brigade-salary-inputs.service.js';
+import { loadBrigadeMonthApprovals, loadBrigadeMonthApprovalsMany } from './brigade-salary-source.service.js';
+import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
+import { loadBrigadeContext, resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
 import { listBrigadeOutputs } from './brigade-output-list.service.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
@@ -474,6 +493,148 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(OPEN);
     expect(await stored()).toEqual(before);
     expect(audit.calls).toEqual([]);
+  });
+
+  // «Свод» и «Расчёты» (09.11.2026): доли бригад месяца — пакетом, одним снимком; фиксация — только needs_fix.
+  const NO_ROWS = '11111111-2222-4333-8444-555555555555';
+
+  it('пакетные загрузчики = одиночные: подачи и ввод нескольких бригад, бригада без строк, дубли и порядок id', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    await setBrigadeKtu(BRIGADE, '2026-09-01', B, 15, PROFILE);
+    await setBrigadeOutput(KHODZHAKULOV, '2026-09-01', '500000.00', PROFILE);
+    await setBrigadeKtu(KHODZHAKULOV, '2026-09-01', A, 8, PROFILE);
+    await q(`INSERT INTO timesheet_approvals (department_id, status, start_date, end_date)
+      VALUES ($1, 'submitted', '2026-09-01', '2026-09-30'), ($1, 'approved', '2026-08-01', '2026-08-31')`, [KHODZHAKULOV]);
+
+    const ids = [KHODZHAKULOV, NO_ROWS, BRIGADE, KHODZHAKULOV];
+    const approvals = await loadBrigadeMonthApprovalsMany(ids, '2026-09');
+    const inputs = await loadBrigadeSalaryInputsMany(ids, '2026-09-01');
+
+    expect([...approvals.keys()].sort()).toEqual([BRIGADE, KHODZHAKULOV, NO_ROWS].sort());
+    expect([...inputs.keys()].sort()).toEqual([BRIGADE, KHODZHAKULOV, NO_ROWS].sort());
+    for (const id of [BRIGADE, KHODZHAKULOV, NO_ROWS]) {
+      expect(approvals.get(id)).toEqual(await loadBrigadeMonthApprovals(id, '2026-09'));
+      expect(inputs.get(id)).toEqual(await loadBrigadeSalaryInputs(id, '2026-09-01'));
+    }
+    expect(approvals.get(BRIGADE)).toHaveLength(2);
+    expect(approvals.get(NO_ROWS)).toEqual([]);
+    expect(inputs.get(BRIGADE)?.ktu).toEqual(new Map([[B, 15]]));
+    expect(inputs.get(KHODZHAKULOV)).toMatchObject({ brigadeOutput: '500000.00', outputs: new Map() });
+    expect(inputs.get(NO_ROWS)).toEqual({ outputs: new Map(), brigadeOutput: null, ktu: new Map() });
+    expect(await loadBrigadeMonthApprovalsMany([], '2026-09')).toEqual(new Map());
+    expect(await loadBrigadeSalaryInputsMany([], '2026-09-01')).toEqual(new Map());
+  });
+
+  it('peekBrigadeSharesMany: fixed = getBrigadeShares; нет записи / другой ввод / редакция / format 1 → needs_fix; не закрыт → open; не пишет', async () => {
+    const stored = async () => q('SELECT * FROM brigade_salary_results ORDER BY department_id, month');
+    const { h2 } = await closeSeptemberInHalves();
+    await enterBoth();
+    const peek = async () => (await peekBrigadeSharesMany([BRIGADE, KHODZHAKULOV, BRIGADE], '2026-09'));
+
+    // Закрыт, не зафиксирован — needs_fix; у бригады без подач — open с её вводом; записи нет.
+    let result = await peek();
+    expect([...result.keys()].sort()).toEqual([BRIGADE, KHODZHAKULOV].sort());
+    expect(result.get(BRIGADE)).toEqual({ state: 'needs_fix' });
+    expect(result.get(KHODZHAKULOV)).toEqual({
+      state: 'open',
+      shares: { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] },
+      inputs: await loadBrigadeSalaryInputs(KHODZHAKULOV, '2026-09-01'),
+    });
+    expect(await stored()).toHaveLength(0);
+
+    // Зафиксировали — fixed, те же доли, что getBrigadeShares и peekBrigadeShares.
+    const fixed = await getBrigadeShares(req, BRIGADE, '2026-09');
+    const before = await stored();
+    expect((await peek()).get(BRIGADE)).toEqual({ state: 'fixed', shares: fixed });
+    expect(await peekBrigadeShares(BRIGADE, '2026-09')).toEqual(fixed);
+
+    // Другой ввод — needs_fix; вернули — снова fixed.
+    await setOutput(WAVE, '228000.01');
+    expect((await peek()).get(BRIGADE)).toEqual({ state: 'needs_fix' });
+    await setOutput(WAVE, '228000.00');
+    expect((await peek()).get(BRIGADE)).toEqual({ state: 'fixed', shares: fixed });
+
+    // Старый формат — needs_fix.
+    await q('UPDATE brigade_salary_results SET format = 1');
+    expect((await peek()).get(BRIGADE)).toEqual({ state: 'needs_fix' });
+    await q('UPDATE brigade_salary_results SET format = 2');
+
+    // Новая редакция — needs_fix.
+    const v3 = await addVersion(h2, 2, payload({ [A]: { '2026-09-16': work(10) }, [B]: { '2026-09-16': work(12) } }));
+    await addObjects(v3, { [A]: { [STORIES]: { '2026-09-16': 10 } }, [B]: { [WAVE]: { '2026-09-16': 12 } } });
+    expect((await peek()).get(BRIGADE)).toEqual({ state: 'needs_fix' });
+
+    // Подачу открыли — open.
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    result = await peek();
+    expect(result.get(BRIGADE)).toMatchObject({ state: 'open', shares: { state: 'open' } });
+    expect(await stored()).toEqual(before);
+    expect(audit.calls).toEqual([]);
+    expect(await peekBrigadeSharesMany([], '2026-09')).toEqual(new Map());
+  });
+
+  it('needs_fix через пакетный путь: те же доли, та же запись и тот же аудит, что одиночный getBrigadeShares', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    const row = async () => (await q<Record<string, unknown>>(
+      `SELECT to_jsonb(r) - 'computed_at' AS row FROM brigade_salary_results r WHERE department_id = $1`, [BRIGADE],
+    ))[0]?.row;
+    const restore = async (saved: unknown) => {
+      await q('DELETE FROM brigade_salary_results');
+      if (saved) {
+        await q(`INSERT INTO brigade_salary_results
+          SELECT * FROM jsonb_populate_record(NULL::brigade_salary_results, $1::jsonb || jsonb_build_object('computed_at', now()))`,
+        [JSON.stringify(saved)]);
+      }
+    };
+
+    // Первая фиксация: пакетный путь пишет то же, что одиночный.
+    const batchFirst = (await loadFixedBrigadeShares(req, '2026-09', [BRIGADE])).shares.get(BRIGADE);
+    const batchRow = await row();
+    expect(batchFirst?.state).toBe('fixed');
+    await restore(null);
+    const singleFirst = await getBrigadeShares(req, BRIGADE, '2026-09');
+    expect(batchFirst).toEqual(singleFirst);
+    expect(await row()).toEqual(batchRow);
+    expect(audit.calls).toEqual([]);
+
+    // Новый КТУ — пересчёт с аудитом: пакетный путь и одиночный дают те же доли, запись и аудит.
+    const fixedRow = await row();
+    await setBrigadeKtu(BRIGADE, '2026-09-01', B, 15, PROFILE);
+    const batchStep = await loadPreliminaryBrigadeShares(req, '2026-09', '2026-09-30', [BRIGADE], []);
+    const batchRecalc = { shares: batchStep.shares.get(BRIGADE), row: await row(), audit: audit.calls };
+    expect(batchRecalc.shares?.state).toBe('fixed');
+    expect(batchStep.preliminary.size).toBe(0);
+    expect(batchRecalc.audit.map(call => call.action)).toEqual(['BRIGADE_SALARY_RECALCULATED']);
+
+    await restore(fixedRow);
+    audit.calls = [];
+    const singleRecalc = { shares: await getBrigadeShares(req, BRIGADE, '2026-09'), row: await row(), audit: audit.calls };
+    expect(batchRecalc).toEqual(singleRecalc);
+
+    // Повтор — fixed из пакета, без записи и аудита.
+    audit.calls = [];
+    const again = await loadFixedBrigadeShares(req, '2026-09', [BRIGADE]);
+    expect(again.shares.get(BRIGADE)).toEqual(singleRecalc.shares);
+    expect(await row()).toEqual(singleRecalc.row);
+    expect(audit.calls).toEqual([]);
+  });
+
+  it('открытая бригада: предварительные доли по вводу из пакета = прежний путь (ввод читается сам)', async () => {
+    const { h2 } = await closeSeptemberInHalves();
+    await enterBoth();
+    await setBrigadeKtu(BRIGADE, '2026-09-01', B, 15, PROFILE);
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+
+    const step = await loadPreliminaryBrigadeShares(req, '2026-09', '2026-09-30', [BRIGADE], []);
+    const context = await loadBrigadeContext(BRIGADE, '2026-09-01', '2026-09-30');
+    const old = await resolveOpenBrigadeShares(context, '2026-09', '2026-09-30');
+
+    expect([...step.preliminary]).toEqual([BRIGADE]);
+    expect(step.shares.get(BRIGADE)).toEqual(old);
+    expect(step.contexts).toEqual([context]);
+    expect(await q('SELECT 1 FROM brigade_salary_results')).toHaveLength(0);
   });
 
   it('половина не закрыта и результата не было → «Предварительно» по живому табелю и живой разбивке, ничего не сохраняется', async () => {

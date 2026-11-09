@@ -71,6 +71,44 @@ const listDates = (start: string, end: string): string[] => {
   return Array.from({ length: last - first + 1 }, (_, index) => `${year}-${pad2(mon)}-${pad2(first + index)}`);
 };
 
+interface IBrigadeApprovalDbRow {
+  department_id: string;
+  id: string | number;
+  start_date: string;
+  end_date: string;
+  status: string;
+  unlocked: boolean;
+  version_id: string | number | null;
+}
+
+/**
+ * Подачи бригад (не персональные), задевающие месяц, с последней редакцией каждой; по бригаде — по дате и id.
+ * department_id — ровно та строка, что передана в $1 (не текст uuid из БД): по ней ищет вызывающий.
+ */
+const BRIGADE_APPROVALS_SQL = `SELECT r.key AS department_id, a.id, a.start_date::text AS start_date,
+            a.end_date::text AS end_date, a.status, (a.unlocked_at IS NOT NULL) AS unlocked, v.id AS version_id
+       FROM unnest($1::text[]) AS r(key)
+       JOIN timesheet_approvals a ON a.department_id = r.key::uuid
+       LEFT JOIN LATERAL (
+         SELECT tv.id FROM timesheet_versions tv
+          WHERE tv.approval_id = a.id
+          ORDER BY tv.revision DESC
+          LIMIT 1
+       ) v ON true
+      WHERE a.manager_employee_id IS NULL
+        AND a.start_date <= $3::date
+        AND a.end_date >= $2::date
+      ORDER BY r.key, a.start_date, a.id`;
+
+const toApprovalRow = (row: IBrigadeApprovalDbRow): IBrigadeApprovalRow => ({
+  id: Number(row.id),
+  start_date: row.start_date,
+  end_date: row.end_date,
+  status: row.status,
+  unlocked: row.unlocked === true,
+  version_id: row.version_id == null ? null : Number(row.version_id),
+});
+
 /** Подачи бригады (не персональные), задевающие месяц, с последней редакцией каждой. */
 export async function loadBrigadeMonthApprovals(
   departmentId: string,
@@ -78,39 +116,27 @@ export async function loadBrigadeMonthApprovals(
   exec?: DbExecutor,
 ): Promise<IBrigadeApprovalRow[]> {
   const { start, end } = monthBounds(month);
-  const found = await rows<{
-    id: string | number;
-    start_date: string;
-    end_date: string;
-    status: string;
-    unlocked: boolean;
-    version_id: string | number | null;
-  }>(
-    exec,
-    `SELECT a.id, a.start_date::text AS start_date, a.end_date::text AS end_date, a.status,
-            (a.unlocked_at IS NOT NULL) AS unlocked, v.id AS version_id
-       FROM timesheet_approvals a
-       LEFT JOIN LATERAL (
-         SELECT tv.id FROM timesheet_versions tv
-          WHERE tv.approval_id = a.id
-          ORDER BY tv.revision DESC
-          LIMIT 1
-       ) v ON true
-      WHERE a.department_id = $1
-        AND a.manager_employee_id IS NULL
-        AND a.start_date <= $3::date
-        AND a.end_date >= $2::date
-      ORDER BY a.start_date, a.id`,
-    [departmentId, start, end],
-  );
-  return found.map(row => ({
-    id: Number(row.id),
-    start_date: row.start_date,
-    end_date: row.end_date,
-    status: row.status,
-    unlocked: row.unlocked === true,
-    version_id: row.version_id == null ? null : Number(row.version_id),
-  }));
+  const found = await rows<IBrigadeApprovalDbRow>(exec, BRIGADE_APPROVALS_SQL, [[departmentId], start, end]);
+  return found.map(toApprovalRow);
+}
+
+/**
+ * То же для многих бригад одним запросом («Свод», «Расчёты»): запись на каждую запрошенную бригаду, у бригады без
+ * подач — пустой список; порядок подач тот же, что у loadBrigadeMonthApprovals.
+ */
+export async function loadBrigadeMonthApprovalsMany(
+  departmentIds: readonly string[],
+  month: string,
+  exec?: DbExecutor,
+): Promise<Map<string, IBrigadeApprovalRow[]>> {
+  const ids = [...new Set(departmentIds)];
+  const result = new Map<string, IBrigadeApprovalRow[]>(ids.map(id => [id, []]));
+  if (ids.length === 0) return result;
+  const { start, end } = monthBounds(month);
+  for (const row of await rows<IBrigadeApprovalDbRow>(exec, BRIGADE_APPROVALS_SQL, [ids, start, end])) {
+    result.get(row.department_id)?.push(toApprovalRow(row));
+  }
+  return result;
 }
 
 /**
