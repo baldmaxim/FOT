@@ -9,11 +9,15 @@
  * filterPresenceExport (пользовательские фильтры) → сборка книги.
  *
  * Ограничение: отдел берётся ТЕКУЩИЙ (Sigur / org_departments), а не на дату
- * прохода — истории членства в skud_events нет.
+ * прохода — истории членства в skud_events нет. Компанию на дату считает
+ * статистика за месяц (skud-presence-company-on-date.service).
+ *
+ * Тип точки (внутренняя/внешняя) — на ДЕНЬ прохода (история зон, миграция 305):
+ * смена типа сегодня не переписывает прошлые месяцы выгрузки.
  */
 import { createHash } from 'node:crypto';
 import { query } from '../config/postgres.js';
-import { getCompanyResolveIndex, getInternalAccessPoints } from './skud-shared.service.js';
+import { getCompanyResolveIndex, getInternalPointsByWorkDate } from './skud-shared.service.js';
 import { listTravelObjects } from './skud-travel.service.js';
 import {
   resolveSigurEmployeesByIds,
@@ -63,6 +67,15 @@ export interface IPresenceExportVisibility {
 export interface IPresenceExportEmployee {
   entry_time: string;
   full_name: string;
+  /**
+   * Идентичность человека: `emp:<employee_id>` для прохода с карточкой,
+   * `ext:<нормализованное ФИО>` без неё. Внешнего с сотрудником по ФИО не
+   * сопоставляем (слило бы тёзок); двое внешних тёзок — один ключ: другого
+   * идентификатора у прохода нет. Так же считает живой экран.
+   */
+  person_key: string;
+  /** null — проход без карточки сотрудника (unsynced). */
+  employee_id: number | null;
 }
 
 export interface IPresenceExportGroup {
@@ -115,6 +128,7 @@ interface IDeptRow {
 
 /** Накопитель по одному человеку в один день на одном объекте. */
 interface IPersonAcc {
+  personKey: string;
   employeeId: number | null;
   /** Каноническое написание ФИО из проходов (для unsynced). */
   rawName: string;
@@ -263,7 +277,7 @@ async function computePresenceExport(
         ORDER BY event_date`,
       [dateFrom, dateTo],
     ),
-    getInternalAccessPoints(),
+    getInternalPointsByWorkDate(),
     listTravelObjects(),
     getCompanyResolveIndex(),
     // Отдельный запрос (не getAllDepartmentsTree): та не грузит is_active,
@@ -290,7 +304,7 @@ async function computePresenceExport(
 
   for (const row of rows || []) {
     const accessPoint = (row.access_point || '').trim();
-    if (!accessPoint || internalPoints.has(accessPoint)) continue;
+    if (!accessPoint || internalPoints.has(accessPoint, row.event_date)) continue;
 
     const rawEmployeeId = row.employee_id == null ? null : Number(row.employee_id);
     const employeeId = rawEmployeeId != null && Number.isFinite(rawEmployeeId) ? rawEmployeeId : null;
@@ -316,7 +330,7 @@ async function computePresenceExport(
 
     const existing = persons.get(personKey);
     if (!existing) {
-      persons.set(personKey, { employeeId, rawName, entryTime: row.first_entry });
+      persons.set(personKey, { personKey, employeeId, rawName, entryTime: row.first_entry });
       totalRows += 1;
       if (totalRows > MAX_DATASET_ROWS) {
         throw new PresenceExportError(
@@ -462,6 +476,8 @@ async function computePresenceExport(
         bucket.employees.push({
           entry_time: person.entryTime,
           full_name: employee?.full_name?.trim() || person.rawName || '—',
+          person_key: person.personKey,
+          employee_id: person.employeeId,
         });
         objectTotal += 1;
       }

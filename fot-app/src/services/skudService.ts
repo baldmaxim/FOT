@@ -7,6 +7,7 @@ import type {
   IPresenceByObjectResponse,
   IPresenceExportFilterOptions,
   IPresenceExportRequest,
+  IPresenceMonthStatsRequest,
   IAccessPointSetting,
   IDashboardStats,
   AccessPointOption,
@@ -403,19 +404,25 @@ export const skudService = {
     return response.data;
   },
 
-  /** POST, а не GET: массивы ключей отделов не влезают в query-строку. */
-  async exportPresenceByObject(body: IPresenceExportRequest): Promise<Blob> {
-    const response = await fetch(buildApiUrl('/skud/presence-by-object/export'), {
+  /**
+   * «Списки по дням». POST, а не GET: массивы ключей отделов не влезают в query-строку.
+   * Через apiClient.download: refresh сессии на 401, таймаут, ApiError и имя файла.
+   */
+  async exportPresenceByObject(body: IPresenceExportRequest, fallbackName: string): Promise<DownloadFileResult> {
+    return apiClient.download('/skud/presence-by-object/export', fallbackName, {
       method: 'POST',
-      credentials: 'include',
-      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
+      timeoutMs: 120_000,
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(payload?.error || 'Не удалось сформировать файл');
-    }
-    return response.blob();
+  },
+
+  /** «Статистика за месяц»: объект × день × число людей. */
+  async exportPresenceMonthStats(body: IPresenceMonthStatsRequest, fallbackName: string): Promise<DownloadFileResult> {
+    return apiClient.download('/skud/presence-by-object/month-stats-export', fallbackName, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      timeoutMs: 120_000,
+    });
   },
 
   async syncEmployee(

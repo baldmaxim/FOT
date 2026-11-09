@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Сбор датасета выгрузки «Сотрудники на объектах»: схлопывание проходов,
- * ключи отделов, построчная авторизация (union из четырёх режимов) и кэш.
+ * ключи отделов и людей, тип точки на дату, построчная авторизация
+ * (union из четырёх режимов) и кэш.
  */
 
 const { pgQuery } = vi.hoisted(() => ({ pgQuery: vi.fn() }));
@@ -43,7 +44,10 @@ const state = vi.hoisted(() => ({
   events: [] as IEventRow[],
   employees: [] as IEmployeeRow[],
   depts: [] as IDeptRow[],
+  /** Внутренние точки на любую дату. */
   internalPoints: new Set<string>(),
+  /** Внутренние точки только на конкретную дату (история типа зоны). */
+  internalPointsByDate: new Map<string, Set<string>>(),
   travelObjects: [] as Array<{ id: string; name: string; access_points: string[]; has_map: boolean }>,
   companyByDeptId: new Map<string, string>(),
   companyMeta: new Map<string, { id: string; name: string; sigur_department_id: number | null }>(),
@@ -52,7 +56,11 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('./skud-shared.service.js', () => ({
-  getInternalAccessPoints: vi.fn(async () => state.internalPoints),
+  getInternalPointsByWorkDate: vi.fn(async () => ({
+    has: (point: string | null | undefined, workDate: string) => !!point && (
+      state.internalPoints.has(point) || !!state.internalPointsByDate.get(workDate)?.has(point)
+    ),
+  })),
   getCompanyResolveIndex: vi.fn(async () => ({
     rootId: 'root',
     companyByDeptId: state.companyByDeptId,
@@ -102,6 +110,7 @@ beforeEach(() => {
     { id: 'company-2', parent_id: 'root', name: 'ЛИНИЯ', sigur_department_id: 20, is_active: true },
   ];
   state.internalPoints = new Set();
+  state.internalPointsByDate = new Map();
   state.travelObjects = [
     { id: 'obj-1', name: 'ЖК Alia', access_points: ['ALIA', 'ALIA кпп-2'], has_map: false },
     { id: 'obj-2', name: 'ЖК Инжой', access_points: ['INJOY'], has_map: false },
@@ -207,7 +216,7 @@ describe('collectPresenceExport', () => {
     expect(days[0].objects).toHaveLength(1);
     expect(days[0].objects[0].total).toBe(1);
     expect(days[0].objects[0].groups[0].employees).toEqual([
-      { entry_time: '07:19:00', full_name: 'Иванов Иван' },
+      { entry_time: '07:19:00', full_name: 'Иванов Иван', person_key: 'emp:1', employee_id: 1 },
     ]);
   });
 
@@ -225,6 +234,56 @@ describe('collectPresenceExport', () => {
     expect(employees).toHaveLength(1);
     expect(employees[0].entry_time).toBe('08:00:00');
     expect(employees[0].full_name).toBe('петр сидоров');
+    expect(employees[0].person_key).toBe('ext:петр сидоров');
+    expect(employees[0].employee_id).toBeNull();
+  });
+
+  it('сотрудник и внешний с тем же ФИО — разные люди, ключи не сливаются', async () => {
+    state.employees = [
+      { id: 1, full_name: 'Иванов Иван', org_department_id: 'dept-a', sigur_employee_id: null },
+    ];
+    state.events = [
+      { event_date: '2026-08-04', employee_id: 1, physical_person: 'Иванов Иван', access_point: 'ALIA', first_entry: '07:00:00' },
+      { event_date: '2026-08-04', employee_id: null, physical_person: 'Иванов Иван', access_point: 'ALIA', first_entry: '07:05:00' },
+    ];
+
+    const days = await collectPresenceExport({
+      dateFrom: '2026-08-04', dateTo: '2026-08-04', visibility: unrestricted,
+    });
+
+    expect(days[0].objects[0].total).toBe(2);
+    const keys = days[0].objects[0].groups.flatMap(g => g.employees.map(e => e.person_key));
+    expect(new Set(keys)).toEqual(new Set(['emp:1', 'ext:иванов иван']));
+  });
+
+  it('один человек на двух объектах за день — строка в каждом с одним ключом', async () => {
+    state.employees = [
+      { id: 1, full_name: 'Иванов Иван', org_department_id: 'dept-a', sigur_employee_id: null },
+    ];
+    state.events = [
+      { event_date: '2026-08-04', employee_id: 1, physical_person: null, access_point: 'ALIA', first_entry: '07:00:00' },
+      { event_date: '2026-08-04', employee_id: 1, physical_person: null, access_point: 'INJOY', first_entry: '13:00:00' },
+    ];
+
+    const days = await collectPresenceExport({
+      dateFrom: '2026-08-04', dateTo: '2026-08-04', visibility: unrestricted,
+    });
+
+    expect(days[0].objects.map(o => o.total)).toEqual([1, 1]);
+    expect(days[0].objects.map(o => o.groups[0].employees[0].person_key)).toEqual(['emp:1', 'emp:1']);
+  });
+
+  it('тип точки — на день прохода: внутренняя 03-го не считается, внешняя 04-го считается', async () => {
+    state.internalPointsByDate = new Map([['2026-08-03', new Set(['ALIA кпп-2'])]]);
+    state.events = [
+      { event_date: '2026-08-03', employee_id: null, physical_person: 'Гость Один', access_point: 'ALIA кпп-2', first_entry: '08:00:00' },
+      { event_date: '2026-08-04', employee_id: null, physical_person: 'Гость Один', access_point: 'ALIA кпп-2', first_entry: '08:00:00' },
+    ];
+
+    const days = await collectPresenceExport({
+      dateFrom: '2026-08-03', dateTo: '2026-08-04', visibility: unrestricted,
+    });
+    expect(days.map(d => d.date)).toEqual(['2026-08-04']);
   });
 
   it('исключает внутренние точки доступа', async () => {

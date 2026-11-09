@@ -1,9 +1,10 @@
 /**
  * СКУД: выгрузка «Сотрудники на объектах» за период.
- *  - GET  /presence-by-object/export-filters — списки объектов/отделов для модалки;
- *  - POST /presence-by-object/export         — сам xlsx (POST из-за массивов ключей).
+ *  - GET  /presence-by-object/export-filters      — списки объектов/отделов для модалки;
+ *  - POST /presence-by-object/export              — «Списки по дням» (POST из-за массивов ключей);
+ *  - POST /presence-by-object/month-stats-export  — «Статистика за месяц».
  *
- * Оба эндпоинта read-only: POST исключён из write-through invalidation в роутере.
+ * Все эндпоинты read-only: POST исключены из write-through invalidation в роутере.
  */
 import { Response } from 'express';
 import { z } from 'zod';
@@ -22,6 +23,14 @@ import {
 } from '../services/skud-presence-export.service.js';
 import { buildPresenceExportWorkbook } from '../services/skud-presence-export-excel.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
+import {
+  computePresenceMonthStats,
+  formatMonthLabel,
+  PresenceMonthStatsError,
+  resolveMonthPeriod,
+} from '../services/skud-presence-month-stats.service.js';
+import { buildPresenceMonthStatsWorkbook } from '../services/skud-presence-month-stats-excel.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 const ERROR_MESSAGES: Record<PresenceExportErrorCode, string> = {
   INVALID_PERIOD: 'Некорректный период',
@@ -37,6 +46,27 @@ const exportBodySchema = z.object({
   object_keys: z.array(z.string()).max(1000).optional(),
   group_keys: z.array(z.string()).max(5000).optional(),
 });
+
+const monthStatsBodySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+  object_keys: z.array(z.string()).max(1000).optional(),
+});
+
+const MONTH_STATS_ERRORS: Record<PresenceMonthStatsError['code'], { status: number; message: string }> = {
+  INVALID_MONTH: { status: 400, message: 'Некорректный месяц' },
+  ARCHIVE_UNKNOWN: { status: 503, message: 'Не удалось определить папку «Уволенные» — попробуйте позже' },
+};
+
+const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+function sendWorkbookBuffer(res: Response, buffer: Buffer, fileName: string): void {
+  res.setHeader('Content-Type', XLSX_CONTENT_TYPE);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+  );
+  res.send(buffer);
+}
 
 /** Скоуп страницы — union из четырёх режимов, а не пересечение (см. getPresenceByObject). */
 async function resolveVisibility(req: AuthenticatedRequest): Promise<IPresenceExportVisibility> {
@@ -132,19 +162,67 @@ export const skudPresenceExportController = {
       const fileName = sanitizeExportFileName(
         `Сотрудники_на_объектах_${formatDateShort(dateFrom)}-${formatDateShort(dateTo)}.xlsx`,
       );
-
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
-      );
-      res.send(buffer);
+      sendWorkbookBuffer(res, buffer, fileName);
     } catch (error) {
       if (error instanceof PresenceExportError) {
         sendExportError(res, error);
         return;
       }
       console.error('Export presence by object error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка формирования выгрузки' });
+    }
+  },
+
+  /**
+   * POST /api/skud/presence-by-object/month-stats-export
+   * Тело: { month: 'YYYY-MM', object_keys? }. Пустой массив объектов = все.
+   * Тот же авторизованный датасет, что у «Списков по дням», — числа объектов совпадают.
+   */
+  async exportPresenceMonthStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = monthStatsBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректные параметры', code: 'INVALID_PARAMS' });
+        return;
+      }
+      const period = resolveMonthPeriod(parsed.data.month, moscowTodayIso());
+      const objectKeys = new Set(parsed.data.object_keys ?? []);
+
+      const visibility = await resolveVisibility(req);
+      const dataset = await collectPresenceExport({
+        dateFrom: period.dateFrom,
+        dateTo: period.dateTo,
+        visibility,
+      });
+      const filtered = filterPresenceExport(dataset, { objectKeys });
+      if (filtered.length === 0) {
+        sendExportError(res, new PresenceExportError('NO_DATA', ERROR_MESSAGES.NO_DATA));
+        return;
+      }
+
+      const stats = await computePresenceMonthStats(filtered, period);
+      const monthLabel = formatMonthLabel(period.month);
+      const workbook = buildPresenceMonthStatsWorkbook(stats, {
+        monthLabel,
+        objectsLabel: buildSelectionLabel(stats.objects.map(o => o.name), objectKeys.size),
+      });
+
+      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+      const fileName = sanitizeExportFileName(
+        `Сотрудники_на_объектах_${monthLabel.toLowerCase().replace(' ', '_')}.xlsx`,
+      );
+      sendWorkbookBuffer(res, buffer, fileName);
+    } catch (error) {
+      if (error instanceof PresenceMonthStatsError) {
+        const { status, message } = MONTH_STATS_ERRORS[error.code];
+        res.status(status).json({ success: false, error: message, code: error.code });
+        return;
+      }
+      if (error instanceof PresenceExportError) {
+        sendExportError(res, error);
+        return;
+      }
+      console.error('Export presence month stats error:', error);
       res.status(500).json({ success: false, error: 'Ошибка формирования выгрузки' });
     }
   },

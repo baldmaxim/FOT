@@ -68,6 +68,64 @@
   gap: 8px;
 }
 
+/* Переключатель «Списки по дням | Статистика за месяц» */
+.modeSwitch {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.modeButton {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.2;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+}
+
+.modeButton:hover {
+  color: var(--text-primary);
+}
+
+.modeButtonActive,
+.modeButtonActive:hover {
+  border-color: var(--accent);
+  background: var(--bg-primary);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.monthSelect {
+  width: min(280px, 100%);
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  /* ≥16px — иначе iOS/Android Chrome зумят при фокусе */
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modeButton {
+    transition: none;
+  }
+}
+
 .label {
   font-size: 0.78rem;
   text-transform: uppercase;

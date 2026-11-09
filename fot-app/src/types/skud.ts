@@ -99,6 +99,12 @@ export interface IPresenceExportRequest {
   group_keys?: string[];
 }
 
+export interface IPresenceMonthStatsRequest {
+  /** YYYY-MM */
+  month: string;
+  object_keys?: string[];
+}
+
 export interface SkudDailySummary {
   id: number;
   employee_id: number;

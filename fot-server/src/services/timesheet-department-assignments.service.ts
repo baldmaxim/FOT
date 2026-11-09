@@ -644,12 +644,18 @@ export interface IAssignmentPeriodRow {
   effective_to: string | null;
 }
 
+/** Стабильный порядок назначений сотрудника: effective_from, затем id. */
+export const compareAssignmentRows = (a: IAssignmentPeriodRow, b: IAssignmentPeriodRow): number => {
+  if (a.effective_from !== b.effective_from) return a.effective_from < b.effective_from ? -1 : 1;
+  return String(a.id).localeCompare(String(b.id), 'en', { numeric: true });
+};
+
 /**
  * Копия отсортированных назначений сотрудника, где архивный отдел заменён отделом
  * ближайшего предыдущего неархивного назначения (нет его — следующего). Входные
  * строки не меняются.
  */
-const normalizeArchiveAssignments = (
+export const normalizeArchiveAssignments = (
   sorted: IAssignmentPeriodRow[],
   archiveDeptId: string | null,
 ): IAssignmentPeriodRow[] => {
@@ -693,14 +699,9 @@ export function buildTransferSegments(
     else byEmployee.set(empId, [row]);
   }
 
-  const compareRows = (a: IAssignmentPeriodRow, b: IAssignmentPeriodRow): number => {
-    if (a.effective_from !== b.effective_from) return a.effective_from < b.effective_from ? -1 : 1;
-    return String(a.id).localeCompare(String(b.id), 'en', { numeric: true });
-  };
-
   const result = new Map<number, ITransferSegment[]>();
   for (const empId of [...byEmployee.keys()].sort((a, b) => a - b)) {
-    const list = normalizeArchiveAssignments([...byEmployee.get(empId)!].sort(compareRows), archiveDeptId);
+    const list = normalizeArchiveAssignments([...byEmployee.get(empId)!].sort(compareAssignmentRows), archiveDeptId);
     // Одна граница на дату: при «грязных» дублях берём первое назначение в стабильном порядке.
     const boundaries: Array<{ date: string; prevDeptId: string | null; nextDeptId: string | null }> = [];
     for (const cur of list) {

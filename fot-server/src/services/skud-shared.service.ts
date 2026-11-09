@@ -315,7 +315,7 @@ export async function getInternalAccessPoints(): Promise<Set<string>> {
   return points;
 }
 
-// ─── История типа зоны — только для расчёта часов в табеле ───
+// ─── История типа зоны — расчёт часов и выгрузки присутствия за период ───
 
 let internalPointsHistoryCache: { data: IInternalPoints; expiresAt: number } | null = null;
 
@@ -323,9 +323,10 @@ let internalPointsHistoryCache: { data: IInternalPoints; expiresAt: number } | n
  * Внутренние точки с историей типа зоны (skud_access_point_zone_periods, миграция 305):
  * тип спрашивают по РАБОЧЕМУ ДНЮ — `has(точка, день)`. TTL 10 мин.
  *
- * Это источник ТОЛЬКО для расчёта часов (timesheet-object.service, skud-travel.service):
- * точка могла быть внутренней в сентябре и внешней в октябре, и часы закрытых месяцев не
- * должны меняться от сегодняшней настройки. Экраны портала (присутствие, списки проходов,
+ * Источник для расчёта часов (timesheet-object.service, skud-travel.service) и выгрузок
+ * «Сотрудники на объектах» за период (skud-presence-export.service): точка могла быть
+ * внутренней в сентябре и внешней в октябре, и прошлые месяцы не должны меняться от
+ * сегодняшней настройки. Живые экраны портала (присутствие, списки проходов, прочие
  * выгрузки СКУД) по-прежнему берут тип «на сегодня» — getInternalAccessPoints() выше.
  */
 export async function getInternalPointsByWorkDate(): Promise<IInternalPoints> {

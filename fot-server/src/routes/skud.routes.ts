@@ -73,7 +73,10 @@ router.use(authenticate);
 
 // Read-only POST'ы (массивы в теле не влезают в query) — мутациями не считаются,
 // иначе каждая выгрузка сбрасывала бы кэши живого экрана присутствия.
-const READ_ONLY_POST_PATHS = new Set(['/presence-by-object/export']);
+const READ_ONLY_POST_PATHS = new Set([
+  '/presence-by-object/export',
+  '/presence-by-object/month-stats-export',
+]);
 
 // Write-through invalidation: после мутаций (импорт, sync-employee, rebuild сегментов,
 // CRUD объектов/маршрутов) сбрасываем HTTP-кэши per-user и in-memory кэши сервисов,
@@ -419,6 +422,14 @@ router.post(
   requirePageAccess('/skud-presence', 'view'),
   noStore,
   skudController.exportPresenceByObject
+);
+
+// POST /api/skud/presence-by-object/month-stats-export - статистика за месяц, xlsx (read-only)
+router.post(
+  '/presence-by-object/month-stats-export',
+  requirePageAccess('/skud-presence', 'view'),
+  noStore,
+  skudController.exportPresenceMonthStats
 );
 
 // POST /api/skud/import - импорт (admin+, требуется 2FA)

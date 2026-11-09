@@ -7,11 +7,19 @@ import { skudService } from '../../../services/skudService';
 import { triggerBlobDownload } from '../../../utils/download';
 import { presetRange, todayIso, type PresetKey } from '../../../components/feedback/deptStats';
 import { EntityFilter, type IEntityFilterOption } from './EntityFilter';
+import { buildMonthOptions, monthFileSuffix, monthRange, shiftMonth } from './presenceExportMonths';
 import styles from './PresenceExportModal.module.css';
 
 interface IPresenceExportModalProps {
   onClose: () => void;
 }
+
+type ExportMode = 'daily' | 'month';
+
+const MODES: Array<{ key: ExportMode; label: string }> = [
+  { key: 'daily', label: 'Списки по дням' },
+  { key: 'month', label: 'Статистика за месяц' },
+];
 
 const PRESETS: Array<{ key: PresetKey; label: string }> = [
   { key: 'yesterday', label: 'Вчера' },
@@ -23,16 +31,27 @@ const PRESETS: Array<{ key: PresetKey; label: string }> = [
 
 const formatDateShort = (iso: string): string => iso.split('-').reverse().join('.');
 
+/** Оставляет в выборе только ключи, которые есть в списке; без изменений — тот же Set. */
+const pruneSelection = (prev: Set<string>, available: Set<string>): Set<string> => {
+  const next = new Set([...prev].filter(key => available.has(key)));
+  return next.size === prev.size ? prev : next;
+};
+
 export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) => {
   const overlayHandlers = useOverlayDismiss(onClose);
   const toast = useToast();
   const today = useMemo(() => todayIso(), []);
   const initial = useMemo(() => presetRange('month', todayIso()), []);
+  const monthOptions = useMemo(() => buildMonthOptions(today), [today]);
 
+  const [mode, setMode] = useState<ExportMode>('daily');
+  // У каждого режима свой выбор: переключение туда и обратно ничего не сбрасывает.
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
-  const [selectedObjects, setSelectedObjects] = useState<Set<string>>(new Set());
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
+  const [dailyObjects, setDailyObjects] = useState<Set<string>>(new Set());
+  const [dailyGroups, setDailyGroups] = useState<Set<string>>(new Set());
+  const [month, setMonth] = useState(() => shiftMonth(today.slice(0, 7), -1));
+  const [monthObjects, setMonthObjects] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
@@ -43,11 +62,16 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const periodValid = !!from && !!to && from <= to;
+  const isMonth = mode === 'month';
+  const range = useMemo(
+    () => (isMonth ? monthRange(month, today) : { from, to }),
+    [isMonth, month, today, from, to],
+  );
+  const periodValid = !!range.from && !!range.to && range.from <= range.to;
 
   const filtersQuery = useQuery({
-    queryKey: ['presence-export-filters', from, to],
-    queryFn: ({ signal }) => skudService.getPresenceExportFilters(from, to, signal),
+    queryKey: ['presence-export-filters', range.from, range.to],
+    queryFn: ({ signal }) => skudService.getPresenceExportFilters(range.from, range.to, signal),
     enabled: periodValid,
     staleTime: 60_000,
   });
@@ -65,27 +89,29 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
     [filtersQuery.data],
   );
 
-  // Ключи, исчезнувшие из нового списка (сменили период), из выбора вычищаем.
+  // Ключи, исчезнувшие из списка (сменили период), вычищаем — только у активного
+  // режима: списки пришли за ЕГО период, выбор другого режима они не касаются.
   useEffect(() => {
     if (!filtersQuery.data) return;
     const objectKeys = new Set(filtersQuery.data.objects.map(o => o.key));
+    if (isMonth) {
+      setMonthObjects(prev => pruneSelection(prev, objectKeys));
+      return;
+    }
     const groupKeys = new Set(filtersQuery.data.groups.map(g => g.key));
-    setSelectedObjects(prev => {
-      const next = new Set([...prev].filter(key => objectKeys.has(key)));
-      return next.size === prev.size ? prev : next;
-    });
-    setSelectedGroups(prev => {
-      const next = new Set([...prev].filter(key => groupKeys.has(key)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [filtersQuery.data]);
+    setDailyObjects(prev => pruneSelection(prev, objectKeys));
+    setDailyGroups(prev => pruneSelection(prev, groupKeys));
+  }, [filtersQuery.data, isMonth]);
 
   const activePreset = PRESETS.find(p => {
-    const range = presetRange(p.key, today);
-    return range.from === from && range.to === to;
+    const presetDates = presetRange(p.key, today);
+    return presetDates.from === from && presetDates.to === to;
   })?.key;
 
-  const toggle = (setter: typeof setSelectedObjects) => (id: string) => {
+  const selectedObjects = isMonth ? monthObjects : dailyObjects;
+  const setSelectedObjects = isMonth ? setMonthObjects : setDailyObjects;
+
+  const toggle = (setter: typeof setDailyObjects) => (id: string) => {
     setter(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -95,7 +121,7 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
   };
 
   const toggleGroupBlock = (ids: string[], checked: boolean) => {
-    setSelectedGroups(prev => {
+    setDailyGroups(prev => {
       const next = new Set(prev);
       for (const id of ids) {
         if (checked) next.add(id);
@@ -109,16 +135,21 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
     if (!periodValid || downloading) return;
     setDownloading(true);
     try {
-      const blob = await skudService.exportPresenceByObject({
-        date_from: from,
-        date_to: to,
-        object_keys: [...selectedObjects],
-        group_keys: [...selectedGroups],
-      });
-      triggerBlobDownload(
-        blob,
-        `Сотрудники_на_объектах_${formatDateShort(from)}-${formatDateShort(to)}.xlsx`,
-      );
+      const { blob, filename } = isMonth
+        ? await skudService.exportPresenceMonthStats(
+          { month, object_keys: [...monthObjects] },
+          `Сотрудники_на_объектах_${monthFileSuffix(month)}.xlsx`,
+        )
+        : await skudService.exportPresenceByObject(
+          {
+            date_from: from,
+            date_to: to,
+            object_keys: [...dailyObjects],
+            group_keys: [...dailyGroups],
+          },
+          `Сотрудники_на_объектах_${formatDateShort(from)}-${formatDateShort(to)}.xlsx`,
+        );
+      triggerBlobDownload(blob, filename);
       onClose();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Не удалось сформировать файл');
@@ -138,44 +169,74 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
         </div>
 
         <div className={styles.body}>
-          <div className={styles.section}>
-            <span className={styles.label}>Период</span>
-            <div className={styles.dates}>
-              <input
-                type="date"
-                className={styles.dateInput}
-                value={from}
-                max={to || undefined}
-                onChange={e => setFrom(e.target.value)}
-              />
-              <span className={styles.dash}>—</span>
-              <input
-                type="date"
-                className={styles.dateInput}
-                value={to}
-                min={from || undefined}
-                onChange={e => setTo(e.target.value)}
-              />
-            </div>
-            <div className={styles.presets}>
-              {PRESETS.map(preset => (
-                <button
-                  key={preset.key}
-                  type="button"
-                  className={`${styles.preset} ${activePreset === preset.key ? styles.presetActive : ''}`}
-                  aria-pressed={activePreset === preset.key}
-                  onClick={() => {
-                    const range = presetRange(preset.key, today);
-                    setFrom(range.from);
-                    setTo(range.to);
-                  }}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            {!periodValid && <div className={styles.error}>Начало периода позже конца</div>}
+          <div className={styles.modeSwitch} role="group" aria-label="Что выгрузить">
+            {MODES.map(item => (
+              <button
+                key={item.key}
+                type="button"
+                className={`${styles.modeButton} ${mode === item.key ? styles.modeButtonActive : ''}`}
+                aria-pressed={mode === item.key}
+                onClick={() => setMode(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
+
+          {isMonth ? (
+            <div className={styles.section}>
+              <label className={styles.label} htmlFor="presence-export-month">Месяц</label>
+              <select
+                id="presence-export-month"
+                className={styles.monthSelect}
+                value={month}
+                onChange={e => setMonth(e.target.value)}
+              >
+                {monthOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className={styles.section}>
+              <span className={styles.label}>Период</span>
+              <div className={styles.dates}>
+                <input
+                  type="date"
+                  className={styles.dateInput}
+                  value={from}
+                  max={to || undefined}
+                  onChange={e => setFrom(e.target.value)}
+                />
+                <span className={styles.dash}>—</span>
+                <input
+                  type="date"
+                  className={styles.dateInput}
+                  value={to}
+                  min={from || undefined}
+                  onChange={e => setTo(e.target.value)}
+                />
+              </div>
+              <div className={styles.presets}>
+                {PRESETS.map(preset => (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    className={`${styles.preset} ${activePreset === preset.key ? styles.presetActive : ''}`}
+                    aria-pressed={activePreset === preset.key}
+                    onClick={() => {
+                      const presetDates = presetRange(preset.key, today);
+                      setFrom(presetDates.from);
+                      setTo(presetDates.to);
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              {!periodValid && <div className={styles.error}>Начало периода позже конца</div>}
+            </div>
+          )}
 
           <div className={styles.section}>
             <span className={styles.label}>Фильтры</span>
@@ -197,17 +258,19 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
                 onToggle={toggle(setSelectedObjects)}
                 onClear={() => setSelectedObjects(new Set())}
               />
-              <EntityFilter
-                label="Фильтр по отделам"
-                searchPlaceholder="Поиск отдела"
-                emptyText="За период данных нет"
-                allEntities={groupOptions}
-                selected={selectedGroups}
-                onToggle={toggle(setSelectedGroups)}
-                onClear={() => setSelectedGroups(new Set())}
-                groupByGroup
-                onToggleGroup={toggleGroupBlock}
-              />
+              {!isMonth && (
+                <EntityFilter
+                  label="Фильтр по отделам"
+                  searchPlaceholder="Поиск отдела"
+                  emptyText="За период данных нет"
+                  allEntities={groupOptions}
+                  selected={dailyGroups}
+                  onToggle={toggle(setDailyGroups)}
+                  onClear={() => setDailyGroups(new Set())}
+                  groupByGroup
+                  onToggleGroup={toggleGroupBlock}
+                />
+              )}
             </div>
           </div>
         </div>

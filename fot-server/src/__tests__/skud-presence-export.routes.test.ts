@@ -56,7 +56,22 @@ vi.mock('../services/skud-presence-export.service.js', async () => {
   };
 });
 
+vi.mock('../services/skud-presence-month-stats.service.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/skud-presence-month-stats.service.js')>(
+    '../services/skud-presence-month-stats.service.js',
+  );
+  return {
+    ...actual,
+    computePresenceMonthStats: vi.fn(async () => ({
+      dates: ['2026-08-04'],
+      objects: [{ key: 'obj-1', name: 'ЖК Alia', counts: [1], companies: [{ key: 'c', name: 'СУ-10', counts: [1] }] }],
+      total: [1],
+    })),
+  };
+});
+
 const app = (await import('../app.js')).default;
+const { moscowTodayIso } = await import('../utils/date.utils.js');
 
 function makeToken(): string {
   return jwt.sign(
@@ -93,6 +108,26 @@ d('POST /api/skud/presence-by-object/export', () => {
       .post('/api/skud/presence-by-object/export')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ date_from: '2026-08-04', date_to: '2026-08-04' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml.sheet');
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+});
+
+d('POST /api/skud/presence-by-object/month-stats-export', () => {
+  beforeEach(() => invalidateSpy.mockClear());
+
+  it('401 без токена', async () => {
+    const res = await request(app).post('/api/skud/presence-by-object/month-stats-export');
+    expect(res.status).toBe(401);
+  });
+
+  it('отдаёт xlsx и НЕ сбрасывает кэш присутствия', async () => {
+    const res = await request(app)
+      .post('/api/skud/presence-by-object/month-stats-export')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ month: moscowTodayIso().slice(0, 7) });
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('spreadsheetml.sheet');

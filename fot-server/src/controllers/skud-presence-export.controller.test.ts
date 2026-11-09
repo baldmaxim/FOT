@@ -31,7 +31,23 @@ vi.mock('../services/skud-presence-export.service.js', async () => {
   return { ...actual, collectPresenceExport: collectMock };
 });
 
+const computeMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../services/skud-presence-month-stats.service.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/skud-presence-month-stats.service.js')>(
+    '../services/skud-presence-month-stats.service.js',
+  );
+  return { ...actual, computePresenceMonthStats: computeMock };
+});
+
+// «Сегодня» по МСК зафиксировано: граница 12 месяцев считается от него.
+vi.mock('../utils/date.utils.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/date.utils.js')>('../utils/date.utils.js');
+  return { ...actual, moscowTodayIso: () => '2026-11-09' };
+});
+
 const { skudPresenceExportController } = await import('./skud-presence-export.controller.js');
+const { PresenceMonthStatsError } = await import('../services/skud-presence-month-stats.service.js');
 const { PresenceExportError, MAX_EXPORT_ROWS } = await import('../services/skud-presence-export.service.js');
 const { resolveAccessibleObjectIdsForRequest } = await import('../services/employee-skud-object-access.service.js');
 const { hasObjectViewScope } = await import('../services/data-scope.service.js');
@@ -86,6 +102,17 @@ beforeEach(() => {
   collectMock.mockResolvedValue([day(1)]);
   vi.mocked(resolveAccessibleObjectIdsForRequest).mockClear();
   vi.mocked(hasObjectViewScope).mockClear();
+  computeMock.mockReset();
+  computeMock.mockResolvedValue({
+    dates: ['2026-09-01'],
+    objects: [{
+      key: 'obj-1',
+      name: 'ЖК Alia',
+      counts: [1],
+      companies: [{ key: 'local:c-su10', name: 'СУ-10', counts: [1] }],
+    }],
+    total: [1],
+  });
 });
 
 describe('getPresenceExportFilters', () => {
@@ -239,5 +266,68 @@ describe('exportPresenceByObject — ответы', () => {
     await skudPresenceExportController.exportPresenceByObject(req({}, { date_from: 5 }), res);
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+});
+
+describe('exportPresenceMonthStats', () => {
+  it('месяц → период 1-е…последнее число, тот же датасет и visibility; xlsx с именем месяца', async () => {
+    scope.objects = { is_unrestricted: false, object_ids: [] };
+    scope.employeeIds = new Set([7]);
+    const res = makeRes();
+    await skudPresenceExportController.exportPresenceMonthStats(req({}, { month: '2026-09' }), res);
+
+    expect(collectMock).toHaveBeenCalledWith({
+      dateFrom: '2026-09-01',
+      dateTo: '2026-09-30',
+      visibility: {
+        isUnrestricted: false,
+        assignedObjectIds: new Set(),
+        allowedEmployeeIds: new Set([7]),
+        hasObjectViewScope: false,
+      },
+    });
+    expect(computeMock).toHaveBeenCalledWith([day(1)], expect.objectContaining({ month: '2026-09' }));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['Content-Type']).toContain('spreadsheetml.sheet');
+    expect(decodeURIComponent(res.headers['Content-Disposition'])).toContain('Сотрудники_на_объектах_сентябрь_2026.xlsx');
+    expect(Buffer.isBuffer(res.sent)).toBe(true);
+  });
+
+  it('текущий месяц — по «сегодня» по МСК', async () => {
+    const res = makeRes();
+    await skudPresenceExportController.exportPresenceMonthStats(req({}, { month: '2026-11' }), res);
+    expect(collectMock).toHaveBeenCalledWith(expect.objectContaining({ dateFrom: '2026-11-01', dateTo: '2026-11-09' }));
+  });
+
+  it('фильтр объектов применяется до статистики; чужой объект — NO_DATA', async () => {
+    const res = makeRes();
+    await skudPresenceExportController.exportPresenceMonthStats(
+      req({}, { month: '2026-09', object_keys: ['obj-чужой'] }), res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NO_DATA' });
+    expect(computeMock).not.toHaveBeenCalled();
+  });
+
+  it('будущий, старше 12 месяцев и кривой месяц — 400', async () => {
+    for (const month of ['2026-12', '2025-11', '2026-13']) {
+      const res = makeRes();
+      await skudPresenceExportController.exportPresenceMonthStats(req({}, { month }), res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'INVALID_MONTH' });
+    }
+    const bad = makeRes();
+    await skudPresenceExportController.exportPresenceMonthStats(req({}, { month: '09.2026' }), bad);
+    expect(bad.statusCode).toBe(400);
+    expect(bad.body).toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(collectMock).not.toHaveBeenCalled();
+  });
+
+  it('архив «Уволенные» не определён — 503 с понятным текстом', async () => {
+    computeMock.mockRejectedValue(new PresenceMonthStatsError('ARCHIVE_UNKNOWN', 'x'));
+    const res = makeRes();
+    await skudPresenceExportController.exportPresenceMonthStats(req({}, { month: '2026-09' }), res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ success: false, code: 'ARCHIVE_UNKNOWN' });
   });
 });
