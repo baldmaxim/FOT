@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
-import { keepPreviousData, useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { Download, Settings } from 'lucide-react';
 
 import {
@@ -13,9 +13,11 @@ import {
   type PayrollPaidMonths,
   type PayrollSortDir,
   type PayrollSortKey,
+  type StaffCategory,
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollCalcExport } from '../../hooks/usePayrollCalcExport';
+import { usePayrollCalcPageColumns } from '../../hooks/usePayrollCalcPageColumns';
 import { usePayrollExpandedColumns } from '../../hooks/usePayrollExpandedColumns';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
@@ -39,19 +41,13 @@ import {
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
 import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
-import {
-  calcColumnsQueryKey,
-  calcPageRequests,
-  calcQueryEnabled,
-  mergeCalcColumns,
-  toCalcQueryState,
-  type CalcQueryState,
-} from '../../utils/payrollCalcPages';
 import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import type { ICalcMonthFilter } from '../../utils/payrollViews';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
+import { PayrollMonthFilterFields } from '../../components/salary/PayrollMonthFilterFields';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import styles from './CompensationTermsPage.module.css';
@@ -84,7 +80,12 @@ interface ICompensationTermsPageProps {
   paidMonths?: PayrollPaidMonths | null;
   /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
+  /** «Расчёты»: «Категория» и «Объект» месяца, как в «Своде». Не передан — полей нет («Условия оплаты»). */
+  monthFilter?: ICalcMonthFilter;
+  onMonthFilterChange?: (next: ICalcMonthFilter) => void;
 }
+
+const CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'ИТР', office: 'Офис', worker: 'Рабочие' };
 
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   date,
@@ -100,6 +101,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   columns = PAYROLL_TERMS_TABLE_COLUMNS,
   paidMonths,
   onOpenPaidItems,
+  monthFilter,
+  onMonthFilterChange,
 }) => {
   // «Выплачено» — за закрытые месяцы перед месяцем этой даты.
   const accrualMonths = useMemo(() => payrollAccrualMonths(date), [date]);
@@ -115,13 +118,20 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const columnFiltersKey = serializePayrollColumnFilters(columnFilters);
   const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
 
+  // «Категория» и «Объект» — только за месяцы списком (сервер иначе отвечает 400) и не для одного сотрудника.
+  const monthsList = Array.isArray(paidMonths) && paidMonths.length > 0 ? paidMonths : null;
+  const category = monthsList && employeeId === undefined ? monthFilter?.category ?? undefined : undefined;
+  const objectKey = monthsList && employeeId === undefined ? monthFilter?.object?.key : undefined;
+
   const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
     date,
     departmentId: departmentId || undefined,
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
     employeeId,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId]);
+    category,
+    objectKey,
+  }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId, category, objectKey]);
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir, paidMonths ?? null],
@@ -153,36 +163,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 
   const rows = useMemo(() => data?.pages.flatMap(page => page.rows) ?? [], [data]);
 
-  // «Расчёты»: столбцы ФОТ — по каждой порции её же id и месяцами, по одной (payrollCalcPages.ts). Следующая порция
-  // ждёт, пока предыдущая завершится; скрытый экран не считает.
+  // «Расчёты»: столбцы ФОТ — по порциям, по одной (usePayrollCalcPageColumns).
   const isCalcScreen = paidMonths !== undefined;
-  const queryClient = useQueryClient();
-  const calcRequests = useMemo(() => (isCalcScreen && data ? calcPageRequests(data.pages) : []), [isCalcScreen, data]);
-  const cachedCalcStates = calcRequests.map(request => toCalcQueryState(queryClient.getQueryState(calcColumnsQueryKey(request))));
-  const calcStates = useQueries({
-    queries: calcRequests.map((request, index) => ({
-      queryKey: calcColumnsQueryKey(request),
-      queryFn: ({ signal }: { signal: AbortSignal }) => payrollService.calcColumns(request.ids, request.months, signal),
-      enabled: calcQueryEnabled(index, cachedCalcStates, active),
-      staleTime: 30_000,
-      // Расчёт тяжёлый: повтор — по кнопке, не сам.
-      retry: false,
-    })),
-    combine: results => results.map((result): CalcQueryState => {
-      if (result.isSuccess) return { status: 'success', result: result.data };
-      return result.isError ? { status: 'error' } : { status: 'pending' };
-    }),
-  });
-  const calcMerge = useMemo(() => mergeCalcColumns(rows, calcRequests, calcStates), [rows, calcRequests, calcStates]);
+  const { calcMerge, retryCalc } = usePayrollCalcPageColumns({ pages: data?.pages, rows, enabled: isCalcScreen, active });
   const tableRows = isCalcScreen ? calcMerge.rows : rows;
-  /** «Повторить» — только порции, которые не посчитались. */
-  const retryCalc = () => {
-    calcRequests.forEach((request, index) => {
-      if (calcStates[index]?.status === 'error') {
-        void queryClient.refetchQueries({ queryKey: calcColumnsQueryKey(request), exact: true });
-      }
-    });
-  };
   const meta = data?.pages[0]?.meta;
   const total = meta?.total ?? 0;
   // Период сумм «Расчётов» — тех строк, что на экране.
@@ -326,7 +310,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     [viewParams, paidMonths],
   );
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}|${category ?? ''}|${objectKey ?? ''}`;
 
   // «Экспорт» «Расчётов» — вся выборка экрана. Пока новая выборка не загрузилась или поиск не применён, на экране
   // прежние строки: кнопка неактивна, чтобы файл не разошёлся с тем, что выбрано.
@@ -343,6 +327,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       hidden: hiddenColumns,
       expanded: expandedColumns,
       departmentName: departmentId ? findDepartmentName(departments, departmentId) ?? 'выбранный отдел' : null,
+      categoryLabel: category ? CATEGORY_LABELS[category] : null,
+      objectName: objectKey ? monthFilter?.object?.name ?? null : null,
       search: debouncedSearch,
       filters: columnFilters,
     });
@@ -365,6 +351,17 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onRetry={() => { void structureTree.refetch(); }}
           />
         </div>
+        {isCalcScreen && monthFilter && onMonthFilterChange && (
+          // Тот же ключ, что у отдела: уход с «Расчётов» перемонтирует поля и закрывает их списки в портале.
+          <PayrollMonthFilterFields
+            key={departmentSelectKey}
+            months={monthsList}
+            date={date}
+            departmentId={departmentId}
+            value={monthFilter}
+            onChange={onMonthFilterChange}
+          />
+        )}
         {activeFilterCount > 0 && (
           <button type="button" className={styles.resetFilters} onClick={resetColumnFilters}>
             Сбросить фильтры ({activeFilterCount})

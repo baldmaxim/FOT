@@ -56,6 +56,8 @@ vi.mock('../employee-archive-department.service.js', () => ({
 
 import type { AuthenticatedRequest } from '../../types/index.js';
 import { listPayrollSummaryMonths, loadPayrollSummary as loadSummary } from './payroll-summary.service.js';
+import { clearMonthProfileCache, loadMonthProfiles } from './payroll-month-profile.service.js';
+import { monthProfileKey } from './payroll-month-profile.rules.js';
 
 const REQ = { user: { id: 'user-1' } } as unknown as AuthenticatedRequest;
 const loadPayrollSummary = (input: Omit<Parameters<typeof loadSummary>[0], 'req'>) => loadSummary({ ...input, req: REQ });
@@ -336,6 +338,19 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
     expect(summary.months).toEqual(['2026-07', '2026-08', '2026-09']);
     const akimov = summary.rows.filter(row => row.employee_id === 1).map(row => [row.object_name, row.amounts.contract]);
     expect(akimov).toEqual([['ЖК Химки', '100000.00'], ['Офис', '100000.00']]);
+  });
+
+  it('профиль фильтров «Расчётов» = категория и объект строки «Свода» на тех же парах', async () => {
+    clearMonthProfileCache();
+    for (const month of ['2026-07', '2026-08', '2026-09']) {
+      const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: [`${month}-01`] });
+      expect(summary.rows.length).toBeGreaterThan(0);
+      const profiles = await loadMonthProfiles(summary.rows.map(row => ({ employeeId: row.employee_id, month })));
+      expect(summary.rows.map(row => {
+        const profile = profiles.get(monthProfileKey(row.employee_id, month));
+        return [row.employee_id, profile?.category, profile?.object.key, profile?.object.name];
+      })).toEqual(summary.rows.map(row => [row.employee_id, row.category, row.object_key, row.object_name]));
+    }
   });
 
   it('охват: текущий отдел или отдел подачи месяца; месяцы — в том же охвате', async () => {

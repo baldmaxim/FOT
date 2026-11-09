@@ -17,6 +17,7 @@ import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
 import { PayrollPaidItemsModal } from '../../components/salary/PayrollPaidItemsModal';
+import type { ICalcMonthFilter } from '../../utils/payrollViews';
 import { CompensationTermsPage } from './CompensationTermsPage';
 import styles from './PayrollDeductionsPage.module.css';
 
@@ -38,6 +39,9 @@ interface IPayrollDeductionsPageProps {
   /** Отдел или бригада — общие с «Условиями оплаты». */
   departmentId: string;
   onDepartmentChange: (id: string) => void;
+  /** «Категория» и «Объект» месяца — только у «Расчётов». */
+  monthFilter: ICalcMonthFilter;
+  onMonthFilterChange: (next: ICalcMonthFilter) => void;
   /** Карточку сотрудника сохранили в окне: его карточка «Подробно» (если открыта) устарела. */
   onSaved: (employeeId: number) => void;
 }
@@ -59,7 +63,7 @@ interface IPaidItemsWindow {
  * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
-  date, active, employeeId, search, onSearchChange, departmentId, onDepartmentChange, onSaved,
+  date, active, employeeId, search, onSearchChange, departmentId, onDepartmentChange, monthFilter, onMonthFilterChange, onSaved,
 }) => {
   const [employee, setEmployee] = useState<IPayrollTermsRow | null>(null);
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
@@ -151,6 +155,8 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
         onSearchChange={onSearchChange}
         departmentId={departmentId}
         onDepartmentChange={onDepartmentChange}
+        monthFilter={monthFilter}
+        onMonthFilterChange={onMonthFilterChange}
         onOpenEmployee={setEmployee}
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         columns={PAYROLL_CALC_TABLE_COLUMNS}

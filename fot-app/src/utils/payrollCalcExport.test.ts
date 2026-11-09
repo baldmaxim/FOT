@@ -302,6 +302,14 @@ describe('подзаголовок и имя файла', () => {
     expect(buildPayrollCalcExport(params()).subtitle).toContain('Отдел: все отделы');
   });
 
+  it('категория и объект месяца — после отдела; «Все» не пишутся', () => {
+    const { subtitle } = buildPayrollCalcExport(params({
+      departmentName: 'Бухгалтерия', categoryLabel: 'Рабочие', objectName: 'ЖК Химки', search: 'Абду',
+    }));
+    expect(subtitle).toMatch(/Отдел: Бухгалтерия\. Категория: Рабочие\. Объект: ЖК Химки\. Поиск: «Абду»\./);
+    expect(buildPayrollCalcExport(params({ categoryLabel: null, objectName: null })).subtitle).not.toMatch(/Категория|Объект/);
+  });
+
   it('лимиты сервера: подзаголовок ≤ 300 с датой в конце, имя файла ≤ 150 без служебных символов', () => {
     const months = ['01', '03', '05', '07', '09', '11'].flatMap(month => [`2025-${month}`, `2026-${month}`]);
     const { subtitle, file_name: fileName } = buildPayrollCalcExport(params({

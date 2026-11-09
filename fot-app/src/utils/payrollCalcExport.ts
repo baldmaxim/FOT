@@ -218,6 +218,9 @@ export interface IPayrollCalcExportParams {
   months: PayrollPaidMonths;
   /** Название выбранного отдела или бригады; null — «Все отделы». */
   departmentName: string | null;
+  /** «Категория» и «Объект» месяца (как в «Своде»); null или нет — «Все». */
+  categoryLabel?: string | null;
+  objectName?: string | null;
   /** Поиск по ФИО, как он применён к строкам. */
   search: string;
   filters: IPayrollColumnFilters;
@@ -231,6 +234,8 @@ export const buildPayrollCalcExport = (params: IPayrollCalcExportParams): ITable
   const conditions = [
     `Период: ${period}`,
     `Отдел: ${params.departmentName ?? 'все отделы'}`,
+    ...(params.categoryLabel ? [`Категория: ${params.categoryLabel}`] : []),
+    ...(params.objectName ? [`Объект: ${params.objectName}`] : []),
     ...(params.search ? [`Поиск: «${params.search}»`] : []),
     ...(filtersText ? [`Фильтры: ${filtersText}`] : []),
   ].join('. ');

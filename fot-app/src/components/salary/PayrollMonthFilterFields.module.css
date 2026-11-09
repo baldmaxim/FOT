@@ -1,0 +1,20 @@
+/* Поля «Категория» и «Объект» в панели «Расчётов» (flex-контейнер CompensationTermsPage .toolbar). */
+
+/* Смартфон: каждое поле на всю ширину, как поиск и подразделение. */
+.category,
+.object {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* С 769px — как «Все отделы» (CompensationTermsPage.module.css). */
+@media (min-width: 769px) {
+  .category,
+  .object {
+    flex: 0 0 auto;
+  }
+
+  .category { min-width: 160px; }
+
+  .object { min-width: 220px; }
+}

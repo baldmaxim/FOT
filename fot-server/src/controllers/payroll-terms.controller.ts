@@ -33,6 +33,14 @@ import {
 } from '../services/payroll/payroll-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import { resolveCurrentStaffCategories } from '../services/payroll/payroll-staff-category.js';
+import { loadMonthProfiles } from '../services/payroll/payroll-month-profile.service.js';
+import {
+  countMonthObjects,
+  employeesMatchingMonthFilter,
+  type IMonthFilter,
+  type IMonthPair,
+} from '../services/payroll/payroll-month-profile.rules.js';
+import { monthPairsSelectSql, parseMonthFilterQuery, parseObjectsCategory } from './payroll-terms-month-filter.js';
 import {
   assignTerms,
   CONTRACT_TYPES,
@@ -621,12 +629,19 @@ const resolvePayrollFioMode = async (
   fio: IFioSearch | null,
   baseParams: unknown[],
   filters: Parameters<typeof appendPayrollColumnFilters>[2],
-  options: { exclude?: PayrollFilterColumn; workedIn?: IPayrollWorkedIn | null; contractMonths?: string[] | null } = {},
+  options: {
+    exclude?: PayrollFilterColumn;
+    workedIn?: IPayrollWorkedIn | null;
+    contractMonths?: string[] | null;
+    /** Отбор «Категория»/«Объект» (resolveMonthFilterIds): точный ФИО, скрытый им, переводит поиск в fuzzy. */
+    employeeIds?: number[] | null;
+  } = {},
 ): Promise<FioSearchMode> => {
   if (!fio || fio.fuzzy.length === 0) return 'exact';
   const params = baseParams.slice(0, 8);
   const whereParts: string[] = [];
   appendPayrollColumnFilters(whereParts, params, filters, { exclude: options.exclude });
+  appendEmployeeIdsFilter(whereParts, params, options.employeeIds);
   let calcMonthsParam: string | undefined;
   if (options.workedIn) {
     params.push(options.workedIn.months, options.workedIn.archiveId);
@@ -642,6 +657,43 @@ const resolvePayrollFioMode = async (
     params,
   );
   return row?.found ? 'exact' : 'fuzzy';
+};
+
+/** Отбор «Категория»/«Объект» в filtered: только эти сотрудники. null — фильтра нет. */
+const appendEmployeeIdsFilter = (whereParts: string[], params: unknown[], ids: number[] | null | undefined): void => {
+  if (!ids) return;
+  params.push(ids);
+  whereParts.push(`employee_id = ANY($${params.length}::int[])`);
+};
+
+/**
+ * Пары «сотрудник + месяц» строк «Расчётов» в охвате и выбранном отделе — без поиска и фильтров столбцов: профиль пары
+ * от них не зависит, а лишние пары только расширяют множество, которое список всё равно пересечёт со своим filtered.
+ * baseParams — $1–$8 от buildBaseParams.
+ */
+const loadCalcMonthPairs = async (baseParams: unknown[], workedIn: IPayrollWorkedIn): Promise<IMonthPair[]> => {
+  const params = baseParams.slice(0, 8);
+  params[7] = null;
+  params.push(workedIn.months, workedIn.archiveId);
+  const monthsParam = `$${params.length - 1}`;
+  const archiveParam = `$${params.length}`;
+  const rows = await query<{ employee_id: number; month: string }>(
+    `${buildBaseCtes(payrollWorkedFilterSql(monthsParam, archiveParam), 'FALSE', monthsParam)}
+     ${monthPairsSelectSql(monthsParam, archiveParam)}`,
+    params,
+  );
+  return rows.map(row => ({ employeeId: Number(row.employee_id), month: row.month }));
+};
+
+/** Сотрудники, у которых в одном из выбранных месяцев совпали категория и объект (null — фильтра нет). */
+const resolveMonthFilterIds = async (
+  baseParams: unknown[],
+  workedIn: IPayrollWorkedIn | null,
+  filter: IMonthFilter | null,
+): Promise<number[] | null> => {
+  if (!filter || !workedIn) return null;
+  const pairs = await loadCalcMonthPairs(baseParams, workedIn);
+  return employeesMatchingMonthFilter(pairs, await loadMonthProfiles(pairs), filter);
 };
 
 const badRequest = (res: Response, error: string, code: string): void => {
@@ -684,13 +736,18 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     // «Расчёты»: месяцы «К выплате» и «Удержаний». Без параметра — прежний список с «Выплачено».
     const paidMonths = parsePayrollMonthsQuery(query.paid_months);
+    const monthFilter = parseMonthFilterQuery(query, paidMonths);
+    if (!monthFilter.ok) return badRequest(res, monthFilter.error, monthFilter.code);
     // За месяцы списком — только работавшие в них и уволенные; «весь период» и «Условия оплаты» — весь штат, как раньше.
     const workedIn = await resolvePayrollWorkedIn(paidMonths);
 
     const { onDate, contractorRootId, params, fio } = await buildBaseParams(req, parsed);
+    // «Категория»/«Объект» — до поиска, курсора и LIMIT: total, порции и «Итого» — только отобранные.
+    const monthFilterIds = await resolveMonthFilterIds(params, workedIn, monthFilter.filter);
     const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, {
       workedIn,
       contractMonths: payrollContractMonths(paidMonths),
+      employeeIds: monthFilterIds,
     });
 
     // Прежний курсор (ФИО, id) — только без сортировки по столбцу.
@@ -722,6 +779,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters);
+    appendEmployeeIdsFilter(whereParts, params, monthFilterIds);
     if (parsed.employee_id !== undefined) {
       params.push(parsed.employee_id);
       whereParts.push(`employee_id = $${params.length}::int`);
@@ -847,13 +905,19 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     if (!filtersResult.ok) return badRequest(res, 'Некорректные фильтры столбцов', 'INVALID_COLUMN_FILTERS');
 
     const paidMonths = parsePayrollMonthsQuery((req.query as Record<string, unknown>).paid_months);
+    const monthFilter = parseMonthFilterQuery(req.query as Record<string, unknown>, paidMonths);
+    if (!monthFilter.ok) return badRequest(res, monthFilter.error, monthFilter.code);
     const workedIn = await resolvePayrollWorkedIn(paidMonths);
     const contractMonths = payrollContractMonths(paidMonths);
     const { params, fio } = await buildBaseParams(req, parsed);
+    const monthFilterIds = await resolveMonthFilterIds(params, workedIn, monthFilter.filter);
     // Режим поиска — по своему набору: без фильтра самого столбца, как и варианты.
-    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, { exclude: column, workedIn, contractMonths });
+    const fioMode = await resolvePayrollFioMode(fio, params, filtersResult.filters, {
+      exclude: column, workedIn, contractMonths, employeeIds: monthFilterIds,
+    });
     const whereParts: string[] = [];
     appendPayrollColumnFilters(whereParts, params, filtersResult.filters, { exclude: column });
+    appendEmployeeIdsFilter(whereParts, params, monthFilterIds);
     let calcMonthsParam: string | undefined;
     if (workedIn) {
       params.push(workedIn.months, workedIn.archiveId);
@@ -888,6 +952,30 @@ const columnValues = async (req: AuthenticatedRequest, res: Response): Promise<v
     if (handleZodError(err, res)) return;
     console.error('payrollTerms.columnValues error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения значений фильтра' });
+  }
+};
+
+/**
+ * GET /api/payroll/terms/month-objects?paid_months=2026-09,…&department_id&category — варианты поля «Все объекты»
+ * «Расчётов»: объекты месяцев (как у «Свода») у сотрудников охвата и отдела, в выбранной категории; count — уникальные
+ * сотрудники. Объект к своей выборке не применяется, поиск и фильтры столбцов не участвуют.
+ */
+const monthObjects = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const raw = req.query as Record<string, unknown>;
+    const parsed = baseQuerySchema.pick({ date: true, department_id: true }).parse(raw);
+    const category = parseObjectsCategory(raw.category);
+    if (!category.ok) return badRequest(res, 'Некорректная категория', 'INVALID_MONTH_FILTER');
+    const paidMonths = parsePayrollMonthsQuery(raw.paid_months);
+    if (paidMonths === null || paidMonths === 'all') return badRequest(res, 'Не выбраны месяцы', 'INVALID_MONTHS');
+    const workedIn = await resolvePayrollWorkedIn(paidMonths);
+    const { params } = await buildBaseParams(req, parsed);
+    const pairs = workedIn ? await loadCalcMonthPairs(params, workedIn) : [];
+    res.json({ success: true, data: countMonthObjects(pairs, await loadMonthProfiles(pairs), category.category) });
+  } catch (err) {
+    if (handleZodError(err, res)) return;
+    console.error('payrollTerms.monthObjects error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения объектов' });
   }
 };
 
@@ -1070,5 +1158,5 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
 };
 
 export const payrollTermsController = {
-  list, columnValues, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns,
+  list, columnValues, monthObjects, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns,
 };

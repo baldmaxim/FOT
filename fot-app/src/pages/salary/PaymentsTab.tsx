@@ -6,13 +6,16 @@ import { useAuth } from '../../contexts/AuthContext';
 import { payrollService, type IPayrollTermsRow } from '../../services/payrollService';
 import { moscowTodayIso } from '../../utils/moscowDate';
 import {
+  calcMonthFilterOf,
   calcViewFilters,
   dropPayrollDetails,
+  EMPTY_CALC_MONTH_FILTER,
   openPayrollDetails,
   paymentsViewOptions,
   readPayrollReturn,
   resolvePaymentsView,
   type ICalcFocus,
+  type ICalcMonthFilter,
   type IPayrollCardView,
   type IPayrollReturn,
   type PaymentsView,
@@ -64,6 +67,9 @@ export const PaymentsTab: FC = () => {
   // «Расчёты» — только сотрудник, открытый кликом в «Условиях оплаты»; сохранение в окне «Расчётов» не снимает.
   const [calcFocus, setCalcFocus] = useState<ICalcFocus | null>(restore?.calcFocus ?? null);
   const calcFilters = calcViewFilters(calcFocus, search, departmentId);
+  // «Категория» и «Объект» — только у «Расчётов» (месяца, как в «Своде»); при открытой карточке — «Все».
+  const [calcMonthFilter, setCalcMonthFilter] = useState<ICalcMonthFilter>(restore?.calcMonthFilter ?? EMPTY_CALC_MONTH_FILTER);
+  const shownMonthFilter = calcMonthFilterOf(calcFocus, calcMonthFilter);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
   const [calcMounted, setCalcMounted] = useState(false);
   if (view === 'calc' && !calcMounted) setCalcMounted(true);
@@ -120,6 +126,10 @@ export const PaymentsTab: FC = () => {
     setCalcFocus(null);
     setDepartmentId(id);
   }, [setDepartmentId]);
+  const handleCalcMonthFilter = useCallback((next: ICalcMonthFilter) => {
+    setCalcFocus(null);
+    setCalcMonthFilter(next);
+  }, []);
 
   // Сохранение в окне «Расчётов»: карточка «Подробно» в этот момент скрыта, экран не меняется —
   // устаревшая карточка этого сотрудника закрывается.
@@ -130,9 +140,11 @@ export const PaymentsTab: FC = () => {
   // Клик по ФИО: стрелка назад вернётся на эту запись истории — кладём в неё, что показать.
   const rememberReturn = useCallback((card: IPayrollCardView) => {
     if (!details) return;
-    const payrollReturn: IPayrollReturn = { employeeId: details.employee_id, card, search, departmentId, calcFocus };
+    const payrollReturn: IPayrollReturn = {
+      employeeId: details.employee_id, card, search, departmentId, calcFocus, calcMonthFilter,
+    };
     setSearchParams(prev => prev, { replace: true, state: { payrollReturn } });
-  }, [details, search, departmentId, calcFocus, setSearchParams]);
+  }, [details, search, departmentId, calcFocus, calcMonthFilter, setSearchParams]);
 
   return (
     <div className={styles.tab}>
@@ -202,6 +214,8 @@ export const PaymentsTab: FC = () => {
                 onSearchChange={handleCalcSearch}
                 departmentId={calcFilters.departmentId}
                 onDepartmentChange={handleCalcDepartment}
+                monthFilter={shownMonthFilter}
+                onMonthFilterChange={handleCalcMonthFilter}
                 onSaved={handleCalcSaved}
               />
             </Suspense>

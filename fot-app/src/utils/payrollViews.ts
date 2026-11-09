@@ -1,7 +1,7 @@
 /**
  * Экраны вкладки «Выплаты» раздела «Зарплата» (?view=) и сотрудник вкладки «Подробно».
  */
-import type { IPayrollTermsRow } from '../services/payrollService';
+import type { IPayrollTermsRow, StaffCategory } from '../services/payrollService';
 
 export type PaymentsView = 'terms' | 'details' | 'calc';
 
@@ -65,6 +65,25 @@ export const calcViewFilters = (focus: ICalcFocus | null, search: string, depart
   focus ? { employeeId: focus.employeeId, search: focus.fullName ?? '', departmentId: '' } : { search, departmentId }
 );
 
+/** Объект «Свода» в поле «Все объекты»: имя хранится — выбранный объект виден по имени и вне нового списка. */
+export interface ICalcObject {
+  key: string;
+  name: string;
+}
+
+/** Фильтры «Категория» и «Объект» «Расчётов» (месяца, как в «Своде»); null — «Все». */
+export interface ICalcMonthFilter {
+  category: StaffCategory | null;
+  object: ICalcObject | null;
+}
+
+export const EMPTY_CALC_MONTH_FILTER: ICalcMonthFilter = { category: null, object: null };
+
+/** Открыта карточка — «Расчёты» только этого сотрудника: категория и объект, как и отдел, — «Все». */
+export const calcMonthFilterOf = (focus: ICalcFocus | null, filter: ICalcMonthFilter): ICalcMonthFilter => (
+  focus ? EMPTY_CALC_MONTH_FILTER : filter
+);
+
 /** Вкладка карточки сотрудника раздела «Зарплата». */
 export type PayrollCardTab = 'terms' | 'history';
 
@@ -84,7 +103,11 @@ export interface IPayrollReturn {
   search: string;
   departmentId: string;
   calcFocus: ICalcFocus | null;
+  /** Нет у записей, сделанных до фильтров «Категория»/«Объект». */
+  calcMonthFilter?: ICalcMonthFilter;
 }
+
+const STAFF_CATEGORIES: readonly StaffCategory[] = ['itr', 'office', 'worker'];
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -100,19 +123,33 @@ const readCardView = (value: unknown): IPayrollCardView | null => {
   return valid.length === months.length ? { months: valid, tab } : null;
 };
 
+/** undefined — поля нет (старая запись); null — поле есть, но не такое. */
+const readMonthFilter = (value: unknown): ICalcMonthFilter | null | undefined => {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const { category, object } = value;
+  if (category !== null && !STAFF_CATEGORIES.includes(category as StaffCategory)) return null;
+  if (object === null) return { category: category as StaffCategory | null, object: null };
+  if (!isRecord(object) || typeof object.key !== 'string' || typeof object.name !== 'string') return null;
+  return { category: category as StaffCategory | null, object: { key: object.key, name: object.name } };
+};
+
 /** Запись истории браузера → что показать при возврате; любое несоответствие — null целиком. */
 export const readPayrollReturn = (state: unknown): IPayrollReturn | null => {
   if (!isRecord(state) || !isRecord(state.payrollReturn)) return null;
-  const { employeeId, card, search, departmentId, calcFocus } = state.payrollReturn;
+  const { employeeId, card, search, departmentId, calcFocus, calcMonthFilter } = state.payrollReturn;
   if (typeof employeeId !== 'number' || !Number.isSafeInteger(employeeId) || employeeId <= 0) return null;
   if (typeof search !== 'string' || typeof departmentId !== 'string') return null;
   const cardView = readCardView(card);
   if (!cardView) return null;
-  if (calcFocus === null) return { employeeId, card: cardView, search, departmentId, calcFocus: null };
+  const monthFilter = readMonthFilter(calcMonthFilter);
+  if (monthFilter === null) return null;
+  const base = { employeeId, card: cardView, search, departmentId, ...(monthFilter ? { calcMonthFilter: monthFilter } : {}) };
+  if (calcFocus === null) return { ...base, calcFocus: null };
   if (!isRecord(calcFocus) || calcFocus.employeeId !== employeeId) return null;
   const { fullName } = calcFocus;
   if (fullName !== null && typeof fullName !== 'string') return null;
-  return { employeeId, card: cardView, search, departmentId, calcFocus: { employeeId, fullName } };
+  return { ...base, calcFocus: { employeeId, fullName } };
 };
 
 /** Карточка посещаемости: календарь на последнем из выбранных месяцев. */

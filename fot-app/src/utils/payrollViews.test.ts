@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { IPayrollTermsRow } from '../services/payrollService';
 import {
+  calcMonthFilterOf,
   calcViewFilters,
   dropPayrollDetails,
+  EMPTY_CALC_MONTH_FILTER,
   employeeCardPath,
   openPayrollDetails,
   paymentsViewOptions,
@@ -108,6 +110,12 @@ describe('«Расчёты» после открытия карточки — т
   it('фокус снят — общие с «Условиями оплаты» поиск и отдел', () => {
     expect(calcViewFilters(null, 'Абдук', 'dept-1')).toEqual({ search: 'Абдук', departmentId: 'dept-1' });
   });
+
+  it('категория и объект: при фокусе — «Все», без него — выбранные', () => {
+    const filter = { category: 'worker' as const, object: { key: 'office', name: 'Офис' } };
+    expect(calcMonthFilterOf({ employeeId: 42, fullName: 'Абдукаримов' }, filter)).toEqual(EMPTY_CALC_MONTH_FILTER);
+    expect(calcMonthFilterOf(null, filter)).toBe(filter);
+  });
 });
 
 describe('возврат с карточки посещаемости: запись истории браузера', () => {
@@ -164,6 +172,21 @@ describe('возврат с карточки посещаемости: запи�
     expect(read({ calcFocus: { employeeId: 7, fullName: 'Другой' } })).toBeNull();
     expect(read({ calcFocus: { employeeId: 2301, fullName: 7 } })).toBeNull();
     expect(read({ calcFocus: 'Абдувохидов' })).toBeNull();
+  });
+
+  it('категория и объект «Расчётов» читаются; старая запись без них — тоже', () => {
+    const calcMonthFilter = { category: 'itr', object: { key: '00000000-0000-0000-0000-00000000000a', name: 'ЖК Химки' } };
+    expect(read({ calcMonthFilter })).toEqual({ ...saved, calcMonthFilter });
+    expect(read({ calcMonthFilter: { category: null, object: null } })).toEqual({
+      ...saved, calcMonthFilter: { category: null, object: null },
+    });
+    expect(read({})).not.toHaveProperty('calcMonthFilter');
+  });
+
+  it('категория или объект не такие — запись отбрасывается', () => {
+    expect(read({ calcMonthFilter: { category: 'boss', object: null } })).toBeNull();
+    expect(read({ calcMonthFilter: { category: null, object: { key: 'office' } } })).toBeNull();
+    expect(read({ calcMonthFilter: 'itr' })).toBeNull();
   });
 });
 

@@ -18,6 +18,8 @@ interface ISearchableSelectProps {
   allLabel: string;
   placeholder?: string;
   ariaLabel?: string;
+  /** Текст пустого списка: «Загрузка…», «Не удалось загрузить»; по умолчанию — «Не найдено». */
+  emptyText?: string;
 }
 
 /** Панель не ниже этого, даже если под полем почти не осталось места. */
@@ -36,6 +38,7 @@ export const SearchableSelect: FC<ISearchableSelectProps> = memo(({
   allLabel,
   placeholder = 'Поиск...',
   ariaLabel,
+  emptyText = 'Не найдено',
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -201,7 +204,7 @@ export const SearchableSelect: FC<ISearchableSelectProps> = memo(({
                   {o.label}
                 </div>
               ))}
-              {filtered.length === 0 && <div className={styles.empty}>Не найдено</div>}
+              {filtered.length === 0 && <div className={styles.empty}>{emptyText}</div>}
             </div>
           </div>
         </>,

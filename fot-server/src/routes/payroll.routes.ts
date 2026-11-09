@@ -56,6 +56,8 @@ router.get('/terms', termsView, serverTiming('payroll_terms_list'), payrollTerms
 router.get('/terms/calc-columns', termsView, serverTiming('payroll_calc_columns'), payrollTermsController.calcColumns);
 // Варианты фильтра столбца (воронка в заголовке таблицы условий).
 router.get('/terms/column-values', termsView, payrollTermsController.columnValues);
+// Варианты поля «Все объекты» «Расчётов»: объекты месяцев, как у «Свода».
+router.get('/terms/month-objects', termsView, serverTiming('payroll_month_objects'), payrollTermsController.monthObjects);
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
 // История условий для карточки сотрудника: оклад / ставка и плановая доплата одним журналом.
 router.get('/terms/employee/:empId/changes', termsView, payrollTermsController.getChanges);
