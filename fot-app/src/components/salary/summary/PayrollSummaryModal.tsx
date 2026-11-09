@@ -48,6 +48,7 @@ const objectName = (row: ISummaryObjectRow): string => row.object_name;
  */
 export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onClose }) => {
   const titleId = useId();
+  const categoriesCaptionId = useId();
   const monthsParam = registryMonthsParam(months);
   const [category, setCategory] = useState<SummaryCategory>('all');
   const [chosenDepartment, setChosenDepartment] = useState('');
@@ -136,19 +137,23 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
                 ariaLabel="Отдел"
               />
             </div>
-            <div className={styles.categories} role="radiogroup" aria-label="Категория">
-              {SUMMARY_CATEGORIES.map(option => (
-                <button
-                  key={option.key}
-                  type="button"
-                  role="radio"
-                  aria-checked={category === option.key}
-                  className={category === option.key ? `${styles.category} ${styles.categoryActive}` : styles.category}
-                  onClick={() => setCategory(option.key)}
-                >
-                  {option.label}
-                </button>
-              ))}
+            {/* Категории «Свода» — по табелю месяца (режим табелирования), а не по отделу, как группы «Расчётов». */}
+            <div className={styles.categoryGroup}>
+              <span id={categoriesCaptionId} className={styles.categoryCaption}>Табелирование</span>
+              <div className={styles.categories} role="radiogroup" aria-labelledby={categoriesCaptionId}>
+                {SUMMARY_CATEGORIES.map(option => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={category === option.key}
+                    className={category === option.key ? `${styles.category} ${styles.categoryActive}` : styles.category}
+                    onClick={() => setCategory(option.key)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <button type="button" className={modal.closeButton} onClick={requestClose} aria-label="Закрыть">
               <X size={20} aria-hidden="true" />

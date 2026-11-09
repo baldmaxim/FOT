@@ -71,15 +71,18 @@ export interface ICalcObject {
   name: string;
 }
 
-/** Фильтры «Категория» и «Объект» «Расчётов» (месяца, как в «Своде»); null — «Все». */
+/**
+ * Фильтры «Расчётов» сверх отдела: группа отделов из списка «Все отделы» (ИТР / Офис / Рабочие — по отделу, выбирается
+ * вместо отдела) и объект месяца, как в «Своде». null — «Все».
+ */
 export interface ICalcMonthFilter {
-  category: StaffCategory | null;
+  group: StaffCategory | null;
   object: ICalcObject | null;
 }
 
-export const EMPTY_CALC_MONTH_FILTER: ICalcMonthFilter = { category: null, object: null };
+export const EMPTY_CALC_MONTH_FILTER: ICalcMonthFilter = { group: null, object: null };
 
-/** Открыта карточка — «Расчёты» только этого сотрудника: категория и объект, как и отдел, — «Все». */
+/** Открыта карточка — «Расчёты» только этого сотрудника: группа и объект, как и отдел, — «Все». */
 export const calcMonthFilterOf = (focus: ICalcFocus | null, filter: ICalcMonthFilter): ICalcMonthFilter => (
   focus ? EMPTY_CALC_MONTH_FILTER : filter
 );
@@ -103,7 +106,7 @@ export interface IPayrollReturn {
   search: string;
   departmentId: string;
   calcFocus: ICalcFocus | null;
-  /** Нет у записей, сделанных до фильтров «Категория»/«Объект». */
+  /** Нет у записей, сделанных до фильтров группы и объекта. */
   calcMonthFilter?: ICalcMonthFilter;
 }
 
@@ -127,11 +130,11 @@ const readCardView = (value: unknown): IPayrollCardView | null => {
 const readMonthFilter = (value: unknown): ICalcMonthFilter | null | undefined => {
   if (value === undefined) return undefined;
   if (!isRecord(value)) return null;
-  const { category, object } = value;
-  if (category !== null && !STAFF_CATEGORIES.includes(category as StaffCategory)) return null;
-  if (object === null) return { category: category as StaffCategory | null, object: null };
+  const { group, object } = value;
+  if (group !== null && !STAFF_CATEGORIES.includes(group as StaffCategory)) return null;
+  if (object === null) return { group: group as StaffCategory | null, object: null };
   if (!isRecord(object) || typeof object.key !== 'string' || typeof object.name !== 'string') return null;
-  return { category: category as StaffCategory | null, object: { key: object.key, name: object.name } };
+  return { group: group as StaffCategory | null, object: { key: object.key, name: object.name } };
 };
 
 /** Запись истории браузера → что показать при возврате; любое несоответствие — null целиком. */

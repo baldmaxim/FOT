@@ -182,6 +182,24 @@
   background: var(--bg-secondary);
 }
 
+/* Группы отделов («Расчёты»: ИТР, Офис, Рабочие) — под «Все отделы», отделены от дерева линией. */
+.groups {
+  border-bottom: 1px solid var(--border);
+}
+
+.groupOption {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.groupOption:hover {
+  background: var(--bg-secondary);
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;

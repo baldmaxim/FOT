@@ -618,9 +618,9 @@ export interface IPayrollTermsViewParams {
   cf?: string;
   /** Только этот сотрудник (карточка открыта → «Расчёты»); старый бэкенд параметр не знает. */
   employeeId?: number;
-  /** «Расчёты» за месяцы: категория месяца, как в «Своде»; сервер без месяцев отвечает 400. */
-  category?: StaffCategory;
-  /** «Расчёты» за месяцы: объект месяца, как в «Своде» — id объекта СКУД, 'office' или 'unknown'. */
+  /** «Расчёты»: группа отделов — ИТР (ЛИНИЯ), Офис (остальные СУ-10), Рабочие (бригады); по отделу, не по табелю. */
+  group?: StaffCategory;
+  /** «Расчёты» за месяцы: объект месяца, как в «Своде» — id объекта СКУД, 'office' или 'unknown'; без месяцев — 400. */
   objectKey?: string;
 }
 
@@ -630,7 +630,7 @@ const appendViewParams = (search: URLSearchParams, params: IPayrollTermsViewPara
   if (params.q) search.set('q', params.q);
   if (params.cf) search.set('cf', params.cf);
   if (params.employeeId) search.set('employee_id', String(params.employeeId));
-  if (params.category) search.set('category', params.category);
+  if (params.group) search.set('group', params.group);
   if (params.objectKey) search.set('object', params.objectKey);
 };
 
@@ -758,18 +758,18 @@ export const payrollService = {
   },
 
   /**
-   * Варианты поля «Все объекты» «Расчётов»: объекты месяцев, как в «Своде», у сотрудников отдела в выбранной категории.
+   * Варианты поля «Все объекты» «Расчётов»: объекты месяцев, как в «Своде», у сотрудников выбранных отдела или группы.
    * Поиск, фильтры столбцов и выбранный объект сервер не применяет — их и не передаём.
    */
   monthObjects: async (
-    params: { months: string[]; date: string; departmentId?: string; category?: StaffCategory },
+    params: { months: string[]; date: string; departmentId?: string; group?: StaffCategory },
     signal?: AbortSignal,
   ): Promise<IPayrollMonthObject[]> => {
     const search = new URLSearchParams();
     search.set('paid_months', params.months.join(','));
     search.set('date', params.date);
     if (params.departmentId) search.set('department_id', params.departmentId);
-    if (params.category) search.set('category', params.category);
+    if (params.group) search.set('group', params.group);
     return (await apiClient.get<IApiResponse<IPayrollMonthObject[]>>(
       `/payroll/terms/month-objects?${search.toString()}`,
       { signal },

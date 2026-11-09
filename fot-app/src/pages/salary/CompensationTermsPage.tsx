@@ -13,7 +13,6 @@ import {
   type PayrollPaidMonths,
   type PayrollSortDir,
   type PayrollSortKey,
-  type StaffCategory,
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollCalcExport } from '../../hooks/usePayrollCalcExport';
@@ -44,10 +43,11 @@ import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
 import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import type { ICalcMonthFilter } from '../../utils/payrollViews';
+import { PAYROLL_GROUP_LABELS, PAYROLL_GROUP_OPTIONS, payrollGroupValue, pickDepartmentOrGroup } from '../../utils/payrollDepartmentGroups';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
-import { PayrollMonthFilterFields } from '../../components/salary/PayrollMonthFilterFields';
+import { PayrollObjectFilterField } from '../../components/salary/PayrollObjectFilterField';
 import { PayrollTermsTable } from '../../components/salary/PayrollTermsTable';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import styles from './CompensationTermsPage.module.css';
@@ -80,12 +80,14 @@ interface ICompensationTermsPageProps {
   paidMonths?: PayrollPaidMonths | null;
   /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
-  /** «Расчёты»: «Категория» и «Объект» месяца, как в «Своде». Не передан — полей нет («Условия оплаты»). */
+  /**
+   * «Расчёты»: группа отделов (ИТР / Офис / Рабочие в списке «Все отделы») и объект месяца, как в «Своде».
+   * Не передан — ни групп, ни поля объекта («Условия оплаты»).
+   */
   monthFilter?: ICalcMonthFilter;
   onMonthFilterChange?: (next: ICalcMonthFilter) => void;
 }
 
-const CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'ИТР', office: 'Офис', worker: 'Рабочие' };
 
 export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   date,
@@ -118,9 +120,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const columnFiltersKey = serializePayrollColumnFilters(columnFilters);
   const activeFilterCount = countActivePayrollColumnFilters(columnFilters);
 
-  // «Категория» и «Объект» — только за месяцы списком (сервер иначе отвечает 400) и не для одного сотрудника.
+  // Группа и объект — не для одного сотрудника; объект — только за месяцы списком (сервер иначе отвечает 400).
   const monthsList = Array.isArray(paidMonths) && paidMonths.length > 0 ? paidMonths : null;
-  const category = monthsList && employeeId === undefined ? monthFilter?.category ?? undefined : undefined;
+  const group = employeeId === undefined ? monthFilter?.group ?? undefined : undefined;
   const objectKey = monthsList && employeeId === undefined ? monthFilter?.object?.key : undefined;
 
   const viewParams = useMemo<IPayrollTermsViewParams>(() => ({
@@ -129,9 +131,17 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     q: debouncedSearch || undefined,
     cf: columnFiltersKey || undefined,
     employeeId,
-    category,
+    group,
     objectKey,
-  }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId, category, objectKey]);
+  }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId, group, objectKey]);
+
+  // Список «Все отделы»: на «Расчётах» в нём и группы (payrollDepartmentGroups.ts).
+  const handleDepartmentChange = (value: string) => {
+    if (!monthFilter || !onMonthFilterChange) return onDepartmentChange(value);
+    const next = pickDepartmentOrGroup(value);
+    if (next.group !== monthFilter.group) onMonthFilterChange({ ...monthFilter, group: next.group });
+    if (next.departmentId !== departmentId) onDepartmentChange(next.departmentId);
+  };
 
   const termsQuery = useInfiniteQuery({
     queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir, paidMonths ?? null],
@@ -310,7 +320,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     [viewParams, paidMonths],
   );
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}|${category ?? ''}|${objectKey ?? ''}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}|${group ?? ''}|${objectKey ?? ''}`;
 
   // «Экспорт» «Расчётов» — вся выборка экрана. Пока новая выборка не загрузилась или поиск не применён, на экране
   // прежние строки: кнопка неактивна, чтобы файл не разошёлся с тем, что выбрано.
@@ -327,7 +337,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       hidden: hiddenColumns,
       expanded: expandedColumns,
       departmentName: departmentId ? findDepartmentName(departments, departmentId) ?? 'выбранный отдел' : null,
-      categoryLabel: category ? CATEGORY_LABELS[category] : null,
+      categoryLabel: group ? PAYROLL_GROUP_LABELS[group] : null,
       objectName: objectKey ? monthFilter?.object?.name ?? null : null,
       search: debouncedSearch,
       filters: columnFilters,
@@ -344,22 +354,24 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           <DepartmentTreeSelect
             key={departmentSelectKey}
             departments={departments}
-            value={departmentId}
-            onChange={onDepartmentChange}
+            value={monthFilter?.group ? payrollGroupValue(monthFilter.group) : departmentId}
+            onChange={handleDepartmentChange}
             isLoading={structureTree.isPending}
             isError={structureTree.isError}
             onRetry={() => { void structureTree.refetch(); }}
+            groups={monthFilter ? PAYROLL_GROUP_OPTIONS : undefined}
           />
         </div>
         {isCalcScreen && monthFilter && onMonthFilterChange && (
-          // Тот же ключ, что у отдела: уход с «Расчётов» перемонтирует поля и закрывает их списки в портале.
-          <PayrollMonthFilterFields
+          // Тот же ключ, что у отдела: уход с «Расчётов» перемонтирует поле и закрывает его список в портале.
+          <PayrollObjectFilterField
             key={departmentSelectKey}
             months={monthsList}
             date={date}
             departmentId={departmentId}
-            value={monthFilter}
-            onChange={onMonthFilterChange}
+            group={monthFilter.group}
+            value={monthFilter.object}
+            onChange={object => onMonthFilterChange({ ...monthFilter, object })}
           />
         )}
         {activeFilterCount > 0 && (

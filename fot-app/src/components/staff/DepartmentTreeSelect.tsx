@@ -43,9 +43,15 @@ interface IDepartmentTreeSelectProps {
    * (фильтр по выбранной компании). Дети корня по-прежнему выбираются как отделы.
    */
   flattenSingleRoot?: boolean;
+  /**
+   * Группы отделов — строки сразу под «Все отделы», над деревом («Расчёты»: ИТР, Офис, Рабочие). value группы не должно
+   * совпадать с id отдела; выбранная группа — в поле её подписью. Ищутся поиском, как отделы.
+   */
+  groups?: ReadonlyArray<{ value: string; label: string }>;
 }
 
 const ALL_LABEL = 'Все отделы';
+const NO_GROUPS: ReadonlyArray<{ value: string; label: string }> = [];
 
 // Корень-компания (depth 0, есть дети) — только контейнер, не выбирается.
 // Узел вне scope пользователя (in_scope=false) — серый предок.
@@ -75,6 +81,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   clearable = false,
   disableUnassignable = false,
   flattenSingleRoot = false,
+  groups = NO_GROUPS,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -94,9 +101,15 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
     [skipRoot, visibleRoots],
   );
   const visibleTree = useMemo(() => filterDepartmentTree(roots, debounced), [roots, debounced]);
+  const visibleGroups = useMemo(() => {
+    const q = debounced.toLowerCase();
+    return q ? groups.filter(group => group.label.toLowerCase().includes(q)) : groups;
+  }, [groups, debounced]);
   const selectedName = useMemo(
-    () => (value ? findDepartmentName(departments, value) : null),
-    [departments, value],
+    () => (value
+      ? groups.find(group => group.value === value)?.label ?? findDepartmentName(departments, value)
+      : null),
+    [groups, departments, value],
   );
 
   // parentMap (child→parent в пределах roots), полный список id, число
@@ -220,7 +233,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   const showStaleBadge = isError && hasData;
   const showLoadingState = isLoading && !hasData;
   const showErrorState = isError && !hasData;
-  const showEmpty = !showLoadingState && !showErrorState && visibleTree.length === 0;
+  const showEmpty = !showLoadingState && !showErrorState && visibleTree.length === 0 && visibleGroups.length === 0;
 
   const renderNode = (node: OrgDepartmentNode, depth: number) => {
     const hasChildren = (node.children?.length ?? 0) > 0;
@@ -331,6 +344,19 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
                   onClick={() => pick('')}
                 >
                   {ALL_LABEL}
+                </div>
+              )}
+              {visibleGroups.length > 0 && (
+                <div className={styles.groups}>
+                  {visibleGroups.map(group => (
+                    <div
+                      key={group.value}
+                      className={`${styles.groupOption} ${group.value === value ? styles.rowActive : ''}`}
+                      onClick={() => pick(group.value)}
+                    >
+                      {group.label}
+                    </div>
+                  ))}
                 </div>
               )}
               {visibleTree.map(node => renderNode(node, rootDepth))}

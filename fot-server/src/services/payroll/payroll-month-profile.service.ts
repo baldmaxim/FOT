@@ -1,9 +1,8 @@
 /**
- * Профиль пары «сотрудник + месяц» для фильтров «Категория» и «Объект» на «Расчётах» — тем же путём, что строка
- * «Свода» (payroll-summary.service, buildSummary): разбивка закрытого табеля → объект и отдел месяца
- * (attributeMonths) → категория по табелю месяца (объект атрибуции «Офис» — офис) → объект «Свода» для «Не определён»
- * (режим месяца, затем часы по проходам). «Свод» этим модулем не пользуется — порядок шагов повторён, и PG-тест
- * сверяет их на одних парах.
+ * Профиль пары «сотрудник + месяц» для фильтра «Объект» на «Расчётах» — тем же путём, что объект строки «Свода»
+ * (payroll-summary.service, buildSummary): разбивка закрытого табеля → объект месяца (attributeMonths) → для «Не
+ * определён» — режим месяца, затем часы по проходам (resolveSummaryObjects). «Свод» этим модулем не пользуется — порядок
+ * шагов повторён, и PG-тест сверяет их на одних парах.
  *
  * Кэш по паре, TTL 2 минуты: «Расчёты» догружают список порциями подряд, и без кэша профиль всего штата считался бы на
  * каждую порцию. Берутся закэшированные пары, считаются только недостающие; одинаковые вычисления в полёте общие.
@@ -14,7 +13,6 @@ import { performance } from 'node:perf_hooks';
 import { query } from '../../config/postgres.js';
 import { attributeMonths, loadMonthBreakdown, type IMonthEmployee } from './payroll-month-attribution.service.js';
 import { monthProfileKey, type IMonthPair, type IMonthProfile } from './payroll-month-profile.rules.js';
-import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import { resolveSummaryObjects } from './payroll-summary-object.service.js';
 import { SUMMARY_UNKNOWN } from './payroll-summary.attribution.js';
 
@@ -48,30 +46,14 @@ const computeMonthProfiles = async (pairs: readonly IMonthPair[]): Promise<Map<s
   ]);
   const employees = new Map<number, IMonthEmployee>(employeeRows.map(row => [Number(row.id), row]));
   const attribution = await attributeMonths(pairs, breakdown, employees);
-  // Категория и объект «Свода» зависят только от атрибуции — параллельно (в «Своде» по очереди, результат тот же).
-  const [categories, summaryObjects] = await Promise.all([
-    resolveMonthStaffCategories(pairs.map(pair => {
-      const item = attribution.get(monthProfileKey(pair.employeeId, pair.month));
-      return {
-        employeeId: pair.employeeId,
-        monthStart: `${pair.month}-01`,
-        officeObject: item?.object.key === 'office',
-        departmentId: item?.departmentId ?? null,
-        mode: item?.mode,
-      };
-    })),
-    // Объект, где базовый «Не определён»: режим месяца, затем часы. Категорию не меняет.
-    resolveSummaryObjects(attribution),
-  ]);
+  // Объект, где базовый «Не определён»: режим месяца, затем часы.
+  const summaryObjects = await resolveSummaryObjects(attribution);
 
   const result = new Map<string, IMonthProfile>();
-  pairs.forEach((pair, index) => {
+  for (const pair of pairs) {
     const key = monthProfileKey(pair.employeeId, pair.month);
-    result.set(key, {
-      category: categories[index] ?? 'office',
-      object: summaryObjects.get(key) ?? attribution.get(key)?.object ?? SUMMARY_UNKNOWN,
-    });
-  });
+    result.set(key, { object: summaryObjects.get(key) ?? attribution.get(key)?.object ?? SUMMARY_UNKNOWN });
+  }
   const elapsed = performance.now() - started;
   if (elapsed > PROFILE_LOG_THRESHOLD_MS) {
     console.log(`[payroll-month-profile] ${pairs.length} пар (${employeeIds.length} чел., ${monthStarts.length} мес.): ${Math.round(elapsed)} мс`);

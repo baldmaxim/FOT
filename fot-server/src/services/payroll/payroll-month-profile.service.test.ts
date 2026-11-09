@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Кэш профилей пар: считаются только недостающие пары, одинаковые вычисления в полёте общие, TTL 2 минуты.
-// Сам расчёт (атрибуция, категория, объект) подставляется — он сверяется со «Сводом» в payroll-summary.pg.test.ts.
+// Сам расчёт (атрибуция, объект) подставляется — он сверяется со «Сводом» в payroll-summary.pg.test.ts.
 
 const calls = vi.hoisted(() => ({ attribute: [] as string[][] }));
 
@@ -20,9 +20,6 @@ vi.mock('./payroll-month-attribution.service.js', () => ({
     ]));
   },
 }));
-vi.mock('./payroll-staff-category.js', () => ({
-  resolveMonthStaffCategories: async (items: Array<{ officeObject: boolean }>) => items.map(item => (item.officeObject ? 'office' : 'worker')),
-}));
 vi.mock('./payroll-summary-object.service.js', () => ({ resolveSummaryObjects: async () => new Map() }));
 
 import { clearMonthProfileCache, loadMonthProfiles } from './payroll-month-profile.service.js';
@@ -35,9 +32,9 @@ describe('loadMonthProfiles', () => {
     calls.attribute.length = 0;
   });
 
-  it('профиль — категория и объект атрибуции', async () => {
+  it('профиль — объект атрибуции', async () => {
     const profiles = await loadMonthProfiles([pair(1)]);
-    expect(profiles.get('1|2026-09')).toEqual({ category: 'office', object: { key: 'office', name: 'Офис' } });
+    expect(profiles.get('1|2026-09')).toEqual({ object: { key: 'office', name: 'Офис' } });
   });
 
   it('закэшированные пары не считаются заново, повторы во входе — один раз', async () => {

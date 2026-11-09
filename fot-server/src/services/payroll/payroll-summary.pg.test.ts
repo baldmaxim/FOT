@@ -340,7 +340,7 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
     expect(akimov).toEqual([['ЖК Химки', '100000.00'], ['Офис', '100000.00']]);
   });
 
-  it('профиль фильтров «Расчётов» = категория и объект строки «Свода» на тех же парах', async () => {
+  it('объект фильтра «Расчётов» = объект строки «Свода» на тех же парах', async () => {
     clearMonthProfileCache();
     for (const month of ['2026-07', '2026-08', '2026-09']) {
       const summary = await loadPayrollSummary({ scope: SCOPE, monthStarts: [`${month}-01`] });
@@ -348,8 +348,8 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
       const profiles = await loadMonthProfiles(summary.rows.map(row => ({ employeeId: row.employee_id, month })));
       expect(summary.rows.map(row => {
         const profile = profiles.get(monthProfileKey(row.employee_id, month));
-        return [row.employee_id, profile?.category, profile?.object.key, profile?.object.name];
-      })).toEqual(summary.rows.map(row => [row.employee_id, row.category, row.object_key, row.object_name]));
+        return [row.employee_id, profile?.object.key, profile?.object.name];
+      })).toEqual(summary.rows.map(row => [row.employee_id, row.object_key, row.object_name]));
     }
   });
 

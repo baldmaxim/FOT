@@ -40,9 +40,23 @@
 /* Тап-цель 44px, как у категорий: поле общего SearchableSelect ниже, и на других экранах оно не меняется. */
 .department > div > div:first-child { height: 44px; }
 
-.categories {
+/* Переключатель категорий с подписью «Табелирование» над ним. */
+.categoryGroup {
   order: 4;
   flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.categoryCaption {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.categories {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
@@ -116,11 +130,11 @@
     flex: 0 1 280px;
   }
   .department > div > div:first-child { height: 36px; }
-  .categories {
+  .categoryGroup {
     order: 0;
     flex: 0 0 auto;
-    grid-auto-columns: auto;
   }
+  .categories { grid-auto-columns: auto; }
   .category { min-height: 32px; padding: 0 12px; font-size: 13px; }
 }
 
