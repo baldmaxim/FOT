@@ -57,29 +57,31 @@ export const PayslipPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      {vacation && (
-        <section className={styles.vacation} aria-label="Остаток отпуска">
-          <span className={styles.vacationLabel}>Остаток отпуска {vacationDate}</span>
-          <span className={styles.vacationValue}>{formatVacationDays(vacation.days)} дн.</span>
-        </section>
-      )}
-
-      {month === null ? (
-        <p className={styles.empty}>Расчётных листов пока нет</p>
-      ) : (
-        <>
-          <label className={styles.monthField}>
-            <span className={styles.monthLabel}>Месяц</span>
+      {(month !== null || vacation) && (
+        <div className={styles.toolbar}>
+          {month !== null && (
             <select
               className={styles.monthSelect}
+              aria-label="Месяц"
               value={month}
               onChange={event => setSelected(event.target.value)}
             >
               {months.map(item => <option key={item} value={item}>{formatMonthLabel(item)}</option>)}
             </select>
-          </label>
-          <MonthPayslip month={month} />
-        </>
+          )}
+          {vacation && (
+            <section className={styles.vacation} aria-label="Остаток отпуска">
+              <span className={styles.vacationLabel}>Остаток отпуска {vacationDate}</span>
+              <span className={styles.vacationValue}>{formatVacationDays(vacation.days)} дн.</span>
+            </section>
+          )}
+        </div>
+      )}
+
+      {month === null ? (
+        <p className={styles.empty}>Расчётных листов пока нет</p>
+      ) : (
+        <MonthPayslip month={month} />
       )}
     </div>
   );
