@@ -70,8 +70,12 @@ import { listHousingAllowances } from './payroll-housing.service.js';
 import { addStay, getHousingRateAmount } from '../dormitory-stays.service.js';
 import {
   addOneTimeSupplement,
+  deleteOneTimeSupplement,
+  getOneTimeSupplement,
+  getOneTimeSupplementFile,
   getPlannedPeriodEmployeeId,
   listSupplements,
+  updateOneTimeSupplement,
   rewritePlannedPeriod,
   savePlannedSupplement,
 } from './payroll-supplements.service.js';
@@ -140,7 +144,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, role_page_access, access_pages,
         payroll_dormitory_allowances, payroll_compensation_stops, payroll_overtime_stops,
-        payroll_one_time_supplements, payroll_supplement_reasons, payroll_paid_amounts,
+        payroll_one_time_supplement_files, payroll_one_time_supplements, payroll_supplement_reasons, payroll_paid_amounts,
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rate_values, payroll_rates,
         payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
@@ -234,6 +238,9 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     const [before] = (await run(`SELECT id FROM payroll_rates WHERE code = 'dormitory'`)).rows;
     await run(migration('315_payroll_dictionary_registries.sql'));
     await run(migration('315_payroll_dictionary_registries.sql'));
+    // 354 — файлы разовых доплат; повтор безопасен.
+    await run(migration('354_payroll_one_time_supplement_files.sql'));
+    await run(migration('354_payroll_one_time_supplement_files.sql'));
     // 324 — значения по месяцам и «Проезд»; ставки с кодом — первыми.
     await run(migration('324_payroll_rate_values.sql'));
     await run(migration('324_payroll_rate_values.sql'));
@@ -565,6 +572,80 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         [2, '2026-10', '2500.50', 'Переработка'],
       ]));
       expect(oneTime).toHaveLength(2);
+    });
+
+    it('354: файлы разовой — по порядку, лимит 10 под блокировкой, stale, аудит в транзакции, каскад', async () => {
+      const fileRow = (n: number) => ({
+        r2Key: `payroll-supplements/2/f${n}.pdf`, fileName: `Файл ${n}.pdf`, fileSize: 100 + n, mimeType: 'application/pdf',
+      });
+      const input = { month: '2026-11', amount: 3300, reason: 'Компенсация использования личного а/м' };
+
+      // Аудит упал — откатилась и доплата, и строки файлов.
+      await expect(addOneTimeSupplement(2, input, {
+        files: [fileRow(0)],
+        audit: async () => { throw new Error('audit_logs недоступна'); },
+      })).rejects.toThrow('audit_logs');
+      expect((await run(`SELECT count(*)::int AS n FROM payroll_one_time_supplements WHERE month = '2026-11-01'`)).rows[0].n).toBe(0);
+      expect((await run('SELECT count(*)::int AS n FROM payroll_one_time_supplement_files')).rows[0].n).toBe(0);
+
+      const audited: string[] = [];
+      const created = await addOneTimeSupplement(2, input, {
+        files: Array.from({ length: 8 }, (_, i) => fileRow(i + 1)),
+        audit: async (_client, row) => { audited.push(`add ${row.files.length}`); },
+      });
+      expect(created.files.map(file => file.file_name)).toEqual(Array.from({ length: 8 }, (_, i) => `Файл ${i + 1}.pdf`));
+      expect(created.files[0]).toEqual({ id: expect.any(Number), file_name: 'Файл 1.pdf', file_size: 101, mime_type: 'application/pdf' });
+      const listed = (await listSupplements(SCOPE)).find(row => row.kind === 'one_time' && row.id === created.id);
+      expect(listed?.files).toEqual(created.files);
+      expect((await listSupplements(SCOPE)).filter(row => row.kind === 'planned').every(row => row.files.length === 0)).toBe(true);
+
+      // Девятый — ок. Два параллельных по +1 к девяти: второй ждёт блокировку, пока первый не закоммитил десятый,
+      // и после ожидания обязан увидеть десять файлов (снимок, взятый до ожидания, пропустил бы одиннадцатый).
+      expect((await updateOneTimeSupplement(created.id, input, { addFiles: [fileRow(9)] })).status).toBe('saved');
+      let second: ReturnType<typeof updateOneTimeSupplement> | null = null;
+      const first = await updateOneTimeSupplement(created.id, input, {
+        addFiles: [fileRow(10)],
+        audit: async () => {
+          second = updateOneTimeSupplement(created.id, input, { addFiles: [fileRow(11)] });
+          for (let i = 0; i < 100; i += 1) {
+            const waiting = (await run(
+              `SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`,
+            )).rows[0].n;
+            if (waiting > 0) return;
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          throw new Error('второе обновление не встало в ожидание блокировки');
+        },
+      });
+      expect(first.status).toBe('saved');
+      expect((await second!).status).toBe('too_many');
+      expect((await getOneTimeSupplement(created.id))?.files).toHaveLength(10);
+
+      // Снять чужой или уже снятый — stale; снять свой — ключ R2 для удаления после коммита, аудит с файлами.
+      const current = (await getOneTimeSupplement(created.id))!;
+      expect((await updateOneTimeSupplement(created.id, input, { removeFileIds: [999999] })).status).toBe('stale');
+      const removed = await updateOneTimeSupplement(created.id, input, {
+        removeFileIds: [current.files[0].id],
+        audit: async (_client, before, after) => { audited.push(`update ${before.files.length}→${after.files.length}`); },
+      });
+      expect(removed).toMatchObject({ status: 'saved', changed: true, removedKeys: ['payroll-supplements/2/f1.pdf'] });
+      expect((await updateOneTimeSupplement(created.id, input, { removeFileIds: [current.files[0].id] })).status).toBe('stale');
+      // Ничего не изменилось — аудита нет.
+      const same = await updateOneTimeSupplement(created.id, input, { audit: async () => { audited.push('лишний'); } });
+      expect(same).toMatchObject({ status: 'saved', changed: false });
+
+      // Ссылка — только на файл этой доплаты.
+      const kept = current.files[1];
+      expect(await getOneTimeSupplementFile(created.id, kept.id)).toEqual({
+        employee_id: 2, r2_key: 'payroll-supplements/2/f2.pdf', file_name: 'Файл 2.pdf', mime_type: 'application/pdf',
+      });
+      expect(await getOneTimeSupplementFile(created.id + 1, kept.id)).toBeNull();
+
+      // Удаление: ключи всех файлов, строки — каскадом.
+      const deleted = await deleteOneTimeSupplement(created.id, { audit: async (_client, row) => { audited.push(`delete ${row.files.length}`); } });
+      expect(deleted?.r2Keys).toHaveLength(9);
+      expect((await run('SELECT count(*)::int AS n FROM payroll_one_time_supplement_files WHERE supplement_id = $1', [created.id])).rows[0].n).toBe(0);
+      expect(audited).toEqual(['add 8', 'update 10→9', 'delete 9']);
     });
 
     it('340: основания — виды 1С и внесённые (пробелы схлопнуты, длиннее 100 — нет); переименование — и у доплат', async () => {

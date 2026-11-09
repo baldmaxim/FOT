@@ -62,7 +62,23 @@ export interface IPayrollSupplementRow {
   reason: string | null;
   /** Плановая: последняя строка журнала. С миграцией 337 правятся все периоды — только справочно. */
   is_current?: boolean;
+  /** Файлы разовой (миграция 354) по порядку прикрепления; у плановой — пусто, у старого бэкенда — нет. */
+  files?: IPayrollSupplementFile[];
   can_edit: boolean;
+}
+
+/** Файл разовой доплаты: ссылку на него выдаёт getSupplementFileUrl по клику. */
+export interface IPayrollSupplementFile {
+  id: number;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+}
+
+/** Файлы разовой при сохранении: новые — загрузить, remove — id снимаемых. */
+export interface IOneTimeSupplementFileChanges {
+  add: File[];
+  remove: number[];
 }
 
 /** «Без проезда» — кому не выплачивать проезд: период «с — по» (по включительно, null — бессрочно). */
@@ -189,6 +205,16 @@ export const PAYROLL_REGISTRY_KEYS = {
 export const PAYROLL_TERMS_PREFIX = ['payroll-terms'] as const;
 
 const SEARCH_LIMIT = 20;
+/** Загрузка до 50 МБ файлов — дольше обычных 30 с. */
+const ONE_TIME_UPLOAD_TIMEOUT_MS = 180_000;
+
+/** multipart разовой доплаты: data — JSON полей, files — файлы (data первым: сервер читает поля до файлов). */
+const oneTimeFormData = (data: object, files: readonly File[]): FormData => {
+  const form = new FormData();
+  form.append('data', JSON.stringify(data));
+  for (const file of files) form.append('files', file, file.name);
+  return form;
+};
 
 const list = async <T,>(path: string, signal?: AbortSignal): Promise<T[]> =>
   (await apiClient.get<IApiResponse<T[]>>(path, { signal })).data;
@@ -246,13 +272,45 @@ export const payrollRegistryService = {
     await apiClient.delete(`/payroll/supplements/planned/${id}`);
   },
 
-  addOneTime: async (employeeId: number, fields: IOneTimeSupplementFields): Promise<void> => {
-    await apiClient.post('/payroll/supplements/one-time', { employee_id: employeeId, ...fields });
+  /** С файлами — одним multipart-запросом: доплата и файлы сохраняются вместе или никак. */
+  addOneTime: async (employeeId: number, fields: IOneTimeSupplementFields, files: readonly File[] = []): Promise<void> => {
+    const data = { employee_id: employeeId, ...fields };
+    if (files.length === 0) {
+      await apiClient.post('/payroll/supplements/one-time', data);
+      return;
+    }
+    await apiClient.request('/payroll/supplements/one-time', {
+      method: 'POST', body: oneTimeFormData(data, files), timeoutMs: ONE_TIME_UPLOAD_TIMEOUT_MS,
+    });
   },
 
-  updateOneTime: async (id: number, fields: IOneTimeSupplementFields): Promise<void> => {
-    await apiClient.patch(`/payroll/supplements/one-time/${id}`, fields);
+  /**
+   * Поля, новые файлы и снятие файлов — одним запросом. ApiError 409 SUPPLEMENT_STALE — снимаемого файла уже нет,
+   * 400 SUPPLEMENT_FILES_LIMIT — стало бы больше 10 файлов.
+   */
+  updateOneTime: async (
+    id: number,
+    fields: IOneTimeSupplementFields,
+    files: IOneTimeSupplementFileChanges = { add: [], remove: [] },
+  ): Promise<void> => {
+    const data = files.remove.length > 0 ? { ...fields, remove_file_ids: files.remove } : fields;
+    if (files.add.length === 0) {
+      await apiClient.patch(`/payroll/supplements/one-time/${id}`, data);
+      return;
+    }
+    await apiClient.request(`/payroll/supplements/one-time/${id}`, {
+      method: 'PATCH', body: oneTimeFormData(data, files.add), timeoutMs: ONE_TIME_UPLOAD_TIMEOUT_MS,
+    });
   },
+
+  /** Ссылка на файл разовой доплаты (живёт 5 минут): inline — просмотр, attachment — скачивание. */
+  getSupplementFileUrl: async (
+    supplementId: number,
+    fileId: number,
+    disposition: 'inline' | 'attachment',
+  ): Promise<string> => (await apiClient.get<IApiResponse<{ url: string }>>(
+    `/payroll/supplements/one-time/${supplementId}/files/${fileId}/url?disposition=${disposition}`,
+  )).data.url,
 
   removeOneTime: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/supplements/one-time/${id}`);

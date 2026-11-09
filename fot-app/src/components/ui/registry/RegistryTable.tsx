@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ColumnValuesFilterPopover';
@@ -69,6 +69,11 @@ export interface IRegistryTableProps<Row> {
    * сотрудника) — только в первой строке, фон — общий. Ряды остаются отдельными: у каждого свои ✎ и 🗑.
    */
   groupRows?: IRegistryRowGroup<Row>;
+  /**
+   * Своё содержимое ячейки по ключу столбца (текст с кнопкой); undefined — текст столбца. Перенос и обрезку своего
+   * содержимого делает оно само. Сортировка, фильтр и экспорт — по-прежнему по text / exportValue столбца.
+   */
+  cellRenderers?: Readonly<Partial<Record<string, (row: Row) => ReactNode | undefined>>>;
 }
 
 /**
@@ -80,7 +85,7 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
-  onRowClick, footer = null, groupRows,
+  onRowClick, footer = null, groupRows, cellRenderers,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
@@ -229,21 +234,27 @@ export const RegistryTable = <Row,>({
                 } : {})}
               >
                 <td className={styles.cellNum}>{group ? (group.first ? group.index + 1 : '') : index + 1}</td>
-                {columns.map(column => (
-                  repeated && groupColumns.has(column.key) ? (
-                    <td key={column.key} className={styles.cellText}>
-                      <span className={styles.srOnly}>{column.text(row)}</span>
-                    </td>
-                  ) : column.nowrap ? (
-                    <td key={column.key} className={column.numeric ? `${styles.cellValue} ${styles.cellNumeric}` : styles.cellValue}>
-                      {column.text(row)}
-                    </td>
+                {columns.map(column => {
+                  if (repeated && groupColumns.has(column.key)) {
+                    return (
+                      <td key={column.key} className={styles.cellText}>
+                        <span className={styles.srOnly}>{column.text(row)}</span>
+                      </td>
+                    );
+                  }
+                  const custom = cellRenderers?.[column.key]?.(row);
+                  const valueClass = column.numeric ? `${styles.cellValue} ${styles.cellNumeric}` : styles.cellValue;
+                  if (custom !== undefined) {
+                    return <td key={column.key} className={column.nowrap ? valueClass : styles.cellText}>{custom}</td>;
+                  }
+                  return column.nowrap ? (
+                    <td key={column.key} className={valueClass}>{column.text(row)}</td>
                   ) : (
                     <td key={column.key} className={styles.cellText}>
                       <span className={styles.clamp2}>{column.text(row)}</span>
                     </td>
-                  )
-                ))}
+                  );
+                })}
                 {withActions && (
                   <td className={styles.cellActions}>
                     {((onEdit && editable) || (onDelete && deletable)) && (

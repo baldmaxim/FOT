@@ -148,9 +148,16 @@ export interface ISupplementRegistryRow extends ISupplementPeriodFields {
   housing: IHousingAllowanceRow | null;
 }
 
+/** Число файлов разовой доплаты (миграция 354); 0 и у плановой и квартиры — null («—»). */
+export const supplementFileCount = (row: ISupplementRegistryRow): number | null => {
+  const count = row.supplement?.kind === 'one_time' ? row.supplement.files?.length ?? 0 : 0;
+  return count > 0 ? count : null;
+};
+
 /**
  * «Доплата за месяц», семь столбцов: «Период» различает строки одного сотрудника (их ФИО — один раз, EMPLOYEE_ROW_GROUP). Отдел и
- * должность уже — таблица без прокрутки влезает в окно на 1280px.
+ * должность уже — таблица без прокрутки влезает в окно на 1280px. Файлы разовой — кнопкой 📎N в ячейке «Основание»
+ * (SupplementRegistry): отдельному столбцу на 1280px места нет; в xlsx — столбец «Файлы» (SUPPLEMENT_FILES_EXPORT_COLUMN).
  */
 export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
   ...employeeColumns<ISupplementRegistryRow>({ department: 112, position: 144 }),
@@ -159,16 +166,25 @@ export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegist
     text: row => supplementKindLabel(row.kind), sortValue: row => supplementKindLabel(row.kind),
   },
   moneyColumn<ISupplementRegistryRow>('Сумма, ₽', row => row.amount, 112),
+  // «01.10.2026 – 31.01.2027» — 153px текста + поля; остаток — «Основанию» с кнопкой 📎N.
   {
-    key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
+    key: 'period', label: 'Период', type: 'text', width: 180, nowrap: true,
     text: supplementPeriod,
     sortValue: supplementPeriodSort,
   },
   {
-    key: 'reason', label: 'Основание', type: 'text', width: 144,
+    key: 'reason', label: 'Основание', type: 'text', width: 154,
     text: row => orDash(row.reason), sortValue: row => row.reason,
   },
 ];
+
+/** xlsx «Доплаты за месяц»: число файлов разовой, без файлов — «—» (на экране — 📎N у основания). */
+export const SUPPLEMENT_FILES_EXPORT_COLUMN: IRegistryColumn<ISupplementRegistryRow> = {
+  key: 'files', label: 'Файлы', type: 'int',
+  text: row => String(supplementFileCount(row) ?? '—'),
+  sortValue: supplementFileCount,
+  exportValue: supplementFileCount,
+};
 
 /**
  * Строки одного сотрудника в «Доплате» и «Удержаниях» «Справочника»: ФИО, отдел и должность — один раз, его строки —
@@ -263,7 +279,7 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
   };
 
 export const buildHousingExport = buildSnapshot('Квартира', HOUSING_COLUMNS);
-export const buildSupplementExport = buildSnapshot('Доплата за месяц', SUPPLEMENT_COLUMNS);
+export const buildSupplementExport = buildSnapshot('Доплата за месяц', [...SUPPLEMENT_COLUMNS, SUPPLEMENT_FILES_EXPORT_COLUMN]);
 export const buildPlannedSupplementExport = buildSnapshot('Плановые доплаты', PLANNED_SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildOvertimeStopExport = buildSnapshot('Без переработки', OVERTIME_STOP_COLUMNS);

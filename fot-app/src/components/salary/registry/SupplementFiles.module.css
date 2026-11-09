@@ -1,0 +1,164 @@
+/*
+ * Файлы разовой доплаты: блок «Файлы» формы и окно списка из таблицы. Mobile-first: строки и кнопки 44px
+ * (тап-цели), имя переносится, а не уезжает за край; с 769px — компактнее.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.nameButton {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  color: var(--primary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.nameButton:hover { text-decoration: underline; }
+.nameButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+.size {
+  flex: 0 0 auto;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease-out, background-color 0.15s ease-out;
+}
+.remove:hover:not(:disabled) { background: var(--surface-hover); color: var(--error); }
+.remove:disabled { opacity: 0.5; cursor: default; }
+.remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Строка без ✕ (окно списка): справа тот же отступ, что у кнопки. */
+.item:not(:has(.remove)) { padding-right: 12px; }
+
+.attach {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out;
+}
+.attach:hover:not(:disabled) { border-color: var(--primary); }
+.attach:disabled { opacity: 0.5; cursor: default; }
+.attach:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.input { display: none; }
+
+/* «Основание» с 📎N в таблице «Доплата за месяц»: текст до двух строк, кнопка справа. */
+.reasonCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.reasonText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+/* 📎N: тап-цель 44px, с 769px — как ✎/🗑 таблицы (28px). */
+.cellButton {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out;
+}
+.cellButton:hover { border-color: var(--primary); }
+.cellButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 769px) {
+  .item { min-height: 36px; }
+  .nameButton { min-height: 36px; }
+  .remove { width: 32px; height: 32px; }
+  .attach { min-height: 36px; }
+  .cellButton { min-width: 28px; height: 28px; padding: 0 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remove, .attach, .cellButton { transition: none; }
+}

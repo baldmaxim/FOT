@@ -7,6 +7,7 @@ import {
   type IPayrollSupplementRow,
   type PayrollSupplementKind,
 } from '../../../services/payrollRegistryService';
+import { supplementFilesError } from '../../../utils/payrollSupplementFiles';
 import { formatMonthLabel } from '../../../utils/formatMoney';
 import { moscowTodayIso } from '../../../utils/moscowDate';
 import { rateAmountInputValue } from '../../../utils/payrollDictionary';
@@ -19,13 +20,16 @@ import {
   reasonAfterRename,
   type RegistryFormField,
 } from '../../../utils/payrollRegistryForms';
+import { FilePreviewModal } from '../../documents/FilePreviewModal';
 import { ClearableInput } from '../../ui/ClearableInput';
 import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
+import { SupplementFilesField } from './SupplementFilesField';
 import { SupplementReasonField } from './SupplementReasonField';
 import { SupplementReasonsModal } from './SupplementReasonsModal';
+import { useSupplementFileOpen } from './useSupplementFileOpen';
 
 interface ISupplementFormProps {
   /** Передано — ✎ этой доплаты (сотрудник и вид не меняются); нет — «Добавить сотрудника». */
@@ -43,7 +47,8 @@ const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candid
 /**
  * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес и период «с — по» (та же, что «Плановые доплаты» окна
  * сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет сервер); разовая —
- * месяц, сумма и основание из списка (за месяц — сколько угодно); ✎ у основания — окно «Основания доплаты».
+ * месяц, сумма и основание из списка (за месяц — сколько угодно); ✎ у основания — окно «Основания доплаты»;
+ * «Файлы» (миграция 354) — прикрепить и снять, всё применяется по «Сохранить» одним запросом с полями.
  */
 export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, onClose, onSaved }) => {
   const errorId = useId();
@@ -59,6 +64,14 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
   // Основание самой доплаты при ✎: удаление из списка его не сбрасывает; переименование меняет и его (как сервер).
   const [ownReason, setOwnReason] = useState<string | null>(row?.reason ?? null);
   const [reasonsOpen, setReasonsOpen] = useState(false);
+  // Файлы разовой: снятые сохранённые и выбранные новые — уйдут на сервер по «Сохранить».
+  const [removedFileIds, setRemovedFileIds] = useState<number[]>([]);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const keptFiles = useMemo(
+    () => (row?.files ?? []).filter(file => !removedFileIds.includes(file.id)),
+    [row?.files, removedFileIds],
+  );
+  const fileOpen = useSupplementFileOpen();
   const [error, setError] = useState<{ field: RegistryFormField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -95,9 +108,22 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
       return false;
     }
     setSaving(true);
-    if (isEdit && row.id !== null) await payrollRegistryService.updateOneTime(row.id, parsed.payload);
-    else await payrollRegistryService.addOneTime(employeeId, parsed.payload);
+    if (isEdit && row.id !== null) {
+      await payrollRegistryService.updateOneTime(row.id, parsed.payload, { add: newFiles, remove: removedFileIds });
+    } else {
+      await payrollRegistryService.addOneTime(employeeId, parsed.payload, newFiles);
+    }
     return true;
+  };
+
+  const pickFiles = (picked: File[]) => {
+    const message = supplementFilesError(picked, keptFiles.length, newFiles);
+    if (message) {
+      setError({ field: null, message });
+      return;
+    }
+    clearError();
+    setNewFiles(current => [...current, ...picked]);
   };
 
   const handleSubmit = async (requestClose: () => void) => {
@@ -122,7 +148,7 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
         error={error?.message ?? null}
         errorId={errorId}
         raised
-        closeOnEscape={!reasonsOpen}
+        closeOnEscape={!reasonsOpen && !fileOpen.preview}
       >
         <div className={styles.field}>
           <span className={styles.label}>Сотрудник</span>
@@ -209,7 +235,28 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
             describedBy={error ? errorId : undefined}
           />
         )}
+
+        {kind === 'one_time' && (
+          <SupplementFilesField
+            kept={keptFiles}
+            staged={newFiles}
+            onPick={pickFiles}
+            onRemoveKept={fileId => { setRemovedFileIds(current => [...current, fileId]); clearError(); }}
+            onRemoveStaged={index => { setNewFiles(current => current.filter((_, i) => i !== index)); clearError(); }}
+            onOpenKept={file => { if (row?.id != null) fileOpen.open(row.id, file); }}
+            disabled={saving}
+          />
+        )}
       </RegistryFormModal>
+
+      {fileOpen.preview && (
+        <FilePreviewModal
+          fileName={fileOpen.preview.fileName}
+          mimeType={fileOpen.preview.mimeType}
+          urlLoader={fileOpen.preview.urlLoader}
+          onClose={fileOpen.closePreview}
+        />
+      )}
 
       {/* Соседом формы, не внутри: submit полей списка не должен всплыть в «Сохранить» доплаты. */}
       {reasonsOpen && (

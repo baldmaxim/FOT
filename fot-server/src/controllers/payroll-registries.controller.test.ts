@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 const registryScope = vi.hoisted(() => ({
   canWritePayrollRegistryEmployee: vi.fn(),
   resolvePayrollStaffScope: vi.fn(),
+  isPayrollStaffEmployee: vi.fn(),
 }));
 vi.mock('../services/payroll/payroll-registry-scope.service.js', () => registryScope);
 
@@ -33,8 +34,12 @@ const supplements = vi.hoisted(() => ({
   addOneTimeSupplement: vi.fn(),
   updateOneTimeSupplement: vi.fn(),
   deleteOneTimeSupplement: vi.fn(),
+  getOneTimeSupplementFile: vi.fn(),
+  ONE_TIME_SUPPLEMENT_FILES_MAX: 10,
 }));
 vi.mock('../services/payroll/payroll-supplements.service.js', () => supplements);
+// Файлы разовой доплаты — в payroll-one-time-supplements.controller.test.ts; здесь R2 не трогается.
+vi.mock('../services/r2.service.js', () => ({ r2Service: {} }));
 
 const stops = vi.hoisted(() => ({
   listCompensationStops: vi.fn(),
@@ -70,7 +75,10 @@ vi.mock('../services/payroll/payroll-terms.service.js', () => terms);
 // Транзакция в тесте — вызов колбэка с фиктивным клиентом: запросы делает замоканный сервис.
 vi.mock('../config/postgres.js', () => ({ withTransaction: vi.fn(async (fn: (client: unknown) => unknown) => fn({})) }));
 
-const audit = vi.hoisted(() => ({ logFromRequest: vi.fn(async (..._args: unknown[]) => undefined) }));
+const audit = vi.hoisted(() => ({
+  logFromRequest: vi.fn(async (..._args: unknown[]) => undefined),
+  logFromRequestWithClient: vi.fn(async (..._args: unknown[]) => undefined),
+}));
 vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
@@ -537,20 +545,29 @@ describe('«Доплата»: плановая', () => {
 });
 
 describe('«Доплата»: разовая', () => {
-  const ONE_TIME = { id: 5, employee_id: 42, full_name: 'Каримов Акмал', month: '2026-10', amount: '10000.00', reason: 'Премия' };
+  const ONE_TIME = {
+    id: 5, employee_id: 42, full_name: 'Каримов Акмал', month: '2026-10', amount: '10000.00', reason: 'Премия', files: [],
+  };
 
-  it('добавление: основание без лишних пробелов, аудит', async () => {
+  it('добавление: основание без лишних пробелов, аудит — в транзакции доплаты', async () => {
     registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
-    supplements.addOneTimeSupplement.mockResolvedValue(ONE_TIME);
+    supplements.addOneTimeSupplement.mockImplementation(async (_employeeId, _input, options) => {
+      await options.audit('tx-client', ONE_TIME);
+      return ONE_TIME;
+    });
     const res = makeRes();
     await supplementsC.addOneTime(makeReq({
       body: { employee_id: 42, month: '2026-10', amount: 10000, reason: '  Премия  ' },
     }), res);
     expect(res.statusCode).toBe(200);
-    expect(supplements.addOneTimeSupplement).toHaveBeenCalledWith(42, { month: '2026-10', amount: 10000, reason: 'Премия' });
-    expect(audit.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'user-1', 'PAYROLL_ONE_TIME_SUPPLEMENT_ADDED', expect.objectContaining({ entityId: '5' }),
+    expect(supplements.addOneTimeSupplement).toHaveBeenCalledWith(
+      42, { month: '2026-10', amount: 10000, reason: 'Премия' }, expect.objectContaining({ files: [] }),
     );
+    expect(audit.logFromRequestWithClient).toHaveBeenCalledWith(
+      'tx-client', expect.anything(), 'user-1', 'PAYROLL_ONE_TIME_SUPPLEMENT_ADDED',
+      expect.objectContaining({ entityId: '5' }),
+    );
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
   it('пустое основание, месяц 13, третий знак у суммы — 400', async () => {

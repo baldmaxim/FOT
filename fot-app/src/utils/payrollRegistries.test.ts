@@ -15,6 +15,8 @@ import {
   buildOvertimeStopExport,
   buildPlannedSupplementExport,
   buildSupplementExport,
+  supplementFileCount,
+  SUPPLEMENT_FILES_EXPORT_COLUMN,
   buildSupplementRegistryRows,
   canEditSupplement,
   canEditSupplementRow,
@@ -162,12 +164,35 @@ describe('«Доплата»', () => {
     ]);
   });
 
+  it('«Файлы» (миграция 354): число у разовой с файлами, иначе «—»; на экране столбца нет, в xlsx — число', () => {
+    const pdf = (id: number) => ({ id, file_name: `Приказ ${id}.pdf`, file_size: 100, mime_type: 'application/pdf' });
+    const once = (id: number, files?: ReturnType<typeof pdf>[]) => supplement({
+      kind: 'one_time', id, month: '2026-10', date_from: null, date_to: null, reason: 'Премия', files,
+    });
+    const rows = buildSupplementRegistryRows(
+      [once(1, [pdf(1), pdf(2)]), once(2, []), once(3), supplement({ id: 4, files: [] })], [apartment({})], ['2026-10'],
+    ) ?? [];
+    expect(SUPPLEMENT_COLUMNS.map(column => column.key)).not.toContain('files');
+    const files = SUPPLEMENT_FILES_EXPORT_COLUMN;
+    expect(rows.map(row => [row.key, files.text(row), supplementFileCount(row)])).toEqual([
+      ['planned-4', '—', null],
+      ['once-1', '2', 2],
+      ['once-2', '—', null],
+      ['once-3', '—', null],
+      ['apartment-5-2026-10', '—', null],
+    ]);
+    const exported = buildSupplementExport(rows);
+    const index = exported.columns.findIndex(column => column.label === 'Файлы');
+    expect(exported.columns[index].type).toBe('int');
+    expect(exported.rows.map(row => row.cells[index])).toEqual(['—', 2, '—', '—', '—']);
+  });
+
   it('выгрузки: «Доплата за месяц», «Плановые доплаты», «Квартира»', () => {
     const at = (name: string) => expect.stringMatching(new RegExp(`^${name}_\\d{4}-\\d{2}-\\d{2}\\.xlsx$`));
     const all = buildSupplementRegistryRows([supplement({})], [apartment({})], ['2026-10']) ?? [];
     expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата за месяц', file_name: at('Доплата_за_месяц') });
     expect(buildSupplementExport(all).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание']);
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание', 'Файлы']);
     expect(buildPlannedSupplementExport([supplement({})])).toMatchObject({
       title: 'Плановые доплаты', file_name: at('Плановые_доплаты'),
     });

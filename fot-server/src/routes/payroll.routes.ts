@@ -4,6 +4,7 @@ import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middle
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
+import { acceptSupplementFiles } from '../middleware/payrollSupplementFilesUpload.js';
 import { requireBrigadeOutputAccess } from '../middleware/brigadeOutputAccess.js';
 import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
@@ -115,9 +116,12 @@ router.put('/supplements/planned/employee/:empId', termsEdit, payrollSupplements
 router.delete('/supplements/planned/employee/:empId', termsEdit, payrollSupplementsController.removePlanned);
 router.put('/supplements/planned/:id', termsEdit, payrollSupplementsController.updatePlannedPeriod);
 router.delete('/supplements/planned/:id', termsEdit, payrollSupplementsController.removePlannedPeriod);
-router.post('/supplements/one-time', termsEdit, payrollSupplementsController.addOneTime);
-router.patch('/supplements/one-time/:id', termsEdit, payrollSupplementsController.updateOneTime);
+// Разовая: файлы (миграция 354) — с сохранением доплаты multipart-запросом; приём файлов — после гарда раздела.
+router.post('/supplements/one-time', termsEdit, acceptSupplementFiles, payrollSupplementsController.addOneTime);
+router.patch('/supplements/one-time/:id', termsEdit, acceptSupplementFiles, payrollSupplementsController.updateOneTime);
 router.delete('/supplements/one-time/:id', termsEdit, payrollSupplementsController.removeOneTime);
+// Ссылка на файл разовой доплаты (5 минут) — по клику.
+router.get('/supplements/one-time/:id/files/:fileId/url', termsView, payrollSupplementsController.fileUrl);
 // Основания разовой доплаты (миграция 340): список общий, переименование меняет основание и у доплат.
 router.get('/supplement-reasons', termsView, payrollSupplementReasonsController.list);
 router.post('/supplement-reasons', termsEdit, payrollSupplementReasonsController.add);

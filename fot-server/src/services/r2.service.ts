@@ -128,6 +128,10 @@ export const r2Service = {
     return `hiring/${requestId}/${randomUUID()}${ext}`;
   },
 
+  /** Файл разовой доплаты «Зарплаты» (миграция 354). */
+  generatePayrollSupplementKey: (employeeId: number, ext: string): string =>
+    `payroll-supplements/${employeeId}/${randomUUID()}${ext || '.bin'}`,
+
   generateUploadUrl: async (key: string, contentType: string): Promise<{ url: string; headers: Record<string, string> }> => {
     const { client, bucket, kmsKeyId } = await getR2();
     if (!client) throw new Error('R2 не настроен');
@@ -165,6 +169,8 @@ export const r2Service = {
     key: string,
     fileName?: string,
     disposition: 'inline' | 'attachment' = 'attachment',
+    /** Срок ссылки в секундах; по умолчанию час. */
+    expiresIn: number = URL_EXPIRY,
   ): Promise<string> => {
     const { client, bucket } = await getR2();
     if (!client) throw new Error('R2 не настроен');
@@ -186,7 +192,7 @@ export const r2Service = {
       Key: key,
       ResponseContentDisposition: responseContentDisposition,
     });
-    return getSignedUrl(client, command, { expiresIn: URL_EXPIRY });
+    return getSignedUrl(client, command, { expiresIn });
   },
 
   deleteObject: async (key: string): Promise<void> => {
