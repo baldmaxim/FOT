@@ -47,9 +47,9 @@ export const calcLinePaidItem = (
   return lines.some(item => item.code === 'contract') ? null : 'contract';
 };
 
-/** «КТУ 1,5 · 176 ч» у доли бригады. */
-const formatBrigadeNote = (brigade: { ktu: string; hours: number }): string => (
-  `КТУ ${brigade.ktu.replace('.', ',')} · ${String(brigade.hours).replace('.', ',')} ч`
+/** «КТУ 1,5 · 176 ч» у доли бригады; вписанная рублями (355) — «КТУ 1,59 · 176 ч · доля вписана» (КТУ расчётный). */
+const formatBrigadeNote = (brigade: { ktu: string; hours: number; fixed?: true }): string => (
+  `КТУ ${brigade.ktu.replace('.', ',')} · ${String(brigade.hours).replace('.', ',')} ч${brigade.fixed ? ' · доля вписана' : ''}`
 );
 
 /**
@@ -201,15 +201,27 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       const objectName = part.object_name ?? null;
       const prefix = objectName ? `${objectName}: ` : '';
       if (part.output === null) return objectName ? `${prefix}выработка не внесена` : 'выработка бригады не внесена';
+      // Вписанные доли (355) не сходятся с выработкой — доли нет ни у кого на объекте.
+      if (part.conflict && part.amount === null) return `${prefix}вписанные доли не сходятся с выработкой`;
       if (part.amount === null) {
         if (part.total_weight !== 0) return `${prefix}ошибка расчёта бригады`;
         return objectName ? `${prefix}нет учтённых часов` : 'нет учтённых часов бригады';
+      }
+      // Доля вписана рублями — ровно она; КТУ расчётный, как в табеле.
+      if (part.fixed_amount !== undefined) {
+        const ktuNote = part.effective_ktu ? ` (КТУ ${part.effective_ktu.replace('.', ',')})` : '';
+        return `${prefix}доля вписана = ${money(part.amount)}${ktuNote}`;
       }
       if (!objectName && part.total_weight === 0) return `нет учтённых часов на объектах = ${money(part.amount)}`;
       // Вес — КТУ × часы; в БД — КТУ в десятых × минуты, отсюда / 600.
       const ktu = decimal(part.ktu_tenths / 10);
       const hours = decimal(part.counted_minutes / 60);
       const scope = objectName ? 'объекта' : 'бригады';
+      // Есть вписанные — остальным делится выработка минус они, знаменатель — без вписанных.
+      if (part.fixed_total !== undefined) {
+        return `${prefix}(выработка ${money(part.output)} − вписанные ${money(part.fixed_total)}) × КТУ ${ktu} × ${hours} ч`
+          + ` / ${decimal(part.total_weight / 600)} (Σ КТУ × ч ${scope} без вписанных) = ${money(part.amount)}`;
+      }
       return `${prefix}выработка ${money(part.output)} × КТУ ${ktu} × ${hours} ч / ${decimal(part.total_weight / 600)} `
         + `(Σ КТУ × ч ${scope}) = ${money(part.amount)}`;
     }

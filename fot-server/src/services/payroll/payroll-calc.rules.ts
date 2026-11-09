@@ -38,6 +38,7 @@
  * смена одной компенсации даёт новую строку условий, но не новую границу округления.
  * Деньги — целые копейки (Math.round(x * 100), как во всей «Зарплате»), наружу — строки с двумя знаками.
  */
+import { BRIGADE_WHOLE_FIXED_KEY, fixedShareKtus } from './brigade-salary.calc.js';
 import type { PayrollAbsenceDays } from './payroll-basis.service.js';
 import type { IPayslipRateAllowance } from './payroll-payslip.rules.js';
 import { centsToAmount, toCents } from './payroll-summary.attribution.js';
@@ -107,10 +108,21 @@ export type PayrollCalcLinePart =
     output: string | null;
     ktu_tenths: number;
     counted_minutes: number;
-    /** Вес сотрудника — КТУ в десятых × минуты на объекте; total_weight — сумма весов объекта (тот же расчёт доли). */
+    /**
+     * Вес сотрудника — КТУ в десятых × минуты на объекте; total_weight — сумма весов объекта (тот же расчёт доли); при
+     * вписанных долях (355) — Σ весов невписанных.
+     */
     weight: number;
     total_weight: number;
     amount: string | null;
+    /** Доля вписана рублями (355) — эта сумма; нет поля — по формуле. */
+    fixed_amount?: string;
+    /** Σ вписанных долей объекта (выработка − она = остаток, который делится по формуле); нет поля — вписанных нет. */
+    fixed_total?: string;
+    /** Расчётный КТУ вписанной доли ('1.59'); null — сравнить не с кем. */
+    effective_ktu?: string | null;
+    /** Вписанные доли объекта не сходятся с выработкой — доли нет. */
+    conflict?: true;
   };
 
 export interface IPayrollCalcLine {
@@ -124,8 +136,11 @@ export interface IPayrollCalcLine {
   filled_dayoffs?: number;
   /** У переработки — часы в будни по корректировкам; у contract — часы почасовых дней. */
   hours?: number;
-  /** Только у доли бригады: КТУ и учтённые часы, по которым она посчитана. */
-  brigade?: { ktu: string; hours: number };
+  /**
+   * Только у доли бригады: КТУ и учтённые часы, по которым она посчитана. fixed — доля вписана рублями при сумме бригаде
+   * (355): ktu — расчётный, как в «Итого по бригаде» табеля.
+   */
+  brigade?: { ktu: string; hours: number; fixed?: true };
   parts?: PayrollCalcLinePart[];
 }
 
@@ -136,10 +151,13 @@ export interface IBrigadeShareObjectFact {
   /** Выработка объекта; null — не внесена. */
   output: string | null;
   countedMinutes: number;
-  /** КТУ в десятых × минуты на объекте; totalWeight — Σ весов объекта. */
+  /** КТУ в десятых × минуты на объекте; totalWeight — Σ весов объекта (при вписанных — невписанных). */
   weight: number;
   totalWeight: number;
   amount: string | null;
+  /** Вписанная доля (355): сумма, Σ вписанных объекта, расчётный КТУ; конфликт — доли нет. */
+  fixed?: { amount: string | null; total: string | null; ktu: string | null };
+  conflict?: true;
 }
 
 /** Доля сотрудника в расчёте одной бригады (зафиксированном или предварительном). */
@@ -154,8 +172,17 @@ export interface IBrigadeShareFact {
   output: string | null;
   /** Объекты с учтёнными минутами сотрудника — части расшифровки; у суммы бригаде (341) — пусто. */
   objects: IBrigadeShareObjectFact[];
-  /** Сумма бригаде (341): вес сотрудника (КТУ в десятых × минуты за месяц) и Σ весов бригады; иначе null. */
-  whole: { weight: number; totalWeight: number } | null;
+  /**
+   * Сумма бригаде (341): вес сотрудника (КТУ в десятых × минуты за месяц) и Σ весов бригады (при вписанных долях —
+   * невписанных); fixed — вписанная доля сотрудника (355), conflict — вписанные не сходятся; иначе null.
+   */
+  whole: {
+    weight: number;
+    totalWeight: number;
+    /** amount — вписанная доля сотрудника (null — у него по формуле), total — Σ вписанных бригады, ktu — расчётный. */
+    fixed?: { amount: string | null; total: string | null; ktu: string | null };
+    conflict?: true;
+  } | null;
   /** Дни с часами в бригаде (по объектам расчёта) — доплата за общежитие по дням (миграция 339). */
   workedDates: string[];
 }
@@ -176,17 +203,22 @@ export const brigadeShareFacts = (
     ktu: string;
     counted_minutes: number;
     amount: string | null;
+    /** Сумма бригаде: вписанная доля (355). */
+    fixed_amount?: string;
     objects?: ReadonlyArray<{
       object_key: string;
       counted_minutes: number;
       weight: number;
       amount: string | null;
+      /** Вписанная доля на объекте (355). */
+      fixed_amount?: string;
       /** Часы по дням на объекте. */
       days?: Readonly<Record<string, number>>;
     }>;
   }>,
   objects: ReadonlyArray<{ object_key: string; object_name: string; output: string | null; total_weight: number }>,
   wholeOutput?: string | null,
+  shareConflicts: ReadonlyArray<{ object_key: string }> = [],
 ): Map<number, IBrigadeShareFact> => {
   const byKey = new Map(objects.map(object => [object.object_key, object]));
   const outputs = objects.filter(object => object.output !== null);
@@ -196,7 +228,39 @@ export const brigadeShareFacts = (
     : outputs.length === 0
       ? null
       : centsToAmount(outputs.reduce((sum, object) => sum + cents(object.output!), 0));
-  const totalWeight = rows.reduce((sum, row) => sum + ktuTenths(row.ktu) * row.counted_minutes, 0);
+  // Вписанные доли (355): знаменатель — веса невписанных, их доли — от остатка; расчётный КТУ — та же функция, что у
+  // табеля. Без вписанных всё как до 355.
+  const conflicted = new Set(shareConflicts.map(conflict => conflict.object_key));
+  const ktus = fixedShareKtus(wholeOutput, rows, objects);
+  const appliedTotal = (list: ReadonlyArray<{ fixed_amount?: string; amount: string | null }>): number => (
+    list.filter(item => item.fixed_amount !== undefined && item.amount !== null)
+      .reduce((sum, item) => sum + cents(item.fixed_amount!), 0)
+  );
+  const wholeFixedTotal = whole ? appliedTotal(rows) : 0;
+  const objectFixedTotals = new Map(objects.map(object => [
+    object.object_key,
+    appliedTotal(rows.flatMap(row => (row.objects ?? []).filter(part => part.object_key === object.object_key))),
+  ]));
+  const totalWeight = rows
+    .filter(row => row.fixed_amount === undefined)
+    .reduce((sum, row) => sum + ktuTenths(row.ktu) * row.counted_minutes, 0);
+  const wholeFact = (row: typeof rows[number]): NonNullable<IBrigadeShareFact['whole']> => {
+    const applied = row.fixed_amount !== undefined && row.amount !== null;
+    return {
+      weight: ktuTenths(row.ktu) * row.counted_minutes,
+      totalWeight,
+      ...(applied || wholeFixedTotal > 0
+        ? {
+          fixed: {
+            amount: applied ? centsToAmount(cents(row.fixed_amount!)) : null,
+            total: wholeFixedTotal > 0 ? centsToAmount(wholeFixedTotal) : null,
+            ktu: applied ? ktus.get(BRIGADE_WHOLE_FIXED_KEY)?.get(Number(row.employee_id)) ?? null : null,
+          },
+        }
+        : {}),
+      ...(conflicted.has(BRIGADE_WHOLE_FIXED_KEY) ? { conflict: true as const } : {}),
+    };
+  };
   return new Map(rows.map(row => [Number(row.employee_id), {
     departmentId,
     amount: row.amount,
@@ -204,23 +268,47 @@ export const brigadeShareFacts = (
     countedMinutes: row.counted_minutes,
     distribution,
     output,
-    whole: whole ? { weight: ktuTenths(row.ktu) * row.counted_minutes, totalWeight } : null,
+    whole: whole ? wholeFact(row) : null,
     objects: (whole ? [] : row.objects ?? [])
       .filter(part => part.counted_minutes > 0)
-      .map(part => ({
-        objectKey: part.object_key,
-        objectName: byKey.get(part.object_key)?.object_name ?? part.object_key,
-        output: byKey.get(part.object_key)?.output ?? null,
-        countedMinutes: part.counted_minutes,
-        weight: part.weight,
-        totalWeight: byKey.get(part.object_key)?.total_weight ?? 0,
-        amount: part.amount,
-      })),
+      .map(part => {
+        const fixedTotal = objectFixedTotals.get(part.object_key) ?? 0;
+        const applied = part.fixed_amount !== undefined && part.amount !== null;
+        return {
+          objectKey: part.object_key,
+          objectName: byKey.get(part.object_key)?.object_name ?? part.object_key,
+          output: byKey.get(part.object_key)?.output ?? null,
+          countedMinutes: part.counted_minutes,
+          weight: part.weight,
+          totalWeight: byKey.get(part.object_key)?.total_weight ?? 0,
+          amount: part.amount,
+          ...(applied || fixedTotal > 0
+            ? {
+              fixed: {
+                amount: applied ? centsToAmount(cents(part.fixed_amount!)) : null,
+                total: fixedTotal > 0 ? centsToAmount(fixedTotal) : null,
+                ktu: applied ? ktus.get(part.object_key)?.get(Number(row.employee_id)) ?? null : null,
+              },
+            }
+            : {}),
+          ...(conflicted.has(part.object_key) ? { conflict: true as const } : {}),
+        };
+      }),
     workedDates: [...new Set((row.objects ?? []).flatMap(part => Object.entries(part.days ?? {})
       .filter(([, hours]) => Number(hours) > 0)
       .map(([date]) => date)))].sort(),
   }]));
 };
+
+/** Поля вписанной доли (355) у части расшифровки — только когда они есть: без них часть как до 355. */
+const brigadeFixedPart = (
+  fixed: { amount: string | null; total: string | null; ktu: string | null } | undefined,
+  conflict: true | undefined,
+): { fixed_amount?: string; fixed_total?: string; effective_ktu?: string | null; conflict?: true } => ({
+  ...(fixed?.amount ? { fixed_amount: fixed.amount, effective_ktu: fixed.ktu } : {}),
+  ...(fixed?.total ? { fixed_total: fixed.total } : {}),
+  ...(conflict ? { conflict } : {}),
+});
 
 /** Ведомость выплаты 1С за отпуск или больничный: сумма сотрудника по документу. */
 export interface IAbsencePayout1c {
@@ -679,8 +767,12 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
       code: 'brigade',
       amount: unknown ? null : centsToAmount(shares.reduce((sum, share) => sum + cents(share.amount), 0)),
       brigade: {
-        ktu: shares[0].ktu,
+        // КТУ под суммой — как в «Итого по бригаде» табеля: у вписанной доли при сумме бригаде — расчётный.
+        ktu: shares.length === 1 && shares[0].whole?.fixed?.amount
+          ? shares[0].whole.fixed.ktu ?? shares[0].ktu
+          : shares[0].ktu,
         hours: Math.round((shares.reduce((sum, share) => sum + share.countedMinutes, 0) / 60) * 100) / 100,
+        ...(shares.length === 1 && shares[0].whole?.fixed?.amount ? { fixed: true as const } : {}),
       },
       // Часть — на объект; у суммы бригаде (341) и у сотрудника без учтённых часов на объектах — одна часть бригады
       // целиком (у суммы бригаде — с весом и Σ весов бригады: «… × КТУ × ч / Σ (КТУ × ч бригады)»).
@@ -696,6 +788,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
           weight: object.weight,
           total_weight: object.totalWeight,
           amount: object.amount === null ? null : centsToAmount(cents(object.amount)),
+          ...brigadeFixedPart(object.fixed, object.conflict),
         }))
         : [{
           kind: 'brigade' as const,
@@ -708,6 +801,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
           weight: share.whole?.weight ?? 0,
           total_weight: share.whole?.totalWeight ?? 0,
           amount: share.amount === null ? null : centsToAmount(cents(share.amount)),
+          ...brigadeFixedPart(share.whole?.fixed, share.whole?.conflict),
         }])),
     });
   }

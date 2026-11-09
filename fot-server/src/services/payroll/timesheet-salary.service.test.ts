@@ -26,7 +26,7 @@ const brigade = vi.hoisted(() => ({ getBrigadeSalary: vi.fn() }));
 vi.mock('./brigade-salary.service.js', () => brigade);
 
 const scope = vi.hoisted(() => ({
-  resolvePayrollEditPredicate: vi.fn(),
+  resolveBrigadeInputEditPredicate: vi.fn(),
   resolvePayrollReadableDepartmentIds: vi.fn(),
 }));
 vi.mock('./payroll-scope.service.js', () => scope);
@@ -53,7 +53,7 @@ const preliminary = (lines: unknown[], net: string, asOf: string) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   pg.query.mockResolvedValue([]);
-  scope.resolvePayrollEditPredicate.mockResolvedValue(() => true);
+  scope.resolveBrigadeInputEditPredicate.mockResolvedValue(() => true);
 });
 
 describe('getTimesheetSalary — «Оклад» и «Переработка»', () => {
@@ -143,6 +143,7 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       }],
       objects: [{ object_key: 'wave', object_name: 'ЖК Wave', output: '1000000.00', state: 'ok', total_weight: 691_300 }],
       inputs: { outputs: new Map([['wave', { amount: '1000000.00', object_name: 'ЖК Wave' }]]), brigadeOutput: null, ktu: new Map([[1951, 15]]) },
+      share_conflicts: [],
       member_ids: [1951],
     });
     pg.query.mockResolvedValue([{ id: 1951, full_name: 'Абдуалимов Жахонгир' }]);
@@ -182,7 +183,7 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       total_weight: 691_300,
       members: [{
         employee_id: 1951, days: { '2026-09-01': 10 }, hours: 10, counted_minutes: 12600, weight: 189_000,
-        share: '273399.53',
+        share: '273399.53', fixed_share: null, effective_ktu: null,
       }],
     }]);
     // Факт доли для «Суммы» — по объектам.
@@ -209,6 +210,7 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
         { object_key: '__unknown_object__', object_name: 'Не определён', output: null, state: 'no_output', total_weight: 6000 },
       ],
       inputs: { outputs: new Map([['alia', { amount: '5000.00', object_name: 'ЖК Alia' }]]), brigadeOutput: null, ktu: new Map() },
+      share_conflicts: [],
       member_ids: [1951],
     });
     calc.previewBrigadePayouts.mockResolvedValue(new Map());

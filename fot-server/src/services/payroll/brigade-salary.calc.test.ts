@@ -17,7 +17,11 @@ import {
   countedMinutesForDay,
   displayHoursByObjects,
   distributeByWeights,
+  effectiveKtu,
+  fixedShareKtus,
   ktuToTenths,
+  maxFixedShare,
+  shareConflicts,
   moneyToCents,
   splitMinutesByObjects,
   type IBrigadeDayValue,
@@ -279,7 +283,9 @@ describe('buildBrigadeObjectDistribution', () => {
       new Map([['wave', 100000n], ['stories', 50000n], ['alia', 7000n]]), members, [],
     );
     expect(result.state).toBe('nothing_to_distribute');
-    expect(result.objects.get('alia')).toEqual({ state: 'nothing_to_distribute', total_weight: 0, amounts: null });
+    expect(result.objects.get('alia')).toEqual({
+      state: 'nothing_to_distribute', total_weight: 0, amounts: null, fixed_total: 0n, conflicts: [],
+    });
     expect(Object.fromEntries(result.totals)).toEqual({ 1: 40000n, 2: 90000n, 3: 20000n });
   });
 
@@ -301,5 +307,165 @@ describe('buildBrigadeObjectDistribution', () => {
     expect(result.state).toBe('error');
     expect([...result.totals.values()].every(value => value === null)).toBe(true);
     expect([...result.objects.values()].every(object => object.amounts === null)).toBe(true);
+  });
+});
+
+// ─── «Доля», вписанная рублями (355) ─────────────────────────────────────────────────────────────────────────────
+describe('вписанные доли', () => {
+  // 10 человек по 10 учтённых часов на Wave, КТУ 1,0; выработка 1 000 000.
+  const ten = (ktu: (id: number) => number = () => 10, minutes: (id: number) => number = () => 600) => (
+    Array.from({ length: 10 }, (_, index) => ({
+      employee_id: index + 1,
+      ktu_tenths: ktu(index + 1),
+      byObject: new Map([['wave', minutes(index + 1)]]),
+    }))
+  );
+  const items = (members: ReturnType<typeof ten>) => members.map(member => ({
+    employee_id: member.employee_id,
+    minutes: member.byObject.get('wave')!,
+    weight: BigInt(member.ktu_tenths) * BigInt(member.byObject.get('wave')!),
+  }));
+  const OUTPUT = 100_000_000n;
+  const fixedOn = (entries: Array<[number, bigint]>) => new Map([['wave', new Map(entries)]]);
+
+  it('пример: Амонову 150 000 — ровно она, остальные делят 850 000 до копейки, КТУ 1,59', () => {
+    const result = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(), [], fixedOn([[1, 15_000_000n]]));
+    const wave = result.objects.get('wave')!;
+    expect(wave.state).toBe('ok');
+    expect(wave.conflicts).toEqual([]);
+    expect(wave.amounts!.get(1)).toBe(15_000_000n);
+    const others = [...wave.amounts!].filter(([id]) => id !== 1).map(([, cents]) => cents);
+    expect(others.reduce((sum, cents) => sum + cents, 0n)).toBe(85_000_000n);
+    expect(others.filter(cents => cents === 9_444_445n)).toHaveLength(4);
+    expect(others.filter(cents => cents === 9_444_444n)).toHaveLength(5);
+    expect(wave.total_weight).toBe(9 * 6000);
+    expect(wave.fixed_total).toBe(15_000_000n);
+    expect(effectiveKtu(15_000_000n, BigInt(wave.total_weight), OUTPUT - wave.fixed_total, 600)).toBe('1.59');
+    expect(result.state).toBe('ok');
+    expect([...result.totals.values()].reduce((sum, cents) => sum! + cents!, 0n)).toBe(OUTPUT);
+  });
+
+  it('максимум при КТУ 2,2 — в копейках вниз; на копейку больше — ktu_above_max', () => {
+    const max = maxFixedShare(OUTPUT, items(ten()), new Map(), 1)!;
+    expect(max).toEqual({ max: 19_642_857n, limitedBy: 1, exact: false });
+    expect(shareConflicts(OUTPUT, items(ten()), new Map([[1, 19_642_857n]]))).toEqual([]);
+    expect(shareConflicts(OUTPUT, items(ten()), new Map([[1, 19_642_858n]]))).toEqual([
+      { code: 'ktu_above_max', employee_id: 1, ktu: '2.20' },
+    ]);
+  });
+
+  it('доля второго выводит первого за 2,2 — конфликт у первого; максимум второго — по первому', () => {
+    const fixed = new Map([[1, 19_000_000n], [2, 11_909_091n]]);
+    expect(shareConflicts(OUTPUT, items(ten()), fixed)).toEqual([{ code: 'ktu_above_max', employee_id: 1, ktu: '2.20' }]);
+    expect(maxFixedShare(OUTPUT, items(ten()), new Map([[1, 19_000_000n]]), 2))
+      .toEqual({ max: 11_909_090n, limitedBy: 1, exact: false });
+    expect(shareConflicts(OUTPUT, items(ten()), new Map([[1, 19_000_000n], [2, 11_909_090n]]))).toEqual([]);
+  });
+
+  it('максимум согласован с проверкой: max проходит, max + 1 копейка — нет (разные часы и КТУ)', () => {
+    const members = ten(id => (id % 3 === 0 ? 0 : 5 + id), id => 300 + id * 37);
+    for (const [employeeId, fixedOthers] of [
+      [1, new Map<number, bigint>()],
+      [4, new Map([[2, 3_000_000n]])],
+      [7, new Map([[2, 3_000_000n], [5, 9_000_000n]])],
+    ] as Array<[number, Map<number, bigint>]>) {
+      const max = maxFixedShare(OUTPUT, items(members), fixedOthers, employeeId)!;
+      expect(shareConflicts(OUTPUT, items(members), new Map(fixedOthers).set(employeeId, max.max))).toEqual([]);
+      expect(shareConflicts(OUTPUT, items(members), new Map(fixedOthers).set(employeeId, max.max + 1n))).not.toEqual([]);
+    }
+  });
+
+  it('два объекта — у одного человека разные расчётные КТУ', () => {
+    const members = [
+      { employee_id: 1, ktu_tenths: 10, byObject: new Map([['wave', 600], ['alia', 600]]) },
+      { employee_id: 2, ktu_tenths: 10, byObject: new Map([['wave', 600]]) },
+      { employee_id: 3, ktu_tenths: 10, byObject: new Map([['alia', 600]]) },
+    ];
+    const result = buildBrigadeObjectDistribution(
+      new Map([['wave', 100_000n], ['alia', 100_000n]]), members, [],
+      new Map([['wave', new Map([[1, 60_000n]])], ['alia', new Map([[1, 40_000n]])]]),
+    );
+    const rows = members.map(member => ({
+      employee_id: member.employee_id,
+      ktu: '1.0',
+      counted_minutes: [...member.byObject.values()].reduce((sum, value) => sum + value, 0),
+      amount: centsToMoney(result.totals.get(member.employee_id)!),
+      objects: [...member.byObject].map(([key, minutes]) => ({
+        object_key: key,
+        counted_minutes: minutes,
+        amount: centsToMoney(result.objects.get(key)!.amounts!.get(member.employee_id)!),
+        ...(member.employee_id === 1 ? { fixed_amount: key === 'wave' ? '600.00' : '400.00' } : {}),
+      })),
+    }));
+    const ktus = fixedShareKtus(undefined, rows, ['wave', 'alia'].map(key => ({
+      object_key: key, output: '1000.00', total_weight: result.objects.get(key)!.total_weight,
+    })));
+    expect(ktus.get('wave')!.get(1)).toBe('1.50');
+    expect(ktus.get('alia')!.get(1)).toBe('0.67');
+    expect(result.totals.get(1)).toBe(100_000n);
+  });
+
+  it('КТУ 0 у остальных: остаток некому — конфликт; ровно вся выработка вписана — сходится, КТУ «—»', () => {
+    const zero = ten(id => (id === 1 ? 10 : 0));
+    expect(shareConflicts(OUTPUT, items(zero), new Map([[1, 90_000_000n]]))).toEqual([
+      { code: 'remainder_without_weight', amount: '100000.00' },
+    ]);
+    const all = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), zero, [], fixedOn([[1, OUTPUT]]));
+    expect(all.objects.get('wave')!.state).toBe('ok');
+    expect(all.objects.get('wave')!.amounts!.get(2)).toBe(0n);
+    expect(effectiveKtu(OUTPUT, 0n, 0n, 600)).toBeNull();
+    expect(maxFixedShare(OUTPUT, items(zero), new Map(), 1)).toEqual({ max: OUTPUT, limitedBy: 1, exact: true });
+  });
+
+  it('вписанная 0,00 — не теряется: у него 0, остальные делят всю выработку', () => {
+    const result = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(), [], fixedOn([[1, 0n]]));
+    const wave = result.objects.get('wave')!;
+    expect(wave.amounts!.get(1)).toBe(0n);
+    // 1 000 000 / 9 — лишняя копейка первому по номеру (равные остатки).
+    expect(wave.amounts!.get(2)).toBe(11_111_112n);
+    expect(wave.amounts!.get(3)).toBe(11_111_111n);
+    expect([...wave.amounts!.values()].reduce((sum, cents) => sum + cents, 0n)).toBe(OUTPUT);
+    expect(wave.total_weight).toBe(9 * 6000);
+    expect(effectiveKtu(0n, 54_000n, OUTPUT, 600)).toBe('0.00');
+  });
+
+  it('больше выработки и доля без часов — конфликт, долей на объекте нет ни у кого, итоги null', () => {
+    const over = buildBrigadeObjectDistribution(new Map([['wave', 12_000_000n]]), ten(), [], fixedOn([[1, 15_000_000n]]));
+    expect(over.objects.get('wave')).toMatchObject({
+      state: 'share_conflict', amounts: null, conflicts: [{ code: 'fixed_exceeds_output', amount: '30000.00' }],
+    });
+    expect(over.state).toBe('nothing_to_distribute');
+    expect(over.totals.get(2)).toBeNull();
+
+    const orphan = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(), [], fixedOn([[777, 1_000n]]));
+    expect(orphan.objects.get('wave')).toMatchObject({
+      state: 'share_conflict', conflicts: [{ code: 'fixed_without_hours', employee_id: 777 }],
+    });
+  });
+
+  it('после вписанной доли: КТУ свободного, выработка или часы сдвинулись — конфликт с верным кодом', () => {
+    const fixed = fixedOn([[1, 19_000_000n]]);
+    expect(buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(), [], fixed).objects.get('wave')!.state).toBe('ok');
+    // Остальным подняли КТУ до 1,2 — расчётный КТУ Амонова растёт.
+    const ktu = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(id => (id === 1 ? 10 : 12)), [], fixed);
+    expect(ktu.objects.get('wave')!.conflicts).toEqual([{ code: 'ktu_above_max', employee_id: 1, ktu: '2.53' }]);
+    // Выработку уменьшили.
+    const output = buildBrigadeObjectDistribution(new Map([['wave', 80_000_000n]]), ten(), [], fixed);
+    expect(output.objects.get('wave')!.conflicts[0].code).toBe('ktu_above_max');
+    // У Амонова часов стало меньше.
+    const hours = buildBrigadeObjectDistribution(new Map([['wave', OUTPUT]]), ten(undefined, id => (id === 1 ? 300 : 600)), [], fixed);
+    expect(hours.objects.get('wave')!.conflicts[0]).toMatchObject({ code: 'ktu_above_max', employee_id: 1 });
+  });
+
+  it('выработка не внесена — вписанные не применяются и конфликтом не считаются', () => {
+    const result = buildBrigadeObjectDistribution(new Map(), ten(), [], fixedOn([[1, 15_000_000n]]));
+    expect(result.objects.get('wave')).toMatchObject({ state: 'no_output', conflicts: [], amounts: null });
+  });
+
+  it('без вписанных — ровно как до 355 (те же копейки и знаменатель)', () => {
+    const members = ten(id => 5 + id, id => 300 + id * 41);
+    const before = buildBrigadeObjectDistribution(new Map([['wave', 123_456_789n]]), members, []);
+    const after = buildBrigadeObjectDistribution(new Map([['wave', 123_456_789n]]), members, [], new Map());
+    expect(after).toEqual(before);
   });
 });

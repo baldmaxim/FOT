@@ -12,15 +12,19 @@ interface ITimesheetSalaryOutputInputProps {
   label: string;
   /** Сумму можно только стереть (на объекте больше нет часов бригады). */
   clearOnly?: boolean;
+  /** Класс поля: по умолчанию — «Выработка, ₽»; у «Доли» — свой (узкий столбец таблицы). */
+  className?: string;
+  /** Подсказка поля (вписанная доля, КТУ по ней). */
+  title?: string;
   onSave: (amount: number | null) => Promise<void>;
 }
 
 /**
- * «Выработка, ₽» объекта бригады: черновик живёт, пока поле в фокусе; сохраняется по уходу из поля и Enter,
- * Escape — выйти без сохранения.
+ * «Выработка, ₽» объекта бригады и «Доля», вписанная рублями (355): черновик живёт, пока поле в фокусе; сохраняется по
+ * уходу из поля и Enter, Escape — выйти без сохранения.
  */
 export const TimesheetSalaryOutputInput: FC<ITimesheetSalaryOutputInputProps> = ({
-  value, canEdit, saving, label, clearOnly = false, onSave,
+  value, canEdit, saving, label, clearOnly = false, className = 'ts-salary-output-input', title, onSave,
 }) => {
   const savedValue = toMoneyInput(value);
   // Вне фокуса — сохранённое (смена месяца, ответ сервера).
@@ -60,7 +64,8 @@ export const TimesheetSalaryOutputInput: FC<ITimesheetSalaryOutputInputProps> = 
   if (!canEdit) return <span className="ts-salary-output-value">{savedValue || '—'}</span>;
   return (
     <ClearableInput
-      className="ts-salary-output-input"
+      className={className}
+      title={title}
       value={shown}
       // Сумму на объекте без часов можно только стереть: принимается лишь очистка.
       onValueChange={next => { if (!clearOnly || next === '') setDraft(formatMoneyInput(next)); }}

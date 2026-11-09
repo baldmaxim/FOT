@@ -3,7 +3,8 @@ import type { FC } from 'react';
 import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, salaryAmountTitle, salaryLineTitle, salaryOvertimeNote,
+  findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, KTU_OPTIONS, salaryAmountTitle, salaryLineTitle,
+  salaryOvertimeNote,
 } from '../../utils/timesheetSalary';
 
 /** Вкладки «Зарплата по отделам / по объектам» в табеле: данные и правка КТУ бригады. */
@@ -15,9 +16,6 @@ export interface ITimesheetSalaryGridProps {
   onKtuChange: (employeeId: number, ktu: number) => void;
 }
 
-/** КТУ 0,5…2,0 с шагом 0,1. */
-const KTU_OPTIONS = Array.from({ length: 16 }, (_, index) => ((index + 5) / 10).toFixed(1));
-
 const amountTitle = (salary: ITimesheetSalaryGridProps, row: ITimesheetSalaryRow): string | undefined => (
   salary.data ? salaryAmountTitle(salary.data, row) : undefined
 );
@@ -26,21 +24,38 @@ interface IKtuSelectProps {
   salary: ITimesheetSalaryGridProps;
   row: ITimesheetSalaryRow;
   employeeName: string;
+  /**
+   * Доля вписана рублями (355): КТУ здесь — расчётный ('1.59'; null — «—»), первым пунктом списка. Выбор КТУ из списка
+   * снимает вписанные доли сотрудника — доля снова по формуле.
+   */
+  fixedKtu?: { ktu: string | null };
+  /** Подсказка: у сотрудника есть вписанные доли на объектах (КТУ месяца там не действует). */
+  title?: string;
 }
 
-export const TimesheetSalaryKtuSelect: FC<IKtuSelectProps> = ({ salary, row, employeeName }) => {
+/** Значение пункта «КТУ по вписанной доле» — его выбор ничего не меняет. */
+const FIXED_OPTION = '__fixed__';
+
+export const TimesheetSalaryKtuSelect: FC<IKtuSelectProps> = ({ salary, row, employeeName, fixedKtu, title }) => {
   const value = row.ktu ?? '1.0';
   const editable = salary.canEdit && row.can_edit;
-  if (!editable) return <span className="ts-salary-ktu-text">{formatKtu(value)}</span>;
+  const fixedLabel = fixedKtu ? (fixedKtu.ktu ? formatKtu(fixedKtu.ktu) : '—') : null;
+  if (!editable) {
+    return <span className="ts-salary-ktu-text" title={title}>{fixedLabel ?? formatKtu(value)}</span>;
+  }
   return (
     <select
-      className="ts-salary-ktu-select"
-      value={value}
+      className={`ts-salary-ktu-select${fixedKtu ? ' ts-salary-ktu-select--fixed' : ''}`}
+      value={fixedKtu ? FIXED_OPTION : value}
       disabled={salary.pendingKtuEmployeeId === row.employee_id}
       aria-label={`КТУ: ${employeeName}`}
+      title={title}
       onClick={event => event.stopPropagation()}
-      onChange={event => salary.onKtuChange(row.employee_id, Number(event.target.value))}
+      onChange={event => {
+        if (event.target.value !== FIXED_OPTION) salary.onKtuChange(row.employee_id, Number(event.target.value));
+      }}
     >
+      {fixedLabel !== null && <option value={FIXED_OPTION}>{fixedLabel}</option>}
       {KTU_OPTIONS.map(option => (
         <option key={option} value={option}>{formatKtu(option)}</option>
       ))}

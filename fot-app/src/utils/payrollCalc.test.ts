@@ -385,3 +385,29 @@ describe('листок: «Остаток (с НДФЛ)»', () => {
     expect(payslipRemainder(undefined, 0)).toBeNull();
   });
 });
+
+describe('доля бригады, вписанная рублями (355)', () => {
+  const wave = {
+    kind: 'brigade' as const, department_id: 'b1', object_key: 'w', object_name: 'ЖК Wave', output: '1000000.00',
+    ktu_tenths: 10, counted_minutes: 600, weight: 6000, total_weight: 54_000, amount: '94444.44',
+  };
+
+  it('вписанная — «доля вписана = сумма (КТУ расчётный)», остальные — от остатка, конфликт — «не сходятся»', () => {
+    expect(calcLineFormula({ code: 'brigade', amount: '150000.00', parts: [{
+      ...wave, amount: '150000.00', fixed_amount: '150000.00', effective_ktu: '1.59', fixed_total: '150000.00',
+    }] })).toEqual([`ЖК Wave: доля вписана = 150${NBSP}000,00 (КТУ 1,59)`]);
+    expect(calcLineFormula({ code: 'brigade', amount: '94444.44', parts: [{ ...wave, fixed_total: '150000.00' }] })).toEqual([
+      `ЖК Wave: (выработка 1${NBSP}000${NBSP}000,00 − вписанные 150${NBSP}000,00) × КТУ 1 × 10 ч / 90`
+        + ` (Σ КТУ × ч объекта без вписанных) = 94${NBSP}444,44`,
+    ]);
+    expect(calcLineFormula({ code: 'brigade', amount: null, parts: [{ ...wave, amount: null, conflict: true }] }))
+      .toEqual(['ЖК Wave: вписанные доли не сходятся с выработкой']);
+  });
+
+  it('сумма бригаде: подпись под суммой — расчётный КТУ и «доля вписана»; без вписанной — как раньше', () => {
+    expect(calcLineDaysNote({ code: 'brigade', amount: '400000.00', brigade: { ktu: '1.33', hours: 10, fixed: true } }))
+      .toBe('КТУ 1,33 · 10 ч · доля вписана');
+    expect(calcLineDaysNote({ code: 'brigade', amount: '300000.00', brigade: { ktu: '1.0', hours: 10 } }))
+      .toBe('КТУ 1,0 · 10 ч');
+  });
+});

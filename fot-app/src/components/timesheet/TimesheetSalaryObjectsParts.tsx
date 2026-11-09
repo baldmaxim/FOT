@@ -10,28 +10,36 @@ import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
   averageTitle,
+  BRIGADE_SHARE_KEY,
   countedHoursLabel,
   describeSalaryState,
   displayedHours,
   employeeCountedMinutes,
+  formatKtu,
   formatSalaryAmount,
+  isFixedShare,
   isOutputClearOnly,
   isSalaryRowMuted,
   memberAverage,
   objectAverage,
   objectCountedMinutes,
+  objectShareMode,
   objectShareTitle,
   rowAverage,
   salaryAmountTitle,
   salaryObjectStateNote,
+  shareConflictsOf,
+  shareConflictText,
+  shareFieldValue,
   sortSalaryRows,
   totalDaysOfEmployee,
+  totalShareMode,
 } from '../../utils/timesheetSalary';
 import { salaryTotalRows } from '../../utils/timesheetSalaryOverlay';
 import { TimesheetSalaryKtuSelect } from './TimesheetSalaryCells';
 import { TimesheetSalaryOutputInput } from './TimesheetSalaryOutputInput';
 
-/** «Зарплата по объектам» поверх сетки «По объектам»: расчёт бригады и его правка (КТУ, «Выработка, ₽»). */
+/** «Зарплата по объектам» поверх сетки «По объектам»: расчёт бригады и его правка (КТУ, «Выработка, ₽», «Доля»). */
 export interface ITimesheetObjectsSalary {
   data: ITimesheetSalaryResponse;
   canEdit: boolean;
@@ -39,8 +47,12 @@ export interface ITimesheetObjectsSalary {
   showAllEmployees: boolean;
   pendingKtuEmployeeId: number | null;
   savingObjectKey: string | null;
+  /** Сохраняемая «Доля»: `${object_key}:${employee_id}`. */
+  savingShareKey: string | null;
   onKtuChange: (employeeId: number, ktu: number) => void;
   onObjectOutputSave: (objectKey: string, amount: number | null) => Promise<void>;
+  /** «Доля», вписанная рублями (355): object_key ('__brigade__' — сумма бригаде); null — стереть. */
+  onShareSave: (objectKey: string, employeeId: number, amount: number | null) => Promise<void>;
 }
 
 /**
@@ -72,9 +84,13 @@ const amountClass = (muted: boolean, amount: string | null | undefined): string 
 
 const hoursLabel = (hours: number): string => (hours > 0 ? formatHoursLabel(hours) : '—');
 
-/** Шапка вкладки: заголовок, «Выработка всего» (по объектам) или «Выработка бригады» (одной суммой), состояние. */
+/**
+ * Шапка вкладки: заголовок, «Выработка всего» (по объектам) или «Выработка бригады» (одной суммой), состояние; у суммы
+ * бригаде — и пометка, если вписанные доли не сходятся (по объектам она у своего объекта).
+ */
 export const TimesheetSalaryObjectsHeader: FC<{ data: ITimesheetSalaryResponse }> = ({ data }) => {
   const state = describeSalaryState(data);
+  const conflicts = isBrigadeOutput(data) ? shareConflictsOf(data, BRIGADE_SHARE_KEY) : [];
   return (
     <div className="ts-salary-objects-head">
       <h3 className="ts-table-title">Зарплата по объектам</h3>
@@ -84,6 +100,11 @@ export const TimesheetSalaryObjectsHeader: FC<{ data: ITimesheetSalaryResponse }
       </span>
       {state && (
         <span className={`ts-salary-state ts-salary-state--${state.tone}`} title={state.title}>{state.text}</span>
+      )}
+      {conflicts.length > 0 && (
+        <span className="ts-salary-state ts-salary-state--error">
+          Долей нет: {conflicts.map(shareConflictText).join('; ')}
+        </span>
       )}
     </div>
   );
@@ -98,7 +119,7 @@ export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetS
   salary, object,
 }) => {
   if (!object || isBrigadeOutput(salary.data)) return null;
-  const note = salaryObjectStateNote(object);
+  const note = salaryObjectStateNote(object, shareConflictsOf(salary.data, object.object_key));
   const average = objectAverage(object);
   const minutes = objectCountedMinutes(object);
   return (
@@ -129,13 +150,63 @@ export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetS
   );
 };
 
-/** КТУ сотрудника бригады; не участник расчёта (начальник участка) — «—». */
-export const TimesheetSalaryKtuCell: FC<ISalaryProps & { employeeId: number }> = ({ salary, employeeId }) => {
+const HAS_FIXED_TITLE = 'На объектах есть вписанные доли: там КТУ — по доле';
+
+/**
+ * КТУ сотрудника бригады; не участник расчёта (начальник участка) — «—». В строке объекта с вписанной долей — расчётный
+ * КТУ по ней; в «Итого по бригаде» — КТУ месяца (у суммы бригаде с вписанной долей — расчётный).
+ */
+export const TimesheetSalaryKtuCell: FC<ISalaryProps & { employeeId: number; object?: ITimesheetSalaryObject }> = ({
+  salary, employeeId, object,
+}) => {
   const row = salaryRowOf(salary.data, employeeId);
+  const member = object?.members.find(item => item.employee_id === employeeId);
+  const fixedKtu = object
+    ? (member && isFixedShare(member) ? { ktu: member.effective_ktu ?? null } : undefined)
+    : (row && isBrigadeOutput(salary.data) && isFixedShare(row) ? { ktu: row.effective_ktu ?? null } : undefined);
+  const title = !object && row?.has_fixed_shares ? HAS_FIXED_TITLE : undefined;
   return (
     <td className="ts-col-ktu-sticky">
-      {row ? <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(salary.data, employeeId)} /> : '—'}
+      {row
+        ? <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(salary.data, employeeId)} fixedKtu={fixedKtu} title={title} />
+        : '—'}
     </td>
+  );
+};
+
+/** Подсказка вписанной доли «Итого по бригаде» (сумма бригаде). */
+const rowShareTitle = (row: ITimesheetSalaryRow): string | undefined => {
+  if (!isFixedShare(row)) return undefined;
+  if (row.share === null || row.share === undefined) return 'Доля вписана вручную — не сходится с выработкой';
+  return `Доля вписана вручную${row.effective_ktu ? ` · КТУ ${formatKtu(row.effective_ktu)}` : ''}`;
+};
+
+/**
+ * Поле «Доли» (355): вписанная — жирным; посчитанная по формуле — как есть, правка её закрепляет. Стереть посчитанную
+ * нечего — крестик у неё ничего не отправляет. clear — только стереть вписанную (нет часов, ушёл из бригады).
+ */
+export const TimesheetSalaryShareField: FC<ISalaryProps & {
+  objectKey: string;
+  employeeId: number;
+  value: { fixed_share?: string | null; share?: string | null };
+  mode: 'edit' | 'clear';
+  title: string | undefined;
+}> = ({ salary, objectKey, employeeId, value, mode, title }) => {
+  const fixed = isFixedShare(value);
+  return (
+    <TimesheetSalaryOutputInput
+      value={shareFieldValue(value)}
+      canEdit
+      saving={salary.savingShareKey === `${objectKey}:${employeeId}`}
+      label={`Доля, ${nameOf(salary.data, employeeId)}`}
+      clearOnly={mode === 'clear'}
+      className={`ts-salary-share-input${fixed ? ' ts-salary-share-input--fixed' : ''}`}
+      title={title}
+      onSave={async amount => {
+        if (amount === null && !fixed) return;
+        await salary.onShareSave(objectKey, employeeId, amount);
+      }}
+    />
   );
 };
 
@@ -147,13 +218,18 @@ export const TimesheetSalaryShareCells: FC<ISalaryProps & {
   const member = object?.members.find(item => item.employee_id === employeeId) ?? null;
   const muted = isMuted(salary.data);
   const average = member ? memberAverage(member) : null;
+  const title = object && member ? objectShareTitle(object, member) : undefined;
+  const mode = object && member ? objectShareMode(salary.data, salary.canEdit, object, member) : null;
   return (
     <>
-      <td
-        className={amountClass(muted, member?.share)}
-        title={object && member ? objectShareTitle(object, member) : undefined}
-      >
-        {formatSalaryAmount(member?.share ?? null)}
+      <td className={amountClass(muted, member?.share)} title={mode ? undefined : title}>
+        {object && member && mode
+          ? (
+            <TimesheetSalaryShareField
+              salary={salary} objectKey={object.object_key} employeeId={employeeId} value={member} mode={mode} title={title}
+            />
+          )
+          : formatSalaryAmount(member?.share ?? null)}
       </td>
       <td className="ts-col-salary" />
       <td className={amountClass(muted, average)} title={member ? averageTitle(member.share, member.counted_minutes) : undefined}>
@@ -188,7 +264,7 @@ export const TimesheetSalaryCalcRows: FC<ICalcRowsProps> = ({ salary, object, me
                 {formatTimesheetEmployeeName(name)}
               </div>
             </td>
-            <TimesheetSalaryKtuCell salary={salary} employeeId={member.employee_id} />
+            <TimesheetSalaryKtuCell salary={salary} employeeId={member.employee_id} object={object} />
             {days.cells}
             <TimesheetSalaryShareCells salary={salary} object={object} employeeId={member.employee_id} />
             <td className="ts-col-sum-sticky">{hoursLabel(days.hours)}</td>
@@ -229,6 +305,23 @@ export const TimesheetSalaryCalcGroups: FC<ISectionProps & { objects: readonly I
   </>
 );
 
+/** «Доля» в «Итого по бригаде»: по объектам — Σ, только показ; при сумме бригаде — поле, как у объекта. */
+const TotalShareCell: FC<ISalaryProps & { row: ITimesheetSalaryRow; muted: boolean }> = ({ salary, row, muted }) => {
+  const mode = totalShareMode(salary.data, salary.canEdit, row);
+  const title = rowShareTitle(row);
+  return (
+    <td className={amountClass(muted, row.share)} title={mode ? undefined : title}>
+      {mode
+        ? (
+          <TimesheetSalaryShareField
+            salary={salary} objectKey={BRIGADE_SHARE_KEY} employeeId={row.employee_id} value={row} mode={mode} title={title}
+          />
+        )
+        : formatSalaryAmount(row.share ?? null)}
+    </td>
+  );
+};
+
 /** «Итого по бригаде»: каждый участник расчёта один раз — клетки как «По сотрудникам», доля по всем объектам и «Сумма». */
 export const TimesheetSalaryTotalRows: FC<ISectionProps> = ({ salary, colSpan, renderDays }) => {
   const { data } = salary;
@@ -260,7 +353,7 @@ export const TimesheetSalaryTotalRows: FC<ISectionProps> = ({ salary, colSpan, r
             </td>
             <TimesheetSalaryKtuCell salary={salary} employeeId={row.employee_id} />
             {days.cells}
-            <td className={amountClass(muted, row.share)}>{formatSalaryAmount(row.share ?? null)}</td>
+            <TotalShareCell salary={salary} row={row} muted={muted} />
             <td className={amountClass(muted, row.amount)} title={salaryAmountTitle(data, row)}>
               {formatSalaryAmount(row.amount)}
             </td>

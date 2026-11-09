@@ -5,8 +5,9 @@ import jwt from 'jsonwebtoken';
 
 /**
  * Галочка «Выработка» (миграция 342). Проверка прав НАСТОЯЩАЯ и роутеры настоящие, контроллеры — заглушки: галочка
- * открывает только маршруты выработки и расчёта бригады (его сужает контроллер), раздел «Зарплата» и КТУ — нет. Выдают
- * только учётки из списка: администратор не из списка получает 403, хотя панель назначений ему открыта.
+ * открывает только маршруты выработки, расчёта бригады, КТУ и «Доли» (355; бригаду и месяц сужает контроллер), раздел
+ * «Зарплата» — нет. Выдают только учётки из списка: администратор не из списка получает 403, хотя панель назначений ему
+ * открыта.
  */
 
 const h = vi.hoisted(() => {
@@ -97,10 +98,12 @@ const OUTPUT_ROUTES: Array<['get' | 'put', string]> = [
   ['get', '/api/payroll/timesheet-salary/brigade-objects'],
   ['put', '/api/payroll/timesheet-salary/output'],
   ['put', '/api/payroll/timesheet-salary/object-output'],
+  // КТУ и «Доля» (355) — галочке тоже: там же, где ей открыта «Зарплата по объектам» (сужает контроллер).
+  ['put', '/api/payroll/timesheet-salary/ktu'],
+  ['put', '/api/payroll/timesheet-salary/share'],
 ];
 
 const CLOSED_ROUTES: Array<['get' | 'put', string]> = [
-  ['put', '/api/payroll/timesheet-salary/ktu'],
   ['get', '/api/payroll/terms'],
 ];
 
@@ -117,7 +120,7 @@ beforeEach(() => {
 });
 
 describe('маршруты выработки', () => {
-  it('галочка у роли без раздела — открыты; раздел «Зарплата» и КТУ — 403', async () => {
+  it('галочка у роли без раздела — открыты, в том числе КТУ и «Доля»; раздел «Зарплата» — 403', async () => {
     h.grantedEmployeeIds.add(EMPLOYEE_ID);
     for (const [method, url] of OUTPUT_ROUTES) {
       expect((await call(method, url, 'potapov', 'hr')).status, url).toBe(200);
@@ -138,7 +141,7 @@ describe('маршруты выработки', () => {
     expect(h.calls).toEqual([]);
   });
 
-  it('учётка из списка — все маршруты, в том числе КТУ', async () => {
+  it('учётка из списка — все маршруты, в том числе КТУ и «Доля»', async () => {
     h.listedUserIds.add('listed');
     for (const [method, url] of [...OUTPUT_ROUTES, ...CLOSED_ROUTES]) {
       expect((await call(method, url, 'listed', 'admin')).status, url).toBe(200);

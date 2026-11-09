@@ -316,6 +316,8 @@ export const AUDIT_ACTIONS = {
   BRIGADE_SALARY_RECALCULATED: 'BRIGADE_SALARY_RECALCULATED',
   // «Табель → Зарплата по объектам» (миграция 336): выработка бригады на объекте за месяц — было → стало.
   BRIGADE_SALARY_OBJECT_OUTPUT_SET: 'BRIGADE_SALARY_OBJECT_OUTPUT_SET',
+  // «Доля», вписанная рублями (миграция 355): было → стало (null — по формуле).
+  BRIGADE_SALARY_SHARE_SET: 'BRIGADE_SALARY_SHARE_SET',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

@@ -5,6 +5,7 @@ import type {
   ITimesheetSalaryObjectMember,
   ITimesheetSalaryResponse,
   ITimesheetSalaryRow,
+  ITimesheetSalaryShareConflict,
   TimesheetSalaryErrorCode,
 } from '../types/timesheet';
 import { calcLineDaysNote, calcMissingNote } from './payrollCalc';
@@ -29,6 +30,12 @@ export const formatSalaryAmount = (amount: string | null): string => (
 
 /** '1.5' → '1,5'. */
 export const formatKtu = (value: string): string => value.replace('.', ',');
+
+/** КТУ 0,0…2,2 с шагом 0,1 (миграция 355). */
+export const KTU_OPTIONS: readonly string[] = Array.from({ length: 23 }, (_, index) => (index / 10).toFixed(1));
+
+/** Ключ вписанной доли при выработке одной суммой на бригаду (341) — как на сервере. */
+export const BRIGADE_SHARE_KEY = '__brigade__';
 
 /**
  * Суммы строки приглушены: бригада «Требует перерасчёта». Отдел — никогда: закрыт табель или нет, на экране не
@@ -146,11 +153,46 @@ export const describeSalaryState = (data: ITimesheetSalaryResponse): ISalaryStat
   return null;
 };
 
-/** Пометка объекта под полем «Выработка»: не внесена / некому распределить; внесена (или сумма бригаде) — null. */
-export const salaryObjectStateNote = (object: ITimesheetSalaryObject): string | null => {
+/**
+ * Почему вписанные доли не сходятся — коротко, для пометки рядом с «Выработкой»: «вписанные доли больше выработки на
+ * 30 000,00», «КТУ по доле 2,41 больше 2,2 — Амонов А. М.».
+ */
+export const shareConflictText = (conflict: ITimesheetSalaryShareConflict): string => {
+  const name = conflict.full_name ? formatTimesheetEmployeeName(conflict.full_name) : `№ ${conflict.employee_id ?? ''}`;
+  switch (conflict.code) {
+    case 'fixed_exceeds_output':
+      return `вписанные доли больше выработки на ${formatSalaryAmount(conflict.amount ?? null)}`;
+    case 'remainder_without_weight':
+      return `остаток ${formatSalaryAmount(conflict.amount ?? null)} некому распределить`;
+    case 'ktu_above_max':
+      return conflict.ktu
+        ? `КТУ по доле ${formatKtu(conflict.ktu)} больше 2,2 — ${name}`
+        : `доля забирает весь остаток — ${name}`;
+    case 'fixed_without_hours':
+      return `доля вписана без часов на объекте — ${name}`;
+  }
+};
+
+/** Конфликты вписанных долей ключа (объект или '__brigade__'). */
+export const shareConflictsOf = (
+  data: ITimesheetSalaryResponse,
+  objectKey: string,
+): ITimesheetSalaryShareConflict[] => (data.share_conflicts ?? []).filter(conflict => conflict.object_key === objectKey);
+
+/**
+ * Пометка объекта под полем «Выработка»: не внесена / некому распределить / вписанные доли не сходятся; внесена (или
+ * сумма бригаде) — null.
+ */
+export const salaryObjectStateNote = (
+  object: ITimesheetSalaryObject,
+  conflicts: readonly ITimesheetSalaryShareConflict[] = [],
+): string | null => {
   if (object.state === 'by_brigade') return null;
   if (object.state === 'no_output') return 'не внесена';
   if (object.state === 'nothing_to_distribute') return 'некому распределить — часов нет';
+  if (object.state === 'share_conflict') {
+    return conflicts.length > 0 ? `долей нет: ${conflicts.map(shareConflictText).join('; ')}` : 'вписанные доли не сходятся';
+  }
   return null;
 };
 
@@ -164,12 +206,68 @@ export const objectShareTitle = (
   object: ITimesheetSalaryObject,
   member: ITimesheetSalaryObjectMember,
 ): string | undefined => {
-  if (member.counted_minutes <= 0 || object.state === 'by_brigade') return undefined;
+  if (object.state === 'by_brigade') return undefined;
+  if (isFixedShare(member)) {
+    const ktu = member.effective_ktu ? ` · КТУ ${formatKtu(member.effective_ktu)}` : '';
+    return member.share === null ? 'Доля вписана вручную — не сходится с выработкой' : `Доля вписана вручную${ktu}`;
+  }
+  if (member.counted_minutes <= 0) return undefined;
   if (object.output_amount === null) return 'выработка не внесена';
   if (member.share === null || object.total_weight <= 0) return undefined;
   const ktu = decimalText(member.weight / member.counted_minutes / 10);
-  return `${formatSalaryAmount(object.output_amount)} × КТУ ${ktu} × ${decimalText(member.counted_minutes / 60)} ч`
+  const tail = ` × КТУ ${ktu} × ${decimalText(member.counted_minutes / 60)} ч`;
+  const fixedTotal = objectFixedTotal(object);
+  if (fixedTotal !== null) {
+    // Есть вписанные доли: остальным делится выработка минус они, знаменатель — без вписанных.
+    return `(${formatSalaryAmount(object.output_amount)} − вписанные ${formatSalaryAmount(fixedTotal)})${tail}`
+      + ` / ${decimalText(object.total_weight / 600)} (Σ КТУ × ч без вписанных) = ${formatSalaryAmount(member.share)}`;
+  }
+  return `${formatSalaryAmount(object.output_amount)}${tail}`
     + ` / ${decimalText(object.total_weight / 600)} (Σ КТУ × ч объекта) = ${formatSalaryAmount(member.share)}`;
+};
+
+/** Доля вписана рублями (355). */
+export const isFixedShare = (member: Pick<ITimesheetSalaryObjectMember, 'fixed_share'>): boolean => (
+  member.fixed_share !== null && member.fixed_share !== undefined
+);
+
+/** Σ применённых вписанных долей объекта строкой; вписанных нет — null. */
+export const objectFixedTotal = (object: ITimesheetSalaryObject): string | null => {
+  const fixed = object.members.filter(member => isFixedShare(member) && member.share !== null);
+  if (fixed.length === 0) return null;
+  return (fixed.reduce((sum, member) => sum + Math.round(Number(member.share) * 100), 0) / 100).toFixed(2);
+};
+
+/** Значение поля «Доля»: вписанная, иначе посчитанная по формуле. */
+export const shareFieldValue = (
+  member: { fixed_share?: string | null; share?: string | null },
+): string | null => member.fixed_share ?? member.share ?? null;
+
+/**
+ * Поле «Доли» у рабочего на объекте (выработка по объектам): edit — вписать/поправить (состав бригады, выработка
+ * внесена, есть учтённые часы); clear — только стереть вписанную (без часов, ушёл из бригады); null — только показ.
+ */
+export const objectShareMode = (
+  data: ITimesheetSalaryResponse,
+  canEdit: boolean,
+  object: ITimesheetSalaryObject,
+  member: ITimesheetSalaryObjectMember,
+): 'edit' | 'clear' | null => {
+  if (!canEdit || data.output_mode === 'brigade' || object.state === 'by_brigade') return null;
+  const row = data.rows.find(item => item.employee_id === member.employee_id);
+  if (row?.can_edit && object.output_amount !== null && member.counted_minutes > 0) return 'edit';
+  return isFixedShare(member) && row?.can_clear_share ? 'clear' : null;
+};
+
+/** Поле «Доли» в «Итого по бригаде» — только при выработке одной суммой на бригаду (по объектам там Σ, только показ). */
+export const totalShareMode = (
+  data: ITimesheetSalaryResponse,
+  canEdit: boolean,
+  row: ITimesheetSalaryRow,
+): 'edit' | 'clear' | null => {
+  if (!canEdit || data.output_mode !== 'brigade') return null;
+  if (row.can_edit && data.brigade_output !== null && (row.counted_hours ?? 0) > 0) return 'edit';
+  return row.fixed_share !== null && row.fixed_share !== undefined && row.can_clear_share ? 'clear' : null;
 };
 
 /**

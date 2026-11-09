@@ -172,14 +172,15 @@ router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPa
 // ─── Отпуск в карточке сотрудника (только чтение) ────────────────────────────
 router.get('/vacation/employee/:empId', termsView, payrollVacationController.getByEmployee);
 
-// ─── «Табель → Зарплата» (миграции 330, 336, 341): КТУ, «Выработка» бригады, «Сумма», «Бригады» ─────
-// Список «Зарплаты» или галочка «Выработка» (342). Полный расчёт для галочки дополнительно ограничен в контроллере:
-// только бригада, читаемая в табеле, в окне месяцев. КТУ — только список.
+// ─── «Табель → Зарплата» (миграции 330, 336, 341, 355): КТУ, «Выработка», «Доля» бригады, «Сумма», «Бригады» ─────
+// Список «Зарплаты» или галочка «Выработка» (342). Полный расчёт, КТУ и «Доля» для галочки дополнительно ограничены в
+// контроллере: только бригада, читаемая в табеле, в окне месяцев (там же, где открыта «Зарплата по объектам»).
 router.get('/timesheet-salary', requireBrigadeOutputAccess, timesheetSalaryController.get);
 router.get('/timesheet-salary/brigades', requireBrigadeOutputAccess, timesheetSalaryController.listBrigades);
 router.get('/timesheet-salary/brigade-objects', requireBrigadeOutputAccess, timesheetSalaryController.brigadeObjects);
 router.put('/timesheet-salary/output', requireBrigadeOutputAccess, timesheetSalaryController.setOutput);
 router.put('/timesheet-salary/object-output', requireBrigadeOutputAccess, timesheetSalaryController.setObjectOutput);
-router.put('/timesheet-salary/ktu', termsEdit, timesheetSalaryController.setKtu);
+router.put('/timesheet-salary/ktu', requireBrigadeOutputAccess, timesheetSalaryController.setKtu);
+router.put('/timesheet-salary/share', requireBrigadeOutputAccess, timesheetSalaryController.setShare);
 
 export default router;

@@ -178,9 +178,12 @@ export const TimesheetPage: FC = () => {
   // только список payroll_section_access, роль админа его не даёт.
   const canViewTimesheetSalary = canViewPage('/salary/terms');
   const canEditTimesheetSalary = canEditPage('/salary/terms');
-  // «Бригады» с вводом выработки и «Зарплата по объектам» на просмотр — ещё и по галочке «Выработка» (миграция 342).
+  // «Бригады» с вводом выработки и «Зарплата по объектам» — ещё и по галочке «Выработка» (миграция 342).
   // «Зарплата по отделам» и правка в сетке — только по праву раздела.
   const canOpenBrigades = canViewTimesheetSalary || profile?.has_brigade_output_access === true;
+  // «Зарплата по объектам»: КТУ 0,0…2,2, «Доля» и «Выработка, ₽» (355) — список «Зарплаты» и галочка «Выработка»;
+  // бригаду и месяц сужает сервер (там же, где ему открыт расчёт).
+  const canEditBrigadeSalary = canEditTimesheetSalary || profile?.has_brigade_output_access === true;
   // Флаг роли view_all_departments (миграция 237): просмотр всех отделов ТОЛЬКО в табеле.
   // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
   // обрабатываем локально, окно месяцев роли при этом остаётся включённым.
@@ -2926,11 +2929,13 @@ export const TimesheetPage: FC = () => {
           gridError={timesheetQuery.isError}
           compact={isMobile}
           showAllEmployees={includeEmptyEmployees}
-          canEdit={canEditTimesheetSalary}
+          canEdit={canEditBrigadeSalary}
           pendingKtuEmployeeId={timesheetSalary.pendingKtuEmployeeId}
           savingObjectKey={timesheetSalary.savingObjectKey}
+          savingShareKey={timesheetSalary.savingShareKey}
           onKtuChange={timesheetSalary.setKtu}
           onObjectOutputSave={timesheetSalary.setObjectOutput}
+          onShareSave={timesheetSalary.setShare}
         />
       ) : isEmployeeMode ? (
         !selectedEmployeeModeId ? (

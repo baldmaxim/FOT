@@ -289,6 +289,7 @@ const shareFactsOf = (departmentId: string, shares: IBrigadeShares): Map<number,
   brigadeShareFacts(
     departmentId, shares.distribution ?? 'error', shares.rows, shares.objects,
     shares.mode === 'brigade' ? shares.output_amount : undefined,
+    shares.share_conflicts ?? [],
   )
 );
 

@@ -329,7 +329,7 @@ export type TimesheetSalaryErrorCode = 'unknown_status' | 'no_schedule' | 'dupli
  * Объект бригады: no_output — выработка не внесена; nothing_to_distribute — внесена, учтённых часов нет; by_brigade —
  * выработка внесена одной суммой на бригаду (341), объект только для показа часов.
  */
-export type TimesheetSalaryObjectState = 'ok' | 'no_output' | 'nothing_to_distribute' | 'by_brigade';
+export type TimesheetSalaryObjectState = 'ok' | 'no_output' | 'nothing_to_distribute' | 'by_brigade' | 'share_conflict';
 /** Как внесена выработка бригады: по объектам или одной суммой на бригаду (341) — не обе сразу. */
 export type TimesheetSalaryOutputMode = 'objects' | 'brigade';
 
@@ -388,7 +388,16 @@ export interface ITimesheetSalaryRow {
    */
   payout_state?: 'closed' | 'preliminary' | 'not_closed' | null;
   source: 'version' | 'live' | null;
+  /** КТУ и «Доля» правятся: текущий состав бригады, не себе, право записи. */
   can_edit: boolean;
+  /** Сумма бригаде (341): «Доля», вписанная рублями (355); null — по формуле. */
+  fixed_share?: string | null;
+  /** Сумма бригаде: расчётный КТУ вписанной доли ('1.59'); null — нет. */
+  effective_ktu?: string | null;
+  /** По объектам: у сотрудника есть вписанные доли на объектах (КТУ месяца там не действует). */
+  has_fixed_shares?: boolean;
+  /** Вписанную долю можно стереть (в т. ч. ушедшему из бригады). */
+  can_clear_share?: boolean;
 }
 
 export interface ITimesheetSalaryError {
@@ -409,8 +418,28 @@ export interface ITimesheetSalaryObjectMember {
   counted_minutes: number;
   /** КТУ в десятых × учтённые минуты. */
   weight: number;
-  /** Доля на объекте; null — нет. */
+  /** Доля на объекте; null — нет (не внесена, конфликт, ошибка). */
   share: string | null;
+  /** «Доля», вписанная рублями (355) — текущий ввод; null — по формуле. Видна и при конфликте, чтобы стереть. */
+  fixed_share?: string | null;
+  /** Расчётный КТУ вписанной доли ('1.59'); null — нет. */
+  effective_ktu?: string | null;
+}
+
+/** Почему вписанные доли объекта не сходятся с выработкой (355): на нём долей нет ни у кого. */
+export type TimesheetSalaryShareConflictCode =
+  | 'fixed_exceeds_output' | 'remainder_without_weight' | 'ktu_above_max' | 'fixed_without_hours';
+
+export interface ITimesheetSalaryShareConflict {
+  /** Объект; '__brigade__' — выработка одной суммой на бригаду. */
+  object_key: string;
+  code: TimesheetSalaryShareConflictCode;
+  /** Превышение или остаток строкой. */
+  amount?: string;
+  employee_id?: number;
+  /** Расчётный КТУ ('2.41'); null — остаток 0. */
+  ktu?: string | null;
+  full_name: string | null;
 }
 
 /** Группа «Зарплаты по объектам»: объект бригады, его выработка и рабочие. */
@@ -444,4 +473,6 @@ export interface ITimesheetSalaryResponse {
   rows: ITimesheetSalaryRow[];
   /** Группы по объектам — только у бригады (нет у старого бэкенда). */
   objects?: ITimesheetSalaryObject[];
+  /** Конфликты вписанных долей (355); нет поля — старый бэкенд. */
+  share_conflicts?: ITimesheetSalaryShareConflict[];
 }

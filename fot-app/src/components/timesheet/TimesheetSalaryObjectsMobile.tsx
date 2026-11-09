@@ -4,20 +4,26 @@ import type { ITimesheetSalaryObject, ITimesheetSalaryResponse, ITimesheetSalary
 import { formatHoursLabel } from '../../utils/hoursDisplay';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
+  BRIGADE_SHARE_KEY,
   countedHoursLabel,
   displayedHours,
   employeeCountedMinutes,
   formatSalaryAmount,
+  isFixedShare,
   memberAverage,
   objectAverage,
   objectCountedMinutes,
+  objectShareMode,
   objectShareTitle,
   rowAverage,
   salaryAmountTitle,
   salaryObjectStateNote,
+  shareConflictsOf,
   totalDaysOfEmployee,
+  totalShareMode,
 } from '../../utils/timesheetSalary';
 import { TimesheetSalaryKtuSelect, type ITimesheetSalaryGridProps } from './TimesheetSalaryCells';
+import { TimesheetSalaryShareField, type ITimesheetObjectsSalary } from './TimesheetSalaryObjectsParts';
 
 interface ITimesheetSalaryObjectsMobileProps {
   data: ITimesheetSalaryResponse;
@@ -26,6 +32,8 @@ interface ITimesheetSalaryObjectsMobileProps {
   /** Строки «Итого по бригаде» — с учётом «Все сотрудники». */
   totalRows: ITimesheetSalaryRow[];
   salary: ITimesheetSalaryGridProps;
+  /** Правка «Доли» (355). */
+  objectsSalary: ITimesheetObjectsSalary;
   muted: boolean;
   nameOf: (employeeId: number) => string;
   order: ReadonlyMap<number, number>;
@@ -50,7 +58,7 @@ const AverageNote: FC<{ average: string | null; minutes: number }> = ({ average,
  * доля · средняя»; внизу «Итого по бригаде» с «Суммой». Часы по дням — во вкладке «По объектам».
  */
 export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps> = ({
-  data, rows, totalRows, salary, muted, nameOf, order, outputField,
+  data, rows, totalRows, salary, objectsSalary, muted, nameOf, order, outputField,
 }) => {
   const rowById = new Map(rows.map(row => [row.employee_id, row]));
   const objects = data.objects ?? [];
@@ -58,7 +66,7 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
     <div className="ts-salary-objects-mobile">
       {objects.length === 0 && <div className="ts-loading">Нет часов бригады на объектах за месяц</div>}
       {objects.map(object => {
-        const note = salaryObjectStateNote(object);
+        const note = salaryObjectStateNote(object, shareConflictsOf(data, object.object_key));
         const members = [...object.members].sort((a, b) => (
           (order.get(a.employee_id) ?? 0) - (order.get(b.employee_id) ?? 0)
         ));
@@ -83,19 +91,40 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
               {members.map(member => {
                 const row = rowById.get(member.employee_id);
                 const hours = displayedHours(member.days);
+                const shareMode = objectShareMode(data, objectsSalary.canEdit, object, member);
+                const shareTitle = objectShareTitle(object, member);
                 return (
                   <li key={member.employee_id} className="ts-salary-object-card-row">
                     <span className="ts-salary-object-card-name">{formatTimesheetEmployeeName(nameOf(member.employee_id))}</span>
                     {row && (
                       <label className="ts-salary-mobile-field">
                         <span>КТУ</span>
-                        <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(member.employee_id)} />
+                        <TimesheetSalaryKtuSelect
+                          salary={salary}
+                          row={row}
+                          employeeName={nameOf(member.employee_id)}
+                          fixedKtu={isFixedShare(member) ? { ktu: member.effective_ktu ?? null } : undefined}
+                        />
                       </label>
                     )}
                     <span className="ts-salary-object-card-hours">{hours > 0 ? formatHoursLabel(hours) : '—'}</span>
-                    <span className={amountClass(muted, member.share)} title={objectShareTitle(object, member)}>
-                      {formatSalaryAmount(member.share)}
-                    </span>
+                    {shareMode ? (
+                      <label className="ts-salary-mobile-field ts-salary-mobile-share">
+                        <span>Доля</span>
+                        <TimesheetSalaryShareField
+                          salary={objectsSalary}
+                          objectKey={object.object_key}
+                          employeeId={member.employee_id}
+                          value={member}
+                          mode={shareMode}
+                          title={shareTitle}
+                        />
+                      </label>
+                    ) : (
+                      <span className={amountClass(muted, member.share)} title={shareTitle}>
+                        {formatSalaryAmount(member.share)}
+                      </span>
+                    )}
                     <AverageNote average={memberAverage(member)} minutes={member.counted_minutes} />
                   </li>
                 );
@@ -113,15 +142,31 @@ export const TimesheetSalaryObjectsMobile: FC<ITimesheetSalaryObjectsMobileProps
           <ul className="ts-salary-object-card-list">
             {totalRows.map(row => {
               const hours = displayedHours(totalDaysOfEmployee(data, row.employee_id));
+              const shareMode = totalShareMode(data, objectsSalary.canEdit, row);
+              const fixedKtu = data.output_mode === 'brigade' && isFixedShare(row) ? { ktu: row.effective_ktu ?? null } : undefined;
               return (
                 <li key={row.employee_id} className="ts-salary-object-card-row">
                   <span className="ts-salary-object-card-name">{formatTimesheetEmployeeName(nameOf(row.employee_id))}</span>
                   <label className="ts-salary-mobile-field">
                     <span>КТУ</span>
-                    <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(row.employee_id)} />
+                    <TimesheetSalaryKtuSelect salary={salary} row={row} employeeName={nameOf(row.employee_id)} fixedKtu={fixedKtu} />
                   </label>
                   <span className="ts-salary-object-card-hours">{hours > 0 ? formatHoursLabel(hours) : '—'}</span>
-                  <span className="ts-salary-object-card-share">Доля {formatSalaryAmount(row.share ?? null)}</span>
+                  {shareMode ? (
+                    <label className="ts-salary-mobile-field ts-salary-mobile-share">
+                      <span>Доля</span>
+                      <TimesheetSalaryShareField
+                        salary={objectsSalary}
+                        objectKey={BRIGADE_SHARE_KEY}
+                        employeeId={row.employee_id}
+                        value={row}
+                        mode={shareMode}
+                        title={undefined}
+                      />
+                    </label>
+                  ) : (
+                    <span className="ts-salary-object-card-share">Доля {formatSalaryAmount(row.share ?? null)}</span>
+                  )}
                   <span className={amountClass(muted, row.amount)} title={salaryAmountTitle(data, row)}>
                     {formatSalaryAmount(row.amount)}
                   </span>

@@ -12,15 +12,27 @@
  */
 import { query, queryOne } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
-import type { BrigadeDistributionState, BrigadeObjectState, BrigadeSalaryErrorCode } from './brigade-salary.calc.js';
 import {
+  centsToMoney,
+  fixedShareKtus,
+  moneyToCents,
+  type BrigadeDistributionState,
+  type BrigadeObjectState,
+  type BrigadeSalaryErrorCode,
+} from './brigade-salary.calc.js';
+import {
+  BRIGADE_WHOLE_SHARE_KEY,
   brigadeOutputMode,
   DEFAULT_KTU_TENTHS,
   totalBrigadeOutput,
   type BrigadeOutputMode,
 } from './brigade-salary-inputs.service.js';
 import type { IDateRange } from './brigade-salary-source.service.js';
-import { getBrigadeSalary, type BrigadeSalaryState } from './brigade-salary.service.js';
+import {
+  getBrigadeSalary,
+  type BrigadeSalaryState,
+  type IBrigadeStoredShareConflict,
+} from './brigade-salary.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from '../timesheet-department-assignments.service.js';
 import { monthBounds } from './brigade-salary-source.service.js';
 import { brigadeShareFacts, type IBrigadeShareFact, type IPayrollCalcLine, type PayrollCalcMissing } from './payroll-calc.rules.js';
@@ -31,7 +43,7 @@ import {
   type IPayrollCalcPreliminary,
   type PayrollCalcWithPreliminary,
 } from './payroll-calc.service.js';
-import { resolvePayrollEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
+import { resolveBrigadeInputEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
 
 export interface ITimesheetSalaryDepartment {
   id: string;
@@ -65,7 +77,16 @@ export interface ITimesheetSalaryRow {
    */
   payout_state: 'closed' | 'preliminary' | 'not_closed' | null;
   source: 'version' | 'live' | null;
+  /** КТУ и «Доля» правятся: текущий состав бригады (без начальника участка), не себе, право записи. */
   can_edit: boolean;
+  /** Сумма бригаде (341): «Доля», вписанная рублями (355); null — по формуле. У отдела и по объектам — null. */
+  fixed_share: string | null;
+  /** Сумма бригаде: расчётный КТУ вписанной доли ('1.59'); null — нет вписанной или сравнить не с кем. */
+  effective_ktu: string | null;
+  /** По объектам: у сотрудника есть вписанные доли на объектах (КТУ месяца на них не действует). */
+  has_fixed_shares: boolean;
+  /** Вписанную долю можно стереть (в т. ч. ушедшему из бригады): есть вписанная и право записи. */
+  can_clear_share: boolean;
 }
 
 export interface ITimesheetSalaryError {
@@ -87,8 +108,12 @@ export interface ITimesheetSalaryObjectMember {
   counted_minutes: number;
   /** КТУ в десятых × учтённые минуты на объекте. */
   weight: number;
-  /** Доля на объекте; null — нет. */
+  /** Доля на объекте; null — нет (не внесена, конфликт, ошибка). */
   share: string | null;
+  /** «Доля», вписанная рублями (355) — текущий ввод; null — по формуле. Видна и при конфликте, чтобы стереть. */
+  fixed_share: string | null;
+  /** Расчётный КТУ вписанной доли ('1.59'); null — не вписана, конфликт или сравнить не с кем. */
+  effective_ktu: string | null;
 }
 
 /** Группа «Зарплаты по объектам»: объект бригады, его выработка и рабочие. */
@@ -100,9 +125,14 @@ export interface ITimesheetSalaryObject {
   state: BrigadeObjectState;
   /** Σ часов группы — для заголовка. */
   total_hours: number;
-  /** Σ весов объекта — точный знаменатель долей. */
+  /** Σ весов невписанных — точный знаменатель их долей (без вписанных — Σ весов объекта). */
   total_weight: number;
   members: ITimesheetSalaryObjectMember[];
+}
+
+/** Конфликт вписанных долей (355) с ФИО сотрудника, о котором он (если есть). */
+export interface ITimesheetSalaryShareConflict extends IBrigadeStoredShareConflict {
+  full_name: string | null;
 }
 
 export interface ITimesheetSalaryResponse {
@@ -124,6 +154,8 @@ export interface ITimesheetSalaryResponse {
   rows: ITimesheetSalaryRow[];
   /** Группы по объектам — только у бригады; у отдела []. */
   objects: ITimesheetSalaryObject[];
+  /** Конфликты вписанных долей: object_key ('__brigade__' — сумма бригаде); на этих объектах долей нет. */
+  share_conflicts: ITimesheetSalaryShareConflict[];
 }
 
 export async function loadSalaryDepartment(departmentId: string): Promise<ITimesheetSalaryDepartment | null> {
@@ -202,6 +234,7 @@ export async function getTimesheetSalary(
       errors: [],
       computed_at: null,
       objects: [],
+      share_conflicts: [],
       rows: memberIds.map(employeeId => {
         const calc = calcs.get(employeeId);
         const counted = calc && calc.state !== 'not_closed' ? calc : null;
@@ -219,26 +252,47 @@ export async function getTimesheetSalary(
           payout_state: counted?.state ?? 'not_closed',
           source: null,
           can_edit: false,
+          fixed_share: null,
+          effective_ktu: null,
+          has_fixed_shares: false,
+          can_clear_share: false,
         };
       }),
     };
   }
 
   const result = await getBrigadeSalary(req, department.id, month);
-  const canEdit = await resolvePayrollEditPredicate(req);
+  const canEdit = await resolveBrigadeInputEditPredicate(req);
   const members = new Set(result.member_ids);
   const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
-  const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys()])].sort((a, b) => a - b);
-  const names = await namesOf([...new Set([...employeeIds, ...result.errors.map(error => error.employee_id)])]);
+  // Вписанные доли — текущий ввод (у stale расчёт старый, а поле должно показать то, что вписали). Только своего режима.
+  const mode = brigadeOutputMode(result.inputs);
+  const fixedInput = new Map([...(result.inputs.fixedShares ?? [])]
+    .filter(([key]) => (mode === 'brigade') === (key === BRIGADE_WHOLE_SHARE_KEY)));
+  const fixedOf = (key: string, employeeId: number): string | null => {
+    const amount = fixedInput.get(key)?.get(employeeId);
+    return amount === undefined ? null : centsToMoney(moneyToCents(amount));
+  };
+  const withFixed = new Set([...fixedInput.values()].flatMap(byEmployee => [...byEmployee.keys()]));
+  const ktus = fixedShareKtus(
+    result.mode === 'brigade' ? result.output_amount : undefined, result.rows, result.objects,
+  );
+  const employeeIds = [...new Set([...result.member_ids, ...byEmployee.keys(), ...withFixed])].sort((a, b) => a - b);
+  const names = await namesOf([...new Set([
+    ...employeeIds,
+    ...result.errors.map(error => error.employee_id),
+    ...result.share_conflicts.flatMap(conflict => (conflict.employee_id === undefined ? [] : [conflict.employee_id])),
+  ])]);
   // «Сумма» — к выплате из доли: доли нет (выработка не внесена, ошибка) — суммы нет.
   const shares = new Map<number, IBrigadeShareFact>([...brigadeShareFacts(
     department.id, result.distribution, result.rows, result.objects,
     result.mode === 'brigade' ? result.output_amount : undefined,
+    result.share_conflicts,
   )].filter(([, fact]) => fact.amount !== null));
   const payouts = await previewBrigadePayouts(shares, month);
 
   const objects: ITimesheetSalaryObject[] = result.objects.map(object => {
-    const objectMembers = result.rows.flatMap(row => {
+    const objectMembers: ITimesheetSalaryObjectMember[] = result.rows.flatMap(row => {
       const part = row.objects.find(item => item.object_key === object.object_key);
       if (!part) return [];
       const hours = Object.values(part.days).reduce((sum, value) => sum + value, 0);
@@ -249,8 +303,25 @@ export async function getTimesheetSalary(
         counted_minutes: part.counted_minutes,
         weight: part.weight,
         share: part.amount,
+        fixed_share: fixedOf(object.object_key, row.employee_id),
+        effective_ktu: ktus.get(object.object_key)?.get(row.employee_id) ?? null,
       }];
     });
+    // Вписанная доля того, у кого на объекте нет часов (или кто ушёл из бригады), — строкой без часов: видна и стирается.
+    const listed = new Set(objectMembers.map(member => member.employee_id));
+    for (const [employeeId] of fixedInput.get(object.object_key) ?? []) {
+      if (listed.has(employeeId)) continue;
+      objectMembers.push({
+        employee_id: employeeId,
+        days: {},
+        hours: 0,
+        counted_minutes: 0,
+        weight: 0,
+        share: null,
+        fixed_share: fixedOf(object.object_key, employeeId),
+        effective_ktu: null,
+      });
+    }
     return {
       object_key: object.object_key,
       object_name: object.object_name,
@@ -276,6 +347,10 @@ export async function getTimesheetSalary(
     errors: result.errors.map(error => ({ ...error, full_name: names.get(error.employee_id) ?? '' })),
     computed_at: result.computed_at,
     objects,
+    share_conflicts: result.share_conflicts.map(conflict => ({
+      ...conflict,
+      full_name: conflict.employee_id === undefined ? null : names.get(conflict.employee_id) ?? null,
+    })),
     rows: employeeIds.map(employeeId => {
       const row = byEmployee.get(employeeId);
       return {
@@ -291,8 +366,14 @@ export async function getTimesheetSalary(
         missing: payouts.get(employeeId)?.missing ?? [],
         payout_state: null,
         source: row?.source ?? null,
-        // КТУ правят только текущему составу (без начальника участка) и не себе.
+        // КТУ и «Долю» правят только текущему составу (без начальника участка) и не себе.
         can_edit: members.has(employeeId) && canEdit(employeeId),
+        fixed_share: mode === 'brigade' ? fixedOf(BRIGADE_WHOLE_SHARE_KEY, employeeId) : null,
+        effective_ktu: result.mode === 'brigade'
+          ? ktus.get(BRIGADE_WHOLE_SHARE_KEY)?.get(employeeId) ?? null
+          : null,
+        has_fixed_shares: mode === 'objects' && [...fixedInput.values()].some(byEmployee => byEmployee.has(employeeId)),
+        can_clear_share: withFixed.has(employeeId) && canEdit(employeeId),
       };
     }),
   };

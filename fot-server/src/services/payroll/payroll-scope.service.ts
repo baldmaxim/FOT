@@ -107,3 +107,26 @@ export async function resolvePayrollEditPredicate(
   const editable = await resolveEditableEmployeeIds(req);
   return (employeeId) => !isSelf(req, employeeId) && (editable === 'all' || editable.has(employeeId));
 }
+
+/**
+ * Правка КТУ и вписанной «Доли» бригады (миграция 355). Учётка списка «Зарплаты» — как условия оплаты
+ * (canEditPayrollEmployee); галочка «Выработка» (342) — любой рабочий бригады, кроме себя: охват бригады проверяет
+ * контроллер (бригада читается в табеле, месяц в окне роли — там же, где открыта «Зарплата по объектам»).
+ * Остальным — нет.
+ */
+export async function canEditBrigadeInputEmployee(
+  req: AuthenticatedRequest,
+  employeeId: number,
+): Promise<boolean> {
+  if (await getRequestPayrollSectionAccess(req)) return canEditPayrollEmployee(req, employeeId);
+  return !isSelf(req, employeeId) && await getRequestBrigadeOutputAccess(req);
+}
+
+/** Батч-вариант canEditBrigadeInputEmployee для признака can_edit строк «Зарплаты по объектам». */
+export async function resolveBrigadeInputEditPredicate(
+  req: AuthenticatedRequest,
+): Promise<(employeeId: number) => boolean> {
+  if (await getRequestPayrollSectionAccess(req)) return resolvePayrollEditPredicate(req);
+  if (await getRequestBrigadeOutputAccess(req)) return (employeeId) => !isSelf(req, employeeId);
+  return () => false;
+}

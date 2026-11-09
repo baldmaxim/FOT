@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 // результат (format 1) не показывается, пересчёт без пустого аудита, повторное чтение без пересчёта, уволенный в
 // месяце увольнения — по живому табелю, начальник участка — вне дележа. 341: сумма бригаде — «или — или» с
 // объектами (сервис и триггер под одним замком), фиксация с mode = brigade, повторы без записи, список «Бригады».
+// 355: КТУ 0,0…2,2, «Доля» рублями — пересчёт закрытого месяца, одни числа во всех путях, снятие долей выбором КТУ и
+// стиранием выработки, проверка под замком (две доли одновременно), стирание конфликтной доли.
 // Состав, живой табель, режимы табелирования и графики подменены: их SQL проверяют свои тесты.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы-заглушки пересоздаются).
 
@@ -150,12 +152,17 @@ vi.mock('../audit.service.js', () => ({
 import { getBrigadeSalary, getBrigadeShares, peekBrigadeShares, peekBrigadeSharesMany } from './brigade-salary.service.js';
 import {
   BrigadeOutputModeConflictError,
+  BrigadeShareRejectedError,
   loadBrigadeSalaryInputs,
   loadBrigadeSalaryInputsMany,
   setBrigadeKtu,
   setBrigadeObjectOutput,
   setBrigadeOutput,
+  setBrigadeShare,
 } from './brigade-salary-inputs.service.js';
+import { fixedShareKtus, moneyToCents } from './brigade-salary.calc.js';
+import { checkFixedShare } from './brigade-salary-shares.service.js';
+import { brigadeShareFacts, buildPayrollCalc } from './payroll-calc.rules.js';
 import { loadBrigadeMonthApprovals, loadBrigadeMonthApprovalsMany } from './brigade-salary-source.service.js';
 import { loadFixedBrigadeShares, loadPreliminaryBrigadeShares } from './payroll-calc-brigades.service.js';
 import { loadBrigadeContexts, resolveOpenBrigadeShares } from './payroll-calc-preliminary.service.js';
@@ -166,6 +173,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', imp
 const MIGRATION = readFileSync(`${MIGRATIONS_DIR}330_brigade_salary.sql`, 'utf8');
 const MIGRATION_336 = readFileSync(`${MIGRATIONS_DIR}336_brigade_salary_object_outputs.sql`, 'utf8');
 const MIGRATION_341 = readFileSync(`${MIGRATIONS_DIR}341_brigade_salary_brigade_outputs.sql`, 'utf8');
+const MIGRATION_355 = readFileSync(`${MIGRATIONS_DIR}355_brigade_salary_fixed_shares.sql`, 'utf8');
 
 const BRIGADE = '5049c2c9-1334-49e6-8d55-7a04bebcaa8c';
 const KHODZHAKULOV = 'bc645c62-4ff1-4f9e-a1ce-503196b1eb8e';
@@ -244,7 +252,7 @@ const sumCents = (rows: Array<{ amount: string | null }>) => rows.reduce(
 describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 336)', () => {
   beforeAll(async () => {
     await q(`
-      DROP TABLE IF EXISTS brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
+      DROP TABLE IF EXISTS brigade_salary_fixed_shares, brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
         brigade_salary_ktu, brigade_salary_outputs, timesheet_version_objects, timesheet_versions, timesheet_approvals,
         employees, employee_assignments, employee_dismissal_events, org_departments, user_profiles, skud_objects CASCADE;
       CREATE TABLE user_profiles (id uuid PRIMARY KEY);
@@ -281,10 +289,12 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     await q(MIGRATION_341);
     // 336 после 341 и пустой 330 — повтор тоже проходит.
     await q(MIGRATION_336);
+    await q(MIGRATION_355);
+    await q(MIGRATION_355);
   });
 
   beforeEach(async () => {
-    await q(`TRUNCATE brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
+    await q(`TRUNCATE brigade_salary_fixed_shares, brigade_salary_brigade_outputs, brigade_salary_object_outputs, brigade_salary_results,
       brigade_salary_ktu, brigade_salary_outputs, timesheet_version_objects, timesheet_versions, timesheet_approvals`);
     fx.members = [
       { employee_id: A, transferred_out_date: null, joined_date: null },
@@ -323,7 +333,7 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(await q('SELECT amount::text AS amount FROM brigade_salary_outputs')).toEqual([{ amount: '1999999.00' }]);
   });
 
-  it('CHECK: месяц с 1-го, КТУ 0,5…2,0, выработка не отрицательная, ключ объекта, формат и итог результата', async () => {
+  it('CHECK: месяц с 1-го, КТУ 0,0…2,2 (355), выработка не отрицательная, ключ объекта, формат и итог результата', async () => {
     await expect(q(`INSERT INTO brigade_salary_object_outputs (department_id, month, object_key, object_name, amount)
       VALUES ($1, '2026-09-02', $2, 'ЖК Wave', 1)`, [BRIGADE, WAVE])).rejects.toThrow(/month_first_day/);
     await expect(q(`INSERT INTO brigade_salary_object_outputs (department_id, month, object_key, object_name, amount)
@@ -332,10 +342,15 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
       VALUES ($1, '2026-09-01', 'ЖК Wave', 'ЖК Wave', 1)`, [BRIGADE])).rejects.toThrow(/object_key/);
     await q(`INSERT INTO brigade_salary_object_outputs (department_id, month, object_key, object_name, amount)
       VALUES ($1, '2026-09-01', '__unknown_object__', 'Не определён', 0)`, [BRIGADE]);
-    await expect(q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', ${A}, 0.4)`, [BRIGADE]))
+    await expect(q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', ${A}, -0.1)`, [BRIGADE]))
       .rejects.toThrow(/ktu_range/);
-    await expect(q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', ${A}, 2.1)`, [BRIGADE]))
+    await expect(q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', ${A}, 2.3)`, [BRIGADE]))
       .rejects.toThrow(/ktu_range/);
+    await q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', ${A}, 0.0), ($1, '2026-09-01', ${B}, 2.2)`, [BRIGADE]);
+    await expect(q(`INSERT INTO brigade_salary_fixed_shares (department_id, month, object_key, employee_id, amount)
+      VALUES ($1, '2026-09-01', $2, ${A}, -1)`, [BRIGADE, WAVE])).rejects.toThrow(/amount_non_negative/);
+    await expect(q(`INSERT INTO brigade_salary_fixed_shares (department_id, month, object_key, employee_id, amount)
+      VALUES ($1, '2026-09-02', $2, ${A}, 1)`, [BRIGADE, WAVE])).rejects.toThrow(/month_first_day/);
     await expect(q(`INSERT INTO brigade_salary_results (department_id, month, status, inputs_hash, versions, rows, format)
       VALUES ($1, '2026-09-01', 'fixed', 'x', '[]', '[]', 3)`, [BRIGADE])).rejects.toThrow(/results_format/);
     await expect(q(`INSERT INTO brigade_salary_results (department_id, month, status, inputs_hash, versions, rows, distribution)
@@ -957,5 +972,144 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
       await q('DELETE FROM employees WHERE id IN (9001, 9002, 9003)');
       await q('DELETE FROM org_departments WHERE id = ANY($1::uuid[])', [[MOVED_TO, EMPTY, ARCHIVED, OFFICE]]);
     }
+  });
+  // ─── 355: «Доля», вписанная рублями ───────────────────────────────────────────────────────────────────────────
+  /** Учтённые минуты ключа из текущего расчёта — как контроллер. */
+  const minutesOn = async (key: string) => (await getBrigadeSalary(req, BRIGADE, '2026-09')).rows.map(row => ({
+    employee_id: row.employee_id,
+    minutes: key === '__brigade__'
+      ? row.counted_minutes
+      : row.objects.find(part => part.object_key === key)?.counted_minutes ?? 0,
+  }));
+
+  /** Запись доли с настоящей проверкой и аудитом — как контроллер. */
+  const writeShare = async (key: string, employeeId: number, amount: string | null) => {
+    const minutes = amount === null ? [] : await minutesOn(key);
+    return setBrigadeShare(
+      BRIGADE, '2026-09-01', key, employeeId, amount, PROFILE,
+      inputs => checkFixedShare(inputs, key, minutes, employeeId, moneyToCents(amount!), new Map()),
+      async (_client, change) => { audit.calls.push({ action: 'BRIGADE_SALARY_SHARE_SET', details: { ...change } }); },
+    );
+  };
+
+  it('355: вписанная доля — закрытый месяц пересчитан, у вписанного ровно она, Σ = выработке; одни числа во всех путях', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    await getBrigadeSalary(req, BRIGADE, '2026-09');
+    audit.calls = [];
+
+    // Wave 228 000: А вписано 70 000 → Б и уволенный делят 158 000 по весам 10 800 : 6 000.
+    expect(await writeShare(WAVE, A, '70000.00')).toEqual({ before: null, after: '70000.00' });
+    const fixed = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(fixed.state).toBe('fixed');
+    expect(fixed.share_conflicts).toEqual([]);
+    expect(objectShares(fixed.rows)).toEqual({
+      [A]: { 'ЖК Wave': '70000.00', 'ЖК Stories': '60000.00' },
+      [B]: { 'ЖК Wave': '101571.43', 'ЖК Stories': '24000.00' },
+      [F]: { 'ЖК Wave': '56428.57' },
+    });
+    expect(sumCents(fixed.rows)).toBe(31200000);
+    expect(fixed.rows.find(row => row.employee_id === A)!.objects.find(part => part.object_key === WAVE))
+      .toMatchObject({ amount: '70000.00', fixed_amount: '70000.00' });
+    expect(fixed.objects.find(object => object.object_key === WAVE)).toMatchObject({ state: 'ok', total_weight: 16800 });
+    expect(fixedShareKtus(undefined, fixed.rows, fixed.objects).get(WAVE)?.get(A)).toBe('1.24');
+    expect(audit.calls.map(call => call.action)).toEqual(['BRIGADE_SALARY_SHARE_SET', 'BRIGADE_SALARY_RECALCULATED']);
+
+    // «Расчёты» пакетом, одиночно, ЛК (peek) — те же строки; доля в «К выплате (ФОТ)» — 130 000.
+    const batch = (await loadFixedBrigadeShares(req, '2026-09', [BRIGADE])).shares.get(BRIGADE)!;
+    const single = await getBrigadeShares(req, BRIGADE, '2026-09');
+    const peeked = await peekBrigadeShares(BRIGADE, '2026-09');
+    expect(batch.rows).toEqual(fixed.rows);
+    expect(single).toEqual(batch);
+    expect(peeked).toEqual(batch);
+    const facts = brigadeShareFacts(BRIGADE, batch.distribution!, batch.rows, batch.objects, undefined, batch.share_conflicts);
+    const calc = buildPayrollCalc({
+      monthStart: '2026-09-01', monthEnd: '2026-09-30', normDays: null, workdayDates: [], dayoffDates: [],
+      absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
+      oneTimeItems: [], rateAllowances: [], deductions: [], brigadeShares: [facts.get(A)!],
+    });
+    expect(calc.lines[0]).toMatchObject({ code: 'brigade', amount: '130000.00' });
+    expect(calc.lines[0].parts?.find(part => part.kind === 'brigade' && part.object_key === WAVE))
+      .toMatchObject({ amount: '70000.00', fixed_amount: '70000.00', effective_ktu: '1.24', fixed_total: '70000.00' });
+
+    // Повторы: чтение — без пересчёта; та же сумма — ни записи, ни аудита.
+    audit.calls = [];
+    const updatedAt = (await q<{ t: string }>('SELECT updated_at::text AS t FROM brigade_salary_fixed_shares'))[0].t;
+    expect((await getBrigadeSalary(req, BRIGADE, '2026-09')).computed_at).toBe(fixed.computed_at);
+    expect(await writeShare(WAVE, A, '70000')).toEqual({ before: '70000.00', after: '70000.00' });
+    expect((await q<{ t: string }>('SELECT updated_at::text AS t FROM brigade_salary_fixed_shares'))[0].t).toBe(updatedAt);
+    expect(audit.calls).toEqual([]);
+
+    // Больше максимума при КТУ 2,2 — отказ, ничего не записано.
+    await expect(writeShare(WAVE, A, '120000.00')).rejects.toThrow(BrigadeShareRejectedError);
+    expect(await q('SELECT amount::text AS amount FROM brigade_salary_fixed_shares')).toEqual([{ amount: '70000.00' }]);
+  });
+
+  it('355: выбор КТУ снимает доли сотрудника, стёртая выработка — доли объекта, смена режима — доли прежнего; всё с аудитом', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    await writeShare(WAVE, A, '50000.00');
+    await writeShare(STORIES, A, '50000.00');
+    await writeShare(WAVE, B, '100000.00');
+
+    const ktuAudit: unknown[] = [];
+    const change = await setBrigadeKtu(BRIGADE, '2026-09-01', A, 12, PROFILE, async (_client, value) => { ktuAudit.push(value); });
+    expect(change.cleared_shares.map(item => [item.object_key, item.employee_id, item.amount]).sort()).toEqual([
+      [STORIES, A, '50000.00'], [WAVE, A, '50000.00'],
+    ].sort());
+    expect(ktuAudit).toHaveLength(1);
+    expect(await q('SELECT employee_id FROM brigade_salary_fixed_shares')).toEqual([{ employee_id: B }]);
+    // Тот же КТУ ещё раз — снимать нечего, аудита нет.
+    await setBrigadeKtu(BRIGADE, '2026-09-01', A, 12, PROFILE, async (_client, value) => { ktuAudit.push(value); });
+    expect(ktuAudit).toHaveLength(1);
+
+    const erased = await setOutput(WAVE, null);
+    expect(erased).toMatchObject({ before: '228000.00', after: null, cleared_shares: [{ object_key: WAVE, employee_id: B, amount: '100000.00' }] });
+    expect(await q('SELECT 1 FROM brigade_salary_fixed_shares')).toHaveLength(0);
+
+    // Смена режима: стёрли выработку по объектам → сумма бригаде → доля бригаде → стёрли сумму — доля ушла с ней.
+    await setOutput(STORIES, null);
+    await setBrigadeOutput(BRIGADE, '2026-09-01', '300000.00', PROFILE);
+    await writeShare('__brigade__', A, '100000.00');
+    const whole = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(whole.mode).toBe('brigade');
+    expect(amounts(whole.rows)[A]).toBe('100000.00');
+    expect(whole.rows.find(row => row.employee_id === A)?.fixed_amount).toBe('100000.00');
+    expect(sumCents(whole.rows)).toBe(30000000);
+    const wiped = await setBrigadeOutput(BRIGADE, '2026-09-01', null, PROFILE);
+    expect(wiped.cleared_shares).toEqual([{ object_key: '__brigade__', employee_id: A, amount: '100000.00' }]);
+    expect(await q('SELECT 1 FROM brigade_salary_fixed_shares')).toHaveLength(0);
+  });
+
+  it('355: две доли одновременно — проверяются по очереди под замком: проходит одна', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    // Каждая по отдельности влезает (максимум А и уволенного — 100 320,00), обе сразу — нет.
+    const results = await Promise.allSettled([writeShare(WAVE, A, '100000.00'), writeShare(WAVE, F, '100000.00')]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(BrigadeShareRejectedError);
+    expect(await q('SELECT 1 FROM brigade_salary_fixed_shares')).toHaveLength(1);
+    const salary = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(salary.share_conflicts).toEqual([]);
+  });
+
+  it('355: доля без часов на объекте — конфликт, долей на объекте нет; стирается без проверок — снова сходится', async () => {
+    await closeSeptemberInHalves();
+    await enterBoth();
+    // Как после правки табеля: доля начальнику участка (в делёже его нет).
+    await q(`INSERT INTO brigade_salary_fixed_shares (department_id, month, object_key, employee_id, amount)
+      VALUES ($1, '2026-09-01', $2, ${S}, 1000)`, [BRIGADE, WAVE]);
+    const conflicted = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(conflicted.share_conflicts).toEqual([{ object_key: WAVE, code: 'fixed_without_hours', employee_id: S }]);
+    expect(conflicted.objects.find(object => object.object_key === WAVE)?.state).toBe('share_conflict');
+    expect(amounts(conflicted.rows)).toEqual({ [A]: null, [B]: null, [F]: null });
+    // Stories не задет: у А и Б доли там есть, но итог неполный — null, частичной суммы нет.
+    expect(objectShares(conflicted.rows)[B]).toEqual({ 'ЖК Wave': null, 'ЖК Stories': '24000.00' });
+
+    expect(await writeShare(WAVE, S, null)).toEqual({ before: '1000.00', after: null });
+    const restored = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(restored.share_conflicts).toEqual([]);
+    expect(amounts(restored.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
   });
 });

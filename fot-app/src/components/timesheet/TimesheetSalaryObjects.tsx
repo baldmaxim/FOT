@@ -30,8 +30,10 @@ export interface ITimesheetSalaryObjectsProps {
   canEdit: boolean;
   pendingKtuEmployeeId: number | null;
   savingObjectKey: string | null;
+  savingShareKey: string | null;
   onKtuChange: (employeeId: number, ktu: number) => void;
   onObjectOutputSave: (objectKey: string, amount: number | null) => Promise<void>;
+  onShareSave: (objectKey: string, employeeId: number, amount: number | null) => Promise<void>;
 }
 
 const Message: FC<{ text: string }> = ({ text }) => (
@@ -40,8 +42,8 @@ const Message: FC<{ text: string }> = ({ text }) => (
 
 /**
  * «Табель → Зарплата по объектам» (миграция 336). Десктоп — сетка «По объектам» как есть, только просмотр, с КТУ,
- * «Выработкой, ₽» у объекта, «Долей» и «Итого по бригаде»; доля на объекте — по КТУ × учтённые часы на нём.
- * Телефон — карточки объектов.
+ * «Выработкой, ₽» у объекта, «Долей» и «Итого по бригаде»; доля на объекте — по КТУ × учтённые часы на нём или
+ * вписанная рублями (355). Телефон — карточки объектов.
  */
 export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props => {
   const { data, loading, error, grid, gridLoading, gridError, compact, showAllEmployees, canEdit } = props;
@@ -51,11 +53,13 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
     showAllEmployees,
     pendingKtuEmployeeId: props.pendingKtuEmployeeId,
     savingObjectKey: props.savingObjectKey,
+    savingShareKey: props.savingShareKey,
     onKtuChange: props.onKtuChange,
     onObjectOutputSave: props.onObjectOutputSave,
+    onShareSave: props.onShareSave,
   } : null), [
-    data, canEdit, showAllEmployees, props.pendingKtuEmployeeId, props.savingObjectKey, props.onKtuChange,
-    props.onObjectOutputSave,
+    data, canEdit, showAllEmployees, props.pendingKtuEmployeeId, props.savingObjectKey, props.savingShareKey,
+    props.onKtuChange, props.onObjectOutputSave, props.onShareSave,
   ]);
   const rows = useMemo(() => sortSalaryRows(data?.rows ?? []), [data]);
   const order = useMemo(() => new Map(rows.map((row, index) => [row.employee_id, index])), [rows]);
@@ -92,6 +96,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
         rows={rows}
         totalRows={salaryTotalRows(rows, data, showAllEmployees)}
         salary={salary}
+        objectsSalary={objectsSalary}
         muted={isSalaryRowMuted(data, rows[0] ?? null)}
         nameOf={nameOf}
         order={order}

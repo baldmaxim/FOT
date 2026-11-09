@@ -6,7 +6,8 @@ import {
   averagePerHour, averageTitle, countedHoursLabel, describeSalaryState, displayedHours, employeeCountedMinutes, findSalaryRow, formatDayHours,
   formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly, isSalaryRowMuted, memberAverage, missingObjectsNote, objectAverage,
   objectCountedMinutes, objectShareTitle, rowAverage, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote, salaryOvertimeNote,
-  sortSalaryRows, totalDaysOfEmployee,
+  sortSalaryRows, totalDaysOfEmployee, KTU_OPTIONS, shareConflictText, objectShareMode, totalShareMode, objectFixedTotal,
+  shareFieldValue,
 } from './timesheetSalary';
 
 const NBSP = ' ';
@@ -376,5 +377,71 @@ describe('средняя в час — по учтённым минутам', ()
     expect(averageTitle('156693.61', 18_480)).toBe(`156${NBSP}693,61 ÷ 308 учтённых ч (18480 мин)`);
     expect(averageTitle(null, 18_480)).toBeUndefined();
     expect(averageTitle('156693.61', 0)).toBeUndefined();
+  });
+});
+
+describe('КТУ 0,0…2,2 и «Доля», вписанная рублями (355)', () => {
+  const object: ITimesheetSalaryObject = {
+    object_key: 'wave', object_name: 'ЖК Wave', output_amount: '1000000.00', state: 'ok', total_hours: 30,
+    total_weight: 12_000,
+    members: [
+      { employee_id: 1, days: {}, hours: 10, counted_minutes: 600, weight: 6000, share: '150000.00', fixed_share: '150000.00', effective_ktu: '1.59' },
+      { employee_id: 2, days: {}, hours: 10, counted_minutes: 600, weight: 6000, share: '425000.00', fixed_share: null, effective_ktu: null },
+      { employee_id: 3, days: {}, hours: 10, counted_minutes: 600, weight: 6000, share: '425000.00', fixed_share: null, effective_ktu: null },
+      // Вписана, а часов на объекте нет (ушёл из бригады) — только стереть.
+      { employee_id: 4, days: {}, hours: 0, counted_minutes: 0, weight: 0, share: null, fixed_share: '1000.00', effective_ktu: null },
+    ],
+  };
+  const row = (id: number, over: Record<string, unknown> = {}) => ({
+    employee_id: id, full_name: `Рабочий ${id}`, ktu: '1.0', counted_hours: 10, amount: null, share: null, deducted: null,
+    source: 'live' as const, can_edit: id !== 4, can_clear_share: id === 1 || id === 4, ...over,
+  });
+  const brigade: ITimesheetSalaryResponse = {
+    ...data, output_mode: 'objects', objects: [object], rows: [row(1), row(2), row(3), row(4)],
+  };
+
+  it('список КТУ — 23 значения 0,0…2,2', () => {
+    expect(KTU_OPTIONS).toHaveLength(23);
+    expect(KTU_OPTIONS[0]).toBe('0.0');
+    expect(KTU_OPTIONS[22]).toBe('2.2');
+    expect(KTU_OPTIONS).toContain('0.5');
+  });
+
+  it('поле «Доли»: вписанная — её сумма, иначе по формуле; Σ вписанных объекта', () => {
+    expect(shareFieldValue(object.members[0])).toBe('150000.00');
+    expect(shareFieldValue(object.members[1])).toBe('425000.00');
+    expect(objectFixedTotal(object)).toBe('150000.00');
+    expect(objectFixedTotal({ ...object, members: object.members.slice(1, 3) })).toBeNull();
+  });
+
+  it('подсказка доли: вписанная — с КТУ по ней, остальные — от остатка без вписанных', () => {
+    expect(objectShareTitle(object, object.members[0])).toBe('Доля вписана вручную · КТУ 1,59');
+    expect(objectShareTitle(object, object.members[1])?.replace(/\s/g, ' '))
+      .toBe('(1 000 000,00 − вписанные 150 000,00) × КТУ 1 × 10 ч / 20 (Σ КТУ × ч без вписанных) = 425 000,00');
+  });
+
+  it('когда «Долю» правят: правая учётка — состав с часами; ушедший с вписанной — только стереть; без права — показ', () => {
+    expect(objectShareMode(brigade, true, object, object.members[1])).toBe('edit');
+    expect(objectShareMode(brigade, true, object, object.members[3])).toBe('clear');
+    expect(objectShareMode(brigade, false, object, object.members[1])).toBeNull();
+    expect(objectShareMode(brigade, true, { ...object, output_amount: null }, object.members[1])).toBeNull();
+    // «Итого по бригаде» — только при сумме бригаде.
+    expect(totalShareMode(brigade, true, row(2))).toBeNull();
+    const whole = { ...brigade, output_mode: 'brigade' as const, brigade_output: '300000.00' };
+    expect(totalShareMode(whole, true, row(2))).toBe('edit');
+    expect(totalShareMode(whole, true, row(4, { fixed_share: '1000.00', counted_hours: 0 }))).toBe('clear');
+  });
+
+  it('конфликт — пометка у объекта с причинами и ФИО', () => {
+    const conflicts = [
+      { object_key: 'wave', code: 'fixed_exceeds_output' as const, amount: '30000.00', full_name: null },
+      { object_key: 'wave', code: 'ktu_above_max' as const, employee_id: 1, ktu: '2.41', full_name: 'Амонов Абдулло Мирзоевич' },
+      { object_key: 'wave', code: 'fixed_without_hours' as const, employee_id: 4, full_name: 'Сивых Константин Николаевич' },
+    ];
+    expect(shareConflictText(conflicts[0]).replace(/\s/g, ' ')).toBe('вписанные доли больше выработки на 30 000,00');
+    expect(shareConflictText(conflicts[1])).toBe('КТУ по доле 2,41 больше 2,2 — Амонов А. М.');
+    expect(shareConflictText(conflicts[2])).toBe('доля вписана без часов на объекте — Сивых К. Н.');
+    expect(salaryObjectStateNote({ ...object, state: 'share_conflict' }, conflicts.slice(0, 1))?.replace(/\s/g, ' '))
+      .toBe('долей нет: вписанные доли больше выработки на 30 000,00');
   });
 });

@@ -18,6 +18,10 @@
  *
  * Или одной суммой на бригаду (341, mode = brigade): доля = сумма × КТУ × учтённые минуты за месяц / Σ, объекты —
  * только для показа часов (состояние by_brigade, без долей). Обе выработки сразу не бывает — следит триггер БД.
+ *
+ * «Доля», вписанная рублями (355): у вписанного ровно она (fixed_amount части или строки), остальным — остаток по КТУ ×
+ * минуты; не сходится — share_conflicts снимка, долей на этом объекте нет. Все экраны («Зарплата по объектам»,
+ * «Расчёты», «Свод», «Выплачено», ЛК) берут доли отсюда — сами из КТУ их никто не пересчитывает.
  */
 import type { PoolClient } from 'pg';
 
@@ -41,13 +45,16 @@ import {
   type BrigadeObjectState,
   type IBrigadeDayValue,
   type IBrigadeSalaryError,
+  type IBrigadeShareConflict,
   type IMemberMinutes,
 } from './brigade-salary.calc.js';
 import {
+  BRIGADE_WHOLE_SHARE_KEY,
   brigadeOutputMode,
   brigadeSalaryInputsHash,
   brigadeSalaryLockKey,
   DEFAULT_KTU_TENTHS,
+  fixedSharesInCents,
   loadBrigadeSalaryInputs,
   loadBrigadeSalaryInputsMany,
   totalBrigadeOutput,
@@ -77,8 +84,13 @@ const CURRENT_ACTIVITY_OBJECT_KEY = '__current_activity__';
 /** Формат сохранённого результата: 2 — по объектам (336); сумма бригаде (341) — тот же формат с mode = brigade. */
 export const BRIGADE_RESULT_FORMAT = 2;
 
-/** Ключ делёжа одной суммой на бригаду: все учтённые минуты месяца — один «объект». Наружу не выходит. */
-const BRIGADE_WHOLE_KEY = '__brigade__';
+/** Ключ делёжа одной суммой на бригаду: все учтённые минуты месяца — один «объект»; он же ключ вписанной доли. */
+const BRIGADE_WHOLE_KEY = BRIGADE_WHOLE_SHARE_KEY;
+
+/** Конфликт вписанных долей с ключом объекта ('__brigade__' — сумма бригаде). */
+export interface IBrigadeStoredShareConflict extends IBrigadeShareConflict {
+  object_key: string;
+}
 
 /** Часть сотрудника на одном объекте. */
 export interface IBrigadeSalaryObjectPart {
@@ -89,8 +101,10 @@ export interface IBrigadeSalaryObjectPart {
   counted_minutes: number;
   /** КТУ в десятых × учтённые минуты на объекте. */
   weight: number;
-  /** Доля на объекте; null — нет (не внесена, делить не по чему, ошибка). */
+  /** Доля на объекте; null — нет (не внесена, делить не по чему, конфликт, ошибка). */
   amount: string | null;
+  /** Доля вписана рублями (355) — эта сумма; нет поля — по формуле. */
+  fixed_amount?: string;
 }
 
 export interface IBrigadeSalaryResultRow {
@@ -102,6 +116,8 @@ export interface IBrigadeSalaryResultRow {
   amount: string | null;
   source: 'version' | 'live';
   objects: IBrigadeSalaryObjectPart[];
+  /** Сумма бригаде (341): доля вписана рублями (355) — эта сумма; нет поля — по формуле. */
+  fixed_amount?: string;
 }
 
 /** Объект расчёта: имя и выработка заморожены вместе с ним. */
@@ -111,7 +127,7 @@ export interface IBrigadeSalaryObjectFacts {
   /** Выработка объекта, по которой посчитаны доли; null — не внесена. */
   output: string | null;
   state: BrigadeObjectState;
-  /** Σ весов объекта — точный знаменатель долей. */
+  /** Σ весов невписанных — точный знаменатель их долей (без вписанных — Σ весов объекта). */
   total_weight: number;
 }
 
@@ -122,6 +138,8 @@ interface IBrigadeComputation {
   errors: IBrigadeSalaryError[];
   rows: IBrigadeSalaryResultRow[];
   objects: IBrigadeSalaryObjectFacts[];
+  /** Конфликты вписанных долей (355): на этих объектах долей нет. */
+  share_conflicts: IBrigadeStoredShareConflict[];
 }
 
 interface IStoredBrigadeResult extends IBrigadeComputation {
@@ -145,6 +163,7 @@ export interface IBrigadeSalaryComputed {
   computed_at: string | null;
   rows: IBrigadeSalaryResultRow[];
   objects: IBrigadeSalaryObjectFacts[];
+  share_conflicts: IBrigadeStoredShareConflict[];
   inputs: IBrigadeSalaryInputs;
   member_ids: number[];
 }
@@ -222,6 +241,14 @@ function distribute(
   const outputs = mode === 'brigade'
     ? new Map([[BRIGADE_WHOLE_KEY, moneyToCents(inputs.brigadeOutput!)]])
     : new Map([...inputs.outputs].map(([key, output]) => [key, moneyToCents(output.amount)]));
+  // Вписанные доли (355) — только своего режима: при сумме бригаде — ключ бригады, по объектам — ключи объектов.
+  const fixedKeys = [...(inputs.fixedShares?.keys() ?? [])]
+    .filter(key => (mode === 'brigade') === (key === BRIGADE_WHOLE_KEY));
+  const fixed = new Map(fixedKeys.map(key => [key, fixedSharesInCents(inputs, key)]));
+  const fixedAmountOf = (key: string, employeeId: number): { fixed_amount?: string } => {
+    const amount = inputs.fixedShares?.get(key)?.get(employeeId);
+    return amount === undefined ? {} : { fixed_amount: centsToMoney(moneyToCents(amount)) };
+  };
   const result = buildBrigadeObjectDistribution(
     outputs,
     members.map(member => ({
@@ -232,7 +259,10 @@ function distribute(
         : member.counted.byObject,
     })),
     errors,
+    fixed,
   );
+  const shareConflicts: IBrigadeStoredShareConflict[] = [...result.objects]
+    .flatMap(([key, object]) => object.conflicts.map(conflict => ({ object_key: key, ...conflict })));
 
   // Объекты: с учтёнными минутами, с выработкой и с часами только для показа (минут нет — ошибка дня и т. п.).
   // У суммы бригаде — объекты с минутами или днями, только для показа: без выработки и долей.
@@ -267,6 +297,7 @@ function distribute(
     distribution: result.state,
     errors,
     objects,
+    share_conflicts: shareConflicts,
     rows: members.map(member => {
       const total = result.totals.get(member.employee_id);
       const memberKeys = new Set([...member.counted.days.keys(), ...member.counted.byObject.keys()]);
@@ -287,8 +318,10 @@ function distribute(
             counted_minutes: minutes,
             weight: member.ktu_tenths * minutes,
             amount: share === undefined ? null : centsToMoney(share),
+            ...(mode === 'brigade' ? {} : fixedAmountOf(object.object_key, member.employee_id)),
           };
         }),
+        ...(mode === 'brigade' ? fixedAmountOf(BRIGADE_WHOLE_KEY, member.employee_id) : {}),
       };
     }),
   };
@@ -416,7 +449,7 @@ const dedupeErrors = (errors: readonly IBrigadeSalaryError[]): IBrigadeSalaryErr
 };
 
 const STORED_RESULT_COLUMNS = `status, output_amount::text AS output_amount, inputs_hash, versions, errors, rows,
-                      objects, format, distribution, mode, computed_at::text AS computed_at`;
+                      objects, format, distribution, mode, share_conflicts, computed_at::text AS computed_at`;
 
 /** Строка brigade_salary_results → сохранённый расчёт: одно правило для одной и многих бригад. */
 const toStoredResult = (row: Record<string, unknown>): IStoredBrigadeResult => {
@@ -424,7 +457,9 @@ const toStoredResult = (row: Record<string, unknown>): IStoredBrigadeResult => {
   const rows = (row.rows as IBrigadeSalaryResultRow[]).map(item => ({ ...item, objects: item.objects ?? [] }));
   const errors = row.errors as IBrigadeSalaryError[];
   const objects = (Array.isArray(row.objects) ? row.objects : []) as IBrigadeSalaryObjectFacts[];
+  const shareConflicts = (Array.isArray(row.share_conflicts) ? row.share_conflicts : []) as IBrigadeStoredShareConflict[];
   return {
+    share_conflicts: shareConflicts,
     mode: row.mode === 'brigade' ? 'brigade' : 'objects',
     distribution: storedDistribution(row.status, row.distribution, rows),
     errors,
@@ -542,13 +577,14 @@ async function ensureFixed(
     const saved = await client.query<{ computed_at: string }>(
       `INSERT INTO brigade_salary_results
          (department_id, month, status, output_amount, inputs_hash, versions, errors, rows, objects, format,
-          distribution, mode, computed_by, computed_at)
-       VALUES ($1, $2::date, $3, $4::numeric, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $13, $12, now())
+          distribution, mode, share_conflicts, computed_by, computed_at)
+       VALUES ($1, $2::date, $3, $4::numeric, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $13,
+               $14::jsonb, $12, now())
        ON CONFLICT (department_id, month) DO UPDATE SET
          status = EXCLUDED.status, output_amount = EXCLUDED.output_amount, inputs_hash = EXCLUDED.inputs_hash,
          versions = EXCLUDED.versions, errors = EXCLUDED.errors, rows = EXCLUDED.rows, objects = EXCLUDED.objects,
          format = EXCLUDED.format, distribution = EXCLUDED.distribution, mode = EXCLUDED.mode,
-         computed_by = EXCLUDED.computed_by, computed_at = now()
+         share_conflicts = EXCLUDED.share_conflicts, computed_by = EXCLUDED.computed_by, computed_at = now()
        RETURNING computed_at::text AS computed_at`,
       [
         departmentId,
@@ -564,6 +600,7 @@ async function ensureFixed(
         computation.distribution,
         req.user.id,
         computation.mode,
+        JSON.stringify(computation.share_conflicts),
       ],
     );
 
@@ -611,6 +648,8 @@ export interface IBrigadeShares {
   rows: IBrigadeSalaryResultRow[];
   /** Объекты расчёта: имя, выработка и Σ весов — для расшифровки доли по объектам. */
   objects: IBrigadeSalaryObjectFacts[];
+  /** Конфликты вписанных долей (355) — для расшифровки; нет поля — нет конфликтов. */
+  share_conflicts?: IBrigadeStoredShareConflict[];
 }
 
 /** Долей нет: месяц не закрыт (или его открыли, пока ждали замок). */
@@ -626,6 +665,7 @@ const fixedShares = (stored: IStoredBrigadeResult): IBrigadeShares => ({
   output_amount: stored.output_amount,
   rows: stored.rows,
   objects: stored.objects,
+  ...(stored.share_conflicts.length > 0 ? { share_conflicts: stored.share_conflicts } : {}),
 });
 
 /**
@@ -722,6 +762,7 @@ export async function computeBrigadePreliminaryShares(
     output_amount: totalBrigadeOutput(inputs),
     rows: computation.rows,
     objects: computation.objects,
+    ...(computation.share_conflicts.length > 0 ? { share_conflicts: computation.share_conflicts } : {}),
   };
 }
 
@@ -754,6 +795,7 @@ export async function getBrigadeSalary(
         computed_at: fixed.stored.computed_at,
         rows: fixed.stored.rows,
         objects: fixed.stored.objects,
+        share_conflicts: fixed.stored.share_conflicts,
         inputs: fixed.inputs,
         member_ids: currentMembers,
       };
@@ -774,6 +816,7 @@ export async function getBrigadeSalary(
       computed_at: stored.computed_at,
       rows: stored.rows,
       objects: stored.objects,
+      share_conflicts: stored.share_conflicts,
       inputs,
       member_ids: currentMembers,
     };
@@ -792,6 +835,7 @@ export async function getBrigadeSalary(
     computed_at: null,
     rows: computation.rows,
     objects: computation.objects,
+    share_conflicts: computation.share_conflicts,
     inputs,
     member_ids: memberIds,
   };

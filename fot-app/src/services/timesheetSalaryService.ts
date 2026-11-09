@@ -59,6 +59,24 @@ export const timesheetSalaryService = {
     );
   },
 
+  /**
+   * «Доля», вписанная рублями (355): objectKey — объект или '__brigade__' (сумма бригаде); null — стереть (снова по
+   * формуле). Не сходится с выработкой — 400 с текстом (максимум при КТУ 2,2).
+   */
+  setShare: async (
+    departmentId: string,
+    month: string,
+    objectKey: string,
+    employeeId: number,
+    amount: number | null,
+  ): Promise<void> => {
+    await apiClient.put<IApiResponse<{ object_key: string; employee_id: number; fixed_share: string | null }>>(
+      '/payroll/timesheet-salary/share',
+      { department_id: departmentId, month, object_key: objectKey, employee_id: employeeId, amount },
+    );
+  },
+
+  /** КТУ 0,0…2,2; снимает вписанные доли сотрудника за месяц. */
   setKtu: async (departmentId: string, month: string, employeeId: number, ktu: number): Promise<void> => {
     await apiClient.put<IApiResponse<{ employee_id: number; ktu: string }>>('/payroll/timesheet-salary/ktu', {
       department_id: departmentId,

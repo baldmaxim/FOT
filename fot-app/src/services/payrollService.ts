@@ -456,10 +456,18 @@ export type PayrollCalcLinePart =
     output: string | null;
     ktu_tenths: number;
     counted_minutes: number;
-    /** Вес — КТУ в десятых × минуты; total_weight — сумма весов объекта (до 336 — бригады). */
+    /** Вес — КТУ в десятых × минуты; total_weight — сумма весов объекта (до 336 — бригады; при вписанных — невписанных). */
     weight: number;
     total_weight: number;
     amount: string | null;
+    /** Доля вписана рублями (355) — эта сумма. */
+    fixed_amount?: string;
+    /** Σ вписанных долей объекта: остальным делится выработка минус она. */
+    fixed_total?: string;
+    /** Расчётный КТУ вписанной доли ('1.59'); null — сравнить не с кем. */
+    effective_ktu?: string | null;
+    /** Вписанные доли не сходятся с выработкой — доли нет. */
+    conflict?: true;
   };
 
 export interface IPayrollCalcLine {
@@ -473,7 +481,7 @@ export interface IPayrollCalcLine {
   /** Переработка: часы в будни по корректировкам. */
   hours?: number;
   /** Доля бригады: КТУ и учтённые часы. */
-  brigade?: { ktu: string; hours: number };
+  brigade?: { ktu: string; hours: number; fixed?: true };
   /** Из чего сумма; нет у старого бэкенда. */
   parts?: PayrollCalcLinePart[];
 }

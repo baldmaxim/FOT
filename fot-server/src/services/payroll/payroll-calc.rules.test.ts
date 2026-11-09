@@ -1012,3 +1012,61 @@ describe('brigadeShareFacts — доли бригады по объектам с
     }]);
   });
 });
+
+describe('brigadeShareFacts и строка доли — вписанные доли (355)', () => {
+  const calcOf = (share: IBrigadeShareFact) => buildPayrollCalc({
+    monthStart: '2026-10-01', monthEnd: '2026-10-31', normDays: null, workdayDates: [], dayoffDates: [],
+    absenceDays: { vacation: 0, sick: 0, educational_leave: 0, unpaid: 0 }, terms: [], plannedSupplements: [],
+    oneTimeItems: [], rateAllowances: [], deductions: [], brigadeShares: [share],
+  });
+
+  it('сумма бригаде: у вписанного — его сумма и расчётный КТУ (как в «Итого по бригаде»), у остальных — Σ вписанных', () => {
+    // 1 000 000; трое по 10 ч, КТУ 1,0; первому вписано 400 000 → остальным по 300 000, КТУ первого 1,33.
+    const rows = [
+      { employee_id: 1, ktu: '1.0', counted_minutes: 600, amount: '400000.00', fixed_amount: '400000.00', objects: [] },
+      { employee_id: 2, ktu: '1.0', counted_minutes: 600, amount: '300000.00', objects: [] },
+      { employee_id: 3, ktu: '1.0', counted_minutes: 600, amount: '300000.00', objects: [] },
+    ];
+    const facts = brigadeShareFacts('b1', 'ok', rows, [], '1000000.00');
+    expect(facts.get(1)?.whole).toEqual({
+      weight: 6_000, totalWeight: 12_000, fixed: { amount: '400000.00', total: '400000.00', ktu: '1.33' },
+    });
+    expect(facts.get(2)?.whole).toEqual({
+      weight: 6_000, totalWeight: 12_000, fixed: { amount: null, total: '400000.00', ktu: null },
+    });
+    const fixed = calcOf(facts.get(1)!).lines[0];
+    expect(fixed.brigade).toEqual({ ktu: '1.33', hours: 10, fixed: true });
+    expect(fixed.parts?.[0]).toMatchObject({ amount: '400000.00', fixed_amount: '400000.00', effective_ktu: '1.33', fixed_total: '400000.00' });
+    const free = calcOf(facts.get(2)!).lines[0];
+    expect(free.brigade).toEqual({ ktu: '1.0', hours: 10 });
+    expect(free.parts?.[0]).toMatchObject({ amount: '300000.00', weight: 6_000, total_weight: 12_000, fixed_total: '400000.00' });
+    expect(free.parts?.[0]).not.toHaveProperty('fixed_amount');
+  });
+
+  it('по объектам: вписанная часть и Σ вписанных объекта; КТУ под суммой — месяца; конфликт — пометка части', () => {
+    const objects = [{ object_key: 'wave', object_name: 'ЖК Wave', output: '1000000.00', total_weight: 54_000 }];
+    const rows = [
+      {
+        employee_id: 1, ktu: '1.0', counted_minutes: 600, amount: '150000.00',
+        objects: [{ object_key: 'wave', counted_minutes: 600, weight: 6_000, amount: '150000.00', fixed_amount: '150000.00' }],
+      },
+      {
+        employee_id: 2, ktu: '1.0', counted_minutes: 600, amount: '94444.45',
+        objects: [{ object_key: 'wave', counted_minutes: 600, weight: 6_000, amount: '94444.45' }],
+      },
+    ];
+    const facts = brigadeShareFacts('b1', 'ok', rows, objects);
+    expect(facts.get(1)?.objects[0].fixed).toEqual({ amount: '150000.00', total: '150000.00', ktu: '1.59' });
+    expect(facts.get(2)?.objects[0].fixed).toEqual({ amount: null, total: '150000.00', ktu: null });
+    const line1 = calcOf(facts.get(1)!).lines[0];
+    expect(line1.brigade).toEqual({ ktu: '1.0', hours: 10 });
+    expect(line1.parts?.[0]).toMatchObject({ fixed_amount: '150000.00', effective_ktu: '1.59', fixed_total: '150000.00' });
+
+    const conflictRows = rows.map(row => ({ ...row, amount: null, objects: row.objects.map(part => ({ ...part, amount: null })) }));
+    const conflicted = brigadeShareFacts('b1', 'nothing_to_distribute', conflictRows, objects, undefined, [{ object_key: 'wave' }]);
+    const line = calcOf(conflicted.get(2)!);
+    expect(line.lines[0]).toMatchObject({ amount: null });
+    expect(line.lines[0].parts?.[0]).toMatchObject({ amount: null, conflict: true });
+    expect(line.missing).toEqual(['brigade_output']);
+  });
+});

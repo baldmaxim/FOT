@@ -1645,7 +1645,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </div>
                         {renderTimesheetObject(row.employee)}
                       </td>
-                      {objectsSalary && <TimesheetSalaryKtuCell salary={objectsSalary} employeeId={row.employee.id} />}
+                      {objectsSalary && (
+                        <TimesheetSalaryKtuCell salary={objectsSalary} employeeId={row.employee.id} object={salaryObject} />
+                      )}
                       {days.map(day => {
                         const objectEntry = row.days.get(day) || null;
                         const dailyEntry = row.dailyEntries.get(day) || null;
