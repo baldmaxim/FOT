@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 // въезд в день выезда, сервис общежития и запрет удалить/переименовать ставку с кодом.
 // Сохранённые адреса (миграция 319): перенос из проживаний, запоминание при записи, удаление их не трогает.
 // Квартира (миграция 320): вид, сумма, адрес по желанию; в один день — одно место.
+// Поиск для «Удержаний» (решение 09.11.2026): уволенные до начала окна выбора месяцев, бывший подрядчик — по отделу
+// из события увольнения.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -66,7 +68,7 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
   beforeAll(async () => {
     await run(`
       DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rate_values, payroll_rates,
-        role_page_access, access_pages,
+        role_page_access, access_pages, employee_dismissal_events,
         payroll_compensation_terms, payroll_dormitory_allowances, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
@@ -85,7 +87,13 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
         org_department_id uuid REFERENCES org_departments(id),
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
-        is_archived boolean NOT NULL DEFAULT false
+        is_archived boolean NOT NULL DEFAULT false,
+        dismissal_date date
+      );
+      -- Отдел, из которого уволен (effectiveDepartmentSql): столбцы — как на проде.
+      CREATE TABLE employee_dismissal_events (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
+        cancelled boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()
       );
       -- Права: столбцы и ключи — как на проде.
       CREATE TABLE access_pages (
@@ -340,6 +348,44 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
       .filter(stay => stay.employee_id === 6).map(stay => stay.kind)).toEqual(['dormitory']);
     // Адрес квартиры в подсказки общежитий не попадает.
     expect(await listAddresses()).not.toContain('ул. Рабочая, 5');
+  });
+
+  it('поиск «Удержаний»: уволенные с даты окна, бывший подрядчик — по отделу увольнения; «Проживание» — без уволенных', async () => {
+    const C1 = '00000000-0000-0000-0000-0000000000c1';
+    await run(`
+      INSERT INTO employees (id, full_name, org_department_id, employment_status, is_archived, dismissal_date) VALUES
+        (11, 'Карташов Уволенный', '${D2}', 'fired', false, '2026-10-23'),
+        (12, 'Карамуллин Бывший', '${D2}', 'fired', false, '2026-10-20'),
+        (13, 'Карандашов Давний', '${D2}', 'fired', false, '2025-11-30'),
+        (14, 'Каргин Граница', '${D2}', 'fired', false, '2025-12-01'),
+        (15, 'Карнаухов БезДаты', '${D2}', 'fired', false, NULL),
+        (16, 'Карлов Архивный', '${D2}', 'fired', true, '2026-10-01');
+      INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date, cancelled, created_at) VALUES
+        (11, '${D1}', '2026-10-23', false, '2026-10-23'),
+        -- Бывший подрядчик: последнее неотменённое увольнение — из подрядной организации; отменённое — не в счёт.
+        (12, '${C1}', '2026-10-20', false, '2026-10-20'),
+        (12, '${D1}', '2026-10-21', true, '2026-10-21');
+    `);
+    try {
+      const names = async (ids: number[] | null, options?: { dismissedFrom?: string }) =>
+        (await searchCandidates('Кар', ids, options)).map(row => row.full_name);
+      // «Проживание» (без опции) — как раньше, только работающие.
+      expect(await names(null)).toEqual(['Карелин Безотдельный', 'Каримов Акмал']);
+      // «Удержания»: окно с 01.12.2025 — граница включительно, раньше — нет; без даты, архивный, бывший подрядчик — нет.
+      expect(await names(null, { dismissedFrom: '2025-12-01' }))
+        .toEqual(['Каргин Граница', 'Карелин Безотдельный', 'Каримов Акмал', 'Карташов Уволенный']);
+      expect(await names([11], { dismissedFrom: '2025-12-01' })).toEqual(['Карташов Уволенный']);
+      expect((await searchCandidates('Карташов', null, { dismissedFrom: '2025-12-01' }))[0])
+        .toMatchObject({ id: 11, department: 'Архив', dismissal_date: '2026-10-23' });
+      expect((await searchCandidates('Каримов', null))[0]).toMatchObject({ dismissal_date: null });
+
+      expect(await getEmployeeState(11)).toMatchObject({ employment_status: 'fired', is_contractor: false, dismissal_date: '2026-10-23' });
+      expect(await getEmployeeState(12)).toMatchObject({ employment_status: 'fired', is_contractor: true });
+      expect(await getEmployeeState(1)).toMatchObject({ is_contractor: false, dismissal_date: null });
+      expect(await getEmployeeState(5)).toMatchObject({ is_contractor: true });
+    } finally {
+      await run('DELETE FROM employee_dismissal_events; DELETE FROM employees WHERE id BETWEEN 11 AND 16');
+    }
   });
 
   it('«Справочник» → «Общежитие»: только «штат зарплаты» — уволенного, архивного, подрядчика не видно, записи остаются', async () => {

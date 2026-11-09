@@ -5,6 +5,7 @@
  *
  * Охват — как у «Проживания»: список — как список кадров (resolveStaffRosterEmployeeIds), запись —
  * canWriteEmployeeInScope; уволенного (его назначения отделов сняты) правит тот, кто видит его в «Уволенных».
+ * Уволенному удержание добавляют и переносят только на месяц не позже месяца увольнения (staff-deduction-input.ts).
  * Персональная галочка «Удержания» (миграция 351) — вся организация и на список, и на запись.
  */
 import type { Response } from 'express';
@@ -31,15 +32,18 @@ import {
   listDeductions,
   updateDeduction,
 } from '../services/staff-deductions.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { handlePayrollZodError, parsePayrollDictionaryId } from './payroll-dictionary.helpers.js';
 import {
   deductionDictionaryEntrySchema,
+  dismissedSearchFrom,
   STAFF_DEDUCTION_REF_MISSING,
   staffDeductionAddRefusal,
   staffDeductionAddSchema,
   staffDeductionAuditDetails,
   staffDeductionChanged,
   staffDeductionFieldsSchema,
+  staffDeductionUpdateRefusal,
 } from './staff-deduction-input.js';
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
@@ -90,7 +94,10 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
   }
 };
 
-/** GET /api/staff-deductions/employees/search?q= — кого добавить: работающие в охвате, от 2 символов. */
+/**
+ * GET /api/staff-deductions/employees/search?q= — кого добавить, от 2 символов: работающие и уволенные за месяцы
+ * выбора (удержание — не позже месяца увольнения), в охвате.
+ */
 const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const search = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -98,7 +105,8 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    res.json({ success: true, data: await searchCandidates(search, await rosterEmployeeIds(req)) });
+    const dismissedFrom = dismissedSearchFrom(moscowTodayIso());
+    res.json({ success: true, data: await searchCandidates(search, await rosterEmployeeIds(req), { dismissedFrom }) });
   } catch (err) {
     console.error('staffDeductions.searchEmployees error:', err);
     res.status(500).json({ success: false, error: 'Ошибка поиска' });
@@ -109,12 +117,13 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId, ...input } = staffDeductionAddSchema.parse(req.body);
-    const refusal = await staffDeductionAddRefusal(employeeId);
+    const refusal = await staffDeductionAddRefusal(employeeId, input.month);
     if (refusal) {
       res.status(refusal.status).json(refusal.body);
       return;
     }
-    if (!(await canAddDeduction(req, employeeId))) {
+    // Уволенного добавляют тоже: право — как на правку его строк (охват роли или «виден в списке кадров»).
+    if (!(await canWriteDeduction(req, employeeId))) {
       res.status(403).json(NO_ACCESS);
       return;
     }
@@ -152,6 +161,11 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     if (!(await canWriteDeduction(req, current.employee_id))) {
       res.status(403).json(NO_ACCESS);
+      return;
+    }
+    const refusal = await staffDeductionUpdateRefusal(current.employee_id, input.month, current.month);
+    if (refusal) {
+      res.status(refusal.status).json(refusal.body);
       return;
     }
     const updated = await updateDeduction(id, input);

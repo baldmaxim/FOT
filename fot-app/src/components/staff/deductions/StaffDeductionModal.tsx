@@ -13,6 +13,7 @@ import { oneTimeMonthOptions } from '../../../utils/payrollRegistryForms';
 import {
   amountAfterKindChange,
   deductionDefaultAmount,
+  monthForDismissed,
   parseStaffDeduction,
   type StaffDeductionField,
 } from '../../../utils/staffDeductionForm';
@@ -21,8 +22,11 @@ import { EmployeeSearchField, type IEmployeeSearchCandidate } from '../../ui/Emp
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 
-/** Кандидат «Добавить сотрудника»; can_edit false — строка неактивна (нет права на сотрудника). */
-type DeductionCandidate = IEmployeeSearchCandidate & { can_edit?: boolean };
+/**
+ * Кандидат «Добавить сотрудника»; can_edit false — строка неактивна (нет права на сотрудника); dismissal_date — уволен
+ * (кадры): месяц удержания не позже месяца увольнения.
+ */
+type DeductionCandidate = IEmployeeSearchCandidate & { can_edit?: boolean; dismissal_date?: string | null };
 
 /** Где правят удержание: кадры или «Зарплата» — те же записи, у каждого раздела свои поиск, права и охват. */
 export interface IStaffDeductionEditorApi {
@@ -141,7 +145,11 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
         ) : (
           <EmployeeSearchField
             value={employee}
-            onChange={value => { setEmployee(value); clearError(); }}
+            onChange={value => {
+              setEmployee(value);
+              if (value) setMonth(current => monthForDismissed(current, value.dismissal_date));
+              clearError();
+            }}
             search={api.searchEmployees}
             isDisabled={isNotEditable}
             disabled={saving}

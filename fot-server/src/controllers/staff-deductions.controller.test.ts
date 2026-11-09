@@ -39,6 +39,8 @@ const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
 vi.mock('../services/staff-tab-access.service.js', () => grant);
 
 import { staffDeductionsController as c } from './staff-deductions.controller.js';
+import { dismissedSearchFrom } from './staff-deduction-input.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 const makeRes = () => {
   const res = {
@@ -68,8 +70,11 @@ const DEDUCTION = {
   amount: '5000.00',
 };
 
-const ACTIVE = { id: 42, employment_status: 'active', is_archived: false, is_contractor: false };
-const DISMISSED = { id: 42, employment_status: 'dismissed', is_archived: false, is_contractor: false };
+const ACTIVE = { id: 42, employment_status: 'active', is_archived: false, is_contractor: false, dismissal_date: null };
+/** Уволен 23.10.2026: удержание — не позже октября 2026. */
+const DISMISSED = { id: 42, employment_status: 'fired', is_archived: false, is_contractor: false, dismissal_date: '2026-10-23' };
+/** Поиск: уволенные — с 1-го числа самого раннего месяца выбора (11 месяцев назад по МСК). */
+const SEARCH_OPTIONS = { dismissedFrom: dismissedSearchFrom(moscowTodayIso()) };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -89,7 +94,7 @@ describe('список и поиск', () => {
     expect(svc.listDeductions).toHaveBeenLastCalledWith({ employeeIds: null });
   });
 
-  it('поиск — от 2 символов, в охвате списка кадров', async () => {
+  it('поиск — от 2 символов, в охвате списка кадров, с уволенными за месяцы выбора', async () => {
     const short = makeRes();
     await c.searchEmployees(makeReq({ query: { q: ' к ' } }), short);
     expect(short.body.data).toEqual([]);
@@ -99,7 +104,7 @@ describe('список и поиск', () => {
     employees.searchCandidates.mockResolvedValue([{ id: 42, full_name: 'Каримов Акмал', department: null, position: null }]);
     const res = makeRes();
     await c.searchEmployees(makeReq({ query: { q: 'Кар' } }), res);
-    expect(employees.searchCandidates).toHaveBeenCalledWith('Кар', [42]);
+    expect(employees.searchCandidates).toHaveBeenCalledWith('Кар', [42], SEARCH_OPTIONS);
     expect(res.body.data).toHaveLength(1);
   });
 });
@@ -153,9 +158,12 @@ describe('добавление', () => {
     expect(svc.addDeduction).not.toHaveBeenCalled();
   });
 
-  it('уволенного, архивного, подрядчика, несуществующего, чужого — не добавить', async () => {
+  it('уволенного после месяца увольнения, без даты, архивного, подрядчика, несуществующего, чужого — не добавить', async () => {
     const cases: Array<[unknown, boolean, number]> = [
-      [DISMISSED, true, 400],
+      [{ ...DISMISSED, dismissal_date: '2026-09-30' }, true, 400],
+      [{ ...DISMISSED, dismissal_date: null }, true, 400],
+      [{ ...DISMISSED, is_archived: true }, true, 400],
+      [{ ...DISMISSED, is_contractor: true }, true, 400],
       [{ ...ACTIVE, is_archived: true }, true, 400],
       [{ ...ACTIVE, is_contractor: true }, true, 400],
       [null, true, 404],
@@ -170,6 +178,29 @@ describe('добавление', () => {
     }
     expect(svc.addDeduction).not.toHaveBeenCalled();
     expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('уволенный 23.10: октябрь — можно (виден в списке кадров), ноябрь — 400 с датой; не виден — 403', async () => {
+    employees.getEmployeeState.mockResolvedValue(DISMISSED);
+    scope.canWriteEmployeeInScope.mockResolvedValue(false);
+    scope.canSeeEmployeeInStaffList.mockResolvedValue(true);
+    svc.addDeduction.mockResolvedValue(DEDUCTION);
+
+    const october = makeRes();
+    await c.add(makeReq({ body }), october);
+    expect(october.statusCode).toBe(200);
+    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000 });
+
+    const november = makeRes();
+    await c.add(makeReq({ body: { ...body, month: '2026-11' } }), november);
+    expect(november.statusCode).toBe(400);
+    expect(november.body.error).toBe('Уволен 23.10.2026 — удержание не позже октября 2026');
+
+    scope.canSeeEmployeeInStaffList.mockResolvedValue(false);
+    const hidden = makeRes();
+    await c.add(makeReq({ body }), hidden);
+    expect(hidden.statusCode).toBe(403);
+    expect(svc.addDeduction).toHaveBeenCalledTimes(1);
   });
 
   it('вид или подвид удалили в соседнем окне (или подвид не этого вида) — 409 без аудита', async () => {
@@ -228,7 +259,7 @@ describe('правка', () => {
     scope.canWriteEmployeeInScope.mockResolvedValue(false);
     svc.updateDeduction.mockResolvedValue({ before: DEDUCTION, after });
 
-    employees.getEmployeeState.mockResolvedValue(DISMISSED);
+    employees.getEmployeeState.mockResolvedValue({ ...DISMISSED, dismissal_date: '2026-11-05' });
     scope.canSeeEmployeeInStaffList.mockResolvedValueOnce(true);
     const visible = makeRes();
     await c.update(makeReq({ params: { id: '7' }, body }), visible);
@@ -245,6 +276,30 @@ describe('правка', () => {
     await c.update(makeReq({ params: { id: '7' }, body }), foreign);
     expect(foreign.statusCode).toBe(403);
     expect(svc.updateDeduction).toHaveBeenCalledTimes(1);
+  });
+
+  it('строка уволенного после месяца увольнения: сумма и вид правятся, месяц — только не позже увольнения', async () => {
+    // Загрузка 1С: сентябрьская строка у уволенного в июне.
+    const historic = { ...DEDUCTION, month: '2026-09' };
+    svc.getDeduction.mockResolvedValue(historic);
+    scope.canWriteEmployeeInScope.mockResolvedValue(false);
+    scope.canSeeEmployeeInStaffList.mockResolvedValue(true);
+    employees.getEmployeeState.mockResolvedValue({ ...DISMISSED, dismissal_date: '2026-06-15' });
+    svc.updateDeduction.mockResolvedValue({ before: historic, after: historic });
+
+    const sameMonth = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { kind_id: 3, month: '2026-09', amount: 1000 } }), sameMonth);
+    expect(sameMonth.statusCode).toBe(200);
+
+    const later = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { kind_id: 3, month: '2026-08', amount: 1000 } }), later);
+    expect(later.statusCode).toBe(400);
+    expect(later.body.error).toBe('Уволен 15.06.2026 — удержание не позже июня 2026');
+
+    const dismissalMonth = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { kind_id: 3, month: '2026-06', amount: 1000 } }), dismissalMonth);
+    expect(dismissalMonth.statusCode).toBe(200);
+    expect(svc.updateDeduction).toHaveBeenCalledTimes(2);
   });
 
   it('нет записи / кривой id — 404; вида нет — 409; нулевая сумма — 400', async () => {
@@ -396,7 +451,7 @@ describe('галочка «Удержания» в назначениях (ми�
 
     employees.searchCandidates.mockResolvedValue([]);
     await c.searchEmployees(makeReq({ query: { q: 'Кар' } }), makeRes());
-    expect(employees.searchCandidates).toHaveBeenCalledWith('Кар', null);
+    expect(employees.searchCandidates).toHaveBeenCalledWith('Кар', null, SEARCH_OPTIONS);
     expect(scope.resolveStaffRosterEmployeeIds).not.toHaveBeenCalled();
   });
 
@@ -421,13 +476,18 @@ describe('галочка «Удержания» в назначениях (ми�
     expect(removed.statusCode).toBe(200);
   });
 
-  it('уволенному добавить нельзя и с галочкой — прежний отказ', async () => {
+  it('уволенному после месяца увольнения нельзя и с галочкой; до — можно', async () => {
     grant.getRequestStaffTabGrant.mockImplementation(onlyTab('deductions'));
     employees.getEmployeeState.mockResolvedValue(DISMISSED);
-    const res = makeRes();
-    await c.add(makeReq({ body }), res);
-    expect(res.statusCode).toBe(400);
+    const after = makeRes();
+    await c.add(makeReq({ body: { ...body, month: '2026-11' } }), after);
+    expect(after.statusCode).toBe(400);
     expect(svc.addDeduction).not.toHaveBeenCalled();
+
+    svc.addDeduction.mockResolvedValue(DEDUCTION);
+    const october = makeRes();
+    await c.add(makeReq({ body }), october);
+    expect(october.statusCode).toBe(200);
   });
 
   it('галочка «Проживание» охват удержаний не расширяет', async () => {

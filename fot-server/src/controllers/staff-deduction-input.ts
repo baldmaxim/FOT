@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 
-import { getEmployeeState } from '../services/dormitory-stays.service.js';
+import { getEmployeeState, type IDormitoryEmployeeState } from '../services/dormitory-stays.service.js';
 import type { IStaffDeduction, StaffDeductionRefMissing } from '../services/staff-deductions.service.js';
 import {
   payrollDictionaryNameSchema,
@@ -46,21 +46,90 @@ export const STAFF_DEDUCTION_REF_MISSING: Record<StaffDeductionRefMissing, { suc
   subkind_missing: { success: false, error: 'Подвид удержания не найден — обновите список видов', code: 'SUBKIND_MISSING' },
 };
 
+type StaffDeductionRefusal = { status: number; body: { success: false; error: string } };
+
+const refuse = (status: number, error: string): StaffDeductionRefusal => ({ status, body: { success: false, error } });
+
+const MONTHS_GENITIVE = [
+  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+] as const;
+
+/** «2026-10-23» → «Уволен 23.10.2026 — удержание не позже октября 2026». */
+const afterDismissalMessage = (dismissalDate: string): string => {
+  const [year, month, day] = dismissalDate.split('-');
+  return `Уволен ${day}.${month}.${year} — удержание не позже ${MONTHS_GENITIVE[Number(month) - 1]} ${year}`;
+};
+
+/** YYYY-MM со сдвигом на delta месяцев. */
+const shiftYearMonth = (yearMonth: string, delta: number): string => {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const index = year * 12 + (month - 1) + delta;
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
+};
+
+/** Месяцев назад в выборе месяца удержания: как в окне (oneTimeMonthOptions на фронте — следующий, текущий, 11 прошлых). */
+const DEDUCTION_MONTHS_BACK = 11;
+
 /**
- * Кому можно добавить удержание: работающему, не из архива, не подрядчику. Поиск в окне отдаёт только таких,
- * но тело запроса могут собрать и руками. Можно — null, иначе — ответ. Правку и удаление прошлых строк
- * уволенного эта проверка не касается.
+ * С какой даты увольнения уволенный есть в поиске «Добавить сотрудника» (YYYY-MM-DD): 1-е число самого раннего
+ * месяца в выборе месяца — уволенного раньше удержанием, которое можно выбрать, не добавить. todayIso — по МСК.
+ */
+export const dismissedSearchFrom = (todayIso: string): string => `${shiftYearMonth(todayIso.slice(0, 7), -DEDUCTION_MONTHS_BACK)}-01`;
+
+/**
+ * Месяц удержания сотрудника (решение пользователя 09.11.2026: удержания вносят в ФОТ, уволенным — тоже):
+ * - работающему — любой месяц;
+ * - уволенному — не позже месяца увольнения (иначе в «Расчётах» этого месяца удержания не видно); без даты
+ *   увольнения — нельзя;
+ * - правка, месяц не меняется (previousMonth = month) — можно всегда: прежние строки после увольнения
+ *   (загрузки 1С) правятся по виду и сумме.
+ * month, previousMonth — YYYY-MM. Можно — null, иначе — текст ошибки.
+ */
+export const staffDeductionMonthRefusal = (
+  employee: Pick<IDormitoryEmployeeState, 'employment_status' | 'dismissal_date'>,
+  month: string,
+  previousMonth?: string,
+): string | null => {
+  if (previousMonth !== undefined && previousMonth === month) return null;
+  if (employee.employment_status === 'active') return null;
+  if (!employee.dismissal_date) return 'У уволенного нет даты увольнения — удержание не добавить';
+  return month > employee.dismissal_date.slice(0, 7) ? afterDismissalMessage(employee.dismissal_date) : null;
+};
+
+/**
+ * Кому можно добавить удержание за month (YYYY-MM): работающему или уволенному до месяца увольнения
+ * (staffDeductionMonthRefusal), не из архива, не подрядчику (у уволенного — по отделу, из которого уволен). Поиск в
+ * окне отдаёт только таких, но тело запроса могут собрать и руками. Можно — null, иначе — ответ.
  */
 export const staffDeductionAddRefusal = async (
   employeeId: number,
-): Promise<{ status: number; body: { success: false; error: string } } | null> => {
+  month: string,
+): Promise<StaffDeductionRefusal | null> => {
   const employee = await getEmployeeState(employeeId);
-  if (!employee) return { status: 404, body: { success: false, error: 'Сотрудник не найден' } };
-  if (employee.employment_status !== 'active' || employee.is_archived) {
-    return { status: 400, body: { success: false, error: 'Добавить можно только работающего сотрудника' } };
+  if (!employee) return refuse(404, 'Сотрудник не найден');
+  if (employee.is_archived || (employee.employment_status !== 'active' && employee.employment_status !== 'fired')) {
+    return refuse(400, 'Добавить можно только работающего или уволенного сотрудника');
   }
-  if (employee.is_contractor) return { status: 400, body: { success: false, error: 'Подрядчика добавить нельзя' } };
-  return null;
+  if (employee.is_contractor) return refuse(400, 'Подрядчика добавить нельзя');
+  const monthRefusal = staffDeductionMonthRefusal(employee, month);
+  return monthRefusal ? refuse(400, monthRefusal) : null;
+};
+
+/**
+ * Правка удержания: сменить месяц уволенному можно только на месяц не позже увольнения; месяц не меняется —
+ * можно (staffDeductionMonthRefusal). Сотрудника нет — null (правку решает существование строки).
+ */
+export const staffDeductionUpdateRefusal = async (
+  employeeId: number,
+  month: string,
+  previousMonth: string,
+): Promise<StaffDeductionRefusal | null> => {
+  if (month === previousMonth) return null;
+  const employee = await getEmployeeState(employeeId);
+  if (!employee) return null;
+  const monthRefusal = staffDeductionMonthRefusal(employee, month, previousMonth);
+  return monthRefusal ? refuse(400, monthRefusal) : null;
 };
 
 /** Удержание в аудите (добавлено, удалено, «было → стало»). */

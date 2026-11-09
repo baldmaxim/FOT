@@ -148,7 +148,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         payroll_planned_supplements, payroll_settings, payroll_item_types, payroll_rate_values, payroll_rates,
         payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
-        employee_schedule_assignments, work_schedules, positions,
+        employee_schedule_assignments, work_schedules, positions, employee_dismissal_events,
         user_profiles, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid, kind text);
@@ -162,6 +162,11 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
         dismissal_date date
+      );
+      -- Отдел, из которого уволен (проверка подрядчика у уволенного, effectiveDepartmentSql): столбцы — как на проде.
+      CREATE TABLE employee_dismissal_events (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
+        cancelled boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);

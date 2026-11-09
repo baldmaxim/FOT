@@ -61,3 +61,14 @@ export const amountAfterKindChange = (
   const untouched = current.trim() === '' || current === rateAmountInputValue(previousDefault);
   return untouched ? rateAmountInputValue(nextDefault) : current;
 };
+
+/**
+ * Месяц после выбора сотрудника: уволенному удержание — не позже месяца увольнения (сервер проверяет то же), поэтому
+ * выбранный месяц позже увольнения становится месяцем увольнения; раньше — остаётся. Работающему — без изменений.
+ * month — YYYY-MM, dismissalDate — YYYY-MM-DD.
+ */
+export const monthForDismissed = (month: string, dismissalDate: string | null | undefined): string => {
+  if (!dismissalDate) return month;
+  const dismissalMonth = dismissalDate.slice(0, 7);
+  return month > dismissalMonth ? dismissalMonth : month;
+};

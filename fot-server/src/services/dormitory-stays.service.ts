@@ -18,6 +18,7 @@ import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../utils/fio-search.utils.js';
+import { effectiveDepartmentSql } from './employees-export.service.js';
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
 import { HOUSING_RATE_CODE } from './payroll/payroll-rates.service.js';
@@ -52,6 +53,8 @@ export interface IDormitoryCandidate {
   full_name: string;
   department: string | null;
   position: string | null;
+  /** YYYY-MM-DD; работающий — null. Уволенные — только в поиске с dismissedFrom (удержания). */
+  dismissal_date: string | null;
 }
 
 /** Даты, адрес и сумма; вид задаётся при добавлении и при правке не меняется. */
@@ -67,12 +70,18 @@ export interface IDormitoryStayInput extends IDormitoryStayFields {
   kind: DormitoryStayKind;
 }
 
-/** Сотрудник для проверки перед записью: работает ли, не в архиве, не подрядчик. */
+/**
+ * Сотрудник для проверки перед записью: работает ли, не в архиве, не подрядчик. Подрядчик — по отделу из
+ * effectiveDepartmentSql: у уволенного это отдел, из которого уволен (карточка уже в «Уволенных»), у работающего —
+ * отдел карточки.
+ */
 export interface IDormitoryEmployeeState {
   id: number;
   employment_status: string | null;
   is_archived: boolean;
   is_contractor: boolean;
+  /** YYYY-MM-DD; нет — null. */
+  dismissal_date: string | null;
 }
 
 const STAY_SELECT = `
@@ -137,28 +146,33 @@ const readStay = async (client: PoolClient, id: number, lock: boolean): Promise<
 /**
  * Кого можно добавить: работающие, не в архиве, не из ветки подрядных организаций, по части ФИО
  * (ё = е, английская раскладка; ничего точного — с одной ошибкой); employeeIds — охват (null — все).
+ * dismissedFrom (YYYY-MM-DD) — ещё и уволенные с датой увольнения не раньше неё (удержания: до месяца
+ * увольнения); подрядчик у них — по отделу, из которого уволены. Без него — только работающие («Проживание»).
  */
 export const searchCandidates = async (
   search: string,
   employeeIds: number[] | null,
+  options: { dismissedFrom?: string } = {},
 ): Promise<IDormitoryCandidate[]> => {
   const fio = buildFioSearch(search);
   if (!fio || employeeIds?.length === 0) return [];
   const contractorRootId = await getContractorRootId();
   const find = (fuzzy: boolean) => {
     // Число параметров поиска зависит от ввода (латиница — два выражения), поэтому они — после постоянных.
-    const params: unknown[] = [employeeIds, contractorRootId];
+    const params: unknown[] = [employeeIds, contractorRootId, options.dismissedFrom ?? null];
     const searchSql = fuzzy ? fioFuzzyConditionSql('e', params, fio) : fioExactConditionSql('e', params, fio);
     return query<IDormitoryCandidate>(
       `WITH ${payrollContractorDeptsCte('$2')}
-       SELECT e.id, e.full_name, d.name AS department, p.name AS position
+       SELECT e.id, e.full_name, d.name AS department, p.name AS position,
+              to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date
          FROM employees e
          LEFT JOIN org_departments d ON d.id = e.org_department_id
          LEFT JOIN positions p ON p.id = e.position_id
         WHERE ${searchSql}
-          AND e.employment_status = 'active'
+          AND (e.employment_status = 'active'
+               OR ($3::date IS NOT NULL AND e.employment_status = 'fired' AND e.dismissal_date >= $3::date))
           AND e.is_archived IS NOT TRUE
-          AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
+          AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = ${effectiveDepartmentSql('e')})
           AND ($1::int[] IS NULL OR e.id = ANY($1::int[]))
         ORDER BY e.full_name
         LIMIT 20`,
@@ -174,7 +188,8 @@ export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEm
   queryOne<IDormitoryEmployeeState>(
     `WITH ${payrollContractorDeptsCte('$2')}
      SELECT e.id, e.employment_status, (e.is_archived IS TRUE) AS is_archived,
-            EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id) AS is_contractor
+            EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = ${effectiveDepartmentSql('e')}) AS is_contractor,
+            to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date
        FROM employees e
       WHERE e.id = $1`,
     [employeeId, await getContractorRootId()],

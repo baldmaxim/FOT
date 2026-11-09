@@ -35,6 +35,7 @@ import {
   staffDeductionAuditDetails,
   staffDeductionChanged,
   staffDeductionFieldsSchema,
+  staffDeductionUpdateRefusal,
 } from './staff-deduction-input.js';
 
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
@@ -77,7 +78,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId, ...input } = staffDeductionAddSchema.parse(req.body);
-    const refusal = await staffDeductionAddRefusal(employeeId);
+    const refusal = await staffDeductionAddRefusal(employeeId, input.month);
     if (refusal) {
       res.status(refusal.status).json(refusal.body);
       return;
@@ -110,6 +111,11 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const input = staffDeductionFieldsSchema.parse(req.body);
     const target = await writableDeduction(req, res);
     if (!target) return;
+    const refusal = await staffDeductionUpdateRefusal(target.current.employee_id, input.month, target.current.month);
+    if (refusal) {
+      res.status(refusal.status).json(refusal.body);
+      return;
+    }
     const updated = await updateDeduction(target.id, input);
     if (updated === null) {
       res.status(404).json(NOT_FOUND);

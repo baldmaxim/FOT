@@ -222,7 +222,7 @@ describe('«Доплата за месяц»: квартира с суммой �
 });
 
 describe('«Удержания»: те же записи, что во вкладке кадров', () => {
-  const ACTIVE = { employment_status: 'active', is_archived: false, is_contractor: false };
+  const ACTIVE = { employment_status: 'active', is_archived: false, is_contractor: false, dismissal_date: null };
   const DEDUCTION = {
     id: 7, employee_id: 42, full_name: 'Каримов Акмал', department: null, position: null,
     kind_id: 4, kind_name: 'Спецодежда', subkind_id: 9, subkind_name: 'Каска', month: '2026-10', amount: '800.00',
@@ -261,8 +261,12 @@ describe('«Удержания»: те же записи, что во вклад
     expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: null, month: '2026-10', amount: 800 });
   });
 
-  it('добавить: уволенному — 400, не «штат зарплаты» — 403, подвид чужого вида — 409', async () => {
-    stays.getEmployeeState.mockResolvedValueOnce({ ...ACTIVE, employment_status: 'dismissed' });
+  it('добавить: уволенному после месяца увольнения или без даты — 400, не «штат зарплаты» — 403, подвид чужого вида — 409', async () => {
+    stays.getEmployeeState.mockResolvedValueOnce({ ...ACTIVE, employment_status: 'fired', dismissal_date: '2026-09-30' });
+    const afterDismissal = await add();
+    expect(afterDismissal.statusCode).toBe(400);
+    expect(afterDismissal.body.error).toBe('Уволен 30.09.2026 — удержание не позже сентября 2026');
+    stays.getEmployeeState.mockResolvedValueOnce({ ...ACTIVE, employment_status: 'fired', dismissal_date: null });
     expect((await add()).statusCode).toBe(400);
 
     stays.getEmployeeState.mockResolvedValue(ACTIVE);
@@ -324,6 +328,27 @@ describe('«Удержания»: те же записи, что во вклад
     const missing = makeRes();
     await deductionsC.update(makeReq({ params: { id: '8' }, body: patch }), missing);
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('изменить: месяц уволенного — не позже месяца увольнения; тот же месяц — можно', async () => {
+    deductions.getDeduction.mockResolvedValue(DEDUCTION);
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    stays.getEmployeeState.mockResolvedValue({ ...ACTIVE, employment_status: 'fired', dismissal_date: '2026-09-30' });
+    deductions.updateDeduction.mockResolvedValue({ before: DEDUCTION, after: DEDUCTION });
+    const patch = { kind_id: 4, subkind_id: 9, amount: 900 };
+
+    const sameMonth = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: { ...patch, month: '2026-10' } }), sameMonth);
+    expect(sameMonth.statusCode).toBe(200);
+
+    const later = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: { ...patch, month: '2026-11' } }), later);
+    expect(later.statusCode).toBe(400);
+
+    const earlier = makeRes();
+    await deductionsC.update(makeReq({ params: { id: '7' }, body: { ...patch, month: '2026-09' } }), earlier);
+    expect(earlier.statusCode).toBe(200);
+    expect(deductions.updateDeduction).toHaveBeenCalledTimes(2);
   });
 
   it('удалить: аудит с source; чужое — 403', async () => {

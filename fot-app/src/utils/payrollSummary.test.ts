@@ -65,6 +65,23 @@ describe('«Свод»: объекты', () => {
     ]);
   });
 
+  it('«Служебная квартира» — удержание (статья «Квартиры» 1С), не начисление «Компенсация проживания»', () => {
+    const rows = [row({ amounts: { contract: '100000.00', housing: '18900.00', apartment: '32500.00', other_deductions: '6678.00' } })];
+    const items = summaryItems(rows);
+    const columns = summaryObjectColumns(items);
+    expect(columns.map(column => column.label)).toEqual([
+      'Объект', 'Чел.', 'К выплате', 'Всего начислено', 'Всего удержано',
+      'Зарплата', 'Компенсация проживания', 'Служебная квартира', 'Прочие удержания',
+    ]);
+    const object = groupSummaryByObject(rows)[0];
+    const text = (key: string) => columns.find(column => column.key === key)!.text(object);
+    expect(text('accrued')).toMatch(/^118\s900,00$/);
+    expect(text('deducted')).toMatch(/^39\s178,00$/);
+    expect(text('payout')).toMatch(/^79\s722,00$/);
+    // «Оплачено» (данные 1С) — прежнее название статьи.
+    expect(PAYROLL_PAID_GROUPS.flatMap(group => group.items).find(item => item.code === 'apartment')?.label).toBe('Квартиры');
+  });
+
   it('ячейки: нет суммы — «—», отрицательная — со знаком; «Начислено» и «Удержано» раздельно', () => {
     const items = summaryItems(ROWS);
     const columns = summaryObjectColumns(items);

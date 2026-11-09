@@ -175,8 +175,24 @@ describe('«Свод»: основания и виды → статьи', () => 
     expect(deductionKindItem('Займ')).toBe('loan_repayment');
     expect(deductionKindItem('% Займа')).toBe('loan_interest');
     expect(deductionKindItem('Банковские издержки по исп. листам')).toBe('bank_fees');
-    for (const kind of ['Штраф за мусор', 'Акт нарушений из Витрины', 'Служебная квартира', 'Переплата за предыдущий период', 'Корректировка з/пл', 'Прочие']) {
+    expect(deductionKindItem('  служебная  квартира ')).toBe('apartment');
+    for (const kind of ['Штраф за мусор', 'Акт нарушений из Витрины', 'Переплата за предыдущий период', 'Корректировка з/пл', 'Прочие']) {
       expect(deductionKindItem(kind)).toBe('other_deductions');
     }
+  });
+
+  it('«Служебная квартира» — удержание «Квартиры» 1С, не начисление «Доплата → Квартира»; загруженная статья не задваивает', () => {
+    const fot = merge({
+      calc: closed([{ code: 'contract', amount: '100000.00' }, { code: 'housing', amount: '18900.00' }]),
+      deductions: [{ kind: 'Служебная квартира', amount: '32500.00' }, { kind: 'Переплата за предыдущий период', amount: '6678.00' }],
+    });
+    expect(fot.cents).toEqual({ contract: 10000000, housing: 1890000, apartment: 3250000, other_deductions: 667800 });
+
+    const with1c = merge({
+      paid: new Map([['apartment', '32500.00']]),
+      calc: closed([{ code: 'contract', amount: '100000.00' }]),
+      deductions: [{ kind: 'Служебная квартира', amount: '32500.00' }],
+    });
+    expect(with1c.cents).toEqual({ contract: 10000000, apartment: 3250000 });
   });
 });

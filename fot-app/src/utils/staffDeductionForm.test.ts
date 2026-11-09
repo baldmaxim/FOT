@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { IStaffDeductionKind } from '../services/staffDeductionService';
-import { amountAfterKindChange, deductionDefaultAmount, parseStaffDeduction } from './staffDeductionForm';
+import { amountAfterKindChange, deductionDefaultAmount, monthForDismissed, parseStaffDeduction } from './staffDeductionForm';
 
 const draft = { selected: true, kindId: 3, subkindId: null, month: '2026-10', amount: '5 000,5' };
 
@@ -75,5 +75,21 @@ describe('сумма по умолчанию: подвид ?? вид', () => {
     expect(step('700', [4, null], [4, 9])).toBe('700');
     expect(step('700', [4, 9], [4, null])).toBe('700');
     expect(step('700', [4, 9], [6, null])).toBe('700');
+  });
+});
+
+describe('monthForDismissed', () => {
+  it('уволен 23.10: ноябрь → октябрь, октябрь и раньше — как были; работающий — без изменений', () => {
+    expect(monthForDismissed('2026-11', '2026-10-23')).toBe('2026-10');
+    expect(monthForDismissed('2026-12', '2026-10-23')).toBe('2026-10');
+    expect(monthForDismissed('2026-10', '2026-10-23')).toBe('2026-10');
+    expect(monthForDismissed('2026-08', '2026-10-23')).toBe('2026-08');
+    expect(monthForDismissed('2026-11', null)).toBe('2026-11');
+    expect(monthForDismissed('2026-11', undefined)).toBe('2026-11');
+  });
+
+  it('граница года: уволен 31.12.2026 — январь 2027 → декабрь 2026', () => {
+    expect(monthForDismissed('2027-01', '2026-12-31')).toBe('2026-12');
+    expect(monthForDismissed('2026-12', '2027-01-05')).toBe('2026-12');
   });
 });

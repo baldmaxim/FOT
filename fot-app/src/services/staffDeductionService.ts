@@ -71,6 +71,12 @@ export interface IStaffDeductionKindPayload {
 
 interface IApiResponse<T> { success: boolean; data: T }
 
+/** «Добавить сотрудника»: работающие и уволенные за месяцы выбора; уволенному — месяц не позже увольнения. */
+export interface IStaffDeductionCandidate extends IDormitoryCandidate {
+  /** YYYY-MM-DD; работающий — null (старый сервер поля не присылает). */
+  dismissal_date?: string | null;
+}
+
 export const STAFF_DEDUCTIONS_KEY = ['staff-deductions'] as const;
 export const STAFF_DEDUCTION_KINDS_KEY = ['staff-deduction-kinds'] as const;
 
@@ -80,8 +86,8 @@ export const staffDeductionService = {
     return res.data;
   },
 
-  searchEmployees: async (search: string, signal?: AbortSignal): Promise<IDormitoryCandidate[]> => {
-    const res = await apiClient.get<IApiResponse<IDormitoryCandidate[]>>(
+  searchEmployees: async (search: string, signal?: AbortSignal): Promise<IStaffDeductionCandidate[]> => {
+    const res = await apiClient.get<IApiResponse<IStaffDeductionCandidate[]>>(
       `/staff-deductions/employees/search?q=${encodeURIComponent(search)}`,
       { signal },
     );

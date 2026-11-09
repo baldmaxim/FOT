@@ -32,8 +32,11 @@ const ITEM_KIND = new Map<SummaryItemCode, PayrollPaidTotalKind>([
   ...PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, group.kind] as const)),
   [OTHER_DEDUCTIONS, 'deducted'],
 ]);
-/** Подписи «Свода», отличные от «Оплачено». */
-const SUMMARY_ITEM_LABELS: Partial<Record<PayrollPaidItemCode, string>> = { contract: 'Зарплата' };
+/**
+ * Подписи «Свода», отличные от «Оплачено». «Квартиры» 1С — то же удержание, что вид «Служебная квартира» «Справочника»
+ * (он сводится в эту статью); начисление «Доплата → Квартира» — другая статья («Компенсация проживания»).
+ */
+const SUMMARY_ITEM_LABELS: Partial<Record<PayrollPaidItemCode, string>> = { contract: 'Зарплата', apartment: 'Служебная квартира' };
 const ITEM_LABEL = new Map<SummaryItemCode, string>([
   ...PAYROLL_PAID_GROUPS.flatMap(group => group.items.map(item => [item.code, SUMMARY_ITEM_LABELS[item.code] ?? item.label] as const)),
   [OTHER_DEDUCTIONS, 'Прочие удержания'],
