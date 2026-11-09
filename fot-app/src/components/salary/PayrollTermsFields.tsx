@@ -11,12 +11,13 @@ import {
 import type { PayrollTermsFormApi } from '../../hooks/usePayrollTermsForm';
 import { formatDate } from '../../utils/formatMoney';
 import { formatPaidAmount } from '../../utils/payrollPaid';
-import { formatPayrollMoney, formatPayrollRubles } from '../../utils/payrollFormat';
+import { formatPayrollMoney, formatPayrollRubles, groupMoneyInput } from '../../utils/payrollFormat';
 import {
   payrollFieldId,
   payrollTermsTotal,
   type PayrollTermsFieldKey,
 } from '../../utils/payrollTermsForm';
+import { PayrollMoneyInput } from './PayrollMoneyInput';
 import styles from './PayrollTermsFields.module.css';
 
 interface IPayrollTermsFieldsProps {
@@ -91,7 +92,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   // Премиальная часть и «Итого» — за месяц, у почасовой ставки их нет: доплата — «Плановой доплатой».
   const salaryTerms = form.calcType === 'salary';
 
-  /** Денежное поле с подписью сверху и ошибкой снизу. Без числовых подсказок: подсказка — не значение. */
+  /** Денежное поле с подписью сверху и ошибкой снизу, сумма — с разрядами. Без числовых подсказок: подсказка — не значение. */
   const renderMoney = (
     key: PayrollTermsFieldKey,
     label: string,
@@ -104,7 +105,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
     return (
       <div className={styles.field} key={key}>
         <label htmlFor={id} className={styles.label}>{label}</label>
-        <input
+        <PayrollMoneyInput
           id={id}
           className={styles.control}
           inputMode="decimal"
@@ -113,7 +114,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           disabled={readOnly || locked}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
-          onChange={event => onChange(event.target.value)}
+          onChange={onChange}
         />
         {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
       </div>
@@ -321,7 +322,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                   )}
                   <div className={styles.field}>
                     <label htmlFor={travelId} className={styles.label}>Проезд, ₽/мес</label>
-                    <input id={travelId} className={styles.control} value={travel} disabled readOnly />
+                    <input id={travelId} className={styles.control} value={groupMoneyInput(travel)} disabled readOnly />
                   </div>
                 </div>
               </div>

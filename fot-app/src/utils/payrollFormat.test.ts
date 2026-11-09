@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatPayrollRubles } from './payrollFormat';
+import { formatPayrollRubles, groupMoneyInput } from './payrollFormat';
 
 /** toLocaleString ставит неразрывные пробелы — сравниваем с обычными. */
 const plain = (value: string | null): string | null => value?.replace(/\s/g, ' ') ?? null;
@@ -24,5 +24,35 @@ describe('formatPayrollRubles', () => {
     expect(formatPayrollRubles(undefined)).toBeNull();
     expect(formatPayrollRubles('')).toBeNull();
     expect(formatPayrollRubles('abc')).toBeNull();
+  });
+});
+
+describe('groupMoneyInput', () => {
+  it('целая часть — с разрядами', () => {
+    expect(plain(groupMoneyInput('130000'))).toBe('130 000');
+    expect(plain(groupMoneyInput('2730'))).toBe('2 730');
+    expect(plain(groupMoneyInput('999'))).toBe('999');
+    expect(plain(groupMoneyInput('1234567890'))).toBe('1 234 567 890');
+    expect(groupMoneyInput('')).toBe('');
+  });
+
+  it('дробная часть — через запятую, как набрана', () => {
+    expect(plain(groupMoneyInput('1250.5'))).toBe('1 250,5');
+    expect(plain(groupMoneyInput('1250,'))).toBe('1 250,');
+    expect(plain(groupMoneyInput('450.1234'))).toBe('450,1234');
+    // Лишний знак не обрезается: ошибку под полем покажет разбор.
+    expect(plain(groupMoneyInput('1234,567'))).toBe('1 234,567');
+  });
+
+  it('не число — как набрано', () => {
+    expect(groupMoneyInput('12а')).toBe('12а');
+    expect(groupMoneyInput('-5000')).toBe('-5000');
+    expect(groupMoneyInput(',5')).toBe(',5');
+  });
+
+  it('повтор не меняет результат', () => {
+    for (const raw of ['130000', '1250.5', '1 250,5', '12а']) {
+      expect(groupMoneyInput(groupMoneyInput(raw))).toBe(groupMoneyInput(raw));
+    }
   });
 });

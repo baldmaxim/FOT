@@ -25,6 +25,19 @@ export const parseRateAmount = (raw: string, decimals: 2 | 4 = 2): RateAmountPar
   return { amount, error: null };
 };
 
+/**
+ * Сумма в поле ввода с разрядами: «130000» → «130 000», «1250.5» → «1 250,5» (неразрывный пробел, как toLocaleString).
+ * Знаки после запятой не дописываются и не обрезаются; не число («12а», «-5») — как набрано, ошибку покажет разбор.
+ * Повторный вызов результат не меняет.
+ */
+export const groupMoneyInput = (raw: string): string => {
+  const match = /^(\d+)(?:([.,])(\d*))?$/.exec(raw.replace(/\s/g, ''));
+  if (!match) return raw;
+  const [, integer, separator, fraction = ''] = match;
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return separator ? `${grouped},${fraction}` : grouped;
+};
+
 /** 175000 → «175 000,00»; не число — null. */
 export const formatPayrollMoney = (value: string | number | null | undefined): string | null => {
   if (value === null || value === undefined || value === '') return null;
