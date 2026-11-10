@@ -190,11 +190,19 @@
   font-size: 13px;
 }
 
+/* «Назначено» — одна сетка на все группы (subgrid по цепочке группа → список → строка): ФИО | галочка
+   «По графику» | что назначено | «Снять». Столбцы общие — назначение и «Снять» во всех группах стоят
+   ровно друг под другом, галочки — тоже. */
 .assigned {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  column-gap: 12px;
+  row-gap: 12px;
   min-width: 0;
+}
+
+.assigned > * {
+  grid-column: 1 / -1;
 }
 
 .sectionTitle {
@@ -204,10 +212,23 @@
   color: var(--text-primary);
 }
 
+.group,
+.list,
+.row {
+  display: grid;
+  grid-column: 1 / -1;
+  /* Без subgrid (старый Safari) — свои столбцы на каждом уровне. */
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: subgrid;
+  column-gap: 12px;
+}
+
 .group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  row-gap: 6px;
+}
+
+.group > * {
+  grid-column: 1 / -1;
 }
 
 .groupTitle {
@@ -225,10 +246,8 @@
 }
 
 .row {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  row-gap: 0;
   min-height: 52px;
   padding: 4px 4px 4px 12px;
 }
@@ -237,44 +256,49 @@
   border-top: 1px solid var(--border);
 }
 
+/* Всё в одну строку сетки; у «Сотрудников» на телефоне контролы — во второй (ниже). */
+.row > * {
+  grid-row: 1;
+}
+
+/* Без галочки ФИО занимает и её столбец. */
 .rowText {
-  flex: 1;
+  grid-column: 1 / 3;
   min-width: 0;
   font-size: 14px;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
-/* Что назначено — между ФИО и «Снять». */
+/* Что назначено — у самой «Снять». */
 .assignedLabel {
-  flex: 0 1 auto;
-  max-width: 40%;
+  grid-column: 3;
+  max-width: 220px;
   font-size: 13px;
   color: var(--text-primary);
   text-align: right;
   overflow-wrap: anywhere;
 }
 
-/* Строка «Сотрудников» на телефоне: ФИО — первой строкой, галочка «По графику», назначение и «Снять» — справа ниже. */
-.rowWrap {
-  flex-wrap: wrap;
-  row-gap: 0;
-}
-
+/* Строка «Сотрудников»: ФИО | галочка | назначение | «Снять». На телефоне ФИО — первой строкой,
+   галочка, назначение и «Снять» — справа ниже. */
 .rowWrap .rowText {
-  flex: 1 0 100%;
+  grid-column: 1 / -1;
   padding-top: 8px;
 }
 
-.rowWrap .scheduleToggle {
-  margin-left: auto;
+.row .scheduleToggle {
+  grid-column: 2;
 }
 
-/* Назначение — столбцом постоянной ширины: галочки во всех строках стоят ровно друг под другом. */
-.rowWrap .assignedLabel {
-  flex: 0 0 140px;
-  max-width: none;
-  text-align: left;
+.rowWrap .scheduleToggle,
+.rowWrap .assignedLabel,
+.rowWrap .removeButton {
+  grid-row: 2;
+}
+
+.row .removeButton {
+  grid-column: 4;
 }
 
 .removeButton {
@@ -517,6 +541,20 @@
   visibility: visible;
 }
 
+/* С 600 px (iPad, большие телефоны в альбомной) строка «Сотрудников» — в одну линию, как у отделов. */
+@media (min-width: 600px) {
+  .rowWrap .rowText {
+    grid-column: 1;
+    padding-top: 0;
+  }
+
+  .rowWrap .scheduleToggle,
+  .rowWrap .assignedLabel,
+  .rowWrap .removeButton {
+    grid-row: 1;
+  }
+}
+
 @media (min-width: 769px) {
   .modal.modal {
     width: min(90vw, 1000px);
@@ -554,19 +592,6 @@
 
   .row {
     min-height: 44px;
-  }
-
-  .rowWrap {
-    flex-wrap: nowrap;
-  }
-
-  .rowWrap .rowText {
-    flex: 1;
-    padding-top: 0;
-  }
-
-  .rowWrap .scheduleToggle {
-    margin-left: 0;
   }
 
   .removeButton,
