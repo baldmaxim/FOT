@@ -47,7 +47,14 @@ describe('столбцы без данных на «Расчётах»', () => {
           timesheet: '250000.00', overtime: '1420.45', overtime_hours: 1, travel: '2730.00', net: '254150.45',
         }),
       }),
-    ])).toEqual(['deductions', 'calc_vacation', 'calc_sick', 'paid_recalc', 'calc_deductions']);
+    ])).toEqual(['deductions', 'calc_vacation', 'calc_sick', 'fss_payments', 'paid_recalc', 'calc_deductions']);
+  });
+
+  it('«Выплаты ФСС (1С)»: есть сумма — столбец виден сразу после «Больничных»; нет ни у кого — скрыт', () => {
+    const keys = PAYROLL_CALC_TABLE_COLUMNS.map(column => column.key);
+    expect(keys.indexOf('fss_payments')).toBe(keys.indexOf('calc_sick') + 1);
+    expect(empty([row({ fss_payments: '3180.34' }), row({ fss_payments: null })])).not.toContain('fss_payments');
+    expect(empty([row({ fss_payments: null }), row()])).toContain('fss_payments');
   });
 
   it('«Остаток» и «Сумма» видны и у строк без итога ФОТ; «Выплаты на карту» не скрываются никогда', () => {
@@ -110,6 +117,12 @@ describe('«Остаток к выплате»', () => {
     expect(calcRemainderAmount(row({
       calc: calc({ net: '244856.71' }), card_payouts_by_method: pay('84930.71', '24913.36', '10246.28'),
     }))).toBe('124766.36');
+  });
+
+  it('ФСС «Остаток» не уменьшает: как 1С, премию прямые выплаты СФР не сокращают (Никифоров, сентябрь)', () => {
+    const base = { calc: calc({ net: '238076.03' }), card_payouts_by_method: pay('89564.03', '148512.00') };
+    expect(calcRemainderAmount(row({ ...base, fss_payments: '13868.04' }))).toBe('0.00');
+    expect(calcRemainderAmount(row(base))).toBe('0.00');
   });
 
   it('единственный вид выплаты тоже вычитается, хотя «Итого» у него нет', () => {

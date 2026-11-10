@@ -37,6 +37,7 @@ import * as XLSX from 'xlsx';
 import type { IPayoutCandidate } from '../src/services/payroll/payroll-1c-payouts.matching.js';
 import { parsePayout1cMonthXml, type IPayout1cMonthDocument } from '../src/services/payroll/payroll-1c-payouts.month-xml.js';
 import { normalizePayoutName, type IPayout1cLine } from '../src/services/payroll/payroll-1c-payouts.parser.js';
+import { decide, DECISION_LABELS, type DecisionKind, type IDecision } from './lib/payouts-person-decision.js';
 import { buildReplaceTarget, loadMonthSnapshot, snapshotToInput } from './lib/payouts-register-replace.js';
 import {
   buildRegisterLoadSql,
@@ -55,6 +56,7 @@ const SOURCE_PATHS = [
   'fot-server/scripts/build-payouts-xml-sql.ts',
   'fot-server/scripts/lib/payouts-register-sql.ts',
   'fot-server/scripts/lib/payouts-register-replace.ts',
+  'fot-server/scripts/lib/payouts-person-decision.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.month-xml.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.parser.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.matching.ts',
@@ -141,17 +143,6 @@ const TRANSLIT: Readonly<Record<string, string>> = Object.fromEntries(
   ][index]]),
 );
 
-type DecisionKind = 'id_all' | 'single' | 'worked' | 'earlier' | 'ambiguous' | 'none';
-const DECISION_LABELS: ReadonlyArray<[DecisionKind, string]> = [
-  ['id_all', 'по коду физлица 1С (id_all)'],
-  ['single', 'один кандидат по ФИО'],
-  ['worked', 'тёзка — работал в месяце'],
-  ['earlier', 'тёзка — подтверждён ранее под этим ФИО'],
-  ['ambiguous', 'тёзки — без сотрудника'],
-  ['none', 'нет в ФОТ — без сотрудника'],
-];
-interface IDecision { employeeId: number | null; kind: DecisionKind }
-
 /** Физлицо файла: нормализованное ФИО + id_all. */
 interface IPerson {
   key: string;
@@ -160,24 +151,6 @@ interface IPerson {
   entries: Array<{ doc: IPayout1cMonthDocument; line: IPayout1cLine }>;
 }
 
-const decide = (
-  candidates: readonly IPayoutCandidate[], autoId: number | null, earlier: ReadonlySet<number>, firedNoDate: ReadonlySet<number>,
-): IDecision => {
-  if (autoId !== null) return { employeeId: autoId, kind: 'id_all' };
-  if (candidates.length === 0) return { employeeId: null, kind: 'none' };
-  if (candidates.length === 1) return { employeeId: candidates[0].employee_id, kind: 'single' };
-  let pool = [...candidates];
-  const stages: Array<[DecisionKind, (c: IPayoutCandidate) => boolean]> = [
-    ['worked', c => c.worked_in_month && !firedNoDate.has(c.employee_id)],
-    ['earlier', c => earlier.has(c.employee_id)],
-  ];
-  for (const [kind, keep] of stages) {
-    const next = pool.filter(keep);
-    if (next.length === 1) return { employeeId: next[0].employee_id, kind };
-    if (next.length > 1) pool = next;
-  }
-  return { employeeId: null, kind: 'ambiguous' };
-};
 
 interface IMonthTotals { docs: number; lines: number; total: string; lines_emp: number; total_emp: string; lines_none: number; total_none: string }
 

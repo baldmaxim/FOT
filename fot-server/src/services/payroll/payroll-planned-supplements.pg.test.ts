@@ -149,7 +149,7 @@ const makeRes = () => {
 describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
+      DROP TABLE IF EXISTS payroll_fss_payments, payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
         employee_hr_profiles, employee_assignments, employee_dismissal_events, skud_daily_summary, attendance_adjustments,
         employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
@@ -231,6 +231,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Ведомости в банк (328) — «Выплаты на карту» на «Расчётах»; профиль нужен только для индекса миграции.
     await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
     await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));
+    await pg.pool!.query(migration('356_payroll_fss_payments.sql'));
   });
 
   afterAll(async () => {
@@ -463,6 +464,12 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         (4, 1, 'k1', 'Борисов А.А.',   1000,    2,    'auto_id_all'),
         (5, 1, 'k1', 'Борисов А.А.',   9999,    2,    'auto_id_all'),
         (6, 1, 'k1', 'Дмитриев Д.Д.',  777,     5,    'auto_id_all');
+      INSERT INTO payroll_fss_payments (registry_guid, registry_number, registry_date, period_month, registry_hash, line_no,
+                                        full_name_1c, amount_gross, ndfl, amount, employee_id, resolution_reason) VALUES
+        ('41b95081-c17b-11f1-8596-00505686eaee', '70', '2026-09-30', '2026-09-01', repeat('a', 64), 1, 'Борисов А.А.', 3655.34, 475, 3180.34, 2, 'т'),
+        ('41b95081-c17b-11f1-8596-00505686eaee', '70', '2026-09-30', '2026-09-01', repeat('a', 64), 2, 'Борисов А.А.', 1000, 130, 870, 2, 'т'),
+        ('41b95081-c17b-11f1-8596-00505686eaee', '70', '2026-09-30', '2026-09-01', repeat('a', 64), 3, 'Неизвестный Н.', 500, 65, 435, NULL, 'т'),
+        ('51b95081-c17b-11f1-8596-00505686eaee', '71', '2026-10-30', '2026-10-01', repeat('b', 64), 1, 'Борисов А.А.', 99, 0, 99, 2, 'т');
     `);
     const res = makeRes();
     await payrollTermsController.list({
@@ -485,9 +492,11 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         { method: 'Увольнения', amount: '1000.00' },
       ],
     });
+    // ФСС — на руки за выбранный месяц, два листка одной суммой; октябрь и строка без сотрудника не попадают.
+    expect(rows[2]).toMatchObject({ fss_payments: '4050.34' });
     expect(rows[2]).not.toHaveProperty('card_payouts_raw');
     expect(rows[2]).not.toHaveProperty('card_payouts');
-    expect(rows[1]).toMatchObject({ paid_vacation: null, card_payouts_by_method: null });
+    expect(rows[1]).toMatchObject({ paid_vacation: null, card_payouts_by_method: null, fss_payments: null });
 
     // Месяцы ведомостей — только у штата в охвате: уволенный (октябрь) не даёт месяц.
     expect(await listPayouts1cMonths({ contractorRootId: null, departmentIds: null })).toEqual(['2026-08', '2026-09']);

@@ -129,14 +129,16 @@ describe('payrollColumnTotals', () => {
     expect(total?.title).toBe(['Аванс: 5,00', 'Зарплата: 10,30'].join('\n'));
   });
 
-  it('суммы 1С: «Удержания» и «Перерасчёт» готовы без расчёта ФОТ', () => {
+  it('суммы 1С: «Удержания», «Перерасчёт» и «Выплаты ФСС» готовы без расчёта ФОТ', () => {
     const rows = [
-      row({ paid_deductions_total: '100.50', paid_recalc_prev: '-1.00' }),
-      row({ paid_deductions_total: null, paid_recalc_prev: '2.00' }),
+      row({ paid_deductions_total: '100.50', paid_recalc_prev: '-1.00', fss_payments: '3180.34' }),
+      row({ paid_deductions_total: null, paid_recalc_prev: '2.00', fss_payments: '13868.04' }),
+      row({ fss_payments: null }),
     ];
-    const totals = payrollColumnTotals(rows, [column('deductions'), column('paid_recalc')]);
+    const totals = payrollColumnTotals(rows, [column('deductions'), column('paid_recalc'), column('fss_payments')]);
     expect(totals.get('deductions')).toMatchObject({ amount: '100.50', fromCalc: false });
     expect(totals.get('paid_recalc')).toMatchObject({ amount: '1.00', fromCalc: false });
+    expect(totals.get('fss_payments')).toMatchObject({ amount: '17048.38', fromCalc: false });
   });
 
   it('подстолбцы: виды ФОТ ждут расчёт, статьи 1С — нет; сумма подстолбцов равна итогу «Доплат»', () => {

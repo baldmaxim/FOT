@@ -10,7 +10,7 @@ export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
   | 'deductions' | 'calc_remainder'
   | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick' | 'calc_housing'
-  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts';
+  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts' | 'fss_payments';
 
 /** Столбцы условий с сортировкой и фильтром; суммы «Выплачено» и «Расчётов» их не имеют. */
 const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
@@ -54,6 +54,7 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   { key: 'calc_timesheet', label: 'Начислено по табелю' },
   { key: 'calc_vacation', label: 'Отпускные' },
   { key: 'calc_sick', label: 'Больничные' },
+  { key: 'fss_payments', label: 'Выплаты ФСС (1С)' },
   { key: 'paid_recalc', label: 'Перерасчёт за пред. месяц' },
   { key: 'calc_supplements', label: 'Доплаты' },
   { key: 'calc_deductions', label: 'Удержания (ФОТ)' },

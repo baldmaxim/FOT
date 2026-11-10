@@ -37,6 +37,9 @@
     "scripts/lib/payouts-register-sql.ts",
     "scripts/lib/payouts-register-replace.ts",
     "scripts/build-payouts-xml-sql.ts",
+    "scripts/lib/payouts-person-decision.ts",
+    "scripts/lib/fss-payments-sql.ts",
+    "scripts/build-fss-payments-sql.ts",
     "scripts/repair-orphan-dismissal-claims-2026-10.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"

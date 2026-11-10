@@ -315,3 +315,16 @@ export const cardPayoutsJoinSql = (monthsParam: string): string => `
                              AND (${monthsParam}::date[] IS NULL OR d.period_month = ANY(${monthsParam}::date[]))
                            GROUP BY d.payment_method) c
                 ) card ON TRUE`;
+
+/**
+ * LATERAL списка «Расчётов»: прямые выплаты ФСС (миграция 356) сотрудника page.employee_id за месяцы (date[] первых
+ * чисел; NULL — все), на руки, NUMERIC текстом; нет — null. Справочно: в «Сумму», «Остаток» и «Выплаты на карту» не
+ * входит (решение пользователя 10.11.2026 — как 1С).
+ */
+export const fssPaymentsJoinSql = (monthsParam: string): string => `
+                LEFT JOIN LATERAL (
+                  SELECT SUM(f.amount)::text AS fss_payments
+                    FROM payroll_fss_payments f
+                   WHERE f.employee_id = page.employee_id
+                     AND (${monthsParam}::date[] IS NULL OR f.period_month = ANY(${monthsParam}::date[]))
+                ) fss ON TRUE`;

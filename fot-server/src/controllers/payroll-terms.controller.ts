@@ -59,6 +59,7 @@ import {
   CALC_COLUMNS_MAX_MONTHS,
   calcColumnsServerTiming,
   cardPayoutsJoinSql,
+  fssPaymentsJoinSql,
   emptyCalcColumnsTiming,
   type ICardPayoutByMethod,
   getCalcColumns,
@@ -409,12 +410,12 @@ const PAYOUTS_JOIN_SQL = `
                 ) pay ON TRUE`;
 
 const PAID_SELECT_SQL = `paid.paid_total, paid.paid_deductions_total, paid.paid_deductions,
-                     paid.paid_vacation, paid.paid_sick_leave, paid.paid_recalc_prev, card.card_payouts_raw`;
+                     paid.paid_vacation, paid.paid_sick_leave, paid.paid_recalc_prev, card.card_payouts_raw, fss.fss_payments`;
 
 /**
  * «Расчёты»: итоги «Начислено» и «Удержано» и статьи «Удержано» по месяцам для окна; «К выплате»
  * (начислено минус удержано) фронт считает в копейках. Отдельно — отпускные, больничные и перерасчёт (столбцы
- * из 1С, payroll-calc-columns.service) и ведомости в банк по способу выплаты. monthsParam — date[] первых чисел
+ * из 1С, payroll-calc-columns.service), ведомости в банк по способу выплаты и прямые выплаты ФСС. monthsParam — date[] первых чисел
  * месяцев, NULL — весь период. Нет сумм группы — null («—»). Суммы — NUMERIC строкой (::text).
  */
 const paidJoinSql = (monthsParam: string): string => `
@@ -432,7 +433,7 @@ const paidJoinSql = (monthsParam: string): string => `
                     FROM payroll_paid_amounts pa
                    WHERE pa.employee_id = page.employee_id
                      AND (${monthsParam}::date[] IS NULL OR pa.month = ANY(${monthsParam}::date[]))
-                ) paid ON TRUE${cardPayoutsJoinSql(monthsParam)}`;
+                ) paid ON TRUE${cardPayoutsJoinSql(monthsParam)}${fssPaymentsJoinSql(monthsParam)}`;
 
 /**
  * Список: итоги + порция. Параметры $9 LIMIT, $10 OFFSET, $11/$12 — курсор прежнего порядка
@@ -550,6 +551,8 @@ interface IPayrollTermsListRow {
   paid_recalc_prev?: string | null;
   /** Только при paid_months: ведомости выплаты по способу выплаты (наружу — card_payouts_by_method). */
   card_payouts_raw?: ICardPayoutByMethod[] | null;
+  /** Только при paid_months: прямые выплаты ФСС за месяцы, на руки (миграция 356); справочно. */
+  fss_payments?: string | null;
   sort_key?: unknown;
   sort_key_text?: string | null;
 }

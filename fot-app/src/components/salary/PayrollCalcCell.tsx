@@ -21,7 +21,7 @@ import styles from './PayrollTermsTable.module.css';
 
 /** Столбцы состава зарплаты «Расчётов»: ФОТ по табелю и суммы 1С (payrollCalcColumns.ts). */
 export type PayrollCalcCellColumn =
-  | PayrollCalcAmountColumn | 'calc_rate' | 'paid_recalc' | 'card_payouts';
+  | PayrollCalcAmountColumn | 'calc_rate' | 'paid_recalc' | 'fss_payments' | 'card_payouts';
 
 interface IPayrollCalcCellProps {
   column: PayrollCalcCellColumn;
@@ -61,6 +61,8 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
     }
     case 'paid_recalc':
       return <td className={cellClass}>{formatAmount(row.paid_recalc_prev)}</td>;
+    case 'fss_payments':
+      return <td className={cellClass}>{formatAmount(row.fss_payments)}</td>;
     case 'card_payouts': {
       const lines = cardPayoutLines(row.card_payouts_by_method);
       const total = cardPayoutsTotal(lines);

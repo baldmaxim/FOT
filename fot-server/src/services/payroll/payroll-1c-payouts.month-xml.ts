@@ -44,7 +44,7 @@ const ARRAY_PATHS = new Set([
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-type XmlNode = Record<string, unknown>;
+export type XmlNode = Record<string, unknown>;
 
 export interface IPayout1cMonthDocument extends IPayout1cDocument {
   docKind: string;
@@ -55,20 +55,20 @@ export interface IPayout1cMonthDocument extends IPayout1cDocument {
   leadershipLines: number;
 }
 
-const fail = (message: string): never => {
+export const fail = (message: string): never => {
   throw new Payout1cParseError(message);
 };
 
-const isNode = (value: unknown): value is XmlNode => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isNode = (value: unknown): value is XmlNode => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isEmpty = (value: unknown): boolean => {
+export const isEmpty = (value: unknown): boolean => {
   if (value === undefined || value === null || value === '') return true;
   if (Array.isArray(value)) return value.every(isEmpty);
   if (isNode(value)) return Object.values(value).every(isEmpty);
   return String(value).trim() === '';
 };
 
-const text = (node: XmlNode, tag: string, where: string, required = true): string | null => {
+export const text = (node: XmlNode, tag: string, where: string, required = true): string | null => {
   const value = node[tag];
   if (Array.isArray(value)) fail(`${where}: тег «${tag}» повторяется`);
   if (isNode(value)) fail(`${where}: «${tag}» — не значение`);
@@ -77,23 +77,23 @@ const text = (node: XmlNode, tag: string, where: string, required = true): strin
   return result === '' ? null : result;
 };
 
-const child = (node: XmlNode, tag: string, where: string): XmlNode => {
+export const child = (node: XmlNode, tag: string, where: string): XmlNode => {
   const value = node[tag];
   if (!isNode(value)) fail(`${where}: нет раздела «${tag}»`);
   return value as XmlNode;
 };
 
-const listOf = (value: unknown): XmlNode[] => {
+export const listOf = (value: unknown): XmlNode[] => {
   if (value === undefined || value === '') return [];
   if (!Array.isArray(value)) return isNode(value) ? [value] : [];
   return value.filter(isNode);
 };
 
-const assertKnownTags = (node: XmlNode, known: ReadonlySet<string>, where: string): void => {
+export const assertKnownTags = (node: XmlNode, known: ReadonlySet<string>, where: string): void => {
   for (const tag of Object.keys(node)) if (!known.has(tag)) fail(`${where}: неизвестный раздел «${tag}»`);
 };
 
-const isoDate = (node: XmlNode, tag: string, where: string): string => {
+export const isoDate = (node: XmlNode, tag: string, where: string): string => {
   const part = child(node, tag, where);
   const [year, month, day] = ['Год', 'Мес', 'День'].map(key => Number(text(part, key, `${where}, «${tag}»`)));
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -104,7 +104,7 @@ const isoDate = (node: XmlNode, tag: string, where: string): string => {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 };
 
-const guid = (raw: string, where: string): string => {
+export const guid = (raw: string, where: string): string => {
   const value = raw.toLowerCase();
   if (!UUID_RE.test(value)) fail(`${where}: ГУИД «${raw}» не распознан`);
   return value;
@@ -190,9 +190,11 @@ const parseDocument = (doc: XmlNode, index: number, month: string): IPayout1cMon
   };
 };
 
-/** Разбор выгрузки ведомостей выплаты за месяц month (YYYY-MM). Ошибка формата — Payout1cParseError. */
-export const parsePayout1cMonthXml = (xml: string, month: string): IPayout1cMonthDocument[] => {
-  if (!/^\d{4}-\d{2}$/.test(month)) fail(`Месяц «${month}» — не YYYY-MM`);
+/**
+ * Дерево выгрузки ЗУП (`зп_документы_31`): без DOCTYPE/ENTITY, значения строками, массивы — пути arrayPaths. Общий
+ * разбор с реестром ФСС (payroll-fss.parser.ts).
+ */
+export const parseZupXmlTree = (xml: string, arrayPaths: ReadonlySet<string>): XmlNode => {
   const source = xml.replace(/^﻿/, '');
   if (/<!DOCTYPE|<!ENTITY/i.test(source)) fail('Файл с DOCTYPE или ENTITY не принимается');
   const validation = XMLValidator.validate(source);
@@ -205,10 +207,16 @@ export const parsePayout1cMonthXml = (xml: string, month: string): IPayout1cMont
     trimValues: true,
     ignoreDeclaration: true,
     ignorePiTags: true,
-    isArray: (_name: string, jpath: unknown) => ARRAY_PATHS.has(String(jpath)),
+    isArray: (_name: string, jpath: unknown) => arrayPaths.has(String(jpath)),
   }).parse(source) as XmlNode;
   if (Object.keys(tree).length !== 1 || !isNode(tree[ROOT])) fail(`Нужен один корень «${ROOT}»`);
-  const root = tree[ROOT] as XmlNode;
+  return tree[ROOT] as XmlNode;
+};
+
+/** Разбор выгрузки ведомостей выплаты за месяц month (YYYY-MM). Ошибка формата — Payout1cParseError. */
+export const parsePayout1cMonthXml = (xml: string, month: string): IPayout1cMonthDocument[] => {
+  if (!/^\d{4}-\d{2}$/.test(month)) fail(`Месяц «${month}» — не YYYY-MM`);
+  const root = parseZupXmlTree(xml, ARRAY_PATHS);
   assertKnownTags(root, new Set(['имя', 'версия', 'ЗарплатаКВыплатеОрганизаций']), 'Файл');
   if (text(root, 'имя', 'Файл') !== ROOT_NAME) fail('Файл: не выгрузка ведомостей выплаты («имя»)');
   const container = child(root, 'ЗарплатаКВыплатеОрганизаций', 'Файл');

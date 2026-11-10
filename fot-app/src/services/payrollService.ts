@@ -181,6 +181,8 @@ export interface IPayrollTermsRow {
    * сервер ещё присылает (paid_vacation, paid_sick_leave) для старых вкладок — экран берёт их из расчёта ФОТ.
    */
   paid_recalc_prev?: string | null;
+  /** Только при paid_months: прямые выплаты ФСС (СФР) за месяцы, на руки; справочно, в «Сумму» и «Остаток» не входят. */
+  fss_payments?: string | null;
   /** «Расчёты»: перечислено по ведомостям 1С за месяцы, по способам выплаты; null — ведомостей нет. */
   card_payouts_by_method?: IPayrollCardPayoutByMethod[] | null;
   /** «Расчёты»: столбцы по расчёту ФОТ закрытого табеля; нет поля — сервер не считал (старый бэкенд, «весь период»). */

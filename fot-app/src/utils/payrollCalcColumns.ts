@@ -57,6 +57,7 @@ export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, stri
   calc_sick: 'Из 1С: начислено («Оплачено»), нет — перечислено по ведомости; входит в «Сумму»',
   calc_housing: `${CALC_SOURCE}: квартира или доплата за общежитие`,
   paid_recalc: 'Из 1С, в «Сумму» не входит',
+  fss_payments: 'Из 1С: больничные с 4-го дня, СФР платит напрямую, на руки; в «Сумму» и «Остаток» не входят',
   calc_supplements: `${CALC_SOURCE}: переработка, проезд, проживание, плановая и разовая доплаты`,
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
   calc_remainder: 'Сколько осталось доплатить: «Сумма» минус «Выплаты на карту». Выплат нет — вся «Сумма»; '
@@ -216,7 +217,7 @@ export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
  */
 const SUM_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
   'deductions', 'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation',
-  'calc_sick', 'calc_housing', 'paid_recalc', 'calc_supplements', 'calc_deductions', 'calc_net',
+  'calc_sick', 'calc_housing', 'paid_recalc', 'fss_payments', 'calc_supplements', 'calc_deductions', 'calc_net',
 ]);
 
 /**
@@ -232,6 +233,7 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
     case 'calc_remainder':
     case 'calc_net': return 'calc' in row;
     case 'paid_recalc': return present(row.paid_recalc_prev);
+    case 'fss_payments': return present(row.fss_payments);
     default: return isCalcSumColumn(column) && present(calcSumAmount(row, column));
   }
 };

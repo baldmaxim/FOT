@@ -94,6 +94,7 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   calc_sick: 'colCalcSum',
   calc_housing: 'colCalcHousing',
   paid_recalc: 'colCalcSum',
+  fss_payments: 'colCalcSum',
   calc_supplements: 'colCalcSum',
   calc_deductions: 'colCalcSum',
   calc_net: 'colCalcSum',

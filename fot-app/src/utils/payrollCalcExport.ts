@@ -120,6 +120,7 @@ const entryColumns = (entry: PayrollTableColumnEntry, rows: readonly IPayrollTer
     case 'calc_rate': return [exportColumn(key, label, 'money', rateCellText)];
     case 'deductions': return [exportColumn(key, label, 'money', row => row.paid_deductions_total ?? NO_VALUE)];
     case 'paid_recalc': return [exportColumn(key, label, 'money', row => row.paid_recalc_prev ?? NO_VALUE)];
+    case 'fss_payments': return [exportColumn(key, label, 'money', row => row.fss_payments ?? NO_VALUE)];
     case 'card_payouts': return cardPayoutColumns(rows, label);
     default:
       if (key !== 'calc_remainder' && !isCalcSumColumn(key)) return [];

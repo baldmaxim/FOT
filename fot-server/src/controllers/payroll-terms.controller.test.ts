@@ -1377,6 +1377,10 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     // Отпускные, больничные, перерасчёт — из той же выборки; ведомости — своим LATERAL за те же месяцы.
     expect(sql).toMatch(/FILTER \(WHERE pa\.item_code = 'vacation'\)\)::text AS paid_vacation/);
     expect(sql).toMatch(/d\.period_month = ANY\(\$13::date\[\]\)/);
+    // Прямые выплаты ФСС — своим LATERAL за те же месяцы, справочно (356).
+    expect(sql).toMatch(/SUM\(f\.amount\)::text AS fss_payments\s+FROM payroll_fss_payments f/);
+    expect(sql).toMatch(/f\.period_month = ANY\(\$13::date\[\]\)/);
+    expect(sql).toMatch(/card\.card_payouts_raw, fss\.fss_payments/);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund', 'reserve', 'material_aid', 'imprest_overspend', 'salary_extra'\)\)\)::text AS paid_total/);
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts'\)\)\)::text AS paid_deductions_total/);

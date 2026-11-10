@@ -70,6 +70,7 @@ const entryAmount = (row: IPayrollTermsRow, entry: PayrollTableColumnEntry): str
   const column = entry.key;
   if (column === 'deductions') return row.paid_deductions_total ?? null;
   if (column === 'paid_recalc') return row.paid_recalc_prev ?? null;
+  if (column === 'fss_payments') return row.fss_payments ?? null;
   if (column === 'card_payouts') return sumAmounts(cardPayoutLines(row.card_payouts_by_method).map(line => line.amount));
   return column === 'calc_remainder' || isCalcSumColumn(column) ? calcSumAmount(row, column) : null;
 };
@@ -77,7 +78,7 @@ const entryAmount = (row: IPayrollTermsRow, entry: PayrollTableColumnEntry): str
 /** Столбцы сумм; подстолбцы «+» — всегда суммы. */
 const hasTotal = (entry: PayrollTableColumnEntry): boolean => (
   entry.kind === 'sub'
-  || entry.key === 'deductions' || entry.key === 'paid_recalc' || entry.key === 'card_payouts'
+  || entry.key === 'deductions' || entry.key === 'paid_recalc' || entry.key === 'fss_payments' || entry.key === 'card_payouts'
   || entry.key === 'calc_remainder' || isCalcSumColumn(entry.key)
 );
 
