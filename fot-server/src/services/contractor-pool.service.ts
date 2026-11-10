@@ -26,6 +26,7 @@ import {
 import { assignSigurEmployeeCardBinding } from './sigur-live-cards.service.js';
 import { getOrgSigurDepartmentId, ContractorScopeError } from './contractor-scope.service.js';
 import { deriveCardW26 } from './sigur-card-w26.util.js';
+import { resetPassDocuments } from './contractor-docs.service.js';
 import { resolveField } from './sigur-sync-shared.js';
 
 export const POOL_SETTINGS_KEY = 'contractor.free_pool.sigur_department_id';
@@ -1222,6 +1223,10 @@ export const enqueueRevoke = async (input: {
       [pass.id],
     );
     const oldSubmissionId = locked.rows[0]?.submission_id ?? null;
+
+    // Документы держателя — в историю и очистить: пропуск уходит в общий пул и может
+    // достаться другому подрядчику, чужой паспорт/СНИЛС с ним уйти не должны.
+    await resetPassDocuments(client, [pass.id], { userId: input.userId, source: 'holder_reset' });
 
     await client.query(
       `UPDATE contractor_passes

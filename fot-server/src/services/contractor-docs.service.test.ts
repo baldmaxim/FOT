@@ -6,7 +6,17 @@ import {
   findOrgDocDuplicate,
   duplicateMessage,
   citizenshipRequiresPatent,
+  docsBodySchema,
+  mergeUnsentDocFields,
+  normalizeDocsPayload,
+  isRussianCitizenship,
+  sameHolderName,
+  holderChangeResetsDocuments,
+  resetPassDocuments,
+  recordDocHistoryIfChanged,
+  EMPTY_DOCS,
   type IDocRow,
+  type IDocHistoryPass,
 } from './contractor-docs.service.js';
 
 const fullDocs: IDocRow = {
@@ -106,5 +116,179 @@ describe('contractor-docs findOrgDocDuplicate', () => {
     });
     const call = (client.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(call[1]).toEqual(['org', 'p1', '772600295204', '4012345678']);
+  });
+});
+
+describe('contractor-docs СНИЛС/ИНН/КиГ: разбор и нормализация', () => {
+  const base = {
+    passport_series_number: '40 12 345678',
+    citizenship: 'Таджикистан',
+  };
+
+  it('СНИЛС с маской → 11 цифр; ИНН — 12 цифр', () => {
+    const next = normalizeDocsPayload(docsBodySchema.parse({ ...base, snils: '123-456-789 00', inn: '7707 0832 8934' }));
+    expect(next.snils).toBe('12345678900');
+    expect(next.inn).toBe('770708328934');
+  });
+
+  it('СНИЛС не из 11 цифр или с буквами → ошибка разбора', () => {
+    expect(() => docsBodySchema.parse({ ...base, snils: '123-456-789' })).toThrow('СНИЛС — 11 цифр');
+    expect(() => docsBodySchema.parse({ ...base, snils: '123-456-789 0A' })).toThrow('СНИЛС — 11 цифр');
+  });
+
+  it('ИНН не из 12 цифр → ошибка разбора (10 цифр — ИНН юрлица)', () => {
+    expect(() => docsBodySchema.parse({ ...base, inn: '7707083893' })).toThrow('ИНН — 12 цифр');
+  });
+
+  it('пустая строка и null очищают СНИЛС/ИНН', () => {
+    const a = normalizeDocsPayload(docsBodySchema.parse({ ...base, snils: '', inn: null }));
+    expect(a.snils).toBeNull();
+    expect(a.inn).toBeNull();
+  });
+
+  it('КиГ иностранца — верхний регистр, срок сохраняется', () => {
+    const next = normalizeDocsPayload(docsBodySchema.parse({ ...base, kig: ' ab1234567 ', kig_end_date: '2027-03-01' }));
+    expect(next.kig).toBe('AB1234567');
+    expect(next.kig_end_date).toBe('2027-03-01');
+  });
+
+  it('гражданин России (в любом регистре и с пробелами) и пустое гражданство — КиГ и срок обнуляются вместе', () => {
+    for (const citizenship of ['Россия', ' россия ', 'РОССИЯ', '', null]) {
+      const next = normalizeDocsPayload(docsBodySchema.parse({
+        ...base, citizenship, kig: 'AB1234567', kig_end_date: '2027-03-01',
+      }));
+      expect(next.kig).toBeNull();
+      expect(next.kig_end_date).toBeNull();
+    }
+  });
+
+  it('isRussianCitizenship', () => {
+    expect(isRussianCitizenship(' россия ')).toBe(true);
+    expect(isRussianCitizenship('Казахстан')).toBe(false);
+    expect(isRussianCitizenship(null)).toBe(false);
+  });
+});
+
+describe('contractor-docs mergeUnsentDocFields (старый клиент)', () => {
+  const prev: Partial<IDocRow> = {
+    citizenship: 'Таджикистан', snils: '12345678900', inn: '770708328934', kig: 'AB1234567', kig_end_date: '2027-03-01',
+  };
+
+  it('ключей нет в теле → прежние значения из БД', () => {
+    const body = { citizenship: 'Таджикистан' };
+    const next = normalizeDocsPayload(mergeUnsentDocFields(body, docsBodySchema.parse(body), prev));
+    expect(next.snils).toBe('12345678900');
+    expect(next.inn).toBe('770708328934');
+    expect(next.kig).toBe('AB1234567');
+    expect(next.kig_end_date).toBe('2027-03-01');
+  });
+
+  it('явный null / пустая строка → очистка', () => {
+    const body = { citizenship: 'Таджикистан', snils: null, inn: '', kig: null, kig_end_date: '' };
+    const next = normalizeDocsPayload(mergeUnsentDocFields(body, docsBodySchema.parse(body), prev));
+    expect(next.snils).toBeNull();
+    expect(next.inn).toBeNull();
+    expect(next.kig).toBeNull();
+    expect(next.kig_end_date).toBeNull();
+  });
+
+  it('старый клиент сменил гражданство на Россию — КиГ из БД всё равно обнуляется', () => {
+    const body = { citizenship: 'Россия' };
+    const next = normalizeDocsPayload(mergeUnsentDocFields(body, docsBodySchema.parse(body), prev));
+    expect(next.kig).toBeNull();
+    expect(next.kig_end_date).toBeNull();
+    expect(next.snils).toBe('12345678900');
+  });
+});
+
+describe('contractor-docs смена ФИО держателя', () => {
+  it('sameHolderName: регистр, пробелы, ё/е', () => {
+    expect(sameHolderName(' Иванов  Пётр ', 'иванов петр')).toBe(true);
+    expect(sameHolderName('Иванов Пётр', 'Петров Пётр')).toBe(false);
+  });
+
+  it('holderChangeResetsDocuments: правила сброса', () => {
+    // первичное назначение — документы могли внести заранее
+    expect(holderChangeResetsDocuments(null, 'Петров П.', false)).toBe(false);
+    expect(holderChangeResetsDocuments('', null, false)).toBe(false);
+    // то же ФИО — исправление написания
+    expect(holderChangeResetsDocuments('Иванов И.', ' иванов  и. ', false)).toBe(false);
+    // другой человек
+    expect(holderChangeResetsDocuments('Иванов И.', 'Петров П.', false)).toBe(true);
+    // подрядчик подтвердил «опечатка — оставить»
+    expect(holderChangeResetsDocuments('Иванов И.', 'Иваноф И.', true)).toBe(false);
+    // ФИО стёрто — сброс всегда, флаг не действует
+    expect(holderChangeResetsDocuments('Иванов И.', null, true)).toBe(true);
+    expect(holderChangeResetsDocuments('Иванов И.', '  ', false)).toBe(true);
+  });
+});
+
+describe('contractor-docs resetPassDocuments', () => {
+  const withDocs: IDocHistoryPass = {
+    ...EMPTY_DOCS,
+    id: 'p1', pass_number: '64', org_department_id: 'org', holder_name: 'Иванов И.',
+    passport_series_number: '403934253', citizenship: 'Таджикистан', snils: '12345678900',
+  };
+  const empty: IDocHistoryPass = {
+    ...EMPTY_DOCS, id: 'p2', pass_number: '65', org_department_id: 'org', holder_name: null,
+  };
+  const makeClient = (rows: IDocHistoryPass[]) => {
+    const q = vi.fn(async (sql: string) => (String(sql).includes('FOR UPDATE') ? { rows } : { rows: [] }));
+    return { client: { query: q } as unknown as PoolClient, q };
+  };
+
+  it('пустой список — без запросов', async () => {
+    const { client, q } = makeClient([]);
+    expect(await resetPassDocuments(client, [], { userId: 'u', source: 'holder_reset' })).toEqual([]);
+    expect(q).not.toHaveBeenCalled();
+  });
+
+  it('блокирует в порядке id, пишет снимок с источником из actor и очищает только строки с документами', async () => {
+    const { client, q } = makeClient([withDocs, empty]);
+    const ids = await resetPassDocuments(client, ['p2', 'p1'], { userId: 'u', source: 'clear_holder' });
+    expect(ids).toEqual(['p1']);
+
+    const select = String(q.mock.calls[0][0]);
+    expect(select).toContain('ORDER BY p.id');
+    expect(select).toContain('FOR UPDATE OF p');
+    expect(select).toContain('valid_until IS NULL');
+
+    const hist = q.mock.calls.filter(c => String(c[0]).includes('contractor_pass_document_history'));
+    expect(hist).toHaveLength(1);
+    const hp = hist[0][1] as unknown[];
+    expect(hp[3]).toBe('Иванов И.');       // прежнее ФИО в снимке
+    expect(hp[15]).toBe('clear_holder');   // источник — из actor
+    expect(hp[16]).toBe('12345678900');    // прежний СНИЛС
+
+    const upd = q.mock.calls.find(c => String(c[0]).startsWith('UPDATE contractor_passes'));
+    expect(String(upd?.[0])).toContain('snils = NULL');
+    expect(String(upd?.[0])).toContain('has_residence_permit = false');
+    expect(upd?.[1]).toEqual([['p1']]);
+  });
+
+  it('документов нет ни у кого — UPDATE не выполняется', async () => {
+    const { client, q } = makeClient([empty]);
+    expect(await resetPassDocuments(client, ['p2'], { userId: 'u', source: 'holder_reset' })).toEqual([]);
+    expect(q.mock.calls.some(c => String(c[0]).startsWith('UPDATE'))).toBe(false);
+  });
+});
+
+describe('contractor-docs recordDocHistoryIfChanged: новые поля', () => {
+  it('смена СНИЛС попадает в changed_fields и в снимок', async () => {
+    const q = vi.fn().mockResolvedValue({ rows: [] });
+    const prev: IDocHistoryPass = {
+      ...EMPTY_DOCS, id: 'p1', pass_number: '64', org_department_id: 'org', holder_name: 'Иванов',
+      passport_series_number: '403934253', snils: '12345678900', kig_end_date: '2027-03-01',
+    };
+    const changed = await recordDocHistoryIfChanged(
+      { query: q } as unknown as PoolClient, prev,
+      { ...prev, snils: '98765432100' },
+      { userId: 'u', source: 'admin' },
+    );
+    expect(changed).toEqual(['snils']);
+    const params = q.mock.calls[0][1] as unknown[];
+    expect(params[13]).toEqual(['snils']);
+    expect(params[16]).toBe('12345678900');
+    expect(params[19]).toBe('2027-03-01');
   });
 });

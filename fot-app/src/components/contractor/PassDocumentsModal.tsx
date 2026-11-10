@@ -2,6 +2,14 @@ import { useState, type FC } from 'react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { IDocHistoryRow, IPassDocDuplicate, IPassDocuments } from '../../services/contractorService';
 import { CITIZENSHIP_OPTIONS, citizenshipRequiresPatent } from '../../services/citizenship';
+import {
+  citizenshipNeedsKig,
+  digitsOnly,
+  formatInnInput,
+  formatSnilsInput,
+  isValidInn,
+  isValidSnils,
+} from '../../utils/contractorDocFormat';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 /** Маска номера патента: «77 №2600295204» (2 цифры серии + 10 цифр номера). */
@@ -48,9 +56,13 @@ const DOC_FIELD_LABELS: Record<string, string> = {
   patent_blank_number: 'Бланк патента',
   has_residence_permit: 'ВНЖ',
   residence_permit_number: 'Номер ВНЖ',
+  snils: 'СНИЛС',
+  inn: 'ИНН',
+  kig: 'Номер КиГ',
+  kig_end_date: 'КиГ действует до',
 };
 
-const DOC_DATE_FIELDS = new Set(['passport_issue_date', 'birth_date', 'patent_issue_date']);
+const DOC_DATE_FIELDS = new Set(['passport_issue_date', 'birth_date', 'patent_issue_date', 'kig_end_date']);
 
 const formatRuDate = (iso: string | null | undefined): string => {
   const s = (iso ?? '').slice(0, 10);
@@ -64,6 +76,7 @@ const historyValue = (row: IDocHistoryRow, field: string): string => {
   if (field === 'has_residence_permit') return row.has_residence_permit ? 'да' : 'нет';
   const raw = (row as unknown as Record<string, string | null>)[field] ?? null;
   if (raw == null) return 'не указано';
+  if (field === 'snils') return formatSnilsInput(raw);
   return DOC_DATE_FIELDS.has(field) ? formatRuDate(raw) : raw;
 };
 
@@ -71,6 +84,7 @@ const historyValue = (row: IDocHistoryRow, field: string): string => {
 const historyAuthor = (row: IDocHistoryRow): string => {
   const name = row.changed_by_name?.trim();
   if (row.changed_source === 'clear_holder') return `${name || 'админ'} — освобождение пропуска`;
+  if (row.changed_source === 'holder_reset') return `${name || 'система'} — смена держателя`;
   if (row.changed_source === 'contractor') return name ? `${name} (подрядчик)` : 'подрядчик';
   return name || 'админ';
 };
@@ -106,7 +120,19 @@ export const PassDocumentsModal: FC<IProps> = ({
     patent_blank_number: documents.patent_blank_number ?? '',
     has_residence_permit: documents.has_residence_permit ?? false,
     residence_permit_number: documents.residence_permit_number ?? '',
+    snils: formatSnilsInput(documents.snils),
+    inn: documents.inn ?? '',
+    kig: documents.kig ?? '',
+    kig_end_date: (documents.kig_end_date ?? '').slice(0, 10),
   });
+
+  // СНИЛС/ИНН/КиГ: узкой роли «Заявки на согласование» сервер ключи не отдаёт — блок не рисуем.
+  const showExtraIds = Object.hasOwn(documents, 'snils');
+  // КиГ — только у иностранца (гражданство выбрано и не Россия).
+  const needsKig = citizenshipNeedsKig(form.citizenship);
+  const snilsInvalid = !isValidSnils(form.snils);
+  const innInvalid = !isValidInn(form.inn);
+  const hasErrors = showExtraIds && (snilsInvalid || innInvalid);
 
   // Патент нужен гражданам визово-безвизовых не-ЕАЭС стран, НО ВНЖ его отменяет.
   const isPatentCountry = citizenshipRequiresPatent(form.citizenship);
@@ -115,11 +141,15 @@ export const PassDocumentsModal: FC<IProps> = ({
   // Номер ВНЖ обязателен, когда галочка стоит — подсвечиваем пустое поле.
   const residenceMissing = hasVnzh && form.residence_permit_number.trim().length === 0;
 
-  // Смена гражданства: очищаем ВНЖ, если страна стала непатентной (нет скрытого состояния).
+  // Смена гражданства: очищаем ВНЖ, если страна стала непатентной, и КиГ (номер и срок
+  // вместе), если гражданин России или гражданство снято — скрытого состояния не остаётся.
   const changeCitizenship = (value: string) => {
-    setForm(prev => citizenshipRequiresPatent(value)
-      ? { ...prev, citizenship: value }
-      : { ...prev, citizenship: value, has_residence_permit: false, residence_permit_number: '' });
+    setForm(prev => {
+      let next = { ...prev, citizenship: value };
+      if (!citizenshipRequiresPatent(value)) next = { ...next, has_residence_permit: false, residence_permit_number: '' };
+      if (!citizenshipNeedsKig(value)) next = { ...next, kig: '', kig_end_date: '' };
+      return next;
+    });
   };
 
   const passportDup = dupNote(duplicates?.passport);
@@ -129,9 +159,20 @@ export const PassDocumentsModal: FC<IProps> = ({
   const patentCls = `${styles.input} ${styles.fullInput} ${patentDup ? styles.docDupInput : ''}`;
 
   const handleSave = () => {
+    if (hasErrors) return;
+    // СНИЛС — цифрами без маски; КиГ — только иностранцу, иначе номер и срок пустые.
+    const extraIds = showExtraIds
+      ? {
+          snils: digitsOnly(form.snils) || null,
+          inn: digitsOnly(form.inn) || null,
+          kig: needsKig ? form.kig.trim().toUpperCase() || null : null,
+          kig_end_date: needsKig ? form.kig_end_date || null : null,
+        }
+      : {};
     // Если патент не требуется — обнуляем поля патента, чтобы не копились
     // устаревшие значения и не срабатывал дубль-детектор.
     onSave?.({
+      ...extraIds,
       passport_series_number: form.passport_series_number.trim() || null,
       passport_issue_date: form.passport_issue_date || null,
       birth_date: form.birth_date || null,
@@ -154,7 +195,7 @@ export const PassDocumentsModal: FC<IProps> = ({
       onTouchStart={overlay.onTouchStart}
       onTouchEnd={overlay.onTouchEnd}
     >
-      <div className={`${styles.modal} ${styles.modalScroll}`}>
+      <div className={`${styles.modal} ${styles.modalScroll} ${styles.docsModal}`}>
         <h2 className={styles.modalTitle}>
           Документы — {holderName ?? `пропуск № ${passNumber}`}
         </h2>
@@ -191,11 +232,11 @@ export const PassDocumentsModal: FC<IProps> = ({
           </select>
         </div>
 
-        <div className={styles.docRow}>
+        <div className={`${styles.docsPair} ${styles.docsPairEnd}`}>
           <div className={styles.field}>
             <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
             <input
-              className={`${styles.input} ${styles.numInput}`}
+              className={`${styles.input} ${styles.fullInput}`}
               type="date"
               value={form.passport_issue_date}
               disabled={readOnly}
@@ -205,7 +246,7 @@ export const PassDocumentsModal: FC<IProps> = ({
           <div className={styles.field}>
             <span className={styles.label}>Дата рождения</span>
             <input
-              className={`${styles.input} ${styles.numInput}`}
+              className={`${styles.input} ${styles.fullInput}`}
               type="date"
               value={form.birth_date}
               disabled={readOnly}
@@ -213,6 +254,35 @@ export const PassDocumentsModal: FC<IProps> = ({
             />
           </div>
         </div>
+
+        {showExtraIds && (
+          <div className={styles.docsPair}>
+            <div className={styles.field}>
+              <span className={styles.label}>СНИЛС</span>
+              <input
+                className={`${styles.input} ${styles.fullInput} ${snilsInvalid ? styles.docDupInput : ''}`}
+                value={form.snils}
+                inputMode="numeric"
+                disabled={readOnly}
+                placeholder="123-456-789 00"
+                onChange={e => setForm(prev => ({ ...prev, snils: formatSnilsInput(e.target.value) }))}
+              />
+              {snilsInvalid && <span className={styles.docDupNote}>СНИЛС — 11 цифр</span>}
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>ИНН</span>
+              <input
+                className={`${styles.input} ${styles.fullInput} ${innInvalid ? styles.docDupInput : ''}`}
+                value={form.inn}
+                inputMode="numeric"
+                disabled={readOnly}
+                placeholder="12 цифр"
+                onChange={e => setForm(prev => ({ ...prev, inn: formatInnInput(e.target.value) }))}
+              />
+              {innInvalid && <span className={styles.docDupNote}>ИНН — 12 цифр</span>}
+            </div>
+          </div>
+        )}
 
         {isPatentCountry && (
           <label className={styles.vnzhRow}>
@@ -255,11 +325,11 @@ export const PassDocumentsModal: FC<IProps> = ({
               {patentDup && <span className={styles.docDupNote}>{patentDup}</span>}
             </div>
 
-            <div className={styles.docRow}>
+            <div className={styles.docsPair}>
               <div className={styles.field}>
                 <span className={styles.label}>Дата выдачи патента</span>
                 <input
-                  className={`${styles.input} ${styles.numInput}`}
+                  className={`${styles.input} ${styles.fullInput}`}
                   type="date"
                   value={form.patent_issue_date}
                   disabled={readOnly}
@@ -278,6 +348,32 @@ export const PassDocumentsModal: FC<IProps> = ({
               </div>
             </div>
           </>
+        )}
+
+        {showExtraIds && needsKig && (
+          <div className={styles.docsPair}>
+            <div className={styles.field}>
+              <span className={styles.label}>Номер КиГ</span>
+              <input
+                className={`${styles.input} ${styles.fullInput}`}
+                value={form.kig}
+                disabled={readOnly}
+                placeholder="Например: AB1234567"
+                maxLength={20}
+                onChange={e => setForm(prev => ({ ...prev, kig: e.target.value.toUpperCase() }))}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>КиГ действует до</span>
+              <input
+                className={`${styles.input} ${styles.fullInput}`}
+                type="date"
+                value={form.kig_end_date}
+                disabled={readOnly}
+                onChange={e => setForm(prev => ({ ...prev, kig_end_date: e.target.value }))}
+              />
+            </div>
+          </div>
         )}
 
         {history && history.length > 0 && (
@@ -310,7 +406,7 @@ export const PassDocumentsModal: FC<IProps> = ({
             {readOnly ? 'Закрыть' : 'Отмена'}
           </button>
           {!readOnly && (
-            <button className="btn-primary" onClick={handleSave} disabled={busy}>
+            <button className="btn-primary" onClick={handleSave} disabled={busy || hasErrors}>
               Сохранить
             </button>
           )}

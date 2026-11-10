@@ -3,9 +3,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { contractorService, formatIdleBlockNote, type IRosterRow, type IPassRow, type IPassDocuments } from '../../services/contractorService';
-import { citizenshipRequiresPatent } from '../../services/citizenship';
+import { hasAllDocs } from '../../utils/contractorPassDocs';
 import { ContractorDocumentsBlock } from '../../components/contractor/ContractorDocumentsBlock';
 import { PassDocumentsModal } from '../../components/contractor/PassDocumentsModal';
+import { HolderChangeDocsDialog } from '../../components/contractor/HolderChangeDocsDialog';
+import { useHolderSave } from '../../hooks/useHolderSave';
 import styles from './Contractor.module.css';
 
 type Tab = 'roster' | 'passes' | 'removals';
@@ -43,22 +45,6 @@ const approvalBadge = (status: IPassRow['approval_status']): { cls: string; labe
 const fmtDate = (iso: string | null): string => {
   if (!iso) return '—';
   try { return new Date(iso).toLocaleDateString('ru-RU'); } catch { return iso; }
-};
-
-/**
- * Все документы держателя заполнены (для зелёной галочки на кнопке).
- * Паспорт, даты и гражданство — всегда; для патентных гражданств — патент,
- * НО ВНЖ его отменяет: с отметкой ВНЖ достаточно номера ВНЖ вместо патента.
- * Зеркало isDocsComplete на бэке (contractor-docs.service) — держать в синхроне.
- */
-const hasAllDocs = (p: IPassRow): boolean => {
-  const base = !!(p.passport_series_number?.trim() && p.passport_issue_date
-    && p.birth_date && p.citizenship?.trim());
-  if (!base) return false;
-  if (!citizenshipRequiresPatent(p.citizenship)) return true;
-  // ВНЖ отменяет патент: для патентной страны с ВНЖ нужен номер ВНЖ.
-  if (p.has_residence_permit) return !!p.residence_permit_number?.trim();
-  return !!(p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
 };
 
 export const ContractorPage: FC = () => {
@@ -120,15 +106,15 @@ export const ContractorPage: FC = () => {
     }
   };
 
-  const saveHolder = async (p: IPassRow) => {
-    const value = (edited[p.id] ?? p.holder_name ?? '').trim();
-    if (value === (p.holder_name ?? '')) return;
-    if (value && value.length < 2) {
-      toast.error('ФИО — минимум 2 символа');
-      return;
-    }
-    await run(() => contractorService.setPassHolder(p.id, value || null));
-  };
+  // Замена/стирание ФИО при заполненных документах — окно «другой человек / опечатка».
+  const { saveHolder, pendingConfirm, resolveConfirm } = useHolderSave({
+    run,
+    revert: passId => setEdited(prev => {
+      const next = { ...prev };
+      delete next[passId];
+      return next;
+    }),
+  });
 
   const saveDocs = (docs: IPassDocuments) => {
     if (!docsPass) return;
@@ -358,7 +344,7 @@ export const ContractorPage: FC = () => {
                                 list="contractor-inducted-list"
                                 disabled={busy}
                                 onChange={e => setEdited(prev => ({ ...prev, [p.id]: e.target.value }))}
-                                onBlur={() => void saveHolder(p)}
+                                onBlur={() => void saveHolder(p, value)}
                                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                               />
                             ) : (
@@ -474,6 +460,15 @@ export const ContractorPage: FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {pendingConfirm && (
+        <HolderChangeDocsDialog
+          mode={pendingConfirm.decision.mode}
+          prevName={pendingConfirm.pass.holder_name ?? ''}
+          nextName={pendingConfirm.decision.name}
+          onChoose={choice => void resolveConfirm(choice)}
+        />
       )}
 
       {docsPass && (

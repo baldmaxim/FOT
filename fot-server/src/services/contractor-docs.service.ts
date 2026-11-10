@@ -70,7 +70,79 @@ export interface IDocRow {
   patent_blank_number: string | null;
   has_residence_permit?: boolean;
   residence_permit_number?: string | null;
+  /** СНИЛС — 11 цифр без маски. Необязательное, на полноту комплекта не влияет. */
+  snils?: string | null;
+  /** ИНН физлица — 12 цифр. Необязательное. */
+  inn?: string | null;
+  /** Карта иностранного гражданина: номер (верхний регистр) и срок. Только у иностранцев. */
+  kig?: string | null;
+  kig_end_date?: string | null;
 }
+
+/** Необязательные идентификаторы (миграция 359): СНИЛС, ИНН, КиГ. */
+export const EXTRA_ID_FIELDS = ['snils', 'inn', 'kig', 'kig_end_date'] as const;
+export type ExtraIdField = (typeof EXTRA_ID_FIELDS)[number];
+
+/** Гражданин России (регистро- и пробелонезависимо): КиГ ему не нужна. */
+export const isRussianCitizenship = (c: string | null | undefined): boolean => {
+  const v = (c ?? '').trim().toUpperCase();
+  return v === 'РОССИЯ' || v === 'РФ' || v === 'РОССИЙСКАЯ ФЕДЕРАЦИЯ';
+};
+
+/**
+ * То же ли это ФИО (опечатка, регистр, пробелы, ё/е): смена такого ФИО — исправление,
+ * документы держателя не сбрасываются.
+ */
+export const sameHolderName = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const n = (v: string | null | undefined) =>
+    (v ?? '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/ё/g, 'е');
+  return n(a) === n(b);
+};
+
+/**
+ * Сбрасывать ли документы при замене ФИО держателя подрядчиком (до подачи):
+ *  - прежнего ФИО не было — первичное назначение (документы могли внести заранее) → нет;
+ *  - ФИО стёрто → да, всегда (флаг «оставить» не действует);
+ *  - то же ФИО (регистр, пробелы, ё) → нет;
+ *  - другое ФИО → да, если подрядчик явно не подтвердил «исправляю опечатку».
+ * Старый клиент флаг не присылает — получает сброс (безопасная сторона).
+ */
+export const holderChangeResetsDocuments = (
+  prevName: string | null | undefined,
+  nextName: string | null | undefined,
+  keepDocuments: boolean,
+): boolean => {
+  if (!(prevName ?? '').trim()) return false;
+  if (!(nextName ?? '').trim()) return true;
+  if (sameHolderName(prevName, nextName)) return false;
+  return !keepDocuments;
+};
+
+/** Колонки документов держателя в contractor_passes (порядок — как в истории). */
+export const DOC_COLUMNS = [
+  'passport_series_number',
+  'passport_issue_date',
+  'birth_date',
+  'citizenship',
+  'patent_number',
+  'patent_issue_date',
+  'patent_blank_number',
+  'has_residence_permit',
+  'residence_permit_number',
+  'snils',
+  'inn',
+  'kig',
+  'kig_end_date',
+] as const;
+
+/** Список колонок документов для SELECT (с алиасом таблицы или без). */
+export const docColumnsSql = (alias?: string): string =>
+  DOC_COLUMNS.map(c => (alias ? `${alias}.${c}` : c)).join(', ');
+
+/** SET-фрагмент UPDATE contractor_passes: все документы держателя → пусто. */
+export const DOC_RESET_SET_SQL = DOC_COLUMNS
+  .map(c => (c === 'has_residence_permit' ? `${c} = false` : `${c} = NULL`))
+  .join(', ');
 
 /**
  * Нормализация номера документа для сравнения: убрать пробелы/№/пунктуацию,
@@ -171,6 +243,15 @@ const docsDateField = z.preprocess(
   z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 );
 
+const onlyDigits = (v: string | null | undefined): string => (v ?? '').replace(/\D/g, '');
+
+/** Номер из цифр с допустимыми разделителями: пусто или ровно `len` цифр. */
+const digitsField = (len: number, message: string) =>
+  z.string().trim().max(20).nullable().optional().refine(
+    v => v == null || (/^[\d\s-]*$/.test(v) && [0, len].includes(onlyDigits(v).length)),
+    message,
+  );
+
 export const docsBodySchema = z.object({
   passport_series_number: z.string().trim().max(50).nullable().optional(),
   passport_issue_date: docsDateField,
@@ -181,6 +262,10 @@ export const docsBodySchema = z.object({
   patent_blank_number: z.string().trim().max(50).nullable().optional(),
   has_residence_permit: z.boolean().optional(),
   residence_permit_number: z.string().trim().max(50).nullable().optional(),
+  snils: digitsField(11, 'СНИЛС — 11 цифр'),
+  inn: digitsField(12, 'ИНН — 12 цифр'),
+  kig: z.string().trim().max(20).nullable().optional(),
+  kig_end_date: docsDateField,
 });
 
 export type IDocsBody = z.infer<typeof docsBodySchema>;
@@ -189,20 +274,49 @@ export type IDocsBody = z.infer<typeof docsBodySchema>;
 export interface IDocPayload extends IDocRow {
   has_residence_permit: boolean;
   residence_permit_number: string | null;
+  snils: string | null;
+  inn: string | null;
+  kig: string | null;
+  kig_end_date: string | null;
 }
+
+/**
+ * Защита от старого закэшированного клиента: он не знает про СНИЛС/ИНН/КиГ и не
+ * присылает эти ключи — тогда берём прежние значения из БД, а не затираем их null.
+ * Явный null или '' в теле — очистка поля. Вызывать ВНУТРИ транзакции, после
+ * блокировки строки пропуска, и до normalizeDocsPayload.
+ */
+export const mergeUnsentDocFields = (
+  rawBody: unknown,
+  parsed: IDocsBody,
+  prev: Partial<IDocRow>,
+): IDocsBody => {
+  const raw = rawBody && typeof rawBody === 'object' ? (rawBody as object) : {};
+  const merged: IDocsBody = { ...parsed };
+  for (const f of EXTRA_ID_FIELDS) {
+    if (Object.hasOwn(raw, f)) continue;
+    const v = prev[f];
+    merged[f] = f === 'kig_end_date' ? comparableDate(v) : (v ?? null);
+  }
+  return merged;
+};
 
 /**
  * Нормализация разобранного тела: trim→null; ВНЖ имеет смысл только для
  * патентной страны; патент и ВНЖ взаимоисключающие (при ВНЖ поля патента
  * обнуляются, иначе — номер ВНЖ), чтобы не копились устаревшие значения.
+ * СНИЛС/ИНН — только цифры; КиГ — только у иностранца (гражданство указано и не Россия),
+ * иначе номер и срок КиГ обнуляются вместе.
  */
 export const normalizeDocsPayload = (parsed: IDocsBody): IDocPayload => {
   const norm = (v: string | null | undefined): string | null => {
     const s = (v ?? '').trim();
     return s.length > 0 ? s : null;
   };
+  const digitsOrNull = (v: string | null | undefined): string | null => onlyDigits(v) || null;
   const citizenship = norm(parsed.citizenship);
   const effHasVnzh = citizenshipRequiresPatent(citizenship) && !!parsed.has_residence_permit;
+  const foreigner = !!citizenship && !isRussianCitizenship(citizenship);
   return {
     passport_series_number: norm(parsed.passport_series_number),
     passport_issue_date: parsed.passport_issue_date ?? null,
@@ -213,7 +327,28 @@ export const normalizeDocsPayload = (parsed: IDocsBody): IDocPayload => {
     patent_blank_number: effHasVnzh ? null : norm(parsed.patent_blank_number),
     has_residence_permit: effHasVnzh,
     residence_permit_number: effHasVnzh ? norm(parsed.residence_permit_number) : null,
+    snils: digitsOrNull(parsed.snils),
+    inn: digitsOrNull(parsed.inn),
+    kig: foreigner ? (norm(parsed.kig)?.toUpperCase() ?? null) : null,
+    kig_end_date: foreigner ? (parsed.kig_end_date ?? null) : null,
   };
+};
+
+/** Пустой комплект: цель сброса документов при смене/снятии держателя. */
+export const EMPTY_DOCS: IDocPayload = {
+  passport_series_number: null,
+  passport_issue_date: null,
+  birth_date: null,
+  citizenship: null,
+  patent_number: null,
+  patent_issue_date: null,
+  patent_blank_number: null,
+  has_residence_permit: false,
+  residence_permit_number: null,
+  snils: null,
+  inn: null,
+  kig: null,
+  kig_end_date: null,
 };
 
 // ------------------------------------------------------------------
@@ -226,6 +361,7 @@ export const DOC_HISTORY_FIELDS = [
   ...PATENT_DOC_FIELDS,
   'has_residence_permit',
   'residence_permit_number',
+  ...EXTRA_ID_FIELDS,
 ] as const;
 
 export type DocHistoryField = (typeof DOC_HISTORY_FIELDS)[number];
@@ -238,7 +374,11 @@ export interface IDocHistoryPass extends IDocPayload {
   holder_name: string | null;
 }
 
-export type DocHistorySource = 'admin' | 'contractor' | 'clear_holder';
+/**
+ * Источник снимка: правка админа / подрядчика, «Освободить» в «Мониторинге» (clear_holder),
+ * автоматический сброс при смене или снятии держателя (holder_reset, миграция 359).
+ */
+export type DocHistorySource = 'admin' | 'contractor' | 'clear_holder' | 'holder_reset';
 
 /** Дата из pg (Date | ISO-строка) → 'YYYY-MM-DD' для сравнения. */
 const comparableDate = (v: unknown): string | null => {
@@ -252,7 +392,12 @@ const comparableDate = (v: unknown): string | null => {
   return null;
 };
 
-const DATE_FIELDS: ReadonlySet<string> = new Set(['passport_issue_date', 'birth_date', 'patent_issue_date']);
+const DATE_FIELDS: ReadonlySet<string> = new Set([
+  'passport_issue_date',
+  'birth_date',
+  'patent_issue_date',
+  'kig_end_date',
+]);
 
 const comparable = (field: DocHistoryField, v: unknown): string | boolean | null => {
   if (field === 'has_residence_permit') return !!v;
@@ -291,11 +436,13 @@ export const recordDocHistoryIfChanged = async (
         passport_series_number, passport_issue_date, birth_date, citizenship,
         patent_number, patent_issue_date, patent_blank_number,
         has_residence_permit, residence_permit_number,
+        snils, inn, kig, kig_end_date,
         changed_fields, changed_by, changed_by_name, changed_source
      ) VALUES (
         $1::uuid, $2, $3::uuid, $4,
         $5, $6::date, $7::date, $8,
         $9, $10::date, $11, $12, $13,
+        $17, $18, $19, $20::date,
         $14::text[], $15::uuid,
         (SELECT full_name FROM user_profiles WHERE id = $15::uuid), $16
      )`,
@@ -316,7 +463,53 @@ export const recordDocHistoryIfChanged = async (
       changed,
       actor.userId,
       actor.source,
+      pass.snils ?? null,
+      pass.inn ?? null,
+      pass.kig ?? null,
+      comparableDate(pass.kig_end_date),
     ],
   );
   return changed;
+};
+
+/**
+ * Единый сброс документов держателя (смена/снятие держателя, возврат в пул, «Освободить»):
+ * блокирует строки в стабильном порядке, пишет снимок прежних документов в историю
+ * (с прежним ФИО — открытый держатель или contractor_passes.holder_name) и обнуляет
+ * все поля документов. Вызывать в транзакции ДО обнуления holder_name.
+ * Возвращает id пропусков, у которых документы действительно были и очищены.
+ */
+export const resetPassDocuments = async (
+  client: PoolClient,
+  passIds: readonly string[],
+  actor: { userId: string | null; source: DocHistorySource },
+): Promise<string[]> => {
+  if (passIds.length === 0) return [];
+  const res = await client.query<IDocHistoryPass>(
+    `SELECT p.id, p.pass_number, p.org_department_id,
+            COALESCE(
+              (SELECT h.holder_name FROM contractor_pass_holders h
+                WHERE h.pass_id = p.id AND h.valid_until IS NULL
+                ORDER BY h.valid_from DESC, h.created_at DESC LIMIT 1),
+              p.holder_name) AS holder_name,
+            ${docColumnsSql('p')}
+       FROM contractor_passes p
+      WHERE p.id = ANY($1::uuid[])
+      ORDER BY p.id
+      FOR UPDATE OF p`,
+    [passIds],
+  );
+  const cleared: string[] = [];
+  for (const pass of res.rows) {
+    const changed = await recordDocHistoryIfChanged(client, pass, EMPTY_DOCS, actor);
+    if (changed.length > 0) cleared.push(pass.id);
+  }
+  if (cleared.length > 0) {
+    await client.query(
+      `UPDATE contractor_passes SET ${DOC_RESET_SET_SQL}, updated_at = now()
+        WHERE id = ANY($1::uuid[])`,
+      [cleared],
+    );
+  }
+  return cleared;
 };

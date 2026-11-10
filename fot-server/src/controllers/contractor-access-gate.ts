@@ -27,14 +27,15 @@ export const OTITB_PAGE_KEY = '/admin/contractor-approvals/otitb';
 export type ContractorAccessAction = 'view' | 'edit';
 
 /**
- * Пускает: системного админа (scope.roots === 'all'); компанийного админа, чей
- * скоуп содержит корень подрядных организаций; не-админскую роль с грантом на
- * любой из ключей. Иначе 403. Порядок веток важен: getContractorRootId() зовётся
- * только для компанийного админа (для 'all' и не-админов — не вызывается).
+ * Есть ли доступ (без ответа клиенту): системный админ (scope.roots === 'all');
+ * компанийный админ, чей скоуп содержит корень подрядных организаций; не-админская
+ * роль с грантом на любой из ключей. Порядок веток важен: getContractorRootId()
+ * зовётся только для компанийного админа (для 'all' и не-админов — не вызывается).
+ * Единая формула для гейтов ниже и для точечных решений внутри ответа (например,
+ * отдавать ли СНИЛС/ИНН/КиГ узкой роли «Заявки на согласование»).
  */
-const ensureAnyPageGrant = async (
+export const hasContractorPageGrant = async (
   req: AuthenticatedRequest,
-  res: Response,
   action: ContractorAccessAction,
   keys: readonly string[],
 ): Promise<boolean> => {
@@ -45,16 +46,24 @@ const ensureAnyPageGrant = async (
     // Компанийный админ, чей скоуп включает корень «подрядные организации»: раздел
     // оперирует именно этим корнем, поэтому даём полный доступ (как системному админу).
     const rootId = await getContractorRootId();
-    if (rootId && scope.roots.includes(rootId)) return true;
-  } else {
-    const checks = await Promise.all(
-      keys.map(key => (action === 'edit'
-        ? hasPageEdit(req.user.role_code, key)
-        : hasPageView(req.user.role_code, key))),
-    );
-    if (checks.some(Boolean)) return true;
+    return !!rootId && scope.roots.includes(rootId);
   }
+  const checks = await Promise.all(
+    keys.map(key => (action === 'edit'
+      ? hasPageEdit(req.user.role_code, key)
+      : hasPageView(req.user.role_code, key))),
+  );
+  return checks.some(Boolean);
+};
 
+/** То же, что hasContractorPageGrant, но без доступа сразу отвечает 403. */
+const ensureAnyPageGrant = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  action: ContractorAccessAction,
+  keys: readonly string[],
+): Promise<boolean> => {
+  if (await hasContractorPageGrant(req, action, keys)) return true;
   res.status(403).json({ success: false, error: 'Недостаточно прав' });
   return false;
 };

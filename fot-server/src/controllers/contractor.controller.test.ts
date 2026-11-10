@@ -234,3 +234,152 @@ describe('submit — гейт полноты учитывает ВНЖ', () => {
     expect((res.body as { code?: string }).code).toBe('CONTRACTOR_DOCUMENTS_INCOMPLETE');
   });
 });
+
+// Старый закэшированный клиент не присылает СНИЛС/ИНН/КиГ — значения из БД не затираются.
+// Параметры UPDATE: $11 snils, $12 inn, $13 kig, $14 kig_end_date (индексы 10..13).
+describe('savePassDocuments — СНИЛС/ИНН/КиГ и старый клиент', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const stored = {
+    status: 'assigned', approval_status: 'not_submitted',
+    citizenship: 'Таджикистан', snils: '12345678900', inn: '770708328934',
+    kig: 'AB1234567', kig_end_date: '2027-03-01',
+  };
+  const baseBody = { passport_series_number: '1234 567890', citizenship: 'Таджикистан' };
+
+  it('ключей нет в теле → прежние значения остаются', async () => {
+    const { res, updateParams } = await runSave(stored, baseBody);
+    expect(res.statusCode).toBe(200);
+    expect(updateParams[0].slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', '2027-03-01']);
+  });
+
+  it('явный null / пустая строка → поля очищаются', async () => {
+    const { res, updateParams } = await runSave(stored, { ...baseBody, snils: null, inn: '', kig: null, kig_end_date: null });
+    expect(res.statusCode).toBe(200);
+    expect(updateParams[0].slice(10, 14)).toEqual([null, null, null, null]);
+  });
+
+  it('новый СНИЛС с маской сохраняется цифрами; неполный — 400', async () => {
+    const ok = await runSave(stored, { ...baseBody, snils: '987-654-321 00' });
+    expect(ok.updateParams[0][10]).toBe('98765432100');
+    const bad = await runSave(stored, { ...baseBody, snils: '987-654' });
+    expect(bad.res.statusCode).toBe(400);
+    expect(bad.updateCalls).toHaveLength(0);
+  });
+});
+
+// Замена ФИО подрядчиком до подачи: документы прежнего человека не должны достаться новому.
+describe('setPassHolder — сброс документов при смене держателя', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const runHolder = async (
+    pass: { status?: string; submission_id?: string | null; holder_name: string | null },
+    body: Record<string, unknown>,
+  ) => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    h.resolveOrg.mockResolvedValue(ORG);
+    h.withTransaction.mockImplementation(async (cb: (c: unknown) => Promise<unknown>) => {
+      const client = {
+        query: vi.fn(async (sql: string, params?: unknown[]) => {
+          calls.push({ sql, params: params ?? [] });
+          // SELECT пропуска в setPassHolder (статус + текущее ФИО под блокировкой).
+          if (sql.includes('p.submission_id') && sql.includes('FOR UPDATE')) {
+            return { rows: [{ id: PASS, status: 'assigned', submission_id: null, ...pass }] };
+          }
+          // SELECT единого сброса — у пропуска есть документы прежнего держателя.
+          if (sql.includes('p.pass_number') && sql.includes('FOR UPDATE')) {
+            return { rows: [{ id: PASS, pass_number: '64', org_department_id: ORG, holder_name: pass.holder_name,
+              passport_series_number: '403934253', citizenship: 'Таджикистан', snils: '12345678900',
+              has_residence_permit: false }] };
+          }
+          return { rows: [] };
+        }),
+      };
+      return cb(client);
+    });
+    const res = makeRes();
+    await contractorController.setPassHolder(
+      { user: { id: 'user-1' }, params: { id: PASS }, body } as never, res as never,
+    );
+    const resetIdx = calls.findIndex(c => c.sql.includes('snils = NULL'));
+    const holderUpd = calls.find(c => c.sql.includes('SET holder_name = $1'));
+    return { res, calls, reset: resetIdx >= 0, resetIdx, holderUpd };
+  };
+
+  it('первичное назначение (ФИО не было) — документы не трогаются', async () => {
+    const r = await runHolder({ holder_name: null }, { full_name: 'Петров Пётр' });
+    expect(r.res.statusCode).toBe(200);
+    expect(r.reset).toBe(false);
+    expect(r.holderUpd?.params[0]).toBe('Петров Пётр');
+  });
+
+  it('то же ФИО в другом написании — без сброса, новое написание записано', async () => {
+    const r = await runHolder({ holder_name: 'Иванов Иван' }, { full_name: ' иванов  иван ' });
+    expect(r.reset).toBe(false);
+    expect(r.holderUpd?.params[0]).toBe('иванов  иван');
+  });
+
+  it('другой человек — снимок в историю и очистка документов до записи ФИО', async () => {
+    const r = await runHolder({ holder_name: 'Иванов Иван' }, { full_name: 'Петров Пётр' });
+    expect(r.res.statusCode).toBe(200);
+    expect(r.reset).toBe(true);
+    const histIdx = r.calls.findIndex(c => c.sql.includes('contractor_pass_document_history'));
+    const updIdx = r.calls.findIndex(c => c.sql.includes('SET holder_name = $1'));
+    expect(histIdx).toBeGreaterThanOrEqual(0);
+    expect(r.calls[histIdx].params[3]).toBe('Иванов Иван');      // в снимке — прежнее ФИО
+    expect(r.calls[histIdx].params[15]).toBe('holder_reset');
+    expect(r.resetIdx).toBeLessThan(updIdx);
+  });
+
+  it('«исправляю опечатку — оставить» (keep_documents) — без сброса', async () => {
+    const r = await runHolder({ holder_name: 'Иванов Иван' }, { full_name: 'Иваноф Иван', keep_documents: true });
+    expect(r.reset).toBe(false);
+    expect(r.holderUpd?.params[0]).toBe('Иваноф Иван');
+  });
+
+  it('ФИО стёрто — сброс всегда, даже с keep_documents', async () => {
+    const r = await runHolder({ holder_name: 'Иванов Иван' }, { full_name: null, keep_documents: true });
+    expect(r.reset).toBe(true);
+    expect(r.holderUpd?.params[0]).toBeNull();
+  });
+
+  it('статус проверяется под блокировкой: пропуск уже в заявке → 409, ничего не пишется', async () => {
+    const r = await runHolder({ holder_name: 'Иванов Иван', submission_id: 'sub-1' }, { full_name: 'Петров Пётр' });
+    expect(r.res.statusCode).toBe(409);
+    expect(r.reset).toBe(false);
+    expect(r.holderUpd).toBeUndefined();
+  });
+});
+
+describe('changeHolder — документы прежнего держателя очищаются', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('снимок и очистка — до закрытия строки прежнего владельца', async () => {
+    const calls: string[] = [];
+    h.resolveOrg.mockResolvedValue(ORG);
+    h.queryOne.mockResolvedValue({ id: PASS, status: 'applied', sigur_employee_id: null });
+    h.withTransaction.mockImplementation(async (cb: (c: unknown) => Promise<unknown>) => {
+      const client = {
+        query: vi.fn(async (sql: string) => {
+          calls.push(sql);
+          if (sql.includes('p.pass_number') && sql.includes('FOR UPDATE')) {
+            return { rows: [{ id: PASS, pass_number: '64', org_department_id: ORG, holder_name: 'Иванов Иван',
+              passport_series_number: '403934253', citizenship: 'Таджикистан', inn: '770708328934',
+              has_residence_permit: false }] };
+          }
+          return { rows: [{ id: 'sub-1' }] };
+        }),
+      };
+      return cb(client);
+    });
+    const res = makeRes();
+    await contractorController.changeHolder(
+      { user: { id: 'user-1' }, params: { id: PASS }, body: { new_holder_name: 'Петров Пётр', valid_from: '2026-11-10' } } as never,
+      res as never,
+    );
+    expect(res.statusCode).toBe(200);
+    const resetIdx = calls.findIndex(sql => sql.includes('inn = NULL'));
+    const closeIdx = calls.findIndex(sql => sql.includes('UPDATE contractor_pass_holders'));
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    expect(resetIdx).toBeLessThan(closeIdx);
+  });
+});

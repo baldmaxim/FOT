@@ -75,6 +75,7 @@ vi.mock('../services/audit.service.js', () => ({
     CONTRACTOR_OT_PERSON_ARCHIVED: 'CONTRACTOR_OT_PERSON_ARCHIVED',
     CONTRACTOR_PASS_HOLDER_CHANGED: 'CONTRACTOR_PASS_HOLDER_CHANGED',
     CONTRACTOR_PASS_DOCUMENTS_UPDATED: 'CONTRACTOR_PASS_DOCUMENTS_UPDATED',
+    CONTRACTOR_DOCUMENTS_EXPORTED: 'CONTRACTOR_DOCUMENTS_EXPORTED',
   },
 }));
 vi.mock('../services/contractor-induction.service.js', async (importOriginal) => ({
@@ -137,6 +138,7 @@ vi.mock('../services/employee-cache.service.js', () => ({
 }));
 
 import { contractorAdminController } from './contractor-admin.controller.js';
+import { hasContractorPageGrant } from './contractor-access-gate.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 const makeRes = () => {
@@ -1112,14 +1114,12 @@ describe('contractorAdminController.clearPassHolder', () => {
     // Sigur вызван с нейтрализацией профиля.
     expect(h.updEmp).toHaveBeenCalledWith(11, { name: 'Пропуск 1124', blocked: true }, 'external');
 
-    const upd = findCall('UPDATE contractor_passes');
+    const upd = findCall('holder_name=NULL');
     expect(upd).toBeTruthy();
     const sql = String(upd?.[0]);
-    // ФИО + статус + персональные документы + параметры выдачи очищаются.
+    // ФИО + статус + параметры выдачи очищаются (документы — единым сбросом, см. тест ниже).
     expect(sql).toContain("status='assigned'");
     expect(sql).toContain('holder_name=NULL');
-    expect(sql).toContain('citizenship=NULL');
-    expect(sql).toContain('has_residence_permit=false');
     expect(sql).toContain('object_ids=NULL');
     expect(sql).toContain('access_point_names=NULL');
     expect(sql).toContain('expires_at=NULL');
@@ -1128,7 +1128,7 @@ describe('contractorAdminController.clearPassHolder', () => {
     expect(sql).not.toContain('sigur_employee_id');
 
     // Sigur — раньше UPDATE.
-    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('UPDATE contractor_passes'));
+    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('holder_name=NULL'));
     expect(h.updEmp.mock.invocationCallOrder[0]).toBeLessThan(clientQuery.mock.invocationCallOrder[updIdx]);
 
     // История закрыта.
@@ -1163,11 +1163,20 @@ describe('contractorAdminController.clearPassHolder', () => {
     const hp = hist?.[1] as unknown[];
     expect(hp[8]).toBe('77 №2600295204');   // прежний patent_number
     expect(hp[15]).toBe('clear_holder');    // changed_source
-    // Снапшот — ДО очищающего UPDATE.
+    // Все документы (включая СНИЛС/ИНН/КиГ) очищаются единым сбросом.
+    const reset = findCall('snils = NULL');
+    expect(reset).toBeTruthy();
+    for (const frag of ['passport_series_number = NULL', 'citizenship = NULL', 'patent_number = NULL',
+      'has_residence_permit = false', 'inn = NULL', 'kig = NULL', 'kig_end_date = NULL']) {
+      expect(String(reset?.[0])).toContain(frag);
+    }
+    // Снапшот — ДО очищающего UPDATE документов и ДО обнуления ФИО.
     const histIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('contractor_pass_document_history'));
-    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('UPDATE contractor_passes'));
+    const resetIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('snils = NULL'));
+    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('holder_name=NULL'));
     expect(histIdx).toBeGreaterThanOrEqual(0);
-    expect(histIdx).toBeLessThan(updIdx);
+    expect(histIdx).toBeLessThan(resetIdx);
+    expect(resetIdx).toBeLessThan(updIdx);
   });
 
   it('guard: revoked → 409, Sigur и БД не трогаются', async () => {
@@ -2230,5 +2239,262 @@ describe('contractorAdminController.renamePassHolderAdmin', () => {
       res as never,
     );
     expect(res.statusCode).toBe(500);
+  });
+});
+
+describe('contractorAdminController.rejectSubmissionPasses — документы ушедших держателей', () => {
+  const SUB = 'sub-1';
+  const P_PENDING = '11111111-1111-1111-1111-111111111111';
+  const P_FOREIGN = '33333333-3333-3333-3333-333333333333';
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.isDryRun.mockReturnValue(true);
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('сброс получает только разрешённые id (та же заявка, pending), посторонний id документы не теряет', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: SUB, status: 'pending' })
+      .mockResolvedValueOnce({ status: 'rejected' });
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string, params?: unknown[]) => {
+        const s = String(sql);
+        calls.push({ sql: s, params: params ?? [] });
+        // Отбор разрешённых id: БД вернула только pending-пропуск этой заявки.
+        if (s.includes('SELECT id FROM contractor_passes') && s.includes('FOR UPDATE')) return { rows: [{ id: P_PENDING }] };
+        // Единый сброс: у пропуска документы прежнего держателя.
+        if (s.includes('p.pass_number') && s.includes('FOR UPDATE OF p')) {
+          return { rows: [{ id: P_PENDING, pass_number: '001', org_department_id: 'org', holder_name: 'Иванов',
+            passport_series_number: '403934253', citizenship: 'Таджикистан', has_residence_permit: false }] };
+        }
+        if (s.includes('WITH locked')) {
+          return { rows: [{ id: P_PENDING, pass_number: '001', sigur_employee_id: null, old_status: 'submitted' }] };
+        }
+        if (s.includes('LEFT JOIN contractor_passes')) {
+          return { rows: [{ current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' }] };
+        }
+        return { rows: [] };
+      });
+      return fn({ query: q });
+    });
+
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses({
+      user: { id: 'admin-1', company_scope: { roots: 'all' } }, params: { id: SUB },
+      body: { pass_ids: [P_PENDING, P_FOREIGN] }, ip: '127.0.0.1', headers: {}, socket: {},
+    } as never, res as never);
+
+    expect(res.statusCode).toBe(200);
+    const eligible = calls.find(c => c.sql.includes('SELECT id FROM contractor_passes'));
+    expect(eligible?.sql).toContain("approval_status = 'pending'");
+    expect(eligible?.sql).toContain('submission_id = $1::uuid');
+    const resetSelect = calls.find(c => c.sql.includes('FOR UPDATE OF p'));
+    expect(resetSelect?.params[0]).toEqual([P_PENDING]);
+    const resetUpd = calls.find(c => c.sql.includes('snils = NULL'));
+    expect(resetUpd?.params[0]).toEqual([P_PENDING]);
+    const cte = calls.find(c => c.sql.includes('WITH locked'));
+    expect(cte?.params[1]).toEqual([P_PENDING]);
+    // Снимок и очистка — до обнуления ФИО (CTE).
+    expect(calls.indexOf(resetUpd!)).toBeLessThan(calls.indexOf(cte!));
+  });
+});
+
+describe('contractorAdminController.updatePassDocumentsAdmin — СНИЛС/ИНН/КиГ', () => {
+  const PASS = '66666666-6666-6666-6666-666666666666';
+  const UPDATED_AT = '2026-08-01T10:00:00.000Z';
+  const stored = {
+    id: PASS, pass_number: '90', status: 'applied', approval_status: 'approved',
+    updated_at: new Date(UPDATED_AT), org_department_id: '77777777-7777-7777-7777-777777777777',
+    holder_name: 'Носиров', passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01',
+    birth_date: '1990-01-01', citizenship: 'КАЗАХСТАН', patent_number: null, patent_issue_date: null,
+    patent_blank_number: null, has_residence_permit: false, residence_permit_number: null,
+    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', kig_end_date: '2027-03-01',
+  };
+  const body = {
+    passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01', birth_date: '1990-01-01',
+    citizenship: 'КАЗАХСТАН', expected_updated_at: UPDATED_AT,
+  };
+
+  const run = async (b: Record<string, unknown>) => {
+    let upd: unknown[] | undefined;
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string, params?: unknown[]) => {
+        const s = String(sql);
+        if (s.includes('FOR UPDATE')) return { rows: [stored] };
+        if (s.startsWith('UPDATE contractor_passes')) upd = params;
+        return { rows: [], rowCount: 1 };
+      });
+      return fn({ query: q });
+    });
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin({
+      user: { id: 'admin-1', company_scope: { roots: 'all' } }, params: { id: PASS }, body: b,
+      ip: '127.0.0.1', headers: {}, socket: {},
+    } as never, res as never);
+    return { res, upd };
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('ключей нет (старый клиент) → прежние значения', async () => {
+    const { res, upd } = await run(body);
+    expect(res.statusCode).toBe(200);
+    expect(upd?.slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', '2027-03-01']);
+  });
+
+  it('явный null → очистка; смена гражданства на Россию обнуляет КиГ и срок', async () => {
+    const a = await run({ ...body, snils: null, inn: null });
+    expect(a.upd?.slice(10, 12)).toEqual([null, null]);
+    const b = await run({ ...body, citizenship: 'Россия' });
+    expect(b.upd?.slice(12, 14)).toEqual([null, null]);
+  });
+});
+
+describe('hasContractorPageGrant и СНИЛС/ИНН/КиГ в деталях заявки', () => {
+  const SECTION = '/admin/contractor-approvals';
+  const SUBMISSIONS = '/admin/contractor-approvals/submissions';
+  const detailRow = {
+    id: 'p1', pass_number: '64', holder_name: 'Иванов', passport_series_number: '403934253',
+    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', kig_end_date: '2027-03-01',
+  };
+  const reqFor = (roleCode: string, isAdmin = false) => ({
+    user: { id: 'u-1', role_code: roleCode, is_admin: isAdmin },
+    params: { id: 'sub-1' }, query: {}, body: {}, ip: '127.0.0.1', headers: {}, socket: {},
+  }) as never;
+  const grantKeys = (keys: string[]) => {
+    h.hasPageView.mockImplementation(async (_r: string, key: string) => keys.includes(key));
+    h.hasPageEdit.mockImplementation(async (_r: string, key: string) => keys.includes(key));
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    h.resolveEffectivePageAccess.mockResolvedValue(false);
+    h.query.mockResolvedValue([detailRow]);
+  });
+
+  it('hasContractorPageGrant: security — да, otitb — нет, системный админ — да, админ корня подрядчиков — да', async () => {
+    grantKeys([SECTION]);
+    expect(await hasContractorPageGrant(reqFor('security'), 'view', [SECTION])).toBe(true);
+    grantKeys([SUBMISSIONS]);
+    expect(await hasContractorPageGrant(reqFor('otitb'), 'view', [SECTION])).toBe(false);
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    expect(await hasContractorPageGrant(reqFor('system_admin', true), 'view', [SECTION])).toBe(true);
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['root-c'] });
+    h.getContractorRootId.mockResolvedValue('root-c');
+    expect(await hasContractorPageGrant(reqFor('admin', true), 'view', [SECTION])).toBe(true);
+    h.getContractorRootId.mockResolvedValue('other-root');
+    expect(await hasContractorPageGrant(reqFor('admin', true), 'view', [SECTION])).toBe(false);
+  });
+
+  it('узкая роль ОТиТБ: ключей СНИЛС/ИНН/КиГ в ответе нет, паспорт есть', async () => {
+    grantKeys([SUBMISSIONS]);
+    const res = makeRes();
+    await contractorAdminController.getSubmissionDetail(reqFor('otitb'), res as never);
+    expect(res.statusCode).toBe(200);
+    const row = (res.body as { data: Array<Record<string, unknown>> }).data[0];
+    expect(row.passport_series_number).toBe('403934253');
+    for (const k of ['snils', 'inn', 'kig', 'kig_end_date']) expect(Object.hasOwn(row, k)).toBe(false);
+  });
+
+  it('«Отдел безопасности» (основной грант): СНИЛС/ИНН/КиГ отдаются', async () => {
+    grantKeys([SECTION]);
+    const res = makeRes();
+    await contractorAdminController.getSubmissionDetail(reqFor('security'), res as never);
+    const row = (res.body as { data: Array<Record<string, unknown>> }).data[0];
+    expect(row.snils).toBe('12345678900');
+    expect(row.kig).toBe('AB1234567');
+  });
+});
+
+describe('contractorAdminController.exportMonitorDocuments', () => {
+  const ORG = '11111111-1111-1111-1111-111111111111';
+  const makeFileRes = () => {
+    const res = {
+      statusCode: 200,
+      body: null as unknown,
+      headers: {} as Record<string, string>,
+      headersSent: false,
+      sent: null as Buffer | null,
+      status: vi.fn(function (c: number) { res.statusCode = c; return res; }),
+      json: vi.fn(function (b: unknown) { res.body = b; return res; }),
+      setHeader: vi.fn(function (k: string, v: string) { res.headers[k] = v; return res; }),
+      send: vi.fn(function (b: Buffer) { res.sent = b; res.headersSent = true; return res; }),
+    };
+    return res;
+  };
+  const reqWith = (query: Record<string, unknown>) => ({
+    user: { id: 'admin-1', role_code: 'security', is_admin: false },
+    params: {}, query, body: {}, ip: '127.0.0.1', headers: {}, socket: {},
+  }) as never;
+
+  const row = {
+    id: 'p1', pass_number: '64', status: 'applied', approval_status: 'approved', is_active: true,
+    card_uid: null, holder_name: 'Абдуллоев Шахзод', expires_at: '2026-12-31', object_label: '',
+    access_point_names: ['ЗилАрт-2'], citizenship: 'Таджикистан', passport_series_number: '403934253',
+    passport_issue_date: '2022-05-04', birth_date: '1995-08-07', has_residence_permit: false,
+    residence_permit_number: null, patent_number: '77 №2600177930', patent_issue_date: '2026-04-13',
+    patent_blank_number: 'ПР7619622', snils: '12345678900', inn: '770708328934', kig: null, kig_end_date: null,
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    h.hasPageView.mockImplementation(async (_r: string, key: string) => key === '/admin/contractor-approvals');
+    h.getContractorOrgs.mockResolvedValue([{ id: ORG, name: 'АЛЬЯНС ООО', sigur_department_id: 1 }]);
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('без подрядчика → 400', async () => {
+    const res = makeFileRes();
+    await contractorAdminController.exportMonitorDocuments(reqWith({}), res as never);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('неизвестная или не подрядная организация → 404, БД не читается', async () => {
+    const res = makeFileRes();
+    await contractorAdminController.exportMonitorDocuments(
+      reqWith({ org_department_id: '99999999-9999-9999-9999-999999999999' }), res as never,
+    );
+    expect(res.statusCode).toBe(404);
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('нет пропусков с ФИО → 404 с понятным текстом, аудита нет', async () => {
+    h.query.mockResolvedValue([]);
+    const res = makeFileRes();
+    await contractorAdminController.exportMonitorDocuments(reqWith({ org_department_id: ORG }), res as never);
+    expect(res.statusCode).toBe(404);
+    expect((res.body as { error: string }).error).toBe('У подрядчика нет пропусков с ФИО');
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('файл: только держатели, no-store, имя от сервера, аудит без значений документов', async () => {
+    h.query.mockResolvedValue([row]);
+    const res = makeFileRes();
+    await contractorAdminController.exportMonitorDocuments(reqWith({ org_department_id: ORG }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const sql = String(h.query.mock.calls[0][0]);
+    expect(sql).toContain("p.status <> 'revoked'");
+    expect(sql).toContain("btrim(COALESCE(h.holder_name, p.holder_name, '')) <> ''");
+    expect(h.query.mock.calls[0][1]).toEqual([ORG]);
+
+    expect(res.headers['Cache-Control']).toBe('private, no-store');
+    const expectedName = `Документы_АЛЬЯНС ООО_${moscowTodayIso()}.xlsx`;
+    expect(res.headers['Content-Disposition']).toContain(`filename*=UTF-8''${encodeURIComponent(expectedName)}`);
+    expect(res.sent?.length ?? 0).toBeGreaterThan(0);
+
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'CONTRACTOR_DOCUMENTS_EXPORTED',
+      { entityType: 'org_department', entityId: ORG, details: { org_name: 'АЛЬЯНС ООО', rows: 1 } },
+    );
   });
 });

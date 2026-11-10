@@ -16,6 +16,8 @@ import {
   ensureContractorSectionAccess,
   ensureSubmissionsAccess,
   ensureOtitbAccess,
+  hasContractorPageGrant,
+  CONTRACTOR_SECTION_PAGE_KEY,
 } from './contractor-access-gate.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
@@ -50,15 +52,18 @@ import {
 import {
   normalizeDocSql,
   docsBodySchema,
+  docColumnsSql,
+  mergeUnsentDocFields,
   normalizeDocsPayload,
   recordDocHistoryIfChanged,
+  resetPassDocuments,
+  EXTRA_ID_FIELDS,
   isDocsComplete,
   findOrgDocDuplicate,
   duplicateMessage,
   CONTRACTOR_DOCUMENT_DUPLICATE,
   CONTRACTOR_DOCUMENTS_INCOMPLETE,
   type IDocHistoryPass,
-  type IDocPayload,
 } from '../services/contractor-docs.service.js';
 import {
   assignSigurEmployeeCardBinding,
@@ -76,6 +81,10 @@ import {
 } from './employee-lifecycle.controller.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import {
+  buildContractorDocsWorkbook,
+  type IContractorDocsExportRow,
+} from '../services/contractor-docs-export.service.js';
 import { getInternalAccessPoints } from '../services/skud-shared.service.js';
 import {
   OT_CONTRACTOR_KINDS,
@@ -650,6 +659,58 @@ async function findDuplicatesForNames(
   }
   return [...byId.values()];
 }
+
+/**
+ * SELECT строк «Мониторинга» (пропуск, держатель, документы, объекты). Общий для списка,
+ * поиска и выгрузки документов в Excel — набор полей и правила одни. Дальше WHERE/ORDER.
+ */
+const MONITOR_BASE_SELECT = `
+  SELECT p.id,
+         p.pass_number,
+         p.status,
+         p.approval_status,
+         p.is_active,
+         to_char(h.idle_blocked_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS idle_blocked_on,
+         p.sigur_employee_id,
+         p.card_uid,
+         COALESCE(h.holder_name, p.holder_name) AS holder_name,
+         -- ФИО из «Управления кадрами» (копия Sigur) — только у одобренного и только
+         -- при расхождении: у неодобренного профиль Sigur называется «Пропуск N».
+         CASE
+           WHEN p.approval_status = 'approved'
+            AND btrim(COALESCE(e.full_name, '')) <> ''
+            AND regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
+                IS DISTINCT FROM regexp_replace(btrim(COALESCE(h.holder_name, p.holder_name, '')), '\\s+', ' ', 'g')
+           THEN regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
+         END AS employee_holder_name,
+         od.name AS org_name,
+         p.expires_at,
+         p.access_point_names,
+         p.submission_id,
+         p.updated_at,
+         p.passport_series_number,
+         to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
+         to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
+         p.citizenship,
+         p.patent_number,
+         to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
+         p.patent_blank_number,
+         p.has_residence_permit,
+         p.residence_permit_number,
+         p.snils,
+         p.inn,
+         p.kig,
+         to_char(p.kig_end_date, 'YYYY-MM-DD') AS kig_end_date,
+         COALESCE(
+           (SELECT string_agg(o.name, ', ' ORDER BY o.name)
+              FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
+           '') AS object_label
+    FROM contractor_passes p
+    LEFT JOIN contractor_pass_holders h
+      ON h.pass_id = p.id AND h.valid_until IS NULL
+    LEFT JOIN employees e
+      ON e.sigur_employee_id = p.sigur_employee_id AND e.is_archived = false
+    LEFT JOIN org_departments od ON od.id = p.org_department_id`;
 
 export const contractorAdminController = {
   /** GET /orgs — список подрядных организаций. */
@@ -1362,6 +1423,10 @@ export const contractorAdminController = {
                 p.patent_blank_number,
                 p.has_residence_permit,
                 p.residence_permit_number,
+                p.snils,
+                p.inn,
+                p.kig,
+                to_char(p.kig_end_date, 'YYYY-MM-DD') AS kig_end_date,
                 -- Чёрный список (273). Причину и автора отдаём ТОЛЬКО тому, у кого
                 -- есть доступ к самому реестру: вкладка заявок открыта и узкой роли
                 -- ОТиТБ по техническому ключу. Остальным — лишь факт и сила совпадения.
@@ -1432,7 +1497,16 @@ export const contractorAdminController = {
           ORDER BY p.pass_number ASC`,
         [req.params.id, canSeeBlacklistReason],
       );
-      res.json({ success: true, data: rows });
+      // СНИЛС/ИНН/КиГ — только полному доступу к разделу («Отдел безопасности», админы).
+      // Узкой роли «Заявки на согласование» (ОТиТБ) ключи не отдаём вовсе: окно
+      // «Документы» тогда не рисует этот блок, а не показывает его пустым.
+      const canSeeExtraIds = await hasContractorPageGrant(req, 'view', [CONTRACTOR_SECTION_PAGE_KEY]);
+      const data = canSeeExtraIds ? rows : (rows as Array<Record<string, unknown>>).map(r => {
+        const copy = { ...r };
+        for (const f of EXTRA_ID_FIELDS) delete copy[f];
+        return copy;
+      });
+      res.json({ success: true, data });
     } catch (error) {
       console.error('Contractor getSubmissionDetail error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить детали заявки' });
@@ -1995,49 +2069,6 @@ export const contractorAdminController = {
         ? req.query.org_department_id.trim() : '';
       const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
-      const baseSelect = `
-        SELECT p.id,
-               p.pass_number,
-               p.status,
-               p.approval_status,
-               p.is_active,
-               to_char(h.idle_blocked_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS idle_blocked_on,
-               p.sigur_employee_id,
-               p.card_uid,
-               COALESCE(h.holder_name, p.holder_name) AS holder_name,
-               -- ФИО из «Управления кадрами» (копия Sigur) — только у одобренного и только
-               -- при расхождении: у неодобренного профиль Sigur называется «Пропуск N».
-               CASE
-                 WHEN p.approval_status = 'approved'
-                  AND btrim(COALESCE(e.full_name, '')) <> ''
-                  AND regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
-                      IS DISTINCT FROM regexp_replace(btrim(COALESCE(h.holder_name, p.holder_name, '')), '\\s+', ' ', 'g')
-                 THEN regexp_replace(btrim(e.full_name), '\\s+', ' ', 'g')
-               END AS employee_holder_name,
-               od.name AS org_name,
-               p.expires_at,
-               p.access_point_names,
-               p.submission_id,
-               p.updated_at,
-               p.passport_series_number,
-               to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
-               to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
-               p.citizenship,
-               p.patent_number,
-               to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
-               p.patent_blank_number,
-               p.has_residence_permit,
-               p.residence_permit_number,
-               COALESCE(
-                 (SELECT string_agg(o.name, ', ' ORDER BY o.name)
-                    FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
-                 '') AS object_label
-          FROM contractor_passes p
-          LEFT JOIN contractor_pass_holders h
-            ON h.pass_id = p.id AND h.valid_until IS NULL
-          LEFT JOIN employees e
-            ON e.sigur_employee_id = p.sigur_employee_id AND e.is_archived = false
-          LEFT JOIN org_departments od ON od.id = p.org_department_id`;
 
       let rows;
       if (q) {
@@ -2049,7 +2080,7 @@ export const contractorAdminController = {
           const holderSql = fio ? fioConditionSql('holder', params, fio, mode) : 'FALSE';
           const employeeSql = fio ? fioConditionSql('e', params, fio, mode) : 'FALSE';
           return query(
-            `${baseSelect}
+            `${MONITOR_BASE_SELECT}
               WHERE p.status <> 'revoked'
                 AND (p.pass_number ILIKE $1
                      OR ${holderSql}
@@ -2063,7 +2094,7 @@ export const contractorAdminController = {
       } else {
         const orgId = z.string().uuid().parse(orgIdRaw);
         rows = await query(
-          `${baseSelect}
+          `${MONITOR_BASE_SELECT}
             WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
             ORDER BY p.pass_number::int ASC`,
           [orgId],
@@ -2078,6 +2109,67 @@ export const contractorAdminController = {
       }
       console.error('Contractor monitorPasses error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить мониторинг' });
+    }
+  },
+
+  /**
+   * GET /passes/monitor/export?org_department_id= — xlsx с документами держателей пропусков
+   * подрядчика: те же строки, что в «Мониторинге» (кроме отозванных), но только с ФИО —
+   * пустые слоты не выгружаются. Каждая выгрузка — в аудит (подрядчик, число строк, без
+   * значений документов). Ответ не кэшируется: в файле персональные данные.
+   */
+  async exportMonitorDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const orgRaw = typeof req.query.org_department_id === 'string' ? req.query.org_department_id.trim() : '';
+      const orgId = z.string().uuid().parse(orgRaw);
+
+      // Только действующий прямой подрядчик; имя файла — из него, а не из строк выгрузки.
+      const org = (await getContractorOrgs()).find(o => o.id === orgId);
+      if (!org) {
+        res.status(404).json({ success: false, error: 'Подрядчик не найден' });
+        return;
+      }
+
+      const rows = await query<Record<string, unknown>>(
+        `${MONITOR_BASE_SELECT}
+          WHERE p.org_department_id = $1::uuid
+            AND p.status <> 'revoked'
+            AND btrim(COALESCE(h.holder_name, p.holder_name, '')) <> ''
+          ORDER BY p.pass_number::int ASC`,
+        [orgId],
+      );
+      if (rows.length === 0) {
+        res.status(404).json({ success: false, error: 'У подрядчика нет пропусков с ФИО' });
+        return;
+      }
+
+      const data = rows.map(r => ({ ...r, w26: decodeW26(r.card_uid) })) as unknown as IContractorDocsExportRow[];
+      const buf = Buffer.from(await buildContractorDocsWorkbook(data).xlsx.writeBuffer());
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_DOCUMENTS_EXPORTED, {
+        entityType: 'org_department',
+        entityId: orgId,
+        details: { org_name: org.name, rows: rows.length },
+      });
+
+      const safeOrg = org.name.replace(/[\\/:*?"<>|]+/g, '_').trim();
+      const fileName = `Документы_${safeOrg}_${moscowTodayIso()}.xlsx`;
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.send(buf);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Не указан подрядчик' });
+        return;
+      }
+      console.error('Contractor exportMonitorDocuments error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.exportMonitorDocuments' } });
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Не удалось сформировать файл' });
+      }
     }
   },
 
@@ -2589,7 +2681,9 @@ export const contractorAdminController = {
       const { expected_updated_at } = z
         .object({ expected_updated_at: z.string().min(1).optional() })
         .parse({ expected_updated_at: (req.body as Record<string, unknown> | undefined)?.expected_updated_at });
-      const next = normalizeDocsPayload(docsBodySchema.parse(req.body));
+      // Нормализация — в транзакции после чтения строки: неприсланные СНИЛС/ИНН/КиГ
+      // (старый клиент) берутся из БД, а не затираются.
+      const parsed = docsBodySchema.parse(req.body);
 
       type SaveError = { http: number; code?: string; message: string };
       const failWith = (e: SaveError): never => {
@@ -2608,9 +2702,7 @@ export const contractorAdminController = {
         }>(
           `SELECT id, approval_status, status, updated_at,
                   pass_number, org_department_id, holder_name,
-                  passport_series_number, passport_issue_date, birth_date, citizenship,
-                  patent_number, patent_issue_date, patent_blank_number,
-                  has_residence_permit, residence_permit_number
+                  ${docColumnsSql()}
              FROM contractor_passes
             WHERE org_department_id = (SELECT org_department_id FROM contractor_passes WHERE id = $1::uuid)
             ORDER BY id
@@ -2622,6 +2714,7 @@ export const contractorAdminController = {
           failWith({ http: 404, message: 'Пропуск не найден' });
           return;
         }
+        const next = normalizeDocsPayload(mergeUnsentDocFields(req.body, parsed, pass));
         // Allowlist по status (не путать с approval_status: 'approved' живёт только там).
         if (pass.status === 'in_pool' || pass.status === 'revoked') {
           failWith({ http: 409, message: 'Пропуск свободен или отозван — документы не редактируются' });
@@ -2672,6 +2765,10 @@ export const contractorAdminController = {
                   patent_blank_number = $7,
                   has_residence_permit = $8,
                   residence_permit_number = $9,
+                  snils = $11,
+                  inn = $12,
+                  kig = $13,
+                  kig_end_date = $14::date,
                   updated_at = now()
             WHERE id = $10::uuid`,
           [
@@ -2685,6 +2782,10 @@ export const contractorAdminController = {
             next.has_residence_permit,
             next.residence_permit_number,
             passId,
+            next.snils,
+            next.inn,
+            next.kig,
+            next.kig_end_date,
           ],
         );
       });
@@ -2725,6 +2826,7 @@ export const contractorAdminController = {
                 passport_series_number, passport_issue_date, birth_date, citizenship,
                 patent_number, patent_issue_date, patent_blank_number,
                 has_residence_permit, residence_permit_number,
+                snils, inn, kig, kig_end_date,
                 changed_fields, changed_by_name, changed_source, changed_at
            FROM contractor_pass_document_history
           WHERE pass_id = $1::uuid
@@ -3395,6 +3497,22 @@ export const contractorAdminController = {
       //    защищает активные/одобренные пропуска от stale/malicious id). Контейнер
       //    (sigur_employee_id / card_uid / org_department_id) и дефолты слота сохраняем.
       const returned = await withTransaction(async client => {
+        // 0) Сначала под блокировкой — только реально возвращаемые пропуска (та же заявка,
+        //    pending). Документы ушедших держателей — в историю и очистить, чтобы при
+        //    повторной выдаче слота они не достались новому человеку. Пользовательские
+        //    pass_ids напрямую не используются: посторонний id документы не теряет.
+        const eligible = await client.query<{ id: string }>(
+          `SELECT id FROM contractor_passes
+            WHERE submission_id = $1::uuid
+              AND id = ANY($2::uuid[])
+              AND approval_status = 'pending'
+            ORDER BY id
+            FOR UPDATE`,
+          [submissionId, pass_ids],
+        );
+        const eligibleIds = eligible.rows.map(r => r.id);
+        await resetPassDocuments(client, eligibleIds, { userId: req.user.id, source: 'holder_reset' });
+
         const upd = await client.query<{
           id: string; pass_number: string; sigur_employee_id: number | null; old_status: string;
         }>(
@@ -3416,7 +3534,7 @@ export const contractorAdminController = {
              FROM locked
             WHERE p.id = locked.id
            RETURNING p.id, locked.pass_number, locked.sigur_employee_id, locked.old_status`,
-          [submissionId, pass_ids],
+          [submissionId, eligibleIds],
         );
         const rows = upd.rows;
 
@@ -3558,6 +3676,7 @@ export const contractorAdminController = {
                   p.passport_series_number, p.passport_issue_date, p.birth_date, p.citizenship,
                   p.patent_number, p.patent_issue_date, p.patent_blank_number,
                   p.has_residence_permit, p.residence_permit_number,
+                  p.snils, p.inn, p.kig, p.kig_end_date,
                   EXISTS(SELECT 1 FROM contractor_pass_holders h
                           WHERE h.pass_id = p.id AND h.valid_until IS NULL) AS has_open_holder
              FROM contractor_passes p
@@ -3600,32 +3719,15 @@ export const contractorAdminController = {
           }
         }
 
-        // Снапшот документов уходящего держателя в историю — иначе прежний патент
-        // теряется именно при освобождении пропуска.
-        const emptyDocs: IDocPayload = {
-          passport_series_number: null,
-          passport_issue_date: null,
-          birth_date: null,
-          citizenship: null,
-          patent_number: null,
-          patent_issue_date: null,
-          patent_blank_number: null,
-          has_residence_permit: false,
-          residence_permit_number: null,
-        };
-        await recordDocHistoryIfChanged(client, pass, emptyDocs, {
-          userId: req.user.id,
-          source: 'clear_holder',
-        });
+        // Снапшот документов уходящего держателя в историю и очистка всех документов
+        // (паспорт, патент, ВНЖ, СНИЛС, ИНН, КиГ) — единый сброс, источник «Освободить».
+        await resetPassDocuments(client, [passId], { userId: req.user.id, source: 'clear_holder' });
 
-        // Сброс ФИО + персональных документов + параметров выдачи + статуса + sync-флагов.
+        // Сброс ФИО + параметров выдачи + статуса + sync-флагов.
         await client.query(
           `UPDATE contractor_passes
               SET status='assigned', approval_status='not_submitted',
                   holder_name=NULL, submission_id=NULL, is_active=false,
-                  passport_series_number=NULL, passport_issue_date=NULL, birth_date=NULL,
-                  citizenship=NULL, patent_number=NULL, patent_issue_date=NULL,
-                  patent_blank_number=NULL, has_residence_permit=false, residence_permit_number=NULL,
                   object_ids=NULL, access_point_names=NULL, expires_at=NULL,
                   sigur_sync_state='synced', sigur_sync_error=NULL, sigur_sync_attempts=0,
                   sigur_sync_updated_at=now(), updated_at=now()

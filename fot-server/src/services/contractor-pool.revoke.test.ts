@@ -79,6 +79,36 @@ beforeEach(() => {
 });
 
 describe('enqueueRevoke', () => {
+  it('документы держателя (вкл. СНИЛС/ИНН/КиГ) — в историю и очищаются ДО возврата в пул: другому подрядчику не уходят', async () => {
+    let captured: Array<[string, unknown[]]> = [];
+    pgTx.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string) => {
+        if (String(sql).includes('FOR UPDATE OF p')) {
+          return { rows: [{ id: 'p1', pass_number: '001', org_department_id: 'org-a', holder_name: 'Иванов',
+            passport_series_number: '403934253', citizenship: 'Таджикистан', snils: '12345678900',
+            has_residence_permit: false }] };
+        }
+        return { rows: [] };
+      });
+      const r = await fn({ query: q });
+      captured = q.mock.calls as Array<[string, unknown[]]>;
+      return r;
+    });
+    pgQueryOne.mockResolvedValue({ id: 'p1', pass_number: '001', status: 'applied', sigur_employee_id: 5 });
+
+    await enqueueRevoke({ passId: 'p1', userId: 'u1' });
+
+    const histIdx = captured.findIndex(c => String(c[0]).includes('contractor_pass_document_history'));
+    const resetIdx = captured.findIndex(c => String(c[0]).includes('snils = NULL'));
+    const poolIdx = captured.findIndex(c => String(c[0]).includes("status = 'in_pool'"));
+    expect(histIdx).toBeGreaterThanOrEqual(0);
+    expect(captured[histIdx][1][15]).toBe('holder_reset');
+    expect(captured[histIdx][1][14]).toBe('u1');
+    expect(String(captured[resetIdx][0])).toContain('passport_series_number = NULL');
+    expect(histIdx).toBeLessThan(resetIdx);
+    expect(resetIdx).toBeLessThan(poolIdx);
+  });
+
   it('мгновенно возвращает в пул и ставит pending_revoke (есть sigur_employee_id)', async () => {
     let captured: unknown[][] = [];
     pgTx.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {

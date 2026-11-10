@@ -75,6 +75,8 @@ router.post('/duplicates/block', apprEdit, requireCritical2FA, contractorAdminCo
 // Отправленные / мониторинг / история по пропуску.
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);
 router.get('/passes/monitor', apprView, contractorAdminController.monitorPasses);
+// Выгрузка документов держателей пропусков подрядчика в Excel (только с ФИО; аудит, no-store).
+router.get('/passes/monitor/export', apprView, contractorAdminController.exportMonitorDocuments);
 router.get('/passes/stats', apprView, contractorAdminController.passStats);
 router.get('/passes/stats/details', apprView, contractorAdminController.passStatsDetails);
 router.get('/passes/stats/idle', apprView, contractorAdminController.passStatsIdle);

@@ -27,8 +27,12 @@ import {
   findOrgDocDuplicate,
   isDocsComplete,
   docsBodySchema,
+  docColumnsSql,
+  holderChangeResetsDocuments,
+  mergeUnsentDocFields,
   normalizeDocsPayload,
   recordDocHistoryIfChanged,
+  resetPassDocuments,
   type IDocHistoryPass,
 } from '../services/contractor-docs.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
@@ -228,27 +232,52 @@ export const contractorController = {
     try {
       const orgId = await resolveOrgOr403(req, res);
       if (!orgId) return;
-      const { full_name } = z.object({
+      const { full_name, keep_documents } = z.object({
         full_name: z.string().trim().max(200).nullable(),
+        // «Исправляю опечатку — оставить документы» (окно в ЛК при замене ФИО).
+        keep_documents: z.boolean().optional(),
       }).parse(req.body);
       const holder = full_name && full_name.length >= 2 ? full_name : null;
       const passId = req.params.id;
 
-      const pass = await queryOne<{ id: string; status: string; submission_id: string | null }>(
-        `SELECT id, status, submission_id FROM contractor_passes
-          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
-        [passId, orgId],
-      );
-      if (!pass) {
-        res.status(404).json({ success: false, error: 'Пропуск не найден' });
-        return;
-      }
-      if (pass.status !== 'assigned' || pass.submission_id !== null) {
-        res.status(409).json({ success: false, error: 'Пропуск недоступен для редактирования' });
-        return;
-      }
+      type HolderError = { http: number; message: string };
+      const failWith = (e: HolderError): never => {
+        throw Object.assign(new Error(e.message), { __holder: e });
+      };
 
       await withTransaction(async client => {
+        // Статус и текущее ФИО — под блокировкой строки: решение о сбросе документов
+        // принимается по тому ФИО, которое реально заменяется.
+        const passRes = await client.query<{
+          id: string; status: string; submission_id: string | null; holder_name: string | null;
+        }>(
+          `SELECT p.id, p.status, p.submission_id,
+                  COALESCE(
+                    (SELECT h.holder_name FROM contractor_pass_holders h
+                      WHERE h.pass_id = p.id AND h.valid_until IS NULL
+                      ORDER BY h.valid_from DESC, h.created_at DESC LIMIT 1),
+                    p.holder_name) AS holder_name
+             FROM contractor_passes p
+            WHERE p.id = $1::uuid AND p.org_department_id = $2::uuid
+            FOR UPDATE OF p`,
+          [passId, orgId],
+        );
+        const pass = passRes.rows[0];
+        if (!pass) {
+          failWith({ http: 404, message: 'Пропуск не найден' });
+          return;
+        }
+        if (pass.status !== 'assigned' || pass.submission_id !== null) {
+          failWith({ http: 409, message: 'Пропуск недоступен для редактирования' });
+          return;
+        }
+
+        // Другой человек (или ФИО стёрто) — документы прежнего держателя не должны
+        // достаться новому: снимок в историю и очистка.
+        if (holderChangeResetsDocuments(pass.holder_name, holder, keep_documents === true)) {
+          await resetPassDocuments(client, [passId], { userId: req.user.id, source: 'holder_reset' });
+        }
+
         await client.query(
           `UPDATE contractor_passes
               SET holder_name = $1, approval_status = 'not_submitted', updated_at = now()
@@ -290,6 +319,11 @@ export const contractorController = {
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      const fail = (error as { __holder?: { http: number; message: string } }).__holder;
+      if (fail) {
+        res.status(fail.http).json({ success: false, error: fail.message });
         return;
       }
       console.error('Contractor setPassHolder error:', error);
@@ -342,6 +376,10 @@ export const contractorController = {
       }
 
       const submissionId = await withTransaction(async client => {
+        // Документы прежнего держателя — в историю и очистить: новому владельцу подрядчик
+        // вносит документы заново (снимок берёт ещё открытую строку владельца — прежнее ФИО).
+        await resetPassDocuments(client, [passId], { userId: req.user.id, source: 'holder_reset' });
+
         // Закрываем текущую открытую строку владельца (valid_until = valid_from - 1 day).
         await client.query(
           `UPDATE contractor_pass_holders
@@ -470,7 +508,9 @@ export const contractorController = {
 
       // Разбор и нормализация общие с админским эндпоинтом (contractor-docs.service):
       // trim→null, ВНЖ только для патентной страны, патент↔ВНЖ взаимоисключающие.
-      const next = normalizeDocsPayload(docsBodySchema.parse(req.body));
+      // Нормализация — в транзакции, после чтения строки: неприсланные СНИЛС/ИНН/КиГ
+      // (старый клиент) берутся из БД, а не затираются.
+      const parsed = docsBodySchema.parse(req.body);
 
       // Конфликт уникальности (CONTRACTOR_DOCUMENT_DUPLICATE) или read-only/неполнота —
       // прокидываем через типизированную ошибку из транзакции.
@@ -488,9 +528,7 @@ export const contractorController = {
           status: string;
         }>(
           `SELECT id, approval_status, status, pass_number, org_department_id, holder_name,
-                  passport_series_number, passport_issue_date, birth_date, citizenship,
-                  patent_number, patent_issue_date, patent_blank_number,
-                  has_residence_permit, residence_permit_number
+                  ${docColumnsSql()}
              FROM contractor_passes
             WHERE org_department_id = $1::uuid
             ORDER BY id
@@ -502,6 +540,7 @@ export const contractorController = {
           failWith({ http: 404, message: 'Пропуск не найден' });
           return;
         }
+        const next = normalizeDocsPayload(mergeUnsentDocFields(req.body, parsed, pass));
         // Read-only после согласования (Шаг 3): документы выданного/одобренного/отозванного
         // пропуска не редактируются.
         if (pass.approval_status === 'approved' || pass.status === 'applied' || pass.status === 'revoked') {
@@ -552,6 +591,10 @@ export const contractorController = {
                   patent_blank_number = $7,
                   has_residence_permit = $8,
                   residence_permit_number = $9,
+                  snils = $11,
+                  inn = $12,
+                  kig = $13,
+                  kig_end_date = $14::date,
                   updated_at = now()
             WHERE id = $10::uuid`,
           [
@@ -565,6 +608,10 @@ export const contractorController = {
             next.has_residence_permit,
             next.residence_permit_number,
             passId,
+            next.snils,
+            next.inn,
+            next.kig,
+            next.kig_end_date,
           ],
         );
       });

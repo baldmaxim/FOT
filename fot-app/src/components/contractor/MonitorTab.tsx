@@ -4,7 +4,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, Download } from 'lucide-react';
 import {
   contractorAdminService,
   formatIdleBlockNote,
@@ -12,6 +12,7 @@ import {
   type IPassDocuments,
 } from '../../services/contractorService';
 import { formatCardW26 } from '../../utils/cardW26';
+import { triggerBlobDownload } from '../../utils/download';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
 import { PassEventsModal } from './PassEventsModal';
@@ -190,6 +191,7 @@ const MonitorDocsModal: FC<{
 
 export const MonitorTab: FC = () => {
   const qc = useQueryClient();
+  const toast = useToast();
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/admin/contractor-approvals');
   const [orgId, setOrgId] = useState('');
@@ -199,6 +201,21 @@ export const MonitorTab: FC = () => {
   const [clearRow, setClearRow] = useState<IMonitorPassRow | null>(null);
   const [eventsRow, setEventsRow] = useState<IMonitorPassRow | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  // Документы держателей выбранного подрядчика в Excel; имя файла (подрядчик + дата по МСК) — от сервера.
+  const handleExport = async (): Promise<void> => {
+    if (!orgId || exporting) return;
+    setExporting(true);
+    try {
+      const { blob, filename } = await contractorAdminService.exportMonitorDocuments(orgId);
+      triggerBlobDownload(blob, filename);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось сформировать файл');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // ФИО держателя видно ещё в истории пропуска и во вкладках заявок/отправленных.
   const onHolderRenamed = (passId: string) => {
@@ -274,6 +291,20 @@ export const MonitorTab: FC = () => {
             <BarChart3 size={14} /> Статистика пропусков
           </button>
         </div>
+
+        {!searchActive && orgId && (
+          <div className={`${styles.field} ${styles.filterAction}`}>
+            <span className={styles.label}>&nbsp;</span>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnIcon}`}
+              onClick={() => void handleExport()}
+              disabled={exporting}
+            >
+              <Download size={14} /> {exporting ? 'Формируем…' : 'Экспорт в Excel'}
+            </button>
+          </div>
+        )}
       </div>
 
       {!searchActive && !orgId && <div className={styles.empty}>Выберите подрядчика или введите номер пропуска</div>}

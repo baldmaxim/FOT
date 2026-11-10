@@ -376,6 +376,55 @@
   flex: 1 1 180px;
 }
 
+/* Окно «Документы» держателя пропуска: шире общей модалки (420px), чтобы пары полей
+   (даты, СНИЛС/ИНН, патент, КиГ) стояли ровными колонками. */
+.docsModal {
+  max-width: 760px;
+}
+
+/* Пара полей: на телефоне — столбик, с 768px — две равные колонки. */
+.docsPair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+}
+
+/* Пара без подписей-ошибок под полем (даты): поля выравниваются по низу,
+   даже если длинная подпись слева перенеслась на вторую строку. */
+.docsPairEnd {
+  align-items: end;
+}
+
+@media (min-width: 768px) {
+  .docsPair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  /* iOS/Android не зумят форму при фокусе; тап-цель ≥ 44px. */
+  .docsModal .input {
+    font-size: 16px;
+    min-height: 44px;
+  }
+}
+
+/* Окно «ФИО изменено — другой человек?»: длинные кнопки переносятся, на телефоне — столбиком. */
+.holderChoiceActions {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 767px) {
+  .holderChoiceActions {
+    flex-direction: column-reverse;
+  }
+  .holderChoiceActions button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
 .filterRow {
   display: flex;
   gap: 12px;

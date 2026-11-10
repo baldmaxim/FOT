@@ -88,9 +88,13 @@ export interface IPassRow {
   patent_blank_number: string | null;
   has_residence_permit: boolean;
   residence_permit_number: string | null;
+  snils: string | null;
+  inn: string | null;
+  kig: string | null;
+  kig_end_date: string | null;
 }
 
-/** Персональные документы держателя пропуска (паспорт/патент/ВНЖ). */
+/** Персональные документы держателя пропуска (паспорт/патент/ВНЖ/СНИЛС/ИНН/КиГ). */
 export interface IPassDocuments {
   passport_series_number: string | null;
   passport_issue_date: string | null;
@@ -102,6 +106,12 @@ export interface IPassDocuments {
   /** ВНЖ отменяет требование патента (для патентных гражданств). */
   has_residence_permit: boolean;
   residence_permit_number: string | null;
+  /** СНИЛС (11 цифр), ИНН (12 цифр), КиГ и её срок — необязательные. Узкой роли
+   *  «Заявки на согласование» сервер эти ключи не отдаёт вовсе. */
+  snils?: string | null;
+  inn?: string | null;
+  kig?: string | null;
+  kig_end_date?: string | null;
 }
 
 export interface ISubmissionRow {
@@ -153,6 +163,12 @@ export interface ISubmissionDetailRow {
   /** ВНЖ отменяет требование патента (для патентных гражданств). */
   has_residence_permit: boolean;
   residence_permit_number: string | null;
+  /** СНИЛС (11 цифр), ИНН (12 цифр), КиГ и её срок — необязательные. Узкой роли
+   *  «Заявки на согласование» сервер эти ключи не отдаёт вовсе. */
+  snils?: string | null;
+  inn?: string | null;
+  kig?: string | null;
+  kig_end_date?: string | null;
   documents_complete: boolean;
   /** Другие держатели той же орг с таким же номером патента. */
   dup_patent: IPassDocDuplicate[];
@@ -268,6 +284,10 @@ export interface IMonitorPassRow {
   patent_blank_number: string | null;
   has_residence_permit: boolean;
   residence_permit_number: string | null;
+  snils: string | null;
+  inn: string | null;
+  kig: string | null;
+  kig_end_date: string | null;
 }
 
 export interface IContractorPassStat {
@@ -387,9 +407,14 @@ export interface IDocHistoryRow {
   patent_blank_number: string | null;
   has_residence_permit: boolean | null;
   residence_permit_number: string | null;
+  snils: string | null;
+  inn: string | null;
+  kig: string | null;
+  kig_end_date: string | null;
   changed_fields: string[];
   changed_by_name: string | null;
-  changed_source: 'admin' | 'contractor' | 'clear_holder';
+  /** holder_reset — документы очищены при смене или снятии держателя. */
+  changed_source: 'admin' | 'contractor' | 'clear_holder' | 'holder_reset';
   changed_at: string;
 }
 
@@ -666,8 +691,15 @@ export const contractorService = {
     );
     return r.data ?? [];
   },
-  async setPassHolder(passId: string, fullName: string | null): Promise<void> {
-    await apiClient.post(`/contractor/passes/${passId}/holder`, { full_name: fullName });
+  /**
+   * ФИО держателя. keepDocuments=true — «исправляю опечатку, документы оставить»; без флага
+   * сервер при замене ФИО на другое (и при стирании) очищает документы прежнего человека.
+   */
+  async setPassHolder(passId: string, fullName: string | null, keepDocuments?: boolean): Promise<void> {
+    await apiClient.post(`/contractor/passes/${passId}/holder`, {
+      full_name: fullName,
+      ...(keepDocuments ? { keep_documents: true } : {}),
+    });
   },
   async changeHolder(passId: string, newHolderName: string, validFrom: string): Promise<{ submission_id: string }> {
     const r = await apiClient.post<ApiResponse<{ submission_id: string }>>(
@@ -1160,6 +1192,13 @@ export const contractorAdminService = {
       `/admin/contractor/passes/stats/access-points${qs}`,
     );
     return r.data ?? [];
+  },
+  /** xlsx с документами держателей пропусков подрядчика; имя файла задаёт сервер. */
+  async exportMonitorDocuments(orgDepartmentId: string): Promise<{ blob: Blob; filename: string }> {
+    return apiClient.download(
+      `/admin/contractor/passes/monitor/export?org_department_id=${encodeURIComponent(orgDepartmentId)}`,
+      'Документы.xlsx',
+    );
   },
   async exportPassStats(orgDepartmentId?: string, dateFrom?: string, dateTo?: string): Promise<Blob> {
     const qs = buildStatsQuery({ org_department_id: orgDepartmentId, date_from: dateFrom, date_to: dateTo });
