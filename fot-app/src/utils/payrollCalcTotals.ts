@@ -111,6 +111,29 @@ const missingTotal = (
   return { missing, title: missing > 0 ? `Не вошли ${missing} чел.: ${[...labels].join(', ')}` : null };
 };
 
+export interface IPayrollTotalsGroups {
+  /** «Сумма» посчитана: в них «Сумма» − «Выплаты на карту» = «Остаток» и в итогах. */
+  counted: IPayrollTermsRow[];
+  /** «Суммы» нет (выработка бригады не введена, нет условий, табель не закрыт): только их суммы 1С. */
+  uncounted: IPayrollTermsRow[];
+}
+
+/**
+ * «Итого» в две строки (решение пользователя 10.11.2026): итог «Выплат» по всем нельзя вычесть из итога «Суммы» —
+ * в нём выплаты людей без «Суммы». Делим строки по тому, есть ли «Сумма» («Нет дней в табеле» — «0.00», посчитано).
+ * Одна строка (null), если ФОТ не считается (ни у кого нет поля calc) или одна из групп пуста.
+ */
+export const splitPayrollTotalsRows = (rows: readonly IPayrollTermsRow[]): IPayrollTotalsGroups | null => {
+  if (!rows.some(row => 'calc' in row)) return null;
+  const counted: IPayrollTermsRow[] = [];
+  const uncounted: IPayrollTermsRow[] = [];
+  for (const row of rows) {
+    const net = row.calc?.net;
+    (net !== null && net !== undefined ? counted : uncounted).push(row);
+  }
+  return counted.length > 0 && uncounted.length > 0 ? { counted, uncounted } : null;
+};
+
 /** Итоги столбцов по ключу записи; столбца без итога в ответе нет. */
 export const payrollColumnTotals = (
   rows: readonly IPayrollTermsRow[],

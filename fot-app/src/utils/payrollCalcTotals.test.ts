@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { IPayrollCalcColumns, IPayrollTermsRow } from '../services/payrollService';
 import type { PayrollTableColumn } from './payrollColumns';
-import { payrollColumnTotals, payrollTotalState } from './payrollCalcTotals';
+import { payrollColumnTotals, payrollTotalState, splitPayrollTotalsRows } from './payrollCalcTotals';
 import type { PayrollSubColumn, PayrollTableColumnEntry } from './payrollSubColumns';
 
 const calc = (overrides: Partial<IPayrollCalcColumns> = {}): IPayrollCalcColumns => ({
@@ -174,5 +174,60 @@ describe('payrollTotalState', () => {
     expect(payrollTotalState({ rows: 'ready', calc: 'pending' }, true)).toBe('pending');
     expect(payrollTotalState({ rows: 'ready', calc: 'failed' }, true)).toBe('failed');
     expect(payrollTotalState({ rows: 'ready', calc: 'ready' }, true)).toBe('ready');
+  });
+});
+
+describe('splitPayrollTotalsRows', () => {
+  const paid = (amount: string) => [{ method: 'Аванс', amount }];
+
+  it('одна строка: ФОТ не считается (нет поля calc), все посчитаны или ни у кого нет «Суммы»', () => {
+    expect(splitPayrollTotalsRows([row({ card_payouts_by_method: paid('10.00') })])).toBeNull();
+    expect(splitPayrollTotalsRows([row({ calc: calc({ net: '1.00' }) }), row({ calc: calc({ net: '0.00' }) })])).toBeNull();
+    expect(splitPayrollTotalsRows([row({ calc: null }), row({ calc: calc() })])).toBeNull();
+  });
+
+  it('«Нет дней в табеле» с «0.00» — посчитано; calc() без «Суммы», calc: null и без поля calc — не посчитано', () => {
+    const noDays = row({ employee_id: 1, calc: calc({ net: '0.00', incomplete: [{ month: '2026-09', reasons: ['no_days'] }] }) });
+    const empty = row({ employee_id: 2, calc: calc() });
+    const notReturned = row({ employee_id: 3, calc: null });
+    const noField = row({ employee_id: 4 });
+    expect(splitPayrollTotalsRows([noDays, empty, notReturned, noField])).toEqual({
+      counted: [noDays],
+      uncounted: [empty, notReturned, noField],
+    });
+  });
+
+  it('в «посчитано» «Сумма» − «Выплаты на карту» = «Остаток» до копейки; выплаты двух строк = выплаты всех', () => {
+    const rows = [
+      row({ employee_id: 1, calc: calc({ net: '145930.90' }), card_payouts_by_method: [
+        { method: 'Отпуска', amount: '46640.90' }, { method: 'Аванс', amount: '26298.27' },
+        { method: 'Зарплата за месяц', amount: '30054.46' }, { method: 'Премии', amount: '233047.00' },
+      ] }),
+      row({ employee_id: 2, calc: calc({ net: '196365.95' }), card_payouts_by_method: paid('6256.37') }),
+      row({ employee_id: 3, calc: calc({ net: '0.10' }) }),
+      row({
+        employee_id: 4,
+        calc: calc({ incomplete: [{ month: '2026-09', reasons: ['brigade_output'] }] }),
+        card_payouts_by_method: paid('80000.20'),
+      }),
+    ];
+    const columns = [column('calc_net'), column('calc_remainder'), column('card_payouts')];
+    const groups = splitPayrollTotalsRows(rows);
+    expect(groups?.uncounted.map(item => item.employee_id)).toEqual([4]);
+    const counted = payrollColumnTotals(groups?.counted ?? [], columns);
+    const uncounted = payrollColumnTotals(groups?.uncounted ?? [], columns);
+    const all = payrollColumnTotals(rows, columns);
+    const cents = (value: string | null | undefined): number => Math.round(Number(value) * 100);
+    expect(counted.get('calc_net')?.amount).toBe('342296.95');
+    expect(counted.get('card_payouts')?.amount).toBe('342297.00');
+    expect(counted.get('calc_remainder')?.amount).toBe('-0.05');
+    expect(cents(counted.get('calc_net')?.amount) - cents(counted.get('card_payouts')?.amount))
+      .toBe(cents(counted.get('calc_remainder')?.amount));
+    expect(uncounted.get('calc_net')).toMatchObject({ amount: null, missing: 1 });
+    expect(uncounted.get('calc_remainder')?.amount).toBeNull();
+    expect(uncounted.get('card_payouts')?.amount).toBe('80000.20');
+    expect(cents(counted.get('card_payouts')?.amount) + cents(uncounted.get('card_payouts')?.amount))
+      .toBe(cents(all.get('card_payouts')?.amount));
+    expect(all.get('calc_remainder')?.amount).toBe(counted.get('calc_remainder')?.amount);
   });
 });

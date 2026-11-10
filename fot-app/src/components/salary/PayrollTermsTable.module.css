@@ -19,8 +19,8 @@
   scroll-padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* С «Итого»: строка в фокусе клавиатуры не прячется под закреплённый подвал */
-.wrapTotals { scroll-padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+/* С «Итого» (до двух строк): строка в фокусе клавиатуры не прячется под закреплённый подвал */
+.wrapTotals { scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
 
 .table {
   width: 100%;
@@ -347,10 +347,13 @@
  * «Итого» «Расчётов» — подвал той же таблицы: столбцы совпадают сами, прокрутка вбок общая. Закреплён снизу обёртки, как
  * шапка сверху; в потоке таблицы он идёт после строк, поэтому в конце списка последняя строка не уходит под него.
  */
+.table tfoot { --totals-row-height: 40px; }
 .table tfoot td {
   position: sticky;
   bottom: 0;
   z-index: 2;
+  height: var(--totals-row-height);
+  box-sizing: border-box;
   font-weight: 600;
   white-space: nowrap;
   background: var(--bg-secondary);
@@ -360,6 +363,13 @@
 .table tfoot td.stickyNum,
 .table tfoot td.stickyName { z-index: 3; }
 .table tfoot td.groupTotal { background: var(--group-total-head); }
+/* Две строки «Итого»: первая закреплена над второй, вторая («Не посчитано») — светлее */
+.table tfoot tr:not(:last-child) td { bottom: var(--totals-row-height); }
+.table tfoot tr.totalsUncounted td {
+  font-weight: 400;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .paidButton,
@@ -368,6 +378,9 @@
 
 @media (max-width: 768px) {
   .table td { height: 48px; }
+  .table tfoot { --totals-row-height: 48px; }
+  /* Столбец ФИО узкий: подпись строки «Итого» переносится, а не обрезается («Не посчитано, 913 чел.») */
+  .table tfoot td.stickyName { white-space: normal; line-height: 1.2; }
   .paidButton { min-height: 44px; }
   .colNum { width: 44px; }
   .colName { width: 150px; }
