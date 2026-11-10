@@ -29,8 +29,8 @@ const branchTimesheetKey = (branchId: string, month: string) => ['timesheet-page
 
 /**
  * «Управление кадрами» → «Выходные» (миграция 346): ЛИНИЯ и ЛИНИЯ-Общестрой отдельными сетками табеля, в них — кто
- * работал в выходной по СКУД без корректировки. Такие дни в красной рамке; плановые субботы графика сюда не входят.
- * Клик по дню открывает то же окно, что в «Табеле».
+ * работал в выходной по СКУД без корректировки, в том числе вошёл без пары (в клетке 0 — метка «без часов»). Такие дни
+ * в красной рамке; плановые субботы графика сюда не входят. Клик по дню открывает то же окно, что в «Табеле».
  */
 export const WeekendsTab: FC = () => {
   const { canViewPage, canEditPage, canManageAsHrAdmin, showActualHours } = useAuth();
@@ -168,6 +168,7 @@ export const WeekendsTab: FC = () => {
             query={query}
             canViewTimesheet={canViewTimesheet}
             canEdit={canEdit}
+            showActualHours={showActualHours}
             showLegend={branch.id === legendBranchId}
             compact={compact}
             actions={canManagePeriods && branch.periods.length > 0

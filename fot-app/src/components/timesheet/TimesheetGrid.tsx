@@ -54,6 +54,12 @@ type TimesheetViewMode = 'employees' | 'objects';
  */
 export type BulkBlockReason = 'locked' | 'covered' | 'other';
 
+/** Метка у ФИО; без title — подпись problemLegendLabel. */
+export interface ITimesheetGridBadge {
+  text: string;
+  title?: string;
+}
+
 export interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
@@ -98,12 +104,12 @@ export interface ITimesheetGridProps {
   hideLegend?: boolean;
   /** Без строки-разделителя с отделом: он уже в шапке. */
   hideSectionLabels?: boolean;
-  /** Что значит рамка дня из problemDates.red: строка легенды и подпись метки у ФИО. */
+  /** Что значит рамка дня из problemDates.red: строка легенды и подпись метки у ФИО без своей подписи. */
   problemLegendLabel?: string;
-  /** Подсказка дня из problemDates.red. */
-  problemTitle?: string;
-  /** Метка рядом с ФИО. */
-  employeeBadge?: (employeeId: number) => string | null;
+  /** Подсказка дня из problemDates.red; cellKey — сотрудник_дата. */
+  problemTitle?: (cellKey: string) => string | undefined;
+  /** Метки рядом с ФИО; несколько — столбиком. */
+  employeeBadge?: (employeeId: number) => ReadonlyArray<ITimesheetGridBadge>;
   /** Клик по ФИО ничего не открывает: без кнопки «Детализация» и подсветки. */
   hideEmployeeDetails?: boolean;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
@@ -1146,16 +1152,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       )}
     </div>
   );
-  const withProblemTitle = (title: string | undefined, cellKey: string): string | undefined => (
-    problemTitle && problemDates?.red?.has(cellKey)
-      ? [title, problemTitle].filter(Boolean).join(' • ')
-      : title
-  );
+  const withProblemTitle = (title: string | undefined, cellKey: string): string | undefined => {
+    const problem = problemDates?.red?.has(cellKey) ? problemTitle?.(cellKey) : undefined;
+    return problem ? [title, problem].filter(Boolean).join(' • ') : title;
+  };
   const renderEmployeeBadge = (employeeId: number): ReactNode => {
-    const badge = employeeBadge?.(employeeId);
-    return badge
-      ? <span className="ts-employee-badge ts-employee-badge--problem" title={problemLegendLabel}>{badge}</span>
-      : null;
+    const badges = employeeBadge?.(employeeId) ?? [];
+    if (badges.length === 0) return null;
+    const items = badges.map(badge => (
+      <span key={badge.text} className="ts-employee-badge ts-employee-badge--problem" title={badge.title ?? problemLegendLabel}>
+        {badge.text}
+      </span>
+    ));
+    return items.length === 1 ? items[0] : <span className="ts-employee-badges">{items}</span>;
   };
 
   if (compact && viewMode === 'objects') {

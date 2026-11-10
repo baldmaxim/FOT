@@ -49,6 +49,15 @@ interface ILeaveRow {
 
 export type ICorrectionValidationScope = IPendingScope;
 
+export interface ICorrectionValidationOptions {
+  /**
+   * Вход по СКУД в выходной без часов (проход без пары: is_present, минут нет) — тоже «выход без корректировки».
+   * Только вкладка «Выходные»: кадрам надо проставить часы. Подача табеля опцию не передаёт и такие дни не блокирует.
+   * В квоту плановых суббот эти дни не идут — она по дням с минутами, как без опции.
+   */
+  includePassWithoutHours?: boolean;
+}
+
 /**
  * Подача табеля блокируется в двух случаях:
  * 1) есть approved leave_requests типа remote/vacation без файла-подтверждения;
@@ -66,6 +75,7 @@ export type ICorrectionValidationScope = IPendingScope;
 export async function validateCorrectionAttachments(
   scope: ICorrectionValidationScope,
   range: ITimesheetDateRange,
+  options: ICorrectionValidationOptions = {},
 ): Promise<ICorrectionValidationResult> {
   // Окно членства в отделе по сотруднику: переведённый/уволенный числится в отделе
   // только с joined_date (вкл.) до transferred_out_date (искл.). Его СКУД-выход в
@@ -139,30 +149,34 @@ export async function validateCorrectionAttachments(
     if (set.size > 0) { anyOff = true; break; }
   }
 
-  let weekendSkudRows: Array<{ employee_id: number; date: string }> = [];
+  // Все выходные со СКУД: корректировки, заявления, имена и результат. В квоту — только дни с минутами.
+  const weekendSkudRows: Array<{ employee_id: number; date: string }> = [];
+  const passWithoutHours = new Set<string>();
   if (anyOff) {
-    const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
+    const skudRows = await query<{ employee_id: number; date: string; total_minutes: number | null }>(
       `SELECT employee_id, date::text AS date, total_minutes
          FROM skud_daily_summary
         WHERE employee_id = ANY($1::int[])
           AND date >= $2::date
           AND date <= $3::date
-          AND total_minutes > 0
+          AND (total_minutes > 0
+               OR ($4::boolean AND is_present = true AND COALESCE(total_minutes, 0) = 0))
         ORDER BY date ASC`,
-      [employeeIds, range.startDate, range.endDate],
+      [employeeIds, range.startDate, range.endDate, options.includePassWithoutHours === true],
     );
-    weekendSkudRows = skudRows
-      .map(row => ({
-        employee_id: Number(row.employee_id),
-        date: String(row.date).slice(0, 10),
-      }))
-      .filter(row =>
-        offByEmployee.get(row.employee_id)?.has(row.date) === true
-        && isWithinMembership(row.employee_id, row.date),
-      );
+    for (const row of skudRows) {
+      const employeeId = Number(row.employee_id);
+      const date = String(row.date).slice(0, 10);
+      if (offByEmployee.get(employeeId)?.has(date) !== true || !isWithinMembership(employeeId, date)) continue;
+      weekendSkudRows.push({ employee_id: employeeId, date });
+      if ((Number(row.total_minutes) || 0) <= 0) passWithoutHours.add(`${employeeId}|${date}`);
+    }
   }
 
-  const mandatoryExemptions = await computeMandatoryExemptions(weekendSkudRows, adjustmentByEmployeeDate);
+  const mandatoryExemptions = await computeMandatoryExemptions(
+    weekendSkudRows.filter(row => !passWithoutHours.has(`${row.employee_id}|${row.date}`)),
+    adjustmentByEmployeeDate,
+  );
 
   // Заявление «Работа в выходной» на 1-м этапе ещё без строк в табеле, но выход оформлен:
   // корректировку для него не требуем — день попадёт в «Ждёт согласования выходных».
@@ -212,7 +226,9 @@ export async function validateCorrectionAttachments(
       employee_id: row.employee_id,
       employee_name: nameMap.get(row.employee_id) ?? null,
       kind: 'weekend_no_correction',
-      reason: 'Работа в выходной без корректировки — создайте корректировку',
+      reason: passWithoutHours.has(key)
+        ? 'Проход в выходной без часов — создайте корректировку'
+        : 'Работа в выходной без корректировки — создайте корректировку',
     });
   }
 

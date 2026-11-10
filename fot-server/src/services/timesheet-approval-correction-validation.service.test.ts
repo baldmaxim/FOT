@@ -49,7 +49,8 @@ import { validateCorrectionAttachments } from './timesheet-approval-correction-v
 
 const RANGE = { startDate: '2026-05-01', endDate: '2026-05-31' };
 
-type SkudRow = { employee_id: number; date: string; total_minutes: number };
+/** is_present не задан — как у обычного выхода с минутами. */
+type SkudRow = { employee_id: number; date: string; total_minutes: number | null; is_present?: boolean | null };
 type AdjRow = {
   employee_id: number;
   work_date: string;
@@ -95,7 +96,12 @@ function setupQueries(fx: IFixture): void {
       return (fx.leaves ?? []).filter(l => allowed.includes(l.request_type));
     }
     if (sql.includes('FROM document_links')) return fx.docLinks ?? [];
-    if (sql.includes('FROM skud_daily_summary')) return fx.skud ?? [];
+    if (sql.includes('FROM skud_daily_summary')) {
+      // Зеркалим SQL: минуты > 0 или ($4 — проход без часов) is_present без минут.
+      const includePassWithoutHours = params?.[3] === true;
+      return (fx.skud ?? []).filter(row => (row.total_minutes ?? 0) > 0
+        || (includePassWithoutHours && row.is_present === true && (row.total_minutes ?? 0) === 0));
+    }
     if (sql.includes('FROM employees')) return fx.employees ?? [];
     throw new Error(`Unexpected SQL: ${sql}`);
   });
@@ -573,5 +579,90 @@ describe('несогласованные выходные подачу не бл
       expect(result.missing).toHaveLength(1);
       expect(result.missing[0]).toMatchObject({ date: '2026-05-02', kind: 'weekend_no_correction' });
     }
+  });
+});
+
+describe('проход в выходной без часов (вкладка «Выходные»)', () => {
+  // Остриогло, октябрь: квота 2; 10.10 и 31.10 — с минутами, 17.10 — вход без пары (is_present, минут нет).
+  const OCT = { startDate: '2026-10-01', endDate: '2026-10-31' };
+  const OCT_SATURDAYS = ['2026-10-03', '2026-10-10', '2026-10-17', '2026-10-24', '2026-10-31'];
+  const worked = ['2026-10-10', '2026-10-17', '2026-10-31'];
+  const PASS_ONLY = { includePassWithoutHours: true };
+  const skud: SkudRow[] = [
+    { employee_id: 1361, date: '2026-10-10', total_minutes: 494, is_present: true },
+    { employee_id: 1361, date: '2026-10-17', total_minutes: null, is_present: true },
+    { employee_id: 1361, date: '2026-10-31', total_minutes: 482, is_present: true },
+  ];
+
+  beforeEach(() => {
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1361, new Set(OCT_SATURDAYS)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1361, worked, { expected_saturdays_per_month: 2, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(
+      (_y: number, _m: number, _c: unknown, _r: boolean, dow: number): string[] => (dow === 6 ? OCT_SATURDAYS : []),
+    );
+  });
+
+  it('без опции (подача табеля): проход без часов не требует корректировки', async () => {
+    setupQueries({ skud, employees: [{ id: 1361, full_name: 'Остриогло В.И.' }] });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1361] }, OCT);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('с опцией: в списке ровно 17.10, плановые — обе субботы с минутами', async () => {
+    setupQueries({ skud, employees: [{ id: 1361, full_name: 'Остриогло В.И.' }] });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1361] }, OCT, PASS_ONLY);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0]).toMatchObject({
+        date: '2026-10-17',
+        employee_id: 1361,
+        kind: 'weekend_no_correction',
+        reason: 'Проход в выходной без часов — создайте корректировку',
+      });
+    }
+  });
+
+  it('с опцией + корректировка на 17.10 → ok', async () => {
+    setupQueries({
+      skud,
+      adjustments: [{ employee_id: 1361, work_date: '2026-10-17', approval_status: 'pending' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1361] }, OCT, PASS_ONLY);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('с опцией + «Работа в выходной» на 1-м этапе на 17.10 → ok', async () => {
+    setupQueries({
+      skud,
+      pendingWork: [{ request_id: 901, employee_id: 1361, work_date: '2026-10-17' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1361] }, OCT, PASS_ONLY);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('с опцией: нулевые минуты без присутствия — не выход', async () => {
+    setupQueries({
+      skud: [
+        { employee_id: 1361, date: '2026-10-10', total_minutes: 494, is_present: true },
+        { employee_id: 1361, date: '2026-10-17', total_minutes: 0, is_present: false },
+        { employee_id: 1361, date: '2026-10-24', total_minutes: null, is_present: null },
+        { employee_id: 1361, date: '2026-10-31', total_minutes: 482, is_present: true },
+      ],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1361] }, OCT, PASS_ONLY);
+
+    expect(result.ok).toBe(true);
   });
 });

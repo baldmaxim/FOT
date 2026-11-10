@@ -7,10 +7,11 @@ import {
   canGoToNextWeekendMonth,
   canGoToPreviousWeekendMonth,
   pickWeekendGridData,
-  weekendBadgeText,
   weekendLockStatus,
   weekendProblemKeys,
+  weekendRowBadges,
   weekendVisibleHours,
+  weekendZeroHourKeys,
 } from './staffWeekendGrid';
 
 const row = (employeeId: number, days: string[]): IStaffWeekendRow => ({
@@ -43,9 +44,37 @@ describe('weekendProblemKeys', () => {
   });
 });
 
-describe('weekendBadgeText', () => {
-  it('отличается от подписи отработанных дней «N дн.»', () => {
-    expect(weekendBadgeText(7)).toBe('7 без корр.');
+describe('weekendZeroHourKeys', () => {
+  it('без часов — клетка «0»: записи нет или часы округляются до 0', () => {
+    const ostrioglo = row(1361, ['2026-10-17', '2026-10-31']);
+    const nechitaylo = row(1279, ['2026-11-08']);
+    const nobody = row(5, ['2026-10-18']);
+    const entries = [
+      entry(1361, '2026-10-17', null),
+      entry(1361, '2026-10-31', 7),
+      entry(1279, '2026-11-08', 0.15, 0),
+    ];
+
+    const keys = weekendZeroHourKeys(entries, [ostrioglo, nechitaylo, nobody], false);
+
+    expect([...keys].sort()).toEqual(['1279_2026-11-08', '1361_2026-10-17', '5_2026-10-18']);
+  });
+
+  it('часы по роли: фактические 0,6 ч — клетка «1», не «без часов»', () => {
+    const entries = [entry(1, '2026-10-17', 0.6, 0)];
+    expect(weekendZeroHourKeys(entries, [row(1, ['2026-10-17'])], true).size).toBe(0);
+    expect(weekendZeroHourKeys(entries, [row(1, ['2026-10-17'])], false).size).toBe(1);
+  });
+});
+
+describe('weekendRowBadges', () => {
+  it('отдельные метки: с часами — «без корр.», клетка 0 — «без часов»; пустых нет', () => {
+    const zero = new Set(['1_2026-10-17']);
+
+    expect(weekendRowBadges(row(1, ['2026-10-04', '2026-10-11', '2026-10-17']), zero).map(badge => badge.text))
+      .toEqual(['2 без корр.', '1 без часов']);
+    expect(weekendRowBadges(row(1, ['2026-10-17']), zero).map(badge => badge.text)).toEqual(['1 без часов']);
+    expect(weekendRowBadges(row(2, ['2026-10-04']), zero).map(badge => badge.text)).toEqual(['1 без корр.']);
   });
 });
 

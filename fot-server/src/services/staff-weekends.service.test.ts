@@ -132,6 +132,8 @@ describe('listWeekendsWithoutCorrection', () => {
     // Один вызов на сотрудника за месяц: квота плановых суббот считается на человека, а не на отрезок.
     expect(h.validate).toHaveBeenCalledTimes(1);
     expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [1] });
+    // Проход без часов в выходной — тоже на вкладку.
+    expect(h.validate.mock.calls[0]?.[2]).toEqual({ includePassWithoutHours: true });
   });
 
   it('обратный перевод: последний день в ЛИНИЯ — в строке ЛИНИЯ', async () => {
@@ -297,6 +299,7 @@ describe('listWeekendsByBranch', () => {
     expect(general?.rows[0]?.days).toEqual(['2026-10-25']);
     expect(h.validate).toHaveBeenCalledTimes(1);
     expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [1] });
+    expect(h.validate.mock.calls[0]?.[2]).toEqual({ includePassWithoutHours: true });
   });
 
   it('уволенный — в отделе, где был, с днями до даты увольнения', async () => {

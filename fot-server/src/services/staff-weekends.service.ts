@@ -9,8 +9,8 @@ import {
 } from './timesheet-department-assignments.service.js';
 
 /**
- * «Управление кадрами» → «Выходные» (миграция 346): кто из ЛИНИЯ и ЛИНИЯ-Общестрой работал в выходной по СКУД,
- * а корректировки на этот день нет.
+ * «Управление кадрами» → «Выходные» (миграция 346): кто из ЛИНИЯ и ЛИНИЯ-Общестрой работал в выходной по СКУД
+ * (в том числе вошёл без пары — часов нет), а корректировки на этот день нет.
  *
  * Правила дня (личный график, плановые субботы, СКУД, корректировка, заявление на согласовании) — из проверки
  * подачи табеля (validateCorrectionAttachments), своей копии правил здесь нет. Состав свой, как в сетке табеля:
@@ -89,7 +89,10 @@ const collectMonthDays = async (month: string, branchIds: readonly string[], res
   if (employeeIds.length === 0) return;
 
   // Один вызов на всех: плановые субботы — квота человека за месяц, а не его отрезка в отделе.
-  const validation = await validateCorrectionAttachments({ kind: 'personal', employeeIds }, range);
+  // Проход без часов в выходной — тоже на вкладку: кадрам проставить часы (подача табеля его не требует).
+  const validation = await validateCorrectionAttachments(
+    { kind: 'personal', employeeIds }, range, { includePassWithoutHours: true },
+  );
   if (validation.ok) return;
 
   for (const { kind, employee_id: employeeId, date } of validation.missing) {

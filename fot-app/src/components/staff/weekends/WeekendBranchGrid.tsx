@@ -3,13 +3,19 @@ import type { QueryKey } from '@tanstack/react-query';
 
 import type { IStaffWeekendBranch, IStaffWeekendRow } from '../../../services/staffWeekendService';
 import type { TimesheetResponse } from '../../../types/timesheet';
-import { pickWeekendGridData, weekendBadgeText, weekendProblemKeys } from '../../../utils/staffWeekendGrid';
-import { TimesheetGrid } from '../../timesheet/TimesheetGrid';
+import {
+  pickWeekendGridData,
+  WEEKEND_NO_CORRECTION_LABEL,
+  WEEKEND_ZERO_HOURS_LABEL,
+  weekendProblemKeys,
+  weekendRowBadges,
+  weekendZeroHourKeys,
+} from '../../../utils/staffWeekendGrid';
+import { type ITimesheetGridBadge, TimesheetGrid } from '../../timesheet/TimesheetGrid';
 import { useWeekendDayCorrection } from './useWeekendDayCorrection';
 import { WeekendDayCorrectionModal } from './WeekendDayCorrectionModal';
 import styles from './WeekendsTab.module.css';
 
-const PROBLEM_LABEL = 'Выход без корректировки';
 const noop = (): void => undefined;
 
 interface ITimesheetQueryState {
@@ -32,6 +38,8 @@ interface IWeekendBranchGridProps {
   query: ITimesheetQueryState;
   canViewTimesheet: boolean;
   canEdit: boolean;
+  /** Часы клеток по роли (show_actual_hours) — как в сетке. */
+  showActualHours: boolean;
   showLegend: boolean;
   compact: boolean;
   /** Кнопки справа в шапке отдела. */
@@ -42,7 +50,8 @@ interface IWeekendBranchGridProps {
 
 /** Отдел на вкладке «Выходные»: шапка с названием и кнопками, сетка табеля только по людям из списка. */
 export const WeekendBranchGrid: FC<IWeekendBranchGridProps> = ({
-  branch, rows, searching, month, queryKey, query, canViewTimesheet, canEdit, showLegend, compact, actions, lockHint, onCorrectionClosed,
+  branch, rows, searching, month, queryKey, query, canViewTimesheet, canEdit, showActualHours, showLegend, compact, actions,
+  lockHint, onCorrectionClosed,
 }) => {
   const [year, monthNumber] = month.split('-').map(Number) as [number, number];
 
@@ -60,11 +69,23 @@ export const WeekendBranchGrid: FC<IWeekendBranchGridProps> = ({
 
   const picked = useMemo(() => (query.data ? pickWeekendGridData(query.data, rows) : null), [query.data, rows]);
   const problemDates = useMemo(() => ({ red: weekendProblemKeys(rows) }), [rows]);
-  const daysByEmployee = useMemo(() => new Map(rows.map(row => [row.employee_id, row.days.length])), [rows]);
-  const employeeBadge = useCallback((employeeId: number): string | null => {
-    const count = daysByEmployee.get(employeeId);
-    return count ? weekendBadgeText(count) : null;
-  }, [daysByEmployee]);
+  // Рамка у обоих видов дня красная: «без часов» (в клетке 0) отличают метка у ФИО и подсказка.
+  const zeroHourKeys = useMemo(
+    () => weekendZeroHourKeys(picked?.entries ?? [], rows, showActualHours),
+    [picked, rows, showActualHours],
+  );
+  const badgesByEmployee = useMemo(
+    () => new Map(rows.map(row => [row.employee_id, weekendRowBadges(row, zeroHourKeys)])),
+    [rows, zeroHourKeys],
+  );
+  const employeeBadge = useCallback(
+    (employeeId: number): ReadonlyArray<ITimesheetGridBadge> => badgesByEmployee.get(employeeId) ?? [],
+    [badgesByEmployee],
+  );
+  const problemTitle = useCallback(
+    (cellKey: string): string => (zeroHourKeys.has(cellKey) ? WEEKEND_ZERO_HOURS_LABEL : WEEKEND_NO_CORRECTION_LABEL),
+    [zeroHourKeys],
+  );
 
   const notice = ((): string | null => {
     if (rows.length === 0) return searching ? 'Никого не найдено' : 'Нет выходов без корректировки';
@@ -114,8 +135,8 @@ export const WeekendBranchGrid: FC<IWeekendBranchGridProps> = ({
         headerActions={actions}
         hideLegend={!showLegend}
         hideSectionLabels
-        problemLegendLabel={PROBLEM_LABEL}
-        problemTitle={PROBLEM_LABEL}
+        problemLegendLabel={WEEKEND_NO_CORRECTION_LABEL}
+        problemTitle={problemTitle}
         employeeBadge={employeeBadge}
         hideEmployeeDetails
         onEmployeeClick={noop}

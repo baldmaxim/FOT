@@ -3137,6 +3137,14 @@
   color: var(--error);
 }
 
+/* Несколько меток у ФИО — столбиком. */
+.ts-employee-badges {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
 /* ===== Exclude employee modal ===== */
 .ts-exclude-modal-overlay {
   position: fixed;
