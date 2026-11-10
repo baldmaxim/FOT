@@ -3,6 +3,7 @@ import type { TimesheetOfficeAssignment } from '../services/adminService';
 import {
   EMPTY_TIMESHEET_OFFICE_DRAFT,
   buildTimesheetOfficePayload,
+  draftScheduleBased,
   isTimesheetOfficeRowChecked,
   toggledOfficeAssignment,
   type ITimesheetOfficeDraftSource,
@@ -91,5 +92,33 @@ describe('toggledOfficeAssignment', () => {
     // Снятая галочка у объекта — запрос пустой: объект как был.
     const source = department({ rows: [pinned] });
     expect(buildTimesheetOfficePayload(draft([[3, toggledOfficeAssignment(pinned, draft([[3, 'office']]))]]), source)).toBeNull();
+  });
+});
+
+describe('«По графику» в черновике', () => {
+  const scheduleRow = (schedule_based: boolean, personal_assignment: TimesheetOfficeAssignment = null): ITimesheetOfficeDraftSource => ({
+    departmentId: null, departmentOffice: false, rows: [{ id: 7, personal_assignment, schedule_based }],
+  });
+  const withSchedule = (value: boolean, employees: Array<[number, TimesheetOfficeAssignment]> = []) => ({
+    employees: new Map(employees),
+    schedule: new Map([[7, value]]),
+  });
+
+  it('галочка — add, снятая — remove, совпала с сервером — ничего', () => {
+    expect(buildTimesheetOfficePayload(withSchedule(true), scheduleRow(false))).toEqual({ schedule: { add: [7] } });
+    expect(buildTimesheetOfficePayload(withSchedule(false), scheduleRow(true))).toEqual({ schedule: { remove: [7] } });
+    expect(buildTimesheetOfficePayload(withSchedule(true), scheduleRow(true))).toBeNull();
+  });
+
+  it('вместе с назначением — одним запросом', () => {
+    expect(buildTimesheetOfficePayload(withSchedule(true, [[7, 'office']]), scheduleRow(false)))
+      .toEqual({ employees: { add: [7] }, schedule: { add: [7] } });
+  });
+
+  it('состояние строки: отметка, иначе сервер', () => {
+    const row = { id: 7, personal_assignment: null, schedule_based: true };
+    expect(draftScheduleBased(row, EMPTY_TIMESHEET_OFFICE_DRAFT)).toBe(true);
+    expect(draftScheduleBased(row, withSchedule(false))).toBe(false);
+    expect(draftScheduleBased({ id: 7, personal_assignment: null }, EMPTY_TIMESHEET_OFFICE_DRAFT)).toBe(false);
   });
 });

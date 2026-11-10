@@ -1,7 +1,8 @@
 /**
  * Окно «Режим табелирования» в «Управлении кадрами» (миграция 291): «Офис» отделу,
- * сотруднику — «Офис» или объект. Право — /staff-control/timesheet-office (admin, hr_admin); логика —
- * timesheet-office.service.ts (запись) и timesheet-office-read.service.ts (чтение).
+ * сотруднику — «Офис» или объект; «По графику» сотруднику (миграция 358). Право —
+ * /staff-control/timesheet-office (admin, hr_admin); логика — timesheet-office.service.ts
+ * (запись) и timesheet-office-read.service.ts (чтение).
  */
 import { z } from 'zod';
 import type { Response } from 'express';
@@ -30,6 +31,11 @@ const updateSchema = z.object({
     remove: idList(z.number().int().positive()),
     objects: idList(z.object({ id: z.number().int().positive(), object_id: z.string().uuid() })),
   }).default({ add: [], remove: [], objects: [] }),
+  // «По графику» (миграция 358): add — отметить, remove — снять.
+  schedule: z.object({
+    add: idList(z.number().int().positive()),
+    remove: idList(z.number().int().positive()),
+  }).default({ add: [], remove: [] }),
 });
 
 const searchSchema = z.object({
@@ -105,7 +111,7 @@ export const timesheetOfficeController = {
     }
   },
 
-  /** PUT /api/admin/timesheet-office { departments: { add, remove }, employees: { add, remove, objects } } */
+  /** PUT /api/admin/timesheet-office { departments: { add, remove }, employees: { add, remove, objects }, schedule: { add, remove } } */
   async update(req: AuthenticatedRequest, res: Response): Promise<void> {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {

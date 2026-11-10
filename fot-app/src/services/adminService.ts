@@ -101,7 +101,7 @@ export interface IObjectAssignments {
   employee_objects: Record<string, string[]>;
 }
 
-// ─── Режим табелирования: «Офис» отделу, сотруднику — «Офис» или объект (291) ─
+// ─── Режим табелирования: «Офис» отделу, сотруднику — «Офис», объект, «По графику» (291, 358) ─
 
 export interface ITimesheetOfficeDepartment {
   id: string;
@@ -128,6 +128,11 @@ export interface ITimesheetOfficeObject {
   name: string;
 }
 
+/** Сотрудник «По графику» (миграция 358): с какого дня действует отметка. */
+export interface ITimesheetOfficeScheduleEmployee extends ITimesheetOfficeEmployee {
+  date_from: string;
+}
+
 export interface ITimesheetOfficeState {
   /** Отделы, которые можно выбрать: активные, не подрядные, в доступе пользователя. */
   allowed_department_ids: string[];
@@ -136,6 +141,8 @@ export interface ITimesheetOfficeState {
   employees: ITimesheetOfficeAssignedEmployee[];
   /** Объекты, которые можно назначить: действующие, без офисных. */
   objects: ITimesheetOfficeObject[];
+  /** «По графику» — действующие отметки. */
+  schedule_employees: ITimesheetOfficeScheduleEmployee[];
 }
 
 export interface ITimesheetOfficeMember {
@@ -153,6 +160,8 @@ export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
   department: string | null;
   /** У отдела сотрудника «Офис» (справочно: личное назначение главнее отдела). */
   department_office: boolean;
+  /** Отмечен «По графику». */
+  schedule_based: boolean;
 }
 
 export interface ITimesheetOfficeDepartmentMembers {
@@ -165,6 +174,8 @@ export interface ITimesheetOfficeUpdate {
   departments?: { add?: string[]; remove?: string[] };
   /** add — «Офис», objects — объект, remove — снять личное назначение. */
   employees?: { add?: number[]; remove?: number[]; objects?: Array<{ id: number; object_id: string }> };
+  /** «По графику»: add — отметить, remove — снять (миграция 358). */
+  schedule?: { add?: number[]; remove?: number[] };
 }
 
 export interface ITimesheetOfficeResult {
@@ -175,6 +186,8 @@ export interface ITimesheetOfficeResult {
   objects_assigned: number;
   employees_removed: number;
   members_applied: number;
+  schedule_added: number;
+  schedule_removed: number;
 }
 
 // ─── Чёрный список (миграция 273) ───────────────────────────────────────────

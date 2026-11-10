@@ -14,12 +14,14 @@ import {
 } from '../../services/adminService';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { formatDate } from '../../utils/formatMoney';
 import { selectableTimesheetOfficeDepartmentIds } from '../../utils/timesheetOfficeDeptFilter';
 import {
   EMPTY_TIMESHEET_OFFICE_DRAFT,
   buildTimesheetOfficePayload,
   draftAssignment,
   draftDepartmentOffice,
+  draftScheduleBased,
   isTimesheetOfficeRowChecked,
   toggledOfficeAssignment,
   type ITimesheetOfficeDraft,
@@ -33,11 +35,16 @@ import styles from './StaffTimesheetOfficeModal.module.css';
 const TIMESHEET_OFFICE_QUERY_KEY = ['admin-timesheet-office'] as const;
 /**
  * Ключи, где видно объект табелирования: карточка, табель, ЛК, «Статья затрат»; 'payroll-terms' — категория
- * и «Проезд» в «Зарплате» (по табелю, payroll-staff-category.ts на сервере).
+ * и «Проезд» в «Зарплате» (по табелю, payroll-staff-category.ts на сервере). Часы «По графику» (358) видны
+ * ещё на дашборде, в «Зарплате» по табелю и в расчётном листе ЛК.
  */
 const TIMESHEET_OBJECT_QUERY_KEYS = [
   'employee', 'timesheet', 'timesheet-page', STAFF_MAIN_OBJECTS_QUERY_KEY, 'payroll-terms',
+  'dashboard-stats', 'timesheet-salary', 'my-payslip',
 ];
+
+/** Строка таблицы: у вкладки «Сотрудник» есть ещё «По графику». */
+type TimesheetOfficeSubjectRow = ITimesheetOfficeMember & { schedule_based?: boolean };
 
 type Target = 'department' | 'employee';
 
@@ -58,7 +65,8 @@ interface IStaffTimesheetOfficeModalProps {
 /**
  * Окно «Режим табелирования» (миграция 291): «Офис» отделу, сотруднику — «Офис» или объект.
  * Кому объект поставлен здесь, тому ночной пересчёт объект по часам не ставит.
- * Клики по «Офис» и выбор в списке — отметки; записывает их одна кнопка «Сохранить» внизу.
+ * «По графику» (миграция 358): сотруднику в табеле — норма дня по графику без СКУД.
+ * Клики по «Офис», выбор в списке и галочки — отметки; записывает их одна кнопка «Сохранить» внизу.
  */
 export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({ deptTree, onClose }) => {
   const toast = useToast();
@@ -120,7 +128,7 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
   const hasSubject = target === 'department' ? departmentId !== '' : employee !== null;
 
   // Вкладка «Сотрудник» не блокируется и в отделе с «Офисом»: личное назначение главнее отдела.
-  const subjectRows = useMemo<ITimesheetOfficeMember[] | undefined>(() => {
+  const subjectRows = useMemo<TimesheetOfficeSubjectRow[] | undefined>(() => {
     if (target === 'department') return membersQuery.data?.employees;
     const row = employeeQuery.data;
     return row ? [row] : undefined;
@@ -144,6 +152,7 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
       disabled: busy || departmentOffice,
       assignment: draftAssignment(row, draft),
       savedAssignment: row.personal_assignment,
+      scheduleBased: draftScheduleBased(row, draft),
     }));
   }, [source, subjectRows, draft, busy]);
 
@@ -154,6 +163,9 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
   };
   const setAssignment = (id: number, value: TimesheetOfficeAssignment): void => {
     updateDraft(current => ({ ...current, employees: new Map(current.employees).set(id, value) }));
+  };
+  const setScheduleBased = (id: number, value: boolean): void => {
+    updateDraft(current => ({ ...current, schedule: new Map(current.schedule ?? []).set(id, value) }));
   };
   const toggleRow = (id: number): void => {
     const row = source?.rows.find(item => item.id === id);
@@ -202,7 +214,13 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     void submit({ employees: { remove: [id] } }, 'Снято');
   };
 
-  const assignedCount = (state?.departments.length ?? 0) + (state?.employees.length ?? 0);
+  const removeSchedule = (id: number, fullName: string): void => {
+    if (!window.confirm(`Снять «По графику» с сотрудника «${fullName}»?`)) return;
+    void submit({ schedule: { remove: [id] } }, 'Снято');
+  };
+
+  const assignedCount = (state?.departments.length ?? 0) + (state?.employees.length ?? 0)
+    + (state?.schedule_employees.length ?? 0);
 
   return (
     <div className="sc-overlay" {...dismiss}>
@@ -273,7 +291,9 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                 ? { checked: draftDepartmentOffice(draft, source), disabled: busy, onToggle: toggleDepartment }
                 : null}
               onToggleRow={toggleRow}
-              assignment={target === 'employee' ? { objects: state?.objects ?? [], onChange: setAssignment } : undefined}
+              assignment={target === 'employee'
+                ? { objects: state?.objects ?? [], onChange: setAssignment, onScheduleChange: setScheduleBased }
+                : undefined}
             />
           )}
 
@@ -323,6 +343,31 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                         type="button"
                         className={styles.removeButton}
                         onClick={() => removeEmployee(item.id, item.full_name, item.label)}
+                        disabled={busy}
+                      >
+                        Снять
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {state && state.schedule_employees.length > 0 && (
+              <div className={styles.group}>
+                <div className={styles.groupTitle}>По графику</div>
+                <ul className={styles.list}>
+                  {state.schedule_employees.map(item => (
+                    <li key={item.id} className={styles.row}>
+                      <span className={styles.rowText}>
+                        {item.full_name}
+                        {item.department && <span className={styles.muted}> · {item.department}</span>}
+                      </span>
+                      <span className={styles.assignedLabel}>с {formatDate(item.date_from)}</span>
+                      <button
+                        type="button"
+                        className={styles.removeButton}
+                        onClick={() => removeSchedule(item.id, item.full_name)}
                         disabled={busy}
                       >
                         Снять

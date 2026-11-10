@@ -26,7 +26,8 @@ async function sqlOne<T extends import('pg').QueryResultRow = import('pg').Query
 }
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getHolidayLunchHours, getPaidLunchMinutes } from './holiday-lunch.util.js';
-import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
+import { getDayNormHours, getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
+import { isScheduleBasedDate, loadScheduleBasedRanges } from './timesheet-schedule-ranges.service.js';
 import { moscowNowHms, moscowTodayIso } from '../utils/date.utils.js';
 import {
   ABSENCE_STATUSES_AS_WORKED,
@@ -575,14 +576,27 @@ export async function buildAttendanceEntries(params: {
   const exec = params.exec;
   // На пуле — параллельно, под клиентом транзакции — последовательно: конкурентные
   // запросы на одном соединении в pg@9 помечены deprecated (см. runMaybeParallel).
-  const [summaries, adjustments, travelSummaries] = await runMaybeParallel(
+  const [summaries, adjustments, travelSummaries, scheduleRanges] = await runMaybeParallel(
     exec,
     () => loadDailySummaries(employeeIds, startDate, endDate, exec),
     () => loadAttendanceAdjustments(employeeIds, startDate, endDate, exec),
     () => getTravelHoursSummaryForRange({
       employeeIds, startDate, endDate, persist: persistTravelSegments, exec,
     }),
+    () => loadScheduleBasedRanges(employeeIds, startDate, endDate, exec),
   );
+  // «По графику» (миграция 358): рабочий по графику день в периоде отметки — норма дня
+  // (предпраздничный −1) без СКУД; null — день считается как обычно. Корректировки и
+  // заявления занимают день раньше (цикл ниже), выходные — как у всех.
+  const scheduleBasedNorm = (employeeId: number, workDate: string, dateObject: Date): number | null => {
+    if (!isScheduleBasedDate(scheduleRanges, employeeId, workDate)) return null;
+    const schedule = dailySchedulesMap.get(employeeId)?.get(workDate);
+    if (!schedule || !isWorkingDay(schedule, dateObject, calendarMonth)) return null;
+    const norm = getDayNormHours(schedule, dateObject, calendarMonth);
+    return norm > 0 ? norm : null;
+  };
+  // Дни, которым поставлена норма «По графику», — `${employee_id}_${date}`.
+  const scheduleBasedKeys = new Set<string>();
 
   // Всегда строим rawFallbackSummaries — они нужны fallback-пути для дней без skud_daily_summary
   // (см. цикл по employees ниже, ветка needsSkudCheck → rawSummary). Object-агрегация выполняется
@@ -862,6 +876,10 @@ export async function buildAttendanceEntries(params: {
     const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
     const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
     const dateObject = new Date(yearPart, monthPart - 1, dayPart);
+    // «По графику»: проходы рабочего дня не считаются — день получит норму в цикле добора ниже
+    // (он идёт по месяцу startDate и до сегодня; вне его день остаётся по СКУД).
+    if (summary.date.startsWith(startDate.slice(0, 8)) && summary.date <= todayStr
+      && scheduleBasedNorm(summary.employee_id, summary.date, dateObject) !== null) continue;
     // Обед графика — для проверки покрытия смены, к вычету — с учётом праздника (holiday-lunch.util).
     const effectiveLunchMinutes = schedule ? getScheduleForDate(schedule, dateObject).lunch_minutes : 0;
     const paidLunchMinutes = schedule ? getPaidLunchMinutes(schedule, dateObject, calendarMonth) : 0;
@@ -948,6 +966,31 @@ export async function buildAttendanceEntries(params: {
 
       const key = `${employee.id}_${workDate}`;
       const travelSummary = travelSummaries.get(key);
+
+      // «По графику»: норма дня без СКУД — и при проходах, и без них; «Дорога» не начисляется.
+      const scheduleNorm = scheduleBasedNorm(employee.id, workDate, dateObject);
+      if (scheduleNorm !== null) {
+        scheduleBasedKeys.add(key);
+        pushEntry({
+          id: null,
+          employee_id: employee.id,
+          work_date: workDate,
+          status: 'work',
+          hours_worked: scheduleNorm,
+          display_hours_worked: scheduleNorm,
+          base_hours_worked: scheduleNorm,
+          travel_minutes_credited: 0,
+          travel_hours_credited: 0,
+          travel_delay_minutes: 0,
+          travel_segments_count: 0,
+          travel_problematic_segments: 0,
+          is_correction: false,
+          first_entry: null,
+          last_exit: null,
+          presence_covers_shift: true,
+        });
+        continue;
+      }
 
       if (needsSkudCheck(schedule, dateObject, calendarMonth)) {
         const rawSummary = rawFallbackSummaries.get(employee.id)?.get(workDate) || null;
@@ -1119,8 +1162,12 @@ export async function buildAttendanceEntries(params: {
       // для брутто-присутствия; travel прибавляем к дневному итогу как в summary-ветке.
       const objectGross = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0));
       const lunchCut = lunchCutByKey.get(`${entry.employee_id}_${entry.work_date}`) ?? 0;
-      const objectNet = roundHours(Math.max(0, objectGross - lunchCut));
-      const totalWithTravel = roundHours(objectNet + (entry.travel_hours_credited || 0));
+      // «По графику»: по объектам проходов раскладывается норма дня, а не присутствие.
+      const scheduleBasedDay = scheduleBasedKeys.has(dayKey);
+      const objectNet = scheduleBasedDay
+        ? roundHours(entry.hours_worked ?? 0)
+        : roundHours(Math.max(0, objectGross - lunchCut));
+      const totalWithTravel = scheduleBasedDay ? objectNet : roundHours(objectNet + (entry.travel_hours_credited || 0));
       distributeNetHoursAcrossObjects(dayObjectEntries, objectNet);
       entry.status = totalWithTravel > 0 || entry.first_entry ? 'work' : entry.status;
       entry.hours_worked = totalWithTravel;

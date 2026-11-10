@@ -1,5 +1,6 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { getCorrectionCapHours, isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import { getHolidayLunchHours } from './holiday-lunch.util.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
@@ -415,8 +416,8 @@ export async function fetchTimesheetDataForDepartment(
     throw new Error('Invalid export month');
   }
   const { year, month: mon, daysInMonth, startDate, endDate } = periodRange;
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  // «Сегодня» — по МСК, как в онлайн-табеле: UTC-дата в 00:00–03:00 МСК — ещё вчера.
+  const todayStr = moscowTodayIso();
   const startDay = Number.parseInt(startDate.slice(-2), 10);
   const endDay = Number.parseInt(endDate.slice(-2), 10);
   const exportDays = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i);
@@ -619,8 +620,8 @@ export async function fetchTimesheetDataForEmployees(
     throw new Error('Invalid export month');
   }
   const { year, month: mon, daysInMonth, startDate, endDate } = periodRange;
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  // «Сегодня» — по МСК, как в онлайн-табеле: UTC-дата в 00:00–03:00 МСК — ещё вчера.
+  const todayStr = moscowTodayIso();
   const startDay = Number.parseInt(startDate.slice(-2), 10);
   const endDay = Number.parseInt(endDate.slice(-2), 10);
   const exportDays = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i);

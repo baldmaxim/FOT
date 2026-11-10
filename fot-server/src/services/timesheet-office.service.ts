@@ -15,6 +15,9 @@
  *
  * Идемпотентность: точный повтор (то же назначение из окна) ничего не пишет — ни дату, ни
  * автора, ни аудит; тот же объект от ночи один раз становится назначением.
+ *
+ * «По графику» (миграция 358, timesheet-schedule-mode.service.ts) пишется в той же транзакции:
+ * отказ любой части — не сохраняется ничего. Подачи 1С эта часть не трогает.
  */
 import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -44,43 +47,34 @@ import {
   type IOfficeAuditEntry,
 } from './timesheet-office-rule.js';
 import { recomputeTimesheetObjectsNow } from './timesheet-object-recompute.service.js';
-import { isRetryableDbError } from './timesheet-snapshot-tx.js';
+import { invalidateDashboardCache } from './skud-dashboard.service.js';
+import { TimesheetOfficeError } from './timesheet-office-error.js';
+import {
+  applyScheduleChanges,
+  deniedScheduleEmployees,
+  validateScheduleChanges,
+  type IScheduleModeChanges,
+} from './timesheet-schedule-mode.service.js';
+import {
+  normalizeObjectAssignments,
+  withRetry,
+  type ITimesheetOfficeObjectAssignment,
+} from './timesheet-office-write.helpers.js';
 import { rebuildVersionObjectsForMonth } from './timesheet-version-objects-rebuild.service.js';
 
 /** Предел одного списка в запросе записи. */
 export const TIMESHEET_OFFICE_BATCH_LIMIT = 500;
-const MAX_ATTEMPTS = 3;
 
-export type TimesheetOfficeErrorCode =
-  | 'TIMESHEET_OFFICE_INVALID'
-  | 'TIMESHEET_OFFICE_FORBIDDEN'
-  | 'TIMESHEET_OFFICE_MONTH_NOT_FROZEN'
-  | 'TIMESHEET_OFFICE_CHANGED'
-  | 'TIMESHEET_OFFICE_BUSY';
+export { TimesheetOfficeError, type TimesheetOfficeErrorCode } from './timesheet-office-error.js';
 
-export class TimesheetOfficeError extends Error {
-  readonly status: number;
-  readonly code: TimesheetOfficeErrorCode;
-  readonly details: unknown;
-
-  constructor(status: number, code: TimesheetOfficeErrorCode, message: string, details?: unknown) {
-    super(message);
-    this.name = 'TimesheetOfficeError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
-
-export interface ITimesheetOfficeObjectAssignment {
-  id: number;
-  object_id: string;
-}
+export type { ITimesheetOfficeObjectAssignment } from './timesheet-office-write.helpers.js';
 
 export interface ITimesheetOfficeUpdate {
   departments: { add: string[]; remove: string[] };
   /** add — «Офис», objects — объект, remove — снять любое личное назначение. */
   employees: { add: number[]; remove: number[]; objects?: ITimesheetOfficeObjectAssignment[] };
+  /** «По графику»: add — отметить, remove — снять. */
+  schedule?: IScheduleModeChanges;
 }
 
 export interface ITimesheetOfficeResult {
@@ -95,6 +89,9 @@ export interface ITimesheetOfficeResult {
   members_applied: number;
   /** После снятия «Офиса» объект по часам сменился у стольких сотрудников. */
   recomputed: number;
+  /** «По графику»: отмечено и снято. */
+  schedule_added: number;
+  schedule_removed: number;
 }
 
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
@@ -128,23 +125,6 @@ const employeeCheckSql = (lock: boolean): string =>
     WHERE e.id = ANY($1::int[])
     ORDER BY e.id${lock ? '\n    FOR UPDATE' : ''}`;
 
-/** Повтор транзакции при 40001/40P01; после последней неудачи — 409. */
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (err instanceof TimesheetOfficeError || !isRetryableDbError(err)) throw err;
-      if (attempt >= MAX_ATTEMPTS) {
-        throw new TimesheetOfficeError(
-          409, 'TIMESHEET_OFFICE_BUSY', 'Не удалось сохранить из-за параллельных изменений — повторите',
-        );
-      }
-      console.warn(`[timesheet-office] повтор ${attempt}/${MAX_ATTEMPTS - 1}`);
-    }
-  }
-}
-
 function invalidateAfterWrite(): void {
   employeeCache.clear();
   invalidateCaches(
@@ -154,6 +134,8 @@ function invalidateAfterWrite(): void {
     'timesheet:overview:today',
     'timesheet:search',
   );
+  // Часы «По графику» видны и на дашборде (свой кэш на 60 с).
+  invalidateDashboardCache();
 }
 
 /** Аудит личного назначения: target — «Офис», объект или снятие. */
@@ -179,27 +161,6 @@ const personalAudit = (
 /** Точный повтор: уже назначен этот же объект из окна. */
 const isSameObjectPin = (row: IEmployeeCheckRow | undefined, objectId: string): boolean =>
   row?.personal_pin === true && row.mode === 'object' && row.object_id === objectId;
-
-/**
- * objects из запроса → id → объект. Одинаковые пары схлопываются; один сотрудник с разными
- * объектами — 400. Регистр uuid не важен.
- */
-function normalizeObjectAssignments(items: readonly ITimesheetOfficeObjectAssignment[]): Map<number, string> {
-  const targets = new Map<number, string>();
-  const conflicting = new Set<number>();
-  for (const item of items) {
-    const objectId = item.object_id.toLowerCase();
-    const current = targets.get(item.id);
-    if (current !== undefined && current !== objectId) conflicting.add(item.id);
-    else targets.set(item.id, objectId);
-  }
-  if (conflicting.size > 0) {
-    throw new TimesheetOfficeError(
-      400, 'TIMESHEET_OFFICE_INVALID', 'Одному сотруднику — разные объекты', [...conflicting].sort((a, b) => a - b),
-    );
-  }
-  return targets;
-}
 
 /** PUT /api/admin/timesheet-office */
 export async function updateTimesheetOffice(
@@ -227,8 +188,11 @@ export async function updateTimesheetOffice(
   const noop: ITimesheetOfficeResult = {
     changed: false, departments_added: 0, departments_removed: 0,
     employees_added: 0, objects_assigned: 0, employees_removed: 0, members_applied: 0, recomputed: 0,
+    schedule_added: 0, schedule_removed: 0,
   };
-  if (deptAdd.length + deptRemove.length + empAdd.length + empRemove.length + empObjects.length === 0) return noop;
+  const scheduleInput = input.schedule ?? { add: [], remove: [] };
+  const hasOfficeChanges = deptAdd.length + deptRemove.length + empAdd.length + empRemove.length + empObjects.length > 0;
+  if (!hasOfficeChanges && scheduleInput.add.length + scheduleInput.remove.length === 0) return noop;
 
   const contractorIds = await loadContractorDepartmentIds();
   const contractors = new Set(contractorIds);
@@ -291,6 +255,8 @@ export async function updateTimesheetOffice(
   }
   // Снять можно только личное назначение из окна; остальное — no-op.
   const personalToRemove = empRemove.filter(id => checkedById.get(id)?.personal_pin === true);
+  const schedule = await validateScheduleChanges(scheduleInput, contractors);
+  if (!hasOfficeChanges && schedule.add.length + schedule.remove.length === 0) return noop;
 
   // ── 403: права записи ──
   const deniedDepartments: string[] = [];
@@ -300,6 +266,9 @@ export async function updateTimesheetOffice(
   const deniedEmployees: number[] = [];
   for (const id of unique([...empAssign, ...personalToRemove])) {
     if (!(await canWriteEmployeeInScope(req, id))) deniedEmployees.push(id);
+  }
+  for (const id of await deniedScheduleEmployees(req, schedule)) {
+    if (!deniedEmployees.includes(id)) deniedEmployees.push(id);
   }
   if (deniedDepartments.length > 0 || deniedEmployees.length > 0) {
     throw new TimesheetOfficeError(
@@ -315,8 +284,9 @@ export async function updateTimesheetOffice(
     await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
 
     // Fail-closed: без состояния расчёта или до фиксации прошлого месяца запись попала бы в него.
-    const state = await readTimesheetObjectState(client);
-    if (!state || state.frozen_month < previousMonthStartMsk(now)) {
+    // «По графику» объект не трогает — ему фиксация не нужна.
+    const state = hasOfficeChanges ? await readTimesheetObjectState(client) : null;
+    if (hasOfficeChanges && (!state || state.frozen_month < previousMonthStartMsk(now))) {
       throw new TimesheetOfficeError(
         409, 'TIMESHEET_OFFICE_MONTH_NOT_FROZEN', 'Объект за прошлый месяц ещё фиксируется — попробуйте позже',
       );
@@ -440,6 +410,9 @@ export async function updateTimesheetOffice(
     );
     audit.push(...officeRuleAuditEntries(members, 'window'));
 
+    const scheduleResult = await applyScheduleChanges(client, schedule, { userId: req.user.id, now });
+    audit.push(...scheduleResult.audit);
+
     await writeOfficeAudit(client, audit, { req, userId: req.user.id });
 
     // «Вернуть»: с кого снято назначение — лично или «Офис» с отдела, — тем объект по часам
@@ -467,6 +440,8 @@ export async function updateTimesheetOffice(
         employees_removed: removed.length,
         members_applied: members.length,
         recomputed: recomputed.length,
+        schedule_added: scheduleResult.added,
+        schedule_removed: scheduleResult.removed,
       },
       personalChanged: unique([...added, ...objectsAssigned, ...removed]).sort((a, b) => a - b),
     };

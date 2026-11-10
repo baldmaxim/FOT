@@ -41,6 +41,9 @@ const mockedState = vi.hoisted(() => ({
   scheduleShiftHours: 9,
   isWorkingDay: true,
   needsSkudCheck: false,
+  // «По графику» (миграция 358): периоды отметки и норма дня из графика.
+  scheduleRanges: new Map<number, Array<{ from: string; to: string | null }>>(),
+  dayNormHours: 8,
   // Rows for tables consumed by buildAttendanceEntries / upsertAttendanceAdjustment
   summaryRows: [] as Array<{ employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number | null; total_minutes?: number | null; break_minutes?: number | null }>,
   adjustmentRows: [] as Array<Record<string, unknown>>,
@@ -74,6 +77,12 @@ vi.mock('./schedule.service.js', () => ({
   isPreHoliday: vi.fn(() => false),
   isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
   needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
+  getDayNormHours: vi.fn(() => (mockedState.isWorkingDay ? mockedState.dayNormHours : 0)),
+}));
+
+vi.mock('./timesheet-schedule-ranges.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('./timesheet-schedule-ranges.service.js')>()),
+  loadScheduleBasedRanges: vi.fn(async () => mockedState.scheduleRanges),
 }));
 
 vi.mock('./skud-shared.service.js', () => ({
@@ -115,6 +124,8 @@ describe('attendance.service', () => {
     mockedState.scheduleShiftHours = 9;
     mockedState.isWorkingDay = true;
     mockedState.needsSkudCheck = false;
+    mockedState.scheduleRanges = new Map();
+    mockedState.dayNormHours = 8;
     mockedState.summaryRows = [];
     mockedState.adjustmentRows = [];
     mockedState.userProfileRows = [];
@@ -2526,6 +2537,132 @@ describe('attendance.service', () => {
 
       expect(withObjects.entries[0].hours_worked).toBe(7);
       expect(withoutObjects.entries[0].hours_worked).toBe(7);
+    });
+  });
+
+  // «По графику» (миграция 358): рабочий по графику день в периоде отметки — норма дня без СКУД.
+  describe('«По графику»', () => {
+    const CALENDAR = { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth;
+    const DAY = '2026-11-10';
+    const build = (overrides: { startDate?: string; endDate?: string; todayStr?: string } = {}) => buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Коровин Олег' }],
+      startDate: overrides.startDate ?? DAY,
+      endDate: overrides.endDate ?? DAY,
+      dailySchedulesMap: new Map([[1, new Map([
+        [overrides.startDate ?? DAY, { work_hours: 8, lunch_minutes: 60 } as unknown as IResolvedSchedule],
+      ])]]),
+      calendarMonth: CALENDAR,
+      todayStr: overrides.todayStr ?? '2026-11-12',
+    });
+    const flag = (from = '2026-11-01', to: string | null = null) => {
+      mockedState.scheduleRanges = new Map([[1, [{ from, to }]]]);
+    };
+    const summary = (date: string, first: string, last: string, minutes: number) => ({
+      employee_id: 1, date, first_entry: first, last_exit: last, total_hours: minutes / 60, total_minutes: minutes,
+    });
+
+    beforeEach(() => {
+      mockedState.needsSkudCheck = true;
+    });
+
+    it('без проходов — норма дня, а не «Н»', async () => {
+      flag();
+      const result = await build();
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({
+        work_date: DAY, status: 'work', hours_worked: 8, display_hours_worked: 8, base_hours_worked: 8,
+        is_correction: false, first_entry: null, last_exit: null, presence_covers_shift: true,
+      });
+    });
+
+    it('пришёл на 3 ч или на 11 ч — всё равно норма; «Дорога» не начисляется', async () => {
+      flag();
+      mockedState.travelSummary = new Map([['1_' + DAY, {
+        creditedMinutes: 30, delayMinutes: 0, segmentsCount: 1, problematicSegmentsCount: 0, objectProblemSegmentsCount: 0,
+      }]]);
+      for (const minutes of [180, 660]) {
+        mockedState.summaryRows = [summary(DAY, '09:00:00', '20:00:00', minutes)];
+        const result = await build();
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toMatchObject({
+          status: 'work', hours_worked: 8, display_hours_worked: 8, travel_hours_credited: 0, first_entry: null,
+        });
+      }
+    });
+
+    it('норма — из графика дня (предпраздничный 7 ч)', async () => {
+      flag();
+      mockedState.dayNormHours = 7;
+      const result = await build();
+      expect(result.entries[0]).toMatchObject({ status: 'work', hours_worked: 7 });
+    });
+
+    it('отпуск поверх отметки — отпуск', async () => {
+      flag();
+      mockedState.summaryRows = [summary(DAY, '09:00:00', '12:00:00', 180)];
+      mockedState.adjustmentRows = [{
+        id: 7001, employee_id: 1, work_date: DAY, status: 'vacation', hours_override: null,
+        source_type: 'leave_request', source_id: '1', reason: 'Отпуск', created_by: 'user-1',
+        approval_status: 'auto_approved', created_at: '2026-11-01T07:00:00.000Z',
+        updated_at: '2026-11-01T07:00:00.000Z', metadata: {},
+      }];
+      const result = await build();
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({ id: 7001, status: 'vacation', is_correction: true });
+    });
+
+    it('выходной по графику с проходами — часы СКУД, как у всех', async () => {
+      flag();
+      mockedState.isWorkingDay = false;
+      mockedState.summaryRows = [summary(DAY, '10:00:00', '14:00:00', 240)];
+      const result = await build();
+      expect(result.entries).toHaveLength(1);
+      // 4 ч присутствия − обед графика 60 мин — обычный расчёт.
+      expect(result.entries[0]).toMatchObject({ status: 'work', first_entry: '10:00:00', hours_worked: 3 });
+    });
+
+    it('до начала периода и после его конца — как раньше («Н» без проходов)', async () => {
+      for (const range of [['2026-11-11', null], ['2026-11-01', '2026-11-09']] as const) {
+        flag(range[0], range[1]);
+        const result = await build();
+        expect(result.entries[0]).toMatchObject({ status: 'absent', hours_worked: 0 });
+      }
+    });
+
+    it('будущий день не заполняется', async () => {
+      flag();
+      const result = await build({ todayStr: '2026-11-09' });
+      expect(result.entries).toHaveLength(0);
+    });
+
+    it('объекты проходов делят норму пропорционально, сумма — норма', async () => {
+      flag();
+      const objectEntry = (key: string, hours: number) => ({
+        adjustment_id: null, employee_id: 1, work_date: DAY, object_key: key, object_id: key,
+        object_name: key, hours_worked: hours, display_hours_worked: hours, base_hours_worked: hours, is_correction: false,
+      });
+      const items = [objectEntry('obj-a', 3), objectEntry('obj-b', 1)];
+      mockedState.objectAttendanceData = {
+        objectEntries: items,
+        objectEntriesByEmployeeDate: new Map([[1, new Map([[DAY, items]])]]),
+        employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+        legacyBlockedDays: new Map(),
+        rawFallbackSummaries: new Map(),
+      };
+      mockedState.summaryRows = [summary(DAY, '09:00:00', '13:00:00', 240)];
+      const result = await build();
+      expect(result.entries[0]).toMatchObject({ status: 'work', hours_worked: 8, display_hours_worked: 8 });
+      expect(items.map(item => item.hours_worked)).toEqual([6, 2]);
+      expect(result.entries[0].object_detail_mode).toBe('available');
+    });
+
+    it('проходы вне месяца startDate не пропускаются (цикл добора их не покрыл бы)', async () => {
+      flag();
+      mockedState.summaryRows = [summary('2026-12-01', '09:00:00', '12:00:00', 180)];
+      const result = await build({ startDate: '2026-11-30', endDate: '2026-12-01', todayStr: '2026-12-02' });
+      expect(result.entries.find(entry => entry.work_date === '2026-12-01')).toMatchObject({
+        status: 'work', first_entry: '09:00:00',
+      });
     });
   });
 });

@@ -14,6 +14,8 @@ export interface ITimesheetOfficeTableRow {
   assignment: TimesheetOfficeAssignment;
   /** Назначение по данным сервера: закрытый с тех пор объект остаётся видимым пунктом. */
   savedAssignment: TimesheetOfficeAssignment;
+  /** «По графику» с учётом отметки — для вкладки «Сотрудник». */
+  scheduleBased: boolean;
 }
 
 const OFFICE_VALUE = 'office';
@@ -82,17 +84,18 @@ interface ITimesheetOfficeAssignTableProps {
   /** «Офис» всему отделу в шапке «Назначить» (вкладка «Отдел»); null — просто заголовок. */
   header: { checked: boolean; disabled: boolean; onToggle: () => void } | null;
   onToggleRow: (id: number) => void;
-  /** Вкладка «Сотрудник»: вместо «Офис» — список назначения из этих объектов. */
+  /** Вкладка «Сотрудник»: вместо «Офис» — список назначения из этих объектов и галочка «По графику». */
   assignment?: {
     objects: readonly ITimesheetOfficeObject[];
     onChange: (id: number, value: TimesheetOfficeAssignment) => void;
+    onScheduleChange: (id: number, value: boolean) => void;
   };
 }
 
 /**
  * Таблица окна «Режим табелирования» (миграция 291) в стиле «Текущих сотрудников»:
- * ФИО | Текущий объект | Назначить. Клик по «Офис» или выбор в списке только отмечает —
- * пишет «Сохранить».
+ * ФИО | Текущий объект | Назначить, во вкладке «Сотрудник» ещё «По графику» (миграция 358).
+ * Клик по «Офис», выбор в списке и галочка только отмечают — пишет «Сохранить».
  */
 export const TimesheetOfficeAssignTable: FC<ITimesheetOfficeAssignTableProps> = ({
   rows,
@@ -102,69 +105,87 @@ export const TimesheetOfficeAssignTable: FC<ITimesheetOfficeAssignTableProps> = 
   header,
   onToggleRow,
   assignment,
-}) => (
-  <div className={`sc-table-wrap ${styles.tableWrap}`}>
-    <table className={`sc-table ${styles.table}`}>
-      <colgroup>
-        <col />
-        <col className={styles.colObject} />
-        <col className={assignment ? styles.colAssignSelect : styles.colAssign} />
-      </colgroup>
-      <thead>
-        <tr>
-          <th>ФИО</th>
-          <th>Текущий объект</th>
-          <th>
-            {header ? (
-              <span className={styles.thAssign}>
-                Назначить
-                <OfficeToggle
-                  checked={header.checked}
-                  disabled={header.disabled}
-                  onClick={header.onToggle}
-                  label="«Офис» всему отделу"
-                />
-              </span>
-            ) : 'Назначить'}
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {isLoading && (
-          <tr><td colSpan={3} className={styles.hint}>Загрузка…</td></tr>
-        )}
-        {isError && !rows && (
+}) => {
+  const columns = assignment ? 4 : 3;
+  return (
+    <div className={`sc-table-wrap ${styles.tableWrap}`}>
+      <table className={`sc-table ${styles.table}`}>
+        <colgroup>
+          <col />
+          <col className={styles.colObject} />
+          <col className={assignment ? styles.colAssignSelect : styles.colAssign} />
+          {assignment && <col className={styles.colSchedule} />}
+        </colgroup>
+        <thead>
           <tr>
-            <td colSpan={3}>
-              <span className={styles.stateRow}>
-                <span className={styles.muted}>Не удалось загрузить</span>
-                <button type="button" className={styles.rowButton} onClick={onRetry}>Повторить</button>
-              </span>
-            </td>
+            <th>ФИО</th>
+            <th>Текущий объект</th>
+            <th>
+              {header ? (
+                <span className={styles.thAssign}>
+                  Назначить
+                  <OfficeToggle
+                    checked={header.checked}
+                    disabled={header.disabled}
+                    onClick={header.onToggle}
+                    label="«Офис» всему отделу"
+                  />
+                </span>
+              ) : 'Назначить'}
+            </th>
+            {assignment && <th className={styles.scheduleCol}>По графику</th>}
           </tr>
-        )}
-        {rows && rows.length === 0 && (
-          <tr><td colSpan={3} className={styles.hint}>В отделе нет сотрудников</td></tr>
-        )}
-        {rows?.map(row => (
-          <tr key={row.id}>
-            <td className={`sc-td-name ${styles.nameCell}`}>{row.full_name}</td>
-            <td className={styles.objectCell}>{row.label ?? '—'}</td>
-            <td>
-              {assignment ? (
-                <AssignmentSelect row={row} objects={assignment.objects} onChange={assignment.onChange} />
-              ) : (
-                <OfficeToggle
-                  checked={row.checked}
-                  disabled={row.disabled}
-                  onClick={() => onToggleRow(row.id)}
-                  label={`«Офис»: ${row.full_name}`}
-                />
+        </thead>
+        <tbody>
+          {isLoading && (
+            <tr><td colSpan={columns} className={styles.hint}>Загрузка…</td></tr>
+          )}
+          {isError && !rows && (
+            <tr>
+              <td colSpan={columns}>
+                <span className={styles.stateRow}>
+                  <span className={styles.muted}>Не удалось загрузить</span>
+                  <button type="button" className={styles.rowButton} onClick={onRetry}>Повторить</button>
+                </span>
+              </td>
+            </tr>
+          )}
+          {rows && rows.length === 0 && (
+            <tr><td colSpan={columns} className={styles.hint}>В отделе нет сотрудников</td></tr>
+          )}
+          {rows?.map(row => (
+            <tr key={row.id}>
+              <td className={`sc-td-name ${styles.nameCell}`}>{row.full_name}</td>
+              <td className={styles.objectCell}>{row.label ?? '—'}</td>
+              <td>
+                {assignment ? (
+                  <AssignmentSelect row={row} objects={assignment.objects} onChange={assignment.onChange} />
+                ) : (
+                  <OfficeToggle
+                    checked={row.checked}
+                    disabled={row.disabled}
+                    onClick={() => onToggleRow(row.id)}
+                    label={`«Офис»: ${row.full_name}`}
+                  />
+                )}
+              </td>
+              {assignment && (
+                <td className={styles.scheduleCol}>
+                  <label className={styles.scheduleToggle}>
+                    <input
+                      type="checkbox"
+                      checked={row.scheduleBased}
+                      disabled={row.disabled}
+                      aria-label={`«По графику»: ${row.full_name}`}
+                      onChange={event => assignment.onScheduleChange(row.id, event.target.checked)}
+                    />
+                  </label>
+                </td>
               )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};

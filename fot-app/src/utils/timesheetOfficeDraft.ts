@@ -6,12 +6,16 @@ export interface ITimesheetOfficeDraft {
   department?: boolean;
   /** Личное назначение по сотрудникам: «Офис», объект или null — снять; нет ключа — не трогали. */
   employees: ReadonlyMap<number, TimesheetOfficeAssignment>;
+  /** «По графику» по сотрудникам (миграция 358); нет ключа — не трогали. */
+  schedule?: ReadonlyMap<number, boolean>;
 }
 
 export interface ITimesheetOfficeDraftRow {
   id: number;
   /** Личное назначение по данным сервера. */
   personal_assignment: TimesheetOfficeAssignment;
+  /** «По графику» по данным сервера (есть только у строки вкладки «Сотрудник»). */
+  schedule_based?: boolean;
 }
 
 export interface ITimesheetOfficeDraftSource {
@@ -31,6 +35,10 @@ export const draftDepartmentOffice = (draft: ITimesheetOfficeDraft, source: ITim
 /** Назначение строки: отметка, иначе состояние сервера. */
 export const draftAssignment = (row: ITimesheetOfficeDraftRow, draft: ITimesheetOfficeDraft): TimesheetOfficeAssignment =>
   draft.employees.has(row.id) ? draft.employees.get(row.id) ?? null : row.personal_assignment;
+
+/** «По графику» строки: отметка, иначе состояние сервера. */
+export const draftScheduleBased = (row: ITimesheetOfficeDraftRow, draft: ITimesheetOfficeDraft): boolean =>
+  draft.schedule?.get(row.id) ?? row.schedule_based === true;
 
 /**
  * Галочка «Офис» строки: личный «Офис», а без личного назначения — «Офис» отдела. Назначенный
@@ -58,7 +66,7 @@ export const toggledOfficeAssignment = (
 };
 
 /**
- * Запрос «Сохранить»: разница отметок с сервером. Пока отделу ставится (или остаётся) «Офис»,
+ * Запрос «Сохранить»: разница отметок с сервером, «Офис» и «По графику» — одним запросом. Пока отделу ставится (или остаётся) «Офис»,
  * строки вкладки «Отдел» заблокированы и личные отметки не отправляются; назначения лично
  * правило отдела и так не трогает. null — сохранять нечего.
  */
@@ -90,5 +98,20 @@ export const buildTimesheetOfficePayload = (
       };
     }
   }
-  return payload.departments || payload.employees ? payload : null;
+  // «По графику» не зависит от «Офиса» отдела — уходит тем же запросом.
+  const scheduleAdd: number[] = [];
+  const scheduleRemove: number[] = [];
+  for (const row of source.rows) {
+    if (!draft.schedule?.has(row.id)) continue;
+    const wanted = draftScheduleBased(row, draft);
+    if (wanted === (row.schedule_based === true)) continue;
+    (wanted ? scheduleAdd : scheduleRemove).push(row.id);
+  }
+  if (scheduleAdd.length > 0 || scheduleRemove.length > 0) {
+    payload.schedule = {
+      ...(scheduleAdd.length > 0 ? { add: scheduleAdd } : {}),
+      ...(scheduleRemove.length > 0 ? { remove: scheduleRemove } : {}),
+    };
+  }
+  return payload.departments || payload.employees || payload.schedule ? payload : null;
 };

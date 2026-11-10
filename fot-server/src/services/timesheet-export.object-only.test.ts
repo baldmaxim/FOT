@@ -197,3 +197,23 @@ describe('object-only день в dataMap проходит фильтр выхо
     expect(dayOf(data)).toMatchObject({ hours: 8, hoursDropped: false });
   });
 });
+
+describe('«сегодня» выгрузки — по МСК (прод-сервер в UTC)', () => {
+  it('00:30 МСК — уже новый день, и для отдела, и для списка сотрудников', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 2026-08-08T21:30Z = 09.08 00:30 МСК: по UTC это ещё 08.08.
+      vi.setSystemTime(new Date('2026-08-09T00:30:00+03:00'));
+      await fetchTimesheetDataForDepartment(MONTH, 'D1');
+      await fetchTimesheetDataForEmployees(MONTH, [EMP_ID], 'Сводный 1С');
+      const todays = h.buildAttendance.mock.calls.map(([params]) => (params as { todayStr: string }).todayStr);
+      expect(todays).toEqual(['2026-08-09', '2026-08-09']);
+      // 1-е число: 01.09 00:30 МСК — сентябрь, а не 31.08.
+      vi.setSystemTime(new Date('2026-09-01T00:30:00+03:00'));
+      await fetchTimesheetDataForEmployees('2026-09', [EMP_ID], 'Сводный 1С');
+      expect((h.buildAttendance.mock.calls.at(-1)?.[0] as { todayStr: string }).todayStr).toBe('2026-09-01');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

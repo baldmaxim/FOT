@@ -45,6 +45,7 @@ describe('timesheetOfficeController.update', () => {
     expect(h.update).toHaveBeenCalledWith(expect.anything(), {
       departments: { add: [DEPT], remove: [] },
       employees: { add: [], remove: [], objects: [] },
+      schedule: { add: [], remove: [] },
     });
     expect(res.body).toEqual({ success: true, changed: true, data: { changed: true } });
   });
@@ -57,6 +58,20 @@ describe('timesheetOfficeController.update', () => {
     expect(h.update).toHaveBeenCalledWith(expect.anything(), {
       departments: { add: [], remove: [] },
       employees: { add: [], remove: [], objects },
+      schedule: { add: [], remove: [] },
+    });
+  });
+
+  it('«По графику»: add/remove уходят в сервис вместе с «Офисом»', async () => {
+    h.update.mockResolvedValue({ changed: true });
+    const res = mockRes();
+    await timesheetOfficeController.update(
+      { body: { employees: { add: [3] }, schedule: { add: [5], remove: [6] } } } as never, res as never,
+    );
+    expect(h.update).toHaveBeenCalledWith(expect.anything(), {
+      departments: { add: [], remove: [] },
+      employees: { add: [3], remove: [], objects: [] },
+      schedule: { add: [5], remove: [6] },
     });
   });
 
@@ -67,6 +82,8 @@ describe('timesheetOfficeController.update', () => {
       { employees: { add: Array.from({ length: 501 }, (_, index) => index + 1) } },
       { employees: { objects: [{ id: 7, object_id: 'not-uuid' }] } },
       { employees: { objects: [{ id: 0, object_id: DEPT }] } },
+      { schedule: { add: ['5'] } },
+      { schedule: { remove: [0] } },
     ]) {
       const res = mockRes();
       await timesheetOfficeController.update({ body } as never, res as never);

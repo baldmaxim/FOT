@@ -369,6 +369,41 @@
   width: 240px;
 }
 
+/* «По графику» (миграция 358) — по ширине заголовка, галочка по центру под ним. */
+.colSchedule {
+  width: 1%;
+}
+
+.table .scheduleCol.scheduleCol {
+  text-align: center;
+}
+
+/* Галочка с тап-целью 44 × 44: кликается вся клетка, а не 18 px квадрата. */
+.scheduleToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  vertical-align: middle;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.scheduleToggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--success);
+  cursor: pointer;
+}
+
+.scheduleToggle input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Системный select (sc-schedule-filter): тап-цель 44 px и 16 px — без автозума iOS/Android. */
 .assignSelect.assignSelect {
   width: 100%;
@@ -519,6 +554,10 @@
     min-height: 34px;
     font-size: 13px;
   }
+
+  .scheduleToggle {
+    height: 34px;
+  }
 }
 
 /* Узкий экран ноутбука и планшет: окно почти во всю ширину и отступы меньше — шапка таблицы
@@ -560,6 +599,10 @@
   .assignSelect.assignSelect {
     min-height: 44px;
     height: auto;
+  }
+
+  .scheduleToggle {
+    height: 44px;
   }
 }
 

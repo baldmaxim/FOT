@@ -56,6 +56,11 @@ export interface ITimesheetOfficeObject {
   name: string;
 }
 
+export interface ITimesheetOfficeScheduleEmployee extends ITimesheetOfficeEmployee {
+  /** С какого дня действует «По графику» (YYYY-MM-DD). */
+  date_from: string;
+}
+
 export interface ITimesheetOfficeState {
   /** Отделы, которые можно выбрать: активные, не подрядные, в скоупе записи. */
   allowed_department_ids: string[];
@@ -65,6 +70,8 @@ export interface ITimesheetOfficeState {
   employees: ITimesheetOfficeAssignedEmployee[];
   /** Объекты, которые можно назначить: действующие, без офисных (для них — «Офис»). */
   objects: ITimesheetOfficeObject[];
+  /** Сотрудники «По графику» (миграция 358) — действующие периоды. */
+  schedule_employees: ITimesheetOfficeScheduleEmployee[];
 }
 
 export interface ITimesheetOfficeMember {
@@ -82,6 +89,8 @@ export interface ITimesheetOfficeEmployeeRow extends ITimesheetOfficeMember {
   department: string | null;
   /** У отдела сотрудника «Офис» (справочно: личное назначение главнее отдела). */
   department_office: boolean;
+  /** Отмечен «По графику» (действующий период). */
+  schedule_based: boolean;
 }
 
 export interface ITimesheetOfficeDepartmentMembers {
@@ -132,7 +141,7 @@ export async function getTimesheetOfficeState(req: AuthenticatedRequest): Promis
       ORDER BY d.name, d.id`,
   )).filter(row => inReadScope(row.id));
 
-  const [assignedRows, objectsById] = await Promise.all([
+  const [assignedRows, objectsById, scheduleRows] = await Promise.all([
     query<ITimesheetOfficeEmployee & { department_id: string | null; object_id: string | null }>(
       `SELECT e.id,
               e.full_name,
@@ -146,7 +155,22 @@ export async function getTimesheetOfficeState(req: AuthenticatedRequest): Promis
         ORDER BY e.full_name, e.id`,
     ),
     loadSkudObjects(),
+    query<ITimesheetOfficeScheduleEmployee & { department_id: string | null }>(
+      `SELECT e.id,
+              e.full_name,
+              e.org_department_id::text AS department_id,
+              d.name AS department,
+              p.date_from::text AS date_from
+         FROM employee_schedule_timesheet_periods p
+         JOIN employees e ON e.id = p.employee_id
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE p.date_to IS NULL
+        ORDER BY e.full_name, e.id`,
+    ),
   ]);
+  const scheduleEmployees = scheduleRows
+    .filter(row => inReadScope(row.department_id))
+    .map(row => ({ id: Number(row.id), full_name: row.full_name, department: row.department, date_from: row.date_from }));
   const employees = assignedRows
     .filter(row => inReadScope(row.department_id))
     .map(row => ({
@@ -156,7 +180,13 @@ export async function getTimesheetOfficeState(req: AuthenticatedRequest): Promis
       label: row.object_id ? (objectsById.get(row.object_id)?.name ?? row.object_id) : OFFICE_LABEL,
     }));
 
-  return { allowed_department_ids: allowed, departments, employees, objects: assignableObjects(objectsById) };
+  return {
+    allowed_department_ids: allowed,
+    departments,
+    employees,
+    objects: assignableObjects(objectsById),
+    schedule_employees: scheduleEmployees,
+  };
 }
 
 /** Объекты для назначения: действующие, без офисных адресов, по алфавиту. */
@@ -278,6 +308,7 @@ export async function getTimesheetOfficeEmployee(
       personal_office: boolean;
       personal_assignment: TimesheetOfficeAssignment;
       department_office: boolean;
+      schedule_based: boolean;
     }>(
       `SELECT e.id,
               e.full_name,
@@ -288,7 +319,9 @@ export async function getTimesheetOfficeEmployee(
               ${personalOfficeSql('e')} AS personal_office,
               ${ASSIGNMENT_SQL} AS personal_assignment,
               EXISTS (SELECT 1 FROM timesheet_office_departments tod
-                       WHERE tod.org_department_id = e.org_department_id) AS department_office
+                       WHERE tod.org_department_id = e.org_department_id) AS department_office,
+              EXISTS (SELECT 1 FROM employee_schedule_timesheet_periods p
+                       WHERE p.employee_id = e.id AND p.date_to IS NULL) AS schedule_based
          FROM employees e
          LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.id = $1::int`,
@@ -315,5 +348,6 @@ export async function getTimesheetOfficeEmployee(
     personal_office: row.personal_office === true,
     personal_assignment: row.personal_assignment ?? null,
     department_office: row.department_office === true,
+    schedule_based: row.schedule_based === true,
   };
 }

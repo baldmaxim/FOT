@@ -273,6 +273,7 @@ describe('updateTimesheetOffice — транзакция', () => {
     expect(result).toEqual({
       changed: true, departments_added: 1, departments_removed: 0,
       employees_added: 0, objects_assigned: 0, employees_removed: 0, members_applied: 1, recomputed: 0,
+      schedule_added: 0, schedule_removed: 0,
     });
     // «Офис» отдела — подачи ждут фиксации месяца, как раньше.
     expect(h.rebuild).not.toHaveBeenCalled();
@@ -523,6 +524,7 @@ describe('чтение', () => {
       departments: [{ id: DEPT, name: 'Бухгалтерия', employees_count: 16 }],
       employees: [{ id: 20, full_name: 'Шупта', department: 'Бухгалтерия', label: 'Офис' }],
       objects: [{ id: O_DOM, name: 'ЖК Дом 56' }, { id: O_METRO, name: 'ЖК Метрополия' }],
+      schedule_employees: [],
     });
   });
 
@@ -628,12 +630,143 @@ describe('сотрудник для вкладки «Сотрудник»', () =
     h.labels.mockResolvedValue(new Map([[60, 'Офис']]));
     await expect(getTimesheetOfficeEmployee(req, 60)).resolves.toEqual({
       id: 60, full_name: 'Семенов Иван', department: 'Бухгалтерия', label: 'Офис', personal_office: false,
-      personal_assignment: null, department_office: true,
+      personal_assignment: null, department_office: true, schedule_based: false,
     });
     const [sql, params] = h.queryOne.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('FROM timesheet_office_departments tod');
     expect(params).toEqual([60]);
     expect(h.canWriteEmployee).toHaveBeenCalledWith(req, 60);
+  });
+});
+
+describe('«По графику» (миграция 358)', () => {
+  const withSchedule = (schedule: { add?: number[]; remove?: number[] }, over: Parameters<typeof input>[0] = {}) => ({
+    ...input(over),
+    schedule: { add: schedule.add ?? [], remove: schedule.remove ?? [] },
+  });
+  /** Ответы транзакции для «По графику» поверх setup(). */
+  const scheduleTx = (options: {
+    approvedEnd?: string;
+    open?: Array<{ id: number; employee_id: number; date_from: string }>;
+    history?: Array<{ employee_id: number; last_to: string | null; dismissed_this_month: boolean }>;
+  } = {}) => {
+    const base = h.clientQuery.getMockImplementation()!;
+    h.clientQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM timesheet_approvals a')) {
+        return { rows: options.approvedEnd ? [{ employee_id: 11, approved_end: options.approvedEnd }] : [] };
+      }
+      if (sql.includes('INSERT INTO employee_schedule_timesheet_periods')) return { rows: [{ id: 1 }] };
+      if (sql.includes('GROUP BY employee_id')) return { rows: options.history ?? [] };
+      if (sql.includes('SELECT id, employee_id, date_from::text AS date_from')) return { rows: options.open ?? [] };
+      return base(sql, params);
+    });
+  };
+  const scheduleSql = (fragment: string) =>
+    h.clientQuery.mock.calls.filter(([sql]) => String(sql).includes(fragment));
+
+  it('«Добавить» уволенному — 400 до прав и без записи «Офиса» из того же запроса', async () => {
+    setup({ employees: [employee(10), employee(11, { employment_status: 'fired' })] });
+    await expect(updateTimesheetOffice(req, withSchedule({ add: [11] }, { eAdd: [10] }), NOW))
+      .rejects.toMatchObject({ status: 400, code: 'TIMESHEET_OFFICE_INVALID', details: [11] });
+    expect(h.canWriteEmployee).not.toHaveBeenCalled();
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('вне скоупа — 403, ничего не пишется', async () => {
+    setup({ employees: [employee(10), employee(11)] });
+    h.canWriteEmployee.mockImplementation(async (_req: unknown, id: number) => id !== 11);
+    await expect(updateTimesheetOffice(req, withSchedule({ add: [11] }, { eAdd: [10] }), NOW))
+      .rejects.toMatchObject({ status: 403, details: { departments: [], employees: [11] } });
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('одно и то же id в «Добавить» и «Снять» — 400', async () => {
+    await expect(updateTimesheetOffice(req, withSchedule({ add: [11], remove: [11] }), NOW))
+      .rejects.toMatchObject({ status: 400, details: [11] });
+  });
+
+  it('только «По графику»: с 1-го месяца, без проверки фиксации, аудит, кэши; подачи 1С не трогаются', async () => {
+    setup({ employees: [employee(11)] });
+    scheduleTx();
+    const result = await updateTimesheetOffice(req, withSchedule({ add: [11] }), NOW);
+    expect(result).toMatchObject({ changed: true, schedule_added: 1, schedule_removed: 0, employees_added: 0 });
+    expect(h.state).not.toHaveBeenCalled();
+    expect(scheduleSql('INSERT INTO employee_schedule_timesheet_periods')[0]?.[1]).toEqual([11, '2026-09-01', 'user-1']);
+    const [, entries] = h.writeAudit.mock.calls[0];
+    expect(entries).toEqual([{
+      entityType: 'employee', entityId: '11',
+      details: { employee_name: 'Сотрудник 11', via: 'schedule', action: 'add', date_from: '2026-09-01' },
+    }]);
+    expect(h.invalidateCaches).toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+  });
+
+  it('согласована подача по 15-е — отметка с 16-го', async () => {
+    setup({ employees: [employee(11)] });
+    scheduleTx({ approvedEnd: '2026-09-15' });
+    await updateTimesheetOffice(req, withSchedule({ add: [11] }), NOW);
+    expect(scheduleSql('INSERT INTO employee_schedule_timesheet_periods')[0]?.[1]).toEqual([11, '2026-09-16', 'user-1']);
+  });
+
+  it('в этом месяце уволили и восстановили — с сегодняшнего дня', async () => {
+    setup({ employees: [employee(11)] });
+    scheduleTx({ history: [{ employee_id: 11, last_to: '2026-09-05', dismissed_this_month: true }] });
+    await updateTimesheetOffice(req, withSchedule({ add: [11] }), NOW);
+    expect(scheduleSql('INSERT INTO employee_schedule_timesheet_periods')[0]?.[1]).toEqual([11, '2026-09-29', 'user-1']);
+  });
+
+  it('уже отмечен — повтор ничего не пишет', async () => {
+    setup({ employees: [employee(11, { has_open: true })] });
+    scheduleTx();
+    const result = await updateTimesheetOffice(req, withSchedule({ add: [11] }), NOW);
+    expect(result).toMatchObject({ changed: false, schedule_added: 0 });
+    expect(scheduleSql('INSERT INTO employee_schedule_timesheet_periods')).toHaveLength(0);
+    expect(h.invalidateCaches).not.toHaveBeenCalled();
+  });
+
+  it('«Снять» без действующей отметки — no-op без транзакции', async () => {
+    setup({ employees: [employee(11, { employment_status: 'fired' })] });
+    const result = await updateTimesheetOffice(req, withSchedule({ remove: [11] }), NOW);
+    expect(result.changed).toBe(false);
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('«Снять»: начатый в этом месяце — удаляется, давний — закрывается концом прошлого месяца или согласованной подачи', async () => {
+    setup({ employees: [employee(11, { has_open: true })] });
+    scheduleTx({ open: [{ id: 5, employee_id: 11, date_from: '2026-09-01' }] });
+    await updateTimesheetOffice(req, withSchedule({ remove: [11] }), NOW);
+    expect(scheduleSql('DELETE FROM employee_schedule_timesheet_periods')[0]?.[1]).toEqual([5]);
+
+    h.clientQuery.mockReset();
+    setup({ employees: [employee(11, { has_open: true })] });
+    scheduleTx({ open: [{ id: 6, employee_id: 11, date_from: '2026-08-01' }] });
+    await updateTimesheetOffice(req, withSchedule({ remove: [11] }), NOW);
+    expect(scheduleSql("closed_reason = 'manual'")[0]?.[1]).toEqual([6, '2026-08-31', 'user-1']);
+
+    h.clientQuery.mockReset();
+    setup({ employees: [employee(11, { has_open: true })] });
+    scheduleTx({ approvedEnd: '2026-09-15', open: [{ id: 7, employee_id: 11, date_from: '2026-08-01' }] });
+    await updateTimesheetOffice(req, withSchedule({ remove: [11] }), NOW);
+    expect(scheduleSql("closed_reason = 'manual'")[0]?.[1]).toEqual([7, '2026-09-15', 'user-1']);
+  });
+
+  it('уволили между проверкой и записью — 409, аудит «Офиса» из того же запроса не пишется', async () => {
+    setup({
+      employees: [employee(10), employee(11)],
+      lockedEmployees: [employee(10), employee(11, { employment_status: 'fired' })],
+    });
+    // Под FOR UPDATE «Офис» видит 10 без изменений; «По графику» — уволенного 11.
+    const base = h.clientQuery.getMockImplementation()!;
+    h.clientQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FOR UPDATE') && !sql.includes('FOR UPDATE OF e')) {
+        return { rows: [employee(10)] };
+      }
+      return base(sql, params);
+    });
+    await expect(updateTimesheetOffice(req, withSchedule({ add: [11] }, { eAdd: [10] }), NOW))
+      .rejects.toMatchObject({ status: 409, code: 'TIMESHEET_OFFICE_CHANGED', details: [11] });
+    expect(h.withTransaction).toHaveBeenCalledTimes(1);
+    expect(h.writeAudit).not.toHaveBeenCalled();
   });
 });
 
