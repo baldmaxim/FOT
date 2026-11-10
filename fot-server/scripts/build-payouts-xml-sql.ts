@@ -444,7 +444,10 @@ const main = async (): Promise<void> => {
         WHERE d.period_month = $1::date AND l.employee_id = ANY($2::int[]) GROUP BY 1`,
       [periodMonth, samples],
     )).map(row => [Number(row.employee_id), Math.round(Number(row.total) * 100)]));
-    const sampleLine = (withNew: boolean) => samples.map(id => `${info.get(id)?.full_name} (${id}) `
+    // ФИО — из сопоставления файла, а у кого строка только снимается заменой — из снимка месяца.
+    const removedNames = new Map((replace?.removedLines ?? []).flatMap(line => (
+      line.employeeId !== null && line.employeeName !== null ? [[line.employeeId, line.employeeName] as const] : [])));
+    const sampleLine = (withNew: boolean) => samples.map(id => `${info.get(id)?.full_name ?? removedNames.get(id) ?? '?'} (${id}) `
       + `${num((sampleBefore.get(id) ?? 0) + (withNew ? (byEmployee.get(id)?.cents ?? 0) - (removedByEmployee.get(id) ?? 0) : 0))}`).join('; ');
     const sampleText = sampleLine(true);
 
