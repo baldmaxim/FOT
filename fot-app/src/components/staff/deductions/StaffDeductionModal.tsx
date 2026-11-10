@@ -15,12 +15,14 @@ import {
   deductionDefaultAmount,
   monthForDismissed,
   parseStaffDeduction,
+  withKeptKind,
   type StaffDeductionField,
 } from '../../../utils/staffDeductionForm';
 import { ClearableInput } from '../../ui/ClearableInput';
 import { EmployeeSearchField, type IEmployeeSearchCandidate } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
+import { DeductionKindFields } from './DeductionKindFields';
 
 /**
  * Кандидат «Добавить сотрудника»; can_edit false — строка неактивна (нет права на сотрудника); dismissal_date — уволен
@@ -75,20 +77,7 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
   }, [currentMonth, editMonth]);
 
   // Вид или подвид правки могли удалить из справочника — оставляем их в списках, сервер ответит понятной ошибкой.
-  const kindOptions = useMemo(() => {
-    if (!deduction) return kinds;
-    const kept = kinds.find(kind => kind.id === deduction.kind_id)
-      ?? { id: deduction.kind_id, name: deduction.kind_name, default_amount: null, subkinds: [] };
-    const subkinds = deduction.subkind_id === null || deduction.subkind_name === null
-      || kept.subkinds.some(subkind => subkind.id === deduction.subkind_id)
-      ? kept.subkinds
-      : [...kept.subkinds, { id: deduction.subkind_id, kind_id: deduction.kind_id, name: deduction.subkind_name, default_amount: null }];
-    const patched = { ...kept, subkinds };
-    return kinds.some(kind => kind.id === kept.id)
-      ? kinds.map(kind => (kind.id === kept.id ? patched : kind))
-      : [...kinds, patched];
-  }, [kinds, deduction]);
-  const subkindOptions = kindOptions.find(kind => kind.id === kindId)?.subkinds ?? [];
+  const kindOptions = useMemo(() => withKeptKind(kinds, deduction), [kinds, deduction]);
 
   const clearError = () => setError(null);
   const invalid = (field: StaffDeductionField): true | undefined => (error?.field === field ? true : undefined);
@@ -158,39 +147,15 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
         )}
       </div>
 
-      <label className={styles.field}>
-        <span className={styles.label}>Вид удержания</span>
-        <select
-          className={styles.select}
-          value={kindId ?? ''}
-          onChange={event => changeSelection(event.target.value ? Number(event.target.value) : null, null)}
-          disabled={saving}
-          aria-invalid={invalid('kind')}
-          aria-describedby={error ? errorId : undefined}
-        >
-          <option value="" disabled>Выберите вид</option>
-          {kindOptions.map(kind => (
-            <option key={kind.id} value={kind.id}>{kind.name}</option>
-          ))}
-        </select>
-      </label>
-
-      {subkindOptions.length > 0 && (
-        <label className={styles.field}>
-          <span className={styles.label}>Подвид</span>
-          <select
-            className={styles.select}
-            value={subkindId ?? ''}
-            onChange={event => changeSelection(kindId, event.target.value ? Number(event.target.value) : null)}
-            disabled={saving}
-          >
-            <option value="">Без подвида</option>
-            {subkindOptions.map(subkind => (
-              <option key={subkind.id} value={subkind.id}>{subkind.name}</option>
-            ))}
-          </select>
-        </label>
-      )}
+      <DeductionKindFields
+        kinds={kindOptions}
+        kindId={kindId}
+        subkindId={subkindId}
+        onChange={changeSelection}
+        disabled={saving}
+        kindInvalid={error?.field === 'kind'}
+        describedBy={error ? errorId : undefined}
+      />
 
       <div className={styles.dates}>
         <label className={styles.field}>

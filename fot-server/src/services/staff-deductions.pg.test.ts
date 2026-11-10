@@ -76,9 +76,10 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
 
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
+      DROP TABLE IF EXISTS payroll_planned_deduction_changes, payroll_planned_deductions,
+        staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
         payroll_deduction_kinds, payroll_compensation_terms, employee_dormitory_stays, role_page_access, access_pages,
-        employees, positions, org_departments CASCADE;
+        user_profiles, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
@@ -90,6 +91,8 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false
       );
+      -- 357 (плановые удержания): автор записи истории.
+      CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       -- 299/300 трогают условия оплаты: здесь достаточно столбца суммы удержания.
       CREATE TABLE payroll_compensation_terms (id serial PRIMARY KEY, deduction_amount numeric(12,2));
       -- Права: столбцы и ключи — как на проде.
@@ -169,6 +172,8 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
 
     await run(migration('321_payroll_deduction_subkinds.sql'));
     await run(migration('321_payroll_deduction_subkinds.sql'));
+    // Плановые удержания тоже держат вид и подвид (счёт «назначен N сотрудникам»).
+    await run(migration('357_payroll_planned_deductions.sql'));
     expect((await run(`SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'staff_deductions_subkind_fk'`)).rows[0].n)
       .toBe(1);
     expect((await run(`SELECT indexname FROM pg_indexes WHERE tablename = 'payroll_deduction_subkinds' ORDER BY 1`)).rows)

@@ -121,7 +121,7 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
       DROP TABLE IF EXISTS timesheet_version_objects, timesheet_versions, skud_objects, payroll_paid_amounts,
         payroll_compensation_terms, payroll_compensation_stops, payroll_one_time_supplements, payroll_planned_supplements,
         payroll_settings, payroll_item_types, payroll_rates, payroll_employee_deductions, payroll_deduction_kinds,
-        staff_deductions, employee_assignments,
+        staff_deductions, payroll_planned_deductions, employee_assignments,
         employee_schedule_assignments, work_schedules, positions, user_profiles, system_roles,
         employee_dismissal_events, timesheet_object_auto_state, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -134,7 +134,8 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
-        hire_date date
+        hire_date date,
+        dismissal_date date
       );
       CREATE TABLE employee_assignments (
         id serial PRIMARY KEY, employee_id integer NOT NULL, org_department_id uuid,
@@ -217,6 +218,11 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
       CREATE TABLE staff_deductions (
         id serial PRIMARY KEY, employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id),
         month date NOT NULL, amount numeric(12,2) NOT NULL
+      );
+      -- Плановые удержания (357): то, что читает развёртка по месяцам.
+      CREATE TABLE payroll_planned_deductions (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id),
+        subkind_id integer, amount numeric(12,2) NOT NULL, month_from date NOT NULL, month_to date
       );
     `);
 

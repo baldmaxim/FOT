@@ -30,22 +30,30 @@ import {
 } from '../../../utils/payrollRegistries';
 import { FilePreviewModal } from '../../documents/FilePreviewModal';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
+import { RegistryTabs, type IRegistryTab } from '../../ui/registry/RegistryTabs';
 import { HousingAllowanceForm } from './HousingAllowanceForm';
 import { PayrollRegistryModal } from './PayrollRegistryModal';
 import { SupplementFilesModal } from './SupplementFilesModal';
 import { SupplementForm } from './SupplementForm';
-import { SupplementTabs, type SupplementTab } from './SupplementTabs';
 import { StayCheckoutModal } from './StayCheckoutModal';
 import { useSupplementFileOpen } from './useSupplementFileOpen';
 import { useSupplementRemoval } from './useSupplementRemoval';
 import fileStyles from './SupplementFiles.module.css';
-import styles from './SupplementTabs.module.css';
+import styles from '../../ui/registry/RegistryTabs.module.css';
 
 interface ISupplementRegistryProps {
   /** Право правки условий оплаты (/salary/terms). */
   canEdit: boolean;
   onClose: () => void;
 }
+
+type SupplementTab = 'all' | 'planned' | 'apartments';
+
+const SUPPLEMENT_TABS: ReadonlyArray<IRegistryTab<SupplementTab>> = [
+  { key: 'all', label: 'Доплата за месяц' },
+  { key: 'planned', label: 'Плановые доплаты' },
+  { key: 'apartments', label: 'Квартира' },
+];
 
 /** Вид операции, а не вкладка: из «Доплаты за месяц» правятся строки всех видов. */
 type EditorState =
@@ -174,7 +182,14 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
       onClose={onClose}
       closeOnEscape={!filterOpen && !editor && !housingCheckout && !filesRow && !fileOpen.preview}
     >
-      <SupplementTabs active={tab} onChange={setTab} tabId={tabId} panelId={panelId} />
+      <RegistryTabs
+        tabs={SUPPLEMENT_TABS}
+        active={tab}
+        onChange={setTab}
+        tabId={tabId}
+        panelId={panelId}
+        label="Разделы доплаты"
+      />
 
       <div {...tabPanelProps('all')}>
         <RegistryPanel

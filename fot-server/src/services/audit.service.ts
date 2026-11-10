@@ -309,6 +309,11 @@ export const AUDIT_ACTIONS = {
   STAFF_DEDUCTION_ADDED: 'STAFF_DEDUCTION_ADDED',
   STAFF_DEDUCTION_UPDATED: 'STAFF_DEDUCTION_UPDATED',
   STAFF_DEDUCTION_DELETED: 'STAFF_DEDUCTION_DELETED',
+  // Плановые удержания (миграция 357): назначено, изменено (было → стало), убрано с месяца (период закрыт), удалено.
+  PAYROLL_PLANNED_DEDUCTION_ADDED: 'PAYROLL_PLANNED_DEDUCTION_ADDED',
+  PAYROLL_PLANNED_DEDUCTION_UPDATED: 'PAYROLL_PLANNED_DEDUCTION_UPDATED',
+  PAYROLL_PLANNED_DEDUCTION_CLOSED: 'PAYROLL_PLANNED_DEDUCTION_CLOSED',
+  PAYROLL_PLANNED_DEDUCTION_REMOVED: 'PAYROLL_PLANNED_DEDUCTION_REMOVED',
   // «Табель → Зарплата» (миграция 330): выработка бригады и КТУ за месяц — было → стало;
   // пересчёт зафиксированного месяца (новая редакция или новый ввод) — итог и изменённые доли.
   BRIGADE_SALARY_OUTPUT_SET: 'BRIGADE_SALARY_OUTPUT_SET',

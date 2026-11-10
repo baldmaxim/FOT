@@ -42,6 +42,7 @@ import {
   type IPlannedSupplementPeriod,
 } from './payroll-calc.rules.js';
 import { loadEmployeePeriods, type IPayrollEmployeeRow } from './payroll-employee-period.service.js';
+import { monthDeductionsSql } from './payroll-month-deductions.sql.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-month-attribution.service.js';
 import {
   assembleMonthBasis,
@@ -243,10 +244,10 @@ const loadPayoutExtras = async (
       [[...ids], monthStart],
     ),
     query<IPayrollCalcDeduction & { employee_id: number }>(
+      // Помесячные и плановые (миграция 357) — одно правило с «Сводом» (monthDeductionsSql).
       `SELECT d.employee_id, d.kind_id, k.name AS kind, SUM(d.amount)::text AS amount
-         FROM staff_deductions d
+         FROM (${monthDeductionsSql('ARRAY[$2::date]', '$1')}) d
          JOIN payroll_deduction_kinds k ON k.id = d.kind_id
-        WHERE d.employee_id = ANY($1::int[]) AND d.month = $2::date
         GROUP BY d.employee_id, d.kind_id, k.name
         ORDER BY k.name, d.kind_id`,
       [[...ids], monthStart],

@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { PAYROLL_DEDUCTION_KINDS_KEY } from '../hooks/usePayrollDeductionKinds';
 import { PAYROLL_REGISTRY_KEYS } from '../services/payrollRegistryService';
+import { PAYROLL_SUMMARY_KEYS } from '../services/payrollSummaryService';
 import {
   STAFF_DEDUCTION_KINDS_KEY,
   STAFF_DEDUCTIONS_KEY,
@@ -9,20 +10,30 @@ import {
   type IStaffDeductionKind,
 } from '../services/staffDeductionService';
 
+/** «Табель → Зарплата» (useTimesheetSalary): «Удержано» и «К выплате» по людям. */
+export const TIMESHEET_SALARY_KEY_PREFIX = ['timesheet-salary'] as const;
+
 /**
- * Перечитать всё, где видны виды, подвиды и удержания (миграция 321): справочники кадров и «Зарплаты», вкладку
- * кадров «Удержания», таблицу «Удержания» «Справочника», список в окне сотрудника (ключ под STAFF_DEDUCTIONS_KEY)
- * и столбцы ФОТ «Расчётов».
- * Записи одни на оба раздела — правка в одном месте должна быть видна в другом.
+ * Ключи, которые сбрасывает правка удержаний: справочники кадров и «Зарплаты», вкладку кадров «Удержания»
+ * (помесячные и плановые — под STAFF_DEDUCTIONS_KEY), таблицы «Удержания» «Справочника» (под 'payroll-terms', с
+ * плановыми — миграция 357), список и историю в окне сотрудника, столбцы ФОТ «Расчётов» (под 'payroll-terms'),
+ * «Свод» и «Табель → Зарплата»: удержания входят в «К выплате» везде.
  */
-export const invalidateDeductionQueries = (queryClient: QueryClient): Promise<unknown> => Promise.all([
-  queryClient.invalidateQueries({ queryKey: STAFF_DEDUCTION_KINDS_KEY }),
-  queryClient.invalidateQueries({ queryKey: PAYROLL_DEDUCTION_KINDS_KEY }),
-  queryClient.invalidateQueries({ queryKey: STAFF_DEDUCTIONS_KEY }),
-  queryClient.invalidateQueries({ queryKey: PAYROLL_REGISTRY_KEYS.deductions }),
-  // Удержания входят в столбцы ФОТ «Расчётов» (список и calc-columns — под 'payroll-terms').
-  queryClient.invalidateQueries({ queryKey: ['payroll-terms'] }),
-]);
+export const DEDUCTION_QUERY_KEYS: ReadonlyArray<readonly unknown[]> = [
+  STAFF_DEDUCTION_KINDS_KEY,
+  PAYROLL_DEDUCTION_KINDS_KEY,
+  STAFF_DEDUCTIONS_KEY,
+  PAYROLL_REGISTRY_KEYS.deductions,
+  PAYROLL_REGISTRY_KEYS.plannedDeductions,
+  ['payroll-terms'],
+  [PAYROLL_SUMMARY_KEYS.months[0]],
+  TIMESHEET_SALARY_KEY_PREFIX,
+];
+
+/** Перечитать всё, где видны виды, подвиды и удержания: записи одни на оба раздела и на все расчёты. */
+export const invalidateDeductionQueries = (queryClient: QueryClient): Promise<unknown> => Promise.all(
+  DEDUCTION_QUERY_KEYS.map(queryKey => queryClient.invalidateQueries({ queryKey })),
+);
 
 /** Справочник после правки подвидов одного вида: остальные виды — те же объекты. */
 export const withSubkinds = (

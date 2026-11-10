@@ -97,7 +97,8 @@ const assign = async (employeeId: number, extra: Record<string, unknown>) => {
 describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
+      DROP TABLE IF EXISTS payroll_planned_deduction_changes, payroll_planned_deductions,
+        payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_rate_values, payroll_rates, payroll_compensation_terms, staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
         user_profiles, employees, org_departments CASCADE;
@@ -160,6 +161,7 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(`CREATE TABLE staff_deductions (
       employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id) ON DELETE RESTRICT)`);
     await pg.pool!.query(migration('321_payroll_deduction_subkinds.sql'));
+    await pg.pool!.query(migration('357_payroll_planned_deductions.sql'));
   });
 
   const listKinds = async () => (await listDeductionKindTree()).map(({ id, name }) => ({ id, name }));

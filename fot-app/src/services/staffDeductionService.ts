@@ -32,6 +32,51 @@ export interface IStaffDeductionPayload {
   amount: number;
 }
 
+/**
+ * Плановое удержание (миграция 357): вид, подвид, сумма ₽/мес на месяцы «с — по» (по — null, бессрочно); в каждом
+ * месяце периода удерживается вся сумма. Те же записи ведут кадры и «Зарплата».
+ */
+export interface IPlannedDeduction {
+  id: number;
+  employee_id: number;
+  full_name: string;
+  department: string | null;
+  position: string | null;
+  kind_id: number;
+  kind_name: string;
+  subkind_id: number | null;
+  subkind_name: string | null;
+  /** ₽/мес, NUMERIC строкой. */
+  amount: string;
+  /** YYYY-MM. */
+  month_from: string;
+  /** YYYY-MM; null — бессрочно. */
+  month_to: string | null;
+  /** Метка версии строки: правка и «Убрать» присылают её обратно (уже изменили — 409 PLANNED_DEDUCTION_STALE). */
+  updated_at: string;
+  /** Право правки строки (у кадров — всегда true, решает право вкладки). */
+  can_edit: boolean;
+}
+
+/** Плановое удержание в одном месяце — строка «Удержаний за месяц» (та же развёртка, что в расчёте). */
+export interface IPlannedDeductionMonth extends IPlannedDeduction {
+  /** YYYY-MM. */
+  month: string;
+}
+
+export interface IPlannedDeductionPayload {
+  kind_id: number;
+  subkind_id: number | null;
+  amount: number;
+  /** YYYY-MM. */
+  month_from: string;
+  /** YYYY-MM; null — бессрочно. */
+  month_to: string | null;
+}
+
+/** Что сделал «Убрать»: закрыл период месяцем перед текущим или удалил строку. */
+export type PlannedDeductionRemoval = 'closed' | 'removed';
+
 /** Подвид вида удержания (миграция 321): «Спецодежда» → «Каска»; своя сумма по умолчанию. */
 export interface IDeductionSubkind {
   id: number;
@@ -80,6 +125,40 @@ export interface IStaffDeductionCandidate extends IDormitoryCandidate {
 export const STAFF_DEDUCTIONS_KEY = ['staff-deductions'] as const;
 export const STAFF_DEDUCTION_KINDS_KEY = ['staff-deduction-kinds'] as const;
 
+/** ?months= списков: месяцы YYYY-MM через запятую (registryMonthsParam). */
+const withMonths = (path: string, months: string): string => `${path}?months=${encodeURIComponent(months)}`;
+
+/** Плановые удержания одного раздела: кадры и «Зарплата» ходят в свои пути (свои права), записи одни. */
+export const plannedDeductionApi = (base: string) => ({
+  /** Периоды, задевающие месяцы. */
+  list: async (months: string, signal?: AbortSignal): Promise<IPlannedDeduction[]> =>
+    (await apiClient.get<IApiResponse<IPlannedDeduction[]>>(withMonths(base, months), { signal })).data,
+
+  /** По месяцам — строка на каждый месяц, где удержание идёт (как в расчёте). */
+  listByMonth: async (months: string, signal?: AbortSignal): Promise<IPlannedDeductionMonth[]> =>
+    (await apiClient.get<IApiResponse<IPlannedDeductionMonth[]>>(withMonths(`${base}/by-month`, months), { signal })).data,
+
+  /** Пересечение того же вида и подвида — ApiError 409 PLANNED_DEDUCTION_EXISTS. */
+  add: async (employeeId: number, payload: IPlannedDeductionPayload): Promise<void> => {
+    await apiClient.post(base, { employee_id: employeeId, ...payload });
+  },
+
+  /** Строку уже изменили — ApiError 409 PLANNED_DEDUCTION_STALE. */
+  update: async (row: Pick<IPlannedDeduction, 'id' | 'updated_at'>, payload: IPlannedDeductionPayload): Promise<void> => {
+    await apiClient.patch(`${base}/${row.id}`, { ...payload, expected_updated_at: row.updated_at });
+  },
+
+  /** «Убрать»: идущее закрывается месяцем перед текущим, остальное удаляется; уже изменили — 409. */
+  remove: async (row: Pick<IPlannedDeduction, 'id' | 'updated_at'>): Promise<PlannedDeductionRemoval> => {
+    const res = await apiClient.delete<{ success: boolean; action: PlannedDeductionRemoval }>(`${base}/${row.id}`, {
+      body: JSON.stringify({ expected_updated_at: row.updated_at }),
+    });
+    return res.action;
+  },
+});
+
+export type IPlannedDeductionApi = ReturnType<typeof plannedDeductionApi>;
+
 export const staffDeductionService = {
   list: async (signal?: AbortSignal): Promise<IStaffDeduction[]> => {
     const res = await apiClient.get<IApiResponse<IStaffDeduction[]>>('/staff-deductions', { signal });
@@ -111,6 +190,17 @@ export const staffDeductionService = {
   /** xlsx ровно той таблицы, что на экране: сортировка и фильтры уже применены. */
   exportTable: async (table: ITableExportSnapshot): Promise<{ blob: Blob; filename: string }> =>
     apiClient.download('/staff-deductions/export', table.file_name, {
+      method: 'POST',
+      body: JSON.stringify(table),
+      timeoutMs: 120_000,
+    }),
+
+  /** Плановые удержания (миграция 357) — вкладка «Плановые удержания» кадров. */
+  planned: plannedDeductionApi('/staff-deductions/planned'),
+
+  /** xlsx вкладки «Плановые удержания» — лист «Плановые удержания». */
+  exportPlannedTable: async (table: ITableExportSnapshot): Promise<{ blob: Blob; filename: string }> =>
+    apiClient.download('/staff-deductions/planned/export', table.file_name, {
       method: 'POST',
       body: JSON.stringify(table),
       timeoutMs: 120_000,

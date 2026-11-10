@@ -72,6 +72,9 @@ vi.mock('../controllers/payroll-card-export.controller.js', () => ({
 vi.mock('../controllers/payroll-staff-deductions.controller.js', () => ({
   payrollStaffDeductionsController: h.stubController('staffDeductions'),
 }));
+vi.mock('../controllers/payroll-planned-deductions.controller.js', () => ({
+  payrollPlannedDeductionsController: h.stubController('plannedDeductions'),
+}));
 vi.mock('../controllers/deduction-subkinds.controller.js', () => ({ deductionSubkindsController: h.stubController('subkinds') }));
 vi.mock('../controllers/payroll-1c-payouts.controller.js', () => ({ payroll1cPayoutsController: h.stubController('payouts1c') }));
 
@@ -113,6 +116,10 @@ const ROUTES = [
   '/api/payroll/compensation-stops',
   '/api/payroll/staff-deductions',
   '/api/payroll/deduction-kinds',
+  '/api/payroll/planned-deductions',
+  '/api/payroll/planned-deductions/by-month?months=2026-11',
+  '/api/payroll/deductions/employee/5/planned',
+  '/api/payroll/deductions/employee/5/planned/changes',
 ];
 
 beforeEach(() => {
@@ -139,6 +146,8 @@ describe('раздел «Зарплата» по списку', () => {
     expect(h.calls).toEqual([
       'terms.list', 'sectionAccess.list', 'rates.list', 'dormitory.listForPayroll',
       'housing.list', 'housing.monthAmounts', 'supplements.list', 'stops.list', 'staffDeductions.list', 'subkinds.listKindTree',
+      'plannedDeductions.list', 'plannedDeductions.listByMonth', 'plannedDeductions.listByEmployee',
+      'plannedDeductions.listChanges',
     ]);
   });
 
@@ -147,6 +156,9 @@ describe('раздел «Зарплата» по списку', () => {
       ['post', '/api/payroll/staff-deductions', 'staffDeductions.add'],
       ['patch', '/api/payroll/staff-deductions/7', 'staffDeductions.update'],
       ['delete', '/api/payroll/staff-deductions/7', 'staffDeductions.remove'],
+      ['post', '/api/payroll/planned-deductions', 'plannedDeductions.add'],
+      ['patch', '/api/payroll/planned-deductions/7', 'plannedDeductions.update'],
+      ['delete', '/api/payroll/planned-deductions/7', 'plannedDeductions.remove'],
       ['post', '/api/payroll/deduction-kinds/3/subkinds', 'subkinds.add'],
       ['patch', '/api/payroll/deduction-subkinds/5', 'subkinds.update'],
       ['delete', '/api/payroll/deduction-subkinds/5', 'subkinds.remove'],

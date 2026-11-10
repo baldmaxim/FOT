@@ -34,6 +34,7 @@ import {
 } from '../services/staff-deductions.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { handlePayrollZodError, parsePayrollDictionaryId } from './payroll-dictionary.helpers.js';
+import { createPlannedDeductionHandlers } from './planned-deduction-handlers.js';
 import {
   deductionDictionaryEntrySchema,
   dismissedSearchFrom,
@@ -48,6 +49,7 @@ import {
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
 const DEDUCTIONS_SHEET = { sheetName: 'Удержания', tableName: 'Deductions' } as const;
+const PLANNED_DEDUCTIONS_SHEET = { sheetName: 'Плановые удержания', tableName: 'PlannedDeductions' } as const;
 
 const kindSchema = deductionDictionaryEntrySchema('Введите название вида');
 
@@ -323,6 +325,29 @@ const deleteKind = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
+/**
+ * «Плановые удержания» кадров (миграция 357): те же записи, что у «Зарплаты». Охват и права — как у помесячных:
+ * список — список кадров (галочка — вся организация), запись — canWriteDeduction; признак правки строки не нужен
+ * (вкладка правит всё в охвате, если есть «Редактирование»).
+ */
+const planned = createPlannedDeductionHandlers({
+  source: 'staff',
+  scope: async req => ({ kind: 'employees', employeeIds: await rosterEmployeeIds(req) }),
+  canWrite: canWriteDeduction,
+  editPredicate: async () => () => true,
+});
+
+/** POST /api/staff-deductions/planned/export — xlsx вкладки «Плановые удержания» ровно как на экране. */
+const exportPlannedTable = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await sendTableSnapshotXlsx(res, req.body, PLANNED_DEDUCTIONS_SHEET);
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('staffDeductions.exportPlanned error:', err);
+    res.status(500).json({ success: false, error: 'Не удалось выгрузить таблицу' });
+  }
+};
+
 export const staffDeductionsController = {
   list,
   searchEmployees,
@@ -333,4 +358,10 @@ export const staffDeductionsController = {
   addKind,
   updateKind,
   deleteKind,
+  plannedList: planned.list,
+  plannedListByMonth: planned.listByMonth,
+  plannedAdd: planned.add,
+  plannedUpdate: planned.update,
+  plannedRemove: planned.remove,
+  plannedExport: exportPlannedTable,
 };

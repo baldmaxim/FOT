@@ -5,6 +5,7 @@ import { payrollService } from '../../services/payrollService';
 import { STAFF_DEDUCTIONS_KEY } from '../../services/staffDeductionService';
 import { formatMonthLabel } from '../../utils/formatMoney';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { plannedDeductionPeriodLabel } from '../../utils/plannedDeductionTable';
 import { staffDeductionKindLabel } from '../../utils/staffDeductionTable';
 import styles from './StaffDeductionsList.module.css';
 
@@ -13,8 +14,9 @@ interface IStaffDeductionsListProps {
 }
 
 /**
- * «Удержание» окна сотрудника на «Расчётах»: удержания сотрудника (вид — подвид, месяц, сумма), новые сверху, только
- * чтение. Те же записи вносят в «Справочнике» → «Удержания» и во вкладке кадров «Удержания» (миграция 321).
+ * «Удержание» окна сотрудника на «Расчётах», только чтение: сначала плановые (вид — подвид, период, сумма ₽/мес;
+ * миграция 357), под ними помесячные (вид — подвид, месяц, сумма), новые сверху. Те же записи вносят в
+ * «Справочнике» → «Удержания» и во вкладке кадров «Удержания».
  */
 export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId }) => {
   // Префикс кадровой вкладки: правка там или в «Справочнике» перечитывает и этот список.
@@ -23,24 +25,43 @@ export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId 
     queryFn: ({ signal }) => payrollService.getEmployeeStaffDeductions(employeeId, signal),
     staleTime: 0,
   });
+  const plannedQuery = useQuery({
+    queryKey: [...STAFF_DEDUCTIONS_KEY, 'payroll-employee-planned', employeeId],
+    queryFn: ({ signal }) => payrollService.getEmployeePlannedDeductions(employeeId, signal),
+    staleTime: 0,
+  });
   const rows = useMemo(
     () => [...(query.data ?? [])].sort((a, b) => b.month.localeCompare(a.month) || b.id - a.id),
     [query.data],
   );
+  const planned = plannedQuery.data;
 
-  if (query.isError && !query.data) {
+  if ((query.isError && !query.data) || (plannedQuery.isError && !planned)) {
     return (
       <p className={styles.error}>
         Не удалось загрузить удержания
-        <button type="button" className={styles.retry} onClick={() => { void query.refetch(); }}>Повторить</button>
+        <button
+          type="button"
+          className={styles.retry}
+          onClick={() => { void query.refetch(); void plannedQuery.refetch(); }}
+        >
+          Повторить
+        </button>
       </p>
     );
   }
-  if (!query.data) return null;
-  if (rows.length === 0) return <p className={styles.empty}>Нет удержаний</p>;
+  if (!query.data || !planned) return null;
+  if (rows.length === 0 && planned.length === 0) return <p className={styles.empty}>Нет удержаний</p>;
 
   return (
     <ul className={styles.list}>
+      {planned.map(row => (
+        <li key={`planned-${row.id}`} className={styles.row}>
+          <span className={styles.kind}>{staffDeductionKindLabel(row)}</span>
+          <span className={styles.month}>{plannedDeductionPeriodLabel(row)}</span>
+          <span className={styles.amount}>{formatPayrollMoney(row.amount) ?? '—'}/мес</span>
+        </li>
+      ))}
       {rows.map(row => (
         <li key={row.id} className={styles.row}>
           <span className={styles.kind}>{staffDeductionKindLabel(row)}</span>

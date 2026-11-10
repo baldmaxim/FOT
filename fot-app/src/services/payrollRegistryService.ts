@@ -1,7 +1,7 @@
 import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
 import { payrollService } from './payrollService';
-import type { IStaffDeduction, IStaffDeductionPayload } from './staffDeductionService';
+import { plannedDeductionApi, type IStaffDeduction, type IStaffDeductionPayload } from './staffDeductionService';
 
 /**
  * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата» (со списками «Плановые доплаты» и
@@ -185,7 +185,7 @@ export interface IRegistryPeriodFields {
 
 export type PayrollRegistryTable =
   | 'housing' | 'supplements' | 'compensation-stops' | 'overtime-stops' | 'dormitory-allowances' | 'dormitory-stays'
-  | 'deductions' | 'summary' | 'calc';
+  | 'deductions' | 'planned-deductions' | 'summary' | 'calc';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
@@ -200,6 +200,7 @@ export const PAYROLL_REGISTRY_KEYS = {
   overtimeStops: ['payroll-terms', 'registry', 'overtime-stops'],
   dormitoryAllowances: ['payroll-terms', 'registry', 'dormitory-allowances'],
   deductions: ['payroll-terms', 'registry', 'deductions'],
+  plannedDeductions: ['payroll-terms', 'registry', 'planned-deductions'],
   supplementReasons: ['payroll-terms', 'registry', 'supplement-reasons'],
 } as const;
 export const PAYROLL_TERMS_PREFIX = ['payroll-terms'] as const;
@@ -397,6 +398,9 @@ export const payrollRegistryService = {
   removeDeduction: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/staff-deductions/${id}`);
   },
+
+  /** Плановые удержания (миграция 357) — те же записи, что у кадров. */
+  plannedDeductions: plannedDeductionApi('/payroll/planned-deductions'),
 
   /** xlsx ровно той таблицы, что на экране: сортировка и фильтры уже применены. */
   exportTable: (table: PayrollRegistryTable) => (snapshot: ITableExportSnapshot): Promise<{ blob: Blob; filename: string }> =>

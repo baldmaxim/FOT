@@ -7,6 +7,7 @@ import { query } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 import { getPreliminaryPayoutForEmployees, type PayrollCalcWithPreliminary } from './payroll-calc.service.js';
 import { monthPairKey } from './payroll-month-attribution.service.js';
+import { monthDeductionsSql } from './payroll-month-deductions.sql.js';
 import { lastDayOfMonth } from './payroll-payslip.rules.js';
 import {
   payrollContractorDeptsCte,
@@ -96,11 +97,10 @@ export const loadSummaryExtras = async (
       [monthStarts, ids],
     ),
     query<{ employee_id: number; month: string; kind: string; amount: string }>(
+      // Помесячные и плановые (миграция 357) — одно правило с расчётом ФОТ (monthDeductionsSql).
       `SELECT d.employee_id, to_char(d.month, 'YYYY-MM') AS month, k.name AS kind, SUM(d.amount)::text AS amount
-         FROM staff_deductions d
+         FROM (${monthDeductionsSql('$1', '$2')}) d
          JOIN payroll_deduction_kinds k ON k.id = d.kind_id
-        WHERE d.month = ANY($1::date[])
-          AND ($2::int[] IS NULL OR d.employee_id = ANY($2::int[]))
         GROUP BY d.employee_id, d.month, k.name`,
       [monthStarts, ids],
     ),

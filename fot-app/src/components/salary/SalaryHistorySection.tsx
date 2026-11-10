@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import { useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight } from 'lucide-react';
 
@@ -14,6 +14,8 @@ import {
 import { formatDate } from '../../utils/formatMoney';
 import { toMoscowDateIso } from '../../utils/moscowDate';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
+import { mergeHistory } from '../../utils/payrollHistory';
+import { PlannedDeductionChangeItem } from './PlannedDeductionChangeItem';
 import styles from './PayrollDisclosure.module.css';
 
 interface ISalaryHistorySectionProps {
@@ -201,7 +203,7 @@ const renderSalaryChange = (change: ISalaryChange & { kind: 'salary' }) => {
 
 /**
  * «История изменений условий оплаты» — раскрываемый блок, свёрнут по умолчанию.
- * Оклад / ставка и плановая доплата одним журналом, по времени изменения (новые сверху).
+ * Оклад / ставка, плановая доплата и плановые удержания одним журналом, по времени изменения (новые сверху).
  * Было → стало; разница — только при том же виде оплаты (оклад со ставкой не сравнить).
  * Пустая история — не то же самое, что отсутствие условий: пишем нейтрально.
  */
@@ -212,11 +214,23 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
     queryFn: ({ signal }) => payrollService.getTermsChanges(employeeId, signal),
     staleTime: 30_000,
   });
-  const { data } = historyQuery;
+  // Тоже под 'payroll-terms': правка плановых удержаний (invalidateDeductionQueries) сбрасывает его.
+  const deductionQuery = useQuery({
+    queryKey: ['payroll-terms', 'planned-deduction-changes', employeeId],
+    queryFn: ({ signal }) => payrollService.getEmployeePlannedDeductionChanges(employeeId, signal),
+    staleTime: 30_000,
+  });
+  const data = useMemo(() => mergeHistory(historyQuery.data, deductionQuery.data), [historyQuery.data, deductionQuery.data]);
+  const isPending = historyQuery.isPending || deductionQuery.isPending;
+  const isError = historyQuery.isError || deductionQuery.isError;
+  const refetch = () => {
+    if (historyQuery.isError) void historyQuery.refetch();
+    if (deductionQuery.isError) void deductionQuery.refetch();
+  };
 
   let meta: string;
-  if (historyQuery.isPending) meta = 'загрузка…';
-  else if (historyQuery.isError) meta = 'не удалось загрузить';
+  if (isError) meta = 'не удалось загрузить';
+  else if (isPending) meta = 'загрузка…';
   else meta = data && data.length > 0 ? `записей: ${data.length}` : 'изменений нет';
 
   return (
@@ -226,17 +240,17 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
           <ChevronRight size={16} className={styles.chevron} aria-hidden="true" />
           <span className={styles.summaryTitle}>История изменений условий оплаты</span>
         </span>
-        <span className={historyQuery.isError ? `${styles.summaryMeta} ${styles.summaryMetaError}` : styles.summaryMeta}>
+        <span className={isError ? `${styles.summaryMeta} ${styles.summaryMetaError}` : styles.summaryMeta}>
           {meta}
         </span>
       </summary>
 
       <div className={styles.content}>
-        {historyQuery.isPending && <p className={styles.state}>Загрузка…</p>}
-        {historyQuery.isError && (
+        {isPending && !isError && <p className={styles.state}>Загрузка…</p>}
+        {isError && (
           <div className={styles.stateError}>
             <span>Не удалось загрузить историю</span>
-            <button type="button" className={styles.retryButton} onClick={() => { void historyQuery.refetch(); }}>
+            <button type="button" className={styles.retryButton} onClick={refetch}>
               Повторить
             </button>
           </div>
@@ -246,9 +260,11 @@ export const SalaryHistorySection: FC<ISalaryHistorySectionProps> = ({ employeeI
 
         {data && data.length > 0 && (
           <ul className={styles.list}>
-            {data.map(change => (
-              change.kind === 'supplement' ? renderSupplementChange(change) : renderSalaryChange(change)
-            ))}
+            {data.map(entry => {
+              if (entry.source === 'deduction') return <PlannedDeductionChangeItem key={entry.key} change={entry.change} />;
+              const { change } = entry;
+              return change.kind === 'supplement' ? renderSupplementChange(change) : renderSalaryChange(change);
+            })}
           </ul>
         )}
       </div>

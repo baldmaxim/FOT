@@ -6,8 +6,8 @@ import jwt from 'jsonwebtoken';
 /**
  * «Удержания» кадров (миграции 318, 321): право /staff-control/deductions. Проверка прав НАСТОЯЩАЯ
  * (resolveEffectivePageAccess) и роутер настоящий, контроллеры — заглушки со счётчиком вызовов.
- * «Просмотр» — список, выгрузка и виды с подвидами; добавление, правка, удаление, поиск, правка видов и подвидов —
- * только с «Редактированием».
+ * «Просмотр» — список, выгрузка и виды с подвидами (и плановые — миграция 357); добавление, правка, удаление,
+ * поиск, правка видов и подвидов — только с «Редактированием».
  */
 
 const h = vi.hoisted(() => {
@@ -89,12 +89,18 @@ const READS: Array<['get' | 'post', string]> = [
   ['get', '/api/staff-deductions'],
   ['post', '/api/staff-deductions/export'],
   ['get', '/api/staff-deductions/kinds'],
+  ['get', '/api/staff-deductions/planned'],
+  ['get', '/api/staff-deductions/planned/by-month?months=2026-11'],
+  ['post', '/api/staff-deductions/planned/export'],
 ];
 const WRITES: Array<['get' | 'post' | 'patch' | 'delete', string]> = [
   ['get', '/api/staff-deductions/employees/search?q=Кар'],
   ['post', '/api/staff-deductions'],
   ['patch', '/api/staff-deductions/7'],
   ['delete', '/api/staff-deductions/7'],
+  ['post', '/api/staff-deductions/planned'],
+  ['patch', '/api/staff-deductions/planned/7'],
+  ['delete', '/api/staff-deductions/planned/7'],
   ['post', '/api/staff-deductions/kinds'],
   ['patch', '/api/staff-deductions/kinds/3'],
   ['delete', '/api/staff-deductions/kinds/3'],
@@ -116,7 +122,10 @@ describe('права вкладки «Удержания»', () => {
     for (const [method, url] of WRITES) {
       expect((await send(method, url, 'hr')).status, `${method} ${url}`).toBe(403);
     }
-    expect(h.calls).toEqual(['deductions.list', 'deductions.exportTable', 'subkinds.listKindTree']);
+    expect(h.calls).toEqual([
+      'deductions.list', 'deductions.exportTable', 'subkinds.listKindTree',
+      'deductions.plannedList', 'deductions.plannedListByMonth', 'deductions.plannedExport',
+    ]);
   });
 
   it('«Редактирование» — всё', async () => {
@@ -124,8 +133,10 @@ describe('права вкладки «Удержания»', () => {
       expect((await send(method, url, 'hr_admin')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual([
-      'deductions.list', 'deductions.exportTable', 'subkinds.listKindTree', 'deductions.searchEmployees',
-      'deductions.add', 'deductions.update', 'deductions.remove',
+      'deductions.list', 'deductions.exportTable', 'subkinds.listKindTree',
+      'deductions.plannedList', 'deductions.plannedListByMonth', 'deductions.plannedExport',
+      'deductions.searchEmployees', 'deductions.add', 'deductions.update', 'deductions.remove',
+      'deductions.plannedAdd', 'deductions.plannedUpdate', 'deductions.plannedRemove',
       'deductions.addKind', 'deductions.updateKind', 'deductions.deleteKind',
       'subkinds.add', 'subkinds.update', 'subkinds.remove',
     ]);

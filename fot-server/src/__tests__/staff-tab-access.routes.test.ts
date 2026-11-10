@@ -65,6 +65,9 @@ vi.mock('../controllers/staff-deductions.controller.js', () => ({ staffDeduction
 vi.mock('../controllers/deduction-subkinds.controller.js', () => ({ deductionSubkindsController: h.stubController('subkinds') }));
 vi.mock('../controllers/dormitory-stays.controller.js', () => ({ dormitoryStaysController: h.stubController('dormitory') }));
 vi.mock('../controllers/payroll-deductions.controller.js', () => ({ payrollDeductionsController: h.stubController('payrollDeductions') }));
+vi.mock('../controllers/payroll-planned-deductions.controller.js', () => ({
+  payrollPlannedDeductionsController: h.stubController('payrollPlanned'),
+}));
 vi.mock('../controllers/staff-tab-access.controller.js', () => ({
   staffTabAccessController: {
     dormitory: h.stubController('grantDormitory'),
@@ -112,6 +115,13 @@ const DEDUCTION_ROUTES: Array<[Method, string]> = [
   ['post', '/api/staff-deductions'],
   ['patch', '/api/staff-deductions/5'],
   ['delete', '/api/staff-deductions/5'],
+  // Плановые удержания (миграция 357) — та же вкладка.
+  ['get', '/api/staff-deductions/planned'],
+  ['get', '/api/staff-deductions/planned/by-month?months=2026-11'],
+  ['post', '/api/staff-deductions/planned/export'],
+  ['post', '/api/staff-deductions/planned'],
+  ['patch', '/api/staff-deductions/planned/5'],
+  ['delete', '/api/staff-deductions/planned/5'],
 ];
 
 const DEDUCTION_KIND_ROUTES: Array<[Method, string]> = [
@@ -138,6 +148,9 @@ const PAYROLL_ROUTES: Array<[Method, string]> = [
   ['get', '/api/payroll/deduction-kinds'],
   ['post', '/api/payroll/deduction-kinds'],
   ['get', '/api/payroll/deductions/employee/5/staff'],
+  ['get', '/api/payroll/planned-deductions'],
+  ['post', '/api/payroll/planned-deductions'],
+  ['get', '/api/payroll/deductions/employee/5/planned'],
 ];
 
 const GRANT_ROUTES: Array<[Method, string]> = [

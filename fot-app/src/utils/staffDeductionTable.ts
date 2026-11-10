@@ -16,7 +16,12 @@ export const staffDeductionKindLabel = (row: Pick<IStaffDeduction, 'kind_name' |
   row.subkind_name ? `${row.kind_name} — ${row.subkind_name}` : row.kind_name
 );
 
-export const STAFF_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IStaffDeduction>> = [
+/** Что показывают столбцы удержания: и помесячное, и строка «Удержаний за месяц» с плановыми (миграция 357). */
+type StaffDeductionCells = Pick<
+  IStaffDeduction, 'full_name' | 'department' | 'position' | 'kind_name' | 'subkind_name' | 'month' | 'amount'
+>;
+
+export const staffDeductionColumns = <Row extends StaffDeductionCells>(): Array<IRegistryColumn<Row>> => [
   {
     key: 'full_name',
     label: 'ФИО',
@@ -69,6 +74,8 @@ export const STAFF_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IStaffDeduct
     exportValue: row => row.amount,
   },
 ];
+
+export const STAFF_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IStaffDeduction>> = staffDeductionColumns<IStaffDeduction>();
 
 /** Удержание в выбранных месяцах; пустой выбор — «Весь период». */
 export const staffDeductionInMonths = (row: IStaffDeduction, months: ReadonlyArray<string>): boolean => (

@@ -3,6 +3,7 @@ import type { IPayrollCardExport } from '../utils/payrollCardExport';
 import type {
   IDeductionSubkind,
   IDeductionSubkindsApi,
+  IPlannedDeduction,
   IStaffDeduction,
   IStaffDeductionKind,
 } from './staffDeductionService';
@@ -294,6 +295,29 @@ export interface IPlannedSupplementChange {
 export type IPayrollTermsChange =
   | (ISalaryChange & { kind: 'salary' })
   | (IPlannedSupplementChange & { kind: 'supplement' });
+
+/**
+ * Изменение планового удержания (миграция 357) — запись «Истории изменений» карточки: назначено, изменено,
+ * убрано с месяца (период закрыт), удалено. Названия — как были в момент изменения; месяцы — YYYY-MM.
+ */
+export interface IPlannedDeductionChange {
+  id: number;
+  planned_id: number;
+  action: 'assigned' | 'changed' | 'closed' | 'removed';
+  kind_name: string | null;
+  subkind_name: string | null;
+  amount: string | null;
+  month_from: string | null;
+  month_to: string | null;
+  prev_kind_name: string | null;
+  prev_subkind_name: string | null;
+  prev_amount: string | null;
+  prev_month_from: string | null;
+  prev_month_to: string | null;
+  changed_by_name: string | null;
+  /** ISO. */
+  changed_at: string;
+}
 
 export type VacationStatus = 'vacation' | 'unpaid' | 'educational_leave';
 
@@ -901,6 +925,24 @@ export const payrollService = {
   getEmployeeStaffDeductions: async (employeeId: number, signal?: AbortSignal): Promise<IStaffDeduction[]> => {
     const res = await apiClient.get<IApiResponse<IStaffDeduction[]>>(
       `/payroll/deductions/employee/${employeeId}/staff`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Плановые удержания сотрудника (миграция 357), новые сверху — окно сотрудника, только чтение. */
+  getEmployeePlannedDeductions: async (employeeId: number, signal?: AbortSignal): Promise<IPlannedDeduction[]> => {
+    const res = await apiClient.get<IApiResponse<IPlannedDeduction[]>>(
+      `/payroll/deductions/employee/${employeeId}/planned`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** История плановых удержаний сотрудника для «Истории изменений» карточки, новые сверху. */
+  getEmployeePlannedDeductionChanges: async (employeeId: number, signal?: AbortSignal): Promise<IPlannedDeductionChange[]> => {
+    const res = await apiClient.get<IApiResponse<IPlannedDeductionChange[]>>(
+      `/payroll/deductions/employee/${employeeId}/planned/changes`,
       { signal },
     );
     return res.data;

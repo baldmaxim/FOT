@@ -15,6 +15,7 @@ import { payrollDormitoryAllowancesController } from '../controllers/payroll-dor
 import { payrollHousingController } from '../controllers/payroll-housing.controller.js';
 import { payrollOvertimeStopsController } from '../controllers/payroll-overtime-stops.controller.js';
 import { payrollPaidController } from '../controllers/payroll-paid.controller.js';
+import { payrollPlannedDeductionsController } from '../controllers/payroll-planned-deductions.controller.js';
 import { payrollRatesController } from '../controllers/payroll-rates.controller.js';
 import { payrollRegistryController } from '../controllers/payroll-registry.controller.js';
 import { dormitoryStaysController } from '../controllers/dormitory-stays.controller.js';
@@ -90,6 +91,9 @@ router.patch('/deduction-subkinds/:id', deductionsEdit, deductionSubkindsControl
 router.delete('/deduction-subkinds/:id', deductionsEdit, deductionSubkindsController.remove);
 // Удержания сотрудника (staff_deductions, миграции 318, 321) — в окне сотрудника только для чтения.
 router.get('/deductions/employee/:empId/staff', deductionsView, payrollDeductionsController.getStaffByEmployee);
+// Плановые удержания сотрудника (миграция 357) и их история — окно сотрудника, только чтение.
+router.get('/deductions/employee/:empId/planned', deductionsView, payrollPlannedDeductionsController.listByEmployee);
+router.get('/deductions/employee/:empId/planned/changes', deductionsView, payrollPlannedDeductionsController.listChanges);
 
 // ─── Справочник ставок (окно «Справочник» на «Расчётах») ─────────────────────
 router.get('/rates', deductionsView, payrollRatesController.list);
@@ -151,8 +155,14 @@ router.get('/staff-deductions', deductionsView, payrollStaffDeductionsController
 router.post('/staff-deductions', termsEdit, payrollStaffDeductionsController.add);
 router.patch('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.update);
 router.delete('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.remove);
+// «Плановые удержания» (миграция 357): те же записи, что у кадров; by-month — развёртка по месяцам, как в расчёте.
+router.get('/planned-deductions', deductionsView, payrollPlannedDeductionsController.list);
+router.get('/planned-deductions/by-month', deductionsView, payrollPlannedDeductionsController.listByMonth);
+router.post('/planned-deductions', termsEdit, payrollPlannedDeductionsController.add);
+router.patch('/planned-deductions/:id', termsEdit, payrollPlannedDeductionsController.update);
+router.delete('/planned-deductions/:id', termsEdit, payrollPlannedDeductionsController.remove);
 // «Экспорт» видимых строк таблицы (:table — housing, supplements, compensation-stops, overtime-stops, dormitory-allowances,
-// dormitory-stays, deductions, summary).
+// dormitory-stays, deductions, planned-deductions, summary).
 router.post('/registry/:table/export', deductionsView, payrollRegistryController.exportTable);
 
 // ─── «Свод» на «Расчётах»: «Оплачено» по объектам и категориям (только чтение) ──

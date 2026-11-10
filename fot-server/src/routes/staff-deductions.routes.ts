@@ -28,6 +28,13 @@ router.post('/kinds/:id/subkinds', deductionKindsEdit, subkinds.add);
 router.patch('/subkinds/:id', deductionKindsEdit, subkinds.update);
 router.delete('/subkinds/:id', deductionKindsEdit, subkinds.remove);
 router.get('/employees/search', deductionsEdit, c.searchEmployees);
+// «Плановые удержания» (миграция 357) — те же записи, что у «Зарплаты»; by-month — развёртка по месяцам, как в расчёте.
+router.get('/planned', deductionsView, c.plannedList);
+router.get('/planned/by-month', deductionsView, c.plannedListByMonth);
+router.post('/planned/export', deductionsView, c.plannedExport);
+router.post('/planned', deductionsEdit, c.plannedAdd);
+router.patch('/planned/:id', deductionsEdit, c.plannedUpdate);
+router.delete('/planned/:id', deductionsEdit, c.plannedRemove);
 router.post('/', deductionsEdit, c.add);
 router.patch('/:id', deductionsEdit, c.update);
 router.delete('/:id', deductionsEdit, c.remove);

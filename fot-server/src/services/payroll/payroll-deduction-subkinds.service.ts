@@ -105,7 +105,11 @@ export const deleteSubkind = async (id: number): Promise<IDeductionSubkind | { i
   } catch (err) {
     if (!isPgReferencedRow(err)) throw err;
     const used = await queryOne<{ total: number }>(
-      `SELECT count(DISTINCT employee_id)::int AS total FROM staff_deductions WHERE subkind_id = $1`,
+      // Помесячные и плановые (миграция 357): человек с обоими — один.
+      `SELECT count(DISTINCT employee_id)::int AS total
+         FROM (SELECT employee_id FROM staff_deductions WHERE subkind_id = $1
+               UNION ALL
+               SELECT employee_id FROM payroll_planned_deductions WHERE subkind_id = $1) used`,
       [id],
     );
     return { inUse: used?.total ?? 0 };
