@@ -255,6 +255,51 @@
   overflow-wrap: anywhere;
 }
 
+/* Строка «Сотрудников» на телефоне: ФИО — первой строкой, назначение, «По графику» и «Снять» — справа ниже. */
+.rowWrap {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.rowWrap .rowText {
+  flex: 1 0 100%;
+  padding-top: 8px;
+}
+
+.rowWrap .assignedLabel {
+  margin-left: auto;
+}
+
+/* «По графику» в строке «Сотрудников»: кликается вся подпись, тап-цель не меньше 44 px. */
+.scheduleLabel {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.scheduleLabel input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--success);
+  cursor: pointer;
+}
+
+.scheduleLabel input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .removeButton {
   flex: 0 0 auto;
   min-height: 44px;
@@ -533,6 +578,23 @@
     min-height: 44px;
   }
 
+  .rowWrap {
+    flex-wrap: nowrap;
+  }
+
+  .rowWrap .rowText {
+    flex: 1;
+    padding-top: 0;
+  }
+
+  .rowWrap .assignedLabel {
+    margin-left: 0;
+  }
+
+  .scheduleLabel {
+    min-height: 34px;
+  }
+
   .removeButton,
   .rowButton {
     min-height: 34px;
@@ -603,6 +665,10 @@
 
   .scheduleToggle {
     height: 44px;
+  }
+
+  .scheduleLabel {
+    min-height: 44px;
   }
 }
 

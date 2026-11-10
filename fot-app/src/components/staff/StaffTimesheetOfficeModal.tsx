@@ -67,6 +67,7 @@ interface IStaffTimesheetOfficeModalProps {
  * Кому объект поставлен здесь, тому ночной пересчёт объект по часам не ставит.
  * «По графику» (миграция 358): сотруднику в табеле — норма дня по графику без СКУД.
  * Клики по «Офис», выбор в списке и галочки — отметки; записывает их одна кнопка «Сохранить» внизу.
+ * Блок «Назначено» пишет сразу: «Снять» и галочка «По графику» в строке сотрудника.
  */
 export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({ deptTree, onClose }) => {
   const toast = useToast();
@@ -219,8 +220,23 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
     void submit({ schedule: { remove: [id] } }, 'Снято');
   };
 
-  const assignedCount = (state?.departments.length ?? 0) + (state?.employees.length ?? 0)
-    + (state?.schedule_employees.length ?? 0);
+  /** Галочка в строке «Сотрудников»: поставить — сразу, снять — с подтверждением, как «Снять». */
+  const toggleListedSchedule = (id: number, fullName: string, checked: boolean): void => {
+    if (checked) void submit({ schedule: { add: [id] } }, 'Сохранено');
+    else removeSchedule(id, fullName);
+  };
+
+  // «По графику»: у кого есть личное назначение — галочкой в строке «Сотрудников», остальные — своей группой.
+  const scheduleFrom = useMemo(
+    () => new Map((state?.schedule_employees ?? []).map(item => [item.id, item.date_from])),
+    [state?.schedule_employees],
+  );
+  const scheduleOnly = useMemo(() => {
+    const listed = new Set((state?.employees ?? []).map(item => item.id));
+    return (state?.schedule_employees ?? []).filter(item => !listed.has(item.id));
+  }, [state?.employees, state?.schedule_employees]);
+
+  const assignedCount = (state?.departments.length ?? 0) + (state?.employees.length ?? 0) + scheduleOnly.length;
 
   return (
     <div className="sc-overlay" {...dismiss}>
@@ -332,32 +348,48 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
               <div className={styles.group}>
                 <div className={styles.groupTitle}>Сотрудники</div>
                 <ul className={styles.list}>
-                  {state.employees.map(item => (
-                    <li key={item.id} className={styles.row}>
-                      <span className={styles.rowText}>
-                        {item.full_name}
-                        {item.department && <span className={styles.muted}> · {item.department}</span>}
-                      </span>
-                      <span className={styles.assignedLabel}>{item.label}</span>
-                      <button
-                        type="button"
-                        className={styles.removeButton}
-                        onClick={() => removeEmployee(item.id, item.full_name, item.label)}
-                        disabled={busy}
-                      >
-                        Снять
-                      </button>
-                    </li>
-                  ))}
+                  {state.employees.map(item => {
+                    const scheduleDate = scheduleFrom.get(item.id);
+                    return (
+                      <li key={item.id} className={`${styles.row} ${styles.rowWrap}`}>
+                        <span className={styles.rowText}>
+                          {item.full_name}
+                          {item.department && <span className={styles.muted}> · {item.department}</span>}
+                        </span>
+                        <span className={styles.assignedLabel}>{item.label}</span>
+                        <label
+                          className={styles.scheduleLabel}
+                          title={scheduleDate ? `По графику с ${formatDate(scheduleDate)}` : undefined}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={scheduleDate !== undefined}
+                            onChange={event => toggleListedSchedule(item.id, item.full_name, event.target.checked)}
+                            disabled={busy}
+                            aria-label={`«По графику»: ${item.full_name}`}
+                          />
+                          По графику
+                        </label>
+                        <button
+                          type="button"
+                          className={styles.removeButton}
+                          onClick={() => removeEmployee(item.id, item.full_name, item.label)}
+                          disabled={busy}
+                        >
+                          Снять
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
 
-            {state && state.schedule_employees.length > 0 && (
+            {scheduleOnly.length > 0 && (
               <div className={styles.group}>
                 <div className={styles.groupTitle}>По графику</div>
                 <ul className={styles.list}>
-                  {state.schedule_employees.map(item => (
+                  {scheduleOnly.map(item => (
                     <li key={item.id} className={styles.row}>
                       <span className={styles.rowText}>
                         {item.full_name}
