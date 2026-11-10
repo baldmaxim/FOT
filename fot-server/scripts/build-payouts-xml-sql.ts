@@ -134,6 +134,12 @@ const writePrivate = (file: string, content: string | Buffer): void => {
   fs.chmodSync(file, 0o600);
 };
 const sqlText = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+const TRANSLIT: Readonly<Record<string, string>> = Object.fromEntries(
+  [...'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'].map((ch, index) => [ch, [
+    'a', 'b', 'v', 'g', 'd', 'e', 'e', 'zh', 'z', 'i', 'i', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 't', 'u', 'f', 'h', 'c', 'ch',
+    'sh', 'sch', '', 'y', '', 'e', 'yu', 'ya',
+  ][index]]),
+);
 
 type DecisionKind = 'id_all' | 'single' | 'worked' | 'earlier' | 'ambiguous' | 'none';
 const DECISION_LABELS: ReadonlyArray<[DecisionKind, string]> = [
@@ -565,7 +571,10 @@ const main = async (): Promise<void> => {
     addSheet('Все', everyone, [40, 8, 40, 36, 36, ...methodsOrder.map(() => 14), 16]);
     addSheet('Не загружено', skippedRows, [14, 12, 30, 8, 16]);
 
-    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}${replace ? '-replace' : ''}`);
+    // Вид — латиницей в имени файла: «-replace» без вида уже занят заменой регистра (build-payouts-register-sql.ts).
+    const methodSlug = (replaceMethod ?? '').toLowerCase().split('').map(ch => TRANSLIT[ch] ?? (/[a-z0-9]/.test(ch) ? ch : '-')).join('')
+      .replace(/-+/g, '-').replace(/^-|-$/g, '');
+    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}${replace ? `-replace-${methodSlug}` : ''}`);
     const files = {
       sql: `${base}.sql`,
       rollback: `${base}-rollback.sql`,
