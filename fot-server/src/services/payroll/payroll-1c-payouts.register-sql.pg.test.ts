@@ -245,6 +245,56 @@ describe.skipIf(!PG_URL)('регистр выплат ЗУП: SQL замены �
     expect(await guids()).toEqual([A.doc.guid, B.doc.guid, AUG.doc.guid]);
   });
 
+  it('замена одного вида на ведомости XML (премии сентября): открытая транзакция, повтор, обратная замена', async () => {
+    // Премии регистра (B) → премии XML (с зарплатным проектом и id_all); аванс A и август не трогаются.
+    const xml = part('c1000000-0000-5000-8000-000000000021', '0000-002749', 'Премии', [['Петров Пётр', 8000, 2], ['Иванов Иван', 50, 1]]);
+    const ID_ALL = 'aaaaaaaa-0000-0000-0000-000000000002';
+    const xmlTo: IRegisterSqlInput = {
+      header: ['xml'],
+      documents: [A.doc, { ...xml.doc, salaryProject: 'Банк №1' }],
+      lines: [...A.lines, ...xml.lines.map((line, index) => ({ ...line, department: null, personIdAll: index === 0 ? ID_ALL : null }))],
+    };
+    const { db } = (await pool.query<{ db: string }>('SELECT current_database() AS db')).rows[0];
+    const open = { database: db, controls: ["\\echo 'КОНТРОЛЬ'", 'SELECT 1;'] };
+    const replace = buildRegisterReplaceSql(['замена премий'], FROM, xmlTo, MONTH, open);
+    const rollback = buildRegisterReplaceSql(['откат'], xmlTo, FROM, MONTH, open);
+    expect(replace).not.toMatch(/^COMMIT;$/m);
+    expect(replace).toMatch(/^\\echo 'Транзакция ОТКРЫТА/m);
+
+    const runOpen = async (sql: string, finish: 'COMMIT' | 'ROLLBACK' = 'COMMIT'): Promise<string[]> => {
+      const client = await pool.connect();
+      try {
+        const notices = await runScript(sql, client);
+        await client.query(finish);
+        return notices;
+      } finally {
+        client.release();
+      }
+    };
+    const before = await state();
+    // ROLLBACK оператора — ничего не записано.
+    expect(await runOpen(replace, 'ROLLBACK')).toContain('Оставлено документов: 1, удалено: 1, добавлено: 1 (строк 2)');
+    expect(await state()).toEqual(before);
+
+    expect(await runOpen(replace)).toContain('Оставлено документов: 1, удалено: 1, добавлено: 1 (строк 2)');
+    const after = await state();
+    expect(after.map(row => row.guid)).toEqual([A.doc.guid, xml.doc.guid, AUG.doc.guid]);
+    expect(after[0]).toEqual(before.find(row => row.guid === A.doc.guid));
+    const saved = (await pool.query(
+      `SELECT d.salary_project, l.person_id_all::text AS id_all, l.employee_id FROM payroll_1c_payout_documents d
+         JOIN payroll_1c_payout_lines l ON l.document_id = d.id WHERE d.doc_guid = $1 ORDER BY l.line_no`,
+      [xml.doc.guid],
+    )).rows;
+    expect(saved).toEqual([
+      { salary_project: 'Банк №1', id_all: ID_ALL, employee_id: 2 },
+      { salary_project: 'Банк №1', id_all: null, employee_id: 1 },
+    ]);
+    expect(await runOpen(replace)).toContain('Без изменений: документы месяца уже ровно этот набор');
+
+    expect(await runOpen(rollback)).toContain('Оставлено документов: 1, удалено: 1, добавлено: 1 (строк 1)');
+    expect(withoutIds(await state())).toEqual(withoutIds(before));
+  });
+
   it('сбой после удаления (строки вставились не такими) — откатывается вся транзакция', async () => {
     await pool.query(`
       CREATE FUNCTION test_spoil_line() RETURNS trigger LANGUAGE plpgsql AS $$

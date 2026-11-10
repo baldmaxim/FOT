@@ -344,10 +344,10 @@ const pairKey = (doc: IRegisterSqlDocument): string => `${doc.guid}|${doc.conten
 
 /**
  * Замена документов месяца: from → to (полные наборы месяца). Откат — та же функция с from и to наоборот.
- * Документы с теми же ГУИДом и хешем не трогаются.
+ * Документы с теми же ГУИДом и хешем не трогаются. open — транзакция остаётся открытой (COMMIT пишет оператор).
  */
 export const buildRegisterReplaceSql = (
-  header: readonly string[], from: IRegisterSqlInput, to: IRegisterSqlInput, periodMonth: string,
+  header: readonly string[], from: IRegisterSqlInput, to: IRegisterSqlInput, periodMonth: string, open?: IOpenTransaction,
 ): string => {
   const toKeys = new Set(to.documents.map(pairKey));
   const fromKeys = new Set(from.documents.map(pairKey));
@@ -358,7 +358,7 @@ export const buildRegisterReplaceSql = (
   const kept = to.documents.length - added.length;
   return `${comment([...header])}
 
-${begin([...from.documents, ...to.documents].map(doc => doc.lockKey), true)}
+${begin([...from.documents, ...to.documents].map(doc => doc.lockKey), true, open)}
 ${createSet('reg_from', from)}
 ${createSet('reg_to', to)}
 DO $$
@@ -386,6 +386,5 @@ ${employeeTotalsSaved('reg_to', 'После замены суммы по сот�
   END IF;
 END $$;
 
-COMMIT;
-`;
+${finish(open)}`;
 };

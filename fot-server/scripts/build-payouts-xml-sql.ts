@@ -12,13 +12,19 @@
  * Догрузка: ведомости, уже лежащие в БД с тем же ГУИДом и хешем, пропускаются; тот же ГУИД с другим содержимым или
  * тот же номер с датой под другим ГУИДом — ошибка.
  *
+ * --replace-method <вид> (решение пользователя 10.11.2026: премии сентября — все из XML): ведомости этого вида за месяц
+ * заменяются ведомостями файла этого вида, остальные документы месяца не трогаются, другие виды файла не грузятся.
+ * Месяц на проде читается одним снимком (payouts-register-replace.ts) и обязан быть в форме загрузки регистром;
+ * SQL — buildRegisterReplaceSql (откат — обратная замена). Сотрудник строки файла обязан совпасть с тем, кому в этом
+ * месяце уже сопоставлено то же ФИО, иначе — стоп.
+ *
  * Работает на read-only проде (роль mcp_readonly из --env-file) и в базу ничего не пишет. Файлы — в --out-dir,
  * права 600, не в git (ФИО и суммы). Исходники с незакоммиченными правками — отказ: SQL и manifest подписаны HEAD.
  * SQL — с открытой транзакцией: \i в интерактивном psql, сверка КОНТРОЛЯ, затем COMMIT; или ROLLBACK;.
  *
  * Запуск:
  *   cd fot-server && TZ=UTC npx tsx scripts/build-payouts-xml-sql.ts --file <xml> --month 2026-10 \
- *     [--skip-method Премии] [--out-dir ~] [--env-file ~/.config/mcp/env] [--database FOT_Prod]
+ *     [--skip-method Премии | --replace-method Премии] [--out-dir ~] [--env-file ~/.config/mcp/env] [--database FOT_Prod]
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -31,8 +37,10 @@ import * as XLSX from 'xlsx';
 import type { IPayoutCandidate } from '../src/services/payroll/payroll-1c-payouts.matching.js';
 import { parsePayout1cMonthXml, type IPayout1cMonthDocument } from '../src/services/payroll/payroll-1c-payouts.month-xml.js';
 import { normalizePayoutName, type IPayout1cLine } from '../src/services/payroll/payroll-1c-payouts.parser.js';
+import { buildReplaceTarget, loadMonthSnapshot, snapshotToInput } from './lib/payouts-register-replace.js';
 import {
   buildRegisterLoadSql,
+  buildRegisterReplaceSql,
   buildRegisterRollbackSql,
   type IRegisterSqlDocument,
   type IRegisterSqlInput,
@@ -46,6 +54,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const SOURCE_PATHS = [
   'fot-server/scripts/build-payouts-xml-sql.ts',
   'fot-server/scripts/lib/payouts-register-sql.ts',
+  'fot-server/scripts/lib/payouts-register-replace.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.month-xml.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.parser.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.matching.ts',
@@ -56,14 +65,16 @@ const SOURCE_PATHS = [
   'fot-server/src/config/env.ts',
 ];
 
-interface IArgs { file: string; month: string; skipMethods: string[]; outDir: string; envFile: string; database: string }
+interface IArgs {
+  file: string; month: string; skipMethods: string[]; replaceMethod: string | null; outDir: string; envFile: string; database: string;
+}
 
 const parseArgs = (argv: readonly string[]): IArgs => {
   const values = new Map<string, string>();
   const skipMethods: string[] = [];
   for (let i = 0; i < argv.length; i += 2) {
     const [name, value] = [argv[i], argv[i + 1]];
-    if (!['--file', '--month', '--skip-method', '--out-dir', '--env-file', '--database'].includes(name)
+    if (!['--file', '--month', '--skip-method', '--replace-method', '--out-dir', '--env-file', '--database'].includes(name)
       || value === undefined || value.startsWith('--')) {
       throw new Error(`Неизвестный или пустой аргумент «${name}»`);
     }
@@ -73,10 +84,13 @@ const parseArgs = (argv: readonly string[]): IArgs => {
   const file = values.get('--file');
   const month = values.get('--month');
   if (!file || !month || !/^\d{4}-\d{2}$/.test(month)) throw new Error('Нужны --file <xml> и --month YYYY-MM');
+  const replaceMethod = values.get('--replace-method') ?? null;
+  if (replaceMethod !== null && skipMethods.length > 0) throw new Error('--replace-method и --skip-method вместе не используются');
   return {
     file,
     month,
     skipMethods,
+    replaceMethod,
     outDir: values.get('--out-dir') ?? os.homedir(),
     envFile: values.get('--env-file') ?? path.join(os.homedir(), '.config', 'mcp', 'env'),
     database: values.get('--database') ?? 'FOT_Prod',
@@ -165,7 +179,7 @@ const main = async (): Promise<void> => {
   const args = parseArgs(process.argv.slice(2));
   const gitHead = sourceHead();
   loadReadonlyEnv(args.envFile);
-  const { query, closeDb } = await import('../src/config/postgres.js');
+  const { query, closeDb, withReadOnlySnapshot } = await import('../src/config/postgres.js');
   const { loadPayoutEligibility, matchPayoutLines, SQL_NAME } = await import('../src/services/payroll/payroll-1c-payouts.matching.js');
   const { payoutNumberLockKey } = await import('../src/services/payroll/payroll-1c-payouts.service.js');
   try {
@@ -185,8 +199,15 @@ const main = async (): Promise<void> => {
     const methods = new Set(parsed.map(doc => doc.paymentMethod));
     const unknownSkip = args.skipMethods.filter(method => !methods.has(method));
     if (unknownSkip.length > 0) throw new Error(`--skip-method: в файле нет вида «${unknownSkip.join('», «')}»`);
-    const skipped = parsed.filter(doc => args.skipMethods.includes(doc.paymentMethod));
-    const wanted = parsed.filter(doc => !args.skipMethods.includes(doc.paymentMethod));
+    const replaceMethod = args.replaceMethod;
+    if (replaceMethod !== null && !methods.has(replaceMethod)) throw new Error(`--replace-method: в файле нет вида «${replaceMethod}»`);
+    // Не грузятся: --skip-method, а при замене — все виды, кроме заменяемого (они уже в месяце и не трогаются).
+    const isSkipped = (doc: IPayout1cMonthDocument): boolean => (
+      replaceMethod !== null ? doc.paymentMethod !== replaceMethod : args.skipMethods.includes(doc.paymentMethod)
+    );
+    const skipped = parsed.filter(isSkipped);
+    const wanted = parsed.filter(doc => !isSkipped(doc));
+    const skippedMethods = [...new Set(skipped.map(doc => doc.paymentMethod))].sort((a, b) => a.localeCompare(b, 'ru'));
 
     // Уже в БД: тот же ГУИД и хеш — пропуск; иначе — ошибка.
     const stored = await query<{ doc_guid: string; doc_number: string; doc_date: string; content_hash: string; period_month: string }>(
@@ -290,6 +311,39 @@ const main = async (): Promise<void> => {
       lineCount: doc.lines.length, lockKey: payoutNumberLockKey(doc.docNumber, doc.docDate), salaryProject: doc.salaryProject,
     }));
 
+    // --replace-method: месяц на проде одним снимком; новый набор = документы месяца других видов как есть + файл.
+    const replace = replaceMethod === null ? null : await (async () => {
+      const snapshot = await withReadOnlySnapshot(client => loadMonthSnapshot(client, periodMonth));
+      const from = snapshotToInput(snapshot, periodMonth, payoutNumberLockKey);
+      const keptDocs = from.documents.filter(doc => doc.paymentMethod !== replaceMethod);
+      const keptGuids = new Set(keptDocs.map(doc => doc.guid));
+      // То же ФИО в месяце уже сопоставлено — строка файла обязана получить того же сотрудника.
+      const monthDecisions = new Map<string, Set<number | null>>();
+      for (const line of from.lines) {
+        const key = normalizePayoutName(line.fullName);
+        monthDecisions.set(key, new Set([...(monthDecisions.get(key) ?? []), line.employeeId]));
+      }
+      const conflicts = [...new Set(sqlLines.flatMap(line => {
+        const before = monthDecisions.get(normalizePayoutName(line.fullName));
+        return before && (before.size !== 1 || !before.has(line.employeeId))
+          ? [`${line.fullName}: сотрудник ${line.employeeId ?? '—'}, в месяце — ${[...before].map(id => id ?? '—').join(', ')}`]
+          : [];
+      }))];
+      if (conflicts.length > 0) {
+        throw new Error(`Сотрудник не совпал с уже сопоставленным в месяце (${conflicts.length}) — решить до замены:\n  `
+          + conflicts.join('\n  '));
+      }
+      const target = buildReplaceTarget(from, [...keptDocs, ...sqlDocs], [
+        ...from.lines.filter(line => keptGuids.has(line.guid)), ...sqlLines,
+      ]);
+      const removedOther = target.removed.filter(doc => doc.paymentMethod !== replaceMethod);
+      if (removedOther.length > 0 || target.added.length !== sqlDocs.length) {
+        throw new Error(`Замена задела не те документы: удаляются другого вида ${removedOther.length}, добавляется ${target.added.length}`);
+      }
+      const removedGuids = new Set(target.removed.map(doc => doc.guid));
+      return { from, ...target, removedLines: from.lines.filter(line => removedGuids.has(line.guid)) };
+    })();
+
     // Состояние БД сейчас — для КОНТРОЛЯ после загрузки и после отката.
     const monthTotalsSql = `SELECT count(DISTINCT d.id)::int AS docs, count(l.document_id)::int AS lines,
          COALESCE(sum(l.amount), 0)::text AS total,
@@ -314,7 +368,28 @@ const main = async (): Promise<void> => {
     const matchedLines = sqlLines.filter(line => line.employeeId !== null);
     const unmatchedLines = sqlLines.filter(line => line.employeeId === null);
     const totalCents = cents(sqlLines);
-    const after: IMonthTotals = {
+    /** Итоги месяца, если его документы — ровно этот набор. */
+    const totalsOfSet = (input: IRegisterSqlInput): IMonthTotals => {
+      const withEmployee = input.lines.filter(line => line.employeeId !== null);
+      const withoutEmployee = input.lines.filter(line => line.employeeId === null);
+      return {
+        docs: input.documents.length, lines: input.lines.length, total: num(cents(input.lines)),
+        lines_emp: withEmployee.length, total_emp: num(cents(withEmployee)),
+        lines_none: withoutEmployee.length, total_none: num(cents(withoutEmployee)),
+      };
+    };
+    const methodsOfSet = (input: IRegisterSqlInput): Map<string, { docs: number; lines: number; cents: number }> => {
+      const result = new Map<string, { docs: number; lines: number; cents: number }>();
+      for (const doc of input.documents) {
+        const entry = result.get(doc.paymentMethod) ?? { docs: 0, lines: 0, cents: 0 };
+        result.set(doc.paymentMethod, { docs: entry.docs + 1, lines: entry.lines + doc.lineCount, cents: entry.cents + doc.totalCents });
+      }
+      return result;
+    };
+    if (replace && JSON.stringify(totalsOfSet(replace.from)) !== JSON.stringify(monthBefore)) {
+      throw new Error('Итоги месяца в снимке и в отдельном запросе разошлись — на проде пишут в этот месяц, повторить позже');
+    }
+    const after: IMonthTotals = replace ? totalsOfSet(replace.to) : {
       docs: monthBefore.docs + documents.length,
       lines: monthBefore.lines + sqlLines.length,
       total: num(centsOf(monthBefore.total) + totalCents),
@@ -323,10 +398,18 @@ const main = async (): Promise<void> => {
       lines_none: monthBefore.lines_none + unmatchedLines.length,
       total_none: num(centsOf(monthBefore.total_none) + cents(unmatchedLines)),
     };
-    const methodsAfter = new Map(methodsBefore.map(row => [row.payment_method, { docs: row.docs, lines: row.lines, cents: centsOf(row.total) }]));
-    for (const doc of documents) {
-      const entry = methodsAfter.get(doc.paymentMethod) ?? { docs: 0, lines: 0, cents: 0 };
-      methodsAfter.set(doc.paymentMethod, { docs: entry.docs + 1, lines: entry.lines + doc.lines.length, cents: entry.cents + doc.totalCents });
+    const methodsAfter = replace ? methodsOfSet(replace.to)
+      : new Map(methodsBefore.map(row => [row.payment_method, { docs: row.docs, lines: row.lines, cents: centsOf(row.total) }]));
+    if (!replace) {
+      for (const doc of documents) {
+        const entry = methodsAfter.get(doc.paymentMethod) ?? { docs: 0, lines: 0, cents: 0 };
+        methodsAfter.set(doc.paymentMethod, { docs: entry.docs + 1, lines: entry.lines + doc.lines.length, cents: entry.cents + doc.totalCents });
+      }
+    }
+    // Снимаемые заменой строки по сотрудникам — для контроля людей.
+    const removedByEmployee = new Map<number, number>();
+    for (const line of replace?.removedLines ?? []) {
+      if (line.employeeId !== null) removedByEmployee.set(line.employeeId, (removedByEmployee.get(line.employeeId) ?? 0) + line.amountCents);
     }
 
     // Примеры для экрана: больше всех получивший, отпуск и увольнение — у сопоставленных.
@@ -346,6 +429,8 @@ const main = async (): Promise<void> => {
       ranked[0]?.[0],
       ranked.find(([, e]) => e.methods.has('Отпуска'))?.[0],
       ranked.find(([, e]) => e.methods.has('Увольнения'))?.[0],
+      // Замена: у кого строка снимается, а новой нет (Сайдиллаев в сентябре).
+      [...removedByEmployee.entries()].filter(([id]) => !byEmployee.has(id)).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0],
     ].filter((id): id is number => id !== undefined))];
     const sampleBefore = new Map((samples.length === 0 ? [] : await query<{ employee_id: number; total: string }>(
       `SELECT l.employee_id, sum(l.amount)::text AS total FROM payroll_1c_payout_lines l
@@ -354,7 +439,7 @@ const main = async (): Promise<void> => {
       [periodMonth, samples],
     )).map(row => [Number(row.employee_id), Math.round(Number(row.total) * 100)]));
     const sampleLine = (withNew: boolean) => samples.map(id => `${info.get(id)?.full_name} (${id}) `
-      + `${num((sampleBefore.get(id) ?? 0) + (withNew ? (byEmployee.get(id)?.cents ?? 0) : 0))}`).join('; ');
+      + `${num((sampleBefore.get(id) ?? 0) + (withNew ? (byEmployee.get(id)?.cents ?? 0) - (removedByEmployee.get(id) ?? 0) : 0))}`).join('; ');
     const sampleText = sampleLine(true);
 
     const monthEcho = (label: string, t: IMonthTotals) => `\\echo 'КОНТРОЛЬ ${label}: док. ${t.docs} / стр. ${t.lines} / ${t.total};`
@@ -398,10 +483,13 @@ const main = async (): Promise<void> => {
       ]),
       ['Итого загружается', documents.length, sqlLines.length, totalCents / 100, cents(matchedLines) / 100, cents(unmatchedLines) / 100],
       [],
-      ...args.skipMethods.map(method => {
+      ...skippedMethods.map(method => {
         const list = skipped.filter(doc => doc.paymentMethod === method);
-        return [`Не загружается: ${method}`, list.length, list.reduce((sum, doc) => sum + doc.lines.length, 0), docsCents(list) / 100];
+        return [`${replace ? 'Не трогается (уже в месяце)' : 'Не загружается'}: ${method}`, list.length,
+          list.reduce((sum, doc) => sum + doc.lines.length, 0), docsCents(list) / 100];
       }),
+      ...(replace ? [[`Снимается заменой: ${replaceMethod}`, replace.removed.length, replace.removedLines.length,
+        replace.removed.reduce((sum, doc) => sum + doc.totalCents, 0) / 100]] : []),
       ['Уже в БД (пропущены)', loaded.length, loaded.reduce((sum, doc) => sum + doc.lines.length, 0), docsCents(loaded) / 100],
       ['Повтор руководства «00000» (не строка)', documents.filter(doc => doc.duplicateCents > 0).length, '', duplicateCents / 100],
       [],
@@ -477,13 +565,14 @@ const main = async (): Promise<void> => {
     addSheet('Все', everyone, [40, 8, 40, 36, 36, ...methodsOrder.map(() => 14), 16]);
     addSheet('Не загружено', skippedRows, [14, 12, 30, 8, 16]);
 
-    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}`);
+    const base = path.join(args.outDir, `payroll-1c-payouts-${args.month}${replace ? '-replace' : ''}`);
     const files = {
       sql: `${base}.sql`,
       rollback: `${base}-rollback.sql`,
-      report: path.join(args.outDir, `Перечислено_1С_${args.month}_сверка.xlsx`),
+      report: path.join(args.outDir, `Перечислено_1С_${args.month}${replace ? `_замена_${replaceMethod}` : ''}_сверка.xlsx`),
       manifest: `${base}.manifest.json`,
     };
+    const removedCents = replace ? replace.removed.reduce((sum, doc) => sum + doc.totalCents, 0) : 0;
     const methodLine = methodsOrder.map(method => `${method} ${rub(sumBy(sqlLines, method))}`).join(' · ');
     const header = [
       `Зарплата → «Перечислено (1С)»: выплаты за ${monthLabel} из выгрузки ведомостей ЗУП`,
@@ -491,28 +580,52 @@ const main = async (): Promise<void> => {
       `Ведомостей ${documents.length}, строк ${sqlLines.length}, итог ${rub(totalCents)}. По способам: ${methodLine}.`,
       `С сотрудником: строк ${matchedLines.length} на ${rub(cents(matchedLines))}, сотрудников ${finalIds.length};`
         + ` без сотрудника: строк ${unmatchedLines.length} на ${rub(cents(unmatchedLines))}.`,
-      ...args.skipMethods.map(method => `Не загружается (решение пользователя): «${method}» — ${skipped.filter(doc => doc.paymentMethod === method).length}`
+      ...(replace ? [
+        `ЗАМЕНА (решение пользователя): ведомости «${replaceMethod}» за ${monthLabel} в БД (${replace.removed.length} шт.,`
+          + ` строк ${replace.removedLines.length}, ${rub(removedCents)}) заменяются ведомостями «${replaceMethod}» этого файла;`,
+        `остальные ${replace.kept.length} документов месяца не трогаются. Месяц после замены: док. ${after.docs},`
+          + ` строк ${after.lines}, ${rub(centsOf(after.total))}.`,
+      ] : []),
+      ...skippedMethods.map(method => `${replace ? 'Не трогается (уже в месяце)' : 'Не загружается (решение пользователя)'}: «${method}» —`
+        + ` ${skipped.filter(doc => doc.paymentMethod === method).length}`
         + ` ведомостей на ${rub(docsCents(skipped.filter(doc => doc.paymentMethod === method)))}.`),
       `Повтор руководства «00000» не строка: ${rub(duplicateCents)}. Уже в БД и пропущено: ${loaded.length} ведомостей.`,
       `Сверка: ${path.basename(files.report)}; manifest: ${path.basename(files.manifest)}.`,
       '',
       'Журнал payroll_1c_payout_imports не пишется (первичная загрузка, как регистр сентября); происхождение — resolution_reason.',
-      'Состояния: ведомостей набора нет → вставка; ровно этот набор (revision 1, строки, журнал пуст) → без изменений;',
-      'иначе → ошибка, ничего не записано.',
-      `Запуск: psql, затем \\i ${path.basename(files.sql)} → NOTICE «Вставлено ведомостей: ${documents.length}, строк: ${sqlLines.length}»`,
+      ...(replace ? [
+        'Состояния: документы месяца ровно как сейчас → замена; уже новый набор → без изменений; иначе → ошибка, ничего не записано.',
+        `Запуск: psql, затем \\i ${path.basename(files.sql)} → NOTICE «Оставлено документов: ${replace.kept.length},`
+          + ` удалено: ${replace.removed.length}, добавлено: ${replace.added.length} (строк ${sqlLines.length})»`,
+      ] : [
+        'Состояния: ведомостей набора нет → вставка; ровно этот набор (revision 1, строки, журнал пуст) → без изменений;',
+        'иначе → ошибка, ничего не записано.',
+        `Запуск: psql, затем \\i ${path.basename(files.sql)} → NOTICE «Вставлено ведомостей: ${documents.length}, строк: ${sqlLines.length}»`,
+      ]),
       'и КОНТРОЛЬ; транзакция остаётся открытой: COMMIT; если всё верно, ROLLBACK; если нет. После ошибки — ROLLBACK;.',
       `Откат (только по решению): ${path.basename(files.rollback)}.`,
       `Собрано ${new Date().toISOString()} из ${gitHead} (scripts/build-payouts-xml-sql.ts).`,
     ];
     const input: IRegisterSqlInput = { header, documents: sqlDocs, lines: sqlLines };
     const peopleAfter = sampleText;
-    writePrivate(files.sql, buildRegisterLoadSql(input, {
-      database: args.database, controls: controls('после загрузки', after, methodsAfter, peopleAfter),
-    }));
-    writePrivate(files.rollback, buildRegisterRollbackSql(
-      { ...input, header: [...header.slice(0, 2), 'ОТКАТ: удаляет все ведомости набора, только если их не меняли после загрузки.'] },
-      { database: args.database, controls: controls('после отката (как до загрузки)', monthBefore, beforeByMethod, samplesBefore) },
-    ));
+    if (replace) {
+      writePrivate(files.sql, buildRegisterReplaceSql(header, replace.from, replace.to, periodMonth, {
+        database: args.database, controls: controls('после замены', after, methodsAfter, peopleAfter),
+      }));
+      writePrivate(files.rollback, buildRegisterReplaceSql(
+        [...header.slice(0, 2), `ОТКАТ: обратная замена — ведомости «${replaceMethod}» месяца снова как до замены; только если месяц не меняли после.`],
+        replace.to, replace.from, periodMonth,
+        { database: args.database, controls: controls('после отката (как до замены)', monthBefore, beforeByMethod, samplesBefore) },
+      ));
+    } else {
+      writePrivate(files.sql, buildRegisterLoadSql(input, {
+        database: args.database, controls: controls('после загрузки', after, methodsAfter, peopleAfter),
+      }));
+      writePrivate(files.rollback, buildRegisterRollbackSql(
+        { ...input, header: [...header.slice(0, 2), 'ОТКАТ: удаляет все ведомости набора, только если их не меняли после загрузки.'] },
+        { database: args.database, controls: controls('после отката (как до загрузки)', monthBefore, beforeByMethod, samplesBefore) },
+      ));
+    }
     writePrivate(files.report, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer);
     const fileSha = (file: string) => sha256(fs.readFileSync(file));
     writePrivate(files.manifest, `${JSON.stringify({
@@ -521,6 +634,12 @@ const main = async (): Promise<void> => {
       month: args.month,
       source: { file: path.basename(args.file), sha256: sourceSha },
       skip_methods: args.skipMethods,
+      replace_method: replaceMethod,
+      ...(replace ? { replace: {
+        kept_documents: replace.kept.length,
+        removed_documents: replace.removed.length, removed_lines: replace.removedLines.length, removed_total: num(removedCents),
+        added_documents: replace.added.length, added_lines: sqlLines.length, added_total: num(totalCents),
+      } } : {}),
       counts: {
         documents: documents.length, lines: sqlLines.length, total: num(totalCents),
         matched_lines: matchedLines.length, matched_total: num(cents(matchedLines)),
@@ -543,6 +662,10 @@ const main = async (): Promise<void> => {
       + ` не найдены ${notFound.length - 1}, тёзки ${namesakes.length - 1}, проверить ${review.length - 1}`);
     console.log(`${TAG} решения: ${DECISION_LABELS.map(([kind, label]) => `${label} ${kindCount(kind)}`).join('; ')}`);
     console.log(`${TAG} не загружается ${skipped.length} (${rub(docsCents(skipped))}), уже в БД ${loaded.length}`);
+    if (replace) {
+      console.log(`${TAG} замена «${replaceMethod}»: снимается ${replace.removed.length} вед. / ${replace.removedLines.length} строк`
+        + ` (${rub(removedCents)}), остаётся ${replace.kept.length}; месяц после: ${after.docs} / ${after.lines} / ${after.total}`);
+    }
     for (const file of Object.values(files)) console.log(`${TAG} ${file}`);
   } finally {
     await closeDb();
