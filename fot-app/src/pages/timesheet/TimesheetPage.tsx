@@ -446,6 +446,8 @@ export const TimesheetPage: FC = () => {
     const raw: TimesheetHalf = (() => {
       if (queryHalf === 'H1' || queryHalf === 'H2' || queryHalf === 'FULL') return queryHalf;
       if (queryFrom) return getHalfFromDate(queryFrom);
+      // По умолчанию — весь месяц; ролям без «Весь месяц» — текущий полупериод.
+      if (showFullPeriod) return 'FULL';
       const current = getCurrentHalf(now);
       return (current.year === year && current.month === month) ? current.half : 'H1';
     })();

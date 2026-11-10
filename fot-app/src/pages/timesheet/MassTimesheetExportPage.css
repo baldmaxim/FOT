@@ -718,6 +718,36 @@
   max-width: 640px;
 }
 
+.mte-confirm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mte-confirm-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: -12px -12px -12px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.mte-confirm-close:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 .mte-confirm-title {
   margin: 0;
   font-size: 16px;

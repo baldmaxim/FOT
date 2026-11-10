@@ -1,4 +1,5 @@
 import { type FC } from 'react';
+import { X } from 'lucide-react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 
 interface IUnifiedExportConfirmModalProps {
@@ -27,7 +28,12 @@ export const UnifiedExportConfirmModal: FC<IUnifiedExportConfirmModalProps> = ({
         aria-modal="true"
         aria-labelledby="mte-unified-confirm-title"
       >
-        <h3 id="mte-unified-confirm-title" className="mte-confirm-title">Единый файл для 1С</h3>
+        <div className="mte-confirm-head">
+          <h3 id="mte-unified-confirm-title" className="mte-confirm-title">Единый файл для 1С</h3>
+          <button type="button" className="mte-confirm-close" aria-label="Закрыть" onClick={onCancel}>
+            <X size={18} />
+          </button>
+        </div>
         <p className="mte-confirm-text">Будет скачан единый файл для 1С за {monthLabel}.</p>
         <p className="mte-confirm-text">
           Закрыть табели выбранных отделов за этот месяц после выгрузки?
