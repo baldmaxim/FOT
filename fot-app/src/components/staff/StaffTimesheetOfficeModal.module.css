@@ -255,7 +255,7 @@
   overflow-wrap: anywhere;
 }
 
-/* Строка «Сотрудников» на телефоне: ФИО — первой строкой, назначение, «По графику» и «Снять» — справа ниже. */
+/* Строка «Сотрудников» на телефоне: ФИО — первой строкой, галочка «По графику», назначение и «Снять» — справа ниже. */
 .rowWrap {
   flex-wrap: wrap;
   row-gap: 0;
@@ -266,38 +266,15 @@
   padding-top: 8px;
 }
 
-.rowWrap .assignedLabel {
+.rowWrap .scheduleToggle {
   margin-left: auto;
 }
 
-/* «По графику» в строке «Сотрудников»: кликается вся подпись, тап-цель не меньше 44 px. */
-.scheduleLabel {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0 4px;
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-
-.scheduleLabel input {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--success);
-  cursor: pointer;
-}
-
-.scheduleLabel input:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+/* Назначение — столбцом постоянной ширины: галочки во всех строках стоят ровно друг под другом. */
+.rowWrap .assignedLabel {
+  flex: 0 0 140px;
+  max-width: none;
+  text-align: left;
 }
 
 .removeButton {
@@ -425,6 +402,7 @@
 
 /* Галочка с тап-целью 44 × 44: кликается вся клетка, а не 18 px квадрата. */
 .scheduleToggle {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -587,12 +565,8 @@
     padding-top: 0;
   }
 
-  .rowWrap .assignedLabel {
+  .rowWrap .scheduleToggle {
     margin-left: 0;
-  }
-
-  .scheduleLabel {
-    min-height: 34px;
   }
 
   .removeButton,
@@ -665,10 +639,6 @@
 
   .scheduleToggle {
     height: 44px;
-  }
-
-  .scheduleLabel {
-    min-height: 44px;
   }
 }
 

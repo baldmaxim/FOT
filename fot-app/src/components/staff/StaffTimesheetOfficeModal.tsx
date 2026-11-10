@@ -356,10 +356,9 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                           {item.full_name}
                           {item.department && <span className={styles.muted}> · {item.department}</span>}
                         </span>
-                        <span className={styles.assignedLabel}>{item.label}</span>
                         <label
-                          className={styles.scheduleLabel}
-                          title={scheduleDate ? `По графику с ${formatDate(scheduleDate)}` : undefined}
+                          className={styles.scheduleToggle}
+                          data-tooltip={scheduleDate ? `По графику с ${formatDate(scheduleDate)}` : 'По графику'}
                         >
                           <input
                             type="checkbox"
@@ -368,8 +367,8 @@ export const StaffTimesheetOfficeModal: FC<IStaffTimesheetOfficeModalProps> = ({
                             disabled={busy}
                             aria-label={`«По графику»: ${item.full_name}`}
                           />
-                          По графику
                         </label>
+                        <span className={styles.assignedLabel}>{item.label}</span>
                         <button
                           type="button"
                           className={styles.removeButton}
