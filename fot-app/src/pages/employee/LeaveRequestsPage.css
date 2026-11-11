@@ -12,6 +12,52 @@
   margin-bottom: 20px;
 }
 
+/* Вкладки, поиск и тип — одной строкой слева; «Создать» остаётся у правого края. */
+.lr-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lr-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Высота и скругление — как у блока вкладок (42px, 10px). Два класса + тег
+   перебивают .wrapper .input из SearchInput.module.css. */
+.lr-filters .lr-search input {
+  width: 240px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.lr-type-select {
+  height: 42px;
+  max-width: 220px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  text-overflow: ellipsis;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+
+.lr-type-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
 .lr-tabs {
   display: inline-flex;
   background: var(--bg-secondary);
@@ -489,9 +535,41 @@
     flex-wrap: wrap;
   }
 
+  /* «Создать» — первой строкой, ниже вкладки на всю ширину, под ними поиск и тип. */
+  .lr-toolbar {
+    order: 1;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
   .lr-tabs {
     width: 100%;
-    order: 1;
+  }
+
+  .lr-filters {
+    width: 100%;
+  }
+
+  .lr-search {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* 16px — иначе iOS/Android-Chrome зумят страницу при фокусе; 44px — тап-цель. */
+  .lr-filters .lr-search input {
+    width: 100%;
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .lr-type-select {
+    flex: 0 0 40%;
+    max-width: 40%;
+    min-width: 0;
+    height: 44px;
+    font-size: 16px;
   }
 
   .lr-tab {
@@ -535,5 +613,11 @@
 
   .lr-detail-card {
     padding: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lr-type-select {
+    transition: none;
   }
 }

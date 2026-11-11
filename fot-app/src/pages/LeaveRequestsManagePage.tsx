@@ -317,62 +317,61 @@ export const LeaveRequestsManagePage: FC = () => {
     <div className="lrm-shell">
       <div className="lrm-page">
         <div className="lrm-header">
-          {scope === 'all' && (
-            <>
-              <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
-              <div className="lrm-dept-filter">
-                <SearchableSelect
-                  options={deptSelectOptions}
-                  value={deptFilter}
-                  onChange={setDeptFilter}
-                  allLabel="Все отделы"
-                  placeholder="Поиск отдела..."
-                  ariaLabel="Фильтр по отделу"
-                />
-              </div>
-              <select
-                className="lrm-filter-select"
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value as LeaveRequestType | 'all')}
-                aria-label="Фильтр по типу заявления"
-              >
-                <option value="all">Все типы</option>
-                {Object.entries(REQUEST_TYPE_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-              <div className="lrm-date-range">
-                <span className="lrm-date-label">Период</span>
-                <input
-                  type="date"
-                  className="lrm-date-input"
-                  value={periodFrom}
-                  max={periodTo || undefined}
-                  onChange={e => handlePeriodFromChange(e.target.value)}
-                  aria-label="Период с"
-                />
-                <span className="lrm-date-sep">—</span>
-                <input
-                  type="date"
-                  className="lrm-date-input"
-                  value={periodTo}
-                  min={periodFrom || undefined}
-                  onChange={e => handlePeriodToChange(e.target.value)}
-                  aria-label="Период по"
-                />
-                {hasPeriod && (
-                  <button
-                    type="button"
-                    className="lrm-date-clear"
-                    onClick={resetPeriod}
-                    aria-label="Сбросить период"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            </>
+          <SearchInput value={search} onValueChange={setSearch} clearable placeholder="Поиск по ФИО..." />
+          {/* Один отдел (у руководителя) — выбирать нечего; выбранный ранее не прячем. */}
+          {(deptOptions.length > 1 || deptFilter !== '') && (
+            <div className="lrm-dept-filter">
+              <SearchableSelect
+                options={deptSelectOptions}
+                value={deptFilter}
+                onChange={setDeptFilter}
+                allLabel="Все отделы"
+                placeholder="Поиск отдела..."
+                ariaLabel="Фильтр по отделу"
+              />
+            </div>
           )}
+          <select
+            className="lrm-filter-select"
+            value={typeFilter}
+            onChange={e => setTypeFilter(e.target.value as LeaveRequestType | 'all')}
+            aria-label="Фильтр по типу заявления"
+          >
+            <option value="all">Все типы</option>
+            {Object.entries(REQUEST_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          <div className="lrm-date-range">
+            <span className="lrm-date-label">Период</span>
+            <input
+              type="date"
+              className="lrm-date-input"
+              value={periodFrom}
+              max={periodTo || undefined}
+              onChange={e => handlePeriodFromChange(e.target.value)}
+              aria-label="Период с"
+            />
+            <span className="lrm-date-sep">—</span>
+            <input
+              type="date"
+              className="lrm-date-input"
+              value={periodTo}
+              min={periodFrom || undefined}
+              onChange={e => handlePeriodToChange(e.target.value)}
+              aria-label="Период по"
+            />
+            {hasPeriod && (
+              <button
+                type="button"
+                className="lrm-date-clear"
+                onClick={resetPeriod}
+                aria-label="Сбросить период"
+              >
+                ×
+              </button>
+            )}
+          </div>
           <div className="lrm-filter">
             <button className={`lrm-filter-btn ${filter === 'pending' ? 'active' : ''}`} onClick={() => setFilter('pending')}>
               Ожидающие

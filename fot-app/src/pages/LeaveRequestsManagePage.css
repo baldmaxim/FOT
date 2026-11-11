@@ -19,7 +19,7 @@
 }
 
 /* Переключатель («Ожидающие/Все», «Не ознакомлен/Ознакомлен») прижат вправо,
-   даже когда слева нет поиска/фильтров (department-скоуп руководителя). */
+   даже когда слева нет поиска/фильтров. */
 .lrm-header .lrm-filter {
   margin-left: auto;
 }
@@ -1728,6 +1728,24 @@
     height: 32px;
     font-size: 12px;
     padding: 0 8px;
+  }
+
+  /* Период на всю строку: подпись сверху, «с» и «по» делят ширину, колонка под «×»
+     зарезервирована — иначе блок (~400px) шире экрана 360–412px. */
+  .lrm-date-range {
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 32px;
+    row-gap: 4px;
+  }
+
+  .lrm-date-label {
+    grid-column: 1 / -1;
+  }
+
+  .lrm-date-input {
+    width: 100%;
+    padding: 0 6px;
   }
 
   .lrm-group-name {

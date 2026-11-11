@@ -1,12 +1,18 @@
-import { type FC, lazy, Suspense, useState } from 'react';
+import { type FC, lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
-import { type ILeaveRequest } from '../../services/leaveRequestService';
+import {
+  REQUEST_TYPE_LABELS,
+  type ILeaveRequest,
+  type LeaveRequestType,
+} from '../../services/leaveRequestService';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
+import { SearchInput } from '../../components/ui/SearchInput';
 import { isLeaveRequestArchived } from '../../utils/leaveRequestDates';
+import { matchesLeaveRequestSearch } from '../../utils/leaveRequestSearch';
 import './LeaveRequestsPage.css';
 
 const UnifiedRequestModal = lazy(() =>
@@ -33,12 +39,23 @@ export const LeaveRequestsPage: FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<ILeaveRequest | null>(null);
   const [tab, setTab] = useState<TabKey>('active');
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
   const { data, isLoading } = useMyLeaveRequests();
   const requests = data ?? EMPTY_REQUESTS;
 
+  // Только типы, которые есть у сотрудника, — по всем его заявлениям, чтобы список не менялся между вкладками.
+  const typeOptions = useMemo(() => {
+    const present = new Set<string>(requests.map(r => r.request_type));
+    return (Object.keys(REQUEST_TYPE_LABELS) as LeaveRequestType[]).filter(t => present.has(t));
+  }, [requests]);
+
   const today = todayIso();
+  const isFiltering = search.trim() !== '' || typeFilter !== 'all';
   const visible = requests.filter(r =>
-    tab === 'archive' ? isLeaveRequestArchived(r, today) : !isLeaveRequestArchived(r, today),
+    (tab === 'archive' ? isLeaveRequestArchived(r, today) : !isLeaveRequestArchived(r, today))
+    && (typeFilter === 'all' || r.request_type === typeFilter)
+    && matchesLeaveRequestSearch(r, search),
   );
 
   const handleCancelled = async (updated: ILeaveRequest) => {
@@ -52,30 +69,55 @@ export const LeaveRequestsPage: FC = () => {
     await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
   };
 
-  const emptyText = tab === 'archive' ? 'Архив пуст' : 'Нет активных заявлений';
+  const emptyText = isFiltering
+    ? 'Ничего не найдено'
+    : (tab === 'archive' ? 'Архив пуст' : 'Нет активных заявлений');
 
   return (
     <div className="lr-page">
       <div className="lr-header">
-        <div className="lr-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'active'}
-            className={`lr-tab${tab === 'active' ? ' lr-tab-active' : ''}`}
-            onClick={() => setTab('active')}
-          >
-            Активные
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'archive'}
-            className={`lr-tab${tab === 'archive' ? ' lr-tab-active' : ''}`}
-            onClick={() => setTab('archive')}
-          >
-            Архив
-          </button>
+        <div className="lr-toolbar">
+          <div className="lr-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'active'}
+              className={`lr-tab${tab === 'active' ? ' lr-tab-active' : ''}`}
+              onClick={() => setTab('active')}
+            >
+              Активные
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'archive'}
+              className={`lr-tab${tab === 'archive' ? ' lr-tab-active' : ''}`}
+              onClick={() => setTab('archive')}
+            >
+              Архив
+            </button>
+          </div>
+          <div className="lr-filters">
+            <div className="lr-search">
+              <SearchInput
+                value={search}
+                onValueChange={setSearch}
+                clearable
+                aria-label="Поиск по заявлениям"
+              />
+            </div>
+            <select
+              className="lr-type-select"
+              value={typeFilter}
+              onChange={e => setTypeFilter(e.target.value as LeaveRequestType | 'all')}
+              aria-label="Тип заявления"
+            >
+              <option value="all">Все типы</option>
+              {typeOptions.map(t => (
+                <option key={t} value={t}>{REQUEST_TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+          </div>
         </div>
         {canEditRequests && (
           <button className="btn-primary" onClick={() => setShowModal(true)}>
