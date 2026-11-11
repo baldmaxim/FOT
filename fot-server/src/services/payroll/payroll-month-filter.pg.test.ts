@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
-// Фильтры «Расчётов» на настоящем PostgreSQL: группа отделов (ИТР — ЛИНИЯ и ЛИНИЯ-Общестрой, Рабочие — бригады, Офис —
-// остальные отделы СУ-10, СМ — вне групп; уволенный — по отделу, из которого уволен) и объект месяца: пары «сотрудник +
+// Фильтры «Расчётов» на настоящем PostgreSQL: группа отделов (ИТР — ЛИНИЯ, ЛИНИЯ-Общестрой и остальные отделы СУ-10,
+// Рабочие — бригады, СМ — по должности: начальник и главный механик — ИТР, слесарь и без должности — Рабочие; уволенный —
+// по отделу, из которого уволен) и объект месяца: пары «сотрудник +
 // месяц» — только месяцы, где строка видна (без фантомных месяцев принятого и уволенного), total и порции по курсору,
 // список объектов (по группе, уникальные сотрудники, свой объект не сужает), варианты столбцов, переход поиска ФИО в fuzzy.
 // Профиль пары подставляется: его объект сверяется со «Сводом» в payroll-summary.pg.test.ts.
@@ -94,6 +95,9 @@ const BRIGADES = '00000000-0000-0000-0000-0000000000d3';
 const BRIGADE = '00000000-0000-0000-0000-0000000000d4';
 const GUARANTEE = '00000000-0000-0000-0000-0000000000d5';
 const SM_GPM = '00000000-0000-0000-0000-0000000000d6';
+const POS_HEAD = '00000000-0000-0000-0000-0000000000c1';
+const POS_CHIEF = '00000000-0000-0000-0000-0000000000c2';
+const POS_FITTER = '00000000-0000-0000-0000-0000000000c3';
 const USER = '00000000-0000-0000-0000-0000000000e1';
 const SEP_OCT = '2026-09,2026-10';
 
@@ -136,7 +140,7 @@ const setProfile = (employeeId: number, month: string, objectKey: string) => {
 describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и объект месяца на PostgreSQL', () => {
   beforeAll(async () => {
     await pg.pool!.query(`
-      DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
+      DROP TABLE IF EXISTS payroll_fss_payments, payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
         employee_hr_profiles, employee_assignments, employee_dismissal_events, skud_daily_summary, attendance_adjustments,
         employee_dormitory_stays, payroll_compensation_stops, payroll_rate_values, payroll_rates,
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
@@ -181,19 +185,27 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
         ('${SM}', '(СМ) Служба Механизации', '${TECH}', 'department'),
         ('${SM_GPM}', 'ГПМ', '${SM}', 'department'),
         ('${ARCHIVE}', 'Уволенные', '${TECH}', 'department');
-      INSERT INTO employees (id, full_name, org_department_id, employment_status, hire_date, dismissal_date) VALUES
-        (1, 'Акимов А.А.', '${OBSHCHESTROY}', 'active', '2025-01-01', NULL),
+      INSERT INTO positions (id, name) VALUES
+        ('${POS_HEAD}', 'Начальник  отдела ГПМ'), ('${POS_CHIEF}', 'Главный механик'), ('${POS_FITTER}', 'Слесарь');
+      INSERT INTO employees (id, full_name, org_department_id, employment_status, hire_date, dismissal_date, position_id) VALUES
+        (1, 'Акимов А.А.', '${OBSHCHESTROY}', 'active', '2025-01-01', NULL, NULL),
         -- Принят в октябре: сентября у него нет.
-        (2, 'Борисов Б.Б.', '${GUARANTEE}', 'active', '2026-10-05', NULL),
+        (2, 'Борисов Б.Б.', '${GUARANTEE}', 'active', '2026-10-05', NULL, NULL),
         -- Уволен 20.09 из бригады, с проходом в сентябре: октября у него нет, группа — по отделу увольнения.
-        (3, 'Васильев В.В.', '${ARCHIVE}', 'fired', '2025-01-01', '2026-09-20'),
-        (4, 'Григорьев Г.Г.', '${LINIA}', 'active', '2025-01-01', NULL),
-        (5, 'Сидоров С.С.', '${GUARANTEE}', 'active', '2025-01-01', NULL),
-        (6, 'Сидаров А.А.', '${BRIGADE}', 'active', '2025-01-01', NULL),
-        -- СМ — ни в одной группе.
-        (7, 'Тихонов Т.Т.', '${SM_GPM}', 'active', '2025-01-01', NULL);
-      INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date) VALUES (3, '${BRIGADE}', '2026-09-20');
-      INSERT INTO skud_daily_summary (employee_id, date, total_minutes) VALUES (3, '2026-09-10', 480);
+        (3, 'Васильев В.В.', '${ARCHIVE}', 'fired', '2025-01-01', '2026-09-20', NULL),
+        (4, 'Григорьев Г.Г.', '${LINIA}', 'active', '2025-01-01', NULL, NULL),
+        (5, 'Сидоров С.С.', '${GUARANTEE}', 'active', '2025-01-01', NULL, NULL),
+        (6, 'Сидаров А.А.', '${BRIGADE}', 'active', '2025-01-01', NULL, NULL),
+        -- СМ — по должности: без должности — Рабочие.
+        (7, 'Тихонов Т.Т.', '${SM_GPM}', 'active', '2025-01-01', NULL, NULL),
+        (8, 'Карпов К.К.', '${SM_GPM}', 'active', '2025-01-01', NULL, '${POS_HEAD}'),
+        -- Уволен 20.09 из ГПМ слесарем: Рабочие по отделу увольнения и должности.
+        (9, 'Лебедев Л.Л.', '${ARCHIVE}', 'fired', '2025-01-01', '2026-09-20', '${POS_FITTER}'),
+        -- Прямо в узле СМ.
+        (10, 'Морозов М.М.', '${SM}', 'active', '2025-01-01', NULL, '${POS_CHIEF}');
+      INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date) VALUES
+        (3, '${BRIGADE}', '2026-09-20'), (9, '${SM_GPM}', '2026-09-20');
+      INSERT INTO skud_daily_summary (employee_id, date, total_minutes) VALUES (3, '2026-09-10', 480), (9, '2026-09-10', 480);
     `);
     for (const name of [
       '271_payroll_terms.sql', '282_payroll_terms_bonus_housing.sql', '286_payroll_terms_compensations.sql',
@@ -216,6 +228,8 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
     await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));
+    // «Выплаты ФСС» (356) — список «Расчётов» читает таблицу.
+    await pg.pool!.query(migration('356_payroll_fss_payments.sql'));
 
     // Акимов: Химки в сентябре, Мытищи в октябре.
     setProfile(1, '2026-09', KHIMKI);
@@ -230,6 +244,7 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
       setProfile(5, month, 'office');
       setProfile(6, month, MYTISHCHI);
       setProfile(7, month, KHIMKI);
+      setProfile(8, month, KHIMKI);
     }
   });
 
@@ -241,17 +256,21 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     await pg.pool?.end();
   });
 
-  it('группа — по отделу: ИТР — ЛИНИЯ, ЛИНИЯ-Общестрой и остальные СУ-10, Рабочие — бригады; СМ — ни в одной', async () => {
-    expect(await listIds({ paid_months: SEP_OCT, group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 5], total: 4 });
-    // Уволенный — по отделу, из которого уволен (бригада), а не «Уволенные».
-    expect(await listIds({ paid_months: SEP_OCT, group: 'worker' })).toMatchObject({ ids: [3, 6], total: 2 });
-    expect((await listIds({ paid_months: SEP_OCT })).total).toBe(7);
-    // Группа по отделу объект месяца не считает.
+  it('группа: ИТР — ЛИНИЯ, ЛИНИЯ-Общестрой и остальные СУ-10, Рабочие — бригады; СМ — по должности', async () => {
+    // Карпов (начальник отдела ГПМ) и Морозов (главный механик, узел СМ) — ИТР.
+    // Порядок — по ФИО.
+    expect(await listIds({ paid_months: SEP_OCT, group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 8, 10, 5], total: 6 });
+    // Уволенный — по отделу, из которого уволен (бригада; ГПМ + слесарь), а не «Уволенные». Тихонов без должности — Рабочие.
+    expect(await listIds({ paid_months: SEP_OCT, group: 'worker' })).toMatchObject({ ids: [3, 9, 6, 7], total: 4 });
+    // ИТР и Рабочие вместе — все: СМ никуда не выпал и не попал дважды.
+    expect((await listIds({ paid_months: SEP_OCT })).total).toBe(10);
+    // Группа объект месяца не считает.
     expect(profiles.calls).toEqual([]);
   });
 
-  it('группа без месяцев («Условия оплаты») — по отделу на дату', async () => {
-    expect(await listIds({ group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 5], total: 4 });
+  it('группа без месяцев («Условия оплаты») — по отделу и должности на дату', async () => {
+    expect(await listIds({ group: 'itr' })).toMatchObject({ ids: [1, 2, 4, 8, 10, 5], total: 6 });
+    expect(await listIds({ group: 'worker' })).toMatchObject({ ids: [6, 7], total: 2 });
   });
 
   it('пары — только месяцы, где строка видна: принятый в октябре и уволенный в сентябре без фантомных месяцев', async () => {
@@ -261,20 +280,22 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     expect(profiles.calls[0].map(pair => `${pair.employeeId}|${pair.month}`).sort()).toEqual([
       '1|2026-09', '1|2026-10', '2|2026-10', '3|2026-09', '4|2026-09', '4|2026-10',
       '5|2026-09', '5|2026-10', '6|2026-09', '6|2026-10', '7|2026-09', '7|2026-10',
-    ]);
+      '8|2026-09', '8|2026-10', '9|2026-09', '10|2026-09', '10|2026-10',
+    ].sort());
     // count — уникальные сотрудники: Акимов в Химках (сентябрь) и в Мытищах (октябрь) — в обоих, по разу.
     expect(res.body.data).toEqual([
       { key: MYTISHCHI, name: 'ЖК Мытищи', count: 3 },
-      { key: KHIMKI, name: 'ЖК Химки', count: 3 },
+      { key: KHIMKI, name: 'ЖК Химки', count: 4 },
       { key: 'office', name: 'Офис', count: 2 },
     ]);
   });
 
   it('список объектов — по группе; свой объект его не сужает', async () => {
     const workers = await call(payrollTermsController.monthObjects, { paid_months: SEP_OCT, group: 'worker' });
+    // Химки: Васильев (сентябрь) и Тихонов (СМ, без должности).
     expect(workers.body.data).toEqual([
       { key: MYTISHCHI, name: 'ЖК Мытищи', count: 1 },
-      { key: KHIMKI, name: 'ЖК Химки', count: 1 },
+      { key: KHIMKI, name: 'ЖК Химки', count: 2 },
     ]);
     const withObject = await call(payrollTermsController.monthObjects, { paid_months: SEP_OCT, group: 'worker', object: KHIMKI });
     expect(withObject.body.data).toEqual(workers.body.data);
@@ -282,13 +303,15 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
 
   it('группа и объект вместе; фантомные месяцы не учитываются', async () => {
     // Фантомный сентябрь Борисова на Химках и октябрь Васильева в Мытищах — не в счёт.
-    expect(await listIds({ paid_months: SEP_OCT, group: 'itr', object: KHIMKI })).toMatchObject({ ids: [1], total: 1 });
+    // Карпов (СМ, начальник) — ИТР в Химках.
+    expect(await listIds({ paid_months: SEP_OCT, group: 'itr', object: KHIMKI })).toMatchObject({ ids: [1, 8], total: 2 });
     expect(await listIds({ paid_months: SEP_OCT, group: 'itr', object: MYTISHCHI })).toMatchObject({ ids: [1, 4], total: 2 });
     expect(await listIds({ paid_months: SEP_OCT, group: 'worker', object: MYTISHCHI })).toMatchObject({ ids: [6], total: 1 });
-    // Объект без группы — и СМ тоже.
-    expect(await listIds({ paid_months: SEP_OCT, object: KHIMKI })).toMatchObject({ ids: [1, 3, 7], total: 3 });
-    // Один октябрь: уволенного в сентябре нет.
-    expect(await listIds({ paid_months: '2026-10', group: 'worker' })).toMatchObject({ ids: [6], total: 1 });
+    expect(await listIds({ paid_months: SEP_OCT, group: 'worker', object: KHIMKI })).toMatchObject({ ids: [3, 7], total: 2 });
+    // Объект без группы.
+    expect(await listIds({ paid_months: SEP_OCT, object: KHIMKI })).toMatchObject({ ids: [1, 3, 8, 7], total: 4 });
+    // Один октябрь: уволенных в сентябре (Васильев, Лебедев) нет.
+    expect(await listIds({ paid_months: '2026-10', group: 'worker' })).toMatchObject({ ids: [6, 7], total: 2 });
   });
 
   it('фильтр держится на порциях по курсору', async () => {
@@ -311,9 +334,17 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
   it('варианты фильтра столбца — только по группе', async () => {
     const res = await call(payrollTermsController.columnValues, { paid_months: SEP_OCT, column: 'department', group: 'itr' });
     expect(res.statusCode).toBe(200);
+    // СМ — только ИТР по должности: Морозов (узел СМ) и Карпов (ГПМ); Тихонов и Лебедев из ГПМ — в «Рабочих».
     expect(res.body.data.values).toEqual([
+      { value: '(СМ) Служба Механизации', count: 1 }, { value: 'ГПМ', count: 1 },
       { value: 'Гарантийный отдел', count: 2 }, { value: 'ЛИНИЯ', count: 1 }, { value: 'ЛИНИЯ-Общестрой', count: 1 },
     ]);
+    const workers = await call(payrollTermsController.columnValues, { paid_months: SEP_OCT, column: 'department', group: 'worker' });
+    // Порядок «бр.» и «ГПМ» зависит от сортировки базы (регистр) — без порядка.
+    expect(workers.body.data.values).toHaveLength(2);
+    expect(workers.body.data.values).toEqual(expect.arrayContaining([
+      { value: 'бр.Иванов', count: 2 }, { value: 'ГПМ', count: 2 },
+    ]));
   });
 
   it('параметры: объект — только со списком месяцев; группа и объект — из допустимых', async () => {

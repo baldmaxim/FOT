@@ -39,7 +39,11 @@ import {
   employeesMatchingMonthFilter,
   type IMonthPair,
 } from '../services/payroll/payroll-month-profile.rules.js';
-import { loadPayrollDepartmentGroupIds } from '../services/payroll/payroll-department-groups.js';
+import {
+  loadPayrollGroupFilter,
+  payrollGroupFilterSql,
+  type IPayrollGroupFilter,
+} from '../services/payroll/payroll-department-groups.js';
 import { monthPairsSelectSql, parseDepartmentGroupQuery, parseMonthFilterQuery } from './payroll-terms-month-filter.js';
 import {
   assignTerms,
@@ -667,19 +671,19 @@ const resolvePayrollFioMode = async (
   return row?.found ? 'exact' : 'fuzzy';
 };
 
-/** Фильтры «Расчётов» в filtered: отделы группы (ИТР / Рабочие) и сотрудники с выбранным объектом месяца. */
+/** Фильтры «Расчётов» в filtered: группа (ИТР / Рабочие) и сотрудники с выбранным объектом месяца. */
 interface ICalcFilters {
-  /** null — группа не выбрана. department_id выборки — отдел работы, у уволенного — из увольнения. */
-  groupDepartmentIds: string[] | null;
+  /**
+   * null — группа не выбрана. По отделу, в СМ — по должности (payroll-department-groups.ts); department_id выборки —
+   * отдел работы, у уволенного — из увольнения.
+   */
+  group: IPayrollGroupFilter | null;
   /** null — объект не выбран. */
   employeeIds: number[] | null;
 }
 
 const appendCalcFilters = (whereParts: string[], params: unknown[], filters: ICalcFilters | undefined): void => {
-  if (filters?.groupDepartmentIds) {
-    params.push(filters.groupDepartmentIds);
-    whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
-  }
+  if (filters?.group) whereParts.push(payrollGroupFilterSql(filters.group, params));
   if (filters?.employeeIds) {
     params.push(filters.employeeIds);
     whereParts.push(`employee_id = ANY($${params.length}::int[])`);
@@ -694,7 +698,7 @@ const appendCalcFilters = (whereParts: string[], params: unknown[], filters: ICa
 const loadCalcMonthPairs = async (
   baseParams: unknown[],
   workedIn: IPayrollWorkedIn,
-  groupDepartmentIds: string[] | null,
+  group: IPayrollGroupFilter | null,
 ): Promise<IMonthPair[]> => {
   const params = baseParams.slice(0, 8);
   params[7] = null;
@@ -702,7 +706,7 @@ const loadCalcMonthPairs = async (
   const monthsParam = `$${params.length - 1}`;
   const archiveParam = `$${params.length}`;
   const whereParts = [payrollWorkedFilterSql(monthsParam, archiveParam)];
-  appendCalcFilters(whereParts, params, { groupDepartmentIds, employeeIds: null });
+  appendCalcFilters(whereParts, params, { group, employeeIds: null });
   const rows = await query<{ employee_id: number; month: string }>(
     `${buildBaseCtes(whereParts.join('\n       AND '), 'FALSE', monthsParam)}
      ${monthPairsSelectSql(monthsParam, archiveParam)}`,
@@ -722,13 +726,13 @@ const resolveCalcFilters = async (
   if (!group.ok) return group;
   const monthFilter = parseMonthFilterQuery(raw, paidMonths);
   if (!monthFilter.ok) return monthFilter;
-  const groupDepartmentIds = group.group ? await loadPayrollDepartmentGroupIds(group.group) : null;
+  const groupFilter = group.group ? await loadPayrollGroupFilter(group.group) : null;
   let employeeIds: number[] | null = null;
   if (monthFilter.filter && workedIn) {
-    const pairs = await loadCalcMonthPairs(baseParams, workedIn, groupDepartmentIds);
+    const pairs = await loadCalcMonthPairs(baseParams, workedIn, groupFilter);
     employeeIds = employeesMatchingMonthFilter(pairs, await loadMonthProfiles(pairs), monthFilter.filter);
   }
-  return { ok: true, filters: { groupDepartmentIds, employeeIds } };
+  return { ok: true, filters: { group: groupFilter, employeeIds } };
 };
 
 const badRequest = (res: Response, error: string, code: string): void => {
@@ -1003,8 +1007,8 @@ const monthObjects = async (req: AuthenticatedRequest, res: Response): Promise<v
     if (paidMonths === null || paidMonths === 'all') return badRequest(res, 'Не выбраны месяцы', 'INVALID_MONTHS');
     const workedIn = await resolvePayrollWorkedIn(paidMonths);
     const { params } = await buildBaseParams(req, parsed);
-    const groupDepartmentIds = group.group ? await loadPayrollDepartmentGroupIds(group.group) : null;
-    const pairs = workedIn ? await loadCalcMonthPairs(params, workedIn, groupDepartmentIds) : [];
+    const groupFilter = group.group ? await loadPayrollGroupFilter(group.group) : null;
+    const pairs = workedIn ? await loadCalcMonthPairs(params, workedIn, groupFilter) : [];
     res.json({ success: true, data: countMonthObjects(pairs, await loadMonthProfiles(pairs)) });
   } catch (err) {
     if (handleZodError(err, res)) return;
