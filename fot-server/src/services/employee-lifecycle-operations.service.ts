@@ -150,6 +150,17 @@ function addDaysIso(iso: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/**
+ * Дата, с которой восстановление меняет назначения. Восстановление датой увольнения —
+ * «увольнения не было» (ошибочное, в т.ч. сегодняшнее): день увольнения и так рабочий
+ * в прежнем отделе (по нему закрыто назначение), а «Уволенные» начинаются со следующего
+ * дня — их и переписываем. Иначе changeDepartment на день увольнения оставил бы
+ * открытые «Уволенные» после восстановления.
+ */
+export function resolveRehireAssignmentDate(effectiveDate: string, dismissalDate: string | null): string {
+  return dismissalDate && effectiveDate <= dismissalDate ? addDaysIso(dismissalDate, 1) : effectiveDate;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === '23505');
 }
@@ -864,7 +875,7 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
       : 'Восстановление на работу',
     lockDepartment: op.sigur_detached,
     createdBy: op.created_by,
-    effectiveDate: op.effective_date,
+    effectiveDate: resolveRehireAssignmentDate(op.effective_date, op.dismissal_date),
     forceHistory: true,
     skipIfScheduledToTarget: true,
   });

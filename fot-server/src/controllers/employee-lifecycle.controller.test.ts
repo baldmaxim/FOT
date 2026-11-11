@@ -540,12 +540,48 @@ describe('rehire — дата восстановления (effective_date)', ()
     expect(h.openRehire).not.toHaveBeenCalled();
   });
 
-  it('дата не позже даты увольнения → 400 с датой увольнения', async () => {
+  it('дата раньше даты увольнения → 400 с датой увольнения', async () => {
     const res = makeRes();
-    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-05-10' }), res as never);
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-05-09' }), res as never);
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ error: expect.stringContaining('10.05.2026') });
+    expect(h.openRehire).not.toHaveBeenCalled();
+  });
+
+  it('дата увольнения допустима — «увольнения не было»', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-05-10' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith(expect.objectContaining({ effectiveDate: '2026-05-10' }));
+  });
+
+  it('уволен по ошибке сегодня → восстановление сегодняшней датой проходит, завтрашней — 400', async () => {
+    routeQueryOne({ ...FIRED_EMPLOYEE, dismissal_date: '2026-09-16' });
+
+    const today = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-16' }), today as never);
+    expect(today.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith(expect.objectContaining({ effectiveDate: '2026-09-16' }));
+
+    h.openRehire.mockClear();
+    const tomorrow = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', effective_date: '2026-09-17' }), tomorrow as never);
+    expect(tomorrow.statusCode).toBe(400);
+    expect(h.openRehire).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['с датой', { effective_date: '2026-09-16' }],
+    ['без даты (старый фронтенд)', {}],
+  ])('дата увольнения в будущем → 400 (%s), операция не открывается', async (_label, body) => {
+    routeQueryOne({ ...FIRED_EMPLOYEE, dismissal_date: '2026-09-20' });
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2', ...body }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: expect.stringContaining('20.09.2026') });
     expect(h.openRehire).not.toHaveBeenCalled();
   });
 

@@ -3,6 +3,7 @@ import { TrendingUp, TrendingDown, Minus, Briefcase, Pencil, Trash2, Check, X, P
 import { employeeService } from '../../services/employeeService';
 import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeeHistoryEvent } from '../../types';
+import { dismissalEventLabel, showDismissalEventDate } from '../../utils/dismissalEventLabel';
 
 type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
 
@@ -313,11 +314,11 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
                 <div className="ec-history-card">
                   <div className="ec-history-card-top">
                     <Briefcase size={14} className="ec-history-assign-icon" />
-                    <span className="ec-history-assign-title">Увольнение</span>
+                    <span className="ec-history-assign-title">{dismissalEventLabel(data)}</span>
                   </div>
-                  {Boolean(data.dismissal_date || data.reason) && (
+                  {(showDismissalEventDate(data) || Boolean(data.reason)) && (
                     <div className="ec-history-card-details">
-                      {data.dismissal_date ? <span>{String(data.dismissal_date)}</span> : null}
+                      {showDismissalEventDate(data) ? <span>{String(data.dismissal_date)}</span> : null}
                       {data.reason ? <span className="ec-history-dept">{String(data.reason)}</span> : null}
                     </div>
                   )}

@@ -86,6 +86,7 @@ import {
   openRehireOperation,
   openRepairOperation,
   probeSigurCard,
+  resolveRehireAssignmentDate,
   resumeExpiredOperations,
   runOperation,
   type ILifecycleOperation,
@@ -948,6 +949,19 @@ describe('runOperation — rehire', () => {
     expect(h.txQuery).not.toHaveBeenCalled();
   });
 
+  it('восстановление датой увольнения: назначения — со следующего дня, событие — с датой операции', async () => {
+    const tx = finalizeOk();
+
+    await runOperation(rehireOp({ effective_date: '2026-11-11', dismissal_date: '2026-11-11' }), OWNER);
+
+    // «Уволенные» начинаются 12.11 — их и переписываем; 11.11 уже рабочий в прежнем отделе.
+    expect(h.changeDepartment).toHaveBeenCalledWith(77, 'dept-2', expect.objectContaining({
+      effectiveDate: '2026-11-12', skipIfScheduledToTarget: true,
+    }));
+    const evt = tx.find(c => c.sql.includes('INSERT INTO employee_dismissal_events'))!;
+    expect(evt.params).toEqual([77, '2026-11-11', '2026-11-11', 'admin-1', 'op-r']);
+  });
+
   it('повтор после падения на unblock: PUT не повторяется', async () => {
     finalizeOk();
 
@@ -955,6 +969,23 @@ describe('runOperation — rehire', () => {
 
     expect(h.updateEmployee).not.toHaveBeenCalled();
     expect(h.unblockEmployee).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveRehireAssignmentDate', () => {
+  it('позже даты увольнения — как есть', () => {
+    expect(resolveRehireAssignmentDate('2026-11-12', '2026-11-11')).toBe('2026-11-12');
+    expect(resolveRehireAssignmentDate('2026-11-20', '2026-11-11')).toBe('2026-11-20');
+  });
+
+  it('в день увольнения — со следующего дня (в т.ч. через месяц и год)', () => {
+    expect(resolveRehireAssignmentDate('2026-11-11', '2026-11-11')).toBe('2026-11-12');
+    expect(resolveRehireAssignmentDate('2026-11-30', '2026-11-30')).toBe('2026-12-01');
+    expect(resolveRehireAssignmentDate('2026-12-31', '2026-12-31')).toBe('2027-01-01');
+  });
+
+  it('без даты увольнения (legacy) — как есть', () => {
+    expect(resolveRehireAssignmentDate('2026-11-11', null)).toBe('2026-11-11');
   });
 });
 

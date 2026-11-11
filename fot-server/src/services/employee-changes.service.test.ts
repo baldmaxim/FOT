@@ -751,6 +751,44 @@ describe('employee-changes.service.changeDepartment — атомарный га�
     expect(mutations).toHaveLength(0);
   });
 
+  it('восстановление после ошибочного увольнения (Пронский): «Уволенные» дня D+1 переписываются на прежний отдел, без разрыва', async () => {
+    // Уволен 11.11 (последний рабочий день): ЛИНИЯ [..11.11], «Уволенные» [12.11..∞).
+    // Восстановление в ЛИНИЮ меняет назначения с 12.11 (resolveRehireAssignmentDate).
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-liniya', effective_from: '2026-04-01', effective_to: '2026-11-11' },
+      { id: 'a-archive', effective_from: '2026-11-12', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: 'pos-1', org_department_id: 'archive-dept', hire_date: '2022-08-01' }] };
+      }
+      // Гард: ЛИНИЯ закрыта 11.11 < 12.11 — назначения в цель на дату нет.
+      if (GUARD_SQL.test(sql)) return { rows: [] };
+      return { rows: [] };
+    });
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await expect(
+      employeeChangesService.changeDepartment(1434, 'liniya', {
+        reason: 'Восстановление на работу',
+        effectiveDate: '2026-11-12',
+        forceHistory: true,
+        skipIfScheduledToTarget: true,
+      }),
+    ).resolves.toBe('applied');
+
+    const sameDayUpdate = fake.queries.find(q =>
+      /UPDATE employee_assignments\s+SET org_department_id = \$1,\s+position_id = \$2,\s+effective_to = \$3/i.test(q.sql));
+    expect(sameDayUpdate?.params?.[0]).toBe('liniya');
+    expect(sameDayUpdate?.params?.[2]).toBeNull();
+    expect(sameDayUpdate?.params?.[6]).toBe('a-archive');
+    // Ни новой строки, ни повторного закрытия ЛИНИИ.
+    expect(fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql))).toHaveLength(0);
+    expect(fake.queries.filter(q => /SET effective_to = \$1, updated_at = \$2/i.test(q.sql))).toHaveLength(0);
+  });
+
   it('назначений в целевой отдел нет → applied, обычный перевод выполняется', async () => {
     mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
     mockGetEmployeeAssignments.mockResolvedValue([

@@ -3,6 +3,7 @@ import { Pencil, X, Briefcase, Trash2, Check } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
 import type { Employee, EmployeeHistoryEvent } from '../../types';
+import { dismissalEventLabel, showDismissalEventDate } from '../../utils/dismissalEventLabel';
 
 type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
 
@@ -219,8 +220,8 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                       <div className="sc-panel-row-compact">
                         <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
                         <Briefcase size={12} className="sc-panel-assign-icon" />
-                        <span className="sc-panel-assign-sm">Увольнение</span>
-                        {data.dismissal_date ? <span className="sc-panel-pos-sm">{String(data.dismissal_date)}</span> : null}
+                        <span className="sc-panel-assign-sm">{dismissalEventLabel(data)}</span>
+                        {showDismissalEventDate(data) ? <span className="sc-panel-pos-sm">{String(data.dismissal_date)}</span> : null}
                         {data.reason ? <span className="sc-panel-reason-sm">{String(data.reason)}</span> : null}
                       </div>
                     </div>

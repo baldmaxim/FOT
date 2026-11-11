@@ -702,7 +702,7 @@ export const EmployeeCardPage: FC = () => {
                   type="date"
                   className="ec-rehire-date"
                   value={rehireDate}
-                  min={employee.dismissal_date ? addIsoDays(employee.dismissal_date, 1) : undefined}
+                  min={employee.dismissal_date ?? undefined}
                   max={getMoscowISODate()}
                   onChange={event => setRehireDate(event.target.value)}
                   disabled={rehireInFlight}

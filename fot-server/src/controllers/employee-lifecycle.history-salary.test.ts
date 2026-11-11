@@ -141,3 +141,44 @@ describe('GET /employees/:id/history — события оклада', () => {
     expect(h.query).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /employees/:id/history — дата события восстановления', () => {
+  it('rehired с операцией — дата восстановления из операции; без операции — прежняя; лента пересортирована', async () => {
+    h.resolveRolePageAccess.mockResolvedValue(false);
+    const rows = [
+      { employee_id: 77, event_type: 'assignment', event_id: 'a-liniya', event_date: '2026-11-12', event_data: {} },
+      { employee_id: 77, event_type: 'dismissal', event_id: 'ev-rehire', event_date: '2026-11-11', event_data: { rehired: true, dismissal_date: '2026-11-11' } },
+      { employee_id: 77, event_type: 'dismissal', event_id: 'ev-dismiss', event_date: '2026-11-11', event_data: { dismissal_date: '2026-11-11' } },
+      { employee_id: 77, event_type: 'dismissal', event_id: 'ev-legacy', event_date: '2025-03-01', event_data: { rehired: true, dismissal_date: '2025-03-01' } },
+    ];
+    h.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.includes('employee_history')) return rows;
+      if (sql.includes('employee_lifecycle_operations')) {
+        expect(params[0]).toEqual(['ev-rehire', 'ev-legacy']);
+        return [{ id: 'ev-rehire', effective_date: '2026-11-12' }];
+      }
+      return [];
+    });
+    const res = makeRes();
+
+    await getHistory(makeReq(), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const data = res.body.data as unknown as Array<{ event_id: string; event_date: string }>;
+    expect(data.map(e => [e.event_id, e.event_date])).toEqual([
+      ['a-liniya', '2026-11-12'],
+      ['ev-rehire', '2026-11-12'],
+      ['ev-dismiss', '2026-11-11'],
+      ['ev-legacy', '2025-03-01'],
+    ]);
+  });
+
+  it('без событий восстановления запрос к операциям не делается', async () => {
+    h.resolveRolePageAccess.mockResolvedValue(false);
+    const res = makeRes();
+
+    await getHistory(makeReq(), res as never);
+
+    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('employee_lifecycle_operations'))).toBe(false);
+  });
+});

@@ -681,16 +681,28 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
+    // Уволенный с датой увольнения в будущем — испорченная запись (fired ставится в день
+    // увольнения): любая дата восстановления легла бы до увольнения. И с датой, и без.
+    if (existing.dismissal_date && existing.dismissal_date > moscowTodayIso()) {
+      res.status(400).json({
+        success: false,
+        error: `Дата увольнения в будущем (${formatRuDate(existing.dismissal_date)}) — восстановление невозможно, обратитесь к администратору`,
+      });
+      return;
+    }
+
     if (effectiveDate !== undefined) {
       if (effectiveDate > moscowTodayIso()) {
         res.status(400).json({ success: false, error: 'Восстановление будущей датой не поддерживается' });
         return;
       }
       if (existing.dismissal_date) {
-        if (effectiveDate <= existing.dismissal_date) {
+        // Дата увольнения допустима: «увольнения не было» (ошибочное, в т.ч. сегодняшнее) —
+        // назначения меняются со следующего дня (resolveRehireAssignmentDate).
+        if (effectiveDate < existing.dismissal_date) {
           res.status(400).json({
             success: false,
-            error: `Дата восстановления должна быть позже даты увольнения (${formatRuDate(existing.dismissal_date)})`,
+            error: `Дата восстановления не может быть раньше даты увольнения (${formatRuDate(existing.dismissal_date)})`,
           });
           return;
         }
@@ -1170,6 +1182,28 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
         created_by: row.created_by,
       };
     });
+
+    // Событие восстановления хранит прежнюю дату увольнения (по ней VIEW ставит event_date),
+    // а в ленте оно должно стоять датой восстановления — она в операции rehire.
+    // Старые события без операции остаются на дате увольнения.
+    const rehiredIds = events
+      .filter(e => e.event_type === 'dismissal' && e.event_data.rehired === true)
+      .map(e => String(e.event_id));
+    if (rehiredIds.length > 0) {
+      const rehireDates = await query<{ id: string; effective_date: string }>(
+        `SELECT de.id::text AS id, o.effective_date::text AS effective_date
+           FROM employee_dismissal_events de
+           JOIN employee_lifecycle_operations o ON o.id = de.operation_id AND o.kind = 'rehire'
+          WHERE de.id = ANY($1::uuid[])`,
+        [rehiredIds],
+      );
+      const dateById = new Map(rehireDates.map(r => [r.id, r.effective_date]));
+      for (const event of events) {
+        const date = dateById.get(String(event.event_id));
+        if (date) event.event_date = date;
+      }
+      events.sort((a, b) => String(b.event_date).localeCompare(String(a.event_date)));
+    }
 
     res.json({ success: true, data: events });
   } catch (error) {

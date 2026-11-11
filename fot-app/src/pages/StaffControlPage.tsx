@@ -3263,7 +3263,7 @@ export const StaffControlPage: FC = () => {
                   type="date"
                   className="sc-rehire-date"
                   value={rehireDate}
-                  min={rehireEmp.dismissal_date ? addIsoDays(rehireEmp.dismissal_date, 1) : undefined}
+                  min={rehireEmp.dismissal_date ?? undefined}
                   max={getMoscowISODate()}
                   onChange={e => setRehireDate(e.target.value)}
                   disabled={rehireInFlight}
