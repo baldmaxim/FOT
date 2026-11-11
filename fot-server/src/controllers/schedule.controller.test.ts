@@ -994,33 +994,96 @@ describe('scheduleController.listEmployeeHistory + deleteEmployeeAssignment', ()
     expect(rows).toHaveLength(2);
   });
 
+  const ASSIGN_P = 'cccccccc-3333-4333-a333-cccccccccccc';
+  const ASSIGN_N = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
+
+  const runDelete = async (assignmentId: string = ASSIGN_A) => {
+    const req = makeReq({ params: { employeeId: '7', assignmentId } });
+    const res = makeRes();
+    await scheduleController.deleteEmployeeAssignment(req, res);
+    return res;
+  };
+  const deleteCalls = () => pgExecute.mock.calls.filter(([sql]) =>
+    typeof sql === 'string' && sql.toLowerCase().startsWith('delete from employee_schedule_assignments'));
+  const updateCalls = () => pgExecute.mock.calls.filter(([sql]) =>
+    typeof sql === 'string' && sql.toLowerCase().startsWith('update employee_schedule_assignments'));
+
   it('deleteEmployeeAssignment: удаляет строку по id и проверяет employee_id', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-10-05', effective_to: null },
+    ]);
     pgExecute.mockResolvedValue(1);
 
-    const req = makeReq({ params: { employeeId: '7', assignmentId: ASSIGN_A } });
-    const res = makeRes();
-
-    await scheduleController.deleteEmployeeAssignment(req, res);
+    const res = await runDelete();
 
     expect(res.statusCode).toBe(200);
-    const del = pgExecute.mock.calls.find(([sql, params]) =>
-      typeof sql === 'string'
-      && sql.toLowerCase().startsWith('delete from employee_schedule_assignments')
-      && Array.isArray(params)
-      && (params as unknown[]).includes(ASSIGN_A)
-      && (params as unknown[]).includes(7));
-    expect(del).toBeTruthy();
+    expect(deleteCalls()).toHaveLength(1);
+    expect(deleteCalls()[0][1]).toEqual([ASSIGN_A, 7]);
+    // Первая запись — продлевать некого, период уходит в базовый.
+    expect(updateCalls()).toHaveLength(0);
+    expect((res.payload as { data: unknown }).data).toEqual({ extended: null });
+  });
+
+  it('deleteEmployeeAssignment: открытая запись удалена → примыкающая предыдущая становится открытой (Ильясов)', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: '2026-10-04' },
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-10-05', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+
+    const res = await runDelete();
+
+    expect(res.statusCode).toBe(200);
+    expect(deleteCalls()[0][1]).toEqual([ASSIGN_A, 7]);
+    expect(updateCalls()).toHaveLength(1);
+    const [, params] = updateCalls()[0] as [string, unknown[]];
+    expect(params[0]).toBeNull();
+    expect(params[2]).toBe(ASSIGN_P);
+    expect((res.payload as { data: unknown }).data).toEqual({ extended: { id: ASSIGN_P, effective_to: null } });
+  });
+
+  it('deleteEmployeeAssignment: закрытая запись удалена → предыдущая продлевается до её конца, следующая не трогается', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-09-01', effective_to: '2026-09-30' },
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: '2026-10-31' },
+      { id: ASSIGN_N, schedule_id: SCHEDULE_ID, effective_from: '2026-11-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+
+    const res = await runDelete();
+
+    expect(res.statusCode).toBe(200);
+    expect(updateCalls()).toHaveLength(1);
+    const [, params] = updateCalls()[0] as [string, unknown[]];
+    expect(params[0]).toBe('2026-10-31');
+    expect(params[2]).toBe(ASSIGN_P);
+  });
+
+  it('deleteEmployeeAssignment: между предыдущей и удаляемой разрыв → предыдущая не продлевается', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-06-01', effective_to: '2026-06-30' },
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+
+    const res = await runDelete();
+
+    expect(res.statusCode).toBe(200);
+    expect(deleteCalls()).toHaveLength(1);
+    expect(updateCalls()).toHaveLength(0);
+    expect((res.payload as { data: unknown }).data).toEqual({ extended: null });
   });
 
   it('deleteEmployeeAssignment: 404, если строка не принадлежит сотруднику', async () => {
-    pgExecute.mockResolvedValue(0);
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
 
-    const req = makeReq({ params: { employeeId: '7', assignmentId: ASSIGN_A } });
-    const res = makeRes();
-
-    await scheduleController.deleteEmployeeAssignment(req, res);
+    const res = await runDelete();
 
     expect(res.statusCode).toBe(404);
+    expect(pgExecute).not.toHaveBeenCalled();
   });
 });
 

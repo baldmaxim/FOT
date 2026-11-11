@@ -485,7 +485,13 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const handleDeleteHistoryRow = async (row: IEmployeeScheduleAssignment) => {
     const schedName = row.work_schedules?.name ?? '—';
     const eto = row.effective_to ?? 'открыто';
-    if (!window.confirm(`Удалить запись «${schedName}» с ${row.effective_from} по ${eto}? Действие необратимо.`)) return;
+    // Как на бэке: период удалённой записи переходит к примыкающей предыдущей, иначе — к базовому графику.
+    const prevRow = [...history].reverse().find(r => r.effective_from < row.effective_from) ?? null;
+    const adjacentPrev = prevRow && prevRow.effective_to === addIsoDays(row.effective_from, -1) ? prevRow : null;
+    const outcome = adjacentPrev
+      ? `«${adjacentPrev.work_schedules?.name ?? '—'}» будет действовать ${row.effective_to ? `по ${row.effective_to}` : 'без даты окончания'}.`
+      : `С ${row.effective_from} будет действовать базовый график${row.effective_to ? ` (по ${row.effective_to})` : ''}.`;
+    if (!window.confirm(`Удалить запись «${schedName}» с ${row.effective_from} по ${eto}? ${outcome} Действие необратимо.`)) return;
     setDeletingId(row.id);
     try {
       await onDeleteAssignmentRow(modalEmp.id, row.id);
@@ -611,18 +617,21 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                     <>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                         <span><strong>Правим запись из истории:</strong> {fixTargetScheduleName}</span>
-                        <button
-                          type="button"
-                          className="sc-btn cancel"
-                          style={{ fontSize: 11, padding: '2px 8px' }}
-                          onClick={() => {
-                            setFixTargetId(null);
-                            setFixFrom(effectiveSchedule?.effectiveFrom || '');
-                            setFixAnchor(effectiveSchedule?.assignmentAnchorDate ?? '');
-                          }}
-                        >
-                          Вернуться к активной
-                        </button>
+                        {/* Возврат к правке действующей персональной записи; без неё возвращаться некуда. */}
+                        {hasFixableAssignment && (
+                          <button
+                            type="button"
+                            className="sc-btn cancel"
+                            style={{ fontSize: 11, padding: '2px 8px' }}
+                            onClick={() => {
+                              setFixTargetId(null);
+                              setFixFrom(effectiveSchedule?.effectiveFrom || '');
+                              setFixAnchor(effectiveSchedule?.assignmentAnchorDate ?? '');
+                            }}
+                          >
+                            Вернуться к активной
+                          </button>
+                        )}
                       </div>
                       <div><strong>Исходная дата вступления:</strong> {fixTargetRow.effective_from}</div>
                       {fixTargetIsCycle && (

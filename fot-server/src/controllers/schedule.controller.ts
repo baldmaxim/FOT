@@ -635,6 +635,49 @@ const fixEmployeeAssignmentDates = async (
 };
 
 /**
+ * Удаление строки истории по id. Период удалённой строки переходит к предыдущей,
+ * если та примыкает вплотную: иначе удаление «следующей» записи оставляло
+ * предыдущую закрытой и сотрудник молча уходил на базовый график (Ильясов 11.2026).
+ * Предыдущей нет или между ними разрыв — период уходит в базовый, как раньше.
+ * null — строки у этого сотрудника нет.
+ */
+const deleteEmployeeAssignmentRow = async (
+  db: Db,
+  employeeId: number,
+  assignmentId: string,
+): Promise<{ extended: { id: string; effective_to: string | null } | null } | null> => {
+  const rows = await db.query<EmployeeScheduleRow>(
+    `SELECT id, schedule_id, effective_from, effective_to
+       FROM employee_schedule_assignments
+      WHERE employee_id = $1
+      ORDER BY effective_from ASC
+      FOR UPDATE`,
+    [employeeId],
+  );
+  const target = rows.find(row => row.id === assignmentId) || null;
+  if (!target) return null;
+
+  const affected = await db.execute(
+    'DELETE FROM employee_schedule_assignments WHERE id = $1 AND employee_id = $2',
+    [target.id, employeeId],
+  );
+  if (affected !== 1) return null;
+
+  const prev = [...rows].reverse().find(row => row.effective_from < target.effective_from) || null;
+  if (!prev || prev.effective_to !== previousIsoDate(target.effective_from)) {
+    return { extended: null };
+  }
+  const updated = await db.execute(
+    `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
+    [target.effective_to, new Date().toISOString(), prev.id],
+  );
+  if (updated !== 1) {
+    throw new Error(`Не удалось продлить предыдущее назначение (employeeId=${employeeId}, assignmentId=${prev.id}, affected=${updated})`);
+  }
+  return { extended: { id: prev.id, effective_to: target.effective_to } };
+};
+
+/**
  * Массовый back-dating: сдвигает effective_from открытого назначения (effective_to=NULL)
  * сотрудника назад без создания новых исторических фрагментов. Записи с
  * effective_from ∈ [newFrom .. target.effective_from) удаляются как поглощённые;
@@ -1257,7 +1300,8 @@ export const scheduleController = {
    * удаление КОНКРЕТНОЙ строки назначения по id. В отличие от
    * removeEmployeeAssignment (который закрывает активную запись через effective_to),
    * этот эндпоинт стирает строку полностью — используется блоком «История
-   * назначений» для удаления стейл-фрагментов руками админа.
+   * назначений» для удаления стейл-фрагментов руками админа. Период строки
+   * переходит к примыкающей предыдущей (deleteEmployeeAssignmentRow).
    */
   async deleteEmployeeAssignment(req: AuthenticatedRequest, res: Response) {
     try {
@@ -1274,15 +1318,13 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const affected = await execute(
-        'DELETE FROM employee_schedule_assignments WHERE id = $1 AND employee_id = $2',
-        [parsedAssignmentId.data, parsedEmployeeId.data],
-      );
-      if (affected === 0) {
+      const result = await withTransaction(client =>
+        deleteEmployeeAssignmentRow(clientDb(client), parsedEmployeeId.data, parsedAssignmentId.data));
+      if (!result) {
         return res.status(404).json({ success: false, error: 'Назначение не найдено у этого сотрудника' });
       }
       void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assignment_delete');
-      res.json({ success: true });
+      res.json({ success: true, data: result });
     } catch (err) {
       console.error('[schedules] deleteEmployeeAssignment error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления записи назначения' });
