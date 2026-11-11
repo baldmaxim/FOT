@@ -402,6 +402,15 @@ function compressDates(dates: readonly string[]): Array<{ start: string; end: st
   return intervals;
 }
 
+/** Дни сотрудника, которые держит закрытая подача (владение уже проверено по каждой дате). */
+export interface IEmployeeApprovalOwnedDays {
+  approval_id: number;
+  employee_id: number;
+  status: IApprovalLockInfo['status'];
+  /** ISO-даты по возрастанию. */
+  dates: string[];
+}
+
 /**
  * Замки за период по набору сотрудников — для подсветки в гриде. Интервальная
  * форма вместо плоского списка дат: в смешанной выборке (табельщица, прямые
@@ -417,6 +426,32 @@ export async function loadApprovalLocksForEmployeesInPeriod(
   endDate: string,
   exec?: DbExecutor,
 ): Promise<IEmployeeApprovalLock[]> {
+  const owned = await loadOwnedApprovalDaysForEmployeesInPeriod(employeeIds, startDate, endDate, exec);
+  const locks: IEmployeeApprovalLock[] = [];
+  for (const row of owned) {
+    for (const interval of compressDates(row.dates)) {
+      locks.push({
+        employee_id: row.employee_id,
+        start_date: interval.start,
+        end_date: interval.end,
+        status: row.status,
+      });
+    }
+  }
+  return locks;
+}
+
+/**
+ * Какая закрытая подача какие дни сотрудника держит за период. Те же кандидаты и то же владение днём, что у
+ * подсветки замков в гриде (loadApprovalLocksForEmployeesInPeriod строится на ней): кнопка «Открыть табель»
+ * снимает ровно те замки, которые сетка показывает.
+ */
+export async function loadOwnedApprovalDaysForEmployeesInPeriod(
+  employeeIds: readonly number[],
+  startDate: string,
+  endDate: string,
+  exec?: DbExecutor,
+): Promise<IEmployeeApprovalOwnedDays[]> {
   const ids = [...new Set(employeeIds.map(Number).filter(id => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return [];
 
@@ -498,22 +533,16 @@ export async function loadApprovalLocksForEmployeesInPeriod(
     exec,
   );
 
-  const locks: IEmployeeApprovalLock[] = [];
+  const owned: IEmployeeApprovalOwnedDays[] = [];
   for (const row of rows) {
     const employeeId = Number(row.employee_id);
     const approvalId = Number(row.id);
     const ownedDates = enumerateDatesInclusive(row.start_date, row.end_date)
       .filter(date => ownsDay(ownership.get(ownershipKey(approvalId, employeeId, date))));
-    for (const interval of compressDates(ownedDates)) {
-      locks.push({
-        employee_id: employeeId,
-        start_date: interval.start,
-        end_date: interval.end,
-        status: row.status,
-      });
-    }
+    if (ownedDates.length === 0) continue;
+    owned.push({ approval_id: approvalId, employee_id: employeeId, status: row.status, dates: ownedDates });
   }
-  return locks;
+  return owned;
 }
 
 /** Разворачивает интервалы замков в плоский список ISO-дат (легаси-поле approval_locked_dates). */

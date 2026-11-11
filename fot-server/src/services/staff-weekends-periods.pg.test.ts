@@ -49,9 +49,11 @@ vi.mock('./skud-shared.service.js', async (importActual) => ({
 }));
 
 const {
+  attachWeekendPeriods,
   listActiveUnlocks,
   listLockingApprovalIds,
   openApprovalsTogether,
+  openApprovalsWithRecords,
   previewWeekendPeriod,
   WeekendPeriodConflictError,
 } = await import('./staff-weekends-periods.service.js');
@@ -289,6 +291,29 @@ describeIf('кнопки «Открыть табель» и «Закрыть т�
 
       expect(await listActiveUnlocks([LINE], [H1])).toEqual([]);
       expect(await listActiveUnlocks([GENERAL], ['2026-10-16'])).toEqual([]);
+    });
+
+    it('подача на весь месяц, открытая из «Табеля» на обе половины: «Закрыть» есть у обеих', async () => {
+      const month = await addApproval({ departmentId: GENERAL, start: '2026-10-01', end: '2026-10-31', employees: [KABYKA] });
+      await openApprovalsWithRecords({
+        approvalIds: [month],
+        userId: USER,
+        reason: null,
+        records: [
+          { operationId: OPERATION, branchId: GENERAL, periodStart: H1, approvalIds: [month] },
+          { operationId: OPERATION_2, branchId: GENERAL, periodStart: '2026-10-16', approvalIds: [month] },
+        ],
+      });
+
+      const active = await listActiveUnlocks([GENERAL], [H1, '2026-10-16']) as Array<{ id: number; period_start: string }>;
+      expect(active.map(row => row.period_start).sort()).toEqual([H1, '2026-10-16']);
+      expect(active.every(row => Number(row.id) === month)).toBe(true);
+
+      const [branch] = await attachWeekendPeriods('2026-10', [{ id: GENERAL, name: 'ЛИНИЯ-Общестрой', rows: [kabykaRow] }]);
+      expect(branch?.periods.map(period => [period.half, period.can_close])).toEqual([[1, true], [2, true]]);
+
+      // Закрытие одной половины по-прежнему видит подачу один раз.
+      expect((await listActiveUnlocks([GENERAL], [H1])).map(row => Number(row.id))).toEqual([month]);
     });
 
     it('удаление подачи убирает и запись', async () => {

@@ -248,6 +248,15 @@
   color: var(--warning, #d97706);
 }
 
+/* Тот же признак внутри чипа другого полупериода («Весь месяц»). */
+.ts-header-other-chip-unlocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  color: var(--warning, #d97706);
+}
+
 /* Подан, но ждёт решения по выходным — утвердить пока нельзя. */
 .ts-header-approval-chip--waiting,
 .ts-approval-status--waiting {

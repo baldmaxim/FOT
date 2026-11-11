@@ -4,6 +4,7 @@ import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
 import { closeTimesheetMonth } from '../controllers/timesheet-month-close.controller.js';
+import { timesheetDepartmentPeriodController } from '../controllers/timesheet-department-period.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 import { registerCache } from '../middleware/cacheResponse.js';
@@ -79,6 +80,14 @@ router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprova
 // из 'approved' — только админ (проверка в контроллере): иначе руководитель снимал бы
 // утверждение HR и правил закрытый период сам.
 router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.recall);
+
+// «Открыть/Закрыть табель» отдела за 1–15, 16–31 или весь месяц: вместе с табелем отдела — личные
+// табели руководителей, держащие строки его людей. Пути — ДО '/:id/open': иначе POST
+// /department-period/open ушёл бы в openPeriod с id = 'department-period'.
+router.get('/department-period', requireTimesheetLockToggle(), timesheetDepartmentPeriodController.getState);
+router.get('/department-period/preview', requireTimesheetLockToggle(), timesheetDepartmentPeriodController.preview);
+router.post('/department-period/open', requireTimesheetLockToggle(), timesheetDepartmentPeriodController.open);
+router.post('/department-period/close', requireTimesheetLockToggle(), timesheetDepartmentPeriodController.close);
 
 // Временное открытие сданного периода: статус подачи не меняется, снимается только замок
 // закрытого табеля. Закрытие возвращает замок.

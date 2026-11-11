@@ -66,6 +66,48 @@ export interface ITimesheetApproval {
   updated_at: string;
 }
 
+/** «Открыть/Закрыть табель» отдела: подача в составе кнопки. */
+export interface IDepartmentPeriodApprovalInfo {
+  id: number;
+  label: string;
+  status: TimesheetApprovalStatus;
+  start_date: string;
+  end_date: string;
+  unlocked: boolean;
+}
+
+/** Половина месяца: какие подачи кнопка откроет и какие закроет. */
+export interface IDepartmentPeriodHalfState {
+  half: 1 | 2;
+  start_date: string;
+  end_date: string;
+  open_ids: number[];
+  close_ids: number[];
+}
+
+export interface IDepartmentPeriodState {
+  start_date: string;
+  end_date: string;
+  halves: IDepartmentPeriodHalfState[];
+  approvals: IDepartmentPeriodApprovalInfo[];
+}
+
+/** Состав на момент окна «Открыть табель»: сервер сверяет с ним открытие. */
+export interface IDepartmentPeriodPreview extends IDepartmentPeriodState {
+  expected_approval_ids: number[];
+}
+
+export interface IDepartmentPeriodRef {
+  department_id: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface IDepartmentPeriodCloseResult {
+  closed: number[];
+  failed: Array<{ id: number; label: string; error: string; code?: string }>;
+}
+
 export interface ITimesheetApprovalEvent {
   id: number;
   approval_id: number;
@@ -329,6 +371,50 @@ export const timesheetApprovalService = {
     const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
       `/timesheet-approvals/${approvalId}/close`,
       {},
+    );
+    return res.data;
+  },
+
+  /** Кнопки «Открыть/Закрыть табель» отдела за половину или весь месяц: что откроется и что закроется. */
+  getDepartmentPeriod: async (ref: IDepartmentPeriodRef, signal?: AbortSignal): Promise<IDepartmentPeriodState> => {
+    const params = new URLSearchParams({ ...ref });
+    const res = await apiClient.get<ApiResponse<IDepartmentPeriodState>>(
+      `/timesheet-approvals/department-period?${params.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** Состав для окна «Открыть табель» — сервер сверяет с ним открытие. */
+  previewDepartmentPeriod: async (ref: IDepartmentPeriodRef, signal?: AbortSignal): Promise<IDepartmentPeriodPreview> => {
+    const params = new URLSearchParams({ ...ref });
+    const res = await apiClient.get<ApiResponse<IDepartmentPeriodPreview>>(
+      `/timesheet-approvals/department-period/preview?${params.toString()}`,
+      { signal, timeoutMs: 120_000 },
+    );
+    return res.data;
+  },
+
+  /** Открыть всё разом; operation_ids — на окно подтверждения: повтор с ними ничего не задвоит. */
+  openDepartmentPeriod: async (body: IDepartmentPeriodRef & {
+    operation_ids: Partial<Record<1 | 2, string>>;
+    expected_approval_ids: number[];
+    reason: string | null;
+  }): Promise<{ opened: number[]; repeated: boolean }> => {
+    const res = await apiClient.post<ApiResponse<{ opened: number[]; repeated: boolean }>>(
+      '/timesheet-approvals/department-period/open',
+      body,
+      { timeoutMs: 120_000 },
+    );
+    return res.data;
+  },
+
+  /** Закрыть открытое: по одной подаче, ошибка одной не мешает остальным. */
+  closeDepartmentPeriod: async (body: IDepartmentPeriodRef): Promise<IDepartmentPeriodCloseResult> => {
+    const res = await apiClient.post<ApiResponse<IDepartmentPeriodCloseResult>>(
+      '/timesheet-approvals/department-period/close',
+      body,
+      { timeoutMs: 300_000 },
     );
     return res.data;
   },

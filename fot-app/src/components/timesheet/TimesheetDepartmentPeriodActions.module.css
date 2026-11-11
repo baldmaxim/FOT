@@ -1,0 +1,29 @@
+/*
+ * «Весь месяц»: у каждой половины подпись и свои кнопки, как во вкладке «Выходные».
+ * Половины — строками сетки: подписи разной ширины, а кнопки встают в одну колонку.
+ */
+.periods {
+  display: grid;
+  grid-template-columns: max-content minmax(0, auto);
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.period {
+  display: contents;
+}
+
+.periodLabel {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.periodButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}

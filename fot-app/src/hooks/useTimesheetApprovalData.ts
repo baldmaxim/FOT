@@ -19,6 +19,13 @@ export const getTimesheetApprovalDepartmentListQueryKey = (
   month: string,
 ) => ['timesheet-approval', 'department-list', mode, departmentId, month] as const;
 
+/** «Открыть/Закрыть табель» отдела за половину или весь месяц — под общим префиксом, инвалидация как у статуса. */
+export const getTimesheetDepartmentPeriodQueryKey = (
+  departmentId: string,
+  startDate: string,
+  endDate: string,
+) => ['timesheet-approval', 'department-period', departmentId, startDate, endDate] as const;
+
 export const getTimesheetApprovalReviewListQueryKey = (
   status: TimesheetApprovalStatus | 'submitted',
 ) => ['timesheet-approval', 'list', status] as const;

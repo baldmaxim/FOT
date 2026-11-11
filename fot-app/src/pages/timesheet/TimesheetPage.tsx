@@ -2458,6 +2458,16 @@ export const TimesheetPage: FC = () => {
             >
               {formatTimesheetRangeLabel(a.start_date, a.end_date)}{' '}
               <OtherIcon size={13} /> {otherWaiting ? PENDING_WEEKENDS_LABEL : APPROVAL_STATUS_LABELS[a.status]}
+              {/* Полупериод открыт для правок («Весь месяц»): своя пометка — у чипа inline-цвет статуса. */}
+              {a.unlocked_at && (
+                <span
+                  className="ts-header-other-chip-unlocked"
+                  title={['Период открыт для правок', a.unlock_reason ? `Причина: ${a.unlock_reason}` : null]
+                    .filter(Boolean).join(' • ')}
+                >
+                  <Unlock size={13} /> Открыт
+                </span>
+              )}
             </span>
           );
         })}

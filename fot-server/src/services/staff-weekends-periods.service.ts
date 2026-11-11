@@ -110,12 +110,16 @@ export const listLockingApprovalIds = async (
   return [...ids].sort((a, b) => a - b);
 };
 
-/** Подачи, открытые кнопкой этого отдела и ещё открытые. Открытые вручную сюда не попадают. */
+/**
+ * Подачи, открытые кнопкой этого отдела и ещё открытые. Открытые вручную сюда не попадают.
+ * Строка — на подачу и половину: «Табель» за весь месяц пишет подачу на 1–31 в обе половины, и кнопка
+ * «Закрыть табель» нужна у обеих (одна строка на подачу оставила бы её только у одной).
+ */
 export const listActiveUnlocks = async (
   branchIds: readonly string[],
   periodStarts: readonly string[],
 ): Promise<IWeekendPeriodApprovalRow[]> => query<IWeekendPeriodApprovalRow & { branch_id: string; period_start: string }>(
-  `SELECT DISTINCT ON (a.id, u.branch_id) a.*, d.name AS department_name, m.full_name AS manager_name,
+  `SELECT DISTINCT ON (a.id, u.branch_id, u.period_start) a.*, d.name AS department_name, m.full_name AS manager_name,
           u.branch_id, u.period_start::text AS period_start
      FROM staff_weekend_unlocks u
      JOIN timesheet_approvals a ON a.id = u.approval_id AND a.unlocked_at = u.unlocked_at
@@ -123,7 +127,7 @@ export const listActiveUnlocks = async (
      LEFT JOIN employees m ON m.id = a.manager_employee_id
     WHERE u.branch_id = ANY($1::uuid[])
       AND u.period_start = ANY($2::date[])
-    ORDER BY a.id, u.branch_id`,
+    ORDER BY a.id, u.branch_id, u.period_start`,
   [[...branchIds], [...periodStarts]],
 );
 
@@ -218,7 +222,7 @@ const loadOthers = async (
     }));
 };
 
-const loadApprovals = (ids: readonly number[]): Promise<IWeekendPeriodApprovalRow[]> => query<IWeekendPeriodApprovalRow>(
+export const loadApprovals = (ids: readonly number[]): Promise<IWeekendPeriodApprovalRow[]> => query<IWeekendPeriodApprovalRow>(
   `SELECT a.*, a.start_date::text AS start_date, a.end_date::text AS end_date,
           d.name AS department_name, m.full_name AS manager_name
      FROM timesheet_approvals a
@@ -279,6 +283,14 @@ export const findWeekendOperation = async (
   [operationId],
 );
 
+/** Запись об открытии для одной половины месяца: какие подачи она держит. */
+export interface IPeriodUnlockRecord {
+  operationId: string;
+  branchId: string;
+  periodStart: string;
+  approvalIds: readonly number[];
+}
+
 /**
  * Снять замок со всех подач разом. Не вышло хотя бы с одной (её успели закрыть, вернуть или открыть) —
  * откат, не открыто ничего. Время берётся из самой строки подачи, минуя JS: Date отбросил бы микросекунды,
@@ -291,8 +303,29 @@ export const openApprovalsTogether = async (params: {
   approvalIds: readonly number[];
   userId: string;
   reason: string | null;
+}): Promise<TimesheetApproval[]> => openApprovalsWithRecords({
+  approvalIds: params.approvalIds,
+  userId: params.userId,
+  reason: params.reason,
+  records: [{
+    operationId: params.operationId,
+    branchId: params.branchId,
+    periodStart: params.periodStart,
+    approvalIds: params.approvalIds,
+  }],
+});
+
+/**
+ * То же для нескольких половин одной транзакцией (табель за весь месяц): у каждой половины своя запись со своим
+ * operation_id, подача на обе половины записывается в обе — «Закрыть табель» любой половины её найдёт.
+ */
+export const openApprovalsWithRecords = async (params: {
+  approvalIds: readonly number[];
+  userId: string;
+  reason: string | null;
+  records: readonly IPeriodUnlockRecord[];
 }): Promise<TimesheetApproval[]> => withTransaction(async (client) => {
-  const ids = [...params.approvalIds];
+  const ids = [...new Set(params.approvalIds.map(Number))].sort((a, b) => a - b);
   // Блокировка по порядку id: две одновременные операции не сцепятся.
   await client.query('SELECT id FROM timesheet_approvals WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE', [ids]);
 
@@ -312,12 +345,15 @@ export const openApprovalsTogether = async (params: {
     throw new WeekendPeriodConflictError('PERIOD_SET_CHANGED', 'Состав табелей изменился — откройте окно заново');
   }
 
-  await client.query(
-    `INSERT INTO staff_weekend_unlocks (operation_id, branch_id, period_start, approval_id, unlocked_at)
-     SELECT $1::uuid, $2::uuid, $3::date, a.id, a.unlocked_at
-       FROM timesheet_approvals a
-      WHERE a.id = ANY($4::bigint[])`,
-    [params.operationId, params.branchId, params.periodStart, ids],
-  );
+  for (const record of params.records) {
+    if (record.approvalIds.length === 0) continue;
+    await client.query(
+      `INSERT INTO staff_weekend_unlocks (operation_id, branch_id, period_start, approval_id, unlocked_at)
+       SELECT $1::uuid, $2::uuid, $3::date, a.id, a.unlocked_at
+         FROM timesheet_approvals a
+        WHERE a.id = ANY($4::bigint[])`,
+      [record.operationId, record.branchId, record.periodStart, [...record.approvalIds]],
+    );
+  }
   return updated.rows;
 });

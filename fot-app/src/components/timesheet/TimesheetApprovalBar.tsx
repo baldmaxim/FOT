@@ -1,4 +1,4 @@
-import { type FC, useEffect, useRef, useState } from 'react';
+import { type FC, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle, Lock, Unlock,
@@ -14,7 +14,7 @@ import {
   type TimesheetSubmissionMode,
 } from '../../services/timesheetApprovalService';
 import { ApiError } from '../../api/client';
-import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
+import { useTimesheetApprovalStatus, useTimesheetDepartmentApprovals } from '../../hooks/useTimesheetApprovalData';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { AttachmentList } from './AttachmentList';
 import {
@@ -30,6 +30,8 @@ import {
 } from './TimesheetSubmitConfirmModal';
 import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
 import { formatPendingDecisions, isWaitingWeekends, PENDING_WEEKENDS_LABEL } from '../../utils/pendingDecisions';
+import { summarizeMonthHalves, type IMonthHalvesSummary } from '../../utils/departmentPeriodActions';
+import { TimesheetDepartmentPeriodActions } from './TimesheetDepartmentPeriodActions';
 
 interface IProps {
   /**
@@ -69,6 +71,18 @@ interface IActiveCardProps {
   canToggleLock: boolean;
   /** Период сейчас открыт для правок. */
   periodUnlocked: boolean;
+  /**
+   * Кнопки «Открыть/Закрыть табель» отдела (вместе с личными табелями его людей). Есть — вместо прежних
+   * кнопок по одной подаче.
+   */
+  periodActions?: ReactNode;
+  /**
+   * «Весь месяц» без подачи на 1–31, но с подачами половин: подача за месяц недоступна (подают по половинам),
+   * статус в компактном блоке — сводный по половинам.
+   */
+  monthSummary?: IMonthHalvesSummary | null;
+  /** Подача ещё неизвестна (грузится сводка месяца) — «Подать» не предлагаем. */
+  submitPending?: boolean;
   canReviewApproval: boolean;
   comment: string;
   compact: boolean;
@@ -99,6 +113,9 @@ const ActiveCard: FC<IActiveCardProps> = ({
   canRecallApproved,
   canToggleLock,
   periodUnlocked,
+  periodActions,
+  monthSummary = null,
+  submitPending = false,
   canReviewApproval,
   comment,
   compact,
@@ -123,7 +140,6 @@ const ActiveCard: FC<IActiveCardProps> = ({
   onDismissError,
 }) => {
   const status = approval?.status || 'draft';
-  const Icon = STATUS_ICONS[status];
   const [showComment, setShowComment] = useState(false);
   const [reviewCommentOpen, setReviewCommentOpen] = useState(false);
   const [errorOpen, setErrorOpen] = useState(false);
@@ -131,7 +147,12 @@ const ActiveCard: FC<IActiveCardProps> = ({
   const errorTriggerRef = useRef<HTMLButtonElement | null>(null);
   const errorCloseTimer = useRef<number | null>(null);
   const submitLabel = status === 'returned' || status === 'rejected' ? 'Переподать' : 'Подать';
-  const canShowSubmit = canSubmitDepartment && (status === 'draft' || status === 'rejected' || status === 'returned');
+  const canShowSubmit = canSubmitDepartment && !monthSummary && !submitPending
+    && (status === 'draft' || status === 'rejected' || status === 'returned');
+  // Компактный блок «Весь месяц» без подачи на 1–31 — сводный статус половин; действия — по точной подаче.
+  const displayStatus = monthSummary ? monthSummary.status : status;
+  const DisplayIcon = STATUS_ICONS[displayStatus];
+  const displayWaiting = monthSummary ? monthSummary.waitingWeekends : isWaitingWeekends(approval);
   const reviewComment = approval?.review_comment ?? '';
   const hasError = !!submitError || missingDays.length > 0;
 
@@ -181,16 +202,16 @@ const ActiveCard: FC<IActiveCardProps> = ({
           <strong className="ts-approval-period">
             {formatTimesheetRangeLabel(startDate, endDate)}
           </strong>
-          {isWaitingWeekends(approval) ? (
+          {displayWaiting ? (
             <span
               className="ts-approval-status ts-approval-status--waiting"
-              title={formatPendingDecisions(approval?.pending_decisions ?? [])}
+              title={monthSummary ? undefined : formatPendingDecisions(approval?.pending_decisions ?? [])}
             >
-              <Icon size={14} /> {PENDING_WEEKENDS_LABEL}
+              <DisplayIcon size={14} /> {PENDING_WEEKENDS_LABEL}
             </span>
           ) : (
-            <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
-              <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
+            <span className="ts-approval-status" style={{ color: STATUS_COLORS[displayStatus] }}>
+              <DisplayIcon size={14} /> {APPROVAL_STATUS_LABELS[displayStatus]}
             </span>
           )}
         </div>
@@ -318,7 +339,9 @@ const ActiveCard: FC<IActiveCardProps> = ({
         </button>
       )}
 
-      {canToggleLock && (status === 'submitted' || status === 'approved') && !periodUnlocked && (
+      {periodActions}
+
+      {!periodActions && canToggleLock && (status === 'submitted' || status === 'approved') && !periodUnlocked && (
         <button
           className="ts-btn"
           onClick={onOpenPeriod}
@@ -330,7 +353,7 @@ const ActiveCard: FC<IActiveCardProps> = ({
         </button>
       )}
 
-      {canToggleLock && periodUnlocked && (
+      {!periodActions && canToggleLock && periodUnlocked && (
         <button
           className="ts-btn ts-btn--primary"
           onClick={onClosePeriod}
@@ -559,6 +582,28 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     ? ({ mode: 'personal' } as const)
     : ({ mode: 'department', department_id: departmentId } as const);
   const activeStatus = useTimesheetApprovalStatus(submissionMode, departmentId, startDate, endDate);
+  // «Весь месяц»: подачи обычно по половинам, точной на 1–31 нет. Сводка половин — только по свежему ответу
+  // ЭТОГО отдела (placeholder прошлого отдела не годится), пока её нет — «Подать» не предлагаем.
+  const monthKey = startDate.slice(0, 7);
+  const isFullMonthRange = (() => {
+    const [year, month] = monthKey.split('-').map(Number);
+    if (!year || !month) return false;
+    const full = getHalfRange(year, month, 'FULL');
+    return startDate === full.startDate && endDate === full.endDate;
+  })();
+  const exactApproval = activeStatus.isSuccess ? (activeStatus.data?.approval ?? null) : null;
+  const monthApprovals = useTimesheetDepartmentApprovals(
+    submissionMode,
+    departmentId,
+    monthKey,
+    isFullMonthRange && activeStatus.isSuccess && !exactApproval,
+  );
+  const monthReady = monthApprovals.isSuccess && !monthApprovals.isPlaceholderData;
+  const monthSummaryRaw = isFullMonthRange && activeStatus.isSuccess && !exactApproval && monthReady
+    ? summarizeMonthHalves({ startDate, endDate, approvals: monthApprovals.data ?? [] })
+    : null;
+  const monthSummary = monthSummaryRaw?.hasApprovals ? monthSummaryRaw : null;
+  const submitPending = isFullMonthRange && (!activeStatus.isSuccess || (!exactApproval && !monthReady));
   // Право на страницу даёт кнопку, право на ОТДЕЛ — сервер (meta.can_write).
   // Fail-closed: пока статус не загружен, действий по отделу не предлагаем.
   const canWriteDepartment = isPersonal || activeStatus.data?.can_write === true;
@@ -780,7 +825,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
 
   const activeApproval = activeStatus.data?.approval ?? null;
   // Редактирование (загрузка/удаление служебки) — только в редактируемом окне.
-  const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && (
+  const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && !monthSummary && (
     !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
   );
   // Просмотр файлов (служебка + файлы корректировок) — на любом статусе для роли с доступом.
@@ -799,6 +844,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           canRecallApproved={canRecallApproved}
           canToggleLock={canToggleLock}
           periodUnlocked={!!activeStatus.data?.approval?.unlocked_at}
+          periodActions={!isPersonal && departmentId && canToggleLock ? (
+            <TimesheetDepartmentPeriodActions departmentId={departmentId} startDate={startDate} endDate={endDate} />
+          ) : undefined}
+          monthSummary={monthSummary}
+          submitPending={submitPending}
           canReviewApproval={canReviewApproval}
           comment={comment}
           compact={compact}
@@ -807,7 +857,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           loading={loading}
           periodSubmittable={periodSubmittable}
           submitDisabledReason={submitDisabledReason}
-          showMemoToggle={memoViewAllowed}
+          showMemoToggle={memoViewAllowed && !submitPending}
           memoOpen={memoOpen}
           submitError={memoRequired ? null : submitError}
           missingDays={memoRequired ? [] : missingDays}
