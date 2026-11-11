@@ -74,6 +74,7 @@ import {
   type TimesheetHalf,
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { useTimesheetDepartmentAccess } from '../../hooks/useTimesheetDepartmentAccess';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { useTimesheetSalary } from '../../hooks/useTimesheetSalary';
 import { TimesheetSalaryObjects } from '../../components/timesheet/TimesheetSalaryObjects';
@@ -188,7 +189,8 @@ export const TimesheetPage: FC = () => {
   // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
   // обрабатываем локально, окно месяцев роли при этом остаётся включённым.
   const hasGlobalTimesheetRead = hasGlobalTimesheetReadScope(profile);
-  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all') || hasGlobalTimesheetRead;
+  // Та же проверка, что у ссылки на отдел в «Текущих сотрудниках».
+  const canOpenTimesheetDepartment = useTimesheetDepartmentAccess();
   const {
     isDepartmentScope,
     isDirectReportsOnly,
@@ -413,16 +415,21 @@ export const TimesheetPage: FC = () => {
     setSelectedDeptId(primaryDepartmentId || managedDepartmentIds[0] || null);
   }, [effectiveSelectedDeptId, isMultiDepartmentManager, managedDepartmentIds, primaryDepartmentId]);
 
+  // ?dept= (ссылка из «Текущих сотрудников») применяется один раз на значение: иначе выбор
+  // другого отдела в списке откатывался бы к отделу из адреса. Отметка — до setState и даже
+  // при совпадении; без доступа не отмечаем — применится, когда догрузится профиль.
+  const appliedQueryDeptRef = useRef<string | null>(null);
   useEffect(() => {
-    if (timesheetMode !== 'department') return;
-    if (!queryAssignedDept) return;
-    if (selectedDeptId === queryAssignedDept) return;
-    const hasAccess = canManageAllDepartments
-      || managedDepartmentIds.includes(queryAssignedDept);
-    if (hasAccess) {
-      setSelectedDeptId(queryAssignedDept);
+    if (!queryAssignedDept) {
+      appliedQueryDeptRef.current = null;
+      return;
     }
-  }, [queryAssignedDept, timesheetMode, canManageAllDepartments, managedDepartmentIds, selectedDeptId]);
+    if (timesheetMode !== 'department') return;
+    if (appliedQueryDeptRef.current === queryAssignedDept) return;
+    if (!canOpenTimesheetDepartment(queryAssignedDept)) return;
+    appliedQueryDeptRef.current = queryAssignedDept;
+    setSelectedDeptId(queryAssignedDept);
+  }, [queryAssignedDept, timesheetMode, canOpenTimesheetDepartment]);
 
   // Close dept/assignee/brigade dropdown on outside click
   useEffect(() => {
@@ -2180,6 +2187,14 @@ export const TimesheetPage: FC = () => {
             clearBulkState();
             closeTeamManagement();
             setSelectedDeptId(id || null);
+            // Отдел из ссылки больше не актуален: убираем только dept (режим, месяц, вид остаются).
+            if (searchParams.has('dept')) {
+              setSearchParams(current => {
+                const next = new URLSearchParams(current);
+                next.delete('dept');
+                return next;
+              }, { replace: true });
+            }
           }}
           showAllOption={!isTimesheetDepartmentScope}
           isLoading={structureQuery.isPending}

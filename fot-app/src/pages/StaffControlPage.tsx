@@ -34,6 +34,7 @@ import {
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import { StaffMainObjectCell } from '../components/staff/StaffMainObjectCell';
+import { StaffDepartmentLink } from '../components/staff/StaffDepartmentLink';
 import { StaffCommentCell } from '../components/staff/StaffCommentCell';
 import { StaffSignBadge } from '../components/staff/StaffSignBadge';
 import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
@@ -211,7 +212,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureR
       {shows('department') && (
         <td title={emp.department || ''}>
           <span className="sc-cell-with-btn">
-            {emp.department || '—'}
+            <StaffDepartmentLink departmentId={emp.org_department_id} name={emp.department} isFired={emp.employment_status === 'fired'} />
             {canEditDept && (
               <button className="sc-inline-btn" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
                 <ArrowRightLeft size={12} />
@@ -1201,7 +1202,9 @@ const MobileCard: FC<{
       {shows('department') && (
         <div className="sc-card-row">
           <span className="sc-card-label">Отдел</span>
-          <span>{emp.department || '—'}</span>
+          <span>
+            <StaffDepartmentLink departmentId={emp.org_department_id} name={emp.department} isFired={emp.employment_status === 'fired'} />
+          </span>
         </div>
       )}
       {shows('site') && (
