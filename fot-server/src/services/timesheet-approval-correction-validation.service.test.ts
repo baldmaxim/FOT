@@ -651,6 +651,91 @@ describe('проход в выходной без часов (вкладка «�
     expect(result.ok).toBe(true);
   });
 
+  describe('короткий проход меньше 30 мин (Бегас 03.10)', () => {
+    // Квота 1: 03.10 — короткий проход, 10.10 — полноценная суббота.
+    const BEGAS = 266;
+    const sats = ['2026-10-03', '2026-10-10'];
+    const shortSkud = (minutes: number): SkudRow[] => [
+      { employee_id: BEGAS, date: '2026-10-03', total_minutes: minutes, is_present: true },
+      { employee_id: BEGAS, date: '2026-10-10', total_minutes: 574, is_present: true },
+    ];
+
+    beforeEach(() => {
+      mockGetOffDatesByEmployee.mockResolvedValue(new Map([[BEGAS, new Set(OCT_SATURDAYS)]]));
+      mockResolveSchedulesForPeriod.mockResolvedValue(
+        makeSchedules(BEGAS, sats, { expected_saturdays_per_month: 1, respects_holidays: true }),
+      );
+    });
+
+    it('с опцией: 29 мин — «без часов», а 10.10 становится плановой', async () => {
+      setupQueries({ skud: shortSkud(29), employees: [{ id: BEGAS, full_name: 'Бегас Д.Ф.' }] });
+
+      const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [BEGAS] }, OCT, PASS_ONLY);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.missing).toHaveLength(1);
+        expect(result.missing[0]).toMatchObject({
+          date: '2026-10-03',
+          kind: 'weekend_no_correction',
+          reason: 'Проход в выходной без часов — создайте корректировку',
+        });
+      }
+    });
+
+    it('без опции (подача табеля): 29 мин занимают квоту, 10.10 требует корректировки — как раньше', async () => {
+      setupQueries({ skud: shortSkud(29), employees: [{ id: BEGAS, full_name: 'Бегас Д.Ф.' }] });
+
+      const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [BEGAS] }, OCT);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.missing).toHaveLength(1);
+        expect(result.missing[0]).toMatchObject({
+          date: '2026-10-10',
+          reason: 'Работа в выходной без корректировки — создайте корректировку',
+        });
+      }
+    });
+
+    it('с опцией: 30 мин — обычный день, занимает квоту, подсвечена 10.10', async () => {
+      setupQueries({ skud: shortSkud(30), employees: [{ id: BEGAS, full_name: 'Бегас Д.Ф.' }] });
+
+      const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [BEGAS] }, OCT, PASS_ONLY);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.missing).toHaveLength(1);
+        expect(result.missing[0]).toMatchObject({
+          date: '2026-10-10',
+          reason: 'Работа в выходной без корректировки — создайте корректировку',
+        });
+      }
+    });
+
+    it('с опцией: короткий проход с корректировкой — не подсвечивается, 10.10 плановая', async () => {
+      setupQueries({
+        skud: shortSkud(24),
+        adjustments: [{ employee_id: BEGAS, work_date: '2026-10-03', approval_status: 'auto_approved' }],
+      });
+
+      const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [BEGAS] }, OCT, PASS_ONLY);
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('с опцией: короткий проход с «Работой в выходной» на 1-м этапе — не подсвечивается', async () => {
+      setupQueries({
+        skud: shortSkud(24),
+        pendingWork: [{ request_id: 902, employee_id: BEGAS, work_date: '2026-10-03' }],
+      });
+
+      const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [BEGAS] }, OCT, PASS_ONLY);
+
+      expect(result.ok).toBe(true);
+    });
+  });
+
   it('с опцией: нулевые минуты без присутствия — не выход', async () => {
     setupQueries({
       skud: [

@@ -15,6 +15,13 @@ import type { ITimesheetDateRange } from './timesheet-range.service.js';
 // только проверка работы в выходной без корректировки).
 const ATTACHMENT_REQUIRED_LEAVE_TYPES = [] as const;
 
+/**
+ * Короткий проход в выходной: сырой итог СКУД меньше получаса — для вкладки «Выходные» это тоже «без часов»
+ * (Бегас 03.10.2026: вход 08:59, выход 09:25, обратно без карты — 24 мин, в табеле 0 ч). Только при
+ * includePassWithoutHours: подача табеля считает такой день субботой с часами, как раньше.
+ */
+const SHORT_PASS_MINUTES = 30;
+
 export type MissingDayKind = 'leave_request' | 'weekend_no_correction';
 
 export interface IMissingDay {
@@ -53,7 +60,8 @@ export interface ICorrectionValidationOptions {
   /**
    * Вход по СКУД в выходной без часов (проход без пары: is_present, минут нет) — тоже «выход без корректировки».
    * Только вкладка «Выходные»: кадрам надо проставить часы. Подача табеля опцию не передаёт и такие дни не блокирует.
-   * В квоту плановых суббот эти дни не идут — она по дням с минутами, как без опции.
+   * Короткий проход (сырой итог СКУД меньше SHORT_PASS_MINUTES) — тоже «без часов». В квоту плановых суббот такие
+   * дни не идут: её занимают субботы с часами.
    */
   includePassWithoutHours?: boolean;
 }
@@ -149,7 +157,8 @@ export async function validateCorrectionAttachments(
     if (set.size > 0) { anyOff = true; break; }
   }
 
-  // Все выходные со СКУД: корректировки, заявления, имена и результат. В квоту — только дни с минутами.
+  // Все выходные со СКУД: корректировки, заявления, имена и результат. В квоту — только дни с минутами
+  // (с опцией — не меньше SHORT_PASS_MINUTES: короткий проход квоту не занимает).
   const weekendSkudRows: Array<{ employee_id: number; date: string }> = [];
   const passWithoutHours = new Set<string>();
   if (anyOff) {
@@ -169,7 +178,9 @@ export async function validateCorrectionAttachments(
       const date = String(row.date).slice(0, 10);
       if (offByEmployee.get(employeeId)?.has(date) !== true || !isWithinMembership(employeeId, date)) continue;
       weekendSkudRows.push({ employee_id: employeeId, date });
-      if ((Number(row.total_minutes) || 0) <= 0) passWithoutHours.add(`${employeeId}|${date}`);
+      const minutes = Number(row.total_minutes) || 0;
+      const isShortPass = options.includePassWithoutHours === true && minutes < SHORT_PASS_MINUTES;
+      if (minutes <= 0 || isShortPass) passWithoutHours.add(`${employeeId}|${date}`);
     }
   }
 
