@@ -60,7 +60,7 @@ export interface IContractorPassRow {
   snils: string | null;
   inn: string | null;
   kig: string | null;
-  kig_end_date: string | null;
+  position: string | null;
 }
 
 const PAGE_SIZE = 500;
@@ -174,7 +174,7 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.snils,
             p.inn,
             p.kig,
-            to_char(p.kig_end_date, 'YYYY-MM-DD') AS kig_end_date,
+            p.position,
             COALESCE(
               (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                  FROM skud_objects o WHERE o.id = ANY(p.object_ids)),

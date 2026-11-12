@@ -91,7 +91,7 @@ export interface IPassRow {
   snils: string | null;
   inn: string | null;
   kig: string | null;
-  kig_end_date: string | null;
+  position: string | null;
 }
 
 /** Персональные документы держателя пропуска (паспорт/патент/ВНЖ/СНИЛС/ИНН/КиГ). */
@@ -111,7 +111,7 @@ export interface IPassDocuments {
   snils?: string | null;
   inn?: string | null;
   kig?: string | null;
-  kig_end_date?: string | null;
+  position?: string | null;
 }
 
 export interface ISubmissionRow {
@@ -168,7 +168,7 @@ export interface ISubmissionDetailRow {
   snils?: string | null;
   inn?: string | null;
   kig?: string | null;
-  kig_end_date?: string | null;
+  position?: string | null;
   documents_complete: boolean;
   /** Другие держатели той же орг с таким же номером патента. */
   dup_patent: IPassDocDuplicate[];
@@ -287,7 +287,7 @@ export interface IMonitorPassRow {
   snils: string | null;
   inn: string | null;
   kig: string | null;
-  kig_end_date: string | null;
+  position: string | null;
 }
 
 export interface IContractorPassStat {
@@ -410,7 +410,9 @@ export interface IDocHistoryRow {
   snils: string | null;
   inn: string | null;
   kig: string | null;
-  kig_end_date: string | null;
+  position: string | null;
+  /** Срок КиГ — поле убрано (миграция 361), значение есть только в старых записях истории. */
+  kig_end_date?: string | null;
   changed_fields: string[];
   changed_by_name: string | null;
   /** holder_reset — документы очищены при смене или снятии держателя. */

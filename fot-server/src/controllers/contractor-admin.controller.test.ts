@@ -1167,7 +1167,7 @@ describe('contractorAdminController.clearPassHolder', () => {
     const reset = findCall('snils = NULL');
     expect(reset).toBeTruthy();
     for (const frag of ['passport_series_number = NULL', 'citizenship = NULL', 'patent_number = NULL',
-      'has_residence_permit = false', 'inn = NULL', 'kig = NULL', 'kig_end_date = NULL']) {
+      'has_residence_permit = false', 'inn = NULL', 'kig = NULL', 'position = NULL', 'kig_end_date = NULL']) {
       expect(String(reset?.[0])).toContain(frag);
     }
     // Снапшот — ДО очищающего UPDATE документов и ДО обнуления ФИО.
@@ -2311,7 +2311,7 @@ describe('contractorAdminController.updatePassDocumentsAdmin — СНИЛС/ИН
     holder_name: 'Носиров', passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01',
     birth_date: '1990-01-01', citizenship: 'КАЗАХСТАН', patent_number: null, patent_issue_date: null,
     patent_blank_number: null, has_residence_permit: false, residence_permit_number: null,
-    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', kig_end_date: '2027-03-01',
+    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', position: 'Бетонщик',
   };
   const body = {
     passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01', birth_date: '1990-01-01',
@@ -2346,14 +2346,14 @@ describe('contractorAdminController.updatePassDocumentsAdmin — СНИЛС/ИН
   it('ключей нет (старый клиент) → прежние значения', async () => {
     const { res, upd } = await run(body);
     expect(res.statusCode).toBe(200);
-    expect(upd?.slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', '2027-03-01']);
+    expect(upd?.slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', 'Бетонщик']);
   });
 
-  it('явный null → очистка; смена гражданства на Россию обнуляет КиГ и срок', async () => {
+  it('явный null → очистка; смена гражданства на Россию обнуляет КиГ, должность остаётся', async () => {
     const a = await run({ ...body, snils: null, inn: null });
     expect(a.upd?.slice(10, 12)).toEqual([null, null]);
     const b = await run({ ...body, citizenship: 'Россия' });
-    expect(b.upd?.slice(12, 14)).toEqual([null, null]);
+    expect(b.upd?.slice(12, 14)).toEqual([null, 'Бетонщик']);
   });
 });
 
@@ -2362,7 +2362,7 @@ describe('hasContractorPageGrant и СНИЛС/ИНН/КиГ в деталях �
   const SUBMISSIONS = '/admin/contractor-approvals/submissions';
   const detailRow = {
     id: 'p1', pass_number: '64', holder_name: 'Иванов', passport_series_number: '403934253',
-    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', kig_end_date: '2027-03-01',
+    snils: '12345678900', inn: '770708328934', kig: 'AB1234567', position: 'Бетонщик',
   };
   const reqFor = (roleCode: string, isAdmin = false) => ({
     user: { id: 'u-1', role_code: roleCode, is_admin: isAdmin },
@@ -2401,7 +2401,7 @@ describe('hasContractorPageGrant и СНИЛС/ИНН/КиГ в деталях �
     expect(res.statusCode).toBe(200);
     const row = (res.body as { data: Array<Record<string, unknown>> }).data[0];
     expect(row.passport_series_number).toBe('403934253');
-    for (const k of ['snils', 'inn', 'kig', 'kig_end_date']) expect(Object.hasOwn(row, k)).toBe(false);
+    for (const k of ['snils', 'inn', 'kig', 'position']) expect(Object.hasOwn(row, k)).toBe(false);
   });
 
   it('«Отдел безопасности» (основной грант): СНИЛС/ИНН/КиГ отдаются', async () => {
@@ -2441,7 +2441,7 @@ describe('contractorAdminController.exportMonitorDocuments', () => {
     access_point_names: ['ЗилАрт-2'], citizenship: 'Таджикистан', passport_series_number: '403934253',
     passport_issue_date: '2022-05-04', birth_date: '1995-08-07', has_residence_permit: false,
     residence_permit_number: null, patent_number: '77 №2600177930', patent_issue_date: '2026-04-13',
-    patent_blank_number: 'ПР7619622', snils: '12345678900', inn: '770708328934', kig: null, kig_end_date: null,
+    patent_blank_number: 'ПР7619622', snils: '12345678900', inn: '770708328934', kig: null, position: null,
   };
 
   beforeEach(() => {

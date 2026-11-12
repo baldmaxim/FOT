@@ -5,8 +5,8 @@ import pg from 'pg';
 import { resetPassDocuments } from './contractor-docs.service.js';
 
 // Единый сброс документов держателя (миграция 359) на настоящем PostgreSQL: SQL блокировки
-// (FOR UPDATE OF p + подзапрос открытого держателя), снимок в историю с СНИЛС/ИНН/КиГ и
-// источником из actor, очистка только строк с документами. Миграции 238 и 359 и их повтор.
+// (FOR UPDATE OF p + подзапрос открытого держателя), снимок в историю с СНИЛС/ИНН/КиГ/должностью и
+// источником из actor, очистка только строк с документами. Миграции 238, 359, 361 и их повтор.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы-заглушки пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -40,6 +40,8 @@ describe.skipIf(!PG_URL)('contractor-docs resetPassDocuments (PG)', () => {
     await pool.query(migration('238_contractor_pass_document_history.sql'));
     await pool.query(migration('359_contractor_pass_snils_inn_kig.sql'));
     await pool.query(migration('359_contractor_pass_snils_inn_kig.sql')); // повтор — без ошибок
+    await pool.query(migration('361_contractor_pass_position.sql'));
+    await pool.query(migration('361_contractor_pass_position.sql')); // повтор — без ошибок
     await pool.query(`INSERT INTO user_profiles VALUES ('00000000-0000-0000-0000-0000000000aa', 'Админ Тестовый')`);
   });
 
@@ -50,9 +52,10 @@ describe.skipIf(!PG_URL)('contractor-docs resetPassDocuments (PG)', () => {
   it('снимок с прежним ФИО открытого держателя и новыми полями, очистка только строк с документами', async () => {
     const ins = await pool.query<{ id: string; pass_number: string }>(`
       INSERT INTO contractor_passes (pass_number, status, holder_name, passport_series_number, citizenship,
-                                     snils, inn, kig, kig_end_date)
-      VALUES ('64', 'applied', 'Устаревшее ФИО', '403934253', 'Таджикистан', '12345678900', '770708328934', 'AB1', '2027-03-01'),
-             ('65', 'assigned', NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+                                     snils, inn, kig, kig_end_date, position)
+      VALUES ('64', 'applied', 'Устаревшее ФИО', '403934253', 'Таджикистан', '12345678900', '770708328934', 'AB1',
+              '2027-03-01', 'Бетонщик'),
+             ('65', 'assigned', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       RETURNING id, pass_number`);
     const p64 = ins.rows.find(r => r.pass_number === '64')!.id;
     const p65 = ins.rows.find(r => r.pass_number === '65')!.id;
@@ -75,28 +78,46 @@ describe.skipIf(!PG_URL)('contractor-docs resetPassDocuments (PG)', () => {
 
     expect(cleared).toEqual([p64]);
     const passes = await pool.query(
-      `SELECT pass_number, passport_series_number, citizenship, snils, inn, kig, kig_end_date,
+      `SELECT pass_number, passport_series_number, citizenship, snils, inn, kig, kig_end_date, position,
               has_residence_permit, updated_at > '2026-01-01' AS touched
          FROM contractor_passes ORDER BY pass_number`);
     expect(passes.rows[0]).toMatchObject({
       pass_number: '64', passport_series_number: null, citizenship: null, snils: null, inn: null,
-      kig: null, kig_end_date: null, has_residence_permit: false, touched: true,
+      kig: null, kig_end_date: null, position: null, has_residence_permit: false, touched: true,
     });
     expect(passes.rows[1]).toMatchObject({ pass_number: '65', touched: false });
 
     const hist = await pool.query(
-      `SELECT holder_name, snils, inn, kig, kig_end_date::text AS kig_end_date, changed_fields,
+      `SELECT holder_name, snils, inn, kig, position, changed_fields,
               changed_source, changed_by_name
          FROM contractor_pass_document_history`);
     expect(hist.rows).toHaveLength(1);
     expect(hist.rows[0]).toMatchObject({
       holder_name: 'Иванов Иван',
-      snils: '12345678900', inn: '770708328934', kig: 'AB1', kig_end_date: '2027-03-01',
+      snils: '12345678900', inn: '770708328934', kig: 'AB1', position: 'Бетонщик',
       changed_source: 'clear_holder', changed_by_name: 'Админ Тестовый',
     });
     expect(hist.rows[0].changed_fields).toEqual(
-      expect.arrayContaining(['passport_series_number', 'citizenship', 'snils', 'inn', 'kig', 'kig_end_date']),
+      expect.arrayContaining(['passport_series_number', 'citizenship', 'snils', 'inn', 'kig', 'position']),
     );
+  });
+
+  it('миграция 361: КиГ кириллицей и с пробелом → латиница, верный номер и NULL не трогает', async () => {
+    const ins = await pool.query<{ id: string; pass_number: string }>(`
+      INSERT INTO contractor_passes (pass_number, status, kig)
+      VALUES ('901', 'assigned', 'АА1234567'), ('902', 'assigned', 'АВ 7654321'),
+             ('903', 'assigned', 'AB1111111'), ('904', 'assigned', NULL), ('905', 'assigned', 'ах12')
+      RETURNING id, pass_number`);
+    await pool.query(migration('361_contractor_pass_position.sql'));
+    const rows = await pool.query<{ pass_number: string; kig: string | null; touched: boolean }>(
+      `SELECT pass_number, kig, updated_at > '2026-01-01' AS touched
+         FROM contractor_passes WHERE id = ANY($1::uuid[]) ORDER BY pass_number`,
+      [ins.rows.map(r => r.id)],
+    );
+    expect(rows.rows.map(r => [r.pass_number, r.kig])).toEqual([
+      ['901', 'AA1234567'], ['902', 'AB7654321'], ['903', 'AB1111111'], ['904', null], ['905', 'AX12'],
+    ]);
+    expect(rows.rows.every(r => !r.touched)).toBe(true);
   });
 
   it("CHECK истории принимает 'holder_reset'", async () => {

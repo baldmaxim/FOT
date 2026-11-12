@@ -1,7 +1,7 @@
 /**
  * СНИЛС, ИНН и КиГ в документах держателя подрядного пропуска (окно «Документы»).
  * Правила зеркальны бэку (contractor-docs.service): СНИЛС — 11 цифр, ИНН физлица — 12,
- * КиГ — только у иностранца (гражданство выбрано и не Россия).
+ * КиГ — только у иностранца (гражданство выбрано и не Россия), только латиница и цифры.
  */
 
 export const SNILS_DIGITS = 11;
@@ -42,3 +42,23 @@ export const citizenshipIsRussia = (c: string | null | undefined): boolean => {
 /** Нужна ли КиГ: гражданство выбрано и это не Россия. */
 export const citizenshipNeedsKig = (c: string | null | undefined): boolean =>
   (c ?? '').trim().length > 0 && !citizenshipIsRussia(c);
+
+export const KIG_MAX_LENGTH = 20;
+
+/**
+ * Кириллица, похожая на латиницу, → латиница: подрядчики набирают «АА…»/«АВ…» в русской раскладке.
+ * Та же таблица — normalizeKig на бэке (contractor-docs.service) и миграция 361 — держать в синхроне.
+ */
+const KIG_LOOKALIKES: Readonly<Record<string, string>> = {
+  А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', У: 'Y', Х: 'X',
+};
+
+/**
+ * Номер КиГ при вводе: верхний регистр, двойники → латиница, всё кроме A–Z и цифр отбрасывается.
+ * rejected — ввод что-то отбросил (другая кириллица, пробел, знак): показать подсказку.
+ */
+export const formatKigInput = (raw: string | null | undefined): { value: string; rejected: boolean } => {
+  const upper = (raw ?? '').toUpperCase().replace(/[АВЕКМНОРСТУХ]/g, ch => KIG_LOOKALIKES[ch] ?? ch);
+  const latin = upper.replace(/[^A-Z0-9]/g, '');
+  return { value: latin.slice(0, KIG_MAX_LENGTH), rejected: latin.length !== upper.length };
+};

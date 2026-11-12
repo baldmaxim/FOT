@@ -700,7 +700,7 @@ const MONITOR_BASE_SELECT = `
          p.snils,
          p.inn,
          p.kig,
-         to_char(p.kig_end_date, 'YYYY-MM-DD') AS kig_end_date,
+         p.position,
          COALESCE(
            (SELECT string_agg(o.name, ', ' ORDER BY o.name)
               FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
@@ -1426,7 +1426,7 @@ export const contractorAdminController = {
                 p.snils,
                 p.inn,
                 p.kig,
-                to_char(p.kig_end_date, 'YYYY-MM-DD') AS kig_end_date,
+                p.position,
                 -- Чёрный список (273). Причину и автора отдаём ТОЛЬКО тому, у кого
                 -- есть доступ к самому реестру: вкладка заявок открыта и узкой роли
                 -- ОТиТБ по техническому ключу. Остальным — лишь факт и сила совпадения.
@@ -2114,7 +2114,7 @@ export const contractorAdminController = {
 
   /**
    * GET /passes/monitor/export?org_department_id= — xlsx с документами держателей пропусков
-   * подрядчика: те же строки, что в «Мониторинге» (кроме отозванных), но только с ФИО —
+   * подрядчика, листы «Документы» и «Биометрия»: те же строки, что в «Мониторинге» (кроме отозванных), но только с ФИО —
    * пустые слоты не выгружаются. Каждая выгрузка — в аудит (подрядчик, число строк, без
    * значений документов). Ответ не кэшируется: в файле персональные данные.
    */
@@ -2145,7 +2145,7 @@ export const contractorAdminController = {
       }
 
       const data = rows.map(r => ({ ...r, w26: decodeW26(r.card_uid) })) as unknown as IContractorDocsExportRow[];
-      const buf = Buffer.from(await buildContractorDocsWorkbook(data).xlsx.writeBuffer());
+      const buf = Buffer.from(await buildContractorDocsWorkbook(data, org.name).xlsx.writeBuffer());
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_DOCUMENTS_EXPORTED, {
         entityType: 'org_department',
@@ -2768,7 +2768,7 @@ export const contractorAdminController = {
                   snils = $11,
                   inn = $12,
                   kig = $13,
-                  kig_end_date = $14::date,
+                  position = $14,
                   updated_at = now()
             WHERE id = $10::uuid`,
           [
@@ -2785,7 +2785,7 @@ export const contractorAdminController = {
             next.snils,
             next.inn,
             next.kig,
-            next.kig_end_date,
+            next.position,
           ],
         );
       });
@@ -2826,7 +2826,7 @@ export const contractorAdminController = {
                 passport_series_number, passport_issue_date, birth_date, citizenship,
                 patent_number, patent_issue_date, patent_blank_number,
                 has_residence_permit, residence_permit_number,
-                snils, inn, kig, kig_end_date,
+                snils, inn, kig, position, kig_end_date,
                 changed_fields, changed_by_name, changed_source, changed_at
            FROM contractor_pass_document_history
           WHERE pass_id = $1::uuid
@@ -3676,7 +3676,7 @@ export const contractorAdminController = {
                   p.passport_series_number, p.passport_issue_date, p.birth_date, p.citizenship,
                   p.patent_number, p.patent_issue_date, p.patent_blank_number,
                   p.has_residence_permit, p.residence_permit_number,
-                  p.snils, p.inn, p.kig, p.kig_end_date,
+                  p.snils, p.inn, p.kig, p.position,
                   EXISTS(SELECT 1 FROM contractor_pass_holders h
                           WHERE h.pass_id = p.id AND h.valid_until IS NULL) AS has_open_holder
              FROM contractor_passes p

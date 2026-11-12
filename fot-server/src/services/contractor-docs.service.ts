@@ -74,14 +74,36 @@ export interface IDocRow {
   snils?: string | null;
   /** ИНН физлица — 12 цифр. Необязательное. */
   inn?: string | null;
-  /** Карта иностранного гражданина: номер (верхний регистр) и срок. Только у иностранцев. */
+  /** Номер карты иностранного гражданина: латиница и цифры. Только у иностранцев. */
   kig?: string | null;
-  kig_end_date?: string | null;
+  /** Должность держателя (миграция 361) — свободный текст, у всех граждан. */
+  position?: string | null;
 }
 
-/** Необязательные идентификаторы (миграция 359): СНИЛС, ИНН, КиГ. */
-export const EXTRA_ID_FIELDS = ['snils', 'inn', 'kig', 'kig_end_date'] as const;
+/**
+ * Необязательные поля (миграции 359, 361): СНИЛС, ИНН, КиГ, должность. На полноту комплекта не влияют,
+ * узкой роли «Заявки на согласование» не отдаются.
+ */
+export const EXTRA_ID_FIELDS = ['snils', 'inn', 'kig', 'position'] as const;
 export type ExtraIdField = (typeof EXTRA_ID_FIELDS)[number];
+
+/**
+ * Кириллица, похожая на латиницу, → латиница. Номер КиГ — только латинские буквы и цифры (так требует
+ * файл «Биометрия»), а подрядчики набирают «АА…»/«АВ…» в русской раскладке. Та же таблица — на фронте
+ * (formatKigInput в fot-app/src/utils/contractorDocFormat.ts) и в миграции 361 — держать в синхроне.
+ */
+const KIG_LOOKALIKES: Readonly<Record<string, string>> = {
+  А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', У: 'Y', Х: 'X',
+};
+
+/** Номер КиГ: верхний регистр, двойники → латиница, без пробелов. Пустой → null. Прочее не трогает. */
+export const normalizeKig = (v: string | null | undefined): string | null => {
+  const s = (v ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/[АВЕКМНОРСТУХ]/g, ch => KIG_LOOKALIKES[ch] ?? ch);
+  return s.length > 0 ? s : null;
+};
 
 /** Гражданин России (регистро- и пробелонезависимо): КиГ ему не нужна. */
 export const isRussianCitizenship = (c: string | null | undefined): boolean => {
@@ -132,17 +154,21 @@ export const DOC_COLUMNS = [
   'snils',
   'inn',
   'kig',
-  'kig_end_date',
+  'position',
 ] as const;
 
 /** Список колонок документов для SELECT (с алиасом таблицы или без). */
 export const docColumnsSql = (alias?: string): string =>
   DOC_COLUMNS.map(c => (alias ? `${alias}.${c}` : c)).join(', ');
 
-/** SET-фрагмент UPDATE contractor_passes: все документы держателя → пусто. */
-export const DOC_RESET_SET_SQL = DOC_COLUMNS
-  .map(c => (c === 'has_residence_permit' ? `${c} = false` : `${c} = NULL`))
-  .join(', ');
+/**
+ * SET-фрагмент UPDATE contractor_passes: все документы держателя → пусто. Плюс kig_end_date — срок КиГ
+ * больше не показывается (миграция 361), но внесённое раньше не должно достаться новому держателю.
+ */
+export const DOC_RESET_SET_SQL = [
+  ...DOC_COLUMNS.map(c => (c === 'has_residence_permit' ? `${c} = false` : `${c} = NULL`)),
+  'kig_end_date = NULL',
+].join(', ');
 
 /**
  * Нормализация номера документа для сравнения: убрать пробелы/№/пунктуацию,
@@ -264,8 +290,11 @@ export const docsBodySchema = z.object({
   residence_permit_number: z.string().trim().max(50).nullable().optional(),
   snils: digitsField(11, 'СНИЛС — 11 цифр'),
   inn: digitsField(12, 'ИНН — 12 цифр'),
-  kig: z.string().trim().max(20).nullable().optional(),
-  kig_end_date: docsDateField,
+  // Кириллица-двойники от старого клиента меняются на латиницу; прочие буквы и знаки — 400.
+  kig: z.string().max(40).nullable().optional()
+    .transform(v => (v === undefined ? undefined : normalizeKig(v)))
+    .refine(v => v == null || /^[A-Z0-9]{1,20}$/.test(v), 'Номер КиГ — только латинские буквы и цифры'),
+  position: z.string().trim().max(100).nullable().optional(),
 });
 
 export type IDocsBody = z.infer<typeof docsBodySchema>;
@@ -277,11 +306,11 @@ export interface IDocPayload extends IDocRow {
   snils: string | null;
   inn: string | null;
   kig: string | null;
-  kig_end_date: string | null;
+  position: string | null;
 }
 
 /**
- * Защита от старого закэшированного клиента: он не знает про СНИЛС/ИНН/КиГ и не
+ * Защита от старого закэшированного клиента: он не знает про СНИЛС/ИНН/КиГ/должность и не
  * присылает эти ключи — тогда берём прежние значения из БД, а не затираем их null.
  * Явный null или '' в теле — очистка поля. Вызывать ВНУТРИ транзакции, после
  * блокировки строки пропуска, и до normalizeDocsPayload.
@@ -295,8 +324,7 @@ export const mergeUnsentDocFields = (
   const merged: IDocsBody = { ...parsed };
   for (const f of EXTRA_ID_FIELDS) {
     if (Object.hasOwn(raw, f)) continue;
-    const v = prev[f];
-    merged[f] = f === 'kig_end_date' ? comparableDate(v) : (v ?? null);
+    merged[f] = prev[f] ?? null;
   }
   return merged;
 };
@@ -306,7 +334,7 @@ export const mergeUnsentDocFields = (
  * патентной страны; патент и ВНЖ взаимоисключающие (при ВНЖ поля патента
  * обнуляются, иначе — номер ВНЖ), чтобы не копились устаревшие значения.
  * СНИЛС/ИНН — только цифры; КиГ — только у иностранца (гражданство указано и не Россия),
- * иначе номер и срок КиГ обнуляются вместе.
+ * иначе номер КиГ обнуляется. Должность — у всех.
  */
 export const normalizeDocsPayload = (parsed: IDocsBody): IDocPayload => {
   const norm = (v: string | null | undefined): string | null => {
@@ -329,8 +357,8 @@ export const normalizeDocsPayload = (parsed: IDocsBody): IDocPayload => {
     residence_permit_number: effHasVnzh ? norm(parsed.residence_permit_number) : null,
     snils: digitsOrNull(parsed.snils),
     inn: digitsOrNull(parsed.inn),
-    kig: foreigner ? (norm(parsed.kig)?.toUpperCase() ?? null) : null,
-    kig_end_date: foreigner ? (parsed.kig_end_date ?? null) : null,
+    kig: foreigner ? normalizeKig(parsed.kig) : null,
+    position: norm(parsed.position),
   };
 };
 
@@ -348,7 +376,7 @@ export const EMPTY_DOCS: IDocPayload = {
   snils: null,
   inn: null,
   kig: null,
-  kig_end_date: null,
+  position: null,
 };
 
 // ------------------------------------------------------------------
@@ -396,7 +424,6 @@ const DATE_FIELDS: ReadonlySet<string> = new Set([
   'passport_issue_date',
   'birth_date',
   'patent_issue_date',
-  'kig_end_date',
 ]);
 
 const comparable = (field: DocHistoryField, v: unknown): string | boolean | null => {
@@ -436,13 +463,13 @@ export const recordDocHistoryIfChanged = async (
         passport_series_number, passport_issue_date, birth_date, citizenship,
         patent_number, patent_issue_date, patent_blank_number,
         has_residence_permit, residence_permit_number,
-        snils, inn, kig, kig_end_date,
+        snils, inn, kig, position,
         changed_fields, changed_by, changed_by_name, changed_source
      ) VALUES (
         $1::uuid, $2, $3::uuid, $4,
         $5, $6::date, $7::date, $8,
         $9, $10::date, $11, $12, $13,
-        $17, $18, $19, $20::date,
+        $17, $18, $19, $20,
         $14::text[], $15::uuid,
         (SELECT full_name FROM user_profiles WHERE id = $15::uuid), $16
      )`,
@@ -466,7 +493,7 @@ export const recordDocHistoryIfChanged = async (
       pass.snils ?? null,
       pass.inn ?? null,
       pass.kig ?? null,
-      comparableDate(pass.kig_end_date),
+      pass.position ?? null,
     ],
   );
   return changed;

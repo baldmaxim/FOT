@@ -594,7 +594,7 @@ export const contractorController = {
                   snils = $11,
                   inn = $12,
                   kig = $13,
-                  kig_end_date = $14::date,
+                  position = $14,
                   updated_at = now()
             WHERE id = $10::uuid`,
           [
@@ -611,7 +611,7 @@ export const contractorController = {
             next.snils,
             next.inn,
             next.kig,
-            next.kig_end_date,
+            next.position,
           ],
         );
       });

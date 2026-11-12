@@ -236,24 +236,24 @@ describe('submit — гейт полноты учитывает ВНЖ', () => {
 });
 
 // Старый закэшированный клиент не присылает СНИЛС/ИНН/КиГ — значения из БД не затираются.
-// Параметры UPDATE: $11 snils, $12 inn, $13 kig, $14 kig_end_date (индексы 10..13).
+// Параметры UPDATE: $11 snils, $12 inn, $13 kig, $14 position (индексы 10..13).
 describe('savePassDocuments — СНИЛС/ИНН/КиГ и старый клиент', () => {
   beforeEach(() => vi.clearAllMocks());
   const stored = {
     status: 'assigned', approval_status: 'not_submitted',
     citizenship: 'Таджикистан', snils: '12345678900', inn: '770708328934',
-    kig: 'AB1234567', kig_end_date: '2027-03-01',
+    kig: 'AB1234567', position: 'Бетонщик',
   };
   const baseBody = { passport_series_number: '1234 567890', citizenship: 'Таджикистан' };
 
   it('ключей нет в теле → прежние значения остаются', async () => {
     const { res, updateParams } = await runSave(stored, baseBody);
     expect(res.statusCode).toBe(200);
-    expect(updateParams[0].slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', '2027-03-01']);
+    expect(updateParams[0].slice(10, 14)).toEqual(['12345678900', '770708328934', 'AB1234567', 'Бетонщик']);
   });
 
   it('явный null / пустая строка → поля очищаются', async () => {
-    const { res, updateParams } = await runSave(stored, { ...baseBody, snils: null, inn: '', kig: null, kig_end_date: null });
+    const { res, updateParams } = await runSave(stored, { ...baseBody, snils: null, inn: '', kig: null, position: null });
     expect(res.statusCode).toBe(200);
     expect(updateParams[0].slice(10, 14)).toEqual([null, null, null, null]);
   });
@@ -262,6 +262,14 @@ describe('savePassDocuments — СНИЛС/ИНН/КиГ и старый кли�
     const ok = await runSave(stored, { ...baseBody, snils: '987-654-321 00' });
     expect(ok.updateParams[0][10]).toBe('98765432100');
     const bad = await runSave(stored, { ...baseBody, snils: '987-654' });
+    expect(bad.res.statusCode).toBe(400);
+    expect(bad.updateCalls).toHaveLength(0);
+  });
+
+  it('КиГ кириллицей-двойником сохраняется латиницей; прочая кириллица — 400', async () => {
+    const ok = await runSave(stored, { ...baseBody, kig: 'АВ 7654321' });
+    expect(ok.updateParams[0][12]).toBe('AB7654321');
+    const bad = await runSave(stored, { ...baseBody, kig: 'ФЫ7654321' });
     expect(bad.res.statusCode).toBe(400);
     expect(bad.updateCalls).toHaveLength(0);
   });

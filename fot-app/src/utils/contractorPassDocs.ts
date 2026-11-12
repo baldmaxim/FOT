@@ -18,11 +18,11 @@ export const hasAllDocs = (p: IPassRow): boolean => {
   return !!(p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
 };
 
-/** В пропуске заполнен хоть один документ держателя (включая СНИЛС/ИНН/КиГ). */
+/** В пропуске заполнен хоть один документ держателя (включая СНИЛС/ИНН/КиГ/должность). */
 export const hasAnyDocs = (p: IPassRow): boolean =>
   p.has_residence_permit
   || [
     p.passport_series_number, p.passport_issue_date, p.birth_date, p.citizenship,
     p.patent_number, p.patent_issue_date, p.patent_blank_number, p.residence_permit_number,
-    p.snils, p.inn, p.kig, p.kig_end_date,
+    p.snils, p.inn, p.kig, p.position,
   ].some(v => (v ?? '').trim().length > 0);

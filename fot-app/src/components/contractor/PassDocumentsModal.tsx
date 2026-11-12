@@ -6,6 +6,8 @@ import {
   citizenshipNeedsKig,
   digitsOnly,
   formatInnInput,
+  formatKigInput,
+  KIG_MAX_LENGTH,
   formatSnilsInput,
   isValidInn,
   isValidSnils,
@@ -59,6 +61,8 @@ const DOC_FIELD_LABELS: Record<string, string> = {
   snils: 'СНИЛС',
   inn: 'ИНН',
   kig: 'Номер КиГ',
+  position: 'Должность',
+  // Поле убрано (миграция 361) — подпись для старых записей истории.
   kig_end_date: 'КиГ действует до',
 };
 
@@ -122,11 +126,14 @@ export const PassDocumentsModal: FC<IProps> = ({
     residence_permit_number: documents.residence_permit_number ?? '',
     snils: formatSnilsInput(documents.snils),
     inn: documents.inn ?? '',
-    kig: documents.kig ?? '',
-    kig_end_date: (documents.kig_end_date ?? '').slice(0, 10),
+    // Номер, внесённый кириллицей до миграции 361, сразу показывается латиницей.
+    kig: formatKigInput(documents.kig).value,
+    position: documents.position ?? '',
   });
+  // Ввод КиГ отбросил не латиницу и не цифру — подсказка под полем.
+  const [kigRejected, setKigRejected] = useState(false);
 
-  // СНИЛС/ИНН/КиГ: узкой роли «Заявки на согласование» сервер ключи не отдаёт — блок не рисуем.
+  // СНИЛС/ИНН/КиГ/должность: узкой роли «Заявки на согласование» сервер ключи не отдаёт — блок не рисуем.
   const showExtraIds = Object.hasOwn(documents, 'snils');
   // КиГ — только у иностранца (гражданство выбрано и не Россия).
   const needsKig = citizenshipNeedsKig(form.citizenship);
@@ -141,15 +148,22 @@ export const PassDocumentsModal: FC<IProps> = ({
   // Номер ВНЖ обязателен, когда галочка стоит — подсвечиваем пустое поле.
   const residenceMissing = hasVnzh && form.residence_permit_number.trim().length === 0;
 
-  // Смена гражданства: очищаем ВНЖ, если страна стала непатентной, и КиГ (номер и срок
-  // вместе), если гражданин России или гражданство снято — скрытого состояния не остаётся.
+  // Смена гражданства: очищаем ВНЖ, если страна стала непатентной, и номер КиГ, если
+  // гражданин России или гражданство снято — скрытого состояния не остаётся. Должность — у всех.
   const changeCitizenship = (value: string) => {
     setForm(prev => {
       let next = { ...prev, citizenship: value };
       if (!citizenshipRequiresPatent(value)) next = { ...next, has_residence_permit: false, residence_permit_number: '' };
-      if (!citizenshipNeedsKig(value)) next = { ...next, kig: '', kig_end_date: '' };
+      if (!citizenshipNeedsKig(value)) next = { ...next, kig: '' };
       return next;
     });
+    if (!citizenshipNeedsKig(value)) setKigRejected(false);
+  };
+
+  const changeKig = (raw: string) => {
+    const { value, rejected } = formatKigInput(raw);
+    setForm(prev => ({ ...prev, kig: value }));
+    setKigRejected(rejected);
   };
 
   const passportDup = dupNote(duplicates?.passport);
@@ -160,13 +174,13 @@ export const PassDocumentsModal: FC<IProps> = ({
 
   const handleSave = () => {
     if (hasErrors) return;
-    // СНИЛС — цифрами без маски; КиГ — только иностранцу, иначе номер и срок пустые.
+    // СНИЛС — цифрами без маски; КиГ — только иностранцу, иначе пусто; должность — у всех.
     const extraIds = showExtraIds
       ? {
           snils: digitsOnly(form.snils) || null,
           inn: digitsOnly(form.inn) || null,
-          kig: needsKig ? form.kig.trim().toUpperCase() || null : null,
-          kig_end_date: needsKig ? form.kig_end_date || null : null,
+          kig: needsKig ? form.kig || null : null,
+          position: form.position.trim() || null,
         }
       : {};
     // Если патент не требуется — обнуляем поля патента, чтобы не копились
@@ -350,27 +364,34 @@ export const PassDocumentsModal: FC<IProps> = ({
           </>
         )}
 
-        {showExtraIds && needsKig && (
-          <div className={styles.docsPair}>
+        {showExtraIds && (
+          <div className={needsKig ? styles.docsPair : undefined}>
+            {needsKig && (
+              <div className={styles.field}>
+                <span className={styles.label}>Номер КиГ</span>
+                <input
+                  className={`${styles.input} ${styles.fullInput}`}
+                  value={form.kig}
+                  disabled={readOnly}
+                  placeholder="Например: AB1234567"
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={KIG_MAX_LENGTH}
+                  onChange={e => changeKig(e.target.value)}
+                />
+                {kigRejected && <span className={styles.docDupNote}>Только латинские буквы и цифры</span>}
+              </div>
+            )}
             <div className={styles.field}>
-              <span className={styles.label}>Номер КиГ</span>
+              <span className={styles.label}>Должность</span>
               <input
                 className={`${styles.input} ${styles.fullInput}`}
-                value={form.kig}
+                value={form.position}
                 disabled={readOnly}
-                placeholder="Например: AB1234567"
-                maxLength={20}
-                onChange={e => setForm(prev => ({ ...prev, kig: e.target.value.toUpperCase() }))}
-              />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.label}>КиГ действует до</span>
-              <input
-                className={`${styles.input} ${styles.fullInput}`}
-                type="date"
-                value={form.kig_end_date}
-                disabled={readOnly}
-                onChange={e => setForm(prev => ({ ...prev, kig_end_date: e.target.value }))}
+                placeholder="Например: бетонщик"
+                maxLength={100}
+                onChange={e => setForm(prev => ({ ...prev, position: e.target.value }))}
               />
             </div>
           </div>
