@@ -5,6 +5,7 @@ import {
   applyPayrollAmountView,
   countPayrollAmountFilters,
   EMPTY_PAYROLL_AMOUNT_VIEW,
+  PAYROLL_AMOUNT_EMPTY_TEXT,
   payrollAmountFilterOptions,
   PAYROLL_AMOUNT_VIEW_COLUMNS,
   visiblePayrollAmountView,
@@ -40,8 +41,18 @@ export const usePayrollAmountView = () => {
   /** Сортировка по серверному столбцу заменяет сортировку сумм. */
   const clearSort = useCallback(() => setView(prev => (prev.sort === '' ? prev : { ...prev, sort: '' })), []);
   const resetFilters = useCallback(() => setView(prev => ({ ...prev, filters: {} })), []);
+  /**
+   * Клик по «Не посчитано, N чел.»: фильтр «Сумма: —» отбирает ровно их — строку «Не посчитано» составляют люди без
+   * «Суммы» (splitPayrollTotalsRows), и она есть, только когда расчёт готов («…» и ошибок нет). Прочие фильтры остаются.
+   */
+  const showUncounted = useCallback(
+    () => setView(prev => setColumnFilter(prev, 'calc_net', [PAYROLL_AMOUNT_EMPTY_TEXT])),
+    [],
+  );
 
-  return { view, openFilter, sortBy, openFilterFor, closeFilter, applyFilter, clearColumn, clearSort, resetFilters };
+  return {
+    view, openFilter, sortBy, openFilterFor, closeFilter, applyFilter, clearColumn, clearSort, resetFilters, showUncounted,
+  };
 };
 
 /**

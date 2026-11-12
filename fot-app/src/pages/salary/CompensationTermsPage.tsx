@@ -430,6 +430,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             amountView={isCalcScreen ? amountView.view : undefined}
             onAmountSort={amountState.sortBy}
             onOpenAmountFilter={amountState.openFilterFor}
+            // Список «Не посчитано» — фильтром «Суммы»: у скрытого столбца фильтр не действует, подпись не нажимается.
+            onShowUncounted={isCalcScreen && !tableHiddenColumns.has('calc_net') ? amountState.showUncounted : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

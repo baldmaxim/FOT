@@ -7,9 +7,11 @@ import {
   describePayrollAmountFilters,
   EMPTY_PAYROLL_AMOUNT_VIEW,
   isPayrollAmountViewColumn,
+  PAYROLL_AMOUNT_EMPTY_TEXT,
   payrollAmountFilterOptions,
   visiblePayrollAmountView,
 } from './payrollCalcView';
+import { splitPayrollTotalsRows } from './payrollCalcTotals';
 import type { PayrollTableColumn } from './payrollColumns';
 import { formatPaidAmount } from './payrollPaid';
 import type { ITableView } from './tableView';
@@ -138,5 +140,23 @@ describe('описание и счётчик', () => {
     expect(isPayrollAmountViewColumn('calc_net')).toBe(true);
     expect(isPayrollAmountViewColumn('department')).toBe(false);
     expect(isPayrollAmountViewColumn('calc_supplements:planned')).toBe(false);
+  });
+});
+
+describe('«Не посчитано, N чел.» → фильтр «Сумма: —»', () => {
+  it('отбирает ровно людей строки «Не посчитано»: без выработки, без условий, без расчёта; ноль и минус — посчитаны', () => {
+    const rows = [
+      row(1, { calc: calc({ net: '1500.00' }) }),
+      row(2, { calc: calc({ net: '0.00', incomplete: [{ month: '2026-10', reasons: ['no_days'] }] }) }),
+      row(3, { calc: calc({ net: null, incomplete: [{ month: '2026-10', reasons: ['brigade_output'] }] }) }),
+      row(4, { calc: calc({ net: null, incomplete: [{ month: '2026-10', reasons: ['no_terms'] }] }) }),
+      row(5, { calc: null }),
+      row(6, { calc: calc({ net: '-200.00' }) }),
+      row(7, { calc: calc({ net: null, incomplete: [{ month: '2026-10', reasons: ['hourly'] }] }) }),
+    ];
+    const groups = splitPayrollTotalsRows(rows);
+    expect(groups && ids(groups.uncounted)).toEqual([3, 4, 5, 7]);
+    const shown = applyPayrollAmountView(rows, view({ filters: { calc_net: [PAYROLL_AMOUNT_EMPTY_TEXT] } }));
+    expect(ids(shown)).toEqual(ids(groups!.uncounted));
   });
 });

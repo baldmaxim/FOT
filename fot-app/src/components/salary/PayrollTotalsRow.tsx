@@ -21,6 +21,8 @@ interface IPayrollTotalsRowProps {
   status: IPayrollTotalsStatus;
   /** Оформление групп «+» по ключу столбца — как в ячейках строк. */
   groupCellClass: (key: string) => string | undefined;
+  /** Клик по «Не посчитано, N чел.» — в таблице только эти люди; нет — подпись не нажимается. */
+  onShowUncounted?: () => void;
 }
 
 /** Открыта ли строка «Не посчитано» — удобство браузера; по умолчанию скрыта (решение 12.11.2026). */
@@ -58,7 +60,7 @@ interface ITotalsLine {
  * «Сумма» − «Выплаты на карту» = «Остаток», и «Не посчитано, N чел.» — суммы 1С людей без «Суммы». Вторая занимает
  * место, поэтому по умолчанию скрыта: её открывает «+» у «Итого (посчитано)».
  */
-export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, columns, status, groupCellClass }) => {
+export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, columns, status, groupCellClass, onShowUncounted }) => {
   const [uncountedOpen, setUncountedOpen] = useState(loadUncountedOpen);
   const toggleUncounted = () => {
     const next = !uncountedOpen;
@@ -110,6 +112,15 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
                   <ToggleIcon size={14} aria-hidden="true" />
                 </button>
               </span>
+            ) : line.key === 'uncounted' && onShowUncounted ? (
+              <button
+                type="button"
+                className={styles.totalsLink}
+                aria-label={`Показать: ${line.label.toLowerCase()}`}
+                onClick={onShowUncounted}
+              >
+                {line.label}
+              </button>
             ) : line.label}
           </td>
           {columns.map(entry => {

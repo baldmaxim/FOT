@@ -30,6 +30,9 @@ export const isPayrollAmountViewColumn = (key: string): key is PayrollTableColum
 /** Текст «пока считается» — как в ячейке; в фильтре такого значения нет. */
 const PENDING_TEXT = '…';
 
+/** Суммы нет («—»): в «Сумме» это люди строки «Не посчитано» (splitPayrollTotalsRows). */
+export const PAYROLL_AMOUNT_EMPTY_TEXT = '—';
+
 /** Расчёт ФОТ строки ещё идёт или не удался: суммы столбца ФОТ неизвестны. */
 const calcUnknown = (row: IPayrollTermsRow, column: PayrollTableColumn): boolean => (
   Boolean(row.calc_status) && isCalcColumn(column)
@@ -37,10 +40,10 @@ const calcUnknown = (row: IPayrollTermsRow, column: PayrollTableColumn): boolean
 
 /** Текст ячейки, как в PayrollCalcCell: сумма с копейками, у «Оклада» — ставка, нет — «—». */
 const cellText = (row: IPayrollTermsRow, column: PayrollTableColumn): string => {
-  if (calcUnknown(row, column)) return row.calc_status === 'pending' ? PENDING_TEXT : '—';
+  if (calcUnknown(row, column)) return row.calc_status === 'pending' ? PENDING_TEXT : PAYROLL_AMOUNT_EMPTY_TEXT;
   if (column === 'calc_rate') return formatCalcRate(row.calc?.rate ?? null);
   const amount = payrollColumnAmount(row, column);
-  return amount === null ? '—' : formatPaidAmount(Number(amount));
+  return amount === null ? PAYROLL_AMOUNT_EMPTY_TEXT : formatPaidAmount(Number(amount));
 };
 
 const sortValue = (row: IPayrollTermsRow, column: PayrollTableColumn): number | null => {
