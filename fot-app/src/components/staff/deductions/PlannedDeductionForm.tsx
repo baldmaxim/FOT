@@ -54,12 +54,14 @@ const isNotEditable = (candidate: PlannedCandidate): boolean => candidate.can_ed
 /**
  * «Добавить сотрудника» и ✎ на вкладке «Плановые удержания» (кадры и «Справочник» «Зарплаты», миграция 357):
  * сотрудник, вид, подвид, сумма ₽/мес, «С месяца» и «По месяц» (пусто — бессрочно). В каждом месяце периода
- * удерживается вся сумма; галочка «Другая сумма в последнем месяце» (миграция 362) — в месяце «По месяц» своя сумма,
- * видна, только если «По месяц» позже «С месяца». Ошибка сервера (пересечение, «уже изменили») — под полями, ввод не
+ * удерживается вся сумма; галочка «Другая сумма в последнем месяце» (миграция 362) — в месяце «По месяц» своя сумма.
+ * Галочка видна всегда (иначе её не найти при «Бессрочно» по умолчанию), но ставится, только если «По месяц» позже
+ * «С месяца»; иначе нажатие показывает подсказку. Ошибка сервера (пересечение, «уже изменили») — под полями, ввод не
  * теряется.
  */
 export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction, kinds, api, raised, onClose, onSaved }) => {
   const errorId = useId();
+  const lastMonthHintId = useId();
   const isEdit = deduction !== undefined;
   const [currentMonth] = useState(() => moscowTodayIso().slice(0, 7));
   const [employee, setEmployee] = useState<PlannedCandidate | null>(null);
@@ -70,6 +72,8 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
   const [monthTo, setMonthTo] = useState(deduction?.month_to ?? '');
   const [lastMonth, setLastMonth] = useState(deduction?.last_month_amount != null);
   const [lastMonthAmount, setLastMonthAmount] = useState(rateAmountInputValue(deduction?.last_month_amount));
+  /** Нажали галочку при периоде без последнего месяца — подсказка; смена месяцев её прячет. */
+  const [lastMonthHint, setLastMonthHint] = useState(false);
   const [error, setError] = useState<{ field: PlannedDeductionField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -101,6 +105,16 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
   const changeMonthFrom = (value: string) => {
     setMonthFrom(value);
     setMonthTo(current => monthToAfterFromChange(current, value));
+    setLastMonthHint(false);
+    clearError();
+  };
+
+  const changeLastMonth = (checked: boolean) => {
+    if (!lastMonthAllowed) {
+      setLastMonthHint(true);
+      return;
+    }
+    setLastMonth(checked);
     clearError();
   };
 
@@ -207,7 +221,7 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
           <select
             className={styles.select}
             value={monthTo}
-            onChange={event => { setMonthTo(event.target.value); clearError(); }}
+            onChange={event => { setMonthTo(event.target.value); setLastMonthHint(false); clearError(); }}
             disabled={saving}
             aria-invalid={invalid('month_to')}
           >
@@ -219,17 +233,23 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
         </label>
       </div>
 
-      {lastMonthAllowed && (
+      <div className={styles.field}>
         <label className={styles.check}>
+          {/* aria-disabled, а не disabled: нажатие при «Бессрочно» должно дойти и показать подсказку. */}
           <input
             type="checkbox"
-            checked={lastMonth}
-            onChange={event => { setLastMonth(event.target.checked); clearError(); }}
+            checked={lastMonth && lastMonthAllowed}
+            onChange={event => changeLastMonth(event.target.checked)}
             disabled={saving}
+            aria-disabled={lastMonthAllowed ? undefined : true}
+            aria-describedby={lastMonthHint && !lastMonthAllowed ? lastMonthHintId : undefined}
           />
           <span>Другая сумма в последнем месяце</span>
         </label>
-      )}
+        {lastMonthHint && !lastMonthAllowed && (
+          <p id={lastMonthHintId} className={styles.hint}>Выберите «По месяц» позже «С месяца»</p>
+        )}
+      </div>
       {lastMonthAllowed && lastMonth && (
         <label className={styles.field}>
           <span className={styles.label}>Сумма за {formatMonthLabel(monthTo)}, ₽</span>
