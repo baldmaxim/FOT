@@ -58,7 +58,7 @@ const makeReq = (over: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest
 const ROW = {
   id: 5, employee_id: 7, full_name: 'Каримов Акмал', department: null, position: null,
   kind_id: 3, kind_name: 'Займ', subkind_id: null, subkind_name: null, amount: '5000.00',
-  month_from: '2026-11', month_to: '2027-01', updated_at: '2026-11-10T09:00:00.000001Z',
+  month_from: '2026-11', month_to: '2027-01', last_month_amount: null, updated_at: '2026-11-10T09:00:00.000001Z',
 };
 const BODY = { kind_id: 3, amount: 5000, month_from: '2026-11', month_to: '2027-01' };
 
@@ -104,6 +104,12 @@ describe('добавление', () => {
       { ...BODY, kind_id: undefined },
       { ...BODY, month_from: '2026-1' },
       { ...BODY, amount: '5000' },
+      // Сумма последнего месяца (миграция 362): у бессрочного, у периода в месяц, равная ежемесячной, ноль, три знака.
+      { ...BODY, month_to: null, last_month_amount: 1000 },
+      { ...BODY, month_to: '2026-11', last_month_amount: 1000 },
+      { ...BODY, last_month_amount: 5000 },
+      { ...BODY, last_month_amount: 0 },
+      { ...BODY, last_month_amount: 1000.005 },
     ];
     for (const body of bodies) {
       const res = makeRes();
@@ -148,7 +154,7 @@ describe('добавление', () => {
     await handlers.add(makeReq({ body: { employee_id: 7, ...BODY, month_to: null } }), ok);
     expect(ok.body.data).toEqual(ROW);
     expect(service.addPlannedDeduction).toHaveBeenLastCalledWith(
-      7, { kind_id: 3, subkind_id: null, amount: 5000, month_from: '2026-11', month_to: null }, 'user-1',
+      7, { kind_id: 3, subkind_id: null, amount: 5000, month_from: '2026-11', month_to: null, last_month_amount: null }, 'user-1',
     );
     expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
     expect(audit.logFromRequest).toHaveBeenCalledWith(expect.anything(), 'user-1', 'PAYROLL_PLANNED_DEDUCTION_ADDED',
@@ -199,6 +205,25 @@ describe('правка и «Убрать»', () => {
       5, expect.objectContaining({ amount: 6000 }), ROW.updated_at, 'user-1',
     );
     expect(audit.logFromRequest).toHaveBeenCalledWith(expect.anything(), 'user-1', 'PAYROLL_PLANNED_DEDUCTION_UPDATED', expect.anything());
+  });
+
+  it('сумма последнего месяца: доходит до сервиса и в аудит; при «Бессрочно» — 400 без записи', async () => {
+    const after = { ...ROW, last_month_amount: '1000.00' };
+    service.updatePlannedDeduction.mockResolvedValueOnce({ before: ROW, after, changed: true });
+    await handlers.update(makeReq({ params: { id: '5' }, body: { ...BODY, last_month_amount: 1000, ...expected } }), makeRes());
+    expect(service.updatePlannedDeduction).toHaveBeenLastCalledWith(
+      5, expect.objectContaining({ month_to: '2027-01', last_month_amount: 1000 }), ROW.updated_at, 'user-1',
+    );
+    expect(audit.logFromRequest).toHaveBeenLastCalledWith(expect.anything(), 'user-1', 'PAYROLL_PLANNED_DEDUCTION_UPDATED',
+      expect.objectContaining({ details: expect.objectContaining({ to: expect.objectContaining({ last_month_amount: '1000.00' }) }) }));
+
+    const endless = makeRes();
+    await handlers.update(
+      makeReq({ params: { id: '5' }, body: { ...BODY, month_to: null, last_month_amount: 1000, ...expected } }), endless,
+    );
+    expect(endless.statusCode).toBe(400);
+    expect(endless.body.error).toBe('Другая сумма в последнем месяце — только если «По месяц» позже «С месяца»');
+    expect(service.updatePlannedDeduction).toHaveBeenCalledTimes(1);
   });
 
   it('«Убрать»: текущий месяц МСК в сервис; закрыто — CLOSED, удалено — REMOVED, повтор — 409', async () => {

@@ -6,15 +6,17 @@
  *
  * Плановое удерживается в месяце целиком (решение пользователя 10.11.2026: вся сумма, без учёта дней), если период
  * задевает месяц, сотрудник принят не позже конца месяца и работает или уволен не раньше 1-го числа месяца (как у
- * помесячных: уволенному — не позже месяца увольнения).
+ * помесячных: уволенному — не позже месяца увольнения). В последнем месяце периода (month_to) — своя сумма, если
+ * задана (last_month_amount, миграция 362).
  */
 
 /**
- * Плановые удержания по месяцам: (planned_id, employee_id, month — date 1-го числа, kind_id, amount). monthsParam —
- * date[] первых чисел; employeeIdsParam — int[] или NULL (все).
+ * Плановые удержания по месяцам: (planned_id, employee_id, month — date 1-го числа, kind_id, amount — сумма этого
+ * месяца). monthsParam — date[] первых чисел; employeeIdsParam — int[] или NULL (все).
  */
 export const plannedDeductionMonthsSql = (monthsParam: string, employeeIdsParam: string): string => `
-  SELECT p.id AS planned_id, p.employee_id, pm.month, p.kind_id, p.amount
+  SELECT p.id AS planned_id, p.employee_id, pm.month, p.kind_id,
+         COALESCE(CASE WHEN pm.month = p.month_to THEN p.last_month_amount END, p.amount) AS amount
     FROM payroll_planned_deductions p
     JOIN employees pe ON pe.id = p.employee_id
    CROSS JOIN unnest(${monthsParam}::date[]) AS pm(month)

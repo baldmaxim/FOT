@@ -28,29 +28,40 @@ export const plannedDeductionPeriodLabel = (row: Pick<IPlannedDeduction, 'month_
     : `${monthNumeric(row.month_from)} – ${monthNumeric(row.month_to)}`
 );
 
+/**
+ * «Плановые удержания». Ширины: столбец «Последний месяц» (миграция 362) взял место у отдела, должности, вида, суммы
+ * и периода — сумма ширин прежняя, иначе на 1280px ✎ и 🗑 уходят за край таблицы.
+ */
 export const PLANNED_DEDUCTION_COLUMNS: ReadonlyArray<IRegistryColumn<IPlannedDeduction>> = [
   { key: 'full_name', label: 'ФИО', type: 'text', text: row => row.full_name, sortValue: row => row.full_name },
   {
-    key: 'department', label: 'Отдел', type: 'text', width: 140,
+    key: 'department', label: 'Отдел', type: 'text', width: 104,
     text: row => orDash(row.department), sortValue: row => row.department,
   },
   {
-    key: 'position', label: 'Должность', type: 'text', width: 148,
+    key: 'position', label: 'Должность', type: 'text', width: 128,
     text: row => orDash(row.position), sortValue: row => row.position,
   },
   {
-    key: 'kind_name', label: 'Вид удержания', type: 'text', width: 200,
+    key: 'kind_name', label: 'Вид удержания', type: 'text', width: 152,
     text: staffDeductionKindLabel, sortValue: staffDeductionKindLabel,
   },
   {
-    key: 'amount', label: 'Сумма, ₽/мес', type: 'money', width: 136, nowrap: true, numeric: true,
+    key: 'amount', label: 'Сумма, ₽/мес', type: 'money', width: 120, nowrap: true, numeric: true,
     text: row => formatPayrollMoney(row.amount) ?? '—',
     sortValue: row => Number(row.amount),
     exportValue: row => row.amount,
   },
   {
+    // Сумма в месяце «По» вместо ежемесячной; «—» — во всех месяцах одна.
+    key: 'last_month_amount', label: 'Последний месяц, ₽', type: 'money', width: 136, nowrap: true, numeric: true,
+    text: row => formatPayrollMoney(row.last_month_amount) ?? '—',
+    sortValue: row => (row.last_month_amount === null ? null : Number(row.last_month_amount)),
+    exportValue: row => row.last_month_amount,
+  },
+  {
     // «11.2026 – 01.2027» — 17 знаков; сортировка — по началу.
-    key: 'period', label: 'Период', type: 'text', width: 172, nowrap: true,
+    key: 'period', label: 'Период', type: 'text', width: 156, nowrap: true,
     text: plannedDeductionPeriodLabel,
     sortValue: row => row.month_from,
   },
@@ -94,7 +105,7 @@ export const buildDeductionMonthRows = <Staff extends IStaffDeduction>(
   canEditStaff: (row: Staff) => boolean,
 ): IDeductionMonthRow[] | undefined => {
   if (!staff || !planned) return undefined;
-  const common = (row: IStaffDeduction | IPlannedDeductionMonth) => ({
+  const common = (row: IStaffDeduction | IPlannedDeductionMonth, amount: string) => ({
     employee_id: row.employee_id,
     full_name: row.full_name,
     department: row.department,
@@ -102,16 +113,18 @@ export const buildDeductionMonthRows = <Staff extends IStaffDeduction>(
     kind_name: row.kind_name,
     subkind_name: row.subkind_name,
     month: row.month,
-    amount: row.amount,
+    amount,
   });
-  // Плановые первыми: при равных ФИО, сотруднике и месяце порядок — как в списке.
+  // Плановые первыми: при равных ФИО, сотруднике и месяце порядок — как в списке. Сумма планового — этого месяца
+  // (в последнем — своя, миграция 362), как в расчёте.
   const rows: IDeductionMonthRow[] = [
     ...planned.map(row => ({
-      ...common(row), key: `planned:${row.id}:${row.month}`, source: 'planned' as const, can_edit: row.can_edit,
-      planned: row,
+      ...common(row, row.month_amount), key: `planned:${row.id}:${row.month}`, source: 'planned' as const,
+      can_edit: row.can_edit, planned: row,
     })),
     ...staff.map(row => ({
-      ...common(row), key: `staff:${row.id}`, source: 'staff' as const, can_edit: canEditStaff(row), staff: row,
+      ...common(row, row.amount), key: `staff:${row.id}`, source: 'staff' as const, can_edit: canEditStaff(row),
+      staff: row,
     })),
   ];
   const order = new Map(rows.map((row, index) => [row.key, index]));

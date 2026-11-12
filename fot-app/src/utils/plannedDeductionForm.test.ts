@@ -7,6 +7,7 @@ import {
   monthToAfterFromChange,
   parsePlannedDeduction,
   plannedFromMonthOptions,
+  plannedLastMonthAllowed,
   plannedToMonthOptions,
   withKeptKind,
 } from './staffDeductionForm';
@@ -20,13 +21,34 @@ describe('окно планового удержания', () => {
   it('разбор: сумма до копеек, «по» пусто — бессрочно, «по» раньше «с» и без вида — ошибка поля', () => {
     expect(parsePlannedDeduction(draft)).toEqual({
       ok: true,
-      payload: { kind_id: 3, subkind_id: null, amount: 5000.5, month_from: '2026-11', month_to: '2027-01' },
+      payload: {
+        kind_id: 3, subkind_id: null, amount: 5000.5, month_from: '2026-11', month_to: '2027-01', last_month_amount: null,
+      },
     });
     expect(parsePlannedDeduction({ ...draft, monthTo: '' })).toMatchObject({ ok: true, payload: { month_to: null } });
     expect(parsePlannedDeduction({ ...draft, monthTo: '2026-10' })).toMatchObject({ ok: false, field: 'month_to' });
     expect(parsePlannedDeduction({ ...draft, kindId: null })).toMatchObject({ ok: false, field: 'kind' });
     expect(parsePlannedDeduction({ ...draft, selected: false })).toMatchObject({ ok: false, field: 'employee' });
     expect(parsePlannedDeduction({ ...draft, amount: '10,005' })).toMatchObject({ ok: false, field: 'amount' });
+  });
+
+  it('последний месяц: только если «По» позже «С»; сумма до копеек, пусто, ноль и равная ежемесячной — ошибка поля', () => {
+    expect([
+      plannedLastMonthAllowed('2026-11', '2027-01'),
+      plannedLastMonthAllowed('2026-11', '2026-11'),
+      plannedLastMonthAllowed('2026-11', ''),
+    ]).toEqual([true, false, false]);
+    const last = { ...draft, lastMonth: true, lastMonthAmount: '1 500,25' };
+    expect(parsePlannedDeduction(last)).toMatchObject({ ok: true, payload: { amount: 5000.5, last_month_amount: 1500.25 } });
+    // Галочка снята — суммы нет, даже если поле заполнено.
+    expect(parsePlannedDeduction({ ...last, lastMonth: false })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
+    // Бессрочно или период в месяц — галочки на экране нет, её состояние не учитывается.
+    expect(parsePlannedDeduction({ ...last, monthTo: '' })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
+    expect(parsePlannedDeduction({ ...last, monthTo: '2026-11' })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
+    for (const lastMonthAmount of ['', '0', '10,005', '5 000,50']) {
+      expect(parsePlannedDeduction({ ...last, lastMonthAmount }), lastMonthAmount)
+        .toMatchObject({ ok: false, field: 'last_month_amount' });
+    }
   });
 
   it('«С месяца»: 11 назад … 12 вперёд; месяц правки вне диапазона остаётся', () => {

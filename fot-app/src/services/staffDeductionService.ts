@@ -34,7 +34,8 @@ export interface IStaffDeductionPayload {
 
 /**
  * Плановое удержание (миграция 357): вид, подвид, сумма ₽/мес на месяцы «с — по» (по — null, бессрочно); в каждом
- * месяце периода удерживается вся сумма. Те же записи ведут кадры и «Зарплата».
+ * месяце периода удерживается вся сумма, в последнем — last_month_amount, если задана (миграция 362). Те же записи
+ * ведут кадры и «Зарплата».
  */
 export interface IPlannedDeduction {
   id: number;
@@ -52,6 +53,8 @@ export interface IPlannedDeduction {
   month_from: string;
   /** YYYY-MM; null — бессрочно. */
   month_to: string | null;
+  /** Сумма в месяце month_to вместо amount, NUMERIC строкой; null — как в остальных месяцах. */
+  last_month_amount: string | null;
   /** Метка версии строки: правка и «Убрать» присылают её обратно (уже изменили — 409 PLANNED_DEDUCTION_STALE). */
   updated_at: string;
   /** Право правки строки (у кадров — всегда true, решает право вкладки). */
@@ -62,6 +65,8 @@ export interface IPlannedDeduction {
 export interface IPlannedDeductionMonth extends IPlannedDeduction {
   /** YYYY-MM. */
   month: string;
+  /** Удержание в этом месяце (в последнем — last_month_amount, если задана); amount — сумма периода для ✎. */
+  month_amount: string;
 }
 
 export interface IPlannedDeductionPayload {
@@ -72,6 +77,8 @@ export interface IPlannedDeductionPayload {
   month_from: string;
   /** YYYY-MM; null — бессрочно. */
   month_to: string | null;
+  /** Сумма в последнем месяце; null — как в остальных. */
+  last_month_amount: number | null;
 }
 
 /** Что сделал «Убрать»: закрыл период месяцем перед текущим или удалил строку. */

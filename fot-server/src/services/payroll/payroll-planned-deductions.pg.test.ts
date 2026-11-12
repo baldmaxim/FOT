@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 // Плановые удержания (миграция 357) на настоящем PostgreSQL: CHECK и повторный запуск миграции, пересечение
 // периодов (без подвида — один «подвид»), updated_at против повтора и гонки, «Убрать» (удалить / закрыть прошлым
 // месяцем), история для карточки, развёртка по месяцам (приём, увольнение, бессрочно) — одна для таблиц и расчёта
-// (monthDeductionsSql в loadSummaryExtras), счёт сотрудников при удалении вида.
+// (monthDeductionsSql в loadSummaryExtras), счёт сотрудников при удалении вида; сумма последнего месяца (миграция 362).
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 
 const PG_URL = process.env.FOT_TEST_PG_URL;
@@ -78,7 +78,7 @@ const kindId = async (name: string): Promise<number> =>
   (await run(`SELECT id FROM payroll_deduction_kinds WHERE name = $1`, [name])).rows[0].id as number;
 
 const input = (over: Partial<IPlannedDeductionInput> & { kind_id: number }): IPlannedDeductionInput => ({
-  subkind_id: null, amount: 5000, month_from: '2026-11', month_to: '2027-01', ...over,
+  subkind_id: null, amount: 5000, month_from: '2026-11', month_to: '2027-01', last_month_amount: null, ...over,
 });
 
 /** Ряд добавлен — иначе тест падает понятной ошибкой. */
@@ -163,17 +163,24 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
     await pg.pool?.end();
   });
 
-  it('357: повтор безопасен, CHECK суммы, первого числа и порядка месяцев', async () => {
+  it('357 и 362: повтор безопасен, CHECK суммы, первого числа, порядка месяцев и суммы последнего месяца', async () => {
     await run(migration('357_payroll_planned_deductions.sql'));
     await run(migration('357_payroll_planned_deductions.sql'));
+    await run(migration('362_payroll_planned_deduction_last_month.sql'));
+    await run(migration('362_payroll_planned_deduction_last_month.sql'));
     const bad = [
-      `(1, ${loan}, 0, '2026-11-01', NULL)`,
-      `(1, ${loan}, 100, '2026-11-02', NULL)`,
-      `(1, ${loan}, 100, '2026-11-01', '2026-12-15')`,
-      `(1, ${loan}, 100, '2026-11-01', '2026-10-01')`,
+      `(1, ${loan}, 0, '2026-11-01', NULL, NULL)`,
+      `(1, ${loan}, 100, '2026-11-02', NULL, NULL)`,
+      `(1, ${loan}, 100, '2026-11-01', '2026-12-15', NULL)`,
+      `(1, ${loan}, 100, '2026-11-01', '2026-10-01', NULL)`,
+      // Последний месяц: у бессрочного, у периода в один месяц, равная ежемесячной, ноль.
+      `(1, ${loan}, 100, '2026-11-01', NULL, 50)`,
+      `(1, ${loan}, 100, '2026-11-01', '2026-11-01', 50)`,
+      `(1, ${loan}, 100, '2026-11-01', '2026-12-01', 100)`,
+      `(1, ${loan}, 100, '2026-11-01', '2026-12-01', 0)`,
     ];
     for (const values of bad) {
-      await expect(run(`INSERT INTO payroll_planned_deductions (employee_id, kind_id, amount, month_from, month_to)
+      await expect(run(`INSERT INTO payroll_planned_deductions (employee_id, kind_id, amount, month_from, month_to, last_month_amount)
                         VALUES ${values}`)).rejects.toThrow(/payroll_planned_deduction_/);
     }
     await expect(run(`INSERT INTO payroll_planned_deduction_changes (planned_id, employee_id, action) VALUES (1, 1, 'x')`))
@@ -339,5 +346,74 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
     expect(await deleteDeductionKind(loan)).toEqual({ inUse: 4 });
     const [helmet] = (await run(`SELECT id FROM payroll_deduction_subkinds WHERE name = 'Каска'`)).rows;
     expect(await deleteSubkind(helmet.id)).toEqual({ inUse: 1 });
+  });
+
+  it('последний месяц: 30 000 × 11.2026–02.2027, в феврале 10 000 — итог 100 000 во всех расчётах; «Убрать» снимает', async () => {
+    await run(`INSERT INTO payroll_deduction_kinds (name) VALUES ('Рассрочка') ON CONFLICT DO NOTHING`);
+    const installment = await kindId('Рассрочка');
+    const period = { kind_id: installment, amount: 30000, month_from: '2026-11', month_to: '2027-02', last_month_amount: 10000 };
+    const row = added(await addPlannedDeduction(WORKER, input(period), AUTHOR));
+    expect(row).toMatchObject({ amount: '30000.00', last_month_amount: '10000.00', month_to: '2027-02' });
+
+    const months = ['2026-10-01', '2026-11-01', '2026-12-01', '2027-01-01', '2027-02-01', '2027-03-01'];
+    const scope = { kind: 'employees' as const, employeeIds: [WORKER] };
+    const ownMonths = async () => (await listPlannedDeductionMonths(scope, months))
+      .filter(item => item.kind_id === installment)
+      .map(item => [item.month, item.month_amount, item.amount]);
+    // «Удержания за месяц»: сумма месяца — month_amount; amount — сумма периода (✎ открывает форму с ней).
+    expect(await ownMonths()).toEqual([
+      ['2026-11', '30000.00', '30000.00'], ['2026-12', '30000.00', '30000.00'],
+      ['2027-01', '30000.00', '30000.00'], ['2027-02', '10000.00', '30000.00'],
+    ]);
+
+    // Расчёт ФОТ за каждый месяц (loadPayoutExtras: ARRAY[$2::date]) — те же суммы, за период — 100 000,00.
+    const payout: string[] = [];
+    for (const month of months) {
+      const result = await run(
+        `SELECT COALESCE(SUM(amount), 0)::text AS amount FROM (${monthDeductionsSql('ARRAY[$2::date]', '$1')}) d
+          WHERE kind_id = $3`,
+        [[WORKER], month, installment],
+      );
+      payout.push(result.rows[0].amount);
+    }
+    expect(payout).toEqual(['0', '30000.00', '30000.00', '30000.00', '10000.00', '0']);
+    const total = await run(
+      `SELECT SUM(amount)::text AS amount FROM (${monthDeductionsSql('$2::date[]', '$1')}) d WHERE kind_id = $3`,
+      [[WORKER], months, installment],
+    );
+    expect(total.rows[0].amount).toBe('100000.00');
+    // «Свод» / «Выплачено» — те же цифры по виду.
+    const extras = await loadSummaryExtras(['2027-01', '2027-02']);
+    const kindAmount = (key: string) => extras.deductions.get(key)?.find(item => item.kind === 'Рассрочка')?.amount;
+    expect([kindAmount(`${WORKER}|2027-01`), kindAmount(`${WORKER}|2027-02`)]).toEqual(['30000.00', '10000.00']);
+
+    // Уволен 14.11 до «По месяц» (декабрь): последний месяц не наступил — в октябре и ноябре обычная сумма.
+    added(await addPlannedDeduction(FIRED_NOV, input({
+      kind_id: installment, amount: 2000, month_from: '2026-10', month_to: '2026-12', last_month_amount: 500,
+    }), AUTHOR));
+    expect((await listPlannedDeductionMonths({ kind: 'employees', employeeIds: [FIRED_NOV] }, months))
+      .filter(item => item.kind_id === installment)
+      .map(item => [item.month, item.month_amount])).toEqual([['2026-10', '2000.00'], ['2026-11', '2000.00']]);
+
+    // Сохранение без изменений — без истории; сумма последнего месяца — правка «было → стало».
+    expect(await updatePlannedDeduction(row.id, input(period), row.updated_at, AUTHOR)).toMatchObject({ changed: false });
+    const edited = await updatePlannedDeduction(row.id, input({ ...period, last_month_amount: 10000.5 }), row.updated_at, AUTHOR);
+    if (edited === null || typeof edited === 'string' || 'conflict' in edited) throw new Error('не сохранено');
+    expect(edited.after.last_month_amount).toBe('10000.50');
+    const [changed] = await listPlannedDeductionChanges(WORKER);
+    expect(changed).toMatchObject({
+      action: 'changed', amount: '30000.00', prev_amount: '30000.00',
+      last_month_amount: '10000.50', prev_last_month_amount: '10000.00',
+    });
+
+    // «Убрать» в декабре: закрыто ноябрём, сумма последнего месяца снята — ноябрь остаётся 30 000, а не 10 000,50.
+    const closed = await removePlannedDeduction(row.id, edited.after.updated_at, '2026-12', AUTHOR);
+    expect(closed).toMatchObject({ action: 'closed', after: { month_to: '2026-11', last_month_amount: null } });
+    expect(await ownMonths()).toEqual([['2026-11', '30000.00', '30000.00']]);
+    const [closedChange] = await listPlannedDeductionChanges(WORKER);
+    expect(closedChange).toMatchObject({
+      action: 'closed', month_to: '2026-11', last_month_amount: null,
+      prev_month_to: '2027-02', prev_last_month_amount: '10000.50',
+    });
   });
 });

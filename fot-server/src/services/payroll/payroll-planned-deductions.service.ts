@@ -1,5 +1,6 @@
 /**
- * Плановые удержания (миграция 357): вид, подвид, сумма ₽/мес на месяцы «с — по» (по — необязательно, бессрочно).
+ * Плановые удержания (миграция 357): вид, подвид, сумма ₽/мес на месяцы «с — по» (по — необязательно, бессрочно);
+ * в последнем месяце периода — своя сумма, если задана (миграция 362).
  *
  * Одни записи ведут кадры («Управление кадрами» → «Удержания») и «Зарплата» («Справочник» → «Удержания»): охват —
  * параметром. В расчётах плановые разворачивает по месяцам payroll-month-deductions.sql.ts (вся сумма в каждом
@@ -12,7 +13,8 @@
  *   'stale', ничего не пишется;
  * - сохранение без изменений — ничего не пишет;
  * - «Убрать» (C — текущий месяц МСК): период начинается с C или позже либо кончился до C — строка удаляется,
- *   иначе закрывается месяцем перед C (прошлые месяцы остаются в расчётах);
+ *   иначе закрывается месяцем перед C (прошлые месяцы остаются в расчётах) и сумма последнего месяца снимается:
+ *   закрытый месяц уже удержан обычной суммой;
  * - каждое изменение — строка истории для карточки (payroll_planned_deduction_changes).
  */
 import type { PoolClient } from 'pg';
@@ -39,6 +41,8 @@ export interface IPlannedDeduction {
   month_from: string;
   /** YYYY-MM; null — бессрочно. */
   month_to: string | null;
+  /** Сумма в месяце month_to вместо amount (NUMERIC текстом); null — как в остальных месяцах. */
+  last_month_amount: string | null;
   /** Метка версии строки (ISO, микросекунды) — правка и «Убрать» присылают её обратно. */
   updated_at: string;
 }
@@ -47,6 +51,8 @@ export interface IPlannedDeduction {
 export interface IPlannedDeductionMonth extends IPlannedDeduction {
   /** YYYY-MM. */
   month: string;
+  /** Удержание в этом месяце (NUMERIC текстом): в последнем месяце — last_month_amount, если задана; amount — сумма периода. */
+  month_amount: string;
 }
 
 export interface IPlannedDeductionInput {
@@ -57,6 +63,8 @@ export interface IPlannedDeductionInput {
   month_from: string;
   /** YYYY-MM; null — бессрочно. */
   month_to: string | null;
+  /** Сумма в последнем месяце; null — как в остальных. */
+  last_month_amount: number | null;
 }
 
 /** Запись истории для карточки. Суммы — текстом NUMERIC, месяцы — YYYY-MM. */
@@ -69,11 +77,13 @@ export interface IPlannedDeductionChange {
   amount: string | null;
   month_from: string | null;
   month_to: string | null;
+  last_month_amount: string | null;
   prev_kind_name: string | null;
   prev_subkind_name: string | null;
   prev_amount: string | null;
   prev_month_from: string | null;
   prev_month_to: string | null;
+  prev_last_month_amount: string | null;
   changed_by_name: string | null;
   changed_at: string;
 }
@@ -106,6 +116,7 @@ const SELECT_COLUMNS = `
   p.amount::text AS amount,
   to_char(p.month_from, 'YYYY-MM') AS month_from,
   to_char(p.month_to, 'YYYY-MM') AS month_to,
+  p.last_month_amount::text AS last_month_amount,
   to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at`;
 
 const SELECT_JOINS = `
@@ -169,7 +180,7 @@ export const listPlannedDeductionMonths = async (
   const { cte, where, params } = scopeSql(scope, 2);
   return query<IPlannedDeductionMonth>(
     `${cte}
-     SELECT ${SELECT_COLUMNS}, to_char(pm.month, 'YYYY-MM') AS month
+     SELECT ${SELECT_COLUMNS}, to_char(pm.month, 'YYYY-MM') AS month, pm.amount::text AS month_amount
        FROM (${plannedDeductionMonthsSql('$1', 'NULL')}) pm
        JOIN payroll_planned_deductions p ON p.id = pm.planned_id
        ${SELECT_JOINS}
@@ -196,8 +207,10 @@ export const listPlannedDeductionChanges = async (employeeId: number): Promise<I
     `SELECT c.id::int AS id, c.planned_id, c.action,
             c.kind_name, c.subkind_name, c.amount::text AS amount,
             to_char(c.month_from, 'YYYY-MM') AS month_from, to_char(c.month_to, 'YYYY-MM') AS month_to,
+            c.last_month_amount::text AS last_month_amount,
             c.prev_kind_name, c.prev_subkind_name, c.prev_amount::text AS prev_amount,
             to_char(c.prev_month_from, 'YYYY-MM') AS prev_month_from, to_char(c.prev_month_to, 'YYYY-MM') AS prev_month_to,
+            c.prev_last_month_amount::text AS prev_last_month_amount,
             up.full_name AS changed_by_name,
             to_char(c.changed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS changed_at
        FROM payroll_planned_deduction_changes c
@@ -256,15 +269,16 @@ const insertChange = async (
   await client.query(
     `INSERT INTO payroll_planned_deduction_changes (
        planned_id, employee_id, action,
-       kind_name, subkind_name, amount, month_from, month_to,
-       prev_kind_name, prev_subkind_name, prev_amount, prev_month_from, prev_month_to, changed_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::date, $9, $10, $11, $12::date, $13::date, $14)`,
+       kind_name, subkind_name, amount, month_from, month_to, last_month_amount,
+       prev_kind_name, prev_subkind_name, prev_amount, prev_month_from, prev_month_to, prev_last_month_amount,
+       changed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::date, $9, $10, $11, $12, $13::date, $14::date, $15, $16)`,
     [
       change.plannedId, change.employeeId, change.action,
       after?.kind_name ?? null, after?.subkind_name ?? null, after?.amount ?? null,
-      monthStart(after?.month_from ?? null), monthStart(after?.month_to ?? null),
+      monthStart(after?.month_from ?? null), monthStart(after?.month_to ?? null), after?.last_month_amount ?? null,
       before?.kind_name ?? null, before?.subkind_name ?? null, before?.amount ?? null,
-      monthStart(before?.month_from ?? null), monthStart(before?.month_to ?? null),
+      monthStart(before?.month_from ?? null), monthStart(before?.month_to ?? null), before?.last_month_amount ?? null,
       change.actorId,
     ],
   );
@@ -292,9 +306,12 @@ export const addPlannedDeduction = async (
     const existing = await findOverlap(client, employeeId, input, null);
     if (existing) return { conflict: 'exists' as const, existing };
     const inserted = await client.query<{ id: number }>(
-      `INSERT INTO payroll_planned_deductions (employee_id, kind_id, subkind_id, amount, month_from, month_to)
-       VALUES ($1, $2, $3, $4, $5::date, $6::date) RETURNING id`,
-      [employeeId, input.kind_id, input.subkind_id, input.amount, monthStart(input.month_from), monthStart(input.month_to)],
+      `INSERT INTO payroll_planned_deductions (employee_id, kind_id, subkind_id, amount, month_from, month_to, last_month_amount)
+       VALUES ($1, $2, $3, $4, $5::date, $6::date, $7) RETURNING id`,
+      [
+        employeeId, input.kind_id, input.subkind_id, input.amount,
+        monthStart(input.month_from), monthStart(input.month_to), input.last_month_amount,
+      ],
     );
     const row = await readRow(client, inserted.rows[0].id, false);
     if (!row) throw new Error('Плановое удержание не найдено после добавления');
@@ -302,13 +319,19 @@ export const addPlannedDeduction = async (
     return row;
   }));
 
+/** Сумма в копейках; null — нет суммы. */
+const kopecks = (amount: string | number | null): number | null => (
+  amount === null ? null : Math.round(Number(amount) * 100)
+);
+
 /** Совпадает ли ввод с записью: тогда сохранять нечего. Суммы сравниваются в копейках. */
 const sameAsInput = (row: IPlannedDeduction, input: IPlannedDeductionInput): boolean => (
   row.kind_id === input.kind_id
   && row.subkind_id === input.subkind_id
-  && Math.round(Number(row.amount) * 100) === Math.round(input.amount * 100)
+  && kopecks(row.amount) === kopecks(input.amount)
   && row.month_from === input.month_from
   && row.month_to === input.month_to
+  && kopecks(row.last_month_amount) === kopecks(input.last_month_amount)
 );
 
 /** Строка, заблокированная вместе с сотрудником; нет — null, updated_at не тот — 'stale'. */
@@ -330,7 +353,7 @@ const lockRow = async (
 };
 
 /**
- * Изменить вид, подвид, сумму и период (сотрудник не меняется). Нет строки — null; уже изменили — { conflict: 'stale' };
+ * Изменить вид, подвид, сумму, период и сумму последнего месяца (сотрудник не меняется). Нет строки — null; уже изменили — { conflict: 'stale' };
  * пересечение — { conflict: 'exists' }; вида или подвида нет — 'kind_missing' / 'subkind_missing'. Без изменений —
  * changed: false, ничего не записано.
  */
@@ -353,9 +376,12 @@ export const updatePlannedDeduction = async (
     await client.query(
       `UPDATE payroll_planned_deductions
           SET kind_id = $2, subkind_id = $3, amount = $4, month_from = $5::date, month_to = $6::date,
-              updated_at = clock_timestamp()
+              last_month_amount = $7, updated_at = clock_timestamp()
         WHERE id = $1`,
-      [id, input.kind_id, input.subkind_id, input.amount, monthStart(input.month_from), monthStart(input.month_to)],
+      [
+        id, input.kind_id, input.subkind_id, input.amount,
+        monthStart(input.month_from), monthStart(input.month_to), input.last_month_amount,
+      ],
     );
     const after = await readRow(client, id, false);
     if (!after) throw new Error('Плановое удержание не найдено после правки');
@@ -381,8 +407,8 @@ const previousMonth = (month: string): string => {
 };
 
 /**
- * «Убрать» (currentMonth — текущий месяц МСК, YYYY-MM): закрыть идущий период месяцем перед текущим или удалить
- * не начавшийся / кончившийся. Нет строки — null; уже изменили (в т.ч. повторный запрос) — { conflict: 'stale' }.
+ * «Убрать» (currentMonth — текущий месяц МСК, YYYY-MM): закрыть идущий период месяцем перед текущим (сумма
+ * последнего месяца снимается — закрытый месяц удержан обычной суммой) или удалить не начавшийся / кончившийся. Нет строки — null; уже изменили (в т.ч. повторный запрос) — { conflict: 'stale' }.
  */
 export const removePlannedDeduction = async (
   id: number,
@@ -406,7 +432,9 @@ export const removePlannedDeduction = async (
       return { action: 'removed' as const, before };
     }
     await client.query(
-      `UPDATE payroll_planned_deductions SET month_to = $2::date, updated_at = clock_timestamp() WHERE id = $1`,
+      `UPDATE payroll_planned_deductions
+          SET month_to = $2::date, last_month_amount = NULL, updated_at = clock_timestamp()
+        WHERE id = $1`,
       [id, monthStart(previousMonth(currentMonth))],
     );
     const after = await readRow(client, id, false);

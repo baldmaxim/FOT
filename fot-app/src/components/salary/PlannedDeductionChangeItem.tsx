@@ -20,6 +20,12 @@ const perMonth = (amount: string | null): string => {
   return money === null ? '—' : `${money} ₽/мес`;
 };
 
+/** Сумма ₽/мес и, если задана, сумма последнего месяца (миграция 362): «30 000,00 ₽/мес, в последнем месяце 10 000,00 ₽». */
+const amounts = (amount: string | null, lastMonthAmount: string | null): string => {
+  const lastMonth = formatPayrollMoney(lastMonthAmount);
+  return lastMonth === null ? perMonth(amount) : `${perMonth(amount)}, в последнем месяце ${lastMonth} ₽`;
+};
+
 const period = (from: string | null, to: string | null): string => (
   from === null ? '—' : plannedDeductionPeriodLabel({ month_from: from, month_to: to })
 );
@@ -31,8 +37,9 @@ const author = (change: IPlannedDeductionChange): string => {
 };
 
 /**
- * Запись «Истории изменений» карточки о плановом удержании (миграция 357): назначено, изменено («было → стало»: сумма,
- * а вид и период — если менялись), убрано с месяца (период закрыт, прошлые месяцы удержаны), удалено.
+ * Запись «Истории изменений» карточки о плановом удержании (миграция 357): назначено, изменено («было → стало»: сумма
+ * и сумма последнего месяца, а вид и период — если менялись), убрано с месяца (период закрыт, прошлые месяцы
+ * удержаны), удалено.
  */
 export const PlannedDeductionChangeItem: FC<IPlannedDeductionChangeItemProps> = ({ change }) => {
   const removed = change.action === 'removed';
@@ -44,7 +51,7 @@ export const PlannedDeductionChangeItem: FC<IPlannedDeductionChangeItemProps> = 
   const kindChanged = change.prev_kind_name !== change.kind_name || change.prev_subkind_name !== change.subkind_name;
   const periodChanged = change.prev_month_from !== change.month_from || change.prev_month_to !== change.month_to;
   const before = [
-    `было ${perMonth(change.prev_amount)}`,
+    `было ${amounts(change.prev_amount, change.prev_last_month_amount)}`,
     kindChanged ? `«${kindLabel(change.prev_kind_name, change.prev_subkind_name)}»` : null,
     periodChanged ? prevPeriod : null,
   ].filter(Boolean).join(', ');
@@ -55,24 +62,28 @@ export const PlannedDeductionChangeItem: FC<IPlannedDeductionChangeItemProps> = 
         <span className={styles.itemSecondary}>Плановое удержание «{kind}» {headPeriod}</span>
       </div>
       <div className={styles.amounts}>
-        {change.action === 'assigned' && <span className={styles.amount}>назначено {perMonth(change.amount)}</span>}
+        {change.action === 'assigned' && (
+          <span className={styles.amount}>назначено {amounts(change.amount, change.last_month_amount)}</span>
+        )}
         {change.action === 'changed' && (
           <>
             <span className={styles.prevAmount}>{before}</span>
             <span className={styles.prevAmount} aria-hidden="true">→</span>
-            <span className={styles.amount}>стало {perMonth(change.amount)}</span>
+            <span className={styles.amount}>стало {amounts(change.amount, change.last_month_amount)}</span>
           </>
         )}
         {change.action === 'closed' && change.month_to !== null && (
           <>
             <span className={styles.amount}>убрано с {monthNumeric(shiftMonth(change.month_to, 1))}</span>
-            <span className={styles.prevAmount}>было {perMonth(change.prev_amount)}, {prevPeriod}</span>
+            <span className={styles.prevAmount}>
+              было {amounts(change.prev_amount, change.prev_last_month_amount)}, {prevPeriod}
+            </span>
           </>
         )}
         {removed && (
           <>
             <span className={styles.amount}>удалено</span>
-            <span className={styles.prevAmount}>было {perMonth(change.prev_amount)}</span>
+            <span className={styles.prevAmount}>было {amounts(change.prev_amount, change.prev_last_month_amount)}</span>
           </>
         )}
       </div>

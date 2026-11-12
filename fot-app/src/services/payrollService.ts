@@ -309,11 +309,14 @@ export interface IPlannedDeductionChange {
   amount: string | null;
   month_from: string | null;
   month_to: string | null;
+  /** Сумма последнего месяца (миграция 362); null — нет. */
+  last_month_amount: string | null;
   prev_kind_name: string | null;
   prev_subkind_name: string | null;
   prev_amount: string | null;
   prev_month_from: string | null;
   prev_month_to: string | null;
+  prev_last_month_amount: string | null;
   changed_by_name: string | null;
   /** ISO. */
   changed_at: string;

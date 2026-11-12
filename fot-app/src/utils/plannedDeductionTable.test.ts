@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { IPlannedDeductionMonth, IStaffDeduction } from '../services/staffDeductionService';
+import { formatPayrollMoney } from './payrollFormat';
 import {
   buildDeductionMonthRows,
   DEDUCTION_MONTH_COLUMNS,
+  PLANNED_DEDUCTION_COLUMNS,
   plannedDeductionPeriodLabel,
   plannedDeductionRemoval,
   plannedDeductionRemovalQuestion,
@@ -17,10 +19,12 @@ const staff = (id: number, employeeId: number, fullName: string, month: string, 
   id, ...person(employeeId, fullName), kind_id: 1, kind_name: 'Питание', subkind_id: null, subkind_name: null, month, amount,
 });
 
-const planned = (id: number, employeeId: number, fullName: string, month: string): IPlannedDeductionMonth => ({
+const planned = (
+  id: number, employeeId: number, fullName: string, month: string, monthAmount = '5000.00',
+): IPlannedDeductionMonth => ({
   id, ...person(employeeId, fullName), kind_id: 2, kind_name: 'Займ', subkind_id: null, subkind_name: null,
-  amount: '5000.00', month_from: '2026-11', month_to: '2027-01', updated_at: '2026-11-10T09:00:00.000001Z',
-  can_edit: true, month,
+  amount: '5000.00', month_from: '2026-11', month_to: '2027-01', last_month_amount: monthAmount === '5000.00' ? null : monthAmount,
+  updated_at: '2026-11-10T09:00:00.000001Z', can_edit: true, month, month_amount: monthAmount,
 });
 
 describe('«Удержания за месяц»: помесячные и плановые', () => {
@@ -41,6 +45,20 @@ describe('«Удержания за месяц»: помесячные и пла
     expect(rows[2].staff?.id).toBe(5);
   });
 
+  it('сумма планового — этого месяца (последний — своя), ✎ получает сумму периода', () => {
+    const rows = buildDeductionMonthRows(
+      [],
+      [planned(5, 7, 'Каримов Акмал', '2026-12'), planned(5, 7, 'Каримов Акмал', '2027-01', '1500.00')],
+      () => true,
+    )!;
+    expect(rows.map(row => [row.month, row.amount, row.planned?.amount])).toEqual([
+      ['2026-12', '5000.00', '5000.00'],
+      ['2027-01', '1500.00', '5000.00'],
+    ]);
+    const amount = DEDUCTION_MONTH_COLUMNS.find(column => column.key === 'amount')!;
+    expect(rows.map(row => amount.text(row))).toEqual([formatPayrollMoney('5000.00'), formatPayrollMoney('1500.00')]);
+  });
+
   it('пока не загружено одно из двух — undefined (таблица в загрузке)', () => {
     expect(buildDeductionMonthRows(undefined, [], () => true)).toBeUndefined();
     expect(buildDeductionMonthRows([], undefined, () => true)).toBeUndefined();
@@ -51,6 +69,24 @@ describe('«Удержания за месяц»: помесячные и пла
       .toEqual(['full_name', 'department', 'position', 'kind_name', 'source', 'month', 'amount']);
     const [row] = buildDeductionMonthRows([], [planned(1, 7, 'Каримов Акмал', '2026-11')], () => true)!;
     expect(DEDUCTION_MONTH_COLUMNS.find(column => column.key === 'source')!.text(row)).toBe('Плановое');
+  });
+});
+
+describe('«Плановые удержания»', () => {
+  it('«Последний месяц, ₽» — после суммы: сумма или «—», сортировка числом, в xlsx — строкой numeric', () => {
+    expect(PLANNED_DEDUCTION_COLUMNS.map(column => column.key)).toEqual(
+      ['full_name', 'department', 'position', 'kind_name', 'amount', 'last_month_amount', 'period'],
+    );
+    const column = PLANNED_DEDUCTION_COLUMNS.find(item => item.key === 'last_month_amount')!;
+    const withLast = planned(1, 7, 'Каримов Акмал', '2027-01', '1500.00');
+    const without = planned(2, 7, 'Каримов Акмал', '2026-11');
+    expect([column.text(withLast), column.text(without)]).toEqual([formatPayrollMoney('1500.00'), '—']);
+    expect([column.sortValue(withLast), column.sortValue(without)]).toEqual([1500, null]);
+    expect([column.exportValue!(withLast), column.exportValue!(without)]).toEqual(['1500.00', null]);
+  });
+
+  it('ширины столбцов в сумме прежние (796 px) — ✎ и 🗑 не уходят за край на 1280', () => {
+    expect(PLANNED_DEDUCTION_COLUMNS.reduce((sum, column) => sum + (column.width ?? 0), 0)).toBe(796);
   });
 });
 

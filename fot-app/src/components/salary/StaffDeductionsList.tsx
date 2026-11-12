@@ -5,7 +5,7 @@ import { payrollService } from '../../services/payrollService';
 import { STAFF_DEDUCTIONS_KEY } from '../../services/staffDeductionService';
 import { formatMonthLabel } from '../../utils/formatMoney';
 import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { plannedDeductionPeriodLabel } from '../../utils/plannedDeductionTable';
+import { monthNumeric, plannedDeductionPeriodLabel } from '../../utils/plannedDeductionTable';
 import { staffDeductionKindLabel } from '../../utils/staffDeductionTable';
 import styles from './StaffDeductionsList.module.css';
 
@@ -15,7 +15,8 @@ interface IStaffDeductionsListProps {
 
 /**
  * «Удержание» окна сотрудника на «Расчётах», только чтение: сначала плановые (вид — подвид, период, сумма ₽/мес;
- * миграция 357), под ними помесячные (вид — подвид, месяц, сумма), новые сверху. Те же записи вносят в
+ * миграция 357; другая сумма в последнем месяце — строкой ниже, миграция 362), под ними помесячные (вид — подвид,
+ * месяц, сумма), новые сверху. Те же записи вносят в
  * «Справочнике» → «Удержания» и во вкладке кадров «Удержания».
  */
 export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId }) => {
@@ -60,6 +61,12 @@ export const StaffDeductionsList: FC<IStaffDeductionsListProps> = ({ employeeId 
           <span className={styles.kind}>{staffDeductionKindLabel(row)}</span>
           <span className={styles.month}>{plannedDeductionPeriodLabel(row)}</span>
           <span className={styles.amount}>{formatPayrollMoney(row.amount) ?? '—'}/мес</span>
+          {row.last_month_amount !== null && row.month_to !== null && (
+            <>
+              <span className={`${styles.month} ${styles.lastMonth}`}>в {monthNumeric(row.month_to)}</span>
+              <span className={styles.amount}>{formatPayrollMoney(row.last_month_amount) ?? '—'}</span>
+            </>
+          )}
         </li>
       ))}
       {rows.map(row => (

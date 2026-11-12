@@ -219,10 +219,11 @@ describe.skipIf(!PG_URL)('«Свод» на PostgreSQL', () => {
         id serial PRIMARY KEY, employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id),
         month date NOT NULL, amount numeric(12,2) NOT NULL
       );
-      -- Плановые удержания (357): то, что читает развёртка по месяцам.
+      -- Плановые удержания (357, 362): то, что читает развёртка по месяцам.
       CREATE TABLE payroll_planned_deductions (
         id serial PRIMARY KEY, employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id),
-        subkind_id integer, amount numeric(12,2) NOT NULL, month_from date NOT NULL, month_to date
+        subkind_id integer, amount numeric(12,2) NOT NULL, month_from date NOT NULL, month_to date,
+        last_month_amount numeric(12,2)
       );
     `);
 

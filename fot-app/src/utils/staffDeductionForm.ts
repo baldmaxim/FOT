@@ -134,13 +134,25 @@ export const monthToAfterFromChange = (monthTo: string, monthFrom: string): stri
   monthTo !== '' && monthTo < monthFrom ? monthFrom : monthTo
 );
 
-export type PlannedDeductionField = 'employee' | 'kind' | 'month_from' | 'month_to' | 'amount';
+/**
+ * Другая сумма в последнем месяце (миграция 362) — только если «По месяц» задан и позже «С месяца»: у бессрочного
+ * последнего месяца нет, у периода в месяц он единственный. Сервер и БД проверяют то же.
+ */
+export const plannedLastMonthAllowed = (monthFrom: string, monthTo: string): boolean => (
+  monthTo !== '' && monthTo > monthFrom
+);
+
+export type PlannedDeductionField = 'employee' | 'kind' | 'month_from' | 'month_to' | 'amount' | 'last_month_amount';
 
 export type PlannedDeductionParse =
   | { ok: true; payload: IPlannedDeductionPayload }
   | { ok: false; field: PlannedDeductionField; message: string };
 
-/** Окно планового удержания: та же проверка, что на сервере, — ошибка видна до запроса. monthTo '' — бессрочно. */
+/**
+ * Окно планового удержания: та же проверка, что на сервере, — ошибка видна до запроса. monthTo '' — бессрочно.
+ * lastMonth — галочка «Другая сумма в последнем месяце»; при периоде без последнего месяца её нет на экране — не
+ * учитывается (сумма последнего месяца — null).
+ */
 export const parsePlannedDeduction = (draft: {
   selected: boolean;
   kindId: number | null;
@@ -148,6 +160,8 @@ export const parsePlannedDeduction = (draft: {
   amount: string;
   monthFrom: string;
   monthTo: string;
+  lastMonth?: boolean;
+  lastMonthAmount?: string;
 }): PlannedDeductionParse => {
   if (!draft.selected) return { ok: false, field: 'employee', message: 'Выберите сотрудника' };
   if (draft.kindId === null) return { ok: false, field: 'kind', message: 'Выберите вид удержания' };
@@ -160,6 +174,18 @@ export const parsePlannedDeduction = (draft: {
   if (draft.monthTo !== '' && draft.monthTo < draft.monthFrom) {
     return { ok: false, field: 'month_to', message: '«По месяц» не может быть раньше «С месяца»' };
   }
+  let lastMonthAmount: number | null = null;
+  if (draft.lastMonth && plannedLastMonthAllowed(draft.monthFrom, draft.monthTo)) {
+    const parsed = parsePositiveAmount(draft.lastMonthAmount ?? '');
+    if ('error' in parsed) return { ok: false, field: 'last_month_amount', message: parsed.error };
+    // Сравнение в копейках: ввод — не больше двух знаков.
+    if (Math.round(parsed.amount * 100) === Math.round(amount.amount * 100)) {
+      return {
+        ok: false, field: 'last_month_amount', message: 'Сумма в последнем месяце равна сумме в месяц — снимите галочку',
+      };
+    }
+    lastMonthAmount = parsed.amount;
+  }
   return {
     ok: true,
     payload: {
@@ -168,6 +194,7 @@ export const parsePlannedDeduction = (draft: {
       amount: amount.amount,
       month_from: draft.monthFrom,
       month_to: draft.monthTo === '' ? null : draft.monthTo,
+      last_month_amount: lastMonthAmount,
     },
   };
 };

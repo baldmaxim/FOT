@@ -16,6 +16,7 @@ import {
   monthToAfterFromChange,
   parsePlannedDeduction,
   plannedFromMonthOptions,
+  plannedLastMonthAllowed,
   plannedToMonthOptions,
   withKeptKind,
   type PlannedDeductionField,
@@ -53,7 +54,9 @@ const isNotEditable = (candidate: PlannedCandidate): boolean => candidate.can_ed
 /**
  * «Добавить сотрудника» и ✎ на вкладке «Плановые удержания» (кадры и «Справочник» «Зарплаты», миграция 357):
  * сотрудник, вид, подвид, сумма ₽/мес, «С месяца» и «По месяц» (пусто — бессрочно). В каждом месяце периода
- * удерживается вся сумма. Ошибка сервера (пересечение, «уже изменили») — под полями, ввод не теряется.
+ * удерживается вся сумма; галочка «Другая сумма в последнем месяце» (миграция 362) — в месяце «По месяц» своя сумма,
+ * видна, только если «По месяц» позже «С месяца». Ошибка сервера (пересечение, «уже изменили») — под полями, ввод не
+ * теряется.
  */
 export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction, kinds, api, raised, onClose, onSaved }) => {
   const errorId = useId();
@@ -65,6 +68,8 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
   const [amount, setAmount] = useState(rateAmountInputValue(deduction?.amount));
   const [monthFrom, setMonthFrom] = useState(deduction?.month_from ?? currentMonth);
   const [monthTo, setMonthTo] = useState(deduction?.month_to ?? '');
+  const [lastMonth, setLastMonth] = useState(deduction?.last_month_amount != null);
+  const [lastMonthAmount, setLastMonthAmount] = useState(rateAmountInputValue(deduction?.last_month_amount));
   const [error, setError] = useState<{ field: PlannedDeductionField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -77,6 +82,8 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
     () => plannedToMonthOptions(monthFrom, currentMonth, deduction?.month_to),
     [monthFrom, currentMonth, deduction?.month_to],
   );
+
+  const lastMonthAllowed = plannedLastMonthAllowed(monthFrom, monthTo);
 
   const clearError = () => setError(null);
   const invalid = (field: PlannedDeductionField): true | undefined => (error?.field === field ? true : undefined);
@@ -99,7 +106,7 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
 
   const handleSubmit = async (requestClose: () => void) => {
     const parsed = parsePlannedDeduction({
-      selected: isEdit || employee !== null, kindId, subkindId, amount, monthFrom, monthTo,
+      selected: isEdit || employee !== null, kindId, subkindId, amount, monthFrom, monthTo, lastMonth, lastMonthAmount,
     });
     if (!parsed.ok) {
       setError({ field: parsed.field, message: parsed.message });
@@ -211,6 +218,33 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
           </select>
         </label>
       </div>
+
+      {lastMonthAllowed && (
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={lastMonth}
+            onChange={event => { setLastMonth(event.target.checked); clearError(); }}
+            disabled={saving}
+          />
+          <span>Другая сумма в последнем месяце</span>
+        </label>
+      )}
+      {lastMonthAllowed && lastMonth && (
+        <label className={styles.field}>
+          <span className={styles.label}>Сумма за {formatMonthLabel(monthTo)}, ₽</span>
+          <ClearableInput
+            value={lastMonthAmount}
+            onValueChange={value => { setLastMonthAmount(value); clearError(); }}
+            inputMode="decimal"
+            autoComplete="off"
+            disabled={saving}
+            aria-invalid={invalid('last_month_amount')}
+            aria-describedby={error ? errorId : undefined}
+            clearLabel="Очистить сумму в последнем месяце"
+          />
+        </label>
+      )}
     </RegistryFormModal>
   );
 };

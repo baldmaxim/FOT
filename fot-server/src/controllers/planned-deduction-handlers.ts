@@ -103,7 +103,7 @@ export const createPlannedDeductionHandlers = (access: IPlannedDeductionAccess) 
     }
   };
 
-  /** POST { employee_id, kind_id, subkind_id?, amount, month_from, month_to? } — назначить плановое. */
+  /** POST { employee_id, kind_id, subkind_id?, amount, month_from, month_to?, last_month_amount? } — назначить плановое. */
   const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { employee_id: employeeId, ...input } = plannedDeductionAddSchema.parse(req.body);
@@ -135,7 +135,7 @@ export const createPlannedDeductionHandlers = (access: IPlannedDeductionAccess) 
     }
   };
 
-  /** PATCH /:id { kind_id, subkind_id?, amount, month_from, month_to?, expected_updated_at } — сотрудник не меняется. */
+  /** PATCH /:id { kind_id, subkind_id?, amount, month_from, month_to?, last_month_amount?, expected_updated_at } — сотрудник не меняется. */
   const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { expected_updated_at: expected, ...input } = plannedDeductionUpdateSchema.parse(req.body);
