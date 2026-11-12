@@ -60,10 +60,48 @@ export interface IApprovalAttachment {
   work_dates?: string[];
   /** Файл загружен тем, кто подал табель (uploaded_by === submitted_by). НЕ «гарантированно руководитель». */
   is_submitter_file?: boolean;
+  /** Служебку можно удалить по состоянию подачи (resolveApprovalMemoDelete); право на табель проверяет сервер отдельно. */
+  deletable?: boolean;
   /** Подписанные URL (агрегатор отдаёт их сразу — у корректировок свой авторизационный путь). */
   download_url?: string;
   preview_url?: string;
 }
+
+/** Статусы подачи, в которых служебку прикладывают и удаляют свободно (до подачи и после возврата). */
+const MEMO_EDITABLE_STATUSES: ReadonlySet<string> = new Set(['draft', 'rejected', 'returned']);
+/** Статусы, которые снимает с замка «Открыть табель» (то же условие, что у открытия). */
+const MEMO_OPENABLE_STATUSES: ReadonlySet<string> = new Set(['submitted', 'approved']);
+
+export interface IApprovalMemoState {
+  status: string;
+  unlocked_at: Date | string | null | undefined;
+}
+
+/** Табель открыт кнопкой «Открыть табель»: подан или согласован и unlocked_at задан. */
+export const isApprovalOpenedForEdits = (approval: IApprovalMemoState): boolean => (
+  MEMO_OPENABLE_STATUSES.has(approval.status) && approval.unlocked_at != null
+);
+
+/** Можно ли приложить служебку: черновик / отклонён / на доработке или табель открыт для правок. */
+export const isApprovalMemoUploadAllowed = (approval: IApprovalMemoState): boolean => (
+  MEMO_EDITABLE_STATUSES.has(approval.status) || isApprovalOpenedForEdits(approval)
+);
+
+export type ApprovalMemoDeleteDecision = 'ok' | 'period_closed' | 'uploaded_before_unlock';
+
+/**
+ * Можно ли удалить служебку. В открытом табеле — только приложенную после текущего открытия:
+ * служебки, по которым табель согласовали (и файлы прошлого открытия), остаются основанием.
+ * Автора не проверяем — удаляет любой, кто ведёт табель, как в черновике.
+ */
+export const resolveApprovalMemoDelete = (
+  approval: IApprovalMemoState,
+  uploadedAfterUnlock: boolean,
+): ApprovalMemoDeleteDecision => {
+  if (MEMO_EDITABLE_STATUSES.has(approval.status)) return 'ok';
+  if (!isApprovalOpenedForEdits(approval)) return 'period_closed';
+  return uploadedAfterUnlock ? 'ok' : 'uploaded_before_unlock';
+};
 
 export async function findOrCreateDraftApproval(params: {
   departmentId: string | null;
@@ -71,22 +109,23 @@ export async function findOrCreateDraftApproval(params: {
   startDate: string;
   endDate: string;
   userId: string;
-}): Promise<{ id: number; status: string }> {
+}): Promise<{ id: number; status: string; unlocked_at: Date | string | null }> {
   const { departmentId, managerEmployeeId, startDate, endDate } = params;
 
   if ((departmentId == null) === (managerEmployeeId == null)) {
     throw new Error('findOrCreateDraftApproval: ровно одно из departmentId/managerEmployeeId должно быть указано');
   }
 
+  type ExistingRow = { id: number | string; status: string; unlocked_at: Date | string | null };
   const existing = managerEmployeeId != null
-    ? await queryOne<{ id: number | string; status: string }>(
-        `SELECT id, status FROM timesheet_approvals
+    ? await queryOne<ExistingRow>(
+        `SELECT id, status, unlocked_at FROM timesheet_approvals
            WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
            LIMIT 1`,
         [managerEmployeeId, startDate, endDate],
       )
-    : await queryOne<{ id: number | string; status: string }>(
-        `SELECT id, status FROM timesheet_approvals
+    : await queryOne<ExistingRow>(
+        `SELECT id, status, unlocked_at FROM timesheet_approvals
            WHERE department_id = $1 AND start_date = $2 AND end_date = $3
              AND manager_employee_id IS NULL
            LIMIT 1`,
@@ -94,7 +133,7 @@ export async function findOrCreateDraftApproval(params: {
       );
 
   if (existing) {
-    return { id: Number(existing.id), status: String(existing.status) };
+    return { id: Number(existing.id), status: String(existing.status), unlocked_at: existing.unlocked_at ?? null };
   }
 
   const now = new Date().toISOString();
@@ -107,7 +146,7 @@ export async function findOrCreateDraftApproval(params: {
   if (!inserted) {
     throw new Error('Failed to create draft approval');
   }
-  return { id: Number(inserted.id), status: String(inserted.status) };
+  return { id: Number(inserted.id), status: String(inserted.status), unlocked_at: null };
 }
 
 export async function listApprovalAttachments(approvalId: number): Promise<IApprovalAttachment[]> {
@@ -181,8 +220,10 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     };
   };
 
-  const approval = await queryOne<{ start_date: string; end_date: string; submitted_by: string | null }>(
-    `SELECT start_date, end_date, submitted_by FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
+  const approval = await queryOne<{
+    start_date: string; end_date: string; submitted_by: string | null; status: string; unlocked_at: Date | string | null;
+  }>(
+    `SELECT start_date, end_date, submitted_by, status, unlocked_at FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
     [approvalId],
   );
   const submittedBy = approval?.submitted_by ? String(approval.submitted_by) : null;
@@ -191,6 +232,21 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
 
   // --- 1. Служебки о выходных (привязка к approval; без подписи URL — подпишем в конце). ---
   const weekendDocs = await listApprovalAttachments(approvalId);
+  // Открытый табель: удалить можно только служебки после текущего открытия. Даты сравнивает SQL —
+  // created_at в ответе строкой без миллисекунд.
+  const memoAfterUnlock = new Set<number>();
+  if (approval && isApprovalOpenedForEdits(approval) && weekendDocs.length > 0) {
+    const rows = await query<{ id: number | string }>(
+      `SELECT d.id
+         FROM documents d
+         JOIN timesheet_approvals a ON a.id = $2
+        WHERE d.id = ANY($1::int[])
+          AND a.unlocked_at IS NOT NULL
+          AND d.created_at >= a.unlocked_at`,
+      [weekendDocs.map(doc => doc.document_id), approvalId],
+    );
+    for (const row of rows) memoAfterUnlock.add(Number(row.id));
+  }
 
   // --- 2. Снимок состава (без уволенных в месяце периода) + корректировки периода. ---
   const snapshot = approval ? await listVisibleApprovalEmployees({ id: approvalId, start_date: approval.start_date }) : [];
@@ -423,6 +479,7 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     work_date: null,
     work_dates: [],
     is_submitter_file: Boolean(submittedBy && doc.uploaded_by && String(doc.uploaded_by) === submittedBy),
+    deletable: approval ? resolveApprovalMemoDelete(approval, memoAfterUnlock.has(doc.document_id)) === 'ok' : false,
   }));
 
   const corrItems: IApprovalAttachment[] = [];
@@ -520,6 +577,14 @@ export async function relinkApprovalAttachments(
   );
 }
 
+export type CreateApprovalMemoResult =
+  | { ok: true; attachment: IApprovalAttachment }
+  | { ok: false; reason: 'period_closed' };
+
+export type DeleteApprovalMemoResult =
+  | { ok: true; r2Key: string; approvalId: number }
+  | { ok: false; reason: 'not_found' | 'period_closed' | 'uploaded_before_unlock' };
+
 export async function createAttachmentRecord(params: {
   approvalId: number;
   fileName: string;
@@ -527,8 +592,19 @@ export async function createAttachmentRecord(params: {
   mimeType: string;
   r2Key: string;
   uploadedBy: string;
-}): Promise<IApprovalAttachment> {
+}): Promise<CreateApprovalMemoResult> {
   return withTransaction(async (client) => {
+    // Окончательная проверка под той же блокировкой, что берёт «Закрыть табель»: файл не прилипнет
+    // к периоду, который закрыли между проверкой контроллера и записью.
+    const lock = await client.query<{ status: string; unlocked_at: Date | string | null }>(
+      'SELECT status, unlocked_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+      [params.approvalId],
+    );
+    const current = lock.rows[0];
+    if (!current || !isApprovalMemoUploadAllowed(current)) {
+      return { ok: false, reason: 'period_closed' } as const;
+    }
+
     const docResult = await client.query<{
       id: number | string;
       file_name: string;
@@ -562,45 +638,66 @@ export async function createAttachmentRecord(params: {
     );
 
     return {
-      document_id: Number(doc.id),
-      file_name: String(doc.file_name),
-      file_size: Number(doc.file_size),
-      mime_type: String(doc.mime_type),
-      r2_key: String(doc.r2_key),
-      uploaded_by: String(doc.uploaded_by),
-      uploaded_by_name: null,
-      created_at: String(doc.created_at),
-    };
+      ok: true,
+      attachment: {
+        document_id: Number(doc.id),
+        file_name: String(doc.file_name),
+        file_size: Number(doc.file_size),
+        mime_type: String(doc.mime_type),
+        r2_key: String(doc.r2_key),
+        uploaded_by: String(doc.uploaded_by),
+        uploaded_by_name: null,
+        created_at: String(doc.created_at),
+      },
+    } as const;
   });
 }
 
-export async function deleteAttachmentRecord(documentId: number): Promise<{ deleted: boolean; r2Key: string | null; approvalId: number | null }> {
-  const link = await queryOne<{ entity_id: string }>(
-    `SELECT entity_id FROM document_links
-       WHERE document_id = $1 AND entity_type = $2 AND purpose = $3
-       LIMIT 1`,
-    [documentId, APPROVAL_ATTACHMENT_ENTITY_TYPE, APPROVAL_ATTACHMENT_PURPOSE],
-  );
-  const approvalId = link ? Number(link.entity_id) : null;
+export async function deleteAttachmentRecord(documentId: number): Promise<DeleteApprovalMemoResult> {
+  // Решение целиком в одной транзакции: подача заблокирована так же, как при «Закрыть табель».
+  const outcome = await withTransaction(async (client): Promise<DeleteApprovalMemoResult> => {
+    const link = await client.query<{ entity_id: string }>(
+      `SELECT entity_id FROM document_links
+         WHERE document_id = $1 AND entity_type = $2 AND purpose = $3
+         LIMIT 1`,
+      [documentId, APPROVAL_ATTACHMENT_ENTITY_TYPE, APPROVAL_ATTACHMENT_PURPOSE],
+    );
+    const approvalId = link.rows[0] ? Number(link.rows[0].entity_id) : NaN;
+    if (!Number.isInteger(approvalId) || approvalId <= 0) return { ok: false, reason: 'not_found' };
 
-  const doc = await queryOne<{ r2_key: string }>(
-    `SELECT r2_key FROM documents WHERE id = $1 LIMIT 1`,
-    [documentId],
-  );
-  const r2Key = doc ? String(doc.r2_key) : null;
+    const lock = await client.query<{ status: string; unlocked_at: Date | string | null }>(
+      'SELECT status, unlocked_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+      [approvalId],
+    );
+    const approval = lock.rows[0];
+    if (!approval) return { ok: false, reason: 'not_found' };
 
-  await withTransaction(async (client) => {
+    // Даты сравнивает SQL: у JS Date нет микросекунд timestamptz.
+    const docResult = await client.query<{ r2_key: string; after_unlock: boolean | null }>(
+      `SELECT d.r2_key, (d.created_at >= a.unlocked_at) AS after_unlock
+         FROM documents d
+         JOIN timesheet_approvals a ON a.id = $2
+        WHERE d.id = $1`,
+      [documentId, approvalId],
+    );
+    const doc = docResult.rows[0];
+    if (!doc) return { ok: false, reason: 'not_found' };
+
+    const decision = resolveApprovalMemoDelete(approval, doc.after_unlock === true);
+    if (decision !== 'ok') return { ok: false, reason: decision };
+
     await client.query(`DELETE FROM document_links WHERE document_id = $1`, [documentId]);
     await client.query(`DELETE FROM documents WHERE id = $1`, [documentId]);
+    return { ok: true, r2Key: String(doc.r2_key), approvalId };
   });
 
-  if (r2Key) {
+  if (outcome.ok) {
     try {
-      await r2Service.deleteObject(r2Key);
+      await r2Service.deleteObject(outcome.r2Key);
     } catch (err) {
       console.warn('timesheet-approval-attachments.delete: r2 delete failed', err);
     }
   }
 
-  return { deleted: Boolean(doc), r2Key, approvalId };
+  return outcome;
 }

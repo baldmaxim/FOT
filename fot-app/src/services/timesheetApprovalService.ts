@@ -191,6 +191,11 @@ export interface IApprovalAttachment {
   work_dates?: string[];
   /** Файл загружен подавшим табель (uploaded_by === submitted_by). НЕ «гарантированно руководитель». */
   is_submitter_file?: boolean;
+  /**
+   * Служебку можно удалить по состоянию подачи: черновик / на доработке / отклонён или приложена после
+   * «Открыть табель». Нет у старого бэкенда — см. canDeleteApprovalMemo.
+   */
+  deletable?: boolean;
   /** Подписанные URL из агрегатора (превью без отдельного getAttachmentDownloadUrl). */
   download_url?: string;
   preview_url?: string;

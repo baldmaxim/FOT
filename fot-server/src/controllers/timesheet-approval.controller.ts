@@ -206,6 +206,7 @@ import { canManageAsHrAdmin, resolveEffectivePageAccess } from '../services/acce
 import {
   createAttachmentRecord,
   deleteAttachmentRecord,
+  isApprovalMemoUploadAllowed,
   findOrCreateDraftApproval,
   listApprovalPeriodAttachments,
   relinkApprovalAttachments,
@@ -2081,6 +2082,8 @@ const saveResponsibles = async (req: AuthenticatedRequest, res: Response): Promi
   }
 };
 
+const MEMO_UPLOAD_CLOSED_MESSAGE = 'Период уже на проверке или утверждён — загрузка недоступна, пока табель не откроют';
+
 /**
  * Руководитель: загрузить вложение к подаче табеля. Multipart через бэкенд
  * (как POST /api/documents/upload для Заявлений) — файл идёт в R2 серверно,
@@ -2136,8 +2139,10 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
       endDate: range.endDate,
       userId: req.user.id,
     });
-    if (draft.status !== 'draft' && draft.status !== 'rejected' && draft.status !== 'returned') {
-      res.status(409).json({ success: false, error: 'Период уже на проверке или утверждён — загрузка недоступна' });
+    // Быстрая проверка до R2: черновик / на доработке / отклонён или табель открыт «Открыть табель».
+    // Окончательная — в createAttachmentRecord под блокировкой подачи.
+    if (!isApprovalMemoUploadAllowed(draft)) {
+      res.status(409).json({ success: false, error: MEMO_UPLOAD_CLOSED_MESSAGE });
       return;
     }
 
@@ -2149,9 +2154,9 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
 
     await r2Service.uploadObject(r2Key, file.buffer, mimeType);
 
-    let created;
+    let result;
     try {
-      created = await createAttachmentRecord({
+      result = await createAttachmentRecord({
         approvalId: draft.id,
         fileName: safeFileName,
         fileSize: file.size,
@@ -2163,6 +2168,13 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
       try { await r2Service.deleteObject(r2Key); } catch { /* best-effort cleanup */ }
       throw err;
     }
+    if (!result.ok) {
+      // Табель закрыли, пока файл грузился в R2: запись не создана, объект убираем.
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort cleanup */ }
+      res.status(409).json({ success: false, error: MEMO_UPLOAD_CLOSED_MESSAGE });
+      return;
+    }
+    const created = result.attachment;
 
     await logApprovalAudit(req, draft.id, 'TIMESHEET_APPROVAL_ATTACHMENT_UPLOADED', {
       department_id: deptId,
@@ -2300,7 +2312,7 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
   }
 };
 
-/** Руководитель: удалить вложение (только если подача в draft/rejected/returned). */
+/** Руководитель: удалить служебку (draft/rejected/returned или приложенную после «Открыть табель»). */
 const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const documentId = Number(req.params.document_id);
@@ -2332,12 +2344,21 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
       res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
-    if (approval.status !== 'draft' && approval.status !== 'rejected' && approval.status !== 'returned') {
-      res.status(409).json({ success: false, error: 'Период уже на проверке или утверждён — удаление недоступно' });
+    // Статус, открытие табеля и время загрузки решает сервис в транзакции под блокировкой подачи.
+    const result = await deleteAttachmentRecord(documentId);
+    if (!result.ok) {
+      if (result.reason === 'not_found') {
+        res.status(404).json({ success: false, error: 'Вложение не найдено' });
+        return;
+      }
+      res.status(409).json({
+        success: false,
+        error: result.reason === 'uploaded_before_unlock'
+          ? 'Служебку, приложенную до открытия табеля, удалить нельзя'
+          : 'Табель закрыт — удаление недоступно',
+      });
       return;
     }
-
-    const result = await deleteAttachmentRecord(documentId);
     await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_ATTACHMENT_DELETED', {
       department_id: approval.department_id,
       manager_employee_id: approval.manager_employee_id,

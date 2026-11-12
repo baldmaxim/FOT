@@ -31,6 +31,7 @@ import {
 import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
 import { formatPendingDecisions, isWaitingWeekends, PENDING_WEEKENDS_LABEL } from '../../utils/pendingDecisions';
 import { summarizeMonthHalves, type IMonthHalvesSummary } from '../../utils/departmentPeriodActions';
+import { canDeleteApprovalMemo, isApprovalMemoEditable, isApprovalOpenedForEdits } from '../../utils/timesheetApprovalMemo';
 import { TimesheetDepartmentPeriodActions } from './TimesheetDepartmentPeriodActions';
 
 interface IProps {
@@ -420,6 +421,10 @@ interface IWeekendMemoPopoverProps {
   loading: boolean;
   /** Только просмотр (после подачи): скрыть загрузку/удаление, оставить превью. */
   readOnly: boolean;
+  /** Табель открыт «Открыть табель» — подсказка про правки вместо подачи. */
+  periodUnlocked: boolean;
+  /** Корзина у файла (canDeleteApprovalMemo): в открытом табеле — только служебки после открытия. */
+  canDeleteAttachment: (attachment: IApprovalAttachment) => boolean;
   errorText: string | null;
   attachments: IApprovalAttachment[];
   attachmentsLoading: boolean;
@@ -435,6 +440,8 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   uploadDisabled,
   loading,
   readOnly,
+  periodUnlocked,
+  canDeleteAttachment,
   errorText,
   attachments,
   attachmentsLoading,
@@ -490,7 +497,9 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
       <div className="ts-memo-popover-hint">
         {readOnly
           ? 'Файлы, приложенные к табелю и корректировкам за период.'
-          : 'В выбранном периоде есть работа в выходные/праздники. Приложите файл-подтверждение, чтобы подать табель.'}
+          : periodUnlocked
+            ? 'Табель открыт для правок — можно приложить служебку.'
+            : 'В выбранном периоде есть работа в выходные/праздники. Приложите файл-подтверждение, чтобы подать табель.'}
       </div>
 
       {errorText && (
@@ -525,9 +534,9 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           loading={attachmentsLoading}
           urlLoader={loadUrl}
           onDelete={readOnly ? undefined : onDeleteAttachment}
-          // Удаление — только своя служебка в редактируемом окне. Файлы корректировок и
-          // заявлений управляются в своих местах, здесь read-only.
-          canDelete={(att) => !readOnly && att.kind === 'weekend_memo'}
+          // Удаление — только служебка в редактируемом окне; в открытом табеле — приложенная после
+          // открытия. Файлы корректировок и заявлений управляются в своих местах, здесь read-only.
+          canDelete={(att) => !readOnly && canDeleteAttachment(att)}
           deletingId={deletingId}
         />
       </div>
@@ -824,10 +833,10 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const activeApproval = activeStatus.data?.approval ?? null;
-  // Редактирование (загрузка/удаление служебки) — только в редактируемом окне.
-  const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && !monthSummary && (
-    !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
-  );
+  // Загрузка/удаление служебки — в редактируемом окне или в табеле, открытом «Открыть табель».
+  // «Весь месяц» — только просмотр: файл относится к половине.
+  const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && !monthSummary
+    && isApprovalMemoEditable(activeApproval);
   // Просмотр файлов (служебка + файлы корректировок) — на любом статусе для роли с доступом.
   const memoViewAllowed = weekendMemoEnabled && canSubmitDepartment;
   const memoErrorText = memoRequired ? submitError : null;
@@ -1034,6 +1043,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
             uploadDisabled={!isPersonal && !departmentId}
             loading={loading}
             readOnly={!memoSectionAllowed}
+            periodUnlocked={isApprovalOpenedForEdits(activeApproval)}
+            canDeleteAttachment={att => canDeleteApprovalMemo(activeApproval, att)}
             errorText={memoErrorText}
             attachments={attachmentsQuery.data ?? []}
             attachmentsLoading={attachmentsQuery.isLoading}

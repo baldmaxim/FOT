@@ -23,7 +23,13 @@ vi.mock('./timesheet-approval-employees-snapshot.service.js', () => ({
   listVisibleApprovalEmployees: vi.fn(),
 }));
 
-import { listApprovalPeriodAttachments } from './timesheet-approval-attachments.service.js';
+import {
+  createAttachmentRecord,
+  deleteAttachmentRecord,
+  isApprovalMemoUploadAllowed,
+  listApprovalPeriodAttachments,
+  resolveApprovalMemoDelete,
+} from './timesheet-approval-attachments.service.js';
 import { listVisibleApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 
 /**
@@ -190,5 +196,153 @@ describe('listApprovalPeriodAttachments', () => {
     pgQuery.mockResolvedValue([]);
     const result = await listApprovalPeriodAttachments(1);
     expect(result).toEqual([]);
+  });
+});
+
+const UNLOCKED_AT = '2026-11-12T08:24:28.592Z';
+
+describe('правила служебки: черновик и «Открыть табель»', () => {
+  it('загрузка: черновик / отклонён / на доработке — всегда; подан и согласован — только открытый', () => {
+    for (const status of ['draft', 'rejected', 'returned']) {
+      expect(isApprovalMemoUploadAllowed({ status, unlocked_at: null })).toBe(true);
+    }
+    for (const status of ['submitted', 'approved']) {
+      expect(isApprovalMemoUploadAllowed({ status, unlocked_at: null })).toBe(false);
+      expect(isApprovalMemoUploadAllowed({ status, unlocked_at: UNLOCKED_AT })).toBe(true);
+    }
+  });
+
+  it('удаление: в открытом — только приложенная после текущего открытия', () => {
+    for (const status of ['draft', 'rejected', 'returned']) {
+      expect(resolveApprovalMemoDelete({ status, unlocked_at: null }, false)).toBe('ok');
+    }
+    for (const status of ['submitted', 'approved']) {
+      expect(resolveApprovalMemoDelete({ status, unlocked_at: null }, true)).toBe('period_closed');
+      expect(resolveApprovalMemoDelete({ status, unlocked_at: UNLOCKED_AT }, true)).toBe('ok');
+      expect(resolveApprovalMemoDelete({ status, unlocked_at: UNLOCKED_AT }, false)).toBe('uploaded_before_unlock');
+    }
+  });
+
+  it('закрыли и открыли снова: файл прошлого открытия раньше нового unlocked_at — не удаляется', () => {
+    // after_unlock считает SQL против ТЕКУЩЕГО unlocked_at; файл первого окна даёт false.
+    expect(resolveApprovalMemoDelete({ status: 'approved', unlocked_at: '2026-11-13T09:00:00Z' }, false))
+      .toBe('uploaded_before_unlock');
+  });
+});
+
+/** Клиент транзакции: отвечает по SQL и запоминает запросы. */
+const makeTxClient = (responses: { approval?: Record<string, unknown> | null; link?: string | null; doc?: Record<string, unknown> | null }) => {
+  const calls: string[] = [];
+  const client = {
+    query: vi.fn(async (sql: string) => {
+      calls.push(sql);
+      if (/FROM document_links/i.test(sql) && /SELECT/i.test(sql)) {
+        return { rows: responses.link ? [{ entity_id: responses.link }] : [] };
+      }
+      if (/FROM timesheet_approvals WHERE id = \$1 FOR UPDATE/i.test(sql)) {
+        return { rows: responses.approval ? [responses.approval] : [] };
+      }
+      if (/FROM documents d/i.test(sql)) {
+        return { rows: responses.doc ? [responses.doc] : [] };
+      }
+      if (/INSERT INTO documents/i.test(sql)) {
+        return { rows: [{ id: 900, file_name: 'Служебка.pdf', file_size: 1, mime_type: 'application/pdf', r2_key: 'k', uploaded_by: 'u', created_at: 'now' }] };
+      }
+      return { rows: [] };
+    }),
+  };
+  pgTx.mockImplementation(async (fn: (c: typeof client) => Promise<unknown>) => fn(client));
+  return calls;
+};
+
+describe('createAttachmentRecord — проверка под блокировкой подачи', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const params = { approvalId: 2269, fileName: 'Служебка.pdf', fileSize: 1, mimeType: 'application/pdf', r2Key: 'k', uploadedBy: 'u' };
+
+  it('табель закрыли до записи: period_closed, документ не создан', async () => {
+    const calls = makeTxClient({ approval: { status: 'approved', unlocked_at: null } });
+    await expect(createAttachmentRecord(params)).resolves.toEqual({ ok: false, reason: 'period_closed' });
+    expect(calls.some(sql => /INSERT/i.test(sql))).toBe(false);
+  });
+
+  it('открытый согласованный: документ и ссылка созданы', async () => {
+    const calls = makeTxClient({ approval: { status: 'approved', unlocked_at: UNLOCKED_AT } });
+    const result = await createAttachmentRecord(params);
+    expect(result.ok).toBe(true);
+    expect(calls[0]).toMatch(/FOR UPDATE/);
+    expect(calls.filter(sql => /INSERT/i.test(sql))).toHaveLength(2);
+  });
+});
+
+describe('deleteAttachmentRecord — решение в одной транзакции', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const deletes = (calls: string[]) => calls.filter(sql => /DELETE/i.test(sql));
+
+  it('табель закрыт: period_closed, ничего не удалено', async () => {
+    const calls = makeTxClient({ link: '2269', approval: { status: 'approved', unlocked_at: null }, doc: { r2_key: 'k', after_unlock: null } });
+    await expect(deleteAttachmentRecord(900)).resolves.toEqual({ ok: false, reason: 'period_closed' });
+    expect(deletes(calls)).toHaveLength(0);
+  });
+
+  it('служебка до открытия: uploaded_before_unlock, ничего не удалено', async () => {
+    const calls = makeTxClient({ link: '2269', approval: { status: 'approved', unlocked_at: UNLOCKED_AT }, doc: { r2_key: 'k', after_unlock: false } });
+    await expect(deleteAttachmentRecord(900)).resolves.toEqual({ ok: false, reason: 'uploaded_before_unlock' });
+    expect(deletes(calls)).toHaveLength(0);
+  });
+
+  it('нет ссылки на подачу: not_found', async () => {
+    const calls = makeTxClient({ link: null });
+    await expect(deleteAttachmentRecord(900)).resolves.toEqual({ ok: false, reason: 'not_found' });
+    expect(deletes(calls)).toHaveLength(0);
+  });
+
+  it('служебка после открытия: удалена, подача заблокирована раньше чтения документа', async () => {
+    const calls = makeTxClient({ link: '2269', approval: { status: 'approved', unlocked_at: UNLOCKED_AT }, doc: { r2_key: 'k', after_unlock: true } });
+    await expect(deleteAttachmentRecord(900)).resolves.toEqual({ ok: true, r2Key: 'k', approvalId: 2269 });
+    const lockIdx = calls.findIndex(sql => /FOR UPDATE/.test(sql));
+    const docIdx = calls.findIndex(sql => /FROM documents d/.test(sql));
+    expect(lockIdx).toBeGreaterThanOrEqual(0);
+    expect(lockIdx).toBeLessThan(docIdx);
+    expect(deletes(calls)).toHaveLength(2);
+  });
+});
+
+describe('listApprovalPeriodAttachments — deletable у служебок', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const setup = (approval: Record<string, unknown>, afterUnlockIds: number[]) => {
+    vi.mocked(listVisibleApprovalEmployees).mockResolvedValue([]);
+    pgQueryOne.mockResolvedValue({ start_date: '2026-10-16', end_date: '2026-10-31', submitted_by: 'mgr', ...approval });
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT document_id FROM document_links')) return [{ document_id: 10 }, { document_id: 11 }];
+      if (sql.includes('FROM documents d')) return afterUnlockIds.map(id => ({ id }));
+      if (sql.includes('FROM documents') && sql.includes('SELECT id, file_name')) {
+        return [10, 11].map(id => ({ id, file_name: `${id}.pdf`, file_size: 1, mime_type: 'application/pdf', r2_key: `k${id}`, uploaded_by: 'u', created_at: 'x' }));
+      }
+      return [];
+    });
+  };
+
+  it('открытый согласованный: только служебка после открытия', async () => {
+    setup({ status: 'approved', unlocked_at: UNLOCKED_AT }, [11]);
+    const result = await listApprovalPeriodAttachments(2269);
+    const byId = new Map(result.map(item => [item.document_id, item.deletable]));
+    expect(byId.get(10)).toBe(false);
+    expect(byId.get(11)).toBe(true);
+  });
+
+  it('согласованный без открытия: ни одна', async () => {
+    setup({ status: 'approved', unlocked_at: null }, []);
+    const result = await listApprovalPeriodAttachments(2269);
+    expect(result.every(item => item.deletable === false)).toBe(true);
+    expect(pgQuery.mock.calls.some(call => String(call[0]).includes('FROM documents d'))).toBe(false);
+  });
+
+  it('черновик: все', async () => {
+    setup({ status: 'draft', unlocked_at: null }, []);
+    const result = await listApprovalPeriodAttachments(2269);
+    expect(result.every(item => item.deletable === true)).toBe(true);
   });
 });
