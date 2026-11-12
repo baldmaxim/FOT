@@ -1,4 +1,5 @@
-import { memo, useMemo, type FC, type ReactNode } from 'react';
+import { memo, useMemo, useState, type FC, type ReactNode } from 'react';
+import { Minus, Plus } from 'lucide-react';
 
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { cx } from '../../utils/motion';
@@ -22,6 +23,26 @@ interface IPayrollTotalsRowProps {
   groupCellClass: (key: string) => string | undefined;
 }
 
+/** Открыта ли строка «Не посчитано» — удобство браузера; по умолчанию скрыта (решение 12.11.2026). */
+const UNCOUNTED_OPEN_KEY = 'fot:payroll-calc:uncounted-open';
+
+const loadUncountedOpen = (): boolean => {
+  try {
+    return window.localStorage.getItem(UNCOUNTED_OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const saveUncountedOpen = (open: boolean): void => {
+  try {
+    if (open) window.localStorage.setItem(UNCOUNTED_OPEN_KEY, '1');
+    else window.localStorage.removeItem(UNCOUNTED_OPEN_KEY);
+  } catch {
+    // Хранилище недоступно (приватный режим, запрет) — выбор живёт до перезагрузки страницы.
+  }
+};
+
 interface ITotalsLine {
   key: 'all' | 'counted' | 'uncounted';
   label: string;
@@ -34,9 +55,17 @@ interface ITotalsLine {
  * при прокрутке вбок едет вместе с таблицей, а последняя строка списка не уходит под него.
  *
  * Когда ФОТ посчитан, а у части людей «Суммы» нет, — две строки (splitPayrollTotalsRows): «Итого (посчитано)», где
- * «Сумма» − «Выплаты на карту» = «Остаток», и «Не посчитано, N чел.» — суммы 1С людей без «Суммы».
+ * «Сумма» − «Выплаты на карту» = «Остаток», и «Не посчитано, N чел.» — суммы 1С людей без «Суммы». Вторая занимает
+ * место, поэтому по умолчанию скрыта: её открывает «+» у «Итого (посчитано)».
  */
 export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, columns, status, groupCellClass }) => {
+  const [uncountedOpen, setUncountedOpen] = useState(loadUncountedOpen);
+  const toggleUncounted = () => {
+    const next = !uncountedOpen;
+    setUncountedOpen(next);
+    saveUncountedOpen(next);
+  };
+
   const lines = useMemo<ITotalsLine[]>(() => {
     const groups = status.rows === 'ready' && status.calc === 'ready' ? splitPayrollTotalsRows(rows) : null;
     if (!groups) return [{ key: 'all', label: 'Итого', totals: payrollColumnTotals(rows, columns) }];
@@ -58,12 +87,31 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
     return formatPaidAmount(Number(total.amount));
   };
 
+  const uncounted = lines.find(line => line.key === 'uncounted');
+  const shownLines = uncountedOpen ? lines : lines.filter(line => line.key !== 'uncounted');
+  const ToggleIcon = uncountedOpen ? Minus : Plus;
+
   return (
     <tfoot>
-      {lines.map(line => (
+      {shownLines.map(line => (
         <tr key={line.key} className={line.className}>
           <td className={`${styles.stickyNum} ${styles.cellNum}`} />
-          <td className={styles.stickyName}>{line.label}</td>
+          <td className={styles.stickyName}>
+            {line.key === 'counted' && uncounted ? (
+              <span className={styles.totalsLabel}>
+                {line.label}
+                <button
+                  type="button"
+                  className={styles.expandButton}
+                  aria-expanded={uncountedOpen}
+                  aria-label={`${uncountedOpen ? 'Скрыть' : 'Показать'} «${uncounted.label}»`}
+                  onClick={toggleUncounted}
+                >
+                  <ToggleIcon size={14} aria-hidden="true" />
+                </button>
+              </span>
+            ) : line.label}
+          </td>
           {columns.map(entry => {
             const total = line.totals.get(entry.key);
             const className = groupCellClass(entry.key);

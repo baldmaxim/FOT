@@ -64,16 +64,22 @@ const unknownReasons = (row: IPayrollTermsRow): string[] => {
   return row.calc.open_months.length > 0 ? [...reasons, CALC_ISSUE_LABELS.unknown_amount] : reasons;
 };
 
-/** Сумма столбца в строке: то же значение, что в ячейке. У столбца без итога (hasTotal) — null. */
-const entryAmount = (row: IPayrollTermsRow, entry: PayrollTableColumnEntry): string | null => {
-  if (entry.kind === 'sub') return subColumnAmount(row, entry.sub);
-  const column = entry.key;
+/**
+ * Сумма столбца в строке: то же значение, что в ячейке (итог, сортировка и фильтр столбца — по нему). У столбца без
+ * суммы — null.
+ */
+export const payrollColumnAmount = (row: IPayrollTermsRow, column: PayrollTableColumn): string | null => {
   if (column === 'deductions') return row.paid_deductions_total ?? null;
   if (column === 'paid_recalc') return row.paid_recalc_prev ?? null;
   if (column === 'fss_payments') return row.fss_payments ?? null;
   if (column === 'card_payouts') return sumAmounts(cardPayoutLines(row.card_payouts_by_method).map(line => line.amount));
   return column === 'calc_remainder' || isCalcSumColumn(column) ? calcSumAmount(row, column) : null;
 };
+
+/** Сумма записи (столбца или подстолбца «+») в строке. У столбца без итога (hasTotal) — null. */
+const entryAmount = (row: IPayrollTermsRow, entry: PayrollTableColumnEntry): string | null => (
+  entry.kind === 'sub' ? subColumnAmount(row, entry.sub) : payrollColumnAmount(row, entry.key)
+);
 
 /** Столбцы сумм; подстолбцы «+» — всегда суммы. */
 const hasTotal = (entry: PayrollTableColumnEntry): boolean => (

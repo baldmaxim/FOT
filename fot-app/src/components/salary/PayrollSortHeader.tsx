@@ -7,7 +7,8 @@ import styles from './PayrollSortHeader.module.css';
 interface IPayrollSortHeaderProps {
   sortKey: PayrollSortKey;
   label: string;
-  activeKey: PayrollSortKey;
+  /** Столбец серверной сортировки; null — таблица отсортирована по столбцу сумм (на клиенте). */
+  activeKey: PayrollSortKey | null;
   dir: PayrollSortDir;
   onSort: (key: PayrollSortKey) => void;
   /** Открыть фильтр столбца; anchor — кнопка-воронка (позиция окна). */

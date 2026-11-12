@@ -17,14 +17,21 @@ import {
   formatAccrualPeriodShort,
   type IAccrualMonthPart,
 } from '../../utils/payrollAccruals';
-import { PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
-import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
+import { isCalcColumn, PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
+import { payrollTotalState, type IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
+import { countPayrollAmountFilters, isPayrollAmountViewColumn } from '../../utils/payrollCalcView';
 import { formatDate } from '../../utils/formatMoney';
 import { cx } from '../../utils/motion';
 import { isPayrollColumnFilterActive, isPayrollGphRow } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
-import { formatPayrollMoney } from '../../utils/payrollFormat';
-import { formatPaidAmount, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import type { PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import {
+  colClassOf,
+  formatMonthly,
+  formatPaid,
+  formatSalary,
+  PAID_KIND_LABELS,
+} from '../../utils/payrollTermsTableFormat';
 import {
   isExpandablePayrollColumn,
   payrollGroupMarks,
@@ -32,8 +39,9 @@ import {
   payrollTableColumnList,
   type PayrollExpandableColumn,
   type PayrollSubColumn,
-  type PayrollTableColumnEntry,
 } from '../../utils/payrollSubColumns';
+import { isColumnFiltered, type ITableView } from '../../utils/tableView';
+import { TableSortHeader } from '../ui/TableSortHeader';
 import { PayrollCalcCell } from './PayrollCalcCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import { PayrollSubColumnCell } from './PayrollSubColumnCell';
@@ -67,6 +75,13 @@ interface IPayrollTermsTableProps {
   onToggleExpand?: (column: PayrollExpandableColumn) => void;
   /** «Расчёты»: закреплённая снизу строка «Итого» и что для неё готово; нет — строки нет. */
   totalsStatus?: IPayrollTotalsStatus;
+  /**
+   * «Расчёты»: сортировка и фильтр столбцов сумм на клиенте (payrollCalcView.ts), строки уже с ними. Без него у сумм
+   * нет ни стрелки, ни воронки. sort — '' или столбец суммы; тогда серверная сортировка не подсвечивается.
+   */
+  amountView?: ITableView;
+  onAmountSort?: (key: PayrollTableColumn) => void;
+  onOpenAmountFilter?: (key: PayrollTableColumn, anchor: HTMLElement) => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
@@ -74,60 +89,6 @@ const ROW_ESTIMATE = 44;
 /** Всегда видимые столбцы: «№», «Сотрудник» (и чекбокс, если есть). */
 const FIXED_COLUMN_COUNT = 2;
 const NO_EXPANDED: ReadonlySet<PayrollExpandableColumn> = new Set();
-
-/** Класс ширины колонки (colgroup) для скрываемых столбцов. */
-const COL_CLASS: Record<PayrollTableColumn, string> = {
-  department: 'colDept',
-  position: 'colPosition',
-  schedule: 'colSchedule',
-  salary: 'colSalary',
-  bonus: 'colBonus',
-  housing: 'colHousing',
-  accruals: 'colAccruals',
-  deductions: 'colDeductions',
-  calc_remainder: 'colCalcSum',
-  calc_rate: 'colCalcRate',
-  calc_timesheet: 'colCalcTimesheet',
-  calc_overtime: 'colCalcSum',
-  calc_travel: 'colCalcSum',
-  calc_vacation: 'colCalcSum',
-  calc_sick: 'colCalcSum',
-  calc_housing: 'colCalcHousing',
-  paid_recalc: 'colCalcSum',
-  fss_payments: 'colCalcSum',
-  calc_supplements: 'colCalcSum',
-  calc_deductions: 'colCalcSum',
-  calc_net: 'colCalcSum',
-  card_payouts: 'colCardPayouts',
-};
-
-/** Ширина подстолбца: у переработки, проезда и проживания — прежняя, у прочих — как у сумм ФОТ. */
-const colClassOf = (entry: PayrollTableColumnEntry): string => {
-  if (entry.kind === 'column') return COL_CLASS[entry.key];
-  return entry.sub.type === 'column' ? COL_CLASS[entry.sub.column] : 'colCalcSum';
-};
-
-/** Сумма зависит от вида оплаты: у оклада — месячная, у почасовой — ставка за час. */
-const formatSalary = (row: IPayrollTermsRow): string => {
-  if (!row.terms_id) return '—';
-  const money = row.calc_type === 'salary' ? formatPayrollMoney(row.monthly_salary) : formatPayrollMoney(row.hourly_rate);
-  if (money === null) return '—';
-  return row.calc_type === 'salary' ? `${money} ₽/мес` : `${money} ₽/час`;
-};
-
-const formatMonthly = (row: IPayrollTermsRow, value: string | number | null, unit = '₽/мес'): string => {
-  const money = row.terms_id ? formatPayrollMoney(value) : null;
-  return money === null ? '—' : `${money} ${unit}`;
-};
-
-/** Подпись кнопки суммы для экранного диктора. */
-const PAID_KIND_LABELS: Record<PayrollPaidTotalKind, string> = { accrued: 'Начислено', deducted: 'Удержания' };
-
-/** Сумма «Оплачено» строки «Расчётов» (с сервера — NUMERIC строкой): нет — «—». */
-const formatPaid = (value: string | number | null | undefined): string => (
-  value === null || value === undefined ? '—' : formatPaidAmount(Number(value))
-);
-
 
 const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount, pending }, index) => (
   <Fragment key={month}>
@@ -179,6 +140,9 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   expandedColumns = NO_EXPANDED,
   onToggleExpand,
   totalsStatus,
+  amountView,
+  onAmountSort,
+  onOpenAmountFilter,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -250,7 +214,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       sortKey={key}
       label={label}
       className={className}
-      activeKey={sort}
+      activeKey={amountView?.sort ? null : sort}
       dir={dir}
       onSort={onSort}
       onOpenFilter={onOpenFilter}
@@ -285,9 +249,39 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     </td>
   );
 
+  /**
+   * Шапка столбца суммы «Расчётов»: сортировка и воронка на клиенте, «+» раскрытия и период под подписью. Пока суммы
+   * столбца не готовы (как его «Итого»), кнопки неактивны: по части строк порядок и варианты фильтра были бы неверны.
+   */
+  const renderAmountHeader = (column: PayrollTableColumns[number], view: ITableView): ReactNode => {
+    const ready = totalsStatus !== undefined && payrollTotalState(totalsStatus, isCalcColumn(column.key)) === 'ready';
+    const toggle = isExpandablePayrollColumn(column.key) ? renderExpandToggle(column.key, column.label) : null;
+    return (
+      <TableSortHeader
+        key={column.key}
+        sortKey={column.key}
+        label={column.label}
+        className={groupClasses.get(column.key)?.head || undefined}
+        title={PAYROLL_CALC_HEADER_TITLES[column.key]}
+        activeKey={view.sort}
+        dir={view.dir}
+        onSort={key => onAmountSort?.(key)}
+        onOpenFilter={(key, anchor) => onOpenAmountFilter?.(key, anchor)}
+        filterActive={isColumnFiltered(view, column.key)}
+        disabled={!ready}
+        extra={toggle ? <span className={styles.headExtra}>{toggle}</span> : undefined}
+      >
+        {paidPeriod && column.key !== 'calc_rate' && (
+          <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
+        )}
+      </TableSortHeader>
+    );
+  };
+
   /** Шапка столбца; у сумм «Оплачено» — период под подписью, без сортировки и фильтра. */
   const renderHeader = (column: PayrollTableColumns[number]): ReactNode => {
     if (isSortablePayrollColumn(column.key)) return renderSortHeader(column.key, column.label);
+    if (amountView && isPayrollAmountViewColumn(column.key)) return renderAmountHeader(column, amountView);
     if (column.key === 'accruals') {
       // Период вместо «посл. полгода»: видно, что текущий месяц не входит. Сортировки и фильтра нет.
       return (
@@ -397,7 +391,13 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columnCount} className={styles.empty}>Сотрудники не найдены</td>
+              <td colSpan={columnCount} className={styles.empty}>
+                {/* Фильтр сумм отбирает только посчитанные строки: пока счёт идёт, «не найдены» было бы неправдой. */}
+                {amountView && countPayrollAmountFilters(amountView) > 0 && totalsStatus
+                  && (totalsStatus.rows === 'pending' || totalsStatus.calc === 'pending')
+                  ? 'Загрузка…'
+                  : 'Сотрудники не найдены'}
+              </td>
             </tr>
           ) : (
             <>

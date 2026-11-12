@@ -1,13 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
-import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
+import { useCallback, useMemo, useState, type FC, type ReactNode } from 'react';
 import { Download, Settings } from 'lucide-react';
 
 import {
-  payrollService,
-  PAYROLL_TERMS_PAGE_SIZE,
   type IPayrollColumnFilters,
   type IPayrollColumnValuesParams,
-  type IPayrollTermsCursor,
   type IPayrollTermsRow,
   type IPayrollTermsViewParams,
   type PayrollPaidMonths,
@@ -16,13 +12,14 @@ import {
 } from '../../services/payrollService';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePayrollCalcExport } from '../../hooks/usePayrollCalcExport';
+import { usePayrollAmountView, usePayrollAmountViewRows } from '../../hooks/usePayrollAmountView';
 import { usePayrollCalcPageColumns } from '../../hooks/usePayrollCalcPageColumns';
+import { usePayrollTermsInfiniteList } from '../../hooks/usePayrollTermsInfiniteList';
 import { usePayrollTermsPayouts } from '../../hooks/usePayrollTermsPayouts';
 import { usePayrollExpandedColumns } from '../../hooks/usePayrollExpandedColumns';
 import { usePayrollHiddenColumns } from '../../hooks/usePayrollHiddenColumns';
 import { usePayrollStructureTree } from '../../hooks/useStructure';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
-import { shouldLoadMore } from '../../utils/staffLoadMore';
 import { filterDepartmentTreeByIds, findDepartmentName } from '../../utils/departmentUtils';
 import { payrollAccrualMonths } from '../../utils/payrollAccruals';
 import {
@@ -41,10 +38,12 @@ import {
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
 import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
+import { isPayrollAmountViewColumn } from '../../utils/payrollCalcView';
 import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import type { ICalcMonthFilter } from '../../utils/payrollViews';
 import { PAYROLL_GROUP_LABELS, PAYROLL_GROUP_OPTIONS, payrollGroupValue, pickDepartmentOrGroup } from '../../utils/payrollDepartmentGroups';
+import { ColumnValuesFilterPopover } from '../../components/ui/ColumnValuesFilterPopover';
 import { SearchInput } from '../../components/ui/SearchInput';
 import { PayrollColumnFilterPopover } from '../../components/salary/PayrollColumnFilterPopover';
 import { PayrollColumnsMenu } from '../../components/salary/PayrollColumnsMenu';
@@ -111,6 +110,8 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   const [dir, setDir] = useState<PayrollSortDir>('asc');
   const [columnFilters, setColumnFilters] = useState<IPayrollColumnFilters>({});
   const [openFilter, setOpenFilter] = useState<{ column: PayrollSortKey; anchor: HTMLElement } | null>(null);
+  // «Расчёты»: сортировка и фильтры столбцов сумм — на клиенте (строки — usePayrollAmountViewRows ниже).
+  const amountState = usePayrollAmountView();
 
   // Поиск идёт на сервере по всему штату, а не по загруженным порциям.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -142,37 +143,10 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     if (next.departmentId !== departmentId) onDepartmentChange(next.departmentId);
   };
 
-  const termsQuery = useInfiniteQuery({
-    queryKey: ['payroll-terms', 'infinite', viewParams, sort, dir, paidMonths ?? null],
-    // Порция помнит месяцы, с которыми запрошена: пока грузится новый период, на экране прежние
-    // строки (keepPreviousData) — и подпись периода должна оставаться их, а не уже выбранной.
-    queryFn: async ({ pageParam, signal }) => ({
-      ...await payrollService.listTerms({
-        ...viewParams,
-        sort,
-        dir,
-        pageSize: PAYROLL_TERMS_PAGE_SIZE,
-        cursor: pageParam,
-        paidMonths: paidMonths ?? undefined,
-        // «Расчёты»: строки сразу, столбцы ФОТ — отдельными запросами ниже.
-        deferCalc: paidMonths !== undefined,
-      }, signal),
-      paidMonths: paidMonths ?? null,
-      // Дата порции: по ней считается «Выплачено» и подписи месяцев — строки прежней даты не смешаются с новой.
-      date,
-    }),
-    initialPageParam: null as IPayrollTermsCursor | null,
-    getNextPageParam: last => last.meta.next_cursor ?? undefined,
-    enabled: paidMonths !== null,
-    staleTime: 30_000,
-    placeholderData: keepPreviousData,
+  const { termsQuery, rows, loadMore, retryNextPage } = usePayrollTermsInfiniteList({
+    viewParams, sort, dir, date, paidMonths, active,
   });
-
-  const {
-    data, hasNextPage, isFetching, isFetchingNextPage, isFetchNextPageError, isPlaceholderData, fetchNextPage,
-  } = termsQuery;
-
-  const rows = useMemo(() => data?.pages.flatMap(page => page.rows) ?? [], [data]);
+  const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, isPlaceholderData } = termsQuery;
 
   // «Расчёты»: столбцы ФОТ — по порциям, по одной (usePayrollCalcPageColumns).
   const isCalcScreen = paidMonths !== undefined;
@@ -203,46 +177,6 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     return filterDepartmentTreeByIds(tree, new Set([...sections.su10, ...sections.sm, ...sections.brigades]));
   }, [structureTree.data, sectionDepartments.data]);
 
-  // Синхронный флаг «порция уже запрошена»: isFetchingNextPage обновится только после рендера,
-  // и быстрая прокрутка успела бы отправить одну и ту же порцию дважды.
-  const inFlightRef = useRef(false);
-
-  const loadMore = useCallback((lastVisibleIndex: number) => {
-    const allowed = shouldLoadMore({
-      lastVisibleIndex,
-      loadedCount: rows.length,
-      hasNextPage,
-      inFlight: inFlightRef.current,
-      isFetchingNextPage,
-      isPlaceholderData,
-      isFetchNextPageError,
-    });
-    if (!allowed) return;
-    inFlightRef.current = true;
-    void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
-  }, [rows.length, hasNextPage, isFetchingNextPage, isPlaceholderData, isFetchNextPageError, fetchNextPage]);
-
-  // «Расчёты»: «Итого» — по всей выборке, поэтому порции грузятся сами, не дожидаясь прокрутки. По isFetching, а не по
-  // inFlightRef: ref сбросится после рендера, и эффект, не увидев перемены, остановил бы догрузку. Упавшая — по кнопке.
-  useEffect(() => {
-    if (!isCalcScreen || !active || !hasNextPage) return;
-    if (isFetching || isPlaceholderData || isFetchNextPageError) return;
-    void fetchNextPage({ cancelRefetch: false });
-  }, [isCalcScreen, active, hasNextPage, isFetching, isPlaceholderData, isFetchNextPageError, fetchNextPage]);
-
-  /** Повтор упавшей порции — только по кнопке: автоповтор у нижней границы дал бы цикл запросов. */
-  const retryNextPage = () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    void fetchNextPage({ cancelRefetch: false }).finally(() => { inFlightRef.current = false; });
-  };
-
-  /** Тот же столбец — смена направления, другой — по возрастанию. */
-  const handleSort = useCallback((key: PayrollSortKey) => {
-    setDir(prevDir => (key === sort ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'));
-    setSort(key);
-  }, [sort]);
-
   const handleOpenFilter = useCallback((column: PayrollSortKey, anchor: HTMLElement) => {
     setOpenFilter({ column, anchor });
   }, []);
@@ -257,6 +191,11 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   // его фильтр и сортировка снимаются вместе со скрытием.
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const clearHiddenColumnConditions = (column: PayrollTableColumn) => {
+    // Столбец суммы «Расчётов» — сортировка и фильтр на клиенте.
+    if (isCalcScreen && isPayrollAmountViewColumn(column)) {
+      amountState.clearColumn(column);
+      return;
+    }
     // Без сортировки и фильтра.
     if (!isSortablePayrollColumn(column)) return;
     if (isPayrollColumnFilterActive(columnFilters, column)) {
@@ -294,6 +233,25 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     () => (emptyColumns.size === 0 ? hiddenColumns : new Set([...hiddenColumns, ...emptyColumns])),
     [hiddenColumns, emptyColumns],
   );
+  // «Расчёты»: сортировка и фильтр столбцов сумм — на клиенте по всем строкам (все порции грузятся ради «Итого»).
+  // Пустые столбцы считаются по всем строкам, а не по отобранным: фильтр «—» не должен скрыть свой же столбец.
+  const amountView = usePayrollAmountViewRows(amountState, tableRows, tableHiddenColumns);
+  const amountSortActive = amountView.sortActive;
+  const clearAmountSort = amountState.clearSort;
+
+  /**
+   * Тот же столбец — смена направления, другой — по возрастанию. При сортировке по сумме серверный столбец не подсвечен:
+   * клик по нему снимает сортировку сумм и ставит его по возрастанию.
+   */
+  const handleSort = useCallback((key: PayrollSortKey) => {
+    if (amountSortActive) {
+      clearAmountSort();
+      setDir('asc');
+    } else {
+      setDir(prevDir => (key === sort ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'));
+    }
+    setSort(key);
+  }, [sort, amountSortActive, clearAmountSort]);
   /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
   const closeColumnsMenu = () => {
     columnsAnchor?.focus();
@@ -310,12 +268,17 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     setWasActive(active);
     if (!active) {
       setOpenFilter(null);
+      amountState.closeFilter();
       setColumnsAnchor(null);
       setDepartmentSelectKey(key => key + 1);
     }
   }
 
-  const resetColumnFilters = () => setColumnFilters({});
+  const resetColumnFilters = () => {
+    setColumnFilters({});
+    amountState.resetFilters();
+  };
+  const filterCount = activeFilterCount + amountView.filterCount;
 
   // «Итого» — только на «Расчётах». Прежние строки другого фильтра (keepPreviousData) считать нельзя: «…».
   const rowsStatus: IPayrollTotalsStatus['rows'] = isFetchNextPageError ? 'failed'
@@ -332,7 +295,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     [viewParams, paidMonths],
   );
 
-  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}|${group ?? ''}|${objectKey ?? ''}`;
+  const resetKey = `${departmentId}|${debouncedSearch}|${columnFiltersKey}|${sort}|${dir}|${employeeId ?? ''}|${group ?? ''}|${objectKey ?? ''}|${amountView.viewKey}`;
 
   // «Экспорт» «Расчётов» — вся выборка экрана. Пока новая выборка не загрузилась или поиск не применён, на экране
   // прежние строки: кнопка неактивна, чтобы файл не разошёлся с тем, что выбрано.
@@ -353,6 +316,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       objectName: objectKey ? monthFilter?.object?.name ?? null : null,
       search: debouncedSearch,
       filters: columnFilters,
+      amountView: amountView.view,
     });
   };
 
@@ -386,9 +350,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onChange={object => onMonthFilterChange({ ...monthFilter, object })}
           />
         )}
-        {activeFilterCount > 0 && (
+        {filterCount > 0 && (
           <button type="button" className={styles.resetFilters} onClick={resetColumnFilters}>
-            Сбросить фильтры ({activeFilterCount})
+            Сбросить фильтры ({filterCount})
           </button>
         )}
         <div className={styles.actions}>
@@ -446,7 +410,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
       {data && (
         <>
           <PayrollTermsTable
-            rows={tableRows}
+            rows={amountView.viewRows}
             columns={columns}
             hiddenColumns={tableHiddenColumns}
             onEdit={onOpenEmployee}
@@ -463,6 +427,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             expandedColumns={isCalcScreen ? expandedColumns : undefined}
             onToggleExpand={isCalcScreen ? toggleExpanded : undefined}
             totalsStatus={totalsStatus}
+            amountView={isCalcScreen ? amountView.view : undefined}
+            onAmountSort={amountState.sortBy}
+            onOpenAmountFilter={amountState.openFilterFor}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (
@@ -491,6 +458,18 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           anchor={openFilter.anchor}
           onApply={applyColumnFilter}
           onClose={closeFilter}
+        />
+      )}
+
+      {amountState.openFilter && (
+        <ColumnValuesFilterPopover
+          key={amountState.openFilter.column}
+          label={amountView.filterLabel}
+          options={amountView.filterOptions}
+          selected={amountView.view.filters[amountState.openFilter.column] ?? []}
+          anchor={amountState.openFilter.anchor}
+          onApply={amountState.applyFilter}
+          onClose={amountState.closeFilter}
         />
       )}
 

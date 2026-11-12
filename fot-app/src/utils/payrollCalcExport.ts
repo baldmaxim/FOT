@@ -225,13 +225,15 @@ export interface IPayrollCalcExportParams {
   /** Поиск по ФИО, как он применён к строкам. */
   search: string;
   filters: IPayrollColumnFilters;
+  /** Фильтры столбцов сумм (на экране, payrollCalcView.ts) текстом; нет — ''. */
+  amountFilters?: string;
 }
 
 /** Снимок для xlsx: над таблицей — период, отдел, поиск, фильтры столбцов и дата выгрузки. */
 export const buildPayrollCalcExport = (params: IPayrollCalcExportParams): ITableExportSnapshot => {
   const isoDate = moscowTodayIso();
   const period = formatPaidPeriod(params.months);
-  const filtersText = describePayrollColumnFilters(params.filters);
+  const filtersText = [describePayrollColumnFilters(params.filters), params.amountFilters ?? ''].filter(Boolean).join('; ');
   const conditions = [
     `Период: ${period}`,
     `Отдел: ${params.departmentName ?? 'все отделы'}`,

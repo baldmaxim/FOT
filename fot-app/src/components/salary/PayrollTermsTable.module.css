@@ -53,8 +53,12 @@
 .colHousing  { width: 180px; }
 /* «Выплачено»: ширину по данным ставит usePayrollAccrualsColumnWidth через style */
 .colAccruals { width: 260px; }
-/* «Расчёты»: сумма до «12 345 678,90» и период под заголовком в две строки */
-.colDeductions { width: 150px; }
+/*
+ * «Расчёты»: сумма до «12 345 678,90» и период под заголовком в две строки. Столбцы с «+» («Удержания (1С)», «Доплаты»,
+ * «Удержания (ФОТ)») шире: в строке подписи ещё стрелка, воронка и «+».
+ */
+.colDeductions,
+.colCalcGroup { width: 176px; }
 /* Состав зарплаты: «КОМПЕНСАЦИЯ» 102px и паддинги; суммы до «12 345 678,90» + ⚠ */
 .colCalcRate      { width: 150px; }
 .colCalcTimesheet { width: 160px; }
@@ -264,6 +268,11 @@
   align-items: center;
   gap: 8px;
 }
+/* «+» в шапке со стрелкой и воронкой: зона нажатия «+» (−10px) не должна наезжать на воронку */
+.headExtra {
+  display: inline-flex;
+  margin-left: 10px;
+}
 .expandButton {
   position: relative;
   flex: none;
@@ -347,13 +356,16 @@
  * «Итого» «Расчётов» — подвал той же таблицы: столбцы совпадают сами, прокрутка вбок общая. Закреплён снизу обёртки, как
  * шапка сверху; в потоке таблицы он идёт после строк, поэтому в конце списка последняя строка не уходит под него.
  */
-.table tfoot { --totals-row-height: 40px; }
+.table tfoot { --totals-row-height: 32px; }
 .table tfoot td {
   position: sticky;
   bottom: 0;
   z-index: 2;
   height: var(--totals-row-height);
   box-sizing: border-box;
+  /* «+» (24px) у «Итого (посчитано)» укладывается в 32px вместе с рамкой */
+  padding-top: 3px;
+  padding-bottom: 3px;
   font-weight: 600;
   white-space: nowrap;
   background: var(--bg-secondary);
@@ -365,6 +377,12 @@
 .table tfoot td.groupTotal { background: var(--group-total-head); }
 /* Две строки «Итого»: первая закреплена над второй, вторая («Не посчитано») — светлее */
 .table tfoot tr:not(:last-child) td { bottom: var(--totals-row-height); }
+/* «Итого (посчитано)» и «+», открывающий «Не посчитано» */
+.totalsLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
 .table tfoot tr.totalsUncounted td {
   font-weight: 400;
   color: var(--text-secondary);
@@ -378,11 +396,14 @@
 
 @media (max-width: 768px) {
   .table td { height: 48px; }
-  .table tfoot { --totals-row-height: 48px; }
+  .table tfoot { --totals-row-height: 44px; }
   /* Столбец ФИО узкий: подпись строки «Итого» переносится, а не обрезается («Не посчитано, 913 чел.») */
   .table tfoot td.stickyName { white-space: normal; line-height: 1.2; }
   .paidButton { min-height: 44px; }
   .colNum { width: 44px; }
   .colName { width: 150px; }
+  /* Воронка на телефоне 28px */
+  .colDeductions,
+  .colCalcGroup { width: 188px; }
   .stickyName { left: 44px; }
 }

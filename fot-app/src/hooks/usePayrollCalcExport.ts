@@ -15,6 +15,8 @@ import {
 } from '../services/payrollService';
 import { triggerBlobDownload } from '../utils/download';
 import { buildPayrollCalcExport, type IPayrollCalcExportParams } from '../utils/payrollCalcExport';
+import { applyPayrollAmountView, describePayrollAmountFilters } from '../utils/payrollCalcView';
+import type { ITableView } from '../utils/tableView';
 import { calcColumnsQueryKey, calcPageRequests, mergeCalcColumns, type CalcQueryState } from '../utils/payrollCalcPages';
 import { SNAPSHOT_EXPORT_MAX_ROWS } from './useSnapshotExport';
 
@@ -22,12 +24,14 @@ import { SNAPSHOT_EXPORT_MAX_ROWS } from './useSnapshotExport';
 type CalcListPage = IPayrollTermsListResult & { paidMonths: PayrollPaidMonths | null };
 
 /** Что выбрано на экране в момент нажатия: загруженные порции и условия списка. */
-export interface IPayrollCalcExportRequest extends Omit<IPayrollCalcExportParams, 'rows' | 'months'> {
+export interface IPayrollCalcExportRequest extends Omit<IPayrollCalcExportParams, 'rows' | 'months' | 'amountFilters'> {
   pages: readonly CalcListPage[];
   months: PayrollPaidMonths;
   viewParams: IPayrollTermsViewParams;
   sort: PayrollSortKey;
   dir: PayrollSortDir;
+  /** Сортировка и фильтры столбцов сумм — на клиенте, как на экране (без скрытых столбцов). */
+  amountView: ITableView;
 }
 
 /** Порции, которых ещё нет на экране: тот же список, с курсора последней загруженной. */
@@ -79,12 +83,17 @@ export const usePayrollCalcExport = () => {
     if (exporting) return;
     setExporting(true);
     try {
-      const rows = await loadCalcRows(queryClient, await loadRemainingPages(request));
+      // Те же строки и в том же порядке, что на экране: фильтры и сортировка сумм — поверх выборки сервера.
+      const rows = applyPayrollAmountView(await loadCalcRows(queryClient, await loadRemainingPages(request)), request.amountView);
       if (rows.length > SNAPSHOT_EXPORT_MAX_ROWS) {
         toast.error(`Больше ${SNAPSHOT_EXPORT_MAX_ROWS} строк — сузьте фильтр`);
         return;
       }
-      const { blob, filename } = await payrollRegistryService.exportTable('calc')(buildPayrollCalcExport({ ...request, rows }));
+      const { blob, filename } = await payrollRegistryService.exportTable('calc')(buildPayrollCalcExport({
+        ...request,
+        rows,
+        amountFilters: describePayrollAmountFilters(request.amountView),
+      }));
       triggerBlobDownload(blob, filename);
     } catch (err) {
       toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось выгрузить таблицу');

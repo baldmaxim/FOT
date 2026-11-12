@@ -84,6 +84,12 @@ th:hover .filterButton,
 
 .filterActive { color: var(--primary); }
 
+/* Данные столбца ещё считаются: кнопки видны, но не нажимаются и не подсвечиваются */
+.sortButton:disabled,
+.filterButton:disabled { cursor: default; }
+.sortButton:disabled:not(.sortActive) .sortIcon,
+th:hover .filterButton:disabled:not(.filterActive) { opacity: 0.35; }
+
 /* Смартфоны и планшеты: воронка всегда видна (hover нет), тап-цель шире */
 @media (max-width: 768px) {
   .filterButton {

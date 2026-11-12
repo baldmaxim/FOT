@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactElement } from 'react';
+import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from 'lucide-react';
 
 import styles from './TableSortHeader.module.css';
@@ -15,6 +15,12 @@ interface ITableSortHeaderProps<K extends string> {
   className?: string;
   /** Подсказка заголовка. */
   title?: string;
+  /** Сортировка и фильтр недоступны (данные столбца ещё считаются). */
+  disabled?: boolean;
+  /** Рядом с воронкой, в строке подписи («+» раскрытия столбца). */
+  extra?: ReactNode;
+  /** Под подписью (период сумм). */
+  children?: ReactNode;
 }
 
 /**
@@ -22,7 +28,7 @@ interface ITableSortHeaderProps<K extends string> {
  * направление, другой столбец — по возрастанию) и воронка фильтра столбца.
  */
 export const TableSortHeader = <K extends string>({
-  sortKey, label, activeKey, dir, onSort, onOpenFilter, filterActive, className, title,
+  sortKey, label, activeKey, dir, onSort, onOpenFilter, filterActive, className, title, disabled = false, extra, children,
 }: ITableSortHeaderProps<K>): ReactElement => {
   const active = sortKey === activeKey;
   const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
@@ -41,6 +47,7 @@ export const TableSortHeader = <K extends string>({
           type="button"
           className={`${styles.sortButton}${active ? ` ${styles.sortActive}` : ''}`}
           onClick={() => onSort(sortKey)}
+          disabled={disabled}
           aria-label={`${label}: сортировать ${nextLabel}`}
         >
           <span className={styles.label}>{label}</span>
@@ -50,13 +57,16 @@ export const TableSortHeader = <K extends string>({
           type="button"
           className={`${styles.filterButton}${filterActive ? ` ${styles.filterActive}` : ''}`}
           onClick={handleFilter}
+          disabled={disabled}
           aria-label={`Фильтр: ${label}${filterActive ? ' (включён)' : ''}`}
           aria-haspopup="dialog"
           title={filterActive ? 'Фильтр включён' : 'Фильтр'}
         >
           <Filter size={11} aria-hidden="true" />
         </button>
+        {extra}
       </span>
+      {children}
     </th>
   );
 };
