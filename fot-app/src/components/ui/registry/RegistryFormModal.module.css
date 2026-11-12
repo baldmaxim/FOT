@@ -161,7 +161,7 @@
 .segment:disabled { cursor: default; }
 .segment:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* Галочка в окне (плановое удержание: «Другая сумма в последнем месяце») — тап-цель во всю строку, 44px. */
+/* Галочка в окне (плановое удержание: «Последний месяц») — тап-цель во всю строку, 44px. */
 .check {
   display: flex;
   align-items: center;
@@ -175,9 +175,6 @@
 }
 .check input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .check input:disabled { cursor: default; }
-/* Нет последнего месяца («Бессрочно», период в месяц): галочка бледная, нажатие показывает подсказку. */
-.check:has(input[aria-disabled='true']) { color: var(--text-muted); cursor: default; }
-.check input[aria-disabled='true'] { opacity: 0.5; cursor: default; }
 .check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .hint { margin: 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }

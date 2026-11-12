@@ -1,0 +1,42 @@
+/*
+ * Выбор одного месяца (MonthSelect): кнопка-поле — размеры, рамку и шрифт задаёт класс места (в окнах — .select
+ * окна), здесь только раскладка: месяц слева, стрелка справа. Панель и сетка — стили MonthsPicker.module.css.
+ */
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.invalid.invalid {
+  border-color: var(--error);
+}
+
+/* «Бессрочно» выбрано — как выбранный месяц сетки. */
+.emptyActive.emptyActive {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}

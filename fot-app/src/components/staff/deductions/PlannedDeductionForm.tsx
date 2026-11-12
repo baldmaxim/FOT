@@ -16,13 +16,14 @@ import {
   monthToAfterFromChange,
   parsePlannedDeduction,
   plannedFromMonthOptions,
-  plannedLastMonthAllowed,
+  plannedLastMonthPeriodError,
   plannedToMonthOptions,
   withKeptKind,
   type PlannedDeductionField,
 } from '../../../utils/staffDeductionForm';
 import { ClearableInput } from '../../ui/ClearableInput';
 import { EmployeeSearchField, type IEmployeeSearchCandidate } from '../../ui/EmployeeSearchField';
+import { MonthSelect } from '../../ui/MonthSelect';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 import { DeductionKindFields } from './DeductionKindFields';
@@ -54,14 +55,16 @@ const isNotEditable = (candidate: PlannedCandidate): boolean => candidate.can_ed
 /**
  * «Добавить сотрудника» и ✎ на вкладке «Плановые удержания» (кадры и «Справочник» «Зарплаты», миграция 357):
  * сотрудник, вид, подвид, сумма ₽/мес, «С месяца» и «По месяц» (пусто — бессрочно). В каждом месяце периода
- * удерживается вся сумма; галочка «Другая сумма в последнем месяце» (миграция 362) — в месяце «По месяц» своя сумма.
- * Галочка видна всегда (иначе её не найти при «Бессрочно» по умолчанию), но ставится, только если «По месяц» позже
- * «С месяца»; иначе нажатие показывает подсказку. Ошибка сервера (пересечение, «уже изменили») — под полями, ввод не
- * теряется.
+ * удерживается вся сумма; галочка «Последний месяц» (миграция 362) — в месяце «По месяц» своя сумма. Галочка
+ * ставится всегда; пока у периода нет последнего месяца («Бессрочно», период в месяц) — подсказка под ней, а
+ * «Сохранить» подсвечивает «По месяц». Месяцы выбираются сеткой (MonthSelect), не длинным списком. Ошибка сервера
+ * (пересечение, «уже изменили») — под полями, ввод не теряется.
  */
 export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction, kinds, api, raised, onClose, onSaved }) => {
   const errorId = useId();
   const lastMonthHintId = useId();
+  const monthFromLabelId = useId();
+  const monthToLabelId = useId();
   const isEdit = deduction !== undefined;
   const [currentMonth] = useState(() => moscowTodayIso().slice(0, 7));
   const [employee, setEmployee] = useState<PlannedCandidate | null>(null);
@@ -72,8 +75,6 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
   const [monthTo, setMonthTo] = useState(deduction?.month_to ?? '');
   const [lastMonth, setLastMonth] = useState(deduction?.last_month_amount != null);
   const [lastMonthAmount, setLastMonthAmount] = useState(rateAmountInputValue(deduction?.last_month_amount));
-  /** Нажали галочку при периоде без последнего месяца — подсказка; смена месяцев её прячет. */
-  const [lastMonthHint, setLastMonthHint] = useState(false);
   const [error, setError] = useState<{ field: PlannedDeductionField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -87,7 +88,9 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
     [monthFrom, currentMonth, deduction?.month_to],
   );
 
-  const lastMonthAllowed = plannedLastMonthAllowed(monthFrom, monthTo);
+  const periodError = plannedLastMonthPeriodError(monthFrom, monthTo);
+  // Та же ошибка после «Сохранить» уже видна внизу окна — подсказку под галочкой не дублируем.
+  const lastMonthHint = lastMonth && periodError !== null && error?.field !== 'month_to' ? periodError : null;
 
   const clearError = () => setError(null);
   const invalid = (field: PlannedDeductionField): true | undefined => (error?.field === field ? true : undefined);
@@ -105,16 +108,6 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
   const changeMonthFrom = (value: string) => {
     setMonthFrom(value);
     setMonthTo(current => monthToAfterFromChange(current, value));
-    setLastMonthHint(false);
-    clearError();
-  };
-
-  const changeLastMonth = (checked: boolean) => {
-    if (!lastMonthAllowed) {
-      setLastMonthHint(true);
-      return;
-    }
-    setLastMonth(checked);
     clearError();
   };
 
@@ -202,57 +195,52 @@ export const PlannedDeductionForm: FC<IPlannedDeductionFormProps> = ({ deduction
       </label>
 
       <div className={styles.dates}>
-        <label className={styles.field}>
-          <span className={styles.label}>С месяца</span>
-          <select
+        <div className={styles.field}>
+          <span id={monthFromLabelId} className={styles.label}>С месяца</span>
+          <MonthSelect
             className={styles.select}
             value={monthFrom}
-            onChange={event => changeMonthFrom(event.target.value)}
+            options={fromOptions}
+            onChange={changeMonthFrom}
             disabled={saving}
-            aria-invalid={invalid('month_from')}
-          >
-            {fromOptions.map(option => (
-              <option key={option} value={option}>{formatMonthLabel(option)}</option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.label}>По месяц</span>
-          <select
+            invalid={error?.field === 'month_from'}
+            labelledBy={monthFromLabelId}
+          />
+        </div>
+        <div className={styles.field}>
+          <span id={monthToLabelId} className={styles.label}>По месяц</span>
+          <MonthSelect
             className={styles.select}
             value={monthTo}
-            onChange={event => { setMonthTo(event.target.value); setLastMonthHint(false); clearError(); }}
+            options={toOptions}
+            emptyLabel="Бессрочно"
+            onChange={value => { setMonthTo(value); clearError(); }}
             disabled={saving}
-            aria-invalid={invalid('month_to')}
-          >
-            <option value="">Бессрочно</option>
-            {toOptions.map(option => (
-              <option key={option} value={option}>{formatMonthLabel(option)}</option>
-            ))}
-          </select>
-        </label>
+            invalid={error?.field === 'month_to'}
+            labelledBy={monthToLabelId}
+            describedBy={error?.field === 'month_to' ? errorId : undefined}
+          />
+        </div>
       </div>
 
       <div className={styles.field}>
         <label className={styles.check}>
-          {/* aria-disabled, а не disabled: нажатие при «Бессрочно» должно дойти и показать подсказку. */}
           <input
             type="checkbox"
-            checked={lastMonth && lastMonthAllowed}
-            onChange={event => changeLastMonth(event.target.checked)}
+            checked={lastMonth}
+            onChange={event => { setLastMonth(event.target.checked); clearError(); }}
             disabled={saving}
-            aria-disabled={lastMonthAllowed ? undefined : true}
-            aria-describedby={lastMonthHint && !lastMonthAllowed ? lastMonthHintId : undefined}
+            aria-describedby={lastMonthHint ? lastMonthHintId : undefined}
           />
-          <span>Другая сумма в последнем месяце</span>
+          <span>Последний месяц</span>
         </label>
-        {lastMonthHint && !lastMonthAllowed && (
-          <p id={lastMonthHintId} className={styles.hint}>Выберите «По месяц» позже «С месяца»</p>
-        )}
+        {lastMonthHint && <p id={lastMonthHintId} className={styles.hint}>{lastMonthHint}</p>}
       </div>
-      {lastMonthAllowed && lastMonth && (
+      {lastMonth && (
         <label className={styles.field}>
-          <span className={styles.label}>Сумма за {formatMonthLabel(monthTo)}, ₽</span>
+          <span className={styles.label}>
+            {periodError === null ? `Сумма за ${formatMonthLabel(monthTo)}, ₽` : 'Сумма за последний месяц, ₽'}
+          </span>
           <ClearableInput
             value={lastMonthAmount}
             onValueChange={value => { setLastMonthAmount(value); clearError(); }}

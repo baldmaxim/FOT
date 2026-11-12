@@ -8,6 +8,7 @@ import {
   parsePlannedDeduction,
   plannedFromMonthOptions,
   plannedLastMonthAllowed,
+  plannedLastMonthPeriodError,
   plannedToMonthOptions,
   withKeptKind,
 } from './staffDeductionForm';
@@ -38,13 +39,21 @@ describe('окно планового удержания', () => {
       plannedLastMonthAllowed('2026-11', '2026-11'),
       plannedLastMonthAllowed('2026-11', ''),
     ]).toEqual([true, false, false]);
+    expect([
+      plannedLastMonthPeriodError('2026-11', '2027-01'),
+      plannedLastMonthPeriodError('2026-11', '2026-11'),
+      plannedLastMonthPeriodError('2026-11', ''),
+    ]).toEqual([null, 'Период — минимум 2 месяца', 'Выберите «По месяц»']);
     const last = { ...draft, lastMonth: true, lastMonthAmount: '1 500,25' };
     expect(parsePlannedDeduction(last)).toMatchObject({ ok: true, payload: { amount: 5000.5, last_month_amount: 1500.25 } });
     // Галочка снята — суммы нет, даже если поле заполнено.
     expect(parsePlannedDeduction({ ...last, lastMonth: false })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
-    // Бессрочно или период в месяц — галочки на экране нет, её состояние не учитывается.
-    expect(parsePlannedDeduction({ ...last, monthTo: '' })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
-    expect(parsePlannedDeduction({ ...last, monthTo: '2026-11' })).toMatchObject({ ok: true, payload: { last_month_amount: null } });
+    // Галочка стоит, а последнего месяца нет — ошибка «По месяц», сумма молча не отбрасывается.
+    expect(parsePlannedDeduction({ ...last, monthTo: '' }))
+      .toEqual({ ok: false, field: 'month_to', message: 'Выберите «По месяц»' });
+    expect(parsePlannedDeduction({ ...last, monthTo: '2026-11' }))
+      .toEqual({ ok: false, field: 'month_to', message: 'Период — минимум 2 месяца' });
+    expect(parsePlannedDeduction({ ...draft, monthTo: '', lastMonth: false })).toMatchObject({ ok: true });
     for (const lastMonthAmount of ['', '0', '10,005', '5 000,50']) {
       expect(parsePlannedDeduction({ ...last, lastMonthAmount }), lastMonthAmount)
         .toMatchObject({ ok: false, field: 'last_month_amount' });

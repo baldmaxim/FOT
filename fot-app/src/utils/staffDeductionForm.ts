@@ -135,11 +135,17 @@ export const monthToAfterFromChange = (monthTo: string, monthFrom: string): stri
 );
 
 /**
- * Другая сумма в последнем месяце (миграция 362) — только если «По месяц» задан и позже «С месяца»: у бессрочного
- * последнего месяца нет, у периода в месяц он единственный. Сервер и БД проверяют то же.
+ * Почему у периода нет последнего месяца для своей суммы (миграция 362) — текст подсказки под галочкой
+ * «Последний месяц»; есть — null. У бессрочного последнего месяца нет, у периода в месяц он единственный. Сервер и
+ * БД проверяют то же.
  */
+export const plannedLastMonthPeriodError = (monthFrom: string, monthTo: string): string | null => {
+  if (monthTo === '') return 'Выберите «По месяц»';
+  return monthTo > monthFrom ? null : 'Период — минимум 2 месяца';
+};
+
 export const plannedLastMonthAllowed = (monthFrom: string, monthTo: string): boolean => (
-  monthTo !== '' && monthTo > monthFrom
+  plannedLastMonthPeriodError(monthFrom, monthTo) === null
 );
 
 export type PlannedDeductionField = 'employee' | 'kind' | 'month_from' | 'month_to' | 'amount' | 'last_month_amount';
@@ -150,8 +156,8 @@ export type PlannedDeductionParse =
 
 /**
  * Окно планового удержания: та же проверка, что на сервере, — ошибка видна до запроса. monthTo '' — бессрочно.
- * lastMonth — галочка «Другая сумма в последнем месяце»; при периоде без последнего месяца её нет на экране — не
- * учитывается (сумма последнего месяца — null).
+ * lastMonth — галочка «Последний месяц»: стоит, а последнего месяца у периода нет — ошибка поля «По месяц» (сумму не
+ * отбрасываем молча); снята — суммы последнего месяца нет.
  */
 export const parsePlannedDeduction = (draft: {
   selected: boolean;
@@ -175,7 +181,9 @@ export const parsePlannedDeduction = (draft: {
     return { ok: false, field: 'month_to', message: '«По месяц» не может быть раньше «С месяца»' };
   }
   let lastMonthAmount: number | null = null;
-  if (draft.lastMonth && plannedLastMonthAllowed(draft.monthFrom, draft.monthTo)) {
+  if (draft.lastMonth) {
+    const periodError = plannedLastMonthPeriodError(draft.monthFrom, draft.monthTo);
+    if (periodError) return { ok: false, field: 'month_to', message: periodError };
     const parsed = parsePositiveAmount(draft.lastMonthAmount ?? '');
     if ('error' in parsed) return { ok: false, field: 'last_month_amount', message: parsed.error };
     // Сравнение в копейках: ввод — не больше двух знаков.
