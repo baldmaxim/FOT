@@ -113,6 +113,12 @@ const kindTotal = (cents: SummaryCents, kind: PayrollPaidTotalKind): number | nu
   return total;
 };
 
+/** «Всего начислено» и «Всего удержано» строки сервера в копейках — как в столбцах «Свода»; null — сумм нет. */
+export const summaryRowKindTotals = (row: IPayrollSummaryRow): { accrued: number | null; deducted: number | null } => {
+  const cents = rowCents(row);
+  return { accrued: kindTotal(cents, 'accrued'), deducted: kindTotal(cents, 'deducted') };
+};
+
 /** «К выплате» — «Всего начислено» минус «Всего удержано»; null — сумм нет ни в одном разделе. */
 const payoutTotal = (cents: SummaryCents): number | null => {
   const accrued = kindTotal(cents, 'accrued');

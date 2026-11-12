@@ -70,7 +70,7 @@ export const tableSnapshotsSchema = (sheetCount: number) => z.object({
 });
 
 /** Книга → xlsx в ответ; имя файла очищается от служебных символов, расширение — ровно одно. */
-async function sendWorkbookXlsx(res: Response, workbook: ExcelJS.Workbook, fileName: string): Promise<void> {
+export async function sendWorkbookXlsx(res: Response, workbook: ExcelJS.Workbook, fileName: string): Promise<void> {
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   const safeName = `${sanitizeExportFileName(fileName.replace(/\.xlsx$/i, ''))}.xlsx`;
 

@@ -11,6 +11,9 @@
  * режим табелирования месяца). Объект месяца «Не определён» — строке «Свода» объект по часам месяца
  * (payroll-summary-object.service.ts). Категория — по режиму табелирования месяца (payroll-staff-category.ts), не из
  * условий оплаты и не по отделу: объект строки «Офис» — «Офис», рабочий табеля — «Рабочие», остальные — «ИТР».
+ *
+ * «Выплачено» строки — ведомости выплаты 1С («Перечислено (1С)») её пар за месяцы начисления: только для выгрузки
+ * «Свода» в виде ведомости 1С. Состав строк не меняет: выплата человеку вне «Свода» строки не создаёт.
  */
 import { performance } from 'node:perf_hooks';
 
@@ -28,7 +31,7 @@ import {
 import { resolveSummaryObjects, type ISummaryObjectsStats } from './payroll-summary-object.service.js';
 import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import type { StaffCategory } from './payroll-terms.service.js';
-import { centsToAmount, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
+import { centsToAmount, toCents, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
 
 export interface IPayrollSummaryScope {
   contractorRootId: string | null;
@@ -51,6 +54,8 @@ export interface IPayrollSummaryRow {
   amounts: Record<string, string>;
   /** Что не посчитано хотя бы за один из месяцев строки; пусто — всё посчитано. */
   issues: SummaryIssue[];
+  /** Выплачено по ведомостям 1С за месяцы строки (NUMERIC строкой); выплат нет — null. */
+  paid_out: string | null;
 }
 
 export interface IPayrollSummary {
@@ -65,6 +70,26 @@ interface IPaidRow {
   item: string;
   amount: string;
 }
+
+interface IPayoutRow {
+  employee_id: number;
+  month: string;
+  amount: string;
+}
+
+/**
+ * Выплаты 1С по сотруднику и месяцу начисления (ПериодРегистрации): ведомости одного месяца сложены. Только строки,
+ * сопоставленные с сотрудником, — как «Выплаты на карту (1С)» «Расчётов» (cardPayoutsJoinSql).
+ */
+const loadPayouts = (months: string[]): Promise<IPayoutRow[]> => query<IPayoutRow>(
+  `SELECT l.employee_id, to_char(d.period_month, 'YYYY-MM') AS month, SUM(l.amount)::text AS amount
+     FROM payroll_1c_payout_lines l
+     JOIN payroll_1c_payout_documents d ON d.id = l.document_id
+    WHERE l.employee_id IS NOT NULL
+      AND d.period_month = ANY($1::date[])
+    GROUP BY l.employee_id, d.period_month`,
+  [months.map(month => `${month}-01`)],
+);
 
 interface IEmployeeRow {
   id: number;
@@ -246,9 +271,11 @@ const buildSummary = async (
     : [...new Set(paidAll.map(row => row.month))].sort();
   if (selectedMonths.length === 0) return { months: [], rows: [] };
 
-  const [roster, extras] = await Promise.all([
+  // Выплаты 1С — только за месяцы «Свода» и только к его строкам (кандидатов не добавляют); время — в шаге «состав».
+  const [roster, extras, payouts] = await Promise.all([
     loadSummaryRoster(selectedMonths, scope.contractorRootId),
     loadSummaryExtras(selectedMonths),
+    loadPayouts(selectedMonths),
   ]);
   lap('rosterMs');
 
@@ -340,7 +367,17 @@ const buildSummary = async (
     )
     : []).map(row => [row.id, row.name]));
 
-  const rows = new Map<string, Omit<IPayrollSummaryRow, 'issues'> & { cents: Map<string, number>; issueSet: Set<SummaryIssue> }>();
+  const payoutCents = new Map<string, number>();
+  for (const row of payouts) {
+    const key = pairKey(Number(row.employee_id), row.month);
+    payoutCents.set(key, (payoutCents.get(key) ?? 0) + toCents(row.amount));
+  }
+
+  const rows = new Map<string, Omit<IPayrollSummaryRow, 'issues' | 'paid_out'> & {
+    cents: Map<string, number>;
+    issueSet: Set<SummaryIssue>;
+    paidOut: number | null;
+  }>();
   for (const pair of pairs) {
     const key = pairKey(pair.employeeId, pair.month);
     const item = attribution.get(key);
@@ -364,22 +401,26 @@ const buildSummary = async (
         amounts: {},
         cents: new Map(),
         issueSet: new Set(),
+        paidOut: null,
       };
       rows.set(rowKey, target);
     }
     const amounts = amountsByPair.get(key)!;
     for (const [itemCode, value] of amounts.cents) target.cents.set(itemCode, (target.cents.get(itemCode) ?? 0) + value);
     for (const issue of amounts.issues) target.issueSet.add(issue);
+    const paidOut = payoutCents.get(key);
+    if (paidOut !== undefined) target.paidOut = (target.paidOut ?? 0) + paidOut;
   }
 
   lap('buildMs');
   return {
     months,
     rows: [...rows.values()]
-      .map(({ cents, issueSet, ...row }) => ({
+      .map(({ cents, issueSet, paidOut, ...row }) => ({
         ...row,
         amounts: Object.fromEntries([...cents].map(([item, value]) => [item, centsToAmount(value)])),
         issues: [...issueSet],
+        paid_out: paidOut === null ? null : centsToAmount(paidOut),
       }))
       .sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru')
         || left.full_name.localeCompare(right.full_name, 'ru')

@@ -36,7 +36,9 @@ export interface IRegistryMonths {
   onChange: (months: string[]) => void;
 }
 
-interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows' | 'visibleRows' | 'view' | 'onViewChange' | 'loading' | 'footer'> {
+/** Snapshot — тело запроса «Экспорта»; своё у «Свода» (ведомость 1С), у остальных — снимок таблицы. */
+interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
+  extends Omit<IRegistryTableProps<Row>, 'rows' | 'visibleRows' | 'view' | 'onViewChange' | 'loading' | 'footer'> {
   /** undefined — ещё не загружены. */
   rows: Row[] | undefined;
   isLoading: boolean;
@@ -48,8 +50,8 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
   fioSearch?: boolean;
   searchPlaceholder?: string;
   /** Снимок xlsx видимых строк (с итогом, если он есть) и его отправка на сервер. */
-  buildExport: (rows: ReadonlyArray<Row>, totals?: IRegistryTotals['export']) => ITableExportSnapshot;
-  sendExport: (snapshot: ITableExportSnapshot) => Promise<{ blob: Blob; filename: string }>;
+  buildExport: (rows: ReadonlyArray<Row>, totals?: IRegistryTotals['export']) => Snapshot;
+  sendExport: (snapshot: Snapshot) => Promise<{ blob: Blob; filename: string }>;
   /** Передан — «Добавить сотрудника» (право «Редактирование»). */
   onAdd?: () => void;
   /** Подпись кнопки добавления, если она добавляет не сотрудника вообще: «Разовая доплата» в «Доплате». */
@@ -71,11 +73,11 @@ interface IRegistryPanelProps<Row> extends Omit<IRegistryTableProps<Row>, 'rows'
  * «Добавить сотрудника»; ошибка загрузки — с «Повторить». «Проживание» и «Удержания» кадров, таблицы «Справочника»
  * и «Свод» «Зарплаты».
  */
-export const RegistryPanel = <Row,>({
+export const RegistryPanel = <Row, Snapshot = ITableExportSnapshot>({
   rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
   addLabel = 'Добавить сотрудника',
   initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, ...tableProps
-}: IRegistryPanelProps<Row>): ReactElement => {
+}: IRegistryPanelProps<Row, Snapshot>): ReactElement => {
   const { columns } = tableProps;
   const [search, setSearch] = useState('');
   const [view, setView] = useState<ITableView>(initialView);

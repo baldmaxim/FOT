@@ -12,9 +12,9 @@ export const SNAPSHOT_EXPORT_MAX_ROWS = 5000;
  * «Экспорт» клиентской таблицы (общежитие, таблицы «Справочника» «Зарплаты»): ровно видимые строки —
  * снимок собирает build, xlsx оформляет сервер (send). Больше предела снимка — сообщение без запроса.
  */
-export const useSnapshotExport = <Row,>(
-  build: (rows: ReadonlyArray<Row>) => ITableExportSnapshot,
-  send: (snapshot: ITableExportSnapshot) => Promise<{ blob: Blob; filename: string }>,
+export const useSnapshotExport = <Row, Snapshot = ITableExportSnapshot>(
+  build: (rows: ReadonlyArray<Row>) => Snapshot,
+  send: (snapshot: Snapshot) => Promise<{ blob: Blob; filename: string }>,
 ) => {
   const toast = useToast();
   const [exporting, setExporting] = useState(false);

@@ -3,10 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../../services/payrollSummaryService';
-import { payrollRegistryService } from '../../../services/payrollRegistryService';
 import { registryMonthsParam } from '../../../utils/payrollRegistries';
 import {
-  buildSummarySnapshot,
   filterSummaryByCategory,
   filterSummaryByDepartment,
   groupSummaryByObject,
@@ -22,6 +20,7 @@ import {
   type ISummaryObjectRow,
   type SummaryCategory,
 } from '../../../utils/payrollSummary';
+import { buildSummaryTreeSnapshot } from '../../../utils/payrollSummaryExport';
 import type { ITableView } from '../../../utils/tableView';
 import { ModalShell } from '../../ui/ModalShell';
 import { RegistryPanel, type RegistryVisibleOf } from '../../ui/registry/RegistryPanel';
@@ -36,7 +35,7 @@ interface IPayrollSummaryModalProps {
   onClose: () => void;
 }
 
-const sendExport = payrollRegistryService.exportTable('summary');
+const sendExport = payrollSummaryService.exportTree;
 const OBJECTS_VIEW: ITableView = { sort: 'object_name', dir: 'asc', filters: {} };
 const objectKey = (row: ISummaryObjectRow): string => row.object_key;
 const objectName = (row: ISummaryObjectRow): string => row.object_name;
@@ -45,6 +44,8 @@ const objectName = (row: ISummaryObjectRow): string => row.object_name;
  * Окно «Свод»: суммы за выбранные месяцы по объектам — автоматический расчёт, загруженное из 1С его заменяет. Строки
  * объекты, столбцы статьи, «Начислено», «Удержано» и строка «Итого». Сверху — отдел и Все / ИТР / Офис / Рабочие; справа
  * от поиска — «К выплате» всех четырёх по отделу, поиску и фильтрам. Клик по объекту — окно с его сотрудниками.
+ * «Экспорт» — xlsx в виде сводной ведомости 1С (объект → категория → отдел → сотрудник, «Выплачено» и «Остаток»)
+ * по видимым объектам в порядке экрана; экран сам не меняется.
  */
 export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onClose }) => {
   const titleId = useId();
@@ -83,15 +84,15 @@ export const PayrollSummaryModal: FC<IPayrollSummaryModalProps> = ({ months, onC
   const columns = useMemo(() => summaryObjectColumns(items, withNotCounted), [items, withNotCounted]);
   const totals = useMemo(() => summaryObjectTotals(items), [items]);
   const buildExport = useMemo(
-    () => buildSummarySnapshot({
-      title: 'Свод',
-      subject: departmentLabel ? `${departmentLabel} ${categoryLabel}` : categoryLabel,
-      periodLabel,
-      categoryLabel,
+    () => (visibleObjects: ReadonlyArray<ISummaryObjectRow>) => buildSummaryTreeSnapshot({
+      rows: categoryRows ?? [],
+      objectKeys: visibleObjects.map(objectKey),
+      months: query.data?.months ?? months,
       departmentLabel,
-      columns,
+      categoryLabel,
+      allCategories: category === 'all',
     }),
-    [categoryLabel, departmentLabel, periodLabel, columns],
+    [categoryRows, query.data, months, departmentLabel, categoryLabel, category],
   );
   const categoryTables = useMemo(
     () => SUMMARY_CATEGORIES.map(option => ({ ...option, ...summaryCategoryTable(departmentRows ?? [], option.key) })),

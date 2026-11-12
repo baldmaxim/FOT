@@ -31,6 +31,8 @@ export interface IPayrollSummaryRow {
   amounts: Partial<Record<SummaryItemCode, string>>;
   /** Что не посчитано хотя бы за один месяц строки; нет у старого бэкенда. */
   issues?: SummaryIssue[];
+  /** Выплачено по ведомостям 1С за месяцы строки (NUMERIC строкой), выплат нет — null; нет у старого бэкенда. */
+  paid_out?: string | null;
 }
 
 export interface IPayrollSummary {
@@ -40,6 +42,34 @@ export interface IPayrollSummary {
 }
 
 interface IApiResponse<T> { success: boolean; data: T }
+
+/** Строка «Свода» для выгрузки в виде ведомости 1С: дерево и суммы узлов собирает сервер. */
+export interface IPayrollSummaryTreeLeaf {
+  object_key: string;
+  object_name: string;
+  category: StaffCategory;
+  /** null — «Без отдела». */
+  department: string | null;
+  employee_id: number;
+  full_name: string;
+  /** «Всего начислено» / «Всего удержано» строки, NUMERIC строкой; сумм нет — null. */
+  accrued: string | null;
+  deducted: string | null;
+  /** Нет поля — старый бэкенд «Свода»: выплат не знаем, «Выплачено» и «Остаток» в файле пустые. */
+  paid_out?: string | null;
+  /** Причины «Не посчитано» через запятую; null — всё посчитано. */
+  not_counted: string | null;
+}
+
+export interface IPayrollSummaryTreeSnapshot {
+  file_name: string;
+  title: string;
+  subtitle: string;
+  /** Вкладка «Все»: «Выплачено» ещё и по рабочим и ИТР. */
+  split_paid: boolean;
+  /** Объекты — в порядке экрана. */
+  leaves: IPayrollSummaryTreeLeaf[];
+}
 
 export const PAYROLL_SUMMARY_KEYS = {
   months: ['payroll-summary', 'months'],
@@ -57,4 +87,12 @@ export const payrollSummaryService = {
       `/payroll/summary?months=${encodeURIComponent(monthsParam)}`,
       { signal, timeoutMs: 180_000 },
     )).data,
+
+  /** xlsx «Свода» в виде сводной ведомости 1С: объект → категория → отдел → сотрудник. */
+  exportTree: (snapshot: IPayrollSummaryTreeSnapshot): Promise<{ blob: Blob; filename: string }> =>
+    apiClient.download('/payroll/summary/export', snapshot.file_name, {
+      method: 'POST',
+      body: JSON.stringify(snapshot),
+      timeoutMs: 120_000,
+    }),
 };

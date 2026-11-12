@@ -154,6 +154,61 @@ describe('loadPayrollSummary — кого считать', () => {
   });
 });
 
+describe('loadPayrollSummary — «Выплачено» (ведомости 1С)', () => {
+  const EMPLOYEES = [
+    { id: 265, full_name: 'Башкиров', org_department_id: 'dep-1', employment_status: 'active', position: null },
+    { id: 300, full_name: 'Новиков', org_department_id: 'dep-1', employment_status: 'active', position: null },
+  ];
+  const mockPayouts = (payouts: Array<{ employee_id: number; month: string; amount: string }>) => {
+    pg.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM payroll_paid_amounts')) {
+        return [{ employee_id: 265, month: '2026-08', item: 'contract', amount: '170000.00' }];
+      }
+      if (sql.includes('FROM payroll_1c_payout_lines')) return payouts;
+      if (sql.includes('FROM employees')) return EMPLOYEES;
+      return [];
+    });
+  };
+  const payoutsCall = () => pg.query.mock.calls.find(([sql]) => String(sql).includes('FROM payroll_1c_payout_lines'));
+
+  beforeEach(() => {
+    summaryObject.resolveSummaryObjects.mockResolvedValue(new Map());
+  });
+
+  it('ведомости месяца складываются в копейках; только сопоставленные строки и месяцы «Свода»', async () => {
+    mockPayouts([
+      { employee_id: 265, month: '2026-08', amount: '1000.10' },
+      { employee_id: 265, month: '2026-08', amount: '500.05' },
+    ]);
+
+    const summary = await loadPayrollSummary(INPUT);
+
+    expect(summary.rows.map(row => [row.employee_id, row.paid_out])).toEqual([[265, '1500.15']]);
+    const [sql, params] = payoutsCall()!;
+    expect(String(sql)).toContain('l.employee_id IS NOT NULL');
+    expect(String(sql)).toContain('GROUP BY l.employee_id, d.period_month');
+    expect(params).toEqual([['2026-08-01']]);
+  });
+
+  it('выплат нет — paid_out null, состав и суммы строк прежние', async () => {
+    mockPayouts([]);
+
+    const summary = await loadPayrollSummary(INPUT);
+
+    expect(summary.rows).toEqual([expect.objectContaining({ employee_id: 265, amounts: { contract: '170000.00' }, paid_out: null })]);
+  });
+
+  it('выплата человеку вне «Свода» строки не создаёт и расчёт ему не заказывает', async () => {
+    mockPayouts([{ employee_id: 300, month: '2026-08', amount: '4603.01' }]);
+
+    const summary = await loadPayrollSummary(INPUT);
+
+    expect(summary.rows.map(row => [row.employee_id, row.paid_out])).toEqual([[265, null]]);
+    expect(summaryCalc.calcSummaryMonths.mock.calls[0][0]).toEqual(new Map());
+    expect(attribution.attributeMonths.mock.calls[0][0]).toEqual([{ employeeId: 265, month: '2026-08' }]);
+  });
+});
+
 describe('замер «Свода» по шагам', () => {
   it('шаги и счётчики заполняются; в лог — только дольше 2 с', async () => {
     let clock = 0;

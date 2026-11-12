@@ -1,6 +1,7 @@
 /**
  * «Свод» на «Расчётах» — суммы по объектам и категориям за выбранные месяцы: расчёт ФОТ, загруженное из 1С его заменяет.
- * Только чтение; xlsx — через POST /payroll/registry/summary/export (снимок экрана).
+ * Только чтение; xlsx «Свода» — POST /payroll/summary/export (ведомость как в 1С), окна объекта — через
+ * POST /payroll/registry/summary/export (снимок экрана).
  */
 import type { Response } from 'express';
 
@@ -12,7 +13,12 @@ import {
   loadPayrollSummary,
   summaryServerTiming,
 } from '../services/payroll/payroll-summary.service.js';
+import {
+  buildSummaryTreeWorkbook,
+  summaryTreeSnapshotSchema,
+} from '../services/payroll/payroll-summary-tree-excel.service.js';
 import { handlePayrollZodError, parsePayrollMonthsQuery, payrollMonthStarts } from './payroll-dictionary.helpers.js';
+import { sendWorkbookXlsx } from './table-snapshot-export.js';
 
 /** GET /api/payroll/summary/months — месяцы, за которые в охвате пользователя есть «Оплачено». */
 const months = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -46,4 +52,19 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   }
 };
 
-export const payrollSummaryController = { months, get };
+/**
+ * POST /api/payroll/summary/export — xlsx «Свода» в виде сводной ведомости 1С: строки «Свода» видимых на экране
+ * объектов (листья), дерево и суммы собирает сервер.
+ */
+const exportTree = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const snapshot = summaryTreeSnapshotSchema.parse(req.body);
+    await sendWorkbookXlsx(res, buildSummaryTreeWorkbook(snapshot), snapshot.file_name);
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('payrollSummary.export error:', err);
+    res.status(500).json({ success: false, error: 'Не удалось выгрузить свод' });
+  }
+};
+
+export const payrollSummaryController = { months, get, exportTree };
