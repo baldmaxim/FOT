@@ -49,9 +49,12 @@ export const usePayrollAmountView = () => {
     () => setView(prev => setColumnFilter(prev, 'calc_net', [PAYROLL_AMOUNT_EMPTY_TEXT])),
     [],
   );
+  /** «←» у «Не посчитано» в «Итого»: снова все — снимается только фильтр «Суммы», прочие остаются. */
+  const hideUncounted = useCallback(() => setView(prev => setColumnFilter(prev, 'calc_net', null)), []);
 
   return {
     view, openFilter, sortBy, openFilterFor, closeFilter, applyFilter, clearColumn, clearSort, resetFilters, showUncounted,
+    hideUncounted,
   };
 };
 

@@ -38,7 +38,7 @@ import {
   type PayrollTableColumns,
 } from '../../utils/payrollColumns';
 import { emptyPayrollColumns } from '../../utils/payrollCalcColumns';
-import { isPayrollAmountViewColumn } from '../../utils/payrollCalcView';
+import { isPayrollAmountViewColumn, PAYROLL_AMOUNT_EMPTY_TEXT } from '../../utils/payrollCalcView';
 import type { IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { formatPaidPeriod, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import type { ICalcMonthFilter } from '../../utils/payrollViews';
@@ -237,6 +237,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   // Пустые столбцы считаются по всем строкам, а не по отобранным: фильтр «—» не должен скрыть свой же столбец.
   const amountView = usePayrollAmountViewRows(amountState, tableRows, tableHiddenColumns);
   const amountSortActive = amountView.sortActive;
+  // В таблице только «не посчитанные» (клик по «Не посчитано» или «Сумма: —» в воронке): в «Итого» — «←» назад.
+  const uncountedFilter = amountView.view.filters.calc_net;
+  const uncountedShown = isCalcScreen && uncountedFilter?.length === 1 && uncountedFilter[0] === PAYROLL_AMOUNT_EMPTY_TEXT;
   const clearAmountSort = amountState.clearSort;
 
   /**
@@ -432,6 +435,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onOpenAmountFilter={amountState.openFilterFor}
             // Список «Не посчитано» — фильтром «Суммы»: у скрытого столбца фильтр не действует, подпись не нажимается.
             onShowUncounted={isCalcScreen && !tableHiddenColumns.has('calc_net') ? amountState.showUncounted : undefined}
+            onHideUncounted={uncountedShown ? amountState.hideUncounted : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

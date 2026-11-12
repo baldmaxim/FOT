@@ -84,6 +84,8 @@ interface IPayrollTermsTableProps {
   onOpenAmountFilter?: (key: PayrollTableColumn, anchor: HTMLElement) => void;
   /** Клик по «Не посчитано, N чел.» в «Итого» (фильтр «Сумма: —»); нет — подпись не нажимается. */
   onShowUncounted?: () => void;
+  /** В таблице только «не посчитанные»: в «Итого» — «←» назад ко всем (подвал есть и при 0 строк). */
+  onHideUncounted?: () => void;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
@@ -146,6 +148,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onAmountSort,
   onOpenAmountFilter,
   onShowUncounted,
+  onHideUncounted,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -459,13 +462,14 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
             </>
           )}
         </tbody>
-        {totalsStatus && rows.length > 0 && (
+        {totalsStatus && (rows.length > 0 || onHideUncounted) && (
           <PayrollTotalsRow
             rows={rows}
             columns={tableColumns}
             status={totalsStatus}
             groupCellClass={groupCellClass}
             onShowUncounted={onShowUncounted}
+            onHideUncounted={onHideUncounted}
           />
         )}
       </table>

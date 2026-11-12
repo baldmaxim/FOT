@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type FC, type ReactNode } from 'react';
-import { Minus, Plus } from 'lucide-react';
+import { ArrowLeft, Minus, Plus } from 'lucide-react';
 
 import type { IPayrollTermsRow } from '../../services/payrollService';
 import { cx } from '../../utils/motion';
@@ -23,6 +23,11 @@ interface IPayrollTotalsRowProps {
   groupCellClass: (key: string) => string | undefined;
   /** Клик по «Не посчитано, N чел.» — в таблице только эти люди; нет — подпись не нажимается. */
   onShowUncounted?: () => void;
+  /**
+   * В таблице только «не посчитанные» (после клика по «Не посчитано»): одна строка «← Не посчитано, N чел.», «←» — снова
+   * все. Без этого все строки — «не посчитанные», и подвал был бы просто «Итого» без пути назад.
+   */
+  onHideUncounted?: () => void;
 }
 
 /** Открыта ли строка «Не посчитано» — удобство браузера; по умолчанию скрыта (решение 12.11.2026). */
@@ -46,7 +51,7 @@ const saveUncountedOpen = (open: boolean): void => {
 };
 
 interface ITotalsLine {
-  key: 'all' | 'counted' | 'uncounted';
+  key: 'all' | 'counted' | 'uncounted' | 'uncountedOnly';
   label: string;
   totals: Map<string, IPayrollColumnTotal>;
   className?: string;
@@ -60,7 +65,9 @@ interface ITotalsLine {
  * «Сумма» − «Выплаты на карту» = «Остаток», и «Не посчитано, N чел.» — суммы 1С людей без «Суммы». Вторая занимает
  * место, поэтому по умолчанию скрыта: её открывает «+» у «Итого (посчитано)».
  */
-export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, columns, status, groupCellClass, onShowUncounted }) => {
+export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({
+  rows, columns, status, groupCellClass, onShowUncounted, onHideUncounted,
+}) => {
   const [uncountedOpen, setUncountedOpen] = useState(loadUncountedOpen);
   const toggleUncounted = () => {
     const next = !uncountedOpen;
@@ -68,8 +75,15 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
     saveUncountedOpen(next);
   };
 
+  const uncountedOnly = Boolean(onHideUncounted);
   const lines = useMemo<ITotalsLine[]>(() => {
-    const groups = status.rows === 'ready' && status.calc === 'ready' ? splitPayrollTotalsRows(rows) : null;
+    const ready = status.rows === 'ready' && status.calc === 'ready';
+    if (uncountedOnly) {
+      // Пока порции и расчёт идут, число было бы частью выборки — без него.
+      const label = ready ? `Не посчитано, ${rows.length.toLocaleString('ru-RU')} чел.` : 'Не посчитано';
+      return [{ key: 'uncountedOnly', label, totals: payrollColumnTotals(rows, columns) }];
+    }
+    const groups = ready ? splitPayrollTotalsRows(rows) : null;
     if (!groups) return [{ key: 'all', label: 'Итого', totals: payrollColumnTotals(rows, columns) }];
     return [
       { key: 'counted', label: 'Итого (посчитано)', totals: payrollColumnTotals(groups.counted, columns) },
@@ -80,7 +94,7 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
         className: styles.totalsUncounted,
       },
     ];
-  }, [rows, columns, status.rows, status.calc]);
+  }, [rows, columns, status.rows, status.calc, uncountedOnly]);
 
   const renderAmount = (total: IPayrollColumnTotal): ReactNode => {
     const state = payrollTotalState(status, total.fromCalc);
@@ -99,7 +113,19 @@ export const PayrollTotalsRow: FC<IPayrollTotalsRowProps> = memo(({ rows, column
         <tr key={line.key} className={line.className}>
           <td className={`${styles.stickyNum} ${styles.cellNum}`} />
           <td className={styles.stickyName}>
-            {line.key === 'counted' && uncounted ? (
+            {line.key === 'uncountedOnly' && onHideUncounted ? (
+              <span className={styles.totalsLabel}>
+                <button
+                  type="button"
+                  className={styles.expandButton}
+                  aria-label="Назад ко всем сотрудникам"
+                  onClick={onHideUncounted}
+                >
+                  <ArrowLeft size={14} aria-hidden="true" />
+                </button>
+                {line.label}
+              </span>
+            ) : line.key === 'counted' && uncounted ? (
               <span className={styles.totalsLabel}>
                 {line.label}
                 <button
