@@ -327,6 +327,13 @@ export interface IOpenRehireInput {
   createdBy: string | null;
   /** Первый рабочий день после восстановления (YYYY-MM-DD). Не передан — сегодня по МСК. */
   effectiveDate?: string;
+  /** Источник операции. Не передан — 'manual'. */
+  source?: TLifecycleOperationSource;
+  /**
+   * false — только перенос карточки в отдел, без разблокировки в Sigur (профиль пропуска
+   * подрядчика: доступ открывает одобрение заявки). Не передан — как раньше, с разблокировкой.
+   */
+  sigurAccessRequired?: boolean;
 }
 
 /**
@@ -361,7 +368,7 @@ export async function openRehireOperation(input: IOpenRehireInput): Promise<ILif
     return insertOperation(client, {
       employeeId: input.employeeId,
       kind: 'rehire',
-      source: 'manual',
+      source: input.source ?? 'manual',
       baseRevision: emp.lifecycle_revision,
       sigurEmployeeId: emp.sigur_employee_id,
       fromDepartmentId: emp.org_department_id,
@@ -370,7 +377,7 @@ export async function openRehireOperation(input: IOpenRehireInput): Promise<ILif
       effectiveDate: input.effectiveDate ?? moscowTodayIso(),
       dismissalDate: emp.dismissal_date,
       sigurMoveRequired: hasSigur,
-      sigurAccessRequired: hasSigur,
+      sigurAccessRequired: hasSigur && input.sigurAccessRequired !== false,
       createdBy: input.createdBy,
     });
   });

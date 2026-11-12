@@ -38,6 +38,16 @@ const h = vi.hoisted(() => ({
   fetchIdleContractorPasses: vi.fn(),
 }));
 
+// Профиль пропуска перед одобрением: вне h, чтобы mockReset в describe не стирал дефолт.
+const pp = vi.hoisted(() => ({
+  ensureProfile: vi.fn(),
+  findUnissued: vi.fn(),
+}));
+vi.mock('../services/contractor-pass-profile.service.js', () => ({
+  ensurePassProfileReady: pp.ensureProfile,
+  findUnissuedPassByProfile: pp.findUnissued,
+}));
+
 vi.mock('../services/org-wide-account-access.service.js', () => ({
   hasOrgWideAccountAccess: h.hasOrgWideAccountAccess,
 }));
@@ -140,6 +150,14 @@ vi.mock('../services/employee-cache.service.js', () => ({
 import { contractorAdminController } from './contractor-admin.controller.js';
 import { hasContractorPageGrant } from './contractor-access-gate.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+
+// По умолчанию профиль пропуска в порядке: id не меняется, пропуск не «невыданный контейнер».
+beforeEach(() => {
+  pp.ensureProfile.mockReset().mockImplementation(async (pass: { sigurEmployeeId: number }) => ({
+    sigurEmployeeId: pass.sigurEmployeeId, recreated: false, restored: null,
+  }));
+  pp.findUnissued.mockReset().mockResolvedValue(null);
+});
 
 const makeRes = () => {
   const res = {
@@ -324,6 +342,76 @@ describe('contractorAdminController.approveSubmission', () => {
     expect(body.data.status).toBe('partially_applied');
     expect(body.data.failed).toBe(1);
     expect(body.data.errors[0]).toContain('p1');
+  });
+
+  it('профиль пропуска пересоздан → новый id в карте, имени и журнале', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check
+    h.query.mockResolvedValueOnce([]); // toRemove
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'submitted', pass_sigur_id: 11, holder_name: 'Ширинов Н.О.',
+        access_point_names: null, card_uid: '73,26448', pass_number: '6579', org_department_id: 'org-1' },
+    ]);
+    pp.ensureProfile.mockResolvedValueOnce({ sigurEmployeeId: 88, recreated: true, restored: 'rehire' });
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(pp.ensureProfile).toHaveBeenCalledWith(
+      { id: 'p1', passNumber: '6579', sigurEmployeeId: 11, orgDepartmentId: 'org-1' },
+      'admin-1',
+      'external',
+    );
+    expect(h.assignCard).toHaveBeenCalledWith(88, ['73,26448'], undefined, 'external', true, {
+      expectedHolderName: 'Ширинов Н.О.', reassignPolicy: 'safe-only',
+    });
+    expect(h.updEmp).toHaveBeenCalledWith(88, { name: 'Ширинов Н.О.', blocked: false }, 'external');
+    expect(h.updEmp).not.toHaveBeenCalledWith(11, expect.anything(), expect.anything());
+    expect(h.logWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      entity_id: '88',
+      details: { action: 'unblock', source: 'contractor_approve', pass_id: 'p1' },
+    }));
+    expect((res.body as { data: { applied: number } }).data.applied).toBe(1);
+  });
+
+  it('пересоздание профиля не удалось → пропуск не выдан, карта не трогается', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'submitted', pass_sigur_id: 11, holder_name: 'A',
+        access_point_names: null, card_uid: '73,26448', pass_number: '6579', org_department_id: 'org-1' },
+    ]);
+    pp.ensureProfile.mockRejectedValueOnce(new Error('нужна ручная проверка'));
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(h.assignCard).not.toHaveBeenCalled();
+    expect(h.updEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { status: string; errors: string[] } };
+    expect(body.data.status).toBe('partially_applied');
+    expect(body.data.errors).toEqual(['pass p1: нужна ручная проверка']);
+  });
+
+  it('legacy-удаление: профиль невыданного пропуска не удаляется и пропуск не отзывается', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check
+    h.query.mockResolvedValueOnce([{ id: 'r-rm', sigur_employee_id: 151351 }]); // toRemove
+    h.query.mockResolvedValueOnce([]); // toRename
+    pp.findUnissued.mockResolvedValueOnce({ id: 'p-6579', pass_number: '6579' });
+    let txUsed = false;
+    h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => {
+      txUsed = true;
+      return fn({ query: vi.fn().mockResolvedValue({ rows: [] }) });
+    });
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(pp.findUnissued).toHaveBeenCalledWith(151351);
+    expect(h.delEmp).not.toHaveBeenCalled();
+    expect(txUsed).toBe(false); // ни отзыва пропуска, ни транзакции удаления
+    const rosterUpd = h.execute.mock.calls.find(c => String(c[0]).includes('UPDATE contractor_roster'));
+    expect(String(rosterUpd?.[0])).toContain("state = 'removed'");
+    expect(rosterUpd?.[1]).toEqual(['r-rm']);
   });
 
   it('гейт по карте: провал привязки → pass не applied, updateSigurEmployee не зовётся', async () => {
@@ -552,6 +640,73 @@ describe('contractorAdminController.decideSubmission — срок действи
     // INSERT батча получил activated_sigur_ids = [11]
     const insertCall = h.queryOne.mock.calls.find(c => String(c[0]).includes('contractor_activation_batches'));
     expect(insertCall?.[1]?.[2]).toEqual([11]);
+  });
+
+  it('профиль пропуска пересоздан → новый id в карте, имени, точках, журнале и activated_sigur_ids', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' }) // submission
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' })       // counts
+      .mockResolvedValueOnce({ id: 'batch-1' });                                               // INSERT batch
+    h.query
+      .mockResolvedValueOnce([
+        { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A', pass_number: '6579',
+          submission_id: 'sub-1', access_point_names: null, card_uid: '73,26448', induction_passed: true,
+          org_department_id: 'org-1' },
+      ])
+      .mockResolvedValueOnce([ // findDuplicatesForNames: дубль → батч с activated_sigur_ids
+        { pass_id: 'p-old', sigur_employee_id: '22', full_name: 'A', pass_number: '0050',
+          access_point_names: ['КПП 1'], card_uid: '1,2', place_name: 'ООО Рога', employee_id: 500 },
+      ])
+      .mockResolvedValueOnce([]); // empRows
+    pp.ensureProfile.mockResolvedValueOnce({ sigurEmployeeId: 77, recreated: true, restored: 'rehire' });
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved', expires_at: '2027-01-15' }] }),
+      res as never,
+    );
+
+    expect(pp.ensureProfile).toHaveBeenCalledWith(
+      { id: PASS_ID, passNumber: '6579', sigurEmployeeId: 11, orgDepartmentId: 'org-1' },
+      'admin-1',
+      'external',
+    );
+    const expIso = new Date('2027-01-15T23:59:59').toISOString();
+    expect(h.assignCard).toHaveBeenCalledWith(77, ['73,26448'], expIso, 'external', true, {
+      expectedHolderName: 'A', reassignPolicy: 'safe-only',
+    });
+    expect(h.updEmp).toHaveBeenCalledWith(77, { name: 'A', blocked: false }, 'external');
+    expect(h.replaceAP).toHaveBeenCalledWith(77, [], 'external');
+    expect(h.logWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      entity_id: '77',
+      details: { action: 'unblock', source: 'contractor_approve', pass_id: PASS_ID },
+    }));
+    const insertCall = h.queryOne.mock.calls.find(c => String(c[0]).includes('contractor_activation_batches'));
+    expect(insertCall?.[1]?.[2]).toEqual([77]);
+  });
+
+  it('пересоздание профиля не удалось → пропуск не выдан, карта не трогается', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '1', approved: '0', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A', pass_number: '6579',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '73,26448', induction_passed: true,
+        org_department_id: 'org-1' },
+    ]);
+    pp.ensureProfile.mockRejectedValueOnce(new Error('нужна ручная проверка'));
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }] }),
+      res as never,
+    );
+
+    expect(h.assignCard).not.toHaveBeenCalled();
+    expect(h.updEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { applied: number; failed: number } };
+    expect(body.data.applied).toBe(0);
+    expect(body.data.failed).toBe(1);
   });
 
   it('пустой выбор точек → replaceAP вызван с [] (очистка всех точек)', async () => {
@@ -2496,5 +2651,59 @@ describe('contractorAdminController.exportMonitorDocuments', () => {
       expect.anything(), 'admin-1', 'CONTRACTOR_DOCUMENTS_EXPORTED',
       { entityType: 'org_department', entityId: ORG, details: { org_name: 'АЛЬЯНС ООО', rows: 1 } },
     );
+  });
+});
+
+describe('contractorAdminController.approveRemoval', () => {
+  const ROSTER_ID = '33333333-3333-3333-3333-333333333333';
+  const makeRemovalReq = () => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { rosterId: ROSTER_ID },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.execute.mockResolvedValue(1);
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('строка «Пропуск N» невыданного пропуска → убрана из списка без увольнения', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      id: ROSTER_ID, state: 'pending_remove', sigur_employee_id: '151351',
+      removal_requested_at: '2026-10-13', full_name: 'Пропуск 6579',
+    });
+    pp.findUnissued.mockResolvedValueOnce({ id: 'p-6579', pass_number: '6579' });
+    const res = makeRes();
+    await contractorAdminController.approveRemoval(makeRemovalReq(), res as never);
+
+    expect(pp.findUnissued).toHaveBeenCalledWith(151351);
+    expect(h.applyDismissal).not.toHaveBeenCalled();
+    expect(h.loadLifecycle).not.toHaveBeenCalled();
+    const rosterUpd = h.execute.mock.calls.find(c => String(c[0]).includes('UPDATE contractor_roster'));
+    expect(String(rosterUpd?.[0])).toContain("state = 'removed'");
+    expect(rosterUpd?.[1]).toEqual([ROSTER_ID]);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('человек (не профиль невыданного пропуска) → увольнение как раньше', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({
+        id: ROSTER_ID, state: 'pending_remove', sigur_employee_id: '150001',
+        removal_requested_at: '2026-10-13', full_name: 'Иванов Иван',
+      })
+      .mockResolvedValueOnce({ id: 500 }); // employees by sigur_employee_id
+    h.loadLifecycle.mockResolvedValueOnce({ employment_status: 'active', hire_date: '2020-01-01' });
+    h.applyDismissal.mockResolvedValueOnce({ fromDepartmentId: 'org-1' });
+    const res = makeRes();
+    await contractorAdminController.approveRemoval(makeRemovalReq(), res as never);
+
+    expect(h.applyDismissal).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId: 500, dismissalDate: '2026-10-13', source: 'contractor_admin',
+    }));
+    expect(res.statusCode).toBe(200);
   });
 });

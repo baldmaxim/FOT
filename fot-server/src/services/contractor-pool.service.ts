@@ -509,19 +509,34 @@ const markProvisioningFailed = async (id: string, error: string): Promise<void> 
 const findPoolProfileInList = (
   employees: Record<string, unknown>[],
   passNumber: string,
-): number | null => {
+): number | null => findPoolProfileIdsInList(employees, passNumber)[0] ?? null;
+
+/** Все профили Sigur пропуска по естественному ключу FOT-POOL:{n} или имени «Пропуск N». */
+export const findPoolProfileIdsInList = (
+  employees: Record<string, unknown>[],
+  passNumber: string,
+): number[] => {
   const wantDesc = `FOT-POOL:${passNumber}`;
   const wantName = `Пропуск ${passNumber}`;
+  const ids: number[] = [];
   for (const e of employees) {
     const desc = String(readField(e, 'description', 'Description') ?? '');
     const name = String(readField(e, 'name', 'NAME', 'Name', 'fullName', 'full_name') ?? '').trim();
     if (desc === wantDesc || name === wantName) {
       const id = normalizeSigurInt(readField(e, 'id', 'ID', 'Id'));
-      if (id) return id;
+      if (id && !ids.includes(id)) ids.push(id);
     }
   }
-  return null;
+  return ids;
 };
+
+/** Профиль-контейнер пропуска: «Пропуск N», заблокирован, примечание FOT-POOL:N. */
+export const buildPoolProfileInput = (passNumber: string, departmentId: number) => ({
+  name: `Пропуск ${passNumber}`,
+  departmentId,
+  description: `FOT-POOL:${passNumber}`,
+  blocked: true,
+});
 
 /**
  * PROVISION одной зарезервированной строки: профиль Sigur (reuse/lookup/create)
@@ -560,12 +575,10 @@ const provisionOnePoolPass = async (
         sigurEmployeeId = await ctx.resolveProfile(row.passNumber);
       }
       if (sigurEmployeeId == null) {
-        const profile = await createSigurEmployee({
-          name: `Пропуск ${row.passNumber}`,
-          departmentId: ctx.poolDeptId,
-          description: `FOT-POOL:${row.passNumber}`,
-          blocked: true,
-        }, ctx.connection);
+        const profile = await createSigurEmployee(
+          buildPoolProfileInput(row.passNumber, ctx.poolDeptId),
+          ctx.connection,
+        );
         sigurEmployeeId = profile.sigurEmployeeId;
       }
       // Фиксируем ссылку на профиль СРАЗУ — до привязки карты, чтобы при сбое

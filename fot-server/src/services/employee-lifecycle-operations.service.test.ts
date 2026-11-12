@@ -276,6 +276,24 @@ describe('openRehireOperation', () => {
     expect(insert.params.slice(10, 12)).toEqual([true, true]);
   });
 
+  it('профиль пропуска: source и перенос без разблокировки (sigur_access_required=false)', async () => {
+    const calls = routeTx((sql) => {
+      if (sql.includes('FOR UPDATE') && sql.includes('FROM employees')) return { rows: [firedRow()], rowCount: 1 };
+      if (sql.includes('FROM employee_lifecycle_operations')) return { rows: [], rowCount: 0 };
+      if (sql.includes('INSERT INTO employee_lifecycle_operations')) return { rows: [baseOp({ kind: 'rehire' })], rowCount: 1 };
+      return undefined;
+    });
+
+    await openRehireOperation({
+      employeeId: 77, targetDepartmentId: 'dept-2', targetSigurDepartmentId: 42, createdBy: 'admin-1',
+      source: 'contractor_admin', sigurAccessRequired: false,
+    });
+
+    const insert = calls.find(c => c.sql.includes('INSERT INTO employee_lifecycle_operations'))!;
+    expect(insert.params.slice(0, 3)).toEqual([77, 'rehire', 'contractor_admin']);
+    expect(insert.params.slice(10, 12)).toEqual([true, false]); // перенос да, разблокировка нет
+  });
+
   it('выбранная дата восстановления записывается в effective_date операции', async () => {
     const calls = routeTx((sql) => {
       if (sql.includes('FOR UPDATE') && sql.includes('FROM employees')) return { rows: [firedRow()], rowCount: 1 };
@@ -918,6 +936,17 @@ describe('runOperation — rehire', () => {
     const evt = tx.find(c => c.sql.includes('INSERT INTO employee_dismissal_events'))!;
     expect(evt.sql).toContain('true, false'); // rehired=true, applied_from_scheduled=false
     expect(evt.params).toEqual([77, '2026-05-10', '2026-05-10', 'admin-1', 'op-r']);
+  });
+
+  it('без разблокировки (профиль пропуска): только перенос, unblock не зовётся, зеркало активно', async () => {
+    finalizeOk();
+
+    const result = await runOperation(rehireOp({ sigur_access_required: false }), OWNER);
+
+    expect(result.outcome).toBe('applied');
+    expect(h.updateEmployee).toHaveBeenCalledWith(555, { departmentId: 42 }, undefined);
+    expect(h.unblockEmployee).not.toHaveBeenCalled();
+    expect(h.changeDepartment).toHaveBeenCalledWith(77, 'dept-2', expect.objectContaining({ lockDepartment: false }));
   });
 
   it('404 на карточку при живом отделе → auto-detach: шаг записан, unblock/syncLinked пропущены, финализация с sigur_employee_id=NULL', async () => {

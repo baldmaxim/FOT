@@ -73,6 +73,10 @@ import {
 import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
 import { enqueueRevoke, computeSubmissionStatus } from '../services/contractor-pool.service.js';
 import {
+  ensurePassProfileReady,
+  findUnissuedPassByProfile,
+} from '../services/contractor-pass-profile.service.js';
+import {
   applyDismissalImmediately,
   loadEmployeeLifecycleRow,
   getHttpErrorStatus,
@@ -795,6 +799,22 @@ export const contractorAdminController = {
       }
       if (roster.sigur_employee_id == null) {
         res.status(409).json({ success: false, error: 'У сотрудника нет привязки к Sigur — увольнение невозможно' });
+        return;
+      }
+
+      // Строка «Пропуск N» — профиль невыданного пропуска, а не человек: увольнение
+      // унесло бы его в «Уволенные» Sigur, и следующее «Открыть» падало бы на 422.
+      // Строку убираем из списка, профиль и пропуск не трогаем.
+      const unissued = await findUnissuedPassByProfile(Number(roster.sigur_employee_id));
+      if (unissued) {
+        await execute(
+          `UPDATE contractor_roster SET state = 'removed', updated_at = now() WHERE id = $1::uuid`,
+          [rosterId],
+        );
+        console.log(
+          `[approveRemoval] roster ${rosterId}: профиль ${roster.sigur_employee_id} — пропуск ${unissued.pass_number}, без увольнения`,
+        );
+        res.json({ success: true, data: { roster_id: rosterId, employee_id: null, dismissal_date: null } });
         return;
       }
 
@@ -1860,6 +1880,19 @@ export const contractorAdminController = {
       );
       for (const row of toRemove) {
         try {
+          // Профиль невыданного пропуска — контейнер, а не человек: не удаляем и не отзываем.
+          const unissued = await findUnissuedPassByProfile(Number(row.sigur_employee_id));
+          if (unissued) {
+            await execute(
+              `UPDATE contractor_roster SET state = 'removed', updated_at = now() WHERE id = $1::uuid`,
+              [row.id],
+            );
+            console.log(
+              `[contractor-approve] roster ${row.id}: профиль ${row.sigur_employee_id} — пропуск ${unissued.pass_number}, не удаляется`,
+            );
+            applied += 1;
+            continue;
+          }
           if (!dryRun) {
             try {
               await deleteSigurEmployee(row.sigur_employee_id, connection);
@@ -1894,10 +1927,12 @@ export const contractorAdminController = {
       const toRename = await query<{
         pass_id: string; pass_status: string; pass_sigur_id: number | null;
         holder_name: string; access_point_names: string[] | null; card_uid: string | null;
+        pass_number: string; org_department_id: string | null;
       }>(
         `SELECT p.id AS pass_id, p.status AS pass_status,
                 p.sigur_employee_id AS pass_sigur_id,
-                p.holder_name, p.access_point_names, p.card_uid
+                p.holder_name, p.access_point_names, p.card_uid,
+                p.pass_number, p.org_department_id
            FROM contractor_passes p
           WHERE p.submission_id = $1::uuid
             AND p.status IN ('submitted', 'blocked')
@@ -1910,20 +1945,33 @@ export const contractorAdminController = {
           failures.push(`pass ${row.pass_id}: профиль не создан в Sigur`);
           continue;
         }
+        // Актуальный профиль пропуска: удалённый в Sigur пересоздаётся (новый id).
+        let passSigurId = Number(row.pass_sigur_id);
         try {
           if (!dryRun) {
             // Карта обязана быть привязана: иначе пропуск нельзя активировать.
             if (!row.card_uid) {
               throw new Error('нет UID карты');
             }
-            await assignSigurEmployeeCardBinding(row.pass_sigur_id, [row.card_uid], undefined, connection, true, {
+            // Профиль мог быть удалён или «уволен» в Sigur — привести в порядок до карты.
+            const profile = await ensurePassProfileReady(
+              {
+                id: row.pass_id,
+                passNumber: row.pass_number,
+                sigurEmployeeId: passSigurId,
+                orgDepartmentId: row.org_department_id,
+              },
+              req.user.id,
+              connection,
+            );
+            passSigurId = profile.sigurEmployeeId;
+            await assignSigurEmployeeCardBinding(passSigurId, [row.card_uid], undefined, connection, true, {
               expectedHolderName: row.holder_name ?? undefined,
               reassignPolicy: 'safe-only',
             });
 
             // Разблокировка — только под локом профиля и с проверкой ЧС внутри него:
             // иначе одобрение сняло бы блокировку только что внесённого человека.
-            const passSigurId = row.pass_sigur_id as number;
             await withSigurProfileGuard(passSigurId, () => updateSigurEmployee(
               passSigurId,
               { name: row.holder_name ?? undefined, blocked: false },
@@ -1934,7 +1982,7 @@ export const contractorAdminController = {
               const resolved = await resolveAccessPointNamesToIds(names, connection);
               if (resolved.accessPointIds.length > 0) {
                 await replaceSigurEmployeeAccessPoints(
-                  row.pass_sigur_id,
+                  passSigurId,
                   resolved.accessPointIds,
                   connection,
                 );
@@ -1969,7 +2017,7 @@ export const contractorAdminController = {
                 user_id: req.user.id,
                 action: 'UPDATE_EMPLOYEE',
                 entity_type: 'sigur_employee',
-                entity_id: String(row.pass_sigur_id),
+                entity_id: String(passSigurId),
                 details: { action: 'unblock', source: 'contractor_approve', pass_id: row.pass_id },
               });
             }
@@ -2901,9 +2949,10 @@ export const contractorAdminController = {
         access_point_names: string[] | null;
         card_uid: string | null;
         pass_number: string; induction_passed: boolean;
+        org_department_id: string | null;
       }>(
         `SELECT id, status, sigur_employee_id, holder_name, submission_id, access_point_names,
-                card_uid, pass_number, induction_passed
+                card_uid, pass_number, induction_passed, org_department_id
            FROM contractor_passes
           WHERE submission_id = $1::uuid AND id = ANY($2::uuid[])`,
         [submissionId, body.decisions.map(d => d.pass_id)],
@@ -2981,6 +3030,8 @@ export const contractorAdminController = {
           const itemExpIso = new Date(`${itemExp}T23:59:59`).toISOString();
           // Резолв точек доступа (приоритет — из decision, иначе из пропуска).
           const names = dec.access_point_names ?? pass.access_point_names ?? [];
+          // Актуальный профиль пропуска: удалённый в Sigur пересоздаётся (новый id).
+          let passSigurId = Number(pass.sigur_employee_id);
           try {
             let resolvedIds: number[] = [];
             if (!dryRun && names.length > 0) {
@@ -2997,8 +3048,20 @@ export const contractorAdminController = {
               if (!pass.card_uid) {
                 throw new Error('нет UID карты');
               }
+              // Профиль мог быть удалён или «уволен» в Sigur — привести в порядок до карты.
+              const profile = await ensurePassProfileReady(
+                {
+                  id: pass.id,
+                  passNumber: pass.pass_number,
+                  sigurEmployeeId: passSigurId,
+                  orgDepartmentId: pass.org_department_id,
+                },
+                req.user.id,
+                connection,
+              );
+              passSigurId = profile.sigurEmployeeId;
               const cardBind = await assignSigurEmployeeCardBinding(
-                pass.sigur_employee_id,
+                passSigurId,
                 [pass.card_uid],
                 itemExpIso,
                 connection,
@@ -3007,15 +3070,14 @@ export const contractorAdminController = {
               );
               if (cardBind.reassigned && cardBind.previousSigurEmployeeId) {
                 localWarnings.push(
-                  `pass ${pass.id}: карта перенесена с профиля ${cardBind.previousSigurEmployeeId} → ${pass.sigur_employee_id}`,
+                  `pass ${pass.id}: карта перенесена с профиля ${cardBind.previousSigurEmployeeId} → ${passSigurId}`,
                 );
                 console.log(
-                  `[contractor-approve] card reassigned pass=${pass.id} from=${cardBind.previousSigurEmployeeId} to=${pass.sigur_employee_id}`,
+                  `[contractor-approve] card reassigned pass=${pass.id} from=${cardBind.previousSigurEmployeeId} to=${passSigurId}`,
                 );
               }
 
               // См. комментарий в approveSubmission: лок профиля + проверка ЧС.
-              const passSigurId = pass.sigur_employee_id as number;
               await withSigurProfileGuard(passSigurId, () => updateSigurEmployee(
                 passSigurId,
                 { name: pass.holder_name ?? undefined, blocked: false },
@@ -3025,7 +3087,7 @@ export const contractorAdminController = {
               // ставим ровно их. Непустой, но всё не сопоставилось (names>0, resolvedIds=0) →
               // НЕ трогаем текущие, остаётся только warning выше.
               if (names.length === 0 || resolvedIds.length > 0) {
-                await replaceSigurEmployeeAccessPoints(pass.sigur_employee_id, resolvedIds, connection);
+                await replaceSigurEmployeeAccessPoints(passSigurId, resolvedIds, connection);
               }
             }
 
@@ -3054,7 +3116,7 @@ export const contractorAdminController = {
                   user_id: req.user.id,
                   action: 'UPDATE_EMPLOYEE',
                   entity_type: 'sigur_employee',
-                  entity_id: String(pass.sigur_employee_id),
+                  entity_id: String(passSigurId),
                   details: { action: 'unblock', source: 'contractor_approve', pass_id: pass.id },
                 });
               }
@@ -3069,7 +3131,7 @@ export const contractorAdminController = {
             return {
               kind: 'applied',
               passId: pass.id,
-              sigurId: pass.sigur_employee_id != null ? Number(pass.sigur_employee_id) : null,
+              sigurId: passSigurId,
               name: pass.holder_name ?? null,
               warnings: localWarnings,
             };
