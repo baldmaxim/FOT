@@ -56,36 +56,39 @@ export const normalizePayrollColumnFilters = (filters: IPayrollColumnFilters): I
   const name = filters.text?.name?.trim().slice(0, MAX_PAYROLL_FILTER_TEXT);
   if (name) result.text = { name };
   if (filters.contract === 'gph') result.contract = 'gph';
+  if (filters.status === 'fired') result.status = 'fired';
   return result;
 };
 
 /** '' — фильтров нет (параметр cf не отправляется). */
 export const serializePayrollColumnFilters = (filters: IPayrollColumnFilters): string => {
   const normalized = normalizePayrollColumnFilters(filters);
-  return normalized.values || normalized.text || normalized.contract ? JSON.stringify(normalized) : '';
+  return normalized.values || normalized.text || normalized.contract || normalized.status ? JSON.stringify(normalized) : '';
 };
 
 export const countActivePayrollColumnFilters = (filters: IPayrollColumnFilters): number => {
   const normalized = normalizePayrollColumnFilters(filters);
-  return Object.keys(normalized.values ?? {}).length + (normalized.text?.name ? 1 : 0) + (normalized.contract ? 1 : 0);
+  return Object.keys(normalized.values ?? {}).length + (normalized.text?.name ? 1 : 0) + (normalized.contract ? 1 : 0)
+    + (normalized.status ? 1 : 0);
 };
 
 export const isPayrollColumnFilterActive = (filters: IPayrollColumnFilters, column: PayrollSortKey): boolean => (
   column === 'name'
-    ? Boolean(filters.text?.name?.trim()) || filters.contract === 'gph'
+    ? Boolean(filters.text?.name?.trim()) || filters.contract === 'gph' || filters.status === 'fired'
     : (filters.values?.[column]?.length ?? 0) > 0
 );
 
-/** «Сотрудник»: текст «Содержит» и галочка «Только ГПХ». */
+/** «Сотрудник»: текст «Содержит», галочки «Только ГПХ» и «Только уволенные» (последняя — только в «Расчётах»). */
 export interface IPayrollNameFilter {
   name: string;
   gph: boolean;
+  fired?: boolean;
 }
 
 /** Значение фильтра столбца: список значений, «Сотрудник» или null — снять фильтр столбца. */
 export type PayrollColumnFilterValue = (string | null)[] | IPayrollNameFilter | null;
 
-/** Фильтр одного столбца; у «Сотрудника» null снимает и текст, и галочку «Только ГПХ». */
+/** Фильтр одного столбца; у «Сотрудника» null снимает и текст, и обе галочки. */
 export const setPayrollColumnFilter = (
   filters: IPayrollColumnFilters,
   column: PayrollSortKey,
@@ -97,6 +100,7 @@ export const setPayrollColumnFilter = (
       ...filters,
       text: { name: nameFilter?.name ?? '' },
       contract: nameFilter?.gph ? 'gph' : undefined,
+      status: nameFilter?.fired ? 'fired' : undefined,
     });
   }
   const list = Array.isArray(value) ? value : [];

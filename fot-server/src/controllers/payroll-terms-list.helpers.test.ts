@@ -127,6 +127,8 @@ describe('parsePayrollColumnFilters', () => {
     expect(parsePayrollColumnFilters(JSON.stringify(filters))).toEqual({ ok: true, filters });
     const gph = { text: { name: 'ов' }, contract: 'gph' };
     expect(parsePayrollColumnFilters(JSON.stringify(gph))).toEqual({ ok: true, filters: gph });
+    const fired = { contract: 'gph', status: 'fired' };
+    expect(parsePayrollColumnFilters(JSON.stringify(fired))).toEqual({ ok: true, filters: fired });
   });
 
   it('неизвестные столбцы, лишние ключи, пустые и слишком большие списки — ошибка', () => {
@@ -145,6 +147,10 @@ describe('parsePayrollColumnFilters', () => {
       JSON.stringify({ contract: 'labor' }),
       JSON.stringify({ contract: true }),
       JSON.stringify({ contract: ['gph'] }),
+      // «Только уволенные» — только 'fired'.
+      JSON.stringify({ status: 'active' }),
+      JSON.stringify({ status: true }),
+      JSON.stringify({ status: ['fired'] }),
       'x'.repeat(8193),
     ];
     for (const raw of bad) expect(parsePayrollColumnFilters(raw).ok, raw.slice(0, 60)).toBe(false);
@@ -210,6 +216,18 @@ describe('appendPayrollColumnFilters', () => {
 
     const excluded: string[] = [];
     appendPayrollColumnFilters(excluded, [], { text: { name: 'ов' }, contract: 'gph' }, { exclude: 'name' });
+    expect(excluded).toEqual([]);
+  });
+
+  it('«Только уволенные» — условие по статусу без параметров, вместе с ГПХ — оба; exclude name снимает', () => {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    appendPayrollColumnFilters(where, params, { contract: 'gph', status: 'fired' });
+    expect(where).toEqual(['is_gph', "employment_status = 'fired'"]);
+    expect(params).toEqual([]);
+
+    const excluded: string[] = [];
+    appendPayrollColumnFilters(excluded, [], { status: 'fired' }, { exclude: 'name' });
     expect(excluded).toEqual([]);
   });
 });

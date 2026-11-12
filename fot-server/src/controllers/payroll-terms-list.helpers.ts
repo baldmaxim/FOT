@@ -156,6 +156,8 @@ const columnFiltersSchema = z.object({
   text: z.object({ name: z.string().max(MAX_TEXT_LENGTH).optional() }).strict().optional(),
   /** Галочка «Только ГПХ» в окне фильтра «Сотрудник» (миграция 352): колонка is_gph, см. appendPayrollColumnFilters. */
   contract: z.literal('gph').optional(),
+  /** Галочка «Только уволенные» там же, только в «Расчётах» (уволенные есть только в их выборке): employment_status scoped. */
+  status: z.literal('fired').optional(),
 }).strict();
 
 export type IPayrollColumnFilters = z.infer<typeof columnFiltersSchema>;
@@ -212,5 +214,10 @@ export function appendPayrollColumnFilters(
   // is_gph — колонка scoped, та же, что у пометки «ГПХ» под ФИО: в «Расчётах» — за выбранные месяцы, иначе на дату.
   if (filters.contract === 'gph' && exclude !== 'name') {
     whereParts.push('is_gph');
+  }
+
+  // Уволенные — те же, что с подписью «Уволен» под ФИО: employment_status колонка scoped.
+  if (filters.status === 'fired' && exclude !== 'name') {
+    whereParts.push("employment_status = 'fired'");
   }
 }

@@ -62,6 +62,23 @@ describe('payrollColumnFilters', () => {
     expect(setPayrollColumnFilter(filters, 'name', null)).toEqual({});
   });
 
+  it('«Только уволенные» в фильтре «Сотрудник»: вместе с ГПХ и текстом; null снимает всё', () => {
+    let filters = setPayrollColumnFilter({}, 'name', { name: '', gph: false, fired: true });
+    expect(filters).toEqual({ status: 'fired' });
+    expect(JSON.parse(serializePayrollColumnFilters(filters))).toEqual({ status: 'fired' });
+    expect(isPayrollColumnFilterActive(filters, 'name')).toBe(true);
+    expect(countActivePayrollColumnFilters(filters)).toBe(1);
+
+    filters = setPayrollColumnFilter(filters, 'name', { name: 'Абд', gph: true, fired: true });
+    expect(filters).toEqual({ text: { name: 'Абд' }, contract: 'gph', status: 'fired' });
+    expect(countActivePayrollColumnFilters(filters)).toBe(3);
+
+    expect(setPayrollColumnFilter(filters, 'name', { name: 'Абд', gph: true, fired: false }))
+      .toEqual({ text: { name: 'Абд' }, contract: 'gph' });
+    expect(setPayrollColumnFilter(filters, 'position', ['Маляр']).status).toBe('fired');
+    expect(setPayrollColumnFilter(filters, 'name', null)).toEqual({});
+  });
+
   it('ГПХ строки: is_gph сервера важнее договора на дату; без поля (старый бэкенд) — по contract_type', () => {
     expect(isPayrollGphRow({ is_gph: true, contract_type: 'labor' })).toBe(true);
     expect(isPayrollGphRow({ is_gph: false, contract_type: 'gph' })).toBe(false);

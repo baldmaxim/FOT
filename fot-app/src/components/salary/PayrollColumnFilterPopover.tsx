@@ -31,19 +31,22 @@ interface IPayrollColumnFilterPopoverProps {
   viewParams: IPayrollColumnValuesParams;
   /** Кнопка-воронка, под которой открывается окно. */
   anchor: HTMLElement;
-  /** Список значений, «Сотрудник» (текст и «Только ГПХ») или null — снять фильтр столбца. */
+  /** «Расчёты»: у «Сотрудника» есть галочка «Только уволенные» (в «Условиях оплаты» уволенных нет). */
+  allowFired?: boolean;
+  /** Список значений, «Сотрудник» (текст и галочки) или null — снять фильтр столбца. */
   onApply: (column: PayrollSortKey, value: PayrollColumnFilterValue) => void;
   onClose: () => void;
 }
 
 /** Редактор фильтра одного столбца; применяется только по «Применить». */
 export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = ({
-  column, label, filters, viewParams, anchor, onApply, onClose,
+  column, label, filters, viewParams, anchor, allowFired = false, onApply, onClose,
 }) => {
   const valueColumn = isPayrollValueFilterColumn(column) ? column : null;
   const [selected, setSelected] = useState<(string | null)[]>(() => (valueColumn ? filters.values?.[valueColumn] ?? [] : []));
   const [text, setText] = useState(() => filters.text?.name ?? '');
   const [gph, setGph] = useState(() => filters.contract === 'gph');
+  const [fired, setFired] = useState(() => filters.status === 'fired');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300).trim();
   const dismiss = useOverlayDismiss(onClose);
@@ -86,7 +89,7 @@ export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = 
 
   const apply = () => {
     if (valueColumn) onApply(column, selected.length > 0 ? selected : null);
-    else onApply(column, { name: text.trim(), gph });
+    else onApply(column, { name: text.trim(), gph, fired: allowFired && fired });
     onClose();
   };
   const reset = () => {
@@ -167,6 +170,13 @@ export const PayrollColumnFilterPopover: FC<IPayrollColumnFilterPopoverProps> = 
               <input type="checkbox" checked={gph} onChange={event => setGph(event.target.checked)} />
               <span className={styles.optionLabel}>Только ГПХ</span>
             </label>
+            {/* Те же, что с подписью «Уволен» под ФИО. */}
+            {allowFired && (
+              <label className={styles.option}>
+                <input type="checkbox" checked={fired} onChange={event => setFired(event.target.checked)} />
+                <span className={styles.optionLabel}>Только уволенные</span>
+              </label>
+            )}
           </>
         )}
 

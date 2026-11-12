@@ -194,10 +194,11 @@ export const payrollCalcExportColumns = (params: {
 
 /** Фильтры столбцов текстом: «Должность: Монтажник, Маляр; Сотрудник: Иванов»; нет — ''. */
 export const describePayrollColumnFilters = (filters: IPayrollColumnFilters): string => {
-  const { values, text, contract } = normalizePayrollColumnFilters(filters);
+  const { values, text, contract, status } = normalizePayrollColumnFilters(filters);
   return [
     ...(text?.name ? [`${PAYROLL_FILTER_COLUMN_LABELS.name}: ${text.name}`] : []),
     ...(contract ? [`Договор: ${CONTRACT_TYPE_LABELS[contract]}`] : []),
+    ...(status === 'fired' ? ['Только уволенные'] : []),
     ...PAYROLL_VALUE_FILTER_COLUMNS.flatMap(column => {
       const selected = values?.[column];
       return selected

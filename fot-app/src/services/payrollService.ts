@@ -647,6 +647,8 @@ export interface IPayrollColumnFilters {
   text?: { name?: string };
   /** Галочка «Только ГПХ» в окне фильтра «Сотрудник». */
   contract?: 'gph';
+  /** Галочка «Только уволенные» там же — только в «Расчётах». */
+  status?: 'fired';
 }
 
 export interface IPayrollColumnValues {

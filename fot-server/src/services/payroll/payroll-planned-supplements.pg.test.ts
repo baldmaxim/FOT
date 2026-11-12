@@ -939,6 +939,47 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         expect(await mine({ paid_months: '2026-09' })).toBe(5);
       });
 
+      it('«Только уволенные» в фильтре «Сотрудник»: ровно уволенные выборки, в том числе уволенный позже месяца', async () => {
+        // 59 уволен в октябре, сентябрь отработал — как уволенные в ноябре на октябрьских «Расчётах».
+        await pg.pool!.query(`
+          INSERT INTO employees (id, full_name, org_department_id, employment_status, hire_date, dismissal_date, is_archived)
+          VALUES (59, 'Позднов П.П.', '${ARCHIVE_DEPARTMENT}', 'fired', '2024-01-01', '2026-10-15', false);
+          INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date) VALUES (59, '${D_MINE}', '2026-10-15');
+          INSERT INTO skud_daily_summary (employee_id, date, total_minutes) VALUES (59, '2026-09-05', 480);
+        `);
+        try {
+          const fired = JSON.stringify({ status: 'fired' });
+          const ids = (rows: Array<Record<string, unknown>>) => rows.map(row => Number(row.employee_id)).sort((a, b) => a - b);
+          const base = await firedIds({ paid_months: '2026-09' });
+          expect(base).toEqual([50, 51, 54, 55, 56, 58, 59]);
+          // Все строки с галочкой, без дофильтрации: проигнорированный сервером фильтр вернул бы и работающих.
+          const withFlag = await listRows({ paid_months: '2026-09', cf: fired });
+          expect(ids(withFlag)).toEqual(base);
+          expect(ids(withFlag)).not.toContain(33);
+          expect(ids(await listRows({ paid_months: '2026-09', cf: JSON.stringify({ text: { name: 'Давуров' }, status: 'fired' }) })))
+            .toEqual([50]);
+
+          const mine = async (cf?: string) => {
+            const res = makeRes();
+            await payrollTermsController.columnValues({
+              user: { id: AUTHOR }, params: {}, body: {},
+              query: { date: '2026-10-01', column: 'department', paid_months: '2026-09', ...(cf ? { cf } : {}) },
+            } as unknown as AuthenticatedRequest, res);
+            expect(res.statusCode).toBe(200);
+            return (res.body.data.values as Array<{ value: string | null; count: number }>).find(item => item.value === 'Свой')?.count;
+          };
+          // «Свой»: уволенные 50, 51, 54, 58, 59 и работающий 33; с галочкой — без него.
+          expect(await mine()).toBe(6);
+          expect(await mine(fired)).toBe(5);
+        } finally {
+          await pg.pool!.query(`
+            DELETE FROM skud_daily_summary WHERE employee_id = 59;
+            DELETE FROM employee_dismissal_events WHERE employee_id = 59;
+            DELETE FROM employees WHERE id = 59;
+          `);
+        }
+      });
+
       it('расчёт ФОТ: уволенный — по отделу увольнения; архивный и чужой — нет', async () => {
         scopeMock.departments = [D_MINE];
         const res = await calcColumns({ employee_ids: '50,56,57', paid_months: '2026-09' });

@@ -456,6 +456,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
           filters={columnFilters}
           viewParams={columnValuesParams}
           anchor={openFilter.anchor}
+          allowFired={isCalcScreen}
           onApply={applyColumnFilter}
           onClose={closeFilter}
         />

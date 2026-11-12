@@ -291,6 +291,16 @@ describe('подзаголовок и имя файла', () => {
       .toBe('Сотрудник: Абду; Договор: ГПХ; Должность: Маляр');
   });
 
+  it('«Только уволенные» — после договора, перед столбцами; в подзаголовке — в «Фильтрах»', () => {
+    expect(describePayrollColumnFilters({ status: 'fired' })).toBe('Только уволенные');
+    expect(describePayrollColumnFilters({
+      text: { name: 'Абду' }, contract: 'gph', status: 'fired', values: { position: ['Маляр'] },
+    })).toBe('Сотрудник: Абду; Договор: ГПХ; Только уволенные; Должность: Маляр');
+    expect(buildPayrollCalcExport(params({ filters: { status: 'fired' } })).subtitle).toContain('. Фильтры: Только уволенные.');
+    expect(buildPayrollCalcExport(params({ filters: { text: { name: 'Абду' }, status: 'fired' } })).subtitle)
+      .toContain('. Фильтры: Сотрудник: Абду; Только уволенные.');
+  });
+
   it('период, отдел, поиск и фильтры — в подзаголовке', () => {
     const { subtitle, title } = buildPayrollCalcExport(params({
       departmentName: 'Бухгалтерия',
