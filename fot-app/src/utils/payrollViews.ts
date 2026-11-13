@@ -72,8 +72,8 @@ export interface ICalcObject {
 }
 
 /**
- * Фильтры «Расчётов» сверх отдела: группа отделов из списка «Все отделы» (ИТР / Рабочие — по отделу, выбирается
- * вместо отдела) и объект месяца, как в «Своде». null — «Все».
+ * Фильтры сверх отдела: группа отделов из списка «Все отделы» (ИТР / Рабочие — по отделу, выбирается вместо отдела;
+ * общая у «Условий оплаты» и «Расчётов») и объект месяца, как в «Своде» (только «Расчёты»). null — «Все».
  */
 export interface ICalcMonthFilter {
   group: PayrollDepartmentGroup | null;
@@ -149,7 +149,15 @@ export const readPayrollReturn = (state: unknown): IPayrollReturn | null => {
   if (!cardView) return null;
   const monthFilter = readMonthFilter(calcMonthFilter);
   if (monthFilter === null) return null;
-  const base = { employeeId, card: cardView, search, departmentId, ...(monthFilter ? { calcMonthFilter: monthFilter } : {}) };
+  // Группа и отдел — одно поле, выбор одного снимает другое. Запись прежнего фронта могла нести оба: поле показывает
+  // группу — отбор тоже только по ней, без пересечения с отделом.
+  const base = {
+    employeeId,
+    card: cardView,
+    search,
+    departmentId: monthFilter?.group ? '' : departmentId,
+    ...(monthFilter ? { calcMonthFilter: monthFilter } : {}),
+  };
   if (calcFocus === null) return { ...base, calcFocus: null };
   if (!isRecord(calcFocus) || calcFocus.employeeId !== employeeId) return null;
   const { fullName } = calcFocus;

@@ -176,16 +176,21 @@ describe('возврат с карточки посещаемости: запи�
 
   it('группа и объект «Расчётов» читаются; старая запись без них — тоже', () => {
     const calcMonthFilter = { group: 'itr', object: { key: '00000000-0000-0000-0000-00000000000a', name: 'ЖК Химки' } };
-    expect(read({ calcMonthFilter })).toEqual({ ...saved, calcMonthFilter });
+    expect(read({ departmentId: '', calcMonthFilter })).toEqual({ ...saved, departmentId: '', calcMonthFilter });
     expect(read({ calcMonthFilter: { group: null, object: null } })).toEqual({
       ...saved, calcMonthFilter: { group: null, object: null },
     });
     expect(read({})).not.toHaveProperty('calcMonthFilter');
   });
 
+  it('группа вместе с отделом (запись прежнего фронта) — остаётся группа, отдел снят', () => {
+    const calcMonthFilter = { group: 'worker', object: null };
+    expect(read({ calcMonthFilter })).toEqual({ ...saved, departmentId: '', calcMonthFilter });
+  });
+
   it('группа «Офис» старой записи — теперь «ИТР»', () => {
-    expect(read({ calcMonthFilter: { group: 'office', object: null } })).toEqual({
-      ...saved, calcMonthFilter: { group: 'itr', object: null },
+    expect(read({ departmentId: '', calcMonthFilter: { group: 'office', object: null } })).toEqual({
+      ...saved, departmentId: '', calcMonthFilter: { group: 'itr', object: null },
     });
   });
 

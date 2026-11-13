@@ -67,7 +67,8 @@ export const PaymentsTab: FC = () => {
   // «Расчёты» — только сотрудник, открытый кликом в «Условиях оплаты»; сохранение в окне «Расчётов» не снимает.
   const [calcFocus, setCalcFocus] = useState<ICalcFocus | null>(restore?.calcFocus ?? null);
   const calcFilters = calcViewFilters(calcFocus, search, departmentId);
-  // «Категория» и «Объект» — только у «Расчётов» (месяца, как в «Своде»); при открытой карточке — «Все».
+  // Группа (ИТР / Рабочие в «Все отделы») — общая с «Условиями оплаты», как отдел; «Объект» месяца — только у «Расчётов».
+  // При открытой карточке «Расчёты» показывают «Все».
   const [calcMonthFilter, setCalcMonthFilter] = useState<ICalcMonthFilter>(restore?.calcMonthFilter ?? EMPTY_CALC_MONTH_FILTER);
   const shownMonthFilter = calcMonthFilterOf(calcFocus, calcMonthFilter);
   // «Расчёты» монтируются при первом заходе и дальше остаются (скрытыми): второй список не строится зря.
@@ -129,7 +130,7 @@ export const PaymentsTab: FC = () => {
   const handleCalcMonthFilter = useCallback((next: ICalcMonthFilter) => {
     setCalcFocus(null);
     setCalcMonthFilter(next);
-  }, []);
+  }, [setCalcMonthFilter]);
 
   // Сохранение в окне «Расчётов»: карточка «Подробно» в этот момент скрыта, экран не меняется —
   // устаревшая карточка этого сотрудника закрывается.
@@ -176,6 +177,8 @@ export const PaymentsTab: FC = () => {
                 onSearchChange={setSearch}
                 departmentId={departmentId}
                 onDepartmentChange={setDepartmentId}
+                monthFilter={calcMonthFilter}
+                onMonthFilterChange={setCalcMonthFilter}
                 onOpenEmployee={openEmployee}
               />
             </Suspense>

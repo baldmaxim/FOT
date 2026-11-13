@@ -86,8 +86,8 @@ interface ICompensationTermsPageProps {
   /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
   /**
-   * «Расчёты»: группа отделов (ИТР / Офис / Рабочие в списке «Все отделы») и объект месяца, как в «Своде».
-   * Не передан — ни групп, ни поля объекта («Условия оплаты»).
+   * Группа отделов (ИТР / Рабочие в списке «Все отделы») — на обоих списках; объект месяца, как в «Своде», — только
+   * «Расчёты» (поле и отбор — при месяцах). Не передан — групп в списке нет.
    */
   monthFilter?: ICalcMonthFilter;
   onMonthFilterChange?: (next: ICalcMonthFilter) => void;
@@ -141,7 +141,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     objectKey,
   }), [date, departmentId, debouncedSearch, columnFiltersKey, employeeId, group, objectKey]);
 
-  // Список «Все отделы»: на «Расчётах» в нём и группы (payrollDepartmentGroups.ts).
+  // Список «Все отделы»: с monthFilter в нём и группы (payrollDepartmentGroups.ts).
   const handleDepartmentChange = (value: string) => {
     if (!monthFilter || !onMonthFilterChange) return onDepartmentChange(value);
     const next = pickDepartmentOrGroup(value);
