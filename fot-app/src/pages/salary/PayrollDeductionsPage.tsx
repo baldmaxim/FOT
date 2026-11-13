@@ -161,6 +161,9 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
         hiddenColumnsKey={PAYROLL_CALC_COLUMNS_KEY}
         columns={PAYROLL_CALC_TABLE_COLUMNS}
         paidMonths={summaryMonths}
+        // Месяц по умолчанию известен после загрузки месяцев (ошибка — тоже: умолчание остаётся прежним); до этого
+        // расчёт не запускается — иначе сервер досчитывал бы брошенный прежний месяц.
+        calcReady={!monthsQuery.isPending}
         onOpenPaidItems={(row, kind, trigger, months) => setPaidItems({ row, kind, trigger, months })}
         actionsExtra={(
           <>

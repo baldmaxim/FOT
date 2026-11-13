@@ -1,5 +1,6 @@
 import { apiClient } from '../api/client';
 import type { IPayrollCardExport } from '../utils/payrollCardExport';
+import { createSerialRunner } from '../utils/serialRunner';
 import type {
   IDeductionSubkind,
   IDeductionSubkindsApi,
@@ -747,6 +748,9 @@ export interface IPayrollTermsListResult {
 /** Порция подгрузки при прокрутке — максимум, который принимает сервер. */
 export const PAYROLL_TERMS_PAGE_SIZE = 500;
 
+/** Очередь столбцов ФОТ «Расчётов»: одна порция за раз (payrollService.calcColumns). */
+const calcColumnsQueue = createSerialRunner();
+
 /** Месяцы сумм «Расчётов» (YYYY-MM); пусто или 'all' — весь период, как у «Свода». */
 export type PayrollPaidMonths = string[] | 'all';
 
@@ -803,10 +807,12 @@ export const payrollService = {
     search.set('paid_months', months === 'all' || months.length === 0 ? 'all' : months.join(','));
     // Незакрытый табель — предварительно по живому табелю, с пометкой (без параметра сервер считает только закрытый).
     search.set('preliminary', '1');
-    return (await apiClient.get<IApiResponse<IPayrollCalcColumnsResult>>(
+    // По одной порции на вкладку при любом запуске (экран, invalidate, «Повторить», экспорт): параллельные расчёты на
+    // сервере идут в разы дольше.
+    return calcColumnsQueue(async () => (await apiClient.get<IApiResponse<IPayrollCalcColumnsResult>>(
       `/payroll/terms/calc-columns?${search.toString()}`,
       { signal },
-    )).data;
+    )).data, signal);
   },
 
   /**

@@ -83,6 +83,7 @@ import {
   payrollMonthStarts,
 } from './payroll-dictionary.helpers.js';
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
+import { payrollQueueServerTiming, runInPayrollCalcSlot } from '../services/payroll/payroll-calc-slot.js';
 import { recordTermsRecalc } from '../services/payroll/payroll-terms-recalc.service.js';
 import {
   payrollCalcStaffWhereSql,
@@ -878,9 +879,15 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     // defer_calc=1 (новый фронт) — строки сразу, ФОТ — отдельным GET /terms/calc-columns; без параметра — как раньше,
     // чтобы старый открытый фронт не потерял столбцы.
     const deferCalc = query.defer_calc === '1';
-    const calcColumns = paidMonths !== null && paidMonths !== 'all' && !deferCalc
-      ? await getCalcColumns(pageRows.map(row => row.employee_id), paidMonths, req)
-      : null;
+    let calcColumns: Awaited<ReturnType<typeof getCalcColumns>> | null = null;
+    if (paidMonths !== null && paidMonths !== 'all' && !deferCalc) {
+      // Тот же расчёт, что у calc-columns, — в той же очереди (payroll-calc-slot.ts).
+      const slot = await runInPayrollCalcSlot(
+        req, res, 'normal', () => getCalcColumns(pageRows.map(row => row.employee_id), paidMonths, req),
+      );
+      if (slot.status === 'aborted') return;
+      calcColumns = slot.result;
+    }
     // Служебные поля ключа и снимок категории из условий наружу не отдаём.
     const data = pageRows.map(({
       sort_key: _sortKey, sort_key_text: _sortKeyText, staff_category: _stored, card_payouts_raw: cardPayoutsRaw, ...row
@@ -1198,8 +1205,12 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const { ids: allowedIds } = await loadAllowedCalcEmployeeIds(req, ids);
 
     const timing = emptyCalcColumnsTiming();
-    const columns = await getCalcColumns(allowedIds, months, req, timing, { preliminary: params.preliminary === '1' });
-    res.setHeader('Server-Timing', calcColumnsServerTiming(timing));
+    const slot = await runInPayrollCalcSlot(
+      req, res, 'normal', () => getCalcColumns(allowedIds, months, req, timing, { preliminary: params.preliminary === '1' }),
+    );
+    if (slot.status === 'aborted') return;
+    const columns = slot.result;
+    res.setHeader('Server-Timing', [payrollQueueServerTiming('normal', slot), calcColumnsServerTiming(timing)].join(', '));
     res.json({
       success: true,
       data: { available: true, rows: allowedIds.map(id => ({ employee_id: id, calc: columns.get(id) ?? null })) },
@@ -1229,14 +1240,17 @@ const payouts = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     const allowed = await loadAllowedCalcEmployeeIds(req, ids);
     const timing = emptyTermsPayoutsTiming();
-    const result = await getTermsPayouts({
+    // «Выплачено» — в очереди расчётов «Зарплаты» последним: «Свод» и «Расчёты» его не ждут (payroll-calc-slot.ts).
+    const slot = await runInPayrollCalcSlot(req, res, 'low', () => getTermsPayouts({
       employeeIds: allowed.ids,
       date: date.data,
       contractorRootId: allowed.contractorRootId,
       req,
       timing,
-    });
-    res.setHeader('Server-Timing', termsPayoutsServerTiming(timing));
+    }));
+    if (slot.status === 'aborted') return;
+    const result = slot.result;
+    res.setHeader('Server-Timing', [payrollQueueServerTiming('low', slot), termsPayoutsServerTiming(timing)].join(', '));
     res.json({
       success: true,
       data: {

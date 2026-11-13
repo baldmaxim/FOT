@@ -21,6 +21,9 @@ const makeRes = () => {
     status(code: number) { this.statusCode = code; return this; },
     json(payload: unknown) { this.body = payload; return this; },
     setHeader(name: string, value: string) { this.headers[name] = value; return this; },
+    // Очередь расчётов слушает закрытие соединения (payroll-calc-slot.ts).
+    on() { return this; },
+    off() { return this; },
   };
   return res as unknown as Response & { statusCode: number; body: any; headers: Record<string, string> };
 };

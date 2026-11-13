@@ -6,6 +6,7 @@
 import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
+import { payrollQueueServerTiming, runInPayrollCalcSlot } from '../services/payroll/payroll-calc-slot.js';
 import { resolvePayrollStaffScope } from '../services/payroll/payroll-registry-scope.service.js';
 import {
   emptySummaryTiming,
@@ -42,9 +43,11 @@ const get = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const scope = await resolvePayrollStaffScope(req);
     // Замер шагов — в Server-Timing (DevTools → Network → Timing), дольше 2 с — и в лог.
     const timing = emptySummaryTiming();
-    const data = await loadPayrollSummary({ scope, monthStarts, req, timing });
-    res.setHeader('Server-Timing', summaryServerTiming(timing));
-    res.json({ success: true, data });
+    // Тяжёлые расчёты «Зарплаты» — по одному; «Свод» — перед ожидающими порциями (payroll-calc-slot.ts).
+    const slot = await runInPayrollCalcSlot(req, res, 'high', () => loadPayrollSummary({ scope, monthStarts, req, timing }));
+    if (slot.status === 'aborted') return;
+    res.setHeader('Server-Timing', [payrollQueueServerTiming('high', slot), summaryServerTiming(timing)].join(', '));
+    res.json({ success: true, data: slot.result });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
     console.error('payrollSummary.get error:', err);

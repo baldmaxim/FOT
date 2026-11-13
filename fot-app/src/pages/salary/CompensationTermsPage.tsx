@@ -78,6 +78,11 @@ interface ICompensationTermsPageProps {
    * Не передан — «Условия оплаты», сумм нет.
    */
   paidMonths?: PayrollPaidMonths | null;
+  /**
+   * «Расчёты»: месяцы выбора загружены — можно считать столбцы ФОТ и выгружать. Пока грузятся, месяц по умолчанию ещё
+   * может смениться: строки показываются, а расчёт прежнего месяца не запускается. По умолчанию — готово.
+   */
+  calcReady?: boolean;
   /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
   /**
@@ -102,6 +107,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   hiddenColumnsKey = PAYROLL_TERMS_COLUMNS_KEY,
   columns = PAYROLL_TERMS_TABLE_COLUMNS,
   paidMonths,
+  calcReady = true,
   onOpenPaidItems,
   monthFilter,
   onMonthFilterChange,
@@ -150,7 +156,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
 
   // «Расчёты»: столбцы ФОТ — по порциям, по одной (usePayrollCalcPageColumns).
   const isCalcScreen = paidMonths !== undefined;
-  const { calcMerge, retryCalc } = usePayrollCalcPageColumns({ pages: data?.pages, rows, enabled: isCalcScreen, active });
+  const { calcMerge, retryCalc } = usePayrollCalcPageColumns({
+    pages: data?.pages, rows, enabled: isCalcScreen, active: active && calcReady,
+  });
   // «Выплачено» — за закрытые месяцы перед месяцем даты показанных строк.
   const shownDate = data?.pages[0]?.date ?? date;
   const accrualMonths = useMemo(() => payrollAccrualMonths(shownDate), [shownDate]);
@@ -364,7 +372,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             <button
               type="button"
               className={styles.exportButton}
-              disabled={exporting || isPlaceholderData || total === 0 || search.trim() !== debouncedSearch}
+              disabled={exporting || !calcReady || isPlaceholderData || total === 0 || search.trim() !== debouncedSearch}
               onClick={handleExport}
             >
               <Download size={14} aria-hidden="true" />

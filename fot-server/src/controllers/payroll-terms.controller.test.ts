@@ -68,6 +68,19 @@ vi.mock('../services/payroll/payroll-access.service.js', async (importOriginal) 
   getRequestPayrollSectionAccess: vi.fn(async () => false),
 }));
 
+// Очередь расчётов (payroll-calc-slot.ts) — настоящая, вызовы записываются: старый список без defer_calc идёт через неё.
+const calcSlot = vi.hoisted(() => ({ priorities: [] as string[] }));
+vi.mock('../services/payroll/payroll-calc-slot.js', async importOriginal => {
+  const original = await importOriginal<typeof import('../services/payroll/payroll-calc-slot.js')>();
+  return {
+    ...original,
+    runInPayrollCalcSlot: ((...args: Parameters<typeof original.runInPayrollCalcSlot>) => {
+      calcSlot.priorities.push(args[2]);
+      return original.runInPayrollCalcSlot(...args);
+    }) as typeof original.runInPayrollCalcSlot,
+  };
+});
+
 import { payrollTermsController } from './payroll-terms.controller.js';
 
 const makeRes = () => {
@@ -76,6 +89,10 @@ const makeRes = () => {
     body: undefined as unknown,
     status(code: number) { this.statusCode = code; return this; },
     json(payload: unknown) { this.body = payload; return this; },
+    setHeader() { return this; },
+    // Очередь расчётов слушает закрытие соединения (payroll-calc-slot.ts).
+    on() { return this; },
+    off() { return this; },
   };
   return res as unknown as Response & { statusCode: number; body: any };
 };
@@ -1342,6 +1359,19 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
     contractor.getContractorRootId.mockResolvedValue('contractor-root');
     pgQueryOne.mockResolvedValue({ total: '0', without_terms_total: '0', rows: [] });
+  });
+
+  it('старый фронт (без defer_calc) — расчёт ФОТ через очередь расчётов; с defer_calc=1 и без месяцев — без неё', async () => {
+    calcSlot.priorities.length = 0;
+    await payrollTermsController.list(makeReq({ query: { paid_months: '2026-09' } } as Partial<AuthenticatedRequest>), makeRes());
+    expect(calcSlot.priorities).toEqual(['normal']);
+
+    calcSlot.priorities.length = 0;
+    await payrollTermsController.list(makeReq({
+      query: { paid_months: '2026-09', defer_calc: '1' },
+    } as Partial<AuthenticatedRequest>), makeRes());
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
+    expect(calcSlot.priorities).toEqual([]);
   });
 
   it('без paid_months — прежний список: «Выплачено» есть, сумм «Расчётов» нет', async () => {
