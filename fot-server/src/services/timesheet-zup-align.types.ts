@@ -20,8 +20,8 @@ export type ZupTarget =
   | { kind: 'day'; hours: number }
   /** В 1С часов нет — «Обнулить день» (`manual`, 0 ч). */
   | { kind: 'zero' }
-  /** Отметка 1С — дневная отметка. */
-  | { kind: 'status'; status: ZupStatusTarget };
+  /** Отметка 1С — дневная отметка; у удалёнки — часы 1С (без них удалёнка в выходной даёт 0 ч и не идёт в основу). */
+  | { kind: 'status'; status: ZupStatusTarget; hours?: number };
 
 export interface IZupPlanItem {
   employee_id: number;
@@ -117,6 +117,7 @@ const checkTarget = (target: unknown, where: string): ZupTarget => {
       return t as unknown as ZupTarget;
     case 'status':
       if (!STATUS_TARGETS.includes(t.status as ZupStatusTarget)) fail(`${where}: отметка ${String(t.status)} не поддержана`);
+      if (t.hours !== undefined && (t.status !== 'remote' || !isHours(t.hours))) fail(`${where}: часы бывают только у удалёнки, 0–24`);
       return t as unknown as ZupTarget;
     default:
       return fail(`${where}: неизвестный вид правки ${String(t.kind)}`);
@@ -173,6 +174,12 @@ export const zupRowSpec = (target: ZupTarget): IZupRowSpec => {
     case 'zero':
       return { source_type: 'manual', source_id: 'manual', status: 'manual', hours_override: 0, metadata_object: null };
     case 'status':
-      return { source_type: 'manual', source_id: 'manual', status: target.status, hours_override: null, metadata_object: null };
+      return {
+        source_type: 'manual',
+        source_id: 'manual',
+        status: target.status,
+        hours_override: target.status === 'remote' && target.hours ? target.hours : null,
+        metadata_object: null,
+      };
   }
 };

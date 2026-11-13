@@ -37,6 +37,32 @@ import { applyZupPlan, ZupPlanStaleError, type IZupApplyDeps } from './timesheet
 import { revertZupBackup, ZupRevertConflictError } from './timesheet-zup-align.revert.js';
 import { zupPairKey, type IZupDaySnapshot, type IZupPair } from './timesheet-zup-align.snapshot.js';
 import { computeZupPlanSha, parseZupPlan, type IZupPlan, type IZupPlanItem, type ZupTarget } from './timesheet-zup-align.types.js';
+import { liveDayMatches } from './timesheet-zup-align.verify.js';
+
+const snap = (over: Partial<IZupDaySnapshot>): IZupDaySnapshot => ({
+  employeeId: 1, date: '2026-10-04', status: null, hours: null, corrected: false, overridden: false, dropped: false,
+  kind: null, absence: null, paidMinutes: null, overtimeMinutes: null, normHours: 0, workingDay: false,
+  objects: [], adjustments: [], closedApprovalIds: [], fingerprint: '', ...over,
+});
+
+describe('liveDayMatches — день ФОТ после правки «ЗУП»', () => {
+  it('удалёнка в выходной без часов не идёт в основу — расхождение', () => {
+    expect(liveDayMatches(snap({ status: 'remote', kind: null }), { kind: 'status', status: 'remote', hours: 8 }))
+      .toMatch(/рабочим днём/);
+  });
+  it('удалёнка с часами 1С — выход в выходной на эти часы', () => {
+    expect(liveDayMatches(snap({ status: 'remote', kind: 'dayoff', paidMinutes: 480 }), { kind: 'status', status: 'remote', hours: 8 })).toBeNull();
+    expect(liveDayMatches(snap({ status: 'remote', kind: 'dayoff', paidMinutes: 600 }), { kind: 'status', status: 'remote', hours: 8 }))
+      .toMatch(/к оплате 10 ч, в 1С 8 ч/);
+  });
+  it('явка, обнуление, отсутствие', () => {
+    expect(liveDayMatches(snap({ kind: 'workday', paidMinutes: 420 }), { kind: 'day', hours: 7 })).toBeNull();
+    expect(liveDayMatches(snap({ kind: 'workday', paidMinutes: 600 }), { kind: 'day', hours: 7 })).toMatch(/к оплате 10 ч/);
+    expect(liveDayMatches(snap({ status: 'manual', kind: null }), { kind: 'zero' })).toBeNull();
+    expect(liveDayMatches(snap({ kind: 'absence', absence: 'unpaid' }), { kind: 'status', status: 'unpaid' })).toBeNull();
+    expect(liveDayMatches(snap({ kind: null }), { kind: 'status', status: 'unpaid' })).toMatch(/ожидалось unpaid/);
+  });
+});
 
 const ACTOR = { userId: '11111111-1111-4111-8111-111111111111', email: 'admin@example.test' };
 const AUTHOR = '22222222-2222-4222-8222-222222222222';
@@ -301,6 +327,33 @@ describeIf('timesheet-zup-align (PostgreSQL)', () => {
     expect(await allLinks()).toEqual(linksBefore);
     const audit = (await pg.pool!.query(`SELECT count(*)::int AS n FROM audit_logs WHERE details->>'source' = 'zup-align-revert'`)).rows[0];
     expect(audit.n).toBe(2);
+  });
+
+  it('удалёнка с часами 1С заменяет ЗУП-удалёнку без часов; повтор её не трогает', async () => {
+    const first = await buildPlan([{ employee_id: EMP2, date: '2026-10-04', target: { kind: 'status', status: 'remote' } }]);
+    await withTx(client => applyZupPlan(client, first, ACTOR, fakeDeps));
+    const [old] = await dayRows(EMP2, '2026-10-04');
+    expect([old.status, old.hours_override]).toEqual(['remote', null]);
+
+    const second = await buildPlan([{ employee_id: EMP2, date: '2026-10-04', target: { kind: 'status', status: 'remote', hours: 8 } }]);
+    const { report, backup } = await withTx(client => applyZupPlan(client, second, ACTOR, fakeDeps));
+    expect(report).toMatchObject({ written: 1, removedRows: 1 });
+    expect(backup.days[0].removed_rows.map(row => Number(row.id))).toEqual([Number(old.id)]);
+    const rows = await dayRows(EMP2, '2026-10-04');
+    expect(rows).toHaveLength(1);
+    expect([rows[0].status, Number(rows[0].hours_override), rows[0].reason]).toEqual(['remote', 8, 'ЗУП']);
+    expect(rows[0].metadata).toMatchObject({ zup_align: { run_id: second.run_id } });
+
+    const again = await withTx(client => applyZupPlan(client, second, ACTOR, fakeDeps));
+    expect(again.report).toMatchObject({ written: 0, alreadyApplied: 1 });
+  });
+
+  it('часы бывают только у удалёнки', async () => {
+    const plan = await buildPlan([{ employee_id: EMP2, date: '2026-10-01', target: { kind: 'day', hours: 10 } }]);
+    const bad = JSON.parse(JSON.stringify(plan));
+    bad.items[0].target = { kind: 'status', status: 'unpaid', hours: 8 };
+    bad.plan_sha256 = computeZupPlanSha(bad.items);
+    expect(() => parseZupPlan(bad)).toThrow(/часы бывают только у удалёнки/);
   });
 
   it('план с подменённым составом не принимается', async () => {
