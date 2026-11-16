@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ITimesheetSalaryObject, ITimesheetSalaryObjectMember, ITimesheetSalaryResponse } from '../types/timesheet';
+import type { ITimesheetSalaryObject, ITimesheetSalaryObjectMember } from '../types/timesheet';
 import {
   buildSalaryObjectsOverlay,
   salaryCalcCellText,
-  salaryTotalRows,
   SALARY_UNKNOWN_OBJECT_KEY,
   type ISalaryObjectsOverlay,
   type ISalaryOverlayGroup,
@@ -133,26 +132,5 @@ describe('клетка строки «только в расчёте»', () => {
     expect(salaryCalcCellText(undefined, 'Н')).toBe('Н');
     expect(salaryCalcCellText(undefined, '—')).toBe('—');
     expect(salaryCalcCellText(undefined, '')).toBe('');
-  });
-});
-
-describe('«Итого по бригаде» и «Все сотрудники»', () => {
-  const data: ITimesheetSalaryResponse = {
-    department_id: 'b', month: '2026-10', kind: 'brigade', state: 'preliminary', distribution: 'ok',
-    as_of: '2026-10-29', open_ranges: [], output_amount: '100000.00', errors: [], computed_at: null,
-    rows: [
-      { employee_id: 1, full_name: 'Амонов А. М.', ktu: '1.0', counted_hours: 11, amount: '100000.00', share: '100000.00', source: 'live', can_edit: true },
-      { employee_id: 2, full_name: 'Боев Б. Д.', ktu: '1.0', counted_hours: 0, amount: null, share: null, source: 'live', can_edit: true },
-      { employee_id: 3, full_name: 'Юсупов С. Н.', ktu: '1.0', counted_hours: 0, amount: null, share: null, source: 'live', can_edit: true },
-    ],
-    objects: [object(K14, [member(1, '100000.00'), member(2, null, {})])],
-  };
-
-  it('выключено — только те, у кого есть часы на объектах', () => {
-    expect(salaryTotalRows(data.rows, data, false).map(row => row.employee_id)).toEqual([1]);
-  });
-
-  it('включено — весь состав расчёта, каждый один раз', () => {
-    expect(salaryTotalRows(data.rows, data, true).map(row => row.employee_id)).toEqual([1, 2, 3]);
   });
 });

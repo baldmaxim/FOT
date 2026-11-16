@@ -1,8 +1,6 @@
 import type {
   ITimesheetSalaryObject,
   ITimesheetSalaryObjectMember,
-  ITimesheetSalaryResponse,
-  ITimesheetSalaryRow,
 } from '../types/timesheet';
 
 /** «Не определён» — один ключ у расчёта и у живого табеля (UNKNOWN_OBJECT_KEY бэкенда). */
@@ -62,14 +60,3 @@ export const buildSalaryObjectsOverlay = (
 export const salaryCalcCellText = (hours: number | undefined, timesheetText: string): string => (
   hours === undefined ? timesheetText : String(Math.round(hours))
 );
-
-/** «Итого по бригаде»: с «Все сотрудники» — весь состав, без — только те, у кого есть часы на объектах. */
-export const salaryTotalRows = (
-  rows: readonly ITimesheetSalaryRow[],
-  data: ITimesheetSalaryResponse,
-  showAllEmployees: boolean,
-): ITimesheetSalaryRow[] => (showAllEmployees
-  ? [...rows]
-  : rows.filter(row => (data.objects ?? []).some(object => object.members.some(member => (
-    member.employee_id === row.employee_id && Object.keys(member.days).length > 0
-  )))));

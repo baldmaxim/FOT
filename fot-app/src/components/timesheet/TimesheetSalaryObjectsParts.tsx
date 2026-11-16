@@ -35,7 +35,6 @@ import {
   totalDaysOfEmployee,
   totalShareMode,
 } from '../../utils/timesheetSalary';
-import { salaryTotalRows } from '../../utils/timesheetSalaryOverlay';
 import { TimesheetSalaryKtuSelect } from './TimesheetSalaryCells';
 import { TimesheetSalaryOutputInput } from './TimesheetSalaryOutputInput';
 
@@ -43,8 +42,6 @@ import { TimesheetSalaryOutputInput } from './TimesheetSalaryOutputInput';
 export interface ITimesheetObjectsSalary {
   data: ITimesheetSalaryResponse;
   canEdit: boolean;
-  /** «Все сотрудники»: в «Итого по бригаде» весь состав; выключено — только те, у кого есть часы. */
-  showAllEmployees: boolean;
   pendingKtuEmployeeId: number | null;
   savingObjectKey: string | null;
   /** Сохраняемая «Доля»: `${object_key}:${employee_id}`. */
@@ -325,7 +322,7 @@ const TotalShareCell: FC<ISalaryProps & { row: ITimesheetSalaryRow; muted: boole
 /** «Итого по бригаде»: каждый участник расчёта один раз — клетки как «По сотрудникам», доля по всем объектам и «Сумма». */
 export const TimesheetSalaryTotalRows: FC<ISectionProps> = ({ salary, colSpan, renderDays }) => {
   const { data } = salary;
-  const rows = salaryTotalRows(sortSalaryRows(data.rows), data, salary.showAllEmployees);
+  const rows = sortSalaryRows(data.rows);
   if (rows.length === 0) return null;
   const muted = isMuted(data);
   const rendered = rows.map(row => ({

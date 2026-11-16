@@ -2,7 +2,6 @@ import { useMemo, type FC } from 'react';
 
 import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../../types/timesheet';
 import { isOutputClearOnly, isSalaryRowMuted, sortSalaryRows } from '../../utils/timesheetSalary';
-import { salaryTotalRows } from '../../utils/timesheetSalaryOverlay';
 import type { ITimesheetSalaryGridProps } from './TimesheetSalaryCells';
 import { TimesheetGrid, type ITimesheetGridProps } from './TimesheetGrid';
 import { TimesheetSalaryObjectsHeader, type ITimesheetObjectsSalary } from './TimesheetSalaryObjectsParts';
@@ -25,8 +24,6 @@ export interface ITimesheetSalaryObjectsProps {
   gridLoading: boolean;
   gridError: boolean;
   compact: boolean;
-  /** «Все сотрудники»: в «Итого по бригаде» весь состав; выключено — только те, у кого есть часы. */
-  showAllEmployees: boolean;
   canEdit: boolean;
   pendingKtuEmployeeId: number | null;
   savingObjectKey: string | null;
@@ -46,11 +43,10 @@ const Message: FC<{ text: string }> = ({ text }) => (
  * вписанная рублями (355). Телефон — карточки объектов.
  */
 export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props => {
-  const { data, loading, error, grid, gridLoading, gridError, compact, showAllEmployees, canEdit } = props;
+  const { data, loading, error, grid, gridLoading, gridError, compact, canEdit } = props;
   const objectsSalary = useMemo<ITimesheetObjectsSalary | null>(() => (data ? {
     data,
     canEdit,
-    showAllEmployees,
     pendingKtuEmployeeId: props.pendingKtuEmployeeId,
     savingObjectKey: props.savingObjectKey,
     savingShareKey: props.savingShareKey,
@@ -58,7 +54,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
     onObjectOutputSave: props.onObjectOutputSave,
     onShareSave: props.onShareSave,
   } : null), [
-    data, canEdit, showAllEmployees, props.pendingKtuEmployeeId, props.savingObjectKey, props.savingShareKey,
+    data, canEdit, props.pendingKtuEmployeeId, props.savingObjectKey, props.savingShareKey,
     props.onKtuChange, props.onObjectOutputSave, props.onShareSave,
   ]);
   const rows = useMemo(() => sortSalaryRows(data?.rows ?? []), [data]);
@@ -94,7 +90,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
       <TimesheetSalaryObjectsMobile
         data={data}
         rows={rows}
-        totalRows={salaryTotalRows(rows, data, showAllEmployees)}
+        totalRows={rows}
         salary={salary}
         objectsSalary={objectsSalary}
         muted={isSalaryRowMuted(data, rows[0] ?? null)}

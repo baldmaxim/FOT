@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { timesheetGridQueryKey } from './timesheetGridQuery';
 
 const base = {
-  month: '2026-11', rangeStart: '2026-11-01', rangeEnd: '2026-11-30', departmentKey: 'D1', includeEmpty: true,
+  month: '2026-11', rangeStart: '2026-11-01', rangeEnd: '2026-11-30', departmentKey: 'D1',
 };
 
 describe('timesheetGridQueryKey', () => {

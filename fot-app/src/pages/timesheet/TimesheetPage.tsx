@@ -220,27 +220,6 @@ export const TimesheetPage: FC = () => {
   const isTimekeeperRole = profile?.role_code === 'timekeeper';
   const canUseAssignedMode = isTimekeeperRole
     || (!isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review')));
-  // Тумблер «Все сотрудники»: показывать членов ростера без активности за период.
-  // Включён по умолчанию (СКУД-проходы не влияют на состав табеля); явное '0'
-  // в localStorage — осознанный выбор пользователя скрывать «пустых».
-  // Роль-гейт отдельно от UI-гейта: роли без чипа всегда видят полный состав.
-  const canUseShowAllEmployees = isAdmin
-    || isTimekeeperRole
-    || canEditTimesheet
-    || hasPermission('timesheet.workflow.monitor')
-    || hasPermission('timesheet.workflow.review');
-  const showAllStorageKey = `ts:showAllEmployees:${profile?.id ?? 'anon'}`;
-  const [showAllEmployees, setShowAllEmployees] = useState<boolean>(
-    () => localStorage.getItem(showAllStorageKey) !== '0',
-  );
-  const includeEmptyEmployees = !canUseShowAllEmployees || showAllEmployees;
-  const handleToggleShowAll = useCallback(() => {
-    setShowAllEmployees(prev => {
-      const next = !prev;
-      localStorage.setItem(showAllStorageKey, next ? '1' : '0');
-      return next;
-    });
-  }, [showAllStorageKey]);
   // «По сотруднику» доступен всем, кто видит табель: состав поиска и данные уже
   // ограничены скоупом роли на сервере.
   const canUseEmployeeMode = canViewManagedTimesheet;
@@ -527,7 +506,6 @@ export const TimesheetPage: FC = () => {
       rangeStart,
       rangeEnd,
       departmentKey: activeGridDeptId ?? 'none',
-      includeEmpty: includeEmptyEmployees,
       includeWeekendMissing,
     }),
     queryFn: () => timesheetService.getAll({
@@ -536,7 +514,6 @@ export const TimesheetPage: FC = () => {
       from: rangeStart,
       to: rangeEnd,
       include_objects: includeObjectDetails,
-      include_empty: includeEmptyEmployees,
       show_fired: true,
       schedule_payload: 'compact',
       include_weekend_missing: includeWeekendMissing,
@@ -2654,24 +2631,6 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
-  // Тумблер «Все сотрудники» — показывает членов ростера без активности за период.
-  // Оборачиваем в ts-view-switch (flex-контейнер), чтобы на мобильном чип не растянулся
-  // на всю ширину. Подпись постоянная, состояние — оформлением + aria-pressed.
-  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode;
-  const showAllControl = canShowAllEmployees ? (
-    <section className="ts-view-switch">
-      <button
-        type="button"
-        className={`ts-view-chip ${includeEmptyEmployees ? ' ts-view-chip--active' : ''}`}
-        onClick={handleToggleShowAll}
-        aria-pressed={includeEmptyEmployees}
-        title="Показывать сотрудников без активности за период"
-      >
-        Все сотрудники
-      </button>
-    </section>
-  ) : null;
-
   const correctionsChip = hasActiveScope ? (
     <button
       type="button"
@@ -2807,7 +2766,6 @@ export const TimesheetPage: FC = () => {
             <div className="ts-header-toolbar">
               <div className="ts-header-toolbar-left">
                 {viewControlPrimary}
-                {showAllControl}
               </div>
               <div className="ts-header-toolbar-right">
                 {/* «Бригады», «Зарплата по отделам» и «Зарплата по объектам» — слева от «Экспорт». */}
@@ -2879,7 +2837,6 @@ export const TimesheetPage: FC = () => {
         {isMobile && viewControl}
         {/* Телефон без отдела: из чипов — только «Бригады» (остальным нужен отдел). */}
         {isMobile && !hasActiveScope && salaryChips && <section className="ts-view-switch">{salaryChips}</section>}
-        {isMobile && showAllControl}
       </div>
 
       {!isMobile && bulkModeEnabled && activeGridDeptId && !isSalaryView && (
@@ -3006,7 +2963,6 @@ export const TimesheetPage: FC = () => {
           gridLoading={timesheetQuery.isLoading || timesheetQuery.isPlaceholderData}
           gridError={timesheetQuery.isError}
           compact={isMobile}
-          showAllEmployees={includeEmptyEmployees}
           canEdit={canEditBrigadeSalary}
           pendingKtuEmployeeId={timesheetSalary.pendingKtuEmployeeId}
           savingObjectKey={timesheetSalary.savingObjectKey}

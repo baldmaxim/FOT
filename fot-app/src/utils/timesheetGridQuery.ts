@@ -7,7 +7,6 @@ export const timesheetGridQueryKey = (params: {
   rangeStart: string;
   rangeEnd: string;
   departmentKey: string;
-  includeEmpty: boolean;
   includeWeekendMissing: boolean;
 }) => [
   'timesheet-page',
@@ -16,6 +15,5 @@ export const timesheetGridQueryKey = (params: {
   params.rangeEnd,
   params.departmentKey,
   'with-objects',
-  params.includeEmpty,
   params.includeWeekendMissing ? 'weekend-missing' : 'plain',
 ] as const;

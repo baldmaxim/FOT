@@ -29,7 +29,7 @@ interface ITimesheetSalaryObjectsMobileProps {
   data: ITimesheetSalaryResponse;
   /** Строки бригады по ФИО. */
   rows: ITimesheetSalaryRow[];
-  /** Строки «Итого по бригаде» — с учётом «Все сотрудники». */
+  /** Строки «Итого по бригаде» — весь состав расчёта. */
   totalRows: ITimesheetSalaryRow[];
   salary: ITimesheetSalaryGridProps;
   /** Правка «Доли» (355). */
