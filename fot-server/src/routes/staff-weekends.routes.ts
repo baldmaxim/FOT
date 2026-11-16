@@ -17,8 +17,6 @@ router.use(noStore);
 // Гард именованным алиасом — его распознаёт `npm run audit:routes`.
 const weekendsView = requirePageAccess('/staff-control/weekends', 'view');
 
-// Прежний список: нужен старой вкладке до выката фронтенда, затем удалить.
-router.get('/', weekendsView, c.list);
 router.get('/grid', weekendsView, resolveTimesheetLockToggle, c.grid);
 router.post('/export', weekendsView, c.exportTable);
 

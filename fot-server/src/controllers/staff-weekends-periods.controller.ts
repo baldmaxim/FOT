@@ -17,7 +17,7 @@ import {
   type WeekendHalf,
 } from '../services/staff-weekends-periods.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canManageWeekendPeriods, visibleBranchIds } from './staff-weekends.controller.js';
+import { canManageWeekendPeriods, resolveWeekendBranches } from './staff-weekends.controller.js';
 import {
   announceApprovalOpened,
   closeApprovalPeriod,
@@ -57,15 +57,15 @@ export const requireWeekendPeriodManage = async (
   }
 };
 
-/** Отдел с его списком за месяц, считается заново; вне охвата — null. */
+/** Отдел с его списком за месяц, считается заново (владелец дня — по всем кандидатам); вне охвата — null. */
 const loadBranch = async (
   req: AuthenticatedRequest,
   month: string,
   branchId: string,
 ): Promise<IStaffWeekendBranch | null> => {
-  const visible = await visibleBranchIds(req);
+  const { ownership, visible } = await resolveWeekendBranches(req, month);
   if (!visible.includes(branchId)) return null;
-  const branches = await listWeekendsByBranch(month, visible);
+  const branches = await listWeekendsByBranch(month, { ownershipBranchIds: ownership, visibleBranchIds: [branchId] });
   return branches.find(branch => branch.id === branchId) ?? null;
 };
 
@@ -197,7 +197,7 @@ const close = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       res.status(400).json({ success: false, error: 'Выберите месяц' });
       return;
     }
-    if (!(await visibleBranchIds(req)).includes(branchId)) {
+    if (!(await resolveWeekendBranches(req, month)).visible.includes(branchId)) {
       res.status(403).json({ success: false, error: 'Отдел вне вашего охвата' });
       return;
     }

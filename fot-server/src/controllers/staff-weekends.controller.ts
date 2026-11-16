@@ -10,26 +10,48 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveAccessibleDepartmentIds, resolveRequestDataScope } from '../services/data-scope.service.js';
 import { resolveStaffRosterEmployeeIds } from '../services/employee-scope-filter.service.js';
+import { listBranchCandidateIds } from '../services/staff-branch-ownership.service.js';
+import { listWeekendsByBranch } from '../services/staff-weekends.service.js';
 import {
-  listWeekendsByBranch,
-  listWeekendsWithoutCorrection,
-  STAFF_WEEKENDS_BRANCH_IDS,
-  STAFF_WEEKENDS_MAX_MONTHS,
-} from '../services/staff-weekends.service.js';
-import { attachWeekendPeriods } from '../services/staff-weekends-periods.service.js';
+  attachWeekendPeriods,
+  listActiveUnlockBranchIds,
+  weekendHalfRange,
+} from '../services/staff-weekends-periods.service.js';
 import { canToggleTimesheetLock } from '../utils/timesheet-lock-toggle.js';
-import { handlePayrollZodError, parsePayrollMonthsQuery } from './payroll-dictionary.helpers.js';
+import { handlePayrollZodError } from './payroll-dictionary.helpers.js';
 import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
 const WEEKENDS_SHEET = { sheetName: 'Выходные', tableName: 'Weekends' } as const;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-/** Отделы списка в охвате пользователя: список кадров без ограничений или отдел среди доступных. */
-export const visibleBranchIds = async (req: AuthenticatedRequest): Promise<string[]> => {
-  if (await resolveStaffRosterEmployeeIds(req) === 'all') return [...STAFF_WEEKENDS_BRANCH_IDS];
+/** Отделы в охвате пользователя, как раньше: список кадров без ограничений или «все отделы» — все, иначе доступные. */
+export const filterBranchesByScope = async (req: AuthenticatedRequest, branchIds: readonly string[]): Promise<string[]> => {
+  if (await resolveStaffRosterEmployeeIds(req) === 'all') return [...branchIds];
   const accessible = await resolveAccessibleDepartmentIds(req);
-  if (accessible === 'all') return [...STAFF_WEEKENDS_BRANCH_IDS];
-  return STAFF_WEEKENDS_BRANCH_IDS.filter(id => accessible.includes(id));
+  if (accessible === 'all') return [...branchIds];
+  const allowed = new Set(accessible);
+  return branchIds.filter(id => allowed.has(id));
+};
+
+export interface IWeekendBranches {
+  /** Все кандидаты месяца — по ним определяется владелец дня. */
+  ownership: string[];
+  /** Что видит пользователь: кандидаты и отделы с открытым кнопкой табелем, в его охвате. */
+  visible: string[];
+}
+
+/**
+ * Отделы вкладки за месяц. Отдел с открытым кнопкой табелем виден, даже если выпал из кандидатов: иначе открытое
+ * нечем закрыть.
+ */
+export const resolveWeekendBranches = async (req: AuthenticatedRequest, month: string): Promise<IWeekendBranches> => {
+  const halves = [weekendHalfRange(month, 1), weekendHalfRange(month, 2)]
+    .flatMap(range => (range ? [range.startDate] : []));
+  const [ownership, unlocked] = await Promise.all([
+    listBranchCandidateIds(month),
+    listActiveUnlockBranchIds(halves),
+  ]);
+  return { ownership, visible: await filterBranchesByScope(req, [...new Set([...ownership, ...unlocked])]) };
 };
 
 /**
@@ -40,27 +62,7 @@ export const canManageWeekendPeriods = async (req: AuthenticatedRequest): Promis
   canToggleTimesheetLock(req.user) && (await resolveRequestDataScope(req)) === 'all'
 );
 
-/** GET /api/staff-weekends?months=2026-10,2026-11 — месяцы обязательны, «весь период» не поддерживается. */
-const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const months = parsePayrollMonthsQuery(req.query.months);
-    if (months === null || months === 'all') {
-      res.status(400).json({ success: false, error: 'Выберите месяц' });
-      return;
-    }
-    if (months.length > STAFF_WEEKENDS_MAX_MONTHS) {
-      res.status(400).json({ success: false, error: 'Слишком много месяцев' });
-      return;
-    }
-    res.json({ success: true, data: await listWeekendsWithoutCorrection(months, await visibleBranchIds(req)) });
-  } catch (err) {
-    if (handlePayrollZodError(err, res)) return;
-    console.error('staffWeekends.list error:', err);
-    res.status(500).json({ success: false, error: 'Не удалось загрузить список' });
-  }
-};
-
-/** GET /api/staff-weekends/grid?month=2026-10 — сетка вкладки: отделы и их люди с днями без корректировки. */
+/** GET /api/staff-weekends/grid?month=2026-10 — отделы месяца и их люди с днями без корректировки. */
 const grid = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const month = req.query.month;
@@ -68,14 +70,17 @@ const grid = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       res.status(400).json({ success: false, error: 'Выберите месяц' });
       return;
     }
-    const branches = await listWeekendsByBranch(month, await visibleBranchIds(req));
+    const { ownership, visible } = await resolveWeekendBranches(req, month);
+    const branches = await listWeekendsByBranch(month, { ownershipBranchIds: ownership, visibleBranchIds: visible });
     const canManagePeriods = await canManageWeekendPeriods(req);
+    const withPeriods = canManagePeriods
+      ? await attachWeekendPeriods(month, branches)
+      : branches.map(branch => ({ ...branch, periods: [] }));
     res.json({
       success: true,
       data: {
-        branches: canManagePeriods
-          ? await attachWeekendPeriods(month, branches)
-          : branches.map(branch => ({ ...branch, periods: [] })),
+        // Отдел без людей нужен только с кнопкой: открытый табель надо уметь закрыть.
+        branches: withPeriods.filter(branch => branch.rows.length > 0 || branch.periods.length > 0),
         can_manage_periods: canManagePeriods,
       },
     });
@@ -96,4 +101,4 @@ const exportTable = async (req: AuthenticatedRequest, res: Response): Promise<vo
   }
 };
 
-export const staffWeekendsController = { list, grid, exportTable };
+export const staffWeekendsController = { grid, exportTable };

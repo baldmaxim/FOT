@@ -30,6 +30,8 @@ export interface IMissingDay {
   employee_name: string | null;
   kind: MissingDayKind;
   reason: string;
+  /** Только weekend_no_correction: проход без часов (или короче получаса) — для подсказки «проставьте часы». */
+  without_hours?: boolean;
 }
 
 export type ICorrectionValidationResult =
@@ -240,6 +242,7 @@ export async function validateCorrectionAttachments(
       reason: passWithoutHours.has(key)
         ? 'Проход в выходной без часов — создайте корректировку'
         : 'Работа в выходной без корректировки — создайте корректировку',
+      without_hours: passWithoutHours.has(key),
     });
   }
 

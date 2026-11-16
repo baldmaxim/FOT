@@ -625,6 +625,7 @@ describe('проход в выходной без часов (вкладка «�
         employee_id: 1361,
         kind: 'weekend_no_correction',
         reason: 'Проход в выходной без часов — создайте корректировку',
+        without_hours: true,
       });
     }
   });
@@ -709,6 +710,7 @@ describe('проход в выходной без часов (вкладка «�
         expect(result.missing[0]).toMatchObject({
           date: '2026-10-10',
           reason: 'Работа в выходной без корректировки — создайте корректировку',
+          without_hours: false,
         });
       }
     });

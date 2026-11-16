@@ -131,7 +131,26 @@ export const listActiveUnlocks = async (
   [[...branchIds], [...periodStarts]],
 );
 
-/** Кнопки отделов: половина есть, если её можно открыть или закрыть. */
+/**
+ * Отделы, у которых кнопка «Открыть табель» держит подачу открытой в этих половинах: их надо показать даже без людей
+ * в списке, иначе открытое нечем закрыть.
+ */
+export const listActiveUnlockBranchIds = async (periodStarts: readonly string[]): Promise<string[]> => {
+  if (periodStarts.length === 0) return [];
+  const rows = await query<{ branch_id: string }>(
+    `SELECT DISTINCT u.branch_id
+       FROM staff_weekend_unlocks u
+       JOIN timesheet_approvals a ON a.id = u.approval_id AND a.unlocked_at = u.unlocked_at
+      WHERE u.period_start = ANY($1::date[])`,
+    [[...periodStarts]],
+  );
+  return rows.map(row => String(row.branch_id));
+};
+
+/**
+ * Кнопки отделов: половина есть, если её можно открыть или закрыть. Замки всех отделов и половин — одним запросом
+ * (по отделу и половине было бы до двух запросов на отдел).
+ */
 export const attachWeekendPeriods = async <Branch extends IStaffWeekendBranch>(
   month: string,
   branches: readonly Branch[],
@@ -139,23 +158,29 @@ export const attachWeekendPeriods = async <Branch extends IStaffWeekendBranch>(
   const ranges = { 1: weekendHalfRange(month, 1), 2: weekendHalfRange(month, 2) } as const;
   if (!ranges[1] || !ranges[2]) return branches.map(branch => ({ ...branch, periods: [] }));
 
-  const active = await listActiveUnlocks(
-    branches.map(branch => branch.id),
-    [ranges[1].startDate, ranges[2].startDate],
-  ) as Array<IWeekendPeriodApprovalRow & { branch_id: string; period_start: string }>;
+  const [active, locks] = await Promise.all([
+    listActiveUnlocks(
+      branches.map(branch => branch.id),
+      [ranges[1].startDate, ranges[2].startDate],
+    ) as Promise<Array<IWeekendPeriodApprovalRow & { branch_id: string; period_start: string }>>,
+    listLockingApprovalsForEmployeeDates(branches.flatMap(branch => [...rowsOfHalf(branch.rows, 1), ...rowsOfHalf(branch.rows, 2)])),
+  ]);
+  const isLocked = (pair: { employeeId: number; workDate: string }): boolean => (
+    (locks.get(lockKey(pair.employeeId, pair.workDate))?.length ?? 0) > 0
+  );
 
-  return Promise.all(branches.map(async (branch) => {
+  return branches.map((branch) => {
     const periods: IWeekendPeriod[] = [];
     for (const half of [1, 2] as const) {
       const range = ranges[half]!;
-      const canOpen = (await listLockingApprovalIds(branch.rows, half)).length > 0;
+      const canOpen = rowsOfHalf(branch.rows, half).some(isLocked);
       const canClose = active.some(row => row.branch_id === branch.id && row.period_start === range.startDate);
       if (canOpen || canClose) {
         periods.push({ half, start_date: range.startDate, end_date: range.endDate, can_open: canOpen, can_close: canClose });
       }
     }
     return { ...branch, periods };
-  }));
+  });
 };
 
 /** Кто ещё затронут: люди подач, чьи дни подача держит, а в этот день они не в этом отделе. */

@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * «Выходные» кадров (миграция 346). Правила дня проверяет тест validateCorrectionAttachments, здесь — что поверх него:
- * состав и окна по двум отделам, отдел строки, сумма минут, охват и несколько месяцев.
+ * «Выходные» кадров: поверх правил дня (weekend-missing-days) и владельца дня (staff-branch-ownership) — раскладка
+ * по отделам, охват после владения, строки и порядок.
  */
 
 const h = vi.hoisted(() => ({
   query: vi.fn(),
-  validate: vi.fn(),
-  memberships: vi.fn(),
+  missing: vi.fn(),
+  ownership: vi.fn(),
+  describe: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -19,324 +20,132 @@ vi.mock('../config/postgres.js', () => ({
   getPool: vi.fn(),
   pool: vi.fn(),
 }));
-vi.mock('./timesheet-approval-correction-validation.service.js', () => ({
-  validateCorrectionAttachments: h.validate,
-}));
-vi.mock('./timesheet-department-assignments.service.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./timesheet-department-assignments.service.js')>()),
-  listEmployeeMembershipsForDepartmentPeriod: h.memberships,
+vi.mock('./weekend-missing-days.service.js', () => ({ listWeekendMissingDays: h.missing }));
+vi.mock('./staff-branch-ownership.service.js', () => ({
+  loadBranchOwnership: h.ownership,
+  describeBranches: h.describe,
 }));
 
-const {
-  listWeekendsByBranch,
-  listWeekendsWithoutCorrection,
-  STAFF_WEEKENDS_BRANCH_IDS,
-  STAFF_WEEKENDS_MAX_MONTHS,
-} = await import('./staff-weekends.service.js');
+const { listWeekendsByBranch } = await import('./staff-weekends.service.js');
 
-const [LINE, GENERAL] = STAFF_WEEKENDS_BRANCH_IDS as [string, string];
-const BOTH = [LINE, GENERAL];
+const LINE = 'line';
+const GENERAL = 'general';
+const STROY = 'stroy';
+const NAMES: Record<string, string> = { [LINE]: 'ЛИНИЯ', [GENERAL]: 'ЛИНИЯ-Общестрой', [STROY]: 'Департамент строительства' };
 
-interface IMembershipFixture {
-  employee_id: number;
-  transferred_out_date?: string | null;
-  joined_date?: string | null;
-  joined_via_transfer?: boolean;
-}
+const day = (employeeId: number, date: string) => ({ employee_id: employeeId, date, without_hours: false });
 
-/** Состав по отделам; месяц не важен, если не задан отдельно. */
-const givenMembers = (byBranch: Record<string, IMembershipFixture[]>): void => {
-  h.memberships.mockImplementation(async (branchId: string) => (byBranch[branchId] ?? []).map(member => ({
-    transferred_out_date: null,
-    joined_date: null,
-    joined_via_transfer: false,
-    ...member,
-  })));
+/** Владелец дня: «сотрудник|дата» → отдел; по умолчанию — LINE. */
+const givenOwnership = (employeeIds: number[], owners: Record<string, string | null> = {}): void => {
+  h.ownership.mockResolvedValue({
+    employeeIds,
+    ownerOf: (employeeId: number, date: string) => (`${employeeId}|${date}` in owners ? owners[`${employeeId}|${date}`] : LINE),
+  });
 };
 
-const weekendDay = (employeeId: number, date: string) => ({
-  date,
-  employee_id: employeeId,
-  employee_name: null,
-  kind: 'weekend_no_correction',
-  reason: '',
-});
-
-const givenDays = (...missing: Array<ReturnType<typeof weekendDay>>): void => {
-  h.validate.mockResolvedValue({ ok: false, missing });
-};
-
-/** Ответы трёх запросов сервиса. minutes — «сотрудник|день» → минуты. */
-const givenDetails = (
-  employees: Array<{ id: number; full_name: string | null; position?: string | null }>,
-  minutes: Record<string, number> = {},
-): void => {
+const givenEmployees = (employees: Array<{ id: number; full_name: string; position?: string | null }>): void => {
   h.query.mockImplementation(async (sql: string) => {
-    if (sql.includes('FROM employees')) return employees.map(employee => ({ position: null, ...employee }));
-    if (sql.includes('FROM skud_daily_summary')) {
-      return Object.entries(minutes).map(([key, total]) => {
-        const [employeeId, date] = key.split('|');
-        return { employee_id: Number(employeeId), date, total_minutes: total };
-      });
-    }
-    if (sql.includes('FROM org_departments')) {
-      return [{ id: LINE, name: 'ЛИНИЯ' }, { id: GENERAL, name: 'ЛИНИЯ-Общестрой' }];
-    }
+    if (String(sql).includes('FROM employees')) return employees.map(employee => ({ position: null, ...employee }));
     throw new Error(`неожиданный запрос: ${sql}`);
   });
 };
 
 beforeEach(() => {
   h.query.mockReset();
-  h.validate.mockReset();
-  h.memberships.mockReset();
+  h.missing.mockReset().mockResolvedValue([]);
+  h.ownership.mockReset();
+  h.describe.mockReset().mockImplementation(async (ids: string[]) => ids.map(id => ({ id, name: NAMES[id] ?? id })));
 });
 
-describe('listWeekendsWithoutCorrection', () => {
-  it('лимит месяцев и два отдела', () => {
-    expect(STAFF_WEEKENDS_MAX_MONTHS).toBe(12);
-    expect(STAFF_WEEKENDS_BRANCH_IDS).toHaveLength(2);
-  });
-
-  it('минуты суммируются только по показанным дням, даты — по порядку, должность и ФИО из карточки', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-04'));
-    givenDetails(
-      [{ id: 1, full_name: 'Джумаев А. Х.', position: 'Начальник участка' }],
-      { '1|2026-10-04': 516, '1|2026-10-11': 6, '1|2026-10-10': 498 },
-    );
-
-    expect(await listWeekendsWithoutCorrection(['2026-10'], BOTH)).toEqual([{
-      employee_id: 1,
-      full_name: 'Джумаев А. Х.',
-      department: 'ЛИНИЯ',
-      position: 'Начальник участка',
-      days: ['2026-10-04', '2026-10-11'],
-      total_minutes: 522,
-    }]);
-  });
-
-  it('перевод ЛИНИЯ → ЛИНИЯ-Общестрой в месяце: дни обоих отрезков, отдел — по последнему дню, квота плановых общая', async () => {
-    givenMembers({
-      [LINE]: [{ employee_id: 1, transferred_out_date: '2026-10-16' }],
-      [GENERAL]: [{ employee_id: 1, joined_date: '2026-10-16', joined_via_transfer: true }],
-    });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-25'));
-    givenDetails([{ id: 1, full_name: 'Иванов' }]);
-
-    const [row] = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    // Окно второго отдела не затёрло первое: 11.10 (ещё в ЛИНИЯ) на месте.
-    expect(row?.days).toEqual(['2026-10-11', '2026-10-25']);
-    expect(row?.department).toBe('ЛИНИЯ-Общестрой');
-    // Один вызов на сотрудника за месяц: квота плановых суббот считается на человека, а не на отрезок.
-    expect(h.validate).toHaveBeenCalledTimes(1);
-    expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [1] });
-    // Проход без часов в выходной — тоже на вкладку.
-    expect(h.validate.mock.calls[0]?.[2]).toEqual({ includePassWithoutHours: true });
-  });
-
-  it('обратный перевод: последний день в ЛИНИЯ — в строке ЛИНИЯ', async () => {
-    givenMembers({
-      [GENERAL]: [{ employee_id: 1, transferred_out_date: '2026-10-16' }],
-      [LINE]: [{ employee_id: 1, joined_date: '2026-10-16', joined_via_transfer: true }],
-    });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-25'));
-    givenDetails([{ id: 1, full_name: 'Иванов' }]);
-
-    const [row] = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    expect(row?.days).toEqual(['2026-10-11', '2026-10-25']);
-    expect(row?.department).toBe('ЛИНИЯ');
-  });
-
-  it('уволенный: виден в месяце увольнения до его даты, отдел — прежний, а не «Уволенные»', async () => {
-    givenMembers({ [GENERAL]: [{ employee_id: 2, transferred_out_date: '2026-10-31' }] });
-    givenDays(weekendDay(2, '2026-10-25'), weekendDay(2, '2026-10-31'));
-    givenDetails([{ id: 2, full_name: 'Тошмуродов' }]);
-
-    const [row] = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    expect(row?.days).toEqual(['2026-10-25']);
-    expect(row?.department).toBe('ЛИНИЯ-Общестрой');
-    expect(h.memberships).toHaveBeenCalledWith(GENERAL, '2026-10-01', '2026-10-31', undefined, { firedInDismissalMonth: true });
-  });
-
-  it('нижняя граница окна — только при настоящем переводе, «грязный» effective_from дни не режет', async () => {
-    givenMembers({
-      [LINE]: [
-        { employee_id: 1, joined_date: '2026-10-20', joined_via_transfer: false },
-        { employee_id: 2, joined_date: '2026-10-20', joined_via_transfer: true },
-      ],
-    });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(2, '2026-10-11'), weekendDay(2, '2026-10-25'));
-    givenDetails([{ id: 1, full_name: 'Грязная дата' }, { id: 2, full_name: 'Настоящий перевод' }]);
-
-    const rows = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    expect(rows.find(row => row.employee_id === 1)?.days).toEqual(['2026-10-11']);
-    expect(rows.find(row => row.employee_id === 2)?.days).toEqual(['2026-10-25']);
-  });
-
-  it('сотрудник без окна (не из этих отделов) в список не попадает', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    givenDays(weekendDay(1, '2026-10-04'), weekendDay(999, '2026-10-04'));
-    givenDetails([{ id: 1, full_name: 'Иванов' }]);
-
-    const rows = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    expect(rows.map(row => row.employee_id)).toEqual([1]);
-    const detailCall = h.query.mock.calls.find(([sql]) => String(sql).includes('FROM employees'));
-    expect(detailCall?.[1]).toEqual([[1]]);
-  });
-
-  it('охват: передан один отдел — состав и дни только его', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }], [GENERAL]: [{ employee_id: 2 }] });
-    givenDays(weekendDay(2, '2026-10-04'));
-    givenDetails([{ id: 2, full_name: 'Петров' }]);
-
-    const rows = await listWeekendsWithoutCorrection(['2026-10'], [GENERAL]);
-
-    expect(rows.map(row => row.department)).toEqual(['ЛИНИЯ-Общестрой']);
-    expect(h.memberships).toHaveBeenCalledTimes(1);
-    expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [2] });
-  });
-
-  it('охват: ни одного отдела — пусто и без запросов', async () => {
-    expect(await listWeekendsWithoutCorrection(['2026-10'], [])).toEqual([]);
-    expect(h.memberships).not.toHaveBeenCalled();
-    expect(h.validate).not.toHaveBeenCalled();
-    expect(h.query).not.toHaveBeenCalled();
-  });
-
-  it('несколько месяцев: проверка на каждый месяц, дни в одной строке без повторов', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    h.validate
-      .mockResolvedValueOnce({ ok: false, missing: [weekendDay(1, '2026-10-04')] })
-      .mockResolvedValueOnce({ ok: false, missing: [weekendDay(1, '2026-11-01')] });
-    givenDetails([{ id: 1, full_name: 'Иванов' }], { '1|2026-10-04': 60, '1|2026-11-01': 30 });
-
-    const rows = await listWeekendsWithoutCorrection(['2026-10', '2026-11'], BOTH);
-
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.days).toEqual(['2026-10-04', '2026-11-01']);
-    expect(rows[0]?.total_minutes).toBe(90);
-    expect(h.validate).toHaveBeenCalledTimes(2);
-    expect(h.validate.mock.calls[1]?.[1]).toMatchObject({ startDate: '2026-11-01', endDate: '2026-11-30' });
-  });
-
-  it('заявления из проверки подачи не показываются, только выходные без корректировки', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    h.validate.mockResolvedValue({
-      ok: false,
-      missing: [{ date: '2026-10-04', employee_id: 1, employee_name: null, kind: 'leave_request', reason: '' }],
-    });
-
-    expect(await listWeekendsWithoutCorrection(['2026-10'], BOTH)).toEqual([]);
-    expect(h.query).not.toHaveBeenCalled();
-  });
-
-  it('проверка прошла или в отделах никого — пустой список', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    h.validate.mockResolvedValue({ ok: true });
-    expect(await listWeekendsWithoutCorrection(['2026-10'], BOTH)).toEqual([]);
-
-    h.validate.mockClear();
-    givenMembers({});
-    expect(await listWeekendsWithoutCorrection(['2026-10'], BOTH)).toEqual([]);
-    expect(h.validate).not.toHaveBeenCalled();
-  });
-
-  it('порядок — по ФИО', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }, { employee_id: 2 }] });
-    givenDays(weekendDay(1, '2026-10-04'), weekendDay(2, '2026-10-04'));
-    givenDetails([{ id: 1, full_name: 'Яковлев' }, { id: 2, full_name: 'Абдуллаев' }]);
-
-    const rows = await listWeekendsWithoutCorrection(['2026-10'], BOTH);
-
-    expect(rows.map(row => row.full_name)).toEqual(['Абдуллаев', 'Яковлев']);
-  });
+const scope = (visible: string[], ownership: string[] = [LINE, GENERAL, STROY]) => ({
+  ownershipBranchIds: ownership,
+  visibleBranchIds: visible,
 });
 
 describe('listWeekendsByBranch', () => {
-  it('каждый отдел своей строкой, в том числе без людей, порядок — как в охвате', async () => {
-    givenMembers({ [GENERAL]: [{ employee_id: 1 }] });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-04'));
-    givenDetails([{ id: 1, full_name: 'Джумаев А. Х.', position: 'Начальник участка' }]);
+  it('строки по владельцу дня, дни по порядку без повторов, ФИО и должность из карточки', async () => {
+    givenOwnership([1]);
+    h.missing.mockResolvedValue([day(1, '2026-11-08'), day(1, '2026-11-01'), day(1, '2026-11-08')]);
+    givenEmployees([{ id: 1, full_name: 'Агарков Д. Н.', position: 'Мастер' }]);
 
-    expect(await listWeekendsByBranch('2026-10', BOTH)).toEqual([
+    expect(await listWeekendsByBranch('2026-11', scope([LINE]))).toEqual([{
+      id: LINE,
+      name: 'ЛИНИЯ',
+      rows: [{ employee_id: 1, full_name: 'Агарков Д. Н.', position: 'Мастер', days: ['2026-11-01', '2026-11-08'] }],
+    }]);
+    expect(h.ownership).toHaveBeenCalledWith('2026-11', [LINE, GENERAL, STROY]);
+    expect(h.missing).toHaveBeenCalledWith([1], expect.objectContaining({ startDate: '2026-11-01', endDate: '2026-11-30' }));
+  });
+
+  it('владелец считается по всем кандидатам, охват — после: день ребёнка не переезжает в доступного родителя', async () => {
+    givenOwnership([1], { '1|2026-11-08': LINE });
+    h.missing.mockResolvedValue([day(1, '2026-11-08')]);
+    givenEmployees([{ id: 1, full_name: 'Иванов' }]);
+
+    const branches = await listWeekendsByBranch('2026-11', scope([STROY]));
+
+    expect(branches).toEqual([{ id: STROY, name: 'Департамент строительства', rows: [] }]);
+    expect(h.ownership).toHaveBeenCalledWith('2026-11', [LINE, GENERAL, STROY]);
+  });
+
+  it('день без владельца (подрядчик, вне кандидатов) не попадает никуда', async () => {
+    givenOwnership([1], { '1|2026-11-22': null });
+    h.missing.mockResolvedValue([day(1, '2026-11-08'), day(1, '2026-11-22')]);
+    givenEmployees([{ id: 1, full_name: 'Иванов' }]);
+
+    const [line] = await listWeekendsByBranch('2026-11', scope([LINE]));
+
+    expect(line?.rows[0]?.days).toEqual(['2026-11-08']);
+  });
+
+  it('перевод внутри месяца: строка в каждом отделе со своими днями, проверка одна на всех', async () => {
+    givenOwnership([1], { '1|2026-11-08': LINE, '1|2026-11-22': GENERAL });
+    h.missing.mockResolvedValue([day(1, '2026-11-08'), day(1, '2026-11-22')]);
+    givenEmployees([{ id: 1, full_name: 'Иванов' }]);
+
+    const [line, general] = await listWeekendsByBranch('2026-11', scope([LINE, GENERAL]));
+
+    expect(line?.rows[0]?.days).toEqual(['2026-11-08']);
+    expect(general?.rows[0]?.days).toEqual(['2026-11-22']);
+    expect(h.missing).toHaveBeenCalledTimes(1);
+  });
+
+  it('видимые отделы приходят все, в том числе без людей, в порядке дерева', async () => {
+    givenOwnership([]);
+    h.describe.mockResolvedValue([{ id: GENERAL, name: 'ЛИНИЯ-Общестрой' }, { id: LINE, name: 'ЛИНИЯ' }]);
+
+    expect(await listWeekendsByBranch('2026-11', scope([LINE, GENERAL]))).toEqual([
+      { id: GENERAL, name: 'ЛИНИЯ-Общестрой', rows: [] },
       { id: LINE, name: 'ЛИНИЯ', rows: [] },
-      {
-        id: GENERAL,
-        name: 'ЛИНИЯ-Общестрой',
-        rows: [{ employee_id: 1, full_name: 'Джумаев А. Х.', position: 'Начальник участка', days: ['2026-10-04', '2026-10-11'] }],
-      },
     ]);
+    expect(h.query).not.toHaveBeenCalled();
   });
 
   it('часов СКУД в ответе нет: в сводке не вычтен обед, часы показывает табель', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }] });
-    givenDays(weekendDay(1, '2026-10-04'));
-    givenDetails([{ id: 1, full_name: 'Иванов' }]);
+    givenOwnership([1]);
+    h.missing.mockResolvedValue([day(1, '2026-11-08')]);
+    givenEmployees([{ id: 1, full_name: 'Иванов' }]);
 
-    const [branch] = await listWeekendsByBranch('2026-10', [LINE]);
+    const [branch] = await listWeekendsByBranch('2026-11', scope([LINE]));
 
     expect(branch?.rows[0]).not.toHaveProperty('total_minutes');
     expect(h.query.mock.calls.some(([sql]) => String(sql).includes('skud_daily_summary'))).toBe(false);
   });
 
-  it('перевод между отделами: строка в каждом со своими днями, проверка одна на человека', async () => {
-    givenMembers({
-      [LINE]: [{ employee_id: 1, transferred_out_date: '2026-10-16' }],
-      [GENERAL]: [{ employee_id: 1, joined_date: '2026-10-16', joined_via_transfer: true }],
-    });
-    givenDays(weekendDay(1, '2026-10-11'), weekendDay(1, '2026-10-25'));
-    givenDetails([{ id: 1, full_name: 'Иванов' }]);
-
-    const [line, general] = await listWeekendsByBranch('2026-10', BOTH);
-
-    expect(line?.rows[0]?.days).toEqual(['2026-10-11']);
-    expect(general?.rows[0]?.days).toEqual(['2026-10-25']);
-    expect(h.validate).toHaveBeenCalledTimes(1);
-    expect(h.validate.mock.calls[0]?.[0]).toEqual({ kind: 'personal', employeeIds: [1] });
-    expect(h.validate.mock.calls[0]?.[2]).toEqual({ includePassWithoutHours: true });
-  });
-
-  it('уволенный — в отделе, где был, с днями до даты увольнения', async () => {
-    givenMembers({ [GENERAL]: [{ employee_id: 2, transferred_out_date: '2026-10-31' }] });
-    givenDays(weekendDay(2, '2026-10-25'), weekendDay(2, '2026-10-31'));
-    givenDetails([{ id: 2, full_name: 'Тошмуродов' }]);
-
-    const [branch] = await listWeekendsByBranch('2026-10', [GENERAL]);
-
-    expect(branch?.rows[0]?.days).toEqual(['2026-10-25']);
-    expect(h.memberships).toHaveBeenCalledWith(GENERAL, '2026-10-01', '2026-10-31', undefined, { firedInDismissalMonth: true });
-  });
-
-  it('никого нет: отделы всё равно приходят, сотрудников не запрашиваем', async () => {
-    givenMembers({});
-    givenDetails([]);
-
-    expect(await listWeekendsByBranch('2026-10', BOTH)).toEqual([
-      { id: LINE, name: 'ЛИНИЯ', rows: [] },
-      { id: GENERAL, name: 'ЛИНИЯ-Общестрой', rows: [] },
-    ]);
-    expect(h.query.mock.calls.some(([sql]) => String(sql).includes('FROM employees'))).toBe(false);
-  });
-
-  it('вне охвата — пусто и без запросов', async () => {
-    expect(await listWeekendsByBranch('2026-10', [])).toEqual([]);
-    expect(h.memberships).not.toHaveBeenCalled();
-    expect(h.query).not.toHaveBeenCalled();
-  });
-
   it('порядок внутри отдела — по ФИО', async () => {
-    givenMembers({ [LINE]: [{ employee_id: 1 }, { employee_id: 2 }] });
-    givenDays(weekendDay(1, '2026-10-04'), weekendDay(2, '2026-10-04'));
-    givenDetails([{ id: 1, full_name: 'Яковлев' }, { id: 2, full_name: 'Абдуллаев' }]);
+    givenOwnership([1, 2]);
+    h.missing.mockResolvedValue([day(1, '2026-11-08'), day(2, '2026-11-08')]);
+    givenEmployees([{ id: 1, full_name: 'Яковлев' }, { id: 2, full_name: 'Абдуллаев' }]);
 
-    const [branch] = await listWeekendsByBranch('2026-10', [LINE]);
+    const [branch] = await listWeekendsByBranch('2026-11', scope([LINE]));
 
     expect(branch?.rows.map(row => row.full_name)).toEqual(['Абдуллаев', 'Яковлев']);
+  });
+
+  it('вне охвата или неверный месяц — пусто без запросов', async () => {
+    expect(await listWeekendsByBranch('2026-11', scope([]))).toEqual([]);
+    expect(await listWeekendsByBranch('2026-13', scope([LINE]))).toEqual([]);
+    expect(h.ownership).not.toHaveBeenCalled();
+    expect(h.missing).not.toHaveBeenCalled();
   });
 });

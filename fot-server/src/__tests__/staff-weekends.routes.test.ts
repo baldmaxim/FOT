@@ -9,7 +9,8 @@ import jwt from 'jsonwebtoken';
  */
 
 const h = vi.hoisted(() => ({
-  list: vi.fn(),
+  candidates: vi.fn(),
+  unlockedBranches: vi.fn(),
   grid: vi.fn(),
   roster: vi.fn(),
   accessible: vi.fn(),
@@ -37,6 +38,13 @@ const h = vi.hoisted(() => ({
 
 const LINE = '60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4';
 const GENERAL = '0b24809e-5f04-45e1-bbe2-8a82990d6bdd';
+const BRIGADE = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
+/** Отдел, где табель открыт кнопкой, а в кандидатах месяца его уже нет. */
+const OPENED_ONLY = '9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c';
+const scopeOf = (visible: string[], ownership: string[] = [LINE, GENERAL, BRIGADE]) => ({
+  ownershipBranchIds: ownership,
+  visibleBranchIds: visible,
+});
 
 vi.mock('../config/postgres.js', () => ({
   queryOne: vi.fn().mockResolvedValue({ token_version: 0 }),
@@ -66,12 +74,8 @@ vi.mock('../services/hiring-access.service.js', () => ({
 }));
 vi.mock('../services/object-kpi-roles-cache.service.js', () => ({ isEconomicsHead: vi.fn(async () => false) }));
 vi.mock('../services/employee-scope-filter.service.js', () => ({ resolveStaffRosterEmployeeIds: h.roster }));
-vi.mock('../services/staff-weekends.service.js', () => ({
-  listWeekendsWithoutCorrection: h.list,
-  listWeekendsByBranch: h.grid,
-  STAFF_WEEKENDS_BRANCH_IDS: ['60e94f0c-7b39-4c5c-be92-6d8c0ad0d7c4', '0b24809e-5f04-45e1-bbe2-8a82990d6bdd'],
-  STAFF_WEEKENDS_MAX_MONTHS: 12,
-}));
+vi.mock('../services/staff-weekends.service.js', () => ({ listWeekendsByBranch: h.grid }));
+vi.mock('../services/staff-branch-ownership.service.js', () => ({ listBranchCandidateIds: h.candidates }));
 
 vi.mock('../services/staff-weekends-periods.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/staff-weekends-periods.service.js')>();
@@ -80,6 +84,7 @@ vi.mock('../services/staff-weekends-periods.service.js', async (importOriginal) 
     attachWeekendPeriods: h.attachPeriods,
     listLockingApprovalIds: h.lockingIds,
     listActiveUnlocks: h.activeUnlocks,
+    listActiveUnlockBranchIds: h.unlockedBranches,
     findWeekendOperation: h.findOperation,
     loadApprovalsForAccessCheck: h.loadApprovals,
     openApprovalsTogether: h.openTogether,
@@ -133,10 +138,13 @@ const postExport = (body: unknown, roleCode = 'hr'): request.Test =>
   request(app).post('/api/staff-weekends/export').set('Authorization', `Bearer ${tokenFor(roleCode)}`).send(body as object);
 
 beforeEach(() => {
-  h.list.mockReset().mockResolvedValue([]);
+  h.candidates.mockReset().mockResolvedValue([LINE, GENERAL, BRIGADE]);
+  h.unlockedBranches.mockReset().mockResolvedValue([]);
   h.grid.mockReset().mockResolvedValue([{ id: LINE, name: 'ЛИНИЯ', rows: [{ employee_id: 1, days: ['2026-10-04'] }] }]);
   h.dataScope.mockReset().mockResolvedValue('all');
-  h.attachPeriods.mockReset().mockImplementation(async (_month: string, branches: unknown[]) => branches);
+  h.attachPeriods.mockReset().mockImplementation(async (_month: string, branches: Array<Record<string, unknown>>) => (
+    branches.map(branch => ({ ...branch, periods: [] }))
+  ));
   h.lockingIds.mockReset().mockResolvedValue([10, 11]);
   h.activeUnlocks.mockReset().mockResolvedValue([]);
   h.findOperation.mockReset().mockResolvedValue([]);
@@ -156,86 +164,69 @@ beforeEach(() => {
 });
 
 describe('права вкладки «Выходные»', () => {
-  it('с «Просмотром»: список и выгрузка работают', async () => {
-    expect((await getList('?months=2026-10')).status).toBe(200);
+  it('с «Просмотром»: сетка и выгрузка работают', async () => {
+    expect((await getList('/grid?month=2026-10')).status).toBe(200);
     expect((await postExport(snapshot())).status).toBe(200);
   });
 
-  it('без права (в т.ч. с правом «Удержаний») — 403, список не считается', async () => {
+  it('без права (в т.ч. с правом «Удержаний») — 403, сетка не считается', async () => {
     for (const role of ['office', 'deductions_only']) {
-      expect((await getList('?months=2026-10', role)).status, role).toBe(403);
+      expect((await getList('/grid?month=2026-10', role)).status, role).toBe(403);
       expect((await postExport(snapshot(), role)).status, role).toBe(403);
     }
-    expect(h.list).not.toHaveBeenCalled();
-  });
-});
-
-describe('месяцы', () => {
-  it('список месяцев уходит в сервис — без повторов и по возрастанию', async () => {
-    const res = await getList('?months=2026-11,2026-10,2026-11');
-    expect(res.status).toBe(200);
-    expect(h.list).toHaveBeenCalledWith(['2026-10', '2026-11'], [LINE, GENERAL]);
+    expect(h.grid).not.toHaveBeenCalled();
   });
 
-  it('ровно 12 месяцев — можно', async () => {
-    const months = Array.from({ length: 12 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`).join(',');
-    expect((await getList(`?months=${months}`)).status).toBe(200);
-  });
-
-  it('без месяцев, «весь период», 13 месяцев и мусор — 400, список не считается', async () => {
-    const thirteen = ['2025-12', ...Array.from({ length: 12 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`)].join(',');
-    for (const query of ['', '?months=all', `?months=${thirteen}`, '?months=', '?months=октябрь', '?months=2026-10&months=2026-11']) {
-      expect((await getList(query)).status, query).toBe(400);
-    }
-    expect(h.list).not.toHaveBeenCalled();
+  it('прежнего списка ?months= больше нет', async () => {
+    expect((await getList('?months=2026-10')).status).toBe(404);
   });
 });
 
 describe('охват — по отделу, а не по текущему отделу сотрудника', () => {
-  it('список кадров без ограничений — оба отдела', async () => {
-    await getList('?months=2026-10');
-    expect(h.list).toHaveBeenCalledWith(['2026-10'], [LINE, GENERAL]);
+  it('список кадров без ограничений — все кандидаты месяца', async () => {
+    await getList('/grid?month=2026-10');
+    expect(h.candidates).toHaveBeenCalledWith('2026-10');
+    expect(h.unlockedBranches).toHaveBeenCalledWith(['2026-10-01', '2026-10-16']);
+    expect(h.grid).toHaveBeenCalledWith('2026-10', scopeOf([LINE, GENERAL, BRIGADE]));
   });
 
-  it('набор сотрудников без уволенных, но все отделы доступны — оба отдела', async () => {
+  it('набор сотрудников без уволенных, но все отделы доступны — все кандидаты', async () => {
     h.roster.mockResolvedValue(new Set([1]));
     h.accessible.mockResolvedValue('all');
-    await getList('?months=2026-10');
-    expect(h.list).toHaveBeenCalledWith(['2026-10'], [LINE, GENERAL]);
+    await getList('/grid?month=2026-10');
+    expect(h.grid).toHaveBeenCalledWith('2026-10', scopeOf([LINE, GENERAL, BRIGADE]));
   });
 
-  it('администратор компании с ветвью СУ-10: его уволенные не теряются — отбор по отделу', async () => {
+  it('администратор компании: видит только свою ветку, а владелец дня считается по всем кандидатам', async () => {
     // Уволенный уже в «Уволенных», в наборе id его нет; отдел при этом в охвате.
     h.roster.mockResolvedValue(new Set([1]));
     h.accessible.mockResolvedValue([GENERAL, 'other-dept']);
-    await getList('?months=2026-10');
-    expect(h.list).toHaveBeenCalledWith(['2026-10'], [GENERAL]);
+    await getList('/grid?month=2026-10');
+    expect(h.grid).toHaveBeenCalledWith('2026-10', scopeOf([GENERAL]));
   });
 
   it('администратор другой компании — пустой список', async () => {
     h.roster.mockResolvedValue(new Set([1]));
     h.accessible.mockResolvedValue(['sm-dept']);
-    const res = await getList('?months=2026-10');
+    h.grid.mockResolvedValue([]);
+    const res = await getList('/grid?month=2026-10');
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([]);
-    expect(h.list).toHaveBeenCalledWith(['2026-10'], []);
+    expect(res.body.data.branches).toEqual([]);
+    expect(h.grid).toHaveBeenCalledWith('2026-10', scopeOf([]));
   });
 });
 
 describe('сетка', () => {
-  it('прежний ?months= отвечает прежней формой: массив строк, а не отделы', async () => {
-    h.list.mockResolvedValue([{ employee_id: 1 }]);
-    const res = await getList('?months=2026-10');
-    expect(res.body.data).toEqual([{ employee_id: 1 }]);
-    expect(h.grid).not.toHaveBeenCalled();
-  });
-
-  it('с «Просмотром» — отделы в охвате', async () => {
-    h.grid.mockResolvedValue([{ id: LINE, name: 'ЛИНИЯ', rows: [] }]);
-    const res = await getList('/grid?month=2026-10');
+  it('без права на кнопки — только отделы со строками', async () => {
+    h.grid.mockResolvedValue([
+      { id: LINE, name: 'ЛИНИЯ', rows: [] },
+      { id: BRIGADE, name: 'бр.Иванов', rows: [{ employee_id: 1, days: ['2026-10-04'] }] },
+    ]);
+    const res = await getList('/grid?month=2026-10', 'viewer');
     expect(res.status).toBe(200);
-    expect(res.body.data.branches).toEqual([{ id: LINE, name: 'ЛИНИЯ', rows: [] }]);
-    expect(h.grid).toHaveBeenCalledWith('2026-10', [LINE, GENERAL]);
+    expect(res.body.data.branches).toEqual([
+      { id: BRIGADE, name: 'бр.Иванов', rows: [{ employee_id: 1, days: ['2026-10-04'] }], periods: [] },
+    ]);
   });
 
   it('без права — 403, не считается', async () => {
@@ -248,13 +239,6 @@ describe('сетка', () => {
       expect((await getList(query)).status, query).toBe(400);
     }
     expect(h.grid).not.toHaveBeenCalled();
-  });
-
-  it('охват: администратор компании с одним отделом получает только его', async () => {
-    h.roster.mockResolvedValue(new Set([1]));
-    h.accessible.mockResolvedValue([GENERAL]);
-    await getList('/grid?month=2026-10');
-    expect(h.grid).toHaveBeenCalledWith('2026-10', [GENERAL]);
   });
 });
 
@@ -290,6 +274,23 @@ describe('кнопки в ответе сетки', () => {
     expect(res.body.data.can_manage_periods).toBe(false);
     expect(res.body.data.branches[0].periods).toEqual([]);
     expect(h.attachPeriods).not.toHaveBeenCalled();
+  });
+
+  it('отдел вне кандидатов, но с открытым кнопкой табелем: виден без людей, с кнопкой «Закрыть»', async () => {
+    h.unlockedBranches.mockResolvedValue([OPENED_ONLY]);
+    h.grid.mockResolvedValue([
+      { id: LINE, name: 'ЛИНИЯ', rows: [] },
+      { id: OPENED_ONLY, name: 'Склад', rows: [] },
+    ]);
+    const closeOnly = [{ half: 1, start_date: '2026-10-01', end_date: '2026-10-15', can_open: false, can_close: true }];
+    h.attachPeriods.mockImplementation(async (_month: string, branches: Array<{ id: string }>) => branches.map(branch => ({
+      ...branch, periods: branch.id === OPENED_ONLY ? closeOnly : [],
+    })));
+
+    const res = await getList('/grid?month=2026-10', 'hr_admin');
+
+    expect(h.grid).toHaveBeenCalledWith('2026-10', scopeOf([LINE, GENERAL, BRIGADE, OPENED_ONLY]));
+    expect(res.body.data.branches).toEqual([{ id: OPENED_ONLY, name: 'Склад', rows: [], periods: closeOnly }]);
   });
 
   it('администратор компании: право есть, охват не «все» — кнопок нет', async () => {
@@ -447,6 +448,21 @@ describe('закрыть табель отдела', () => {
     h.activeUnlocks.mockResolvedValue([approval(10)]);
     h.closeApproval.mockResolvedValue({ ok: false, status: 409, body: { success: false, error: 'Период уже закрыт', code: 'ALREADY_LOCKED' } });
     expect((await post('close', closeBody)).body.data).toEqual({ closed: [10], failed: [] });
+  });
+
+  it('отдел выпал из кандидатов, но открыт кнопкой — закрывается', async () => {
+    h.unlockedBranches.mockResolvedValue([OPENED_ONLY]);
+    h.activeUnlocks.mockResolvedValue([approval(10)]);
+    const res = await post('close', { ...closeBody, branch_id: OPENED_ONLY });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ closed: [10], failed: [] });
+    expect(h.activeUnlocks).toHaveBeenCalledWith([OPENED_ONLY], ['2026-10-01']);
+  });
+
+  it('чужой отдел (не кандидат и не открыт кнопкой) — 403', async () => {
+    const res = await post('close', { ...closeBody, branch_id: OPENED_ONLY });
+    expect(res.status).toBe(403);
+    expect(h.closeApproval).not.toHaveBeenCalled();
   });
 
   it('повтор: закрывать нечего — пустой результат, а не ошибка', async () => {

@@ -1,5 +1,5 @@
 import { type FC, useCallback, useMemo, useState } from 'react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 
 import { useAuth } from '../../../contexts/AuthContext';
@@ -7,6 +7,13 @@ import { useIsMobile } from '../../../hooks/useIsMobile';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { STAFF_WEEKENDS_KEY, staffWeekendService, type IStaffWeekendBranch } from '../../../services/staffWeekendService';
 import { timesheetService } from '../../../services/timesheetService';
+import {
+  branchOptionLabel,
+  buildBranchOptions,
+  readStoredBranch,
+  resolveSelectedBranch,
+  writeStoredBranch,
+} from '../../../utils/branchSelect';
 import { getMonthLabel } from '../../../utils/calendarUtils';
 import { searchRowsByFio } from '../../../utils/fioSearch';
 import { moscowCurrentMonth, shiftMonth } from '../../../utils/moscowDate';
@@ -23,14 +30,16 @@ import { WeekendPeriodActions } from './WeekendPeriodActions';
 import styles from './WeekendsTab.module.css';
 
 const EMPTY_BRANCHES: IStaffWeekendBranch[] = [];
+const BRANCH_STORAGE_KEY = 'staff-weekends:branch';
 
 /** Ключ внутри ['timesheet-page']: правка табеля обновляет и эту сетку. */
 const branchTimesheetKey = (branchId: string, month: string) => ['timesheet-page', 'staff-weekends', branchId, month] as const;
 
 /**
- * «Управление кадрами» → «Выходные» (миграция 346): ЛИНИЯ и ЛИНИЯ-Общестрой отдельными сетками табеля, в них — кто
- * работал в выходной по СКУД без корректировки, в том числе вошёл без пары (в клетке 0 — метка «без часов»). Такие дни
- * в красной рамке; плановые субботы графика сюда не входят. Клик по дню открывает то же окно, что в «Табеле».
+ * «Управление кадрами» → «Выходные» (миграция 346): отделы и бригады, где кто-то работал в выходной по СКУД без
+ * корректировки, в том числе вошёл без пары (в клетке 0 — метка «без часов»). Отдел выбирается в селекте, на экране —
+ * сетка табеля только выбранного, такие дни в красной рамке; плановые субботы графика сюда не входят. Клик по дню
+ * открывает то же окно, что в «Табеле».
  */
 export const WeekendsTab: FC = () => {
   const { canViewPage, canEditPage, canManageAsHrAdmin, showActualHours } = useAuth();
@@ -39,6 +48,8 @@ export const WeekendsTab: FC = () => {
   const [currentMonth] = useState(moscowCurrentMonth);
   const [month, setMonth] = useState(currentMonth);
   const [search, setSearch] = useState('');
+  // Ручной выбор: автовыбор (поиск, отдел исчез) его не меняет и не сбрасывается при загрузке или смене месяца.
+  const [manualBranchId, setManualBranchId] = useState<string | null>(() => readStoredBranch(BRANCH_STORAGE_KEY));
 
   const canViewTimesheet = canViewPage('/timesheet') || canViewPage('/timesheet-hr')
     || canEditPage('/timesheet') || canEditPage('/timesheet-hr');
@@ -50,46 +61,66 @@ export const WeekendsTab: FC = () => {
     staleTime: 0,
   });
   const branches = gridQuery.data?.branches ?? EMPTY_BRANCHES;
-  const bounds = getMonthBounds(month);
-
-  // Те же параметры, что у «Табеля» по отделу: те же окна перевода, замки и часы.
-  const timesheetQueries = useQueries({
-    queries: branches.map(branch => ({
-      queryKey: branchTimesheetKey(branch.id, month),
-      queryFn: () => timesheetService.getAll({
-        month,
-        department_id: branch.id,
-        from: bounds?.firstDate,
-        to: bounds?.lastDate,
-        include_objects: true,
-        show_fired: true,
-        schedule_payload: 'compact' as const,
-      }),
-      enabled: canViewTimesheet && branch.rows.length > 0,
-      staleTime: 5 * 60_000,
-      gcTime: 15 * 60_000,
-      refetchOnWindowFocus: 'always' as const,
-    })),
-  });
+  const canManagePeriods = gridQuery.data?.can_manage_periods === true;
+  const searching = search.trim() !== '';
 
   const visibleRows = useMemo(() => new Map(branches.map(branch => [
     branch.id,
     searchRowsByFio(branch.rows, row => row.full_name, search, rows => rows).visibleRows,
   ])), [branches, search]);
 
-  // Часы экспорта — из записей сетки, поэтому файл собирается, только когда загружены все нужные табели.
-  const exportReady = gridQuery.isSuccess && timesheetQueries.every((query, index) => (
-    (branches[index]?.rows.length ?? 0) === 0 || Boolean(query.data)
-  ));
+  const options = useMemo(() => buildBranchOptions(branches.map(branch => ({
+    id: branch.id,
+    name: branch.name,
+    visibleCount: visibleRows.get(branch.id)?.length ?? 0,
+    keepWhenEmpty: canManagePeriods && branch.periods.length > 0,
+  })), searching), [branches, visibleRows, canManagePeriods, searching]);
+
+  // Сверка выбора — только по успешному ответу: во время загрузки и ошибки ничего не выбрано и не сброшено.
+  const selectedId = gridQuery.isSuccess ? resolveSelectedBranch(options, manualBranchId) : null;
+  const selectedBranch = branches.find(branch => branch.id === selectedId) ?? null;
+  const selectedRows = useMemo(
+    () => (selectedBranch ? visibleRows.get(selectedBranch.id) ?? [] : []),
+    [selectedBranch, visibleRows],
+  );
+
+  const bounds = getMonthBounds(month);
+  // Тот же запрос, что у «Табеля» по отделу: те же окна перевода, замки и часы. Только выбранный отдел со строками.
+  const timesheetQuery = useQuery({
+    queryKey: branchTimesheetKey(selectedBranch?.id ?? 'none', month),
+    queryFn: () => timesheetService.getAll({
+      month,
+      department_id: selectedBranch?.id,
+      from: bounds?.firstDate,
+      to: bounds?.lastDate,
+      include_objects: true,
+      show_fired: true,
+      schedule_payload: 'compact' as const,
+    }),
+    enabled: canViewTimesheet && selectedBranch !== null && selectedBranch.rows.length > 0,
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchOnWindowFocus: 'always' as const,
+  });
+
+  const pickBranch = useCallback((branchId: string) => {
+    setManualBranchId(branchId);
+    writeStoredBranch(BRANCH_STORAGE_KEY, branchId);
+  }, []);
+
+  // Часы экспорта — из записей сетки: файл собирается, когда загружен табель выбранного отдела.
+  const exportReady = selectedRows.length > 0 && Boolean(timesheetQuery.data);
   const exportRowsList = useMemo((): IStaffWeekendExportRow[] => (
-    branches.flatMap((branch, index) => (visibleRows.get(branch.id) ?? []).map(row => ({
-      full_name: row.full_name,
-      department: branch.name,
-      position: row.position,
-      days: row.days,
-      hours: weekendVisibleHours(timesheetQueries[index]?.data?.entries ?? [], row, showActualHours),
-    })))
-  ), [branches, visibleRows, timesheetQueries, showActualHours]);
+    selectedBranch
+      ? selectedRows.map(row => ({
+        full_name: row.full_name,
+        department: selectedBranch.name,
+        position: row.position,
+        days: row.days,
+        hours: weekendVisibleHours(timesheetQuery.data?.entries ?? [], row, showActualHours),
+      }))
+      : []
+  ), [selectedBranch, selectedRows, timesheetQuery.data, showActualHours]);
 
   const buildSnapshot = useCallback(
     (rows: ReadonlyArray<IStaffWeekendExportRow>) => buildStaffWeekendExport(rows, month),
@@ -102,11 +133,9 @@ export const WeekendsTab: FC = () => {
   }, [queryClient]);
 
   const [year, monthNumber] = month.split('-').map(Number) as [number, number];
-  const canManagePeriods = gridQuery.data?.can_manage_periods === true;
-  // Легенда одна на экран — у первой настоящей сетки.
-  const legendBranchId = canViewTimesheet
-    ? branches.find(branch => (visibleRows.get(branch.id) ?? []).length > 0)?.id
-    : undefined;
+  const emptyNotice = gridQuery.isSuccess && options.length === 0
+    ? (searching ? 'Никого не найдено' : 'Нет выходов без корректировки')
+    : null;
 
   return (
     <div className={styles.tab}>
@@ -114,6 +143,18 @@ export const WeekendsTab: FC = () => {
         <div className={styles.search}>
           <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
         </div>
+        {options.length > 0 && selectedId && (
+          <select
+            className={styles.branchSelect}
+            value={selectedId}
+            onChange={event => pickBranch(event.target.value)}
+            aria-label="Отдел"
+          >
+            {options.map(option => (
+              <option key={option.id} value={option.id}>{branchOptionLabel(option)}</option>
+            ))}
+          </select>
+        )}
         <div className={styles.monthNav}>
           <button
             type="button"
@@ -153,32 +194,29 @@ export const WeekendsTab: FC = () => {
           <button type="button" className={styles.retry} onClick={() => { void gridQuery.refetch(); }}>Повторить</button>
         </div>
       )}
+      {emptyNotice && <div className={styles.notice}>{emptyNotice}</div>}
 
-      {branches.map((branch, index) => {
-        const query = timesheetQueries[index];
-        if (!query) return null;
-        return (
-          <WeekendBranchGrid
-            key={branch.id}
-            branch={branch}
-            rows={visibleRows.get(branch.id) ?? []}
-            searching={search.trim() !== ''}
-            month={month}
-            queryKey={branchTimesheetKey(branch.id, month)}
-            query={query}
-            canViewTimesheet={canViewTimesheet}
-            canEdit={canEdit}
-            showActualHours={showActualHours}
-            showLegend={branch.id === legendBranchId}
-            compact={compact}
-            actions={canManagePeriods && branch.periods.length > 0
-              ? <WeekendPeriodActions branch={branch} month={month} />
-              : undefined}
-            lockHint={canManagePeriods ? 'Чтобы править, откройте табель кнопкой над сеткой' : undefined}
-            onCorrectionClosed={handleCorrectionClosed}
-          />
-        );
-      })}
+      {selectedBranch && (
+        <WeekendBranchGrid
+          key={selectedBranch.id}
+          branch={selectedBranch}
+          rows={selectedRows}
+          searching={searching}
+          month={month}
+          queryKey={branchTimesheetKey(selectedBranch.id, month)}
+          query={timesheetQuery}
+          canViewTimesheet={canViewTimesheet}
+          canEdit={canEdit}
+          showActualHours={showActualHours}
+          showLegend
+          compact={compact}
+          actions={canManagePeriods && selectedBranch.periods.length > 0
+            ? <WeekendPeriodActions branch={selectedBranch} month={month} />
+            : undefined}
+          lockHint={canManagePeriods ? 'Чтобы править, откройте табель кнопкой над сеткой' : undefined}
+          onCorrectionClosed={handleCorrectionClosed}
+        />
+      )}
     </div>
   );
 };
