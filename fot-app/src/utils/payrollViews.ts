@@ -96,11 +96,7 @@ export interface IPayrollCardView {
   tab: PayrollCardTab;
 }
 
-/**
- * Что показать при возврате с карточки посещаемости. Лежит в записи истории браузера, поэтому сумм здесь нет:
- * строку сотрудника заново запрашивают с сервера.
- */
-export interface IPayrollReturn {
+interface IPayrollReturnBase {
   employeeId: number;
   card: IPayrollCardView;
   search: string;
@@ -110,20 +106,43 @@ export interface IPayrollReturn {
   calcMonthFilter?: ICalcMonthFilter;
 }
 
+/** Возврат с карточки посещаемости в «Подробно». Запись без screen (до 16.11.2026) — тоже она. */
+export interface IPayrollDetailsReturn extends IPayrollReturnBase {
+  screen: 'details';
+}
+
+/** Возврат из табеля на «Расчёты» с окном сотрудника. Месяцы «Расчётов» обязательны: за них ищем его строку. */
+export interface IPayrollCalcReturn extends IPayrollReturnBase {
+  screen: 'calc';
+  calcMonths: string[];
+}
+
+/**
+ * Что показать при возврате с карточки посещаемости или из табеля. Лежит в записи истории браузера, поэтому сумм
+ * здесь нет: строку сотрудника заново запрашивают с сервера.
+ */
+export type PayrollReturn = IPayrollDetailsReturn | IPayrollCalcReturn;
+
 const DEPARTMENT_GROUPS: readonly PayrollDepartmentGroup[] = ['itr', 'worker'];
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
+/** Непустой список месяцев YYYY-MM; любой чужой элемент — null. */
+const readMonthList = (value: unknown): string[] | null => {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const valid = value.filter((month): month is string => typeof month === 'string' && MONTH_PATTERN.test(month));
+  return valid.length === value.length ? valid : null;
+};
+
 const readCardView = (value: unknown): IPayrollCardView | null => {
   if (!isRecord(value)) return null;
   const { months, tab } = value;
   if (tab !== 'terms' && tab !== 'history') return null;
   if (months === null) return { months: null, tab };
-  if (!Array.isArray(months) || months.length === 0) return null;
-  const valid = months.filter((month): month is string => typeof month === 'string' && MONTH_PATTERN.test(month));
-  return valid.length === months.length ? { months: valid, tab } : null;
+  const valid = readMonthList(months);
+  return valid ? { months: valid, tab } : null;
 };
 
 /** undefined — поля нет (старая запись); null — поле есть, но не такое. */
@@ -140,29 +159,37 @@ const readMonthFilter = (value: unknown): ICalcMonthFilter | null | undefined =>
 };
 
 /** Запись истории браузера → что показать при возврате; любое несоответствие — null целиком. */
-export const readPayrollReturn = (state: unknown): IPayrollReturn | null => {
+export const readPayrollReturn = (state: unknown): PayrollReturn | null => {
   if (!isRecord(state) || !isRecord(state.payrollReturn)) return null;
-  const { employeeId, card, search, departmentId, calcFocus, calcMonthFilter } = state.payrollReturn;
+  const { employeeId, card, search, departmentId, calcFocus, calcMonthFilter, screen, calcMonths } = state.payrollReturn;
   if (typeof employeeId !== 'number' || !Number.isSafeInteger(employeeId) || employeeId <= 0) return null;
   if (typeof search !== 'string' || typeof departmentId !== 'string') return null;
   const cardView = readCardView(card);
   if (!cardView) return null;
   const monthFilter = readMonthFilter(calcMonthFilter);
   if (monthFilter === null) return null;
+  let focus: ICalcFocus | null = null;
+  if (calcFocus !== null) {
+    if (!isRecord(calcFocus) || calcFocus.employeeId !== employeeId) return null;
+    const { fullName } = calcFocus;
+    if (fullName !== null && typeof fullName !== 'string') return null;
+    focus = { employeeId, fullName };
+  }
   // Группа и отдел — одно поле, выбор одного снимает другое. Запись прежнего фронта могла нести оба: поле показывает
   // группу — отбор тоже только по ней, без пересечения с отделом.
-  const base = {
+  const base: IPayrollReturnBase = {
     employeeId,
     card: cardView,
     search,
     departmentId: monthFilter?.group ? '' : departmentId,
+    calcFocus: focus,
     ...(monthFilter ? { calcMonthFilter: monthFilter } : {}),
   };
-  if (calcFocus === null) return { ...base, calcFocus: null };
-  if (!isRecord(calcFocus) || calcFocus.employeeId !== employeeId) return null;
-  const { fullName } = calcFocus;
-  if (fullName !== null && typeof fullName !== 'string') return null;
-  return { ...base, calcFocus: { employeeId, fullName } };
+  if (screen === 'calc') {
+    const months = readMonthList(calcMonths);
+    return months ? { ...base, screen: 'calc', calcMonths: months } : null;
+  }
+  return screen === undefined || screen === 'details' ? { ...base, screen: 'details' } : null;
 };
 
 /** Карточка посещаемости: календарь на последнем из выбранных месяцев. */
@@ -170,3 +197,55 @@ export const employeeCardPath = (employeeId: number, months: readonly string[]):
   const last = [...months].sort().at(-1);
   return last ? `/employees/${employeeId}?date=${last}-01` : `/employees/${employeeId}`;
 };
+
+/** Табель сотрудника из окна «Расчётов»: «По сотруднику», последний из месяцев «Расчётов», весь месяц. */
+export const employeeTimesheetPath = (employeeId: number, months: readonly string[]): string => {
+  const params = new URLSearchParams({ mode: 'employee', emp: String(employeeId) });
+  const last = [...months].sort().at(-1);
+  if (last) params.set('month', last);
+  params.set('half', 'FULL');
+  return `/timesheet?${params.toString()}`;
+};
+
+/** «Расчёты» — куда ведёт «← Зарплата» табеля, если записи истории позади нет. */
+export const PAYROLL_CALC_PATH = '/salary?tab=payments&view=calc';
+
+/**
+ * Возврат из табеля в окно «Расчётов»: лежит в записи истории табеля (location.state.payrollBack). Чья запись (userId)
+ * и чей табель (employeeId) — кнопка «← Зарплата» только у того же входа и в табеле того же сотрудника.
+ */
+export interface IPayrollTimesheetBack {
+  userId: string;
+  employeeId: number;
+  payrollReturn: IPayrollCalcReturn;
+}
+
+/** location.state табеля → возврат в «Расчёты»; любое несоответствие — null. */
+export const readPayrollTimesheetBack = (state: unknown): IPayrollTimesheetBack | null => {
+  if (!isRecord(state) || !isRecord(state.payrollBack)) return null;
+  const { userId, employeeId, payrollReturn } = state.payrollBack;
+  if (typeof userId !== 'string' || userId === '') return null;
+  const parsed = readPayrollReturn({ payrollReturn });
+  if (!parsed || parsed.screen !== 'calc' || parsed.employeeId !== employeeId) return null;
+  return { userId, employeeId: parsed.employeeId, payrollReturn: parsed };
+};
+
+interface IPayrollBackCheck {
+  back: IPayrollTimesheetBack | null;
+  profileId: string | null | undefined;
+  /** Ключи раздела «Зарплата» (/salary/terms и /salary/payments): их даёт только список payroll_section_access. */
+  canPayroll: boolean;
+  isEmployeeMode: boolean;
+  /** Сотрудник «По сотруднику» из адреса табеля. */
+  employeeId: number | null;
+}
+
+/** Показать «← Зарплата»: тот же вход, есть права «Зарплаты», табель «По сотруднику» того же сотрудника. */
+export const isPayrollBackActive = ({ back, profileId, canPayroll, isEmployeeMode, employeeId }: IPayrollBackCheck): boolean => (
+  back !== null
+  && canPayroll
+  && isEmployeeMode
+  && typeof profileId === 'string'
+  && back.userId === profileId
+  && back.employeeId === employeeId
+);

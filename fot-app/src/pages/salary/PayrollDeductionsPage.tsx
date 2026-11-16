@@ -17,7 +17,7 @@ import { MonthsPicker } from '../../components/ui/MonthsPicker';
 import { PayrollDictionaryModal } from '../../components/salary/PayrollDictionaryModal';
 import { PayrollEmployeeModal } from '../../components/salary/PayrollEmployeeModal';
 import { PayrollPaidItemsModal } from '../../components/salary/PayrollPaidItemsModal';
-import type { ICalcMonthFilter } from '../../utils/payrollViews';
+import type { ICalcMonthFilter, PayrollCardTab } from '../../utils/payrollViews';
 import { CompensationTermsPage } from './CompensationTermsPage';
 import styles from './PayrollDeductionsPage.module.css';
 
@@ -44,6 +44,13 @@ interface IPayrollDeductionsPageProps {
   onMonthFilterChange: (next: ICalcMonthFilter) => void;
   /** Карточку сотрудника сохранили в окне: его карточка «Подробно» (если открыта) устарела. */
   onSaved: (employeeId: number) => void;
+  /** Возврат из табеля: строка сотрудника, чьё окно открыть снова (приходит после запроса), и вкладка окна. */
+  restoreEmployee?: IPayrollTermsRow | null;
+  initialCardTab?: PayrollCardTab;
+  /** Месяцы «Свода» и таблицы при возврате из табеля. */
+  initialMonths?: string[];
+  /** Клик по ФИО в окне: табель сотрудника за месяцы таблицы. */
+  onLeaveToTimesheet?: (row: IPayrollTermsRow, tab: PayrollCardTab, months: string[]) => void;
 }
 
 /** Окно статей «Удержания (1С)»: строка, раздел, кнопка-сумма (вернуть фокус) и месяцы сумм строки. */
@@ -61,11 +68,19 @@ interface IPaidItemsWindow {
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
  * ставки и таблицы. «Загрузить из 1С» — ведомость выплаты (миграция 328), только тем, кому сервер разрешает
  * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
+ * ФИО в окне — табель сотрудника; на возврате из табеля окно открывается снова, месяцы таблицы — прежние.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   date, active, employeeId, search, onSearchChange, departmentId, onDepartmentChange, monthFilter, onMonthFilterChange, onSaved,
+  restoreEmployee = null, initialCardTab, initialMonths, onLeaveToTimesheet,
 }) => {
   const [employee, setEmployee] = useState<IPayrollTermsRow | null>(null);
+  // Возврат из табеля: окно открывается один раз, когда строка пришла, и только на экране «Расчётов».
+  const [restoredEmployee, setRestoredEmployee] = useState<IPayrollTermsRow | null>(null);
+  if (restoreEmployee && restoreEmployee !== restoredEmployee) {
+    setRestoredEmployee(restoreEmployee);
+    if (active) setEmployee(restoreEmployee);
+  }
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const dictionaryButtonRef = useRef<HTMLButtonElement>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -106,7 +121,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   }), [currentMonth, monthsQuery.data, payoutMonthsQuery.data]);
   // Не выбирали — последний закрытый месяц с «Оплачено» (пока грузится — прошлый). Выбранный до загрузки
   // недопустимый месяц после неё отбрасывается. Суммы таблицы — за те же месяцы.
-  const [chosenMonths, setChosenMonths] = useState<string[] | null>(null);
+  const [chosenMonths, setChosenMonths] = useState<string[] | null>(initialMonths ?? null);
   const summaryMonths = useMemo(
     () => effectivePaidMonths(chosenMonths, selectable, defaultMonth),
     [chosenMonths, selectable, defaultMonth],
@@ -240,6 +255,8 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
           defaultDate={date}
           onClose={() => setEmployee(null)}
           onSaved={onSaved}
+          initialView={employee === restoredEmployee && initialCardTab ? { months: null, tab: initialCardTab } : undefined}
+          onLeaveToTimesheet={onLeaveToTimesheet ? tab => onLeaveToTimesheet(employee, tab, summaryMonths) : undefined}
         />
       )}
     </>

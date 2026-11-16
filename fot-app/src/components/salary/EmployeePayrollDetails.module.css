@@ -49,6 +49,29 @@
 }
 .nameLink:hover { color: var(--primary); text-decoration-color: currentColor; }
 .nameLink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+/* ФИО в окне «Расчётов» — кнопка табеля сотрудника: вид как у ссылки, без рамки, фона и отступов кнопки. */
+.nameButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 150ms ease-out;
+}
+.nameButton:hover:not(:disabled) { color: var(--primary); text-decoration-color: currentColor; }
+.nameButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.nameButton:disabled { cursor: default; opacity: 0.6; }
 .meta { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 /* «Экспорт» — xlsx условий и истории выплат; на телефоне — только иконка. */
@@ -206,5 +229,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .primaryButton, .secondaryButton, .exportButton, .tab, .nameLink { transition: none; }
+  .primaryButton, .secondaryButton, .exportButton, .tab, .nameLink, .nameButton { transition: none; }
 }

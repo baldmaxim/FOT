@@ -8,6 +8,8 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { TimesheetEmployeePicker } from '../../components/timesheet/TimesheetEmployeePicker';
+import { TimesheetPayrollBackButton } from '../../components/timesheet/TimesheetPayrollBackButton';
+import { usePayrollTimesheetBack } from '../../hooks/usePayrollTimesheetBack';
 import { buildEmployeeModeGridData } from './timesheetEmployeeMode.helpers';
 import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService, uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
@@ -254,6 +256,9 @@ export const TimesheetPage: FC = () => {
     const parsed = Number.parseInt(searchParams.get('emp') || '', 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }, [timesheetMode, searchParams]);
+  // Табель открыт из окна «Расчётов»: «← Зарплата»; месяц, половина и вид не плодят записи истории.
+  const payrollBack = usePayrollTimesheetBack({ isEmployeeMode: timesheetMode === 'employee', employeeId: selectedEmployeeModeId });
+  const payrollBackNav = payrollBack.keepNav;
   const selectedAssigneeId = useMemo(() => {
     if (timesheetMode !== 'assigned') return null;
     const parsed = Number.parseInt(queryAssignee || '', 10);
@@ -946,8 +951,8 @@ export const TimesheetPage: FC = () => {
       next.delete('from');
       next.delete('to');
       return next;
-    });
-  }, [clearBulkState, setSearchParams]);
+    }, payrollBackNav);
+  }, [clearBulkState, setSearchParams, payrollBackNav]);
 
   const prevMonth = () => {
     if (month === 1) {
@@ -2008,8 +2013,8 @@ export const TimesheetPage: FC = () => {
       next.delete('from');
       next.delete('to');
       return next;
-    });
-  }, [selectedHalf, clearBulkState, setSearchParams]);
+    }, payrollBackNav);
+  }, [selectedHalf, clearBulkState, setSearchParams, payrollBackNav]);
 
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
@@ -2021,8 +2026,8 @@ export const TimesheetPage: FC = () => {
         next.set('view', nextViewMode);
       }
       return next;
-    });
-  }, [clearBulkState, setSearchParams]);
+    }, payrollBackNav);
+  }, [clearBulkState, setSearchParams, payrollBackNav]);
 
   // Кнопка «Корректировки» — переключатель: из corrections возвращает в исходный
   // «сеточный» вид, иначе открывает corrections (#10).
@@ -2736,6 +2741,7 @@ export const TimesheetPage: FC = () => {
               </div>
             </div>
             <div className="ts-mobile-header-row ts-mobile-header-row--controls">
+              {payrollBack.active && <TimesheetPayrollBackButton onClick={payrollBack.goBack} />}
               {monthNavigation}
               {selectorControl}
               {isAssignedMode && brigadeControl}
@@ -2767,6 +2773,7 @@ export const TimesheetPage: FC = () => {
           <section className="ts-top-panel">
             <div className="ts-header-grid">
               <div className="ts-header-cell ts-header-cell--left">
+                {payrollBack.active && <TimesheetPayrollBackButton onClick={payrollBack.goBack} />}
                 {modeControl}
                 {selectorControl}
                 {isAssignedMode && brigadeControl}

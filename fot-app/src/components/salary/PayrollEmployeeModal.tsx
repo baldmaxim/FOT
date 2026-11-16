@@ -1,6 +1,7 @@
 import type { FC } from 'react';
 
 import type { IPayrollTermsRow } from '../../services/payrollService';
+import type { IPayrollCardView, PayrollCardTab } from '../../utils/payrollViews';
 import { ModalShell } from '../ui/ModalShell';
 import { EmployeePayrollDetails } from './EmployeePayrollDetails';
 import modal from './PayrollModal.module.css';
@@ -13,6 +14,10 @@ interface IPayrollEmployeeModalProps {
   onClose: () => void;
   /** Сохранено: окно закрывается само, родитель закрывает устаревшую карточку «Подробно» этого сотрудника. */
   onSaved: (employeeId: number) => void;
+  /** Вкладка карточки при возврате из табеля. */
+  initialView?: IPayrollCardView;
+  /** Клик по ФИО: табель сотрудника в этой же вкладке браузера. */
+  onLeaveToTimesheet?: (tab: PayrollCardTab) => void;
 }
 
 /**
@@ -24,6 +29,8 @@ export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
   defaultDate,
   onClose,
   onSaved,
+  initialView,
+  onLeaveToTimesheet,
 }) => (
   <ModalShell
     onClose={onClose}
@@ -40,6 +47,8 @@ export const PayrollEmployeeModal: FC<IPayrollEmployeeModalProps> = ({
         editable
         className={styles.card}
         active
+        initialView={initialView}
+        onLeaveToTimesheet={onLeaveToTimesheet}
         onClose={requestClose}
         onSaved={employeeId => {
           onSaved(employeeId);

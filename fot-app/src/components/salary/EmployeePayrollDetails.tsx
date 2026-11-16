@@ -59,6 +59,8 @@ interface IEmployeePayrollDetailsProps {
   initialView?: IPayrollCardView;
   /** Клик по ФИО (только «Подробно»): запомнить, что показать при возврате. */
   onLeaveToEmployeeCard?: (view: IPayrollCardView) => void;
+  /** Клик по ФИО в окне «Расчётов»: табель сотрудника в этой же вкладке; вкладка карточки — для возврата. */
+  onLeaveToTimesheet?: (tab: PayrollCardTab) => void;
 }
 
 /**
@@ -75,7 +77,8 @@ interface IEmployeePayrollDetailsProps {
  * (один или несколько) задают таблицу «Оплачено».
  * ФИО в «Подробно» — ссылка на карточку посещаемости в этой же вкладке браузера; только администратору: у него охват
  * «Зарплаты» и карточки один, а у остальных карточка могла бы отказать и показать пустую страницу. В окне «Расчётов»
- * ссылки нет: переход стёр бы введённые суммы.
+ * ФИО — кнопка табеля «По сотруднику» (тоже только администратору): кнопкой, а не ссылкой, — в новой вкладке не
+ * открыть; несохранённый ввод — сперва вопрос, во время сохранения не нажать.
  */
 export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   row,
@@ -87,6 +90,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   onSaved,
   initialView,
   onLeaveToEmployeeCard,
+  onLeaveToTimesheet,
 }) => {
   const { canEditPage, canViewPage, isAdmin } = useAuth();
   const location = useLocation();
@@ -117,6 +121,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const meta = [row.department_name, row.position_name].filter(Boolean).join(' · ');
   const fullName = row.full_name ?? 'Сотрудник';
   const canOpenEmployeeCard = !editable && isAdmin && canViewPage('/employees');
+  const canOpenTimesheet = editable && isAdmin && canViewPage('/timesheet') && onLeaveToTimesheet !== undefined;
   const tabsId = useId();
   const [tab, setTab] = useState<PayrollCardTab>(initialView?.tab ?? 'terms');
   // История монтируется при первом открытии вкладки и дальше остаётся: выбранный месяц и прокрутка целы.
@@ -173,6 +178,13 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
     ? (saveMutation.error?.message || 'Не удалось назначить условия')
     : null;
 
+  // Уход в табель размонтирует окно: введённое без сохранения пропадёт — сперва спросить.
+  const handleOpenTimesheet = () => {
+    if (!onLeaveToTimesheet || saveMutation.isPending) return;
+    if (form.isChanged() && !window.confirm('Изменения не сохранены. Открыть табель без сохранения?')) return;
+    onLeaveToTimesheet(tab);
+  };
+
   // В режиме просмотра полей для ввода нет — фокус на ФИО, чтобы Tab шёл по карточке.
   useEffect(() => {
     if (!canEdit) nameRef.current?.focus();
@@ -215,6 +227,15 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
                 >
                   {fullName}
                 </Link>
+              ) : canOpenTimesheet ? (
+                <button
+                  type="button"
+                  className={styles.nameButton}
+                  onClick={handleOpenTimesheet}
+                  disabled={saveMutation.isPending}
+                >
+                  {fullName}
+                </button>
               ) : fullName}
             </h2>
             {/* Месяцы задают «Оплачено» на «Условиях»; истории они не касаются. */}

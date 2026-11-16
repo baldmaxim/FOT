@@ -1,6 +1,6 @@
 import { lazy, startTransition, Suspense, useCallback, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '../../contexts/AuthContext';
 import { payrollService, type IPayrollTermsRow } from '../../services/payrollService';
@@ -10,15 +10,19 @@ import {
   calcViewFilters,
   dropPayrollDetails,
   EMPTY_CALC_MONTH_FILTER,
+  employeeTimesheetPath,
   openPayrollDetails,
   paymentsViewOptions,
   readPayrollReturn,
   resolvePaymentsView,
   type ICalcFocus,
   type ICalcMonthFilter,
+  type IPayrollCalcReturn,
   type IPayrollCardView,
-  type IPayrollReturn,
+  type IPayrollTimesheetBack,
   type PaymentsView,
+  type PayrollCardTab,
+  type PayrollReturn,
 } from '../../utils/payrollViews';
 import { EmployeePayrollDetails } from '../../components/salary/EmployeePayrollDetails';
 import styles from './PaymentsTab.module.css';
@@ -39,14 +43,20 @@ const PayrollDeductionsPage = lazy(() => import('./PayrollDeductionsPage').then(
  *
  * Клик по ФИО в «Подробно» уводит на карточку посещаемости, и страница размонтируется: перед уходом запись истории
  * браузера запоминает сотрудника, месяцы, поиск и отдел. На возврате строку сотрудника читаем заново с сервера.
+ * Клик по ФИО в окне «Расчётов» — так же в табель «По сотруднику»; на возврате снова открыто окно «Расчётов».
  */
 export const PaymentsTab: FC = () => {
-  const { canViewPage } = useAuth();
+  const { canViewPage, profile } = useAuth();
+  const profileId = profile?.id ?? null;
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const [restore] = useState(() => readPayrollReturn(location.state));
-  // Сотрудник, чью строку ещё ждём после возврата с карточки посещаемости.
+  // Сотрудник, чью строку ещё ждём после возврата с карточки посещаемости или из табеля.
   const [restoreId, setRestoreId] = useState(restore?.employeeId ?? null);
+  const calcRestore = restore?.screen === 'calc' ? restore : null;
+  // Строка для окна «Расчётов» после возврата из табеля.
+  const [calcRestoreRow, setCalcRestoreRow] = useState<IPayrollTermsRow | null>(null);
 
   const canTerms = canViewPage('/salary/terms');
   // «Расчёты» — список и карточка условий оплаты: нужен и ключ /salary/terms.
@@ -75,24 +85,29 @@ export const PaymentsTab: FC = () => {
   const [calcMounted, setCalcMounted] = useState(false);
   if (view === 'calc' && !calcMounted) setCalcMounted(true);
 
+  // «Расчёты» — за их месяцы: уволенные есть в таблице только с месяцами; столбцы ФОТ окну не нужны (deferCalc).
   const returnRow = useQuery({
-    queryKey: ['payroll-terms', 'return-row', restoreId, date],
+    queryKey: ['payroll-terms', 'return-row', restore?.screen ?? null, restoreId, calcRestore?.calcMonths ?? null, date],
     queryFn: ({ signal }) => payrollService.listTerms(
-      { date, employeeId: restoreId as number, sort: 'name', dir: 'asc', pageSize: 1 },
+      {
+        date, employeeId: restoreId as number, sort: 'name', dir: 'asc', pageSize: 1,
+        ...(calcRestore ? { paidMonths: calcRestore.calcMonths, deferCalc: true } : {}),
+      },
       signal,
     ),
-    enabled: canTerms && restoreId !== null,
+    enabled: (calcRestore ? canCalc : canTerms) && restoreId !== null,
     // Строку не кэшируем: на возврате нужна свежая, а в приложении refetchOnMount: false — кэш вернулся бы без запроса.
     gcTime: 0,
   });
-  // Ждём конца запроса. Условие разовое: restoreId сразу сбрасывается.
+  // Ждём конца запроса. Условие разовое: restoreId сразу сбрасывается. Ошибка или пусто — экран без карточки.
   if (restoreId !== null && !returnRow.isFetching) {
     setRestoreId(null);
     // Сверка id: сервер, не знающий фильтра, вернул бы другого человека.
     const row = returnRow.isSuccess
       ? returnRow.data.rows.find(item => item.employee_id === restoreId)
       : undefined;
-    if (row) setDetails(prev => prev ?? row);
+    if (row && calcRestore) setCalcRestoreRow(row);
+    else if (row) setDetails(prev => prev ?? row);
   }
 
   /**
@@ -141,11 +156,30 @@ export const PaymentsTab: FC = () => {
   // Клик по ФИО: стрелка назад вернётся на эту запись истории — кладём в неё, что показать.
   const rememberReturn = useCallback((card: IPayrollCardView) => {
     if (!details) return;
-    const payrollReturn: IPayrollReturn = {
-      employeeId: details.employee_id, card, search, departmentId, calcFocus, calcMonthFilter,
+    const payrollReturn: PayrollReturn = {
+      screen: 'details', employeeId: details.employee_id, card, search, departmentId, calcFocus, calcMonthFilter,
     };
     setSearchParams(prev => prev, { replace: true, state: { payrollReturn } });
   }, [details, search, departmentId, calcFocus, calcMonthFilter, setSearchParams]);
+
+  // Клик по ФИО в окне «Расчётов»: возврат кладём и в эту запись истории («Назад» браузера), и в запись табеля
+  // (его кнопка «← Зарплата»: чей вход и чей табель — показывать только тому же входу у того же сотрудника).
+  const leaveToTimesheet = useCallback((row: IPayrollTermsRow, tab: PayrollCardTab, months: string[]) => {
+    if (!profileId) return;
+    const payrollReturn: IPayrollCalcReturn = {
+      screen: 'calc',
+      employeeId: row.employee_id,
+      card: { months: null, tab },
+      calcMonths: months,
+      search,
+      departmentId,
+      calcFocus: calcFocus?.employeeId === row.employee_id ? calcFocus : null,
+      calcMonthFilter,
+    };
+    const payrollBack: IPayrollTimesheetBack = { userId: profileId, employeeId: row.employee_id, payrollReturn };
+    setSearchParams(prev => prev, { replace: true, state: { payrollReturn } });
+    navigate(employeeTimesheetPath(row.employee_id, months), { state: { payrollBack } });
+  }, [profileId, search, departmentId, calcFocus, calcMonthFilter, setSearchParams, navigate]);
 
   return (
     <div className={styles.tab}>
@@ -192,7 +226,7 @@ export const PaymentsTab: FC = () => {
               row={details}
               defaultDate={date}
               active={view === 'details'}
-              initialView={details.employee_id === restore?.employeeId ? restore.card : undefined}
+              initialView={restore?.screen === 'details' && details.employee_id === restore.employeeId ? restore.card : undefined}
               onLeaveToEmployeeCard={rememberReturn}
             />
           </div>
@@ -220,6 +254,10 @@ export const PaymentsTab: FC = () => {
                 monthFilter={shownMonthFilter}
                 onMonthFilterChange={handleCalcMonthFilter}
                 onSaved={handleCalcSaved}
+                restoreEmployee={calcRestoreRow}
+                initialCardTab={calcRestore?.card.tab}
+                initialMonths={calcRestore?.calcMonths}
+                onLeaveToTimesheet={leaveToTimesheet}
               />
             </Suspense>
           </div>

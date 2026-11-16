@@ -7,9 +7,12 @@ import {
   dropPayrollDetails,
   EMPTY_CALC_MONTH_FILTER,
   employeeCardPath,
+  employeeTimesheetPath,
+  isPayrollBackActive,
   openPayrollDetails,
   paymentsViewOptions,
   readPayrollReturn,
+  readPayrollTimesheetBack,
   resolvePaymentsView,
 } from './payrollViews';
 
@@ -127,14 +130,16 @@ describe('возврат с карточки посещаемости: запи�
     calcFocus: { employeeId: 2301, fullName: 'Абдувохидов' },
   };
   const read = (patch: Record<string, unknown>) => readPayrollReturn({ payrollReturn: { ...saved, ...patch } });
+  // Запись без screen (до 16.11.2026) — возврат в «Подробно».
+  const details = { ...saved, screen: 'details' };
 
   it('верная запись читается целиком', () => {
-    expect(readPayrollReturn({ payrollReturn: saved })).toEqual(saved);
+    expect(readPayrollReturn({ payrollReturn: saved })).toEqual(details);
   });
 
   it('месяцы по умолчанию и снятый отбор «Расчётов» — допустимы', () => {
     expect(read({ card: { months: null, tab: 'terms' }, calcFocus: null })).toEqual({
-      ...saved,
+      ...details,
       card: { months: null, tab: 'terms' },
       calcFocus: null,
     });
@@ -176,21 +181,21 @@ describe('возврат с карточки посещаемости: запи�
 
   it('группа и объект «Расчётов» читаются; старая запись без них — тоже', () => {
     const calcMonthFilter = { group: 'itr', object: { key: '00000000-0000-0000-0000-00000000000a', name: 'ЖК Химки' } };
-    expect(read({ departmentId: '', calcMonthFilter })).toEqual({ ...saved, departmentId: '', calcMonthFilter });
+    expect(read({ departmentId: '', calcMonthFilter })).toEqual({ ...details, departmentId: '', calcMonthFilter });
     expect(read({ calcMonthFilter: { group: null, object: null } })).toEqual({
-      ...saved, calcMonthFilter: { group: null, object: null },
+      ...details, calcMonthFilter: { group: null, object: null },
     });
     expect(read({})).not.toHaveProperty('calcMonthFilter');
   });
 
   it('группа вместе с отделом (запись прежнего фронта) — остаётся группа, отдел снят', () => {
     const calcMonthFilter = { group: 'worker', object: null };
-    expect(read({ calcMonthFilter })).toEqual({ ...saved, departmentId: '', calcMonthFilter });
+    expect(read({ calcMonthFilter })).toEqual({ ...details, departmentId: '', calcMonthFilter });
   });
 
   it('группа «Офис» старой записи — теперь «ИТР»', () => {
     expect(read({ departmentId: '', calcMonthFilter: { group: 'office', object: null } })).toEqual({
-      ...saved, departmentId: '', calcMonthFilter: { group: 'itr', object: null },
+      ...details, departmentId: '', calcMonthFilter: { group: 'itr', object: null },
     });
   });
 
@@ -212,5 +217,100 @@ describe('адрес карточки посещаемости', () => {
 
   it('месяцев нет — без даты, карточка откроет текущий', () => {
     expect(employeeCardPath(2301, [])).toBe('/employees/2301');
+  });
+});
+
+describe('возврат из табеля на «Расчёты»: запись истории браузера', () => {
+  const calcReturn = {
+    screen: 'calc',
+    employeeId: 2301,
+    card: { months: null, tab: 'history' },
+    calcMonths: ['2026-10'],
+    search: '',
+    departmentId: 'dept-1',
+    calcFocus: null,
+    calcMonthFilter: { group: null, object: null },
+  };
+  const read = (patch: Record<string, unknown>) => readPayrollReturn({ payrollReturn: { ...calcReturn, ...patch } });
+
+  it('верная запись «Расчётов» читается целиком', () => {
+    expect(read({})).toEqual(calcReturn);
+  });
+
+  it('screen «details» явно — возврат в «Подробно», месяцы «Расчётов» не нужны', () => {
+    const detailsReturn = { ...calcReturn, screen: 'details', calcMonths: undefined };
+    expect(readPayrollReturn({ payrollReturn: detailsReturn })).toEqual({ ...calcReturn, screen: 'details', calcMonths: undefined });
+    expect(readPayrollReturn({ payrollReturn: detailsReturn })).not.toHaveProperty('calcMonths');
+  });
+
+  it.each([
+    [undefined],
+    [null],
+    [[]],
+    [['2026-13']],
+    [['2026-10', 7]],
+    ['2026-10'],
+  ])('«Расчёты» без верных месяцев %j — запись отбрасывается', calcMonths => {
+    expect(read({ calcMonths })).toBeNull();
+  });
+
+  it('чужой экран — запись отбрасывается', () => {
+    expect(read({ screen: 'terms' })).toBeNull();
+    expect(read({ screen: 1 })).toBeNull();
+  });
+});
+
+describe('адрес табеля сотрудника', () => {
+  it('«По сотруднику», последний месяц «Расчётов», весь месяц', () => {
+    expect(employeeTimesheetPath(2301, ['2026-10', '2026-08'])).toBe('/timesheet?mode=employee&emp=2301&month=2026-10&half=FULL');
+  });
+
+  it('месяцев нет — без месяца, табель откроет текущий', () => {
+    expect(employeeTimesheetPath(2301, [])).toBe('/timesheet?mode=employee&emp=2301&half=FULL');
+  });
+});
+
+describe('«← Зарплата» в табеле', () => {
+  const payrollReturn = {
+    screen: 'calc',
+    employeeId: 2301,
+    card: { months: null, tab: 'terms' },
+    calcMonths: ['2026-10'],
+    search: 'Абду',
+    departmentId: '',
+    calcFocus: null,
+  };
+  const state = { payrollBack: { userId: 'user-1', employeeId: 2301, payrollReturn } };
+  const back = readPayrollTimesheetBack(state);
+  const check = { back, profileId: 'user-1', canPayroll: true, isEmployeeMode: true, employeeId: 2301 };
+
+  it('запись табеля читается', () => {
+    expect(back).toEqual({ userId: 'user-1', employeeId: 2301, payrollReturn });
+  });
+
+  it.each([
+    ['записи нет', null],
+    ['пустой state', {}],
+    ['нет входа', { payrollBack: { ...state.payrollBack, userId: '' } }],
+    ['чужой сотрудник', { payrollBack: { ...state.payrollBack, employeeId: 7 } }],
+    ['возврат в «Подробно», а не в «Расчёты»', { payrollBack: { ...state.payrollBack, payrollReturn: { ...payrollReturn, screen: 'details' } } }],
+    ['«Расчёты» без месяцев', { payrollBack: { ...state.payrollBack, payrollReturn: { ...payrollReturn, calcMonths: [] } } }],
+  ])('%s — нет возврата', (_label, value) => {
+    expect(readPayrollTimesheetBack(value)).toBeNull();
+  });
+
+  it('тот же вход, права «Зарплаты», табель этого сотрудника — кнопка есть', () => {
+    expect(isPayrollBackActive(check)).toBe(true);
+  });
+
+  it.each([
+    ['другой вход в том же браузере', { profileId: 'user-2' }],
+    ['вход ещё не загружен', { profileId: undefined }],
+    ['нет прав «Зарплаты» (админ не из списка)', { canPayroll: false }],
+    ['в табеле выбран другой сотрудник', { employeeId: 7 }],
+    ['табель «По отделу»', { isEmployeeMode: false }],
+    ['записи возврата нет', { back: null }],
+  ])('%s — кнопки нет', (_label, patch) => {
+    expect(isPayrollBackActive({ ...check, ...patch })).toBe(false);
   });
 });
