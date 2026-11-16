@@ -6,7 +6,6 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { STAFF_WEEKENDS_KEY, staffWeekendService, type IStaffWeekendBranch } from '../../../services/staffWeekendService';
-import { timesheetService } from '../../../services/timesheetService';
 import {
   branchOptionLabel,
   buildBranchOptions,
@@ -23,17 +22,14 @@ import {
   weekendVisibleHours,
 } from '../../../utils/staffWeekendGrid';
 import { buildStaffWeekendExport, type IStaffWeekendExportRow } from '../../../utils/staffWeekendTable';
-import { getMonthBounds } from '../../../utils/timesheetApprovalPeriod';
 import { SearchInput } from '../../ui/SearchInput';
+import { branchTimesheetKey, fetchBranchTimesheet } from './branchTimesheetQuery';
 import { WeekendBranchGrid } from './WeekendBranchGrid';
 import { WeekendPeriodActions } from './WeekendPeriodActions';
 import styles from './WeekendsTab.module.css';
 
 const EMPTY_BRANCHES: IStaffWeekendBranch[] = [];
 const BRANCH_STORAGE_KEY = 'staff-weekends:branch';
-
-/** Ключ внутри ['timesheet-page']: правка табеля обновляет и эту сетку. */
-const branchTimesheetKey = (branchId: string, month: string) => ['timesheet-page', 'staff-weekends', branchId, month] as const;
 
 /**
  * «Управление кадрами» → «Выходные» (миграция 346): отделы и бригады, где кто-то работал в выходной по СКУД без
@@ -84,19 +80,10 @@ export const WeekendsTab: FC = () => {
     [selectedBranch, visibleRows],
   );
 
-  const bounds = getMonthBounds(month);
   // Тот же запрос, что у «Табеля» по отделу: те же окна перевода, замки и часы. Только выбранный отдел со строками.
   const timesheetQuery = useQuery({
     queryKey: branchTimesheetKey(selectedBranch?.id ?? 'none', month),
-    queryFn: () => timesheetService.getAll({
-      month,
-      department_id: selectedBranch?.id,
-      from: bounds?.firstDate,
-      to: bounds?.lastDate,
-      include_objects: true,
-      show_fired: true,
-      schedule_payload: 'compact' as const,
-    }),
+    queryFn: () => fetchBranchTimesheet(selectedBranch?.id ?? '', month),
     enabled: canViewTimesheet && selectedBranch !== null && selectedBranch.rows.length > 0,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,

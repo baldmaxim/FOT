@@ -558,6 +558,9 @@ export async function buildAttendanceEntries(params: {
   // (интерактивный табель/дашборд обновляют кэш). Read-only экспорты ставят false —
   // сводка считается в памяти, а тяжёлый DELETE+INSERT не выполняется.
   persistTravelSegments?: boolean;
+  // Журнал «Корректировки» кадров: день «как без правки» — по СКУД, графику, обеду и «Дороге». Корректировки
+  // (и материализованные заявления) не загружаются вовсе. По умолчанию false — остальные пути не меняются.
+  ignoreAdjustments?: boolean;
   // Клиент транзакции для материализации официальной версии табеля: все чтения
   // обязаны идти по ОДНОМУ соединению, иначе payload соберётся из разных снимков
   // БД. По умолчанию не задан — запросы идут через пул, поведение прежнее.
@@ -579,7 +582,9 @@ export async function buildAttendanceEntries(params: {
   const [summaries, adjustments, travelSummaries, scheduleRanges] = await runMaybeParallel(
     exec,
     () => loadDailySummaries(employeeIds, startDate, endDate, exec),
-    () => loadAttendanceAdjustments(employeeIds, startDate, endDate, exec),
+    () => (params.ignoreAdjustments
+      ? Promise.resolve<IAttendanceAdjustment[]>([])
+      : loadAttendanceAdjustments(employeeIds, startDate, endDate, exec)),
     () => getTravelHoursSummaryForRange({
       employeeIds, startDate, endDate, persist: persistTravelSegments, exec,
     }),

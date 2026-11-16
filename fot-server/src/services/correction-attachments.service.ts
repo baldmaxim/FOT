@@ -14,7 +14,7 @@ export interface ICorrectionAttachment {
   r2_key: string;
 }
 
-interface ICorrectionAdjustmentMeta {
+export interface ICorrectionAdjustmentMeta {
   id: number;
   employee_id: number;
   work_date: string;
@@ -211,6 +211,91 @@ export async function listCorrectionAttachments(adj: ICorrectionAdjustmentMeta):
       r2_key: doc.r2_key,
     }))
     .sort((left, right) => right.uploaded_at.localeCompare(left.uploaded_at));
+}
+
+/**
+ * Пакетно — столько файлов, сколько покажет окно дня (listCorrectionAttachments) для каждой корректировки: свои,
+ * исходного заявления (с legacy documents.leave_request_id) и заявок этого дня (time_correction, «Работа в
+ * выходной»); один документ считается один раз, документ без строки в documents — не считается. Журнал
+ * «Корректировки» кадров. Запросов — постоянное число, не на строку.
+ */
+export async function countCorrectionAttachmentsLikeWindow(
+  adjustments: ReadonlyArray<ICorrectionAdjustmentMeta>,
+): Promise<Map<number, number>> {
+  const counts = new Map<number, number>(adjustments.map(adj => [Number(adj.id), 0]));
+  if (adjustments.length === 0) return counts;
+
+  const docsByAdjustment = new Map<number, Set<number>>(adjustments.map(adj => [Number(adj.id), new Set<number>()]));
+  const ownRows = await query<{ entity_id: string; document_id: number | string }>(
+    `SELECT entity_id, document_id FROM document_links
+      WHERE entity_type = $1 AND purpose = $2 AND entity_id = ANY($3::text[])`,
+    [CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE, adjustments.map(adj => String(adj.id))],
+  );
+  for (const row of ownRows) docsByAdjustment.get(Number(row.entity_id))?.add(Number(row.document_id));
+
+  // Заявки по корректировке: исходная (source) и заявки этого дня — по паре (сотрудник, дата).
+  const leaveIdsByAdjustment = new Map<number, Set<number>>(adjustments.map((adj) => {
+    const sourceId = leaveRequestIdFromAdjustment(adj);
+    return [Number(adj.id), new Set<number>(sourceId != null ? [sourceId] : [])];
+  }));
+  const pairs = [...new Map(adjustments.map(adj => [`${adj.employee_id}|${String(adj.work_date).slice(0, 10)}`, adj])).values()];
+  const dayRows = await query<{ employee_id: number | string; work_date: string; id: number | string }>(
+    `SELECT p.employee_id, p.work_date::text AS work_date, lr.id
+       FROM unnest($1::int[], $2::date[]) AS p(employee_id, work_date)
+       JOIN leave_requests lr ON lr.employee_id = p.employee_id
+      WHERE ${dayMemoLeaveRequestCondition('p.work_date')}`,
+    [pairs.map(adj => Number(adj.employee_id)), pairs.map(adj => String(adj.work_date).slice(0, 10))],
+  );
+  const dayLeaveIds = new Map<string, number[]>();
+  for (const row of dayRows) {
+    const key = `${Number(row.employee_id)}|${String(row.work_date).slice(0, 10)}`;
+    dayLeaveIds.set(key, [...(dayLeaveIds.get(key) ?? []), Number(row.id)]);
+  }
+  for (const adj of adjustments) {
+    const set = leaveIdsByAdjustment.get(Number(adj.id))!;
+    for (const id of dayLeaveIds.get(`${adj.employee_id}|${String(adj.work_date).slice(0, 10)}`) ?? []) set.add(id);
+  }
+
+  const allLeaveIds = [...new Set([...leaveIdsByAdjustment.values()].flatMap(set => [...set]))];
+  const docsByLeave = new Map<number, Set<number>>();
+  if (allLeaveIds.length > 0) {
+    const [links, legacy] = await Promise.all([
+      query<{ entity_id: string; document_id: number | string }>(
+        `SELECT entity_id, document_id FROM document_links
+          WHERE entity_type = 'leave_request' AND entity_id = ANY($1::text[])`,
+        [allLeaveIds.map(String)],
+      ),
+      query<{ leave_request_id: number | string; id: number | string }>(
+        'SELECT leave_request_id, id FROM documents WHERE leave_request_id = ANY($1::int[])',
+        [allLeaveIds],
+      ),
+    ]);
+    const add = (leaveId: number, documentId: number): void => {
+      const set = docsByLeave.get(leaveId) ?? new Set<number>();
+      set.add(documentId);
+      docsByLeave.set(leaveId, set);
+    };
+    for (const row of links) add(Number(row.entity_id), Number(row.document_id));
+    for (const row of legacy) add(Number(row.leave_request_id), Number(row.id));
+  }
+  for (const [adjId, leaveIds] of leaveIdsByAdjustment) {
+    const set = docsByAdjustment.get(adjId)!;
+    for (const leaveId of leaveIds) for (const documentId of docsByLeave.get(leaveId) ?? []) set.add(documentId);
+  }
+
+  // Как fetchDocuments окна: ссылка на несуществующий документ файла не даёт.
+  const allDocumentIds = [...new Set([...docsByAdjustment.values()].flatMap(set => [...set]))]
+    .filter(id => Number.isFinite(id));
+  const existing = allDocumentIds.length > 0
+    ? new Set((await query<{ id: number | string }>(
+      'SELECT id FROM documents WHERE id = ANY($1::int[])',
+      [allDocumentIds],
+    )).map(row => Number(row.id)))
+    : new Set<number>();
+  for (const [adjId, set] of docsByAdjustment) {
+    counts.set(adjId, [...set].filter(id => existing.has(id)).length);
+  }
+  return counts;
 }
 
 /**

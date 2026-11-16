@@ -27,6 +27,21 @@ export interface ICorrectionSourceRequest {
  *    само пишет корректировку (допуск на разницу часов процесса и БД).
  * Из нескольких подходящих — последнее согласованное.
  */
+/**
+ * Связь корректировки `a` с согласованным заявлением `lr` — одно правило на окно дня и журнал кадров «Корректировки».
+ */
+export const SOURCE_REQUEST_JOIN_CONDITION = `lr.employee_id = a.employee_id
+        AND lr.request_type = 'time_correction'
+        AND lr.status = 'approved'
+        AND lr.reviewed_at IS NOT NULL
+        AND COALESCE(lr.correction_date, lr.start_date) = a.work_date
+        AND lr.correction_hours IS NOT DISTINCT FROM a.hours_override
+        AND lr.reviewed_at <= a.updated_at + interval '1 minute'
+        AND (
+              (a.source_type = 'manual_object' AND lr.correction_object_id::text = a.source_id)
+           OR (a.source_type = 'leave_request' AND a.source_id = lr.id::text || ':time_correction')
+            )`;
+
 export async function loadCorrectionSourceRequest(
   adjustmentId: number,
 ): Promise<ICorrectionSourceRequest | null> {
@@ -41,17 +56,7 @@ export async function loadCorrectionSourceRequest(
             lr.reviewed_at, up.full_name AS reviewer_name
        FROM attendance_adjustments a
        JOIN leave_requests lr
-         ON lr.employee_id = a.employee_id
-        AND lr.request_type = 'time_correction'
-        AND lr.status = 'approved'
-        AND lr.reviewed_at IS NOT NULL
-        AND COALESCE(lr.correction_date, lr.start_date) = a.work_date
-        AND lr.correction_hours IS NOT DISTINCT FROM a.hours_override
-        AND lr.reviewed_at <= a.updated_at + interval '1 minute'
-        AND (
-              (a.source_type = 'manual_object' AND lr.correction_object_id::text = a.source_id)
-           OR (a.source_type = 'leave_request' AND a.source_id = lr.id::text || ':time_correction')
-            )
+         ON ${SOURCE_REQUEST_JOIN_CONDITION}
        LEFT JOIN employees e ON e.id = lr.employee_id
        LEFT JOIN user_profiles up ON up.id = lr.reviewer_id
       WHERE a.id = $1
