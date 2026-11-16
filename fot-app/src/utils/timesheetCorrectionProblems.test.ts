@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TimesheetEmployee, TimesheetEntry } from '../types';
+import type { IResolvedSchedule } from '../types/schedule';
 import {
   CORRECTION_NEEDED_LABEL,
   timesheetCorrectionProblems,
@@ -99,6 +100,33 @@ describe('timesheetCorrectionProblems', () => {
       { text: '1 без корр.', title: CORRECTION_NEEDED_LABEL },
       { text: '1 без часов', title: ZERO_HOURS_TITLE },
     ]);
+  });
+
+  it('по графику: целых часов хватает до нормы — рамки нет, недобор от получаса — рамка с прежней подсказкой', () => {
+    const fiveTwo = {
+      schedule_id: 's', schedule_type: 'office', work_start: '09:00:00', work_end: '18:00:00', work_hours: 8,
+      work_days: [1, 2, 3, 4, 5], office_days: null, late_threshold_minutes: 0, day_overrides: null, lunch_minutes: 60,
+      respects_holidays: true, pattern_type: 'custom', expected_saturdays_per_month: 0, expected_sundays_per_month: 0,
+      full_day_threshold_minutes: null, weekend_full_day_threshold_minutes: null, cycle_length: null, cycle_days: null,
+      anchor_date: null, assignment_anchor_date: null, source: 'employee',
+    } as unknown as IResolvedSchedule;
+    const result = timesheetCorrectionProblems({
+      employees: [employee(1)],
+      entries: [
+        entry(1, '2026-11-13', 7 + 52 / 60, { presence_covers_shift: false, underwork_reason: 'short_span' }),
+        entry(1, '2026-11-05', 9.55, { presence_covers_shift: false, underwork_reason: 'long_break' }),
+        entry(1, '2026-11-12', 7 + 29 / 60),
+      ],
+      weekendMissing: [],
+      schedules: { 1: fiveTwo },
+      calendar: null,
+      year: 2026,
+      month: 11,
+      showActualHours: true,
+      todayIso: '2026-11-16',
+    });
+    expect([...result.keys]).toEqual(['1_2026-11-12']);
+    expect(result.titles.get('1_2026-11-12')).toBe(UNDERWORK_TITLE);
   });
 
   it('выходной с сервера на сегодняшний день — без рамки', () => {

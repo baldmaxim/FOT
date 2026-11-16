@@ -2,15 +2,20 @@ import type { TimesheetEmployee, TimesheetEntry } from '../types';
 import type { IResolvedSchedule } from '../types/schedule';
 import type { IProductionCalendarMonth, IWeekendMissingDay } from '../types/timesheet';
 import { getDayStatus } from './dayStatus';
-import { getFullDayThresholdHoursForDay, getScheduleForTimesheetDay, isScheduleDayOff } from './scheduleUtils';
+import {
+  getDayNormHoursForDay,
+  getFullDayThresholdHoursForDay,
+  getScheduleForTimesheetDay,
+  isScheduleDayOff,
+} from './scheduleUtils';
 import { isDateInactiveForEmployee } from './timesheetEmployeeWindow';
 
 /**
  * Рамки «Нужна корректировка» в сетке «Табеля» (по сотрудникам): где руководителю проставить часы.
  *
- * Будний день — «Неполный» (часов меньше графика или длинный перерыв) или «СКУД без пары» (проход есть, 0 ч), а
- * корректировки нет; статус — тот же getDayStatus с тем же графиком и порогом, что у клетки, поэтому рамка совпадает
- * с цветом. Выходной — с сервера (weekend_missing_days): правила дня там же, где у вкладки «Выходные».
+ * Будний день — «Неполный» / «Длинный перерыв» (целых часов меньше нормы графика — зарплата по часам заплатит меньше)
+ * или «СКУД без пары» (проход есть, 0 ч), а корректировки нет; статус — тот же getDayStatus с тем же графиком, порогом
+ * и нормой, что у клетки, поэтому рамка совпадает с цветом. Выходной — с сервера (weekend_missing_days): правила дня там же, где у вкладки «Выходные».
  * Без рамки: сегодня и будущее, вне окна строки, до ноября 2026 (зарплата по часам — с ноября; та же дата на сервере,
  * TIMESHEET_CORRECTION_FRAMES_FROM).
  */
@@ -90,9 +95,11 @@ export const timesheetCorrectionProblems = ({
       if (isScheduleDayOff(schedule, calendar, year, month, day)) continue;
       const entry = entryByKey.get(`${employee.id}_${iso}`) ?? null;
       if (!entry || entry.is_correction) continue;
+      // Норма дня — как в зарплате по часам: целые часы не меньше неё — полный день, рамки нет.
       const status = getDayStatus(entry, {
         showActualHours,
         fullDayThresholdHours: getFullDayThresholdHoursForDay(schedule, calendar, year, month, day),
+        dayNormHours: getDayNormHoursForDay(schedule, calendar, year, month, day),
         isScheduledDayOff: false,
         isFuture: false,
       });

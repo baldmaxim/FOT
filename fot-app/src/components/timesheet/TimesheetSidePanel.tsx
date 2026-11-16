@@ -26,6 +26,7 @@ import {
   isScheduleDayOff,
   isPreHolidayForSchedule,
   getFullDayThresholdHoursForDay,
+  getDayNormHoursForDay,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { triggerBlobDownload } from '../../utils/download';
@@ -198,6 +199,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       isWeekend: boolean;
       isPreHoliday: boolean;
       fullDayThreshold: number;
+      dayNorm: number;
     }> = [];
 
     for (const d of (visibleDays || Array.from({ length: getDaysInMonth(year, month) }, (_, index) => index + 1))) {
@@ -208,22 +210,24 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       if (dayOff && !entry) continue;
       const isPreHoliday = isPreHolidayForSchedule(sched, calendar ?? null, year, month, d);
       const fullDayThreshold = getFullDayThresholdHoursForDay(sched, calendar ?? null, year, month, d);
+      const dayNorm = getDayNormHoursForDay(sched, calendar ?? null, year, month, d);
 
       const dayDate = new Date(year, month - 1, d);
       const today = new Date();
       today.setHours(23, 59, 59, 999);
       if (dayDate > today) continue;
 
-      details.push({ day: d, entry, isWeekend: dayOff, isPreHoliday, fullDayThreshold });
+      details.push({ day: d, entry, isWeekend: dayOff, isPreHoliday, fullDayThreshold, dayNorm });
     }
 
     return details;
   }, [employee, entries, year, month, schedules, dailySchedules, calendar, visibleDays]);
 
-  const getHoursClass = (entry: TimesheetEntry | null, fullDayThreshold: number, isWeekendDay: boolean): string => {
+  const getHoursClass = (entry: TimesheetEntry | null, fullDayThreshold: number, dayNorm: number, isWeekendDay: boolean): string => {
     const status = getDayStatus(entry, {
       showActualHours,
       fullDayThresholdHours: fullDayThreshold,
+      dayNormHours: dayNorm,
       isScheduledDayOff: isWeekendDay,
     });
     return STATUS_TO_DETAIL_HOURS_CLASS[status];
@@ -291,7 +295,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
           <div className="ts-panel-section">
             <div className="ts-panel-section-title">Детализация по дням</div>
-            {dayDetails.map(({ day, entry, isWeekend: isWeekendDay, isPreHoliday, fullDayThreshold }) => {
+            {dayDetails.map(({ day, entry, isWeekend: isWeekendDay, isPreHoliday, fullDayThreshold, dayNorm }) => {
               const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const dayEventsData = skudEvents.get(dateStr);
               const expanded = expandedDays.has(day);
@@ -339,7 +343,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                           {formatTime(summaryLastExit)}
                         </span>
                       )}
-                      <div className={`ts-day-detail-hours ${getHoursClass(entry, fullDayThreshold, isWeekendDay)}`}>
+                      <div className={`ts-day-detail-hours ${getHoursClass(entry, fullDayThreshold, dayNorm, isWeekendDay)}`}>
                         {getHoursLabel(entry)}
                       </div>
                       {entry && (

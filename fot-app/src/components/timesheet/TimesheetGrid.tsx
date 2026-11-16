@@ -295,6 +295,8 @@ const getDayCellClass = (
   // задаёт ТОЛЬКО objectEntry.is_correction, а не дневная запись. Иначе day-level
   // корректировка течёт на все объекты дня (фантомы на «чужих» объектах, #3).
   markCorrection = true,
+  // Норма дня по графику: целые часы не меньше неё — полный день (см. getDayStatus).
+  dayNormHours?: number,
 ): string => {
   const classes = ['ts-day'];
   if (today) classes.push('ts-day--today');
@@ -302,6 +304,7 @@ const getDayCellClass = (
   const status = getDayStatus(entry, {
     showActualHours: showActualHoursFlag,
     fullDayThresholdHours: thresholdHours,
+    dayNormHours,
     isScheduledDayOff: weekend,
     isFuture: future,
   });
@@ -486,11 +489,13 @@ const getObjectCellTitleWithStatus = (
   dayOff: boolean,
   threshold: number,
   future: boolean,
+  dayNormHours?: number,
 ): string | undefined => {
   const baseTitle = getObjectCellTitle(objectEntry, objectName);
   const status = getDayStatus(dailyEntry, {
     showActualHours: showActualHoursFlag,
     fullDayThresholdHours: threshold,
+    dayNormHours,
     isScheduledDayOff: dayOff,
     isFuture: future,
   });
@@ -1226,7 +1231,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         // markCorrection=false: метку даёт только корректировка самого объекта,
                         // а не дневная запись — иначе течёт на «чужие» объекты (#3).
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const objCorrected = Boolean(topEntry?.is_correction || bottomEntry?.is_correction);
                         const classes = [baseCls, 'ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
                         if (objCorrected) classes.push('ts-day--corrected');
@@ -1440,7 +1445,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate));
+                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate), true, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const text = getDayCellTextMobile(entry, dayOff);
                         const letterHours = inactive ? null : getSalaryLetterCell(row.employee.id, day, entry);
                         const baseTitle = getDayCellTitle(entry, dayOff, letterHours);
@@ -1510,7 +1515,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       const future = isFutureDay(year, month, day);
       const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
       const entry = dailyEntries?.get(day) ?? null;
-      const baseCls = getDayCellClass(entry, dayOff, today, future, threshold, approvalStatusFor?.(employeeId, isoDate), asTimesheet);
+      const baseCls = getDayCellClass(entry, dayOff, today, future, threshold, approvalStatusFor?.(employeeId, isoDate), asTimesheet, getDayNormHoursForDay(sched, calendar, year, month, day));
       if (asTimesheet) {
         const inactive = isDayInactiveForEmployee(employee, year, month, day);
         const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
@@ -1646,7 +1651,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
                         const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
-                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, row.object_name, dayOff, threshold, future);
+                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, row.object_name, dayOff, threshold, future, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const title = bulkEditMode
                           ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
@@ -1664,7 +1669,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const blockReason: BulkBlockReason | null =
                           resolveBulkBlockReason(row.employee.id, day, isBlocked);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
                         const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
                           : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
@@ -1937,7 +1942,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         && highlightedCell.date === isoDate
                         ? ' ts-day--flash'
                         : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}${viewOnly ? ' ts-day--readonly' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate), true, getDayNormHoursForDay(sched, calendar, year, month, day))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}${viewOnly ? ' ts-day--readonly' : ''}`;
                       const letterHours = inactive ? null : getSalaryLetterCell(row.employee.id, day, entry);
                       const text = inactive
                         ? ''
@@ -2032,7 +2037,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
                         const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, objectRow.object_key, day));
-                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, objectRow.object_name, dayOff, threshold, future);
+                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, objectRow.object_name, dayOff, threshold, future, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const title = bulkEditMode
                           ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
@@ -2042,7 +2047,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isBulkClickable = true;
                         const objectDayLocked = isBulkDayLocked(row.employee.id, day);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false, getDayNormHoursForDay(sched, calendar, year, month, day));
                         const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
                           : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
                           : objectEntry?.approval_status === 'rejected' ? ' ts-day--approval-rejected' : '';

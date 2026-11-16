@@ -29,6 +29,11 @@ export interface IGetDayStatusOptions {
   // Порог «полного дня» в часах с учётом графика, предпраздничного дня (-1ч)
   // и day_overrides — должен совпадать с тем, что использует Grid и Calendar.
   fullDayThresholdHours: number;
+  // Норма дня по графику (getDayNormHoursForDay: предпраздничный −1, праздник 0). Передана и > 0 — день полный, если
+  // часы, округлённые до целого (как в зарплате по часам и «Едином 1С»), не меньше округлённой нормы: недобор меньше
+  // получаса, опоздание или длинный перерыв при полных часах день не красят — зарплата засчитает его полностью.
+  // Не передана — прежнее правило (порог и покрытие смены).
+  dayNormHours?: number;
   // День помечен как выходной по графику сотрудника (с учётом производственного календаря).
   isScheduledDayOff: boolean;
   // День в будущем (текущий месяц, > today). Для прошлых месяцев — false.
@@ -43,7 +48,7 @@ export const getDayStatus = (
   entry: TimesheetEntry | null | undefined,
   options: IGetDayStatusOptions,
 ): DayStatus => {
-  const { showActualHours, fullDayThresholdHours, isScheduledDayOff, isFuture, hasExternalSkud } = options;
+  const { showActualHours, fullDayThresholdHours, dayNormHours, isScheduledDayOff, isFuture, hasExternalSkud } = options;
 
   if (!entry) {
     if (isFuture) return 'future';
@@ -72,6 +77,11 @@ export const getDayStatus = (
       // день недоработан.
       const spanOk = isScheduledDayOff || entry.is_correction || entry.presence_covers_shift !== false;
       if (hoursOk && spanOk) return 'present';
+      // Целые часы дня (как в зарплате по часам и «Едином 1С») не меньше нормы — полный день, без жёлтого.
+      if (dayNormHours !== undefined && dayNormHours > 0 && visibleHours != null
+        && Math.round(visibleHours) >= Math.round(dayNormHours)) {
+        return 'present';
+      }
       // Жёлтый из-за перерывов сверх квоты обеда при покрытом span — отдельная подпись
       // «Длинный перерыв». Причину считает бэк (underwork_reason); при нескольких причинах
       // (опоздал И перерыв превышен) бэк отдаёт 'short_span' → остаётся «Недобор».

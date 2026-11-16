@@ -84,6 +84,8 @@ interface ICorrectionModalProps {
     isScheduledDayOff: boolean;
     isPreHoliday: boolean;
     fullDayThresholdHours: number;
+    /** Норма дня по графику: целые часы не меньше неё — полный день (см. getDayStatus). */
+    dayNormHours?: number;
     showActualHours: boolean;
   };
   // Список объектов дня (из СКУД + per-object корректировки). Передаётся только в day-mode;
@@ -1724,6 +1726,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     ? getDayStatus(timesheetEntry ?? null, {
         showActualHours: dayStatusContext.showActualHours,
         fullDayThresholdHours: dayStatusContext.fullDayThresholdHours,
+        dayNormHours: dayStatusContext.dayNormHours,
         isScheduledDayOff: dayStatusContext.isScheduledDayOff,
       })
     : null;

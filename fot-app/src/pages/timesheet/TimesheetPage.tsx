@@ -3283,6 +3283,7 @@ export const TimesheetPage: FC = () => {
                 isScheduledDayOff: isScheduleDayOff(sched, calendar, year, month, modalDay),
                 isPreHoliday: isPreHolidayForSchedule(sched, calendar, year, month, modalDay),
                 fullDayThresholdHours: getFullDayThresholdHoursForDay(sched, calendar, year, month, modalDay),
+                dayNormHours: getDayNormHoursForDay(sched, calendar, year, month, modalDay),
                 showActualHours,
               };
             })() : undefined}

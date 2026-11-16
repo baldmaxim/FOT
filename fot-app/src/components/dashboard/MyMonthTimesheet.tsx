@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
 import {
+  getDayNormHoursForDay,
   getFullDayThresholdHoursForDay,
   isHolidayForSchedule,
   isPreHolidayForSchedule,
@@ -264,6 +265,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
     const ds = getDayStatus(entry, {
       showActualHours,
       fullDayThresholdHours,
+      dayNormHours: getDayNormHoursForDay(employeeSchedule, calendar, y, m, day),
       isScheduledDayOff,
       isFuture: iso > todayIso,
     });
@@ -321,6 +323,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
     const ds = getDayStatus(entry, {
       showActualHours,
       fullDayThresholdHours,
+      dayNormHours: getDayNormHoursForDay(employeeSchedule, calendar, year, month, day),
       isScheduledDayOff,
       isFuture: iso > todayIso,
     });

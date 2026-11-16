@@ -2,6 +2,7 @@ import type { SkudEvent, TimesheetEntry, IProductionCalendarMonth } from '../typ
 import type { IResolvedSchedule } from '../types/schedule';
 import {
   getEffectiveLateThresholdForDay,
+  getDayNormHoursForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
   getShiftDurationForDay,
@@ -580,6 +581,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       status = getDayStatus(entry, {
         showActualHours,
         fullDayThresholdHours,
+        dayNormHours: getDayNormHoursForDay(schedule, calendar ?? null, year, month + 1, day),
         isScheduledDayOff,
         hasExternalSkud,
       });

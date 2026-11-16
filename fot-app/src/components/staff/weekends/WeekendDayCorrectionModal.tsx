@@ -6,6 +6,7 @@ import { useCanViewSkudDirectory } from '../../../hooks/useCanViewSkudDirectory'
 import { formatDateRu } from '../../../utils/calendarUtils';
 import {
   getCorrectionDefaultHoursForDay,
+  getDayNormHoursForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
   isPreHolidayForSchedule,
@@ -133,6 +134,7 @@ export const WeekendDayCorrectionModal: FC<IWeekendDayCorrectionModalProps> = ({
               isScheduledDayOff: isScheduleDayOff(schedule, calendar, year, month, modalDay),
               isPreHoliday: isPreHolidayForSchedule(schedule, calendar, year, month, modalDay),
               fullDayThresholdHours: getFullDayThresholdHoursForDay(schedule, calendar, year, month, modalDay),
+              dayNormHours: getDayNormHoursForDay(schedule, calendar, year, month, modalDay),
               showActualHours,
             } : undefined}
             objectChoice={modalObjects}
