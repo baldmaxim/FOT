@@ -28,6 +28,7 @@ import {
   parsePayrollEmployeeIdParam,
   payrollDateSchema,
   payrollEmployeeIdSchema,
+  payrollPlannedCommentSchema,
   payrollPositiveMoneySchema,
   withCanEdit,
 } from './payroll-dictionary.helpers.js';
@@ -38,6 +39,8 @@ const plannedFields = {
   date_from: payrollDateSchema('Укажите дату начала'),
   // Пусто — бессрочно (миграция 322).
   date_to: payrollDateSchema('Такой даты нет').nullable().optional(),
+  // Миграция 364: null или пусто — без комментария, ключа нет — не трогать.
+  comment: payrollPlannedCommentSchema,
 };
 const PLANNED_ORDER = { message: 'Дата окончания раньше даты начала', path: ['date_to'] };
 const plannedOrder = (value: { date_from: string; date_to?: string | null }): boolean => (
@@ -65,12 +68,15 @@ const toPlannedValue = (body: z.infer<typeof plannedSchema>): IPlannedSupplement
   amount: body.amount,
   dateFrom: body.date_from,
   dateTo: body.date_to ?? null,
+  comment: body.comment,
 });
 
+/** Аудит: comment undefined (прежний клиент — комментарий не трогали) в JSON не попадает. */
 const plannedAudit = (value: IPlannedSupplementValue | null) => (value && {
   amount: value.amount,
   date_from: value.dateFrom,
   date_to: value.dateTo,
+  comment: value.comment,
 });
 
 /** GET /api/payroll/supplements — плановые (текущие и прошлые периоды) и разовые доплаты «штата зарплаты». */
@@ -116,11 +122,12 @@ const writePlanned = async (
   res.json({ success: true, data: { changed: result.status === 'saved' } });
 };
 
-/** POST /api/payroll/supplements/planned { employee_id, amount, date_from, date_to } — добавить. */
+/** POST /api/payroll/supplements/planned { employee_id, amount, date_from, date_to, comment? } — добавить. */
 const addPlanned = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId, ...body } = plannedAddSchema.parse(req.body);
-    await writePlanned(req, res, employeeId, toPlannedValue(body), true);
+    // Новый период: без комментария в запросе — без комментария, а не комментарий последней версии сотрудника.
+    await writePlanned(req, res, employeeId, { ...toPlannedValue(body), comment: body.comment ?? null }, true);
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
     console.error('payrollSupplements.addPlanned error:', err);
@@ -128,7 +135,7 @@ const addPlanned = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-/** PUT /api/payroll/supplements/planned/employee/:empId { amount, date_from, date_to } — изменить. */
+/** PUT /api/payroll/supplements/planned/employee/:empId { amount, date_from, date_to, comment? } — изменить. */
 const setPlanned = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = parsePayrollEmployeeIdParam(req);
@@ -195,7 +202,7 @@ const writePlannedPeriod = async (
         source: 'supplement_registry_period',
         employee_id: employeeId,
         period_id: periodId,
-        planned_supplement: plannedAudit(value),
+        planned_supplement: plannedAudit(result.next),
         previous: plannedAudit(result.previous),
       },
     });
@@ -203,7 +210,7 @@ const writePlannedPeriod = async (
   res.json({ success: true, data: { changed: result.status === 'saved' } });
 };
 
-/** PUT /api/payroll/supplements/planned/:id { amount, date_from, date_to } — изменить период. */
+/** PUT /api/payroll/supplements/planned/:id { amount, date_from, date_to, comment? } — изменить период. */
 const updatePlannedPeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const value = toPlannedValue(plannedSchema.parse(req.body));

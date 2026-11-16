@@ -59,6 +59,8 @@
 .amounts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-variant-numeric: tabular-nums; }
 .prevAmount { font-size: 14px; color: var(--text-secondary); }
 .amount { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+/* Комментарий плановой доплаты в истории: длинный текст без пробелов не шире экрана 360px. */
+.comment { min-width: 0; overflow-wrap: anywhere; }
 .deltaUp, .deltaDown { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .deltaUp { color: var(--success); }
 .deltaDown { color: var(--error); }

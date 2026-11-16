@@ -223,6 +223,11 @@ export interface IPlannedSupplementValue {
   dateFrom: string;
   /** null — бессрочно (миграция 322). */
   dateTo: string | null;
+  /**
+   * Комментарий периода (миграция 364): null — без комментария; undefined — не передан (прежний клиент, 🗑 «Убрать»):
+   * остаётся прежний комментарий — последней версии у setPlannedSupplement, правленого периода у rewritePlannedPeriod.
+   */
+  comment?: string | null;
 }
 
 /**
@@ -234,6 +239,9 @@ export interface IPlannedSupplementValue {
  * (NUMERIC с NUMERIC). Вызывать в транзакции под блокировкой сотрудника (lockPayrollEmployee),
  * иначе два параллельных сохранения прочтут одну и ту же последнюю версию.
  *
+ * Комментарий (миграция 364) — часть версии: только он другой — тоже новая версия. value.comment undefined — берётся
+ * комментарий последней версии; у снятия комментария нет.
+ *
  * Возвращает true, если доплата изменилась. createdBy null — запись скриптом по списку 1С, без автора.
  */
 export const setPlannedSupplement = async (
@@ -242,21 +250,30 @@ export const setPlannedSupplement = async (
 ): Promise<boolean> => {
   const res = await exec.query(
     `WITH last AS (
-       SELECT amount, date_from, date_to
+       SELECT amount, date_from, date_to, comment
          FROM payroll_planned_supplements
         WHERE employee_id = $1 AND archived_at IS NULL
         ORDER BY id DESC
         LIMIT 1
+     ),
+     incoming AS (
+       SELECT CASE
+                WHEN $2::numeric IS NULL THEN NULL
+                WHEN $6::boolean THEN (SELECT comment FROM last)
+                ELSE $7::text
+              END AS comment
      )
-     INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by)
-     SELECT $1, $2::numeric, $3::date, $4::date, $5
+     INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by, comment)
+     SELECT $1, $2::numeric, $3::date, $4::date, $5, incoming.comment
+       FROM incoming
       WHERE CASE
               WHEN EXISTS (SELECT 1 FROM last)
                 THEN NOT EXISTS (
                   SELECT 1 FROM last
                    WHERE amount IS NOT DISTINCT FROM $2::numeric
                      AND date_from IS NOT DISTINCT FROM $3::date
-                     AND date_to IS NOT DISTINCT FROM $4::date)
+                     AND date_to IS NOT DISTINCT FROM $4::date
+                     AND comment IS NOT DISTINCT FROM incoming.comment)
               ELSE $2::numeric IS NOT NULL
             END`,
     [
@@ -265,6 +282,8 @@ export const setPlannedSupplement = async (
       input.value?.dateFrom ?? null,
       input.value?.dateTo ?? null,
       input.createdBy,
+      input.value !== null && input.value.comment === undefined,
+      input.value?.comment ?? null,
     ],
   );
   return (res.rowCount ?? 0) > 0;
@@ -290,6 +309,9 @@ export interface IPlannedSupplementChange {
   prev_amount: string | null;
   prev_date_from: string | null;
   prev_date_to: string | null;
+  /** Комментарий периода (миграция 364): стало и было; null — без комментария. */
+  comment: string | null;
+  prev_comment: string | null;
   changed_by_name: string | null;
   changed_at: string;
 }
@@ -297,28 +319,32 @@ export interface IPlannedSupplementChange {
 /**
  * История плановой доплаты, новые сверху. Переписанное расписание (миграция 337): у строки с replaces_id
  * «было» — заменённая строка, а не предыдущая по id; копии без изменений не показываются; архивная строка
- * «снята» — снятый период (prev — его значения).
+ * «снята» — снятый период (prev — его значения). Комментарий (миграция 364) — часть версии: правка только его —
+ * тоже «changed», копия — когда совпал и он.
  */
 export const getPlannedSupplementChanges = async (employeeId: number): Promise<IPlannedSupplementChange[]> =>
   query<IPlannedSupplementChange>(
     `WITH ordered AS (
-       SELECT s.id, s.amount, s.date_from, s.date_to, s.created_by, s.created_at, s.replaces_id,
+       SELECT s.id, s.amount, s.date_from, s.date_to, s.comment, s.created_by, s.created_at, s.replaces_id,
               LAG(s.amount) OVER w AS lag_amount,
               LAG(s.date_from) OVER w AS lag_date_from,
-              LAG(s.date_to) OVER w AS lag_date_to
+              LAG(s.date_to) OVER w AS lag_date_to,
+              LAG(s.comment) OVER w AS lag_comment
          FROM payroll_planned_supplements s
         WHERE s.employee_id = $1
        WINDOW w AS (ORDER BY s.id)
      ),
      versions AS (
-       SELECT o.id, o.amount, o.date_from, o.date_to, o.created_by, o.created_at,
+       SELECT o.id, o.amount, o.date_from, o.date_to, o.comment, o.created_by, o.created_at,
               CASE WHEN o.replaces_id IS NULL THEN o.lag_amount ELSE r.amount END AS prev_amount,
               CASE WHEN o.replaces_id IS NULL THEN o.lag_date_from ELSE r.date_from END AS prev_date_from,
               CASE WHEN o.replaces_id IS NULL THEN o.lag_date_to ELSE r.date_to END AS prev_date_to,
+              CASE WHEN o.replaces_id IS NULL THEN o.lag_comment ELSE r.comment END AS prev_comment,
               o.replaces_id IS NOT NULL
                 AND o.amount IS NOT DISTINCT FROM r.amount
                 AND o.date_from IS NOT DISTINCT FROM r.date_from
-                AND o.date_to IS NOT DISTINCT FROM r.date_to AS is_copy
+                AND o.date_to IS NOT DISTINCT FROM r.date_to
+                AND o.comment IS NOT DISTINCT FROM r.comment AS is_copy
          FROM ordered o
          LEFT JOIN payroll_planned_supplements r ON r.id = o.replaces_id
      )
@@ -334,6 +360,8 @@ export const getPlannedSupplementChanges = async (employeeId: number): Promise<I
             v.prev_amount::text AS prev_amount,
             v.prev_date_from,
             v.prev_date_to,
+            v.comment,
+            v.prev_comment,
             up.full_name AS changed_by_name,
             v.created_at AS changed_at
        FROM versions v

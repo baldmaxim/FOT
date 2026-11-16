@@ -20,6 +20,7 @@ import {
   reasonAfterRename,
   type RegistryFormField,
 } from '../../../utils/payrollRegistryForms';
+import { PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH } from '../../../utils/plannedSupplementComment';
 import { FilePreviewModal } from '../../documents/FilePreviewModal';
 import { ClearableInput } from '../../ui/ClearableInput';
 import { DateInput } from '../../ui/DateInput';
@@ -45,8 +46,9 @@ interface ISupplementFormProps {
 const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candidate.can_edit;
 
 /**
- * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес и период «с — по» (та же, что «Плановые доплаты» окна
- * сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет сервер); разовая —
+ * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес, период «с — по» и необязательный комментарий (та же, что
+ * «Плановые доплаты» окна сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет
+ * сервер); разовая —
  * месяц, сумма и основание из списка (за месяц — сколько угодно); ✎ у основания — окно «Основания доплаты»;
  * «Файлы» (миграция 354) — прикрепить и снять, всё применяется по «Сохранить» одним запросом с полями.
  */
@@ -58,6 +60,8 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
   const [amount, setAmount] = useState(rateAmountInputValue(row?.amount));
   const [dateFrom, setDateFrom] = useState(row?.date_from ?? '');
   const [dateTo, setDateTo] = useState(row?.date_to ?? '');
+  // Комментарий плановой (миграция 364); у старого бэкенда поля нет — пусто.
+  const [comment, setComment] = useState(row?.comment ?? '');
   const currentMonth = moscowTodayIso().slice(0, 7);
   const [month, setMonth] = useState(row?.month ?? currentMonth);
   const [reason, setReason] = useState(row?.reason ?? '');
@@ -90,7 +94,7 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
     const selected = isEdit || employee !== null;
     const employeeId = isEdit ? row.employee_id : employee?.id ?? 0;
     if (kind === 'planned') {
-      const parsed = parsePlannedForm({ selected, amount, dateFrom, dateTo });
+      const parsed = parsePlannedForm({ selected, amount, dateFrom, dateTo, comment });
       if (!parsed.ok) {
         setError({ field: parsed.field, message: parsed.message });
         return false;
@@ -234,6 +238,22 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
             invalid={error?.field === 'reason'}
             describedBy={error ? errorId : undefined}
           />
+        )}
+
+        {kind === 'planned' && (
+          <label className={styles.field}>
+            <span className={styles.label}>Комментарий</span>
+            <ClearableInput
+              value={comment}
+              onValueChange={value => { setComment(value); clearError(); }}
+              maxLength={PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH}
+              autoComplete="off"
+              disabled={saving}
+              aria-invalid={error?.field === 'comment' || undefined}
+              aria-describedby={error ? errorId : undefined}
+              clearLabel="Очистить комментарий"
+            />
+          </label>
         )}
 
         {kind === 'one_time' && (

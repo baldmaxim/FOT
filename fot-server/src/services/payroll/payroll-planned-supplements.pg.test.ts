@@ -207,6 +207,9 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     await pg.pool!.query(migration('322_payroll_planned_supplement_open_end.sql'));
     await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
     await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
+    // Миграция 364 — комментарий периода; повторный запуск безопасен.
+    await pg.pool!.query(migration('364_payroll_planned_supplement_comment.sql'));
+    await pg.pool!.query(migration('364_payroll_planned_supplement_comment.sql'));
     // Список берёт «Начисления» из «Оплачено».
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
@@ -438,6 +441,72 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       planned_supplement_amount: '20000.00', planned_supplement_from: '2023-02-01', planned_supplement_to: null,
     });
   });
+  it('364: комментарий — часть версии; без комментария в запросе остаётся прежний, у снятой его нет', async () => {
+    await pg.pool!.query(`INSERT INTO employees (id, full_name) VALUES (6, 'Евсеев Е.Е.')`);
+    try {
+      const comments = async () => (await pg.pool!.query(
+        'SELECT amount::text AS amount, comment FROM payroll_planned_supplements WHERE employee_id = 6 ORDER BY id',
+      )).rows.map(row => [row.amount, row.comment]);
+      const open: IPlannedSupplementValue = { amount: 30000, dateFrom: '2026-10-01', dateTo: null };
+      expect(await save(6, { ...open, comment: 'Совмещение' })).toBe(true);
+      // Тот же комментарий — не правка; без ключа comment (прежний клиент) — тоже.
+      expect(await save(6, { ...open, comment: 'Совмещение' })).toBe(false);
+      expect(await save(6, open)).toBe(false);
+      // Только комментарий — новая версия.
+      expect(await save(6, { ...open, comment: 'Совмещение секретаря' })).toBe(true);
+      // Правка суммы без ключа comment — комментарий последней версии остаётся.
+      expect(await save(6, { ...open, amount: 32000 })).toBe(true);
+      // Явный null — комментарий снят; снятие доплаты — без комментария, даже если он был.
+      expect(await save(6, { ...open, amount: 32000, comment: null })).toBe(true);
+      expect(await save(6, { ...open, amount: 33000, comment: 'Ещё' })).toBe(true);
+      expect(await save(6, null)).toBe(true);
+      expect(await comments()).toEqual([
+        ['30000.00', 'Совмещение'],
+        ['30000.00', 'Совмещение секретаря'],
+        ['32000.00', 'Совмещение секретаря'],
+        ['32000.00', null],
+        ['33000.00', 'Ещё'],
+        [null, null],
+      ]);
+
+      // История: правка одного комментария — «changed» с прежним комментарием.
+      const history = (await getPlannedSupplementChanges(6))
+        .map(change => [change.action, change.amount, change.prev_amount, change.comment, change.prev_comment]);
+      expect(history).toEqual([
+        ['removed', null, '33000.00', null, 'Ещё'],
+        ['changed', '33000.00', '32000.00', 'Ещё', null],
+        ['changed', '32000.00', '32000.00', null, 'Совмещение секретаря'],
+        ['changed', '32000.00', '30000.00', 'Совмещение секретаря', 'Совмещение секретаря'],
+        ['changed', '30000.00', '30000.00', 'Совмещение секретаря', 'Совмещение'],
+        ['assigned', '30000.00', null, 'Совмещение', null],
+      ]);
+
+      // Список «Условий оплаты» (карточка «Подробно») — комментарий последней версии.
+      expect(await save(6, { ...open, comment: 'С 1 октября' })).toBe(true);
+      const res = makeRes();
+      await payrollTermsController.list({
+        user: { id: AUTHOR }, params: {}, body: {}, query: { date: '2026-10-01' },
+      } as unknown as AuthenticatedRequest, res);
+      expect((res.body.data as Array<Record<string, unknown>>).find(r => r.employee_id === 6))
+        .toMatchObject({ planned_supplement_amount: '30000.00', planned_supplement_comment: 'С 1 октября' });
+    } finally {
+      await pg.pool!.query('DELETE FROM payroll_planned_supplements WHERE employee_id = 6');
+      await pg.pool!.query('DELETE FROM employees WHERE id = 6');
+    }
+  });
+
+  it('364: комментарий у снятой строки, с пробелами по краям, пустой или длиннее 500 символов отвергает БД', async () => {
+    const insert = (amount: number | null, dateFrom: string | null, comment: string) => pg.pool!.query(
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, comment)
+       VALUES (3, $1, $2, NULL, $3)`,
+      [amount, dateFrom, comment],
+    );
+    await expect(insert(null, null, 'Снята')).rejects.toThrow(/payroll_supplement_comment/);
+    await expect(insert(1000, '2030-01-01', ' Совмещение')).rejects.toThrow(/payroll_supplement_comment/);
+    await expect(insert(1000, '2030-01-01', '')).rejects.toThrow(/payroll_supplement_comment/);
+    await expect(insert(1000, '2030-01-01', 'я'.repeat(501))).rejects.toThrow(/payroll_supplement_comment/);
+  });
+
   it('«Расчёты»: отпускные, больничные, перерасчёт из 1С и выплаты на карту по способам выплаты — без удвоения', async () => {
     await pg.pool!.query(`
       INSERT INTO employees (id, full_name, employment_status) VALUES (5, 'Дмитриев Д.Д.', 'dismissed');
@@ -557,7 +626,13 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     });
 
     it('запись: периоды как в списке, автор пуст, повтор ничего не пишет', async () => {
+      // Комментарий прежней версии (364) не переходит на периоды из списка 1С.
+      await pg.pool!.query(`UPDATE payroll_planned_supplements SET comment = 'Старый' WHERE employee_id = 20`);
       await syncPlannedSupplements(targets, { apply: true });
+      expect((await pg.pool!.query(
+        `SELECT c.comment FROM (${PLANNED_SUPPLEMENT_PERIODS_SQL}) x
+           JOIN payroll_planned_supplements c ON c.id = x.id WHERE x.employee_id = 20 ORDER BY x.date_from`,
+      )).rows.map(row => row.comment)).toEqual([null, null, null]);
       expect(await periods(20)).toEqual([
         { amount: '20000.00', date_from: '2023-03-01', date_to: '2026-09-30' },
         { amount: '30000.00', date_from: '2026-10-01', date_to: '2027-01-31' },

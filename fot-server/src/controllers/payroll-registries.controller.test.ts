@@ -546,9 +546,42 @@ describe('«Доплата»: плановая', () => {
     await supplementsC.addPlanned(makeReq({ body: { ...open, date_to: null } }), makeRes());
     expect(res.statusCode).toBe(200);
     expect(supplements.savePlannedSupplement.mock.calls.map(call => call[0].value)).toEqual([
-      { amount: 5000, dateFrom: '2026-10-01', dateTo: null },
-      { amount: 5000, dateFrom: '2026-10-01', dateTo: null },
+      { amount: 5000, dateFrom: '2026-10-01', dateTo: null, comment: null },
+      { amount: 5000, dateFrom: '2026-10-01', dateTo: null, comment: null },
     ]);
+  });
+
+  it('364: комментарий — без пробелов по краям, пусто — null; у правки периода без ключа — undefined (оставить)', async () => {
+    registryScope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+    supplements.savePlannedSupplement.mockResolvedValue({ status: 'saved', previous: null });
+    supplements.getPlannedPeriodEmployeeId.mockResolvedValue(42);
+    supplements.rewritePlannedPeriod.mockResolvedValue({
+      status: 'saved',
+      previous: { amount: 5000, dateFrom: '2026-10-01', dateTo: '2026-12-31', comment: 'Было' },
+      next: { amount: 5000, dateFrom: '2026-10-01', dateTo: '2026-12-31', comment: 'Было' },
+    });
+    const { employee_id: _employeeId, ...fields } = body;
+    await supplementsC.addPlanned(makeReq({ body: { ...body, comment: '  Совмещение секретаря ' } }), makeRes());
+    await supplementsC.addPlanned(makeReq({ body: { ...body, comment: '   ' } }), makeRes());
+    expect(supplements.savePlannedSupplement.mock.calls.map(call => call[0].value.comment))
+      .toEqual(['Совмещение секретаря', null]);
+
+    await supplementsC.updatePlannedPeriod(makeReq({ params: { id: '26' }, body: fields }), makeRes());
+    await supplementsC.updatePlannedPeriod(makeReq({ params: { id: '26' }, body: { ...fields, comment: null } }), makeRes());
+    expect(supplements.rewritePlannedPeriod.mock.calls.map(call => 'comment' in call[0].value
+      ? call[0].value.comment : 'нет ключа')).toEqual([undefined, null]);
+    // Аудит — записанное значение (комментарий уже разрешён сервисом).
+    expect(audit.logFromRequest.mock.calls.at(-1)?.[3].details.planned_supplement)
+      .toEqual({ amount: 5000, date_from: '2026-10-01', date_to: '2026-12-31', comment: 'Было' });
+
+    const long = makeRes();
+    await supplementsC.addPlanned(makeReq({ body: { ...body, comment: 'я'.repeat(501) } }), long);
+    expect(long.statusCode).toBe(400);
+    expect(long.body.error).toBe('Комментарий — не больше 500 символов');
+    const notText = makeRes();
+    await supplementsC.addPlanned(makeReq({ body: { ...body, comment: 5 } }), notText);
+    expect(notText.statusCode).toBe(400);
+    expect(supplements.savePlannedSupplement).toHaveBeenCalledTimes(2);
   });
 
   it('окончание раньше начала, третий знак у суммы — 400; чужой — 403', async () => {

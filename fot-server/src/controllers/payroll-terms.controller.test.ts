@@ -472,7 +472,8 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     expect(txClient.query.mock.calls[0][1]).toEqual([42]);
     expect(statements[SINGLE_INSERT]).toMatch(/INSERT INTO payroll_compensation_terms/i);
     expect(statements[SINGLE_INSERT + 1]).toMatch(/INSERT INTO payroll_planned_supplements/i);
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', '2026-12-31', 'user-1']);
+    // Без ключа comment (прежний клиент) — флаг «оставить комментарий последней версии».
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', '2026-12-31', 'user-1', true, null]);
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({
       planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' },
@@ -490,7 +491,30 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1']);
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', true, null]);
+  });
+
+  it('364: комментарий из карточки — без пробелов по краям; пусто — null (снять комментарий); длиннее 500 — 400', async () => {
+    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
+    const supplement = { amount: 10000, date_from: '2026-11-01', date_to: null };
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: ' Совмещение ' } },
+    } as Partial<AuthenticatedRequest>), makeRes());
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', false, 'Совмещение']);
+
+    txClient.query.mockClear();
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: '' } },
+    } as Partial<AuthenticatedRequest>), makeRes());
+    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', false, null]);
+
+    txClient.query.mockClear();
+    const long = makeRes();
+    await payrollTermsController.assign(makeReq({
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: 'я'.repeat(501) } },
+    } as Partial<AuthenticatedRequest>), long);
+    expect(long.statusCode).toBe(400);
+    expect(supplementCall()).toBeUndefined();
   });
 
   it('null снимает доплату: версия с пустыми суммой и датами', async () => {
@@ -501,7 +525,7 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
-    expect(supplementCall()?.[1]).toEqual([42, null, null, null, 'user-1']);
+    expect(supplementCall()?.[1]).toEqual([42, null, null, null, 'user-1', false, null]);
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ planned_supplement: null });
   });

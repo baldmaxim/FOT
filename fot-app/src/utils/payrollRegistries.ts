@@ -195,14 +195,21 @@ export const EMPLOYEE_ROW_GROUP: IRegistryRowGroup<{ employee_id: number }> = {
   columns: ['full_name', 'department', 'position'],
 };
 
-/** «Плановые доплаты»: пять столбцов — вид и основание у плановой не нужны. */
+/**
+ * «Плановые доплаты»: шесть столбцов — вид и основание у плановой не нужны; «Комментарий» (миграция 364) — текст с
+ * переносом. Отдел и должность уже, как у «Доплаты за месяц», — таблица без прокрутки влезает в окно на 1280px.
+ */
 export const PLANNED_SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<IPayrollSupplementRow>> = [
-  ...employeeColumns<IPayrollSupplementRow>(),
+  ...employeeColumns<IPayrollSupplementRow>({ department: 112, position: 144 }),
   moneyColumn<IPayrollSupplementRow>('Сумма, ₽/мес', row => row.amount),
   {
     key: 'period', label: 'Период', type: 'text', width: 190, nowrap: true,
     text: supplementPeriod,
     sortValue: row => row.date_from,
+  },
+  {
+    key: 'comment', label: 'Комментарий', type: 'text', width: 200,
+    text: row => orDash(row.comment ?? null), sortValue: row => row.comment ?? null,
   },
 ];
 
@@ -411,7 +418,8 @@ const compareSupplementRows = (a: ISupplementRegistryRow, b: ISupplementRegistry
 
 /**
  * Строки «Доплаты за месяц» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths) и квартиры —
- * сервер их уже разложил по месяцам с суммой за месяц (listHousingByMonth). Порядок — по сотруднику, у него —
+ * сервер их уже разложил по месяцам с суммой за месяц (listHousingByMonth). «Основание» плановой — её комментарий
+ * (миграция 364), у разовой — основание из списка, у квартиры — «Квартира». Порядок — по сотруднику, у него —
  * плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки сотрудника идут подряд.
  * Пока один из источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
  */
@@ -424,7 +432,13 @@ export const buildSupplementRegistryRows = (
   const rows: ISupplementRegistryRow[] = [
     ...supplements
       .filter(row => supplementInMonths(row, months))
-      .map(row => ({ ...row, key: supplementRowKey(row), supplement: row, housing: null })),
+      .map(row => ({
+        ...row,
+        key: supplementRowKey(row),
+        reason: row.kind === 'planned' ? row.comment ?? null : row.reason,
+        supplement: row,
+        housing: null,
+      })),
     ...housing.map(row => ({
       key: `${housingRowKey(row)}-${row.month}`,
       kind: 'apartment' as const,

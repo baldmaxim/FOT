@@ -162,6 +162,8 @@ export interface IPayrollTermsRow {
   planned_supplement_amount?: string | number | null;
   planned_supplement_from?: string | null;
   planned_supplement_to?: string | null;
+  /** Комментарий последней сохранённой плановой доплаты (миграция 364); поля нет у старого бэкенда. */
+  planned_supplement_comment?: string | null;
   /**
    * «Выплачено» по месяцам. Список присылает «Оплачено» 1С; «Условия оплаты» заменяют их ответом termsPayouts (месяц
    * из 1С, иначе расчёт ФОТ, решение 09.11.2026), когда порция посчитана. Без поля ячейка «Выплачено» — «—».
@@ -249,6 +251,8 @@ export interface IPlannedSupplementPayload {
   amount: number;
   date_from: string;
   date_to: string | null;
+  /** Комментарий (миграция 364): null — без комментария. */
+  comment: string | null;
 }
 
 /** Изменение оклада / ставки. Суммы — текстом NUMERIC; разница — только при том же виде оплаты. */
@@ -288,6 +292,9 @@ export interface IPlannedSupplementChange {
   prev_amount: string | null;
   prev_date_from: string | null;
   prev_date_to: string | null;
+  /** Комментарий периода (миграция 364): стало и было; у старого бэкенда полей нет. */
+  comment?: string | null;
+  prev_comment?: string | null;
   changed_by_name: string | null;
   changed_at: string;
 }

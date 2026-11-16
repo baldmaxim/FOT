@@ -13,8 +13,8 @@ import {
 import type { IPayrollTermsRow } from '../services/payrollService';
 
 const EMPTY_MONEY = { bonus: '', housing: '' };
-const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '' };
-const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31' };
+const EMPTY_SUPPLEMENT = { amount: '', from: '', to: '', comment: '' };
+const NOV_DEC = { amount: '10000', from: '2026-11-01', to: '2026-12-31', comment: '' };
 
 const values = (over: Partial<IPayrollTermsFormValues> = {}): IPayrollTermsFormValues => ({
   calcType: 'salary',
@@ -143,7 +143,8 @@ describe('validatePayrollTerms: плановая доплата', () => {
 
   it('новая доплата: сумма числом (запятая — разделитель), даты как есть', () => {
     const result = validatePayrollTerms(values({ supplement: { ...NOV_DEC, amount: '10000,5' } }), withSupplement());
-    expect(result.payload?.planned_supplement).toEqual({ amount: 10000.5, date_from: '2026-11-01', date_to: '2026-12-31' });
+    expect(result.payload?.planned_supplement)
+      .toEqual({ amount: 10000.5, date_from: '2026-11-01', date_to: '2026-12-31', comment: null });
   });
 
   it('не меняли — не передаётся: чужая правка, сделанная пока карточка открыта, не затрётся', () => {
@@ -171,13 +172,41 @@ describe('validatePayrollTerms: плановая доплата', () => {
       values({ supplement: { ...NOV_DEC, to: '2027-01-31' } }),
       withSupplement(NOV_DEC),
     );
-    expect(result.payload?.planned_supplement).toEqual({ amount: 10000, date_from: '2026-11-01', date_to: '2027-01-31' });
+    expect(result.payload?.planned_supplement)
+      .toEqual({ amount: 10000, date_from: '2026-11-01', date_to: '2027-01-31', comment: null });
+  });
+
+  it('комментарий (миграция 364): правка одного комментария — новая доплата, пробелы по краям срезаются', () => {
+    const initial = { ...NOV_DEC, comment: 'Совмещение' };
+    const changed = validatePayrollTerms(values({ supplement: { ...NOV_DEC, comment: '  Совмещение секретаря ' } }),
+      withSupplement(initial));
+    expect(changed.payload?.planned_supplement)
+      .toEqual({ amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31', comment: 'Совмещение секретаря' });
+    expect(isPayrollTermsChanged(values({ supplement: { ...NOV_DEC, comment: 'x' } }), values({ supplement: NOV_DEC })))
+      .toBe(true);
+    // Стёрли комментарий — доплата та же, комментарий null.
+    const cleared = validatePayrollTerms(values({ supplement: { ...NOV_DEC, comment: '   ' } }), withSupplement(initial));
+    expect(cleared.payload?.planned_supplement).toMatchObject({ amount: 10000, comment: null });
+    // Пробелы по краям — не правка.
+    const same = validatePayrollTerms(values({ supplement: { ...initial, comment: ' Совмещение ' } }), withSupplement(initial));
+    expect(wire(same.payload)).not.toHaveProperty('planned_supplement');
+  });
+
+  it('комментарий длиннее 500 символов — ошибка у поля; один комментарий без суммы — ошибки суммы и даты', () => {
+    const long = validatePayrollTerms(values({ supplement: { ...NOV_DEC, comment: 'я'.repeat(501) } }), withSupplement());
+    expect(long.payload).toBeNull();
+    expect(long.errors).toEqual({ supplementComment: 'Комментарий — не больше 500 символов' });
+    expect(validatePayrollTerms(values({ supplement: { ...NOV_DEC, comment: 'я'.repeat(500) } }), withSupplement()).errors)
+      .toBeNull();
+    expect(validatePayrollTerms(values({ supplement: { ...EMPTY_SUPPLEMENT, comment: 'Совмещение' } }), withSupplement()).errors)
+      .toEqual({ supplementAmount: 'Укажите сумму доплаты', supplementFrom: 'Укажите дату начала' });
+    expect(firstInvalidField({ supplementComment: 'x', supplementTo: 'x' })).toBe('supplementTo');
   });
 
   it('без даты окончания — бессрочная доплата', () => {
     const result = validatePayrollTerms(values({ supplement: { ...NOV_DEC, to: '' } }), withSupplement());
     expect(result.errors).toBeNull();
-    expect(result.payload?.planned_supplement).toEqual({ amount: 10000, date_from: '2026-11-01', date_to: null });
+    expect(result.payload?.planned_supplement).toEqual({ amount: 10000, date_from: '2026-11-01', date_to: null, comment: null });
   });
 
   it('заполнено частично — ошибки по полям, запроса нет', () => {
@@ -237,6 +266,17 @@ describe('initialPayrollTermsValues', () => {
       supplement: EMPTY_SUPPLEMENT,
       effectiveFrom: '2026-09-24',
     });
+  });
+
+  it('комментарий плановой доплаты — из строки списка; нет поля (старый бэкенд) — пусто', () => {
+    const supplementRow = row({
+      planned_supplement_amount: '30000.00', planned_supplement_from: '2026-10-01', planned_supplement_to: null,
+      planned_supplement_comment: 'Совмещение секретаря',
+    });
+    expect(initialPayrollTermsValues(supplementRow, '2026-09-24').supplement)
+      .toEqual({ amount: '30000', from: '2026-10-01', to: '', comment: 'Совмещение секретаря' });
+    expect(initialPayrollTermsValues(row({ planned_supplement_amount: '30000.00' }), '2026-09-24').supplement.comment)
+      .toBe('');
   });
 
   it('плановая доплата — последняя сохранённая, хвост нулей убирается', () => {

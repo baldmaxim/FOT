@@ -5,7 +5,8 @@
  * текущая — ПОСЛЕДНЯЯ неархивная строка журнала по id; если у неё amount NULL, доплата снята. Окно
  * сотрудника и добавление пишут через setPlannedSupplement под блокировкой сотрудника; добавили новый
  * период — прежние остаются в таблице. Правка или снятие любого периода из таблицы (миграция 337) —
- * rewritePlannedPeriod: расписание сотрудника переписывается, прежние строки — архив (archived_at).
+ * rewritePlannedPeriod: расписание сотрудника переписывается, прежние строки — архив (archived_at). Комментарий
+ * периода (миграция 364) — колонка той же строки журнала: переписывание переносит его вместе с периодом.
  * Разовая — payroll_one_time_supplements: месяц, сумма, основание; за месяц — сколько угодно. Файлы разовой
  * (миграция 354) — payroll_one_time_supplement_files: строка — объект R2; объекты грузит и удаляет контроллер.
  */
@@ -56,6 +57,8 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
+  /** Плановая: комментарий периода (миграция 364); у разовой — null. */
+  comment: string | null;
   /** Плановая: последняя версия журнала (false — прошлый период, только история); у разовой — null. */
   is_current: boolean | null;
   /** Файлы разовой (по порядку прикрепления); у плановой — пусто. */
@@ -135,12 +138,14 @@ export const listSupplements = async (scope: {
               v.amount::text AS amount,
               to_char(v.date_from, 'YYYY-MM-DD') AS date_from,
               to_char(v.date_to, 'YYYY-MM-DD') AS date_to,
-              NULL::text AS month, NULL::text AS reason, v.is_current, '[]'::json AS files
+              NULL::text AS month, NULL::text AS reason, c.comment, v.is_current, '[]'::json AS files
          FROM staff s
          JOIN (${PLANNED_SUPPLEMENT_PERIODS_SQL}) v ON v.employee_id = s.id
+         -- Комментарий — из строки журнала: PLANNED_SUPPLEMENT_PERIODS_SQL читает и расчёт ФОТ, его не расширяем.
+         JOIN payroll_planned_supplements c ON c.id = v.id
        UNION ALL
        SELECT 'one_time'::text, o.id, s.id, s.full_name, s.department, s.position,
-              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, NULL, ${oneTimeFilesSql('o')}
+              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, NULL, NULL, ${oneTimeFilesSql('o')}
          FROM staff s
          JOIN payroll_one_time_supplements o ON o.employee_id = s.id
      ) rows
@@ -151,10 +156,16 @@ export const listSupplements = async (scope: {
 
 /** Текущая плановая доплата сотрудника (последняя неархивная версия журнала; снята — null). */
 const readPlanned = async (client: PoolClient, employeeId: number): Promise<IPlannedSupplementValue | null> => {
-  const row = (await client.query<{ amount: string | null; date_from: string | null; date_to: string | null }>(
+  const row = (await client.query<{
+    amount: string | null;
+    date_from: string | null;
+    date_to: string | null;
+    comment: string | null;
+  }>(
     `SELECT amount::text AS amount,
             to_char(date_from, 'YYYY-MM-DD') AS date_from,
-            to_char(date_to, 'YYYY-MM-DD') AS date_to
+            to_char(date_to, 'YYYY-MM-DD') AS date_to,
+            comment
        FROM payroll_planned_supplements
       WHERE employee_id = $1 AND archived_at IS NULL
       ORDER BY id DESC
@@ -162,7 +173,7 @@ const readPlanned = async (client: PoolClient, employeeId: number): Promise<IPla
     [employeeId],
   )).rows[0];
   if (!row || row.amount === null || row.date_from === null) return null;
-  return { amount: Number(row.amount), dateFrom: row.date_from, dateTo: row.date_to };
+  return { amount: Number(row.amount), dateFrom: row.date_from, dateTo: row.date_to, comment: row.comment };
 };
 
 export type PlannedSetResult =
@@ -175,22 +186,34 @@ const plannedOverlap = (a: IPlannedSupplementValue, b: IPlannedSupplementValue):
   (b.dateTo === null || a.dateFrom <= b.dateTo) && (a.dateTo === null || b.dateFrom <= a.dateTo)
 );
 
-/** Действующий период плановой доплаты сотрудника (PLANNED_SUPPLEMENT_PERIODS_SQL): id строки журнала и значение. */
+/**
+ * Действующий период плановой доплаты сотрудника (PLANNED_SUPPLEMENT_PERIODS_SQL): id строки журнала и значение
+ * с комментарием строки (миграция 364).
+ */
 interface IPlannedPeriod extends IPlannedSupplementValue {
   id: number;
+  comment: string | null;
 }
 
 /** Действующие периоды сотрудника по дате начала — то же, что видят таблица «Доплата» и расчёт. */
 const readPeriods = async (client: PoolClient, employeeId: number): Promise<IPlannedPeriod[]> => (
-  (await client.query<{ id: number; amount: string; date_from: string; date_to: string | null }>(
+  (await client.query<{ id: number; amount: string; date_from: string; date_to: string | null; comment: string | null }>(
     `SELECT p.id::int AS id, p.amount::text AS amount,
             to_char(p.date_from, 'YYYY-MM-DD') AS date_from,
-            to_char(p.date_to, 'YYYY-MM-DD') AS date_to
+            to_char(p.date_to, 'YYYY-MM-DD') AS date_to,
+            c.comment
        FROM (${PLANNED_SUPPLEMENT_PERIODS_SQL}) p
+       JOIN payroll_planned_supplements c ON c.id = p.id
       WHERE p.employee_id = $1
       ORDER BY p.date_from, p.id`,
     [employeeId],
-  )).rows.map(row => ({ id: row.id, amount: Number(row.amount), dateFrom: row.date_from, dateTo: row.date_to }))
+  )).rows.map(row => ({
+    id: row.id,
+    amount: Number(row.amount),
+    dateFrom: row.date_from,
+    dateTo: row.date_to,
+    comment: row.comment,
+  }))
 );
 
 /**
@@ -234,10 +257,12 @@ export type PlannedPeriodRewriteResult =
   | { status: 'stale' }
   | { status: 'exists' }
   | { status: 'unchanged' }
-  | { status: 'saved'; previous: IPlannedSupplementValue };
+  /** next — записанное значение (комментарий разрешён); null — период снят. */
+  | { status: 'saved'; previous: IPlannedSupplementValue; next: IPlannedSupplementValue | null };
 
-const sameValue = (a: IPlannedSupplementValue, b: IPlannedSupplementValue): boolean => (
-  a.amount === b.amount && a.dateFrom === b.dateFrom && a.dateTo === b.dateTo
+/** Период и его новое значение совпадают — с комментарием (у value он уже разрешён: undefined → комментарий периода). */
+const sameValue = (a: IPlannedPeriod, b: IPlannedPeriod): boolean => (
+  a.amount === b.amount && a.dateFrom === b.dateFrom && a.dateTo === b.dateTo && a.comment === b.comment
 );
 
 /**
@@ -247,6 +272,9 @@ const sameValue = (a: IPlannedSupplementValue, b: IPlannedSupplementValue): bool
  * вставляются заново по дате начала (правленый — с новыми значениями, снятый — архивной строкой «снята»).
  * replaces_id связывает новую строку с заменённой — для истории. Последняя вставленная строка — последний по
  * дате период: окно сотрудника показывает его, как и до переписывания.
+ *
+ * Комментарий (миграция 364) едет со своим периодом; у правленого — value.comment, а undefined (🗑 «Убрать» закрывает
+ * период датой «по», прежний клиент) — прежний комментарий периода.
  *
  * 'stale' — периода уже нет среди действующих (его поправили в другом окне); 'exists' — новый период
  * пересекается с другим периодом сотрудника.
@@ -261,7 +289,13 @@ export const rewritePlannedPeriod = async (input: {
   const periods = await readPeriods(client, input.employeeId);
   const target = periods.find(period => period.id === input.periodId);
   if (!target) return { status: 'stale' };
-  const { value } = input;
+  const value: IPlannedPeriod | null = input.value && {
+    id: target.id,
+    amount: input.value.amount,
+    dateFrom: input.value.dateFrom,
+    dateTo: input.value.dateTo,
+    comment: input.value.comment === undefined ? target.comment : input.value.comment,
+  };
   const others = periods.filter(period => period !== target);
   if (value !== null) {
     if (others.some(period => plannedOverlap(period, value))) return { status: 'exists' };
@@ -280,16 +314,20 @@ export const rewritePlannedPeriod = async (input: {
       [input.employeeId, input.createdBy, target.id],
     );
   }
-  const next = (value === null ? others : [...others, { ...value, id: target.id }])
+  const next = (value === null ? others : [...others, value])
     .sort((a, b) => (a.dateFrom === b.dateFrom ? a.id - b.id : a.dateFrom.localeCompare(b.dateFrom)));
   for (const period of next) {
     await client.query(
-      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by, replaces_id)
-       VALUES ($1, $2::numeric, $3::date, $4::date, $5, $6)`,
-      [input.employeeId, period.amount, period.dateFrom, period.dateTo, input.createdBy, period.id],
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by, replaces_id, comment)
+       VALUES ($1, $2::numeric, $3::date, $4::date, $5, $6, $7)`,
+      [input.employeeId, period.amount, period.dateFrom, period.dateTo, input.createdBy, period.id, period.comment],
     );
   }
-  return { status: 'saved', previous: { amount: target.amount, dateFrom: target.dateFrom, dateTo: target.dateTo } };
+  return {
+    status: 'saved',
+    previous: { amount: target.amount, dateFrom: target.dateFrom, dateTo: target.dateTo, comment: target.comment },
+    next: value,
+  };
 });
 
 const ONE_TIME_SELECT = `

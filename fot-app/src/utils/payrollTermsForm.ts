@@ -7,6 +7,7 @@ import type {
   StaffCategory,
 } from '../services/payrollService';
 import { parseRateAmount } from './payrollFormat';
+import { parsePlannedComment } from './plannedSupplementComment';
 
 /**
  * Необязательные суммы условий, ₽/мес: премия и проживание (только показ). Удержания с миграции 321 — не условия:
@@ -17,11 +18,13 @@ export type PayrollMoneyField = 'bonus' | 'housing';
 
 export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing'];
 
-/** Плановая доплата: сумма ₽/мес, дата начала и дата окончания — строки как в полях ввода. */
+/** Плановая доплата: сумма ₽/мес, дата начала, дата окончания и комментарий — строки как в полях ввода. */
 export interface IPayrollSupplementValues {
   amount: string;
   from: string;
   to: string;
+  /** Миграция 364; необязателен. */
+  comment: string;
 }
 
 export type PayrollSupplementField = keyof IPayrollSupplementValues;
@@ -31,6 +34,7 @@ export const SUPPLEMENT_FIELD_KEYS = {
   amount: 'supplementAmount',
   from: 'supplementFrom',
   to: 'supplementTo',
+  comment: 'supplementComment',
 } as const satisfies Record<PayrollSupplementField, string>;
 
 /** Поля, у которых бывает ошибка проверки, — в порядке на экране (фокус на первую ошибку). */
@@ -42,7 +46,7 @@ export type PayrollTermsFieldKey =
 
 export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
   'effectiveFrom', 'amount', 'bonus', 'housing',
-  'supplementAmount', 'supplementFrom', 'supplementTo',
+  'supplementAmount', 'supplementFrom', 'supplementTo', 'supplementComment',
 ];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
@@ -92,6 +96,7 @@ export const initialPayrollTermsValues = (
       amount: toInputValue(row.planned_supplement_amount),
       from: row.planned_supplement_from ?? '',
       to: row.planned_supplement_to ?? '',
+      comment: row.planned_supplement_comment ?? '',
     },
     effectiveFrom: defaultDate,
   };
@@ -125,8 +130,9 @@ const parseOptionalMoney = (raw: string): { value: number } | { error: string } 
   return parsed.amount === null ? undefined : { value: parsed.amount };
 };
 
+/** Пусто — снять доплату. Один комментарий без суммы и дат — не пусто: ошибка «Укажите сумму доплаты». */
 const isSupplementEmpty = (values: IPayrollSupplementValues): boolean =>
-  !values.amount.trim() && !values.from && !values.to;
+  !values.amount.trim() && !values.from && !values.to && !values.comment.trim();
 
 /** Доплата из полей; null — поля пустые или заполнены с ошибкой (тогда errors не пуст). */
 const parseSupplement = (
@@ -142,14 +148,16 @@ const parseSupplement = (
   if (!values.from) errors.supplementFrom = 'Укажите дату начала';
   // Дата окончания необязательна: пусто — бессрочно.
   if (values.from && values.to && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
-  if (errors.supplementAmount || errors.supplementFrom || errors.supplementTo) return null;
-  return { amount, date_from: values.from, date_to: values.to || null };
+  const comment = parsePlannedComment(values.comment);
+  if ('error' in comment) errors.supplementComment = comment.error;
+  if (errors.supplementAmount || errors.supplementFrom || errors.supplementTo || 'error' in comment) return null;
+  return { amount, date_from: values.from, date_to: values.to || null, comment: comment.comment };
 };
 
 const sameSupplement = (a: IPlannedSupplementPayload | null, b: IPlannedSupplementPayload | null): boolean => (
   a === null || b === null
     ? a === b
-    : a.amount === b.amount && a.date_from === b.date_from && a.date_to === b.date_to
+    : a.amount === b.amount && a.date_from === b.date_from && a.date_to === b.date_to && a.comment === b.comment
 );
 
 export interface IPayrollTermsValidateOptions {

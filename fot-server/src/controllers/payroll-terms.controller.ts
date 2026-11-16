@@ -81,6 +81,7 @@ import {
   hasMaxDecimals,
   parsePayrollMonthsQuery,
   payrollMonthStarts,
+  payrollPlannedCommentSchema,
 } from './payroll-dictionary.helpers.js';
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
 import { payrollQueueServerTiming, runInPayrollCalcSlot } from '../services/payroll/payroll-calc-slot.js';
@@ -175,6 +176,8 @@ const plannedSupplementSchema = z.object({
   amount: moneySchema,
   date_from: calendarDateSchema,
   date_to: calendarDateSchema.nullable().optional(),
+  // Миграция 364: null или пусто — без комментария; ключа нет (прежний клиент) — комментарий последней версии.
+  comment: payrollPlannedCommentSchema,
 }).refine(value => !value.date_to || value.date_to >= value.date_from, 'Дата окончания доплаты раньше даты начала');
 
 /**
@@ -479,6 +482,7 @@ const buildListSql = (options: {
                      ps.amount::text AS planned_supplement_amount,
                      ps.date_from AS planned_supplement_from,
                      ps.date_to   AS planned_supplement_to,
+                     ps.comment   AS planned_supplement_comment,
                      -- Проезд (миграция 324): ставка за месяц даты; положен ли — решает категория (на клиенте).
                      payroll_rate_value('${TRAVEL_RATE_CODE}', $1::date)::text AS travel_rate,
                      EXISTS (
@@ -493,7 +497,7 @@ const buildListSql = (options: {
                        ORDER BY ${options.orderSql}
                        LIMIT $9 OFFSET $10) page
                 LEFT JOIN LATERAL (
-                  SELECT s.amount, s.date_from, s.date_to
+                  SELECT s.amount, s.date_from, s.date_to, s.comment
                     FROM payroll_planned_supplements s
                    WHERE s.employee_id = page.employee_id AND s.archived_at IS NULL
                    ORDER BY s.id DESC
@@ -540,6 +544,8 @@ interface IPayrollTermsListRow {
   planned_supplement_amount: string | null;
   planned_supplement_from: string | null;
   planned_supplement_to: string | null;
+  /** Комментарий последней сохранённой плановой доплаты (миграция 364). */
+  planned_supplement_comment: string | null;
   /** Ставка «Проезд» за месяц даты выборки (NUMERIC текстом); не задана — null. */
   travel_rate: string | null;
   /** В месяце даты есть день «Без проезда» — проезда в этом месяце нет. */
@@ -1093,6 +1099,7 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             amount: supplement.amount,
             dateFrom: supplement.date_from,
             dateTo: supplement.date_to ?? null,
+            comment: supplement.comment,
           },
           createdBy: req.user.id,
         });

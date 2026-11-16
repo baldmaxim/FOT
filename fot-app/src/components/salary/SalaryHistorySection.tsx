@@ -66,10 +66,20 @@ const formatAuthor = (change: IPayrollTermsChange): string => {
   return change.changed_by_name ? `Изменил: ${change.changed_by_name} · ${changedOn}` : changedOn;
 };
 
-/** Плановая доплата: назначена, заменена («было → стало») или снята. */
+/** Комментарий плановой доплаты в истории: «нет» — «—». */
+const formatSupplementComment = (comment: string | null | undefined): string => (comment ? `«${comment}»` : '—');
+
+/**
+ * Плановая доплата: назначена, заменена («было → стало») или снята. Комментарий (миграция 364): у назначенной —
+ * строкой, у заменённой — «было → стало», если менялся; правка только комментария — без строки сумм.
+ */
 const renderSupplementChange = (change: IPlannedSupplementChange & { kind: 'supplement' }) => {
   const prevPeriod = formatSupplementPeriod(change.prev_date_from, change.prev_date_to);
   const samePeriod = change.prev_date_from === change.date_from && change.prev_date_to === change.date_to;
+  const comment = change.comment ?? null;
+  const prevComment = change.prev_comment ?? null;
+  const commentChanged = change.action === 'changed' && comment !== prevComment;
+  const onlyComment = commentChanged && samePeriod && change.prev_amount === change.amount;
   return (
     <li key={`supplement-${change.id}`} className={styles.item}>
       <div className={styles.itemHead}>
@@ -83,7 +93,7 @@ const renderSupplementChange = (change: IPlannedSupplementChange & { kind: 'supp
         {change.action === 'assigned' && (
           <span className={styles.amount}>назначено {formatSupplement(change.amount)}</span>
         )}
-        {change.action === 'changed' && (
+        {change.action === 'changed' && !onlyComment && (
           <>
             <span className={styles.prevAmount}>
               было {formatSupplement(change.prev_amount)}{samePeriod ? '' : `, ${prevPeriod}`}
@@ -99,6 +109,18 @@ const renderSupplementChange = (change: IPlannedSupplementChange & { kind: 'supp
           </>
         )}
       </div>
+      {change.action === 'assigned' && comment && (
+        <div className={styles.amounts}>
+          <span className={`${styles.amount} ${styles.comment}`}>Комментарий: {formatSupplementComment(comment)}</span>
+        </div>
+      )}
+      {commentChanged && (
+        <div className={styles.amounts}>
+          <span className={`${styles.prevAmount} ${styles.comment}`}>Комментарий: было {formatSupplementComment(prevComment)}</span>
+          <span className={styles.prevAmount} aria-hidden="true">→</span>
+          <span className={`${styles.amount} ${styles.comment}`}>стало {formatSupplementComment(comment)}</span>
+        </div>
+      )}
       <div className={styles.itemMeta}>{formatAuthor(change)}</div>
     </li>
   );

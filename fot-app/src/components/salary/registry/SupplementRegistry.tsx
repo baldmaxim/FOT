@@ -39,6 +39,7 @@ import { StayCheckoutModal } from './StayCheckoutModal';
 import { useSupplementFileOpen } from './useSupplementFileOpen';
 import { useSupplementRemoval } from './useSupplementRemoval';
 import fileStyles from './SupplementFiles.module.css';
+import tableStyles from '../../ui/registry/RegistryTable.module.css';
 import styles from '../../ui/registry/RegistryTabs.module.css';
 
 interface ISupplementRegistryProps {
@@ -69,6 +70,14 @@ const sendHousingExport = payrollRegistryService.exportTable('housing');
 const rowKey = (row: ISupplementRegistryRow): string => row.key;
 const rowName = (row: { full_name: string }): string => row.full_name;
 const canEditHousing = (row: IHousingAllowanceRow): boolean => row.can_edit;
+
+/** Комментарий плановой (миграция 364): в ячейке — до двух строк, полностью — подсказкой; пусто — обычное «—». */
+const commentCell = (comment: string | null | undefined): ReactNode | undefined => (
+  comment ? <span className={tableStyles.clamp2} title={comment}>{comment}</span> : undefined
+);
+const PLANNED_CELL_RENDERERS = {
+  comment: (row: IPayrollSupplementRow): ReactNode | undefined => commentCell(row.comment),
+};
 
 /**
  * «Справочник» → «Доплата», вкладки одного окна; месяц общий, поиск и фильтры столбцов у каждой свои.
@@ -134,9 +143,10 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
     if (files.length === 1) openFile(row.id, files[0]);
     else setFilesRow(row);
   }, [openFile]);
-  // 📎N — у основания разовой с файлами (отдельному столбцу на 1280px места нет).
+  // 📎N — у основания разовой с файлами (отдельному столбцу на 1280px места нет); у плановой основание — комментарий.
   const cellRenderers = useMemo(() => ({
     reason: (row: ISupplementRegistryRow): ReactNode | undefined => {
+      if (row.kind === 'planned') return commentCell(row.reason);
       const count = supplementFileCount(row);
       const { supplement } = row;
       if (count === null || !supplement) return undefined;
@@ -241,6 +251,7 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
           deleteLabel="Убрать"
           canEditRow={canEditSupplement}
           busyKey={busyKey}
+          cellRenderers={PLANNED_CELL_RENDERERS}
           raisedFilters
           onFilterOpenChange={setFilterOpen}
         />

@@ -17,6 +17,8 @@ import {
   payrollTermsTotal,
   type PayrollTermsFieldKey,
 } from '../../utils/payrollTermsForm';
+import { PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH } from '../../utils/plannedSupplementComment';
+import { ClearableInput } from '../ui/ClearableInput';
 import { PayrollMoneyInput } from './PayrollMoneyInput';
 import styles from './PayrollTermsFields.module.css';
 
@@ -144,6 +146,31 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           onChange={event => onChange(event.target.value)}
+        />
+        {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
+      </div>
+    );
+  };
+
+  /** Комментарий плановой доплаты (миграция 364): текст с крестиком «Очистить», ошибка снизу. */
+  const renderComment = () => {
+    const key: PayrollTermsFieldKey = 'supplementComment';
+    const error = form.fieldErrors[key];
+    const id = fieldId(key);
+    return (
+      <div className={styles.field}>
+        <label htmlFor={id} className={styles.label}>Комментарий</label>
+        <ClearableInput
+          id={id}
+          className={styles.commentInput}
+          value={form.supplement.comment}
+          onValueChange={value => form.changeSupplement('comment', value)}
+          maxLength={PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH}
+          autoComplete="off"
+          disabled={readOnly}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          clearLabel="Очистить комментарий"
         />
         {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
       </div>
@@ -345,6 +372,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
                     {renderDate('supplementFrom', 'Дата начала', form.supplement.from, value => form.changeSupplement('from', value))}
                     {renderDate('supplementTo', 'Дата окончания', form.supplement.to, value => form.changeSupplement('to', value))}
                   </div>
+                  {renderComment()}
                 </div>
               </div>
             </section>

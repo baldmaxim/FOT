@@ -60,6 +60,8 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
+  /** Плановая: комментарий периода (миграция 364); у разовой — null, у старого бэкенда — нет. */
+  comment?: string | null;
   /** Плановая: последняя строка журнала. С миграцией 337 правятся все периоды — только справочно. */
   is_current?: boolean;
   /** Файлы разовой (миграция 354) по порядку прикрепления; у плановой — пусто, у старого бэкенда — нет. */
@@ -162,6 +164,8 @@ export interface IPlannedSupplementFields {
   date_from: string;
   /** null — бессрочно. */
   date_to: string | null;
+  /** Комментарий (миграция 364): null — без комментария; не передан — сервер оставит прежний. */
+  comment?: string | null;
 }
 
 export interface IOneTimeSupplementFields {

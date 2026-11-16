@@ -95,6 +95,7 @@ import { listDeductionKindTree } from './payroll-deduction-subkinds.service.js';
 import { deleteDeduction, listDeductions } from '../staff-deductions.service.js';
 import { canWritePayrollRegistryEmployee, isPayrollStaffEmployee } from './payroll-registry-scope.service.js';
 import { payrollTermsController } from '../../controllers/payroll-terms.controller.js';
+import { payrollSupplementsController } from '../../controllers/payroll-supplements.controller.js';
 import { payrollStaffDeductionsController } from '../../controllers/payroll-staff-deductions.controller.js';
 import {
   listSupplementReasons,
@@ -229,7 +230,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     for (const name of [
       '314_employee_dormitory_stays.sql', '318_staff_deductions.sql', '319_dormitory_addresses.sql',
       '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql', '322_payroll_planned_supplement_open_end.sql',
-      '337_payroll_planned_supplement_rewrite.sql',
+      '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql',
     ]) {
       await run(migration(name));
     }
@@ -516,7 +517,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         expect(await getPlannedPeriodEmployeeId(middle)).toBe(20);
         const octJan = { amount: 35000, dateFrom: '2026-10-01', dateTo: '2027-01-31' };
         expect(await rewritePlannedPeriod({ employeeId: 20, periodId: middle, value: octJan, createdBy: AUTHOR }))
-          .toEqual({ status: 'saved', previous: { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' } });
+          .toMatchObject({ status: 'saved', previous: { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' } });
         expect(await periods()).toEqual([
           ['20000.00', '2023-03-01', '2026-09-30'], ['35000.00', '2026-10-01', '2027-01-31'], ['20000.00', '2027-02-01', null],
         ]);
@@ -564,6 +565,94 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       } finally {
         await run('DELETE FROM payroll_planned_supplements WHERE employee_id = 20');
         await run('DELETE FROM employees WHERE id = 20');
+      }
+    });
+
+    it('364: комментарий периода едет со своим периодом при правке, «Убрать» и снятии соседних (Корж)', async () => {
+      await run(`INSERT INTO employees (id, full_name, org_department_id) VALUES (21, 'Корж И.С.', '${D1}')`);
+      try {
+        const planned = () => listSupplements(SCOPE)
+          .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 21));
+        const periods = async () => (await planned()).map(row => [row.amount, row.date_from, row.date_to, row.comment]);
+        const idOf = async (dateFrom: string) => (await planned()).find(row => row.date_from === dateFrom)!.id;
+        const add = async (body: Record<string, unknown>) => {
+          const res = makeRes();
+          await payrollSupplementsController.addPlanned(req({ body: { employee_id: 21, ...body } }), res);
+          return res;
+        };
+        const update = async (id: number, body: Record<string, unknown>) => {
+          const res = makeRes();
+          await payrollSupplementsController.updatePlannedPeriod(req({ params: { id: String(id) }, body }), res);
+          return res;
+        };
+
+        // Добавление из «Справочника»: комментарий — без пробелов по краям; пробелы — без комментария.
+        expect((await add({ amount: 20000, date_from: '2023-03-01', date_to: '2026-09-30', comment: '   ' })).body)
+          .toEqual({ success: true, data: { changed: true } });
+        expect((await add({
+          amount: 30000, date_from: '2026-10-01', date_to: '2027-01-31', comment: '  Совмещение секретаря ',
+        })).statusCode).toBe(200);
+        // Без ключа comment новый период не наследует комментарий последней версии.
+        expect((await add({ amount: 20000, date_from: '2027-02-01', date_to: null })).statusCode).toBe(200);
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30', null],
+          ['30000.00', '2026-10-01', '2027-01-31', 'Совмещение секретаря'],
+          ['20000.00', '2027-02-01', null, null],
+        ]);
+
+        // Длиннее 500 символов — 400, ничего не записано.
+        const long = await add({ amount: 1000, date_from: '2030-01-01', date_to: null, comment: 'я'.repeat(501) });
+        expect(long.statusCode).toBe(400);
+        expect(long.body.error).toBe('Комментарий — не больше 500 символов');
+
+        // Правка соседнего периода — комментарий среднего на месте.
+        expect((await update(await idOf('2027-02-01'), { amount: 25000, date_from: '2027-02-01', date_to: null })).statusCode)
+          .toBe(200);
+        // «Убрать» среднего (🗑 шлёт только сумму и даты) — период короче, комментарий тот же.
+        expect((await update(await idOf('2026-10-01'), { amount: 30000, date_from: '2026-10-01', date_to: '2026-11-30' }))
+          .body).toEqual({ success: true, data: { changed: true } });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30', null],
+          ['30000.00', '2026-10-01', '2026-11-30', 'Совмещение секретаря'],
+          ['25000.00', '2027-02-01', null, null],
+        ]);
+
+        // Только комментарий — правка: новая версия, суммы и даты прежние; тот же комментарий — без изменений.
+        const middle = { amount: 30000, date_from: '2026-10-01', date_to: '2026-11-30' };
+        expect((await update(await idOf('2026-10-01'), { ...middle, comment: 'Совмещение' })).body.data).toEqual({ changed: true });
+        expect((await update(await idOf('2026-10-01'), { ...middle, comment: 'Совмещение' })).body.data).toEqual({ changed: false });
+        expect((await update(await idOf('2026-10-01'), middle)).body.data).toEqual({ changed: false });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30', null],
+          ['30000.00', '2026-10-01', '2026-11-30', 'Совмещение'],
+          ['25000.00', '2027-02-01', null, null],
+        ]);
+        // История: правка комментария видна, копии соседних периодов — нет.
+        const history = (await getPlannedSupplementChanges(21))
+          .map(change => [change.action, change.amount, change.prev_amount, change.comment, change.prev_comment]);
+        expect(history.slice(0, 3)).toEqual([
+          ['changed', '30000.00', '30000.00', 'Совмещение', 'Совмещение секретаря'],
+          ['changed', '30000.00', '30000.00', 'Совмещение секретаря', 'Совмещение секретаря'],
+          ['changed', '25000.00', '20000.00', null, null],
+        ]);
+
+        // Явный null — комментарий снят; снять первый период — комментарии остальных на месте.
+        expect((await update(await idOf('2026-10-01'), { ...middle, comment: null })).body.data).toEqual({ changed: true });
+        await update(await idOf('2026-10-01'), { ...middle, comment: 'Совмещение' });
+        const res = makeRes();
+        await payrollSupplementsController.removePlannedPeriod(req({ params: { id: String(await idOf('2023-03-01')) } }), res);
+        expect(res.body).toEqual({ success: true, data: { changed: true } });
+        expect(await periods()).toEqual([
+          ['30000.00', '2026-10-01', '2026-11-30', 'Совмещение'],
+          ['25000.00', '2027-02-01', null, null],
+        ]);
+        // У архивной строки «снята» комментария нет (CHECK 364 не дал бы его записать).
+        expect((await run(
+          `SELECT count(*)::int AS n FROM payroll_planned_supplements WHERE employee_id = 21 AND amount IS NULL AND comment IS NOT NULL`,
+        )).rows[0].n).toBe(0);
+      } finally {
+        await run('DELETE FROM payroll_planned_supplements WHERE employee_id = 21');
+        await run('DELETE FROM employees WHERE id = 21');
       }
     });
 

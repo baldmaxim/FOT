@@ -77,8 +77,13 @@ const syncOne = async (
   if (periods.length === 0) {
     await setPlannedSupplement(client, { employeeId: target.employeeId, value: null, createdBy: null });
   }
+  // Список 1С без комментариев (миграция 364): явный null — иначе период унаследовал бы комментарий последней версии.
   for (const period of periods) {
-    await setPlannedSupplement(client, { employeeId: target.employeeId, value: period, createdBy: null });
+    await setPlannedSupplement(client, {
+      employeeId: target.employeeId,
+      value: { ...period, comment: null },
+      createdBy: null,
+    });
   }
   const after = await readPeriods(client, target.employeeId);
   if (!samePeriods(after, target.periods)) {

@@ -11,8 +11,9 @@ import type {
 import { isCalendarDate } from './dormitoryStayForm';
 import { shiftMonth } from './moscowDate';
 import { parseRateAmount } from './payrollDictionary';
+import { parsePlannedComment } from './plannedSupplementComment';
 
-export type RegistryFormField = 'employee' | 'amount' | 'date_from' | 'date_to' | 'month' | 'reason';
+export type RegistryFormField = 'employee' | 'amount' | 'date_from' | 'date_to' | 'month' | 'reason' | 'comment';
 
 export type RegistryFormParse<T> =
   | { ok: true; payload: T }
@@ -44,12 +45,13 @@ const parseDate = (value: string, field: RegistryFormField, emptyMessage: string
   return null;
 };
 
-/** Плановая доплата: сумма ₽/мес, «с — по» включительно; «по» пусто — бессрочно. */
+/** Плановая доплата: сумма ₽/мес, «с — по» включительно; «по» пусто — бессрочно; комментарий необязателен. */
 export const parsePlannedForm = (draft: {
   selected: boolean;
   amount: string;
   dateFrom: string;
   dateTo: string;
+  comment: string;
 }): RegistryFormParse<IPlannedSupplementFields> => {
   if (!draft.selected) return fail('employee', 'Выберите сотрудника');
   const amount = parsePositiveAmount(draft.amount);
@@ -58,7 +60,12 @@ export const parsePlannedForm = (draft: {
   if (fromError) return fromError;
   if (draft.dateTo && !isCalendarDate(draft.dateTo)) return fail('date_to', 'Такой даты нет');
   if (draft.dateTo && draft.dateTo < draft.dateFrom) return fail('date_to', 'Дата окончания раньше даты начала');
-  return { ok: true, payload: { amount: amount.amount, date_from: draft.dateFrom, date_to: draft.dateTo || null } };
+  const comment = parsePlannedComment(draft.comment);
+  if ('error' in comment) return fail('comment', comment.error);
+  return {
+    ok: true,
+    payload: { amount: amount.amount, date_from: draft.dateFrom, date_to: draft.dateTo || null, comment: comment.comment },
+  };
 };
 
 /** Разовая доплата: месяц, сумма, основание (обязательно). */

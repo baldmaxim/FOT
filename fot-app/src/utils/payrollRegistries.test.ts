@@ -29,6 +29,7 @@ import {
   stayRemovalMode,
   stopInMonths,
   EMPLOYEE_ROW_GROUP,
+  PLANNED_SUPPLEMENT_COLUMNS,
   SUPPLEMENT_COLUMNS,
   type ISupplementRegistryRow,
   supplementInMonths,
@@ -82,6 +83,25 @@ describe('«Доплата»', () => {
     expect(keys(['2026-10'])).toEqual(['planned-7', 'once-8']);
     expect(keys(['2027-01'])).toEqual(['planned-7']);
     expect(keys(['2027-02'])).toEqual([]);
+  });
+
+  it('«Основание» плановой в «Доплате за месяц» — её комментарий; у разовой — основание; «Плановые доплаты» — столбец', () => {
+    const planned = supplement({ id: 7, date_from: '2026-10-01', date_to: null, comment: 'Совмещение секретаря' });
+    const bare = supplement({ id: 9, employee_id: 2, full_name: 'Борисов', date_from: '2026-10-01', comment: null });
+    const legacy = supplement({ id: 10, employee_id: 3, full_name: 'Волков', date_from: '2026-10-01' });
+    const once = supplement({
+      kind: 'one_time', id: 8, month: '2026-10', date_from: null, date_to: null, reason: 'Премия', comment: null,
+    });
+    const rows = buildSupplementRegistryRows([planned, once, bare, legacy], [], ['2026-10']) ?? [];
+    expect(rows.map(row => [row.key, row.reason, row.supplement?.comment ?? null])).toEqual([
+      ['planned-7', 'Совмещение секретаря', 'Совмещение секретаря'],
+      ['once-8', 'Премия', null],
+      ['planned-9', null, null],
+      ['planned-10', null, null],
+    ]);
+    expect(rows.map(row => cells(row)[3])).toEqual(['Совмещение секретаря', 'Премия', '—', '—']);
+    const commentColumn = PLANNED_SUPPLEMENT_COLUMNS.find(column => column.key === 'comment');
+    expect([planned, bare, legacy].map(row => commentColumn?.text(row))).toEqual(['Совмещение секретаря', '—', '—']);
   });
 
   it('квартира в «Доплате за месяц»: «Плановая», сумма за месяц из расчёта, период — месяц, основание «Квартира»', () => {
@@ -197,7 +217,7 @@ describe('«Доплата»', () => {
       title: 'Плановые доплаты', file_name: at('Плановые_доплаты'),
     });
     expect(buildPlannedSupplementExport([supplement({})]).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Сумма, ₽/мес', 'Период']);
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Сумма, ₽/мес', 'Период', 'Комментарий']);
     expect(buildHousingExport([apartment({})])).toMatchObject({ title: 'Квартира', file_name: at('Квартира') });
   });
 });
@@ -232,10 +252,20 @@ describe('формы', () => {
   });
 
   it('плановая: окончание раньше начала; «по» пусто — бессрочно', () => {
-    expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '2026-09-30' }))
+    expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '2026-09-30', comment: '' }))
       .toMatchObject({ ok: false, field: 'date_to' });
-    expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '' }))
-      .toEqual({ ok: true, payload: { amount: 5000, date_from: '2026-10-01', date_to: null } });
+    expect(parsePlannedForm({ selected: true, amount: '5000', dateFrom: '2026-10-01', dateTo: '', comment: '' }))
+      .toEqual({ ok: true, payload: { amount: 5000, date_from: '2026-10-01', date_to: null, comment: null } });
+  });
+
+  it('плановая: комментарий без пробелов по краям, пусто — null, больше 500 символов — ошибка поля', () => {
+    const draft = { selected: true, amount: '30000', dateFrom: '2026-10-01', dateTo: '' };
+    expect(parsePlannedForm({ ...draft, comment: '  Совмещение секретаря ' }))
+      .toEqual({ ok: true, payload: { amount: 30000, date_from: '2026-10-01', date_to: null, comment: 'Совмещение секретаря' } });
+    expect(parsePlannedForm({ ...draft, comment: '   ' })).toMatchObject({ ok: true, payload: { comment: null } });
+    expect(parsePlannedForm({ ...draft, comment: 'я'.repeat(500) })).toMatchObject({ ok: true });
+    expect(parsePlannedForm({ ...draft, comment: 'я'.repeat(501) }))
+      .toEqual({ ok: false, field: 'comment', message: 'Комментарий — не больше 500 символов' });
   });
 
   it('разовая: основание обязательно и без лишних пробелов', () => {

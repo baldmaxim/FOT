@@ -100,6 +100,20 @@ export const payrollPositiveMoneySchema = (message: string) => z.number({ requir
   .max(PAYROLL_MAX_MONEY, 'Слишком большая сумма')
   .refine(value => hasMaxDecimals(value, 2), MONEY_DECIMALS_MESSAGE);
 
+/** Длина комментария плановой доплаты — как CHECK payroll_supplement_comment (миграция 364). */
+export const PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH = 500;
+
+/**
+ * Комментарий плановой доплаты: пробелы по краям срезаются; пусто или null — без комментария (null); ключа нет —
+ * undefined: комментарий не трогать (прежний клиент, 🗑 «Убрать» шлёт только сумму и даты).
+ */
+export const payrollPlannedCommentSchema = z.string({ invalid_type_error: 'Комментарий — текст' })
+  .trim()
+  .max(PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH, `Комментарий — не больше ${PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH} символов`)
+  .nullable()
+  .optional()
+  .transform(value => (value === undefined ? undefined : value || null));
+
 export const payrollEmployeeIdSchema = z.number({ required_error: 'Выберите сотрудника', invalid_type_error: 'Выберите сотрудника' })
   .int('Выберите сотрудника').positive('Выберите сотрудника');
 
