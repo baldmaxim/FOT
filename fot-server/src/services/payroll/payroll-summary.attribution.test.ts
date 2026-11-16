@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   centsToAmount,
   fallbackSummaryObject,
+  pickMainKnownObject,
   pickMainObject,
   pickMonthDepartment,
+  previousMonthStarts,
   summaryHoursPeriod,
   summaryObjectFromHours,
   summaryObjectOf,
@@ -152,5 +154,27 @@ describe('копейки', () => {
     expect(centsToAmount(toCents('175000.50') + toCents('-1250.25'))).toBe('173750.25');
     expect(centsToAmount(-150)).toBe('-1.50');
     expect(centsToAmount(0)).toBe('0.00');
+  });
+});
+
+describe('pickMainKnownObject', () => {
+  it('часы без объекта с объектами не спорят: больше неявок «без объекта» — всё равно объект', () => {
+    expect(pickMainKnownObject([
+      row({ object_key: '__unknown_object__', object_id: null, hours: 220 }),
+      row({ object_key: OBJ_B, object_id: OBJ_B, object_name: 'ЖК Wave', hours: 11 }),
+    ])).toEqual({ key: OBJ_B, name: 'ЖК Wave' });
+  });
+
+  it('одни часы без объекта или нет строк — null', () => {
+    expect(pickMainKnownObject([row({ object_key: '__unknown_object__', object_id: null, hours: 50 })])).toBeNull();
+    expect(pickMainKnownObject([])).toBeNull();
+  });
+});
+
+describe('previousMonthStarts', () => {
+  it('ближайший первым, через границу года', () => {
+    expect(previousMonthStarts('2026-09', 2)).toEqual(['2026-08-01', '2026-07-01']);
+    expect(previousMonthStarts('2026-02', 3)).toEqual(['2026-01-01', '2025-12-01', '2025-11-01']);
+    expect(previousMonthStarts('2026-09', 0)).toEqual([]);
   });
 });

@@ -8,8 +8,8 @@
  * текущий отдел или отдел его подачи за месяц.
  *
  * Объект и отдел месяца — payroll-month-attribution.service.ts (объектная разбивка закрытого табеля, иначе
- * режим табелирования месяца). Объект месяца «Не определён» — строке «Свода» объект по часам месяца
- * (payroll-summary-object.service.ts). Категория — по режиму табелирования месяца (payroll-staff-category.ts), не из
+ * режим табелирования месяца). Объект месяца «Не определён» — строке «Свода» объект по часам месяца, затем прежний,
+ * бригады или отдела, текущий (payroll-summary-object.service.ts). Категория — по режиму табелирования месяца (payroll-staff-category.ts), не из
  * условий оплаты и не по отделу: объект строки «Офис» — «Офис», рабочий табеля — «Рабочие», остальные — «ИТР».
  *
  * «Выплачено» строки — ведомости выплаты 1С («Перечислено (1С)») её пар за месяцы начисления: только для выгрузки
@@ -195,7 +195,8 @@ export interface IPayrollSummaryTiming extends ISummaryObjectsStats {
 
 export const emptySummaryTiming = (): IPayrollSummaryTiming => ({
   paidMs: 0, paidRows: 0, rosterMs: 0, scopeMs: 0, pairs: 0, calcMs: 0, calcEmployees: 0, attributionMs: 0, categoriesMs: 0,
-  objectsMs: 0, unknown: 0, byMode: 0, hoursEmployees: 0, hoursMs: 0, buildMs: 0, totalMs: 0,
+  objectsMs: 0, unknown: 0, byMode: 0, hoursEmployees: 0, hoursMs: 0, byPrevTimesheet: 0, byPrevHours: 0, byDepartment: 0,
+  byCurrentObject: 0, buildMs: 0, totalMs: 0,
 });
 
 /** «Свод» дольше — строка в лог. */
@@ -209,7 +210,9 @@ export const formatSummaryTiming = (monthStarts: string[] | null, timing: IPayro
   + `охват ${ms(timing.scopeMs)} (${timing.pairs} пар), расчёт ФОТ ${ms(timing.calcMs)} (${timing.calcEmployees} чел.), `
   + `объект месяца ${ms(timing.attributionMs)}, категории ${ms(timing.categoriesMs)}, `
   + `объект по часам ${ms(timing.objectsMs)} (не определён ${timing.unknown}, по режиму ${timing.byMode}, `
-  + `по часам ${timing.hoursEmployees} чел. за ${ms(timing.hoursMs)}), сборка ${ms(timing.buildMs)}; всего ${ms(timing.totalMs)}`
+  + `по часам ${timing.hoursEmployees} чел. за ${ms(timing.hoursMs)}, прежний по табелю ${timing.byPrevTimesheet}, `
+  + `по проходам ${timing.byPrevHours}, бригады/отдела ${timing.byDepartment}, текущий ${timing.byCurrentObject}), `
+  + `сборка ${ms(timing.buildMs)}; всего ${ms(timing.totalMs)}`
 );
 
 /** Server-Timing «Свода»: шаги по порядку, в desc — счётчики. */
@@ -220,7 +223,8 @@ export const summaryServerTiming = (timing: IPayrollSummaryTiming): string => [
   `summary_calc;dur=${timing.calcMs.toFixed(1)};desc="${timing.calcEmployees}"`,
   `summary_attribution;dur=${timing.attributionMs.toFixed(1)}`,
   `summary_categories;dur=${timing.categoriesMs.toFixed(1)}`,
-  `summary_objects;dur=${timing.objectsMs.toFixed(1)};desc="${timing.unknown}/${timing.byMode}/${timing.hoursEmployees}"`,
+  `summary_objects;dur=${timing.objectsMs.toFixed(1)};desc="${timing.unknown}/${timing.byMode}/${timing.hoursEmployees}`
+    + `/${timing.byPrevTimesheet}/${timing.byPrevHours}/${timing.byDepartment}/${timing.byCurrentObject}"`,
   `summary_hours;dur=${timing.hoursMs.toFixed(1)}`,
   `summary_build;dur=${timing.buildMs.toFixed(1)}`,
   `summary_total;dur=${timing.totalMs.toFixed(1)}`,
@@ -337,7 +341,7 @@ const buildSummary = async (
   const months = [...new Set(pairs.map(pair => pair.month))].sort();
   const attribution = await attributeMonths(pairs, breakdown, employees);
   lap('attributionMs');
-  // Объект строки, где базовый «Не определён»: режим месяца, затем часы.
+  // Объект строки, где базовый «Не определён»: режим месяца, часы, прежний, бригады или отдела, текущий.
   const summaryObjects = await resolveSummaryObjects(attribution, undefined, timing);
   lap('objectsMs');
   // «Офис» — по объекту строки: без режима, но с часами в офисе — тоже «Офис» (определён по часам, как ночью).

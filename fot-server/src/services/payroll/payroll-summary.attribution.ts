@@ -75,6 +75,23 @@ export const pickMainObject = (rows: readonly ISummaryBreakdownRow[]): ISummaryO
 };
 
 /**
+ * Основной объект без «Не определён»: часы без объекта (неявки по графику, правки без объекта) с объектами не спорят.
+ * Объектов нет — null.
+ */
+export const pickMainKnownObject = (rows: readonly ISummaryBreakdownRow[]): ISummaryObject | null => (
+  pickMainObject(rows.filter(row => summaryObjectOf(row).key !== SUMMARY_UNKNOWN.key))
+);
+
+/** Первые числа count месяцев перед month (YYYY-MM), ближайший первым: ('2026-09', 2) → ['2026-08-01', '2026-07-01']. */
+export const previousMonthStarts = (month: string, count: number): string[] => {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(year, monthNumber - 2 - index, 1));
+    return date.toISOString().slice(0, 10);
+  });
+};
+
+/**
  * Отдел месяца для категории: отдел подачи, где у сотрудника больше всего часов (ничья — более поздняя
  * подача). Персональная подача (без отдела) или подачи нет — null: категорию решит текущий отдел.
  */

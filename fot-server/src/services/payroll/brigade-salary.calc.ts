@@ -135,17 +135,44 @@ export const splitMinutesByObjects = (
 
 /**
  * Часы дня по объектам для показа (группы «Зарплаты по объектам»): разбивка дня как есть; день с часами без
- * разбивки — целиком в «Не определён», как и его учтённые минуты.
+ * разбивки — целиком в «Не определён», как и его учтённые минуты. Неявка (отпуск, больничный, «без сохранения»…) —
+ * не работа: учтённых минут у неё нет, и её часы по графику ни на одном объекте не показываются. Иначе дни неявок без
+ * прохода копились в «Не определён», и вписанная туда выработка никому не шла (решение 16.11.2026).
  */
 export const displayHoursByObjects = (day: IBrigadeDayValue): Map<string, number> => {
   const result = new Map<string, number>();
+  if (ZERO_STATUSES.has(day.status)) return result;
   for (const [key, hours] of day.objects ?? []) {
     if (hours > 0) result.set(key, hours);
   }
-  if (result.size === 0 && day.hours > 0 && !ZERO_STATUSES.has(day.status)) {
+  if (result.size === 0 && day.hours > 0) {
     result.set(BRIGADE_UNKNOWN_OBJECT_KEY, day.hours);
   }
   return result;
+};
+
+/**
+ * Сохранённый расчёт закрытого месяца без «Не определён» из одних неявок. До 16.11.2026 displayHoursByObjects
+ * показывал дни неявок без прохода в «Не определён», и в зафиксированных расчётах эта группа осталась. Убирается
+ * только при показе и только когда на ней ни у кого нет учтённых минут, вписанной доли и выработки. Суммы, веса
+ * и минуты не меняются. Пересчитывать закрытые месяцы ради показа нельзя: пересчёт берёт текущие графики.
+ */
+export const withoutIdleUnknownObject = <
+  P extends { object_key: string; counted_minutes: number; fixed_amount?: string },
+  R extends { objects: P[] },
+  O extends { object_key: string; output: string | null },
+>(rows: R[], objects: O[]): { rows: R[]; objects: O[] } => {
+  const unknown = objects.find(object => object.object_key === BRIGADE_UNKNOWN_OBJECT_KEY);
+  if (!unknown || unknown.output !== null) return { rows, objects };
+  const used = rows.some(row => row.objects.some(part => part.object_key === BRIGADE_UNKNOWN_OBJECT_KEY
+    && (part.counted_minutes > 0 || part.fixed_amount !== undefined)));
+  if (used) return { rows, objects };
+  return {
+    rows: rows.map(row => (row.objects.some(part => part.object_key === BRIGADE_UNKNOWN_OBJECT_KEY)
+      ? { ...row, objects: row.objects.filter(part => part.object_key !== BRIGADE_UNKNOWN_OBJECT_KEY) }
+      : row)),
+    objects: objects.filter(object => object.object_key !== BRIGADE_UNKNOWN_OBJECT_KEY),
+  };
 };
 
 export interface IMemberMinutes {

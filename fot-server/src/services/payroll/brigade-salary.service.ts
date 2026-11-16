@@ -47,6 +47,7 @@ import {
   type IBrigadeSalaryError,
   type IBrigadeShareConflict,
   type IMemberMinutes,
+  withoutIdleUnknownObject,
 } from './brigade-salary.calc.js';
 import {
   BRIGADE_WHOLE_SHARE_KEY,
@@ -454,9 +455,13 @@ const STORED_RESULT_COLUMNS = `status, output_amount::text AS output_amount, inp
 /** Строка brigade_salary_results → сохранённый расчёт: одно правило для одной и многих бригад. */
 const toStoredResult = (row: Record<string, unknown>): IStoredBrigadeResult => {
   const format = Number(row.format ?? 1);
-  const rows = (row.rows as IBrigadeSalaryResultRow[]).map(item => ({ ...item, objects: item.objects ?? [] }));
+  const storedRows = (row.rows as IBrigadeSalaryResultRow[]).map(item => ({ ...item, objects: item.objects ?? [] }));
   const errors = row.errors as IBrigadeSalaryError[];
-  const objects = (Array.isArray(row.objects) ? row.objects : []) as IBrigadeSalaryObjectFacts[];
+  const storedObjects = (Array.isArray(row.objects) ? row.objects : []) as IBrigadeSalaryObjectFacts[];
+  // «Не определён» из одних неявок (расчёты до 16.11.2026) не показывается; при ошибках расчёта — как сохранено.
+  const { rows, objects } = Array.isArray(errors) && errors.length > 0
+    ? { rows: storedRows, objects: storedObjects }
+    : withoutIdleUnknownObject(storedRows, storedObjects);
   const shareConflicts = (Array.isArray(row.share_conflicts) ? row.share_conflicts : []) as IBrigadeStoredShareConflict[];
   return {
     share_conflicts: shareConflicts,

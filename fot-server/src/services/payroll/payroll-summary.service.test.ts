@@ -235,10 +235,10 @@ describe('замер «Свода» по шагам', () => {
     expect(slow.totalMs).toBe(4000);
     expect(log).toHaveBeenCalledTimes(1);
     expect(String(log.mock.calls[0][0])).toMatch(
-      /^\[payroll-summary\] 2026-08: суммы 1С 0 мс \(1 строк\), состав 0 мс, охват 0 мс \(1 пар\), расчёт ФОТ 0 мс \(0 чел\.\), .*объект по часам 4000 мс .*по часам 1 чел\. за 4000 мс\).*всего 4000 мс$/,
+      /^\[payroll-summary\] 2026-08: суммы 1С 0 мс \(1 строк\), состав 0 мс, охват 0 мс \(1 пар\), расчёт ФОТ 0 мс \(0 чел\.\), .*объект по часам 4000 мс .*по часам 1 чел\. за 4000 мс, прежний по табелю 0, .*текущий 0\).*всего 4000 мс$/,
     );
     expect(summaryServerTiming(slow)).toContain('summary_calc;dur=0.0;desc="0"');
-    expect(summaryServerTiming(slow)).toContain('summary_objects;dur=4000.0;desc="1/0/1"');
+    expect(summaryServerTiming(slow)).toContain('summary_objects;dur=4000.0;desc="1/0/1/0/0/0/0"');
     expect(summaryServerTiming(slow)).toContain('summary_total;dur=4000.0');
     now.mockRestore();
     log.mockRestore();

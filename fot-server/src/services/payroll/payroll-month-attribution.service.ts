@@ -82,6 +82,66 @@ export const loadMonthBreakdown = async (
   return result;
 };
 
+interface IDepartmentBreakdownSqlRow {
+  month: string;
+  department_id: string;
+  object_key: string | null;
+  object_id: string | null;
+  object_name: string | null;
+  object_address: string | null;
+  hours: number;
+}
+
+/**
+ * Часы подач отделов за месяцы по объектам — объект бригады или отдела в месяце: последняя редакция каждой подачи
+ * месяца, часы всех людей подачи на объекте сложены. Ключ — «отдел|YYYY-MM» (monthPairKey не подходит: отдел — uuid).
+ */
+export const loadDepartmentMonthBreakdown = async (
+  monthStarts: string[],
+  departmentIds: string[],
+): Promise<Map<string, ISummaryBreakdownRow[]>> => {
+  const result = new Map<string, ISummaryBreakdownRow[]>();
+  if (monthStarts.length === 0 || departmentIds.length === 0) return result;
+  const rows = await query<IDepartmentBreakdownSqlRow>(
+    `WITH latest AS (
+       SELECT DISTINCT ON (v.approval_id) v.id, v.department_id, v.start_date
+         FROM timesheet_versions v
+        WHERE date_trunc('month', v.start_date)::date = ANY($1::date[])
+        ORDER BY v.approval_id, v.revision DESC
+     )
+     SELECT to_char(l.start_date, 'YYYY-MM') AS month,
+            l.department_id::text AS department_id,
+            obj->>'object_key' AS object_key,
+            obj->>'object_id' AS object_id,
+            obj->>'object_name' AS object_name,
+            obj->>'object_address' AS object_address,
+            SUM(COALESCE((obj->>'total_hours')::float8, 0)) AS hours
+       FROM latest l
+       JOIN timesheet_version_objects vo ON vo.version_id = l.id
+      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(vo.payload->'employees', '[]'::jsonb)) AS emp
+      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(emp->'objects', '[]'::jsonb)) AS obj
+      WHERE l.department_id = ANY($2::uuid[])
+      GROUP BY 1, 2, 3, 4, 5, 6`,
+    [monthStarts, departmentIds],
+  );
+  for (const row of rows) {
+    const key = `${row.department_id}|${row.month}`;
+    const item: ISummaryBreakdownRow = {
+      version_id: 0,
+      department_id: row.department_id,
+      object_key: row.object_key,
+      object_id: row.object_id,
+      object_name: row.object_name,
+      object_address: row.object_address,
+      hours: Number(row.hours),
+    };
+    const list = result.get(key);
+    if (list) list.push(item);
+    else result.set(key, [item]);
+  }
+  return result;
+};
+
 /** Сотрудник для запасного отдела месяца. */
 export interface IMonthEmployee {
   org_department_id: string | null;

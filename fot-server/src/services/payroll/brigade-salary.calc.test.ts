@@ -16,6 +16,7 @@ import {
   countMemberMinutes,
   countedMinutesForDay,
   displayHoursByObjects,
+  withoutIdleUnknownObject,
   distributeByWeights,
   effectiveKtu,
   fixedShareKtus,
@@ -206,6 +207,65 @@ describe('splitMinutesByObjects', () => {
     expect(Object.fromEntries(displayHoursByObjects(day({ hours: 10, objects: new Map([['wave', 10]]) })))).toEqual({ wave: 10 });
     expect(Object.fromEntries(displayHoursByObjects(day({ hours: 10 })))).toEqual({ [BRIGADE_UNKNOWN_OBJECT_KEY]: 10 });
     expect(displayHoursByObjects(day({ status: 'vacation', hours: 0 })).size).toBe(0);
+  });
+
+  it('неявка с часами по графику — ни на одном объекте, учтённых минут нет', () => {
+    for (const status of ['unpaid', 'vacation', 'sick', 'educational_leave', 'dayoff', 'absent']) {
+      const unpaid = day({ status, hours: 11, objects: new Map([[BRIGADE_UNKNOWN_OBJECT_KEY, 11]]) });
+      expect(displayHoursByObjects(unpaid).size).toBe(0);
+      expect(displayHoursByObjects(day({ status, hours: 11 })).size).toBe(0);
+      expect(displayHoursByObjects(day({ status, hours: 8, objects: new Map([['wave', 8]]) })).size).toBe(0);
+      expect(minutes(unpaid)).toBe(0);
+    }
+  });
+
+  it('день «без сохранения» не даёт объекту «Не определён» часов, работа рядом — на своём объекте', () => {
+    const member = countMemberMinutes(1, new Map([
+      ['2026-10-08', day({ status: 'unpaid', hours: 11, objects: new Map([[BRIGADE_UNKNOWN_OBJECT_KEY, 11]]) })],
+      ['2026-10-09', day({ hours: 10, objects: new Map([['wave', 10]]) })],
+    ]), new Map([['2026-10-08', schedule], ['2026-10-09', schedule]]), calendar);
+
+    expect([...member.days.keys()]).toEqual(['wave']);
+    expect(Object.fromEntries(member.byObject)).toEqual({ wave: 600 });
+    expect(member.minutes).toBe(600);
+  });
+});
+
+describe('withoutIdleUnknownObject — сохранённый расчёт без «Не определён» из неявок', () => {
+  const part = (object_key: string, counted_minutes: number, extra: { fixed_amount?: string } = {}) => (
+    { object_key, counted_minutes, days: { '2026-10-08': 11 }, weight: counted_minutes * 10, amount: null, ...extra }
+  );
+  const facts = (object_key: string, output: string | null) => ({ object_key, output, object_name: object_key, state: 'no_output', total_weight: 0 });
+
+  it('ни минут, ни выработки — объект и части строк убираются, остальное как было', () => {
+    const rows = [
+      { employee_id: 1, objects: [part('wave', 600), part(BRIGADE_UNKNOWN_OBJECT_KEY, 0)] },
+      { employee_id: 2, objects: [part('wave', 300)] },
+    ];
+    const result = withoutIdleUnknownObject(rows, [facts('wave', '1000.00'), facts(BRIGADE_UNKNOWN_OBJECT_KEY, null)]);
+
+    expect(result.objects.map(object => object.object_key)).toEqual(['wave']);
+    expect(result.rows[0].objects.map(item => item.object_key)).toEqual(['wave']);
+    expect(result.rows[1]).toBe(rows[1]);
+  });
+
+  it('выработка вписана, есть учтённые минуты или вписанная доля — «Не определён» остаётся', () => {
+    const idle = [{ employee_id: 1, objects: [part(BRIGADE_UNKNOWN_OBJECT_KEY, 0)] }];
+    const withOutput = withoutIdleUnknownObject(idle, [facts(BRIGADE_UNKNOWN_OBJECT_KEY, '900000.00')]);
+    expect(withOutput.objects).toHaveLength(1);
+    expect(withOutput.rows[0].objects).toHaveLength(1);
+
+    const worked = [{ employee_id: 1, objects: [part(BRIGADE_UNKNOWN_OBJECT_KEY, 600)] }];
+    expect(withoutIdleUnknownObject(worked, [facts(BRIGADE_UNKNOWN_OBJECT_KEY, null)]).objects).toHaveLength(1);
+
+    const fixed = [{ employee_id: 1, objects: [part(BRIGADE_UNKNOWN_OBJECT_KEY, 0, { fixed_amount: '100.00' })] }];
+    expect(withoutIdleUnknownObject(fixed, [facts(BRIGADE_UNKNOWN_OBJECT_KEY, null)]).objects).toHaveLength(1);
+  });
+
+  it('нет «Не определён» — тот же результат', () => {
+    const rows = [{ employee_id: 1, objects: [part('wave', 600)] }];
+    const objects = [facts('wave', null)];
+    expect(withoutIdleUnknownObject(rows, objects)).toEqual({ rows, objects });
   });
 });
 

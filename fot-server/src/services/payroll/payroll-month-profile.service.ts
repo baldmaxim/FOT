@@ -1,7 +1,7 @@
 /**
  * Профиль пары «сотрудник + месяц» для фильтра «Объект» на «Расчётах» — тем же путём, что объект строки «Свода»
  * (payroll-summary.service, buildSummary): разбивка закрытого табеля → объект месяца (attributeMonths) → для «Не
- * определён» — режим месяца, затем часы по проходам (resolveSummaryObjects). «Свод» этим модулем не пользуется — порядок
+ * определён» — режим месяца, часы по проходам, прежний объект, объект бригады или отдела, текущий (resolveSummaryObjects). «Свод» этим модулем не пользуется — порядок
  * шагов повторён, и PG-тест сверяет их на одних парах.
  *
  * Кэш по паре, TTL 2 минуты: «Расчёты» догружают список порциями подряд, и без кэша профиль всего штата считался бы на
@@ -46,7 +46,7 @@ const computeMonthProfiles = async (pairs: readonly IMonthPair[]): Promise<Map<s
   ]);
   const employees = new Map<number, IMonthEmployee>(employeeRows.map(row => [Number(row.id), row]));
   const attribution = await attributeMonths(pairs, breakdown, employees);
-  // Объект, где базовый «Не определён»: режим месяца, затем часы.
+  // Объект, где базовый «Не определён»: режим месяца, часы, прежний, бригады или отдела, текущий.
   const summaryObjects = await resolveSummaryObjects(attribution);
 
   const result = new Map<string, IMonthProfile>();
