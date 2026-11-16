@@ -35,7 +35,7 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
  *    («Начислено за N дней», «Удержано») нет (решение 30.10.2026). Старый бэкенд без расчёта — блок «По ставкам ФОТ»;
  *  - долги прошлых месяцев из ведомости бригады (PayslipDebtSection) — расшифровка строки «Погашение долгов»;
  *  - «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
- *  - «Остаток (с НДФЛ)» — итог ФОТ минус перечисленное: НДФЛ в итоге ФОТ не вычтен, поэтому он сидит в остатке.
+ *  - «Остаток» — итог ФОТ минус перечисленное: НДФЛ в итоге ФОТ не вычтен, поэтому он сидит в остатке.
  */
 export const PaidPayslip: FC<IPaidPayslipProps> = ({
   employeeId, month, amounts, totals, transfers, transferred, transfersFailed,
@@ -155,7 +155,7 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
               </colgroup>
               <tfoot>
                 <tr>
-                  <th scope="row">Остаток (с НДФЛ)</th>
+                  <th scope="row">Остаток</th>
                   <td className={styles.num}>{formatTotal(remainder)}</td>
                 </tr>
               </tfoot>

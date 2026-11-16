@@ -41,6 +41,6 @@ export const recalcTotalView = (total: string): {
 } => {
   const value = Number(total);
   return value < 0
-    ? { label: 'Переплата (с НДФЛ)', amount: -value, action: 'Учтено', question: 'Переплату учли?' }
-    : { label: 'К доплате (с НДФЛ)', amount: value, action: 'Доплачено', question: 'Сотруднику доплатили?' };
+    ? { label: 'Переплата', amount: -value, action: 'Учтено', question: 'Переплату учли?' }
+    : { label: 'К доплате', amount: value, action: 'Доплачено', question: 'Сотруднику доплатили?' };
 };

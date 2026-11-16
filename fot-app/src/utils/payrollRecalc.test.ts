@@ -50,10 +50,10 @@ describe('recalcTermsNotes', () => {
 
 describe('recalcTotalView', () => {
   it('плюс — к доплате', () => {
-    expect(recalcTotalView('20000.00')).toMatchObject({ label: 'К доплате (с НДФЛ)', amount: 20000, action: 'Доплачено' });
+    expect(recalcTotalView('20000.00')).toMatchObject({ label: 'К доплате', amount: 20000, action: 'Доплачено' });
   });
 
   it('минус — переплата, сумма без минуса', () => {
-    expect(recalcTotalView('-1500.50')).toMatchObject({ label: 'Переплата (с НДФЛ)', amount: 1500.5, action: 'Учтено' });
+    expect(recalcTotalView('-1500.50')).toMatchObject({ label: 'Переплата', amount: 1500.5, action: 'Учтено' });
   });
 });
