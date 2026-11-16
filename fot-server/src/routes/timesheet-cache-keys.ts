@@ -33,6 +33,8 @@ const buildKey = (prefix: string, req: Request): string =>
     // при тех же отделе и датах это разные ответы.
     req.query.show_fired === '1' ? 'f1' : 'f0',
     req.query.schedule_payload ?? '',
+    // Рамки «Нужна корректировка»: с флагом в ответе есть weekend_missing_days, без него — нет.
+    req.query.include_weekend_missing === '1' ? 'wm1' : 'wm0',
     req.user.id,
     req.user.show_actual_hours ? '1' : '0',
   ].join(':');

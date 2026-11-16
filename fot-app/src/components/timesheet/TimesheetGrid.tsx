@@ -20,6 +20,7 @@ import {
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName, getTimesheetRowKey } from '../../utils/timesheetDisplay';
 import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
+import { isDayInactiveForEmployee } from '../../utils/timesheetEmployeeWindow';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { getSalaryLetterHours, type ISalaryLetterHours } from '../../utils/timesheetSalary';
@@ -225,28 +226,6 @@ const formatBadgeDate = (iso: string): string => {
   const [, m, d] = iso.split('-');
   if (!m || !d) return iso;
   return `${d}.${m}`;
-};
-
-/**
- * Дата выхода из табеля (включительно): минимум из transferred_out_date и excluded_from_timesheet_date.
- * После неё — день рендерится как inactive (серый, line-through).
- */
-const getInactiveFromDate = (employee: TimesheetEmployee): string | null => {
-  const a = employee.transferred_out_date ?? null;
-  const b = employee.excluded_from_timesheet_date ?? null;
-  if (a && b) return a < b ? a : b;
-  return a || b || null;
-};
-
-const isDayInactiveForEmployee = (employee: TimesheetEmployee, year: number, month: number, day: number): boolean => {
-  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  // Верхняя граница: дни после перевода/исключения.
-  const cutoff = getInactiveFromDate(employee);
-  if (cutoff && dateStr >= cutoff) return true;
-  // Нижняя граница: дни до прихода в отдел (бэк проставляет joined_date только для настоящих переводов/уволенных).
-  const joined = employee.joined_date ?? null;
-  if (joined && dateStr < joined) return true;
-  return false;
 };
 
 const getDeviationCellClass = (deviation: number): string => {

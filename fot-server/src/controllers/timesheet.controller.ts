@@ -41,6 +41,12 @@ import {
   roleAllowsTimesheet,
 } from '../services/timesheet-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
+import {
+  filterWeekendMissingForGrid,
+  listWeekendMissingDays,
+  TIMESHEET_CORRECTION_FRAMES_FROM,
+  type IWeekendMissingDay,
+} from '../services/weekend-missing-days.service.js';
 import { listEmployeeDepartmentPeriods } from '../services/timesheet-employee-periods.service.js';
 import { buildFioSearch, fioConditionSql, withFioFallback, type FioSearchMode } from '../utils/fio-search.utils.js';
 import {
@@ -2289,6 +2295,9 @@ export const timesheetController = {
       // увольнения, до даты увольнения. «Согласования» флаг не шлют — их состав как у подачи.
       const showFiredInDismissalMonth = req.query.show_fired === '1';
       const compactSchedulePayload = req.query.schedule_payload === 'compact';
+      // Рамки «Нужна корректировка»: выходы без корректировки людей сетки (шлют сетка отдела и «Свои люди»).
+      // С флагом поле weekend_missing_days есть всегда, в том числе пустое в ранних ответах; без флага — нет.
+      const includeWeekendMissing = req.query.include_weekend_missing === '1';
       const scope = await resolveTimesheetScope(req);
       if (!scope) {
         return res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
@@ -2364,6 +2373,7 @@ export const timesheetController = {
             actualHours: 0,
             deviations: { late: 0, absent: 0, sick: 0 },
           },
+          ...(includeWeekendMissing ? { weekend_missing_days: [] as IWeekendMissingDay[] } : {}),
         },
       };
 
@@ -2679,7 +2689,14 @@ export const timesheetController = {
       // Переключение факт/урезано выполняет фронт по per-role show_actual_hours
       // (selectVisibleHours). Путь 'capped_to_schedule' нужен только экспорту/зарплате.
       const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = 'actual';
-      let { entries, objectEntries } = await buildAttendanceEntries({
+      // Выходы без корректировки — по всему месяцу (квота плановых суббот считается на месяц, а не на диапазон
+      // сетки), параллельно с посещаемостью; до TIMESHEET_CORRECTION_FRAMES_FROM рамок нет — и проверки тоже.
+      const weekendMissingMonth = includeWeekendMissing ? resolveTimesheetPeriodRange(month) : null;
+      const weekendMissingPromise: Promise<IWeekendMissingDay[]> = weekendMissingMonth
+        && weekendMissingMonth.endDate >= TIMESHEET_CORRECTION_FRAMES_FROM
+        ? listWeekendMissingDays(employeeIds, weekendMissingMonth)
+        : Promise.resolve([]);
+      const [attendance, weekendMissingRaw] = await Promise.all([buildAttendanceEntries({
         employees: employees.map(employee => ({
           id: Number(employee.id),
           full_name: employee.full_name || null,
@@ -2697,7 +2714,8 @@ export const timesheetController = {
         // но с отсечкой synthesizeObjectOnlyDaysUpTo; здесь отсечки нет намеренно —
         // правка, внесённая заранее, должна быть видна табельщице сразу.
         synthesizeObjectOnlyDays: true,
-      });
+      }), weekendMissingPromise]);
+      let { entries, objectEntries } = attendance;
       mark(includeObjectDetails ? 'attendance_with_objects' : 'attendance');
 
       // Скрываем из ростера сотрудников, у которых за весь период нет НИ ОДНОЙ настоящей
@@ -3033,6 +3051,11 @@ export const timesheetController = {
         };
       });
 
+      // После всех фильтров состава и с окнами строк: рамка не ляжет на чужой или серый день.
+      const weekendMissingDays = includeWeekendMissing
+        ? filterWeekendMissingForGrid(weekendMissingRaw, employeesWithNames, startDate, endDate)
+        : null;
+
       // Сериализация графиков для фронтенда
       const schedulesObj: Record<number, IResolvedSchedule> = {};
       for (const [id, sched] of schedulesMap) {
@@ -3145,6 +3168,7 @@ export const timesheetController = {
           approvals: departmentApprovals,
           approval_locks: approvalLocks,
           approval_locked_dates: approvalLockedDates,
+          ...(weekendMissingDays ? { weekend_missing_days: weekendMissingDays } : {}),
         },
       });
     } catch (err) {

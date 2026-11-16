@@ -276,6 +276,15 @@ export interface IEmployeeApprovalLock {
   status: 'submitted' | 'approved';
 }
 
+/** Выход в выходной без корректировки: те же правила, что у вкладки кадров «Выходные». */
+export interface IWeekendMissingDay {
+  employee_id: number;
+  /** YYYY-MM-DD */
+  date: string;
+  /** Проход без часов или короче получаса: в клетке 0. */
+  without_hours: boolean;
+}
+
 export interface TimesheetResponse {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
@@ -292,6 +301,8 @@ export interface TimesheetResponse {
   approval_locks?: IEmployeeApprovalLock[];
   /** Легаси-поле: плоский список дат. Оставлено на переходный релиз, не использовать. */
   approval_locked_dates?: string[];
+  /** Выходы в выходной без корректировки (только при include_weekend_missing): рамки «Нужна корректировка». */
+  weekend_missing_days?: IWeekendMissingDay[];
   /**
    * Можно ли ПИСАТЬ в выбранный отдел (meta.department_writable сервера).
    * true только когда открыт ровно один отдел из табельно-редактируемого скоупа:

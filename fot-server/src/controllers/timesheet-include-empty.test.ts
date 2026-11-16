@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   memberships: vi.fn(),
   supervisors: vi.fn(),
   buildAttendance: vi.fn(),
+  weekendMissing: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -46,6 +47,12 @@ vi.mock('./timesheet-weekend-memo.controller.js', () => ({
 }));
 
 // Единый мок schedule.service: и для контроллера, и для настоящего attendance.service.
+// Рамки «Нужна корректировка»: проверка дня подменена, фильтр сетки и порог — настоящие.
+vi.mock('../services/weekend-missing-days.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/weekend-missing-days.service.js')>()),
+  listWeekendMissingDays: h.weekendMissing,
+}));
+
 vi.mock('../services/schedule.service.js', () => ({
   resolveSchedulesForPeriod: vi.fn(async () => new Map()),
   loadCalendarMonth: vi.fn(async () => null),
@@ -286,6 +293,7 @@ beforeEach(() => {
     return [];
   });
   h.pgQueryOne.mockResolvedValue(null);
+  h.weekendMissing.mockResolvedValue([]);
 });
 
 describe('getAll — инверсия дефолта include_empty', () => {
@@ -475,5 +483,89 @@ describe('кэш-ключи timesheet — include_empty и employee_ids', () => 
   it('ключи ts и ts-today не пересекаются', () => {
     expect(buildTimesheetCacheKey(keyReq({})))
       .not.toBe(buildTimesheetTodayCacheKey(keyReq({})));
+  });
+});
+
+describe('getAll — include_weekend_missing (рамки «Нужна корректировка»)', () => {
+  const NOV = '2026-11';
+  const missingDay = (employeeId: number, date: string, withoutHours = false) => ({
+    employee_id: employeeId, date, without_hours: withoutHours,
+  });
+  const dataOf = (res: { _json: unknown }) => (res._json as { data: Record<string, unknown> }).data;
+
+  it('с флагом: дни людей сетки, проверка — по всему месяцу и по составу сетки', async () => {
+    h.weekendMissing.mockResolvedValue([missingDay(1, '2026-11-07'), missingDay(2, '2026-11-08', true)]);
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: NOV, include_weekend_missing: '1' }), res);
+
+    expect(res._status).toBe(200);
+    expect(dataOf(res).weekend_missing_days).toEqual([missingDay(1, '2026-11-07'), missingDay(2, '2026-11-08', true)]);
+    expect(h.weekendMissing).toHaveBeenCalledWith([1, 2], expect.objectContaining({ startDate: '2026-11-01', endDate: '2026-11-30' }));
+  });
+
+  it('без флага (и с 0) поля нет и проверка не идёт', async () => {
+    for (const query of [{ month: NOV }, { month: NOV, include_weekend_missing: '0' }]) {
+      const res = makeRes();
+      await timesheetController.getAll(makeReq(query), res);
+      expect(dataOf(res)).not.toHaveProperty('weekend_missing_days');
+    }
+    expect(h.weekendMissing).not.toHaveBeenCalled();
+  });
+
+  it('ранний пустой ответ с флагом — поле есть и пустое; без флага — поля нет', async () => {
+    h.memberships.mockResolvedValue([]);
+    const withFlag = makeRes();
+    await timesheetController.getAll(makeReq({ month: NOV, include_weekend_missing: '1' }), withFlag);
+    expect(dataOf(withFlag).weekend_missing_days).toEqual([]);
+
+    const withoutFlag = makeRes();
+    await timesheetController.getAll(makeReq({ month: NOV }), withoutFlag);
+    expect(dataOf(withoutFlag)).not.toHaveProperty('weekend_missing_days');
+  });
+
+  it('человек, убранный фильтром «без активности», в рамки не попадает', async () => {
+    h.weekendMissing.mockResolvedValue([missingDay(1, '2026-11-07'), missingDay(2, '2026-11-07')]);
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: NOV, include_weekend_missing: '1', include_empty: '0' }), res);
+
+    expect(responseEmployeeIds(res)).toEqual([1]);
+    expect(dataOf(res).weekend_missing_days).toEqual([missingDay(1, '2026-11-07')]);
+  });
+
+  it('дни вне окна строки (после перевода, до входа переводом) отброшены', async () => {
+    h.memberships.mockResolvedValue([
+      { ...membership(1), transferred_out_date: '2026-11-16' },
+      { ...membership(2), joined_date: '2026-11-16', joined_via_transfer: true },
+    ]);
+    h.weekendMissing.mockResolvedValue([
+      missingDay(1, '2026-11-08'), missingDay(1, '2026-11-22'),
+      missingDay(2, '2026-11-08'), missingDay(2, '2026-11-22'),
+    ]);
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: NOV, include_weekend_missing: '1' }), res);
+
+    expect(dataOf(res).weekend_missing_days).toEqual([missingDay(1, '2026-11-08'), missingDay(2, '2026-11-22')]);
+  });
+
+  it('месяц до ноября 2026 — рамок нет, проверка не идёт', async () => {
+    const res = makeRes();
+    await timesheetController.getAll(makeReq({ month: '2026-10', include_weekend_missing: '1' }), res);
+    expect(dataOf(res).weekend_missing_days).toEqual([]);
+    expect(h.weekendMissing).not.toHaveBeenCalled();
+  });
+});
+
+describe('кэш-ключи timesheet — include_weekend_missing', () => {
+  const keyReq = (query: Record<string, string>) => ({
+    query: { month: MONTH, department_id: DEPT, ...query },
+    user: { id: 'u1', show_actual_hours: false },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any;
+
+  it('без параметра и 0 — один bucket, 1 — другой; в обычном и today-кэше', () => {
+    for (const build of [buildTimesheetCacheKey, buildTimesheetTodayCacheKey]) {
+      expect(build(keyReq({}))).toBe(build(keyReq({ include_weekend_missing: '0' })));
+      expect(build(keyReq({ include_weekend_missing: '1' }))).not.toBe(build(keyReq({})));
+    }
   });
 });

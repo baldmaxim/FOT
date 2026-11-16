@@ -4,7 +4,7 @@ const h = vi.hoisted(() => ({ validate: vi.fn() }));
 
 vi.mock('./timesheet-approval-correction-validation.service.js', () => ({ validateCorrectionAttachments: h.validate }));
 
-const { listWeekendMissingDays } = await import('./weekend-missing-days.service.js');
+const { filterWeekendMissingForGrid, listWeekendMissingDays } = await import('./weekend-missing-days.service.js');
 
 const RANGE = { startDate: '2026-11-01', endDate: '2026-11-30' };
 
@@ -37,5 +37,22 @@ describe('listWeekendMissingDays', () => {
     h.validate.mockClear();
     expect(await listWeekendMissingDays([], RANGE)).toEqual([]);
     expect(h.validate).not.toHaveBeenCalled();
+  });
+});
+
+describe('filterWeekendMissingForGrid', () => {
+  const day = (employeeId: number, date: string) => ({ employee_id: employeeId, date, without_hours: false });
+
+  it('только люди сетки, только диапазон сетки и не раньше 01.11.2026', () => {
+    const days = [day(1, '2026-10-31'), day(1, '2026-11-07'), day(1, '2026-11-29'), day(9, '2026-11-07')];
+    expect(filterWeekendMissingForGrid(days, [{ id: 1 }], '2026-10-01', '2026-11-15')).toEqual([day(1, '2026-11-07')]);
+  });
+
+  it('окно строки: с даты перевода или исключения (что раньше) — вне, до даты входа — вне', () => {
+    const days = [day(1, '2026-11-07'), day(1, '2026-11-14'), day(1, '2026-11-21'), day(1, '2026-11-28')];
+    const employee = {
+      id: '1', joined_date: '2026-11-10', transferred_out_date: '2026-11-25', excluded_from_timesheet_date: '2026-11-21',
+    };
+    expect(filterWeekendMissingForGrid(days, [employee], '2026-11-01', '2026-11-30')).toEqual([day(1, '2026-11-14')]);
   });
 });

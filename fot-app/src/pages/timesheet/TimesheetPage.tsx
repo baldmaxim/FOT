@@ -84,6 +84,9 @@ import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/depar
 import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../../components/layout/HeaderAddonContext';
+import { timesheetGridQueryKey } from '../../utils/timesheetGridQuery';
+import { CORRECTION_NEEDED_LABEL, timesheetCorrectionProblems } from '../../utils/timesheetCorrectionProblems';
+import { moscowTodayIso } from '../../utils/moscowDate';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -509,8 +512,19 @@ export const TimesheetPage: FC = () => {
   // Объектные детали нужны в обоих режимах: «по объектам» — для группировки строк,
   // «по сотрудникам» — для per-object корректировок в дневной модалке.
   const includeObjectDetails = true;
+  // Рамки «Нужна корректировка» — у этого запроса всегда (сетка отдела, «Свои люди», назначенная бригада):
+  // от вида внутри отдела флаг не зависит — запрос общий, переключение вида не грузит табель заново.
+  // «По сотруднику» использует свои запросы, без рамок.
+  const includeWeekendMissing = !isEmployeeMode;
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', 'with-objects', includeEmptyEmployees],
+    queryKey: timesheetGridQueryKey({
+      month: monthStr,
+      rangeStart,
+      rangeEnd,
+      departmentKey: activeGridDeptId ?? 'none',
+      includeEmpty: includeEmptyEmployees,
+      includeWeekendMissing,
+    }),
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
@@ -520,6 +534,7 @@ export const TimesheetPage: FC = () => {
       include_empty: includeEmptyEmployees,
       show_fired: true,
       schedule_payload: 'compact',
+      include_weekend_missing: includeWeekendMissing,
     }),
     enabled: Boolean(activeGridDeptId) && !isEmployeeMode,
     staleTime: 5 * 60_000,
@@ -650,6 +665,35 @@ export const TimesheetPage: FC = () => {
   const calendar = isEmployeeMode
     ? employeeModeData.calendar
     : (deferredTimesheetData?.calendar || null);
+  // Рамки «Нужна корректировка» — только в обычной сетке по сотрудникам (не «По объектам», не «Зарплата»).
+  const showCorrectionFrames = !isEmployeeMode && gridViewMode === 'employees' && !isSalaryView;
+  const weekendMissingDays = deferredTimesheetData?.weekend_missing_days;
+  const correctionProblems = useMemo(() => (showCorrectionFrames
+    ? timesheetCorrectionProblems({
+      employees,
+      entries,
+      weekendMissing: weekendMissingDays ?? [],
+      schedules,
+      dailySchedules,
+      calendar,
+      year,
+      month,
+      showActualHours,
+      todayIso: moscowTodayIso(),
+    })
+    : null), [showCorrectionFrames, employees, entries, weekendMissingDays, schedules, dailySchedules, calendar, year, month, showActualHours]);
+  const correctionProblemDates = useMemo(
+    () => (correctionProblems ? { red: correctionProblems.keys } : undefined),
+    [correctionProblems],
+  );
+  const correctionProblemTitle = useCallback(
+    (cellKey: string): string | undefined => correctionProblems?.titles.get(cellKey),
+    [correctionProblems],
+  );
+  const correctionEmployeeBadge = useCallback(
+    (employeeId: number) => correctionProblems?.badges.get(employeeId) ?? [],
+    [correctionProblems],
+  );
   const loading = isEmployeeMode
     ? employeeModeLoading
     : (Boolean(effectiveSelectedDeptId) || isDirectReportsOnly) && timesheetQuery.isLoading;
@@ -3048,6 +3092,10 @@ export const TimesheetPage: FC = () => {
             onExcludeEmployee={handleExcludeEmployeeFromDepartment}
             onDayClick={handleDayClick}
             onObjectDayClick={handleObjectDayClick}
+            problemDates={correctionProblemDates}
+            problemTitle={correctionProblems ? correctionProblemTitle : undefined}
+            problemLegendLabel={correctionProblems ? CORRECTION_NEEDED_LABEL : undefined}
+            employeeBadge={correctionProblems ? correctionEmployeeBadge : undefined}
           />
         )
       ) : loading ? (
@@ -3087,6 +3135,10 @@ export const TimesheetPage: FC = () => {
           onExcludeEmployee={handleExcludeEmployeeFromDepartment}
           onDayClick={handleDayClick}
           onObjectDayClick={handleObjectDayClick}
+          problemDates={correctionProblemDates}
+          problemTitle={correctionProblems ? correctionProblemTitle : undefined}
+          problemLegendLabel={correctionProblems ? CORRECTION_NEEDED_LABEL : undefined}
+          employeeBadge={correctionProblems ? correctionEmployeeBadge : undefined}
         />
       )}
 

@@ -40,6 +40,8 @@ interface TimesheetFilters {
   // увольнения, только чтение). «Согласования» не шлют: их состав как у подачи.
   show_fired?: boolean;
   schedule_payload?: 'full' | 'compact';
+  // Рамки «Нужна корректировка»: в ответе weekend_missing_days (шлют сетка отдела и «Свои люди»).
+  include_weekend_missing?: boolean;
 }
 
 type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
@@ -269,6 +271,7 @@ export const timesheetService = {
       params.append('include_empty', filters.include_empty ? '1' : '0');
     }
     if (filters.show_fired) params.append('show_fired', '1');
+    if (filters.include_weekend_missing) params.append('include_weekend_missing', '1');
     params.append('schedule_payload', filters.schedule_payload ?? 'compact');
     const res = await apiClient.get<ApiResponse<TimesheetResponse> & {
       meta?: { department_writable?: boolean };
