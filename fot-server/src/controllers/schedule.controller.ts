@@ -18,6 +18,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { filterEmployeeIdsByReadScope } from '../services/employee-scope-filter.service.js';
+import { runWithScheduleAudit } from './schedule-audit.helpers.js';
 
 /** Предел POST /schedules/employees: размер страницы «Текущих сотрудников». */
 export const EMPLOYEE_ASSIGNMENTS_MAX_IDS = 1000;
@@ -1246,16 +1247,21 @@ export const scheduleController = {
       // явный false при выборе «Создать новый исторический фрагмент».
       const mergeIntoNext = parsed.data.merge_into_next ?? true;
 
-      const data = await withTransaction(client => assignEmployeeSchedule(
-        clientDb(client),
-        parsedEmployeeId.data,
-        parsed.data.schedule_id,
-        parsed.data.effective_from,
-        req.user.employee_id,
-        parsed.data.effective_to,
-        undefined,
-        parsed.data.anchor_date,
-        mergeIntoNext,
+      const data = await withTransaction(client => runWithScheduleAudit(
+        client,
+        req,
+        { employeeId: parsedEmployeeId.data, operation: 'assign', date: parsed.data.effective_from },
+        () => assignEmployeeSchedule(
+          clientDb(client),
+          parsedEmployeeId.data,
+          parsed.data.schedule_id,
+          parsed.data.effective_from,
+          req.user.employee_id,
+          parsed.data.effective_to,
+          undefined,
+          parsed.data.anchor_date,
+          mergeIntoNext,
+        ),
       ));
 
       void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assign');
@@ -1318,8 +1324,18 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const result = await withTransaction(client =>
-        deleteEmployeeAssignmentRow(clientDb(client), parsedEmployeeId.data, parsedAssignmentId.data));
+      const assignmentId = parsedAssignmentId.data;
+      const result = await withTransaction(client => runWithScheduleAudit(
+        client,
+        req,
+        {
+          employeeId: parsedEmployeeId.data,
+          operation: 'delete',
+          assignmentId,
+          date: before => before.find(row => row.id === assignmentId)?.effective_from ?? null,
+        },
+        () => deleteEmployeeAssignmentRow(clientDb(client), parsedEmployeeId.data, assignmentId),
+      ));
       if (!result) {
         return res.status(404).json({ success: false, error: 'Назначение не найдено у этого сотрудника' });
       }
@@ -1351,8 +1367,19 @@ export const scheduleController = {
       if (body.effective_from !== undefined) patch.effectiveFrom = body.effective_from;
       if ('anchor_date' in body) patch.anchorDate = body.anchor_date ?? null;
 
-      const data = await withTransaction(client =>
-        fixEmployeeAssignmentDates(clientDb(client), parsedEmployeeId.data, body.assignment_id, patch));
+      const data = await withTransaction(client => runWithScheduleAudit(
+        client,
+        req,
+        {
+          employeeId: parsedEmployeeId.data,
+          operation: 'fix',
+          assignmentId: body.assignment_id,
+          date: before => patch.effectiveFrom
+            ?? before.find(row => row.id === body.assignment_id)?.effective_from
+            ?? null,
+        },
+        () => fixEmployeeAssignmentDates(clientDb(client), parsedEmployeeId.data, body.assignment_id, patch),
+      ));
       void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assignment_fix');
       res.json({ success: true, data });
     } catch (err) {
@@ -1452,6 +1479,10 @@ export const scheduleController = {
       const CHUNK_SIZE = 20;
 
       const preloadedByEmployee = await loadEmployeeScheduleRowsBatch(employeeIds);
+      const brigadeNames = departments
+        .map(department => department.name)
+        .filter((name): name is string => Boolean(name));
+      const auditOperation = `brigade_${action}` as const;
 
       // allSettled + per-employee try/catch: одна сбойная запись больше НЕ
       // роняет весь батч (раньше Promise.all → reject чанка → 500 → ни одной
@@ -1460,16 +1491,18 @@ export const scheduleController = {
         const chunk = employeeIds.slice(index, index + CHUNK_SIZE);
         const results = await Promise.allSettled(chunk.map(async (employeeId) => {
           const preloaded = preloadedByEmployee.get(employeeId) ?? [];
+          const audit = { employeeId, operation: auditOperation, date: effectiveDate, brigadeNames };
           if (action === 'assign') {
-            await withTransaction(client => assignEmployeeSchedule(
-              clientDb(client), employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded));
+            await withTransaction(client => runWithScheduleAudit(client, req, audit, () => assignEmployeeSchedule(
+              clientDb(client), employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded)));
             return true;
           }
           if (action === 'shift_start') {
-            return withTransaction(client => shiftEmployeeScheduleStart(
-              clientDb(client), employeeId, effectiveDate, preloaded));
+            return withTransaction(client => runWithScheduleAudit(client, req, audit, () => shiftEmployeeScheduleStart(
+              clientDb(client), employeeId, effectiveDate, preloaded)));
           }
-          return withTransaction(client => removeEmployeeSchedule(clientDb(client), employeeId, effectiveDate, preloaded));
+          return withTransaction(client => runWithScheduleAudit(client, req, audit, () => removeEmployeeSchedule(
+            clientDb(client), employeeId, effectiveDate, preloaded)));
         }));
         for (let i = 0; i < results.length; i++) {
           const r = results[i];
@@ -1533,8 +1566,12 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const updated = await withTransaction(client =>
-        removeEmployeeSchedule(clientDb(client), parsedEmployeeId.data, parsedEffectiveTo.data));
+      const updated = await withTransaction(client => runWithScheduleAudit(
+        client,
+        req,
+        { employeeId: parsedEmployeeId.data, operation: 'remove', date: parsedEffectiveTo.data },
+        () => removeEmployeeSchedule(clientDb(client), parsedEmployeeId.data, parsedEffectiveTo.data),
+      ));
       if (!updated) {
         return res.json({ success: true });
       }

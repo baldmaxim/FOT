@@ -64,6 +64,15 @@ vi.mock('../services/employee-scope-filter.service.js', () => ({
   filterEmployeeIdsByReadScope: readScopeMock,
 }));
 
+// След смены графика проверяется отдельно (schedule-audit.helpers.test.ts): здесь
+// хелпер просто выполняет операцию, чтобы очереди моков pgQuery не сдвигались.
+const runWithScheduleAuditMock = vi.hoisted(() => vi.fn(
+  async (_client: unknown, _req: unknown, _input: unknown, run: () => Promise<unknown>) => run(),
+));
+vi.mock('./schedule-audit.helpers.js', () => ({
+  runWithScheduleAudit: runWithScheduleAuditMock,
+}));
+
 import { scheduleController, EMPLOYEE_ASSIGNMENTS_MAX_IDS } from './schedule.controller.js';
 
 const BRIGADE_1 = '11111111-1111-4111-8111-111111111111';
@@ -1512,5 +1521,127 @@ describe('архивный шаблон не назначается и не пр
 
     expect(res.statusCode).toBe(409);
     expect(writes()).toHaveLength(0);
+  });
+});
+
+describe('след смены графика сотрудника (runWithScheduleAudit)', () => {
+  type AuditInput = {
+    employeeId: number;
+    operation: string;
+    date: string | null | ((before: { id: string; effective_from: string }[]) => string | null);
+    assignmentId?: string;
+    brigadeNames?: string[];
+  };
+  const auditInputs = (): AuditInput[] => runWithScheduleAuditMock.mock.calls.map(call => call[2] as AuditInput);
+  const ASSIGN_T = 'dddddddd-4444-4444-8444-dddddddddddd';
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset().mockResolvedValue(1);
+    pgTx.mockReset();
+    installDefaultTx();
+    mockedState.scope = 'all';
+    runWithScheduleAuditMock.mockClear();
+    pgQueryOne.mockImplementation(async (sql: string) => (
+      sql.toLowerCase().trimStart().startsWith('insert') ? { id: 'new-1' } : { id: 'fetched' }
+    ));
+  });
+
+  it('назначение: операция assign на дату вступления, тем же клиентом транзакции', async () => {
+    pgQuery.mockResolvedValue([]);
+    const res = makeRes();
+    await scheduleController.assignEmployee(makeReq({
+      params: { employeeId: '445' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-10-01' },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(auditInputs()).toEqual([{ employeeId: 445, operation: 'assign', date: '2026-10-01' }]);
+    expect(runWithScheduleAuditMock.mock.calls[0][0]).toBeTruthy();
+    expect((runWithScheduleAuditMock.mock.calls[0][1] as AuthenticatedRequest).user.id).toBe('user-1');
+  });
+
+  it('исправление дат: дата — новая effective_from, а при правке одного якоря — начало записи', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_T, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: null },
+    ]);
+    await scheduleController.fixEmployeeAssignment(makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_T, effective_from: '2026-09-15' },
+    }), makeRes());
+    await scheduleController.fixEmployeeAssignment(makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_T, anchor_date: '2026-10-05' },
+    }), makeRes());
+
+    const [byDate, byAnchor] = auditInputs();
+    const before = [{ id: ASSIGN_T, effective_from: '2026-10-01' }];
+    expect(byDate).toMatchObject({ employeeId: 7, operation: 'fix', assignmentId: ASSIGN_T });
+    expect(typeof byDate.date === 'function' && byDate.date(before)).toBe('2026-09-15');
+    expect(typeof byAnchor.date === 'function' && byAnchor.date(before)).toBe('2026-10-01');
+  });
+
+  it('удаление записи: дата — начало удаляемой записи; чужая запись — 404', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_T, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: null },
+    ]);
+    const res = makeRes();
+    await scheduleController.deleteEmployeeAssignment(makeReq({ params: { employeeId: '445', assignmentId: ASSIGN_T } }), res);
+
+    expect(res.statusCode).toBe(200);
+    const [input] = auditInputs();
+    expect(input).toMatchObject({ employeeId: 445, operation: 'delete', assignmentId: ASSIGN_T });
+    expect(typeof input.date === 'function' && input.date([{ id: ASSIGN_T, effective_from: '2026-10-01' }])).toBe('2026-10-01');
+    expect(typeof input.date === 'function' && input.date([])).toBeNull();
+  });
+
+  it('снятие персонального графика: операция remove на дату из запроса', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_T, schedule_id: SCHEDULE_ID, effective_from: '2026-10-01', effective_to: null },
+    ]);
+    const res = makeRes();
+    await scheduleController.removeEmployeeAssignment(makeReq({
+      params: { employeeId: '445' },
+      query: { effective_to: '2026-11-01' },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(auditInputs()).toEqual([{ employeeId: 445, operation: 'remove', date: '2026-11-01' }]);
+  });
+
+  it('по бригадам: след на каждого сотрудника с названием бригады', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) return [{ id: BRIGADE_1, name: 'Бр. Монолит', kind: 'brigade' }];
+      if (lower.includes('from employees')) return [{ id: 101 }, { id: 102 }];
+      return [];
+    });
+    const res = makeRes();
+    await scheduleController.bulkApplyToBrigades(makeReq({
+      body: { department_ids: [BRIGADE_1], action: 'assign', schedule_id: SCHEDULE_ID, effective_date: '2026-10-01' },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(auditInputs()).toEqual([
+      { employeeId: 101, operation: 'brigade_assign', date: '2026-10-01', brigadeNames: ['Бр. Монолит'] },
+      { employeeId: 102, operation: 'brigade_assign', date: '2026-10-01', brigadeNames: ['Бр. Монолит'] },
+    ]);
+  });
+
+  it('след не записался → 500, смена не подтверждается', async () => {
+    pgQuery.mockResolvedValue([]);
+    runWithScheduleAuditMock.mockImplementationOnce(async (_c, _r, _i, run) => {
+      await run();
+      throw new Error('audit insert failed');
+    });
+    const res = makeRes();
+    await scheduleController.assignEmployee(makeReq({
+      params: { employeeId: '445' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-10-01' },
+    }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.payload).toMatchObject({ success: false });
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { actionHistoryApi } from '../../api/actionHistory';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { formatScheduleChangeDetails } from './actionHistorySchedule';
 import styles from './ActionHistoryPage.module.css';
 
 const ACTION_LABELS: Record<string, string> = {
@@ -46,6 +47,7 @@ const ACTION_LABELS: Record<string, string> = {
   FIRE_EMPLOYEE: 'Сотрудник уволен',
   REHIRE_EMPLOYEE: 'Сотрудник принят повторно',
   MOVE_EMPLOYEE_DEPARTMENT: 'Перевод в отдел',
+  EMPLOYEE_SCHEDULE_CHANGED: 'График сотрудника изменён',
   IMPORT_EMPLOYEES: 'Импорт сотрудников',
   ENRICH_EMPLOYEES: 'Обогащение данных',
   ENRICH_EMPLOYEES_CONTACTS: 'Обогащение контактов',
@@ -102,7 +104,7 @@ const CHAT_INBOUND_LABELS: Record<string, string> = {
 const ACTION_GROUPS: Record<string, string[]> = {
   'Аутентификация': ['LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'PASSWORD_RESET_REQUESTED', 'PASSWORD_RESET_COMPLETED', '2FA_ENABLED', '2FA_DISABLED', '2FA_VERIFIED', '2FA_FAILED'],
   'Пользователи': ['USER_APPROVED', 'USER_REJECTED', 'USER_DELETED', 'EMAIL_CONFIRMED', 'EMAIL_CHANGED', 'POSITION_CHANGED', 'ROLE_CHANGED', 'NAME_CHANGED', 'USER_DEPARTMENT_ACCESS_CHANGED', 'CHAT_INBOUND_MODE_CHANGED', 'ORG_ASSIGNED', 'BLACKLIST_ADDED', 'BLACKLIST_REMOVED', 'BLACKLIST_ENFORCED', 'BLACKLIST_BLOCKED_ATTEMPT', 'BLACKLIST_MEMO_ADDED', 'BLACKLIST_MEMO_REMOVED'],
-  'Сотрудники': ['VIEW_EMPLOYEES', 'EXPORT_EMPLOYEES_VIEW', 'UPDATE_STAFF_COMMENT', 'CREATE_EMPLOYEE', 'UPDATE_EMPLOYEE', 'DELETE_EMPLOYEE', 'DELETE_ALL_EMPLOYEES', 'ARCHIVE_EMPLOYEE', 'RESTORE_EMPLOYEE', 'FIRE_EMPLOYEE', 'REHIRE_EMPLOYEE', 'MOVE_EMPLOYEE_DEPARTMENT', 'IMPORT_EMPLOYEES', 'ENRICH_EMPLOYEES', 'ENRICH_EMPLOYEES_CONTACTS'],
+  'Сотрудники': ['VIEW_EMPLOYEES', 'EXPORT_EMPLOYEES_VIEW', 'UPDATE_STAFF_COMMENT', 'CREATE_EMPLOYEE', 'UPDATE_EMPLOYEE', 'DELETE_EMPLOYEE', 'DELETE_ALL_EMPLOYEES', 'ARCHIVE_EMPLOYEE', 'RESTORE_EMPLOYEE', 'FIRE_EMPLOYEE', 'REHIRE_EMPLOYEE', 'MOVE_EMPLOYEE_DEPARTMENT', 'EMPLOYEE_SCHEDULE_CHANGED', 'IMPORT_EMPLOYEES', 'ENRICH_EMPLOYEES', 'ENRICH_EMPLOYEES_CONTACTS'],
   'Структура': ['ORG_CREATED', 'ORG_UPDATED', 'ORG_DELETED', 'CREATE_ORG_DEPARTMENT', 'UPDATE_ORG_DEPARTMENT', 'DELETE_ORG_DEPARTMENT', 'MOVE_ORG_DEPARTMENT_BATCH', 'DELETE_ORG_DEPARTMENT_RECURSIVE', 'CLEAR_STRUCTURE'],
   'Табель': ['VIEW_TIMESHEET', 'CREATE_TIMESHEET_ENTRY', 'UPDATE_TIMESHEET_ENTRY', 'IMPORT_TIMESHEET', 'TIMESHEET_APPROVAL_SUBMITTED', 'TIMESHEET_APPROVAL_APPROVED', 'TIMESHEET_APPROVAL_REJECTED', 'TIMESHEET_APPROVAL_RETURNED_TO_REWORK'],
   'СКУД / Sigur': ['VIEW_SKUD', 'IMPORT_SKUD', 'CLEAR_SKUD', 'CLEAN_SKUD_DUPLICATES', 'SYNC_SIGUR', 'SYNC_SIGUR_EMPLOYEE', 'MATCH_EMPLOYEES'],
@@ -175,6 +177,8 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
       const prefix = fio ? `${fio}: ` : '';
       return `${prefix}«${from}» → «${to}»`;
     }
+    case 'EMPLOYEE_SCHEDULE_CHANGED':
+      return formatScheduleChangeDetails(details);
     case 'CREATE_EMPLOYEE': {
       const dept = asString(details.department_name) || asString(details.org_department_id);
       if (fio && dept) return `${fio}, отдел «${dept}»`;
