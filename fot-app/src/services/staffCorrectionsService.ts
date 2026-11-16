@@ -1,5 +1,6 @@
 import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
+import type { IBranchPathNode } from './staffWeekendService';
 
 /**
  * «Управление кадрами» → «Корректировки» (миграция 365): правки часов руководителей за месяц — кадрам проверить.
@@ -33,7 +34,8 @@ export interface IStaffCorrectionRow {
 }
 
 export interface IStaffCorrectionsList {
-  branches: Array<{ id: string; name: string }>;
+  /** Отделы с правками; path — предки от корня до родителя (нет у прежнего сервера). */
+  branches: Array<{ id: string; name: string; path?: IBranchPathNode[] }>;
   rows: IStaffCorrectionRow[];
 }
 

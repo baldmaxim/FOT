@@ -1,5 +1,5 @@
 import { query } from '../config/postgres.js';
-import { describeBranches, loadBranchOwnership } from './staff-branch-ownership.service.js';
+import { describeBranches, loadBranchOwnership, type IBranchPathNode } from './staff-branch-ownership.service.js';
 import { resolveTimesheetPeriodRange } from './timesheet-department-assignments.service.js';
 import { listWeekendMissingDays } from './weekend-missing-days.service.js';
 
@@ -23,6 +23,8 @@ export interface IStaffWeekendGridRow {
 export interface IStaffWeekendBranch {
   id: string;
   name: string;
+  /** Предки от корня до родителя: список отделов — деревом. */
+  path: IBranchPathNode[];
   rows: IStaffWeekendGridRow[];
 }
 
@@ -83,9 +85,10 @@ export const listWeekendsByBranch = async (
   ]);
   const employeeById = new Map(employees.map(employee => [Number(employee.id), employee]));
 
-  return branches.map(({ id, name }): IStaffWeekendBranch => ({
+  return branches.map(({ id, name, path }): IStaffWeekendBranch => ({
     id,
     name,
+    path,
     rows: [...(daysByBranch.get(id) ?? new Map<number, string[]>())]
       .map(([employeeId, days]): IStaffWeekendGridRow => {
         const employee = employeeById.get(employeeId);

@@ -13,6 +13,9 @@ import {
 } from '../../../utils/scheduleUtils';
 import type { IWeekendDayCorrection } from './useWeekendDayCorrection';
 import styles from './WeekendsTab.module.css';
+// Окно дня (TimesheetCorrectionModal) оформлено глобальными классами «Табеля» (ts-modal-*): подключаем их здесь, а не
+// полагаемся на сетку на той же вкладке — без неё окно разваливалось текстом под таблицей.
+import '../../../pages/timesheet/TimesheetPage.css';
 
 const TimesheetCorrectionModal = lazy(() => import('../../timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,

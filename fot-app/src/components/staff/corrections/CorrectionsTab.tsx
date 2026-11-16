@@ -3,56 +3,50 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 
 import { useAuth } from '../../../contexts/AuthContext';
-import { useToast } from '../../../contexts/ToastContext';
+import { useIsMobile } from '../../../hooks/useIsMobile';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import {
   STAFF_CORRECTIONS_KEY,
   staffCorrectionsService,
   type IStaffCorrectionRow,
+  type IStaffCorrectionsList,
 } from '../../../services/staffCorrectionsService';
 import {
-  branchOptionLabel,
   buildBranchOptions,
   readStoredBranch,
   resolveSelectedBranch,
   writeStoredBranch,
 } from '../../../utils/branchSelect';
+import { buildBranchTree } from '../../../utils/branchTree';
 import { getMonthLabel } from '../../../utils/calendarUtils';
 import { searchRowsByFio } from '../../../utils/fioSearch';
 import { moscowCurrentMonth, shiftMonth } from '../../../utils/moscowDate';
 import { canGoToNextWeekendMonth, canGoToPreviousWeekendMonth } from '../../../utils/staffWeekendGrid';
-import {
-  buildStaffCorrectionsExport,
-  STAFF_CORRECTION_COLUMNS,
-  type IStaffCorrectionTableRow,
-} from '../../../utils/staffCorrectionsTable';
-import { applyTableView, type ITableView } from '../../../utils/tableView';
-import { RegistryTable } from '../../ui/registry/RegistryTable';
+import { buildStaffCorrectionsExport, type IStaffCorrectionTableRow } from '../../../utils/staffCorrectionsTable';
 import { SearchInput } from '../../ui/SearchInput';
+import { DepartmentTreeSelect } from '../DepartmentTreeSelect';
 import { branchTimesheetKey, fetchBranchTimesheet } from '../weekends/branchTimesheetQuery';
-import { useWeekendDayCorrection } from '../weekends/useWeekendDayCorrection';
-import { WeekendDayCorrectionModal } from '../weekends/WeekendDayCorrectionModal';
 import styles from '../weekends/WeekendsTab.module.css';
+import { CorrectionsBranchGrid } from './CorrectionsBranchGrid';
 
 const EMPTY_ROWS: IStaffCorrectionRow[] = [];
-const EMPTY_BRANCHES: Array<{ id: string; name: string }> = [];
+const EMPTY_BRANCHES: IStaffCorrectionsList['branches'] = [];
 const BRANCH_STORAGE_KEY = 'staff-corrections:branch';
-const INITIAL_VIEW: ITableView = { sort: '', dir: 'asc', filters: {} };
 
 /**
  * «Управление кадрами» → «Корректировки» (миграция 365): правки часов, которые руководители ставят своим людям, —
- * кадрам проверить. Отдел — селект (число правок после поиска), поиск по ФИО — по всем отделам. Строка — правка:
- * часы «по СКУД» (как посчитал бы табель без неё) → часы правки, кто и когда. Правка действует сразу; клик по строке
- * открывает окно дня (у правки по объекту — окно объекта), исправить можно с правами табеля.
+ * кадрам проверить. Как табель: отдел — в дереве (как в «Текущих сотрудниках», число людей с правками), на экране —
+ * сетка отдела только по этим людям, дни с правкой руководителя — в рамке с подсказкой (кто, когда, по СКУД → правка).
+ * Клик по дню — окно дня, исправить можно с правами табеля. Поиск по ФИО — по всем отделам. «Экспорт» — список правок.
  */
 export const CorrectionsTab: FC = () => {
   const { canViewPage, canEditPage, canManageAsHrAdmin } = useAuth();
-  const toast = useToast();
   const queryClient = useQueryClient();
+  const compact = useIsMobile(768);
   const [currentMonth] = useState(moscowCurrentMonth);
   const [month, setMonth] = useState(currentMonth);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<ITableView>(INITIAL_VIEW);
+  // Ручной выбор: автовыбор (поиск, отдел исчез) его не меняет и не сбрасывается при загрузке или смене месяца.
   const [manualBranchId, setManualBranchId] = useState<string | null>(() => readStoredBranch(BRANCH_STORAGE_KEY));
 
   const canViewTimesheet = canViewPage('/timesheet') || canViewPage('/timesheet-hr')
@@ -73,15 +67,21 @@ export const CorrectionsTab: FC = () => {
     () => searchRowsByFio(allRows, row => row.full_name, search, rows => rows).visibleRows,
     [allRows, search],
   );
+  // (N) — люди с правками после поиска, как на «Выходных».
   const options = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of searchedRows) counts.set(row.branch_id, (counts.get(row.branch_id) ?? 0) + 1);
+    const people = new Map<string, Set<number>>();
+    for (const row of searchedRows) {
+      const set = people.get(row.branch_id) ?? new Set<number>();
+      set.add(row.employee_id);
+      people.set(row.branch_id, set);
+    }
     return buildBranchOptions(branches.map(branch => ({
       id: branch.id,
       name: branch.name,
-      visibleCount: counts.get(branch.id) ?? 0,
+      visibleCount: people.get(branch.id)?.size ?? 0,
     })), searching);
   }, [branches, searchedRows, searching]);
+  const branchTree = useMemo(() => buildBranchTree(options, branches), [options, branches]);
   const selectedId = listQuery.isSuccess ? resolveSelectedBranch(options, manualBranchId) : null;
   const selectedName = branches.find(branch => branch.id === selectedId)?.name ?? '';
 
@@ -95,78 +95,35 @@ export const CorrectionsTab: FC = () => {
   const branchRows = useMemo((): IStaffCorrectionTableRow[] => searchedRows
     .filter(row => row.branch_id === selectedId)
     .map(row => ({ ...row, skud: skudQuery.data?.[row.id] ?? null })), [searchedRows, selectedId, skudQuery.data]);
-  const visibleRows = useMemo(() => applyTableView(branchRows, STAFF_CORRECTION_COLUMNS, view), [branchRows, view]);
 
   const pickBranch = useCallback((branchId: string) => {
+    if (!branchId) return;
     setManualBranchId(branchId);
     writeStoredBranch(BRANCH_STORAGE_KEY, branchId);
   }, []);
 
-  const [year, monthNumber] = month.split('-').map(Number) as [number, number];
-  // Табель выбранного отдела — для окна дня (как на «Выходных»; ключ общий — грузится один раз).
+  // Табель выбранного отдела — для сетки и окна дня (ключ общий с «Выходными» — грузится один раз).
   const timesheetQuery = useQuery({
     queryKey: branchTimesheetKey(selectedId ?? 'none', month),
     queryFn: () => fetchBranchTimesheet(selectedId ?? '', month),
     enabled: canViewTimesheet && selectedId !== null,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
+    refetchOnWindowFocus: 'always' as const,
   });
 
   const handleCorrectionClosed = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: STAFF_CORRECTIONS_KEY });
   }, [queryClient]);
 
-  const correction = useWeekendDayCorrection({
-    year,
-    month: monthNumber,
-    data: timesheetQuery.data,
-    queryKey: branchTimesheetKey(selectedId ?? 'none', month),
-    dataUpdatedAt: timesheetQuery.dataUpdatedAt,
-    isFetching: timesheetQuery.isFetching,
-    refetch: timesheetQuery.refetch,
-    canEdit,
-    onClosed: handleCorrectionClosed,
-  });
-
-  // Правка по объекту — окно объекта, иначе — окно дня. Табель отдела ещё грузится — подсказка, окно не открываем.
-  const { handleDayClick, handleObjectDayClick } = correction;
-  const timesheetData = timesheetQuery.data;
-  const handleRowClick = useCallback((row: IStaffCorrectionTableRow) => {
-    if (!canViewTimesheet) {
-      toast.info('Нужен доступ к табелю');
-      return;
-    }
-    if (!timesheetData) {
-      toast.info(timesheetQuery.isError ? 'Не удалось загрузить табель отдела' : 'Табель отдела загружается — повторите через секунду');
-      return;
-    }
-    const employee = timesheetData.employees.find(item => item.id === row.employee_id);
-    if (!employee) {
-      toast.info('Сотрудника нет в табеле этого отдела за месяц');
-      return;
-    }
-    const day = Number(row.work_date.slice(8, 10));
-    if (row.window === 'object' && row.object_id) {
-      const objectEntry = timesheetData.object_entries.find(item => item.employee_id === employee.id
-        && item.work_date === row.work_date && item.object_id === row.object_id) ?? null;
-      handleObjectDayClick(employee, day, {
-        object_key: row.object_id,
-        object_id: row.object_id,
-        object_name: row.object_name ?? 'Объект',
-      }, objectEntry);
-      return;
-    }
-    const entry = timesheetData.entries.find(item => item.employee_id === employee.id && item.work_date === row.work_date) ?? null;
-    handleDayClick(employee, day, entry);
-  }, [canViewTimesheet, timesheetData, timesheetQuery.isError, handleDayClick, handleObjectDayClick, toast]);
-
   const buildSnapshot = useCallback(
     (rows: ReadonlyArray<IStaffCorrectionTableRow>) => buildStaffCorrectionsExport(rows, month, selectedName),
     [month, selectedName],
   );
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, staffCorrectionsService.exportTable);
-  const exportReady = visibleRows.length > 0 && skudQuery.isSuccess;
+  const exportReady = branchRows.length > 0 && skudQuery.isSuccess;
 
+  const [year, monthNumber] = month.split('-').map(Number) as [number, number];
   const emptyNotice = listQuery.isSuccess && options.length === 0
     ? (searching ? 'Никого не найдено' : 'Нет корректировок руководителей за месяц')
     : null;
@@ -178,16 +135,15 @@ export const CorrectionsTab: FC = () => {
           <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
         </div>
         {options.length > 0 && selectedId && (
-          <select
-            className={styles.branchSelect}
-            value={selectedId}
-            onChange={event => pickBranch(event.target.value)}
-            aria-label="Отдел"
-          >
-            {options.map(option => (
-              <option key={option.id} value={option.id}>{branchOptionLabel(option)}</option>
-            ))}
-          </select>
+          <div className={styles.branchSelect}>
+            <DepartmentTreeSelect
+              departments={branchTree}
+              value={selectedId}
+              onChange={pickBranch}
+              showAllOption={false}
+              selectableRoots
+            />
+          </div>
         )}
         <div className={styles.monthNav}>
           <button
@@ -213,7 +169,7 @@ export const CorrectionsTab: FC = () => {
         <button
           type="button"
           className={styles.exportButton}
-          onClick={() => { void exportRows(visibleRows); }}
+          onClick={() => { void exportRows(branchRows); }}
           disabled={!exportReady || exporting}
         >
           <Download size={14} aria-hidden="true" />
@@ -237,20 +193,20 @@ export const CorrectionsTab: FC = () => {
       {emptyNotice && <div className={styles.notice}>{emptyNotice}</div>}
 
       {selectedId && (
-        <RegistryTable
-          columns={STAFF_CORRECTION_COLUMNS}
+        <CorrectionsBranchGrid
+          key={selectedId}
+          branchName={selectedName}
           rows={branchRows}
-          visibleRows={visibleRows}
-          view={view}
-          onViewChange={setView}
-          loading={false}
-          label={`Корректировки — ${selectedName}`}
-          rowKey={row => row.id}
-          rowLabel={row => `${row.full_name}, ${row.work_date}`}
-          onRowClick={handleRowClick}
+          searching={searching}
+          month={month}
+          queryKey={branchTimesheetKey(selectedId, month)}
+          query={timesheetQuery}
+          canViewTimesheet={canViewTimesheet}
+          canEdit={canEdit}
+          compact={compact}
+          onCorrectionClosed={handleCorrectionClosed}
         />
       )}
-      <WeekendDayCorrectionModal correction={correction} />
     </div>
   );
 };

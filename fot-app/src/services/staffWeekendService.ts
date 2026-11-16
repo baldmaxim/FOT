@@ -25,9 +25,17 @@ export interface IStaffWeekendPeriod {
   can_close: boolean;
 }
 
+/** Предок отдела: список отделов — деревом, как в «Текущих сотрудниках». */
+export interface IBranchPathNode {
+  id: string;
+  name: string;
+}
+
 export interface IStaffWeekendBranch {
   id: string;
   name: string;
+  /** Предки от корня до родителя; нет (прежний сервер) — список плоский. */
+  path?: IBranchPathNode[];
   rows: IStaffWeekendRow[];
   periods: IStaffWeekendPeriod[];
 }

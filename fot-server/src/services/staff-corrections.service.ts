@@ -3,7 +3,7 @@ import { buildAttendanceEntries } from './attendance.service.js';
 import { countCorrectionAttachmentsLikeWindow } from './correction-attachments.service.js';
 import { SOURCE_REQUEST_JOIN_CONDITION } from './correction-source-request.service.js';
 import { getDayNormHours, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
-import { describeBranches, loadBranchOwnership } from './staff-branch-ownership.service.js';
+import { describeBranches, loadBranchOwnership, type IDescribedBranch } from './staff-branch-ownership.service.js';
 import { resolveTimesheetPeriodRange } from './timesheet-department-assignments.service.js';
 import { isMigratedDayLevelAdjustment } from './timesheet-object.service.js';
 
@@ -52,7 +52,8 @@ export interface IStaffCorrectionRow {
 }
 
 export interface IStaffCorrectionsList {
-  branches: Array<{ id: string; name: string }>;
+  /** Отделы с правками: название и предки (список — деревом). */
+  branches: IDescribedBranch[];
   rows: IStaffCorrectionRow[];
 }
 

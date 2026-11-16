@@ -48,21 +48,28 @@ interface IDepartmentTreeSelectProps {
    * совпадать с id отдела; выбранная группа — в поле её подписью. Ищутся поиском, как отделы.
    */
   groups?: ReadonlyArray<{ value: string; label: string }>;
+  /**
+   * Верхний узел с детьми выбирается, если он сам в охвате (in_scope). Списки кадров «Выходные» и «Корректировки»:
+   * там в дереве только отделы с данными, а предки — серые; компания, где числятся свои люди, — тоже пункт.
+   * Default false — корень-компания только заголовок.
+   */
+  selectableRoots?: boolean;
 }
 
 const ALL_LABEL = 'Все отделы';
 const NO_GROUPS: ReadonlyArray<{ value: string; label: string }> = [];
 
-// Корень-компания (depth 0, есть дети) — только контейнер, не выбирается.
+// Корень-компания (depth 0, есть дети) — только контейнер, не выбирается (кроме selectableRoots).
 // Узел вне scope пользователя (in_scope=false) — серый предок.
 // Корень без детей — выбираем (иначе по нему нельзя отфильтровать).
 const isSelectableNode = (
   node: OrgDepartmentNode,
   depth: number,
   disableUnassignable = false,
+  selectableRoots = false,
 ): boolean => {
   const hasChildren = (node.children?.length ?? 0) > 0;
-  if (depth === 0 && hasChildren) return false;
+  if (depth === 0 && hasChildren && !selectableRoots) return false;
   if (disableUnassignable && (node.is_assignable ?? true) === false) return false;
   return (node.in_scope ?? true) === true;
 };
@@ -82,6 +89,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   disableUnassignable = false,
   flattenSingleRoot = false,
   groups = NO_GROUPS,
+  selectableRoots = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -121,12 +129,12 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
     const walk = (node: OrgDepartmentNode, depth: number, parentId: string | null) => {
       ids.push(node.id);
       if (parentId) pMap.set(node.id, parentId);
-      if (isSelectableNode(node, depth, disableUnassignable)) selectable += 1;
+      if (isSelectableNode(node, depth, disableUnassignable, selectableRoots)) selectable += 1;
       node.children?.forEach(child => walk(child, depth + 1, node.id));
     };
     roots.forEach(node => walk(node, rootDepth, null));
     return { parentMap: pMap, allNodeIds: ids, selectableCount: selectable };
-  }, [roots, rootDepth, disableUnassignable]);
+  }, [roots, rootDepth, disableUnassignable, selectableRoots]);
 
   const computeBaseExpansion = useCallback((): Set<string> => {
     // Узкий скоуп (мало узлов) — раскрыть всё: руководитель видит отделы сразу.
@@ -237,7 +245,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
 
   const renderNode = (node: OrgDepartmentNode, depth: number) => {
     const hasChildren = (node.children?.length ?? 0) > 0;
-    const selectable = isSelectableNode(node, depth, disableUnassignable);
+    const selectable = isSelectableNode(node, depth, disableUnassignable, selectableRoots);
     const notAssignable = disableUnassignable && (node.is_assignable ?? true) === false;
     const isHeader = !selectable && hasChildren;
     const nodeExpanded = isNodeExpanded(node.id);

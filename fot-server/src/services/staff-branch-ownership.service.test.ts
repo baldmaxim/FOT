@@ -211,11 +211,18 @@ describe('loadBranchOwnership', () => {
 });
 
 describe('describeBranches', () => {
-  it('названия из дерева, порядок — по пути: СМ раньше СУ-10, внутри — по дереву', async () => {
+  it('названия и предки от корня до родителя из дерева, порядок — по пути: СМ раньше СУ-10, внутри — по дереву', async () => {
+    const obj = { id: 'obj', name: 'Объект' };
+    const su10 = { id: 'su10', name: '(СУ-10) ООО СУ-10' };
+    const stroy = { id: 'stroy', name: 'Департамент строительства' };
     expect(await describeBranches(['brig', 'sm', 'line', 'line'])).toEqual([
-      { id: 'sm', name: '(СМ) Служба Механизации' },
-      { id: 'brig', name: 'бр.Иванов' },
-      { id: 'line', name: 'ЛИНИЯ' },
+      { id: 'sm', name: '(СМ) Служба Механизации', path: [obj] },
+      { id: 'brig', name: 'бр.Иванов', path: [obj, su10, stroy] },
+      { id: 'line', name: 'ЛИНИЯ', path: [obj, su10, stroy] },
     ]);
+  });
+
+  it('корень — без предков', async () => {
+    expect(await describeBranches(['obj'])).toEqual([{ id: 'obj', name: 'Объект', path: [] }]);
   });
 });

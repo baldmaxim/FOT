@@ -161,16 +161,27 @@ export const loadBranchOwnership = async (
   return { employeeIds, ownerOf };
 };
 
-/** Названия и порядок по пути в дереве (компания → отдел → бригада). */
-export const describeBranches = async (
-  branchIds: readonly string[],
-): Promise<Array<{ id: string; name: string }>> => {
+export interface IBranchPathNode {
+  id: string;
+  name: string;
+}
+
+export interface IDescribedBranch {
+  id: string;
+  name: string;
+  /** Предки от корня до родителя — для списка отделов деревом, как в «Текущих сотрудниках». */
+  path: IBranchPathNode[];
+}
+
+/** Названия, предки и порядок по пути в дереве (компания → отдел → бригада). */
+export const describeBranches = async (branchIds: readonly string[]): Promise<IDescribedBranch[]> => {
   const index = buildTreeIndex(await getAllDepartmentsTree());
-  const pathOf = (id: string): string => [...ancestorsOf(index, id).reverse(), id]
-    .map(nodeId => index.nameOf.get(nodeId) ?? '')
-    .join(' / ');
   return [...new Set(branchIds)]
-    .map(id => ({ id, name: index.nameOf.get(id) ?? '', path: pathOf(id) }))
-    .sort((a, b) => a.path.localeCompare(b.path, 'ru') || a.id.localeCompare(b.id))
-    .map(({ id, name }) => ({ id, name }));
+    .map((id) => {
+      const path = ancestorsOf(index, id).reverse().map(nodeId => ({ id: nodeId, name: index.nameOf.get(nodeId) ?? '' }));
+      const name = index.nameOf.get(id) ?? '';
+      return { id, name, path, sortKey: [...path.map(node => node.name), name].join(' / ') };
+    })
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey, 'ru') || a.id.localeCompare(b.id))
+    .map(({ id, name, path }) => ({ id, name, path }));
 };

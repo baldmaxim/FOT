@@ -7,12 +7,12 @@ import { useIsMobile } from '../../../hooks/useIsMobile';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { STAFF_WEEKENDS_KEY, staffWeekendService, type IStaffWeekendBranch } from '../../../services/staffWeekendService';
 import {
-  branchOptionLabel,
   buildBranchOptions,
   readStoredBranch,
   resolveSelectedBranch,
   writeStoredBranch,
 } from '../../../utils/branchSelect';
+import { buildBranchTree } from '../../../utils/branchTree';
 import { getMonthLabel } from '../../../utils/calendarUtils';
 import { searchRowsByFio } from '../../../utils/fioSearch';
 import { moscowCurrentMonth, shiftMonth } from '../../../utils/moscowDate';
@@ -23,6 +23,7 @@ import {
 } from '../../../utils/staffWeekendGrid';
 import { buildStaffWeekendExport, type IStaffWeekendExportRow } from '../../../utils/staffWeekendTable';
 import { SearchInput } from '../../ui/SearchInput';
+import { DepartmentTreeSelect } from '../DepartmentTreeSelect';
 import { branchTimesheetKey, fetchBranchTimesheet } from './branchTimesheetQuery';
 import { WeekendBranchGrid } from './WeekendBranchGrid';
 import { WeekendPeriodActions } from './WeekendPeriodActions';
@@ -33,7 +34,8 @@ const BRANCH_STORAGE_KEY = 'staff-weekends:branch';
 
 /**
  * «Управление кадрами» → «Выходные» (миграция 346): отделы и бригады, где кто-то работал в выходной по СКУД без
- * корректировки, в том числе вошёл без пары (в клетке 0 — метка «без часов»). Отдел выбирается в селекте, на экране —
+ * корректировки, в том числе вошёл без пары (в клетке 0 — метка «без часов»). Отдел выбирается в дереве (как в
+ * «Текущих сотрудниках»), на экране —
  * сетка табеля только выбранного, такие дни в красной рамке; плановые субботы графика сюда не входят. Клик по дню
  * открывает то же окно, что в «Табеле».
  */
@@ -71,6 +73,8 @@ export const WeekendsTab: FC = () => {
     visibleCount: visibleRows.get(branch.id)?.length ?? 0,
     keepWhenEmpty: canManagePeriods && branch.periods.length > 0,
   })), searching), [branches, visibleRows, canManagePeriods, searching]);
+  // Список отделов — деревом, как в «Текущих сотрудниках»: предки серыми заголовками, пункты с числом людей.
+  const branchTree = useMemo(() => buildBranchTree(options, branches), [options, branches]);
 
   // Сверка выбора — только по успешному ответу: во время загрузки и ошибки ничего не выбрано и не сброшено.
   const selectedId = gridQuery.isSuccess ? resolveSelectedBranch(options, manualBranchId) : null;
@@ -91,6 +95,7 @@ export const WeekendsTab: FC = () => {
   });
 
   const pickBranch = useCallback((branchId: string) => {
+    if (!branchId) return;
     setManualBranchId(branchId);
     writeStoredBranch(BRANCH_STORAGE_KEY, branchId);
   }, []);
@@ -131,16 +136,15 @@ export const WeekendsTab: FC = () => {
           <SearchInput clearable value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
         </div>
         {options.length > 0 && selectedId && (
-          <select
-            className={styles.branchSelect}
-            value={selectedId}
-            onChange={event => pickBranch(event.target.value)}
-            aria-label="Отдел"
-          >
-            {options.map(option => (
-              <option key={option.id} value={option.id}>{branchOptionLabel(option)}</option>
-            ))}
-          </select>
+          <div className={styles.branchSelect}>
+            <DepartmentTreeSelect
+              departments={branchTree}
+              value={selectedId}
+              onChange={pickBranch}
+              showAllOption={false}
+              selectableRoots
+            />
+          </div>
         )}
         <div className={styles.monthNav}>
           <button
