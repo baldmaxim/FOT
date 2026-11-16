@@ -65,7 +65,8 @@ export const calcLineDaysNote = (line: IPayrollCalcLine): string | null => {
     ];
     return parts.length > 0 ? parts.join(' · ') : null;
   }
-  if (!line.days) return null;
+  // Оклад и «Премиальная» по часам (с ноября 2026) — только часы.
+  if (!line.days) return line.hours ? `${String(line.hours).replace('.', ',')} ч` : null;
   if (line.hours) return `${line.days.worked} дн. · ${String(line.hours).replace('.', ',')} ч`;
   return line.days.norm === null ? null : `${line.days.worked} из ${line.days.norm} дн.`;
 };
@@ -74,7 +75,7 @@ const MISSING_LABELS: Record<PayrollCalcMissing, string> = {
   vacation_pay: 'отпускные',
   sick_pay: 'больничные',
   educational_pay: 'учебный отпуск',
-  hourly: 'часы табеля по почасовой ставке',
+  hourly: 'нет часов табеля',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы графика',
   no_days: 'нет дней в табеле',
@@ -174,10 +175,18 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       }
       return `${base} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
     }
+    case 'salary_hours': {
+      const base = Number(part.bonus) > 0
+        ? `(оклад ${money(part.salary)} + премиальная ${money(part.bonus)})`
+        : `оклад ${money(part.salary)}`;
+      return `${base} × ${decimal(part.minutes / 60)} / ${decimal(part.norm_minutes / 60)} ч${tail(part.amount)}`;
+    }
     case 'hourly':
       return `${decimal(part.minutes / 60)} ч × ${Number(part.rate).toLocaleString('ru-RU', { maximumFractionDigits: 4 })} ₽/ч${tail(part.amount)}`;
     case 'planned_supplement':
       return `плановая доплата ${money(part.base)} × ${part.days} / ${part.norm} дн.${tail(part.amount)}`;
+    case 'planned_supplement_hours':
+      return `плановая доплата ${money(part.base)} × ${decimal(part.minutes / 60)} / ${decimal(part.norm_minutes / 60)} ч${tail(part.amount)}`;
     case 'overtime_days':
       return `${part.days} вых. × ${money(part.salary)} / ${part.norm} дн.${tail(part.amount)}`;
     case 'overtime_hours':

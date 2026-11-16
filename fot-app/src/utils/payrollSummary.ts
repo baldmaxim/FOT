@@ -47,7 +47,7 @@ const ITEM_ORDER: SummaryItemCode[] = [...PAYROLL_PAID_GROUPS.flatMap(group => g
 export const SUMMARY_ISSUE_LABELS: Record<SummaryIssue, string> = {
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы графика',
-  hourly: 'часы табеля по почасовой ставке',
+  hourly: 'нет часов табеля',
   vacation_pay: 'отпускные',
   sick_pay: 'больничные',
   educational_pay: 'учебный отпуск',

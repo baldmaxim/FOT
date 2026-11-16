@@ -85,7 +85,7 @@ const SUPPLEMENTS_GROUP_FIELDS = ['overtime', 'travel', 'housing', 'supplements'
 export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;
 
 export const CALC_ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
-  hourly: 'почасовая ставка: нет часов табеля',
+  hourly: 'нет часов табеля',
   no_terms: 'нет условий оплаты',
   no_norm: 'нет нормы',
   no_days: 'нет дней в табеле',
@@ -96,7 +96,7 @@ export const CALC_ISSUE_LABELS: Record<PayrollCalcColumnsIssue, string> = {
 };
 
 /**
- * Подсказка ⚠, причины одного месяца — в одной части: «Неполный расчёт: август — почасовая ставка: нет часов табеля;
+ * Подсказка ⚠, причины одного месяца — в одной части: «Неполный расчёт: август — нет часов табеля;
  * октябрь — нет учтённых часов бригады». «Выработка не введена» сюда не входит — она подписью (calcBrigadeOutputSub);
  * других причин нет — null, ⚠ не показывается.
  */

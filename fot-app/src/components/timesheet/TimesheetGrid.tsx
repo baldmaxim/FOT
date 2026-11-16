@@ -23,7 +23,7 @@ import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
 import { isDayInactiveForEmployee } from '../../utils/timesheetEmployeeWindow';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
-import { getSalaryLetterHours, type ISalaryLetterHours } from '../../utils/timesheetSalary';
+import { getSalaryLetterHours, salaryColumnTitle, type ISalaryLetterHours } from '../../utils/timesheetSalary';
 import { buildSalaryObjectsOverlay, salaryCalcCellText, type ISalaryObjectsOverlay } from '../../utils/timesheetSalaryOverlay';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -1777,7 +1777,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               })}
               {showSalaryLineColumns && (
                 <>
-                  <th className="ts-col-salary" title="«По трудовому договору»: оклад по дням закрытого табеля">Оклад</th>
+                  <th className="ts-col-salary" title={salaryColumnTitle(year, month)}>Оклад</th>
                   <th className="ts-col-salary" title="Выходы сверх нормы и часы сверх нормы дня по корректировкам">Переработка</th>
                 </>
               )}

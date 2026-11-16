@@ -17,7 +17,10 @@ export type StaffCategory = 'office' | 'itr' | 'worker';
 /** Вид оплаты. Единственное, что определяет формулу начисления. */
 export type PayrollCalcType = 'salary' | 'hourly';
 
-/** Округление оклада за неполный месяц, как в ЗУП: до рубля или дневная ставка до копейки × дни. */
+/**
+ * Округление оклада за неполный месяц, как в ЗУП: до рубля или дневная ставка до копейки × дни. С ноября 2026 (оклад по
+ * часам, payroll-calc-hours.rules.ts) daily_kopeck — вся сумма сегмента до копейки один раз.
+ */
 export type ProrationRounding = 'ruble' | 'daily_kopeck';
 
 export const PRORATION_ROUNDINGS: readonly ProrationRounding[] = ['ruble', 'daily_kopeck'];

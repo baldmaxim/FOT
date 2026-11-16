@@ -47,6 +47,7 @@ import { compute1CDayHours, isStudentSchedule, isWorkedDayForOneC, STATUS_LABELS
 import { computeExportWeekendExemptions } from '../timesheet-export.service.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
 import type { ITimesheetVersionPayload, IVersionDayValue } from '../timesheet-version.service.js';
+import { isSalaryByHoursMonth } from './payroll-salary-hours.js';
 
 export type PayrollAbsenceStatus = 'vacation' | 'sick' | 'educational_leave' | 'unpaid';
 
@@ -254,17 +255,24 @@ export const countMonthNormDays = (
 };
 
 /**
- * Норма часов месяца в минутах — знаменатель часовой переработки. Как ЗУП — норма производственного календаря
- * (40-часовая неделя): у Абраменко в августе 2026 график с 7-часовой пятницей (164 ч), а ЗУП заплатил 6 ч ×
- * 250 000 / 168. Календаря нет — часы графика каждого дня + плановые Сб/Вс (как countNormHoursForSchedule); нет
- * графика хоть на день — null.
+ * Норма часов месяца в минутах.
+ * - До ноября 2026 — знаменатель часовой переработки. Как ЗУП — норма производственного календаря (40-часовая неделя):
+ *   у Абраменко в августе 2026 график с 7-часовой пятницей (164 ч), а ЗУП заплатил 6 ч × 250 000 / 168. Календаря нет —
+ *   норма графика.
+ * - С ноября 2026 (оклад по часам, payroll-salary-hours.ts) — всегда норма графика: знаменатель и оклада, и переработки.
+ *   С календарём у графика 10 ч почти весь месяц ушёл бы в переработку (решение пользователя 16.11.2026).
+ * Норма графика — то же правило, что у нормы дней основы: дневная норма из графика каждой даты (предпраздничный −1,
+ * праздники по графику), квота обязательных Сб/Вс и её часы — из графика последнего дня месяца (как
+ * countNormHoursForSchedule). За весь месяц: приём и увольнение норму не режут. Нет графика хоть на день — null.
  */
 export const countMonthNormMinutes = (
   schedules: ReadonlyMap<string, IResolvedSchedule> | undefined,
   month: string,
   calendar: IProductionCalendarMonth | null,
 ): number | null => {
-  if (calendar && Number(calendar.norm_hours) > 0) return Math.round(Number(calendar.norm_hours) * 60);
+  if (!isSalaryByHoursMonth(month) && calendar && Number(calendar.norm_hours) > 0) {
+    return Math.round(Number(calendar.norm_hours) * 60);
+  }
   const [year, mon] = month.split('-').map(Number);
   let hours = 0;
   let last: IResolvedSchedule | undefined;

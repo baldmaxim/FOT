@@ -90,6 +90,16 @@ export const salaryOvertimeNote = (line: IPayrollCalcLine | null | undefined): s
   line?.code === 'overtime' ? calcLineDaysNote(line) : null
 );
 
+/** Первый месяц оклада по часам (сервер, payroll-salary-hours.ts). */
+const SALARY_BY_HOURS_FROM = '2026-11';
+
+/** Подсказка столбца «Оклад»: до ноября 2026 — по дням, с ноября — по часам табеля. */
+export const salaryColumnTitle = (year: number, month: number): string => (
+  `${year}-${String(month).padStart(2, '0')}` >= SALARY_BY_HOURS_FROM
+    ? '«По трудовому договору»: оклад по часам табеля'
+    : '«По трудовому договору»: оклад по дням закрытого табеля'
+);
+
 /** Буквы вкладки «Зарплата», под которыми — часы дня: удалёнка, работа на больничном, учебный день. */
 const SALARY_LETTER_LABELS: Partial<Record<TimesheetStatus, string>> = { remote: 'УУ', sick_worked: 'РБ', study_day: 'УД' };
 

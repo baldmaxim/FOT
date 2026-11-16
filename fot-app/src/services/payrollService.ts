@@ -462,9 +462,34 @@ export type PayrollCalcLinePart =
     daily_rate?: string;
     amount: string;
   }
+  /**
+   * Оклад по часам (с ноября 2026): (оклад + премиальная) × минуты / норма минут графика. whole — весь месяц, оклад как
+   * есть; ruble — до рубля; kopeck — до копейки один раз.
+   */
+  | {
+    kind: 'salary_hours';
+    from: string;
+    to: string;
+    salary: string;
+    bonus: string;
+    minutes: number;
+    norm_minutes: number;
+    rounding: 'whole' | 'ruble' | 'kopeck';
+    amount: string;
+  }
   /** Почасовые условия: ставка ₽/ч × минуты к оплате сегмента / 60. */
   | { kind: 'hourly'; from: string; to: string; rate: string; minutes: number; amount: string }
   | { kind: 'planned_supplement'; from: string; to: string; base: string; days: number; norm: number; amount: string }
+  /** Плановая доплата при окладе по часам: × минуты периода (не больше нормы) / норма минут. */
+  | {
+    kind: 'planned_supplement_hours';
+    from: string;
+    to: string;
+    base: string;
+    minutes: number;
+    norm_minutes: number;
+    amount: string;
+  }
   | { kind: 'overtime_days'; from: string; to: string; salary: string; days: number; norm: number; amount: string }
   | {
     kind: 'overtime_hours';
@@ -515,7 +540,10 @@ export interface IPayrollCalcLine {
   days?: { worked: number; norm: number | null };
   /** Оклад: сколько выходов добрали норму. */
   filled_dayoffs?: number;
-  /** Переработка: часы в будни по корректировкам. */
+  /**
+   * Переработка: часы в будни по корректировкам (с ноября 2026 — все часы переработки, без дней); оклад и «Премиальная»
+   * с ноября — часы вместо дней.
+   */
   hours?: number;
   /** Доля бригады: КТУ и учтённые часы. */
   brigade?: { ktu: string; hours: number; fixed?: true };

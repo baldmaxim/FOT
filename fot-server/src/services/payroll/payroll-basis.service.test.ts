@@ -440,6 +440,47 @@ describe('основа расчёта: норма дней месяца', () => 
     expect(countMonthNormMinutes(undefined, '2026-09', null)).toBeNull();
   });
 
+  describe('с ноября 2026 — норма часов графика (оклад по часам)', () => {
+    const november: IProductionCalendarMonth = {
+      year: 2026, month: 11, norm_days: 20, norm_hours: 159, holidays: ['2026-11-04'], mandatory_holidays: [],
+      pre_holidays: ['2026-11-03'],
+    };
+    const novemberDates = Array.from({ length: 30 }, (_, i) => `2026-11-${String(i + 1).padStart(2, '0')}`);
+    const novemberOf = (pick: (date: string) => IResolvedSchedule): Map<string, IResolvedSchedule> => (
+      new Map(novemberDates.map(date => [date, pick(date)]))
+    );
+    // ЛИНИЯ: 5 дн. по 10 ч + 2 плановые субботы, праздники не учитывает.
+    const line10 = { ...fiveTwo, work_hours: 10, expected_saturdays_per_month: 2, respects_holidays: false };
+    const noQuota8 = { ...fiveTwo, expected_saturdays_per_month: 0 };
+
+    it('ЛИНИЯ 10 ч + 2 субботы: 21 будний × 10 + 2 × 10 = 230 ч, а не 159 ч календаря', () => {
+      expect(countMonthNormMinutes(novemberOf(() => line10), '2026-11', november)).toBe(230 * 60);
+    });
+
+    it('5+2 по 8 ч с праздниками: 20 дн. × 8 − 1 ч предпраздничного = 159 ч; пятница 7 ч — ещё −4 ч', () => {
+      expect(countMonthNormMinutes(novemberOf(() => fiveTwo), '2026-11', november)).toBe(159 * 60);
+      const shortFriday = {
+        ...fiveTwo, day_overrides: { 5: { work_start: '09:00', work_end: '17:00', work_hours: 7 } },
+      };
+      expect(countMonthNormMinutes(novemberOf(() => shortFriday), '2026-11', november)).toBe(155 * 60);
+    });
+
+    it('смена графика посреди месяца: дни — по графику даты, квота суббот и её часы — графика последнего дня', () => {
+      // С квотой (10 ч) → без квоты (8 ч) с 16.11: 1–15 — 10 будних (4.11 у ЛИНИИ рабочий) по 10 ч; 16–30 — 11 будних по 8 ч.
+      const toNoQuota = novemberOf(date => (date < '2026-11-16' ? line10 : noQuota8));
+      expect(countMonthNormMinutes(toNoQuota, '2026-11', november)).toBe((10 * 10 + 11 * 8) * 60);
+      // Обратно: 1–15 — 9 будних по 8 ч (4.11 праздник, 3.11 −1 ч); 16–30 — 11 по 10 ч + 2 субботы × 10 ч.
+      const toQuota = novemberOf(date => (date < '2026-11-16' ? noQuota8 : line10));
+      expect(countMonthNormMinutes(toQuota, '2026-11', november)).toBe((9 * 8 - 1 + 11 * 10 + 2 * 10) * 60);
+      expect(countMonthNormDays(toQuota, '2026-11', november)).toBe(9 + 11 + 2);
+    });
+
+    it('нет графика хоть на день — null, календарь не подставляется', () => {
+      const partial = new Map(novemberDates.slice(1).map(date => [date, line10]));
+      expect(countMonthNormMinutes(partial, '2026-11', november)).toBeNull();
+    });
+  });
+
   it('нет графика хоть на день — норма календаря, нет и её — null', () => {
     const partial = new Map(septemberDates.slice(1).map(date => [date, fiveTwo]));
     expect(countMonthNormDays(partial, '2026-09', calendar)).toBe(22);

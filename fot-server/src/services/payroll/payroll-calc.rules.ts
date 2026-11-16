@@ -34,15 +34,34 @@
  * выдаётся.
  * Под строками — части (parts): из чего сумма, те же числа, что в ней.
  *
+ * С ноября 2026 оклад — по часам (payroll-salary-hours.ts, решения пользователя 16.11.2026): месяц с окладной строкой
+ * условий считается веткой payroll-calc-hours.rules.ts — оклад, «Премиальная» и «Переработка» в часах, норма — часы
+ * графика (norm_minutes основы). Полностью почасовой месяц и месяцы до ноября — правила выше, без изменений.
+ *
  * Сегменты: соседние строки условий с одинаковыми видом оплаты, окладом, ставкой, премией и округлением склеиваются —
  * смена одной компенсации даёт новую строку условий, но не новую границу округления.
  * Деньги — целые копейки (Math.round(x * 100), как во всей «Зарплате»), наружу — строки с двумя знаками.
  */
 import { BRIGADE_WHOLE_FIXED_KEY, fixedShareKtus } from './brigade-salary.calc.js';
 import type { PayrollAbsenceDays } from './payroll-basis.service.js';
+import { buildSalaryHoursLines } from './payroll-calc-hours.rules.js';
+import {
+  cents,
+  clampPeriod,
+  dailyKopeckRateCents,
+  hourlyAmountCents,
+  inRange,
+  prorateDailyKopeckCents,
+  prorateMinutesCents,
+  prorateToRubleCents,
+  rateUnits,
+} from './payroll-calc-money.js';
 import type { IPayslipRateAllowance } from './payroll-payslip.rules.js';
-import { centsToAmount, toCents } from './payroll-summary.attribution.js';
+import { isSalaryByHoursMonth } from './payroll-salary-hours.js';
+import { centsToAmount } from './payroll-summary.attribution.js';
 import type { ProrationRounding } from './payroll-terms.service.js';
+
+export { hourlyAmountCents, prorateDailyKopeckCents, prorateMinutesCents, prorateToRubleCents } from './payroll-calc-money.js';
 
 export type PayrollCalcLineCode =
   | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave';
@@ -76,9 +95,35 @@ export type PayrollCalcLinePart =
     daily_rate?: string;
     amount: string;
   }
+  /**
+   * Оклад по часам (с ноября 2026): (оклад + премиальная) × минуты сегмента / норма минут графика. whole — весь месяц
+   * одним сегментом и минуты = норме, оклад как есть; ruble — до рубля; kopeck — до копейки один раз (признак условий
+   * daily_kopeck).
+   */
+  | {
+    kind: 'salary_hours';
+    from: string;
+    to: string;
+    salary: string;
+    bonus: string;
+    minutes: number;
+    norm_minutes: number;
+    rounding: 'whole' | 'ruble' | 'kopeck';
+    amount: string;
+  }
   /** Почасовые условия: ставка ₽/ч (до 4 знаков) × минуты к оплате сегмента / 60. */
   | { kind: 'hourly'; from: string; to: string; rate: string; minutes: number; amount: string }
   | { kind: 'planned_supplement'; from: string; to: string; base: string; days: number; norm: number; amount: string }
+  /** Плановая доплата при окладе по часам: × минуты в её периоде (не больше нормы) / норма минут, до рубля. */
+  | {
+    kind: 'planned_supplement_hours';
+    from: string;
+    to: string;
+    base: string;
+    minutes: number;
+    norm_minutes: number;
+    amount: string;
+  }
   | { kind: 'overtime_days'; from: string; to: string; salary: string; days: number; norm: number; amount: string }
   | {
     kind: 'overtime_hours';
@@ -428,16 +473,6 @@ const nextIsoDay = (iso: string): string => {
   return date.toISOString().slice(0, 10);
 };
 
-const cents = (amount: string | null): number => (amount === null ? 0 : toCents(amount));
-
-/** Ставка '730.5000' → 7 305 000 десятитысячных рубля. */
-const rateUnits = (rate: string | null): number => (rate === null ? 0 : Math.round(Number(rate) * 10_000));
-
-/** Ставка × минуты / 60, половина вверх до копейки; в копейках. BigInt: ставка до 12 цифр × минуты не влезает в double. */
-export const hourlyAmountCents = (units: number, minutes: number): number => Number(
-  (2n * BigInt(units) * BigInt(minutes) + 6_000n) / 12_000n,
-);
-
 /** Строки условий → сегменты: соседние без смены вида оплаты, оклада, ставки, премии и округления — один сегмент. */
 export const mergeTermsSegments = (rows: readonly ICalcTermsRow[]): ICalcSegment[] => {
   const segments: ICalcSegment[] = [];
@@ -470,33 +505,6 @@ export const mergeTermsSegments = (rows: readonly ICalcTermsRow[]): ICalcSegment
   }
   return segments;
 };
-
-const inRange = (date: string, from: string, to: string | null): boolean => date >= from && (to === null || date <= to);
-
-/** Сумма × дни / норма, половина вверх до рубля; в копейках. */
-export const prorateToRubleCents = (amountCents: number, days: number, norm: number): number => {
-  const normCents = norm * 100;
-  return Math.floor((2 * amountCents * days + normCents) / (2 * normCents)) * 100;
-};
-
-/** Сумма × минуты / норма минут, половина вверх до копейки; в копейках. */
-export const prorateMinutesCents = (amountCents: number, minutes: number, normMinutes: number): number => (
-  Math.floor((2 * amountCents * minutes + normMinutes) / (2 * normMinutes))
-);
-
-/** Дневная ставка до копейки, половина вверх; в копейках. */
-const dailyKopeckRateCents = (amountCents: number, norm: number): number => Math.floor((2 * amountCents + norm) / (2 * norm));
-
-/** Дневная ставка до копейки (половина вверх) × дни; в копейках. */
-export const prorateDailyKopeckCents = (amountCents: number, days: number, norm: number): number => (
-  dailyKopeckRateCents(amountCents, norm) * days
-);
-
-/** Период условий или доплаты в границах месяца — для подписи части. */
-const clampPeriod = (from: string, to: string | null, monthStart: string, monthEnd: string): { from: string; to: string } => ({
-  from: from < monthStart ? monthStart : from,
-  to: to === null || to > monthEnd ? monthEnd : to,
-});
 
 /**
  * Дни оклада и выходы «Переработки»: рабочие дни по порядку до нормы, недостающее — первыми выходами месяца;
@@ -564,195 +572,214 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     (facts.overtimeStops ?? []).some(stop => inRange(date, stop.date_from, stop.date_to))
   );
 
-  // Сначала даты по условиям: норма, её добор и переработка — только среди окладных и дат без условий.
-  const isHourlyDate = (date: string): boolean => segmentOf(date)?.calcType === 'hourly';
-  const salaryWorkdays = facts.workdayDates.filter(date => !isHourlyDate(date));
-  const salaryDayoffs = facts.dayoffDates.filter(date => !isHourlyDate(date));
-  const hourlyDates = [...facts.workdayDates, ...facts.dayoffDates].filter(isHourlyDate).sort();
-  const dayoffs = new Set(facts.dayoffDates);
+  // С ноября 2026 месяц с окладом — по часам (payroll-calc-hours.rules.ts); иначе — по дням, как было.
+  const salaryByHours = isSalaryByHoursMonth(facts.monthStart) && segments.some(segment => segment.calcType === 'salary');
+  if (salaryByHours) {
+    const byHours = buildSalaryHoursLines({
+      monthStart: facts.monthStart,
+      monthEnd: facts.monthEnd,
+      normMinutes: facts.normMinutes ?? null,
+      segments,
+      workdayDates: facts.workdayDates,
+      dayoffDates: facts.dayoffDates,
+      paidMinutes: facts.paidMinutes ?? null,
+      overtimeMinutes: facts.overtimeMinutes ?? {},
+      overtimeStops: facts.overtimeStops ?? [],
+      plannedSupplements: facts.plannedSupplements,
+    });
+    lines.push(...byHours.lines);
+    for (const code of byHours.missing) missing.add(code);
+  } else {
+    // Сначала даты по условиям: норма, её добор и переработка — только среди окладных и дат без условий.
+    const isHourlyDate = (date: string): boolean => segmentOf(date)?.calcType === 'hourly';
+    const salaryWorkdays = facts.workdayDates.filter(date => !isHourlyDate(date));
+    const salaryDayoffs = facts.dayoffDates.filter(date => !isHourlyDate(date));
+    const hourlyDates = [...facts.workdayDates, ...facts.dayoffDates].filter(isHourlyDate).sort();
+    const dayoffs = new Set(facts.dayoffDates);
 
-  /** Минуты почасовой даты; null — определить нельзя. «Без переработки» снимает выход и часы переработки дня. */
-  const paidMinutesOf = (date: string): number | null => {
-    const stopped = overtimeStopped(date);
-    if (stopped && dayoffs.has(date)) return 0;
-    const minutes = facts.paidMinutes?.[date];
-    if (minutes === undefined) return null;
-    return stopped ? Math.max(0, minutes - (facts.overtimeMinutes?.[date] ?? 0)) : minutes;
-  };
+    /** Минуты почасовой даты; null — определить нельзя. «Без переработки» снимает выход и часы переработки дня. */
+    const paidMinutesOf = (date: string): number | null => {
+      const stopped = overtimeStopped(date);
+      if (stopped && dayoffs.has(date)) return 0;
+      const minutes = facts.paidMinutes?.[date];
+      if (minutes === undefined) return null;
+      return stopped ? Math.max(0, minutes - (facts.overtimeMinutes?.[date] ?? 0)) : minutes;
+    };
 
-  const hasPlannedHourlyDays = facts.plannedSupplements.some(period => (
-    hourlyDates.some(date => inRange(date, period.date_from, period.date_to))
-  ));
-  if (norm === null && (salaryWorkdays.length > 0 || salaryDayoffs.length > 0 || hasPlannedHourlyDays)) {
-    missing.add('no_norm');
-  }
-  const salarySplit: { contract: string[]; overtime: string[] } = norm === null
-    ? { contract: [], overtime: [] }
-    : splitByNorm(salaryWorkdays, salaryDayoffs, norm);
-  const { contract: contractDates, overtime: overtimeDates } = salarySplit;
+    const hasPlannedHourlyDays = facts.plannedSupplements.some(period => (
+      hourlyDates.some(date => inRange(date, period.date_from, period.date_to))
+    ));
+    if (norm === null && (salaryWorkdays.length > 0 || salaryDayoffs.length > 0 || hasPlannedHourlyDays)) {
+      missing.add('no_norm');
+    }
+    const salarySplit: { contract: string[]; overtime: string[] } = norm === null
+      ? { contract: [], overtime: [] }
+      : splitByNorm(salaryWorkdays, salaryDayoffs, norm);
+    const { contract: contractDates, overtime: overtimeDates } = salarySplit;
 
-  // Оклад и почасовая: по сегментам, каждый по своим датам.
-  const wholeMonthSegment = segments.length === 1
-    && segments[0].from <= facts.monthStart
-    && (segments[0].to === null || segments[0].to >= facts.monthEnd);
-  let contractCents = 0;
-  let contractKnown = false;
-  let contractUnknown = false;
-  let hourlyMinutes = 0;
-  const contractParts: PayrollCalcLinePart[] = [];
-  for (const segment of segments) {
-    if (segment.calcType === 'hourly') {
-      const dates = hourlyDates.filter(date => inRange(date, segment.from, segment.to));
-      if (dates.length === 0) continue;
-      const dayMinutes = dates.map(paidMinutesOf);
-      if (dayMinutes.some(minutes => minutes === null)) {
-        contractUnknown = true;
-        missing.add('hourly');
+    // Оклад и почасовая: по сегментам, каждый по своим датам.
+    const wholeMonthSegment = segments.length === 1
+      && segments[0].from <= facts.monthStart
+      && (segments[0].to === null || segments[0].to >= facts.monthEnd);
+    let contractCents = 0;
+    let contractKnown = false;
+    let contractUnknown = false;
+    let hourlyMinutes = 0;
+    const contractParts: PayrollCalcLinePart[] = [];
+    for (const segment of segments) {
+      if (segment.calcType === 'hourly') {
+        const dates = hourlyDates.filter(date => inRange(date, segment.from, segment.to));
+        if (dates.length === 0) continue;
+        const dayMinutes = dates.map(paidMinutesOf);
+        if (dayMinutes.some(minutes => minutes === null)) {
+          contractUnknown = true;
+          missing.add('hourly');
+          continue;
+        }
+        const minutes = dayMinutes.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+        const partCents = hourlyAmountCents(segment.hourlyRateUnits, minutes);
+        contractKnown = true;
+        contractCents += partCents;
+        hourlyMinutes += minutes;
+        contractParts.push({
+          kind: 'hourly',
+          ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+          rate: (segment.hourlyRateUnits / 10_000).toFixed(4),
+          minutes,
+          amount: centsToAmount(partCents),
+        });
         continue;
       }
-      const minutes = dayMinutes.reduce<number>((sum, value) => sum + (value ?? 0), 0);
-      const partCents = hourlyAmountCents(segment.hourlyRateUnits, minutes);
-      contractKnown = true;
-      contractCents += partCents;
-      hourlyMinutes += minutes;
-      contractParts.push({
-        kind: 'hourly',
-        ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
-        rate: (segment.hourlyRateUnits / 10_000).toFixed(4),
-        minutes,
-        amount: centsToAmount(partCents),
-      });
-      continue;
-    }
-    if (norm === null) continue;
-    const days = contractDates.filter(date => inRange(date, segment.from, segment.to)).length;
-    if (days === 0) continue;
-    const base = segment.salaryCents + segment.bonusCents;
-    contractKnown = true;
-    const rounding = wholeMonthSegment && days === norm ? 'whole' : segment.rounding;
-    const partCents = rounding === 'whole' ? base
-      : rounding === 'daily_kopeck' ? prorateDailyKopeckCents(base, days, norm)
-        : prorateToRubleCents(base, days, norm);
-    contractCents += partCents;
-    contractParts.push({
-      kind: 'salary',
-      ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
-      salary: centsToAmount(segment.salaryCents),
-      bonus: centsToAmount(segment.bonusCents),
-      days,
-      norm,
-      rounding,
-      ...(rounding === 'daily_kopeck' ? { daily_rate: centsToAmount(dailyKopeckRateCents(base, norm)) } : {}),
-      amount: centsToAmount(partCents),
-    });
-  }
-  if (contractDates.some(date => segmentOf(date) === null)) missing.add('no_terms');
-  if (contractKnown || contractUnknown) {
-    const filledDayoffs = contractDates.filter(date => dayoffs.has(date)).length;
-    lines.push({
-      code: 'contract',
-      amount: contractUnknown && !contractKnown ? null : centsToAmount(contractCents),
-      days: { worked: contractDates.length + hourlyDates.length, norm },
-      ...(filledDayoffs > 0 ? { filled_dayoffs: filledDayoffs } : {}),
-      ...(hourlyMinutes > 0 ? { hours: Math.round((hourlyMinutes / 60) * 100) / 100 } : {}),
-      parts: contractParts,
-    });
-  }
-
-  // Выходы сверх нормы — только при норме дней.
-  let overtimeDays: string[] = [];
-  if (norm !== null) {
-    // Премиальная: плановая доплата пропорционально дням оклада и почасовым дням в её периоде, не больше нормы.
-    const bonusDates = [...contractDates, ...hourlyDates];
-    let bonusCents = 0;
-    const bonusParts: PayrollCalcLinePart[] = [];
-    for (const period of facts.plannedSupplements) {
-      const days = Math.min(bonusDates.filter(date => inRange(date, period.date_from, period.date_to)).length, norm);
+      if (norm === null) continue;
+      const days = contractDates.filter(date => inRange(date, segment.from, segment.to)).length;
       if (days === 0) continue;
-      const wholeMonth = period.date_from <= facts.monthStart && (period.date_to === null || period.date_to >= facts.monthEnd);
-      const partCents = wholeMonth && days === norm ? cents(period.amount) : prorateToRubleCents(cents(period.amount), days, norm);
-      bonusCents += partCents;
-      bonusParts.push({
-        kind: 'planned_supplement',
-        ...clampPeriod(period.date_from, period.date_to, facts.monthStart, facts.monthEnd),
-        base: centsToAmount(cents(period.amount)),
+      const base = segment.salaryCents + segment.bonusCents;
+      contractKnown = true;
+      const rounding = wholeMonthSegment && days === norm ? 'whole' : segment.rounding;
+      const partCents = rounding === 'whole' ? base
+        : rounding === 'daily_kopeck' ? prorateDailyKopeckCents(base, days, norm)
+          : prorateToRubleCents(base, days, norm);
+      contractCents += partCents;
+      contractParts.push({
+        kind: 'salary',
+        ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+        salary: centsToAmount(segment.salaryCents),
+        bonus: centsToAmount(segment.bonusCents),
         days,
         norm,
+        rounding,
+        ...(rounding === 'daily_kopeck' ? { daily_rate: centsToAmount(dailyKopeckRateCents(base, norm)) } : {}),
         amount: centsToAmount(partCents),
       });
     }
-    if (bonusCents > 0) {
+    if (contractDates.some(date => segmentOf(date) === null)) missing.add('no_terms');
+    if (contractKnown || contractUnknown) {
+      const filledDayoffs = contractDates.filter(date => dayoffs.has(date)).length;
       lines.push({
-        code: 'bonus',
-        amount: centsToAmount(bonusCents),
-        days: { worked: Math.min(bonusDates.length, norm), norm },
-        parts: bonusParts,
+        code: 'contract',
+        amount: contractUnknown && !contractKnown ? null : centsToAmount(contractCents),
+        days: { worked: contractDates.length + hourlyDates.length, norm },
+        ...(filledDayoffs > 0 ? { filled_dayoffs: filledDayoffs } : {}),
+        ...(hourlyMinutes > 0 ? { hours: Math.round((hourlyMinutes / 60) * 100) / 100 } : {}),
+        parts: contractParts,
       });
     }
 
-    // «Без переработки» — после добора нормы: выходы в окладе остаются.
-    overtimeDays = overtimeDates.filter(date => !overtimeStopped(date));
-  }
-
-  // Переработка: выходы сверх нормы — днём, будни по корректировкам — часами; по окладу своей даты, одинарно.
-  const daysBySegment = new Map<ICalcSegment, number>();
-  for (const date of overtimeDays) {
-    const segment = segmentOf(date);
-    if (!segment) missing.add('no_terms');
-    else daysBySegment.set(segment, (daysBySegment.get(segment) ?? 0) + 1);
-  }
-  const minutesBySegment = new Map<ICalcSegment, number>();
-  // Часы почасовых дней уже в их сумме.
-  const overtimeMinutes = Object.entries(facts.overtimeMinutes ?? {})
-    .filter(([date, minutes]) => minutes > 0 && !overtimeStopped(date) && !isHourlyDate(date));
-  const normMinutes = facts.normMinutes !== null && facts.normMinutes !== undefined && facts.normMinutes > 0
-    ? facts.normMinutes
-    : null;
-  if (overtimeMinutes.length > 0 && normMinutes === null) missing.add('no_norm');
-  for (const [date, minutes] of normMinutes === null ? [] : overtimeMinutes) {
-    const segment = segmentOf(date);
-    if (!segment) missing.add('no_terms');
-    else minutesBySegment.set(segment, (minutesBySegment.get(segment) ?? 0) + minutes);
-  }
-  if (daysBySegment.size > 0 || minutesBySegment.size > 0) {
-    let overtimeCents = 0;
-    const overtimeParts: PayrollCalcLinePart[] = [];
-    for (const [segment, count] of daysBySegment) {
-      if (norm !== null) {
-        const partCents = prorateToRubleCents(segment.salaryCents, count, norm);
-        overtimeCents += partCents;
-        overtimeParts.push({
-          kind: 'overtime_days',
-          ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
-          salary: centsToAmount(segment.salaryCents),
-          days: count,
+    // Выходы сверх нормы — только при норме дней.
+    let overtimeDays: string[] = [];
+    if (norm !== null) {
+      // Премиальная: плановая доплата пропорционально дням оклада и почасовым дням в её периоде, не больше нормы.
+      const bonusDates = [...contractDates, ...hourlyDates];
+      let bonusCents = 0;
+      const bonusParts: PayrollCalcLinePart[] = [];
+      for (const period of facts.plannedSupplements) {
+        const days = Math.min(bonusDates.filter(date => inRange(date, period.date_from, period.date_to)).length, norm);
+        if (days === 0) continue;
+        const wholeMonth = period.date_from <= facts.monthStart && (period.date_to === null || period.date_to >= facts.monthEnd);
+        const partCents = wholeMonth && days === norm ? cents(period.amount) : prorateToRubleCents(cents(period.amount), days, norm);
+        bonusCents += partCents;
+        bonusParts.push({
+          kind: 'planned_supplement',
+          ...clampPeriod(period.date_from, period.date_to, facts.monthStart, facts.monthEnd),
+          base: centsToAmount(cents(period.amount)),
+          days,
           norm,
           amount: centsToAmount(partCents),
         });
       }
-    }
-    for (const [segment, minutes] of minutesBySegment) {
-      if (normMinutes !== null) {
-        const partCents = prorateMinutesCents(segment.salaryCents, minutes, normMinutes);
-        overtimeCents += partCents;
-        overtimeParts.push({
-          kind: 'overtime_hours',
-          ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
-          salary: centsToAmount(segment.salaryCents),
-          minutes,
-          norm_minutes: normMinutes,
-          amount: centsToAmount(partCents),
+      if (bonusCents > 0) {
+        lines.push({
+          code: 'bonus',
+          amount: centsToAmount(bonusCents),
+          days: { worked: Math.min(bonusDates.length, norm), norm },
+          parts: bonusParts,
         });
       }
+
+      // «Без переработки» — после добора нормы: выходы в окладе остаются.
+      overtimeDays = overtimeDates.filter(date => !overtimeStopped(date));
     }
-    const hours = [...minutesBySegment.values()].reduce((sum, minutes) => sum + minutes, 0) / 60;
-    lines.push({
-      code: 'overtime',
-      amount: centsToAmount(overtimeCents),
-      days: { worked: overtimeDays.length, norm },
-      ...(hours > 0 ? { hours: Math.round(hours * 100) / 100 } : {}),
-      parts: overtimeParts,
-    });
+
+    // Переработка: выходы сверх нормы — днём, будни по корректировкам — часами; по окладу своей даты, одинарно.
+    const daysBySegment = new Map<ICalcSegment, number>();
+    for (const date of overtimeDays) {
+      const segment = segmentOf(date);
+      if (!segment) missing.add('no_terms');
+      else daysBySegment.set(segment, (daysBySegment.get(segment) ?? 0) + 1);
+    }
+    const minutesBySegment = new Map<ICalcSegment, number>();
+    // Часы почасовых дней уже в их сумме.
+    const overtimeMinutes = Object.entries(facts.overtimeMinutes ?? {})
+      .filter(([date, minutes]) => minutes > 0 && !overtimeStopped(date) && !isHourlyDate(date));
+    const normMinutes = facts.normMinutes !== null && facts.normMinutes !== undefined && facts.normMinutes > 0
+      ? facts.normMinutes
+      : null;
+    if (overtimeMinutes.length > 0 && normMinutes === null) missing.add('no_norm');
+    for (const [date, minutes] of normMinutes === null ? [] : overtimeMinutes) {
+      const segment = segmentOf(date);
+      if (!segment) missing.add('no_terms');
+      else minutesBySegment.set(segment, (minutesBySegment.get(segment) ?? 0) + minutes);
+    }
+    if (daysBySegment.size > 0 || minutesBySegment.size > 0) {
+      let overtimeCents = 0;
+      const overtimeParts: PayrollCalcLinePart[] = [];
+      for (const [segment, count] of daysBySegment) {
+        if (norm !== null) {
+          const partCents = prorateToRubleCents(segment.salaryCents, count, norm);
+          overtimeCents += partCents;
+          overtimeParts.push({
+            kind: 'overtime_days',
+            ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+            salary: centsToAmount(segment.salaryCents),
+            days: count,
+            norm,
+            amount: centsToAmount(partCents),
+          });
+        }
+      }
+      for (const [segment, minutes] of minutesBySegment) {
+        if (normMinutes !== null) {
+          const partCents = prorateMinutesCents(segment.salaryCents, minutes, normMinutes);
+          overtimeCents += partCents;
+          overtimeParts.push({
+            kind: 'overtime_hours',
+            ...clampPeriod(segment.from, segment.to, facts.monthStart, facts.monthEnd),
+            salary: centsToAmount(segment.salaryCents),
+            minutes,
+            norm_minutes: normMinutes,
+            amount: centsToAmount(partCents),
+          });
+        }
+      }
+      const hours = [...minutesBySegment.values()].reduce((sum, minutes) => sum + minutes, 0) / 60;
+      lines.push({
+        code: 'overtime',
+        amount: centsToAmount(overtimeCents),
+        days: { worked: overtimeDays.length, norm },
+        ...(hours > 0 ? { hours: Math.round(hours * 100) / 100 } : {}),
+        parts: overtimeParts,
+      });
+    }
   }
 
   const shares = facts.brigadeShares ?? [];

@@ -97,6 +97,19 @@ describe('sumCalcColumns', () => {
     });
   });
 
+  it('ноябрь 2026 (оклад по часам): переработка без дней — выходы в часах, дней 0', () => {
+    const november = closed({
+      lines: [
+        { code: 'contract', amount: '160000.00', hours: 230 },
+        { code: 'overtime', amount: '8347.82', hours: 12 },
+      ],
+      net: '168347.82',
+    });
+    expect(sumCalcColumns([['2026-11', november]])).toMatchObject({
+      timesheet: '160000.00', overtime: '8347.82', overtime_days: 0, overtime_hours: 12, net: '168347.82',
+    });
+  });
+
   it('раскрытие «Доплат» и «Удержаний (ФОТ)»: плановая + разовая = доплаты, виды по месяцам в копейках = удержания', () => {
     const result = sumCalcColumns([
       ['2026-08', closed({

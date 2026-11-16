@@ -185,6 +185,10 @@ export const salaryPartsOf = (lines: readonly IPayrollCalcLine[]): IEmployeePays
     if (part.kind === 'salary') {
       return [{ calc_type: 'salary', from: part.from, to: part.to, amount: part.salary, days: part.days }];
     }
+    // Оклад по часам (с ноября 2026): дней у части нет.
+    if (part.kind === 'salary_hours') {
+      return [{ calc_type: 'salary', from: part.from, to: part.to, amount: part.salary, days: null }];
+    }
     if (part.kind === 'hourly') {
       return [{ calc_type: 'hourly', from: part.from, to: part.to, amount: part.rate, days: null }];
     }

@@ -176,6 +176,24 @@ describe('buildPayslipFromFot', () => {
     ]);
   });
 
+  it('оклад по часам (с ноября 2026) — часть оклада без дней', () => {
+    const slip = buildPayslipFromFot(header({ month: '2026-11' }), {
+      ...fotCalc,
+      lines: [{
+        code: 'contract',
+        amount: '158609.00',
+        hours: 228,
+        parts: [{
+          kind: 'salary_hours', from: '2026-11-01', to: '2026-11-30', salary: '160000.00', bonus: '0.00', minutes: 13680,
+          norm_minutes: 13800, rounding: 'ruble', amount: '158609.00',
+        }],
+      }],
+    }, []);
+    expect(slip.salary_parts).toEqual([
+      { calc_type: 'salary', from: '2026-11-01', to: '2026-11-30', amount: '160000.00', days: null },
+    ]);
+  });
+
   it('ведомости есть — сальдо по строкам листка', () => {
     const slip = buildPayslipFromFot(header({ month: '2026-10' }), fotCalc, [payout({ amount: '83230.00' })]);
     expect(slip.balance).toBe('100000.00');

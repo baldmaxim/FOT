@@ -268,6 +268,53 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
   });
 });
 
+describe('«К выплате (ФОТ)»: оклад по часам (с ноября 2026)', () => {
+  const salaryHours = {
+    kind: 'salary_hours' as const, from: '2026-11-01', to: '2026-11-30', salary: '160000.00', bonus: '0.00',
+    minutes: 13680, norm_minutes: 13800, rounding: 'ruble' as const, amount: '158609.00',
+  };
+
+  it('оклад — «оклад 160 000,00 × 228 / 230 ч», с премиальной — в скобках; у строки часы без дней', () => {
+    const line: IPayrollCalcLine = { code: 'contract', amount: '158609.00', hours: 228, parts: [salaryHours] };
+    expect(calcLineFormula(line)).toEqual([`оклад 160${NBSP}000,00 × 228 / 230 ч`]);
+    expect(calcLineDaysNote(line)).toBe('228 ч');
+    expect(calcLineFormula({ ...line, parts: [{ ...salaryHours, salary: '120000.00', bonus: '40000.00' }] }))
+      .toEqual([`(оклад 120${NBSP}000,00 + премиальная 40${NBSP}000,00) × 228 / 230 ч`]);
+  });
+
+  it('две окладные строки и почасовая — по подстроке на период с суммой', () => {
+    expect(calcLineFormula({
+      code: 'contract',
+      amount: '160478.00',
+      hours: 230,
+      parts: [
+        { ...salaryHours, to: '2026-11-15', minutes: 7200, amount: '83478.00' },
+        { kind: 'hourly', from: '2026-11-16', to: '2026-11-30', rate: '700.0000', minutes: 6600, amount: '77000.00' },
+      ],
+    })).toEqual([
+      `с 01.11 по 15.11: оклад 160${NBSP}000,00 × 120 / 230 ч = 83${NBSP}478,00`,
+      `с 16.11 по 30.11: 110 ч × 700 ₽/ч = 77${NBSP}000,00`,
+    ]);
+  });
+
+  it('плановая доплата и переработка — часами; переработка без «вых.»', () => {
+    expect(calcLineFormula({ code: 'bonus', amount: '9565.00', hours: 230, parts: [{
+      kind: 'planned_supplement_hours', from: '2026-11-16', to: '2026-11-30', base: '20000.00', minutes: 6600,
+      norm_minutes: 13800, amount: '9565.00',
+    }] })).toEqual([`плановая доплата 20${NBSP}000,00 × 110 / 230 ч`]);
+    const overtime: IPayrollCalcLine = { code: 'overtime', amount: '6956.52', hours: 10, parts: [{
+      kind: 'overtime_hours', from: '2026-11-01', to: '2026-11-30', salary: '160000.00', minutes: 600, norm_minutes: 13800,
+      amount: '6956.52',
+    }] };
+    expect(calcLineFormula(overtime)).toEqual([`10 ч × 160${NBSP}000,00 / 230 ч`]);
+    expect(calcLineDaysNote(overtime)).toBe('10 ч');
+  });
+
+  it('нет часов табеля — так и подписано', () => {
+    expect(calcMissingNote(['hourly'])).toBe('без: нет часов табеля');
+  });
+});
+
 describe('«К выплате (ФОТ)»: отпускные и больничные из 1С', () => {
   // Гринёв, сентябрь 2026: оклад 120 000 + проезд 1 820, отпуск 9 дн. по ведомости «Отпуска» 59 709,13.
   const vacation: IPayrollCalcLine = {

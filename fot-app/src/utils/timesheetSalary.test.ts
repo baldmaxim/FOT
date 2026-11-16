@@ -5,7 +5,7 @@ import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../types/
 import {
   averagePerHour, averageTitle, countedHoursLabel, describeSalaryState, displayedHours, employeeCountedMinutes, findSalaryRow, formatDayHours,
   formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly, isSalaryRowMuted, memberAverage, missingObjectsNote, objectAverage,
-  objectCountedMinutes, objectShareTitle, rowAverage, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote, salaryOvertimeNote,
+  objectCountedMinutes, objectShareTitle, rowAverage, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote, salaryOvertimeNote, salaryColumnTitle,
   sortSalaryRows, totalDaysOfEmployee, KTU_OPTIONS, shareConflictText, objectShareMode, totalShareMode, objectFixedTotal,
   shareFieldValue,
 } from './timesheetSalary';
@@ -122,6 +122,13 @@ describe('«Оклад» и «Переработка» отдела', () => {
     expect(salaryOvertimeNote(contract)).toBeNull();
     expect(salaryOvertimeNote(null)).toBeNull();
     expect(salaryOvertimeNote(undefined)).toBeNull();
+  });
+
+  it('с ноября 2026 переработка только часами (выходы тоже), подсказка «Оклада» — по часам табеля', () => {
+    expect(salaryOvertimeNote({ code: 'overtime', amount: '6956.52', hours: 10 })).toBe('10 ч');
+    expect(salaryColumnTitle(2026, 11)).toBe('«По трудовому договору»: оклад по часам табеля');
+    expect(salaryColumnTitle(2027, 1)).toBe('«По трудовому договору»: оклад по часам табеля');
+    expect(salaryColumnTitle(2026, 10)).toBe('«По трудовому договору»: оклад по дням закрытого табеля');
   });
 });
 

@@ -423,6 +423,41 @@ describe('закрытый месяц', () => {
   });
 });
 
+describe('ноябрь 2026: оклад по часам', () => {
+  it('предварительно по живому табелю и по закрытой основе с теми же днями — одна сумма, полная норма графика', async () => {
+    const days = weekdays('2026-11');
+    const paidMinutes = { ...Object.fromEntries(days.map(date => [date, 600])), '2026-11-10': 480 };
+    const norm = days.length * 600;
+    live.fetchTimesheetDataForEmployees.mockResolvedValue(liveData({ 8: days }));
+    basisDrafts.buildBasisDraftsForDays.mockImplementation(async (exec: unknown, source: Parameters<typeof draftsFromDays>[1]) => (
+      (await draftsFromDays(exec, source)).map(draft => ({ ...draft, normDays: days.length, normMinutes: norm, paidMinutes }))
+    ));
+
+    const preliminary = (await getPreliminaryPayoutForEmployees([8], '2026-11', req)).get(8);
+
+    // 110 000 × 12 480 / 12 600 = 108 952,38 → 108 952.
+    expect(preliminary).toMatchObject({ state: 'preliminary', net: '108952.00', missing: [] });
+    expect(preliminary?.state === 'preliminary' && preliminary.lines).toEqual([{
+      code: 'contract',
+      amount: '108952.00',
+      hours: 208,
+      parts: [{
+        kind: 'salary_hours', from: '2026-11-01', to: '2026-11-30', salary: '110000.00', bonus: '0.00',
+        minutes: norm - 120, norm_minutes: norm, rounding: 'ruble', amount: '108952.00',
+      }],
+    }]);
+
+    monthBasis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [{
+      basisId: 1, versionId: 10, coverFrom: '2026-11-01', coverTo: '2026-11-30', normDays: days.length, normMinutes: norm,
+      workdayDates: days, dayoffDates: [], absenceDays: {}, overtimeMinutes: {}, paidMinutes, quality: 'materialized',
+      departmentId: OFFICE, isBrigade: false,
+    }]]]));
+    const closed = (await getPayoutForEmployees([8], '2026-11', req)).get(8);
+    expect(closed).toMatchObject({ state: 'closed', net: '108952.00' });
+    expect(closed?.state === 'closed' && closed.lines).toEqual(preliminary?.state === 'preliminary' && preliminary.lines);
+  });
+});
+
 describe('resolveOpenBrigadeShares', () => {
   const context = { departmentId: BRIGADE, memberIds: [7], memberships: [], windows: new Map() };
 
