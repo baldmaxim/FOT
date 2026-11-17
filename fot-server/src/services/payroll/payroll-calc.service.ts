@@ -62,6 +62,7 @@ import { loadRateFacts, type RateFactsRow } from './payroll-rate-facts.service.j
 import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import { PLANNED_SUPPLEMENT_PERIODS_SQL } from './payroll-supplements.service.js';
 import { getTermsForPeriod, type IPayrollTerms, type StaffCategory } from './payroll-terms.service.js';
+import { PAYOUT_LINE_MONTH_SQL } from './payroll-1c-payouts.parser.js';
 
 /** Расчёт месяца с суммой: строки и то, из чего они посчитаны. */
 interface IPayrollCalcDetails extends IPayrollCalcResult {
@@ -188,7 +189,7 @@ export const loadAbsencePay1c = async (
               SUM(l.amount)::text AS amount
          FROM payroll_1c_payout_lines l
          JOIN payroll_1c_payout_documents d ON d.id = l.document_id
-        WHERE l.employee_id = ANY($1::int[]) AND d.period_month = $2::date AND d.payment_method = ANY($3::text[])
+        WHERE l.employee_id = ANY($1::int[]) AND ${PAYOUT_LINE_MONTH_SQL} = $2::date AND d.payment_method = ANY($3::text[])
         GROUP BY l.employee_id, d.id
         ORDER BY d.doc_date, d.doc_number, d.id`,
       [[...ids], monthStart, Object.keys(ABSENCE_PAYOUT_METHODS)],

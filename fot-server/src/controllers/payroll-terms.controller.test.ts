@@ -1430,7 +1430,8 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).toMatch(/scoped\.employment_status = 'fired' OR EXISTS/);
     // Отпускные, больничные, перерасчёт — из той же выборки; ведомости — своим LATERAL за те же месяцы.
     expect(sql).toMatch(/FILTER \(WHERE pa\.item_code = 'vacation'\)\)::text AS paid_vacation/);
-    expect(sql).toMatch(/d\.period_month = ANY\(\$13::date\[\]\)/);
+    // Месяц строки выплаты: перенос строки (367), иначе месяц ведомости.
+    expect(sql).toMatch(/COALESCE\(l\.period_month, d\.period_month\) = ANY\(\$13::date\[\]\)/);
     // Прямые выплаты ФСС — своим LATERAL за те же месяцы, справочно (356).
     expect(sql).toMatch(/SUM\(f\.amount\)::text AS fss_payments\s+FROM payroll_fss_payments f/);
     expect(sql).toMatch(/f\.period_month = ANY\(\$13::date\[\]\)/);

@@ -14,7 +14,12 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 import { query, withTransaction } from '../../config/postgres.js';
 import { matchPayoutLines, type IPayoutCandidate } from './payroll-1c-payouts.matching.js';
-import { parsePayout1cXml, type IPayout1cDocument, type Payout1cFormat } from './payroll-1c-payouts.parser.js';
+import {
+  parsePayout1cXml,
+  PAYOUT_LINE_MONTH_SQL,
+  type IPayout1cDocument,
+  type Payout1cFormat,
+} from './payroll-1c-payouts.parser.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll-registry-scope.service.js';
 
 export type PayoutResolution = 'auto_id_all' | 'confirmed' | 'unmatched';
@@ -169,6 +174,25 @@ const loadStored = async (run: Runner, guid: string, forUpdate: boolean) => {
 export const payoutNumberLockKey = (docNumber: string, docDate: string): string => (
   `payroll_1c_payout_no:${docNumber}|${docDate}`
 );
+
+/**
+ * Замена пересоздаёт строки документа: перенос строки в другой месяц (period_month, миграция 367) потерялся бы, а
+ * выплату по ведомости бригады (source = 'brigade_sheet') кнопка не грузит вовсе. Такие документы меняет только
+ * скрипт — 409. Перепривязка и дополнение строки не пересоздают, месяц у них сохраняется.
+ */
+const assertReplaceable = async (run: Runner, documentId: number): Promise<void> => {
+  const [row] = await run<{ source: string; moved: number }>(
+    `SELECT d.source,
+            (SELECT count(*)::int FROM payroll_1c_payout_lines l WHERE l.document_id = d.id AND l.period_month IS NOT NULL) AS moved
+       FROM payroll_1c_payout_documents d WHERE d.id = $1`,
+    [documentId],
+  );
+  if (row && (row.source !== '1c' || Number(row.moved) > 0)) {
+    throw new Payout1cImportError(
+      'В документе есть строки, перенесённые в другой месяц, или это выплата по ведомости бригады — заменить его можно '
+      + 'только скриптом', 409);
+  }
+};
 
 /** Ведомость с тем же номером и датой уже загружена под другим ГУИДом — второй раз её не грузим (409). */
 const assertNotLoadedUnderOtherGuid = async (run: Runner, doc: IPayout1cDocument): Promise<void> => {
@@ -365,6 +389,7 @@ export const importPayouts1c = async (input: IPayoutImportInput): Promise<IPayou
     if (stored && !sameContent && !input.confirmReplace) {
       throw new Payout1cImportError('Документ в 1С изменён — подтвердите замену', 409);
     }
+    if (stored && !sameContent) await assertReplaceable(run, stored.doc.id);
     const storedByKey = new Map((stored?.lines ?? []).map(line => [line.line_key, line]));
     const matches = await matchPayoutLines(doc);
     const final = resolveLines(doc, matches, sameContent ? storedByKey : new Map(), input.choices);
@@ -480,12 +505,12 @@ export interface IEmployeePayout1c {
 /** «Перечислено (1С)» сотрудника за месяцы начисления from..to (YYYY-MM). */
 export const listEmployeePayouts1c = async (employeeId: number, from: string, to: string): Promise<IEmployeePayout1c[]> => {
   const rows = await query<IEmployeePayout1c & { line_no: number }>(
-    `SELECT to_char(d.period_month, 'YYYY-MM') AS month, d.id AS document_id, d.doc_number, d.zup2_number,
+    `SELECT to_char(${PAYOUT_LINE_MONTH_SQL}, 'YYYY-MM') AS month, d.id AS document_id, d.doc_number, d.zup2_number,
             d.doc_date::text AS doc_date, d.payment_method, l.amount::text AS amount, l.line_no
        FROM payroll_1c_payout_lines l
        JOIN payroll_1c_payout_documents d ON d.id = l.document_id
-      WHERE l.employee_id = $1 AND d.period_month BETWEEN ($2 || '-01')::date AND ($3 || '-01')::date
-      ORDER BY d.period_month, d.doc_date, d.doc_number, l.line_no`,
+      WHERE l.employee_id = $1 AND ${PAYOUT_LINE_MONTH_SQL} BETWEEN ($2 || '-01')::date AND ($3 || '-01')::date
+      ORDER BY ${PAYOUT_LINE_MONTH_SQL}, d.doc_date, d.doc_number, l.line_no`,
     [employeeId, from, to],
   );
   return rows.map(({ line_no: _lineNo, ...row }) => ({ ...row, document_id: Number(row.document_id) }));
@@ -501,7 +526,7 @@ export const listPayouts1cMonths = async (
   if (scope.departmentIds?.length === 0) return [];
   const rows = await query<{ month: string }>(
     `WITH ${payrollContractorDeptsCte('$1')}
-     SELECT DISTINCT to_char(d.period_month, 'YYYY-MM') AS month
+     SELECT DISTINCT to_char(${PAYOUT_LINE_MONTH_SQL}, 'YYYY-MM') AS month
        FROM payroll_1c_payout_lines l
        JOIN payroll_1c_payout_documents d ON d.id = l.document_id
        JOIN employees e ON e.id = l.employee_id

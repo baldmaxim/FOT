@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// «Перечислено (1С)» на настоящем PostgreSQL (миграция 328): новая ведомость, второй формат — дополнение,
+// «Перечислено (1С)» на настоящем PostgreSQL (миграции 328 и 367): новая ведомость, второй формат — дополнение,
 // повтор — без записи, пересопоставление и замена с журналом, устаревшая ревизия и параллельные загрузки — 409,
-// подменённый выбор — 400, подрядчик в месяце не кандидат, авто только по id_all, удаление сотрудника.
+// подменённый выбор — 400, подрядчик в месяце не кандидат, авто только по id_all, удаление сотрудника; строка,
+// перенесённая в другой месяц (367), — во всех выборках по месяцу строки, замена её документа — 409.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются). Гонять отдельно от
 // других *.pg.test.ts: они дропают те же таблицы.
 
@@ -45,7 +46,16 @@ vi.mock('../../config/postgres.js', async () => {
 const CONTRACTORS = '00000000-0000-0000-0000-0000000000c0';
 vi.mock('../../config/contractor.js', () => ({ getContractorRootId: async () => CONTRACTORS }));
 
-import { importPayouts1c, listEmployeePayouts1c, previewPayouts1c, type IPayoutPreview } from './payroll-1c-payouts.service.js';
+import {
+  importPayouts1c,
+  listEmployeePayouts1c,
+  listPayouts1cMonths,
+  previewPayouts1c,
+  type IPayoutPreview,
+} from './payroll-1c-payouts.service.js';
+import { cardPayoutsJoinSql } from './payroll-calc-columns.service.js';
+import { payrollDismissedInMonthsSql } from './payroll-registry-scope.service.js';
+import { loadPayouts } from './payroll-summary.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -135,7 +145,10 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
       CREATE TABLE user_profiles (id uuid PRIMARY KEY);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, parent_id uuid, name text NOT NULL);
       CREATE TABLE employees (id integer PRIMARY KEY, full_name text NOT NULL, employment_status text NOT NULL DEFAULT 'active',
-        hire_date date, dismissal_date date, org_department_id uuid);
+        hire_date date, dismissal_date date, org_department_id uuid, is_archived boolean);
+      DROP TABLE IF EXISTS skud_daily_summary, attendance_adjustments;
+      CREATE TABLE skud_daily_summary (employee_id integer, date date, total_minutes integer);
+      CREATE TABLE attendance_adjustments (employee_id integer, work_date date);
       CREATE TABLE employee_hr_profiles (employee_id integer PRIMARY KEY, passdesk_id_all uuid);
       CREATE TABLE employee_dismissal_events (employee_id integer, from_department_id uuid, cancelled boolean NOT NULL DEFAULT false,
         created_at timestamptz NOT NULL DEFAULT now());
@@ -166,6 +179,8 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     await run(`INSERT INTO payroll_paid_amounts VALUES (1, '2026-09-01', 'contract', 100000)`);
     await run(migration('328_payroll_1c_payouts.sql'));
     await run(migration('328_payroll_1c_payouts.sql'));
+    await run(migration('367_payroll_payouts_brigade_sheet.sql'));
+    await run(migration('367_payroll_payouts_brigade_sheet.sql'));
   });
 
   afterAll(async () => {
@@ -322,5 +337,65 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     expect(rejected.reason).toMatchObject({ status: 409 });
     expect((await run(`SELECT count(*)::int AS n FROM payroll_1c_payout_documents WHERE doc_number = '0000-000090'`)).rows[0].n)
       .toBe(1);
+  });
+
+  it('перенос строки в другой месяц (367): месяц строки — в истории, «Выплатах на карту», «Своде», видимости и списке месяцев; '
+    + 'замена документа — 409, перепривязка месяц сохраняет', async () => {
+    const GUID_M = '33333333-2222-3333-4444-000000000001';
+    const original = zup2(GUID_M, [IVANOV], '43500', '0000-000091');
+    const first = await previewPayouts1c(original);
+    expect(await doImport(original, first, { choices: confirmAll(first) })).toMatchObject({ action: 'new' });
+    const doc = await docRow(GUID_M);
+    const card = async (month: string) => (await run(
+      `SELECT card.card_payouts_raw AS raw FROM (SELECT 1 AS employee_id) page ${cardPayoutsJoinSql('$1')}`, [[month]],
+    )).rows[0].raw as Array<{ method: string; amount: string }> | null;
+    const visible = async (month: string) => (await run(
+      `SELECT ${payrollDismissedInMonthsSql('e', '$1')} AS ok FROM employees e WHERE e.id = 1`, [[month]],
+    )).rows[0].ok as boolean;
+    const septBefore = await card('2026-09-01');
+    expect(await card('2026-08-01')).toBeNull();
+    expect(await visible('2026-08-01')).toBe(false);
+
+    await run(`UPDATE payroll_1c_payout_lines SET period_month = '2026-08-01', period_month_reason = 'тест: за август'
+                WHERE document_id = $1`, [doc.id]);
+    await expect(run(`UPDATE payroll_1c_payout_lines SET period_month_reason = NULL WHERE document_id = $1`, [doc.id]))
+      .rejects.toThrow(/period_month_check/);
+    await expect(run(`UPDATE payroll_1c_payout_lines SET period_month = '2026-08-15' WHERE document_id = $1`, [doc.id]))
+      .rejects.toThrow(/period_month_check/);
+
+    expect(await listEmployeePayouts1c(1, '2026-08', '2026-08')).toEqual([
+      expect.objectContaining({ month: '2026-08', doc_number: '0000-000091', amount: '43500.00' }),
+    ]);
+    expect((await listEmployeePayouts1c(1, '2026-09', '2026-09')).map(row => row.doc_number)).not.toContain('0000-000091');
+    expect(await card('2026-08-01')).toEqual([{ method: 'Увольнения', amount: '43500.00' }]);
+    // В сентябре — как до загрузки этой ведомости: её строка ушла в август.
+    const septAfter = await card('2026-09-01');
+    const sum = (rows: Array<{ amount: string }> | null) => (rows ?? []).reduce((acc, row) => acc + Math.round(Number(row.amount) * 100), 0);
+    expect(sum(septAfter)).toBe(sum(septBefore) - 4_350_000);
+    expect(await loadPayouts(['2026-08'])).toEqual([{ employee_id: 1, month: '2026-08', amount: '43500.00' }]);
+    expect(await visible('2026-08-01')).toBe(true);
+    expect(await visible('2026-07-01')).toBe(false);
+
+    // Список месяцев «Расчётов» — только штат (работающий 2): его строка, перенесённая в июль.
+    await run(`UPDATE payroll_1c_payout_lines SET employee_id = 2 WHERE document_id = $1`, [doc.id]);
+    await run(`UPDATE payroll_1c_payout_lines SET period_month = '2026-07-01' WHERE document_id = $1`, [doc.id]);
+    expect(await listPayouts1cMonths({ contractorRootId: CONTRACTORS, departmentIds: null })).toContain('2026-07');
+    await run(`UPDATE payroll_1c_payout_lines SET employee_id = 1, period_month = '2026-08-01' WHERE document_id = $1`, [doc.id]);
+
+    // Замена изменённой ведомости пересоздала бы строки и потеряла месяц — 409, ничего не записано.
+    const changed = zup2(GUID_M, [{ ...IVANOV, amount: '43000' }], '43000', '0000-000091');
+    const changedPreview = await previewPayouts1c(changed);
+    expect(changedPreview.status).toBe('changed');
+    await expect(doImport(changed, changedPreview, { choices: confirmAll(changedPreview), confirmReplace: true }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/перенесённые в другой месяц/) });
+    expect(await docRow(GUID_M)).toMatchObject({ revision: 1, total: '43500.00' });
+
+    // Перепривязка строки (тот же файл, «Без сотрудника») месяц строки не трогает.
+    const again = await previewPayouts1c(original);
+    expect(await doImport(original, again, { choices: { [again.lines[0].fingerprint]: null } }))
+      .toMatchObject({ action: 'relink' });
+    expect((await run(`SELECT employee_id, period_month::text AS month, period_month_reason AS reason
+                         FROM payroll_1c_payout_lines WHERE document_id = $1`, [doc.id])).rows)
+      .toEqual([{ employee_id: null, month: '2026-08-01', reason: 'тест: за август' }]);
   });
 });

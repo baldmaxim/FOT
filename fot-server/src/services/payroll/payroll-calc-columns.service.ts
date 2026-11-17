@@ -29,6 +29,7 @@ import type { PayrollCalcLineCode, PayrollCalcMissing } from './payroll-calc.rul
 import { lastDayOfMonth } from './payroll-payslip.rules.js';
 import { centsToAmount, toCents } from './payroll-summary.attribution.js';
 import { getTermsForPeriod, type IPayrollTerms } from './payroll-terms.service.js';
+import { PAYOUT_LINE_MONTH_SQL } from './payroll-1c-payouts.parser.js';
 
 /** Больше месяцев — расчёт ФОТ не идёт (каждый месяц — отдельный расчёт порции), столбцы ФОТ пусты. */
 export const CALC_COLUMNS_MAX_MONTHS = 12;
@@ -312,7 +313,7 @@ export const cardPayoutsJoinSql = (monthsParam: string): string => `
                             FROM payroll_1c_payout_lines l
                             JOIN payroll_1c_payout_documents d ON d.id = l.document_id
                            WHERE l.employee_id = page.employee_id
-                             AND (${monthsParam}::date[] IS NULL OR d.period_month = ANY(${monthsParam}::date[]))
+                             AND (${monthsParam}::date[] IS NULL OR ${PAYOUT_LINE_MONTH_SQL} = ANY(${monthsParam}::date[]))
                            GROUP BY d.payment_method) c
                 ) card ON TRUE`;
 

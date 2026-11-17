@@ -27,6 +27,7 @@ import {
   type IRecalcRecord,
 } from './payroll-terms-recalc.rules.js';
 import { lockPayrollEmployee } from './payroll-terms.service.js';
+import { PAYOUT_LINE_MONTH_SQL } from './payroll-1c-payouts.parser.js';
 
 export interface IEmployeeRecalc {
   /** Новые сверху; без разницы месяц не показывается. */
@@ -89,7 +90,7 @@ const loadOpenRecords = (employeeId: number): Promise<IRecalcRecord[]> => query<
 /** Даты ведомостей окончательного расчёта по месяцам начисления. */
 const loadFinalPayoutDates = async (employeeId: number): Promise<Map<string, string[]>> => {
   const rows = await query<{ month: string; doc_date: string }>(
-    `SELECT DISTINCT to_char(d.period_month, 'YYYY-MM') AS month, to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date
+    `SELECT DISTINCT to_char(${PAYOUT_LINE_MONTH_SQL}, 'YYYY-MM') AS month, to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date
        FROM payroll_1c_payout_lines l
        JOIN payroll_1c_payout_documents d ON d.id = l.document_id
       WHERE l.employee_id = $1 AND d.payment_method = ANY($2::text[])`,

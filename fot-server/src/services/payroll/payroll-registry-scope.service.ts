@@ -87,7 +87,7 @@ export const payrollDismissedInMonthsSql = (alias: string, monthsParam: string):
                          WHERE dp.employee_id = ${alias}.id AND dp.month = dm.month_start)
              OR EXISTS (SELECT 1 FROM payroll_1c_payout_lines dl
                           JOIN payroll_1c_payout_documents dd ON dd.id = dl.document_id
-                         WHERE dl.employee_id = ${alias}.id AND dd.period_month = dm.month_start)
+                         WHERE dl.employee_id = ${alias}.id AND COALESCE(dl.period_month, dd.period_month) = dm.month_start)
              OR (${alias}.dismissal_date >= dm.month_start
                  AND (${alias}.hire_date IS NULL OR ${alias}.hire_date <= dme.month_end)
                  AND (EXISTS (SELECT 1 FROM skud_daily_summary ds

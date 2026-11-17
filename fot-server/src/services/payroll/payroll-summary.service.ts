@@ -32,6 +32,7 @@ import { resolveSummaryObjects, type ISummaryObjectsStats } from './payroll-summ
 import { resolveMonthStaffCategories } from './payroll-staff-category.js';
 import type { StaffCategory } from './payroll-terms.service.js';
 import { centsToAmount, toCents, type ISummaryBreakdownRow, type ISummaryObject } from './payroll-summary.attribution.js';
+import { PAYOUT_LINE_MONTH_SQL } from './payroll-1c-payouts.parser.js';
 
 export interface IPayrollSummaryScope {
   contractorRootId: string | null;
@@ -78,16 +79,17 @@ interface IPayoutRow {
 }
 
 /**
- * Выплаты 1С по сотруднику и месяцу начисления (ПериодРегистрации): ведомости одного месяца сложены. Только строки,
- * сопоставленные с сотрудником, — как «Выплаты на карту (1С)» «Расчётов» (cardPayoutsJoinSql).
+ * Выплаты по сотруднику и месяцу строки (ПериодРегистрации ведомости или перенос строки, миграция 367): ведомости
+ * одного месяца сложены. Только строки, сопоставленные с сотрудником, — как «Выплаты на карту» «Расчётов»
+ * (cardPayoutsJoinSql).
  */
-const loadPayouts = (months: string[]): Promise<IPayoutRow[]> => query<IPayoutRow>(
-  `SELECT l.employee_id, to_char(d.period_month, 'YYYY-MM') AS month, SUM(l.amount)::text AS amount
+export const loadPayouts = (months: string[]): Promise<IPayoutRow[]> => query<IPayoutRow>(
+  `SELECT l.employee_id, to_char(${PAYOUT_LINE_MONTH_SQL}, 'YYYY-MM') AS month, SUM(l.amount)::text AS amount
      FROM payroll_1c_payout_lines l
      JOIN payroll_1c_payout_documents d ON d.id = l.document_id
     WHERE l.employee_id IS NOT NULL
-      AND d.period_month = ANY($1::date[])
-    GROUP BY l.employee_id, d.period_month`,
+      AND ${PAYOUT_LINE_MONTH_SQL} = ANY($1::date[])
+    GROUP BY l.employee_id, ${PAYOUT_LINE_MONTH_SQL}`,
   [months.map(month => `${month}-01`)],
 );
 

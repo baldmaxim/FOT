@@ -21,6 +21,13 @@ export const SM_ORGANIZATION_INN = '7705794997';
  */
 export const PAYOUT_XML_ORGANIZATION_INNS: readonly string[] = [PAYOUTS_1C_ORGANIZATION_INN, SM_ORGANIZATION_INN];
 
+/**
+ * Месяц строки выплаты в SQL (алиасы l — payroll_1c_payout_lines, d — payroll_1c_payout_documents): перенос строки
+ * в другой месяц решением пользователя (миграция 367), иначе ПериодРегистрации ведомости. Все выборки «Перечислено
+ * (1С)» и «Выплат на карту» за месяц идут по нему.
+ */
+export const PAYOUT_LINE_MONTH_SQL = 'COALESCE(l.period_month, d.period_month)';
+
 export type Payout1cFormat = 'zup2' | 'external';
 
 export interface IPayout1cLine {

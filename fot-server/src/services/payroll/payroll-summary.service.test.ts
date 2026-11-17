@@ -186,7 +186,8 @@ describe('loadPayrollSummary — «Выплачено» (ведомости 1С)
     expect(summary.rows.map(row => [row.employee_id, row.paid_out])).toEqual([[265, '1500.15']]);
     const [sql, params] = payoutsCall()!;
     expect(String(sql)).toContain('l.employee_id IS NOT NULL');
-    expect(String(sql)).toContain('GROUP BY l.employee_id, d.period_month');
+    // Месяц строки выплаты: перенос строки (367), иначе месяц ведомости.
+    expect(String(sql)).toContain('GROUP BY l.employee_id, COALESCE(l.period_month, d.period_month)');
     expect(params).toEqual([['2026-08-01']]);
   });
 
