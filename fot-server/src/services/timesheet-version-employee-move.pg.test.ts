@@ -234,7 +234,7 @@ describe.skipIf(!PG_URL)('перенос сотрудника между ред�
         id bigserial PRIMARY KEY, version_id bigint NOT NULL, employee_id integer NOT NULL, month date NOT NULL,
         revision integer NOT NULL, basis_hash text NOT NULL, norm_days integer, norm_minutes integer,
         workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb, absence_dates jsonb, overtime_minutes jsonb,
-        paid_minutes jsonb, quality text, reason text, created_at timestamptz NOT NULL DEFAULT now(),
+        paid_minutes jsonb, norm_plan jsonb, quality text, reason text, created_at timestamptz NOT NULL DEFAULT now(),
         UNIQUE (version_id, employee_id, month, revision)
       );
       CREATE TABLE audit_logs (

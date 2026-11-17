@@ -137,7 +137,9 @@ describe('getPayslipInfo — категория месяца по табелю',
     const info = await getPayslipInfo(42, '2026-09', req);
 
     // 21 + (30 − 22) = 29 × 630 = 18 270.
-    expect(info.rate_allowances).toEqual([{ code: 'housing', amount: '18270.00', rate: '630.00', housing_days: 29 }]);
+    expect(info.rate_allowances).toEqual([
+      { code: 'housing', amount: '18270.00', rate: '630.00', housing_days: 29, housing_weekend_days: 8 },
+    ]);
   });
 
   it('объект месяца «Не определён» — категория по нему, объект «Свода» по часам листок не считает', async () => {

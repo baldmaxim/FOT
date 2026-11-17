@@ -2,7 +2,7 @@
  * Блок «График работы» под табелем «По сотруднику»: год по графику сотрудника, как форма графика в 1С —
  * у месяца «Дней / Часов» нормы и квота суббот, у дня — плановые часы и вид дня.
  *
- * Норма месяца — то же правило, что у зарплаты по часам (countMonthNormDays / countScheduleMonthNormMinutes):
+ * Норма месяца — то же правило, что у зарплаты по часам (countMonthNormDays / scheduleMonthNorm):
  * график каждой даты, квота Сб/Вс — графика последнего дня, приём и увольнение норму не режут. Квота суббот к датам
  * не привязана (в норму идут первые отработанные), поэтому в днях субботы — выходные, а квота — числом.
  *
@@ -12,14 +12,14 @@
 import { query, queryOne } from '../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import {
-  getDayNormHours,
   isHoliday,
   isPreHoliday,
   isWorkingDay,
   loadCalendarYear,
   resolveSchedulesForPeriod,
 } from './schedule.service.js';
-import { countMonthNormDays, countScheduleMonthNormMinutes } from './payroll/payroll-basis.service.js';
+import { countMonthNormDays } from './payroll/payroll-basis.service.js';
+import { scheduleMonthNorm } from './payroll/schedule-month-norm.js';
 
 export type SchedulePlanDayKind = 'work' | 'off' | 'holiday' | 'pre_holiday';
 
@@ -190,25 +190,21 @@ export const buildSchedulePlanMonths = (params: {
       continue;
     }
     const calendar = calendars.get(month) ?? null;
-    const days: ISchedulePlanDay[] = [];
-    for (let day = 1; day <= total; day++) {
-      const schedule = schedules.get(`${monthKey}-${pad2(day)}`);
-      if (!schedule) continue;
-      const date = new Date(year, month - 1, day);
-      days.push({
-        day,
-        hours: getDayNormHours(schedule, date, calendar),
-        kind: classifyPlanDay(schedule, date, calendar),
-      });
-    }
-    const last = schedules.get(`${monthKey}-${pad2(total)}`);
+    // Часы дней, квота и норма — одно правило с зарплатой по часам (scheduleMonthNorm).
+    const norm = scheduleMonthNorm(schedules, monthKey, calendar);
+    const days = norm.days.flatMap(({ date, hours }): ISchedulePlanDay[] => {
+      const schedule = schedules.get(date);
+      if (!schedule) return [];
+      const day = Number(date.slice(8, 10));
+      return [{ day, hours, kind: classifyPlanDay(schedule, new Date(year, month - 1, day), calendar) }];
+    });
     months.push({
       month,
       employed,
       norm_days: countMonthNormDays(schedules, monthKey, calendar),
-      norm_minutes: countScheduleMonthNormMinutes(schedules, monthKey, calendar),
-      saturdays: last?.expected_saturdays_per_month ?? 0,
-      sundays: last?.expected_sundays_per_month ?? 0,
+      norm_minutes: norm.totalMinutes,
+      saturdays: norm.saturdays,
+      sundays: norm.sundays,
       days,
     });
   }

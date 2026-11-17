@@ -254,6 +254,8 @@ export const loadLiveMonthBases = async (
       absenceDates: Object.values(draft.absenceDates).flat().filter(inPeriod).sort(),
       overtimeMinutes: Object.fromEntries(Object.entries(draft.overtimeMinutes).filter(([date]) => inPeriod(date))),
       paidMinutes: Object.fromEntries(Object.entries(draft.paidMinutes).filter(([date]) => inPeriod(date))),
+      // Норма по дням — за весь месяц, как и сама норма: табель живой, а норма от даты не зависит.
+      normPlan: draft.normPlan ?? null,
       brigades: [...brigades.values()],
     });
   }

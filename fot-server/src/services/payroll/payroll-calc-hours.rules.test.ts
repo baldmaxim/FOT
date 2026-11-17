@@ -315,3 +315,68 @@ describe('оклад по часам: неизвестные часы и пре�
     });
   });
 });
+
+describe('«Часы по дням» листка (withHoursByDay)', () => {
+  const withDays = (over: Partial<IPayrollCalcFacts> = {}, brigadeDates: string[] = []) => {
+    const base = facts(over);
+    return buildPayrollCalc({
+      ...base,
+      hoursByDay: { brigadeDates, paidMinutes: { ...base.paidMinutes, ...minutesOf(brigadeDates) } },
+    });
+  };
+  const sum = (days: readonly { contract_minutes: number }[]): number => days.reduce((total, day) => total + day.contract_minutes, 0);
+  const salaryMinutes = (result: ReturnType<typeof buildPayrollCalc>): number => (line(result, 'contract')?.parts ?? [])
+    .reduce((total, part) => total + (part.kind === 'salary_hours' ? part.minutes : 0), 0);
+
+  it('весь месяц: строка на дату, Σ «в оклад» = минуты формулы; деньги с расшифровкой и без — одни и те же', () => {
+    const result = withDays();
+    expect(result.hours_by_day).toHaveLength(23);
+    expect(result.hours_by_day?.[0]).toEqual({
+      date: '2026-11-02', kind: 'workday', paid_minutes: 600, contract_minutes: 600, overtime_minutes: 0, hourly_minutes: 0,
+    });
+    expect(sum(result.hours_by_day ?? [])).toBe(salaryMinutes(result));
+    const { hours_by_day: _days, ...money } = result;
+    expect(money).toEqual(buildPayrollCalc(facts()));
+    expect(buildPayrollCalc(facts()).hours_by_day).toBeUndefined();
+  });
+
+  it('день бригады — своей строкой с часами табеля, в оклад не идёт', () => {
+    const own = LINE_DAYS.filter(date => date !== '2026-11-16');
+    const result = withDays({ workdayDates: own, paidMinutes: minutesOf(own) }, ['2026-11-16']);
+    expect(result.hours_by_day?.find(day => day.date === '2026-11-16')).toEqual({
+      date: '2026-11-16', kind: 'brigade', paid_minutes: 600, contract_minutes: 0, overtime_minutes: 0, hourly_minutes: 0,
+    });
+    expect(sum(result.hours_by_day ?? [])).toBe(salaryMinutes(result));
+  });
+
+  it('выход сверх полной нормы — «Переработка»; правка будня при «Без переработки» — не оплачивается', () => {
+    const paid = { ...minutesOf(LINE_DAYS), '2026-11-10': 720, '2026-11-21': 600 };
+    const result = withDays({
+      dayoffDates: ['2026-11-21'],
+      paidMinutes: paid,
+      overtimeMinutes: { '2026-11-10': 120 },
+      overtimeStops: [{ date_from: '2026-11-10', date_to: '2026-11-10' }],
+    });
+    expect(result.hours_by_day?.find(day => day.date === '2026-11-21')).toMatchObject({
+      kind: 'dayoff', paid_minutes: 600, contract_minutes: 0, overtime_minutes: 600,
+    });
+    // 720 табеля: 600 в оклад, 120 правки сняты «Без переработки» — разница не оплачивается.
+    expect(result.hours_by_day?.find(day => day.date === '2026-11-10')).toMatchObject({
+      kind: 'workday', paid_minutes: 720, contract_minutes: 600, overtime_minutes: 0,
+    });
+  });
+
+  it('оклад → почасовая: после смены — минуты по ставке, в оклад ноль', () => {
+    const result = withDays({
+      terms: [terms({ effective_to: '2026-11-15' }), hourlyTerms('700.0000', { effective_from: '2026-11-16' })],
+    });
+    expect(result.hours_by_day?.find(day => day.date === '2026-11-16')).toMatchObject({
+      contract_minutes: 0, hourly_minutes: 600,
+    });
+    expect(sum(result.hours_by_day ?? [])).toBe(7200);
+  });
+
+  it('полностью почасовой ноябрь — расшифровки нет', () => {
+    expect(withDays({ terms: [hourlyTerms('700.0000')] }).hours_by_day).toBeUndefined();
+  });
+});

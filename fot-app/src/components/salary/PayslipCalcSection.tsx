@@ -20,7 +20,8 @@ import {
   isCalcCounted,
   payslipDeductionRows,
 } from '../../utils/payrollCalc';
-import { formatPaidAmount, paidCellKey } from '../../utils/payrollPaid';
+import { isSalaryByHoursCalc, salaryHoursNotes } from '../../utils/payrollHoursDays';
+import { formatAsOfDay, formatPaidAmount, paidCellKey } from '../../utils/payrollPaid';
 import { formatPayslipSchedules, payslipLines } from '../../utils/payrollPayslip';
 import styles from './PaidPayslip.module.css';
 
@@ -64,6 +65,12 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({
   const renderTable = (counted: PayrollCalcCounted | null) => {
     const missing = counted ? calcMissingNote(counted.missing) : null;
     const lines = counted ? calcLines(counted) : [];
+    // Табель не закрыт: по какой день он взят; норма часов и месячные доплаты (проезд, квартира) — за полный месяц.
+    const preliminary = counted?.state === 'preliminary'
+      ? `Предварительно: табель по ${formatAsOfDay(counted.as_of)} включительно; норма и месячные доплаты — за полный месяц.`
+      : null;
+    const byHours = counted !== null && isSalaryByHoursCalc(counted);
+    const hoursNotes = counted ? salaryHoursNotes(counted) : [];
     // Дни отпуска или больничного, оплаченные строкой 1С, — в ней же; отдельной строкой — только без суммы.
     const paidAbsences = new Set(lines.map(line => calcLineAbsence(line.code)));
     const absences = counted ? calcAbsenceLines(counted).filter(line => !paidAbsences.has(line.status)) : [];
@@ -73,7 +80,11 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({
       : (counted?.deductions ?? []).map(item => ({ key: `kind-${item.kind_id}`, label: item.kind, fot: item.amount, paid: null }));
     return (
       <>
+        {preliminary && <p className={styles.calcNote}>{preliminary}</p>}
         {schedulesNote && <p className={styles.calcNote}>{schedulesNote}</p>}
+        {byHours && (
+          <p className={styles.calcNote}>С ноября 2026 оклад — по часам: оклад × часы табеля / норма часов графика.</p>
+        )}
         {missing && <p className={styles.calcNote}>{missing}</p>}
         <div className={styles.scroll}>
           <table className={`${styles.table} ${styles.calcTable}`}>
@@ -97,6 +108,9 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({
                     <th scope="row" className={styles.kind}>
                       <span className={styles.kindName}>{calcLineLabel(line.code)}</span>
                       {calcLineFormula(line).map(text => <span key={text} className={styles.kindNote}>{text}</span>)}
+                      {line.code === 'contract' && hoursNotes.map(text => (
+                        <span key={`hours-${text}`} className={styles.kindNote}>{text}</span>
+                      ))}
                     </th>
                     <td className={styles.num}>{formatValue(calcAmount(line.amount))}</td>
                     {with1c && <td className={styles.num}>{paidItem ? formatValue(paid(paidItem)) : ''}</td>}

@@ -6,7 +6,8 @@
  * schedule — норма по действующему правилу (countMonthNormMinutes: с ноября — норма графика), основа редакции
  * пересобирается из её payload по графикам на сейчас; calendar — откат: норма календаря, как до правки (без календаря —
  * норма графика, как и тогда). Берётся только последняя revision каждой пары редакция + сотрудник + месяц; пишется её
- * копия с новой нормой — остальные поля и качество прежние, reason = 'backfill'. Повторный запуск — без эффекта.
+ * копия с новой нормой и снимком нормы по дням из тех же графиков (миграция 368; у нормы календаря — NULL) — остальные
+ * поля и качество прежние, reason = 'backfill'. Повторный запуск — без эффекта.
  *
  * Всё или ничего: не построилась основа или норма хоть у одной строки, упала хоть одна редакция — запись не делается
  * вовсе. Запись — одна транзакция на редакцию. Запуск — scripts/fix-payroll-basis-norm-minutes.ts.
@@ -23,6 +24,7 @@ import {
   type PayrollAbsenceDays,
 } from './payroll-basis.service.js';
 import { SALARY_BY_HOURS_FROM } from './payroll-salary-hours.js';
+import type { IPayrollNormPlan } from './schedule-month-norm.js';
 
 export type NormFixMode = 'schedule' | 'calendar';
 
@@ -131,7 +133,7 @@ export const fixPayrollBasisNormMinutes = async (options: {
 
   const changes: INormFixChange[] = [];
   const problems: INormFixProblem[] = [];
-  const fixes = new Map<number, Array<{ row: IBasisRow; norm: number; hash: string }>>();
+  const fixes = new Map<number, Array<{ row: IBasisRow; norm: number; plan: IPayrollNormPlan | null; hash: string }>>();
   for (const [versionId, versionRows] of byVersion) {
     try {
       const payload = (await query<{ payload: ITimesheetVersionPayload | null }>(
@@ -143,7 +145,7 @@ export const fixPayrollBasisNormMinutes = async (options: {
         continue;
       }
       const drafts = new Map((await rebuild(pool(), payload)).map(draft => [`${draft.employeeId}|${draft.month}`, draft]));
-      const versionFixes: Array<{ row: IBasisRow; norm: number; hash: string }> = [];
+      const versionFixes: Array<{ row: IBasisRow; norm: number; plan: IPayrollNormPlan | null; hash: string }> = [];
       for (const row of versionRows) {
         const draft = drafts.get(`${row.employee_id}|${row.month}`);
         const scheduleNorm = draft?.normMinutes ?? null;
@@ -168,7 +170,8 @@ export const fixPayrollBasisNormMinutes = async (options: {
           overtimeMinutes: row.overtime_minutes,
           paidMinutes: row.paid_minutes,
         });
-        versionFixes.push({ row, norm, hash });
+        // Снимок нормы по дням (368) — из тех же графиков, что и норма; у нормы календаря он не подходит — NULL.
+        versionFixes.push({ row, norm, plan: norm === scheduleNorm ? draft.normPlan ?? null : null, hash });
       }
       if (versionFixes.length === 0) continue;
       fixes.set(versionId, versionFixes);
@@ -200,16 +203,16 @@ export const fixPayrollBasisNormMinutes = async (options: {
     for (const [versionId, versionFixes] of fixes) {
       written += await withTransaction(async client => {
         let count = 0;
-        for (const { row, norm, hash } of versionFixes) {
+        for (const { row, norm, plan, hash } of versionFixes) {
           // Копия последней revision с новой нормой; ON CONFLICT — параллельный запуск уже записал.
           const result = await client.query(
             `INSERT INTO timesheet_version_payroll_basis (
                version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
+               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, norm_plan, quality, reason
              )
              SELECT b.version_id, b.employee_id, b.month, b.revision + 1, $5, b.norm_days, $6,
                     b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, b.overtime_minutes, b.paid_minutes,
-                    b.quality, 'backfill'
+                    $7::jsonb, b.quality, 'backfill'
                FROM timesheet_version_payroll_basis b
               WHERE b.version_id = $1 AND b.employee_id = $2 AND b.month = $3::date AND b.revision = $4
                 AND NOT EXISTS (
@@ -218,7 +221,7 @@ export const fixPayrollBasisNormMinutes = async (options: {
                      AND n.revision > b.revision
                 )
              ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,
-            [versionId, row.employee_id, row.month, row.revision, hash, norm],
+            [versionId, row.employee_id, row.month, row.revision, hash, norm, plan === null ? null : JSON.stringify(plan)],
           );
           count += result.rowCount ?? 0;
         }

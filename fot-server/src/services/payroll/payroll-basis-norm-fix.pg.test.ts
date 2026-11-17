@@ -121,6 +121,7 @@ describe.skipIf(!PG_URL)('норма часов ноябрьских основ 
     await q(migration('331_payroll_version_basis.sql'));
     await q(migration('339_payroll_housing_by_days.sql'));
     await q(migration('344_payroll_basis_paid_minutes.sql'));
+    await q(migration('368_payroll_basis_norm_plan.sql'));
   });
 
   beforeEach(async () => {

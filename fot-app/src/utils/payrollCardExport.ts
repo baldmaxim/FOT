@@ -13,10 +13,12 @@ import {
 import { formatDate } from './formatMoney';
 import { formatAccrualMonthLabel } from './payrollAccruals';
 import {
+  formatAsOfDay,
   paidCellKey,
   paidHistory,
   paidHistoryShown,
   paidItemTotal,
+  preliminaryTotalNote,
   visiblePaidGroups,
   type IPaidMonthSums,
 } from './payrollPaid';
@@ -106,6 +108,19 @@ export const buildPayrollTermsSheet = (row: IPayrollTermsRow, asOfDate: string):
   };
 };
 
+/** Месяц листа; табель не закрыт — «Ноябрь 2026 — предварительно, табель по 16.11», как на экране. */
+const monthLabel = (month: string, asOf: string | undefined): string => (
+  asOf
+    ? `${formatAccrualMonthLabel(month, true)} — предварительно, табель по ${formatAsOfDay(asOf)}`
+    : formatAccrualMonthLabel(month, true)
+);
+
+/** «Итого»; в нём предварительные месяцы — «Итого (вкл. предварительный ноябрь)». */
+const totalLabel = (preliminaryMonths: readonly string[]): string => {
+  const note = preliminaryTotalNote(preliminaryMonths);
+  return note ? `Итого (${note})` : 'Итого';
+};
+
 /**
  * Лист «История выплат» — те же месяцы и суммы, что левая таблица вкладки «Зарплата»: месяц — строка (новые сверху),
  * «Начислено», «Удержано», «К выплате» из расчёта ФОТ (итога ФОТ нет — суммы 1С) и статьи 1С, по которым есть сумма
@@ -145,7 +160,7 @@ export const buildPaidHistorySheet = (
     rows: [
       ...history.months.map(entry => ({
         cells: [
-          formatAccrualMonthLabel(entry.month, true),
+          monthLabel(entry.month, shown.byMonth.get(entry.month)?.asOf),
           shown.byMonth.get(entry.month)?.accrued ?? null,
           shown.byMonth.get(entry.month)?.deducted ?? null,
           shown.byMonth.get(entry.month)?.payout ?? null,
@@ -155,7 +170,7 @@ export const buildPaidHistorySheet = (
       })),
       {
         cells: [
-          'Итого',
+          totalLabel(shown.overall.preliminaryMonths),
           shown.overall.accrued,
           shown.overall.deducted,
           shown.overall.payout,

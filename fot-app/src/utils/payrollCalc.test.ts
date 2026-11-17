@@ -57,8 +57,9 @@ describe('«К выплате (ФОТ)»: суммы месяца для лев�
   it('те же числа, что «Начислено», «Удержано» и «Итого»; у предварительного — тоже', () => {
     expect(calcMonthSums(closed({ accrued: '204878.00', deducted: '0.00', net: '204878.00' })))
       .toEqual({ accrued: 204878, deducted: 0, payout: 204878 });
+    // Предварительный — с днём табеля: строка месяца и итоги помечаются.
     expect(calcMonthSums(preliminary({ accrued: '1000.50', deducted: '100.25', net: '900.25' })))
-      .toEqual({ accrued: 1000.5, deducted: 100.25, payout: 900.25 });
+      .toEqual({ accrued: 1000.5, deducted: 100.25, payout: 900.25, asOf: '2026-09-30' });
   });
 
   it('итога нет, месяц не посчитан или считать нечего — null: таблица покажет суммы 1С', () => {
@@ -212,6 +213,10 @@ describe('«К выплате (ФОТ)»: расшифровка строк', ()
     expect(calcLineFormula({ code: 'housing', amount: '5670.00', parts: [
       { kind: 'housing', housing: 'apartment', amount: '5670.00', rate: '630.00', days: 9 },
     ] })).toEqual(['квартира: 630,00 × 9 дн.']);
+    // Квартира с выходными месяца (правило 339): из чего дни — Абдурахманов, ноябрь по 16.11.
+    expect(calcLineFormula({ code: 'housing', amount: '11970.00', parts: [
+      { kind: 'housing', housing: 'apartment', amount: '11970.00', rate: '630.00', days: 19, weekend_days: 7 },
+    ] })).toEqual(['квартира: 630,00 × 19 дн. (12 раб. + 7 вых. месяца)']);
     expect(calcLineFormula({ code: 'housing', amount: '4160.00', parts: [
       { kind: 'housing', housing: 'dormitory', amount: '4160.00', rate: '160.00', days: 26 },
     ] })).toEqual(['доплата за общежитие: 160,00 × 26 дн.']);

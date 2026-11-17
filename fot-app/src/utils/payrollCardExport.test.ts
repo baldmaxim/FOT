@@ -7,7 +7,7 @@ import {
   buildPayrollTermsSheet,
   PAYROLL_CARD_NO_PAYOUTS,
 } from './payrollCardExport';
-import { PAYROLL_PAID_GROUPS } from './payrollPaid';
+import { PAYROLL_PAID_GROUPS, type IPaidMonthSums } from './payrollPaid';
 
 const row = (patch: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
   employee_id: 7,
@@ -165,7 +165,7 @@ describe('лист «История выплат»', () => {
 
 describe('лист «История выплат»: те же суммы, что на вкладке «Зарплата»', () => {
   const paid = [amount('2026-08', 'contract', '710497.00'), amount('2026-09', 'housing', '18900.00')];
-  const sums = (accrued: number) => ({ accrued, deducted: 0, payout: accrued });
+  const sums = (accrued: number): IPaidMonthSums => ({ accrued, deducted: 0, payout: accrued });
   const recentMonths = ['2026-10', '2026-09', '2026-08'];
 
   it('Абдурахмонов: начислено, удержано, к выплате и «Итого» — расчёт ФОТ, статьи 1С на месте', () => {
@@ -191,6 +191,23 @@ describe('лист «История выплат»: те же суммы, что
       ['Сентябрь 2026', 18900, null, 18900],
       ['Август 2026', 710497, null, 710497],
       ['Итого', 933657, 0, 933657],
+    ]);
+  });
+
+  it('предварительный ноябрь (табель по 16.11) — подписан в строке месяца и в «Итого», как на экране', () => {
+    const { rows } = buildPaidHistorySheet('Абдурахманов', paid, [], {
+      recentMonths: ['2026-11', ...recentMonths],
+      byMonth: new Map([
+        ['2026-11', { ...sums(97568), asOf: '2026-11-16' }],
+        ['2026-10', sums(204260)], ['2026-09', sums(211213)], ['2026-08', sums(176698)],
+      ]),
+    });
+    expect(rows.map(r => r.cells.slice(0, 4))).toEqual([
+      ['Ноябрь 2026 — предварительно, табель по 16.11', 97568, 0, 97568],
+      ['Октябрь 2026', 204260, 0, 204260],
+      ['Сентябрь 2026', 211213, 0, 211213],
+      ['Август 2026', 176698, 0, 176698],
+      ['Итого (вкл. предварительный ноябрь)', 689739, 0, 689739],
     ]);
   });
 

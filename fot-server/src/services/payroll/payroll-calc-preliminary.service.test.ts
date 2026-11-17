@@ -247,7 +247,7 @@ describe('отдел: незакрытый месяц', () => {
 
     // 13 + (30 − 22) = 21 × 630 = 13 230.
     expect(calc?.state === 'preliminary' && calc.rate_allowances).toEqual([
-      { code: 'housing', amount: '13230.00', rate: '630.00', housing_days: 21 },
+      { code: 'housing', amount: '13230.00', rate: '630.00', housing_days: 21, housing_weekend_days: 8 },
     ]);
   });
 

@@ -8,6 +8,7 @@ import { formatPaidAmount, paidPayout, type PayrollPaidTotals } from '../../util
 import { payslipRateLines } from '../../utils/payrollPayslip';
 import { PayslipCalcSection } from './PayslipCalcSection';
 import { PayslipDebtSection } from './PayslipDebtSection';
+import { PayslipHoursDays } from './PayslipHoursDays';
 import disclosure from './PayrollDisclosure.module.css';
 import styles from './PaidPayslip.module.css';
 
@@ -33,6 +34,7 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
  *  - «Расчёт ФОТ» по табелю, закрыт он или нет (PayslipCalcSection) — с формулами и столбцом «1С»: в нём все статьи
  *    «Оплачено» месяца (без пары в ФОТ — своими строками); расчёта нет — таблица из строк 1С. Отдельных таблиц 1С
  *    («Начислено за N дней», «Удержано») нет (решение 30.10.2026). Старый бэкенд без расчёта — блок «По ставкам ФОТ»;
+ *  - месяц с окладом по часам — «Часы по дням» (PayslipHoursDays, свёрнуто): норма, табель, оклад, переработка по датам;
  *  - долги прошлых месяцев из ведомости бригады (PayslipDebtSection) — расшифровка строки «Погашение долгов»;
  *  - «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
  *  - «Остаток» — итог ФОТ минус перечисленное: НДФЛ в итоге ФОТ не вычтен, поэтому он сидит в остатке.
@@ -62,6 +64,7 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
           payout1c={hasPaid ? paidPayout(totals) : null}
         />
       )}
+      {isCalcCounted(calc) && <PayslipHoursDays calc={calc} />}
       {payslipQuery.isError && (
         <div className={`${disclosure.stateError} ${styles.note}`}>
           <span>Не удалось загрузить листок</span>

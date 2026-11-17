@@ -201,7 +201,8 @@ export const getPayslipInfo = async (
 ): Promise<IPayrollPayslipInfo> => {
   const payouts = options.preliminary ? getPreliminaryPayoutForEmployees : getPayoutForEmployees;
   const [calcs, schedules] = await Promise.all([
-    payouts([employeeId], month, req),
+    // withHoursByDay — «Часы по дням» и норма по дням к расшифровке оклада по часам; суммы те же.
+    payouts([employeeId], month, req, undefined, { withHoursByDay: true }),
     loadPayslipSchedules(employeeId, month),
   ]);
   const calc: PayrollCalcWithPreliminary = calcs.get(employeeId) ?? { state: 'not_closed', reason: 'no_period' };

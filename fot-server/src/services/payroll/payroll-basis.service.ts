@@ -48,6 +48,7 @@ import { computeExportWeekendExemptions } from '../timesheet-export.service.js';
 import { buildFiredCutoffMap } from '../timesheet-fired-cutoff.service.js';
 import type { ITimesheetVersionPayload, IVersionDayValue } from '../timesheet-version.service.js';
 import { isSalaryByHoursMonth } from './payroll-salary-hours.js';
+import { scheduleMonthNorm, toNormPlan, type IPayrollNormPlan } from './schedule-month-norm.js';
 
 export type PayrollAbsenceStatus = 'vacation' | 'sick' | 'educational_leave' | 'unpaid';
 
@@ -278,25 +279,24 @@ export const countMonthNormMinutes = (
 
 /**
  * Норма графика за месяц в минутах — без подмены нормой календаря (её делает countMonthNormMinutes до ноября 2026).
- * Дневная норма из графика каждой даты, квота Сб/Вс и её часы — из графика последнего дня. Нет графика хоть на день —
- * null. Одно правило для зарплаты по часам и для блока «График работы» в табеле «По сотруднику».
+ * Итог scheduleMonthNorm (schedule-month-norm.ts): дневная норма из графика каждой даты, квота Сб/Вс и её часы — из
+ * графика последнего дня. Нет графика хоть на день — null. Одно правило для зарплаты по часам, снимка нормы в основе
+ * и блока «График работы» в табеле «По сотруднику».
  */
 export const countScheduleMonthNormMinutes = (
   schedules: ReadonlyMap<string, IResolvedSchedule> | undefined,
   month: string,
   calendar: IProductionCalendarMonth | null,
-): number | null => {
-  const [year, mon] = month.split('-').map(Number);
-  let hours = 0;
-  let last: IResolvedSchedule | undefined;
-  for (let day = 1; day <= daysInMonth(month); day++) {
-    last = schedules?.get(`${month}-${pad2(day)}`);
-    if (!last) return null;
-    hours += getDayNormHours(last, new Date(year, mon - 1, day), calendar);
-  }
-  const quota = (last?.expected_saturdays_per_month ?? 0) + (last?.expected_sundays_per_month ?? 0);
-  return Math.round((hours + quota * (last?.work_hours ?? 0)) * 60);
-};
+): number | null => scheduleMonthNorm(schedules, month, calendar).totalMinutes;
+
+/** Снимок нормы по дням для основы (миграция 368) — только месяцы оклада по часам; нет графика хоть на день — null. */
+export const countMonthNormPlan = (
+  schedules: ReadonlyMap<string, IResolvedSchedule> | undefined,
+  month: string,
+  calendar: IProductionCalendarMonth | null,
+): IPayrollNormPlan | null => (
+  isSalaryByHoursMonth(month) ? toNormPlan(scheduleMonthNorm(schedules, month, calendar)) : null
+);
 
 export interface IPayrollBasisDraft extends IBasisDays {
   employeeId: number;
@@ -304,9 +304,17 @@ export interface IPayrollBasisDraft extends IBasisDays {
   month: string;
   normDays: number | null;
   normMinutes: number | null;
+  /**
+   * Норма по дням и квота на момент снятия основы (миграция 368) — для расшифровки в листке, в расчёт и в хэш не
+   * входит; нет — месяц по дням, графика нет или основа старая.
+   */
+  normPlan?: IPayrollNormPlan | null;
 }
 
-/** Вход хэша: у копий старых основ дат отсутствий (до 339) и минут к оплате (до 344) может не быть. */
+/**
+ * Вход хэша: у копий старых основ дат отсутствий (до 339) и минут к оплате (до 344) может не быть. Снимок нормы по
+ * дням в хэш не входит: он только поясняет norm_minutes, повторное закрытие с ним новой revision не даёт.
+ */
 export type BasisHashInput = Omit<IPayrollBasisDraft, 'absenceDates' | 'paidMinutes'> & {
   absenceDates: PayrollAbsenceDates | null;
   paidMinutes?: Readonly<Record<string, number>> | null;
@@ -393,6 +401,7 @@ export const buildBasisDraftsForDays = async (
         month: `${month}-01`,
         normDays: countMonthNormDays(employeeSchedules, month, calendar),
         normMinutes: countMonthNormMinutes(employeeSchedules, month, calendar),
+        normPlan: countMonthNormPlan(employeeSchedules, month, calendar),
         ...classifyBasisDays({
           employeeId,
           month,
@@ -447,22 +456,23 @@ export const insertPayrollBasis = async (
       absence_dates: draft.absenceDates,
       overtime_minutes: draft.overtimeMinutes,
       paid_minutes: draft.paidMinutes,
+      norm_plan: draft.normPlan ?? null,
     });
   }
   if (rows.length === 0) return 0;
   await exec.query(
     `INSERT INTO timesheet_version_payroll_basis (
        version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
+       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, norm_plan, quality, reason
      )
      SELECT $1, r.employee_id, r.month, r.revision, r.basis_hash, r.norm_days, r.norm_minutes,
             ARRAY(SELECT jsonb_array_elements_text(r.workday_dates))::date[],
             ARRAY(SELECT jsonb_array_elements_text(r.dayoff_dates))::date[],
-            r.absence_days, r.absence_dates, r.overtime_minutes, r.paid_minutes, $3, $4
+            r.absence_days, r.absence_dates, r.overtime_minutes, r.paid_minutes, r.norm_plan, $3, $4
        FROM jsonb_to_recordset($2::jsonb) AS r(
          employee_id int, month date, revision int, basis_hash text, norm_days int, norm_minutes int,
          workday_dates jsonb, dayoff_dates jsonb, absence_days jsonb, absence_dates jsonb, overtime_minutes jsonb,
-         paid_minutes jsonb)
+         paid_minutes jsonb, norm_plan jsonb)
      ON CONFLICT (version_id, employee_id, month, revision) DO NOTHING`,
     [versionId, JSON.stringify(rows), options.quality, options.reason],
   );
@@ -510,11 +520,11 @@ const copyBasisRows = async (
   await client.query(
     `INSERT INTO timesheet_version_payroll_basis (
        version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
+       workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, norm_plan, quality, reason
      )
      SELECT $2, b.employee_id, b.month, 1, b.basis_hash, b.norm_days, b.norm_minutes,
             b.workday_dates, b.dayoff_dates, b.absence_days, b.absence_dates, b.overtime_minutes, b.paid_minutes,
-            b.quality, 'rebuild'
+            b.norm_plan, b.quality, 'rebuild'
        FROM (
          SELECT DISTINCT ON (employee_id, month) *
            FROM timesheet_version_payroll_basis

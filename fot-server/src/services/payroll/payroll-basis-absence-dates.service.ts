@@ -144,11 +144,11 @@ export const backfillPayrollBasisAbsenceDates = async (options: {
           const result = await client.query(
             `INSERT INTO timesheet_version_payroll_basis (
                version_id, employee_id, month, revision, basis_hash, norm_days, norm_minutes,
-               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, quality, reason
+               workday_dates, dayoff_dates, absence_days, absence_dates, overtime_minutes, paid_minutes, norm_plan, quality, reason
              )
              SELECT b.version_id, b.employee_id, b.month, b.revision + 1, $5, b.norm_days, b.norm_minutes,
                     b.workday_dates, b.dayoff_dates, b.absence_days, $6::jsonb, b.overtime_minutes, b.paid_minutes,
-                    b.quality, 'backfill'
+                    b.norm_plan, b.quality, 'backfill'
                FROM timesheet_version_payroll_basis b
               WHERE b.version_id = $1 AND b.employee_id = $2 AND b.month = $3::date AND b.revision = $4
                 AND b.absence_dates IS NULL

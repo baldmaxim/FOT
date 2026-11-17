@@ -14,6 +14,7 @@
  * Дни подач бригады собраны ещё и по бригадам: их оплачивает доля «Выработки» по КТУ (brigade-salary), а не оклад.
  */
 import { query } from '../../config/postgres.js';
+import { canonicalJson } from '../../utils/canonical-json.js';
 import {
   enumerateDatesInclusive,
   ownershipKey,
@@ -28,6 +29,7 @@ import {
   type PayrollAbsenceDays,
   type PayrollBasisQuality,
 } from './payroll-basis.service.js';
+import type { IPayrollNormPlan } from './schedule-month-norm.js';
 
 /** Основа одной подачи: её период в месяце и дни сотрудника в ней. */
 export interface IMonthBasisSource {
@@ -45,6 +47,8 @@ export interface IMonthBasisSource {
   overtimeMinutes: Record<string, number>;
   /** Минуты к оплате при почасовой ставке; null — основа до миграции 344. */
   paidMinutes: Record<string, number> | null;
+  /** Норма по дням на момент закрытия (368); null — основа до 368, месяц по дням или нет графика. */
+  normPlan?: IPayrollNormPlan | null;
   quality: PayrollBasisQuality;
   /** Отдел подачи; у персональной — null. */
   departmentId: string | null;
@@ -75,6 +79,11 @@ export interface ICalcMonthBasis {
   overtimeMinutes: Record<string, number>;
   /** Минуты к оплате при почасовой ставке: дата → минуты; null — основа до миграции 344 или подачи разошлись. */
   paidMinutes: Record<string, number> | null;
+  /**
+   * Норма по дням и квота (368) — только для расшифровки в листке: у закрытой — снимок при закрытии, у живой — по
+   * графикам на сейчас; нет — только итог нормы.
+   */
+  normPlan?: IPayrollNormPlan | null;
   /** Дни в бригадах — по бригадам: у закрытой основы — дни подач бригад, у живой — дни в окнах членства. */
   brigades: IMonthBrigadeDays[];
 }
@@ -131,6 +140,18 @@ const mergePaidMinutes = (
   return merged;
 };
 
+/**
+ * Снимок нормы по дням месяца: норма у подач одна (иначе norm_conflict), снимок — общий для месяца, поэтому берётся
+ * любой из непустых; непустые разошлись — null (в листке — только итог нормы). Подача без снимка (закрыта до 368) не
+ * мешает: 1–15 без него и 16–30 с ним — снимок второй.
+ */
+const mergeNormPlan = (sources: readonly IMonthBasisSource[]): IPayrollNormPlan | null => {
+  const plans = sources.map(source => source.normPlan ?? null).filter((plan): plan is IPayrollNormPlan => plan !== null);
+  if (plans.length === 0) return null;
+  const first = canonicalJson(plans[0]);
+  return plans.every(plan => canonicalJson(plan) === first) ? plans[0] : null;
+};
+
 /** Основа месяца из основ подач — правила в шапке файла. */
 export const assembleMonthBasis = (
   sources: readonly IMonthBasisSource[],
@@ -178,6 +199,7 @@ export const assembleMonthBasis = (
     absenceDates: [...absenceDates].sort(),
     overtimeMinutes,
     paidMinutes: mergePaidMinutes(sources, inPeriod),
+    normPlan: mergeNormPlan(sources),
     brigades: [...brigades.values()].map(entry => ({
       ...entry,
       workdayDates: entry.workdayDates.sort(),
@@ -198,6 +220,7 @@ interface IBasisSourceRow {
   norm_minutes: number | null;
   overtime_minutes: Record<string, number> | null;
   paid_minutes: Record<string, number> | null;
+  norm_plan: IPayrollNormPlan | null;
   workday_dates: string[] | null;
   dayoff_dates: string[] | null;
   absence_days: Partial<PayrollAbsenceDays> | null;
@@ -244,6 +267,7 @@ export const loadMonthBasisSources = async (
             b.norm_minutes,
             b.overtime_minutes,
             b.paid_minutes,
+            b.norm_plan,
             b.workday_dates::text[] AS workday_dates,
             b.dayoff_dates::text[] AS dayoff_dates,
             b.absence_days,
@@ -286,6 +310,7 @@ export const loadMonthBasisSources = async (
       normMinutes: row.norm_minutes === null || row.norm_minutes === undefined ? null : Number(row.norm_minutes),
       overtimeMinutes: row.overtime_minutes ?? {},
       paidMinutes: row.paid_minutes ?? null,
+      normPlan: row.norm_plan ?? null,
       workdayDates: row.workday_dates ?? [],
       dayoffDates: row.dayoff_dates ?? [],
       absenceDays: row.absence_days ?? {},

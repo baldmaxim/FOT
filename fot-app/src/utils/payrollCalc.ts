@@ -138,7 +138,9 @@ export const calcMonthSums = (calc: PayrollCalc | undefined): IPaidMonthSums | n
   const deducted = calcAmount(calc.deducted);
   const payout = calcAmount(calc.net);
   if (accrued === null || deducted === null || payout === null) return null;
-  return accrued === 0 && deducted === 0 ? null : { accrued, deducted, payout };
+  if (accrued === 0 && deducted === 0) return null;
+  // Табель не закрыт — суммы предварительные: строка месяца и итоги это показывают.
+  return calc.state === 'preliminary' ? { accrued, deducted, payout, asOf: calc.as_of } : { accrued, deducted, payout };
 };
 
 /** Сумма «К выплате (ФОТ)» за месяцы — только если итог известен в каждом; иначе null. Счёт в копейках. */
@@ -197,7 +199,12 @@ const partFormula = (part: PayrollCalcLinePart, equals: boolean): string => {
       const what = part.housing === 'apartment' ? 'квартира' : 'доплата за общежитие';
       // Старый бэкенд — сумма за месяц без дней; у квартиры со сменой ставки в месяце — только дни.
       if (part.days === undefined) return `${what}, сумма за месяц`;
-      return part.rate === undefined ? `${what}: ${part.days} дн.` : `${what}: ${money(part.rate)} × ${part.days} дн.`;
+      // Квартира: к отработанным дням добавлены выходные месяца (правило 339) — видно, из чего дни.
+      const weekends = part.weekend_days ?? 0;
+      const split = weekends > 0 && weekends <= part.days ? ` (${part.days - weekends} раб. + ${weekends} вых. месяца)` : '';
+      return part.rate === undefined
+        ? `${what}: ${part.days} дн.${split}`
+        : `${what}: ${money(part.rate)} × ${part.days} дн.${split}`;
     }
     case 'one_time':
       return `${part.reason ?? 'разовые доплаты месяца'}${tail(part.amount)}`;

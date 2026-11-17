@@ -7,6 +7,7 @@
 import type { IEmployeePayout1c } from '../services/payroll1cPayoutsService';
 import type { IPayrollPaidAmount, PayrollPaidItemCode, PayrollPaidMonths } from '../services/payrollService';
 import { formatMonthsLabel } from './monthsSelection';
+import { formatAccrualMonthLabel } from './payrollAccruals';
 import { payoutsByMonth, payoutsTotal } from './payroll1cPayouts';
 import { shiftMonth } from './moscowDate';
 
@@ -336,9 +337,12 @@ export const paidHistory = (
 /** Сколько прошлых месяцев видно в истории и без сумм 1С: у них есть расчёт ФОТ. */
 const RECENT_HISTORY_MONTHS = 6;
 
-/** Прошлые месяцы, которые всегда есть в таблице месяцев, новые сверху; текущий не считаем. */
+/**
+ * Месяцы, которые всегда есть в таблице месяцев, новые сверху: текущий (предварительно, по табелю на вчера) и шесть
+ * прошлых.
+ */
 export const recentHistoryMonths = (toMonth: string): string[] => (
-  Array.from({ length: RECENT_HISTORY_MONTHS }, (_, index) => shiftMonth(toMonth, -1 - index))
+  Array.from({ length: RECENT_HISTORY_MONTHS + 1 }, (_, index) => shiftMonth(toMonth, -index))
 );
 
 /** Суммы строки таблицы месяцев. */
@@ -346,6 +350,8 @@ export interface IPaidMonthSums {
   accrued: number | null;
   deducted: number | null;
   payout: number | null;
+  /** Предварительный расчёт (табель не закрыт): по какой день взят табель, YYYY-MM-DD; нет — окончательный. */
+  asOf?: string;
 }
 
 /** Откуда суммы месяца: расчёт ФОТ, 1С (итога ФОТ нет), ещё считается. */
@@ -358,6 +364,8 @@ export interface IPaidShownMonth extends IPaidMonthSums {
 export interface IPaidShownTotal extends IPaidMonthSums {
   /** Хоть один месяц ещё считается: итог не окончательный. */
   pending: boolean;
+  /** Месяцы итога с предварительным расчётом (YYYY-MM, по порядку): итог помечается. */
+  preliminaryMonths: string[];
 }
 
 export interface IPaidHistoryShown {
@@ -369,8 +377,15 @@ export interface IPaidHistoryShown {
 const SHOWN_SUMS = ['accrued', 'deducted', 'payout'] as const;
 
 /** Итог месяцев в копейках; месяцы без суммы не входят, ничего нет — null. */
-const sumShownMonths = (months: readonly IPaidShownMonth[]): IPaidShownTotal => {
-  const total: IPaidShownTotal = { accrued: null, deducted: null, payout: null, pending: months.some(month => month.source === 'pending') };
+const sumShownMonths = (entries: ReadonlyArray<readonly [string, IPaidShownMonth]>): IPaidShownTotal => {
+  const months = entries.map(([, month]) => month);
+  const total: IPaidShownTotal = {
+    accrued: null,
+    deducted: null,
+    payout: null,
+    pending: months.some(month => month.source === 'pending'),
+    preliminaryMonths: entries.filter(([, month]) => month.source === 'fot' && month.asOf).map(([key]) => key).sort(),
+  };
   for (const key of SHOWN_SUMS) {
     const values = months.flatMap(month => (month[key] === null ? [] : [month[key]]));
     total[key] = values.length === 0 ? null : values.reduce((sum, value) => sum + Math.round(value * 100), 0) / 100;
@@ -394,12 +409,28 @@ export const paidHistoryShown = (
       ? { ...fot, source: 'fot' }
       : { accrued: entry.totals.accrued, deducted: entry.totals.deducted, payout: entry.payout, source: '1c' }];
   }));
-  const monthsOf = (entries: readonly IPaidHistoryMonth[]): IPaidShownMonth[] => entries.map(entry => byMonth.get(entry.month)!);
+  const monthsOf = (entries: readonly IPaidHistoryMonth[]): Array<[string, IPaidShownMonth]> => (
+    entries.map(entry => [entry.month, byMonth.get(entry.month)!])
+  );
   return {
     byMonth,
     byYear: new Map(history.years.map(year => [year.year, sumShownMonths(monthsOf(year.months))])),
     overall: sumShownMonths(monthsOf(history.months)),
   };
+};
+
+/** YYYY-MM-DD → «ДД.ММ»: по какой день взят табель предварительного месяца. */
+export const formatAsOfDay = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+
+/**
+ * Пометка итога с предварительными месяцами: «вкл. предварительный ноябрь», short — «вкл. предв. ноябрь» (узкий
+ * столбец таблицы месяцев); таких нет — null.
+ */
+export const preliminaryTotalNote = (months: readonly string[], short = false): string | null => {
+  if (months.length === 0) return null;
+  const names = months.map(month => formatAccrualMonthLabel(month, false).toLocaleLowerCase('ru')).join(', ');
+  if (short) return `вкл. предв. ${names}`;
+  return months.length === 1 ? `вкл. предварительный ${names}` : `вкл. предварительные ${names}`;
 };
 
 /** Начало окна «за всё время» — раньше любых сумм ЗУП. */

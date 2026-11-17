@@ -49,6 +49,8 @@ export interface IPayslipRateAllowance {
   rate?: string;
   /** Только у проживания: за сколько дней. */
   housing_days?: number;
+  /** Только у квартиры: сколько из housing_days — выходные месяца, добавленные к отработанным; нет — не добавлялись. */
+  housing_weekend_days?: number;
 }
 
 /** Проживание, задевающее период: квартира или общежитие; YYYY-MM-DD, end — день выезда (уже не живёт), null — живёт. */
@@ -196,6 +198,7 @@ const apartmentAllowance = (
     code: 'housing',
     amount: fromCents(rates.reduce((sum, [rate, days]) => sum + toCents(rate) * days, 0)),
     housing_days: rates.reduce((sum, [, days]) => sum + days, 0),
+    ...(weekends > 0 ? { housing_weekend_days: weekends } : {}),
     ...(rates.length === 1 ? { rate: rates[0][0] } : {}),
   };
 };

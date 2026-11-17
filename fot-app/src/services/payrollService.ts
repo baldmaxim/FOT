@@ -502,7 +502,8 @@ export type PayrollCalcLinePart =
   }
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   /** Проживание по дням (миграция 339): ставка за день и дни; у квартиры со сменой ставки в месяце и у старого бэкенда — нет. */
-  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
+  // weekend_days — у квартиры: сколько из days добавлено выходными месяца (правило 339); нет у старого бэкенда.
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number; weekend_days?: number }
   /** Разовая доплата: часть на основание; старый бэкенд — одна часть без основания. */
   | { kind: 'one_time'; amount: string; reason?: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
@@ -577,6 +578,35 @@ export interface IPayrollCalcClosed {
   /** Начислено − удержано, без НДФЛ; null — итог неизвестен (сумму строки ФОТ не посчитал). */
   net: string | null;
   missing: PayrollCalcMissing[];
+  /** «Часы по дням» месяца с окладом по часам — только в листке; нет у старого бэкенда и у месяцев по дням. */
+  hours_by_day?: IPayrollCalcHoursDay[];
+  /**
+   * Норма графика по дням и квота Сб/Вс (миграция 368): у закрытого месяца — снимок при закрытии, у предварительного —
+   * по графикам на сейчас; null — снимка нет (месяц закрыт до 368): только итог нормы.
+   */
+  norm_plan?: IPayrollNormPlan | null;
+}
+
+/**
+ * Дата «Часов по дням»: workday — рабочий день графика (в том числе плановая Сб/Вс), dayoff — выход в выходной,
+ * brigade — день оплачивает доля бригады. paid_minutes — целые часы табеля к оплате (null — часов нет); остаток
+ * paid − contract − overtime − hourly не оплачивается (часы будней сверх нормы, «Без переработки»).
+ */
+export interface IPayrollCalcHoursDay {
+  date: string;
+  kind: 'workday' | 'dayoff' | 'brigade';
+  paid_minutes: number | null;
+  contract_minutes: number;
+  overtime_minutes: number;
+  hourly_minutes: number;
+}
+
+/** Снимок нормы: YYYY-MM-DD → минуты нормы дня (дни с нормой 0 не пишутся), квота Сб/Вс и минуты её дня. */
+export interface IPayrollNormPlan {
+  days: Record<string, number>;
+  saturdays: number;
+  sundays: number;
+  quota_minutes: number;
 }
 
 /** Табель месяца не закрыт — посчитано по живому табелю по as_of (YYYY-MM-DD) включительно; на экране — как закрытый. */

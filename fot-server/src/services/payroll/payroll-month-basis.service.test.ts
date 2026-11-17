@@ -141,6 +141,27 @@ describe('основа месяца: чьи это дни', () => {
   });
 });
 
+describe('основа месяца: снимок нормы по дням (368)', () => {
+  const half = { coverFrom: '2026-09-16', coverTo: '2026-09-30', basisId: 2, versionId: 11 };
+  const plan = { days: { '2026-09-01': 480, '2026-09-02': 480 }, saturdays: 2, sundays: 0, quota_minutes: 480 };
+
+  it('первая половина закрыта до 368 (снимка нет), вторая со снимком — снимок второй', () => {
+    const basis = assembleMonthBasis([source({}), source({ ...half, normPlan: plan })], september);
+    expect(basis).toMatchObject({ state: 'closed', normPlan: plan });
+  });
+
+  it('одинаковые снимки двух подач — один, без повторов', () => {
+    const basis = assembleMonthBasis([source({ normPlan: plan }), source({ ...half, normPlan: { ...plan } })], september);
+    expect(basis).toMatchObject({ state: 'closed', normPlan: plan });
+  });
+
+  it('снимки разошлись (график менялся между подачами) — снимка нет, норма та же', () => {
+    const other = { ...plan, days: { '2026-09-01': 480, '2026-09-03': 480 } };
+    const basis = assembleMonthBasis([source({ normPlan: plan }), source({ ...half, normPlan: other })], september);
+    expect(basis).toMatchObject({ state: 'closed', normPlan: null, normMinutes: 10560 });
+  });
+});
+
 describe('основа месяца из закрытых подач', () => {
   it('две закрытые половины покрывают месяц — дни складываются', () => {
     const basis = assembleMonthBasis([
@@ -166,6 +187,7 @@ describe('основа месяца из закрытых подач', () => {
       absenceDates: ['2026-09-02', '2026-09-03'],
       overtimeMinutes: { '2026-09-16': 180 },
       paidMinutes: {},
+      normPlan: null,
       brigades: [],
     });
   });

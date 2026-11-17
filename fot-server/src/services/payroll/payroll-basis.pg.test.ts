@@ -69,6 +69,8 @@ const MIGRATION = migration('331_payroll_version_basis.sql');
 const MIGRATION_339 = migration('339_payroll_housing_by_days.sql');
 // 344 — минуты к оплате в основе (paid_minutes).
 const MIGRATION_344 = migration('344_payroll_basis_paid_minutes.sql');
+// 368 — норма по дням в основе (norm_plan).
+const MIGRATION_368 = migration('368_payroll_basis_norm_plan.sql');
 
 const q = async <T extends import('pg').QueryResultRow>(sql: string, params?: unknown[]) =>
   (await pg.pool!.query<T>(sql, params)).rows;
@@ -134,6 +136,8 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
     await q(MIGRATION_339);
     await q(MIGRATION_344);
     await q(MIGRATION_344);
+    await q(MIGRATION_368);
+    await q(MIGRATION_368);
   });
 
   beforeEach(async () => {
@@ -383,6 +387,41 @@ describe.skipIf(!PG_URL)('основа расчёта на PostgreSQL', () => {
         { revision: 1, overtime_minutes: { '2026-09-02': 180 }, paid_minutes: { '2026-09-01': 480, '2026-09-02': 660 } },
         { revision: 2, overtime_minutes: {}, paid_minutes: { '2026-09-01': 480, '2026-09-02': 660 } },
       ]);
+  });
+
+  it('368: снимок нормы пишется при закрытии, в хэш не входит, переносится копиями и читается расчётом', async () => {
+    const [from, to] = await seedApproval({ start: '2026-11-01', end: '2026-11-30' }, {}, 2);
+    const options = { quality: 'materialized', reason: 'close', mode: 'changed' } as const;
+    const plan = { days: { '2026-11-02': 600, '2026-11-03': 600 }, saturdays: 2, sundays: 0, quota_minutes: 600 };
+    const november = (over: Partial<IPayrollBasisDraft> = {}) => draft(71, {
+      month: '2026-11-01', normMinutes: 13800, workdayDates: ['2026-11-02'], overtimeMinutes: { '2026-11-02': 120 },
+      paidMinutes: { '2026-11-02': 720 }, normPlan: plan, ...over,
+    });
+    expect(await insertPayrollBasis(pg.pool!, from, [november()], options)).toBe(1);
+    // Другой снимок при тех же днях и норме — та же основа: новой revision нет, снятый при закрытии снимок остаётся.
+    const moved = { ...plan, days: { '2026-11-02': 600, '2026-11-04': 600 } };
+    expect(await insertPayrollBasis(pg.pool!, from, [november({ normPlan: moved })], options)).toBe(0);
+
+    // Копия служебного скрипта (новая revision) переносит снимок как есть.
+    await q('UPDATE timesheet_versions SET payload = $1::jsonb', [JSON.stringify({ employees: [] })]);
+    await fixPayrollBasisOvertime({ apply: true, rebuild: async () => [november({ overtimeMinutes: {} })] });
+    const client = await pg.pool!.connect();
+    await client.query('BEGIN');
+    await copyPayrollBasis(client, from, to);
+    await client.query('COMMIT');
+    client.release();
+    expect(await q(`SELECT version_id::int AS version_id, revision, norm_plan
+                      FROM timesheet_version_payroll_basis ORDER BY id`)).toEqual([
+      { version_id: from, revision: 1, norm_plan: plan },
+      { version_id: from, revision: 2, norm_plan: plan },
+      { version_id: to, revision: 1, norm_plan: plan },
+    ]);
+
+    const sources = (await loadMonthBasisSources([71], '2026-11')).get(71);
+    expect(sources?.map(source => source.normPlan)).toEqual([plan]);
+    // Основа до 368 — снимка нет.
+    await q('UPDATE timesheet_version_payroll_basis SET norm_plan = NULL');
+    expect((await loadMonthBasisSources([71], '2026-11')).get(71)?.map(source => source.normPlan)).toEqual([null]);
   });
 
   it('339: даты отсутствий пишутся при закрытии, переносятся в новую редакцию и читаются расчётом', async () => {

@@ -44,7 +44,7 @@
  */
 import { BRIGADE_WHOLE_FIXED_KEY, fixedShareKtus } from './brigade-salary.calc.js';
 import type { PayrollAbsenceDays } from './payroll-basis.service.js';
-import { buildSalaryHoursLines } from './payroll-calc-hours.rules.js';
+import { buildSalaryHoursLines, composeHoursByDay, type IPayrollCalcHoursDay } from './payroll-calc-hours.rules.js';
 import {
   cents,
   clampPeriod,
@@ -136,7 +136,8 @@ export type PayrollCalcLinePart =
   }
   | { kind: 'travel'; rate: string; days: number; norm: number; amount: string }
   // Ставка за день и дни (миграция 339); у квартиры со сменой ставки в месяце ставки нет.
-  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number }
+  // weekend_days — у квартиры: сколько из days — выходные месяца, добавленные к отработанным (правило 339).
+  | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number; weekend_days?: number }
   /** Разовая доплата: часть на основание («Допработы», «Премия»…). */
   | { kind: 'one_time'; amount: string; reason: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
@@ -446,6 +447,14 @@ export interface IPayrollCalcFacts {
   brigadeShares?: readonly IBrigadeShareFact[];
   /** Отпускные и больничные из 1С месяца. */
   absencePay1c?: readonly IAbsencePay1c[];
+  /**
+   * Расшифровка «Часы по дням» для листка (withHoursByDay); нет — не строится, суммы те же. Даты бригад и минуты основы
+   * со всеми датами: в факты оклада они не попадают, а в расшифровке нужны.
+   */
+  hoursByDay?: {
+    brigadeDates: readonly string[];
+    paidMinutes: Readonly<Record<string, number>> | null;
+  };
 }
 
 export interface IPayrollCalcResult {
@@ -459,6 +468,8 @@ export interface IPayrollCalcResult {
    */
   net: string | null;
   missing: PayrollCalcMissing[];
+  /** «Часы по дням» месяца с окладом по часам — только при facts.hoursByDay. */
+  hours_by_day?: IPayrollCalcHoursDay[];
 }
 
 /** Причины, при которых итог «К выплате (ФОТ)» неизвестен: частичная сумма за итог не выдаётся. */
@@ -574,6 +585,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
 
   // С ноября 2026 месяц с окладом — по часам (payroll-calc-hours.rules.ts); иначе — по дням, как было.
   const salaryByHours = isSalaryByHoursMonth(facts.monthStart) && segments.some(segment => segment.calcType === 'salary');
+  let hoursByDay: IPayrollCalcHoursDay[] | undefined;
   if (salaryByHours) {
     const byHours = buildSalaryHoursLines({
       monthStart: facts.monthStart,
@@ -589,6 +601,15 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     });
     lines.push(...byHours.lines);
     for (const code of byHours.missing) missing.add(code);
+    if (facts.hoursByDay) {
+      hoursByDay = composeHoursByDay({
+        workdayDates: facts.workdayDates,
+        dayoffDates: facts.dayoffDates,
+        brigadeDates: facts.hoursByDay.brigadeDates,
+        paidMinutes: facts.hoursByDay.paidMinutes,
+        byDate: byHours.byDate,
+      });
+    }
   } else {
     // Сначала даты по условиям: норма, её добор и переработка — только среди окладных и дат без условий.
     const isHourlyDate = (date: string): boolean => segmentOf(date)?.calcType === 'hourly';
@@ -860,6 +881,7 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
         amount: allowance.amount,
         ...(allowance.rate !== undefined ? { rate: allowance.rate } : {}),
         ...(allowance.housing_days !== undefined ? { days: allowance.housing_days } : {}),
+        ...(allowance.housing_weekend_days ? { weekend_days: allowance.housing_weekend_days } : {}),
       };
       lines.push({ code: 'housing', amount: allowance.amount, parts: [part] });
     }
@@ -900,5 +922,6 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     deducted: centsToAmount(deductedCents),
     net: netKnown ? centsToAmount(accruedCents - deductedCents) : null,
     missing: [...missing],
+    ...(hoursByDay ? { hours_by_day: hoursByDay } : {}),
   };
 };

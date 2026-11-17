@@ -41,6 +41,7 @@ import {
   type IPayrollCalcResult,
   type IPlannedSupplementPeriod,
 } from './payroll-calc.rules.js';
+import type { IPayrollNormPlan } from './schedule-month-norm.js';
 import { loadEmployeePeriods, type IPayrollEmployeeRow } from './payroll-employee-period.service.js';
 import { monthDeductionsSql } from './payroll-month-deductions.sql.js';
 import { attributeMonths, loadMonthBreakdown, monthPairKey } from './payroll-month-attribution.service.js';
@@ -77,6 +78,11 @@ interface IPayrollCalcDetails extends IPayrollCalcResult {
   terms: IPayrollTerms[];
   /** Итог того же месяца по прежним условиям (блок «Пересчёт»); только если их передали. */
   previous_net?: string | null;
+  /**
+   * Норма по дням и квота (368) — к «Часам по дням» листка: только с withHoursByDay и окладом по часам (есть часть
+   * salary_hours); у закрытого месяца — снимок при закрытии, у живого — по графикам на сейчас.
+   */
+  norm_plan?: IPayrollNormPlan | null;
 }
 
 export interface IPayrollCalcClosed extends IPayrollCalcDetails {
@@ -338,6 +344,11 @@ export interface IPayoutOptions {
    * расчёта (peekFixedBrigadeShares), иначе бригада open. По умолчанию — как раньше: закрытый месяц фиксируется.
    */
   fixBrigades?: boolean;
+  /**
+   * true — листок карточки: к расчёту «Часы по дням» (hours_by_day) и норма по дням (norm_plan). Суммы те же; «Расчёты»,
+   * «Свод» и табель флаг не передают — их ответы не растут.
+   */
+  withHoursByDay?: boolean;
 }
 
 /**
@@ -494,7 +505,10 @@ const computePayouts = async (
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: shares,
       absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
+      ...(options.withHoursByDay ? { hoursByDay: { brigadeDates: [...brigadeDates], paidMinutes: basis.paidMinutes } } : {}),
     };
+    const calcResult = buildPayrollCalc(calcFacts);
+    const salaryHours = calcResult.lines.some(line => line.parts?.some(part => part.kind === 'salary_hours'));
     const previousTerms = options.previousTerms?.get(employeeId);
     const details: IPayrollCalcDetails = {
       norm_days: basis.normDays,
@@ -504,8 +518,9 @@ const computePayouts = async (
       absences: basis.absenceDays,
       rate_allowances: rateAllowances,
       terms,
-      ...buildPayrollCalc(calcFacts),
-      ...(previousTerms ? { previous_net: buildPayrollCalc({ ...calcFacts, terms: previousTerms }).net } : {}),
+      ...calcResult,
+      ...(previousTerms ? { previous_net: buildPayrollCalc({ ...calcFacts, terms: previousTerms, hoursByDay: undefined }).net } : {}),
+      ...(options.withHoursByDay && salaryHours ? { norm_plan: basis.normPlan ?? null } : {}),
     };
     // Живой табель или предварительная доля бригады — предварительно; иначе — закрытый расчёт, как всегда.
     const preliminaryAsOf = !closed || basis.brigades.some(item => brigades.preliminary.has(item.departmentId)) ? asOf : null;
@@ -531,7 +546,7 @@ export const getPayoutForEmployees = async (
   month: string,
   req: AuthenticatedRequest,
   metrics?: IPayoutMetrics,
-  options?: Pick<IPayoutOptions, 'fixBrigades'>,
+  options?: Pick<IPayoutOptions, 'fixBrigades' | 'withHoursByDay'>,
 ): Promise<Map<number, PayrollCalc>> => {
   const result = new Map<number, PayrollCalc>();
   for (const [employeeId, calc] of await computePayouts(employeeIds, month, req, metrics, false, options)) {

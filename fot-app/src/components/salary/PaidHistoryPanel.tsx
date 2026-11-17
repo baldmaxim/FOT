@@ -6,11 +6,14 @@ import { paidHistoryQueryOptions, payouts1cHistoryQueryOptions, payslipQueryOpti
 import { formatAccrualMonthLabel } from '../../utils/payrollAccruals';
 import { calcMonthSums } from '../../utils/payrollCalc';
 import {
+  formatAsOfDay,
   formatPaidAmount,
   paidHistory,
   paidHistoryShown,
+  preliminaryTotalNote,
   recentHistoryMonths,
   type IPaidMonthSums,
+  type IPaidShownTotal,
 } from '../../utils/payrollPaid';
 import { PaidPayslip } from './PaidPayslip';
 import { PayslipRecalcSection } from './PayslipRecalcSection';
@@ -23,7 +26,7 @@ interface IPaidHistoryPanelProps {
   toMonth: string;
 }
 
-type SumKind = keyof IPaidMonthSums | 'transferred';
+type SumKind = Exclude<keyof IPaidMonthSums, 'asOf'> | 'transferred';
 
 const SUM_COLUMNS: ReadonlyArray<{ kind: SumKind; label: string }> = [
   { kind: 'accrued', label: 'Начислено' },
@@ -34,6 +37,14 @@ const SUM_COLUMNS: ReadonlyArray<{ kind: SumKind; label: string }> = [
 
 const SOURCE_1C_HINT = 'Итога ФОТ нет — суммы 1С';
 
+/** Пометка итога (год, «Итого») с предварительными месяцами; полная подпись — в подсказке. */
+const renderTotalNote = (total: IPaidShownTotal | undefined): ReactNode => {
+  const note = preliminaryTotalNote(total?.preliminaryMonths ?? [], true);
+  return note && (
+    <span className={styles.rowNote} title={preliminaryTotalNote(total?.preliminaryMonths ?? []) ?? undefined}>{note}</span>
+  );
+};
+
 /** Сумма ячейки: расчёт идёт — «…», перечисление 1С от расчёта не зависит. */
 const renderSum = (value: number | null, pending: boolean, kind: SumKind): ReactNode => {
   if (pending && kind !== 'transferred') return <span className={styles.pending} aria-label="Считается">…</span>;
@@ -42,11 +53,13 @@ const renderSum = (value: number | null, pending: boolean, kind: SumKind): React
 
 /**
  * Вкладка «Зарплата» карточки сотрудника. Слева все месяцы, за которые из 1С пришли суммы «Оплачено» или ведомости
- * выплаты, и последние шесть месяцев (текущий не считаем), по годам (новые сверху, у года — итоги): «Начислено»,
+ * выплаты, текущий месяц и шесть прошлых, по годам (новые сверху, у года — итоги): «Начислено»,
  * «Удержано», «К выплате» — из расчёта ФОТ, те же числа, что справа (решение пользователя 03.11.2026); итога ФОТ нет
  * (нет условий, выработка бригады не введена) — суммы 1С. «Перечислено (1С)» — справочно, по месяцу начисления
  * (миграция 328). Таблица не ждёт расчёта: месяцы заполняются по мере ответов.
- * Справа — расчётный листок выбранного месяца (PaidPayslip), по умолчанию последнего, и блок «Пересчёт»: рядом, если
+ * Табель месяца не закрыт (текущий — всегда) — суммы предварительные: у месяца «по ДД.ММ», у итогов года и «Итого» —
+ * «вкл. предв. ноябрь».
+ * Справа — расчётный листок выбранного месяца (PaidPayslip), по умолчанию последнего (текущего), и блок «Пересчёт»: рядом, если
  * хватает ширины, иначе под листком.
  * Две колонки — когда хватает ширины карточки (container query), уже — одна: список, тап по месяцу
  * открывает листок, «Все месяцы» — назад. Записывает только «Доплачено» в «Пересчёте».
@@ -123,7 +136,10 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMon
               {history.years.map(year => (
                 <tbody key={year.year}>
                   <tr className={styles.yearRow}>
-                    <th scope="rowgroup">{year.year}</th>
+                    <th scope="rowgroup">
+                      {year.year}
+                      {renderTotalNote(shown.byYear.get(year.year))}
+                    </th>
                     {SUM_COLUMNS.map(column => {
                       const total = shown.byYear.get(year.year);
                       const value = column.kind === 'transferred' ? year.transferred : total?.[column.kind] ?? null;
@@ -143,6 +159,8 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMon
                         <th scope="row">
                           <button type="button" className={styles.monthButton} aria-pressed={active}>
                             {formatAccrualMonthLabel(entry.month, false)}
+                            {/* Табель не закрыт — суммы предварительные, по этот день. */}
+                            {sums?.asOf && <span className={styles.rowNote}>по {formatAsOfDay(sums.asOf)}</span>}
                           </button>
                         </th>
                         {SUM_COLUMNS.map(column => {
@@ -162,7 +180,10 @@ export const PaidHistoryPanel: FC<IPaidHistoryPanelProps> = ({ employeeId, toMon
               {history.years.length > 1 && (
                 <tfoot>
                   <tr>
-                    <th scope="row">Итого</th>
+                    <th scope="row">
+                      Итого
+                      {renderTotalNote(shown.overall)}
+                    </th>
                     {SUM_COLUMNS.map(column => {
                       const value = column.kind === 'transferred' ? history.overallTransferred : shown.overall[column.kind];
                       return <td key={column.kind} className={styles.num}>{renderSum(value, shown.overall.pending, column.kind)}</td>;

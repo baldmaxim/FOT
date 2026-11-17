@@ -195,9 +195,12 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(pickPayslipRateAllowances(facts({ travelDays: { worked: 5, norm: 0 } }))).toEqual([]);
   });
 
-  /** Строка квартиры по ставке 630. */
-  const housingLine = (housingDays: number, amount: string) => (
-    [{ code: 'housing', amount, rate: '630.00', housing_days: housingDays }]
+  /** Строка квартиры по ставке 630; weekendDays — сколько из дней добавлено выходными месяца. */
+  const housingLine = (housingDays: number, amount: string, weekendDays = 0) => (
+    [{
+      code: 'housing', amount, housing_days: housingDays,
+      ...(weekendDays > 0 ? { housing_weekend_days: weekendDays } : {}), rate: '630.00',
+    }]
   );
   /** Квартира весь месяц: норма графика, отработано с 1-го по count. */
   const wholeMonth = (month: string, normDays: number | null, count: number) => housingAllowances(facts({
@@ -208,26 +211,26 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
   }));
 
   it('квартира — 31 день, график 26: отработанные + 5 выходных; меньше недели — только отработанные', () => {
-    expect(wholeMonth('2026-10', 26, 26)).toEqual(housingLine(31, '19530.00'));
-    expect(wholeMonth('2026-10', 26, 15)).toEqual(housingLine(20, '12600.00'));
-    expect(wholeMonth('2026-10', 26, 7)).toEqual(housingLine(12, '7560.00'));
+    expect(wholeMonth('2026-10', 26, 26)).toEqual(housingLine(31, '19530.00', 5));
+    expect(wholeMonth('2026-10', 26, 15)).toEqual(housingLine(20, '12600.00', 5));
+    expect(wholeMonth('2026-10', 26, 7)).toEqual(housingLine(12, '7560.00', 5));
     expect(wholeMonth('2026-10', 26, 6)).toEqual(housingLine(6, '3780.00'));
     expect(wholeMonth('2026-10', 26, 5)).toEqual(housingLine(5, '3150.00'));
     expect(wholeMonth('2026-10', 26, 3)).toEqual(housingLine(3, '1890.00'));
   });
 
   it('квартира — сентябрь 2026 как в 1С: выходные = дни месяца − график (6 при 24, 8 при 22)', () => {
-    expect(wholeMonth('2026-09', 24, 24)).toEqual(housingLine(30, '18900.00'));
+    expect(wholeMonth('2026-09', 24, 24)).toEqual(housingLine(30, '18900.00', 6));
     // Антоненко: день без явки не оплачивается.
-    expect(wholeMonth('2026-09', 24, 13)).toEqual(housingLine(19, '11970.00'));
+    expect(wholeMonth('2026-09', 24, 13)).toEqual(housingLine(19, '11970.00', 6));
     // Калязин.
-    expect(wholeMonth('2026-09', 24, 15)).toEqual(housingLine(21, '13230.00'));
+    expect(wholeMonth('2026-09', 24, 15)).toEqual(housingLine(21, '13230.00', 6));
     // Крумина: 21 день отпуска не оплачивается, выходные — целиком.
-    expect(wholeMonth('2026-09', 24, 8)).toEqual(housingLine(14, '8820.00'));
-    // Гадоев: 26 + 6 = 32 — не больше дней месяца.
-    expect(wholeMonth('2026-09', 24, 26)).toEqual(housingLine(30, '18900.00'));
+    expect(wholeMonth('2026-09', 24, 8)).toEqual(housingLine(14, '8820.00', 6));
+    // Гадоев: 26 + 6 = 32 — не больше дней месяца: выходных 4.
+    expect(wholeMonth('2026-09', 24, 26)).toEqual(housingLine(30, '18900.00', 4));
     // Голуб: график 22.
-    expect(wholeMonth('2026-09', 22, 17)).toEqual(housingLine(25, '15750.00'));
+    expect(wholeMonth('2026-09', 22, 17)).toEqual(housingLine(25, '15750.00', 8));
   });
 
   it('квартира — норма неизвестна, 0 или больше дней месяца: только отработанные', () => {
@@ -241,17 +244,17 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-08')],
       housingDays: days({ from: '2026-09-08', normDays: 24, workedDates: dates('2026-09', 8, 26) }),
-    }))).toEqual(housingLine(25, '15750.00'));
+    }))).toEqual(housingLine(25, '15750.00', 6));
     // Выезд 11.09: дни после выезда не оплачиваются, 8 + 6 = 14.
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-01', '2026-09-11')],
       housingDays: days({ normDays: 24, workedDates: [...dates('2026-09', 1, 8), ...dates('2026-09', 15, 20)] }),
-    }))).toEqual(housingLine(14, '8820.00'));
+    }))).toEqual(housingLine(14, '8820.00', 6));
     // Порог — по месяцу: 10 отработанных, 3 из них после заселения 21.09, 3 + 6 = 9.
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-21')],
       housingDays: days({ normDays: 24, workedDates: [...dates('2026-09', 1, 7), ...dates('2026-09', 21, 23)] }),
-    }))).toEqual(housingLine(9, '5670.00'));
+    }))).toEqual(housingLine(9, '5670.00', 6));
     // За месяц 5, 3 из них после заселения — только 3.
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-21')],
@@ -269,7 +272,7 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-01')],
       housingDays: days({ from: '2026-10-01', to: '2026-10-09', normDays: 26, workedDates: dates('2026-10', 1, 7) }),
-    }))).toEqual(housingLine(12, '7560.00'));
+    }))).toEqual(housingLine(12, '7560.00', 5));
     // Окно до 03.09: из 20 отработанных в счёт идут 3.
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-01')],
@@ -289,7 +292,7 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     }))).toEqual(housingLine(6, '3780.00'));
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-01')], housingDays: days({ normDays: 24, workedDates: twice(8) }),
-    }))).toEqual(housingLine(14, '8820.00'));
+    }))).toEqual(housingLine(14, '8820.00', 6));
   });
 
   it('две ставки квартиры — отработанные по своей ставке, выходные пропорционально дням проживания; ставки в строке нет', () => {
@@ -302,16 +305,16 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(housingAllowances(facts({
       housing: half,
       housingDays: days({ normDays: 24, workedDates: [...dates('2026-09', 1, 8), ...dates('2026-09', 16, 23)] }),
-    }))).toEqual([{ code: 'housing', amount: '14630.00', housing_days: 22 }]);
+    }))).toEqual([{ code: 'housing', amount: '14630.00', housing_days: 22, housing_weekend_days: 6 }]);
     // 20 и 10 дней проживания, 5 выходных (3,33 и 1,67): остаток — большей дробной части, 3 и 2.
     expect(housingAllowances(facts({
       housing: [apartment('2026-09-01', '2026-09-21'), apartment('2026-09-21', null, '700.00')],
       housingDays: days({ normDays: 25, workedDates: dates('2026-09', 1, 7) }),
-    }))).toEqual([{ code: 'housing', amount: '7700.00', housing_days: 12 }]);
+    }))).toEqual([{ code: 'housing', amount: '7700.00', housing_days: 12, housing_weekend_days: 5 }]);
     // Дробные части равны — более поздней ставке: 8 × 630 + 1 × 700.
     expect(housingAllowances(facts({
       housing: half, housingDays: days({ normDays: 29, workedDates: dates('2026-09', 1, 8) }),
-    }))).toEqual([{ code: 'housing', amount: '5740.00', housing_days: 9 }]);
+    }))).toEqual([{ code: 'housing', amount: '5740.00', housing_days: 9, housing_weekend_days: 1 }]);
   });
 
   it('доплата за общежитие — ставка × дни в бригаде, кроме дней в общежитии и квартире', () => {
@@ -327,7 +330,7 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
       housing: [apartment('2026-09-21')],
       housingDays: days({ brigadeDates, workedDates: brigadeDates, normDays: 24 }),
     }))).toEqual([
-      { code: 'housing', amount: '7560.00', rate: '630.00', housing_days: 12 },
+      { code: 'housing', amount: '7560.00', rate: '630.00', housing_days: 12, housing_weekend_days: 6 },
       { code: 'dormitory_allowance', amount: '3200.00', rate: '160.00', housing_days: 20 },
     ]);
   });
@@ -352,7 +355,7 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
       housingDays: days({ normDays: 24, workedDates: dates('2026-09', 1, 24) }),
     }))).toEqual([
       fullTravel,
-      { code: 'housing', amount: '18900.00', rate: '630.00', housing_days: 30 },
+      { code: 'housing', amount: '18900.00', rate: '630.00', housing_days: 30, housing_weekend_days: 6 },
     ]);
   });
 });

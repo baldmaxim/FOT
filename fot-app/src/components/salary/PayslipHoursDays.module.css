@@ -1,0 +1,16 @@
+/*
+ * «Часы по дням» листка: раскрываемый блок под «Расчётом ФОТ», таблица в 5 узких столбцов — на 360 px без прокрутки,
+ * уже — прокрутка вбок (обёртка .scroll листка).
+ */
+.block { border-bottom: none; }
+.title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+
+/* Дата «ДД.ММ Дн» — первый столбец шире, часы — поровну. */
+.table.table { min-width: 18rem; table-layout: auto; }
+.table th:first-child { width: 30%; }
+
+/* Даты после «табеля по» предварительного месяца: табеля ещё нет, только норма. */
+.table .future > * { color: var(--text-tertiary); }
+
+/* Квота — строка нормы без дат: только «График». */
+.table .quotaRow > * { font-weight: 400; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); }

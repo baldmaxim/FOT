@@ -61,6 +61,25 @@ export interface IMinutesSplit {
   overtime: Record<string, number>;
 }
 
+/** Куда ушли минуты дат месяца: в оклад, в «Переработку», по почасовой ставке. */
+export interface IHoursByDate extends IMinutesSplit {
+  hourly: Record<string, number>;
+}
+
+/**
+ * Дата в расшифровке «Часы по дням» листка (флаг withHoursByDay): workday — рабочий день графика (в том числе плановая
+ * Сб/Вс), dayoff — выход в выходной, brigade — день оплачивает доля бригады (в оклад не идёт).
+ */
+export interface IPayrollCalcHoursDay {
+  date: string;
+  kind: 'workday' | 'dayoff' | 'brigade';
+  /** Минуты к оплате основы — целые часы табеля, снятые при закрытии (миграция 344); null — часов дня нет. */
+  paid_minutes: number | null;
+  contract_minutes: number;
+  overtime_minutes: number;
+  hourly_minutes: number;
+}
+
 /**
  * Распределение минут окладных дат — правила в шапке файла. workdays — обычные минуты рабочих дней (без переработки по
  * правке), dayoffs — минуты выходов, weekdayOvertime — часы правки сверх порога; stopped — дата в «Без переработки».
@@ -104,7 +123,7 @@ const sumMinutes = (byDate: Readonly<Record<string, number>>, from: string, to: 
 /** Строки «По трудовому договору», «Премиальная», «Переработка» месяца с окладом по часам — правила в шапке файла. */
 export const buildSalaryHoursLines = (
   input: ISalaryHoursInput,
-): { lines: IPayrollCalcLine[]; missing: PayrollCalcMissing[] } => {
+): { lines: IPayrollCalcLine[]; missing: PayrollCalcMissing[]; byDate: IHoursByDate } => {
   const missing = new Set<PayrollCalcMissing>();
   const lines: IPayrollCalcLine[] = [];
   const norm = input.normMinutes !== null && input.normMinutes > 0 ? input.normMinutes : null;
@@ -211,14 +230,15 @@ export const buildSalaryHoursLines = (
       parts,
     });
   }
-  if (!known) return { lines, missing: [...missing] };
+  const byDate: IHoursByDate = { ...split, hourly: hourlyMinutesByDate };
+  if (!known) return { lines, missing: [...missing], byDate };
   if (norm === null) {
     // Плановой доплате нечем делить: дат периода нет — и доплаты нет, иначе итог неизвестен.
     const plannedDates = input.plannedSupplements.some(period => (
       allDates.some(date => inRange(date, period.date_from, period.date_to))
     ));
     if (plannedDates) missing.add('no_norm');
-    return { lines, missing: [...missing] };
+    return { lines, missing: [...missing], byDate };
   }
 
   // «Премиальная»: минуты оклада и почасовые минуты периода доплаты, не больше нормы.
@@ -275,5 +295,40 @@ export const buildSalaryHoursLines = (
     }
     lines.push({ code: 'overtime', amount: centsToAmount(overtimeCents), hours: hoursOf(overtimeMinutes), parts: overtimeParts });
   }
-  return { lines, missing: [...missing] };
+  return { lines, missing: [...missing], byDate };
+};
+
+/**
+ * «Часы по дням» листка: каждая дата основы месяца — сколько часов табеля, сколько из них в оклад, в «Переработку», по
+ * ставке; остаток (часы будней сверх нормы, «Без переработки») не оплачивается. Даты бригады — своими строками с
+ * часами табеля: их оплачивает доля, в оклад они не идут (в факты расчёта оклада не попадают). Чистая функция.
+ */
+export const composeHoursByDay = (input: {
+  /** Рабочие дни и выходы без дат бригад — те же, что в фактах расчёта. */
+  workdayDates: readonly string[];
+  dayoffDates: readonly string[];
+  brigadeDates: readonly string[];
+  /** Минуты к оплате основы со всеми датами, в том числе бригад; null — основа до 344. */
+  paidMinutes: Readonly<Record<string, number>> | null;
+  byDate: IHoursByDate;
+}): IPayrollCalcHoursDay[] => {
+  const brigade = new Set(input.brigadeDates);
+  const dayoff = new Set(input.dayoffDates);
+  const dates = new Set([
+    ...input.workdayDates,
+    ...input.dayoffDates,
+    ...input.brigadeDates,
+    ...Object.keys(input.byDate.overtime),
+  ]);
+  return [...dates].sort().map((date): IPayrollCalcHoursDay => {
+    const isBrigade = brigade.has(date);
+    return {
+      date,
+      kind: isBrigade ? 'brigade' : dayoff.has(date) ? 'dayoff' : 'workday',
+      paid_minutes: input.paidMinutes?.[date] ?? null,
+      contract_minutes: isBrigade ? 0 : input.byDate.contract[date] ?? 0,
+      overtime_minutes: isBrigade ? 0 : input.byDate.overtime[date] ?? 0,
+      hourly_minutes: isBrigade ? 0 : input.byDate.hourly[date] ?? 0,
+    };
+  });
 };

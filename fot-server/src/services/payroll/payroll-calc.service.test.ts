@@ -330,7 +330,7 @@ describe('«К выплате (ФОТ)» бригады', () => {
     // 20 + (30 − 24) = 26 × 630 = 16 380.
     expect(calc?.state === 'closed' && calc.lines.find(line => line.code === 'housing')).toEqual({
       code: 'housing', amount: '16380.00',
-      parts: [{ kind: 'housing', housing: 'apartment', amount: '16380.00', rate: '630.00', days: 26 }],
+      parts: [{ kind: 'housing', housing: 'apartment', amount: '16380.00', rate: '630.00', days: 26, weekend_days: 6 }],
     });
 
     const fact = {
@@ -356,7 +356,7 @@ describe('«К выплате (ФОТ)» бригады', () => {
 
     // 12 + 1 выход + (30 − 24) = 19 × 630 = 11 970.
     expect(calc?.state === 'closed' && calc.rate_allowances).toEqual([
-      { code: 'housing', amount: '11970.00', rate: '630.00', housing_days: 19 },
+      { code: 'housing', amount: '11970.00', rate: '630.00', housing_days: 19, housing_weekend_days: 6 },
     ]);
   });
 
@@ -437,5 +437,47 @@ describe('бригады — не больше трёх расчётов одн�
       const calc = result.get(id);
       return calc?.state === 'closed' ? calc.lines.find(line => line.code === 'brigade')?.amount : null;
     })).toEqual(['101.00', '102.00', '103.00', '104.00', '105.00']);
+  });
+});
+
+describe('листок: «Часы по дням» и норма по дням (withHoursByDay)', () => {
+  const novemberDays = Array.from({ length: 30 }, (_, i) => `2026-11-${String(i + 1).padStart(2, '0')}`)
+    .filter(date => ![0, 6].includes(new Date(`${date}T12:00:00`).getDay()));
+  const plan = {
+    days: Object.fromEntries(novemberDays.map(date => [date, 480])), saturdays: 0, sundays: 0, quota_minutes: 480,
+  };
+  const officeTerms = (over: Record<string, unknown> = {}) => ({
+    effective_from: '2026-01-01', effective_to: null, calc_type: 'salary', monthly_salary: '110000.00',
+    hourly_rate: null, bonus_amount: null, proration_rounding: 'ruble', ...over,
+  });
+
+  beforeEach(() => {
+    basis.loadMonthBasisSources.mockResolvedValue(new Map([[8, [source({
+      coverFrom: '2026-11-01', coverTo: '2026-11-30', normDays: novemberDays.length,
+      normMinutes: novemberDays.length * 480, workdayDates: novemberDays, overtimeMinutes: {},
+      paidMinutes: Object.fromEntries(novemberDays.map(date => [date, 480])), normPlan: plan,
+      departmentId: 'office', isBrigade: false,
+    })]]]));
+    terms.getTermsForPeriod.mockResolvedValue(new Map([[8, [officeTerms()]]]));
+  });
+
+  it('с флагом — часы по дням и снимок нормы; без флага ответ прежний, суммы одни', async () => {
+    const plain = (await getPayoutForEmployees([8], '2026-11', req)).get(8);
+    const detailed = (await getPayoutForEmployees([8], '2026-11', req, undefined, { withHoursByDay: true })).get(8);
+    expect(plain).not.toHaveProperty('hours_by_day');
+    expect(plain).not.toHaveProperty('norm_plan');
+    expect(detailed).toMatchObject({ state: 'closed', norm_plan: plan });
+    expect(detailed?.state === 'closed' && detailed.hours_by_day).toHaveLength(novemberDays.length);
+    const { hours_by_day: _days, norm_plan: _plan, ...money } = detailed as Record<string, unknown>;
+    expect(money).toEqual(plain);
+  });
+
+  it('полностью почасовой ноябрь — снимка нормы нет', async () => {
+    terms.getTermsForPeriod.mockResolvedValue(new Map([[8, [officeTerms({
+      calc_type: 'hourly', monthly_salary: null, hourly_rate: '700.0000',
+    })]]]));
+    const calc = (await getPayoutForEmployees([8], '2026-11', req, undefined, { withHoursByDay: true })).get(8);
+    expect(calc).not.toHaveProperty('norm_plan');
+    expect(calc).not.toHaveProperty('hours_by_day');
   });
 });

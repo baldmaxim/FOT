@@ -4,6 +4,7 @@ import {
   calcMonthsSelection,
   defaultPaidMonth,
   effectivePaidMonths,
+  formatAsOfDay,
   formatPaidAmount,
   formatPaidPeriod,
   paidAmountMonths,
@@ -20,8 +21,10 @@ import {
   PAYROLL_PAID_GROUPS,
   pickPaidKind,
   pickPaidRows,
+  preliminaryTotalNote,
   toPaidAmounts,
   visiblePaidGroups,
+  type IPaidMonthSums,
 } from './payrollPaid';
 import { shiftMonth } from './moscowDate';
 
@@ -185,7 +188,9 @@ describe('«Расчёты»: месяцы и период сумм', () => {
 });
 
 describe('левая таблица вкладки «Зарплата»: расчёт ФОТ', () => {
-  const fot = (accrued: number, deducted = 0) => ({ accrued, deducted, payout: Math.round((accrued - deducted) * 100) / 100 });
+  const fot = (accrued: number, deducted = 0): IPaidMonthSums => ({
+    accrued, deducted, payout: Math.round((accrued - deducted) * 100) / 100,
+  });
   // Абдурахмонов: 1С — июль и август с основной ведомостью, сентябрь только квартира.
   const rows = [
     { month: '2026-07', item: 'contract' as const, amount: '378820.00' },
@@ -194,13 +199,29 @@ describe('левая таблица вкладки «Зарплата»: рас�
   ];
   const months = recentHistoryMonths('2026-11');
 
-  it('последние шесть месяцев, новые сверху, без текущего', () => {
-    expect(months).toEqual(['2026-10', '2026-09', '2026-08', '2026-07', '2026-06', '2026-05']);
+  it('текущий месяц и шесть прошлых, новые сверху', () => {
+    expect(months).toEqual(['2026-11', '2026-10', '2026-09', '2026-08', '2026-07', '2026-06', '2026-05']);
+  });
+
+  it('предварительный ноябрь (табель по 16.11): у месяца as_of, итоги года и общий помечены', () => {
+    const history = paidHistory(rows, [], months);
+    const shown = paidHistoryShown(history, new Map([
+      ['2026-11', { ...fot(97568), asOf: '2026-11-16' }],
+      ['2026-10', fot(204260)],
+    ]));
+    expect(shown.byMonth.get('2026-11')).toEqual({ accrued: 97568, deducted: 0, payout: 97568, asOf: '2026-11-16', source: 'fot' });
+    expect(shown.byYear.get('2026')).toMatchObject({ accrued: 301828, preliminaryMonths: ['2026-11'] });
+    expect(shown.overall.preliminaryMonths).toEqual(['2026-11']);
+    expect(preliminaryTotalNote(shown.overall.preliminaryMonths)).toBe('вкл. предварительный ноябрь');
+    expect(preliminaryTotalNote(['2026-10', '2026-11'], true)).toBe('вкл. предв. октябрь, ноябрь');
+    expect(preliminaryTotalNote([])).toBeNull();
+    expect(formatAsOfDay('2026-11-16')).toBe('16.11');
   });
 
   it('Абдурахмонов: расчёт ФОТ важнее сумм 1С, месяц без итога и без 1С — «—», строка года по показанным', () => {
     const history = paidHistory(rows, [], months);
     const shown = paidHistoryShown(history, new Map([
+      ['2026-11', null],
       ['2026-10', fot(204260)],
       ['2026-09', fot(211213)],
       ['2026-08', fot(176698)],
@@ -211,7 +232,7 @@ describe('левая таблица вкладки «Зарплата»: рас�
     expect(shown.byMonth.get('2026-09')).toEqual({ accrued: 211213, deducted: 0, payout: 211213, source: 'fot' });
     expect(shown.byMonth.get('2026-08')).toEqual({ accrued: 176698, deducted: 0, payout: 176698, source: 'fot' });
     expect(shown.byMonth.get('2026-06')).toEqual({ accrued: null, deducted: null, payout: null, source: '1c' });
-    expect(shown.byYear.get('2026')).toEqual({ accrued: 791461, deducted: 0, payout: 791461, pending: false });
+    expect(shown.byYear.get('2026')).toEqual({ accrued: 791461, deducted: 0, payout: 791461, pending: false, preliminaryMonths: [] });
     // Столбец «1С» справа читает прежние суммы.
     expect(history.months.find(entry => entry.month === '2026-08')?.totals.accrued).toBe(710497);
     expect(history.months.find(entry => entry.month === '2026-09')?.totals.accrued).toBe(18900);
@@ -223,7 +244,7 @@ describe('левая таблица вкладки «Зарплата»: рас�
       { month: '2026-08', item: 'fines', amount: '100.50' },
     ]), new Map([['2026-08', null]]));
     expect(shown.byMonth.get('2026-08')).toEqual({ accrued: 146890, deducted: 100.5, payout: 146789.5, source: '1c' });
-    expect(shown.overall).toEqual({ accrued: 146890, deducted: 100.5, payout: 146789.5, pending: false });
+    expect(shown.overall).toEqual({ accrued: 146890, deducted: 100.5, payout: 146789.5, pending: false, preliminaryMonths: [] });
   });
 
   it('расчёт ещё идёт — суммы месяца не показываются, строка года не окончательная', () => {
@@ -243,8 +264,8 @@ describe('левая таблица вкладки «Зарплата»: рас�
       ['2025-12', fot(0.1, 0.05)],
       ['2025-11', fot(0.2)],
     ]));
-    expect(shown.byYear.get('2025')).toEqual({ accrued: 0.3, deducted: 0.05, payout: 0.25, pending: false });
-    expect(shown.byYear.get('2026')).toEqual({ accrued: 1000, deducted: 0, payout: 1000, pending: false });
+    expect(shown.byYear.get('2025')).toEqual({ accrued: 0.3, deducted: 0.05, payout: 0.25, pending: false, preliminaryMonths: [] });
+    expect(shown.byYear.get('2026')).toEqual({ accrued: 1000, deducted: 0, payout: 1000, pending: false, preliminaryMonths: [] });
     expect(shown.overall).toMatchObject({ accrued: 1000.3, deducted: 0.05, payout: 1000.25 });
   });
 });
