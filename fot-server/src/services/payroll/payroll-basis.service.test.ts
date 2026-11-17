@@ -27,6 +27,7 @@ import {
   computeBasisHash,
   countMonthNormDays,
   countMonthNormMinutes,
+  countScheduleMonthNormMinutes,
   monthsInRange,
   type IClassifyBasisInput,
 } from './payroll-basis.service.js';
@@ -440,6 +441,13 @@ describe('основа расчёта: норма дней месяца', () => 
     expect(countMonthNormMinutes(undefined, '2026-09', null)).toBeNull();
   });
 
+  it('норма графика без подмены календарём: до ноября зарплата берёт календарь, блок «График работы» — график', () => {
+    const shortFriday = new Map(septemberDates.map(date => [date, { ...fiveTwo, work_hours: 7 }]));
+    expect(countMonthNormMinutes(shortFriday, '2026-09', calendar)).toBe(176 * 60);
+    expect(countScheduleMonthNormMinutes(shortFriday, '2026-09', calendar)).toBe(22 * 7 * 60);
+    expect(countScheduleMonthNormMinutes(undefined, '2026-09', calendar)).toBeNull();
+  });
+
   describe('с ноября 2026 — норма часов графика (оклад по часам)', () => {
     const november: IProductionCalendarMonth = {
       year: 2026, month: 11, norm_days: 20, norm_hours: 159, holidays: ['2026-11-04'], mandatory_holidays: [],
@@ -455,6 +463,7 @@ describe('основа расчёта: норма дней месяца', () => 
 
     it('ЛИНИЯ 10 ч + 2 субботы: 21 будний × 10 + 2 × 10 = 230 ч, а не 159 ч календаря', () => {
       expect(countMonthNormMinutes(novemberOf(() => line10), '2026-11', november)).toBe(230 * 60);
+      expect(countScheduleMonthNormMinutes(novemberOf(() => line10), '2026-11', november)).toBe(230 * 60);
     });
 
     it('5+2 по 8 ч с праздниками: 20 дн. × 8 − 1 ч предпраздничного = 159 ч; пятница 7 ч — ещё −4 ч', () => {

@@ -1,0 +1,198 @@
+/* «Табель → По сотруднику» → блок «График работы»: год по графику, как форма графика в 1С. */
+
+.card {
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.year {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 16px 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.retry {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out;
+}
+
+.retry:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.scroll {
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  height: 28px;
+  padding: 0 4px;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.table thead th {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.table .monthCell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 76px;
+  padding-left: 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  text-align: left;
+  font-weight: 500;
+  box-shadow: 1px 0 0 var(--border);
+}
+
+.table thead .monthCell {
+  z-index: 2;
+  background: var(--bg-secondary);
+}
+
+.totalCell {
+  min-width: 40px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.dayHead {
+  min-width: 26px;
+}
+
+.dayWork {
+  color: var(--text-primary);
+}
+
+.dayOff {
+  background: var(--error-muted);
+}
+
+.dayPre {
+  background: var(--warning-muted);
+  color: var(--text-primary);
+}
+
+.dayNone {
+  background: var(--bg-secondary);
+}
+
+.dayMissing {
+  background: var(--bg-tertiary);
+}
+
+.rowSelected .totalCell {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+/* Липкая ячейка — непрозрачный фон под полупрозрачным акцентом, иначе под ней просвечивают дни. */
+.table .rowSelected .monthCell {
+  background: linear-gradient(var(--accent-muted), var(--accent-muted)), var(--surface);
+  color: var(--accent);
+}
+
+.rowSelected td {
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+
+.table .rowSelected .monthCell {
+  box-shadow: 1px 0 0 var(--border), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+
+@media (min-width: 768px) {
+  .head {
+    padding: 14px 16px 12px;
+  }
+
+  .state {
+    padding: 16px;
+  }
+
+  .table {
+    font-size: 13px;
+  }
+
+  .table th,
+  .table td {
+    height: 30px;
+  }
+
+  .table .monthCell {
+    min-width: 92px;
+    padding-left: 16px;
+  }
+
+  .dayHead {
+    min-width: 30px;
+  }
+}

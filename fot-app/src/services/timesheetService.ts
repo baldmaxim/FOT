@@ -3,6 +3,7 @@ import type {
   IAssignedEmployeeSummary,
   IDepartmentSupervisor,
   IEmployeeAssignmentPeriod,
+  IEmployeeSchedulePlan,
   ITimesheetEmployeeSearchResult,
   ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
@@ -307,6 +308,16 @@ export const timesheetService = {
       `/timesheet/employees/${employeeId}/assignment-periods?${search.toString()}`,
     );
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки периодов сотрудника');
+    return res.data;
+  },
+
+  /** План графика сотрудника на год месяца табеля (доступ — к этому месяцу). */
+  async getEmployeeSchedulePlan(employeeId: number, month: string): Promise<IEmployeeSchedulePlan> {
+    const search = new URLSearchParams({ month });
+    const res = await apiClient.get<ApiResponse<IEmployeeSchedulePlan>>(
+      `/timesheet/employees/${employeeId}/schedule-plan?${search.toString()}`,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки графика сотрудника');
     return res.data;
   },
 

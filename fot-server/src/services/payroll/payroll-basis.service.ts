@@ -273,6 +273,19 @@ export const countMonthNormMinutes = (
   if (!isSalaryByHoursMonth(month) && calendar && Number(calendar.norm_hours) > 0) {
     return Math.round(Number(calendar.norm_hours) * 60);
   }
+  return countScheduleMonthNormMinutes(schedules, month, calendar);
+};
+
+/**
+ * Норма графика за месяц в минутах — без подмены нормой календаря (её делает countMonthNormMinutes до ноября 2026).
+ * Дневная норма из графика каждой даты, квота Сб/Вс и её часы — из графика последнего дня. Нет графика хоть на день —
+ * null. Одно правило для зарплаты по часам и для блока «График работы» в табеле «По сотруднику».
+ */
+export const countScheduleMonthNormMinutes = (
+  schedules: ReadonlyMap<string, IResolvedSchedule> | undefined,
+  month: string,
+  calendar: IProductionCalendarMonth | null,
+): number | null => {
   const [year, mon] = month.split('-').map(Number);
   let hours = 0;
   let last: IResolvedSchedule | undefined;

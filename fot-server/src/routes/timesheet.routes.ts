@@ -3,6 +3,7 @@ import { query as dbQuery } from '../config/postgres.js';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { timesheetTeamManagementController as tm } from '../controllers/timesheet-team-management.controller.js';
 import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
+import { timesheetSchedulePlanController } from '../controllers/timesheet-schedule-plan.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { perUserConcurrency } from '../middleware/perUserConcurrency.js';
@@ -169,6 +170,13 @@ router.get(
   '/employees/:employeeId/assignment-periods',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
   timesheetController.listEmployeeAssignmentPeriods
+);
+
+// GET /api/timesheet/employees/:employeeId/schedule-plan?month=YYYY-MM — график сотрудника на год (блок «По сотруднику»)
+router.get(
+  '/employees/:employeeId/schedule-plan',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetSchedulePlanController.get
 );
 
 router.get(

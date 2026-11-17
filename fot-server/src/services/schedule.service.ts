@@ -99,7 +99,7 @@ export const getCycleSlot = (
 };
 
 /** Праздник ли день по календарю (holidays + mandatory_holidays) */
-const isHoliday = (
+export const isHoliday = (
   date: Date,
   schedule: IResolvedSchedule,
   calendar: IProductionCalendarMonth | null,
@@ -464,36 +464,54 @@ async function schedOne<T extends import('pg').QueryResultRow = import('pg').Que
   return queryOne<T>(sql, params);
 }
 
+interface ICalendarRow {
+  year: number;
+  month: number;
+  norm_days: number | string | null;
+  norm_hours: number | string | null;
+  holidays: string[] | null;
+  mandatory_holidays: string[] | null;
+  pre_holidays: string[] | null;
+}
+
+const CALENDAR_COLUMNS = 'year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays';
+
+const mapCalendarRow = (data: ICalendarRow): IProductionCalendarMonth => ({
+  year: data.year,
+  month: data.month,
+  norm_days: Number(data.norm_days) || 0,
+  norm_hours: Number(data.norm_hours) || 0,
+  holidays: data.holidays || [],
+  mandatory_holidays: data.mandatory_holidays || [],
+  pre_holidays: data.pre_holidays || [],
+});
+
 export const loadCalendarMonth = async (
   year: number,
   month: number,
   exec?: DbExecutor,
 ): Promise<IProductionCalendarMonth | null> => {
-  const data = await schedOne<{
-    year: number;
-    month: number;
-    norm_days: number | string | null;
-    norm_hours: number | string | null;
-    holidays: string[] | null;
-    mandatory_holidays: string[] | null;
-    pre_holidays: string[] | null;
-  }>(
+  const data = await schedOne<ICalendarRow>(
     exec,
-    `SELECT year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays
+    `SELECT ${CALENDAR_COLUMNS}
        FROM production_calendar
       WHERE year = $1 AND month = $2`,
     [year, month],
   );
-  if (!data) return null;
-  return {
-    year: data.year,
-    month: data.month,
-    norm_days: Number(data.norm_days) || 0,
-    norm_hours: Number(data.norm_hours) || 0,
-    holidays: data.holidays || [],
-    mandatory_holidays: data.mandatory_holidays || [],
-    pre_holidays: data.pre_holidays || [],
-  };
+  return data ? mapCalendarRow(data) : null;
+};
+
+/** Производственный календарь за год одним запросом: месяц (1–12) → календарь; месяца нет в БД — нет и ключа. */
+export const loadCalendarYear = async (
+  year: number,
+): Promise<Map<number, IProductionCalendarMonth>> => {
+  const rows = await query<ICalendarRow>(
+    `SELECT ${CALENDAR_COLUMNS}
+       FROM production_calendar
+      WHERE year = $1`,
+    [year],
+  );
+  return new Map(rows.map(row => [Number(row.month), mapCalendarRow(row)]));
 };
 
 const extractWorkSchedule = (value: unknown): Record<string, unknown> | null => {

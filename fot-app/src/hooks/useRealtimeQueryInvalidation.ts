@@ -3,6 +3,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { wsService } from '../services/websocket';
 import { DOMAIN_EVENTS, type DomainEvent, type IDomainEventPayload } from '../services/realtimeEvents';
 import {
+  employeeScheduleKeys,
   employeesKeys,
   patentReceiptsKeys,
   structureKeys,
@@ -18,7 +19,7 @@ const FLUSH_DELAY_MS = 120;
 
 type EventToKeysFn = (payload: IDomainEventPayload) => QueryKey[];
 
-const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
+export const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
   'leave_request:changed': (payload) => {
     const keys: QueryKey[] = [
       ['leave-requests-manage'],
@@ -66,9 +67,10 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
       ['schedules'],
       timesheetKeys.page(),
     ];
-    if (payload.employeeId != null) {
-      keys.push(['employee-schedule', payload.employeeId]);
-    }
+    // Без employeeId — шаблон или массовое назначение: график мог смениться у кого угодно.
+    keys.push(payload.employeeId != null
+      ? employeeScheduleKeys.byEmployee(payload.employeeId)
+      : employeeScheduleKeys.all);
     return keys;
   },
   'employee:changed': (payload) => {
@@ -79,6 +81,10 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     if (payload.entityId != null) {
       keys.push(employeesKeys.byId(payload.entityId as number | string));
     }
+    // Приём, увольнение, восстановление меняют месяцы блока «График работы».
+    keys.push(payload.entityId != null
+      ? employeeScheduleKeys.byEmployee(payload.entityId as number | string)
+      : employeeScheduleKeys.all);
     return keys;
   },
   'salary_raise:changed': () => [['salary-raise']],
@@ -92,6 +98,7 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
   'production_calendar:changed': () => [
     ['production-calendar'],
     timesheetKeys.page(),
+    employeeScheduleKeys.all,
   ],
   // Событие двойное: отметка вводного инструктажа на пропуске (вкладка «Заявки на
   // согласование») и правка обучения по ОТ в реестре (вкладка «ОТиТБ»). Инвалидируем

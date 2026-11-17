@@ -61,6 +61,16 @@ export const timesheetKeys = {
 };
 
 /**
+ * График сотрудника. Префикс ['employee-schedule', id] сбрасывает событие schedule:changed (useRealtimeQueryInvalidation),
+ * поэтому id стоит вторым. plan — блок «График работы» под табелем «По сотруднику», данные на год.
+ */
+export const employeeScheduleKeys = {
+  all: ['employee-schedule'] as const,
+  byEmployee: (employeeId: number | string) => [...employeeScheduleKeys.all, employeeId] as const,
+  plan: (employeeId: number, year: number) => [...employeeScheduleKeys.byEmployee(employeeId), 'plan', year] as const,
+};
+
+/**
  * Список верхне-уровневых ключей всех «семей» табеля.
  * Инвалидация мутаций табеля: пройти `for (const k of TIMESHEET_FAMILY_KEYS)`.
  */

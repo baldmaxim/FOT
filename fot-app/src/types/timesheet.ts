@@ -239,6 +239,44 @@ export interface IEmployeeAssignmentPeriod {
   editable: boolean;
 }
 
+/** Вид дня в плане графика: праздник, предпраздничный рабочий (−1 ч у графика с праздниками), рабочий, выходной. */
+export type SchedulePlanDayKind = 'work' | 'off' | 'holiday' | 'pre_holiday';
+
+export interface ISchedulePlanDay {
+  /** Число месяца, 1–31. */
+  day: number;
+  /** Плановые часы дня (норма графика). */
+  hours: number;
+  kind: SchedulePlanDayKind;
+}
+
+export interface ISchedulePlanMonth {
+  /** 1–12. */
+  month: number;
+  /** Хоть один день месяца — в периоде работы; нет — дней и нормы нет. */
+  employed: boolean;
+  norm_days: number | null;
+  norm_minutes: number | null;
+  /** Квота обязательных суббот / воскресений графика: к датам не привязана. */
+  saturdays: number;
+  sundays: number;
+  days: ISchedulePlanDay[];
+}
+
+export interface ISchedulePlanPeriod {
+  schedule_name: string | null;
+  from: string;
+  to: string;
+}
+
+/** Блок «График работы» под табелем «По сотруднику»: план графика на год. */
+export interface IEmployeeSchedulePlan {
+  employee_id: number;
+  year: number;
+  periods: ISchedulePlanPeriod[];
+  months: ISchedulePlanMonth[];
+}
+
 /** Найденный сотрудник в поиске режима «По сотруднику». */
 export interface ITimesheetEmployeeSearchResult {
   id: number;

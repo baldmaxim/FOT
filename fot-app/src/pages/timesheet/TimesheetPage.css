@@ -1195,6 +1195,22 @@
   min-height: 0;
 }
 
+/* «По сотруднику»: сетка по высоте строк, под ней блок «График работы»; прокручивается стопка целиком. */
+.ts-employee-mode-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.ts-employee-mode-stack > .ts-table-container {
+  flex: none;
+}
+
 .ts-table-header-bar {
   display: flex;
   align-items: center;
