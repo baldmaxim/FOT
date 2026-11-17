@@ -87,8 +87,10 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
       const note = calcIssuesNote(row.calc);
       const amount = calcSumAmount(row, column);
       const isResult = column === 'calc_net' || column === 'calc_remainder';
-      // Выработка бригады не введена — подпись под «Начислено по табелю», «Суммой» и «Остатком» (без ⚠).
-      const outputSub = column === 'calc_timesheet' || isResult ? calcBrigadeOutputSub(row.calc) : null;
+      // Выработка бригады не введена — подпись под «Начислено по табелю» (и его «Основным»), «Суммой» и «Остатком» (без ⚠).
+      const outputSub = column === 'calc_timesheet' || column === 'calc_timesheet_base' || isResult
+        ? calcBrigadeOutputSub(row.calc)
+        : null;
       // Вторая строка: выработка не внесена, вид проживания, из чего переработка.
       const sub = outputSub ?? (amount === null ? null
         : column === 'calc_housing' ? housingKindsLabel(row.calc)

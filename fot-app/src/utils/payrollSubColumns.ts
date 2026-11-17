@@ -1,7 +1,8 @@
 /**
- * Раскрытие столбцов «Расчётов» по «+» (решение пользователя 30.10.2026). «Доплаты» — переработка, проезд, проживание,
- * плановая и разовая (свёрнутые «Доплаты» — их сумма, calcSumAmount); «Удержания» (1С) — статьи «Оплачено» группы
- * «Удержано»; «Удержания (ФОТ)» — виды «Справочника». Сумма подстолбцов строки равна её итогу.
+ * Раскрытие столбцов «Расчётов» по «+» (решение пользователя 30.10.2026). «Начислено по табелю» — основное и переработка
+ * (решение 17.11.2026); «Доплаты» — проезд, проживание, плановая и разовая (свёрнутые — их сумма, calcSumAmount);
+ * «Удержания» (1С) — статьи «Оплачено» группы «Удержано»; «Удержания (ФОТ)» — виды «Справочника». Сумма подстолбцов
+ * строки равна её итогу.
  *
  * Подстолбец — только с суммой хоть в одной загруженной строке («0.00» и минус — тоже сумма): отдел приходит целиком,
  * в «Все отделы» вид может добавиться при догрузке (как пустые столбцы, emptyPayrollColumns). Разбивку ФОТ присылает
@@ -12,21 +13,23 @@ import { calcSumAmount, sumAmounts } from './payrollCalcColumns';
 import type { PayrollTableColumn, PayrollTableColumns } from './payrollColumns';
 import { PAYROLL_PAID_GROUPS } from './payrollPaid';
 
-export type PayrollExpandableColumn = 'calc_supplements' | 'deductions' | 'calc_deductions';
+export type PayrollExpandableColumn = 'calc_timesheet' | 'calc_supplements' | 'deductions' | 'calc_deductions';
 
 /** Порядок — для хранилища. */
-const EXPANDABLE_COLUMNS: readonly PayrollExpandableColumn[] = ['deductions', 'calc_supplements', 'calc_deductions'];
+const EXPANDABLE_COLUMNS: readonly PayrollExpandableColumn[] = [
+  'deductions', 'calc_timesheet', 'calc_supplements', 'calc_deductions',
+];
 
 export const isExpandablePayrollColumn = (column: string): column is PayrollExpandableColumn => (
   (EXPANDABLE_COLUMNS as readonly string[]).includes(column)
 );
 
-/** Столбцы ФОТ под «+» у «Доплат»: ячейка — прежняя PayrollCalcCell (с подписью и ⚠). */
-export type PayrollSupplementsColumn = 'calc_overtime' | 'calc_travel' | 'calc_housing';
+/** Столбцы ФОТ под «+» у «Начислено по табелю» и «Доплат»: ячейка — PayrollCalcCell (с подписью и ⚠). */
+export type PayrollCalcGroupColumn = 'calc_timesheet_base' | 'calc_overtime' | 'calc_travel' | 'calc_housing';
 
 /** key — составной («родитель:код»), стабильный между порциями. */
 export type PayrollSubColumn =
-  | { type: 'column'; key: string; label: string; column: PayrollSupplementsColumn }
+  | { type: 'column'; key: string; label: string; column: PayrollCalcGroupColumn }
   | { type: 'supplement'; key: string; label: string; part: 'planned' | 'one_time' }
   | { type: 'paid'; key: string; label: string; item: PayrollPaidItemCode }
   | { type: 'kind'; key: string; label: string; kindId: number };
@@ -34,8 +37,12 @@ export type PayrollSubColumn =
 /** Подстолбцы со своей ячейкой (PayrollSubColumnCell); ФОТ — все, кроме статей 1С. */
 export type PayrollAmountSubColumn = Exclude<PayrollSubColumn, { type: 'column' }>;
 
+const TIMESHEET_SUB_COLUMNS: readonly PayrollSubColumn[] = [
+  { type: 'column', key: 'calc_timesheet:base', label: 'Основное', column: 'calc_timesheet_base' },
+  { type: 'column', key: 'calc_timesheet:calc_overtime', label: 'Переработка', column: 'calc_overtime' },
+];
+
 const SUPPLEMENTS_SUB_COLUMNS: readonly PayrollSubColumn[] = [
-  { type: 'column', key: 'calc_supplements:calc_overtime', label: 'Переработка', column: 'calc_overtime' },
   { type: 'column', key: 'calc_supplements:calc_travel', label: 'Компенсация проезда', column: 'calc_travel' },
   { type: 'column', key: 'calc_supplements:calc_housing', label: 'Проживание', column: 'calc_housing' },
   { type: 'supplement', key: 'calc_supplements:planned', label: 'Плановая', part: 'planned' },
@@ -67,12 +74,16 @@ export const subColumnAmount = (row: IPayrollTermsRow, sub: PayrollSubColumn): s
 };
 
 /**
- * Подстолбцы родителя с суммой хоть в одной строке: «Доплаты» — по порядку SUPPLEMENTS_SUB_COLUMNS; статьи 1С — порядок
+ * Подстолбцы родителя с суммой хоть в одной строке: «Начислено по табелю» — только если хоть у кого-то есть переработка
+ * (иначе раскрывать нечего: «Основное» равно итогу); «Доплаты» — по порядку SUPPLEMENTS_SUB_COLUMNS; статьи 1С — порядок
  * и подписи PAYROLL_PAID_GROUPS, незнакомый код (CHECK не пустит) — следом, подписью-кодом, чтобы сумма не терялась;
  * виды ФОТ — по названию.
  */
 export const payrollSubColumns = (rows: readonly IPayrollTermsRow[], parent: PayrollExpandableColumn): PayrollSubColumn[] => {
   switch (parent) {
+    case 'calc_timesheet':
+      if (!rows.some(row => calcSumAmount(row, 'calc_overtime') !== null)) return [];
+      return TIMESHEET_SUB_COLUMNS.filter(sub => rows.some(row => subColumnAmount(row, sub) !== null));
     case 'calc_supplements':
       if (!hasCalcBreakdown(rows, ['supplements_planned', 'supplements_one_time'])) return [];
       return SUPPLEMENTS_SUB_COLUMNS.filter(sub => rows.some(row => subColumnAmount(row, sub) !== null));

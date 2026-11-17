@@ -60,16 +60,16 @@ describe('«+» у «Доплат»', () => {
     }),
   });
 
-  it('подстолбцы по порядку, только с суммой; сумма подстолбцов строки = свёрнутые «Доплаты»', () => {
+  it('подстолбцы по порядку, только с суммой; переработки нет; сумма подстолбцов строки = свёрнутые «Доплаты»', () => {
     const subs = payrollSubColumns([abdullaev, barulin], 'calc_supplements');
-    expect(labels(subs)).toEqual(['Переработка', 'Компенсация проезда', 'Проживание', 'Плановая', 'Разовая']);
+    expect(labels(subs)).toEqual(['Компенсация проезда', 'Проживание', 'Плановая', 'Разовая']);
     expect(subs.map(sub => sub.key)).toEqual([
-      'calc_supplements:calc_overtime', 'calc_supplements:calc_travel', 'calc_supplements:calc_housing',
-      'calc_supplements:planned', 'calc_supplements:one_time',
+      'calc_supplements:calc_travel', 'calc_supplements:calc_housing', 'calc_supplements:planned', 'calc_supplements:one_time',
     ]);
     for (const item of [abdullaev, barulin]) expect(subsTotal(item, subs)).toBe(calcSumAmount(item, 'calc_supplements'));
     expect(calcSumAmount(abdullaev, 'calc_supplements')).toBe('2340.00');
-    expect(calcSumAmount(barulin, 'calc_supplements')).toBe('38900.30');
+    // Переработка 0,10 — в «Начислено по табелю», не в «Доплатах» (решение 17.11.2026).
+    expect(calcSumAmount(barulin, 'calc_supplements')).toBe('38900.20');
     // Только проезд в выборке — один подстолбец.
     expect(labels(payrollSubColumns([abdullaev], 'calc_supplements'))).toEqual(['Компенсация проезда']);
   });
@@ -101,6 +101,23 @@ describe('«+» у «Доплат»', () => {
     expect(labels(subs)).toEqual(['Плановая', 'Разовая']);
     expect(subsTotal(zero, subs)).toBe(calcSumAmount(zero, 'calc_supplements'));
     expect(subsTotal(minus, subs)).toBe('-500.00');
+  });
+});
+
+describe('«+» у «Начислено по табелю»', () => {
+  const ivanov = row(1, { calc: calc({ timesheet: '106363.68' }) });
+  const petrov = row(2, { calc: calc({ timesheet: '50000.10', overtime: '0.20', overtime_days: 1 }) });
+
+  it('основное и переработка; сумма подстолбцов строки = итог «Начислено по табелю» в копейках', () => {
+    const subs = payrollSubColumns([ivanov, petrov], 'calc_timesheet');
+    expect(labels(subs)).toEqual(['Основное', 'Переработка']);
+    expect(subs.map(sub => sub.key)).toEqual(['calc_timesheet:base', 'calc_timesheet:calc_overtime']);
+    expect(calcSumAmount(petrov, 'calc_timesheet')).toBe('50000.30');
+    for (const item of [ivanov, petrov]) expect(subsTotal(item, subs)).toBe(calcSumAmount(item, 'calc_timesheet'));
+  });
+
+  it('переработки нет ни у кого — без «+»: «Основное» равнялось бы итогу', () => {
+    expect(payrollSubColumns([ivanov], 'calc_timesheet')).toEqual([]);
   });
 });
 

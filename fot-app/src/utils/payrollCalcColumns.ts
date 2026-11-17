@@ -1,8 +1,9 @@
 /**
  * Столбцы состава зарплаты на «Расчётах» (решение пользователя 27.10.2026): что показать в ячейке и какие столбцы
- * пусты в выборке. ФОТ — расчёт по табелю (сервер, payroll-calc-columns.service): «Начислено по табелю», отпускные и
- * больничные (суммы 1С в расчёте, решение 30.10.2026), «Доплаты» (переработка, проезд, проживание, плановая и разовая —
- * раскрываются «+», payrollSubColumns.ts), удержания; только из 1С — перерасчёт и ведомости выплаты по способам.
+ * пусты в выборке. ФОТ — расчёт по табелю (сервер, payroll-calc-columns.service): «Начислено по табелю» (основное и
+ * переработка — раскрываются «+», решение 17.11.2026), отпускные и больничные (суммы 1С в расчёте, решение
+ * 30.10.2026), «Доплаты» (проезд, проживание, плановая и разовая — раскрываются «+», payrollSubColumns.ts), удержания;
+ * только из 1С — перерасчёт и ведомости выплаты по способам.
  * Закрыт табель или нет — на экране не помечается (решение 29.10.2026: незакрытый сервер считает по живому).
  * Неполный месяц не превращается в ноль: «Сумма» — «—». Выработка бригады не введена — подпись «выработка не
  * внесена» под «Начислено по табелю» и «Суммой», без ⚠; прочие причины (почасовая ставка, нет условий или нормы,
@@ -18,16 +19,20 @@ import type {
 import { accrualPeriodCrossesYear, formatAccrualMonthLabel } from './payrollAccruals';
 import type { PayrollTableColumn } from './payrollColumns';
 
-/** Столбцы по расчёту ФОТ, суммы которых складываются по месяцам. */
+/**
+ * Столбцы по расчёту ФОТ, суммы которых складываются по месяцам. «Основное» (calc_timesheet_base) — оклад по дням или
+ * доля бригады, подстолбец «Начислено по табелю».
+ */
 export type PayrollCalcSumColumn =
-  | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick' | 'calc_housing'
-  | 'calc_supplements' | 'calc_deductions' | 'calc_net';
+  | 'calc_timesheet' | 'calc_timesheet_base' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick'
+  | 'calc_housing' | 'calc_supplements' | 'calc_deductions' | 'calc_net';
 
 const CALC_SUM_FIELD: Record<
   PayrollCalcSumColumn,
   'timesheet' | 'overtime' | 'travel' | 'vacation' | 'sick_leave' | 'housing' | 'supplements' | 'deductions' | 'net'
 > = {
   calc_timesheet: 'timesheet',
+  calc_timesheet_base: 'timesheet',
   calc_overtime: 'overtime',
   calc_travel: 'travel',
   calc_vacation: 'vacation',
@@ -48,7 +53,9 @@ const CALC_SOURCE = 'Расчёт ФОТ по табелю';
 
 export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, string>> = {
   calc_rate: 'Оклад (у почасовых — ставка) по условиям оплаты на последний день последнего выбранного месяца',
-  calc_timesheet: `${CALC_SOURCE}: оклад по отработанным дням (с премиальной частью условий); `
+  calc_timesheet: `${CALC_SOURCE}: основное (оклад по отработанным дням, у рабочих бригады — доля выработки по КТУ) `
+    + 'и переработка',
+  calc_timesheet_base: `${CALC_SOURCE}: оклад по отработанным дням (с премиальной частью условий); `
     + 'у рабочих бригады — доля выработки по КТУ',
   calc_overtime: `${CALC_SOURCE}: выходы в выходные сверх нормы — днём, в будни — часы корректировки `
     + 'сверх 8 ч (в предпраздничный — сверх 7 ч); оклад / норма',
@@ -58,7 +65,7 @@ export const PAYROLL_CALC_HEADER_TITLES: Partial<Record<PayrollTableColumn, stri
   calc_housing: `${CALC_SOURCE}: квартира или доплата за общежитие`,
   paid_recalc: 'Из 1С, в «Сумму» не входит',
   fss_payments: 'Из 1С: больничные с 4-го дня, СФР платит напрямую, на руки; в «Сумму» и «Остаток» не входят',
-  calc_supplements: `${CALC_SOURCE}: переработка, проезд, проживание, плановая и разовая доплаты`,
+  calc_supplements: `${CALC_SOURCE}: проезд, проживание, плановая и разовая доплаты`,
   calc_deductions: 'Расчёт ФОТ: удержания «Справочника»',
   calc_remainder: 'Сколько осталось доплатить: «Сумма» минус «Выплаты на карту». Выплат нет — вся «Сумма»; '
     + 'минус — выплачено больше расчёта',
@@ -78,8 +85,13 @@ export const sumAmounts = (values: ReadonlyArray<string | null | undefined>): st
   return (cents / 100).toFixed(2);
 };
 
-/** Что складывается в свёрнутые «Доплаты» (решение 30.10.2026); supplements — плановая и разовая. */
-const SUPPLEMENTS_GROUP_FIELDS = ['overtime', 'travel', 'housing', 'supplements'] as const;
+/**
+ * Что складывается в свёрнутые «Доплаты» (решение 30.10.2026); supplements — плановая и разовая. Переработка — в
+ * «Начислено по табелю» (решение 17.11.2026).
+ */
+const SUPPLEMENTS_GROUP_FIELDS = ['travel', 'housing', 'supplements'] as const;
+/** Что складывается в свёрнутое «Начислено по табелю»: основное и переработка. */
+const TIMESHEET_GROUP_FIELDS = ['timesheet', 'overtime'] as const;
 
 /** Есть неполные месяцы — суммы ФОТ строки не окончательные (в том числе выработка бригады не введена). */
 export const calcHasIssues = (calc: IPayrollCalcColumns | null | undefined): boolean => (calc?.incomplete.length ?? 0) > 0;
@@ -194,9 +206,10 @@ export const calcRemainderAmount = (row: IPayrollTermsRow): string | null => {
   return ((Math.round(Number(net) * 100) - Math.round(Number(paid) * 100)) / 100).toFixed(2);
 };
 
-/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. «Доплаты» — сумма группы. */
+/** Сумма столбца ФОТ строки, NUMERIC строкой; нет — null. «Начислено по табелю» и «Доплаты» — сумма группы. */
 export const calcSumAmount = (row: IPayrollTermsRow, column: PayrollCalcAmountColumn): string | null => {
   if (column === 'calc_remainder') return calcRemainderAmount(row);
+  if (column === 'calc_timesheet') return sumAmounts(TIMESHEET_GROUP_FIELDS.map(field => row.calc?.[field]));
   if (column === 'calc_supplements') return sumAmounts(SUPPLEMENTS_GROUP_FIELDS.map(field => row.calc?.[field]));
   return row.calc?.[CALC_SUM_FIELD[column]] ?? null;
 };
@@ -216,8 +229,9 @@ export const formatCalcRate = (rate: IPayrollCalcColumns['rate']): string => {
  * здесь нет: остаток считается из них, поэтому столбец виден и без выплат (решение 02.11.2026).
  */
 const SUM_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
-  'deductions', 'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation',
-  'calc_sick', 'calc_housing', 'paid_recalc', 'fss_payments', 'calc_supplements', 'calc_deductions', 'calc_net',
+  'deductions', 'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_timesheet_base', 'calc_overtime', 'calc_travel',
+  'calc_vacation', 'calc_sick', 'calc_housing', 'paid_recalc', 'fss_payments', 'calc_supplements', 'calc_deductions',
+  'calc_net',
 ]);
 
 /**
@@ -229,7 +243,7 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
   switch (column) {
     case 'deductions': return present(row.paid_deductions_total);
     case 'calc_rate': return Boolean(row.calc?.rate);
-    case 'calc_timesheet': return present(row.calc?.timesheet) || calcHasIssues(row.calc);
+    case 'calc_timesheet': return present(calcSumAmount(row, column)) || calcHasIssues(row.calc);
     case 'calc_remainder':
     case 'calc_net': return 'calc' in row;
     case 'paid_recalc': return present(row.paid_recalc_prev);
@@ -240,8 +254,8 @@ const hasColumnData = (row: IPayrollTermsRow, column: PayrollTableColumn): boole
 
 /** Столбцы по расчёту ФОТ — считаются отдельным запросом после строк. */
 const CALC_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
-  'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_overtime', 'calc_travel', 'calc_vacation', 'calc_sick', 'calc_housing',
-  'calc_supplements', 'calc_deductions', 'calc_net',
+  'calc_remainder', 'calc_rate', 'calc_timesheet', 'calc_timesheet_base', 'calc_overtime', 'calc_travel', 'calc_vacation',
+  'calc_sick', 'calc_housing', 'calc_supplements', 'calc_deductions', 'calc_net',
 ]);
 
 export const isCalcColumn = (column: PayrollTableColumn): boolean => CALC_COLUMNS.has(column);

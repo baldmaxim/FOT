@@ -141,7 +141,7 @@ describe('столбцы файла «Расчётов»', () => {
     expect(Math.max(...result.map(label => label.length))).toBeLessThanOrEqual(60);
   });
 
-  it('все раскрытые «+»: 68 столбцов с «№» укладываются в лимит сервера', () => {
+  it('все раскрытые «+»: 69 столбцов с «№» укладываются в лимит сервера', () => {
     const deducted = PAYROLL_PAID_GROUPS.filter(group => group.kind === 'deducted').flatMap(group => group.items);
     const rows = [row({
       paid_deductions_total: '1.00',
@@ -160,10 +160,11 @@ describe('столбцы файла «Расчётов»', () => {
       }),
     })];
     const snapshot = buildPayrollCalcExport(params({
-      rows, expanded: new Set<PayrollExpandableColumn>(['calc_supplements', 'deductions', 'calc_deductions']),
+      rows, expanded: new Set<PayrollExpandableColumn>(['calc_timesheet', 'calc_supplements', 'deductions', 'calc_deductions']),
     }));
-    // 31 постоянный столбец, в том числе 9 способов выплаты и 5 подстолбцов «Доплат»; на ноябрь 2026 всего 68.
-    expect(snapshot.columns.length).toBe(31 + deducted.length + 18);
+    // 32 постоянных столбца, в том числе 9 способов выплаты, 2 подстолбца «Начислено по табелю» и 4 «Доплат»; на ноябрь
+    // 2026 всего 69.
+    expect(snapshot.columns.length).toBe(32 + deducted.length + 18);
     expect(snapshot.columns.length).toBeLessThanOrEqual(100);
     expect(new Set(snapshot.columns.map(column => column.label)).size).toBe(snapshot.columns.length);
     expect(snapshot.rows[0].cells).toHaveLength(snapshot.columns.length);

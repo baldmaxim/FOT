@@ -19,7 +19,8 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   deductions: 'colDeductions',
   calc_remainder: 'colCalcSum',
   calc_rate: 'colCalcRate',
-  calc_timesheet: 'colCalcTimesheet',
+  calc_timesheet: 'colCalcGroup',
+  calc_timesheet_base: 'colCalcTimesheet',
   calc_overtime: 'colCalcSum',
   calc_travel: 'colCalcSum',
   calc_vacation: 'colCalcSum',
@@ -33,7 +34,7 @@ const COL_CLASS: Record<PayrollTableColumn, string> = {
   card_payouts: 'colCardPayouts',
 };
 
-/** Ширина подстолбца: у переработки, проезда и проживания — прежняя, у прочих — как у сумм ФОТ. */
+/** Ширина подстолбца: у основного, переработки, проезда и проживания — своя, у прочих — как у сумм ФОТ. */
 export const colClassOf = (entry: PayrollTableColumnEntry): string => {
   if (entry.kind === 'column') return COL_CLASS[entry.key];
   return entry.sub.type === 'column' ? COL_CLASS[entry.sub.column] : 'colCalcSum';

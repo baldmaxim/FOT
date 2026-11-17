@@ -9,8 +9,9 @@ import type { PayrollSortKey } from '../services/payrollService';
 export type PayrollTableColumn =
   | 'department' | 'position' | 'schedule' | 'salary' | 'bonus' | 'housing' | 'accruals'
   | 'deductions' | 'calc_remainder'
-  | 'calc_rate' | 'calc_timesheet' | 'calc_overtime' | 'calc_travel' | 'calc_vacation' | 'calc_sick' | 'calc_housing'
-  | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts' | 'fss_payments';
+  | 'calc_rate' | 'calc_timesheet' | 'calc_timesheet_base' | 'calc_overtime' | 'calc_travel' | 'calc_vacation'
+  | 'calc_sick' | 'calc_housing' | 'paid_recalc' | 'calc_supplements' | 'calc_deductions' | 'calc_net' | 'card_payouts'
+  | 'fss_payments';
 
 /** Столбцы условий с сортировкой и фильтром; суммы «Выплачено» и «Расчётов» их не имеют. */
 const SORTABLE_COLUMNS: ReadonlySet<PayrollTableColumn> = new Set<PayrollTableColumn>([
@@ -41,8 +42,9 @@ export const PAYROLL_TERMS_TABLE_COLUMNS: PayrollTableColumns = [
 
 /**
  * «Расчёты»: вместо условий и «Выплачено» — сначала «Сумма» ФОТ, остаток и выплаты 1С (решение 02.11.2026, порядок —
- * 03.11.2026), затем удержания 1С и состав зарплаты (payrollCalcColumns.ts). Переработка, проезд и проживание —
- * под «+» у «Доплат» (payrollSubColumns.ts, решение 30.10.2026), в шестерёнке их нет.
+ * 03.11.2026), затем удержания 1С и состав зарплаты (payrollCalcColumns.ts). Основное и переработка — под «+» у
+ * «Начислено по табелю» (решение 17.11.2026), проезд и проживание — под «+» у «Доплат» (payrollSubColumns.ts, решение
+ * 30.10.2026), в шестерёнке их нет.
  */
 export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
   ...COMMON_COLUMNS,

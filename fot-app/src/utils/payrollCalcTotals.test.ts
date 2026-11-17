@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { IPayrollCalcColumns, IPayrollTermsRow } from '../services/payrollService';
 import type { PayrollTableColumn } from './payrollColumns';
 import { payrollColumnTotals, payrollTotalState, splitPayrollTotalsRows } from './payrollCalcTotals';
-import type { PayrollSubColumn, PayrollTableColumnEntry } from './payrollSubColumns';
+import type { PayrollExpandableColumn, PayrollSubColumn, PayrollTableColumnEntry } from './payrollSubColumns';
 
 const calc = (overrides: Partial<IPayrollCalcColumns> = {}): IPayrollCalcColumns => ({
   rate: null,
@@ -31,7 +31,7 @@ const calc = (overrides: Partial<IPayrollCalcColumns> = {}): IPayrollCalcColumns
 const row = (overrides: Partial<IPayrollTermsRow>): IPayrollTermsRow => ({ employee_id: 1, ...overrides } as IPayrollTermsRow);
 
 const column = (key: PayrollTableColumn): PayrollTableColumnEntry => ({ kind: 'column', key, column: { key, label: key } });
-const sub = (value: PayrollSubColumn, parent: 'calc_supplements' | 'deductions' = 'calc_supplements'): PayrollTableColumnEntry => (
+const sub = (value: PayrollSubColumn, parent: PayrollExpandableColumn = 'calc_supplements'): PayrollTableColumnEntry => (
   { kind: 'sub', key: value.key, parent, sub: value }
 );
 
@@ -141,23 +141,31 @@ describe('payrollColumnTotals', () => {
     expect(totals.get('fss_payments')).toMatchObject({ amount: '17048.38', fromCalc: false });
   });
 
-  it('подстолбцы: виды ФОТ ждут расчёт, статьи 1С — нет; сумма подстолбцов равна итогу «Доплат»', () => {
+  it('подстолбцы: виды ФОТ ждут расчёт, статьи 1С — нет; сумма подстолбцов равна итогу группы', () => {
     const rows = [
       row({
-        calc: calc({ overtime: '10.00', travel: '2.50', supplements: '1.25', supplements_planned: '1.00', supplements_one_time: '0.25' }),
+        calc: calc({
+          timesheet: '100.00', overtime: '10.00', travel: '2.50', supplements: '1.25', supplements_planned: '1.00',
+          supplements_one_time: '0.25',
+        }),
         paid_deductions: [{ month: '2026-09', item: 'meals', amount: '7.00' }],
       }),
     ];
     const entries = [
+      column('calc_timesheet'),
+      sub({ type: 'column', key: 'calc_timesheet:base', label: 'Основное', column: 'calc_timesheet_base' }, 'calc_timesheet'),
+      sub({ type: 'column', key: 'calc_timesheet:calc_overtime', label: 'Переработка', column: 'calc_overtime' }, 'calc_timesheet'),
       column('calc_supplements'),
-      sub({ type: 'column', key: 'calc_supplements:calc_overtime', label: 'Переработка', column: 'calc_overtime' }),
       sub({ type: 'column', key: 'calc_supplements:calc_travel', label: 'Проезд', column: 'calc_travel' }),
       sub({ type: 'supplement', key: 'calc_supplements:planned', label: 'Плановая', part: 'planned' }),
       sub({ type: 'supplement', key: 'calc_supplements:one_time', label: 'Разовая', part: 'one_time' }),
       sub({ type: 'paid', key: 'deductions:meals', label: 'Питание', item: 'meals' }, 'deductions'),
     ];
     const totals = payrollColumnTotals(rows, entries);
-    expect(totals.get('calc_supplements')?.amount).toBe('13.75');
+    expect(totals.get('calc_timesheet')?.amount).toBe('110.00');
+    expect(totals.get('calc_timesheet:base')).toMatchObject({ amount: '100.00', fromCalc: true });
+    expect(totals.get('calc_timesheet:calc_overtime')).toMatchObject({ amount: '10.00', fromCalc: true });
+    expect(totals.get('calc_supplements')?.amount).toBe('3.75');
     expect(totals.get('calc_supplements:planned')).toMatchObject({ amount: '1.00', fromCalc: true });
     expect(totals.get('deductions:meals')).toMatchObject({ amount: '7.00', fromCalc: false });
   });

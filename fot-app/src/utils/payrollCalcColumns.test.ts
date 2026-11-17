@@ -64,13 +64,25 @@ describe('столбцы без данных на «Расчётах»', () => {
     expect(hidden).not.toContain('card_payouts');
   });
 
-  it('свёрнутые «Доплаты» — переработка + проезд + проживание + плановая и разовая, в копейках; ни одной — null', () => {
+  it('свёрнутые «Доплаты» — проезд + проживание + плановая и разовая, без переработки, в копейках; ни одной — null', () => {
     expect(calcSumAmount(row({ calc: calc({ overtime: '0.10', travel: '0.20', housing: null, supplements: '-0.05' }) }), 'calc_supplements'))
-      .toBe('0.25');
+      .toBe('0.15');
+    expect(calcSumAmount(row({ calc: calc({ overtime: '0.10' }) }), 'calc_supplements')).toBeNull();
     expect(calcSumAmount(row({ calc: calc({ travel: '2340.00' }) }), 'calc_supplements')).toBe('2340.00');
     expect(calcSumAmount(row({ calc: calc({ supplements: '0.00' }) }), 'calc_supplements')).toBe('0.00');
     expect(calcSumAmount(row({ calc: calc() }), 'calc_supplements')).toBeNull();
     expect(empty([row({ calc: calc({ housing: '18900.00' }) })])).not.toContain('calc_supplements');
+  });
+
+  it('«Начислено по табелю» — основное + переработка в копейках, «Основное» — без неё; ни одной — null', () => {
+    const item = row({ calc: calc({ timesheet: '0.10', overtime: '0.20' }) });
+    expect(calcSumAmount(item, 'calc_timesheet')).toBe('0.30');
+    expect(calcSumAmount(item, 'calc_timesheet_base')).toBe('0.10');
+    expect(calcSumAmount(row({ calc: calc() }), 'calc_timesheet')).toBeNull();
+    // Только переработка — столбец с данными.
+    const overtimeOnly = row({ calc: calc({ overtime: '900.00' }) });
+    expect(calcSumAmount(overtimeOnly, 'calc_timesheet')).toBe('900.00');
+    expect(empty([overtimeOnly])).not.toContain('calc_timesheet');
   });
 
   it('0 и минус — данные; неполный расчёт — данные «Начислено по табелю»; столбцы условий не скрываются', () => {

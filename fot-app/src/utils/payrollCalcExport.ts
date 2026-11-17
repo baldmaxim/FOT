@@ -56,11 +56,12 @@ const NO_VALUE = '—';
 
 /** Столбцы, где вместо суммы экран подписывает «выработка не внесена». */
 const OUTPUT_NOTE_COLUMNS: ReadonlySet<PayrollCalcAmountColumn> = new Set<PayrollCalcAmountColumn>([
-  'calc_timesheet', 'calc_net', 'calc_remainder',
+  'calc_timesheet', 'calc_timesheet_base', 'calc_net', 'calc_remainder',
 ]);
 
 /** Префикс подстолбца: названия статей 1С и видов ФОТ могут совпасть, а в шапке Excel нет скобки группы над ними. */
 const SUB_LABEL_PREFIX: Partial<Record<PayrollExpandableColumn, string>> = {
+  calc_timesheet: 'Начислено по табелю: ',
   deductions: 'Удержания (1С): ',
   calc_deductions: 'Удержания (ФОТ): ',
 };
