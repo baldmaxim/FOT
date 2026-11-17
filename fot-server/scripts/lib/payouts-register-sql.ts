@@ -11,6 +11,7 @@
  * Откат — только при том же полном совпадении, все ведомости сразу.
  *
  * Ведомости из XML (build-payouts-xml-sql.ts) несут ещё зарплатный проект и id_all строк; у регистра они NULL.
+ * ИНН организации — у каждого документа свой (СУ-10 или СМ, CHECK миграции 366); content_hash его не включает.
  * Режим «транзакция открыта» (open): проверка базы, lock_timeout, в конце — КОНТРОЛЬ и без COMMIT: COMMIT или
  * ROLLBACK оператор пишет сам, сверив вывод (\i в интерактивном psql).
  *
@@ -19,8 +20,6 @@
  * Кроме advisory lock — SHARE ROW EXCLUSIVE на таблицы «Перечислено (1С)»: любая чужая запись ждёт конца транзакции.
  * Откат замены — та же замена с from и to наоборот.
  */
-import { PAYOUTS_1C_ORGANIZATION_INN } from '../../src/services/payroll/payroll-1c-payouts.parser.js';
-
 export interface IRegisterSqlDocument {
   guid: string;
   docNumber: string;
@@ -31,6 +30,8 @@ export interface IRegisterSqlDocument {
   contentHash: string;
   lineCount: number;
   lockKey: string;
+  /** ИНН организации документа (СУ-10 или СМ). */
+  organizationInn: string;
   /** Зарплатный проект (только XML); у регистра — NULL. */
   salaryProject?: string | null;
 }
@@ -132,12 +133,13 @@ const createSet = (p: string, input: IRegisterSqlInput): string => {
 CREATE TEMP TABLE ${p}_docs (
   doc_guid uuid PRIMARY KEY, doc_number text NOT NULL, doc_date date NOT NULL, period_month date NOT NULL,
   payment_method text NOT NULL, total_amount numeric(12,2) NOT NULL, content_hash text NOT NULL, line_count integer NOT NULL,
-  salary_project text
+  salary_project text, organization_inn text NOT NULL
 ) ON COMMIT DROP;
-${insertValues(`${p}_docs`, 'doc_guid, doc_number, doc_date, period_month, payment_method, total_amount, content_hash, line_count, salary_project',
+${insertValues(`${p}_docs`, `doc_guid, doc_number, doc_date, period_month, payment_method, total_amount, content_hash, line_count, salary_project,
+  organization_inn`,
     input.documents.map(doc => [
       lit(doc.guid), lit(doc.docNumber), lit(doc.docDate), lit(doc.periodMonth), lit(doc.paymentMethod),
-      money(doc.totalCents), lit(doc.contentHash), String(doc.lineCount), lit(doc.salaryProject ?? null),
+      money(doc.totalCents), lit(doc.contentHash), String(doc.lineCount), lit(doc.salaryProject ?? null), lit(doc.organizationInn),
     ].join(', ')))}
 
 CREATE TEMP TABLE ${p}_lines (
@@ -164,7 +166,7 @@ ${insertValues(`${p}_employees`, 'employee_id, total', [...employees].map(([id, 
 /** Сохранённое состояние документов набора ровно такое, как после загрузки, и после неё ничего не менялось. */
 const sameState = (p: string): string => `(
     NOT EXISTS (
-      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
+      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, organization_inn,
               total_amount, content_hash, 1, NULL::uuid FROM ${p}_docs)
       EXCEPT
       (SELECT d.doc_guid, d.doc_number, d.zup2_number, d.doc_date, d.period_month, d.payment_method, d.salary_project,
@@ -175,7 +177,7 @@ const sameState = (p: string): string => `(
               d.organization_inn, d.total_amount, d.content_hash, d.revision, d.updated_by
          FROM payroll_1c_payout_documents d JOIN ${p}_docs r ON r.doc_guid = d.doc_guid)
       EXCEPT
-      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}'::text,
+      (SELECT doc_guid, doc_number, NULL::text, doc_date, period_month, payment_method, salary_project, organization_inn,
               total_amount, content_hash, 1, NULL::uuid FROM ${p}_docs))
     AND NOT EXISTS (
       (SELECT doc_guid, line_no, line_key, full_name_1c, person_id_all, brigade_1c, amount, employee_id, resolution, resolution_reason
@@ -260,7 +262,7 @@ const checks = (p: string, input: IRegisterSqlInput): string => {
 /** Вставка документов набора, отобранных условием по `r` (документ набора), и их строк; n — документов, m — строк. */
 const insertSet = (p: string, where: string): string => `    INSERT INTO payroll_1c_payout_documents (doc_guid, doc_number, zup2_number, doc_date, period_month, payment_method,
                                              salary_project, organization_inn, total_amount, content_hash, revision, updated_by)
-    SELECT r.doc_guid, r.doc_number, NULL, r.doc_date, r.period_month, r.payment_method, r.salary_project, '${PAYOUTS_1C_ORGANIZATION_INN}',
+    SELECT r.doc_guid, r.doc_number, NULL, r.doc_date, r.period_month, r.payment_method, r.salary_project, r.organization_inn,
            r.total_amount, r.content_hash, 1, NULL
       FROM ${p}_docs r WHERE ${where};
     GET DIAGNOSTICS n = ROW_COUNT;

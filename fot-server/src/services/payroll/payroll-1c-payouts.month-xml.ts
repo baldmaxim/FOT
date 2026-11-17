@@ -7,16 +7,20 @@
  *  - «отпуска» (средний заработок по отпускам, повтор сумм строк) и «Основания» (ссылки на документы) — справочные,
  *    с ПДн: не читаются. «Состав» должен быть пустым.
  * Ключи строк и content_hash — те же функции, что у кнопки: тот же документ даёт тот же хеш.
- * Fail-closed: неизвестный раздел, чужой ИНН, другой месяц, повтор ГУИДа или номера с датой — ошибка. Персональные
- * данные (паспорт, ИНН, СНИЛС, гражданство, дата рождения) не извлекаются.
+ * Fail-closed: неизвестный раздел, ИНН не из PAYOUT_XML_ORGANIZATION_INNS, другой месяц, повтор ГУИДа или номера с датой —
+ * ошибка. Персональные данные (паспорт, ИНН, СНИЛС, гражданство, дата рождения) не извлекаются.
+ *
+ * Перенос месяца (moveDocs, решение пользователя): ведомость из списка, которую 1С провела другим месяцем, грузится в
+ * month; content_hash — по исходному документу 1С (с его ПериодРегистрации), как у кнопки, исходный месяц —
+ * sourcePeriodMonth. Ведомость из списка уже за month — ошибка. Полноту списка по всем файлам проверяет генератор.
  */
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 import {
   buildPayoutLineKeys,
   parseAmountCents,
+  PAYOUT_XML_ORGANIZATION_INNS,
   payoutContentHash,
-  PAYOUTS_1C_ORGANIZATION_INN,
   Payout1cParseError,
   type IPayout1cDocument,
 } from './payroll-1c-payouts.parser.js';
@@ -53,6 +57,13 @@ export interface IPayout1cMonthDocument extends IPayout1cDocument {
   /** Строки «00000» без ФИО (= Σ руководства). */
   duplicateCents: number;
   leadershipLines: number;
+  /** ПериодРегистрации 1С, если ведомость перенесена в month решением пользователя (moveDocs); иначе null. */
+  sourcePeriodMonth: string | null;
+}
+
+export interface IPayout1cMonthXmlOptions {
+  /** Номера ведомостей, которые 1С провела другим месяцем, а грузятся в month (решение пользователя). */
+  moveDocs?: ReadonlySet<string>;
 }
 
 export const fail = (message: string): never => {
@@ -138,18 +149,23 @@ const sectionLines = (doc: XmlNode, section: (typeof SECTIONS)[number], at: stri
   return { lines, duplicate };
 };
 
-const parseDocument = (doc: XmlNode, index: number, month: string): IPayout1cMonthDocument => {
+const parseDocument = (
+  doc: XmlNode, index: number, month: string, moveDocs: ReadonlySet<string>,
+): IPayout1cMonthDocument => {
   const at = `Документ ${index + 1}`;
   assertKnownTags(doc, DOC_TAGS, at);
   const docKind = text(doc, 'имя_док', at) as string;
   if (!(PAYOUT_MONTH_DOC_KINDS as readonly string[]).includes(docKind)) fail(`${at}: вид «${docKind}» не поддержан`);
   const inn = text(doc, 'организация_инн', at) as string;
-  if (inn !== PAYOUTS_1C_ORGANIZATION_INN) fail(`${at}: ведомость другой организации (ИНН ${inn})`);
+  if (!PAYOUT_XML_ORGANIZATION_INNS.includes(inn)) fail(`${at}: ведомость другой организации (ИНН ${inn})`);
   if (!isEmpty(doc.Состав)) fail(`${at}: раздел «Состав» не пустой — формат не поддержан`);
   const docNumber = text(doc, 'Док_Номер', at) as string;
   const where = `${at} (${docNumber})`;
   const periodMonth = isoDate(doc, 'ПериодРегистрации', where);
-  if (periodMonth !== `${month}-01`) fail(`${where}: месяц начисления ${periodMonth}, ожидался ${month}`);
+  const targetMonth = `${month}-01`;
+  const moved = moveDocs.has(docNumber);
+  if (moved && periodMonth === targetMonth) fail(`${where}: в списке переноса, но 1С уже провела её за ${month}`);
+  if (!moved && periodMonth !== targetMonth) fail(`${where}: месяц начисления ${periodMonth}, ожидался ${month}`);
 
   const salary = sectionLines(doc, 'Зарплата', where);
   const leadership = sectionLines(doc, 'Зарплата_руководство', where);
@@ -181,12 +197,15 @@ const parseDocument = (doc: XmlNode, index: number, month: string): IPayout1cMon
   };
   return {
     ...header,
-    lines,
+    // Хеш — по документу 1С как есть (исходный месяц): та же ведомость в выгрузке своего месяца даёт тот же хеш.
     contentHash: payoutContentHash({ ...header, lineKeys: keys }),
+    periodMonth: targetMonth,
+    lines,
     docKind,
     fileTotalCents,
     duplicateCents: salary.duplicate,
     leadershipLines: leadership.lines.length,
+    sourcePeriodMonth: moved ? periodMonth : null,
   };
 };
 
@@ -214,14 +233,17 @@ export const parseZupXmlTree = (xml: string, arrayPaths: ReadonlySet<string>): X
 };
 
 /** Разбор выгрузки ведомостей выплаты за месяц month (YYYY-MM). Ошибка формата — Payout1cParseError. */
-export const parsePayout1cMonthXml = (xml: string, month: string): IPayout1cMonthDocument[] => {
+export const parsePayout1cMonthXml = (
+  xml: string, month: string, options: IPayout1cMonthXmlOptions = {},
+): IPayout1cMonthDocument[] => {
   if (!/^\d{4}-\d{2}$/.test(month)) fail(`Месяц «${month}» — не YYYY-MM`);
   const root = parseZupXmlTree(xml, ARRAY_PATHS);
   assertKnownTags(root, new Set(['имя', 'версия', 'ЗарплатаКВыплатеОрганизаций']), 'Файл');
   if (text(root, 'имя', 'Файл') !== ROOT_NAME) fail('Файл: не выгрузка ведомостей выплаты («имя»)');
   const container = child(root, 'ЗарплатаКВыплатеОрганизаций', 'Файл');
   assertKnownTags(container, new Set(['документ']), 'Файл');
-  const docs = listOf(container.документ).map((doc, index) => parseDocument(doc, index, month));
+  const moveDocs = options.moveDocs ?? new Set<string>();
+  const docs = listOf(container.документ).map((doc, index) => parseDocument(doc, index, month, moveDocs));
   if (docs.length === 0) fail('В файле нет документов');
 
   const guids = new Set<string>();

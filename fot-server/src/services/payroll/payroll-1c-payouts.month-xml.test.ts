@@ -18,10 +18,10 @@ const row = (name: string | null, amount: string, idAll: string | null = null, c
 
 interface IDocOpts {
   guid?: string; number?: string; kind?: string; method?: string; month?: string; total?: string; project?: boolean;
-  salary?: string; leadership?: string; sostav?: string; extra?: string;
+  salary?: string; leadership?: string; sostav?: string; extra?: string; inn?: string;
 }
 const doc = (o: IDocOpts = {}): string => `<документ><имя_док>${o.kind ?? 'ВедомостьНаВыплатуЗарплатыВБанк'}</имя_док>`
-  + '<организация_инн>7736255508</организация_инн><организация_имя>ООО "Тест"</организация_имя>'
+  + `<организация_инн>${o.inn ?? '7736255508'}</организация_инн><организация_имя>ООО "Тест"</организация_имя>`
   + `<Док_Гуид>${o.guid ?? '11111111-2222-3333-4444-555555555555'}</Док_Гуид><Док_Номер>${o.number ?? '0000-000077'}</Док_Номер>`
   + '<Док_Дата><Год>2026</Год><Мес>11</Мес><День>3</День></Док_Дата>'
   + `<ПериодРегистрации><Год>2026</Год><Мес>${o.month ?? '10'}</Мес><День>1</День></ПериодРегистрации>`
@@ -95,5 +95,25 @@ describe('выгрузка ведомостей выплаты за месяц: 
     expectError(file(doc(), doc()), /ГУИД .* повторяется/);
     expectError(file(doc(), doc({ guid: '44444444-2222-3333-4444-555555555555' })), /0000-000077 от 2026-11-03 повторяется/);
     expectError('<зп_документы_31><имя>Другое</имя></зп_документы_31>', /не выгрузка ведомостей выплаты/);
+  });
+
+  it('организация: СМ (7705794997) принимается вместе с СУ-10, чужой ИНН — ошибка', () => {
+    const [sm] = parsePayout1cMonthXml(file(doc({ inn: '7705794997' })), '2026-10');
+    expect(sm.organizationInn).toBe('7705794997');
+    expectError(file(doc({ inn: '7700000000' })), /другой организации \(ИНН 7700000000\)/);
+  });
+
+  it('перенос месяца: ведомость из списка — в месяц загрузки, хеш как у документа 1С в своём месяце', () => {
+    const own = parsePayout1cMonthXml(file(doc({ month: '11' })), '2026-11')[0];
+    const [moved] = parsePayout1cMonthXml(file(doc({ month: '11' })), '2026-10', { moveDocs: new Set(['0000-000077']) });
+    expect(moved).toMatchObject({ periodMonth: '2026-10-01', sourcePeriodMonth: '2026-11-01', contentHash: own.contentHash });
+    expect(own.sourcePeriodMonth).toBeNull();
+    // Список не трогает документы своего месяца без номера в списке; номер из списка уже за месяц — ошибка.
+    const [plain] = parsePayout1cMonthXml(file(doc()), '2026-10', { moveDocs: new Set(['0000-000099']) });
+    expect(plain).toMatchObject({ periodMonth: '2026-10-01', sourcePeriodMonth: null });
+    expect(() => parsePayout1cMonthXml(file(doc()), '2026-10', { moveDocs: new Set(['0000-000077']) }))
+      .toThrow(/в списке переноса, но 1С уже провела её за 2026-10/);
+    expect(() => parsePayout1cMonthXml(file(doc({ month: '11' })), '2026-10', { moveDocs: new Set(['0000-000099']) }))
+      .toThrow(/месяц начисления 2026-11-01, ожидался 2026-10/);
   });
 });

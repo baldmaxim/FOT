@@ -12,7 +12,7 @@ import {
   type IRegisterSqlLine,
 } from '../../../scripts/lib/payouts-register-sql.js';
 
-// SQL регистра выплат ЗУП (scripts/lib/payouts-register-sql.ts) на настоящем PostgreSQL, миграция 328: замена
+// SQL регистра выплат ЗУП (scripts/lib/payouts-register-sql.ts) на настоящем PostgreSQL, миграции 328 и 366: замена
 // месяца from → to, повтор — без изменений, откат — обратная замена; отказ без записи при лишнем документе месяца,
 // revision 2, журнале, испорченном наборе; параллельная запись ждёт; сбой после удаления откатывает всё.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются). Гонять отдельно от
@@ -24,11 +24,11 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../../../../docs/migrations/', imp
 const MONTH = '2026-09-01';
 
 const part = (guid: string, docNumber: string, method: string, rows: Array<[string, number, number | null]>,
-  periodMonth = MONTH): { doc: IRegisterSqlDocument; lines: IRegisterSqlLine[] } => ({
+  periodMonth = MONTH, organizationInn = '7736255508'): { doc: IRegisterSqlDocument; lines: IRegisterSqlLine[] } => ({
   doc: {
     guid, docNumber, docDate: '2026-10-05', periodMonth, paymentMethod: method,
     totalCents: rows.reduce((sum, [, cents]) => sum + cents, 0), contentHash: guid.slice(0, 1).repeat(64),
-    lineCount: rows.length, lockKey: `payroll_1c_payout_no:${docNumber}|2026-10-05`,
+    lineCount: rows.length, lockKey: `payroll_1c_payout_no:${docNumber}|2026-10-05`, organizationInn,
   },
   lines: rows.map(([name, cents, employeeId], index) => ({
     guid, lineNo: index + 1, lineKey: `${name.toLowerCase()}|${cents}|1`, fullName: name, department: 'ИТР',
@@ -101,6 +101,10 @@ describe.skipIf(!PG_URL)('регистр выплат ЗУП: SQL замены �
       INSERT INTO employees VALUES (1, 'Иванов Иван (ФОТ)'), (2, 'Петров Пётр (ФОТ)');
     `);
     await pool.query(readFileSync(`${MIGRATIONS_DIR}328_payroll_1c_payouts.sql`, 'utf8'));
+    // 366 — ИНН СМ; повторный запуск безопасен.
+    const sm = readFileSync(`${MIGRATIONS_DIR}366_payroll_1c_payouts_sm_inn.sql`, 'utf8');
+    await pool.query(sm);
+    await pool.query(sm);
   });
 
   beforeEach(async () => {
@@ -293,6 +297,32 @@ describe.skipIf(!PG_URL)('регистр выплат ЗУП: SQL замены �
 
     expect(await runOpen(rollback)).toContain('Оставлено документов: 1, удалено: 1, добавлено: 1 (строк 1)');
     expect(withoutIds(await state())).toEqual(withoutIds(before));
+  });
+
+  it('ведомость СМ (366): ИНН документа сохраняется, повтор — без изменений, откат; чужой ИНН — отказ CHECK', async () => {
+    const smDoc = part('f0000000-0000-5000-8000-000000000006', 'СМЗП-000458', 'Премии', [['Иванов Иван', 131862, 1],
+      ['Товбин Михаил', 70000, null]], MONTH, '7705794997');
+    const input = set(smDoc);
+    const before = await state();
+    expect(await runScript(buildRegisterLoadSql(input))).toContain('Вставлено ведомостей: 1, строк: 2');
+    const inns = (await pool.query(
+      'SELECT doc_guid::text AS guid, organization_inn FROM payroll_1c_payout_documents ORDER BY doc_guid',
+    )).rows;
+    expect(inns).toEqual([
+      { guid: A.doc.guid, organization_inn: '7736255508' },
+      { guid: B.doc.guid, organization_inn: '7736255508' },
+      { guid: AUG.doc.guid, organization_inn: '7736255508' },
+      { guid: smDoc.doc.guid, organization_inn: '7705794997' },
+    ]);
+    expect(await runScript(buildRegisterLoadSql(input))).toContain('Без изменений: этот набор уже загружен');
+    // Набор с той же ведомостью, но ИНН СУ-10, не совпадает с сохранённым — ни «без изменений», ни отката.
+    const wrongInn = set({ ...smDoc, doc: { ...smDoc.doc, organizationInn: '7736255508' } });
+    await expectRejected(buildRegisterLoadSql(wrongInn), /Состояние не то/);
+    await expectRejected(buildRegisterRollbackSql(wrongInn), /Откат невозможен/);
+    expect(await runScript(buildRegisterRollbackSql(input))).toContain('Удалено ведомостей: 1 (строки — каскадом)');
+    expect(await state()).toEqual(before);
+    const other = set(part('f0000000-0000-5000-8000-000000000007', 'X-1', 'Аванс', [['Иванов Иван', 100, 1]], MONTH, '7700000000'));
+    await expectRejected(buildRegisterLoadSql(other), /organization_inn_check/);
   });
 
   it('сбой после удаления (строки вставились не такими) — откатывается вся транзакция', async () => {

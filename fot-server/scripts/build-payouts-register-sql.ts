@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 
 import type { IPayoutCandidate } from '../src/services/payroll/payroll-1c-payouts.matching.js';
-import { normalizePayoutName } from '../src/services/payroll/payroll-1c-payouts.parser.js';
+import { normalizePayoutName, PAYOUTS_1C_ORGANIZATION_INN } from '../src/services/payroll/payroll-1c-payouts.parser.js';
 import {
   buildRegisterDocuments,
   type IRegisterDocument,
@@ -359,6 +359,8 @@ const main = async (): Promise<void> => {
       guid: doc.guid, docNumber: doc.docNumber, docDate: doc.docDate, periodMonth: doc.periodMonth,
       paymentMethod: doc.paymentMethod, totalCents: doc.totalCents, contentHash: doc.contentHash,
       lineCount: doc.lines.length, lockKey: payoutNumberLockKey(doc.docNumber, doc.docDate),
+      // Регистр выплат ЗУП — только СУ-10.
+      organizationInn: PAYOUTS_1C_ORGANIZATION_INN,
     }));
 
     // --replace: месяц на проде — одним снимком; оставляемые документы берутся из него, расхождения — стоп.

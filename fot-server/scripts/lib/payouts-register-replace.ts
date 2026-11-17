@@ -13,7 +13,7 @@
  */
 import type { PoolClient } from 'pg';
 
-import { normalizePayoutName, PAYOUTS_1C_ORGANIZATION_INN } from '../../src/services/payroll/payroll-1c-payouts.parser.js';
+import { normalizePayoutName, PAYOUT_XML_ORGANIZATION_INNS } from '../../src/services/payroll/payroll-1c-payouts.parser.js';
 import type { IRegisterSqlDocument, IRegisterSqlInput, IRegisterSqlLine } from './payouts-register-sql.js';
 
 export interface ISnapshotDocRow {
@@ -106,7 +106,7 @@ export const snapshotToInput = (
     if (doc.zup2_number !== null || doc.salary_project !== null || doc.updated_by !== null) {
       problems.push(`${where}: заполнены ЗУП2-номер, зарплатный проект или updated_by — загружен не этим скриптом`);
     }
-    if (doc.organization_inn !== PAYOUTS_1C_ORGANIZATION_INN) problems.push(`${where}: ИНН ${doc.organization_inn}`);
+    if (!PAYOUT_XML_ORGANIZATION_INNS.includes(doc.organization_inn)) problems.push(`${where}: ИНН ${doc.organization_inn}`);
     const docLines = linesByGuid.get(doc.doc_guid) ?? [];
     const totalCents = cents(doc.total_amount, where);
     const linesCents = docLines.reduce((sum, line) => sum + cents(line.amount, where), 0);
@@ -123,6 +123,7 @@ export const snapshotToInput = (
       contentHash: doc.content_hash,
       lineCount: docLines.length,
       lockKey: lockKeyOf(doc.doc_number, doc.doc_date),
+      organizationInn: doc.organization_inn,
     };
   });
   const guids = new Set(snapshot.docs.map(doc => doc.doc_guid));

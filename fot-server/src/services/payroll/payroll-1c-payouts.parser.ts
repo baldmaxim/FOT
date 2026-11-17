@@ -9,8 +9,17 @@
 import { createHash } from 'node:crypto';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
-/** ИНН СУ-10 — единственная организация, чьи ведомости принимаются (тот же CHECK в миграции 328). */
+/** ИНН СУ-10 — единственная организация, чьи ведомости принимает кнопка «Загрузить из 1С» и реестр ФСС. */
 export const PAYOUTS_1C_ORGANIZATION_INN = '7736255508';
+
+/** ИНН АО «Служба механизации» (СМ). */
+export const SM_ORGANIZATION_INN = '7705794997';
+
+/**
+ * Организации, чьи выгрузки ведомостей за месяц (XML ЗУП) грузит генератор build-payouts-xml-sql.ts — тот же CHECK
+ * в миграции 366. Кнопка и реестр ФСС по-прежнему только СУ-10.
+ */
+export const PAYOUT_XML_ORGANIZATION_INNS: readonly string[] = [PAYOUTS_1C_ORGANIZATION_INN, SM_ORGANIZATION_INN];
 
 export type Payout1cFormat = 'zup2' | 'external';
 

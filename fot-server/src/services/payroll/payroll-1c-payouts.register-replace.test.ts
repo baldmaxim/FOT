@@ -46,7 +46,7 @@ const fileDoc = (guid: string, docNumber: string, method: string, lines: Array<[
   const doc: IRegisterSqlDocument = {
     guid, docNumber, docDate: '2026-10-05', periodMonth: MONTH, paymentMethod: method,
     totalCents: lines.reduce((sum, [, cents]) => sum + cents, 0), contentHash: guid.slice(0, 1).repeat(64),
-    lineCount: lines.length, lockKey: lockKey(docNumber, '2026-10-05'),
+    lineCount: lines.length, lockKey: lockKey(docNumber, '2026-10-05'), organizationInn: '7736255508',
   };
   const docLines = lines.map(([name, cents, employeeId], index): IRegisterSqlLine => ({
     guid, lineNo: index + 1, lineKey: `${name.toLowerCase()}|${cents}|1`, fullName: name, department: 'ИТР',
