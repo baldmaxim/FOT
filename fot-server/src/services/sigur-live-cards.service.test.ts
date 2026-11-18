@@ -158,6 +158,69 @@ describe('assignSigurEmployeeCardBinding', () => {
     expect(sig.findCardByCandidates).toHaveBeenCalledTimes(2);
     expect(sig.createEmployeeCardBinding).toHaveBeenCalledWith(500, 38046, expect.any(String), expect.any(String), 'external', 'W26');
   });
+
+  describe('дубли номера в каталоге Sigur (пропуск 2050, 18.11.2026)', () => {
+    // Две карты 9E4AF3 / 158,19187: 38624 свободна, 38625 уже у профиля 146261.
+    const PROFILE = 146261;
+    const W26 = '158,19187';
+    const FREE_DUP = { id: 38624, value: '9E4AF3', formattedValue: W26, format: 'W26' };
+    const OWN_DUP = { id: 38625, value: '9E4AF3', formattedValue: W26, format: 'W26', holder: { holderId: PROFILE, type: 'EMP' } };
+    const OWN_BINDING = { employeeId: PROFILE, cardId: 38625, startDate: '2026-06-29 11:30:20', expirationDate: '2031-06-29 11:30:20', format: 'W26' };
+
+    const bindingsByFilter = (own: Record<string, unknown>[]) =>
+      vi.fn(async (filters?: Record<string, unknown>) => {
+        if (filters?.employeeId === PROFILE) return own;
+        if (filters?.cardId === 38625) return [OWN_BINDING];
+        return [];
+      });
+
+    it('берётся карта, уже привязанная к профилю → PATCH срока, без create/delete', async () => {
+      sig.findCardByCandidates = vi.fn(async () => ({ matches: [FREE_DUP, OWN_DUP], tried: [], sample: [] }));
+      sig.getCardBindings = bindingsByFilter([OWN_BINDING]);
+
+      const res = await assignSigurEmployeeCardBinding(PROFILE, [W26], undefined, 'external', true, {
+        expectedHolderName: 'Угаров Сергей Николаевич',
+        reassignPolicy: 'safe-only',
+      });
+
+      expect(sig.getCardBindings).toHaveBeenCalledWith({ employeeId: PROFILE }, 'external');
+      expect(sig.getCardBindings).toHaveBeenCalledWith({ cardId: 38625 }, 'external');
+      expect(sig.getCardBindings).not.toHaveBeenCalledWith({ cardId: 38624 }, 'external');
+      expect(sig.patchEmployeeCardBinding).toHaveBeenCalledWith(PROFILE, 38625, expect.any(String), expect.any(String), 'external', 'W26');
+      expect(sig.createEmployeeCardBinding).not.toHaveBeenCalled();
+      expect(sig.deleteEmployeeCardBinding).not.toHaveBeenCalled();
+      expect(sig.createCard).not.toHaveBeenCalled();
+      expect(res.reassigned).toBe(false);
+    });
+
+    it('своей карты среди дублей нет → первая, как раньше', async () => {
+      sig.findCardByCandidates = vi.fn(async () => ({ matches: [FREE_DUP, OWN_DUP], tried: [], sample: [] }));
+      sig.getCardBindings = bindingsByFilter([]);
+      const OTHER_PROFILE = 146300;
+
+      await assignSigurEmployeeCardBinding(OTHER_PROFILE, [W26], undefined, 'external', true);
+
+      expect(sig.getCardBindings).toHaveBeenCalledWith({ employeeId: OTHER_PROFILE }, 'external');
+      expect(sig.createEmployeeCardBinding).toHaveBeenCalledWith(OTHER_PROFILE, 38624, expect.any(String), expect.any(String), 'external', 'W26');
+      expect(sig.patchEmployeeCardBinding).not.toHaveBeenCalled();
+      expect(sig.deleteEmployeeCardBinding).not.toHaveBeenCalled();
+    });
+
+    it('refetch после 422 у createCard нашёл дубли → своя карта, PATCH', async () => {
+      sig.findCardByCandidates = vi.fn()
+        .mockResolvedValueOnce({ matches: [], tried: [], sample: [] })
+        .mockResolvedValueOnce({ matches: [FREE_DUP, OWN_DUP], tried: [], sample: [] });
+      sig.createCard = vi.fn(async () => { throw http(422); });
+      sig.getCardBindings = bindingsByFilter([OWN_BINDING]);
+
+      await assignSigurEmployeeCardBinding(PROFILE, [W26], undefined, 'external', true, { reassignPolicy: 'safe-only' });
+
+      expect(sig.createCard).toHaveBeenCalledTimes(1);
+      expect(sig.patchEmployeeCardBinding).toHaveBeenCalledWith(PROFILE, 38625, expect.any(String), expect.any(String), 'external', 'W26');
+      expect(sig.createEmployeeCardBinding).not.toHaveBeenCalled();
+      expect(sig.deleteEmployeeCardBinding).not.toHaveBeenCalled();
+    });
+  });
 });
 
 /**

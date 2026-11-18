@@ -19,6 +19,7 @@ import {
   enrichAccessPointBinding,
   toAccessRuleBinding,
   toCardSummary,
+  toEmployeeCardBinding,
   type IAccessPointBinding,
 } from './sigur-live-admin.service.js';
 import { resolveField } from './sigur-sync-shared.js';
@@ -97,6 +98,27 @@ function isExactCardMatch(raw: Record<string, unknown>, decoded: ReturnType<type
   };
   const fmt = normW26(String(resolveField(raw, 'formattedValue', 'formatted_value') ?? ''));
   return !!fmt && fmt === normW26(decoded.w26);
+}
+
+type TCardSummary = NonNullable<ReturnType<typeof toCardSummary>>;
+
+/**
+ * Выбор среди карт каталога Sigur с одним номером (дубли от выпуска пула 29.06.2026).
+ * Карта, уже привязанная к профилю, продлевается; привязка её свободной копии к тому же
+ * профилю — Sigur 422 (пропуск 2050, 18.11.2026). Своей нет — первая, как раньше.
+ */
+async function pickOwnCard(
+  cards: TCardSummary[],
+  sigurEmployeeId: number,
+  connection?: ConnectionType,
+): Promise<TCardSummary | undefined> {
+  if (cards.length <= 1) return cards[0];
+  const bindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId }, connection) as Record<string, unknown>[];
+  const ownCardIds = new Set(bindings
+    .map(raw => toEmployeeCardBinding(raw))
+    .filter((b): b is NonNullable<typeof b> => !!b && b.employeeId === sigurEmployeeId && b.cardId != null)
+    .map(b => b.cardId));
+  return cards.find(c => ownCardIds.has(c.cardId)) ?? cards[0];
 }
 
 /** Политика перепривязки карты, если она уже привязана к ДРУГОМУ профилю Sigur. */
@@ -363,8 +385,8 @@ export async function assignSigurEmployeeCardBinding(
   // Отбрасываем ложные частичные совпадения матчера: для W26 берём только карты с ТОЧНЫМ value.
   // Иначе новый пластик ошибочно «привязывается» к карте другого сотрудника, а safe-only бросает конфликт.
   const exactMatches = decoded ? matches.filter(m => isExactCardMatch(m, decoded!)) : matches;
-  const cards = exactMatches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
-  let card: NonNullable<ReturnType<typeof toCardSummary>> | undefined = cards[0];
+  const cards = exactMatches.map(toCardSummary).filter((c): c is TCardSummary => !!c);
+  let card: TCardSummary | undefined = await pickOwnCard(cards, sigurEmployeeId, connection);
 
   if (!card) {
     if (!createIfMissing) {
@@ -383,10 +405,11 @@ export async function assignSigurEmployeeCardBinding(
     if (!card) {
       // POST /cards без распознаваемого id ИЛИ 422-дубль — перечитываем по value/W26.
       const refetched = await sigurService.findCardByCandidates([decoded.value, decoded.w26], connection);
-      card = refetched.matches
+      const refetchedCards = refetched.matches
         .filter(m => isExactCardMatch(m, decoded!))
         .map(toCardSummary)
-        .find((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+        .filter((c): c is TCardSummary => !!c);
+      card = await pickOwnCard(refetchedCards, sigurEmployeeId, connection);
     }
     if (!card) {
       throw new Error(`Карта создана/уже существует, но не найдена в Sigur: value ${decoded.value}`);
