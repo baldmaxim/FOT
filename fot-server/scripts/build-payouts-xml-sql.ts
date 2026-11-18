@@ -29,6 +29,13 @@
  * --link «ФИО=id» и --unmatched «ФИО» — ручные решения пользователя по физлицу (applyManualRules: ровно одно физлицо
  * под ФИО, правило использовано, код 1С не ведёт к другой карточке).
  *
+ * Выгрузка ЗУП2 «ЗП к выплате» (корень ЗУП_ВЫПЛАТЫ, `<имя>данные_из_зуп_зп_к_выплате</имя>`, решение пользователя
+ * 18.11.2026 — октябрь, документ 0000000403): вида выплаты и ИНН в файле нет — --payment-method и --organization-inn
+ * обязательны; сотрудник — только по коду физлица 1С (decideByIdAll), ФИО не используется; --move-doc, --link,
+ * --unmatched, --skip-method, --replace-method не принимаются (payouts-xml-args.ts). Сумма — зарплата и премия вместе,
+ * поэтому стоп, если у её сотрудников (или их кодов 1С) в месяце уже есть строки этого вида, «Зарплаты за месяц» или
+ * «Премий»; выгрузка ведомостей ЗУП в такой месяц предупреждает о строках «ЗП к выплате» у своих сотрудников.
+ *
  * Работает на read-only проде (роль mcp_readonly из --env-file) и в базу ничего не пишет. Файлы — в --out-dir,
  * права 600, не в git (ФИО и суммы); имена — с --tag; существующий файл не перезаписывается. Исходники с
  * незакоммиченными правками — отказ: SQL и manifest подписаны HEAD.
@@ -38,6 +45,8 @@
  *   cd fot-server && TZ=UTC npx tsx scripts/build-payouts-xml-sql.ts --file <xml> [--file <xml> …] --month 2026-10 \
  *     [--tag sm] [--move-doc <номер> …] [--link "ФИО=id" …] [--unmatched "ФИО" …] \
  *     [--skip-method Премии | --replace-method Премии] [--out-dir ~] [--env-file ~/.config/mcp/env] [--database FOT_Prod]
+ *   «ЗП к выплате»: … --file <xml> --month 2026-10 --tag zp-k-vyplate --payment-method "Зарплата за месяц" \
+ *     --organization-inn 7736255508
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -48,10 +57,16 @@ import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 
 import type { IPayoutCandidate } from '../src/services/payroll/payroll-1c-payouts.matching.js';
-import { normalizePayoutName, SM_ORGANIZATION_INN, type IPayout1cLine } from '../src/services/payroll/payroll-1c-payouts.parser.js';
+import {
+  normalizePayoutName,
+  PAYOUT_LINE_MONTH_SQL,
+  SM_ORGANIZATION_INN,
+  type IPayout1cLine,
+} from '../src/services/payroll/payroll-1c-payouts.parser.js';
 import {
   applyManualRules,
   decide,
+  decideByIdAll,
   DECISION_LABELS,
   parseManualRules,
   type DecisionKind,
@@ -73,9 +88,11 @@ import {
   MOVE_MARK,
   outputNames,
   parseXmlFiles,
+  TO_PAY_REASON_PREFIX,
   type IStoredPayoutDoc,
   type IXmlSetDocument,
 } from './lib/payouts-xml-files.js';
+import { assertArgsForKind, parseXmlSqlArgs } from './lib/payouts-xml-args.js';
 
 const TAG = '[build-payouts-xml-sql]';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -87,7 +104,9 @@ const SOURCE_PATHS = [
   'fot-server/scripts/lib/payouts-register-replace.ts',
   'fot-server/scripts/lib/payouts-person-decision.ts',
   'fot-server/scripts/lib/payouts-xml-files.ts',
+  'fot-server/scripts/lib/payouts-xml-args.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.month-xml.ts',
+  'fot-server/src/services/payroll/payroll-1c-payouts.to-pay-xml.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.parser.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.matching.ts',
   'fot-server/src/services/payroll/payroll-1c-payouts.service.ts',
@@ -96,51 +115,6 @@ const SOURCE_PATHS = [
   'fot-server/src/config/postgres.ts',
   'fot-server/src/config/env.ts',
 ];
-
-interface IArgs {
-  files: string[]; month: string; skipMethods: string[]; replaceMethod: string | null; outDir: string; envFile: string;
-  database: string; tag: string | null; moveDocs: string[]; links: string[]; unmatched: string[];
-}
-
-/** Повторяемые флаги — списком, остальные — по одному разу. */
-const REPEATABLE = ['--file', '--skip-method', '--move-doc', '--link', '--unmatched'] as const;
-const SINGLE = ['--month', '--replace-method', '--out-dir', '--env-file', '--database', '--tag'] as const;
-
-const parseArgs = (argv: readonly string[]): IArgs => {
-  const values = new Map<string, string>();
-  const lists = new Map<string, string[]>(REPEATABLE.map(name => [name, []]));
-  for (let i = 0; i < argv.length; i += 2) {
-    const [name, value] = [argv[i], argv[i + 1]];
-    const known = (REPEATABLE as readonly string[]).includes(name) || (SINGLE as readonly string[]).includes(name);
-    if (!known || value === undefined || value.startsWith('--') || value.trim() === '') {
-      throw new Error(`Неизвестный или пустой аргумент «${name}»`);
-    }
-    if (values.has(name)) throw new Error(`«${name}» указан дважды`);
-    const list = lists.get(name);
-    if (list) list.push(value);
-    else values.set(name, value);
-  }
-  const listOf = (name: (typeof REPEATABLE)[number]): string[] => lists.get(name) ?? [];
-  const files = listOf('--file');
-  const skipMethods = listOf('--skip-method');
-  const month = values.get('--month');
-  if (files.length === 0 || !month || !/^\d{4}-\d{2}$/.test(month)) throw new Error('Нужны --file <xml> и --month YYYY-MM');
-  const replaceMethod = values.get('--replace-method') ?? null;
-  if (replaceMethod !== null && skipMethods.length > 0) throw new Error('--replace-method и --skip-method вместе не используются');
-  return {
-    files,
-    month,
-    skipMethods,
-    replaceMethod,
-    tag: values.get('--tag') ?? null,
-    moveDocs: listOf('--move-doc'),
-    links: listOf('--link'),
-    unmatched: listOf('--unmatched'),
-    outDir: values.get('--out-dir') ?? os.homedir(),
-    envFile: values.get('--env-file') ?? path.join(os.homedir(), '.config', 'mcp', 'env'),
-    database: values.get('--database') ?? 'FOT_Prod',
-  };
-};
 
 const git = (...gitArgs: string[]): string => execFileSync('git', gitArgs, { cwd: REPO }).toString().trim();
 
@@ -206,7 +180,7 @@ const groupBy = <T>(items: readonly T[], keyOf: (item: T) => string): Map<string
 interface IMonthTotals { docs: number; lines: number; total: string; lines_emp: number; total_emp: string; lines_none: number; total_none: string }
 
 const main = async (): Promise<void> => {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseXmlSqlArgs(process.argv.slice(2), os.homedir());
   const gitHead = sourceHead();
   loadReadonlyEnv(args.envFile);
   const { query, closeDb, withReadOnlySnapshot } = await import('../src/config/postgres.js');
@@ -238,9 +212,16 @@ const main = async (): Promise<void> => {
     const existing = Object.values(files).filter(file => fs.existsSync(file));
     if (existing.length > 0) throw new Error(`Результаты уже есть — не перезаписываю (другой --tag или удалить):\n  ${existing.join('\n  ')}`);
 
-    const set = parseXmlFiles(args.files.map(file => ({ path: file, content: fs.readFileSync(file) })), args.month, args.moveDocs);
+    const toPayOptions = args.paymentMethod !== null && args.organizationInn !== null
+      ? { paymentMethod: args.paymentMethod, organizationInn: args.organizationInn } : null;
+    const set = parseXmlFiles(
+      args.files.map(file => ({ path: file, content: fs.readFileSync(file) })), args.month, args.moveDocs, toPayOptions,
+    );
+    assertArgsForKind(set.kind, args);
+    const isToPay = set.kind === 'to_pay';
     const parsed = set.documents;
-    const prefix = `Выплаченная ЗП ${monthLabel} (XML ЗУП${set.organizationInn === SM_ORGANIZATION_INN ? ' СМ' : ''})`;
+    const smMark = set.organizationInn === SM_ORGANIZATION_INN ? ' СМ' : '';
+    const prefix = isToPay ? `${TO_PAY_REASON_PREFIX}${monthLabel} (XML ЗУП2${smMark})` : `Выплаченная ЗП ${monthLabel} (XML ЗУП${smMark})`;
     const methods = new Set(parsed.map(doc => doc.paymentMethod));
     const unknownSkip = args.skipMethods.filter(method => !methods.has(method));
     if (unknownSkip.length > 0) throw new Error(`--skip-method: в файле нет вида «${unknownSkip.join('», «')}»`);
@@ -319,13 +300,16 @@ const main = async (): Promise<void> => {
       `SELECT id FROM employees WHERE id = ANY($1::int[]) AND employment_status = 'fired' AND dismissal_date IS NULL`,
       [candidateIds],
     )).map(row => Number(row.id)));
-    const autoDecisions = new Map([...persons.values()].map(person => [
-      person.key, decide(candidatesOf(person), matches.get(person.key)?.auto_employee_id ?? null, earlierOf(person), firedNoDate),
-    ]));
-    // Ручные решения пользователя поверх автоматики — только однозначные (applyManualRules).
-    const decisions = applyManualRules([...persons.values()].map(person => ({
-      key: person.key, fullName: person.fullName, idAll: person.idAll, autoEmployeeId: matches.get(person.key)?.auto_employee_id ?? null,
-    })), manualRules, autoDecisions);
+    const autoIdOf = (person: IPerson): number | null => matches.get(person.key)?.auto_employee_id ?? null;
+    // «ЗП к выплате» — только по коду физлица 1С (правило 1С «не нашли — не загрузили»), ФИО не используется.
+    // Ведомости ЗУП — автоматика по id_all и ФИО, поверх неё ручные решения пользователя (applyManualRules).
+    const decisions = isToPay
+      ? new Map([...persons.values()].map(person => [person.key, decideByIdAll(autoIdOf(person))]))
+      : applyManualRules([...persons.values()].map(person => ({
+        key: person.key, fullName: person.fullName, idAll: person.idAll, autoEmployeeId: autoIdOf(person),
+      })), manualRules, new Map([...persons.values()].map(person => [
+        person.key, decide(candidatesOf(person), autoIdOf(person), earlierOf(person), firedNoDate),
+      ])));
     const decisionOf = (person: IPerson): IDecision => {
       const decision = decisions.get(person.key);
       if (!decision) throw new Error(`Нет решения: ${person.fullName}`);
@@ -340,6 +324,48 @@ const main = async (): Promise<void> => {
     }
     const personByLine = new Map<IPayout1cLine, IPerson>();
     for (const person of persons.values()) for (const { line } of person.entries) personByLine.set(line, person);
+
+    // Дубль выплаты по людям (не по месяцу целиком): «ЗП к выплате» — зарплата и премия одной суммой, поэтому у её
+    // сотрудников (и их кодов 1С) в месяце не должно быть строк этого вида, «Зарплаты за месяц» и «Премий» — иначе стоп.
+    // Ведомости ЗУП — предупреждение, если у сотрудника в месяце уже есть строки «ЗП к выплате» (та же зарплата могла
+    // прийти обеими выгрузками).
+    interface IOverlapRow {
+      employee_id: number | null; person_id_all: string | null; full_name_1c: string; doc_number: string; doc_date: string;
+      payment_method: string; amount: string;
+    }
+    const setGuids = documents.map(doc => doc.guid);
+    const guardMethods = isToPay ? [...new Set([args.paymentMethod as string, 'Зарплата за месяц', 'Премии'])] : [];
+    const overlapRows = isToPay
+      ? await query<IOverlapRow>(
+        `SELECT l.employee_id, l.person_id_all::text AS person_id_all, l.full_name_1c, d.doc_number, d.doc_date::text AS doc_date,
+                d.payment_method, l.amount::text AS amount
+           FROM payroll_1c_payout_lines l JOIN payroll_1c_payout_documents d ON d.id = l.document_id
+          WHERE ${PAYOUT_LINE_MONTH_SQL} = $1::date AND d.payment_method = ANY($2::text[]) AND d.doc_guid <> ALL($5::uuid[])
+            AND (l.employee_id = ANY($3::int[]) OR l.person_id_all = ANY($4::uuid[]))
+          ORDER BY l.full_name_1c, d.doc_date, d.doc_number`,
+        [periodMonth, guardMethods, finalIds,
+          [...new Set([...persons.values()].map(person => person.idAll).filter((id): id is string => id !== null))], setGuids],
+      )
+      : await query<IOverlapRow>(
+        `SELECT l.employee_id, l.person_id_all::text AS person_id_all, l.full_name_1c, d.doc_number, d.doc_date::text AS doc_date,
+                d.payment_method, l.amount::text AS amount
+           FROM payroll_1c_payout_lines l JOIN payroll_1c_payout_documents d ON d.id = l.document_id
+          WHERE ${PAYOUT_LINE_MONTH_SQL} = $1::date AND l.employee_id = ANY($2::int[]) AND d.doc_guid <> ALL($4::uuid[])
+            AND l.resolution_reason LIKE $3
+          ORDER BY l.full_name_1c, d.doc_date, d.doc_number`,
+        [periodMonth, finalIds, `${TO_PAY_REASON_PREFIX}%`, setGuids],
+      );
+    const overlapText = (row: IOverlapRow) => `${row.full_name_1c} (сотрудник ${row.employee_id ?? '—'}): «${row.payment_method}»`
+      + ` ${row.doc_number} от ${ruDate(row.doc_date)} — ${row.amount}`;
+    if (isToPay && overlapRows.length > 0) {
+      throw new Error(`У сотрудников «ЗП к выплате» за ${monthLabel} уже есть строки «${guardMethods.join('», «')}» — возможен дубль,`
+        + ` нужна ручная проверка (${overlapRows.length}):\n  ${overlapRows.map(overlapText).join('\n  ')}`);
+    }
+    for (const row of overlapRows) console.warn(`${TAG} ВНИМАНИЕ: уже есть «${TO_PAY_REASON_PREFIX.trim()}» за ${monthLabel} — ${overlapText(row)}`);
+    const guardLine = isToPay
+      ? `Проверка дубля пройдена: у ${finalIds.length} сотрудников и их кодов 1С нет строк «${guardMethods.join('», «')}» за ${monthLabel}.`
+      : `Строк «${TO_PAY_REASON_PREFIX.trim()}» за ${monthLabel} у сотрудников набора: ${overlapRows.length}`
+        + `${overlapRows.length > 0 ? ' — ВНИМАНИЕ: возможен дубль, лист «Уже ЗП к выплате»' : ''}.`;
 
     const sqlLines: IRegisterSqlLine[] = buildXmlSqlLines(documents, line => {
       const person = personByLine.get(line);
@@ -496,7 +522,8 @@ const main = async (): Promise<void> => {
       }
     }
     const ranked = [...byEmployee.entries()].sort((a, b) => b[1].cents - a[1].cents || a[0] - b[0]);
-    const samples = [...new Set([
+    // «ЗП к выплате» — короткий список людей: в КОНТРОЛЕ все.
+    const samples = isToPay && byEmployee.size <= 20 ? [...byEmployee.keys()].sort((a, b) => a - b) : [...new Set([
       ranked[0]?.[0],
       ranked.find(([, e]) => e.methods.has('Отпуска'))?.[0],
       ranked.find(([, e]) => e.methods.has('Увольнения'))?.[0],
@@ -590,12 +617,15 @@ const main = async (): Promise<void> => {
       ['Файлы', 'Ведомостей', 'SHA-256'],
       ...set.sources.map(source => [source.name, source.documents, source.sha256]),
       ['Организация (ИНН)', set.organizationInn],
+      ['Выгрузка', isToPay ? `«ЗП к выплате» ЗУП2: вид «${args.paymentMethod}» и ИНН — решение пользователя, сотрудник — только по id_all`
+        : 'ведомости ЗУП за месяц'],
+      ['Проверка дубля', guardLine],
       ...DECISION_LABELS.map(([kind, label]) => [`Физлиц: ${label}`, kindCount(kind)]),
     ];
 
     const namesakeRows = await query<{ id: number; name_key: string }>(
       `SELECT id, ${SQL_NAME('full_name')} AS name_key FROM employees WHERE ${SQL_NAME('full_name')} = ANY($1::text[])`,
-      [[...persons.values()].filter(person => ['none', 'manual_none'].includes(decisionOf(person).kind))
+      [[...persons.values()].filter(person => ['none', 'manual_none', 'id_all_none'].includes(decisionOf(person).kind))
         .map(person => normalizePayoutName(person.fullName))],
     );
     const namesakeInfo = await loadPayoutEligibility(namesakeRows.map(row => Number(row.id)), periodMonth);
@@ -616,7 +646,7 @@ const main = async (): Promise<void> => {
       const decision = decisionOf(person);
       const id = decision.employeeId;
       const employee = id === null ? null : info.get(id);
-      if (decision.kind === 'none' || decision.kind === 'manual_none') {
+      if (decision.kind === 'none' || decision.kind === 'manual_none' || decision.kind === 'id_all_none') {
         const ids = namesakeRows.filter(row => row.name_key === normalizePayoutName(person.fullName)).map(row => Number(row.id));
         notFound.push([person.fullName, personCents(person) / 100, personMethods(person), ids.map(i => (
           `${i} ${namesakeInfo.get(i)?.full_name ?? ''} — ${namesakeInfo.get(i)?.department ?? ''}`
@@ -676,12 +706,23 @@ const main = async (): Promise<void> => {
     addSheet('Все', everyone, [40, 8, 40, 36, 36, ...methodsOrder.map(() => 14), 16]);
     addSheet('Не загружено', skippedRows, [14, 12, 30, 8, 16]);
     addSheet('Строки', lineRows, [26, 14, 12, 22, 10, 12, 20, 40, 14, 8, 40, 30]);
+    if (!isToPay) {
+      addSheet('Уже ЗП к выплате', [['ФИО 1С', 'id', 'Вид', 'Ведомость', 'Дата', 'Сумма'], ...overlapRows.map(row => [
+        row.full_name_1c, row.employee_id, row.payment_method, row.doc_number, ruDate(row.doc_date), Number(row.amount)])],
+      [40, 8, 22, 14, 12, 16]);
+    }
 
     const removedCents = replace ? replace.removed.reduce((sum, doc) => sum + doc.totalCents, 0) : 0;
     const methodLine = methodsOrder.map(method => `${method} ${rub(sumBy(sqlLines, method))}`).join(' · ');
     const header = [
-      `Зарплата → «Перечислено (1С)»: выплаты за ${monthLabel} из выгрузки ведомостей ЗУП, ИНН ${set.organizationInn}`,
+      `Зарплата → «Перечислено (1С)»: выплаты за ${monthLabel} из выгрузки ${isToPay ? 'ЗУП2 «ЗП к выплате»' : 'ведомостей ЗУП'},`
+        + ` ИНН ${set.organizationInn}`,
       `(файлов ${set.sources.length}: ${set.sources.map(source => `«${source.name}»`).join(', ')}).`,
+      ...(isToPay ? [
+        `Вида выплаты и ИНН в файле нет — решение пользователя: «${args.paymentMethod}», ${set.organizationInn}. Сотрудник — только`
+          + ' по коду физлица 1С (id_all); сумма = кНачислению − ндфл сверена, НДФЛ и «к начислению» не сохраняются.',
+      ] : []),
+      guardLine,
       ...set.sources.map(source => `  ${source.name}: ведомостей ${source.documents}, sha256 ${source.sha256}`),
       `Ведомостей ${documents.length}, строк ${sqlLines.length}, итог ${rub(totalCents)}. По способам: ${methodLine}.`,
       `С сотрудником: строк ${matchedLines.length} на ${rub(cents(matchedLines))}, сотрудников ${finalIds.length};`
@@ -749,6 +790,14 @@ const main = async (): Promise<void> => {
       git_head: gitHead,
       month: args.month,
       organization_inn: set.organizationInn,
+      kind: set.kind,
+      payment_method_by_user: args.paymentMethod,
+      duplicate_guard: {
+        mode: isToPay ? 'stop' : 'warn', methods: guardMethods, text: guardLine,
+        overlaps: overlapRows.map(row => ({
+          employee_id: row.employee_id, payment_method: row.payment_method, number: row.doc_number, date: row.doc_date, amount: row.amount,
+        })),
+      },
       tag: args.tag,
       sources: set.sources.map(source => ({ file: source.name, sha256: source.sha256, documents: source.documents })),
       move_docs: movedDocs.map(doc => ({

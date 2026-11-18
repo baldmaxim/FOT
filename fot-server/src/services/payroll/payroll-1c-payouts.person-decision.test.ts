@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import type { IPayoutCandidate } from './payroll-1c-payouts.matching.js';
 import {
   applyManualRules,
+  decide,
+  decideByIdAll,
   parseManualRules,
   type IDecision,
   type IManualRulePerson,
@@ -59,5 +62,21 @@ describe('ручные решения по физлицу: применение'
       .toThrow(/код физлица 1С ведёт к сотруднику 7, а не 8/);
     expect(() => applyManualRules(persons, parseManualRules([], ['Иванов Иван']), auto))
       .toThrow(/--unmatched «Иванов Иван»: код физлица 1С ведёт к сотруднику 7/);
+  });
+});
+
+describe('«ЗП к выплате»: сотрудник только по коду физлица 1С', () => {
+  const byName: IPayoutCandidate = {
+    employee_id: 5, full_name: 'Петров Пётр', department: 'Отдел', worked_in_month: true, by_id_all: false, brigade_match: false,
+  };
+
+  it('ФИО однозначно нашлось, а по id_all — нет (кода нет, код чужой или ведёт к двум карточкам): без сотрудника', () => {
+    // Общая автоматика взяла бы единственного кандидата по ФИО — здесь нет.
+    expect(decide([byName], null, new Set(), new Set())).toEqual({ employeeId: 5, kind: 'single' });
+    expect(decideByIdAll(null)).toEqual({ employeeId: null, kind: 'id_all_none' });
+  });
+
+  it('ровно один допустимый сотрудник по id_all (auto из matchPayoutLines) — он', () => {
+    expect(decideByIdAll(7)).toEqual({ employeeId: 7, kind: 'id_all' });
   });
 });

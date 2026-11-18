@@ -210,10 +210,10 @@ const parseDocument = (
 };
 
 /**
- * Дерево выгрузки ЗУП (`зп_документы_31`): без DOCTYPE/ENTITY, значения строками, массивы — пути arrayPaths. Общий
- * разбор с реестром ФСС (payroll-fss.parser.ts).
+ * Дерево XML-выгрузки 1С: без DOCTYPE/ENTITY, значения строками, массивы — пути arrayPaths. Корень любой — его имя
+ * и содержимое (по имени и `<имя>` выбирается разбор).
  */
-export const parseZupXmlTree = (xml: string, arrayPaths: ReadonlySet<string>): XmlNode => {
+export const parseXmlRoot = (xml: string, arrayPaths: ReadonlySet<string>): { name: string | null; value: unknown } => {
   const source = xml.replace(/^﻿/, '');
   if (/<!DOCTYPE|<!ENTITY/i.test(source)) fail('Файл с DOCTYPE или ENTITY не принимается');
   const validation = XMLValidator.validate(source);
@@ -228,8 +228,18 @@ export const parseZupXmlTree = (xml: string, arrayPaths: ReadonlySet<string>): X
     ignorePiTags: true,
     isArray: (_name: string, jpath: unknown) => arrayPaths.has(String(jpath)),
   }).parse(source) as XmlNode;
-  if (Object.keys(tree).length !== 1 || !isNode(tree[ROOT])) fail(`Нужен один корень «${ROOT}»`);
-  return tree[ROOT] as XmlNode;
+  const names = Object.keys(tree);
+  return names.length === 1 ? { name: names[0], value: tree[names[0]] } : { name: null, value: undefined };
+};
+
+/**
+ * Дерево выгрузки ЗУП с корнем root (по умолчанию `зп_документы_31`) — см. parseXmlRoot. Общий разбор с реестром ФСС
+ * (payroll-fss.parser.ts) и выгрузкой «ЗП к выплате» (payroll-1c-payouts.to-pay-xml.ts).
+ */
+export const parseZupXmlTree = (xml: string, arrayPaths: ReadonlySet<string>, root: string = ROOT): XmlNode => {
+  const parsed = parseXmlRoot(xml, arrayPaths);
+  if (parsed.name !== root || !isNode(parsed.value)) fail(`Нужен один корень «${root}»`);
+  return parsed.value as XmlNode;
 };
 
 /** Разбор выгрузки ведомостей выплаты за месяц month (YYYY-MM). Ошибка формата — Payout1cParseError. */

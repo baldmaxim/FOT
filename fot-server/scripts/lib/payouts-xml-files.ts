@@ -3,6 +3,8 @@
  * набора с уже загруженным в «Перечислено (1С)». Чистые функции — тестируются без БД.
  *
  * Набор (parseXmlFiles):
+ *  - вид выгрузки — по корню и `<имя>` файла (detectPayoutXmlKind): ведомости ЗУП за месяц или «ЗП к выплате»
+ *    (вид выплаты и ИНН — из toPay); один вид на запуск;
  *  - повтор пути файла, повтор номера в --move-doc — ошибка;
  *  - ГУИД и «номер + дата» не повторяются между файлами; одна организация (ИНН) на запуск;
  *  - перенос месяца (--move-doc): каждый номер списка встретился ровно один раз во всех файлах; неиспользованный —
@@ -19,6 +21,12 @@ import * as path from 'node:path';
 
 import { parsePayout1cMonthXml, type IPayout1cMonthDocument } from '../../src/services/payroll/payroll-1c-payouts.month-xml.js';
 import type { IPayout1cLine } from '../../src/services/payroll/payroll-1c-payouts.parser.js';
+import {
+  detectPayoutXmlKind,
+  parsePayout1cToPayXml,
+  type IPayout1cToPayOptions,
+  type PayoutXmlKind,
+} from '../../src/services/payroll/payroll-1c-payouts.to-pay-xml.js';
 import { DECISION_LABELS, type IDecision } from './payouts-person-decision.js';
 import type { IRegisterSqlLine } from './payouts-register-sql.js';
 
@@ -38,10 +46,14 @@ export interface IXmlSet {
   /** Перенесённые решением пользователя (--move-doc), в порядке файлов. */
   moved: IXmlSetDocument[];
   organizationInn: string;
+  kind: PayoutXmlKind;
 }
 
 /** ММ.ГГГГ из первого числа месяца. */
 export const monthLabelOf = (periodMonth: string): string => `${periodMonth.slice(5, 7)}.${periodMonth.slice(0, 4)}`;
+
+/** Начало причины строк выгрузки «ЗП к выплате» — по нему генератор находит её строки при следующих загрузках месяца. */
+export const TO_PAY_REASON_PREFIX = 'ЗП к выплате ';
 
 /** Общая часть маркера переноса — для отбора перенесённых строк в SQL. */
 export const MOVE_MARK = 'ведомость 1С за ';
@@ -54,6 +66,7 @@ export const moveMarker = (sourcePeriodMonth: string, targetPeriodMonth: string)
 /** Файлы → один набор документов месяца; нарушение правил набора — ошибка (все нарушения сразу). */
 export const parseXmlFiles = (
   files: ReadonlyArray<{ path: string; content: Buffer }>, month: string, moveDocs: readonly string[],
+  toPay: IPayout1cToPayOptions | null = null,
 ): IXmlSet => {
   if (files.length === 0) throw new Error('Нужен хотя бы один --file');
   const seenPaths = new Set<string>();
@@ -70,11 +83,20 @@ export const parseXmlFiles = (
 
   const sources: IXmlSourceFile[] = [];
   const documents: IXmlSetDocument[] = [];
+  const kinds = new Map<PayoutXmlKind, string[]>();
   for (const file of files) {
     const name = path.basename(file.path);
+    const xml = file.content.toString('utf8');
     let parsed: IPayout1cMonthDocument[];
     try {
-      parsed = parsePayout1cMonthXml(file.content.toString('utf8'), month, { moveDocs: requested });
+      const kind = detectPayoutXmlKind(xml);
+      kinds.set(kind, [...(kinds.get(kind) ?? []), name]);
+      if (kind === 'to_pay') {
+        if (toPay === null) throw new Error('выгрузка «ЗП к выплате» — нужны вид выплаты и ИНН (--payment-method, --organization-inn)');
+        parsed = parsePayout1cToPayXml(xml, month, toPay);
+      } else {
+        parsed = parsePayout1cMonthXml(xml, month, { moveDocs: requested });
+      }
     } catch (err) {
       throw new Error(`«${name}»: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -83,6 +105,10 @@ export const parseXmlFiles = (
   }
 
   const problems: string[] = [];
+  if (kinds.size > 1) {
+    problems.push(`разные выгрузки в одном наборе: ведомости ЗУП (${(kinds.get('zup_month') ?? []).join(', ')})`
+      + ` и «ЗП к выплате» (${(kinds.get('to_pay') ?? []).join(', ')}) — по одной на запуск`);
+  }
   const byGuid = new Map<string, IXmlSetDocument>();
   const byNumber = new Map<string, IXmlSetDocument>();
   for (const doc of documents) {
@@ -105,7 +131,7 @@ export const parseXmlFiles = (
   if (unused.length > 0) problems.push(`--move-doc не использован — таких ведомостей в файлах нет: ${unused.join(', ')}`);
 
   if (problems.length > 0) throw new Error(`Набор файлов не принят:\n  ${problems.join('\n  ')}`);
-  return { sources, documents, moved, organizationInn: inns[0] };
+  return { sources, documents, moved, organizationInn: inns[0], kind: kinds.has('to_pay') ? 'to_pay' : 'zup_month' };
 };
 
 /** Документ «Перечислено (1С)» в БД для сверки с набором. */

@@ -10,7 +10,8 @@
 import type { IPayoutCandidate } from '../../src/services/payroll/payroll-1c-payouts.matching.js';
 import { normalizePayoutName } from '../../src/services/payroll/payroll-1c-payouts.parser.js';
 
-export type DecisionKind = 'id_all' | 'single' | 'worked' | 'earlier' | 'ambiguous' | 'none' | 'manual' | 'manual_none';
+export type DecisionKind =
+  | 'id_all' | 'single' | 'worked' | 'earlier' | 'ambiguous' | 'none' | 'manual' | 'manual_none' | 'id_all_none';
 
 export const DECISION_LABELS: ReadonlyArray<[DecisionKind, string]> = [
   ['id_all', 'по коду физлица 1С (id_all)'],
@@ -21,6 +22,7 @@ export const DECISION_LABELS: ReadonlyArray<[DecisionKind, string]> = [
   ['none', 'нет в ФОТ — без сотрудника'],
   ['manual', 'указан при загрузке'],
   ['manual_none', 'без сотрудника по решению'],
+  ['id_all_none', 'нет по коду физлица 1С (id_all) — без сотрудника'],
 ];
 
 export const decisionLabel = (kind: DecisionKind): string => DECISION_LABELS.find(([k]) => k === kind)?.[1] ?? kind;
@@ -45,6 +47,15 @@ export const decide = (
   }
   return { employeeId: null, kind: 'ambiguous' };
 };
+
+/**
+ * Только по коду физлица 1С (выгрузка «ЗП к выплате», правило 1С «не нашли — не загрузили»): ровно один допустимый
+ * сотрудник по id_all (autoId из matchPayoutLines) — он; нет, несколько или подрядчик — без сотрудника. ФИО не
+ * используется даже при однозначном совпадении.
+ */
+export const decideByIdAll = (autoId: number | null): IDecision => (
+  autoId !== null ? { employeeId: autoId, kind: 'id_all' } : { employeeId: null, kind: 'id_all_none' }
+);
 
 /** Ручные решения пользователя: нормализованное ФИО 1С → сотрудник (link) или «без сотрудника» (unmatched). */
 export interface IManualRules {
