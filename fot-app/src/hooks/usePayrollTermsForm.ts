@@ -10,11 +10,9 @@ import {
   firstInvalidField,
   initialPayrollTermsValues,
   isPayrollTermsChanged,
-  SUPPLEMENT_FIELD_KEYS,
   validatePayrollTerms,
   type IPayrollTermsFormValues,
   type PayrollMoneyField,
-  type PayrollSupplementField,
   type PayrollTermsFieldErrors,
   type PayrollTermsFieldKey,
 } from '../utils/payrollTermsForm';
@@ -23,8 +21,6 @@ interface IUsePayrollTermsFormArgs {
   /** Строка сотрудника — предзаполнение. */
   row: IPayrollTermsRow;
   defaultDate: string;
-  /** Секция «Плановые доплаты» — только в карточке, где условия можно править. */
-  plannedSupplement?: boolean;
 }
 
 /**
@@ -32,12 +28,8 @@ interface IUsePayrollTermsFormArgs {
  * Проверка и состав запроса — в utils/payrollTermsForm (покрыты тестом); деньги дальше
  * считает сервер. Ошибки хранятся по полям и снимаются при правке своего поля.
  */
-export const usePayrollTermsForm = ({
-  row,
-  defaultDate,
-  plannedSupplement = false,
-}: IUsePayrollTermsFormArgs) => {
-  // Начальные значения храним: доплата уходит в запрос, только если отличается от них.
+export const usePayrollTermsForm = ({ row, defaultDate }: IUsePayrollTermsFormArgs) => {
+  // Начальные значения храним: по ним видно, правили ли условия (isChanged).
   const [initial] = useState<IPayrollTermsFormValues>(() => initialPayrollTermsValues(row, defaultDate));
   const [values, setValues] = useState<IPayrollTermsFormValues>(initial);
   const [fieldErrors, setFieldErrors] = useState<PayrollTermsFieldErrors>({});
@@ -71,11 +63,6 @@ export const usePayrollTermsForm = ({
     clearError(field);
   };
 
-  const changeSupplement = (field: PayrollSupplementField, value: string) => {
-    setValues(prev => ({ ...prev, supplement: { ...prev.supplement, [field]: value } }));
-    clearError(SUPPLEMENT_FIELD_KEYS[field]);
-  };
-
   const setEffectiveFrom = (value: string) => {
     setValues(prev => ({ ...prev, effectiveFrom: value }));
     clearError('effectiveFrom');
@@ -83,10 +70,7 @@ export const usePayrollTermsForm = ({
 
   /** Проверяет форму: запрос сохранения или первое поле с ошибкой (для фокуса). */
   const buildPayload = (): { payload: IAssignTermsPayload | null; firstInvalid: PayrollTermsFieldKey | null } => {
-    const result = validatePayrollTerms(
-      values,
-      plannedSupplement ? { initialSupplement: initial.supplement } : {},
-    );
+    const result = validatePayrollTerms(values);
     setFieldErrors(result.errors ?? {});
     return result.payload
       ? { payload: result.payload, firstInvalid: null }
@@ -98,13 +82,11 @@ export const usePayrollTermsForm = ({
 
   return {
     ...values,
-    plannedSupplement,
     fieldErrors,
     setCalcType,
     setContractType,
     setAmount,
     changeMoney,
-    changeSupplement,
     setEffectiveFrom,
     buildPayload,
     isChanged,

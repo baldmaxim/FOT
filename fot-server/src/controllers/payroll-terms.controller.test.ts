@@ -450,20 +450,32 @@ describe('payrollTermsController.assign: тип договора (миграци
   });
 });
 
-describe('payrollTermsController.assign: плановая доплата', () => {
+describe('payrollTermsController.assign: плановая доплата (прежний клиент, миграция 369)', () => {
   const baseBody = {
     staff_category: 'itr', calc_type: 'salary', monthly_salary: 150000, effective_from: '2026-10-01',
   };
-  const supplementCall = () => txClient.query.mock.calls.find(call => /payroll_planned_supplements/.test(String(call[0])));
-
-  it('доплата пишется в той же транзакции после условий и попадает в аудит', async () => {
-    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
+  /** Действующие доплаты сотрудника для SELECT строк доплат (readPlannedPeriods); остальные запросы — как раньше. */
+  const withPlannedRows = (rows: Array<Record<string, unknown>>) => {
+    txClient.query.mockImplementation(async (sql: string) => (
+      /FROM payroll_planned_supplements x/.test(String(sql))
+        ? { rows, rowCount: rows.length }
+        : { rows: [{ id: 77 }], rowCount: 1 }
+    ));
+  };
+  const plannedWrites = () => txClient.query.mock.calls
+    .filter(call => /(INSERT INTO|UPDATE) payroll_planned_supplements/.test(String(call[0])));
+  const NOV_OPEN = { id: 5, amount: '10000.00', date_from: '2026-11-01', date_to: null, comment: 'Совмещение' };
+  const assign = async (plannedSupplement: unknown) => {
     const res = makeRes();
-
     await payrollTermsController.assign(makeReq({
-      params: { empId: '42' },
-      body: { ...baseBody, planned_supplement: { amount: '10000', date_from: '2026-11-01', date_to: '2026-12-31' } },
+      params: { empId: '42' }, body: { ...baseBody, planned_supplement: plannedSupplement },
     } as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+
+  it('доплат нет — новая строка в той же транзакции после условий (legacy_journal = false), в аудите', async () => {
+    withPlannedRows([]);
+    const res = await assign({ amount: '10000', date_from: '2026-11-01', date_to: '2026-12-31' });
 
     expect(res.statusCode).toBe(200);
     expect(pgTx).toHaveBeenCalledTimes(1);
@@ -471,9 +483,11 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     expect(statements[0]).toMatch(/pg_advisory_xact_lock/i);
     expect(txClient.query.mock.calls[0][1]).toEqual([42]);
     expect(statements[SINGLE_INSERT]).toMatch(/INSERT INTO payroll_compensation_terms/i);
-    expect(statements[SINGLE_INSERT + 1]).toMatch(/INSERT INTO payroll_planned_supplements/i);
-    // Без ключа comment (прежний клиент) — флаг «оставить комментарий последней версии».
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', '2026-12-31', 'user-1', true, null]);
+    expect(statements[SINGLE_INSERT + 1]).toMatch(/FROM payroll_planned_supplements x/);
+    expect(plannedWrites()).toHaveLength(1);
+    expect(String(plannedWrites()[0][0])).toMatch(/legacy_journal/);
+    // Без ключа comment и без прежней доплаты — без комментария.
+    expect(plannedWrites()[0][1]).toEqual([42, 10000, '2026-11-01', '2026-12-31', null, 'user-1', null]);
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({
       planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' },
@@ -481,69 +495,67 @@ describe('payrollTermsController.assign: плановая доплата', () =>
     });
   });
 
-  it('доплата без даты окончания — бессрочная версия', async () => {
-    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
-    const res = makeRes();
-
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' },
-      body: { ...baseBody, planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: null } },
-    } as Partial<AuthenticatedRequest>), res);
+  it('правка — замена последней по дате: строка в архив, новая с replaces_id; без ключа comment — её комментарий', async () => {
+    withPlannedRows([NOV_OPEN]);
+    const res = await assign({ amount: 12000, date_from: '2026-11-01', date_to: null });
 
     expect(res.statusCode).toBe(200);
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', true, null]);
+    const writes = plannedWrites();
+    expect(String(writes[0][0])).toMatch(/UPDATE payroll_planned_supplements SET archived_at/);
+    expect(writes[0][1]).toEqual([5]);
+    expect(writes[1][1]).toEqual([42, 12000, '2026-11-01', null, 'Совмещение', 'user-1', 5]);
   });
 
   it('364: комментарий из карточки — без пробелов по краям; пусто — null (снять комментарий); длиннее 500 — 400', async () => {
-    txClient.query.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1 });
+    withPlannedRows([]);
     const supplement = { amount: 10000, date_from: '2026-11-01', date_to: null };
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: ' Совмещение ' } },
-    } as Partial<AuthenticatedRequest>), makeRes());
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', false, 'Совмещение']);
+    await assign({ ...supplement, comment: ' Совмещение ' });
+    expect(plannedWrites()[0][1]).toEqual([42, 10000, '2026-11-01', null, 'Совмещение', 'user-1', null]);
 
     txClient.query.mockClear();
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: '' } },
-    } as Partial<AuthenticatedRequest>), makeRes());
-    expect(supplementCall()?.[1]).toEqual([42, 10000, '2026-11-01', null, 'user-1', false, null]);
+    await assign({ ...supplement, comment: '' });
+    expect(plannedWrites()[0][1]).toEqual([42, 10000, '2026-11-01', null, null, 'user-1', null]);
 
     txClient.query.mockClear();
-    const long = makeRes();
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' }, body: { ...baseBody, planned_supplement: { ...supplement, comment: 'я'.repeat(501) } },
-    } as Partial<AuthenticatedRequest>), long);
+    const long = await assign({ ...supplement, comment: 'я'.repeat(501) });
     expect(long.statusCode).toBe(400);
-    expect(supplementCall()).toBeUndefined();
+    expect(plannedWrites()).toHaveLength(0);
   });
 
-  it('null снимает доплату: версия с пустыми суммой и датами', async () => {
-    const res = makeRes();
-
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' }, body: { ...baseBody, planned_supplement: null },
-    } as Partial<AuthenticatedRequest>), res);
+  it('null снимает последнюю по дате: архив и строка «снята» с replaces_id', async () => {
+    withPlannedRows([NOV_OPEN]);
+    const res = await assign(null);
 
     expect(res.statusCode).toBe(200);
-    expect(supplementCall()?.[1]).toEqual([42, null, null, null, 'user-1', false, null]);
+    const writes = plannedWrites();
+    expect(writes[0][1]).toEqual([5]);
+    expect(String(writes[1][0])).toMatch(/VALUES \(\$1, NULL, NULL, NULL/);
+    expect(writes[1][1]).toEqual([42, 'user-1', 5]);
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
-    expect(details).toMatchObject({ planned_supplement: null });
+    expect(details).toMatchObject({ planned_supplement: null, planned_supplement_changed: true });
   });
 
-  it('доплата не изменилась (версия не вставлена) — в аудите planned_supplement_changed: false', async () => {
-    txClient.query.mockImplementation(async (sql: string) => (
-      /payroll_planned_supplements/.test(String(sql)) ? { rows: [], rowCount: 0 } : { rows: [{ id: 77 }], rowCount: 1 }
-    ));
-    const res = makeRes();
-
-    await payrollTermsController.assign(makeReq({
-      params: { empId: '42' },
-      body: { ...baseBody, planned_supplement: { amount: 10000, date_from: '2026-11-01', date_to: '2026-12-31' } },
-    } as Partial<AuthenticatedRequest>), res);
+  it('доплата не изменилась — ничего не пишется, в аудите planned_supplement_changed: false', async () => {
+    withPlannedRows([NOV_OPEN]);
+    const res = await assign({ amount: 10000, date_from: '2026-11-01', date_to: null });
 
     expect(res.statusCode).toBe(200);
+    expect(plannedWrites()).toHaveLength(0);
     const details = (audit.logFromRequest.mock.calls[0][3] as { details: Record<string, unknown> }).details;
     expect(details).toMatchObject({ planned_supplement_changed: false });
+  });
+
+  it('значение другой действующей доплаты — 409 SUPPLEMENT_EXISTS, ничего не записано и не в аудите', async () => {
+    // Последняя по дате — ноябрьская; правка на значение октябрьской дала бы две одинаковые.
+    withPlannedRows([NOV_OPEN, { id: 4, amount: '30000.00', date_from: '2026-10-01', date_to: '2027-01-31', comment: null }]);
+    const res = await assign({ amount: 30000, date_from: '2026-10-01', date_to: '2027-01-31', comment: null });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'SUPPLEMENT_EXISTS' });
+    // Ошибка — внутри транзакции: withTransaction откатит и уже вставленные условия.
+    await expect(pgTx.mock.results[0].value).rejects.toThrow();
+    expect(plannedWrites()).toHaveLength(0);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([

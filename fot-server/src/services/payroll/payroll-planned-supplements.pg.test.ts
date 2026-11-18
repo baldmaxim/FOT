@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/index.js';
 
-// Плановая доплата на настоящем PostgreSQL: журнал версий (миграция 293), действие и прежние
-// значения в истории, два параллельных сохранения, общий журнал с окладом, SQL списка (и «Расчётов»:
-// статьи 1С и ведомости в банк), приведение доплат к списку 1С.
+// Плановая доплата на настоящем PostgreSQL: строки доплат (миграции 293, 369 — несколько доплат на одни даты),
+// действие и прежние значения в истории, два параллельных сохранения, общий журнал с окладом, SQL списка (и
+// «Расчётов»: статьи 1С и ведомости в банк), приведение доплат к списку 1С.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
 // В обычном прогоне пропускается.
 
@@ -121,11 +121,14 @@ const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${nam
 const AUTHOR = '00000000-0000-0000-0000-00000000000b';
 const NOV_DEC: IPlannedSupplementValue = { amount: 10000, dateFrom: '2026-11-01', dateTo: '2026-12-31' };
 
-/** Сохранение доплаты так же, как в контроллере: транзакция под блокировкой сотрудника. */
+/**
+ * Сохранение доплаты так же, как в контроллере (прежний клиент окна сотрудника): транзакция под блокировкой
+ * сотрудника; true — записано.
+ */
 const save = (employeeId: number, value: IPlannedSupplementValue | null): Promise<boolean> =>
   withTransaction(async client => {
     await lockPayrollEmployee(client, employeeId);
-    return setPlannedSupplement(client, { employeeId, value, createdBy: AUTHOR });
+    return (await setPlannedSupplement(client, { employeeId, value, createdBy: AUTHOR })).status === 'saved';
   });
 
 const versions = async (employeeId: number) => (await pg.pool!.query(
@@ -210,6 +213,10 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Миграция 364 — комментарий периода; повторный запуск безопасен.
     await pg.pool!.query(migration('364_payroll_planned_supplement_comment.sql'));
     await pg.pool!.query(migration('364_payroll_planned_supplement_comment.sql'));
+    // Миграция 369 — несколько доплат на одни даты; повторный запуск безопасен. Сырые INSERT ниже — с legacy_journal
+    // = false, иначе их отклонит триггер 369 (он ловит код до миграции).
+    await pg.pool!.query(migration('369_payroll_planned_supplements_concurrent.sql'));
+    await pg.pool!.query(migration('369_payroll_planned_supplements_concurrent.sql'));
     // Список берёт «Начисления» из «Оплачено».
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('297_payroll_paid_groups.sql'));
@@ -287,17 +294,17 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
 
   it('недопустимое состояние отвергает сама БД', async () => {
     await expect(pg.pool!.query(
-      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
-       VALUES (3, 1000, '2026-12-01', '2026-11-01')`,
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, legacy_journal)
+       VALUES (3, 1000, '2026-12-01', '2026-11-01', false)`,
     )).rejects.toThrow(/payroll_supplement_state/);
     // Без «с» нельзя; без «по» — бессрочно (322), проверка — в последнем тесте.
     await expect(pg.pool!.query(
-      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
-       VALUES (3, 1000, NULL, '2026-12-01')`,
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, legacy_journal)
+       VALUES (3, 1000, NULL, '2026-12-01', false)`,
     )).rejects.toThrow(/payroll_supplement_state/);
     await expect(pg.pool!.query(
-      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to)
-       VALUES (3, NULL, '2026-12-01', NULL)`,
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, legacy_journal)
+       VALUES (3, NULL, '2026-12-01', NULL, false)`,
     )).rejects.toThrow(/payroll_supplement_state/);
   });
 
@@ -322,7 +329,7 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     ]);
   });
 
-  it('список: последняя сохранённая доплата у своих строк — будущая, прошедшая и снятая', async () => {
+  it('список: последняя по дате действующая доплата у своих строк — будущая и прошедшая', async () => {
     // 1 — снята и назначена заново (Nov–Dec), 2 — Nov–Dec, 3 — Nov–Dec; 4 — кончилась в прошлом году.
     await save(4, { amount: 5000, dateFrom: '2025-01-01', dateTo: '2025-03-31' });
     const res = makeRes();
@@ -497,8 +504,8 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
 
   it('364: комментарий у снятой строки, с пробелами по краям, пустой или длиннее 500 символов отвергает БД', async () => {
     const insert = (amount: number | null, dateFrom: string | null, comment: string) => pg.pool!.query(
-      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, comment)
-       VALUES (3, $1, $2, NULL, $3)`,
+      `INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, comment, legacy_journal)
+       VALUES (3, $1, $2, NULL, $3, false)`,
       [amount, dateFrom, comment],
     );
     await expect(insert(null, null, 'Снята')).rejects.toThrow(/payroll_supplement_comment/);
@@ -604,13 +611,13 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
         INSERT INTO employees (id, full_name) VALUES
           (20, 'Корж Илья Семенович'), (21, 'Белякова Надежда Владимировна'), (22, 'Власов Алексей Николаевич'),
           (23, 'Бурлаку Кристина Александровна'), (24, 'Смитская Юлия Александровна'), (25, 'Ёлкин Пётр');
-        INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by) VALUES
-          (20, 20000, '2023-03-01', NULL, NULL),
-          (21, 25000, '2023-09-01', NULL, NULL),
-          (22, 20000, '2023-02-01', NULL, NULL),
-          (24, 20000, '2023-01-01', NULL, NULL),
-          (25, 15000, '2020-01-01', '2020-12-31', NULL),
-          (25, 20000, '2021-01-01', NULL, NULL);
+        INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by, legacy_journal) VALUES
+          (20, 20000, '2023-03-01', NULL, NULL, false),
+          (21, 25000, '2023-09-01', NULL, NULL, false),
+          (22, 20000, '2023-02-01', NULL, NULL, false),
+          (24, 20000, '2023-01-01', NULL, NULL, false),
+          (25, 15000, '2020-01-01', '2020-12-31', NULL, false),
+          (25, 20000, '2021-01-01', NULL, NULL, false);
       `);
     });
 
@@ -661,15 +668,66 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
       expect(await versionCount()).toBe(count);
     });
 
-    it('после записи периоды не равны списку — откат всего списка', async () => {
+    it('ошибка записи у одного сотрудника — откат всего списка', async () => {
       const count = await versionCount();
-      // У 25 старый период 2020 года не перекрывается новым — журнал его не снимет, цель недостижима.
+      // У 25 «по» раньше «с» — вставку отклонит CHECK; правка 23 тоже откатывается.
       await expect(syncPlannedSupplements([
         { employeeId: 23, fullName: 'Бурлаку Кристина Александровна', periods: [p(12000, '2026-10-01', '2027-01-31')] },
-        { employeeId: 25, fullName: 'Елкин Петр', periods: [p(10000, '2026-10-01', '2027-01-31')] },
-      ], { apply: true })).rejects.toThrow(/не равны списку/);
+        { employeeId: 25, fullName: 'Елкин Петр', periods: [p(10000, '2026-10-01', '2026-09-30')] },
+      ], { apply: true })).rejects.toThrow(/payroll_supplement_state/);
       expect(await versionCount()).toBe(count);
       expect(await periods(23)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+    });
+
+    it('369: история синка — «назначена» / «снята», совпавшие доплаты не трогаются, у 25 старые периоды сняты', async () => {
+      const history = async (employeeId: number) => (await getPlannedSupplementChanges(employeeId))
+        .map(change => [change.action, change.amount ?? change.prev_amount, change.date_from ?? change.prev_date_from]);
+      // Белякова: 25 000 бессрочно заменили на 10 000 — снята прежняя, назначена новая (без «замены» чужой строки).
+      expect(await history(21)).toEqual([
+        ['assigned', '10000.00', '2026-10-01'],
+        ['removed', '25000.00', '2023-09-01'],
+        ['assigned', '25000.00', '2023-09-01'],
+      ]);
+      // Власов — снята; Смитская — уже как в списке, строка не тронута.
+      expect((await history(22))[0]).toEqual(['removed', '20000.00', '2023-02-01']);
+      expect(await history(24)).toEqual([['assigned', '20000.00', '2023-01-01']]);
+
+      // У 25 оба старых периода сняты, хоть новый их и не перекрывает (до 369 журнал этого не умел).
+      const ids24 = (await pg.pool!.query('SELECT id FROM payroll_planned_supplements WHERE employee_id = 24')).rows;
+      await syncPlannedSupplements(
+        [{ employeeId: 25, fullName: 'Елкин Петр', periods: [p(10000, '2026-10-01', '2027-01-31')] }],
+        { apply: true },
+      );
+      expect(await periods(25)).toEqual([{ amount: '10000.00', date_from: '2026-10-01', date_to: '2027-01-31' }]);
+      // Снимаются от последней по дате, история — новые сверху.
+      expect((await history(25)).slice(0, 3)).toEqual([
+        ['assigned', '10000.00', '2026-10-01'],
+        ['removed', '15000.00', '2020-01-01'],
+        ['removed', '20000.00', '2021-01-01'],
+      ]);
+      expect((await pg.pool!.query('SELECT id FROM payroll_planned_supplements WHERE employee_id = 24')).rows).toEqual(ids24);
+    });
+
+    it('369: две доплаты с одной датой начала — цель достижима, повтор ничего не пишет; дубль в цели — ошибка', async () => {
+      const both = [p(30000, '2026-10-01', '2027-01-31'), p(10000, '2026-10-01', '2027-01-31')];
+      const target = [{ employeeId: 23, fullName: 'Бурлаку Кристина Александровна', periods: both }];
+      const [item] = await syncPlannedSupplements(target, { apply: true });
+      expect(item.status).toBe('changed');
+      expect(await periods(23)).toHaveLength(2);
+      const count = await versionCount();
+      // Порядок в списке другой — то же самое.
+      const [again] = await syncPlannedSupplements(
+        [{ ...target[0], periods: [...both].reverse() }],
+        { apply: true },
+      );
+      expect(again.status).toBe('same');
+      expect(await versionCount()).toBe(count);
+
+      await expect(syncPlannedSupplements(
+        [{ ...target[0], periods: [both[0], { ...both[0] }] }],
+        { apply: true },
+      )).rejects.toThrow(/Одинаковые периоды/);
+      expect(await versionCount()).toBe(count);
     });
   });
 

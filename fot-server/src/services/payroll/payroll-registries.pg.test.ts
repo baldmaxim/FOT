@@ -231,6 +231,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       '314_employee_dormitory_stays.sql', '318_staff_deductions.sql', '319_dormitory_addresses.sql',
       '320_dormitory_stays_apartment.sql', '321_payroll_deduction_subkinds.sql', '322_payroll_planned_supplement_open_end.sql',
       '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql',
+      // 369 — несколько доплат на одни даты; дважды — повторный запуск безопасен.
+      '369_payroll_planned_supplements_concurrent.sql', '369_payroll_planned_supplements_concurrent.sql',
     ]) {
       await run(migration(name));
     }
@@ -410,7 +412,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
   });
 
   describe('«Доплата»', () => {
-    it('плановая: снятая не «оживает», добавление при текущей — exists; как в списке условий', async () => {
+    it('369: добавление — новая доплата рядом с прежними, отказ только на полный дубль; как в списке условий', async () => {
       const value = { amount: 5000, dateFrom: '2026-10-01', dateTo: '2026-12-31' };
       expect(await savePlannedSupplement({ employeeId: 2, value, createdBy: AUTHOR, onlyIfNone: true }))
         .toEqual({ status: 'saved', previous: null });
@@ -428,144 +430,165 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       const row = res.body.data.find((r: { employee_id: number }) => r.employee_id === 2);
       expect(Number(row.planned_supplement_amount)).toBe(5000);
 
-      // Снята — последняя версия журнала с amount NULL; прежняя ненулевая не показывается.
+      // Те же сумма и даты с другим комментарием — другая доплата: обе действуют.
+      expect(await savePlannedSupplement({
+        employeeId: 2, value: { ...value, comment: 'Совмещение' }, createdBy: AUTHOR, onlyIfNone: true,
+      })).toEqual({ status: 'saved', previous: null });
+      expect((await planned()).map(r => [r.amount, r.comment])).toEqual([['5000.00', null], ['5000.00', 'Совмещение']]);
+
+      // Прежний контракт «одна доплата» (DELETE …/employee/:empId) снимает последнюю по дате, при равных — последнюю
+      // добавленную; вторая остаётся.
       expect(await savePlannedSupplement({ employeeId: 2, value: null, createdBy: AUTHOR }))
-        .toMatchObject({ status: 'saved', previous: { amount: 5000 } });
+        .toMatchObject({ status: 'saved', previous: { amount: 5000, comment: 'Совмещение' } });
+      expect((await planned()).map(r => r.comment)).toEqual([null]);
+      expect(await savePlannedSupplement({ employeeId: 2, value: null, createdBy: AUTHOR }))
+        .toMatchObject({ status: 'saved', previous: { amount: 5000, comment: null } });
       expect(await planned()).toEqual([]);
+      expect(await savePlannedSupplement({ employeeId: 2, value: null, createdBy: AUTHOR })).toEqual({ status: 'unchanged' });
       expect(await savePlannedSupplement({ employeeId: 2, value, createdBy: AUTHOR, onlyIfNone: true }))
         .toMatchObject({ status: 'saved', previous: null });
     });
 
-    it('плановая: «убрали» укороченной версией, потом новый период — прежний остаётся историей; правка — нет', async () => {
+    it('369: прежний клиент правит последнюю по дате; значение другой доплаты — exists', async () => {
       const planned6 = () => listSupplements(SCOPE)
         .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 6));
       const julDec = { amount: 3000, dateFrom: '2026-07-01', dateTo: '2026-12-31' };
       await savePlannedSupplement({ employeeId: 6, value: julDec, createdBy: AUTHOR, onlyIfNone: true });
-      // Правка суммы на том же периоде — исправление: видна только новая версия.
+      // Правка суммы — замена строки: видна только новая.
       await savePlannedSupplement({ employeeId: 6, value: { ...julDec, amount: 3500 }, createdBy: AUTHOR });
-      expect(await planned6()).toEqual([expect.objectContaining({ amount: '3500.00', is_current: true })]);
+      expect((await planned6()).map(row => row.amount)).toEqual(['3500.00']);
 
-      // «Убрали» с 01.10 — версия по 30.09.
+      // «Убрали» с 01.10 — строка по 30.09; новая доплата на пересекающиеся даты — рядом, не вместо.
       await savePlannedSupplement({ employeeId: 6, value: { amount: 3500, dateFrom: '2026-07-01', dateTo: '2026-09-30' }, createdBy: AUTHOR });
-      // Новый период: пересекается с текущей — exists, не пересекается — новая версия.
       expect(await savePlannedSupplement({
         employeeId: 6, value: { amount: 4000, dateFrom: '2026-09-15', dateTo: '2026-12-31' }, createdBy: AUTHOR, onlyIfNone: true,
-      })).toEqual({ status: 'exists' });
-      expect(await savePlannedSupplement({
-        employeeId: 6, value: { amount: 4000, dateFrom: '2026-12-01', dateTo: '2027-02-28' }, createdBy: AUTHOR, onlyIfNone: true,
-      })).toMatchObject({ status: 'saved', previous: { amount: 3500, dateTo: '2026-09-30' } });
-      expect(await planned6()).toEqual([
-        expect.objectContaining({ amount: '3500.00', date_from: '2026-07-01', date_to: '2026-09-30', is_current: false }),
-        expect.objectContaining({ amount: '4000.00', date_from: '2026-12-01', date_to: '2027-02-28', is_current: true }),
+      })).toEqual({ status: 'saved', previous: null });
+      expect((await planned6()).map(row => [row.amount, row.date_from, row.date_to])).toEqual([
+        ['3500.00', '2026-07-01', '2026-09-30'],
+        ['4000.00', '2026-09-15', '2026-12-31'],
       ]);
-      expect((await planned6()).every(row => typeof row.id === 'number')).toBe(true);
 
-      // Новую сняли как ошибочную — прошлый период остаётся.
-      await savePlannedSupplement({ employeeId: 6, value: null, createdBy: AUTHOR });
-      expect(await planned6()).toEqual([expect.objectContaining({ date_to: '2026-09-30', is_current: false })]);
+      // Прежний клиент меняет последнюю по дате (4 000) на значение первой — две одинаковые не заводим.
+      expect(await savePlannedSupplement({
+        employeeId: 6, value: { amount: 3500, dateFrom: '2026-07-01', dateTo: '2026-09-30' }, createdBy: AUTHOR,
+      })).toEqual({ status: 'exists' });
+
+      // Сняли последнюю по дате — прежняя остаётся.
+      expect(await savePlannedSupplement({ employeeId: 6, value: null, createdBy: AUTHOR }))
+        .toMatchObject({ status: 'saved', previous: { amount: 4000 } });
+      expect((await planned6()).map(row => row.date_to)).toEqual(['2026-09-30']);
     });
 
-    it('плановая бессрочная: пересекается с любым будущим периодом; «убрали» — новый период после неё', async () => {
+    it('369: бессрочная и новая на те же даты действуют обе; правка бессрочной не трогает новую', async () => {
       const planned1 = () => listSupplements(SCOPE)
         .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 1));
       const open = { amount: 20000, dateFrom: '2023-02-01', dateTo: null };
       expect(await savePlannedSupplement({ employeeId: 1, value: open, createdBy: AUTHOR, onlyIfNone: true }))
         .toEqual({ status: 'saved', previous: null });
-      expect(await planned1()).toEqual([
-        expect.objectContaining({ amount: '20000.00', date_from: '2023-02-01', date_to: null, is_current: true }),
-      ]);
       expect(await savePlannedSupplement({
         employeeId: 1, value: { amount: 1000, dateFrom: '2030-01-01', dateTo: '2030-01-31' }, createdBy: AUTHOR, onlyIfNone: true,
-      })).toEqual({ status: 'exists' });
+      })).toEqual({ status: 'saved', previous: null });
 
-      // «Убрали» с 01.10 — версия по 30.09; новый бессрочный с декабря — прежний период остаётся историей.
-      await savePlannedSupplement({ employeeId: 1, value: { ...open, dateTo: '2026-09-30' }, createdBy: AUTHOR });
-      expect(await savePlannedSupplement({
-        employeeId: 1, value: { amount: 25000, dateFrom: '2026-12-01', dateTo: null }, createdBy: AUTHOR, onlyIfNone: true,
-      })).toMatchObject({ status: 'saved', previous: { dateTo: '2026-09-30' } });
-      expect(await planned1()).toEqual([
-        expect.objectContaining({ amount: '20000.00', date_to: '2026-09-30', is_current: false }),
-        expect.objectContaining({ amount: '25000.00', date_from: '2026-12-01', date_to: null, is_current: true }),
+      const openId = (await planned1()).find(row => row.date_from === '2023-02-01')!.id;
+      expect(await rewritePlannedPeriod({
+        employeeId: 1, periodId: openId, value: { ...open, dateTo: '2026-09-30' }, createdBy: AUTHOR,
+      })).toMatchObject({ status: 'saved', previous: { amount: 20000, dateTo: null } });
+      expect((await planned1()).map(row => [row.amount, row.date_from, row.date_to])).toEqual([
+        ['20000.00', '2023-02-01', '2026-09-30'],
+        ['1000.00', '2030-01-01', '2030-01-31'],
       ]);
     });
 
-    it('337: любой период плановой (Корж) — правка, перенос, снятие переписывают расписание; история по периоду', async () => {
+    it('369: Корж — две доплаты на один период; правка и снятие одной не трогают другую; история', async () => {
       await run(`INSERT INTO employees (id, full_name, org_department_id) VALUES (20, 'Корж И.С.', '${D1}')`);
       try {
         const planned = () => listSupplements(SCOPE)
           .then(rows => rows.filter(row => row.kind === 'planned' && row.employee_id === 20));
-        const periods = async () => (await planned()).map(row => [row.amount, row.date_from, row.date_to]);
-        const idOf = async (dateFrom: string) => (await planned()).find(row => row.date_from === dateFrom)!.id;
-        // Как на проде (скрипт 28.10): бессрочные 20 000 → по 30.09, 30 000 окт–янв, 20 000 с февраля.
+        const periods = async () => (await planned()).map(row => [row.amount, row.date_from, row.date_to, row.comment]);
+        const idOf = async (dateFrom: string, amount: string) => (await planned())
+          .find(row => row.date_from === dateFrom && row.amount === amount)!.id;
+        const octJan = { dateFrom: '2026-10-01', dateTo: '2027-01-31' };
         for (const value of [
-          { amount: 20000, dateFrom: '2023-03-01', dateTo: null },
           { amount: 20000, dateFrom: '2023-03-01', dateTo: '2026-09-30' },
-          { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' },
+          { amount: 30000, ...octJan },
           { amount: 20000, dateFrom: '2027-02-01', dateTo: null },
-        ]) await savePlannedSupplement({ employeeId: 20, value, createdBy: AUTHOR });
+          // Вторая доплата на тот же период — со своим комментарием.
+          { amount: 10000, ...octJan, comment: 'Совмещение' },
+        ]) {
+          expect(await savePlannedSupplement({ employeeId: 20, value, createdBy: AUTHOR, onlyIfNone: true }))
+            .toMatchObject({ status: 'saved' });
+        }
         expect(await periods()).toEqual([
-          ['20000.00', '2023-03-01', '2026-09-30'], ['30000.00', '2026-10-01', '2027-01-31'], ['20000.00', '2027-02-01', null],
+          ['20000.00', '2023-03-01', '2026-09-30', null],
+          ['30000.00', '2026-10-01', '2027-01-31', null],
+          ['10000.00', '2026-10-01', '2027-01-31', 'Совмещение'],
+          ['20000.00', '2027-02-01', null, null],
         ]);
-
-        // Добавление сверяется со всеми периодами, а не с последним: ноябрь перекрыл бы 30 000 целиком.
+        // Полный дубль — отказ.
         expect(await savePlannedSupplement({
-          employeeId: 20, value: { amount: 1000, dateFrom: '2026-11-01', dateTo: '2026-11-30' }, createdBy: AUTHOR, onlyIfNone: true,
+          employeeId: 20, value: { amount: 10000, ...octJan, comment: 'Совмещение' }, createdBy: AUTHOR, onlyIfNone: true,
         })).toEqual({ status: 'exists' });
 
-        // Сумма среднего периода; крайние не меняются.
-        const middle = await idOf('2026-10-01');
-        expect(await getPlannedPeriodEmployeeId(middle)).toBe(20);
-        const octJan = { amount: 35000, dateFrom: '2026-10-01', dateTo: '2027-01-31' };
-        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: middle, value: octJan, createdBy: AUTHOR }))
-          .toMatchObject({ status: 'saved', previous: { amount: 30000, dateFrom: '2026-10-01', dateTo: '2027-01-31' } });
-        expect(await periods()).toEqual([
-          ['20000.00', '2023-03-01', '2026-09-30'], ['35000.00', '2026-10-01', '2027-01-31'], ['20000.00', '2027-02-01', null],
-        ]);
-        // Прежний id — уже архив; пересечение с февралём; без изменений.
-        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: middle, value: octJan, createdBy: AUTHOR }))
+        // Сумма 30 000 → 35 000: 10 000 на тот же период не меняется.
+        const main = await idOf('2026-10-01', '30000.00');
+        expect(await getPlannedPeriodEmployeeId(main)).toBe(20);
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: main, value: { amount: 35000, ...octJan }, createdBy: AUTHOR }))
+          .toMatchObject({ status: 'saved', previous: { amount: 30000, ...octJan } });
+        // Прежний id — уже архив; без изменений; значение второй доплаты — exists.
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: main, value: { amount: 35000, ...octJan }, createdBy: AUTHOR }))
           .toEqual({ status: 'stale' });
-        const edited = await idOf('2026-10-01');
-        expect(await rewritePlannedPeriod({
-          employeeId: 20, periodId: edited, value: { ...octJan, dateTo: '2027-02-15' }, createdBy: AUTHOR,
-        })).toEqual({ status: 'exists' });
-        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: edited, value: octJan, createdBy: AUTHOR }))
+        const edited = await idOf('2026-10-01', '35000.00');
+        expect(await rewritePlannedPeriod({ employeeId: 20, periodId: edited, value: { amount: 35000, ...octJan }, createdBy: AUTHOR }))
           .toEqual({ status: 'unchanged' });
+        expect(await rewritePlannedPeriod({
+          employeeId: 20, periodId: edited, value: { amount: 10000, ...octJan, comment: 'Совмещение' }, createdBy: AUTHOR,
+        })).toEqual({ status: 'exists' });
 
-        // Перенос дат мимо прежних версий: октябрь и январь не «оживают» прежними 30 000.
-        await rewritePlannedPeriod({
-          employeeId: 20, periodId: edited, value: { amount: 35000, dateFrom: '2026-11-01', dateTo: '2026-12-31' }, createdBy: AUTHOR,
-        });
-        expect(await periods()).toEqual([
-          ['20000.00', '2023-03-01', '2026-09-30'], ['35000.00', '2026-11-01', '2026-12-31'], ['20000.00', '2027-02-01', null],
-        ]);
-
-        // Окно сотрудника после переписывания правит последний по дате период — февральский.
+        // Сняли 10 000 — 35 000 на тот же период остаётся.
+        expect(await rewritePlannedPeriod({
+          employeeId: 20, periodId: await idOf('2026-10-01', '10000.00'), value: null, createdBy: AUTHOR,
+        })).toMatchObject({ status: 'saved', next: null });
+        // Окно сотрудника прежнего клиента правит последнюю по дате — февральскую.
         expect(await savePlannedSupplement({
           employeeId: 20, value: { amount: 25000, dateFrom: '2027-02-01', dateTo: null }, createdBy: AUTHOR,
         })).toMatchObject({ status: 'saved', previous: { amount: 20000, dateFrom: '2027-02-01' } });
+        expect(await periods()).toEqual([
+          ['20000.00', '2023-03-01', '2026-09-30', null],
+          ['35000.00', '2026-10-01', '2027-01-31', null],
+          ['25000.00', '2027-02-01', null, null],
+        ]);
 
-        // Снять средний: крайние остаются.
-        expect(await rewritePlannedPeriod({
-          employeeId: 20, periodId: await idOf('2026-11-01'), value: null, createdBy: AUTHOR,
-        })).toMatchObject({ status: 'saved' });
-        expect(await periods()).toEqual([['20000.00', '2023-03-01', '2026-09-30'], ['25000.00', '2027-02-01', null]]);
-
-        // История: «было → стало» по периоду, копии не видны, «снята» — со снятым периодом.
-        const history = (await getPlannedSupplementChanges(20)).map(change => [change.action, change.amount, change.prev_amount]);
+        // История: каждая добавленная — «назначена» (а не «замена» предыдущей), правка — «было» той же доплаты.
+        const history = (await getPlannedSupplementChanges(20))
+          .map(change => [change.action, change.amount, change.prev_amount, change.comment ?? change.prev_comment]);
         expect(history).toEqual([
-          ['removed', null, '35000.00'],
-          ['changed', '25000.00', '20000.00'],
-          ['changed', '35000.00', '35000.00'],
-          ['changed', '35000.00', '30000.00'],
-          ['changed', '20000.00', '30000.00'],
-          ['changed', '30000.00', '20000.00'],
-          ['changed', '20000.00', '20000.00'],
-          ['assigned', '20000.00', null],
+          ['changed', '25000.00', '20000.00', null],
+          ['removed', null, '10000.00', 'Совмещение'],
+          ['changed', '35000.00', '30000.00', null],
+          ['assigned', '10000.00', null, 'Совмещение'],
+          ['assigned', '20000.00', null, null],
+          ['assigned', '30000.00', null, null],
+          ['assigned', '20000.00', null, null],
         ]);
       } finally {
         await run('DELETE FROM payroll_planned_supplements WHERE employee_id = 20');
         await run('DELETE FROM employees WHERE id = 20');
       }
+    });
+
+    it('369: два одинаковых добавления параллельно — одно сохранено, второе — 409', async () => {
+      const add = async () => {
+        const res = makeRes();
+        await payrollSupplementsController.addPlanned(req({
+          body: { employee_id: 6, amount: 7000, date_from: '2027-03-01', date_to: '2027-03-31', comment: 'Дубль' },
+        }), res);
+        return res.statusCode;
+      };
+      expect((await Promise.all([add(), add(), add()])).sort()).toEqual([200, 409, 409]);
+      expect((await run(
+        `SELECT count(*)::int AS n FROM payroll_planned_supplements
+          WHERE employee_id = 6 AND comment = 'Дубль' AND archived_at IS NULL`,
+      )).rows[0].n).toBe(1);
     });
 
     it('364: комментарий периода едет со своим периодом при правке, «Убрать» и снятии соседних (Корж)', async () => {

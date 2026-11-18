@@ -156,15 +156,6 @@ export interface IPayrollTermsRow {
   effective_from: string | null;
   effective_to: string | null;
   /**
-   * Последняя сохранённая плановая доплата, ₽/мес, и её период (может быть будущим или прошедшим).
-   * null — доплаты нет; поля нет у старого бэкенда.
-   */
-  planned_supplement_amount?: string | number | null;
-  planned_supplement_from?: string | null;
-  planned_supplement_to?: string | null;
-  /** Комментарий последней сохранённой плановой доплаты (миграция 364); поля нет у старого бэкенда. */
-  planned_supplement_comment?: string | null;
-  /**
    * «Выплачено» по месяцам. Список присылает «Оплачено» 1С; «Условия оплаты» заменяют их ответом termsPayouts (месяц
    * из 1С, иначе расчёт ФОТ, решение 09.11.2026), когда порция посчитана. Без поля ячейка «Выплачено» — «—».
    */
@@ -227,6 +218,16 @@ export interface IPayrollTermsHistoryRow {
   created_at: string;
 }
 
+/** Действующая плановая доплата сотрудника (миграция 369): сумма ₽/мес — NUMERIC строкой, даты YYYY-MM-DD. */
+export interface IEmployeePlannedSupplement {
+  id: number;
+  amount: string;
+  date_from: string;
+  /** null — бессрочно. */
+  date_to: string | null;
+  comment: string | null;
+}
+
 export interface IAssignTermsPayload {
   calc_type: PayrollCalcType;
   monthly_salary?: number;
@@ -242,17 +243,6 @@ export interface IAssignTermsPayload {
    */
   contract_type?: ContractType;
   effective_from: string;
-  /** Плановая доплата: не передано — не менять, null — снять. Только для одного сотрудника. */
-  planned_supplement?: IPlannedSupplementPayload | null;
-}
-
-/** Плановая доплата: сумма ₽/мес на период «с — по» включительно; «по» null — бессрочно. */
-export interface IPlannedSupplementPayload {
-  amount: number;
-  date_from: string;
-  date_to: string | null;
-  /** Комментарий (миграция 364): null — без комментария. */
-  comment: string | null;
 }
 
 /** Изменение оклада / ставки. Суммы — текстом NUMERIC; разница — только при том же виде оплаты. */
@@ -940,6 +930,18 @@ export const payrollService = {
   getHistory: async (employeeId: number): Promise<IPayrollTermsHistoryRow[]> => {
     const res = await apiClient.get<IApiResponse<IPayrollTermsHistoryRow[]>>(
       `/payroll/terms/employee/${employeeId}`,
+    );
+    return res.data;
+  },
+
+  /**
+   * Действующие плановые доплаты сотрудника (миграция 369 — их может быть несколько): последняя по дате — первой.
+   * Список окна сотрудника и «Подробно», лист «Условия» экспорта карточки.
+   */
+  getEmployeePlannedSupplements: async (employeeId: number, signal?: AbortSignal): Promise<IEmployeePlannedSupplement[]> => {
+    const res = await apiClient.get<IApiResponse<IEmployeePlannedSupplement[]>>(
+      `/payroll/terms/employee/${employeeId}/planned-supplements`,
+      { signal },
     );
     return res.data;
   },

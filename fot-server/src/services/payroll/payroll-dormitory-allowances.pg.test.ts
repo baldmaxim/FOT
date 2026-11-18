@@ -226,6 +226,7 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
       '293_payroll_planned_supplements.sql', '295_payroll_paid_amounts.sql', '299_payroll_deduction_kinds.sql',
       '300_payroll_employee_deductions.sql', '301_payroll_paid_order_kinds.sql', '306_payroll_rates.sql',
       '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql',
+      '369_payroll_planned_supplements_concurrent.sql',
     ]) {
       await run(migration(name));
     }

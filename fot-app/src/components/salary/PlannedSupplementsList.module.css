@@ -1,0 +1,58 @@
+/*
+ * «Плановые доплаты» окна сотрудника и «Подробно»: действующие доплаты, только чтение (вносят в «Справочнике»).
+ * Mobile-first: сумма и период — первой строкой, комментарий — второй на всю ширину.
+ */
+.list {
+  max-width: 640px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.empty { margin: 0; font-size: 13px; color: var(--text-secondary); }
+
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+.row:last-child { border-bottom: none; }
+
+.amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.period { min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.comment { grid-column: 1 / -1; min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.retry {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 769px) {
+  .retry { min-height: 36px; }
+}

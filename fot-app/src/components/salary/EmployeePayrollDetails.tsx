@@ -26,6 +26,7 @@ import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { PaidHistoryPanel } from './PaidHistoryPanel';
 import { SalaryHistorySection } from './SalaryHistorySection';
 import { StaffDeductionsList } from './StaffDeductionsList';
+import { PlannedSupplementsList } from './PlannedSupplementsList';
 import modal from './PayrollModal.module.css';
 import styles from './EmployeePayrollDetails.module.css';
 
@@ -38,10 +39,10 @@ interface IEmployeePayrollDetailsProps {
   row: IPayrollTermsRow;
   defaultDate: string;
   /**
-   * Окно сотрудника на «Расчётах» (true): условия, компенсация, плановая доплата и удержание вносятся и сохраняются;
-   * «Оплачено» и выбора месяцев нет.
-   * Вкладка «Подробно» (false) — только просмотр: Категория, оклад · премия · итого, «Оплачено», история, отпуска;
-   * кнопок нет.
+   * Окно сотрудника на «Расчётах» (true): условия вносятся и сохраняются; компенсация, плановые доплаты и удержание —
+   * только показ; «Оплачено» и выбора месяцев нет.
+   * Вкладка «Подробно» (false) — только просмотр: Категория, оклад · премия · итого, «Оплачено», плановые доплаты,
+   * история, отпуска; кнопок нет.
    */
   editable?: boolean;
   /** Класс корня: в окне «Расчётов» — без своей рамки. */
@@ -101,7 +102,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
   const nameRef = useRef<HTMLHeadingElement>(null);
   // Право на страницу и скоуп правки этого сотрудника (can_edit нет у старого бэкенда — решит сервер).
   const canEdit = editable && canEditPage('/salary/terms') && row.can_edit !== false;
-  const form = usePayrollTermsForm({ row, defaultDate, plannedSupplement: editable });
+  const form = usePayrollTermsForm({ row, defaultDate });
   // «Сегодня» — на момент открытия карточки: defaultDate фиксируется при входе в раздел и через
   // границу месяца без перезагрузки устарел бы.
   const [currentMonth] = useState(moscowCurrentMonth);
@@ -325,6 +326,7 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           termsFrom={row.terms_id ? row.effective_from : null}
           total
           staffDeductions={editable ? <StaffDeductionsList employeeId={row.employee_id} /> : undefined}
+          plannedSupplements={<PlannedSupplementsList employeeId={row.employee_id} />}
         />
 
         <div className={styles.reference}>

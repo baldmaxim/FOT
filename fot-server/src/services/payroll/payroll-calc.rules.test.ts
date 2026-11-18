@@ -431,6 +431,30 @@ describe('«К выплате (ФОТ)»: доплаты, выходы, удер
     expect(line(result, 'bonus')?.amount).toBe('17273.00');
   });
 
+  it('369: две плановые доплаты на один период — каждая пропорционально дням, «Премиальная» — их сумма', () => {
+    const full = buildPayrollCalc(facts({
+      normDays: 22,
+      workdayDates: august(22),
+      plannedSupplements: [
+        { amount: '30000.00', date_from: '2026-08-01', date_to: '2026-12-31' },
+        { amount: '10000.00', date_from: '2026-08-01', date_to: '2026-12-31' },
+      ],
+    }));
+    expect(line(full, 'bonus')).toMatchObject({ amount: '40000.00', days: { worked: 22, norm: 22 } });
+    expect(line(full, 'bonus')?.parts?.map(part => ('amount' in part ? part.amount : null))).toEqual(['30000.00', '10000.00']);
+
+    // Неполный месяц: 30 000 × 19/22 = 25 909,09 → 25 909; 10 000 × 19/22 = 8 636,36 → 8 636 — каждая округляется сама.
+    const partial = buildPayrollCalc(facts({
+      normDays: 22,
+      workdayDates: august(19),
+      plannedSupplements: [
+        { amount: '30000.00', date_from: '2026-07-01', date_to: null },
+        { amount: '10000.00', date_from: '2026-07-01', date_to: null },
+      ],
+    }));
+    expect(line(partial, 'bonus')?.amount).toBe('34545.00');
+  });
+
   it('выход в выходной — по окладу своей даты, одинарно: 92 000 / 23 × 4 = 16 000', () => {
     const result = buildPayrollCalc(facts({
       normDays: 23,

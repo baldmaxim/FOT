@@ -11,6 +11,14 @@
  * ставки применилась бы дважды (график «0,5 ставки» уже даёт 4 ч вместо 8).
  */
 import { query, queryOne, withTransaction, type DbExecutor } from '../../config/postgres.js';
+import {
+  insertPlannedPeriod,
+  plannedValueOf,
+  readPlannedPeriods,
+  replacePlannedPeriod,
+  resolvePlannedValue,
+  samePlannedValue,
+} from './payroll-planned-supplement-rows.js';
 
 /** Категория персонала — по табелю (payroll-staff-category.ts); на формулу расчёта не влияет. */
 export type StaffCategory = 'office' | 'itr' | 'worker';
@@ -228,68 +236,47 @@ export interface IPlannedSupplementValue {
   dateTo: string | null;
   /**
    * Комментарий периода (миграция 364): null — без комментария; undefined — не передан (прежний клиент, 🗑 «Убрать»):
-   * остаётся прежний комментарий — последней версии у setPlannedSupplement, правленого периода у rewritePlannedPeriod.
+   * остаётся прежний комментарий правленой доплаты (у новой — без комментария).
    */
   comment?: string | null;
 }
 
+/** Итог записи плановой доплаты по сотруднику: exists — значение совпало с другой действующей доплатой. */
+export type PlannedSupplementWrite =
+  | { status: 'unchanged' }
+  | { status: 'exists' }
+  | { status: 'saved'; previous: IPlannedSupplementValue | null };
+
 /**
- * Записать доплату сотрудника: value — новая доплата, null — снять.
+ * Записать доплату сотрудника по прежнему контракту «одна доплата» (окно «Расчётов» прежнего клиента, PUT/DELETE
+ * /supplements/planned/employee/:empId): value — правка, null — снять. С миграции 369 доплат у сотрудника может быть
+ * несколько, правится последняя по дате (date_from DESC, id DESC) — та же, что прежний клиент видит в полях
+ * (planned_supplement_* списка условий). Действующих нет — новая доплата; снимать нечего — ничего не пишется.
  *
- * Новая версия пишется, только если отличается от последней неархивной (архив — переписанное расписание,
- * миграция 337): повторное сохранение карточки без правки истории не засоряет; снятие без прежней доплаты
- * ничего не пишет. Сравнение — в SQL
- * (NUMERIC с NUMERIC). Вызывать в транзакции под блокировкой сотрудника (lockPayrollEmployee),
- * иначе два параллельных сохранения прочтут одну и ту же последнюю версию.
- *
- * Комментарий (миграция 364) — часть версии: только он другой — тоже новая версия. value.comment undefined — берётся
- * комментарий последней версии; у снятия комментария нет.
- *
- * Возвращает true, если доплата изменилась. createdBy null — запись скриптом по списку 1С, без автора.
+ * value.comment undefined — комментарий правленой доплаты. Совпадает с правленой — 'unchanged', с другой действующей —
+ * 'exists' (две одинаковые доплаты не заводим). previous — значение правленой доплаты (для аудита).
+ * Вызывать в транзакции под lockPayrollEmployee. createdBy null — запись скриптом, без автора.
  */
 export const setPlannedSupplement = async (
   exec: DbExecutor,
   input: { employeeId: number; value: IPlannedSupplementValue | null; createdBy: string | null },
-): Promise<boolean> => {
-  const res = await exec.query(
-    `WITH last AS (
-       SELECT amount, date_from, date_to, comment
-         FROM payroll_planned_supplements
-        WHERE employee_id = $1 AND archived_at IS NULL
-        ORDER BY id DESC
-        LIMIT 1
-     ),
-     incoming AS (
-       SELECT CASE
-                WHEN $2::numeric IS NULL THEN NULL
-                WHEN $6::boolean THEN (SELECT comment FROM last)
-                ELSE $7::text
-              END AS comment
-     )
-     INSERT INTO payroll_planned_supplements (employee_id, amount, date_from, date_to, created_by, comment)
-     SELECT $1, $2::numeric, $3::date, $4::date, $5, incoming.comment
-       FROM incoming
-      WHERE CASE
-              WHEN EXISTS (SELECT 1 FROM last)
-                THEN NOT EXISTS (
-                  SELECT 1 FROM last
-                   WHERE amount IS NOT DISTINCT FROM $2::numeric
-                     AND date_from IS NOT DISTINCT FROM $3::date
-                     AND date_to IS NOT DISTINCT FROM $4::date
-                     AND comment IS NOT DISTINCT FROM incoming.comment)
-              ELSE $2::numeric IS NOT NULL
-            END`,
-    [
-      input.employeeId,
-      input.value?.amount ?? null,
-      input.value?.dateFrom ?? null,
-      input.value?.dateTo ?? null,
-      input.createdBy,
-      input.value !== null && input.value.comment === undefined,
-      input.value?.comment ?? null,
-    ],
-  );
-  return (res.rowCount ?? 0) > 0;
+): Promise<PlannedSupplementWrite> => {
+  const periods = await readPlannedPeriods(exec, input.employeeId);
+  const latest = periods[0] ?? null;
+  if (input.value === null) {
+    if (!latest) return { status: 'unchanged' };
+    await replacePlannedPeriod(exec, { employeeId: input.employeeId, target: latest, value: null, createdBy: input.createdBy });
+    return { status: 'saved', previous: plannedValueOf(latest) };
+  }
+  const next = resolvePlannedValue(input.value, latest?.comment ?? null);
+  if (latest && samePlannedValue(latest, next)) return { status: 'unchanged' };
+  if (periods.some(period => period !== latest && samePlannedValue(period, next))) return { status: 'exists' };
+  if (latest) {
+    await replacePlannedPeriod(exec, { employeeId: input.employeeId, target: latest, value: next, createdBy: input.createdBy });
+  } else {
+    await insertPlannedPeriod(exec, { employeeId: input.employeeId, value: next, createdBy: input.createdBy });
+  }
+  return { status: 'saved', previous: latest && plannedValueOf(latest) };
 };
 
 /**
@@ -320,15 +307,17 @@ export interface IPlannedSupplementChange {
 }
 
 /**
- * История плановой доплаты, новые сверху. Переписанное расписание (миграция 337): у строки с replaces_id
- * «было» — заменённая строка, а не предыдущая по id; копии без изменений не показываются; архивная строка
- * «снята» — снятый период (prev — его значения). Комментарий (миграция 364) — часть версии: правка только его —
- * тоже «changed», копия — когда совпал и он.
+ * История плановой доплаты, новые сверху. У строки с replaces_id «было» — заменённая строка (правка, снятие —
+ * архивная строка «снята» с prev — значениями снятой доплаты); копии без изменений (переписывание 337) не
+ * показываются. Без replaces_id: строка журнала до 369 (legacy_journal) — «было» из предыдущей строки по id; новая
+ * строка — самостоятельная доплата (369), «было» нет — «assigned», даже если у сотрудника есть другие доплаты.
+ * Комментарий (миграция 364) — часть версии: правка только его — тоже «changed», копия — когда совпал и он.
  */
 export const getPlannedSupplementChanges = async (employeeId: number): Promise<IPlannedSupplementChange[]> =>
   query<IPlannedSupplementChange>(
     `WITH ordered AS (
        SELECT s.id, s.amount, s.date_from, s.date_to, s.comment, s.created_by, s.created_at, s.replaces_id,
+              s.legacy_journal,
               LAG(s.amount) OVER w AS lag_amount,
               LAG(s.date_from) OVER w AS lag_date_from,
               LAG(s.date_to) OVER w AS lag_date_to,
@@ -339,10 +328,10 @@ export const getPlannedSupplementChanges = async (employeeId: number): Promise<I
      ),
      versions AS (
        SELECT o.id, o.amount, o.date_from, o.date_to, o.comment, o.created_by, o.created_at,
-              CASE WHEN o.replaces_id IS NULL THEN o.lag_amount ELSE r.amount END AS prev_amount,
-              CASE WHEN o.replaces_id IS NULL THEN o.lag_date_from ELSE r.date_from END AS prev_date_from,
-              CASE WHEN o.replaces_id IS NULL THEN o.lag_date_to ELSE r.date_to END AS prev_date_to,
-              CASE WHEN o.replaces_id IS NULL THEN o.lag_comment ELSE r.comment END AS prev_comment,
+              CASE WHEN o.replaces_id IS NOT NULL THEN r.amount WHEN o.legacy_journal THEN o.lag_amount END AS prev_amount,
+              CASE WHEN o.replaces_id IS NOT NULL THEN r.date_from WHEN o.legacy_journal THEN o.lag_date_from END AS prev_date_from,
+              CASE WHEN o.replaces_id IS NOT NULL THEN r.date_to WHEN o.legacy_journal THEN o.lag_date_to END AS prev_date_to,
+              CASE WHEN o.replaces_id IS NOT NULL THEN r.comment WHEN o.legacy_journal THEN o.lag_comment END AS prev_comment,
               o.replaces_id IS NOT NULL
                 AND o.amount IS NOT DISTINCT FROM r.amount
                 AND o.date_from IS NOT DISTINCT FROM r.date_from

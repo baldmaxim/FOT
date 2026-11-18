@@ -84,6 +84,7 @@ import {
   payrollPlannedCommentSchema,
 } from './payroll-dictionary.helpers.js';
 import { TRAVEL_RATE_CODE } from '../services/payroll/payroll-rates.service.js';
+import { listEmployeePlannedSupplements } from '../services/payroll/payroll-supplements.service.js';
 import { payrollQueueServerTiming, runInPayrollCalcSlot } from '../services/payroll/payroll-calc-slot.js';
 import { recordTermsRecalc } from '../services/payroll/payroll-terms-recalc.service.js';
 import {
@@ -188,6 +189,15 @@ const assignBodySchema = termsBodySchema.and(z.object({
   planned_supplement: plannedSupplementSchema.nullable().optional(),
 }));
 
+/** Плановая доплата прежнего клиента совпала с другой действующей доплатой сотрудника (миграция 369). */
+class PlannedSupplementExistsError extends Error {}
+
+const PLANNED_SUPPLEMENT_EXISTS = {
+  success: false,
+  error: 'У сотрудника уже есть такая плановая доплата: та же сумма, даты и комментарий',
+  code: 'SUPPLEMENT_EXISTS',
+};
+
 /** Прежний клиент прислал «Сумма, ₽/мес» удержания: тихо не записываем — просим обновить страницу. */
 const DEDUCTION_MOVED = {
   success: false,
@@ -223,6 +233,21 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
  * GET /api/payroll/terms/employee/:empId/changes — история условий для карточки:
  * изменения оклада / ставки и плановой доплаты одним журналом.
  */
+/** GET /api/payroll/terms/employee/:empId/planned-supplements — действующие плановые доплаты (список окна сотрудника). */
+const getPlannedSupplements = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = Number(req.params.empId);
+    if (!Number.isInteger(employeeId) || !(await canReadPayrollEmployee(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+    res.json({ success: true, data: await listEmployeePlannedSupplements(employeeId) });
+  } catch (err) {
+    console.error('payrollTerms.getPlannedSupplements error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения плановых доплат' });
+  }
+};
+
 const getChanges = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const employeeId = Number(req.params.empId);
@@ -496,11 +521,13 @@ const buildListSql = (options: {
                        WHERE ${options.cursorSql}
                        ORDER BY ${options.orderSql}
                        LIMIT $9 OFFSET $10) page
+                -- Прежний клиент (поля доплаты в окне «Расчётов»): последняя по дате действующая доплата — её же правит
+                -- setPlannedSupplement (миграция 369, доплат может быть несколько).
                 LEFT JOIN LATERAL (
                   SELECT s.amount, s.date_from, s.date_to, s.comment
                     FROM payroll_planned_supplements s
-                   WHERE s.employee_id = page.employee_id AND s.archived_at IS NULL
-                   ORDER BY s.id DESC
+                   WHERE s.employee_id = page.employee_id AND s.archived_at IS NULL AND s.amount IS NOT NULL
+                   ORDER BY s.date_from DESC, s.id DESC
                    LIMIT 1
                 ) ps ON TRUE${options.paidMonthsParam ? paidJoinSql(options.paidMonthsParam) : PAYOUTS_JOIN_SQL}) p
     ), '[]'::json) AS rows`;
@@ -1091,8 +1118,8 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         note: body.note ?? null,
         createdBy: req.user.id,
       }, client);
-      const changed = supplement === undefined
-        ? false
+      const written = supplement === undefined
+        ? null
         : await setPlannedSupplement(client, {
           employeeId,
           value: supplement && {
@@ -1103,6 +1130,9 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           },
           createdBy: req.user.id,
         });
+      // Прежний клиент правит последнюю доплату значением другой действующей — откат вместе с условиями (409).
+      if (written?.status === 'exists') throw new PlannedSupplementExistsError();
+      const changed = written?.status === 'saved';
       return { termsId: id, previous: previousTerms, supplementChanged: changed, staffCategory: category };
     });
 
@@ -1146,6 +1176,10 @@ const assign = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true, data: { terms_id: termsId } });
   } catch (err) {
     if (handleZodError(err, res)) return;
+    if (err instanceof PlannedSupplementExistsError) {
+      res.status(409).json(PLANNED_SUPPLEMENT_EXISTS);
+      return;
+    }
     console.error('payrollTerms.assign error:', err);
     res.status(500).json({ success: false, error: 'Ошибка назначения условий оплаты' });
   }
@@ -1272,5 +1306,6 @@ const payouts = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 };
 
 export const payrollTermsController = {
-  list, columnValues, monthObjects, getByEmployee, getChanges, getSalaryHistory, assign, calcColumns, payouts,
+  list, columnValues, monthObjects, getByEmployee, getChanges, getPlannedSupplements, getSalaryHistory, assign,
+  calcColumns, payouts,
 };

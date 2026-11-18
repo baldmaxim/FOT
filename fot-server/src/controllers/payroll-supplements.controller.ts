@@ -55,7 +55,7 @@ const NO_ACCESS = { success: false, error: 'Нет доступа к сотру�
 const NOT_FOUND = { success: false, error: 'Доплата не найдена' };
 const EXISTS = {
   success: false,
-  error: 'У сотрудника уже есть плановая доплата в эти даты — измените её в таблице',
+  error: 'У сотрудника уже есть такая плановая доплата: та же сумма, даты и комментарий',
   code: 'SUPPLEMENT_EXISTS',
 };
 const STALE = {

@@ -139,6 +139,8 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
     await pg.pool!.query(migration('293_payroll_planned_supplements.sql'));
     await pg.pool!.query(migration('337_payroll_planned_supplement_rewrite.sql'));
     await pg.pool!.query(migration('364_payroll_planned_supplement_comment.sql'));
+    // 369 — несколько плановых доплат на одни даты.
+    await pg.pool!.query(migration('369_payroll_planned_supplements_concurrent.sql'));
     await pg.pool!.query(migration('295_payroll_paid_amounts.sql'));
     await pg.pool!.query(migration('299_payroll_deduction_kinds.sql'));
     await pg.pool!.query(migration('300_payroll_employee_deductions.sql'));

@@ -9,10 +9,12 @@ import { moscowTodayIso } from '../utils/moscowDate';
 import { buildPayrollCardExport } from '../utils/payrollCardExport';
 import { calcMonthSums } from '../utils/payrollCalc';
 import { paidHistory, recentHistoryMonths } from '../utils/payrollPaid';
+import { employeePlannedSupplementsQueryOptions } from './useEmployeePlannedSupplements';
 import { paidHistoryQueryOptions, payouts1cHistoryQueryOptions, payslipQueryOptions } from './usePayrollPaid';
 
 /**
- * «Экспорт» карточки сотрудника: xlsx с условиями (row на момент открытия карточки) и историей выплат.
+ * «Экспорт» карточки сотрудника: xlsx с условиями (row на момент открытия карточки, плановые доплаты — на момент
+ * выгрузки) и историей выплат.
  * История и «Перечислено (1С)» — теми же запросами, что вкладка «История выплат» (toMonth карточки): открытая
  * не грузится заново.
  * asOfDate — дата выборки условий; имя файла — по дате выгрузки по Москве.
@@ -26,9 +28,10 @@ export const usePayrollCardExport = (row: IPayrollTermsRow, asOfDate: string, to
     if (exporting) return;
     setExporting(true);
     try {
-      const [paidRows, payouts] = await Promise.all([
+      const [paidRows, payouts, supplements] = await Promise.all([
         queryClient.fetchQuery(paidHistoryQueryOptions(row.employee_id, toMonth)),
         queryClient.fetchQuery(payouts1cHistoryQueryOptions(row.employee_id, toMonth)),
+        queryClient.fetchQuery(employeePlannedSupplementsQueryOptions(row.employee_id)),
       ]);
       // Те же месяцы и суммы, что на вкладке «Зарплата»; расчёт месяца не загрузился — суммы 1С, выгрузка не падает.
       const recentMonths = recentHistoryMonths(toMonth);
@@ -41,7 +44,7 @@ export const usePayrollCardExport = (row: IPayrollTermsRow, asOfDate: string, to
         return [month, payslip.status === 'fulfilled' ? calcMonthSums(payslip.value.calc) : null];
       }));
       const snapshot = buildPayrollCardExport({
-        row, paidRows, payouts, fot: { recentMonths, byMonth }, asOfDate, exportedAt: moscowTodayIso(),
+        row, supplements, paidRows, payouts, fot: { recentMonths, byMonth }, asOfDate, exportedAt: moscowTodayIso(),
       });
       const { blob, filename } = await payrollService.exportCard(snapshot);
       triggerBlobDownload(blob, filename);

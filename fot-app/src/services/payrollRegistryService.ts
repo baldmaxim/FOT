@@ -62,8 +62,6 @@ export interface IPayrollSupplementRow {
   reason: string | null;
   /** Плановая: комментарий периода (миграция 364); у разовой — null, у старого бэкенда — нет. */
   comment?: string | null;
-  /** Плановая: последняя строка журнала. С миграцией 337 правятся все периоды — только справочно. */
-  is_current?: boolean;
   /** Файлы разовой (миграция 354) по порядку прикрепления; у плановой — пусто, у старого бэкенда — нет. */
   files?: IPayrollSupplementFile[];
   can_edit: boolean;
@@ -251,7 +249,10 @@ export const payrollRegistryService = {
 
   listSupplements: (signal?: AbortSignal) => list<IPayrollSupplementRow>('/payroll/supplements', signal),
 
-  /** Текущая плановая пересекается с новым периодом — ApiError 409 SUPPLEMENT_EXISTS. */
+  /**
+   * Новая плановая доплата рядом с прежними — даты могут совпадать (миграция 369). ApiError 409 SUPPLEMENT_EXISTS — у
+   * сотрудника уже есть такая же: сумма, даты и комментарий.
+   */
   addPlanned: async (employeeId: number, fields: IPlannedSupplementFields): Promise<void> => {
     await apiClient.post('/payroll/supplements/planned', { employee_id: employeeId, ...fields });
   },
@@ -265,8 +266,9 @@ export const payrollRegistryService = {
   },
 
   /**
-   * Любой период плановой по id строки журнала (миграция 337), не только последний. ApiError 409:
-   * SUPPLEMENT_EXISTS — пересекается с другим периодом сотрудника, SUPPLEMENT_STALE — период уже изменили.
+   * Одна плановая доплата по id строки; остальные доплаты сотрудника не меняются (миграция 369). ApiError 409:
+   * SUPPLEMENT_EXISTS — совпала с другой доплатой сотрудника (сумма, даты, комментарий), SUPPLEMENT_STALE — её уже
+   * изменили.
    */
   updatePlannedPeriod: async (id: number, fields: IPlannedSupplementFields): Promise<void> => {
     await apiClient.put(`/payroll/supplements/planned/${id}`, fields);

@@ -2,12 +2,10 @@ import type {
   ContractType,
   IAssignTermsPayload,
   IPayrollTermsRow,
-  IPlannedSupplementPayload,
   PayrollCalcType,
   StaffCategory,
 } from '../services/payrollService';
 import { parseRateAmount } from './payrollFormat';
-import { parsePlannedComment } from './plannedSupplementComment';
 
 /**
  * Необязательные суммы условий, ₽/мес: премия и проживание (только показ). Удержания с миграции 321 — не условия:
@@ -18,36 +16,16 @@ export type PayrollMoneyField = 'bonus' | 'housing';
 
 export const PAYROLL_MONEY_FIELDS: readonly PayrollMoneyField[] = ['bonus', 'housing'];
 
-/** Плановая доплата: сумма ₽/мес, дата начала, дата окончания и комментарий — строки как в полях ввода. */
-export interface IPayrollSupplementValues {
-  amount: string;
-  from: string;
-  to: string;
-  /** Миграция 364; необязателен. */
-  comment: string;
-}
-
-export type PayrollSupplementField = keyof IPayrollSupplementValues;
-
-/** Ключ ошибки и id поля доплаты. */
-export const SUPPLEMENT_FIELD_KEYS = {
-  amount: 'supplementAmount',
-  from: 'supplementFrom',
-  to: 'supplementTo',
-  comment: 'supplementComment',
-} as const satisfies Record<PayrollSupplementField, string>;
-
-/** Поля, у которых бывает ошибка проверки, — в порядке на экране (фокус на первую ошибку). */
+/**
+ * Поля, у которых бывает ошибка проверки, — в порядке на экране (фокус на первую ошибку). Плановые доплаты с миграции
+ * 369 в форме не правятся (их может быть несколько): окно сотрудника показывает их списком, правят в «Справочнике».
+ */
 export type PayrollTermsFieldKey =
   | 'effectiveFrom'
   | 'amount'
-  | PayrollMoneyField
-  | (typeof SUPPLEMENT_FIELD_KEYS)[PayrollSupplementField];
+  | PayrollMoneyField;
 
-export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = [
-  'effectiveFrom', 'amount', 'bonus', 'housing',
-  'supplementAmount', 'supplementFrom', 'supplementTo', 'supplementComment',
-];
+export const PAYROLL_TERMS_FIELD_ORDER: readonly PayrollTermsFieldKey[] = ['effectiveFrom', 'amount', 'bonus', 'housing'];
 
 export type PayrollTermsFieldErrors = Partial<Record<PayrollTermsFieldKey, string>>;
 
@@ -58,7 +36,6 @@ export interface IPayrollTermsFormValues {
   /** Тип договора (миграция 352). */
   contractType: ContractType;
   money: Record<PayrollMoneyField, string>;
-  supplement: IPayrollSupplementValues;
   effectiveFrom: string;
 }
 
@@ -74,8 +51,7 @@ export const payrollRowCategory = (row: IPayrollTermsRow): StaffCategory => row.
 
 /**
  * Начальные значения: из строки списка сотрудника; без условий — пусто,
- * вид оплаты — «По графику (оклад)». Плановая доплата от условий не зависит: предзаполняется
- * и у сотрудника без условий на дату.
+ * вид оплаты — «По графику (оклад)».
  */
 export const initialPayrollTermsValues = (
   row: IPayrollTermsRow,
@@ -92,17 +68,9 @@ export const initialPayrollTermsValues = (
       // Проживание — квартира «Проживания» на дату (миграция 320), не условия: есть и без оклада, только показ.
       housing: toInputValue(row.housing_compensation),
     },
-    supplement: {
-      amount: toInputValue(row.planned_supplement_amount),
-      from: row.planned_supplement_from ?? '',
-      to: row.planned_supplement_to ?? '',
-      comment: row.planned_supplement_comment ?? '',
-    },
     effectiveFrom: defaultDate,
   };
 };
-
-const SUPPLEMENT_FIELDS = Object.keys(SUPPLEMENT_FIELD_KEYS) as PayrollSupplementField[];
 
 /** Правили ли условия: хоть одно поле отличается от начального значения. */
 export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: IPayrollTermsFormValues): boolean => (
@@ -111,7 +79,6 @@ export const isPayrollTermsChanged = (values: IPayrollTermsFormValues, initial: 
   || values.contractType !== initial.contractType
   || values.effectiveFrom !== initial.effectiveFrom
   || PAYROLL_MONEY_FIELDS.some(field => values.money[field] !== initial.money[field])
-  || SUPPLEMENT_FIELDS.some(field => values.supplement[field] !== initial.supplement[field])
 );
 
 /**
@@ -130,44 +97,6 @@ const parseOptionalMoney = (raw: string): { value: number } | { error: string } 
   return parsed.amount === null ? undefined : { value: parsed.amount };
 };
 
-/** Пусто — снять доплату. Один комментарий без суммы и дат — не пусто: ошибка «Укажите сумму доплаты». */
-const isSupplementEmpty = (values: IPayrollSupplementValues): boolean =>
-  !values.amount.trim() && !values.from && !values.to && !values.comment.trim();
-
-/** Доплата из полей; null — поля пустые или заполнены с ошибкой (тогда errors не пуст). */
-const parseSupplement = (
-  values: IPayrollSupplementValues,
-  errors: PayrollTermsFieldErrors,
-): IPlannedSupplementPayload | null => {
-  if (isSupplementEmpty(values)) return null;
-  const parsed = parseRateAmount(values.amount);
-  const amount = parsed.amount ?? 0;
-  if (parsed.error !== null) errors.supplementAmount = amountError(values.amount, parsed.error, 'Введите число больше нуля');
-  else if (parsed.amount === null) errors.supplementAmount = 'Укажите сумму доплаты';
-  else if (amount <= 0) errors.supplementAmount = 'Введите число больше нуля';
-  if (!values.from) errors.supplementFrom = 'Укажите дату начала';
-  // Дата окончания необязательна: пусто — бессрочно.
-  if (values.from && values.to && values.to < values.from) errors.supplementTo = 'Дата окончания раньше даты начала';
-  const comment = parsePlannedComment(values.comment);
-  if ('error' in comment) errors.supplementComment = comment.error;
-  if (errors.supplementAmount || errors.supplementFrom || errors.supplementTo || 'error' in comment) return null;
-  return { amount, date_from: values.from, date_to: values.to || null, comment: comment.comment };
-};
-
-const sameSupplement = (a: IPlannedSupplementPayload | null, b: IPlannedSupplementPayload | null): boolean => (
-  a === null || b === null
-    ? a === b
-    : a.amount === b.amount && a.date_from === b.date_from && a.date_to === b.date_to && a.comment === b.comment
-);
-
-export interface IPayrollTermsValidateOptions {
-  /**
-   * Плановая доплата в форме (редактируемая карточка): начальные значения полей.
-   * Не передано — секции нет, доплата в запрос не входит.
-   */
-  initialSupplement?: IPayrollSupplementValues;
-}
-
 export type PayrollTermsValidation =
   | { payload: IAssignTermsPayload; errors: null }
   | { payload: null; errors: PayrollTermsFieldErrors };
@@ -175,15 +104,9 @@ export type PayrollTermsValidation =
 /**
  * Проверка формы и запрос сохранения. Состав запроса не зависит от раскладки формы:
  * сумма уходит в monthly_salary или hourly_rate по виду оплаты, пустые необязательные суммы
- * не передаются (на сервере — NULL, а не 0).
- *
- * Плановая доплата уходит, только если её поменяли: равна начальной — не передаётся (чужая правка,
- * сделанная пока карточка открыта, не затрётся), очищена — null (снять), иначе — новая доплата.
+ * не передаются (на сервере — NULL, а не 0). Плановой доплаты в запросе нет (миграция 369).
  */
-export const validatePayrollTerms = (
-  values: IPayrollTermsFormValues,
-  options: IPayrollTermsValidateOptions = {},
-): PayrollTermsValidation => {
+export const validatePayrollTerms = (values: IPayrollTermsFormValues): PayrollTermsValidation => {
   const errors: PayrollTermsFieldErrors = {};
 
   // Ставка хранится с 4 знаками (NUMERIC(12,4)), оклад — с копейками.
@@ -203,14 +126,6 @@ export const validatePayrollTerms = (
     else optional[field] = result.value;
   }
 
-  let plannedSupplement: IPlannedSupplementPayload | null | undefined;
-  if (options.initialSupplement) {
-    const next = parseSupplement(values.supplement, errors);
-    // Начальные значения пришли с сервера; если вдруг неполные — считаем, что доплаты не было.
-    const initial = parseSupplement(options.initialSupplement, {});
-    plannedSupplement = sameSupplement(next, initial) ? undefined : next;
-  }
-
   if (!values.effectiveFrom) errors.effectiveFrom = 'Укажите дату «Действует с»';
 
   if (Object.keys(errors).length > 0) return { payload: null, errors };
@@ -224,7 +139,6 @@ export const validatePayrollTerms = (
       bonus_amount: optional.bonus,
       contract_type: values.contractType,
       effective_from: values.effectiveFrom,
-      planned_supplement: plannedSupplement,
     },
   };
 };

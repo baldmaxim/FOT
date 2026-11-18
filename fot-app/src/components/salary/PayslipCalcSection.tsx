@@ -107,7 +107,10 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({
                   <tr key={line.code}>
                     <th scope="row" className={styles.kind}>
                       <span className={styles.kindName}>{calcLineLabel(line.code)}</span>
-                      {calcLineFormula(line).map(text => <span key={text} className={styles.kindNote}>{text}</span>)}
+                      {/* Ключ с индексом: две плановые доплаты с одной суммой и датами дают одинаковый текст (миграция 369). */}
+                      {calcLineFormula(line).map((text, index) => (
+                        <span key={`${index}-${text}`} className={styles.kindNote}>{text}</span>
+                      ))}
                       {line.code === 'contract' && hoursNotes.map(text => (
                         <span key={`hours-${text}`} className={styles.kindNote}>{text}</span>
                       ))}

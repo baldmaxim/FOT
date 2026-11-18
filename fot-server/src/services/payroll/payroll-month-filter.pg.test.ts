@@ -210,7 +210,8 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     for (const name of [
       '271_payroll_terms.sql', '282_payroll_terms_bonus_housing.sql', '286_payroll_terms_compensations.sql',
       '293_payroll_planned_supplements.sql', '322_payroll_planned_supplement_open_end.sql',
-      '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql', '295_payroll_paid_amounts.sql', '297_payroll_paid_groups.sql',
+      '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql',
+      '369_payroll_planned_supplements_concurrent.sql', '295_payroll_paid_amounts.sql', '297_payroll_paid_groups.sql',
       '298_payroll_paid_drop_payouts.sql', '299_payroll_deduction_kinds.sql', '300_payroll_employee_deductions.sql',
       '301_payroll_paid_order_kinds.sql',
     ]) {

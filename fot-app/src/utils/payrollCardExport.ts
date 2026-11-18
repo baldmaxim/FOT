@@ -7,6 +7,7 @@ import type { IEmployeePayout1c } from '../services/payroll1cPayoutsService';
 import {
   CALC_TYPE_LABELS,
   STAFF_CATEGORY_LABELS,
+  type IEmployeePlannedSupplement,
   type IPayrollPaidAmount,
   type IPayrollTermsRow,
 } from '../services/payrollService';
@@ -66,15 +67,41 @@ const termsTotal = (row: IPayrollTermsRow): number | null => {
 };
 
 /**
- * Лист «Условия»: показатель — значение. Без условий на дату (terms_id = null) — вид оплаты, суммы и «Действует с»
- * прочерком, без умолчаний формы; категория, проживание, проезд и плановая доплата от условий не зависят.
- * Значения — сохранённые на момент открытия карточки (row), несохранённый ввод окна «Расчётов» не попадает.
+ * Строки плановых доплат листа «Условия» (миграция 369 — их может быть несколько). Нет доплат — три строки с прочерком,
+ * как до 369; одна — те же строки и комментарий; несколько — блок на каждую с номером («Плановая доплата 2 с»), в
+ * порядке списка окна сотрудника (последняя по дате — первой).
  */
-export const buildPayrollTermsSheet = (row: IPayrollTermsRow, asOfDate: string): PayrollCardSheet => {
+const plannedSupplementRows = (
+  supplements: readonly IEmployeePlannedSupplement[],
+): Array<[string, string | number | null]> => {
+  if (supplements.length === 0) {
+    return [['Плановая доплата, ₽/мес', DASH], ['Плановая доплата с', DASH], ['Плановая доплата по', DASH]];
+  }
+  return supplements.flatMap((supplement, index): Array<[string, string | number | null]> => {
+    const name = supplements.length === 1 ? 'Плановая доплата' : `Плановая доплата ${index + 1}`;
+    return [
+      [`${name}, ₽/мес`, orDash(toNumber(supplement.amount))],
+      [`${name} с`, formatDate(supplement.date_from)],
+      [`${name} по`, formatDate(supplement.date_to)],
+      [`${name}, комментарий`, supplement.comment ?? DASH],
+    ];
+  });
+};
+
+/**
+ * Лист «Условия»: показатель — значение. Без условий на дату (terms_id = null) — вид оплаты, суммы и «Действует с»
+ * прочерком, без умолчаний формы; категория, проживание, проезд и плановые доплаты от условий не зависят.
+ * Значения — сохранённые на момент открытия карточки (row), несохранённый ввод окна «Расчётов» не попадает; плановые
+ * доплаты — действующие на момент выгрузки.
+ */
+export const buildPayrollTermsSheet = (
+  row: IPayrollTermsRow,
+  asOfDate: string,
+  supplements: readonly IEmployeePlannedSupplement[],
+): PayrollCardSheet => {
   const hasTerms = row.terms_id !== null;
   const hourly = hasTerms && row.calc_type === 'hourly';
   const category = payrollRowCategory(row);
-  const hasSupplement = toNumber(row.planned_supplement_amount) !== null;
   const subtitle = [
     row.department_name,
     row.position_name,
@@ -94,9 +121,7 @@ export const buildPayrollTermsSheet = (row: IPayrollTermsRow, asOfDate: string):
     ['Действует с', hasTerms ? formatDate(row.effective_from) : DASH],
     ['Проживание, ₽/мес', orDash(toNumber(row.housing_compensation))],
     ['Проезд, ₽/мес', orDash(toNumber(travelAllowance(category, row)))],
-    ['Плановая доплата, ₽/мес', orDash(toNumber(row.planned_supplement_amount))],
-    ['Плановая доплата с', hasSupplement ? formatDate(row.planned_supplement_from) : DASH],
-    ['Плановая доплата по', hasSupplement ? formatDate(row.planned_supplement_to) : DASH],
+    ...plannedSupplementRows(supplements),
   ];
 
   return {
@@ -185,6 +210,8 @@ export const buildPaidHistorySheet = (
 /** Снимок карточки: asOfDate — дата условий (выборка списка), exportedAt — дата выгрузки по Москве (имя файла). */
 export const buildPayrollCardExport = (params: {
   row: IPayrollTermsRow;
+  /** Действующие плановые доплаты сотрудника (миграция 369). */
+  supplements: readonly IEmployeePlannedSupplement[];
   paidRows: readonly IPayrollPaidAmount[];
   /** «Перечислено (1С)» — ведомости выплаты по месяцам начисления (справочно). */
   payouts?: readonly IEmployeePayout1c[];
@@ -193,9 +220,9 @@ export const buildPayrollCardExport = (params: {
   asOfDate: string;
   exportedAt: string;
 }): IPayrollCardExport => {
-  const { row, paidRows, payouts = [], fot, asOfDate, exportedAt } = params;
+  const { row, supplements, paidRows, payouts = [], fot, asOfDate, exportedAt } = params;
   return {
     file_name: `Зарплата_${row.full_name ?? 'Сотрудник'}_${exportedAt}.xlsx`.replace(/[\s/\\:*?"<>|]+/g, '_'),
-    sheets: [buildPayrollTermsSheet(row, asOfDate), buildPaidHistorySheet(row.full_name, paidRows, payouts, fot)],
+    sheets: [buildPayrollTermsSheet(row, asOfDate, supplements), buildPaidHistorySheet(row.full_name, paidRows, payouts, fot)],
   };
 };

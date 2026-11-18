@@ -64,6 +64,8 @@ router.get('/terms/month-objects', termsView, serverTiming('payroll_month_object
 router.get('/terms/employee/:empId', termsView, payrollTermsController.getByEmployee);
 // История условий для карточки сотрудника: оклад / ставка и плановая доплата одним журналом.
 router.get('/terms/employee/:empId/changes', termsView, payrollTermsController.getChanges);
+// Действующие плановые доплаты сотрудника (миграция 369 — их может быть несколько): список в окне и в «Подробно».
+router.get('/terms/employee/:empId/planned-supplements', termsView, payrollTermsController.getPlannedSupplements);
 // Только оклад / ставка — для закэшированных клиентов до /changes.
 router.get('/terms/employee/:empId/salary-history', termsView, payrollTermsController.getSalaryHistory);
 router.post('/terms/employee/:empId', termsEdit, payrollTermsController.assign);

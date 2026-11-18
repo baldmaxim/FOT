@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IPayrollPaidAmount, IPayrollTermsRow } from '../services/payrollService';
+import type { IEmployeePlannedSupplement, IPayrollPaidAmount, IPayrollTermsRow } from '../services/payrollService';
 import {
   buildPaidHistorySheet,
   buildPayrollCardExport,
@@ -29,16 +29,27 @@ const row = (patch: Partial<IPayrollTermsRow> = {}): IPayrollTermsRow => ({
   staff_units: '1',
   effective_from: '2026-09-01',
   effective_to: null,
-  planned_supplement_amount: null,
-  planned_supplement_from: null,
-  planned_supplement_to: null,
   ...patch,
 });
 
 /** Строки листа «Условия» как { показатель: значение }. */
-const termsValues = (r: IPayrollTermsRow): Record<string, string | number | null> => Object.fromEntries(
-  buildPayrollTermsSheet(r, '2026-10-26').rows.map(({ cells }) => [cells[0], cells[1]]),
+const termsValues = (
+  r: IPayrollTermsRow,
+  supplements: readonly IEmployeePlannedSupplement[] = [],
+): Record<string, string | number | null> => Object.fromEntries(
+  buildPayrollTermsSheet(r, '2026-10-26', supplements).rows.map(({ cells }) => [cells[0], cells[1]]),
 );
+
+/** Строки плановых доплат листа «Условия» по порядку — показатель и значение. */
+const supplementCells = (supplements: readonly IEmployeePlannedSupplement[]) => (
+  buildPayrollTermsSheet(row(), '2026-10-26', supplements).rows
+    .map(({ cells }) => cells)
+    .filter(cells => String(cells[0]).startsWith('Плановая доплата'))
+);
+
+const plannedSupplement = (patch: Partial<IEmployeePlannedSupplement> = {}): IEmployeePlannedSupplement => ({
+  id: 1, amount: '5000.00', date_from: '2026-10-01', date_to: null, comment: null, ...patch,
+});
 
 const amount = (month: string, item: IPayrollPaidAmount['item'], value: string): IPayrollPaidAmount => ({ month, item, amount: value });
 
@@ -60,7 +71,7 @@ describe('лист «Условия»', () => {
   });
 
   it('шапка: ФИО, отдел, должность, таб. № и дата условий', () => {
-    const sheet = buildPayrollTermsSheet(row(), '2026-10-26');
+    const sheet = buildPayrollTermsSheet(row(), '2026-10-26', []);
     expect(sheet.title).toBe('Абдукарими Сафарзодаи Исмон');
     expect(sheet.subtitle).toBe('бр.Прозоров А.В. · Монтажник · таб. № 0123 · Условия на 26.10.2026');
     expect(sheet.columns).toEqual([{ label: 'Показатель', type: 'text' }, { label: 'Значение', type: 'money' }]);
@@ -74,10 +85,7 @@ describe('лист «Условия»', () => {
       bonus_amount: null,
       effective_from: null,
       category: 'worker',
-      planned_supplement_amount: '5000.00',
-      planned_supplement_from: '2026-10-01',
-      planned_supplement_to: null,
-    }));
+    }), [plannedSupplement()]);
     expect(values).toMatchObject({
       'Категория': 'Рабочие',
       'Вид оплаты': '—',
@@ -91,7 +99,36 @@ describe('лист «Условия»', () => {
       'Плановая доплата, ₽/мес': 5000,
       'Плановая доплата с': '01.10.2026',
       'Плановая доплата по': '—',
+      'Плановая доплата, комментарий': '—',
     });
+  });
+
+  it('плановые доплаты (миграция 369): нет — три прочерка, одна — с комментарием, несколько — блоки с номером', () => {
+    expect(supplementCells([])).toEqual([
+      ['Плановая доплата, ₽/мес', '—'],
+      ['Плановая доплата с', '—'],
+      ['Плановая доплата по', '—'],
+    ]);
+    expect(supplementCells([plannedSupplement({ comment: 'Совмещение', date_to: '2026-12-31' })])).toEqual([
+      ['Плановая доплата, ₽/мес', 5000],
+      ['Плановая доплата с', '01.10.2026'],
+      ['Плановая доплата по', '31.12.2026'],
+      ['Плановая доплата, комментарий', 'Совмещение'],
+    ]);
+    // Две доплаты на одни даты — по блоку на каждую, в порядке списка.
+    expect(supplementCells([
+      plannedSupplement({ id: 2, amount: '30000.00', date_to: '2027-01-31', comment: 'Руководство объектом' }),
+      plannedSupplement({ id: 3, amount: '10000.50', date_to: '2027-01-31' }),
+    ])).toEqual([
+      ['Плановая доплата 1, ₽/мес', 30000],
+      ['Плановая доплата 1 с', '01.10.2026'],
+      ['Плановая доплата 1 по', '31.01.2027'],
+      ['Плановая доплата 1, комментарий', 'Руководство объектом'],
+      ['Плановая доплата 2, ₽/мес', 10000.5],
+      ['Плановая доплата 2 с', '01.10.2026'],
+      ['Плановая доплата 2 по', '31.01.2027'],
+      ['Плановая доплата 2, комментарий', '—'],
+    ]);
   });
 
   it('почасовая: ставка вместо оклада, «Итого» — прочерк', () => {
@@ -219,7 +256,9 @@ describe('лист «История выплат»: те же суммы, что
 
 describe('снимок карточки', () => {
   it('имя файла — по дате выгрузки, без пробелов; листы — условия и история', () => {
-    const snapshot = buildPayrollCardExport({ row: row(), paidRows: [], asOfDate: '2026-10-20', exportedAt: '2026-10-26' });
+    const snapshot = buildPayrollCardExport({
+      row: row(), supplements: [], paidRows: [], asOfDate: '2026-10-20', exportedAt: '2026-10-26',
+    });
     expect(snapshot.file_name).toBe('Зарплата_Абдукарими_Сафарзодаи_Исмон_2026-10-26.xlsx');
     expect(snapshot.sheets.map(sheet => sheet.title)).toEqual(['Абдукарими Сафарзодаи Исмон', 'История выплат']);
     expect(snapshot.sheets[0].subtitle).toContain('Условия на 20.10.2026');

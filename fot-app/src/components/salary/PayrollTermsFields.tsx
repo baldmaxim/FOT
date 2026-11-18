@@ -17,8 +17,6 @@ import {
   payrollTermsTotal,
   type PayrollTermsFieldKey,
 } from '../../utils/payrollTermsForm';
-import { PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH } from '../../utils/plannedSupplementComment';
-import { ClearableInput } from '../ui/ClearableInput';
 import { PayrollMoneyInput } from './PayrollMoneyInput';
 import styles from './PayrollTermsFields.module.css';
 
@@ -44,9 +42,14 @@ interface IPayrollTermsFieldsProps {
    */
   staffDeductions?: ReactNode;
   /**
+   * «Плановые доплаты» — список действующих доплат сотрудника (только чтение; миграция 369 — их может быть несколько,
+   * вносят в «Справочнике»). Есть и в окне сотрудника, и в «Подробно»; не передан — секции нет.
+   */
+  plannedSupplements?: ReactNode;
+  /**
    * Вкладка «Подробно» — только просмотр: в «Основной оплате» Категория, действующие оклад, премия, итого и
-   * «Оплачено» текстом; секций Компенсация, Плановые доплаты, Удержание нет. Условия вносят в окне сотрудника
-   * на «Расчётах».
+   * «Оплачено» текстом; секций Компенсация и Удержание нет (Плановые доплаты — если переданы). Условия вносят в окне
+   * сотрудника на «Расчётах».
    */
   detailsOnly?: boolean;
   /** «Проезд» в «Компенсации» — значение ставки, если положен (travelAllowance), как в поле ввода; нет — пусто. */
@@ -69,10 +72,10 @@ const CONTRACT_TYPES = Object.keys(CONTRACT_TYPE_LABELS) as ContractType[];
 
 /**
  * Форма условий оплаты. Секции — две половины: слева Категория (только чтение) · Вид оплаты · Действует с,
- * компенсации, плановая доплата (только в карточке сотрудника) и удержание; справа оклад (или ставка) с премией.
+ * компенсации, плановые доплаты (список) и удержание; справа оклад (или ставка) с премией.
  * «Оплачено» (только в «Подробно») — под ними на всю ширину формы. В узком окне и при stacked половины встают
  * друг под друга, на телефоне поля — в столбик (container queries). Ошибки — под своим полем.
- * detailsOnly («Подробно») — Категория, действующие оклад · премия · итого и «Оплачено».
+ * detailsOnly («Подробно») — Категория, действующие оклад · премия · итого, «Оплачено» и плановые доплаты.
  */
 export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   form,
@@ -83,6 +86,7 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
   paid,
   stacked = false,
   staffDeductions,
+  plannedSupplements,
   detailsOnly = false,
   total = false,
   travel = '',
@@ -146,31 +150,6 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           onChange={event => onChange(event.target.value)}
-        />
-        {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
-      </div>
-    );
-  };
-
-  /** Комментарий плановой доплаты (миграция 364): текст с крестиком «Очистить», ошибка снизу. */
-  const renderComment = () => {
-    const key: PayrollTermsFieldKey = 'supplementComment';
-    const error = form.fieldErrors[key];
-    const id = fieldId(key);
-    return (
-      <div className={styles.field}>
-        <label htmlFor={id} className={styles.label}>Комментарий</label>
-        <ClearableInput
-          id={id}
-          className={styles.commentInput}
-          value={form.supplement.comment}
-          onValueChange={value => form.changeSupplement('comment', value)}
-          maxLength={PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH}
-          autoComplete="off"
-          disabled={readOnly}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? `${id}-error` : undefined}
-          clearLabel="Очистить комментарий"
         />
         {error && <p id={`${id}-error`} className={styles.error}>{error}</p>}
       </div>
@@ -329,62 +308,46 @@ export const PayrollTermsFields: FC<IPayrollTermsFieldsProps> = ({
       </section>
 
       {!detailsOnly && (
-        <>
-          <section className={styles.section} aria-labelledby={`${idPrefix}-compensation`}>
-            <h3 id={`${idPrefix}-compensation`} className={styles.sectionTitle}>Компенсация</h3>
-            <div className={styles.halves}>
-              <div className={styles.half}>
-                {/*
-                  Только показ. Проживание — квартира «Проживания» (миграция 320): вносят в «Доплате за проживание»
-                  и во вкладке кадров. Проезд — ставка «Проезд» «Справочника» (миграция 324): всем, кроме «Рабочих»
-                  и «Без проезда».
-                */}
-                <div className={styles.row}>
-                  {renderMoney(
-                    'housing',
-                    'Проживание, ₽/день',
-                    form.money.housing,
-                    value => form.changeMoney('housing', value),
-                    true,
-                  )}
-                  <div className={styles.field}>
-                    <label htmlFor={travelId} className={styles.label}>Проезд, ₽/мес</label>
-                    <input id={travelId} className={styles.control} value={groupMoneyInput(travel)} disabled readOnly />
-                  </div>
+        <section className={styles.section} aria-labelledby={`${idPrefix}-compensation`}>
+          <h3 id={`${idPrefix}-compensation`} className={styles.sectionTitle}>Компенсация</h3>
+          <div className={styles.halves}>
+            <div className={styles.half}>
+              {/*
+                Только показ. Проживание — квартира «Проживания» (миграция 320): вносят в «Доплате за проживание»
+                и во вкладке кадров. Проезд — ставка «Проезд» «Справочника» (миграция 324): всем, кроме «Рабочих»
+                и «Без проезда».
+              */}
+              <div className={styles.row}>
+                {renderMoney(
+                  'housing',
+                  'Проживание, ₽/день',
+                  form.money.housing,
+                  value => form.changeMoney('housing', value),
+                  true,
+                )}
+                <div className={styles.field}>
+                  <label htmlFor={travelId} className={styles.label}>Проезд, ₽/мес</label>
+                  <input id={travelId} className={styles.control} value={groupMoneyInput(travel)} disabled readOnly />
                 </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
+      )}
 
-          {/* Одна доплата на сотрудника: поля — последняя сохранённая, очистить и сохранить — снять. */}
-          {form.plannedSupplement && (
-            <section className={styles.section} aria-labelledby={`${idPrefix}-supplement-title`}>
-              <h3 id={`${idPrefix}-supplement-title`} className={styles.sectionTitle}>Плановые доплаты</h3>
-              <div className={styles.halves}>
-                <div className={styles.half}>
-                  <div className={styles.row}>
-                    {renderMoney(
-                      'supplementAmount',
-                      'Сумма, ₽/мес',
-                      form.supplement.amount,
-                      value => form.changeSupplement('amount', value),
-                    )}
-                    {renderDate('supplementFrom', 'Дата начала', form.supplement.from, value => form.changeSupplement('from', value))}
-                    {renderDate('supplementTo', 'Дата окончания', form.supplement.to, value => form.changeSupplement('to', value))}
-                  </div>
-                  {renderComment()}
-                </div>
-              </div>
-            </section>
-          )}
+      {/* Плановые доплаты — списком в обоих режимах: их может быть несколько (миграция 369), правят в «Справочнике». */}
+      {plannedSupplements && (
+        <section className={styles.section} aria-labelledby={`${idPrefix}-supplement-title`}>
+          <h3 id={`${idPrefix}-supplement-title`} className={styles.sectionTitle}>Плановые доплаты</h3>
+          {plannedSupplements}
+        </section>
+      )}
 
-          {staffDeductions && (
-            <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
-              <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
-              {staffDeductions}
-            </section>
-          )}
-        </>
+      {!detailsOnly && staffDeductions && (
+        <section className={styles.section} aria-labelledby={`${idPrefix}-deduction-title`}>
+          <h3 id={`${idPrefix}-deduction-title`} className={styles.sectionTitle}>Удержание</h3>
+          {staffDeductions}
+        </section>
       )}
     </div>
   );

@@ -144,13 +144,12 @@ describe('«Доплата»', () => {
     expect(rows.map(row => row.key)).toEqual(['planned-5', 'once-5', 'apartment-5-2026-10']);
   });
 
-  it('✎ и 🗑: у любого периода плановой, разовой и квартиры — по праву правки (миграция 337)', () => {
-    expect(canEditSupplement(supplement({ is_current: false }))).toBe(true);
-    expect(canEditSupplement(supplement({ is_current: true }))).toBe(true);
-    expect(canEditSupplement(supplement({ is_current: true, can_edit: false }))).toBe(false);
+  it('✎ и 🗑: у любой плановой, разовой и квартиры — по праву правки (миграции 337, 369)', () => {
+    expect(canEditSupplement(supplement({}))).toBe(true);
+    expect(canEditSupplement(supplement({ can_edit: false }))).toBe(false);
     expect(canEditSupplement(supplement({ kind: 'one_time', id: 5, month: '2026-10' }))).toBe(true);
     const rows = buildSupplementRegistryRows(
-      [supplement({ id: 1, is_current: false })],
+      [supplement({ id: 1 })],
       [apartment({}), apartment({ id: 6, can_edit: false })],
       ['2026-10'],
     ) ?? [];
