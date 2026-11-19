@@ -25,20 +25,28 @@ const argValue = (name: string): string | null => {
 };
 
 const IN = argValue('--in') ?? 'temp/passdesk-preview.xlsx';
+/**
+ * Переносить и уволенным: сначала реквизиты заполняли только действующим,
+ * но карточки уволенных в FOT остаются и их данные нужно уметь смотреть.
+ * Без флага поведение прежнее — уволенные остаются неразмеченными.
+ */
+const INCLUDE_DISMISSED = process.argv.includes('--include-dismissed');
 const OUT = argValue('--out') ?? 'temp/passdesk-mapping-draft.xlsx';
 
 const log = (...a: unknown[]): void => console.log('[mapping-draft]', ...a);
 
 /**
  * Как получено значение employee_id — видно при проверке, что машинное, а что нет.
- * Реквизиты переносим только действующим сотрудникам, поэтому «не переносим…» —
- * это тоже результат разметки, а не незаполненная строка.
+ * «не переносим…» — тоже результат разметки, а не незаполненная строка: так
+ * помечаются уволенные, когда скрипт запущен без --include-dismissed.
  */
 type MatchKind =
   | 'уже сопоставлен'
   | 'один кандидат, активен'
   | 'один активный из нескольких'
   | 'больше истории СКУД'
+  | 'один кандидат, уволен'
+  | 'уволенные: больше истории СКУД'
   | 'не переносим: уволен в FOT'
   | 'не переносим: все кандидаты уволены'
   | 'нет в FOT';
@@ -60,6 +68,8 @@ interface ICandidate {
   is_archived: boolean | null;
   /** Проходы СКУД — по ним видно, по какой карточке человек реально работал. */
   skud: number;
+  /** Есть ли кадровый профиль и откуда: по нему видно, что прогон не тронет. */
+  profile_state: 'нет' | 'перенос' | 'заведён в FOT';
 }
 
 /** Действующий = не уволен и не в архиве: таким и переносим. */
@@ -91,10 +101,14 @@ const loadCandidates = async (ids: number[]): Promise<Map<number, ICandidate>> =
     `SELECT e.id, e.full_name, d.name AS department, p.name AS position,
             e.employment_status, e.hire_date::text AS hire_date,
             e.dismissal_date::text AS dismissal_date, e.tab_number, e.is_archived,
-            COALESCE(s.cnt, 0)::int AS skud
+            COALESCE(s.cnt, 0)::int AS skud,
+            CASE WHEN hp.employee_id IS NULL THEN 'нет'
+                 WHEN hp.passdesk_id IS NOT NULL THEN 'перенос'
+                 ELSE 'заведён в FOT' END AS profile_state
        FROM employees e
        LEFT JOIN org_departments d ON d.id = e.org_department_id
        LEFT JOIN positions p ON p.id = e.position_id
+       LEFT JOIN employee_hr_profiles hp ON hp.employee_id = e.id
        LEFT JOIN (SELECT employee_id, count(*) AS cnt FROM skud_events
                    WHERE employee_id = ANY($1::int[]) GROUP BY employee_id) s ON s.employee_id = e.id
       WHERE e.id = ANY($1::int[])`,
@@ -102,6 +116,10 @@ const loadCandidates = async (ids: number[]): Promise<Map<number, ICandidate>> =
   );
   return new Map(rows.map(r => [Number(r.id), { ...r, skud: Number(r.skud) }]));
 };
+
+/** Из нескольких однофамильцев берём карточку, по которой человек реально работал. */
+const byMostSkud = (ids: number[], cards: Map<number, ICandidate>): number =>
+  ids.reduce((best, id) => ((cards.get(id)?.skud ?? 0) > (cards.get(best)?.skud ?? 0) ? id : best), ids[0]);
 
 const describe = (c: ICandidate | undefined, id: number): string => {
   if (!c) return `#${id} — не найден в FOT`;
@@ -115,6 +133,8 @@ const describe = (c: ICandidate | undefined, id: number): string => {
     ...(c.dismissal_date ? [`уволен ${c.dismissal_date}`] : []),
     ...(c.tab_number ? [`табель ${c.tab_number}`] : []),
     `проходов ${c.skud}`,
+    // Профиль, заведённый в FOT, прогон пропустит: видно до запуска, а не после.
+    ...(c.profile_state !== 'нет' ? [`профиль: ${c.profile_state}`] : []),
   ];
   return parts.join(' · ');
 };
@@ -133,6 +153,8 @@ const main = async (): Promise<void> => {
     'один кандидат, активен': 0,
     'один активный из нескольких': 0,
     'больше истории СКУД': 0,
+    'один кандидат, уволен': 0,
+    'уволенные: больше истории СКУД': 0,
     'не переносим: уволен в FOT': 0,
     'не переносим: все кандидаты уволены': 0,
     'нет в FOT': 0,
@@ -155,8 +177,13 @@ const main = async (): Promise<void> => {
     } else if (row.candidates.length === 0) {
       kind = 'нет в FOT';
     } else if (active.length === 0) {
-      // Реквизиты уволенным не нужны: оставляем строку пустой с явной причиной.
-      kind = row.candidates.length === 1 ? 'не переносим: уволен в FOT' : 'не переносим: все кандидаты уволены';
+      if (INCLUDE_DISMISSED) {
+        // Карточка уволенного в FOT остаётся — реквизиты к ней привязываются так же.
+        kind = row.candidates.length === 1 ? 'один кандидат, уволен' : 'уволенные: больше истории СКУД';
+        employeeId = row.candidates.length === 1 ? row.candidates[0] : byMostSkud(row.candidates, cards);
+      } else {
+        kind = row.candidates.length === 1 ? 'не переносим: уволен в FOT' : 'не переносим: все кандидаты уволены';
+      }
     } else if (active.length === 1) {
       kind = row.candidates.length === 1 ? 'один кандидат, активен' : 'один активный из нескольких';
       employeeId = active[0];
@@ -164,8 +191,7 @@ const main = async (): Promise<void> => {
       // Несколько действующих однофамильцев: берём карточку, по которой человек
       // реально работал, — с наибольшим числом проходов СКУД.
       kind = 'больше истории СКУД';
-      employeeId = active.reduce((best, id) =>
-        (cards.get(id)?.skud ?? 0) > (cards.get(best)?.skud ?? 0) ? id : best, active[0]);
+      employeeId = byMostSkud(active, cards);
     }
     stats[kind] += 1;
 
@@ -178,7 +204,7 @@ const main = async (): Promise<void> => {
     });
     const added = ws.addRow(out);
     // Строки с несколькими кандидатами подсвечиваем: там решение проверяемое.
-    if (kind === 'больше истории СКУД' || kind === 'один активный из нескольких') {
+    if (kind === 'больше истории СКУД' || kind === 'один активный из нескольких' || kind === 'уволенные: больше истории СКУД') {
       added.getCell(outColumns.indexOf('как_сопоставлено') + 1).font = { bold: true };
       added.alignment = { vertical: 'top', wrapText: true };
     }

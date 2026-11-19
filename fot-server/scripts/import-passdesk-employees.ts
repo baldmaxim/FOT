@@ -452,10 +452,16 @@ const matchEmployee = async (e: IPdEmployee, profile: IHrProfileInput, fullName:
 
 const migrationUserId = (): string => requireEnv('HR_MIGRATION_USER_ID');
 
-const applyProfile = async (e: IPdEmployee, profile: IHrProfileInput, match: IMatch): Promise<'created' | 'skipped'> => {
+const applyProfile = async (e: IPdEmployee, profile: IHrProfileInput, match: IMatch): Promise<'created' | 'skipped' | 'conflict'> => {
   const employeeId = match.employeeId!;
   const existingRef = match.rule === 'external_ref';
   if (existingRef) return 'skipped';
+  // Профиль, заведённый в FOT не переносом, не трогаем: при существующей строке
+  // createProfile её не вставляет, а идёт сразу в applyProfilePatch и перезаписал
+  // бы введённое табельщицей. Решение — за человеком, в файле сопоставления.
+  const own = await queryOne<{ passdesk_id: string | null }>(
+    `SELECT passdesk_id FROM employee_hr_profiles WHERE employee_id = $1`, [employeeId]);
+  if (own && own.passdesk_id !== e.id) return 'conflict';
   const fot = await queryOne<IFotEmployeeLite>(`SELECT id, full_name, birth_date, pension_number, email, patent_issue_date, patent_expiry_date, country FROM employees WHERE id = $1`, [employeeId]);
   if (!fot) throw new Error(`Сотрудник FOT #${employeeId} не найден`);
   // Поля, принадлежащие employees, дозаполняем только если в FOT пусто.
@@ -557,7 +563,7 @@ const main = async (): Promise<void> => {
 
   const report: Array<Record<string, unknown>> = [];
   const counts: Record<string, number> = {};
-  const stats = { profilesCreated: 0, profilesSkipped: 0, profilesFailed: 0, staged: 0, reviewedNotTransferred: 0, filesCopied: 0, filesSkipped: 0, filesFailed: 0 };
+  const stats = { profilesCreated: 0, profilesSkipped: 0, profilesConflicted: 0, profilesFailed: 0, staged: 0, reviewedNotTransferred: 0, filesCopied: 0, filesSkipped: 0, filesFailed: 0 };
   const failures: Array<{ passdesk_id: string; employee_id: number; reason: string }> = [];
 
   for (const e of employees) {
@@ -581,6 +587,14 @@ const main = async (): Promise<void> => {
       // повтор идемпотентен по hr_external_refs.
       try {
         const r = await applyProfile(e, profile, match);
+        if (r === 'conflict') {
+          // Сканы тоже не копируем: если однофамилец выбран ошибочно, это чужие
+          // ПДн в чужой карточке — пусть сначала посмотрит человек.
+          stats.profilesConflicted += 1;
+          failures.push({ passdesk_id: e.id, employee_id: match.employeeId, reason: 'в FOT уже есть профиль не из переноса — ничего не записано' });
+          log(`  профиль ${e.id} → #${match.employeeId}: в FOT уже есть профиль не из переноса, пропущен`);
+          continue;
+        }
         if (r === 'created') stats.profilesCreated += 1; else stats.profilesSkipped += 1;
         if (WITH_FILES) await transferFiles(match.employeeId, files, stats);
       } catch (err) {
