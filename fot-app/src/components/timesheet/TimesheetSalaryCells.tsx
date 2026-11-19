@@ -3,14 +3,14 @@ import type { FC } from 'react';
 import type { TimesheetEmployee } from '../../types';
 import type { ITimesheetSalaryResponse, ITimesheetSalaryRow } from '../../types/timesheet';
 import {
-  findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, KTU_OPTIONS, salaryAmountTitle, salaryLineTitle,
+  findSalaryRow, formatKtu, formatSalaryAmount, isSalaryRowMuted, ktuOptionsOf, salaryAmountTitle, salaryLineTitle,
   salaryOvertimeNote,
 } from '../../utils/timesheetSalary';
 
 /** Вкладки «Зарплата по отделам / по объектам» в табеле: данные и правка КТУ бригады. */
 export interface ITimesheetSalaryGridProps {
   data: ITimesheetSalaryResponse | undefined;
-  /** Право страницы «Зарплаты» на правку. */
+  /** Право вкладки на правку; «Выработку» и «Долю» дополнительно сужает access ответа (370). */
   canEdit: boolean;
   pendingKtuEmployeeId: number | null;
   onKtuChange: (employeeId: number, ktu: number) => void;
@@ -56,7 +56,7 @@ export const TimesheetSalaryKtuSelect: FC<IKtuSelectProps> = ({ salary, row, emp
       }}
     >
       {fixedLabel !== null && <option value={FIXED_OPTION}>{fixedLabel}</option>}
-      {KTU_OPTIONS.map(option => (
+      {ktuOptionsOf(salary.data).map(option => (
         <option key={option} value={option}>{formatKtu(option)}</option>
       ))}
     </select>

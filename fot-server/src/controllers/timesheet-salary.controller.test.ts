@@ -22,6 +22,9 @@ const svc = vi.hoisted(() => ({
   listBrigadeMemberIds: vi.fn(),
   listBrigadeSupervisorEmployeeIdsForDepartments: vi.fn(),
   canEditBrigadeInputEmployee: vi.fn(),
+  canEditBrigadeKtuEmployee: vi.fn(),
+  getRequestBrigadeSalaryLevel: vi.fn(),
+  loadBrigadeMonthApprovals: vi.fn(),
   getBrigadeSalary: vi.fn(),
   setBrigadeShare: vi.fn(),
   query: vi.fn(),
@@ -71,12 +74,21 @@ vi.mock('../services/payroll/brigade-salary.service.js', () => ({
   loadBrigadeObjectKeys: svc.loadBrigadeObjectKeys,
   getBrigadeSalary: svc.getBrigadeSalary,
 }));
-vi.mock('../services/payroll/brigade-salary-source.service.js', () => ({
+// Закрытие месяца (resolveBrigadeMonthClosure) — настоящее, подачи — заглушка.
+vi.mock('../services/payroll/brigade-salary-source.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../services/payroll/brigade-salary-source.service.js')>()),
   listBrigadeMemberIds: svc.listBrigadeMemberIds,
+  loadBrigadeMonthApprovals: svc.loadBrigadeMonthApprovals,
 }));
 vi.mock('../services/payroll/payroll-scope.service.js', () => ({
   canEditBrigadeInputEmployee: svc.canEditBrigadeInputEmployee,
+  canEditBrigadeKtuEmployee: svc.canEditBrigadeKtuEmployee,
   resolveBrigadeOutputDepartmentIds: svc.resolveBrigadeOutputDepartmentIds,
+}));
+// Уровень доступа — заглушка; пределы КТУ (ktuRangeOf) — настоящие.
+vi.mock('../services/payroll/brigade-output-access.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../services/payroll/brigade-output-access.service.js')>()),
+  getRequestBrigadeSalaryLevel: svc.getRequestBrigadeSalaryLevel,
 }));
 vi.mock('./timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: svc.listBrigadeSupervisorEmployeeIdsForDepartments,
@@ -150,6 +162,14 @@ beforeEach(() => {
   svc.resolveBrigadeOutputDepartmentIds.mockResolvedValue('all');
   // По умолчанию — учётка из списка «Зарплаты»; галочка — в своём describe.
   svc.getRequestPayrollSectionAccess.mockResolvedValue(true);
+  // Уровень — как настоящий резолвер: список → «Выработка»; начальник участка — в своём describe.
+  svc.getRequestBrigadeSalaryLevel.mockImplementation(async () => (
+    (await svc.getRequestPayrollSectionAccess()) ? { kind: 'payroll' } : { kind: 'output' }
+  ));
+  svc.canEditBrigadeKtuEmployee.mockImplementation(async (req: unknown, level: { kind: string }, id: number) => (
+    level.kind === 'supervisor' ? id !== 2325 : svc.canEditBrigadeInputEmployee(req, id)
+  ));
+  svc.loadBrigadeMonthApprovals.mockResolvedValue([]);
   // Объекты бригады за месяц: ЖК Wave, «Не определён» и удалённый из справочника объект из снимка закрытого табеля.
   svc.loadBrigadeObjectKeys.mockResolvedValue(new Map([
     [WAVE, 'ЖК Wave'], ['__unknown_object__', 'Не определён'], [DELETED, 'ЖК Старый'],
@@ -509,7 +529,7 @@ describe('timesheetSalaryController.setKtu', () => {
     svc.setBrigadeKtu.mockImplementation(ktuWrites({ before: 10, after: 15, cleared_shares: [] }));
     const res = await putKtu({ department_id: BRIGADE_ID, month: '2026-10', employee_id: 1951, ktu: 1.5 });
     expect(res.statusCode).toBe(200);
-    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(BRIGADE_ID, '2026-10-01', 1951, 15, 'user-1', expect.any(Function));
+    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(BRIGADE_ID, '2026-10-01', 1951, 15, 'user-1', expect.any(Function), {});
     expect(res.body.data).toEqual({ employee_id: 1951, ktu: '1.5' });
     expect(audit.logFromRequestWithClient).toHaveBeenCalledWith(
       CLIENT, expect.anything(), 'user-1', 'BRIGADE_SALARY_KTU_SET',
@@ -539,7 +559,9 @@ describe('timesheetSalaryController.setKtu', () => {
     svc.setBrigadeKtu.mockImplementation(ktuWrites({ before: 10, after: Math.round(ktu * 10), cleared_shares: [] }));
     const res = await putKtu({ department_id: BRIGADE_ID, month: '2026-10', employee_id: 1951, ktu });
     expect(res.statusCode).toBe(200);
-    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(BRIGADE_ID, '2026-10-01', 1951, Math.round(ktu * 10), 'user-1', expect.any(Function));
+    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(
+      BRIGADE_ID, '2026-10-01', 1951, Math.round(ktu * 10), 'user-1', expect.any(Function), {},
+    );
   });
 
   it.each([-0.1, 2.3, 0.05, 1.25])('КТУ %s — 400', async ktu => {
@@ -773,5 +795,135 @@ describe('КТУ и «Доля» по галочке «Выработка» бе
     svc.canEditBrigadeInputEmployee.mockResolvedValue(false);
     expect((await ktuAs('2026-11')).statusCode).toBe(403);
     expect((await shareAs('2026-11')).statusCode).toBe(403);
+  });
+});
+
+// ─── Начальник участка (370): «Зарплата по объектам» своих бригад, КТУ 0,8–1,6 ─────────────────────────────────────
+describe('галочка начальника участка (370) — свои бригады, только КТУ 0,8–1,6', () => {
+  const OTHER_BRIGADE = { id: '7d3c1e2f-4a5b-4c6d-8e7f-9a0b1c2d3e4f', name: 'бр.Чужая', kind: 'brigade' };
+  const asSupervisor = { id: 'user-sup', employee_id: 815, timesheet_months_back: 3, timesheet_months_forward: 1 };
+  const supervisorLevel = { kind: 'supervisor', brigadeIds: new Set([BRIGADE_ID]) };
+
+  /** Настоящий порядок setBrigadeKtu: guard под замком с прежним КТУ; отказ guard — без записи и аудита. */
+  const guardedKtu = (before: number, fixedRows: unknown[] = []) => async (...args: unknown[]) => {
+    const [, , , after, , auditFn, options] = args as [unknown, unknown, unknown, number, unknown,
+      (client: unknown, change: unknown) => Promise<void>, { guard?: (client: unknown, before: number) => Promise<void> }];
+    const client = { query: vi.fn(async () => ({ rows: fixedRows })) };
+    if (options?.guard) await options.guard(client, before);
+    const change = { before, after, cleared_shares: [] };
+    if (before !== after) await auditFn(CLIENT, change);
+    return change;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-19T12:00:00Z') });
+    svc.getRequestPayrollSectionAccess.mockResolvedValue(false);
+    svc.getRequestBrigadeSalaryLevel.mockResolvedValue(supervisorLevel);
+    svc.canReadSalaryDepartment.mockResolvedValue(false);
+    svc.resolveEffectivePageAccess.mockImplementation(async (_req: unknown, page: string) => page === '/timesheet');
+    svc.resolveTimesheetReadableDepartmentId.mockImplementation(async (_req: unknown, id: string) => id);
+    svc.resolveTimesheetScope.mockResolvedValue('department');
+    svc.getTimesheetSalary.mockResolvedValue({ rows: [] });
+    svc.setBrigadeKtu.mockImplementation(guardedKtu(10));
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const getAs = async (departmentId: string, month = '2026-11') => {
+    const res = makeRes();
+    await timesheetSalaryController.get(makeReq({
+      query: { department_id: departmentId, month }, user: asSupervisor,
+    } as unknown as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+  const ktuAs = async (ktu: number, employeeId = 1951, departmentId = BRIGADE_ID) => {
+    const res = makeRes();
+    await timesheetSalaryController.setKtu(makeReq({
+      body: { department_id: departmentId, month: '2026-11', employee_id: employeeId, ktu }, user: asSupervisor,
+    } as unknown as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+
+  it('своя бригада — расчёт открыт; чужая (и прямой запрос) — 403 без расчёта', async () => {
+    expect((await getAs(BRIGADE_ID)).statusCode).toBe(200);
+    svc.getTimesheetSalary.mockClear();
+    svc.loadSalaryDepartment.mockResolvedValue(OTHER_BRIGADE);
+    expect((await getAs(OTHER_BRIGADE.id)).statusCode).toBe(403);
+    expect(svc.getTimesheetSalary).not.toHaveBeenCalled();
+  });
+
+  it('окно месяцев роли — как у галочки «Выработка»', async () => {
+    expect((await getAs(BRIGADE_ID, '2026-07')).statusCode).toBe(403);
+  });
+
+  it.each([0.8, 1.2, 1.6])('КТУ %s — в пределах начальника: локи табеля всех рабочих бригады и guard', async ktu => {
+    const res = await ktuAs(ktu);
+    expect(res.statusCode).toBe(200);
+    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(
+      BRIGADE_ID, '2026-11-01', 1951, Math.round(ktu * 10), 'user-sup', expect.any(Function),
+      { lockTimesheetEmployeeIds: [1951, 2325], guard: expect.any(Function) },
+    );
+  });
+
+  it.each([0.7, 1.7, 0, 2.2])('КТУ %s — 400 «от 0,8 до 1,6», записи нет', async ktu => {
+    const res = await ktuAs(ktu);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'KTU_OUT_OF_RANGE', error: 'КТУ — от 0,8 до 1,6 с шагом 0,1' });
+    expect(svc.setBrigadeKtu).not.toHaveBeenCalled();
+  });
+
+  it('чужая бригада — 403, записи нет', async () => {
+    svc.loadSalaryDepartment.mockResolvedValue(OTHER_BRIGADE);
+    expect((await ktuAs(1.2, 1951, OTHER_BRIGADE.id)).statusCode).toBe(403);
+    expect(svc.setBrigadeKtu).not.toHaveBeenCalled();
+  });
+
+  it('месяц закрыт (обе половины утверждены и заперты) — 409 MONTH_CLOSED, аудита нет', async () => {
+    svc.loadBrigadeMonthApprovals.mockResolvedValue([
+      { id: 1, start_date: '2026-11-01', end_date: '2026-11-15', status: 'approved', unlocked: false, version_id: 10 },
+      { id: 2, start_date: '2026-11-16', end_date: '2026-11-30', status: 'approved', unlocked: false, version_id: 11 },
+    ]);
+    const res = await ktuAs(1.2);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('MONTH_CLOSED');
+    expect(svc.loadBrigadeMonthApprovals).toHaveBeenCalledWith(BRIGADE_ID, '2026-11', expect.anything());
+    expect(audit.logFromRequestWithClient).not.toHaveBeenCalled();
+  });
+
+  it('закрыта одна половина или период снова открыт («Требует перерасчёта») — правится', async () => {
+    svc.loadBrigadeMonthApprovals.mockResolvedValue([
+      { id: 1, start_date: '2026-11-01', end_date: '2026-11-15', status: 'approved', unlocked: false, version_id: 10 },
+    ]);
+    expect((await ktuAs(1.2)).statusCode).toBe(200);
+    svc.loadBrigadeMonthApprovals.mockResolvedValue([
+      { id: 1, start_date: '2026-11-01', end_date: '2026-11-15', status: 'approved', unlocked: false, version_id: 10 },
+      { id: 2, start_date: '2026-11-16', end_date: '2026-11-30', status: 'approved', unlocked: true, version_id: 11 },
+    ]);
+    expect((await ktuAs(1.3)).statusCode).toBe(200);
+  });
+
+  it('КТУ ОТиЗ вне 0,8–1,6 (2,0) — 409 KTU_SET_BY_PAYROLL', async () => {
+    svc.setBrigadeKtu.mockImplementation(guardedKtu(20));
+    const res = await ktuAs(1.2);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'KTU_SET_BY_PAYROLL', error: 'КТУ 2,0 поставил ОТиЗ — изменить его может только ОТиЗ' });
+  });
+
+  it('у рабочего вписана доля — 409 SHARE_FIXED', async () => {
+    svc.setBrigadeKtu.mockImplementation(guardedKtu(10, [{ '?column?': 1 }]));
+    const res = await ktuAs(1.2);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('SHARE_FIXED');
+  });
+
+  it('своя строка — 403', async () => {
+    expect((await ktuAs(1.2, 2325)).statusCode).toBe(403);
+    expect(svc.setBrigadeKtu).not.toHaveBeenCalled();
+  });
+
+  it('обе галочки — уровень «Выработка»: 0,0…2,2 и без guard', async () => {
+    svc.getRequestBrigadeSalaryLevel.mockResolvedValue({ kind: 'output' });
+    svc.setBrigadeKtu.mockImplementation(ktuWrites({ before: 10, after: 22, cleared_shares: [] }));
+    expect((await ktuAs(2.2)).statusCode).toBe(200);
+    expect(svc.setBrigadeKtu).toHaveBeenCalledWith(BRIGADE_ID, '2026-11-01', 1951, 22, 'user-sup', expect.any(Function), {});
   });
 });

@@ -10,6 +10,9 @@
  *
  * КТУ и «Доля» (355) — тем же, кто видит «Зарплату по объектам»: список — в охвате «Зарплаты», галочка — там же, где ей
  * открыт полный расчёт (canReadBrigadeSalaryByGrant). Никому — свою строку.
+ *
+ * Галочка начальника участка (370): полный расчёт и КТУ только своих бригад, КТУ 0,8–1,6, пока месяц не закрыт и у
+ * рабочего нет решения ОТиЗ (вписанная доля, КТУ вне 0,8–1,6). Уровень доступа — getRequestBrigadeSalaryLevel.
  */
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -19,7 +22,9 @@ import { auditService } from '../services/audit.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
 import {
   BRIGADE_WHOLE_SHARE_KEY,
+  BrigadeKtuRejectedError,
   BrigadeOutputModeConflictError,
+  formatKtuTenths,
   BrigadeShareRejectedError,
   isOutputModeConflictDbError,
   loadBrigadeSalaryInputs,
@@ -28,6 +33,7 @@ import {
   setBrigadeOutput,
   setBrigadeShare,
   type IBrigadeOutputChange,
+  supervisorKtuOptions,
 } from '../services/payroll/brigade-salary-inputs.service.js';
 import { KTU_MAX_TENTHS, KTU_MIN_TENTHS, moneyToCents } from '../services/payroll/brigade-salary.calc.js';
 import { checkFixedShare, type IShareMinutes } from '../services/payroll/brigade-salary-shares.service.js';
@@ -37,8 +43,10 @@ import { getBrigadeSalary, loadBrigadeObjectKeys } from '../services/payroll/bri
 import { query } from '../config/postgres.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getRequestPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
+import { getRequestBrigadeSalaryLevel, ktuRangeOf } from '../services/payroll/brigade-output-access.service.js';
 import {
   canEditBrigadeInputEmployee,
+  canEditBrigadeKtuEmployee,
   resolveBrigadeOutputDepartmentIds,
 } from '../services/payroll/payroll-scope.service.js';
 import {
@@ -192,6 +200,7 @@ const resolveOutputBrigade = async (
  * Полный расчёт по галочке «Выработка» (342), без списка «Зарплаты»: нужна страница табеля, только бригада, читаемая в
  * табеле, в окне месяцев роли. Проверка страницы отдельно: resolveTimesheetReadableDepartmentId для глобального просмотра
  * её не делает. Обычный отдел закрыт: в его ответе оклады и «К выплате» сотрудников. Иначе ответ уже отправлен и false.
+ * Галочка начальника участка (370) — то же и только его бригады.
  */
 const canReadBrigadeSalaryByGrant = async (
   req: AuthenticatedRequest,
@@ -199,10 +208,13 @@ const canReadBrigadeSalaryByGrant = async (
   department: ITimesheetSalaryDepartment,
   month: string,
 ): Promise<boolean> => {
+  const level = await getRequestBrigadeSalaryLevel(req);
   const hasTimesheetPage = await resolveEffectivePageAccess(req, '/timesheet', 'view')
     || await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
   if (
-    !hasTimesheetPage
+    level.kind === 'none'
+    || (level.kind === 'supervisor' && !level.brigadeIds.has(department.id))
+    || !hasTimesheetPage
     || department.kind !== 'brigade'
     || (await resolveTimesheetReadableDepartmentId(req, department.id)) !== department.id
   ) {
@@ -405,32 +417,53 @@ const resolveEditableBrigade = async (
 
 const NOT_MEMBER = { success: false, error: 'Сотрудника нет в бригаде за этот месяц', code: 'NOT_MEMBER' };
 
-/** Участник делёжа бригады за месяц: в составе и не начальник участка. */
-const isBrigadeShareMember = async (departmentId: string, month: string, employeeId: number): Promise<boolean> => {
+/** Участник делёжа бригады за месяц: в составе и не начальник участка. members — уже прочитанный состав месяца. */
+const isBrigadeShareMember = async (
+  departmentId: string,
+  month: string,
+  employeeId: number,
+  members?: readonly number[],
+): Promise<boolean> => {
   const supervisors = await listBrigadeSupervisorEmployeeIdsForDepartments([departmentId]);
-  const members = await listBrigadeMemberIds(departmentId, month);
-  return !supervisors.has(employeeId) && members.includes(employeeId);
+  const monthMembers = members ?? await listBrigadeMemberIds(departmentId, month);
+  return !supervisors.has(employeeId) && monthMembers.includes(employeeId);
 };
 
 /**
- * PUT /api/payroll/timesheet-salary/ktu { department_id, month, employee_id, ktu } — КТУ рабочего, 0,0…2,2. Снимает его
- * вписанные доли за месяц (доля снова по формуле); КТУ, снятие и аудит — одной транзакцией под замком бригады.
+ * PUT /api/payroll/timesheet-salary/ktu { department_id, month, employee_id, ktu } — КТУ рабочего, 0,0…2,2 (начальник
+ * участка — 0,8…1,6, 370). Снимает его вписанные доли за месяц (доля снова по формуле); КТУ, снятие и аудит — одной
+ * транзакцией под замком бригады. Начальнику — 409, если месяц закрыт или у рабочего решение ОТиЗ.
  */
 const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { department_id: departmentId, month, employee_id: employeeId, ktu } = ktuSchema.parse(req.body);
     const department = await resolveEditableBrigade(req, res, departmentId, month);
     if (!department) return;
-    if (!(await isBrigadeShareMember(department.id, month, employeeId))) {
+    const level = await getRequestBrigadeSalaryLevel(req);
+    const range = ktuRangeOf(level);
+    const ktuTenths = Math.round(ktu * 10);
+    if (ktuTenths < range.min || ktuTenths > range.max) {
+      res.status(400).json({
+        success: false,
+        error: `КТУ — от ${formatKtuTenths(range.min)} до ${formatKtuTenths(range.max)} с шагом 0,1`,
+        code: 'KTU_OUT_OF_RANGE',
+      });
+      return;
+    }
+    const members = await listBrigadeMemberIds(department.id, month);
+    if (!(await isBrigadeShareMember(department.id, month, employeeId, members))) {
       res.status(400).json(NOT_MEMBER);
       return;
     }
-    if (!(await canEditBrigadeInputEmployee(req, employeeId))) {
+    if (!(await canEditBrigadeKtuEmployee(req, level, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет права менять КТУ этого сотрудника' });
       return;
     }
+    const options = level.kind === 'supervisor'
+      ? supervisorKtuOptions(department.id, month, employeeId, members, range)
+      : {};
     const { after } = await setBrigadeKtu(
-      department.id, `${month}-01`, employeeId, Math.round(ktu * 10), req.user.id,
+      department.id, `${month}-01`, employeeId, ktuTenths, req.user.id,
       (client, change) => auditService.logFromRequestWithClient(client, req, req.user.id, 'BRIGADE_SALARY_KTU_SET', {
         entityType: 'brigade_salary_ktu',
         entityId: `${department.id}:${month}:${employeeId}`,
@@ -442,10 +475,15 @@ const setKtu = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           ...(change.cleared_shares.length > 0 ? { cleared_shares: change.cleared_shares } : {}),
         },
       }),
+      options,
     );
     res.json({ success: true, data: { employee_id: employeeId, ktu: (after / 10).toFixed(1) } });
   } catch (err) {
     if (handlePayrollZodError(err, res)) return;
+    if (err instanceof BrigadeKtuRejectedError) {
+      res.status(409).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     console.error('timesheetSalary.setKtu error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения КТУ' });
   }

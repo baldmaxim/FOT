@@ -238,6 +238,10 @@ export const tenthsToKtu = (tenths: number): string => (tenths / 10).toFixed(1);
 export const KTU_MIN_TENTHS = 0;
 export const KTU_MAX_TENTHS = 22;
 
+/** КТУ, который ставит начальник участка своим бригадам (миграция 370): 0,8…1,6; шире — только ОТиЗ. */
+export const SUPERVISOR_KTU_MIN_TENTHS = 8;
+export const SUPERVISOR_KTU_MAX_TENTHS = 16;
+
 /**
  * Расчётный КТУ вписанной доли, 2 знака: S × W / (R × m) в десятых → '1.59'. Это КТУ, при котором формула дала бы ровно
  * вписанную сумму. W (Σ весов невписанных) или R (остаток выработки) равен нулю — сравнить не с кем, null.

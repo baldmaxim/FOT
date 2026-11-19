@@ -22,7 +22,7 @@ import {
   resolveAccessibleDepartmentIds,
   resolveEditableEmployeeIds,
 } from '../data-scope.service.js';
-import { getRequestBrigadeOutputAccess } from './brigade-output-access.service.js';
+import { getRequestBrigadeOutputAccess, type BrigadeSalaryLevel } from './brigade-output-access.service.js';
 import { getRequestPayrollSectionAccess } from './payroll-access.service.js';
 
 const isSelf = (req: AuthenticatedRequest, employeeId: number): boolean => (
@@ -129,4 +129,28 @@ export async function resolveBrigadeInputEditPredicate(
   if (await getRequestPayrollSectionAccess(req)) return resolvePayrollEditPredicate(req);
   if (await getRequestBrigadeOutputAccess(req)) return (employeeId) => !isSelf(req, employeeId);
   return () => false;
+}
+
+/**
+ * Правка КТУ (370): список «Зарплаты» и «Выработка» — как canEditBrigadeInputEmployee; начальник участка — любой
+ * рабочий своей бригады, кроме себя (бригаду, пределы, закрытый месяц и решения ОТиЗ проверяет контроллер).
+ */
+export async function canEditBrigadeKtuEmployee(
+  req: AuthenticatedRequest,
+  level: BrigadeSalaryLevel,
+  employeeId: number,
+): Promise<boolean> {
+  if (level.kind === 'supervisor') return !isSelf(req, employeeId);
+  if (level.kind === 'none') return false;
+  return canEditBrigadeInputEmployee(req, employeeId);
+}
+
+/** Батч-вариант canEditBrigadeKtuEmployee для can_edit строк «Зарплаты по объектам». */
+export async function resolveBrigadeKtuEditPredicate(
+  req: AuthenticatedRequest,
+  level: BrigadeSalaryLevel,
+): Promise<(employeeId: number) => boolean> {
+  if (level.kind === 'supervisor') return (employeeId) => !isSelf(req, employeeId);
+  if (level.kind === 'none') return () => false;
+  return resolveBrigadeInputEditPredicate(req);
 }

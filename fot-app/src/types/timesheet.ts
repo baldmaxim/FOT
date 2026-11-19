@@ -524,4 +524,14 @@ export interface ITimesheetSalaryResponse {
   objects?: ITimesheetSalaryObject[];
   /** Конфликты вписанных долей (355); нет поля — старый бэкенд. */
   share_conflicts?: ITimesheetSalaryShareConflict[];
+  /** Что открыто пользователю (370): начальнику участка — только КТУ 0,8…1,6. Нет поля — старый бэкенд, всё по странице. */
+  access?: ITimesheetSalaryAccess;
+}
+
+/** Права правки «Зарплаты по объектам» от сервера (370); КТУ — строкой '0.8'. */
+export interface ITimesheetSalaryAccess {
+  can_edit_output: boolean;
+  can_edit_share: boolean;
+  ktu_min: string;
+  ktu_max: string;
 }

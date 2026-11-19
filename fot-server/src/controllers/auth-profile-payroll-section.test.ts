@@ -150,7 +150,12 @@ const salaryAccess = (canEdit: boolean): PageAccess => Object.fromEntries(
 const loadProfile = async () => {
   const res = makeRes();
   await authController.getMe(makeReq(), res);
-  return res.body?.profile as { page_access: PageAccess; has_admin_access: boolean; has_brigade_output_access: boolean };
+  return res.body?.profile as {
+    page_access: PageAccess;
+    has_admin_access: boolean;
+    has_brigade_output_access: boolean;
+    supervisor_brigade_ids: string[];
+  };
 };
 
 beforeEach(() => {
@@ -247,6 +252,55 @@ describe('/auth/me: «Выработка» (миграция 342)', () => {
       return [];
     }) as never);
     expect((await loadProfile()).has_brigade_output_access).toBe(false);
+  });
+});
+
+describe('/auth/me: «Ставить КТУ своим бригадам» (миграция 370)', () => {
+  const BRIGADES = ['5049c2c9-1334-49e6-8d55-7a04bebcaa8c', '7d3c1e2f-4a5b-4c6d-8e7f-9a0b1c2d3e4f'];
+  /** Галочка начальника (queryOne) и его текущие бригады (query) — по тексту SQL. */
+  const setup = ({ granted, brigades = BRIGADES, output = false }: {
+    granted: boolean | 'error'; brigades?: string[]; output?: boolean;
+  }) => {
+    pgQueryOne.mockImplementation((async (sql: string) => {
+      if (!String(sql).includes('FROM employee_supervisor_ktu_access')) return PROFILE_ROW;
+      if (granted === 'error') throw new Error('relation does not exist');
+      return granted ? { employee_id: 501 } : null;
+    }) as never);
+    pgQuery.mockImplementation((async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FROM employee_brigade_output_access')) return output ? [{ employee_id: 501 }] : [];
+      if (text.includes('WHERE eda.employee_id = $1')) return brigades.map(id => ({ department_id: id }));
+      return [];
+    }) as never);
+  };
+
+  it('галочка и бригады — только свои бригады, «Выработки» нет', async () => {
+    setup({ granted: true });
+    const profile = await loadProfile();
+    expect(profile.supervisor_brigade_ids).toEqual(BRIGADES);
+    expect(profile.has_brigade_output_access).toBe(false);
+  });
+
+  it('начальник без галочки — [] (кнопка не появится у всех начальников)', async () => {
+    setup({ granted: false });
+    expect((await loadProfile()).supervisor_brigade_ids).toEqual([]);
+  });
+
+  it('галочка без бригад (спящая) — []', async () => {
+    setup({ granted: true, brigades: [] });
+    expect((await loadProfile()).supervisor_brigade_ids).toEqual([]);
+  });
+
+  it('обе галочки — «Выработка» шире: список пуст', async () => {
+    setup({ granted: true, output: true });
+    const profile = await loadProfile();
+    expect(profile.has_brigade_output_access).toBe(true);
+    expect(profile.supervisor_brigade_ids).toEqual([]);
+  });
+
+  it('база недоступна (таблица до миграции) — [], а не ошибка профиля', async () => {
+    setup({ granted: 'error' });
+    expect((await loadProfile()).supervisor_brigade_ids).toEqual([]);
   });
 });
 

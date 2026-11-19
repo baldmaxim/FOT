@@ -5,7 +5,7 @@ import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
 import { acceptSupplementFiles } from '../middleware/payrollSupplementFilesUpload.js';
-import { requireBrigadeOutputAccess } from '../middleware/brigadeOutputAccess.js';
+import { requireBrigadeOutputAccess, requireBrigadeSalaryAccess } from '../middleware/brigadeOutputAccess.js';
 import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
@@ -188,12 +188,13 @@ router.get('/vacation/employee/:empId', termsView, payrollVacationController.get
 // ─── «Табель → Зарплата» (миграции 330, 336, 341, 355): КТУ, «Выработка», «Доля» бригады, «Сумма», «Бригады» ─────
 // Список «Зарплаты» или галочка «Выработка» (342). Полный расчёт, КТУ и «Доля» для галочки дополнительно ограничены в
 // контроллере: только бригада, читаемая в табеле, в окне месяцев (там же, где открыта «Зарплата по объектам»).
-router.get('/timesheet-salary', requireBrigadeOutputAccess, timesheetSalaryController.get);
+// Галочка начальника участка (370) — только полный расчёт своих бригад и КТУ 0,8–1,6; остальное ей 403.
+router.get('/timesheet-salary', requireBrigadeSalaryAccess, timesheetSalaryController.get);
 router.get('/timesheet-salary/brigades', requireBrigadeOutputAccess, timesheetSalaryController.listBrigades);
 router.get('/timesheet-salary/brigade-objects', requireBrigadeOutputAccess, timesheetSalaryController.brigadeObjects);
 router.put('/timesheet-salary/output', requireBrigadeOutputAccess, timesheetSalaryController.setOutput);
 router.put('/timesheet-salary/object-output', requireBrigadeOutputAccess, timesheetSalaryController.setObjectOutput);
-router.put('/timesheet-salary/ktu', requireBrigadeOutputAccess, timesheetSalaryController.setKtu);
+router.put('/timesheet-salary/ktu', requireBrigadeSalaryAccess, timesheetSalaryController.setKtu);
 router.put('/timesheet-salary/share', requireBrigadeOutputAccess, timesheetSalaryController.setShare);
 
 export default router;

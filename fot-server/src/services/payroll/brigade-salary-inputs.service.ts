@@ -13,7 +13,9 @@ import type { PoolClient } from 'pg';
 
 import type { DbExecutor } from '../../config/postgres.js';
 import { query, withTransaction } from '../../config/postgres.js';
+import { lockTimesheetMonthsOnClient } from '../timesheet-lock.service.js';
 import { centsToMoney, moneyToCents } from './brigade-salary.calc.js';
+import { loadBrigadeMonthApprovals, resolveBrigadeMonthClosure } from './brigade-salary-source.service.js';
 
 export const DEFAULT_KTU_TENTHS = 10;
 
@@ -386,10 +388,65 @@ export interface IBrigadeKtuChange {
   cleared_shares: IClearedShare[];
 }
 
+/** Отказ записи КТУ начальником участка (370): месяц закрыт, у рабочего решение ОТиЗ — текст для 409. */
+export class BrigadeKtuRejectedError extends Error {
+  constructor(readonly code: 'MONTH_CLOSED' | 'KTU_SET_BY_PAYROLL' | 'SHARE_FIXED', message: string) {
+    super(message);
+  }
+}
+
+export interface ISetBrigadeKtuOptions {
+  /**
+   * Рабочие, чьи advisory-локи табеля (сотрудник, месяц) взять ДО замка бригады: закрытие и открытие табеля пишут
+   * подачи под теми же локами (session-level, конфликтуют с xact), и проверка guard видит месяц уже без гонки.
+   */
+  lockTimesheetEmployeeIds?: readonly number[];
+  /** Проверка под замком до записи (прежний КТУ в десятых); бросает BrigadeKtuRejectedError — ничего не пишется. */
+  guard?: (client: PoolClient, before: number) => Promise<void>;
+}
+
+/** КТУ в десятых — текстом ответа: 8 → '0,8'. */
+export const formatKtuTenths = (tenths: number): string => (tenths / 10).toFixed(1).replace('.', ',');
+
+/**
+ * Путь начальника участка (370): локи табеля всех рабочих бригады за месяц (закрытие/открытие подач берёт те же) — до
+ * замка бригады, затем под замком: месяц не закрыт, прежний КТУ в пределах начальника, у рабочего нет вписанной доли.
+ */
+export const supervisorKtuOptions = (
+  departmentId: string,
+  month: string,
+  employeeId: number,
+  members: readonly number[],
+  range: { min: number; max: number },
+): ISetBrigadeKtuOptions => ({
+  lockTimesheetEmployeeIds: members,
+  guard: async (client, before) => {
+    const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month, client), month);
+    if (closure.closed) {
+      throw new BrigadeKtuRejectedError('MONTH_CLOSED', 'Табель за месяц закрыт — КТУ меняет только ОТиЗ');
+    }
+    if (before < range.min || before > range.max) {
+      throw new BrigadeKtuRejectedError(
+        'KTU_SET_BY_PAYROLL',
+        `КТУ ${formatKtuTenths(before)} поставил ОТиЗ — изменить его может только ОТиЗ`,
+      );
+    }
+    const fixed = await client.query(
+      `SELECT 1 FROM brigade_salary_fixed_shares
+        WHERE department_id = $1 AND month = $2::date AND employee_id = $3 LIMIT 1`,
+      [departmentId, `${month}-01`, employeeId],
+    );
+    if (fixed.rows.length > 0) {
+      throw new BrigadeKtuRejectedError('SHARE_FIXED', 'У рабочего вписана доля — КТУ меняет только ОТиЗ');
+    }
+  },
+});
+
 /**
  * КТУ в десятых; 1,0 удаляет строку. Выбор КТУ снимает все вписанные доли сотрудника за месяц (доля снова по формуле).
  * Одна транзакция под замком бригады: КТУ, снятие долей и аудит — аудит только при реальной смене (КТУ другой или
- * снята хоть одна доля); тот же КТУ без долей — ни записи в аудит, ни смены отпечатка.
+ * снята хоть одна доля); тот же КТУ без долей — ни записи в аудит, ни смены отпечатка. options — путь начальника
+ * участка (370): локи табеля до замка бригады и проверка под замком.
  */
 export async function setBrigadeKtu(
   departmentId: string,
@@ -398,8 +455,14 @@ export async function setBrigadeKtu(
   ktuTenths: number,
   actorUserId: string,
   audit?: (client: PoolClient, change: IBrigadeKtuChange) => Promise<void>,
+  options: ISetBrigadeKtuOptions = {},
 ): Promise<IBrigadeKtuChange> {
   return withTransaction(async client => {
+    if (options.lockTimesheetEmployeeIds && options.lockTimesheetEmployeeIds.length > 0) {
+      await lockTimesheetMonthsOnClient(
+        client, options.lockTimesheetEmployeeIds.map(id => ({ employeeId: id, workDate: monthStart })),
+      );
+    }
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
       brigadeSalaryLockKey(departmentId, monthStart.slice(0, 7)),
     ]);
@@ -409,6 +472,7 @@ export async function setBrigadeKtu(
       [departmentId, monthStart, employeeId],
     )).rows[0];
     const before = previous ? Math.round(Number(previous.ktu) * 10) : DEFAULT_KTU_TENTHS;
+    if (options.guard) await options.guard(client, before);
     if (ktuTenths === DEFAULT_KTU_TENTHS) {
       await client.query(
         'DELETE FROM brigade_salary_ktu WHERE department_id = $1 AND month = $2::date AND employee_id = $3',

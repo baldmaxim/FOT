@@ -27,9 +27,17 @@ vi.mock('./brigade-salary.service.js', () => brigade);
 
 const scope = vi.hoisted(() => ({
   resolveBrigadeInputEditPredicate: vi.fn(),
+  resolveBrigadeKtuEditPredicate: vi.fn(),
   resolvePayrollReadableDepartmentIds: vi.fn(),
 }));
 vi.mock('./payroll-scope.service.js', () => scope);
+
+// Уровень доступа — заглушка; пределы КТУ — настоящие (370).
+const level = vi.hoisted(() => ({ getRequestBrigadeSalaryLevel: vi.fn() }));
+vi.mock('./brigade-output-access.service.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('./brigade-output-access.service.js')>()),
+  getRequestBrigadeSalaryLevel: level.getRequestBrigadeSalaryLevel,
+}));
 
 import { getBrigadeObjectOutputs, getTimesheetSalary } from './timesheet-salary.service.js';
 
@@ -54,6 +62,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   pg.query.mockResolvedValue([]);
   scope.resolveBrigadeInputEditPredicate.mockResolvedValue(() => true);
+  scope.resolveBrigadeKtuEditPredicate.mockResolvedValue(() => true);
+  level.getRequestBrigadeSalaryLevel.mockResolvedValue({ kind: 'payroll' });
 });
 
 describe('getTimesheetSalary — «Оклад» и «Переработка»', () => {
@@ -174,6 +184,8 @@ describe('getTimesheetSalary — «Оклад» и «Переработка»', 
       full_name: 'Абдуалимов Жахонгир',
     })]);
     expect(result.output_amount).toBe('1000000.00');
+    // ОТиЗ и список «Зарплаты» — всё как раньше: поля выработки и доли, КТУ 0,0…2,2.
+    expect(result.access).toEqual({ can_edit_output: true, can_edit_share: true, ktu_min: '0.0', ktu_max: '2.2' });
     expect(result.objects).toEqual([{
       object_key: 'wave',
       object_name: 'ЖК Wave',
@@ -269,5 +281,62 @@ describe('getBrigadeObjectOutputs — стрелка во «Бригадах»',
       expect(text).not.toContain(key);
     }
     expect(calc.previewBrigadePayouts).not.toHaveBeenCalled();
+  });
+});
+
+describe('getTimesheetSalary — начальник участка (370)', () => {
+  // 1951 — КТУ 1,5; 2325 — КТУ ОТиЗ 2,0; 2400 — вписанная доля на «wave»; 2500 — КТУ по умолчанию 1,0.
+  const members = [1951, 2325, 2400, 2500];
+  const brigadeResult = (state: string) => ({
+    state,
+    distribution: 'ok',
+    as_of: null,
+    open_ranges: [],
+    errors: [],
+    computed_at: null,
+    mode: 'objects',
+    output_amount: '1000000.00',
+    rows: members.map(id => ({
+      employee_id: id, counted_minutes: 600, amount: null, source: 'live',
+      objects: [{ object_key: 'wave', days: { '2026-11-03': 10 }, counted_minutes: 600, weight: 6000, amount: null }],
+    })),
+    objects: [{ object_key: 'wave', object_name: 'ЖК Wave', output: '1000000.00', state: 'ok', total_weight: 24_000 }],
+    inputs: {
+      outputs: new Map([['wave', { amount: '1000000.00', object_name: 'ЖК Wave' }]]),
+      brigadeOutput: null,
+      ktu: new Map([[1951, 15], [2325, 20]]),
+      fixedShares: new Map([['wave', new Map([[2400, '150000.00']])]]),
+    },
+    share_conflicts: [],
+    member_ids: members,
+  });
+
+  beforeEach(() => {
+    level.getRequestBrigadeSalaryLevel.mockResolvedValue({ kind: 'supervisor', brigadeIds: new Set([BRIGADE.id]) });
+    // Долю начальник не правит — предикат доли закрыт (как у настоящего без «Выработки»).
+    scope.resolveBrigadeInputEditPredicate.mockResolvedValue(() => false);
+    calc.previewBrigadePayouts.mockResolvedValue(new Map());
+  });
+
+  const editable = (result: Awaited<ReturnType<typeof getTimesheetSalary>>) => Object.fromEntries(
+    result.rows.map(row => [row.employee_id, row.can_edit]),
+  );
+
+  it('открытый месяц: КТУ в 0,8–1,6 без вписанной доли — правится; КТУ ОТиЗ 2,0 и вписанная доля — нет', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue(brigadeResult('preliminary'));
+    const result = await getTimesheetSalary(req, BRIGADE, '2026-11');
+    expect(result.access).toEqual({ can_edit_output: false, can_edit_share: false, ktu_min: '0.8', ktu_max: '1.6' });
+    expect(editable(result)).toEqual({ 1951: true, 2325: false, 2400: false, 2500: true });
+    expect(result.rows.every(row => row.can_clear_share === false)).toBe(true);
+  });
+
+  it('«Требует перерасчёта» (период снова открыт) — правится', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue(brigadeResult('stale'));
+    expect(editable(await getTimesheetSalary(req, BRIGADE, '2026-11'))).toMatchObject({ 1951: true, 2500: true });
+  });
+
+  it('закрытый месяц — КТУ никому', async () => {
+    brigade.getBrigadeSalary.mockResolvedValue(brigadeResult('fixed'));
+    expect(editable(await getTimesheetSalary(req, BRIGADE, '2026-11'))).toEqual({ 1951: false, 2325: false, 2400: false, 2500: false });
   });
 });

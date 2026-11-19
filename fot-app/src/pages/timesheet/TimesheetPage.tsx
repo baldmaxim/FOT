@@ -187,7 +187,7 @@ export const TimesheetPage: FC = () => {
   const canEditTimesheetSalary = canEditPage('/salary/terms');
   // «Бригады» с вводом выработки и «Зарплата по объектам» — ещё и по галочке «Выработка» (миграция 342).
   // «Зарплата по отделам» и правка в сетке — только по праву раздела.
-  const canOpenBrigades = canViewTimesheetSalary || profile?.has_brigade_output_access === true;
+  const canOpenBrigadeRegistry = canViewTimesheetSalary || profile?.has_brigade_output_access === true;
   // «Зарплата по объектам»: КТУ 0,0…2,2, «Доля» и «Выработка, ₽» (355) — список «Зарплаты» и галочка «Выработка»;
   // бригаду и месяц сужает сервер (там же, где ему открыт расчёт).
   const canEditBrigadeSalary = canEditTimesheetSalary || profile?.has_brigade_output_access === true;
@@ -359,6 +359,12 @@ export const TimesheetPage: FC = () => {
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
+  // Начальник участка с галочкой «Ставить КТУ своим бригадам» (370): «Зарплата по объектам» — только выбранной бригады из
+  // его списка (сервер отдаёт уже эффективный: галочка ∧ текущие бригады), «Бригады» — нет; правит он только КТУ.
+  const isSupervisorObjectsSalary = !canOpenBrigadeRegistry && effectiveSelectedDeptId !== null
+    && (profile?.supervisor_brigade_ids ?? []).includes(effectiveSelectedDeptId);
+  const canOpenObjectsSalary = canOpenBrigadeRegistry || isSupervisorObjectsSalary;
+  const canEditObjectsSalary = canEditBrigadeSalary || isSupervisorObjectsSalary;
   // Выпадающий список отделов — только ветки компаний (СУ-10, СМ, Бригады, Подрядные), как
   // «Все отделы» в «Управлении кадрами»: «Уволенные», «test», «Допуск Везде» скрыты.
   // У руководителя со скоупом дерево уже сужено — его отдел из «Прочих» терять нельзя.
@@ -380,7 +386,10 @@ export const TimesheetPage: FC = () => {
       : (queryView === 'transfers' && canViewTransfers && timesheetMode === 'department')
         ? 'transfers'
         : ((queryView === 'salary' || queryView === 'salary_objects' || queryView === 'brigades')
-          && (queryView === 'salary' ? canViewTimesheetSalary : canOpenBrigades) && timesheetMode !== 'employee')
+          && (queryView === 'salary'
+            ? canViewTimesheetSalary
+            : queryView === 'brigades' ? canOpenBrigadeRegistry : canOpenObjectsSalary)
+          && timesheetMode !== 'employee')
           ? queryView
           : 'employees';
   // Вкладки «Зарплата по отделам» и «Зарплата по объектам»: весь месяц, без массовых правок.
@@ -2540,16 +2549,18 @@ export const TimesheetPage: FC = () => {
 
   // «Бригады» (выработка бригад месяца, 341 — и без выбранного отдела) и «Зарплата по объектам» (бригады по объектам,
   // 336) — 5 учёткам раздела «Зарплата» и по галочке «Выработка» (342); «Зарплата по отделам» (отделы, без бригад) —
-  // только 5 учёткам.
-  const salaryChips = !isEmployeeMode && canOpenBrigades ? (
+  // только 5 учёткам. Начальнику участка (370) — только «Зарплата по объектам» своей выбранной бригады.
+  const salaryChips = !isEmployeeMode && canOpenObjectsSalary ? (
     <>
-      <button
-        type="button"
-        className={`ts-view-chip ${viewMode === 'brigades' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('brigades')}
-      >
-        Бригады
-      </button>
+      {canOpenBrigadeRegistry && (
+        <button
+          type="button"
+          className={`ts-view-chip ${viewMode === 'brigades' ? ' ts-view-chip--active' : ''}`}
+          onClick={() => handleViewModeChange('brigades')}
+        >
+          Бригады
+        </button>
+      )}
       {hasActiveScope && (
         <>
           {canViewTimesheetSalary && (
@@ -2915,7 +2926,7 @@ export const TimesheetPage: FC = () => {
       )}
 
       {viewMode === 'brigades' ? (
-        <TimesheetBrigadesTab month={monthStr} canEdit={canOpenBrigades} />
+        <TimesheetBrigadesTab month={monthStr} canEdit={canOpenBrigadeRegistry} />
       ) : viewMode === 'transfers' ? (
         <div className="ts-table-container">
           <TimesheetTransfersTab
@@ -2964,7 +2975,7 @@ export const TimesheetPage: FC = () => {
           gridLoading={timesheetQuery.isLoading || timesheetQuery.isPlaceholderData}
           gridError={timesheetQuery.isError}
           compact={isMobile}
-          canEdit={canEditBrigadeSalary}
+          canEdit={canEditObjectsSalary}
           pendingKtuEmployeeId={timesheetSalary.pendingKtuEmployeeId}
           savingObjectKey={timesheetSalary.savingObjectKey}
           savingShareKey={timesheetSalary.savingShareKey}

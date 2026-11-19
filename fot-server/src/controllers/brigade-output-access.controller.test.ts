@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-/** Вкладка «Выработка» (миграция 342): валидация, зона админа компании, аудит в транзакции, обновление профиля. */
+/**
+ * Вкладка «Выработка» (миграция 342): валидация, зона админа компании, аудит в транзакции, обновление профиля.
+ * Вторая галочка «Ставить КТУ своим бригадам» (370): необязательное поле, только начальнику участка бригады.
+ */
 
 const { h } = vi.hoisted(() => ({
   h: {
@@ -13,6 +16,9 @@ const { h } = vi.hoisted(() => ({
     canWrite: vi.fn(),
     load: vi.fn(),
     set: vi.fn(),
+    loadKtu: vi.fn(),
+    setKtu: vi.fn(),
+    supervised: vi.fn(),
     audit: vi.fn(),
     emit: vi.fn(),
   },
@@ -31,7 +37,10 @@ vi.mock('../services/data-scope.service.js', () => ({
 vi.mock('../services/payroll/brigade-output-access.service.js', () => ({
   loadBrigadeOutputGrant: h.load,
   setBrigadeOutputGrant: h.set,
+  loadSupervisorKtuGrant: h.loadKtu,
+  setSupervisorKtuGrant: h.setKtu,
 }));
+vi.mock('../services/brigade-supervisors.service.js', () => ({ listSupervisedBrigadeIds: h.supervised }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: () => ({ to: () => ({ emit: h.emit }) }) }));
 
 const { brigadeOutputAccessController } = await import('./brigade-output-access.controller.js');
@@ -75,6 +84,9 @@ beforeEach(() => {
   h.canWrite.mockResolvedValue(true);
   h.load.mockResolvedValue(false);
   h.set.mockResolvedValue(true);
+  h.loadKtu.mockResolvedValue(false);
+  h.setKtu.mockResolvedValue(true);
+  h.supervised.mockResolvedValue([]);
 });
 
 describe('GET /admin/employees/:id/brigade-output-access', () => {
@@ -82,7 +94,18 @@ describe('GET /admin/employees/:id/brigade-output-access', () => {
     h.load.mockResolvedValue(true);
     const res = await get();
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ granted: true });
+    expect(res.body.data).toEqual({ granted: true, supervisor_ktu: false, supervised_brigades: 0 });
+  });
+
+  it('начальник участка: вторая галочка и число его бригад', async () => {
+    h.loadKtu.mockResolvedValue(true);
+    h.supervised.mockResolvedValue(['b-1', 'b-2', 'b-3']);
+    expect((await get()).body.data).toEqual({ granted: false, supervisor_ktu: true, supervised_brigades: 3 });
+  });
+
+  it('ошибка базы у второй галочки — 500', async () => {
+    h.loadKtu.mockRejectedValue(new Error('db down'));
+    expect((await get()).statusCode).toBe(500);
   });
 
   it('некорректный id — 400, нет сотрудника — 404, вне зоны — 403, галочка не читается', async () => {
@@ -103,7 +126,7 @@ describe('PUT /admin/employees/:id/brigade-output-access', () => {
   it('поставить: аудит в той же транзакции, сотруднику — обновление профиля', async () => {
     const res = await put({ granted: true });
     expect(res.statusCode).toBe(200);
-    expect(res.body.data).toEqual({ granted: true });
+    expect(res.body.data).toEqual({ granted: true, supervisor_ktu: false });
     expect(h.set).toHaveBeenCalledWith(h.client, EMPLOYEE, true, 'admin-user');
     expect(h.audit).toHaveBeenCalledWith(
       h.client, expect.anything(), 'admin-user', 'EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED',
@@ -138,5 +161,63 @@ describe('PUT /admin/employees/:id/brigade-output-access', () => {
   it('сбой оповещения не превращает сохранение в ошибку', async () => {
     h.query.mockRejectedValue(new Error('io down'));
     expect((await put({ granted: true })).statusCode).toBe(200);
+  });
+});
+
+describe('PUT — галочка «Ставить КТУ своим бригадам» (370)', () => {
+  it('старый фронт шлёт только granted — вторая галочка не трогается', async () => {
+    h.loadKtu.mockResolvedValue(true);
+    const res = await put({ granted: false });
+    expect(res.statusCode).toBe(200);
+    expect(h.setKtu).not.toHaveBeenCalled();
+    expect(res.body.data).toEqual({ granted: false, supervisor_ktu: true });
+  });
+
+  it('поставить начальнику участка: запись и аудит в той же транзакции, обновление профиля', async () => {
+    h.supervised.mockResolvedValue(['b-1']);
+    const res = await put({ supervisor_ktu: true });
+    expect(res.statusCode).toBe(200);
+    expect(h.set).not.toHaveBeenCalled();
+    expect(h.setKtu).toHaveBeenCalledWith(h.client, EMPLOYEE, true, 'admin-user');
+    expect(h.audit).toHaveBeenCalledWith(
+      h.client, expect.anything(), 'admin-user', 'EMPLOYEE_SUPERVISOR_KTU_ACCESS_CHANGED',
+      expect.objectContaining({ entityId: String(EMPLOYEE), details: expect.objectContaining({ granted: true }) }),
+    );
+    expect(h.emit).toHaveBeenCalledWith('profile:access_changed');
+    expect(res.body.data).toEqual({ granted: false, supervisor_ktu: true });
+  });
+
+  it('не начальник ни одной бригады — 400 без записи; уже стоящую (спящую) — без ошибки', async () => {
+    const res = await put({ supervisor_ktu: true });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('NOT_BRIGADE_SUPERVISOR');
+    expect(h.setKtu).not.toHaveBeenCalled();
+    h.loadKtu.mockResolvedValue(true);
+    h.setKtu.mockResolvedValue(false);
+    expect((await put({ supervisor_ktu: true })).statusCode).toBe(200);
+  });
+
+  it('выдать вне зоны — 403; снять — и вне зоны, и без бригад', async () => {
+    h.supervised.mockResolvedValue(['b-1']);
+    h.canWrite.mockResolvedValue(false);
+    expect((await put({ supervisor_ktu: true })).statusCode).toBe(403);
+    expect(h.setKtu).not.toHaveBeenCalled();
+    h.supervised.mockResolvedValue([]);
+    expect((await put({ supervisor_ktu: false })).statusCode).toBe(200);
+    expect(h.setKtu).toHaveBeenCalledWith(h.client, EMPLOYEE, false, 'admin-user');
+  });
+
+  it('обе галочки — одной транзакцией, два аудита', async () => {
+    h.supervised.mockResolvedValue(['b-1']);
+    expect((await put({ granted: true, supervisor_ktu: true })).statusCode).toBe(200);
+    expect(h.set).toHaveBeenCalledWith(h.client, EMPLOYEE, true, 'admin-user');
+    expect(h.setKtu).toHaveBeenCalledWith(h.client, EMPLOYEE, true, 'admin-user');
+    expect(h.audit.mock.calls.map(call => call[3])).toEqual([
+      'EMPLOYEE_BRIGADE_OUTPUT_ACCESS_CHANGED', 'EMPLOYEE_SUPERVISOR_KTU_ACCESS_CHANGED',
+    ]);
+  });
+
+  it('некорректное значение — 400', async () => {
+    expect((await put({ supervisor_ktu: 'yes' })).statusCode).toBe(400);
   });
 });

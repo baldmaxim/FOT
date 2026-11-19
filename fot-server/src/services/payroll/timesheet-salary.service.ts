@@ -43,7 +43,16 @@ import {
   type IPayrollCalcPreliminary,
   type PayrollCalcWithPreliminary,
 } from './payroll-calc.service.js';
-import { resolveBrigadeInputEditPredicate, resolvePayrollReadableDepartmentIds } from './payroll-scope.service.js';
+import {
+  getRequestBrigadeSalaryLevel,
+  ktuRangeOf,
+  type BrigadeSalaryLevel,
+} from './brigade-output-access.service.js';
+import {
+  resolveBrigadeInputEditPredicate,
+  resolveBrigadeKtuEditPredicate,
+  resolvePayrollReadableDepartmentIds,
+} from './payroll-scope.service.js';
 
 export interface ITimesheetSalaryDepartment {
   id: string;
@@ -77,7 +86,10 @@ export interface ITimesheetSalaryRow {
    */
   payout_state: 'closed' | 'preliminary' | 'not_closed' | null;
   source: 'version' | 'live' | null;
-  /** КТУ и «Доля» правятся: текущий состав бригады (без начальника участка), не себе, право записи. */
+  /**
+   * КТУ правится (и «Доля» — если в access её правка открыта): текущий состав бригады (без начальника участка), не
+   * себе, право записи. Начальнику участка (370) ещё: месяц не закрыт, КТУ в его пределах, вписанных долей нет.
+   */
   can_edit: boolean;
   /** Сумма бригаде (341): «Доля», вписанная рублями (355); null — по формуле. У отдела и по объектам — null. */
   fixed_share: string | null;
@@ -135,6 +147,17 @@ export interface ITimesheetSalaryShareConflict extends IBrigadeStoredShareConfli
   full_name: string | null;
 }
 
+/**
+ * Что открыто пользователю в «Зарплате по объектам» (370): поля «Выработка, ₽» и «Доля», пределы КТУ ('0.0'…'2.2',
+ * у начальника участка '0.8'…'1.6'). Нет права — значение показывается текстом.
+ */
+export interface ITimesheetSalaryAccess {
+  can_edit_output: boolean;
+  can_edit_share: boolean;
+  ktu_min: string;
+  ktu_max: string;
+}
+
 export interface ITimesheetSalaryResponse {
   department_id: string;
   month: string;
@@ -156,7 +179,20 @@ export interface ITimesheetSalaryResponse {
   objects: ITimesheetSalaryObject[];
   /** Конфликты вписанных долей: object_key ('__brigade__' — сумма бригаде); на этих объектах долей нет. */
   share_conflicts: ITimesheetSalaryShareConflict[];
+  access: ITimesheetSalaryAccess;
 }
+
+/** access ответа по уровню доступа: начальник участка — только КТУ в своих пределах. */
+export const salaryAccessOf = (level: BrigadeSalaryLevel): ITimesheetSalaryAccess => {
+  const range = ktuRangeOf(level);
+  const full = level.kind === 'payroll' || level.kind === 'output';
+  return {
+    can_edit_output: full,
+    can_edit_share: full,
+    ktu_min: (range.min / 10).toFixed(1),
+    ktu_max: (range.max / 10).toFixed(1),
+  };
+};
 
 export async function loadSalaryDepartment(departmentId: string): Promise<ITimesheetSalaryDepartment | null> {
   return queryOne<ITimesheetSalaryDepartment>(
@@ -209,6 +245,8 @@ export async function getTimesheetSalary(
   month: string,
   options: ITimesheetSalaryOptions = {},
 ): Promise<ITimesheetSalaryResponse> {
+  const level = await getRequestBrigadeSalaryLevel(req);
+  const access = salaryAccessOf(level);
   if (department.kind !== 'brigade') {
     const { start, end } = monthBounds(month);
     const memberIds = [...new Set(
@@ -235,6 +273,7 @@ export async function getTimesheetSalary(
       computed_at: null,
       objects: [],
       share_conflicts: [],
+      access,
       rows: memberIds.map(employeeId => {
         const calc = calcs.get(employeeId);
         const counted = calc && calc.state !== 'not_closed' ? calc : null;
@@ -263,6 +302,7 @@ export async function getTimesheetSalary(
 
   const result = await getBrigadeSalary(req, department.id, month);
   const canEdit = await resolveBrigadeInputEditPredicate(req);
+  const canEditKtu = await resolveBrigadeKtuEditPredicate(req, level);
   const members = new Set(result.member_ids);
   const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
   // Вписанные доли — текущий ввод (у stale расчёт старый, а поле должно показать то, что вписали). Только своего режима.
@@ -274,6 +314,18 @@ export async function getTimesheetSalary(
     return amount === undefined ? null : centsToMoney(moneyToCents(amount));
   };
   const withFixed = new Set([...fixedInput.values()].flatMap(byEmployee => [...byEmployee.keys()]));
+  // Начальник участка (370) КТУ не меняет: месяц закрыт, у рабочего вписана доля (любого режима — выбор КТУ сняла бы
+  // её) или КТУ ОТиЗ вне его пределов. Всё — по текущему вводу, как проверка под замком в setKtu.
+  const ktuRange = ktuRangeOf(level);
+  const anyFixed = new Set([...(result.inputs.fixedShares ?? new Map<string, Map<number, string>>()).values()]
+    .flatMap(byEmployee => [...byEmployee.keys()]));
+  const ktuTenthsOf = (employeeId: number): number => result.inputs.ktu.get(employeeId) ?? DEFAULT_KTU_TENTHS;
+  const supervisorMayEditKtu = (employeeId: number): boolean => level.kind !== 'supervisor' || (
+    result.state !== 'fixed'
+    && !anyFixed.has(employeeId)
+    && ktuTenthsOf(employeeId) >= ktuRange.min
+    && ktuTenthsOf(employeeId) <= ktuRange.max
+  );
   const ktus = fixedShareKtus(
     result.mode === 'brigade' ? result.output_amount : undefined, result.rows, result.objects,
   );
@@ -351,12 +403,13 @@ export async function getTimesheetSalary(
       ...conflict,
       full_name: conflict.employee_id === undefined ? null : names.get(conflict.employee_id) ?? null,
     })),
+    access,
     rows: employeeIds.map(employeeId => {
       const row = byEmployee.get(employeeId);
       return {
         employee_id: employeeId,
         full_name: names.get(employeeId) ?? null,
-        ktu: ((result.inputs.ktu.get(employeeId) ?? DEFAULT_KTU_TENTHS) / 10).toFixed(1),
+        ktu: (ktuTenthsOf(employeeId) / 10).toFixed(1),
         counted_hours: row ? Math.round((row.counted_minutes / 60) * 100) / 100 : null,
         amount: payouts.get(employeeId)?.net ?? null,
         share: row?.amount ?? null,
@@ -367,7 +420,7 @@ export async function getTimesheetSalary(
         payout_state: null,
         source: row?.source ?? null,
         // КТУ и «Долю» правят только текущему составу (без начальника участка) и не себе.
-        can_edit: members.has(employeeId) && canEdit(employeeId),
+        can_edit: members.has(employeeId) && canEditKtu(employeeId) && supervisorMayEditKtu(employeeId),
         fixed_share: mode === 'brigade' ? fixedOf(BRIGADE_WHOLE_SHARE_KEY, employeeId) : null,
         effective_ktu: result.mode === 'brigade'
           ? ktus.get(BRIGADE_WHOLE_SHARE_KEY)?.get(employeeId) ?? null

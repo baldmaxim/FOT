@@ -11,6 +11,7 @@ import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
   averageTitle,
   BRIGADE_SHARE_KEY,
+  canEditSalaryOutput,
   countedHoursLabel,
   describeSalaryState,
   displayedHours,
@@ -125,7 +126,7 @@ export const TimesheetSalaryGroupOutput: FC<ISalaryProps & { object: ITimesheetS
         <span className="ts-salary-output-label">Выработка, ₽</span>
         <TimesheetSalaryOutputInput
           value={object.output_amount}
-          canEdit={salary.canEdit}
+          canEdit={canEditSalaryOutput(salary.data, salary.canEdit)}
           saving={salary.savingObjectKey === object.object_key}
           label={`Выработка, ${object.object_name}`}
           clearOnly={isOutputClearOnly(object)}

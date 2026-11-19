@@ -19,6 +19,8 @@ const PROTECTION_MARKERS = [
   'requireAdmin',
   'requireSystemAdmin',
   'requireBrigadeOutputAccess',
+  // Расчёт бригады и КТУ: «Выработка» или галочка начальника участка со своими бригадами (миграция 370).
+  'requireBrigadeSalaryAccess',
 ];
 
 // Файлы целиком исключены из аудита: содержат публичные роуты или роуты со

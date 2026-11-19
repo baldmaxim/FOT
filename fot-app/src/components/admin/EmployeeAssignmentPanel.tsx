@@ -685,7 +685,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               className={`${styles.assignmentPanelTab} ${activeTab === 'brigade_output' ? styles.assignmentPanelTabActive : ''}`}
               onClick={() => { setActiveTab('brigade_output'); setSearchQuery(''); }}
             >
-              Выработка ({brigadeOutput.granted ? 1 : 0})
+              Выработка ({brigadeOutput.checkedCount})
             </button>
           )}
           {tabAllowed('dormitory_access') && (
@@ -840,6 +840,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
             <BrigadeOutputAccessTab
               checked={brigadeOutput.granted}
               onToggle={brigadeOutput.toggle}
+              supervisorKtu={brigadeOutput.showSupervisorKtu
+                ? { checked: brigadeOutput.supervisorKtu, onToggle: brigadeOutput.toggleSupervisorKtu }
+                : undefined}
               loading={brigadeOutput.isLoading}
               error={brigadeOutput.isError}
             />

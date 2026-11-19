@@ -7,6 +7,7 @@ import {
   formatKtu, formatSalaryAmount, getSalaryLetterHours, isOutputClearOnly, isSalaryRowMuted, memberAverage, missingObjectsNote, objectAverage,
   objectCountedMinutes, objectShareTitle, rowAverage, salaryAmountTitle, salaryLineTitle, salaryObjectStateNote, salaryOvertimeNote, salaryColumnTitle,
   sortSalaryRows, totalDaysOfEmployee, KTU_OPTIONS, shareConflictText, objectShareMode, totalShareMode, objectFixedTotal,
+  ktuOptionsOf, canEditSalaryOutput, canEditSalaryShare,
   shareFieldValue,
 } from './timesheetSalary';
 
@@ -437,6 +438,23 @@ describe('КТУ 0,0…2,2 и «Доля», вписанная рублями (3
     const whole = { ...brigade, output_mode: 'brigade' as const, brigade_output: '300000.00' };
     expect(totalShareMode(whole, true, row(2))).toBe('edit');
     expect(totalShareMode(whole, true, row(4, { fixed_share: '1000.00', counted_hours: 0 }))).toBe('clear');
+  });
+
+  it('начальник участка (370): КТУ 0,8…1,6, «Выработка» и «Доля» — только показ; без access — как раньше', () => {
+    const supervisor = {
+      ...brigade, access: { can_edit_output: false, can_edit_share: false, ktu_min: '0.8', ktu_max: '1.6' },
+    };
+    expect(ktuOptionsOf(supervisor)).toEqual(['0.8', '0.9', '1.0', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6']);
+    expect(ktuOptionsOf(brigade)).toBe(KTU_OPTIONS);
+    expect(ktuOptionsOf({ ...brigade, access: { can_edit_output: true, can_edit_share: true, ktu_min: '0.0', ktu_max: '2.2' } }))
+      .toHaveLength(23);
+    expect([canEditSalaryOutput(supervisor, true), canEditSalaryShare(supervisor, true)]).toEqual([false, false]);
+    expect([canEditSalaryOutput(brigade, true), canEditSalaryShare(brigade, true)]).toEqual([true, true]);
+    expect(canEditSalaryOutput(brigade, false)).toBe(false);
+    expect(objectShareMode(supervisor, true, object, object.members[1])).toBeNull();
+    expect(objectShareMode(supervisor, true, object, object.members[3])).toBeNull();
+    const whole = { ...supervisor, output_mode: 'brigade' as const, brigade_output: '300000.00' };
+    expect(totalShareMode(whole, true, row(2))).toBeNull();
   });
 
   it('конфликт — пометка у объекта с причинами и ФИО', () => {

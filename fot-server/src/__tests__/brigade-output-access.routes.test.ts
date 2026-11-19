@@ -18,13 +18,29 @@ const h = vi.hoisted(() => {
       res.json({ success: true, data: [] });
     },
   });
-  return { calls, stubController, listedUserIds: new Set<string>(), grantedEmployeeIds: new Set<number>() };
+  return {
+    calls,
+    stubController,
+    listedUserIds: new Set<string>(),
+    grantedEmployeeIds: new Set<number>(),
+    // Галочка начальника участка (370) и его бригады.
+    supervisorKtuEmployeeIds: new Set<number>(),
+    supervisedBrigadeIds: [] as string[],
+  };
 });
 
 vi.mock('../config/postgres.js', () => ({
-  queryOne: vi.fn().mockResolvedValue({ token_version: 0 }),
+  queryOne: vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (String(sql).includes('FROM employee_supervisor_ktu_access')) {
+      return h.supervisorKtuEmployeeIds.has(Number(params[0])) ? { employee_id: params[0] } : null;
+    }
+    return { token_version: 0 };
+  }),
   query: vi.fn(async (sql: string, params: unknown[] = []) => {
     const text = String(sql);
+    if (text.includes('WHERE eda.employee_id = $1') && text.includes("sr.code = 'site_supervisor'")) {
+      return h.supervisedBrigadeIds.map(id => ({ department_id: id }));
+    }
     if (text.includes('FROM payroll_section_access')) {
       return h.listedUserIds.has(String(params[0])) ? [{ user_id: params[0] }] : [];
     }
@@ -116,7 +132,45 @@ beforeEach(() => {
   h.calls.length = 0;
   h.listedUserIds.clear();
   h.grantedEmployeeIds.clear();
+  h.supervisorKtuEmployeeIds.clear();
+  h.supervisedBrigadeIds = [];
   invalidateRolePageAccessCache();
+});
+
+// Начальник участка (370): только полный расчёт своих бригад и КТУ — бригаду и пределы сужает контроллер.
+const SUPERVISOR_ROUTES: Array<['get' | 'put', string]> = [
+  ['get', '/api/payroll/timesheet-salary'],
+  ['put', '/api/payroll/timesheet-salary/ktu'],
+];
+
+describe('галочка «Ставить КТУ своим бригадам» (370)', () => {
+  it('со своими бригадами — расчёт и КТУ открыты; «Бригады», выработка и «Доля» — 403', async () => {
+    h.supervisorKtuEmployeeIds.add(EMPLOYEE_ID);
+    h.supervisedBrigadeIds = ['5049c2c9-1334-49e6-8d55-7a04bebcaa8c'];
+    for (const [method, url] of SUPERVISOR_ROUTES) {
+      expect((await call(method, url, 'kengashev', 'site_supervisor')).status, url).toBe(200);
+    }
+    const before = h.calls.length;
+    const closed = OUTPUT_ROUTES.filter(([method, url]) => !SUPERVISOR_ROUTES.some(([m, u]) => m === method && u === url));
+    expect(closed).toHaveLength(5);
+    for (const [method, url] of [...closed, ...GRANT_ROUTES]) {
+      expect((await call(method, url, 'kengashev', 'site_supervisor')).status, url).toBe(403);
+    }
+    expect(h.calls.length).toBe(before);
+  });
+
+  it('галочка без бригад (спящая) и бригады без галочки — 403', async () => {
+    h.supervisorKtuEmployeeIds.add(EMPLOYEE_ID);
+    for (const [method, url] of SUPERVISOR_ROUTES) {
+      expect((await call(method, url, 'kengashev', 'site_supervisor')).status, url).toBe(403);
+    }
+    h.supervisorKtuEmployeeIds.clear();
+    h.supervisedBrigadeIds = ['5049c2c9-1334-49e6-8d55-7a04bebcaa8c'];
+    for (const [method, url] of SUPERVISOR_ROUTES) {
+      expect((await call(method, url, 'kengashev', 'site_supervisor')).status, url).toBe(403);
+    }
+    expect(h.calls).toEqual([]);
+  });
 });
 
 describe('маршруты выработки', () => {

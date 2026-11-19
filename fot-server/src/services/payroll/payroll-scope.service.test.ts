@@ -28,8 +28,10 @@ vi.mock('../data-scope.service.js', () => ({
 }));
 
 import {
+  canEditBrigadeKtuEmployee,
   canEditPayrollEmployee,
   canReadPayrollEmployee,
+  resolveBrigadeKtuEditPredicate,
   resolveBrigadeOutputDepartmentIds,
   resolvePayrollEditPredicate,
   resolvePayrollReadableDepartmentIds,
@@ -177,5 +179,26 @@ describe('админ компании: уволенный из отдела в �
     h.canAccessEmployeeInScope.mockResolvedValue(true);
     await expect(canReadPayrollEmployee(makeReq(true), OTHER)).resolves.toBe(true);
     expect(h.queryOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('КТУ бригады по уровню доступа (370)', () => {
+  const supervisor = { kind: 'supervisor', brigadeIds: new Set(['b-1']) } as const;
+
+  it('начальник участка — любой рабочий, кроме себя; без «Выработки» и списка', async () => {
+    const req = makeReq();
+    await expect(canEditBrigadeKtuEmployee(req, supervisor, OTHER)).resolves.toBe(true);
+    await expect(canEditBrigadeKtuEmployee(req, supervisor, SELF)).resolves.toBe(false);
+    const predicate = await resolveBrigadeKtuEditPredicate(req, supervisor);
+    expect([predicate(OTHER), predicate(SELF)]).toEqual([true, false]);
+  });
+
+  it('«Выработка» — как прежде (не себе); нет уровня — никому', async () => {
+    h.hasOutputAccess.mockResolvedValue(true);
+    const req = makeReq();
+    await expect(canEditBrigadeKtuEmployee(req, { kind: 'output' }, OTHER)).resolves.toBe(true);
+    await expect(canEditBrigadeKtuEmployee(req, { kind: 'output' }, SELF)).resolves.toBe(false);
+    await expect(canEditBrigadeKtuEmployee(req, { kind: 'none' }, OTHER)).resolves.toBe(false);
+    expect((await resolveBrigadeKtuEditPredicate(req, { kind: 'none' }))(OTHER)).toBe(false);
   });
 });

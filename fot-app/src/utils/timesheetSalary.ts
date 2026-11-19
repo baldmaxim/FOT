@@ -34,6 +34,29 @@ export const formatKtu = (value: string): string => value.replace('.', ',');
 /** КТУ 0,0…2,2 с шагом 0,1 (миграция 355). */
 export const KTU_OPTIONS: readonly string[] = Array.from({ length: 23 }, (_, index) => (index / 10).toFixed(1));
 
+const ktuTenths = (value: string): number => Math.round(Number(value) * 10);
+
+/** Пункты КТУ в пределах ответа (370: начальник участка — 0,8…1,6); нет access (старый бэкенд) — все 0,0…2,2. */
+export const ktuOptionsOf = (data: ITimesheetSalaryResponse | undefined): readonly string[] => {
+  const access = data?.access;
+  if (!access) return KTU_OPTIONS;
+  const min = ktuTenths(access.ktu_min);
+  const max = ktuTenths(access.ktu_max);
+  return KTU_OPTIONS.filter(option => ktuTenths(option) >= min && ktuTenths(option) <= max);
+};
+
+/**
+ * Права правки «Зарплаты по объектам» (370): право вкладки ∧ access ответа. КТУ — право вкладки и can_edit строки;
+ * «Выработка, ₽» и «Доля» — ещё и access (начальнику участка закрыты — значение показывается текстом).
+ */
+export const canEditSalaryOutput = (data: ITimesheetSalaryResponse | undefined, canEdit: boolean): boolean => (
+  canEdit && data?.access?.can_edit_output !== false
+);
+
+export const canEditSalaryShare = (data: ITimesheetSalaryResponse | undefined, canEdit: boolean): boolean => (
+  canEdit && data?.access?.can_edit_share !== false
+);
+
 /** Ключ вписанной доли при выработке одной суммой на бригаду (341) — как на сервере. */
 export const BRIGADE_SHARE_KEY = '__brigade__';
 
@@ -263,7 +286,7 @@ export const objectShareMode = (
   object: ITimesheetSalaryObject,
   member: ITimesheetSalaryObjectMember,
 ): 'edit' | 'clear' | null => {
-  if (!canEdit || data.output_mode === 'brigade' || object.state === 'by_brigade') return null;
+  if (!canEditSalaryShare(data, canEdit) || data.output_mode === 'brigade' || object.state === 'by_brigade') return null;
   const row = data.rows.find(item => item.employee_id === member.employee_id);
   if (row?.can_edit && object.output_amount !== null && member.counted_minutes > 0) return 'edit';
   return isFixedShare(member) && row?.can_clear_share ? 'clear' : null;
@@ -275,7 +298,7 @@ export const totalShareMode = (
   canEdit: boolean,
   row: ITimesheetSalaryRow,
 ): 'edit' | 'clear' | null => {
-  if (!canEdit || data.output_mode !== 'brigade') return null;
+  if (!canEditSalaryShare(data, canEdit) || data.output_mode !== 'brigade') return null;
   if (row.can_edit && data.brigade_output !== null && (row.counted_hours ?? 0) > 0) return 'edit';
   return row.fixed_share !== null && row.fixed_share !== undefined && row.can_clear_share ? 'clear' : null;
 };

@@ -38,7 +38,7 @@ import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-a
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { EMPLOYEE_PAYSLIP_PAGE, hasEmployeePayslipAccess } from '../services/employee-payslip-access.service.js';
 import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
-import { hasBrigadeOutputGrant } from '../services/payroll/brigade-output-access.service.js';
+import { hasBrigadeOutputGrant, resolveSupervisorKtuBrigadeIds } from '../services/payroll/brigade-output-access.service.js';
 import {
   listStaffTabGrants,
   resolveStaffTabProfileFlags,
@@ -256,6 +256,9 @@ async function buildProfileResponse(
 
   // «Выработка» (миграция 342): кнопки «Бригады» и «Зарплата по объектам» в табеле. Галочка page-ключей раздела не даёт.
   const has_brigade_output_access = payrollSectionAccess || await hasBrigadeOutputGrant(profile.employee_id);
+  // «Ставить КТУ своим бригадам» (миграция 370) — только при отсутствии «Выработки»: та шире. Эффективный список (галочка ∧
+  // текущие бригады начальника) — по нему фронт открывает «Зарплату по объектам», как гард и контроллер.
+  const supervisor_brigade_ids = has_brigade_output_access ? [] : await resolveSupervisorKtuBrigadeIds(profile.employee_id);
 
   // Галочки «Проживание»/«Удержания» в назначениях (миграция 351) — зеркало ветки в resolveEffectivePageAccess:
   // без этих строк бэк запрос пропустит, а фронт вкладку не покажет.
@@ -296,6 +299,7 @@ async function buildProfileResponse(
     has_direct_reports,
     has_timesheet_view_employees,
     has_brigade_output_access,
+    supervisor_brigade_ids,
     staff_tab_role_edit: staffTabFlags.roleEdit,
     can_grant_staff_tabs: staffTabFlags.canGrant,
     is_weekend_responsible,

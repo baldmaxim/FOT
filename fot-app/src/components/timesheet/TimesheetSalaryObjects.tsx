@@ -1,7 +1,7 @@
 import { useMemo, type FC } from 'react';
 
 import type { ITimesheetSalaryObject, ITimesheetSalaryResponse } from '../../types/timesheet';
-import { isOutputClearOnly, isSalaryRowMuted, sortSalaryRows } from '../../utils/timesheetSalary';
+import { canEditSalaryOutput, isOutputClearOnly, isSalaryRowMuted, sortSalaryRows } from '../../utils/timesheetSalary';
 import type { ITimesheetSalaryGridProps } from './TimesheetSalaryCells';
 import { TimesheetGrid, type ITimesheetGridProps } from './TimesheetGrid';
 import { TimesheetSalaryObjectsHeader, type ITimesheetObjectsSalary } from './TimesheetSalaryObjectsParts';
@@ -75,7 +75,7 @@ export const TimesheetSalaryObjects: FC<ITimesheetSalaryObjectsProps> = props =>
   const outputField = (object: ITimesheetSalaryObject) => (
     <TimesheetSalaryOutputInput
       value={object.output_amount}
-      canEdit={canEdit}
+      canEdit={canEditSalaryOutput(data, canEdit)}
       saving={props.savingObjectKey === object.object_key}
       label={`Выработка, ${object.object_name}`}
       clearOnly={isOutputClearOnly(object)}

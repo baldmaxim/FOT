@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 // объектами (сервис и триггер под одним замком), фиксация с mode = brigade, повторы без записи, список «Бригады».
 // 355: КТУ 0,0…2,2, «Доля» рублями — пересчёт закрытого месяца, одни числа во всех путях, снятие долей выбором КТУ и
 // стиранием выработки, проверка под замком (две доли одновременно), стирание конфликтной доли.
+// 370: КТУ начальника участка — проверки под замком (закрытый месяц, КТУ ОТиЗ, вписанная доля) и гонка с закрытием
+// табеля: локи (сотрудник, месяц) — те же, что у путей утверждения.
 // Состав, живой табель, режимы табелирования и графики подменены: их SQL проверяют свои тесты.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы-заглушки пересоздаются).
 
@@ -159,7 +161,9 @@ import {
   setBrigadeObjectOutput,
   setBrigadeOutput,
   setBrigadeShare,
+  supervisorKtuOptions,
 } from './brigade-salary-inputs.service.js';
+import { lockTimesheetMonthsSession, unlockTimesheetMonthsSession } from '../timesheet-lock.service.js';
 import { fixedShareKtus, moneyToCents } from './brigade-salary.calc.js';
 import { checkFixedShare } from './brigade-salary-shares.service.js';
 import { brigadeShareFacts, buildPayrollCalc } from './payroll-calc.rules.js';
@@ -1111,5 +1115,101 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     const restored = await getBrigadeSalary(req, BRIGADE, '2026-09');
     expect(restored.share_conflicts).toEqual([]);
     expect(amounts(restored.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
+  });
+
+  // ─── 370: КТУ начальника участка ────────────────────────────────────────────────────────────────────────────────
+  const SUPERVISOR_RANGE = { min: 8, max: 16 };
+  const MEMBERS = [A, B, F];
+  const ktuRows = () => q<{ employee_id: number; ktu: string }>(
+    'SELECT employee_id, ktu::text AS ktu FROM brigade_salary_ktu ORDER BY employee_id',
+  );
+  const supervisorKtu = (employeeId: number, tenths: number, options = supervisorKtuOptions(
+    BRIGADE, '2026-09', employeeId, MEMBERS, SUPERVISOR_RANGE,
+  )) => setBrigadeKtu(BRIGADE, '2026-09-01', employeeId, tenths, PROFILE, undefined, options);
+  /** Вторая половина подана с редакцией: её утверждение закрывает месяц (первая уже закрыта). */
+  const halfOpen = async (): Promise<number> => {
+    await addVersion(await addApproval('2026-09-01', '2026-09-15'), 1, payload({}));
+    const second = await addApproval('2026-09-16', '2026-09-30', 'pending');
+    await addVersion(second, 1, payload({}));
+    return second;
+  };
+  /** Закрытие второй половины, как у путей табеля: session-локи (сотрудник, месяц) до транзакции, UPDATE подачи. */
+  const startClosing = async (approvalId: number) => {
+    const client = await pg.pool!.connect();
+    const keys = await lockTimesheetMonthsSession(client, MEMBERS.map(id => ({ employeeId: id, workDate: '2026-09-16' })));
+    await client.query('BEGIN');
+    await client.query(`UPDATE timesheet_approvals SET status = 'approved' WHERE id = $1`, [approvalId]);
+    return async () => {
+      await client.query('COMMIT');
+      await unlockTimesheetMonthsSession(client, keys);
+      client.release();
+    };
+  };
+  const settled = <T>(promise: Promise<T>) => {
+    const state = { done: false };
+    promise.then(() => { state.done = true; }, () => { state.done = true; });
+    return state;
+  };
+
+  it('370: открытый месяц — КТУ 1,2 пишется; закрытый — MONTH_CLOSED; КТУ ОТиЗ 2,0 и вписанная доля — отказ', async () => {
+    const second = await halfOpen();
+    await supervisorKtu(A, 12);
+    expect(await ktuRows()).toEqual([{ employee_id: A, ktu: '1.2' }]);
+
+    await q(`INSERT INTO brigade_salary_ktu (department_id, month, employee_id, ktu) VALUES ($1, '2026-09-01', $2, 2.0)`, [BRIGADE, B]);
+    await expect(supervisorKtu(B, 12)).rejects.toMatchObject({ code: 'KTU_SET_BY_PAYROLL' });
+    await setOutput(WAVE, '1000000.00');
+    await q(`INSERT INTO brigade_salary_fixed_shares (department_id, month, object_key, employee_id, amount)
+             VALUES ($1, '2026-09-01', $2, $3, 150000.00)`, [BRIGADE, WAVE, A]);
+    await expect(supervisorKtu(A, 13)).rejects.toMatchObject({ code: 'SHARE_FIXED' });
+
+    await q(`UPDATE timesheet_approvals SET status = 'approved' WHERE id = $1`, [second]);
+    await q('DELETE FROM brigade_salary_fixed_shares');
+    await expect(supervisorKtu(A, 14)).rejects.toMatchObject({ code: 'MONTH_CLOSED' });
+    // Отказы ничего не пишут: доля не снята, КТУ прежние.
+    expect(await ktuRows()).toEqual([{ employee_id: A, ktu: '1.2' }, { employee_id: B, ktu: '2.0' }]);
+  });
+
+  it('370: закрытие табеля начато раньше — КТУ ждёт его коммита и получает MONTH_CLOSED, в закрытый не пишет', async () => {
+    const finishClosing = await startClosing(await halfOpen());
+    const write = supervisorKtu(A, 12);
+    const state = settled(write);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(state.done).toBe(false);
+    await finishClosing();
+    await expect(write).rejects.toMatchObject({ code: 'MONTH_CLOSED' });
+    expect(await ktuRows()).toEqual([]);
+  });
+
+  it('370: без локов табеля (контроль) — та же гонка пропустила бы КТУ в закрытый месяц', async () => {
+    const finishClosing = await startClosing(await halfOpen());
+    const { guard } = supervisorKtuOptions(BRIGADE, '2026-09', A, MEMBERS, SUPERVISOR_RANGE);
+    await supervisorKtu(A, 12, { guard });
+    await finishClosing();
+    expect(await ktuRows()).toEqual([{ employee_id: A, ktu: '1.2' }]);
+  });
+
+  it('370: КТУ начат раньше — закрытие ждёт его коммита; КТУ записан до закрытия', async () => {
+    const second = await halfOpen();
+    let release!: () => void;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const inGuard = new Promise<void>(resolve => { entered = resolve; });
+    const base = supervisorKtuOptions(BRIGADE, '2026-09', A, MEMBERS, SUPERVISOR_RANGE);
+    const write = supervisorKtu(A, 12, {
+      ...base,
+      guard: async (client, before) => { await base.guard!(client, before); entered(); await hold; },
+    });
+    await inGuard;
+    const closing = startClosing(second);
+    const state = settled(closing);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(state.done).toBe(false);
+    release();
+    await write;
+    await (await closing)();
+    expect(await ktuRows()).toEqual([{ employee_id: A, ktu: '1.2' }]);
+    expect((await q<{ status: string }>('SELECT status FROM timesheet_approvals WHERE id = $1', [second]))[0].status)
+      .toBe('approved');
   });
 });
