@@ -196,10 +196,13 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
   });
 
   /** Строка квартиры по ставке 630; weekendDays — сколько из дней добавлено выходными месяца. */
-  const housingLine = (housingDays: number, amount: string, weekendDays = 0) => (
+  /** monthWeekends — выходные месяца до потолка (только показ), есть лишь когда потолок их урезал. */
+  const housingLine = (housingDays: number, amount: string, weekendDays = 0, monthWeekends = 0) => (
     [{
       code: 'housing', amount, housing_days: housingDays,
-      ...(weekendDays > 0 ? { housing_weekend_days: weekendDays } : {}), rate: '630.00',
+      ...(weekendDays > 0 ? { housing_weekend_days: weekendDays } : {}),
+      ...(monthWeekends > 0 ? { housing_month_weekends: monthWeekends } : {}),
+      rate: '630.00',
     }]
   );
   /** Квартира весь месяц: норма графика, отработано с 1-го по count. */
@@ -227,8 +230,8 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
     expect(wholeMonth('2026-09', 24, 15)).toEqual(housingLine(21, '13230.00', 6));
     // Крумина: 21 день отпуска не оплачивается, выходные — целиком.
     expect(wholeMonth('2026-09', 24, 8)).toEqual(housingLine(14, '8820.00', 6));
-    // Гадоев: 26 + 6 = 32 — не больше дней месяца: выходных 4.
-    expect(wholeMonth('2026-09', 24, 26)).toEqual(housingLine(30, '18900.00', 4));
+    // Гадоев: 26 + 6 = 32 — не больше дней месяца: выходных 4 (в «Компенсации аренды» — 6, как 1С; сумма та же).
+    expect(wholeMonth('2026-09', 24, 26)).toEqual(housingLine(30, '18900.00', 4, 6));
     // Голуб: график 22.
     expect(wholeMonth('2026-09', 22, 17)).toEqual(housingLine(25, '15750.00', 8));
   });
@@ -297,10 +300,10 @@ describe('pickPayslipRateAllowances — «По ставкам ФОТ»', () => {
 
   it('две ставки квартиры — отработанные по своей ставке, выходные пропорционально дням проживания; ставки в строке нет', () => {
     const half = [apartment('2026-09-01', '2026-09-16'), apartment('2026-09-16', null, '700.00')];
-    // Весь месяц отработан: 15 × 630 + 15 × 700, выходным места нет.
+    // Весь месяц отработан: 15 × 630 + 15 × 700, выходным места нет (выходные месяца — 6, только показ).
     expect(housingAllowances(facts({
       housing: half, housingDays: days({ normDays: 24, workedDates: dates('2026-09', 1, 30) }),
-    }))).toEqual([{ code: 'housing', amount: '19950.00', housing_days: 30 }]);
+    }))).toEqual([{ code: 'housing', amount: '19950.00', housing_days: 30, housing_month_weekends: 6 }]);
     // По 8 отработанных, 6 выходных поровну: 11 × 630 + 11 × 700.
     expect(housingAllowances(facts({
       housing: half,

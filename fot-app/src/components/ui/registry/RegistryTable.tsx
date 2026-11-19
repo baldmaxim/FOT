@@ -74,6 +74,11 @@ export interface IRegistryTableProps<Row> {
    * содержимого делает оно само. Сортировка, фильтр и экспорт — по-прежнему по text / exportValue столбца.
    */
   cellRenderers?: Readonly<Partial<Record<string, (row: Row) => ReactNode | undefined>>>;
+  /**
+   * Передан — особая строка: 'dismissed' — уволенный (строка слегка подкрашена), hint — подсказка при наведении
+   * («Уволен 02.11.2026»). null — обычная строка.
+   */
+  rowTone?: (row: Row) => { tone: 'dismissed'; hint: string } | null;
 }
 
 /**
@@ -85,7 +90,7 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
-  onRowClick, footer = null, groupRows, cellRenderers,
+  onRowClick, footer = null, groupRows, cellRenderers, rowTone,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
@@ -213,16 +218,19 @@ export const RegistryTable = <Row,>({
             // Не первая строка группы: столбцы сотрудника пустые на экране, текст — для экранного диктора.
             const repeated = group !== null && !group.first;
             const stripe = group ? group.index : index;
+            const tone = rowTone?.(row) ?? null;
             const rowClass = [
               stripe % 2 === 1 ? styles.rowEven : '',
               group && !group.last ? styles.rowGroupInner : '',
               onRowClick ? styles.rowClickable : '',
+              tone?.tone === 'dismissed' ? styles.rowDismissed : '',
             ].filter(Boolean).join(' ');
             return (
               // Чередование — по индексу видимой строки (с группами — по группе): после фильтра полосы не «слипаются».
               <tr
                 key={key}
                 className={rowClass || undefined}
+                title={tone?.hint}
                 {...(onRowClick ? {
                   tabIndex: 0,
                   onClick: () => onRowClick(row),
@@ -256,7 +264,8 @@ export const RegistryTable = <Row,>({
                   );
                 })}
                 {withActions && (
-                  <td className={styles.cellActions}>
+                  // ✎ и 🗑 — не клик по строке: у кликабельной строки («Квартира») окно строки не открывается.
+                  <td className={styles.cellActions} onClick={event => event.stopPropagation()}>
                     {((onEdit && editable) || (onDelete && deletable)) && (
                       <span className={styles.actions}>
                         {/* 🗑 без ✎ — на месте ✎ пусто: корзины всех строк в одном столбце. */}

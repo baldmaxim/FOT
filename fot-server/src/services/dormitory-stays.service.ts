@@ -11,6 +11,9 @@
  * общежитие» — DormitoryAllowanceConflictError (одна доплата из двух).
  * Адрес общежития запоминается в dormitory_addresses (миграция 319) — подсказки поля «Адрес / номер»;
  * удаление проживания адрес не трогает.
+ * Служебная квартира (миграция 371) — вид dormitory со ссылкой apartment_id; адрес проживания — копия «Кв. <адрес>»
+ * квартиры (её меняет только правка квартиры, company-apartments.service.ts), в подсказки не попадает. Классы записей —
+ * STAY_CLASS_SQL.
  */
 import type { PoolClient } from 'pg';
 
@@ -44,9 +47,38 @@ export interface IDormitoryStay {
   check_out: string | null;
   /** У общежития — всегда; у квартиры — если указали. */
   address: string | null;
-  /** Только у квартиры: ₽/мес, numeric строкой. */
+  /** Только у квартиры (компенсации): ставка ₽/день, numeric строкой. */
   amount: string | null;
+  /** Служебная квартира (миграция 371); общежитие и компенсация — null. */
+  apartment_id: number | null;
+  /** «Платно» — только у жильца служебной квартиры. */
+  paid: boolean;
+  comment: string | null;
+  /** ISO-время последней правки записи. */
+  updated_at: string;
+  employment_status: string | null;
+  /** YYYY-MM-DD; работает — null. */
+  dismissal_date: string | null;
+  /** Текущий отдел карточки (uuid) — для «Начальника участка». */
+  org_department_id: string | null;
+  /** Гражданство — employees.country (зеркало реквизитов). */
+  country: string | null;
 }
+
+/**
+ * Классы записей (миграция 371), одно правило во всех запросах: служебная квартира — общежитие со ссылкой на
+ * квартиру, общежитие — без ссылки, компенсация аренды — вид apartment.
+ */
+export const STAY_CLASS_SQL = {
+  flat: (alias: string) => `(${alias}.kind = 'dormitory' AND ${alias}.apartment_id IS NOT NULL)`,
+  dormitory: (alias: string) => `(${alias}.kind = 'dormitory' AND ${alias}.apartment_id IS NULL)`,
+  compensation: (alias: string) => `(${alias}.kind = 'apartment')`,
+} as const;
+
+/** «Живёт на дату» ([въезд, выезд)): одно правило для счётчиков, списков и истории. */
+export const livesOnSql = (alias: string, dateParam: string): string => (
+  `(${alias}.check_in <= ${dateParam}::date AND (${alias}.check_out IS NULL OR ${alias}.check_out > ${dateParam}::date))`
+);
 
 export interface IDormitoryCandidate {
   id: number;
@@ -68,6 +100,8 @@ export interface IDormitoryStayFields {
 
 export interface IDormitoryStayInput extends IDormitoryStayFields {
   kind: DormitoryStayKind;
+  /** Жилец служебной квартиры (вид dormitory); адрес — копия «Кв. <адрес>», её подставляет контроллер. */
+  apartment_id?: number | null;
 }
 
 /**
@@ -90,7 +124,13 @@ const STAY_SELECT = `
          to_char(s.check_in, 'YYYY-MM-DD') AS check_in,
          to_char(s.check_out, 'YYYY-MM-DD') AS check_out,
          s.address,
-         s.amount::text AS amount
+         s.amount::text AS amount,
+         s.apartment_id, s.paid, s.comment,
+         to_char(s.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
+         e.employment_status,
+         to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date,
+         e.org_department_id::text AS org_department_id,
+         e.country
     FROM employee_dormitory_stays s
     JOIN employees e ON e.id = s.employee_id
     LEFT JOIN org_departments d ON d.id = e.org_department_id
@@ -113,6 +153,27 @@ export const listStays = async (scope: {
         AND ($2::uuid[] IS NULL OR e.org_department_id = ANY($2::uuid[]))
       ORDER BY e.full_name, s.check_in, s.id`,
     [employeeIds, departmentIds],
+  );
+};
+
+/**
+ * Проживания одного класса (STAY_CLASS_SQL) в охвате employeeIds (null — без ограничения, пустой — пустой ответ):
+ * все, с историей; period — только задевающие [from, to] (въезд не позже to, выезд позже from). Порядок — ФИО, въезд.
+ */
+export const listStaysOfClass = async (
+  stayClass: keyof typeof STAY_CLASS_SQL,
+  employeeIds: number[] | null,
+  period: { from: string; to: string } | null = null,
+): Promise<IDormitoryStay[]> => {
+  if (employeeIds?.length === 0) return [];
+  return query<IDormitoryStay>(
+    `${STAY_SELECT}
+      WHERE ${STAY_CLASS_SQL[stayClass]('s')}
+        AND ($1::int[] IS NULL OR s.employee_id = ANY($1::int[]))
+        AND ($2::date IS NULL OR s.check_in <= $2::date)
+        AND ($3::date IS NULL OR s.check_out IS NULL OR s.check_out > $3::date)
+      ORDER BY e.full_name, e.id, s.check_in, s.id`,
+    [employeeIds, period?.to ?? null, period?.from ?? null],
   );
 };
 
@@ -212,13 +273,16 @@ export const getHousingRateAmount = async (): Promise<string | null> =>
     [HOUSING_RATE_CODE, moscowTodayIso()],
   ))?.amount ?? null;
 
-/** После записи: адрес общежития — в подсказки; квартира — без доплаты за общежитие в добавленных днях. */
+/**
+ * После записи: адрес общежития — в подсказки (служебная квартира — нет: её адрес у квартиры); квартира — без доплаты
+ * за общежитие в добавленных днях.
+ */
 const afterWrite = async (
   client: PoolClient,
-  stay: { employee_id: number; kind: DormitoryStayKind } & IDormitoryStayFields,
+  stay: { employee_id: number; kind: DormitoryStayKind; apartment_id?: number | null } & IDormitoryStayFields,
   previous: { check_in: string; check_out: string | null } | null,
 ): Promise<void> => {
-  if (stay.kind === 'dormitory' && stay.address) {
+  if (stay.kind === 'dormitory' && stay.address && !stay.apartment_id) {
     await client.query(REMEMBER_ADDRESS_SQL, [stay.address]);
   }
   if (stay.kind === 'apartment') {
@@ -226,9 +290,19 @@ const afterWrite = async (
   }
 };
 
+/** Служебной квартиры, в которую заселяют, нет (удалили) — ответ 404. */
+export class CompanyApartmentNotFoundError extends Error {
+  constructor() {
+    super('Квартира не найдена');
+    this.name = 'CompanyApartmentNotFoundError';
+  }
+}
+
 /**
- * Добавить проживание. Пересечение с другим проживанием сотрудника — 'overlap'; квартира в днях доплаты
- * за общежитие — DormitoryAllowanceConflictError (запись откатывается).
+ * Добавить проживание. Жилец служебной квартиры (apartment_id) — адрес «Кв. <адрес>» берётся из квартиры в той же
+ * транзакции (FOR SHARE: переименование квартиры дождётся записи); квартиры нет — CompanyApartmentNotFoundError.
+ * Пересечение с другим проживанием сотрудника — 'overlap'; квартира в днях доплаты за общежитие —
+ * DormitoryAllowanceConflictError (запись откатывается).
  */
 export const addStay = async (
   employeeId: number,
@@ -237,12 +311,21 @@ export const addStay = async (
   try {
     return await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
+      let address = input.address;
+      if (input.apartment_id) {
+        const apartment = (await client.query<{ address: string }>(
+          `SELECT address FROM company_apartments WHERE id = $1 FOR SHARE`,
+          [input.apartment_id],
+        )).rows[0];
+        if (!apartment) throw new CompanyApartmentNotFoundError();
+        address = `Кв. ${apartment.address}`;
+      }
       const row = (await client.query<{ id: number }>(
-        `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount)
-         VALUES ($1, $2, $3::date, $4::date, $5, $6) RETURNING id`,
-        [employeeId, input.kind, input.check_in, input.check_out, input.address, input.amount],
+        `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount, apartment_id)
+         VALUES ($1, $2, $3::date, $4::date, $5, $6, $7) RETURNING id`,
+        [employeeId, input.kind, input.check_in, input.check_out, address, input.amount, input.apartment_id ?? null],
       )).rows[0];
-      await afterWrite(client, { employee_id: employeeId, ...input }, null);
+      await afterWrite(client, { employee_id: employeeId, ...input, address }, null);
       const stay = await readStay(client, row.id, false);
       if (!stay) throw new Error('Проживание не найдено после добавления');
       return stay;
@@ -255,7 +338,8 @@ export const addStay = async (
 
 /**
  * Изменить даты, адрес и сумму (вид не меняется); amount null — сумма прежняя (кадры сумму квартиры не задают,
- * у общежития её нет). Проживания нет — null; пересечение — 'overlap'; квартира в добавленных днях доплаты
+ * у общежития её нет). У жильца служебной квартиры адрес прежний (меняется только правкой квартиры) — даже если
+ * прислан другой. Проживания нет — null; пересечение — 'overlap'; квартира в добавленных днях доплаты
  * за общежитие — DormitoryAllowanceConflictError. Возвращает прежнюю и новую строки: аудит пишет «было → стало».
  */
 export const updateStay = async (
@@ -272,12 +356,18 @@ export const updateStay = async (
       if (!before) return null;
       await client.query(
         `UPDATE employee_dormitory_stays
-            SET check_in = $2::date, check_out = $3::date, address = $4, amount = COALESCE($5, amount),
+            SET check_in = $2::date, check_out = $3::date,
+                address = CASE WHEN apartment_id IS NULL THEN $4 ELSE address END,
+                amount = COALESCE($5, amount),
                 updated_at = now()
           WHERE id = $1`,
         [id, input.check_in, input.check_out, input.address, input.amount],
       );
-      await afterWrite(client, { employee_id: before.employee_id, kind: before.kind, ...input }, before);
+      await afterWrite(
+        client,
+        { employee_id: before.employee_id, kind: before.kind, apartment_id: before.apartment_id, ...input },
+        before,
+      );
       const after = await readStay(client, id, false);
       return after ? { before, after } : null;
     });
@@ -286,6 +376,29 @@ export const updateStay = async (
     throw err;
   }
 };
+
+/**
+ * «Платно» и/или комментарий (PATCH /stays/:id/meta): остальные поля не трогаются; без изменений — та же строка, без
+ * записи. «Платно» у общежития или компенсации — 'not_flat' (и CHECK employee_dormitory_stay_paid). Нет записи — null.
+ */
+export const updateStayMeta = async (
+  id: number,
+  input: { paid?: boolean; comment?: string | null },
+): Promise<{ before: IDormitoryStay; after: IDormitoryStay } | 'not_flat' | null> =>
+  withTransaction(async client => {
+    const before = await readStay(client, id, true);
+    if (!before) return null;
+    if (input.paid === true && before.apartment_id === null) return 'not_flat';
+    const paid = input.paid ?? before.paid;
+    const comment = input.comment === undefined ? before.comment : input.comment;
+    if (paid === before.paid && comment === before.comment) return { before, after: before };
+    await client.query(
+      `UPDATE employee_dormitory_stays SET paid = $2, comment = $3, updated_at = now() WHERE id = $1`,
+      [id, paid, comment],
+    );
+    const after = await readStay(client, id, false);
+    return after ? { before, after } : null;
+  });
 
 /** Удалить проживание (адрес в подсказках остаётся); его нет — null. */
 export const deleteStay = async (id: number): Promise<IDormitoryStay | null> =>

@@ -33,8 +33,11 @@ export const apartmentMonthAmount = (calc: PayrollCalcWithPreliminary | undefine
   return calc.rate_allowances.find(allowance => allowance.code === 'housing')?.amount ?? '0.00';
 };
 
+/** Что нужно от строки проживания, чтобы выбрать последнее в месяце. */
+type HousingStayRef = Pick<IHousingAllowanceRow, 'id' | 'employee_id' | 'check_in' | 'check_out'>;
+
 /** Проживание [въезд, выезд) задевает месяц: в день выезда уже не живёт. */
-const stayTouchesMonth = (stay: IHousingAllowanceRow, month: string): boolean => (
+const stayTouchesMonth = (stay: HousingStayRef, month: string): boolean => (
   stay.check_in <= lastDayOfMonth(month) && (stay.check_out === null || stay.check_out > `${month}-01`)
 );
 
@@ -42,8 +45,8 @@ const stayTouchesMonth = (stay: IHousingAllowanceRow, month: string): boolean =>
  * Квартиры месяца — одна строка на сотрудника: последнее проживание (въезд, затем id — наибольшие). Сумма месяца
  * у сотрудника одна на все его квартиры и ставки; ✎ и 🗑 строки — у последнего проживания.
  */
-export const lastStaysOfMonth = (stays: readonly IHousingAllowanceRow[], month: string): IHousingAllowanceRow[] => {
-  const byEmployee = new Map<number, IHousingAllowanceRow>();
+export const lastStaysOfMonth = <Stay extends HousingStayRef>(stays: readonly Stay[], month: string): Stay[] => {
+  const byEmployee = new Map<number, Stay>();
   for (const stay of stays) {
     if (!stayTouchesMonth(stay, month)) continue;
     const current = byEmployee.get(stay.employee_id);

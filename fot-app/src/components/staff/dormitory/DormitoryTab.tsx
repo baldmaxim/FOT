@@ -1,47 +1,53 @@
-import { useMemo, useState, type FC } from 'react';
+import { useId, useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { ApiError } from '../../../api/client';
 import { useAuth } from '../../../contexts/AuthContext';
-import { useToast } from '../../../contexts/ToastContext';
 import {
   DORMITORY_ADDRESSES_KEY,
+  DORMITORY_APARTMENTS_KEY,
   DORMITORY_STAYS_KEY,
   dormitoryService,
-  type IDormitoryStay,
 } from '../../../services/dormitoryService';
 import { PAYROLL_TERMS_PREFIX } from '../../../services/payrollRegistryService';
-import {
-  DORMITORY_PRESET_ADDRESSES,
-  DORMITORY_STAY_KIND_LABELS,
-  dormitoryAddressOptions,
-} from '../../../utils/dormitoryStayForm';
-import { formatDate } from '../../../utils/formatMoney';
-import { DormitoryStayModal } from './DormitoryStayModal';
-import { DormitoryStaysPanel } from './DormitoryStaysPanel';
+import { DORMITORY_PRESET_ADDRESSES, dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
+import { RegistryTabs, type IRegistryTab } from '../../ui/registry/RegistryTabs';
+import tabStyles from '../../ui/registry/RegistryTabs.module.css';
+import { ApartmentsPanel } from './ApartmentsPanel';
+import { CompensationPanel } from './CompensationPanel';
+import { DormitoryResidentsPanel } from './DormitoryResidentsPanel';
+import styles from './DormitoryTab.module.css';
 
-/** Окно правки: добавление или ✎ конкретного проживания. */
-type EditorState = { mode: 'add' } | { mode: 'edit'; stay: IDormitoryStay } | null;
+type HousingTab = 'apartment' | 'dormitory' | 'compensation';
+
+const HOUSING_TABS: ReadonlyArray<IRegistryTab<HousingTab>> = [
+  { key: 'apartment', label: 'Квартира' },
+  { key: 'dormitory', label: 'Общежитие' },
+  { key: 'compensation', label: 'Компенсация аренды' },
+];
+
+/** «Кв. …» — адрес служебной квартиры, общежитию его не подсказываем (миграция 371). */
+const isFlatAddress = (address: string): boolean => /^\s*кв[.\s]/i.test(address);
 
 /**
- * «Управление кадрами» → «Проживание» (миграции 314, 320): где живут сотрудники — общежитие или квартира, все
- * проживания, текущие и прошлые. Квартиры — те же записи, что «Доплата за проживание» «Зарплаты». С правом
- * «Редактирование» — «Добавить сотрудника», ✎ и 🗑; «Экспорт» — ровно таблица экрана.
+ * «Управление кадрами» → «Проживание» (миграции 314, 320, 371): вкладки «Квартира» (служебные квартиры компании, как
+ * «Учёт квартир» 1С), «Общежитие» (как отчёт «Проживающие в общежитии последний вход (СКД)») и «Компенсация аренды»
+ * (630 ₽/день — те же записи, что «Доплата → Квартира» «Зарплаты»). Вкладка загружается при первом открытии и дальше
+ * остаётся смонтированной (поиск и фильтры целы); таблица прокручивается внутри — шапка закреплена.
  */
 export const DormitoryTab: FC = () => {
   const { isAdmin, canEditPage } = useAuth();
   const canEdit = isAdmin || canEditPage('/staff-control/dormitory');
-  const toast = useToast();
   const queryClient = useQueryClient();
-  const [editor, setEditor] = useState<EditorState>(null);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const baseId = useId();
+  const [tab, setTab] = useState<HousingTab>('apartment');
+  const [visited, setVisited] = useState<ReadonlySet<HousingTab>>(() => new Set(['apartment']));
 
-  const staysQuery = useQuery({
-    queryKey: DORMITORY_STAYS_KEY,
-    queryFn: ({ signal }) => dormitoryService.list(signal),
-    staleTime: 0,
-  });
-  // Подсказки «Адрес / номер»: 9 общежитий и все когда-либо сохранённые адреса — нужны только окну правки.
+  const changeTab = (next: HousingTab) => {
+    setTab(next);
+    setVisited(prev => (prev.has(next) ? prev : new Set([...prev, next])));
+  };
+
+  // Подсказки общежитий: 9 общежитий компании и сохранённые адреса — нужны только окнам правки.
   const addressesQuery = useQuery({
     queryKey: DORMITORY_ADDRESSES_KEY,
     queryFn: ({ signal }) => dormitoryService.listAddresses(signal),
@@ -49,54 +55,64 @@ export const DormitoryTab: FC = () => {
     staleTime: 0,
   });
   const addresses = useMemo(
-    () => dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, ...(addressesQuery.data ?? [])]),
+    () => dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, ...(addressesQuery.data ?? [])])
+      .filter(address => !isFlatAddress(address)),
     [addressesQuery.data],
   );
+  // Квартиры для «Переселить» из общежития — те же данные, что вкладка «Квартира» (общий ключ, один запрос).
+  const apartmentsQuery = useQuery({
+    queryKey: DORMITORY_APARTMENTS_KEY,
+    queryFn: ({ signal }) => dormitoryService.listApartments(signal),
+    enabled: canEdit && visited.has('dormitory'),
+    staleTime: 0,
+  });
 
-  // Префикс общий с таблицей «Справочника» «Зарплаты» и подсказками адресов — они тоже перечитаются; квартиры —
-  // «Доплата за проживание» и «Компенсация проживания» условий оплаты (префикс 'payroll-terms').
-  const refresh = () => Promise.all([
-    queryClient.invalidateQueries({ queryKey: DORMITORY_STAYS_KEY }),
-    queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX }),
-  ]);
-
-  const handleDelete = async (stay: IDormitoryStay) => {
-    if (deletingId !== null) return;
-    const where = DORMITORY_STAY_KIND_LABELS[stay.kind].toLowerCase();
-    if (!window.confirm(`Удалить проживание (${where}): ${stay.full_name}, въезд ${formatDate(stay.check_in)}?`)) return;
-    setDeletingId(stay.id);
-    try {
-      await dormitoryService.remove(stay.id);
-      queryClient.setQueryData<IDormitoryStay[]>(DORMITORY_STAYS_KEY, list => list?.filter(item => item.id !== stay.id));
-    } catch (err) {
-      toast.error(err instanceof ApiError && err.message ? err.message : 'Не удалось удалить');
-    } finally {
-      setDeletingId(null);
-      void refresh();
-    }
+  // Общий префикс: квартиры, жильцы, компенсация, подсказки и «Справочник» «Зарплаты»; квартиры-компенсации — ещё и
+  // «Доплата за проживание» условий оплаты (префикс 'payroll-terms').
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: DORMITORY_STAYS_KEY });
+    void queryClient.invalidateQueries({ queryKey: PAYROLL_TERMS_PREFIX });
   };
 
+  const tabId = (key: HousingTab) => `${baseId}-tab-${key}`;
+  const panelId = (key: HousingTab) => `${baseId}-panel-${key}`;
+  const panelProps = (key: HousingTab) => ({
+    className: tabStyles.tabPanel,
+    role: 'tabpanel',
+    id: panelId(key),
+    'aria-labelledby': tabId(key),
+    hidden: tab !== key,
+    // Таблица прокручивается внутри панели, шапка закреплена (RegistryTable.module.css).
+    'data-registry-fill': true,
+  });
+
   return (
-    <>
-      <DormitoryStaysPanel
-        rows={staysQuery.data}
-        isLoading={staysQuery.isLoading}
-        isError={staysQuery.isError}
-        onRetry={() => { void staysQuery.refetch(); }}
-        onAdd={canEdit ? () => setEditor({ mode: 'add' }) : undefined}
-        onEdit={canEdit ? stay => setEditor({ mode: 'edit', stay }) : undefined}
-        onDelete={canEdit ? stay => { void handleDelete(stay); } : undefined}
-        busyId={deletingId}
+    <div className={styles.root}>
+      <RegistryTabs
+        tabs={HOUSING_TABS}
+        active={tab}
+        onChange={changeTab}
+        tabId={tabId}
+        panelId={panelId}
+        label="Разделы проживания"
       />
 
-      {editor && (
-        <DormitoryStayModal
-          stay={editor.mode === 'edit' ? editor.stay : undefined}
-          addresses={addresses}
-          onClose={() => setEditor(null)}
-          onSaved={() => { void refresh(); }}
-        />
-      )}
-    </>
+      <div {...panelProps('apartment')}>
+        {visited.has('apartment') && <ApartmentsPanel canEdit={canEdit} addresses={addresses} onChanged={refresh} />}
+      </div>
+      <div {...panelProps('dormitory')}>
+        {visited.has('dormitory') && (
+          <DormitoryResidentsPanel
+            canEdit={canEdit}
+            addresses={addresses}
+            apartments={apartmentsQuery.data?.apartments ?? []}
+            onChanged={refresh}
+          />
+        )}
+      </div>
+      <div {...panelProps('compensation')}>
+        {visited.has('compensation') && <CompensationPanel canEdit={canEdit} onChanged={refresh} />}
+      </div>
+    </div>
   );
 };

@@ -340,8 +340,10 @@ export const toCalcTermsRow = (row: IPayrollTerms): ICalcTermsRow => ({
 export interface IPayoutOptions {
   previousTerms?: ReadonlyMap<number, readonly ICalcTermsRow[]>;
   /**
-   * false — закрытый расчёт без записи (расчётный лист в ЛК): доли бригад только из уже зафиксированного актуального
-   * расчёта (peekFixedBrigadeShares), иначе бригада open. По умолчанию — как раньше: закрытый месяц фиксируется.
+   * false — расчёт без записи: закрытый (расчётный лист в ЛК) — доли бригад только из уже зафиксированного актуального
+   * расчёта (peekFixedBrigadeShares), иначе бригада open; предварительный («Компенсация аренды» кадров) — закрытая
+   * бригада без актуального расчёта считается предварительной долей, не фиксируется. По умолчанию — как раньше:
+   * закрытый месяц фиксируется.
    */
   fixBrigades?: boolean;
   /**
@@ -399,7 +401,7 @@ const computePayouts = async (
   // предварительно) — месяц её людей не закрыт.
   const brigadeIds = [...new Set([...entries.values()].flatMap(entry => entry.basis.brigades.map(item => item.departmentId)))];
   const brigades = asOf !== null
-    ? await loadPreliminaryBrigadeShares(req, month, asOf, brigadeIds, liveIds)
+    ? await loadPreliminaryBrigadeShares(req, month, asOf, brigadeIds, liveIds, options.fixBrigades !== false)
     : options.fixBrigades === false
       ? await peekFixedBrigadeShares(month, brigadeIds)
       : await loadFixedBrigadeShares(req, month, brigadeIds);

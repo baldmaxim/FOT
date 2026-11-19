@@ -190,6 +190,25 @@
 
 .muted { color: var(--text-muted); }
 
+/* Кнопка-ссылка в теле окна («Переселить…» в окне проживания): тап-цель 44px, слева. */
+.linkButton {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.linkButton:hover:not(:disabled) { text-decoration: underline; }
+.linkButton:disabled { opacity: 0.6; cursor: default; }
+.linkButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
 .error {
   margin: 0;
   font-size: 13px;

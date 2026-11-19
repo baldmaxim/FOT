@@ -53,6 +53,8 @@ vi.mock('../services/hiring-access.service.js', () => ({
 vi.mock('../services/object-kpi-roles-cache.service.js', () => ({ isEconomicsHead: vi.fn(async () => false) }));
 
 vi.mock('../controllers/dormitory-stays.controller.js', () => ({ dormitoryStaysController: h.stubController('dormitory') }));
+vi.mock('../controllers/company-apartments.controller.js', () => ({ companyApartmentsController: h.stubController('apartments') }));
+vi.mock('../controllers/dormitory-residents.controller.js', () => ({ dormitoryResidentsController: h.stubController('residents') }));
 
 const app = express();
 app.use(express.json());
@@ -81,13 +83,25 @@ const tokenFor = (roleCode: string): string => jwt.sign(
 const send = (method: 'get' | 'post' | 'patch' | 'delete', url: string, roleCode: string): request.Test =>
   request(app)[method](url).set('Authorization', `Bearer ${tokenFor(roleCode)}`).send({});
 
-const READS: Array<['get' | 'post', string]> = [['get', '/api/dormitory/stays'], ['post', '/api/dormitory/stays/export']];
+const READS: Array<['get' | 'post', string]> = [
+  ['get', '/api/dormitory/stays'],
+  ['post', '/api/dormitory/stays/export'],
+  // Миграция 371: вкладки «Квартира», «Общежитие», «Компенсация аренды».
+  ['get', '/api/dormitory/apartments'],
+  ['get', '/api/dormitory/residents'],
+  ['get', '/api/dormitory/compensation?month=2026-10'],
+];
 const WRITES: Array<['get' | 'post' | 'patch' | 'delete', string]> = [
   ['get', '/api/dormitory/employees/search?q=Кар'],
   ['get', '/api/dormitory/addresses'],
   ['post', '/api/dormitory/stays'],
   ['patch', '/api/dormitory/stays/7'],
   ['delete', '/api/dormitory/stays/7'],
+  ['patch', '/api/dormitory/stays/7/meta'],
+  ['post', '/api/dormitory/stays/7/move'],
+  ['post', '/api/dormitory/apartments'],
+  ['patch', '/api/dormitory/apartments/3'],
+  ['delete', '/api/dormitory/apartments/3'],
 ];
 
 beforeEach(() => {
@@ -103,7 +117,9 @@ describe('права вкладки «Общежитие»', () => {
     for (const [method, url] of WRITES) {
       expect((await send(method, url, 'hr')).status, `${method} ${url}`).toBe(403);
     }
-    expect(h.calls).toEqual(['dormitory.list', 'dormitory.exportTable']);
+    expect(h.calls).toEqual([
+      'dormitory.list', 'dormitory.exportTable', 'apartments.list', 'residents.residents', 'residents.compensation',
+    ]);
   });
 
   it('«Редактирование» — всё', async () => {
@@ -111,8 +127,9 @@ describe('права вкладки «Общежитие»', () => {
       expect((await send(method, url, 'hr_admin')).status, `${method} ${url}`).toBe(200);
     }
     expect(h.calls).toEqual([
-      'dormitory.list', 'dormitory.exportTable', 'dormitory.searchEmployees', 'dormitory.listAddresses',
-      'dormitory.add', 'dormitory.update', 'dormitory.remove',
+      'dormitory.list', 'dormitory.exportTable', 'apartments.list', 'residents.residents', 'residents.compensation',
+      'dormitory.searchEmployees', 'dormitory.listAddresses', 'dormitory.add', 'dormitory.update', 'dormitory.remove',
+      'residents.updateMeta', 'residents.move', 'apartments.add', 'apartments.update', 'apartments.remove',
     ]);
   });
 

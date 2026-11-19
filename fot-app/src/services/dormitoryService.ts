@@ -20,7 +20,86 @@ export interface IDormitoryStay {
   address: string | null;
   /** Только у квартиры: ставка ₽/день (миграция 339), numeric строкой. */
   amount: string | null;
+  /** Служебная квартира (миграция 371); общежитие и компенсация — null. Прежний бэкенд поле не присылает. */
+  apartment_id?: number | null;
+  /** «Платно» — только у жильца служебной квартиры. */
+  paid?: boolean;
+  comment?: string | null;
+  /** ISO-время последней правки записи. */
+  updated_at?: string;
+  employment_status?: string | null;
+  /** YYYY-MM-DD; работает — null. */
+  dismissal_date?: string | null;
+  org_department_id?: string | null;
+  /** Гражданство (employees.country). */
+  country?: string | null;
 }
+
+/** Служебная квартира компании (миграция 371). */
+export interface ICompanyApartment {
+  id: number;
+  /** Без «Кв.». */
+  address: string;
+  /** «РФ \ ВНЖ», «семейная». */
+  note: string | null;
+  rooms: number | null;
+  /** Справочно, не лимит. */
+  places: number | null;
+  /** Аренда ₽/мес, numeric строкой. */
+  price: string | null;
+  /** YYYY-MM-DD. */
+  paid_until: string | null;
+}
+
+export interface ICompanyApartmentPayload {
+  address: string;
+  note: string | null;
+  rooms: number | null;
+  places: number | null;
+  price: number | null;
+  paid_until: string | null;
+}
+
+/** Жилец служебной квартиры: сведения — только у живущих сейчас. */
+export interface IApartmentResident extends IDormitoryStay {
+  phone: string | null;
+  vacation_from: string | null;
+  vacation_to: string | null;
+  main_object: string | null;
+}
+
+export interface IApartmentsData {
+  /** Сегодня по Москве (YYYY-MM-DD) — граница «живёт сейчас» и «история». */
+  today: string;
+  apartments: ICompanyApartment[];
+  residents: IApartmentResident[];
+}
+
+/** Жилец общежития: сведения — только у тех, чья запись не закончилась. */
+export interface IDormitoryResident extends IDormitoryStay {
+  /** Последние 4 знака паспорта. */
+  passport: string | null;
+  /** YYYY-MM-DDTHH:MM:SS по Москве. */
+  last_pass_at: string | null;
+  last_access_point: string | null;
+  supervisor: string | null;
+}
+
+export interface IDormitoryResidentsData {
+  today: string;
+  residents: IDormitoryResident[];
+}
+
+/** «Компенсация аренды» за месяц: дни и сумма — из расчёта ФОТ (null — месяц не посчитан). */
+export interface ICompensationMonthRow extends IDormitoryStay {
+  month: string;
+  month_amount: string | null;
+  worked_days: number | null;
+  weekend_days: number | null;
+}
+
+/** Переселение: в общежитие (адрес) или в служебную квартиру (id) — одно из двух. */
+export type StayMoveTarget = { address: string } | { apartment_id: number };
 
 /** Общежитие в «Справочнике» «Зарплаты»: только «штат зарплаты»; can_edit — можно ли убрать (🗑). */
 export interface IPayrollDormitoryStay extends IDormitoryStay {
@@ -50,6 +129,10 @@ export const DORMITORY_STAYS_KEY = ['dormitory-stays'] as const;
 export const PAYROLL_DORMITORY_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'payroll'] as const;
 /** Под тем же префиксом: сохранение проживания перечитывает и подсказки адресов. */
 export const DORMITORY_ADDRESSES_KEY = [...DORMITORY_STAYS_KEY, 'addresses'] as const;
+/** Вкладки «Проживания» (миграция 371) — под тем же префиксом: любая правка перечитывает открытые. */
+export const DORMITORY_APARTMENTS_KEY = [...DORMITORY_STAYS_KEY, 'apartments'] as const;
+export const DORMITORY_RESIDENTS_KEY = [...DORMITORY_STAYS_KEY, 'residents'] as const;
+export const DORMITORY_COMPENSATION_KEY = [...DORMITORY_STAYS_KEY, 'compensation'] as const;
 
 export const dormitoryService = {
   /** «Управление кадрами» → «Проживание»: общежития и квартиры, охват списка кадров. */
@@ -110,10 +193,63 @@ export const dormitoryService = {
    * Пересечение с другим проживанием сотрудника — ApiError 409; квартира в днях «Доплаты за общежитие» или без
    * ставки «Доплата за проживание» (сумму квартиры сервер берёт из неё) — тоже 409.
    */
-  add: async (employeeId: number, kind: DormitoryStayKind, payload: IDormitoryStayPayload): Promise<IDormitoryStay> => {
+  add: async (
+    employeeId: number,
+    kind: DormitoryStayKind,
+    payload: IDormitoryStayPayload,
+    apartmentId: number | null = null,
+  ): Promise<IDormitoryStay> => {
     const res = await apiClient.post<IApiResponse<IDormitoryStay>>(
       '/dormitory/stays',
-      { employee_id: employeeId, kind, ...payload },
+      { employee_id: employeeId, kind, ...payload, ...(apartmentId !== null ? { apartment_id: apartmentId } : {}) },
+    );
+    return res.data;
+  },
+
+  /** «Платно» и/или комментарий — остальные поля записи не меняются. */
+  updateMeta: async (stayId: number, meta: { paid?: boolean; comment?: string | null }): Promise<IDormitoryStay> => {
+    const res = await apiClient.patch<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/meta`, meta);
+    return res.data;
+  },
+
+  /** Переселить с даты (с 1-го числа текущего месяца по сегодня): прежняя запись закрывается, новая — с этой даты. */
+  move: async (stayId: number, date: string, target: StayMoveTarget): Promise<void> => {
+    await apiClient.post(`/dormitory/stays/${stayId}/move`, { date, ...target });
+  },
+
+  /** Вкладка «Квартира»: квартиры и жильцы (сейчас и история) в охвате списка кадров. */
+  listApartments: async (signal?: AbortSignal): Promise<IApartmentsData> => {
+    const res = await apiClient.get<IApiResponse<IApartmentsData>>('/dormitory/apartments', { signal });
+    return res.data;
+  },
+
+  addApartment: async (payload: ICompanyApartmentPayload): Promise<ICompanyApartment> => {
+    const res = await apiClient.post<IApiResponse<ICompanyApartment>>('/dormitory/apartments', payload);
+    return res.data;
+  },
+
+  /** Новый адрес меняется и у всех проживаний квартиры. */
+  updateApartment: async (id: number, payload: ICompanyApartmentPayload): Promise<ICompanyApartment> => {
+    const res = await apiClient.patch<IApiResponse<ICompanyApartment>>(`/dormitory/apartments/${id}`, payload);
+    return res.data;
+  },
+
+  /** Только квартиру без жильцов и истории — иначе ApiError 409. */
+  removeApartment: async (id: number): Promise<void> => {
+    await apiClient.delete(`/dormitory/apartments/${id}`);
+  },
+
+  /** Вкладка «Общежитие»: все записи общежитий (с историей) со сведениями у живущих. */
+  listResidents: async (signal?: AbortSignal): Promise<IDormitoryResidentsData> => {
+    const res = await apiClient.get<IApiResponse<IDormitoryResidentsData>>('/dormitory/residents', { signal });
+    return res.data;
+  },
+
+  /** Вкладка «Компенсация аренды» за месяц YYYY-MM. */
+  listCompensation: async (month: string, signal?: AbortSignal): Promise<ICompensationMonthRow[]> => {
+    const res = await apiClient.get<IApiResponse<ICompensationMonthRow[]>>(
+      `/dormitory/compensation?month=${encodeURIComponent(month)}`,
+      { signal, timeoutMs: 120_000 },
     );
     return res.data;
   },

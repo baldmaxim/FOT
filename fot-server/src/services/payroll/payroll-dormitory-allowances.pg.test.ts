@@ -163,7 +163,7 @@ const auditCount = async (action: string) =>
 describe.skipIf(!PG_URL)('«Доплата за общежитие» на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS payroll_dormitory_allowances, employee_dormitory_stays, payroll_compensation_stops,
+      DROP TABLE IF EXISTS payroll_dormitory_allowances, employee_dormitory_stays, company_apartments, payroll_compensation_stops,
         payroll_one_time_supplements, payroll_paid_amounts, payroll_planned_supplements, payroll_settings,
         payroll_item_types, payroll_rate_values, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, role_page_access, access_pages,
@@ -179,7 +179,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
-        dismissal_date date
+        dismissal_date date,
+        country text
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);
@@ -240,6 +241,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     for (const name of [
       '313_payroll_rate_code.sql', '314_employee_dormitory_stays.sql', '315_payroll_dictionary_registries.sql',
       '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql',
+      // Служебные квартиры: сервис проживаний пишет и читает её столбцы.
+      '371_company_apartments.sql',
     ]) {
       await run(migration(name));
     }

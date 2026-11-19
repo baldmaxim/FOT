@@ -98,10 +98,68 @@ export const dormitoryStayAuditDetails = (stay: IDormitoryStay) => ({
   check_out: stay.check_out,
   address: stay.address,
   amount: stay.amount,
+  apartment_id: stay.apartment_id ?? null,
+  paid: stay.paid ?? false,
+  comment: stay.comment ?? null,
 });
 
 /** Изменилось ли что-то в записи — без изменений аудита нет. */
 export const dormitoryStayChanged = (before: IDormitoryStay, after: IDormitoryStay): boolean => (
   before.check_in !== after.check_in || before.check_out !== after.check_out
   || before.address !== after.address || before.amount !== after.amount
+  || (before.apartment_id ?? null) !== (after.apartment_id ?? null)
+  || (before.paid ?? false) !== (after.paid ?? false)
+  || (before.comment ?? null) !== (after.comment ?? null)
 );
+
+/**
+ * Адрес «Кв. …» — служебная квартира (миграция 371): общежитием с таким адресом её не завести, только жильцом
+ * квартиры во вкладке «Квартира» (в БД — CHECK employee_dormitory_stay_no_pseudo_apartment).
+ */
+export const isPseudoApartmentAddress = (address: string | null): boolean => /^\s*кв[.\s]/i.test(address ?? '');
+
+export const PSEUDO_APARTMENT_ERROR = 'Служебную квартиру заселяют во вкладке «Квартира»: адрес «Кв. …» у общежития не указывают';
+
+/** Заселение жильцом служебной квартиры: её id (адрес берётся из квартиры). */
+export const stayApartmentIdSchema = z.object({
+  apartment_id: z.number({ invalid_type_error: 'Неверная квартира' }).int('Неверная квартира').positive('Неверная квартира')
+    .nullable().optional().transform(value => value ?? null),
+});
+
+const COMMENT_MAX = 500;
+
+/** Комментарий: пробелы по краям убираются, пусто — нет комментария (NULL). */
+const commentSchema = z.string({ invalid_type_error: 'Неверный комментарий' })
+  .transform(value => value.trim())
+  .pipe(z.string().max(COMMENT_MAX, `Комментарий — не больше ${COMMENT_MAX} символов`))
+  .nullable()
+  .transform(value => value || null);
+
+/**
+ * PATCH /stays/:id/meta — частичная правка: «Платно» и/или комментарий, остальные поля не трогаются. Ни одного
+ * поля — 400.
+ */
+export const stayMetaSchema = z.object({
+  paid: z.boolean({ invalid_type_error: 'Неверное значение «Платно»' }).optional(),
+  comment: commentSchema.optional(),
+}).strict('Можно изменить только «Платно» и комментарий')
+  .refine(value => value.paid !== undefined || value.comment !== undefined, { message: 'Нечего сохранять' });
+
+export type IStayMetaInput = z.infer<typeof stayMetaSchema>;
+
+/**
+ * POST /stays/:id/move — переселение: дата и ровно одно из двух — адрес общежития или служебная квартира.
+ */
+export const stayMoveSchema = z.object({
+  date: dateSchema('Укажите дату переселения'),
+  address: z.string({ invalid_type_error: 'Неверный адрес' })
+    .transform(squeeze)
+    .pipe(z.string().max(200, ADDRESS_TOO_LONG))
+    .nullable().optional().transform(value => value || null),
+  apartment_id: z.number({ invalid_type_error: 'Неверная квартира' }).int('Неверная квартира').positive('Неверная квартира')
+    .nullable().optional().transform(value => value ?? null),
+}).refine(value => (value.address === null) !== (value.apartment_id === null), {
+  message: 'Выберите общежитие или квартиру — одно из двух',
+});
+
+export type IStayMoveInput = z.infer<typeof stayMoveSchema>;

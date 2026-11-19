@@ -34,11 +34,23 @@ interface IDormitoryStayModalProps {
   addresses: readonly string[];
   /** Передано — заселение из «Зарплаты» (окно поверх таблицы «Справочника»); нет — вкладка кадров. */
   payroll?: IDormitoryStayModalPayroll;
+  /** Вид задан вкладкой («Общежитие», «Компенсация аренды», миграция 371): переключателя нет. */
+  fixedKind?: DormitoryStayKind;
+  /** Заселение жильцом этой служебной квартиры: поля адреса нет, адрес — у квартиры. */
+  apartment?: { id: number; title: string };
+  /** Передано — в правке кнопка «Переселить…» (окно переселения вместо этого). */
+  onMove?: () => void;
+  /** Поверх другого окна (жильцы квартиры): оверлей выше. */
+  raised?: boolean;
+  /** Поле «Комментарий» (вкладка «Компенсация аренды»): сохраняется частичной правкой записи. */
+  withComment?: boolean;
   onClose: () => void;
   onSaved: (stay: IDormitoryStay) => void;
 }
 
 const KINDS: DormitoryStayKind[] = ['dormitory', 'apartment'];
+/** Как CHECK employee_dormitory_stay_comment (миграция 371). */
+const COMMENT_MAX_LENGTH = 500;
 
 /**
  * «Добавить сотрудника» и ✎ во вкладке «Проживание»: сотрудник (поиск по ФИО), вид (общежитие или квартира —
@@ -47,15 +59,20 @@ const KINDS: DormitoryStayKind[] = ['dormitory', 'apartment'];
  * «Доплата за проживание», меняет её «Зарплата». Ошибка сервера — под полями, ввод не теряется. Из «Зарплаты»
  * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника».
  */
-export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, addresses, payroll, onClose, onSaved }) => {
+export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
+  stay, addresses, payroll, fixedKind, apartment, onMove, raised = false, withComment = false, onClose, onSaved,
+}) => {
   const errorId = useId();
   const addressId = useId();
   const isEdit = stay !== undefined;
-  const [kind, setKind] = useState<DormitoryStayKind>(stay?.kind ?? 'dormitory');
+  /** Жилец служебной квартиры: адрес — у квартиры, здесь не меняется. */
+  const flatAddress = apartment ? `Кв. ${apartment.title}` : (stay?.apartment_id ? stay.address : null);
+  const [kind, setKind] = useState<DormitoryStayKind>(stay?.kind ?? fixedKind ?? 'dormitory');
   const [employee, setEmployee] = useState<IDormitoryCandidate | null>(null);
   const [checkIn, setCheckIn] = useState(stay?.check_in ?? '');
   const [checkOut, setCheckOut] = useState(stay?.check_out ?? '');
   const [address, setAddress] = useState(stay?.address ?? '');
+  const [comment, setComment] = useState(stay?.comment ?? '');
   const isApartment = kind === 'apartment';
   const [error, setError] = useState<{ field: DormitoryStayField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -75,7 +92,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
 
   const handleSubmit = async (requestClose: () => void) => {
     const parsed = parseDormitoryStay(
-      { checkIn, checkOut, address },
+      { checkIn, checkOut, address: flatAddress ?? address },
       { required: !isEdit, selected: employee !== null },
       kind,
     );
@@ -89,7 +106,11 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
       let saved: IDormitoryStay;
       if (isEdit) saved = await dormitoryService.update(stay.id, parsed.payload);
       else if (payroll) saved = await payroll.add(employee!.id, parsed.payload);
-      else saved = await dormitoryService.add(employee!.id, kind, parsed.payload);
+      else saved = await dormitoryService.add(employee!.id, kind, parsed.payload, apartment?.id ?? null);
+      const nextComment = comment.trim() || null;
+      if (withComment && nextComment !== (saved.comment ?? null)) {
+        saved = await dormitoryService.updateMeta(saved.id, { comment: nextComment });
+      }
       onSaved(saved);
       requestClose();
     } catch (err) {
@@ -100,13 +121,13 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
 
   return (
     <RegistryFormModal
-      title={isEdit ? DORMITORY_STAY_KIND_LABELS[kind] : 'Добавить сотрудника'}
+      title={isEdit ? (flatAddress ? 'Квартира' : DORMITORY_STAY_KIND_LABELS[kind]) : apartment ? 'Заселить в квартиру' : 'Добавить сотрудника'}
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
       saving={saving}
       error={error?.message ?? null}
       errorId={errorId}
-      raised={payroll !== undefined}
+      raised={payroll !== undefined || raised}
     >
       <div className={styles.field}>
         <span className={styles.label}>Сотрудник</span>
@@ -129,7 +150,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
         )}
       </div>
 
-      {!isEdit && !payroll && (
+      {!isEdit && !payroll && !fixedKind && !apartment && (
         <div className={styles.field}>
           <div className={styles.segmented} role="group" aria-label="Где живёт">
             {KINDS.map(value => (
@@ -170,7 +191,12 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
         </div>
       </div>
 
-      {isApartment ? (
+      {flatAddress ? (
+        <div className={styles.field}>
+          <span className={styles.label}>Квартира</span>
+          <div className={styles.fixed}><span>{flatAddress}</span></div>
+        </div>
+      ) : isApartment ? (
         <label className={styles.field}>
           <span className={styles.label}>Адрес</span>
           <ClearableInput
@@ -200,6 +226,26 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({ stay, address
             clearLabel="Очистить адрес"
           />
         </div>
+      )}
+
+      {withComment && (
+        <label className={styles.field}>
+          <span className={styles.label}>Комментарий</span>
+          <ClearableInput
+            value={comment}
+            onValueChange={value => { setComment(value); clearError(); }}
+            maxLength={COMMENT_MAX_LENGTH}
+            autoComplete="off"
+            disabled={saving}
+            clearLabel="Очистить комментарий"
+          />
+        </label>
+      )}
+
+      {isEdit && onMove && (
+        <button type="button" className={styles.linkButton} onClick={onMove} disabled={saving}>
+          Переселить в другое общежитие или квартиру…
+        </button>
       )}
     </RegistryFormModal>
   );

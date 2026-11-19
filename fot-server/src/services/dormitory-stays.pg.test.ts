@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 // PostgreSQL: чистая БД и БД с уже заведённой ставкой, повторный запуск, пересечение периодов,
 // въезд в день выезда, сервис общежития и запрет удалить/переименовать ставку с кодом.
 // Сохранённые адреса (миграция 319): перенос из проживаний, запоминание при записи, удаление их не трогает.
-// Квартира (миграция 320): вид, сумма, адрес по желанию; в один день — одно место.
+// Квартира (миграция 320): вид, сумма, адрес по желанию; в один день — одно место. Миграция 371 — следом за 320.
 // Поиск для «Удержаний» (решение 09.11.2026): уволенные до начала окна выбора месяцев, бывший подрядчик — по отделу
 // из события увольнения.
 // Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД (таблицы пересоздаются).
@@ -67,7 +67,7 @@ const D2 = '00000000-0000-0000-0000-0000000000d2';
 describe.skipIf(!PG_URL)('общежитие и ставка с кодом на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, payroll_rate_values, payroll_rates,
+      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, company_apartments, payroll_rate_values, payroll_rates,
         role_page_access, access_pages, employee_dismissal_events,
         payroll_compensation_terms, payroll_dormitory_allowances, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -88,7 +88,8 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
-        dismissal_date date
+        dismissal_date date,
+        country text
       );
       -- Отдел, из которого уволен (effectiveDepartmentSql): столбцы — как на проде.
       CREATE TABLE employee_dismissal_events (
@@ -233,6 +234,17 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     // Прежний бэкенд пишет без вида — общежитие.
     await run(`INSERT INTO employee_dormitory_stays (employee_id, check_in, address) VALUES (1, '2030-01-01', 'Общ1')`);
     expect((await run(`SELECT kind, amount FROM employee_dormitory_stays`)).rows).toEqual([{ kind: 'dormitory', amount: null }]);
+    await run(`DELETE FROM employee_dormitory_stays`);
+  });
+
+  // Служебные квартиры (миграция 371) — дальше сервис пишет и читает её столбцы; подробно — company-apartments.pg.test.ts.
+  it('371 поверх 320: повтор безопасен, у прежних записей — без квартиры, «Платно» снято', async () => {
+    await run(`INSERT INTO employee_dormitory_stays (employee_id, check_in, address) VALUES (1, '2030-01-01', 'Общ1')`);
+    await run(migration('371_company_apartments.sql'));
+    await run(migration('371_company_apartments.sql'));
+    expect((await run(`SELECT apartment_id, paid, comment FROM employee_dormitory_stays`)).rows)
+      .toEqual([{ apartment_id: null, paid: false, comment: null }]);
+    expect((await run(`SELECT count(*)::int AS n FROM company_apartments`)).rows).toEqual([{ n: 0 }]);
     await run(`DELETE FROM employee_dormitory_stays`);
   });
 

@@ -59,8 +59,9 @@ describe('изоляция прав «все объекты», «все отде
       .map(({ file }) => file)
       .sort();
     expect(importers).toEqual([
-      // Вкладка «Проживание» «Управления кадрами» (миграция 314): список и правка — в круге списка кадров.
-      'controllers/dormitory-stays.controller.ts',
+      // Вкладка «Проживание» «Управления кадрами» (миграции 314, 371): охват и запись проживаний, квартир, жильцов
+      // и компенсации — в круге списка кадров (один модуль доступа на все её контроллеры).
+      'controllers/dormitory-access.ts',
       'controllers/employees-export.controller.ts',
       'controllers/employees-main-objects.controller.ts',
       'controllers/employees-staff-filter.helpers.ts',

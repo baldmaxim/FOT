@@ -22,6 +22,14 @@ import {
 } from './payroll-calc-preliminary.service.js';
 
 const BRIGADE_SHARES_CONCURRENCY = 3;
+
+/**
+ * Закрытая бригада без актуального сохранённого расчёта, когда фиксировать нельзя (fix: false — «Компенсация аренды»
+ * кадров): как открытая — дальше она считается предварительной долей по табелю, ничего не пишется.
+ */
+const unfixedAsOpen = (): IBrigadeShares => (
+  { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] }
+);
 const withBrigadeSlot = createConcurrencyLimiter(BRIGADE_SHARES_CONCURRENCY);
 
 /** Доли бригад месяца: какие посчитаны предварительно, контексты открытых и кандидатов. */
@@ -76,6 +84,7 @@ export const peekFixedBrigadeShares = async (
  *    подачу успели открыть.
  * 2. Состав — одним вызовом на все бригады, где итог не fixed или в ней могли быть дни незакрытых сотрудников.
  * 3. Предварительные доли — только у итоговой open, в слоте: ввод открытой из пакета, после фиксации — читается заново.
+ * fix false — без записи (кадры): needs_fix не фиксируется, а считается предварительной долей, как открытая.
  */
 export const loadPreliminaryBrigadeShares = async (
   req: AuthenticatedRequest,
@@ -83,13 +92,15 @@ export const loadPreliminaryBrigadeShares = async (
   asOf: string,
   brigadeIds: readonly string[],
   liveIds: readonly number[],
+  fix = true,
 ): Promise<IBrigadeStep> => {
   const candidates = new Set(await loadBrigadeCandidates(liveIds, `${month}-01`, asOf));
   const ids = [...new Set([...brigadeIds, ...candidates])].sort();
   const peeked = await peekBrigadeSharesMany(ids, month);
   const fixed = await Promise.all(ids.map(departmentId => {
     const peek = peeked.get(departmentId)!;
-    return peek.state === 'needs_fix' ? withBrigadeSlot(() => getBrigadeShares(req, departmentId, month)) : peek.shares;
+    if (peek.state !== 'needs_fix') return peek.shares;
+    return fix ? withBrigadeSlot(() => getBrigadeShares(req, departmentId, month)) : unfixedAsOpen();
   }));
   const contexts = await loadBrigadeContexts(
     ids.filter((departmentId, index) => fixed[index].state !== 'fixed' || candidates.has(departmentId)),

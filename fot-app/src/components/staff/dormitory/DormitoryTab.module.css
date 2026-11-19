@@ -1,0 +1,128 @@
+/*
+ * «Управление кадрами» → «Проживание» (миграция 371): вкладки «Квартира», «Общежитие», «Компенсация аренды».
+ * Вкладка занимает высоту экрана под шапкой и пилюлями разделов: таблица прокручивается внутри своей панели
+ * (data-registry-fill), поэтому шапка таблицы закреплена (RegistryTable.module.css). Mobile-first: на 360px
+ * не ниже 420px — таблица не схлопывается под панелью кнопок.
+ */
+.root {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 420px;
+  height: calc(100dvh - var(--header-height) - 112px - env(safe-area-inset-bottom));
+}
+
+@media (min-width: 769px) {
+  .root { height: calc(100dvh - var(--header-height) - 116px); }
+}
+
+/* Галочка «Платно» в ячейке: тап-цель 44px на телефоне, по центру столбца. */
+.paidCheck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 36px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.paidCheck input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: inherit; }
+.paidCheck input:disabled { cursor: default; }
+.paidCheck input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Справа от поиска: выбор общежития и «История» / выбор месяца — высота как у кнопок панели. */
+.aside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.select {
+  box-sizing: border-box;
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+}
+.select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.toggle {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.toggle:hover { background: var(--bg-secondary); color: var(--text-primary); }
+.toggle[aria-pressed='true'] { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.monthNav {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.monthButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.monthButton:hover:not(:disabled) { background: var(--bg-secondary); color: var(--text-primary); }
+.monthButton:disabled { opacity: 0.4; cursor: not-allowed; }
+.monthButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.monthLabel {
+  min-width: 124px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+@media (min-width: 769px) {
+  /* Одной строкой с поиском: селект и «История» не переносятся. */
+  .aside { flex-wrap: nowrap; }
+  .select { flex: 0 0 280px; min-height: 36px; font-size: 14px; }
+  .toggle { min-height: 36px; }
+  .monthNav { flex: 0 0 auto; }
+  .monthButton { width: 36px; height: 36px; }
+  .paidCheck { min-width: 36px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle,
+  .monthButton { transition: none; }
+}

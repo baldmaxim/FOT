@@ -40,6 +40,18 @@ beforeEach(() => {
 });
 
 describe('loadPreliminaryBrigadeShares', () => {
+  it('fix false (кадры, «Компенсация аренды»): needs_fix не фиксируется — предварительная доля, без записи', async () => {
+    brigade.peekBrigadeSharesMany.mockResolvedValue(new Map([['b-closed', { state: 'needs_fix' }]]));
+
+    const step = await loadPreliminaryBrigadeShares(req, MONTH, AS_OF, ['b-closed'], [7], false);
+
+    expect(brigade.getBrigadeShares).not.toHaveBeenCalled();
+    expect(preliminary.loadBrigadeContexts).toHaveBeenCalledWith(['b-closed'], '2026-09-01', AS_OF);
+    expect(preliminary.resolveOpenBrigadeShares).toHaveBeenCalledWith(contextOf('b-closed'), MONTH, AS_OF, undefined);
+    expect(step.shares.get('b-closed')).toEqual(prelimShares('b-closed'));
+    expect(step.preliminary).toEqual(new Set(['b-closed']));
+  });
+
   it('fixed из пакета: без кандидата — без состава, с кандидатом — состав есть; фиксация не зовётся', async () => {
     preliminary.loadBrigadeCandidates.mockResolvedValue(['b-cand']);
     brigade.peekBrigadeSharesMany.mockResolvedValue(new Map([

@@ -1,5 +1,7 @@
 import { Router } from 'express';
 
+import { companyApartmentsController as apartments } from '../controllers/company-apartments.controller.js';
+import { dormitoryResidentsController as residents } from '../controllers/dormitory-residents.controller.js';
 import { dormitoryStaysController as c } from '../controllers/dormitory-stays.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
@@ -24,6 +26,17 @@ router.post('/stays/export', dormitoryExport, c.exportTable);
 router.post('/stays', dormitoryEdit, c.add);
 router.patch('/stays/:id', dormitoryEdit, c.update);
 router.delete('/stays/:id', dormitoryEdit, c.remove);
+// Миграция 371: «Платно» и комментарий, «Переселить».
+router.patch('/stays/:id/meta', dormitoryEdit, residents.updateMeta);
+router.post('/stays/:id/move', dormitoryEdit, residents.move);
+// Вкладки «Общежитие» и «Компенсация аренды».
+router.get('/residents', dormitoryView, residents.residents);
+router.get('/compensation', dormitoryView, residents.compensation);
+// Вкладка «Квартира»: служебные квартиры и их жильцы.
+router.get('/apartments', dormitoryView, apartments.list);
+router.post('/apartments', dormitoryEdit, apartments.add);
+router.patch('/apartments/:id', dormitoryEdit, apartments.update);
+router.delete('/apartments/:id', dormitoryEdit, apartments.remove);
 router.get('/employees/search', dormitoryEdit, c.searchEmployees);
 // Подсказки «Адрес / номер» — только окну добавления и правки.
 router.get('/addresses', dormitoryEdit, c.listAddresses);

@@ -71,6 +71,14 @@ const STAY = {
   check_out: null,
   address: 'Общежитие №2, комн. 14',
   amount: null,
+  apartment_id: null,
+  paid: false,
+  comment: null,
+  updated_at: '2026-10-30T10:00:00Z',
+  employment_status: 'active',
+  dismissal_date: null,
+  org_department_id: null,
+  country: null,
 };
 
 const APARTMENT = { ...STAY, id: 8, kind: 'apartment', address: null, amount: '630.00' };
@@ -143,7 +151,8 @@ describe('добавление', () => {
 
     expect(res.statusCode).toBe(200);
     expect(svc.addStay).toHaveBeenCalledWith(42, {
-      kind: 'dormitory', check_in: '2026-10-01', check_out: null, address: 'Общежитие №2, комн. 14', amount: null,
+      kind: 'dormitory', apartment_id: null, check_in: '2026-10-01', check_out: null, address: 'Общежитие №2, комн. 14',
+      amount: null,
     });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'DORMITORY_STAY_ADDED',
@@ -201,7 +210,7 @@ describe('добавление', () => {
 
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', address: '  ' } }), makeRes());
     expect(svc.addStay).toHaveBeenLastCalledWith(42, {
-      kind: 'apartment', check_in: '2026-10-01', check_out: null, address: null, amount: 630,
+      kind: 'apartment', apartment_id: null, check_in: '2026-10-01', check_out: null, address: null, amount: 630,
     });
     // Прежний клиент присылает сумму — она не пишется: сумму задаёт «Зарплата».
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 700, address: ' ул. Рабочая ' } }), makeRes());
@@ -585,5 +594,61 @@ describe('галочка «Проживание» в назначениях (м�
     svc.listStays.mockResolvedValue([]);
     await c.list(makeReq(), makeRes());
     expect(svc.listStays).toHaveBeenLastCalledWith({ employeeIds: [42] });
+  });
+});
+
+describe('служебные квартиры (миграция 371)', () => {
+  const FLAT = { ...STAY, id: 9, apartment_id: 2, address: 'Кв. Ляпидевского 12-58' };
+  beforeEach(() => {
+    svc.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWriteEmployeeInScope.mockResolvedValue(true);
+  });
+
+  it('общежитие с адресом «Кв. …» — 400 (кадры и «Зарплата»); заселение в квартиру — по apartment_id, адрес не читается', async () => {
+    for (const address of ['Кв. Ляпидевского 12-58', ' кв Мичуринский 31-4-7']) {
+      const res = makeRes();
+      await c.add(makeReq({ body: { employee_id: 42, check_in: '2026-11-19', address } }), res);
+      expect(res.statusCode, address).toBe(400);
+      const payroll = makeRes();
+      scope.canWritePayrollRegistryEmployee.mockResolvedValue(true);
+      await c.addForPayroll(makeReq({ body: { employee_id: 42, check_in: '2026-11-19', address } }), payroll);
+      expect(payroll.statusCode, address).toBe(400);
+    }
+    expect(svc.addStay).not.toHaveBeenCalled();
+
+    svc.addStay.mockResolvedValue(FLAT);
+    const res = makeRes();
+    await c.add(makeReq({ body: { employee_id: 42, apartment_id: 2, check_in: '2026-11-19' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(svc.addStay).toHaveBeenCalledWith(42, expect.objectContaining({ kind: 'dormitory', apartment_id: 2, amount: null }));
+
+    const compensation = makeRes();
+    await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', apartment_id: 2, check_in: '2026-11-19' } }), compensation);
+    expect(compensation.statusCode).toBe(400);
+  });
+
+  it('правка жильца квартиры: тот же адрес или без адреса — даты сохраняются; другой адрес — 400', async () => {
+    svc.getStay.mockResolvedValue(FLAT);
+    svc.updateStay.mockResolvedValue({ before: FLAT, after: { ...FLAT, check_out: '2026-12-01' } });
+    for (const body of [
+      { check_in: '2026-10-01', check_out: '2026-12-01' },
+      { check_in: '2026-10-01', check_out: '2026-12-01', address: ' Кв.  Ляпидевского 12-58 ' },
+    ]) {
+      const res = makeRes();
+      await c.update(makeReq({ params: { id: '9' }, body }), res);
+      expect(res.statusCode, JSON.stringify(body)).toBe(200);
+      expect(svc.updateStay).toHaveBeenLastCalledWith(9, expect.objectContaining({ address: 'Кв. Ляпидевского 12-58' }));
+    }
+    svc.updateStay.mockClear();
+    const res = makeRes();
+    await c.update(makeReq({ params: { id: '9' }, body: { check_in: '2026-10-01', address: 'Общ. Свободы 35' } }), res);
+    expect(res.statusCode).toBe(400);
+    expect(svc.updateStay).not.toHaveBeenCalled();
+
+    // Общежитию «Кв. …» правкой не поставить.
+    svc.getStay.mockResolvedValue(STAY);
+    const pseudo = makeRes();
+    await c.update(makeReq({ params: { id: '7' }, body: { check_in: '2026-10-01', address: 'Кв. Складочная 6-2-27' } }), pseudo);
+    expect(pseudo.statusCode).toBe(400);
   });
 });

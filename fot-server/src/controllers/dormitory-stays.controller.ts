@@ -18,11 +18,10 @@ import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
-import { canWriteEmployeeInScope } from '../services/data-scope.service.js';
-import { getRequestStaffTabGrant } from '../services/staff-tab-access.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import {
   addStay,
+  CompanyApartmentNotFoundError,
   deleteStay,
   getEmployeeState,
   getHousingRateAmount,
@@ -34,18 +33,18 @@ import {
   updateStay,
 } from '../services/dormitory-stays.service.js';
 import {
-  canSeeEmployeeInStaffList,
-  resolveStaffRosterEmployeeIds,
-} from '../services/employee-scope-filter.service.js';
-import {
   canWritePayrollRegistryEmployee,
   resolvePayrollStaffScope,
 } from '../services/payroll/payroll-registry-scope.service.js';
 import { resolvePayrollEditPredicate } from '../services/payroll/payroll-scope.service.js';
+import { canAddStay, canWriteStay, rosterEmployeeIds } from './dormitory-access.js';
 import {
   dormitoryStayAuditDetails,
   dormitoryStayChanged,
+  isPseudoApartmentAddress,
   parseStayFields,
+  PSEUDO_APARTMENT_ERROR,
+  stayApartmentIdSchema,
   stayEmployeeIdSchema,
   stayKindSchema,
 } from './dormitory-stay-input.js';
@@ -75,6 +74,10 @@ const handleStayError = (error: unknown, res: Response): boolean => {
     res.status(409).json({ success: false, error: error.message, code: error.code });
     return true;
   }
+  if (error instanceof CompanyApartmentNotFoundError) {
+    res.status(404).json({ success: false, error: error.message });
+    return true;
+  }
   return false;
 };
 
@@ -89,32 +92,6 @@ const handleZodError = (error: unknown, res: Response): boolean => {
 const parseId = (req: AuthenticatedRequest): number | null => {
   const id = Number(req.params.id);
   return Number.isInteger(id) && id > 0 ? id : null;
-};
-
-/** Галочка «Проживание» в назначениях (миграция 351): охват вкладки кадров — вся организация. */
-const hasDormitoryGrant = (req: AuthenticatedRequest): Promise<boolean> => getRequestStaffTabGrant(req, 'dormitory');
-
-/** Охват списка кадров набором id; 'all' и галочка — null (без ограничения). */
-const rosterEmployeeIds = async (req: AuthenticatedRequest): Promise<number[] | null> => {
-  if (await hasDormitoryGrant(req)) return null;
-  const roster = await resolveStaffRosterEmployeeIds(req);
-  return roster === 'all' ? null : [...roster];
-};
-
-/** Можно ли заселить работающего сотрудника: галочка или охват роли. */
-const canAddStay = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => (
-  await hasDormitoryGrant(req) || canWriteEmployeeInScope(req, employeeId)
-);
-
-/**
- * Можно ли менять проживание сотрудника. Уволенного увольнение выводит из назначений отделов,
- * и canWriteEmployeeInScope админу компании откажет — тогда решает «виден ли в списке кадров».
- */
-const canWriteStay = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
-  if (await canAddStay(req, employeeId)) return true;
-  const employee = await getEmployeeState(employeeId);
-  if (!employee || employee.employment_status === 'active') return false;
-  return canSeeEmployeeInStaffList(req, employeeId);
 };
 
 /** GET /api/dormitory/stays — все проживания (общежития и квартиры) в охвате списка кадров. */
@@ -167,15 +144,27 @@ const listSavedAddresses = async (_req: AuthenticatedRequest, res: Response): Pr
 };
 
 /**
- * POST /api/dormitory/stays { employee_id, kind?, check_in, check_out?, address? } — добавить проживание:
- * общежитие (адрес обязателен) или квартиру (адрес — по желанию; сумма — ставка «Доплата за проживание»,
+ * POST /api/dormitory/stays { employee_id, kind?, apartment_id?, check_in, check_out?, address? } — добавить
+ * проживание: общежитие (адрес обязателен, «Кв. …» — 400), жильца служебной квартиры (apartment_id, адрес — из
+ * квартиры) или компенсацию аренды (kind apartment: адрес — по желанию; сумма — ставка «Доплата за проживание»,
  * не задана — 409).
  */
 const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { employee_id: employeeId } = stayEmployeeIdSchema.parse(req.body);
     const { kind } = stayKindSchema.parse(req.body);
-    const input = { kind, ...parseStayFields(kind, req.body, { withAmount: false }) };
+    const { apartment_id: apartmentId } = stayApartmentIdSchema.parse(req.body);
+    if (apartmentId !== null && kind !== 'dormitory') {
+      res.status(400).json({ success: false, error: 'В служебную квартиру заселяют без компенсации аренды' });
+      return;
+    }
+    // Жилец квартиры: адрес подставит сервис из квартиры — в схему общежития идёт заглушка, присланный не читается.
+    const fieldsBody = apartmentId !== null ? { ...(req.body as object), address: '-' } : req.body;
+    const input = { kind, apartment_id: apartmentId, ...parseStayFields(kind, fieldsBody, { withAmount: false }) };
+    if (kind === 'dormitory' && apartmentId === null && isPseudoApartmentAddress(input.address)) {
+      res.status(400).json({ success: false, error: PSEUDO_APARTMENT_ERROR });
+      return;
+    }
     // Поиск отдаёт только работающих и не подрядчиков, но тело запроса могут собрать и руками.
     const employee = await getEmployeeState(employeeId);
     if (!employee) {
@@ -236,8 +225,22 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json(NOT_FOUND);
       return;
     }
+    // Жилец служебной квартиры: адрес меняется только правкой квартиры — другой присланный адрес — 400.
+    let body: unknown = req.body;
+    if (current.apartment_id !== null) {
+      const sent = (req.body as { address?: unknown } | undefined)?.address;
+      if (typeof sent === 'string' && sent.replace(/\s+/g, ' ').trim() !== current.address) {
+        res.status(400).json({ success: false, error: 'Адрес квартиры меняется во вкладке «Квартира»' });
+        return;
+      }
+      body = { ...(req.body as object), address: current.address };
+    }
     // Без суммы: у квартиры остаётся прежняя (её меняет «Зарплата»).
-    const input = parseStayFields(current.kind, req.body, { withAmount: false });
+    const input = parseStayFields(current.kind, body, { withAmount: false });
+    if (current.kind === 'dormitory' && current.apartment_id === null && isPseudoApartmentAddress(input.address)) {
+      res.status(400).json({ success: false, error: PSEUDO_APARTMENT_ERROR });
+      return;
+    }
     if (!(await canWriteStay(req, current.employee_id))) {
       res.status(403).json(NO_ACCESS);
       return;
@@ -305,6 +308,10 @@ const addForPayroll = async (req: AuthenticatedRequest, res: Response): Promise<
   try {
     const { employee_id: employeeId } = stayEmployeeIdSchema.parse(req.body);
     const input = { kind: 'dormitory' as const, ...parseStayFields('dormitory', req.body) };
+    if (isPseudoApartmentAddress(input.address)) {
+      res.status(400).json({ success: false, error: PSEUDO_APARTMENT_ERROR });
+      return;
+    }
     // Поиск отдаёт только «штат зарплаты», но тело запроса могут собрать и руками.
     const employee = await getEmployeeState(employeeId);
     if (!employee) {

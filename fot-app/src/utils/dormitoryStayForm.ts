@@ -19,9 +19,10 @@ export interface IDormitoryStayDraft {
 
 export type DormitoryStayField = 'employee' | 'check_in' | 'check_out' | 'address' | 'amount';
 
+/** Вид записи в окнах кадров: apartment — компенсация аренды 630 ₽/день (служебная квартира — общежитие с квартирой). */
 export const DORMITORY_STAY_KIND_LABELS: Record<DormitoryStayKind, string> = {
   dormitory: 'Общежитие',
-  apartment: 'Квартира',
+  apartment: 'Компенсация аренды',
 };
 
 export type DormitoryStayParse =
