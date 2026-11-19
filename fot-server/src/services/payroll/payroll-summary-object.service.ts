@@ -22,6 +22,7 @@
  */
 import { performance } from 'node:perf_hooks';
 
+import type { DbExecutor } from '../../config/postgres.js';
 import { moscowTodayIso } from '../../utils/date.utils.js';
 import { loadSkudObjects, loadTimesheetObjectHours } from '../employee-timesheet-object.service.js';
 import { resolveExportModes } from '../timesheet-export-mode.service.js';
@@ -64,6 +65,24 @@ export interface ISummaryObjectsStats {
 
 type StepStat = 'byPrevTimesheet' | 'byPrevHours' | 'byDepartment' | 'byCurrentObject';
 
+/** Шаг, которым найден объект пары (API для ЗУП3 — object_source). */
+export type SummaryObjectStep =
+  | 'mode' | 'month_hours' | 'previous_timesheet' | 'previous_hours' | 'department' | 'current_object';
+
+const STEP_OF: Record<StepStat, SummaryObjectStep> = {
+  byPrevTimesheet: 'previous_timesheet',
+  byPrevHours: 'previous_hours',
+  byDepartment: 'department',
+  byCurrentObject: 'current_object',
+};
+
+export interface IResolveSummaryObjectsOptions {
+  /** Клиент транзакции (снимок API для ЗУП3); без него — пул. */
+  exec?: DbExecutor;
+  /** Сюда пишется шаг каждой найденной пары. */
+  steps?: Map<string, SummaryObjectStep>;
+}
+
 /** Пары «сотрудник|YYYY-MM» по месяцам: месяц → сотрудники. */
 const groupByMonth = (keys: Iterable<string>): Map<string, number[]> => {
   const byMonth = new Map<string, number[]>();
@@ -90,13 +109,16 @@ export const resolveSummaryObjects = async (
   attribution: ReadonlyMap<string, IMonthAttribution>,
   now: Date = new Date(),
   stats?: ISummaryObjectsStats,
+  options: IResolveSummaryObjectsOptions = {},
 ): Promise<Map<string, ISummaryObject>> => {
+  const { exec, steps } = options;
   const result = new Map<string, ISummaryObject>();
   const unknown = [...attribution].filter(([, item]) => item.object.key === SUMMARY_UNKNOWN.key);
   if (stats) stats.unknown += unknown.length;
   if (unknown.length === 0) return result;
 
-  const objects = await loadSkudObjects();
+  // Без exec вызовы — прежние (их аргументы сверяют тесты «Свода»).
+  const objects = await (exec ? loadSkudObjects(exec) : loadSkudObjects());
   const meta = new Map<string, ISummaryObjectMeta>(
     [...objects.values()].map(object => [object.id, { name: object.name, address: object.alt_name }]),
   );
@@ -104,6 +126,7 @@ export const resolveSummaryObjects = async (
   const remaining = new Set<string>();
   const found = (key: string, object: ISummaryObject, step: StepStat): void => {
     result.set(key, object);
+    steps?.set(key, STEP_OF[step]);
     remaining.delete(key);
     if (stats) stats[step] += 1;
   };
@@ -112,6 +135,7 @@ export const resolveSummaryObjects = async (
     if (!period || employeeIds.length === 0) return null;
     const started = performance.now();
     const hours = await loadTimesheetObjectHours(employeeIds, period, {
+      ...(exec ? { exec } : {}),
       todayStr: today,
       objectsById: objects,
       includeInactive: true,
@@ -125,6 +149,7 @@ export const resolveSummaryObjects = async (
     const byMode = fallbackSummaryObject(item.mode, meta);
     if (byMode.key !== SUMMARY_UNKNOWN.key) {
       result.set(key, byMode);
+      steps?.set(key, 'mode');
       if (stats) stats.byMode += 1;
     } else {
       remaining.add(key);
@@ -141,6 +166,7 @@ export const resolveSummaryObjects = async (
       if (object) {
         remaining.delete(monthPairKey(employeeId, month));
         result.set(monthPairKey(employeeId, month), object);
+        steps?.set(monthPairKey(employeeId, month), 'month_hours');
       }
     }
   }
@@ -150,7 +176,9 @@ export const resolveSummaryObjects = async (
     const pairs = [...remaining].map(key => key.split('|'));
     const employeeIds = [...new Set(pairs.map(([employeeId]) => Number(employeeId)))];
     const monthStarts = [...new Set(pairs.flatMap(([, month]) => previousMonthStarts(month, PREVIOUS_TIMESHEET_MONTHS)))];
-    const breakdown = await loadMonthBreakdown(monthStarts, employeeIds);
+    const breakdown = await (exec
+      ? loadMonthBreakdown(monthStarts, employeeIds, undefined, exec)
+      : loadMonthBreakdown(monthStarts, employeeIds));
     for (const [employeeId, month] of pairs) {
       for (const previous of previousMonthStarts(month, PREVIOUS_TIMESHEET_MONTHS)) {
         const object = pickMainKnownObject(breakdown.get(monthPairKey(Number(employeeId), previous.slice(0, 7))) ?? []);
@@ -183,7 +211,9 @@ export const resolveSummaryObjects = async (
     const departmentOf = new Map([...remaining].map(key => [key, attribution.get(key)?.departmentId ?? null]));
     const departmentIds = [...new Set([...departmentOf.values()].filter((id): id is string => id !== null))];
     const months = [...new Set([...remaining].map(key => `${key.split('|')[1]}-01`))];
-    const departments = await loadDepartmentMonthBreakdown(months, departmentIds);
+    const departments = await (exec
+      ? loadDepartmentMonthBreakdown(months, departmentIds, exec)
+      : loadDepartmentMonthBreakdown(months, departmentIds));
     for (const [key, departmentId] of departmentOf) {
       if (!departmentId) continue;
       const object = pickMainKnownObject(departments.get(`${departmentId}|${key.split('|')[1]}`) ?? []);
@@ -193,7 +223,8 @@ export const resolveSummaryObjects = async (
 
   // 5. Текущий объект табелирования (живой режим: окно «Режим табелирования» или авторасчёт).
   if (remaining.size > 0) {
-    const modes = await resolveExportModes([...new Set([...remaining].map(key => Number(key.split('|')[0])))]);
+    const ids = [...new Set([...remaining].map(key => Number(key.split('|')[0])))];
+    const modes = await (exec ? resolveExportModes(ids, exec) : resolveExportModes(ids));
     for (const key of [...remaining]) {
       const object = fallbackSummaryObject(modes.get(Number(key.split('|')[0])), meta);
       if (object.key !== SUMMARY_UNKNOWN.key) found(key, object, 'byCurrentObject');

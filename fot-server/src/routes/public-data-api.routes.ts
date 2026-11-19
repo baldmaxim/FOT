@@ -3,6 +3,7 @@ import { dataApiAuth } from '../middleware/dataApiAuth.js';
 import { dataApiRequestLog } from '../middleware/dataApiRequestLog.js';
 import { publicDataApiController } from '../controllers/public-data-api.controller.js';
 import { publicTimesheetsController } from '../controllers/public-timesheets.controller.js';
+import { publicStaffMonthController } from '../controllers/public-staff-month.controller.js';
 import { dataApiLimiter } from '../middleware/dataApiRateLimit.js';
 
 // Публичная часть data-api на Node (рядом с Python /external/v1): расчётные
@@ -28,5 +29,10 @@ router.get('/timesheets/:approval_id/objects', publicTimesheetsController.object
 // Руководитель отдела по каждому сотруднику той же редакции — тоже отдельным методом.
 router.get('/timesheets/:approval_id/managers', publicTimesheetsController.managers);
 router.post('/timesheets/:approval_id/ack', publicTimesheetsController.ack);
+
+// API для ЗУП3: сотрудники месяца (объект, факт и норма часов, категория, дни), бригады и объекты месяца.
+router.get('/staff-month', publicStaffMonthController.employees);
+router.get('/staff-month/brigades', publicStaffMonthController.brigades);
+router.get('/staff-month/objects', publicStaffMonthController.objects);
 
 export default router;

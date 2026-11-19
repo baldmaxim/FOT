@@ -8,7 +8,9 @@
  * Отдел месяца — отдел подачи с наибольшими часами; персональная подача или подачи нет — у уволенного
  * отдел до увольнения (последнее неотменённое увольнение), иначе текущий.
  */
-import { query } from '../../config/postgres.js';
+import type { QueryResultRow } from 'pg';
+
+import { query, type DbExecutor } from '../../config/postgres.js';
 import { resolveExportModes, type IResolvedExportMode } from '../timesheet-export-mode.service.js';
 import {
   fallbackSummaryObject,
@@ -21,6 +23,13 @@ import {
 
 /** Ключ пары «сотрудник + месяц YYYY-MM». */
 export const monthPairKey = (employeeId: number, month: string): string => `${employeeId}|${month}`;
+
+/** SELECT через клиент транзакции (exec), иначе через пул — тот же query, что мокают тесты. */
+const selectRows = async <T extends QueryResultRow>(
+  exec: DbExecutor | undefined,
+  sql: string,
+  params: unknown[],
+): Promise<T[]> => (exec ? (await exec.query<T>(sql, params)).rows : query<T>(sql, params));
 
 interface IBreakdownSqlRow extends ISummaryBreakdownRow {
   month: string;
@@ -37,10 +46,12 @@ export const loadMonthBreakdown = async (
   monthStarts: string[],
   employeeIds: number[],
   versionIds?: readonly number[],
+  exec?: DbExecutor,
 ): Promise<Map<string, ISummaryBreakdownRow[]>> => {
   const result = new Map<string, ISummaryBreakdownRow[]>();
   if (monthStarts.length === 0 || employeeIds.length === 0) return result;
-  const rows = await query<IBreakdownSqlRow>(
+  const rows = await selectRows<IBreakdownSqlRow>(
+    exec,
     `WITH latest AS (
        SELECT DISTINCT ON (v.approval_id) v.id, v.department_id, v.start_date
          FROM timesheet_versions v
@@ -99,10 +110,12 @@ interface IDepartmentBreakdownSqlRow {
 export const loadDepartmentMonthBreakdown = async (
   monthStarts: string[],
   departmentIds: string[],
+  exec?: DbExecutor,
 ): Promise<Map<string, ISummaryBreakdownRow[]>> => {
   const result = new Map<string, ISummaryBreakdownRow[]>();
   if (monthStarts.length === 0 || departmentIds.length === 0) return result;
-  const rows = await query<IDepartmentBreakdownSqlRow>(
+  const rows = await selectRows<IDepartmentBreakdownSqlRow>(
+    exec,
     `WITH latest AS (
        SELECT DISTINCT ON (v.approval_id) v.id, v.department_id, v.start_date
          FROM timesheet_versions v
@@ -155,9 +168,10 @@ export interface IMonthAttribution {
   mode: IResolvedExportMode | undefined;
 }
 
-const loadObjectMeta = async (ids: string[]): Promise<Map<string, ISummaryObjectMeta>> => {
+const loadObjectMeta = async (ids: string[], exec?: DbExecutor): Promise<Map<string, ISummaryObjectMeta>> => {
   if (ids.length === 0) return new Map();
-  const rows = await query<{ id: string; name: string; alt_name: string | null }>(
+  const rows = await selectRows<{ id: string; name: string; alt_name: string | null }>(
+    exec,
     'SELECT id::text AS id, name, alt_name FROM skud_objects WHERE id::text = ANY($1::text[])',
     [ids],
   );
@@ -167,6 +181,7 @@ const loadObjectMeta = async (ids: string[]): Promise<Map<string, ISummaryObject
 /** Режимы табелирования месяцев по парам. */
 const loadMonthModes = async (
   pairs: ReadonlyArray<{ employeeId: number; month: string }>,
+  exec?: DbExecutor,
 ): Promise<Map<string, IResolvedExportMode>> => {
   const byMonth = new Map<string, number[]>();
   for (const pair of pairs) {
@@ -176,16 +191,20 @@ const loadMonthModes = async (
   }
   const result = new Map<string, IResolvedExportMode>();
   for (const [month, ids] of byMonth) {
-    const modes = await resolveExportModes(ids, undefined, { month });
+    const modes = await resolveExportModes(ids, exec, { month });
     for (const [employeeId, mode] of modes) result.set(monthPairKey(employeeId, month), mode);
   }
   return result;
 };
 
 /** Отдел до увольнения: последнее неотменённое увольнение. */
-const loadDismissalDepartments = async (employeeIds: number[]): Promise<Map<number, string | null>> => {
+const loadDismissalDepartments = async (
+  employeeIds: number[],
+  exec?: DbExecutor,
+): Promise<Map<number, string | null>> => {
   if (employeeIds.length === 0) return new Map();
-  const rows = await query<{ employee_id: number; department_id: string | null }>(
+  const rows = await selectRows<{ employee_id: number; department_id: string | null }>(
+    exec,
     `SELECT DISTINCT ON (de.employee_id) de.employee_id, de.from_department_id::text AS department_id
        FROM employee_dismissal_events de
       WHERE de.cancelled = false AND de.employee_id = ANY($1::int[])
@@ -195,11 +214,15 @@ const loadDismissalDepartments = async (employeeIds: number[]): Promise<Map<numb
   return new Map(rows.map(row => [Number(row.employee_id), row.department_id]));
 };
 
-/** Объект, отдел и режим месяца для пар (month — YYYY-MM); breakdown — loadMonthBreakdown этих пар. */
+/**
+ * Объект, отдел и режим месяца для пар (month — YYYY-MM); breakdown — loadMonthBreakdown этих пар. exec — клиент
+ * транзакции (снимок API для ЗУП3), без него — пул.
+ */
 export const attributeMonths = async (
   pairs: ReadonlyArray<{ employeeId: number; month: string }>,
   breakdown: ReadonlyMap<string, readonly ISummaryBreakdownRow[]>,
   employees: ReadonlyMap<number, IMonthEmployee>,
+  exec?: DbExecutor,
 ): Promise<Map<string, IMonthAttribution>> => {
   const result = new Map<string, IMonthAttribution>();
   if (pairs.length === 0) return result;
@@ -208,10 +231,13 @@ export const attributeMonths = async (
     .filter(pair => employees.get(pair.employeeId)?.employment_status === 'fired'
       && pickMonthDepartment(breakdown.get(monthPairKey(pair.employeeId, pair.month)) ?? []) === null)
     .map(pair => pair.employeeId))];
-  const [modes, dismissalDepartments] = await Promise.all([
-    loadMonthModes(pairs),
-    loadDismissalDepartments(firedWithoutMonthDepartment),
-  ]);
+  // Клиент транзакции — запросы по очереди (pg не держит параллельные запросы на одном клиенте), пул — параллельно.
+  const [modes, dismissalDepartments] = exec
+    ? [await loadMonthModes(pairs, exec), await loadDismissalDepartments(firedWithoutMonthDepartment, exec)]
+    : await Promise.all([
+      loadMonthModes(pairs),
+      loadDismissalDepartments(firedWithoutMonthDepartment),
+    ]);
 
   const mainObjects = new Map<string, ISummaryObject | null>();
   for (const pair of pairs) {
@@ -224,7 +250,7 @@ export const attributeMonths = async (
   const breakdownIds = [...mainObjects.values()]
     .map(object => object?.key ?? null)
     .filter((id): id is string => id !== null && id !== 'office' && id !== 'unknown');
-  const objectMeta = await loadObjectMeta([...new Set([...pinnedIds, ...breakdownIds])]);
+  const objectMeta = await loadObjectMeta([...new Set([...pinnedIds, ...breakdownIds])], exec);
 
   for (const pair of pairs) {
     const key = monthPairKey(pair.employeeId, pair.month);

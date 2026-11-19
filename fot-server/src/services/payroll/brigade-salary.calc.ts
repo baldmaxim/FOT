@@ -51,8 +51,8 @@ const ZERO_STATUSES: ReadonlySet<string> = new Set([
   'vacation', 'sick', 'educational_leave', 'unpaid', 'dayoff', 'absent',
 ]);
 
-/** Отработанные статусы: УУ, РБ, УД — как явка. */
-const WORKED_STATUSES: ReadonlySet<string> = new Set([
+/** Отработанные статусы: УУ, РБ, УД — как явка. Тот же список — факт в API для ЗУП3. */
+export const WORKED_STATUSES: ReadonlySet<string> = new Set([
   'work', 'manual', 'remote', 'sick_worked', 'study_day',
 ]);
 

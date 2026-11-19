@@ -9,10 +9,9 @@
 
 import type { Request, Response } from 'express';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
-import { dataApiKeyService } from '../services/data-api-key.service.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { resolveState, type TimesheetExportState } from '../services/timesheet-version.service.js';
-import type { DataApiKeyContext } from '../middleware/dataApiAuth.js';
+import { ensureEmployeesAccess, fail } from './public-data-api.helpers.js';
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -40,38 +39,6 @@ interface IVersionJoinRow {
   acked_revision: number | null;
   acked_at: string | null;
   document_ref: string | null;
-}
-
-function keyOf(req: Request): DataApiKeyContext | undefined {
-  return (req as Request & { dataApiKey?: DataApiKeyContext }).dataApiKey;
-}
-
-function fail(res: Response, status: number, error: string, code?: string, extra?: Record<string, unknown>): void {
-  const body: Record<string, unknown> = { success: false, error };
-  if (code) body.code = code;
-  if (extra) Object.assign(body, extra);
-  res.status(status).json(body);
-}
-
-/** Гейт: ключу должна быть открыта таблица employees (табель — данные сотрудников). */
-async function ensureEmployeesAccess(req: Request, res: Response): Promise<DataApiKeyContext | null> {
-  const keyCtx = keyOf(req);
-  if (!keyCtx) {
-    fail(res, 401, 'Unauthorized');
-    return null;
-  }
-  let keyTables: Array<{ table_name: string }>;
-  try {
-    keyTables = await dataApiKeyService.getKeyTables(keyCtx.id);
-  } catch {
-    fail(res, 500, 'Failed to resolve key access');
-    return null;
-  }
-  if (!keyTables.some(t => t.table_name === 'employees')) {
-    fail(res, 403, 'Ключу не открыта таблица employees — табель недоступен');
-    return null;
-  }
-  return keyCtx;
 }
 
 /** Нижняя граница периода: глубже 1С не ходит, иначе упрётся в неотбэкфилленные подачи. */

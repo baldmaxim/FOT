@@ -193,13 +193,14 @@ export interface IMonthCategoryInput {
   mode: IResolvedExportMode | undefined;
 }
 
-/** Категории месяцев — «Свод» и расчётный листок; порядок ответа — порядок входа. */
+/** Категории месяцев — «Свод», расчётный листок, API для ЗУП3; порядок ответа — порядок входа. exec — клиент транзакции. */
 export const resolveMonthStaffCategories = async (
   items: readonly IMonthCategoryInput[],
+  exec?: DbExecutor,
 ): Promise<StaffCategory[]> => {
   if (items.length === 0) return [];
-  const structure = await loadStructure();
-  const workers = await loadWorkerRule(items, structure.brigadeIds);
+  const structure = await loadStructure(exec);
+  const workers = await loadWorkerRule(items, structure.brigadeIds, exec);
   return items.map(item => categoryByTimesheet({
     officeObject: item.officeObject,
     timesheetWorker: isTimesheetWorker({
