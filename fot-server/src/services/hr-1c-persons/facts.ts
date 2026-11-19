@@ -20,6 +20,7 @@ export const personHashes = (p: IPerson1c): IPersonHashes => ({
 
 export const personKeys = (p: IPerson1c): IPersonKeys => ({
   idAll: p.idAll,
+  nameKey: normalizeNameForHash(p.fullName) ?? '',
   birthDate: p.birthDate,
   snils: p.snils,
   departments: p.departments,
@@ -50,39 +51,35 @@ const ids = (rows: Array<{ id: number | string }>): number[] => rows.map(r => Nu
 const isWorking = (r: { employment_status: string | null; is_archived: boolean | null; dismissal_date: string | null }, asOf: string): boolean =>
   r.employment_status === 'active' && !r.is_archived && (!r.dismissal_date || r.dismissal_date > asOf);
 
+/**
+ * Все сильные признаки и однофамильцы — одним запросом (по сети каждый запрос дорог):
+ * строка = (признак, карточка, её ДР). Пустой параметр признака отключает его ветку.
+ */
+const SIGNALS_SQL = `
+  SELECT 'id_all' AS s, x.employee_id AS id, NULL::text AS birth_date FROM (${LINKED_BY_ID_ALL_SQL}) x
+  UNION ALL
+  SELECT 'snils', e.id, NULL FROM employees e
+   WHERE $2::text IS NOT NULL AND regexp_replace(COALESCE(e.pension_number, ''), '\\D', '', 'g') = $2
+  UNION ALL SELECT 'snils', employee_id, NULL FROM employee_hr_profiles WHERE snils_hash = $3
+  UNION ALL SELECT 'snils', employee_id, NULL FROM hr_identity_claims WHERE claim_type = 'snils' AND claim_hash = $3 AND employee_id IS NOT NULL
+  UNION ALL SELECT 'inn', employee_id, NULL FROM employee_hr_profiles WHERE inn_hash = $4
+  UNION ALL SELECT 'inn', employee_id, NULL FROM hr_identity_claims WHERE claim_type = 'inn' AND claim_hash = $4 AND employee_id IS NOT NULL
+  UNION ALL SELECT 'passport', employee_id, NULL FROM employee_hr_profiles WHERE passport_number_hash = $5
+  UNION ALL SELECT 'passport', employee_id, NULL FROM hr_identity_claims WHERE claim_type = 'passport' AND claim_hash = $5 AND employee_id IS NOT NULL
+  UNION ALL SELECT 'kig', employee_id, NULL FROM employee_hr_profiles WHERE kig_hash = $6
+  UNION ALL SELECT 'name', e.id, e.birth_date::text FROM employees e WHERE $7::text IS NOT NULL AND ${NAME_EXPR} = $7`;
+
 export const loadPersonFacts = async (db: IDb, person: IPerson1c, keys: IPersonKeys, asOf: string, extraIds: number[] = []): Promise<IPersonFacts> => {
   const h = keys.hashes;
-  const one = async (sql: string, params: unknown[]): Promise<number[]> => ids((await db.query<{ id: number }>(sql, params)).rows);
   const bySignal: Record<Signal, number[]> = { id_all: [], snils: [], inn: [], passport: [], kig: [], name_birth: [] };
-
-  bySignal.id_all = ids((await db.query<{ employee_id: number }>(LINKED_BY_ID_ALL_SQL, [person.idAll])).rows.map(r => ({ id: r.employee_id })));
-  if (person.snils) {
-    bySignal.snils = await one(
-      `SELECT e.id FROM employees e WHERE regexp_replace(COALESCE(e.pension_number, ''), '\\D', '', 'g') = $1
-       UNION SELECT employee_id FROM employee_hr_profiles WHERE snils_hash = $2
-       UNION SELECT employee_id FROM hr_identity_claims WHERE claim_type = 'snils' AND claim_hash = $2 AND employee_id IS NOT NULL`,
-      [person.snils, h.snils],
-    );
-  }
-  if (h.inn) {
-    bySignal.inn = await one(
-      `SELECT employee_id AS id FROM employee_hr_profiles WHERE inn_hash = $1
-       UNION SELECT employee_id FROM hr_identity_claims WHERE claim_type = 'inn' AND claim_hash = $1 AND employee_id IS NOT NULL`, [h.inn]);
-  }
-  if (h.passport) {
-    bySignal.passport = await one(
-      `SELECT employee_id AS id FROM employee_hr_profiles WHERE passport_number_hash = $1
-       UNION SELECT employee_id FROM hr_identity_claims WHERE claim_type = 'passport' AND claim_hash = $1 AND employee_id IS NOT NULL`, [h.passport]);
-  }
-  if (h.kig) bySignal.kig = await one(`SELECT employee_id AS id FROM employee_hr_profiles WHERE kig_hash = $1`, [h.kig]);
-
   const nameKey = normalizeNameForHash(person.fullName);
-  const byNameRows = nameKey
-    ? (await db.query<{ id: number; birth_date: string | null }>(
-      `SELECT e.id, e.birth_date::text AS birth_date FROM employees e WHERE ${NAME_EXPR} = $1`, [nameKey])).rows
-    : [];
-  const byName = ids(byNameRows);
-  if (person.birthDate) bySignal.name_birth = ids(byNameRows.filter(r => r.birth_date === person.birthDate));
+  const signalRows = (await db.query<{ s: Signal | 'name'; id: number; birth_date: string | null }>(
+    SIGNALS_SQL, [person.idAll, person.snils, h.snils, h.inn, h.passport, h.kig, nameKey])).rows;
+  const byNameRows = signalRows.filter(r => r.s === 'name');
+  for (const r of signalRows) if (r.s !== 'name') bySignal[r.s].push(Number(r.id));
+  for (const k of Object.keys(bySignal) as Signal[]) bySignal[k] = [...new Set(bySignal[k])];
+  const byName = [...new Set(ids(byNameRows))];
+  if (person.birthDate) bySignal.name_birth = [...new Set(ids(byNameRows.filter(r => r.birth_date === person.birthDate)))];
 
   const claimRows = (await db.query<{ claim_type: IClaimOwner['claimType']; employee_id: number | null; draft_id: string | null }>(
     `SELECT claim_type, employee_id, draft_id::text AS draft_id FROM hr_identity_claims

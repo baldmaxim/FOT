@@ -10,7 +10,7 @@ const card = (id: number, over: Partial<IFotCard> = {}): IFotCard => ({
 });
 
 const keys = (over: Partial<IPersonKeys> = {}): IPersonKeys => ({
-  idAll: ID, birthDate: '1990-01-01', snils: '11223344595', departments: ['бр.Новая/закр'], keyConflict: false,
+  idAll: ID, nameKey: 'иванов иван', birthDate: '1990-01-01', snils: '11223344595', departments: ['бр.Новая/закр'], keyConflict: false,
   hashes: { snils: 'hs', inn: 'hi', passport: 'hp', kig: 'hk' }, ...over,
 });
 
@@ -77,6 +77,14 @@ describe('decidePerson', () => {
     expect(decidePerson(keys(), facts([card(7, { birthDate: '1980-01-01' })]), 7).kind).toBe('manual');
     const f = facts([card(7), card(8)], { bySignal: { ...facts([]).bySignal, snils: [8] } });
     expect(decidePerson(keys(), f, 7).reasons[0]).toMatch(/признаки указывают на #8/);
+  });
+
+  it('сильный признак, но ФИО в FOT другое — вручную; ручной выбор этой карточки принимается', () => {
+    const f = facts([card(1, { fullName: 'Иванова Ивана' })], { bySignal: { ...facts([]).bySignal, id_all: [1] } });
+    expect(decidePerson(keys(), f).reasons[0]).toMatch(/ФИО в FOT другое/);
+    expect(decidePerson(keys(), f, 1)).toMatchObject({ kind: 'apply', employeeId: 1, tier: 'manual' });
+    const same = facts([card(1, { fullName: 'Иванов  Иван' })], { bySignal: { ...facts([]).bySignal, id_all: [1] } });
+    expect(decidePerson(keys(), same).kind).toBe('apply');
   });
 
   it('ключевой конфликт в 1С — только вручную', () => {

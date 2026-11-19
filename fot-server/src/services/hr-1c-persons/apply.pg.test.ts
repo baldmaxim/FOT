@@ -120,12 +120,16 @@ const P = {
 const d = PG_URL ? describe : describe.skip;
 
 d('физлица 1С → «Реквизиты» на PostgreSQL', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-1c-persons-'));
-  const src = path.join(dir, 'fiz.xlsx');
-  const report = path.join(dir, 'preview.xlsx');
-  const journal = path.join(dir, 'apply.jsonl');
+  let dir = '';
+  let src = '';
+  let report = '';
+  let journal = '';
 
   beforeAll(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-1c-persons-'));
+    src = path.join(dir, 'fiz.xlsx');
+    report = path.join(dir, 'preview.xlsx');
+    journal = path.join(dir, 'apply.jsonl');
     await q(`DROP TABLE IF EXISTS hr_profile_import_staging, hr_external_refs, hr_ocr_jobs, hr_identity_claims, employee_hr_drafts,
              employee_hr_ocr_conflicts, employee_hr_profile_history, employee_hr_profiles, hr_citizenship_synonyms, hr_citizenships,
              documents, document_categories, access_pages, user_profiles, payroll_1c_payout_lines, payroll_fss_payments,
@@ -310,6 +314,40 @@ d('физлица 1С → «Реквизиты» на PostgreSQL', () => {
       actor: { userId: USER, userName: 'тест' },
     }))).rejects.toBeInstanceOf(HrIntegrityError);
     expect((await q(`SELECT inn_enc FROM employee_hr_profiles WHERE employee_id = 107`))[0].inn_enc).toBe('v0:AAAA:BBBB:CCCC');
+  });
+
+  const directApply = async (n: number, name: string, empId: number) => {
+    const [p] = collapsePersons(parsePersons1cRows([[...PERSONS_1C_REQUIRED_COLUMNS],
+      PERSONS_1C_REQUIRED_COLUMNS.map(c => person(n, name)[c] ?? '')]).rows, AS_OF).working;
+    await q(`INSERT INTO employees (id, full_name, org_department_id) VALUES ($1, $2, $3)`, [empId, name, DEPT]);
+    await q(`INSERT INTO payroll_1c_payout_lines (employee_id, person_id_all, resolution) VALUES ($1, $2, 'confirmed')`, [empId, id(n)]);
+    return { p, run: async () => {
+      const { withTransaction } = await import('../../config/postgres.js');
+      return withTransaction(c => applyPersonInTransaction(c, {
+        person: p, keys: personKeys(p), expectedEmployeeId: empId, manualEmployeeId: null, citizenship: null, asOf: AS_OF,
+        actor: { userId: USER, userName: 'тест' },
+      }));
+    } };
+  };
+
+  it('ИНН закреплён за другим сотрудником — запись отказывается, ничего не пишет', async () => {
+    const { p, run } = await directApply(10, 'Каримов Карим', 110);
+    await q(`INSERT INTO employees (id, full_name) VALUES (910, 'Другой')`);
+    await q(`INSERT INTO hr_identity_claims (claim_type, claim_hash, employee_id) VALUES ('inn', $1, 910)`, [hashForSearch('inn', p.inn)]);
+    const res = await run();
+    expect(res.status).toBe('skipped_changed');
+    // ИНН сам указывает на #910 — признаки разошлись, запись блокируется.
+    expect(res.reasons.join(';')).toMatch(/#910/);
+    expect(await q(`SELECT 1 FROM employee_hr_profiles WHERE employee_id = 110`)).toHaveLength(0);
+  });
+
+  it('у карточки уже другой код 1С — запись отказывается, код не меняется', async () => {
+    const { run } = await directApply(11, 'Латипов Латип', 111);
+    await q(`INSERT INTO employee_hr_profiles (employee_id, passdesk_id_all, created_by) VALUES (111, $1, $2)`, [id(99), USER]);
+    const res = await run();
+    expect(res.status).toBe('skipped_changed');
+    expect(res.reasons.join(';')).toMatch(/другой код 1С|другим физлицом/);
+    expect((await q(`SELECT passdesk_id_all::text AS v, inn_enc FROM employee_hr_profiles WHERE employee_id = 111`))[0]).toEqual({ v: id(99), inn_enc: null });
   });
 
   it('шифрование в тесте настоящее', () => {

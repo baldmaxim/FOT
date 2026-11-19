@@ -56,6 +56,8 @@ export interface IPersonFacts {
 
 export interface IPersonKeys {
   idAll: string;
+  /** ФИО в виде normalizeNameForHash. */
+  nameKey: string;
   birthDate: string | null;
   snils: string | null;
   departments: string[];
@@ -81,6 +83,9 @@ export const signalLabel = (s: Signal): string => SIGNAL_LABEL[s];
 /** «бр.Шерматов А.М./закр» ~ «бр. Шерматов А.М.» */
 export const normalizeDepartmentName = (s: string | null | undefined): string =>
   (s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/\/закр\s*$/, '').replace(/[\s./]+/g, '');
+
+/** Как normalizeNameForHash: NFKC, ё→е, пробелы, регистр. */
+export const nameKeyOf = (s: string): string => s.normalize('NFKC').trim().replace(/\s+/g, ' ').replace(/ё/gi, 'е').toLowerCase();
 
 const manual = (reasons: string[], candidates: number[] = [], signals: Signal[] = []): IDecision =>
   ({ kind: 'manual', employeeId: null, tier: null, signals, candidates, reasons });
@@ -133,8 +138,11 @@ export const decidePerson = (person: IPersonKeys, facts: IPersonFacts, manualEmp
 
   if (hits.size === 1) {
     const [[id, signals]] = [...hits];
-    const veto = vetoReasons(facts.cards.get(id)!, person, facts, { weak: false });
+    const found = facts.cards.get(id)!;
+    const veto = vetoReasons(found, person, facts, { weak: false });
     if (veto.length > 0) return manual(veto, [id], signals);
+    // Связь из выплат — выбор оператора; другое ФИО подтверждает человек номером вручную.
+    if (nameKeyOf(found.fullName) !== person.nameKey) return manual(['ФИО в FOT другое — впишите номер карточки вручную, если это тот же человек'], [id], signals);
     return { kind: 'apply', employeeId: id, tier: signals.includes('id_all') ? 'id_all' : 'strong', signals, candidates: [id], reasons: [] };
   }
 

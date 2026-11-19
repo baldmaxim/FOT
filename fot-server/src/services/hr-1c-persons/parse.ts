@@ -136,6 +136,34 @@ export const normalizeInn1c = (v: unknown): { value: string | null; problem: str
   return { value: padded, problem: null };
 };
 
+/** Кириллические буквы, похожие на латинские, — только для проверки формы номера. */
+const LOOKALIKE: Record<string, string> = { А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', У: 'Y', Х: 'X' };
+
+/**
+ * Номер иностранного паспорта только подтверждённых форм (по хэшам заведённых профилей):
+ * 2 буквы + 7 цифр (у Узбекистана потерянные нули дополняются), Украина — 2 буквы + 6,
+ * Таджикистан — 9 цифр. Остальное — null: не заносится, человек виден в отчёте.
+ */
+export const foreignPassportNumber = (series: string, number: string, citizenship: string): string | null => {
+  const m = /^([A-ZА-ЯЁ]{2})?(\d+)$/.exec(`${series}${number}`);
+  if (!m) return null;
+  const letters = m[1] ?? '';
+  const latin = letters.replace(/[А-ЯЁ]/g, ch => LOOKALIKE[ch] ?? '?');
+  let digitsPart = m[2];
+  if (latin && !/^[A-Z]{2}$/.test(latin)) return null;
+  if (latin && citizenship === 'УЗБЕКИСТАН' && digitsPart.length < 7) digitsPart = digitsPart.padStart(7, '0');
+  const ok = (latin && digitsPart.length === 7)
+    || (latin && citizenship === 'УКРАИНА' && digitsPart.length === 6)
+    || (!latin && citizenship === 'ТАДЖИКИСТАН' && digitsPart.length === 9);
+  return ok ? `${letters}${digitsPart}` : null;
+};
+
+/** «гггг-мм-дд» существующей даты — иначе исключение (дата среза сравнивается строками). */
+export const assertIsoDate = (value: string, what: string): string => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || parseRuDate(value) !== value) throw new Error(`${what}: ожидается дата гггг-мм-дд`);
+  return value;
+};
+
 export const normalizePassport1c = (row: Record<Column, unknown>): { value: IPassport1c | null; problem: string | null } => {
   const kind = text(row['Паспорт_Вид']).toLowerCase();
   const rawNumber = text(row['Паспорт_Номер']).replace(/\s/g, '').toUpperCase();
@@ -155,11 +183,10 @@ export const normalizePassport1c = (row: Record<Column, unknown>): { value: IPas
     return { value: { type: 'russian', number: `${series} ${num.padStart(6, '0')}`, ...common }, problem: null };
   }
   if (kind === FOREIGN_PASSPORT) {
-    const series = text(row['Паспорт_Серия']).replace(/\s/g, '').toUpperCase();
     if (!rawNumber) return { value: null, problem: 'Паспорт: нет номера' };
-    const uzbek = text(row['Гражданство']).toUpperCase() === 'УЗБЕКИСТАН';
-    const num = uzbek && /^[A-Z]{2}$/.test(series) && /^\d{1,6}$/.test(rawNumber) ? rawNumber.padStart(7, '0') : rawNumber;
-    return { value: { type: 'foreign', number: `${series}${num}`, ...common }, problem: null };
+    const number = foreignPassportNumber(text(row['Паспорт_Серия']).replace(/\s/g, '').toUpperCase(), rawNumber, text(row['Гражданство']).toUpperCase());
+    if (!number) return { value: null, problem: 'Паспорт: номер неподтверждённой формы — не заносится' };
+    return { value: { type: 'foreign', number, ...common }, problem: null };
   }
   return { value: null, problem: 'Документ не паспорт (вид документа в 1С другой) — паспорт не заносится' };
 };
@@ -240,6 +267,7 @@ const pick = <T>(rows: IRow1c[], get: (r: IRow1c) => T | null, name: string, con
 
 /** Строки файла → работающие на дату среза физлица (по id_all) + число уволенных. */
 export const collapsePersons = (rows: IRow1c[], asOf: string): { working: IPerson1c[]; dismissed: number } => {
+  assertIsoDate(asOf, 'Дата среза');
   const groups = new Map<string, IRow1c[]>();
   for (const r of rows) groups.set(r.idAll, [...(groups.get(r.idAll) ?? []), r]);
   const working: IPerson1c[] = [];

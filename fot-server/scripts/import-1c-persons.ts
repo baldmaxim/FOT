@@ -58,7 +58,7 @@ const prepareEnv = (readOnly: boolean): void => {
   for (const k of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'ssl', 'options']) url.searchParams.delete(k);
   if (readOnly) url.searchParams.set('options', '-c default_transaction_read_only=on');
   process.env.DATABASE_URL = url.toString();
-  process.env.DATABASE_POOL_MAX = '3';
+  process.env.DATABASE_POOL_MAX = '2';
   // Прод — всегда SSL с CA; DATABASE_SSL=false в .env — только для тестовой базы.
   process.env.DATABASE_SSL = env.DATABASE_SSL === 'false' ? 'false' : 'true';
   if (process.env.DATABASE_SSL === 'false') return;

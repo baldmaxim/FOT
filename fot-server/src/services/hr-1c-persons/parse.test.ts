@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  PERSONS_1C_REQUIRED_COLUMNS, collapsePersons, isValidPersonInn, isValidSnils, normalizeInn1c, normalizePassport1c,
+  PERSONS_1C_REQUIRED_COLUMNS, collapsePersons, foreignPassportNumber, isValidPersonInn, isValidSnils, normalizeInn1c, normalizePassport1c,
   normalizePatent1c, normalizePhone1c, normalizeSnils1c, parsePersons1cRows, parseRuDate,
 } from './parse.js';
 
@@ -75,6 +75,18 @@ describe('нормализация полей 1С', () => {
     expect(vnzh.problem).toMatch(/не паспорт/);
   });
 
+  it('иностранный паспорт: только подтверждённые формы', () => {
+    expect(foreignPassportNumber('FА', '631284', 'УЗБЕКИСТАН')).toBe('FА0631284');
+    expect(foreignPassportNumber('КВ', '1234567', 'БЕЛАРУСЬ')).toBe('КВ1234567');
+    expect(foreignPassportNumber('', 'РЕ0959620', 'КИРГИЗИЯ')).toBe('РЕ0959620');
+    expect(foreignPassportNumber('U', '12345678', 'ТУРЦИЯ')).toBeNull();
+    expect(foreignPassportNumber('', '012345678', 'КАЗАХСТАН')).toBeNull();
+    expect(foreignPassportNumber('', '12345678', 'ТАДЖИКИСТАН')).toBeNull();
+    expect(foreignPassportNumber('ЖЖ', '1234567', 'УЗБЕКИСТАН')).toBeNull();
+    const turk = normalizePassport1c({ 'Паспорт_Вид': 'Паспорт иностранного гражданина', 'Паспорт_Серия': 'U', 'Паспорт_Номер': '12345678', 'Гражданство': 'ТУРЦИЯ' } as never);
+    expect(turk).toEqual({ value: null, problem: 'Паспорт: номер неподтверждённой формы — не заносится' });
+  });
+
   it('патент — «серия№номер», служебные «*» отбрасываются; телефон — +7…', () => {
     expect(normalizePatent1c({ 'Патент_Серия': '77', 'Патент_Номер': '2400039966*', 'Патент_ДатаВыдачи': '07.02.2024' } as never))
       .toEqual({ number: '77№2400039966', issueDate: '2024-02-07' });
@@ -90,6 +102,12 @@ describe('строки и физлица', () => {
   it('нет обязательного столбца — ошибка, id_all не UUID — ошибка', () => {
     expect(() => parsePersons1cRows([['ФизЛицо']])).toThrow(/нет столбцов/);
     expect(() => parsePersons1cRows(sheet([{ 'ФизЛицо': 'А', 'Физлицо_id_all': 'x' }]))).toThrow(/UUID/);
+  });
+
+  it('дата среза не в формате гггг-мм-дд — ошибка (иначе уволенные стали бы «работающими»)', () => {
+    const { rows } = parsePersons1cRows(sheet([{ 'ФизЛицо': 'Первый', 'Физлицо_id_all': ID_A, 'ДатаУвольнения': '01.11.2025' }]));
+    expect(() => collapsePersons(rows, '19.11.2026')).toThrow(/гггг-мм-дд/);
+    expect(() => collapsePersons(rows, '2026-02-30')).toThrow(/гггг-мм-дд/);
   });
 
   it('уволенный до среза — не работающий; уволенный после среза — работает', () => {
