@@ -7,7 +7,10 @@
  * веса объектов из живых проходов (buildVersionObjectBreakdown).
  *
  * Живой день — только у пары без закрытого дня: живой табель (fetchTimesheetDataForEmployees, как «Зарплата
- * бригады»), отсечка после увольнения. Охват живого — работавшие в месяце не подрядчики (по текущему отделу).
+ * бригады»), отсечка после увольнения. Охват живого — работавшие в месяце, кроме подрядчиков месяца: текущий отдел,
+ * назначение, задевающее месяц, или отдел увольнения в месяце — в дереве «Подрядные организации» (как «Свод»).
+ * Предварительный живой день — открытый месяц, подача на доработке или прошлый месяц без закрытой подачи;
+ * окончательный — только у уволенного в этом месяце (в закрытую редакцию он не попадает по правилу).
  */
 import type { DbExecutor } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -242,7 +245,15 @@ export const loadMonthDays = async (
             AND (e.hire_date IS NULL OR e.hire_date <= $3::date)
             AND (e.dismissal_date IS NULL OR e.dismissal_date >= $2::date)
             AND NOT (e.employment_status = 'fired' AND e.dismissal_date IS NULL)
-            AND (e.org_department_id IS NULL OR NOT (e.org_department_id::text = ANY($4::text[]))))`,
+            AND NOT COALESCE(e.org_department_id::text = ANY($4::text[]), false)
+            AND NOT EXISTS (
+              SELECT 1 FROM employee_assignments x
+               WHERE x.employee_id = e.id AND x.org_department_id::text = ANY($4::text[])
+                 AND x.effective_from <= $3::date AND (x.effective_to IS NULL OR x.effective_to >= $2::date))
+            AND NOT EXISTS (
+              SELECT 1 FROM employee_dismissal_events de
+               WHERE de.employee_id = e.id AND de.cancelled = false AND de.from_department_id::text = ANY($4::text[])
+                 AND de.dismissal_date >= $2::date))`,
   [[...days.keys(), ...new Set([...rework].map(key => Number(key.split('|')[0])))], bounds.start, bounds.end, contractorIds]);
   const employeeById = new Map(employees.map(row => [Number(row.id), { ...row, id: Number(row.id) }]));
   timing?.mark('closed');
@@ -263,8 +274,11 @@ export const loadMonthDays = async (
     }
   }
   if (liveIds.size > 0) {
+    const dismissedInMonth = new Set([...employeeById.values()]
+      .filter(employee => employee.dismissal_date !== null && employee.dismissal_date >= bounds.start && employee.dismissal_date <= bounds.end)
+      .map(employee => employee.id));
     await attachLiveDays(exec, bounds, [...liveIds].sort((a, b) => a - b), {
-      days, put, rework, unfrozen, objects, keyOf, skudObjects, names, configErrors,
+      days, put, rework, unfrozen, objects, keyOf, skudObjects, names, configErrors, dismissedInMonth,
     });
   }
   timing?.mark(`live(${liveIds.size})`);
@@ -288,6 +302,8 @@ interface ILiveContext {
   skudObjects: ReadonlyMap<string, ISkudObjectInfo>;
   names: Map<number, string | null>;
   configErrors: Set<number>;
+  /** Уволенные в этом месяце: их живые дни прошлого месяца окончательные. */
+  dismissedInMonth: ReadonlySet<number>;
 }
 
 /** Живые дни пар без закрытого дня и живые веса объектов для закрытых дней редакций без снимка. */
@@ -361,7 +377,7 @@ const attachLiveDays = async (
       versionId: null,
       departmentId: null,
       frozen: false,
-      preliminary: bounds.open || ctx.rework.has(key),
+      preliminary: bounds.open || ctx.rework.has(key) || !ctx.dismissedInMonth.has(employeeId),
     });
   }
   for (const { employeeId, date } of ctx.unfrozen) {

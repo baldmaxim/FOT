@@ -42,6 +42,8 @@ const OBJ_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
 const D1 = 'd1000000-0000-4000-8000-000000000001';
 const D2 = 'd2000000-0000-4000-8000-000000000002';
 const ARCH = 'a0000000-0000-4000-8000-0000000000ac';
+const CONTR = 'c0000000-0000-4000-8000-0000000000c0';
+const CONTR_CO = 'c1000000-0000-4000-8000-0000000000c1';
 
 vi.mock('./timesheet-export.service.js', () => ({
   fetchTimesheetDataForEmployees: vi.fn(async (_month: string, ids: number[]) => {
@@ -54,6 +56,8 @@ vi.mock('./timesheet-export.service.js', () => ({
     set(3, '2026-10-07', 'work', 9);
     set(4, '2026-10-08', 'work', 10); // закрытый день — живым не заменяется
     set(5, '2026-10-09', 'work', 8);
+    set(7, '2026-10-06', 'work', 8); // уволен 10.10 — окончательно
+    set(8, '2026-10-06', 'work', 8); // подрядчик месяца — не попадает
     set(1, '2026-10-01', 'work', 99); // закрытый день — живым не заменяется
     const entry = (id: number, date: string, objectId: string, hoursWorked: number) => ({
       adjustment_id: null, employee_id: id, work_date: date, object_key: objectId, object_id: objectId,
@@ -171,11 +175,17 @@ describe.skipIf(!PG_URL)('staff-month-1c — снимок месяца на Post
                  created_at timestamptz DEFAULT now(), dismissal_date date)`);
 
     await sql(`INSERT INTO org_departments VALUES ($1, NULL, 'бр.Амонов М.Н.', 'brigade'), ($2, NULL, 'Отдел ПТО', NULL),
-                 ($3, NULL, 'Уволенные', NULL)`, [D1, D2, ARCH]);
+                 ($3, NULL, 'Уволенные', NULL), ($4, NULL, 'Подрядные организации', NULL), ($5, $4, 'ООО Подряд', NULL)`,
+    [D1, D2, ARCH, CONTR, CONTR_CO]);
     await sql(`INSERT INTO skud_objects VALUES ($1, 'ЖК Ситибэй', 'ул. Ситибэй, 1', true), ($2, 'ЖК Примавера К14', NULL, true)`, [OBJ_A, OBJ_B]);
     await sql(`INSERT INTO employees (id, full_name, org_department_id) VALUES
                  (1, 'Сотрудник 1', $1), (2, 'Сотрудник 2', $2), (3, 'Сотрудник 3', $2), (4, 'Сотрудник 4', $2),
                  (5, 'Сотрудник 5', $1), (6, 'Сотрудник 6', $2)`, [D1, D2]);
+    // 7 — уволен 10.10 из отдела; 8 — подрядчик, уволен 10.10 (сейчас в «Уволенных»).
+    await sql(`INSERT INTO employees (id, full_name, org_department_id, employment_status, dismissal_date) VALUES
+                 (7, 'Сотрудник 7', $1, 'fired', '2026-10-10'), (8, 'Подрядчик 8', $1, 'fired', '2026-10-10')`, [ARCH]);
+    await sql(`INSERT INTO employee_dismissal_events (employee_id, from_department_id, dismissal_date) VALUES
+                 (7, $1, '2026-10-10'), (8, $2, '2026-10-10')`, [D2, CONTR_CO]);
 
     // 1 и 6 — бригада, согласовано; у 1 — отпуск с часами нормы на объекте (в снимке, но не в факте).
     await version({
@@ -228,7 +238,8 @@ describe.skipIf(!PG_URL)('staff-month-1c — снимок месяца на Post
     const snapshot = await withReadOnlySnapshot(client => buildStaffMonthSnapshot(client, monthBoundsOf('2026-10', now), now));
     const row = (id: number) => snapshot.rows.find(item => item.employee_id === id)!;
 
-    expect(snapshot.rows.map(item => item.employee_id)).toEqual([1, 2, 3, 4, 5, 6]);
+    // 8 — подрядчик месяца (отдел увольнения — «Подрядные организации»): в API его нет.
+    expect(snapshot.rows.map(item => item.employee_id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(snapshot.meta.duplicate_days).toBe(1);
 
     // 1: факт — только работа (10 + 8), отпуск — буква с часами нормы, основной объект — как «Свод» (A с отпуском).
@@ -255,8 +266,11 @@ describe.skipIf(!PG_URL)('staff-month-1c — снимок месяца на Post
     expect(row(4).object_frozen).toBe(false);
     expect(snapshot.meta.objects_not_frozen).toBeGreaterThanOrEqual(1);
 
-    // 5: живой день прошлого месяца — не предварительный; бригада по окну членства; запись во время сборки не видна.
-    expect(row(5).preliminary).toBe(false);
+    // 5: живой день прошлого месяца без закрытой подачи — предварительный; бригада по окну членства; запись во время
+    // сборки не видна. 7: уволен в месяце — его живые дни окончательные.
+    expect(row(5).preliminary).toBe(true);
+    expect(row(7).preliminary).toBe(false);
+    expect(row(7).days.find(day => day.date === '2026-10-06')).toMatchObject({ hours: 8, source: 'live' });
     expect(row(5).brigade).toMatchObject({ department_id: D1, name: 'бр.Амонов М.Н.' });
     expect(row(5).days.every(day => day.employed)).toBe(true);
 

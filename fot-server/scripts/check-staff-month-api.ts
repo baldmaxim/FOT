@@ -172,6 +172,13 @@ async function main(): Promise<void> {
   const sample = snapshot.brigades.find(item => item.name.startsWith('бр.Амонов М.Н'));
 
   const liveRows = snapshot.rows.filter(row => row.days.some(day => day.source === 'live'));
+  // Живые дни, отданные как окончательные (прошлый месяц вне подач): кто это — для разбора.
+  const liveFinal = liveRows.filter(row => !row.preliminary).map(row => ({
+    id: row.employee_id,
+    closed_days: row.days.filter(day => day.source === 'closed').length,
+    live_days: row.days.filter(day => day.source === 'live').length,
+    live_hours: Math.round(row.days.filter(day => day.source === 'live').reduce((sum, day) => sum + day.hours, 0) * 100) / 100,
+  }));
   const byCategory = snapshot.rows.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.category]: (acc[row.category] ?? 0) + 1 }), {});
   const bySource = snapshot.rows.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.object_source]: (acc[row.object_source] ?? 0) + 1 }), {});
   console.log(JSON.stringify({
@@ -198,6 +205,7 @@ async function main(): Promise<void> {
     category_vs_svod_without_live: categoryDiff,
     brigade_object_vs_submissions: brigadeDiff,
     sample_brigade: sample ? { name: sample.name, object: sample.object?.name, objects: sample.objects.map(item => `${item.object.name} ${item.hours}`) } : null,
+    live_final: liveFinal,
     problems,
   }, null, 2));
   await pg.closeDb();
