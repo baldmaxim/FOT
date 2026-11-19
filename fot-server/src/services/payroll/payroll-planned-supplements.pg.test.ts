@@ -145,6 +145,9 @@ const makeRes = () => {
     status(code: number) { this.statusCode = code; return this; },
     json(payload: unknown) { this.body = payload; return this; },
     setHeader(name: string, value: string) { this.headers[name] = value; return this; },
+    // Очередь расчётов (runInPayrollCalcSlot) слушает закрытие ответа — клиент не уходит.
+    on() { return this; },
+    off() { return this; },
   };
   return res as unknown as Response & { statusCode: number; body: any; headers: Record<string, string> };
 };
@@ -241,6 +244,9 @@ describe.skipIf(!PG_URL)('плановая доплата на PostgreSQL', () =
     // Ведомости в банк (328) — «Выплаты на карту» на «Расчётах»; профиль нужен только для индекса миграции.
     await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
     await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));
+    // Выплаты СМ и перенос строки в другой месяц (366, 367): список «Расчётов» читает period_month строки.
+    await pg.pool!.query(migration('366_payroll_1c_payouts_sm_inn.sql'));
+    await pg.pool!.query(migration('367_payroll_payouts_brigade_sheet.sql'));
     await pg.pool!.query(migration('356_payroll_fss_payments.sql'));
   });
 

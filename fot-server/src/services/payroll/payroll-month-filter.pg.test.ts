@@ -229,6 +229,9 @@ describe.skipIf(!PG_URL)('«Расчёты»: группы отделов и о�
     await pg.pool!.query(migration('352_payroll_terms_contract_type.sql'));
     await pg.pool!.query('CREATE TABLE employee_hr_profiles (employee_id integer, passdesk_id_all uuid)');
     await pg.pool!.query(migration('328_payroll_1c_payouts.sql'));
+    // Выплаты СМ и перенос строки в другой месяц (366, 367): список «Расчётов» читает period_month строки.
+    await pg.pool!.query(migration('366_payroll_1c_payouts_sm_inn.sql'));
+    await pg.pool!.query(migration('367_payroll_payouts_brigade_sheet.sql'));
     // «Выплаты ФСС» (356) — список «Расчётов» читает таблицу.
     await pg.pool!.query(migration('356_payroll_fss_payments.sql'));
 

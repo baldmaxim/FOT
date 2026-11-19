@@ -164,6 +164,7 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
   beforeAll(async () => {
     await run(`
       DROP TABLE IF EXISTS payroll_dormitory_allowances, employee_dormitory_stays, company_apartments, payroll_compensation_stops,
+        payroll_switches, timesheet_version_payroll_basis,
         payroll_one_time_supplements, payroll_paid_amounts, payroll_planned_supplements, payroll_settings,
         payroll_item_types, payroll_rate_values, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, role_page_access, access_pages,
@@ -435,6 +436,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
   });
 
   it('339: факты ставок — проживания с выездом, включатель авто-доплаты (ставит загрузка, только 1-е число)', async () => {
+    // 339 добавляет столбец основе расчёта (331) — здесь нужна только сама таблица, её столбцы тест не читает.
+    await run(`CREATE TABLE IF NOT EXISTS timesheet_version_payroll_basis (version_id integer)`);
     await run(migration('339_payroll_housing_by_days.sql'));
     await run(migration('339_payroll_housing_by_days.sql'));
     const facts = async () => (await loadRateFacts(
