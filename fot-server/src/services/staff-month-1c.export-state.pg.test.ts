@@ -35,6 +35,7 @@ vi.mock('../config/postgres.js', async () => {
 
 import {
   ackStaffMonth,
+  loadStaffMonthBuild,
   loadStaffMonthExportInfo,
   loadZup3ExportStates,
   persistStaffMonthStates,
@@ -49,7 +50,7 @@ const sql = async (text: string, params: unknown[] = []) => (await pg.pool!.quer
 describe.skipIf(!PG_URL)('staff-month-1c.export-state — PostgreSQL', () => {
   beforeAll(async () => {
     await sql(`DROP TABLE IF EXISTS staff_month_1c_exports, staff_month_1c_states, staff_month_1c_state_revisions,
-                 employees, data_api_keys CASCADE`);
+                 staff_month_1c_builds, employees, data_api_keys CASCADE`);
     await sql('CREATE TABLE employees (id int PRIMARY KEY)');
     await sql('CREATE TABLE data_api_keys (id uuid PRIMARY KEY)');
     await sql('INSERT INTO employees VALUES (1), (2), (3)');
@@ -67,15 +68,17 @@ describe.skipIf(!PG_URL)('staff-month-1c.export-state — PostgreSQL', () => {
       { employeeId: 1, preliminary: false, contentHash: A },
       { employeeId: 2, preliminary: false, contentHash: B },
       { employeeId: 3, preliminary: true, contentHash: A },
-    ]);
+    ], 'fp');
     expect([...states].map(([id, st]) => [id, st.revision])).toEqual([[1, 1], [2, 1], [3, 1]]);
     // Та же сборка — ревизии не растут.
     await persistStaffMonthStates('2026-10', [
       { employeeId: 1, preliminary: false, contentHash: A },
       { employeeId: 2, preliminary: false, contentHash: B },
       { employeeId: 3, preliminary: true, contentHash: A },
-    ]);
+    ], 'fp');
     expect((await sql('SELECT count(*)::int AS n FROM staff_month_1c_state_revisions'))[0].n).toBe(3);
+    expect((await loadStaffMonthBuild('2026-10'))?.fingerprint).toBe('fp');
+    expect(await loadStaffMonthBuild('2026-11')).toBeNull();
 
     // ACK: 1 и 2 принимаются, 3 — предварительный, чужой хеш и несуществующая ревизия — отказ.
     const ack = await ackStaffMonth({
@@ -98,7 +101,7 @@ describe.skipIf(!PG_URL)('staff-month-1c.export-state — PostgreSQL', () => {
     states = await persistStaffMonthStates('2026-10', [
       { employeeId: 1, preliminary: false, contentHash: B },
       { employeeId: 3, preliminary: false, contentHash: A },
-    ]);
+    ], 'fp');
     expect(states.get(1)).toMatchObject({ revision: 2, present: true, contentHash: B });
     expect(states.get(2)).toMatchObject({ revision: 2, present: false, contentHash: null });
     let info = await loadStaffMonthExportInfo('2026-10');
@@ -110,7 +113,7 @@ describe.skipIf(!PG_URL)('staff-month-1c.export-state — PostgreSQL', () => {
     states = await persistStaffMonthStates('2026-10', [
       { employeeId: 1, preliminary: false, contentHash: A },
       { employeeId: 3, preliminary: false, contentHash: A },
-    ]);
+    ], 'fp');
     expect(states.get(1)?.revision).toBe(3);
     info = await loadStaffMonthExportInfo('2026-10');
     expect(staffMonthExportState(info.states.get(1), info.acks.get(1))).toBe('changed');

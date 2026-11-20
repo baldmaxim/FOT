@@ -7,7 +7,7 @@ import {
   staffMonthRowHash,
   type IStaffMonthState,
 } from './staff-month-1c.export-state.rules.js';
-import { isStaffMonthNightRun, staffMonthRefreshMonths } from './staff-month-1c.scheduler.js';
+import { staffMonthNightSince, staffMonthRefreshMonths } from './staff-month-1c.scheduler.js';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -79,8 +79,9 @@ describe('staff-month-1c.export-state.rules', () => {
     // 31.10 22:30 UTC — уже 1 ноября по Москве.
     expect(staffMonthRefreshMonths(new Date('2026-10-31T22:30:00Z'))).toEqual(['2026-10', '2026-11']);
     expect(staffMonthRefreshMonths(new Date('2026-06-10T10:00:00Z'))).toEqual(['2026-06']);
-    expect(isStaffMonthNightRun(new Date('2026-11-20T00:30:00Z'), null)).toBe(false); // 03:30 МСК
-    expect(isStaffMonthNightRun(new Date('2026-11-20T01:30:00Z'), null)).toBe(true); // 04:30 МСК
-    expect(isStaffMonthNightRun(new Date('2026-11-20T09:00:00Z'), '2026-11-20')).toBe(false);
+    // Ночная граница — последние 04:00 МСК: до неё — вчерашние.
+    expect(staffMonthNightSince(new Date('2026-11-20T00:30:00Z'))).toBe('2026-11-19T01:00:00Z'); // 03:30 МСК
+    expect(staffMonthNightSince(new Date('2026-11-20T01:30:00Z'))).toBe('2026-11-20T01:00:00Z'); // 04:30 МСК
+    expect(staffMonthNightSince(new Date('2026-11-20T23:30:00Z'))).toBe('2026-11-20T01:00:00Z'); // 02:30 МСК 21.11
   });
 });

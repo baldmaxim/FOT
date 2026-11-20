@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS staff_month_1c_exports (
 );
 CREATE INDEX IF NOT EXISTS staff_month_1c_exports_month_idx ON staff_month_1c_exports (month);
 
+-- Последняя сборка месяца: отпечаток закрытой части и время — фоновое обновление не пересобирает месяц после рестарта,
+-- если табели не менялись и ночная сборка уже была. started_at — фоновая сборка начата: не завершилась (сбой, рестарт
+-- по памяти) — следующая попытка не раньше чем через час, без цикла «рестарт → сборка».
+CREATE TABLE IF NOT EXISTS staff_month_1c_builds (
+  month       DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
+  fingerprint TEXT,
+  built_at    TIMESTAMPTZ,
+  started_at  TIMESTAMPTZ
+);
+
 COMMENT ON TABLE staff_month_1c_state_revisions IS
   'API для ЗУП3: ревизии состояния «сотрудник + месяц» (present/preliminary/content_hash строки staff-month). Только добавление.';
 COMMENT ON TABLE staff_month_1c_states IS 'API для ЗУП3: текущая ревизия пары «сотрудник + месяц».';

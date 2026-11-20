@@ -67,8 +67,15 @@ export function hashSecret(secret: string): string {
   return sha256Hex(secret);
 }
 
+/**
+ * Право приёма увольнений (миграция 372) — через to_jsonb: без колонки (бэкенд выкачен раньше миграции) поле false, а
+ * не ошибка SELECT — иначе проверка любого ключа data-API падала бы в 401 и вставал бы обмен табелями.
+ */
+const DISMISSAL_IMPORT_COL =
+  "COALESCE((to_jsonb(data_api_keys) ->> 'allow_payroll_dismissal_import')::boolean, false) AS allow_payroll_dismissal_import";
+
 const KEY_PUBLIC_COLS =
-  'id, name, description, key_prefix, rate_limit_per_minute, allow_timesheet_ack, allow_payroll_dismissal_import, created_by, created_at, expires_at, revoked_at, last_used_at';
+  'id, name, description, key_prefix, rate_limit_per_minute, allow_timesheet_ack, ' + DISMISSAL_IMPORT_COL + ', created_by, created_at, expires_at, revoked_at, last_used_at';
 
 export const dataApiKeyService = {
   async createKey(input: CreateKeyInput): Promise<CreateKeyResult> {
@@ -152,7 +159,7 @@ export const dataApiKeyService = {
     } | null;
     try {
       row = await queryOne(
-        `SELECT id, name, key_hash, rate_limit_per_minute, allow_timesheet_ack, allow_payroll_dismissal_import, expires_at, revoked_at
+        `SELECT id, name, key_hash, rate_limit_per_minute, allow_timesheet_ack, ${DISMISSAL_IMPORT_COL}, expires_at, revoked_at
            FROM data_api_keys
           WHERE key_prefix = $1
           LIMIT 1`,

@@ -64,9 +64,15 @@ const loadCurrentStates = async (client: PoolClient, monthStart: string): Promis
 export const persistStaffMonthStates = async (
   month: string,
   rows: ReadonlyArray<{ employeeId: number; preliminary: boolean; contentHash: string }>,
+  fingerprint: string,
 ): Promise<Map<number, IStaffMonthState>> => withTransaction(async client => {
   const monthStart = `${month}-01`;
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`staff_month_1c_states:${month}`]);
+  await client.query(
+    `INSERT INTO staff_month_1c_builds (month, fingerprint, built_at) VALUES ($1::date, $2, now())
+     ON CONFLICT (month) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, built_at = now()`,
+    [monthStart, fingerprint],
+  );
   const current = await loadCurrentStates(client, monthStart);
   const next = nextStaffMonthRevisions(current, rows);
   if (next.size > 0) {
@@ -100,6 +106,33 @@ export const persistStaffMonthStates = async (
   for (const [employeeId, state] of next) merged.set(employeeId, state);
   return merged;
 });
+
+export interface IStaffMonthBuild {
+  fingerprint: string | null;
+  builtAt: string | null;
+  startedAt: string | null;
+}
+
+const ISO = (column: string): string => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+
+/** Последняя сборка месяца (отпечаток, когда собрана и когда начата фоновая) — для фонового обновления; нет — null. */
+export const loadStaffMonthBuild = async (month: string): Promise<IStaffMonthBuild | null> => {
+  const [row] = await query<{ fingerprint: string | null; built_at: string | null; started_at: string | null }>(
+    `SELECT fingerprint, ${ISO('built_at')} AS built_at, ${ISO('started_at')} AS started_at
+       FROM staff_month_1c_builds WHERE month = $1::date`,
+    [`${month}-01`],
+  );
+  return row ? { fingerprint: row.fingerprint, builtAt: row.built_at, startedAt: row.started_at } : null;
+};
+
+/** Фоновая сборка месяца начата — отметка до сборки (сбой или рестарт оставят её незавершённой). */
+export const markStaffMonthBuildStarted = async (month: string): Promise<void> => {
+  await query(
+    `INSERT INTO staff_month_1c_builds (month, started_at) VALUES ($1::date, now())
+     ON CONFLICT (month) DO UPDATE SET started_at = now()`,
+    [`${month}-01`],
+  );
+};
 
 export interface IStaffMonthExportInfo {
   states: Map<number, IStaffMonthState>;

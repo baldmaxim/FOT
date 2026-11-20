@@ -4,6 +4,7 @@ const state = vi.hoisted(() => ({
   fingerprint: 'fp1',
   builds: 0,
   build: null as null | ((month: string) => Promise<unknown>),
+  storedBuild: null as null | { fingerprint: string | null; builtAt: string | null; startedAt: string | null },
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -38,6 +39,8 @@ const fakeSnapshot = (month: string) => {
 };
 
 vi.mock('./staff-month-1c.export-state.js', () => ({
+  loadStaffMonthBuild: vi.fn(async () => state.storedBuild),
+  markStaffMonthBuildStarted: vi.fn(async () => undefined),
   persistStaffMonthStates: vi.fn(async (_month: string, rows: Array<{ employeeId: number }>) => new Map(rows.map(row => [
     row.employeeId, { revision: 1, present: true, preliminary: false, contentHash: 'h' },
   ]))),
@@ -53,6 +56,7 @@ vi.mock('./staff-month-1c.snapshot.js', () => ({
 import {
   getStaffMonthSnapshot,
   listStaffMonthEmployees,
+  refreshStaffMonth,
   resetStaffMonthSnapshots,
   StaffMonthApiError,
 } from './staff-month-1c.service.js';
@@ -87,9 +91,31 @@ describe('staff-month-1c.service — снимки и курсор', () => {
     state.fingerprint = 'fp1';
     state.builds = 0;
     state.build = null;
+    state.storedBuild = null;
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('фоновое обновление: первая сборка, без изменений — нет, после 04:00 — да, незавершённая попытка — не чаще часа', async () => {
+    const now = new Date('2026-11-20T10:00:00Z');
+    const night = '2026-11-20T01:00:00Z';
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(true);
+    expect(state.builds).toBe(1);
+
+    state.storedBuild = { fingerprint: 'fp1', builtAt: '2026-11-20T05:00:00Z', startedAt: '2026-11-20T04:59:00Z' };
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(false); // рестарт днём — без пересборки
+    state.fingerprint = 'fp2';
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(true); // табель закрыли
+    state.storedBuild = { fingerprint: 'fp2', builtAt: '2026-11-19T22:00:00Z', startedAt: '2026-11-19T21:59:00Z' };
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(true); // ночная сборка ещё не было
+
+    // Прошлая фоновая сборка начата 20 минут назад и не завершилась (рестарт по памяти) — не повторять.
+    state.storedBuild = { fingerprint: 'fp1', builtAt: '2026-11-19T22:00:00Z', startedAt: '2026-11-20T09:40:00Z' };
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(false);
+    // Прошло больше часа — повторить.
+    state.storedBuild = { fingerprint: 'fp1', builtAt: '2026-11-19T22:00:00Z', startedAt: '2026-11-20T08:40:00Z' };
+    expect(await refreshStaffMonth('2026-10', night, now)).toBe(true);
   });
 
   it('обход по курсору: все строки один раз, один снимок; без days=1 дней в ответе нет', async () => {

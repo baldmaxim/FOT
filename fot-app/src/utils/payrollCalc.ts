@@ -266,6 +266,12 @@ export const calcLineFormula = (line: IPayrollCalcLine): string[] => {
     result.push(`${line.days.worked} дн. = ${line.days.worked - line.filled_dayoffs} раб. + ${line.filled_dayoffs} вых. (добор нормы)`);
   }
   if (calcLineAbsence(line.code) && line.days?.worked) result.unshift(`${line.days.worked} дн.`);
+  // Выходное пособие из документа увольнения 1С заменило разовую доплату с тем же основанием.
+  for (const part of parts) {
+    if (part.kind === 'paid_1c' && part.replaced_one_time) {
+      result.push(`вместо разовой доплаты ${formatPaidAmount(Number(part.replaced_one_time))}`);
+    }
+  }
   return result;
 };
 

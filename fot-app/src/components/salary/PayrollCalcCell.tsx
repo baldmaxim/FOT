@@ -98,7 +98,9 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
       // Вторая строка: выработка не внесена, вид проживания, из чего переработка.
       const sub = outputSub ?? (amount === null ? null
         : column === 'calc_housing' ? housingKindsLabel(row.calc)
-          : column === 'calc_overtime' ? overtimeNote(row.calc) : null);
+          : column === 'calc_overtime' ? overtimeNote(row.calc)
+            : column === 'calc_vacation' && row.calc?.vacation_compensation
+              ? `в т. ч. компенсация ${formatAmount(row.calc.vacation_compensation)}` : null);
       return (
         <td
           className={cx(cellClass, isResult && styles.calcTotal)}

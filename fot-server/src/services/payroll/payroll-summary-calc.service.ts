@@ -6,6 +6,7 @@
 import { query } from '../../config/postgres.js';
 import type { AuthenticatedRequest } from '../../types/index.js';
 import { getPreliminaryPayoutForEmployees, type PayrollCalcWithPreliminary } from './payroll-calc.service.js';
+import { SEVERANCE_ONE_TIME_REASON } from './payroll-calc.rules.js';
 import { monthPairKey } from './payroll-month-attribution.service.js';
 import { monthDeductionsSql } from './payroll-month-deductions.sql.js';
 import { lastDayOfMonth } from './payroll-payslip.rules.js';
@@ -105,8 +106,24 @@ export const loadSummaryExtras = async (
       [monthStarts, ids],
     ),
   ]);
+  // Действующий документ увольнения из 1С (API, миграция 372) — его пособие главнее разовой доплаты «Выходное пособие
+  // при увольнении», как в расчёте ФОТ (payroll-calc.rules): одна сумма, без задвоения. Сбой чтения — без исключения.
+  const dismissalPairs = new Set<string>();
+  try {
+    const active = await query<{ employee_id: number; month: string }>(
+      `SELECT DISTINCT employee_id, to_char(period_month, 'YYYY-MM') AS month
+         FROM payroll_1c_dismissal_documents
+        WHERE is_active AND period_month = ANY($1::date[]) AND ($2::int[] IS NULL OR employee_id = ANY($2::int[]))`,
+      [monthStarts, ids],
+    );
+    for (const row of active ?? []) dismissalPairs.add(monthPairKey(Number(row.employee_id), row.month));
+  } catch (err) {
+    console.error('[payroll-summary] увольнения из 1С не прочитаны:', err instanceof Error ? err.message : err);
+  }
   for (const { employee_id, month, reason, amount } of oneTime) {
-    pushTo(extras.oneTime, monthPairKey(Number(employee_id), month), { reason, amount });
+    const key = monthPairKey(Number(employee_id), month);
+    if (dismissalPairs.has(key) && reason.replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru') === SEVERANCE_ONE_TIME_REASON) continue;
+    pushTo(extras.oneTime, key, { reason, amount });
   }
   for (const { employee_id, month, kind, amount } of deductions) {
     pushTo(extras.deductions, monthPairKey(Number(employee_id), month), { kind, amount });

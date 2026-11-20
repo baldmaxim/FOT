@@ -15,7 +15,12 @@ import { createHash } from 'node:crypto';
 import { getPool, withReadOnlySnapshot } from '../config/postgres.js';
 import { env } from '../config/env.js';
 import { loadClosedFingerprint, monthBoundsOf } from './staff-month-1c.load.js';
-import { loadStaffMonthExportInfo, persistStaffMonthStates } from './staff-month-1c.export-state.js';
+import {
+  loadStaffMonthBuild,
+  loadStaffMonthExportInfo,
+  markStaffMonthBuildStarted,
+  persistStaffMonthStates,
+} from './staff-month-1c.export-state.js';
 import {
   staffMonthExportState,
   staffMonthRowHash,
@@ -39,6 +44,8 @@ const LIVE_STALE_MS = 5 * 60_000;
 const CLOSED_STALE_MS = 60 * 60_000;
 const WAIT_MS = 25_000;
 export const RETRY_AFTER_SECONDS = 15;
+/** Фоновая сборка не завершилась — следующая не раньше чем через час. */
+const REFRESH_RETRY_AFTER_MS = 60 * 60_000;
 
 export class StaffMonthApiError extends Error {
   constructor(
@@ -59,8 +66,6 @@ interface IEntry {
 const snapshots = new Map<string, IEntry>();
 const latestByMonth = new Map<string, string>();
 const builds = new Map<string, Promise<IStaffMonthSnapshot>>();
-/** Отпечаток закрытой части последней сборки месяца — для фонового обновления статусов. */
-const builtFingerprints = new Map<string, string>();
 let buildChain: Promise<unknown> = Promise.resolve();
 
 /** Ключ подписи курсора — из серверного секрета с отдельной меткой. */
@@ -91,11 +96,10 @@ const startBuild = (month: string): Promise<IStaffMonthSnapshot> => {
     .then(async snapshot => {
       // Ревизии строк — до выдачи снимка: GET отдаёт их 1С, ACK проверяет по ним.
       const hashed = snapshot.rows.map(row => ({ employeeId: row.employee_id, preliminary: row.preliminary, contentHash: staffMonthRowHash(row) }));
-      const states = await persistStaffMonthStates(month, hashed);
+      const states = await persistStaffMonthStates(month, hashed, snapshot.fingerprint);
       snapshot.exportRows = new Map(hashed.map(row => [row.employeeId, {
         revision: states.get(row.employeeId)?.revision ?? 0, contentHash: row.contentHash,
       }]));
-      builtFingerprints.set(month, snapshot.fingerprint);
       snapshots.set(snapshot.id, { snapshot, lastAccess: Date.now() });
       latestByMonth.set(month, snapshot.id);
       evict(Date.now());
@@ -268,14 +272,20 @@ export const listStaffMonthEmployees = async (params: {
 };
 
 /**
- * Фоновое обновление статусов: пересобрать месяц, если изменилась закрытая часть (или force — ночной и первый
- * прогон). Сборка — в той же очереди, что и запросы 1С.
+ * Фоновое обновление статусов: пересобрать месяц, если сборки ещё не было, изменилась закрытая часть или после
+ * nightSince (ночная граница) месяц не собирался. Отметка сборки — в БД (staff_month_1c_builds): рестарт сервера
+ * месяц не пересобирает. Сборка — в той же очереди, что и запросы 1С.
  */
-export const refreshStaffMonth = async (month: string, force: boolean): Promise<boolean> => {
-  if (!force) {
-    const known = builtFingerprints.get(month);
-    if (known !== undefined && known === await loadClosedFingerprint(getPool(), `${month}-01`)) return false;
-  }
+export const refreshStaffMonth = async (month: string, nightSince: string | null, now: Date = new Date()): Promise<boolean> => {
+  const build = await loadStaffMonthBuild(month);
+  // Прошлая фоновая сборка не завершилась (сбой, рестарт по памяти) меньше часа назад — не повторять сразу.
+  if (build?.startedAt && (!build.builtAt || build.builtAt < build.startedAt)
+    && now.getTime() - Date.parse(build.startedAt) < REFRESH_RETRY_AFTER_MS) return false;
+  const due = !build?.builtAt
+    || (nightSince !== null && build.builtAt < nightSince)
+    || build.fingerprint !== await loadClosedFingerprint(getPool(), `${month}-01`);
+  if (!due) return false;
+  await markStaffMonthBuildStarted(month);
   await startBuild(month);
   return true;
 };
@@ -289,6 +299,5 @@ export const resetStaffMonthSnapshots = (): void => {
   snapshots.clear();
   latestByMonth.clear();
   builds.clear();
-  builtFingerprints.clear();
   buildChain = Promise.resolve();
 };
