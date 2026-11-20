@@ -421,3 +421,16 @@
     padding: 14px;
   }
 }
+
+/* Право ключа строкой в «Права»: тап-цель ≥ 44 px. */
+.permissionRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: 8px;
+}
+
+.permissionCheck {
+  margin-top: 4px;
+}

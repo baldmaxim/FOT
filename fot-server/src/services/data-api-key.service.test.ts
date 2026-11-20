@@ -174,7 +174,7 @@ describe('authenticateRawToken', () => {
     const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
     expect(result).toEqual({
       ok: true,
-      key: { id: 'key-1', name: 'тест', rate_limit_per_minute: 60, allow_timesheet_ack: false },
+      key: { id: 'key-1', name: 'тест', rate_limit_per_minute: 60, allow_timesheet_ack: false, allow_payroll_dismissal_import: false },
     });
     expect(pgExecute.mock.calls[0][0]).toMatch(/UPDATE data_api_keys SET last_used_at/);
   });

@@ -88,6 +88,8 @@ describe('sumCalcColumns', () => {
       supplements: '22273.00',
       supplements_planned: '17273.00',
       supplements_one_time: '5000.00',
+      supplements_severance: null,
+      vacation_compensation: null,
       deductions: '3500.00',
       deductions_by_kind: [{ kind_id: 1, kind: 'Питание', amount: '3500.00' }],
       net: '426383.93',

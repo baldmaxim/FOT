@@ -74,14 +74,14 @@ export const usePayrollPaid = (employeeId: number, months: string[], enabled = t
   // Префикс 'payroll-terms': сохранение карточки перечитывает и суммы.
   const query = useQuery({
     queryKey: ['payroll-terms', 'paid', employeeId, from, to],
-    queryFn: ({ signal }) => payrollService.getPaid(employeeId, from, to, signal),
+    queryFn: ({ signal }) => payrollService.getPaidWithOrders(employeeId, from, to, signal),
     enabled: enabled && months.length > 0,
   });
   // Справочно, под статьями раскрытой таблицы; не загрузились — блока нет, суммы «Оплачено» не ждут.
   const debtsQuery = useQuery({ ...paidDebtsQueryOptions(employeeId, from, to), enabled: enabled && months.length > 0 });
   const [expanded, setExpanded] = useState(false);
 
-  const amounts = useMemo(() => toPaidAmounts(query.data ?? []), [query.data]);
+  const amounts = useMemo(() => toPaidAmounts(query.data?.amounts ?? []), [query.data]);
   const totals = useMemo(() => paidTotals(months, amounts), [months, amounts]);
   // Статьи с суммой хотя бы за один из выбранных месяцев.
   const groups = useMemo(() => visiblePaidGroups(months, amounts), [months, amounts]);
@@ -90,6 +90,8 @@ export const usePayrollPaid = (employeeId: number, months: string[], enabled = t
   return {
     months,
     status,
+    /** Приказы об увольнении из 1С за месяцы «Оплачено». */
+    dismissalOrders: query.data?.dismissalOrders ?? [],
     amounts,
     totals,
     groups,

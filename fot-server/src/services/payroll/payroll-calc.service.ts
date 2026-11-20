@@ -31,6 +31,7 @@ import {
   brigadeShareFacts,
   buildPayrollCalc,
   type IAbsencePay1c,
+  type IDismissalPay1c,
   type IAbsencePayout1c,
   type IBrigadeShareFact,
   type ICalcTermsRow,
@@ -232,7 +233,31 @@ interface IPayoutExtras {
   rateFacts: Map<number, RateFactsRow>;
   overtimeStops: Map<number, IOvertimeStopPeriod[]>;
   absencePay1c: Map<number, IAbsencePay1c[]>;
+  dismissalPay1c: Map<number, IDismissalPay1c>;
 }
+
+/**
+ * Увольнение из 1С (API, миграция 372) за месяц YYYY-MM: Σ действующих документов по сотрудникам. Есть строка — есть
+ * действующий документ. Сбой чтения (миграции ещё нет) — без увольнений, расчёт не падает.
+ */
+export const loadDismissalPay1c = async (ids: readonly number[], month: string): Promise<Map<number, IDismissalPay1c>> => {
+  if (ids.length === 0) return new Map();
+  try {
+    const found = await query<{ employee_id: number; vacation_compensation: string; severance: string }>(
+      `SELECT employee_id, SUM(vacation_compensation)::text AS vacation_compensation, SUM(severance)::text AS severance
+         FROM payroll_1c_dismissal_documents
+        WHERE is_active AND period_month = $2::date AND employee_id = ANY($1::int[])
+        GROUP BY employee_id`,
+      [[...ids], `${month}-01`],
+    );
+    return new Map((found ?? []).map(row => [Number(row.employee_id), {
+      vacation_compensation: row.vacation_compensation ?? '0.00', severance: row.severance ?? '0.00',
+    }]));
+  } catch (err) {
+    console.error('[payroll-calc] увольнения из 1С не прочитаны:', err instanceof Error ? err.message : err);
+    return new Map();
+  }
+};
 
 /** Разовые доплаты, удержания, факты ставок и «Без переработки» месяца — одно правило для карточки и вкладки табеля. */
 const loadPayoutExtras = async (
@@ -241,7 +266,7 @@ const loadPayoutExtras = async (
   periods: ReadonlyMap<number, { from: string; to: string }>,
 ): Promise<IPayoutExtras> => {
   const monthStart = `${month}-01`;
-  const [oneTime, deductions, rateFacts, overtimeStops, absencePay1c] = await Promise.all([
+  const [oneTime, deductions, rateFacts, overtimeStops, absencePay1c, dismissalPay1c] = await Promise.all([
     query<IOneTimeSupplementFact & { employee_id: number }>(
       `SELECT employee_id, btrim(reason) AS reason, SUM(amount)::text AS amount
          FROM payroll_one_time_supplements
@@ -273,6 +298,7 @@ const loadPayoutExtras = async (
       [[...ids], monthStart, lastDayOfMonth(month)],
     ),
     loadAbsencePay1c(ids, month),
+    loadDismissalPay1c(ids, month),
   ]);
   return {
     oneTime: new Map([...groupBy(oneTime)].map(([id, rows]) => [
@@ -289,6 +315,7 @@ const loadPayoutExtras = async (
       rows.map(({ date_from, date_to }) => ({ date_from, date_to })),
     ])),
     absencePay1c,
+    dismissalPay1c,
   };
 };
 
@@ -507,6 +534,7 @@ const computePayouts = async (
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: shares,
       absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
+      dismissalPay1c: extras.dismissalPay1c.get(employeeId) ?? null,
       ...(options.withHoursByDay ? { hoursByDay: { brigadeDates: [...brigadeDates], paidMinutes: basis.paidMinutes } } : {}),
     };
     const calcResult = buildPayrollCalc(calcFacts);
@@ -611,6 +639,7 @@ export const previewBrigadePayouts = async (
       deductions: extras.deductions.get(employeeId) ?? [],
       brigadeShares: [share],
       absencePay1c: extras.absencePay1c.get(employeeId) ?? [],
+      dismissalPay1c: extras.dismissalPay1c.get(employeeId) ?? null,
     }));
   }
   return result;

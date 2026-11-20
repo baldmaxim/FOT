@@ -78,6 +78,8 @@ tags:
     description: Закрытые согласованные табели — список, выгрузка, подтверждение.
   - name: legacy
     description: Ранее существовавшие методы. Расчёт на лету, без версионирования.
+  - name: dismissals
+    description: Увольнение из 1С ЗУП3 — приказ, компенсация отпуска и выходное пособие (запись в ФОТ).
   - name: staff-month
     description: |
       Сотрудники месяца для ЗУП3: основной объект, факт и норма часов, категория (рабочий / ИТР / офис), дни с
@@ -780,6 +782,152 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /payroll/dismissals:
+    post:
+      tags: [dismissals]
+      operationId: postDismissals
+      summary: Увольнение из 1С — приказ, компенсация отпуска, выходное пособие
+      description: |
+        Документ «Увольнение» ЗУП3. Версии — по `source_revision`, распроведение — `posted: false`, исправление —
+        `supersedes_guid`. Суммы — строкой с двумя знаками, начисление до удержаний. Право ключа —
+        `allow_payroll_dismissal_import`. `dry_run=1` — без записи. Подробно — раздел «Увольнение из 1С» API_1C.md.
+      parameters:
+        - name: dry_run
+          in: query
+          schema:
+            type: string
+            enum: ['0', '1', 'true', 'false']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documents]
+              properties:
+                documents:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [guid, source_revision, posted]
+                    properties:
+                      guid:
+                        type: string
+                        format: uuid
+                      source_revision:
+                        type: integer
+                        minimum: 1
+                      posted:
+                        type: boolean
+                      supersedes_guid:
+                        type: [string, 'null']
+                        format: uuid
+                      number:
+                        type: string
+                      date:
+                        type: string
+                        format: date
+                      month:
+                        type: string
+                        pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+                      organization_inn:
+                        type: string
+                        enum: ['7736255508', '7705794997']
+                      employee:
+                        type: object
+                        required: [employee_id, id_all]
+                        properties:
+                          employee_id:
+                            type: integer
+                          id_all:
+                            type: string
+                            format: uuid
+                          full_name:
+                            type: string
+                      order:
+                        type: object
+                        required: [dismissal_date]
+                        properties:
+                          dismissal_date:
+                            type: string
+                            format: date
+                          basis:
+                            type: [string, 'null']
+                            maxLength: 200
+                      accruals:
+                        type: object
+                        required: [vacation_compensation, severance]
+                        properties:
+                          vacation_compensation:
+                            type: string
+                            pattern: '^\d{1,10}\.\d{2}$'
+                          vacation_compensation_days:
+                            type: [string, 'null']
+                          severance:
+                            type: string
+                            pattern: '^\d{1,10}\.\d{2}$'
+      responses:
+        '200':
+          description: Результат по каждому документу.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    const: true
+                  dry_run:
+                    type: boolean
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        index:
+                          type: integer
+                        guid:
+                          type: string
+                        action:
+                          type: string
+                          enum: [new, updated, unposted, unchanged, stale]
+                        employee_id:
+                          type: [integer, 'null']
+                        month:
+                          type: [string, 'null']
+                        cells:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              item:
+                                type: string
+                                enum: [vacation_compensation, severance]
+                              before:
+                                type: [string, 'null']
+                              after:
+                                type: [string, 'null']
+                        warnings:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              code:
+                                type: string
+                                enum: [fot_not_dismissed, fot_dismissal_date_differs, id_all_missing_in_fot, month_differs_from_dismissal]
+                              message:
+                                type: string
+        '400':
+          description: '`invalid_body`, `unknown_employee`, `employee_mismatch`, `revision_conflict`, `supersedes_conflict`; `errors[]` — index, guid, path.'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: '`busy` — документ сейчас принимается, повторить через `Retry-After`.'
         '429':
           $ref: '#/components/responses/TooManyRequests'
   /staff-month/brigades:

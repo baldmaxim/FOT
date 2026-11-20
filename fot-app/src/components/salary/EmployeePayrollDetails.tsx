@@ -21,6 +21,7 @@ import { payrollFieldId, payrollRowCategory, toInputValue } from '../../utils/pa
 import { employeeCardPath, type IPayrollCardView, type PayrollCardTab } from '../../utils/payrollViews';
 import { MonthsPicker } from '../ui/MonthsPicker';
 import { PayrollPaidTable } from './PayrollPaidTable';
+import { PayrollDismissalOrders } from './PayrollDismissalOrders';
 import { PayrollTermsFields } from './PayrollTermsFields';
 import { EmployeeVacationSection } from './EmployeeVacationSection';
 import { PaidHistoryPanel } from './PaidHistoryPanel';
@@ -320,7 +321,12 @@ export const EmployeePayrollDetails: FC<IEmployeePayrollDetailsProps> = ({
           category={payrollRowCategory(row)}
           travel={toInputValue(travelAllowance(payrollRowCategory(row), row))}
           autoFocus={canEdit}
-          paid={editable ? undefined : <PayrollPaidTable paid={paid} calc={calc} />}
+          paid={editable ? undefined : (
+            <>
+              <PayrollDismissalOrders orders={paid.dismissalOrders} />
+              <PayrollPaidTable paid={paid} calc={calc} />
+            </>
+          )}
           stacked
           detailsOnly={!editable}
           termsFrom={row.terms_id ? row.effective_from : null}

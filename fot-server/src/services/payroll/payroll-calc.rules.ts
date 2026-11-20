@@ -64,7 +64,20 @@ import type { ProrationRounding } from './payroll-terms.service.js';
 export { hourlyAmountCents, prorateDailyKopeckCents, prorateMinutesCents, prorateToRubleCents } from './payroll-calc-money.js';
 
 export type PayrollCalcLineCode =
-  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave';
+  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave'
+  | 'vacation_compensation' | 'severance';
+
+/**
+ * Увольнение из 1С (API, миграция 372): Σ действующих документов пары «сотрудник × месяц». Есть объект — есть
+ * действующий документ (даже с нулевыми суммами): разовая доплата «Выходное пособие при увольнении» тогда не считается.
+ */
+export interface IDismissalPay1c {
+  vacation_compensation: string;
+  severance: string;
+}
+
+/** Основание разовой доплаты, которое заменяет пособие из документа увольнения 1С. */
+export const SEVERANCE_ONE_TIME_REASON = 'выходное пособие при увольнении';
 
 /**
  * hourly — у почасовой даты нет минут к оплате (нет графика и правки, основа до миграции 344 без дозаполнения);
@@ -140,8 +153,11 @@ export type PayrollCalcLinePart =
   | { kind: 'housing'; housing: 'apartment' | 'dormitory'; amount: string; rate?: string; days?: number; weekend_days?: number }
   /** Разовая доплата: часть на основание («Допработы», «Премия»…). */
   | { kind: 'one_time'; amount: string; reason: string }
-  /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
-  | { kind: 'paid_1c'; amount: string }
+  /**
+   * Отпускные или больничные: статья «Оплачено» (начислено в 1С); компенсация отпуска и выходное пособие — документ
+   * увольнения из 1С. replaced_one_time — разовая доплата «Выходное пособие при увольнении», которую заменило пособие 1С.
+   */
+  | { kind: 'paid_1c'; amount: string; replaced_one_time?: string }
   /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
   | { kind: 'payout_1c'; doc_number: string; doc_date: string; amount: string }
   | {
@@ -447,6 +463,8 @@ export interface IPayrollCalcFacts {
   brigadeShares?: readonly IBrigadeShareFact[];
   /** Отпускные и больничные из 1С месяца. */
   absencePay1c?: readonly IAbsencePay1c[];
+  /** Увольнение из 1С (API) месяца; нет действующего документа — null. */
+  dismissalPay1c?: IDismissalPay1c | null;
   /**
    * Расшифровка «Часы по дням» для листка (withHoursByDay); нет — не строится, суммы те же. Даты бригад и минуты основы
    * со всеми датами: в факты оклада они не попадают, а в расшифровке нужны.
@@ -854,12 +872,18 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
     });
   }
 
-  const oneTimeCents = facts.oneTimeItems.reduce((sum, item) => sum + cents(item.amount), 0);
+  // Есть документ увольнения из 1С — его пособие главнее разовой доплаты с тем же основанием (без задвоения).
+  const isReplacedSeverance = (item: IOneTimeSupplementFact): boolean => (
+    Boolean(facts.dismissalPay1c) && item.reason.replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru') === SEVERANCE_ONE_TIME_REASON
+  );
+  const oneTimeItems = facts.oneTimeItems.filter(item => !isReplacedSeverance(item));
+  const replacedSeveranceCents = facts.oneTimeItems.filter(isReplacedSeverance).reduce((sum, item) => sum + cents(item.amount), 0);
+  const oneTimeCents = oneTimeItems.reduce((sum, item) => sum + cents(item.amount), 0);
   if (oneTimeCents > 0) {
     lines.push({
       code: 'supplement',
       amount: centsToAmount(oneTimeCents),
-      parts: facts.oneTimeItems.map(item => ({
+      parts: oneTimeItems.map(item => ({
         kind: 'one_time' as const,
         amount: centsToAmount(cents(item.amount)),
         reason: item.reason,
@@ -899,6 +923,23 @@ export const buildPayrollCalc = (facts: IPayrollCalcFacts): IPayrollCalcResult =
   }
   for (const [status, code] of MISSING_BY_ABSENCE) {
     if (facts.absenceDays[status] > 0 && !paidAbsences.has(status)) missing.add(code);
+  }
+  // Увольнение из 1С: компенсация отпуска и выходное пособие — отдельными строками, суммы 1С как есть.
+  if (facts.dismissalPay1c) {
+    const compensation = cents(facts.dismissalPay1c.vacation_compensation);
+    if (compensation > 0) {
+      const amount = centsToAmount(compensation);
+      lines.push({ code: 'vacation_compensation', amount, parts: [{ kind: 'paid_1c', amount }] });
+    }
+    const severance = cents(facts.dismissalPay1c.severance);
+    if (severance > 0) {
+      const amount = centsToAmount(severance);
+      lines.push({
+        code: 'severance',
+        amount,
+        parts: [{ kind: 'paid_1c', amount, ...(replacedSeveranceCents > 0 ? { replaced_one_time: centsToAmount(replacedSeveranceCents) } : {}) }],
+      });
+    }
   }
 
   if (

@@ -192,10 +192,10 @@ describe('лист «История выплат»', () => {
     expect(sheet.subtitle).toBe('Сотрудник');
   });
 
-  it('все 47 статей — подписи столбцов уникальны и влезают в лимит сервера (60)', () => {
+  it('все 48 статей — подписи столбцов уникальны и влезают в лимит сервера (60)', () => {
     const all = PAYROLL_PAID_GROUPS.flatMap(group => group.items).map(item => amount('2026-08', item.code, '1.00'));
     const { columns } = buildPaidHistorySheet('Иванов', all);
-    expect(columns).toHaveLength(52);
+    expect(columns).toHaveLength(53);
     expect(new Set(columns.map(column => column.label)).size).toBe(columns.length);
   });
 });

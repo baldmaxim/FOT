@@ -4,6 +4,7 @@ import { dataApiRequestLog } from '../middleware/dataApiRequestLog.js';
 import { publicDataApiController } from '../controllers/public-data-api.controller.js';
 import { publicTimesheetsController } from '../controllers/public-timesheets.controller.js';
 import { publicStaffMonthController } from '../controllers/public-staff-month.controller.js';
+import { publicDismissalsController } from '../controllers/public-dismissals.controller.js';
 import { dataApiLimiter } from '../middleware/dataApiRateLimit.js';
 
 // Публичная часть data-api на Node (рядом с Python /external/v1): расчётные
@@ -36,5 +37,8 @@ router.get('/staff-month/brigades', publicStaffMonthController.brigades);
 router.get('/staff-month/objects', publicStaffMonthController.objects);
 // 1С подтверждает записанные строки (ревизия + хеш) — статус «Выгружен» в «Расчётах».
 router.post('/staff-month/ack', publicStaffMonthController.ack);
+
+// Увольнение из 1С ЗУП3: приказ, компенсация отпуска, выходное пособие (право allow_payroll_dismissal_import).
+router.post('/payroll/dismissals', publicDismissalsController.post);
 
 export default router;

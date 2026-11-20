@@ -84,6 +84,10 @@ export interface ICalcColumns {
   /** Из доплат (раскрытие «Доплат» на «Расчётах», решение 30.10.2026): плановая (по дням оклада) и разовая. */
   supplements_planned: string | null;
   supplements_one_time: string | null;
+  /** Выходное пособие из документа увольнения 1С — составляющая «Доплат». */
+  supplements_severance: string | null;
+  /** Компенсация отпуска из документа увольнения 1С — составляющая «Отпускных». */
+  vacation_compensation: string | null;
   deductions: string | null;
   /** Удержания по видам, по названию вида; сумма — deductions. */
   deductions_by_kind: ICalcDeductionByKind[];
@@ -111,6 +115,9 @@ const LINE_COLUMN: Record<PayrollCalcLineCode, CalcSumKey> = {
   housing: 'housing',
   bonus: 'supplements',
   supplement: 'supplements',
+  // Увольнение из 1С: компенсация — к отпускным, пособие — к доплатам (своими составляющими ниже).
+  vacation_compensation: 'vacation',
+  severance: 'supplements',
 };
 
 const addCents = (sum: number | null, amount: string): number => (sum ?? 0) + toCents(amount);
@@ -126,6 +133,8 @@ export const sumCalcColumns = (
   };
   let plannedCents: number | null = null;
   let oneTimeCents: number | null = null;
+  let severanceCents: number | null = null;
+  let compensationCents: number | null = null;
   const deductionsByKind = new Map<number, { kind: string; cents: number }>();
   let overtimeDays = 0;
   let overtimeHours = 0;
@@ -156,6 +165,8 @@ export const sumCalcColumns = (
       sums[key] = addCents(sums[key], line.amount);
       if (line.code === 'bonus') plannedCents = addCents(plannedCents, line.amount);
       else if (line.code === 'supplement') oneTimeCents = addCents(oneTimeCents, line.amount);
+      else if (line.code === 'severance') severanceCents = addCents(severanceCents, line.amount);
+      else if (line.code === 'vacation_compensation') compensationCents = addCents(compensationCents, line.amount);
     }
     for (const deduction of calc.deductions) {
       sums.deductions = addCents(sums.deductions, deduction.amount);
@@ -187,6 +198,8 @@ export const sumCalcColumns = (
     supplements: toAmount(sums.supplements),
     supplements_planned: toAmount(plannedCents),
     supplements_one_time: toAmount(oneTimeCents),
+    supplements_severance: toAmount(severanceCents),
+    vacation_compensation: toAmount(compensationCents),
     deductions: toAmount(sums.deductions),
     deductions_by_kind: [...deductionsByKind]
       .map(([kindId, { kind, cents }]) => ({ kind_id: kindId, kind, amount: centsToAmount(cents) }))

@@ -30,7 +30,7 @@ export type PayrollCalcGroupColumn = 'calc_timesheet_base' | 'calc_overtime' | '
 /** key — составной («родитель:код»), стабильный между порциями. */
 export type PayrollSubColumn =
   | { type: 'column'; key: string; label: string; column: PayrollCalcGroupColumn }
-  | { type: 'supplement'; key: string; label: string; part: 'planned' | 'one_time' }
+  | { type: 'supplement'; key: string; label: string; part: 'planned' | 'one_time' | 'severance' }
   | { type: 'paid'; key: string; label: string; item: PayrollPaidItemCode }
   | { type: 'kind'; key: string; label: string; kindId: number };
 
@@ -47,6 +47,7 @@ const SUPPLEMENTS_SUB_COLUMNS: readonly PayrollSubColumn[] = [
   { type: 'column', key: 'calc_supplements:calc_housing', label: 'Проживание', column: 'calc_housing' },
   { type: 'supplement', key: 'calc_supplements:planned', label: 'Плановая', part: 'planned' },
   { type: 'supplement', key: 'calc_supplements:one_time', label: 'Разовая', part: 'one_time' },
+  { type: 'supplement', key: 'calc_supplements:severance', label: 'Выходное пособие (1С)', part: 'severance' },
 ];
 
 const DEDUCTED_ITEMS = PAYROLL_PAID_GROUPS.filter(group => group.kind === 'deducted').flatMap(group => group.items);
@@ -66,6 +67,7 @@ export const subColumnAmount = (row: IPayrollTermsRow, sub: PayrollSubColumn): s
   switch (sub.type) {
     case 'column': return calcSumAmount(row, sub.column);
     case 'supplement':
+      if (sub.part === 'severance') return row.calc?.supplements_severance ?? null;
       return (sub.part === 'planned' ? row.calc?.supplements_planned : row.calc?.supplements_one_time) ?? null;
     case 'paid':
       return sumAmounts((row.paid_deductions ?? []).filter(paid => paid.item === sub.item).map(paid => paid.amount));

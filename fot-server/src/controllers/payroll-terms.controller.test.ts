@@ -1029,7 +1029,7 @@ describe('payrollTermsController.list', () => {
       + "'overtime', 'recalc_prev', 'severance', 'supplement', 'planned_supplement', 'loan', "
       + "'kpi', 'premium', 'premium_contract', 'gph', 'extra_work', 'substitution', 'car_compensation', 'deposit', "
       + "'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund', "
-      + "'reserve', 'material_aid', 'imprest_overspend', 'salary_extra', "
+      + "'reserve', 'material_aid', 'imprest_overspend', 'salary_extra', 'vacation_compensation', "
       + "'meals', 'workwear', 'safety_fine', 'fines', 'writ_deduction', 'vacation_deduction', 'loan_repayment', "
       + "'loan_interest', 'apartment', 'imprest', 'third_party', 'transport', 'mobile', 'bank_fees', "
       + "'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts')");
@@ -1449,7 +1449,7 @@ describe('payrollTermsController.list: «К выплате» и «Удержан
     expect(sql).toMatch(/f\.period_month = ANY\(\$13::date\[\]\)/);
     expect(sql).toMatch(/card\.card_payouts_raw, fss\.fss_payments/);
     // Итоги «Начислено» и «Удержано» — NUMERIC строкой; «К выплате» = начислено − удержано считает фронт в копейках.
-    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund', 'reserve', 'material_aid', 'imprest_overspend', 'salary_extra'\)\)\)::text AS paid_total/);
+    expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('contract'.*'loan', 'kpi'.*'deposit', 'day_rate', 'workwear_accrual', 'advance_accrual', 'fine_refund', 'reserve', 'material_aid', 'imprest_overspend', 'salary_extra', 'vacation_compensation'\)\)\)::text AS paid_total/);
     expect(sql).toMatch(/\(SUM\(pa\.amount\) FILTER \(WHERE pa\.item_code IN \('meals'.*'writ_deduction', 'vacation_deduction'.*'bank_fees', 'alimony', 'tmc', 'car_rent', 'property_damage', 'prior_debts'\)\)\)::text AS paid_deductions_total/);
     // Новые статьи 325: удержание не попадает в итог начислений, начисление — в итог удержаний.
     expect(sql).not.toMatch(/item_code IN \('contract'[^)]*'bank_fees'/);

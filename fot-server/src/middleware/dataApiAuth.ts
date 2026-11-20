@@ -7,6 +7,8 @@ export interface DataApiKeyContext {
   rate_limit_per_minute: number;
   /** Разрешено ли ключу подтверждать выгрузку табелей (POST .../ack). */
   allow_timesheet_ack: boolean;
+  /** Разрешено ли ключу присылать увольнения из 1С (POST /payroll/dismissals). */
+  allow_payroll_dismissal_import: boolean;
 }
 
 /**

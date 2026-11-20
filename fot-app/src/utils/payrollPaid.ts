@@ -47,6 +47,7 @@ export const PAYROLL_PAID_GROUPS: readonly IPayrollPaidGroup[] = [
       { code: 'overtime', label: 'Переработка' }, // 1.1.2
       { code: 'recalc_prev', label: 'Перерасчёт за предыдущий период' }, // 1.1.6
       { code: 'severance', label: 'Выходное пособие при увольнении' }, // 1.3.2
+      { code: 'vacation_compensation', label: 'Компенсация отпуска при увольнении' }, // из документа увольнения 1С (API)
       { code: 'supplement', label: 'Разовая доплата' }, // 1.3.5
       { code: 'planned_supplement', label: 'Плановая доплата' },
       { code: 'loan', label: 'Займ' }, // 1.3.7

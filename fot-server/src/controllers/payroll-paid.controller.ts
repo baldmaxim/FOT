@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { getPaidAmounts } from '../services/payroll/payroll-paid.service.js';
+import { listDismissalOrders } from '../services/payroll/payroll-1c-dismissals.service.js';
 import { getPaidDebts } from '../services/payroll/payroll-paid-debts.service.js';
 import { getPayslipInfo } from '../services/payroll/payroll-payslip.service.js';
 import { canReadPayrollEmployee } from '../services/payroll/payroll-scope.service.js';
@@ -31,8 +32,15 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
     const range = rangeQuerySchema.parse(req.query);
-    const data = await getPaidAmounts(employeeId, range.from, range.to);
-    res.json({ success: true, data });
+    const [data, dismissalOrders] = await Promise.all([
+      getPaidAmounts(employeeId, range.from, range.to),
+      // Приказы об увольнении из 1С (API, миграция 372) за тот же период; сбой — без них, суммы отдаются.
+      listDismissalOrders(employeeId, range.from, range.to).catch((err: unknown) => {
+        console.error('payrollPaid.getByEmployee dismissal orders error:', err);
+        return [];
+      }),
+    ]);
+    res.json({ success: true, data, dismissal_orders: dismissalOrders });
   } catch (err) {
     if (err instanceof z.ZodError) {
       res.status(400).json({ success: false, error: err.errors[0]?.message ?? 'Некорректные данные' });

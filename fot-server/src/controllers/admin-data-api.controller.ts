@@ -11,6 +11,8 @@ const createKeySchema = z.object({
   rate_limit_per_minute: z.number().int().min(1).max(10000).optional(),
   // Единственный write-метод публичного API — по умолчанию закрыт.
   allow_timesheet_ack: z.boolean().optional(),
+  // Приём увольнений из 1С — пишет «Оплачено», по умолчанию закрыт.
+  allow_payroll_dismissal_import: z.boolean().optional(),
   expires_at: z.string().datetime().optional().nullable(),
 });
 
@@ -19,6 +21,7 @@ const updateKeySchema = z.object({
   description: z.string().trim().max(500).nullable().optional(),
   rate_limit_per_minute: z.number().int().min(1).max(10000).optional(),
   allow_timesheet_ack: z.boolean().optional(),
+  allow_payroll_dismissal_import: z.boolean().optional(),
   expires_at: z.string().datetime().nullable().optional(),
 });
 
@@ -56,6 +59,7 @@ export const adminDataApiController = {
         description: payload.description ?? null,
         rate_limit_per_minute: payload.rate_limit_per_minute,
         allow_timesheet_ack: payload.allow_timesheet_ack,
+        allow_payroll_dismissal_import: payload.allow_payroll_dismissal_import,
         expires_at: payload.expires_at ?? null,
         created_by: req.user.id,
       });

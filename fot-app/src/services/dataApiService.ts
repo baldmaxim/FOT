@@ -13,6 +13,8 @@ export interface DataApiKey {
   rate_limit_per_minute: number;
   /** Разрешено ли ключу подтверждать выгрузку табелей (POST .../ack). */
   allow_timesheet_ack: boolean;
+  /** Приём увольнений из 1С (POST /payroll/dismissals); нет у старого бэкенда. */
+  allow_payroll_dismissal_import?: boolean;
   created_by: string | null;
   created_at: string;
   expires_at: string | null;
@@ -57,6 +59,7 @@ export interface CreateKeyInput {
 }
 
 export interface UpdateKeyInput {
+  allow_payroll_dismissal_import?: boolean;
   name?: string;
   description?: string | null;
   rate_limit_per_minute?: number;

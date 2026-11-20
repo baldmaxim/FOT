@@ -1,0 +1,21 @@
+/* Приказы об увольнении из 1С над «Оплачено» в «Подробно». Цвета — токены (обе темы), на 360 px — перенос. */
+.list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.title {
+  color: var(--text-secondary);
+}
+
+.mismatch {
+  color: var(--error);
+}

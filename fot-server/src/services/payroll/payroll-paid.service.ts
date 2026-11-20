@@ -1,7 +1,9 @@
 /**
  * «Оплачено» в карточке «Зарплата → Подробно»: суммы статей «Сводной ведомости» ЗУП —
  * начислено и удержано — по месяцам (миграции 295, 297, 298, 301, 325, 326, 327, 329, 334, 338). Только чтение: суммы
- * приходят из 1С (API или выгрузка). В расчёте зарплаты не участвуют. Суммы нет — строки нет.
+ * приходят из 1С (API или выгрузка). В расчёт ФОТ входят отпускные и больничные (vacation, sick_leave) и строки увольнения
+ * из 1С (vacation_compensation, severance с source_kind = 'api_1c_dismissal', миграция 372); остальные — справочно.
+ * Суммы нет — строки нет.
  */
 import { query } from '../../config/postgres.js';
 
@@ -37,6 +39,7 @@ export const PAYROLL_PAID_ITEM_CODES = [
   'material_aid',
   'imprest_overspend',
   'salary_extra',
+  'vacation_compensation',
   // Удержано.
   'meals',
   'workwear',
@@ -94,6 +97,7 @@ export const PAYROLL_PAID_ACCRUAL_CODES: readonly PayrollPaidItemCode[] = [
   'material_aid',
   'imprest_overspend',
   'salary_extra',
+  'vacation_compensation',
 ];
 
 /**

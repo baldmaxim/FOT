@@ -82,6 +82,9 @@ export interface IPayrollCalcColumns {
   /** Из доплат: плановая (по дням оклада) и разовая; нет поля — старый бэкенд (у «Доплат» нет «+»). */
   supplements_planned?: string | null;
   supplements_one_time?: string | null;
+  /** Выходное пособие и компенсация отпуска из документа увольнения 1С (API) — составляющие «Доплат» и «Отпускных». */
+  supplements_severance?: string | null;
+  vacation_compensation?: string | null;
   deductions: string | null;
   /** Удержания по видам «Справочника», по названию вида; нет поля — старый бэкенд. */
   deductions_by_kind?: IPayrollCalcDeductionByKind[];
@@ -389,13 +392,29 @@ export interface IEmployeeVacation {
   balance: IVacationBalance | null;
 }
 
+/** Приказ об увольнении из 1С (API, миграция 372) — действующий документ; суммы — NUMERIC строкой. */
+export interface IPayrollDismissalOrder {
+  guid: string;
+  /** YYYY-MM. */
+  month: string;
+  doc_number: string;
+  doc_date: string;
+  dismissal_date: string | null;
+  basis: string | null;
+  vacation_compensation: string;
+  vacation_compensation_days: string | null;
+  severance: string;
+  /** Дата увольнения в карточке ФОТ сейчас; null — не уволен. */
+  fot_dismissal_date: string | null;
+}
+
 /** Статья «Оплачено» — столбец «Сводной ведомости» ЗУП (подписи и группы — utils/payrollPaid). */
 export type PayrollPaidItemCode =
   | 'contract' | 'bonus' | 'sick_leave' | 'vacation'
   | 'housing' | 'travel' | 'overtime' | 'recalc_prev' | 'severance' | 'supplement' | 'planned_supplement' | 'loan'
   | 'kpi' | 'premium' | 'premium_contract' | 'gph' | 'extra_work' | 'substitution' | 'car_compensation' | 'deposit'
   | 'day_rate' | 'workwear_accrual' | 'advance_accrual' | 'fine_refund'
-  | 'reserve' | 'material_aid' | 'imprest_overspend' | 'salary_extra'
+  | 'reserve' | 'material_aid' | 'imprest_overspend' | 'salary_extra' | 'vacation_compensation'
   | 'meals' | 'workwear' | 'safety_fine' | 'fines' | 'writ_deduction'
   | 'vacation_deduction' | 'loan_repayment' | 'loan_interest' | 'apartment' | 'imprest' | 'third_party'
   | 'transport' | 'mobile' | 'bank_fees' | 'alimony' | 'tmc' | 'car_rent' | 'property_damage' | 'prior_debts';
@@ -443,7 +462,8 @@ export interface IPayslipSchedule {
 
 /** Строка расчёта ФОТ — код статьи «Оплачено» (1С), чтобы сравнивать построчно. */
 export type PayrollCalcLineCode =
-  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave';
+  | 'contract' | 'brigade' | 'bonus' | 'supplement' | 'overtime' | 'travel' | 'housing' | 'vacation' | 'sick_leave'
+  | 'vacation_compensation' | 'severance';
 
 /**
  * Чего ФОТ не посчитал: дни есть, суммы нет. brigade_output — выработка бригады не введена, brigade_no_hours —
@@ -514,7 +534,7 @@ export type PayrollCalcLinePart =
   /** Разовая доплата: часть на основание; старый бэкенд — одна часть без основания. */
   | { kind: 'one_time'; amount: string; reason?: string }
   /** Отпускные или больничные: статья «Оплачено» (начислено в 1С). */
-  | { kind: 'paid_1c'; amount: string }
+  | { kind: 'paid_1c'; amount: string; replaced_one_time?: string }
   /** Отпускные или больничные: ведомость выплаты 1С (перечислено); doc_date — YYYY-MM-DD. */
   | { kind: 'payout_1c'; doc_number: string; doc_date: string; amount: string }
   | {
@@ -979,6 +999,18 @@ export const payrollService = {
       { signal },
     );
     return res.data;
+  },
+
+  /** «Оплачено» за месяцы from — to и приказы об увольнении из 1С за те же месяцы («Подробно»). */
+  getPaidWithOrders: async (
+    employeeId: number, from: string, to: string, signal?: AbortSignal,
+  ): Promise<{ amounts: IPayrollPaidAmount[]; dismissalOrders: IPayrollDismissalOrder[] }> => {
+    const search = new URLSearchParams({ from, to });
+    const res = await apiClient.get<IApiResponse<IPayrollPaidAmount[]> & { dismissal_orders?: IPayrollDismissalOrder[] }>(
+      `/payroll/terms/employee/${employeeId}/paid?${search.toString()}`,
+      { signal },
+    );
+    return { amounts: res.data, dismissalOrders: res.dismissal_orders ?? [] };
   },
 
   /** «Оплачено» за месяцы from — to (YYYY-MM, включительно). */

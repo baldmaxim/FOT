@@ -545,6 +545,38 @@ describe('«К выплате (ФОТ)»: отпускные и больничн
     expect(result.missing).toEqual([]);
   });
 
+  it('увольнение из 1С: компенсация и пособие — строки «Суммы»; разовое «Выходное пособие при увольнении» не задваивается', () => {
+    const base = buildPayrollCalc(grinev());
+    const result = buildPayrollCalc(grinev({
+      absencePay1c: [{ code: 'vacation', paid: null, payouts: [vacationPayout] }],
+      oneTimeItems: [{ reason: 'Выходное  пособие при увольнении', amount: '330000.00' }, { reason: 'Премия', amount: '1000.00' }],
+      dismissalPay1c: { vacation_compensation: '35602.21', severance: '330000.00' },
+    }));
+    expect(line(result, 'vacation_compensation')).toEqual({
+      code: 'vacation_compensation', amount: '35602.21', parts: [{ kind: 'paid_1c', amount: '35602.21' }],
+    });
+    expect(line(result, 'severance')).toEqual({
+      code: 'severance', amount: '330000.00', parts: [{ kind: 'paid_1c', amount: '330000.00', replaced_one_time: '330000.00' }],
+    });
+    expect(line(result, 'supplement')?.amount).toBe('1000.00');
+    // Отпускные из ведомости рядом не пропадают.
+    expect(line(result, 'vacation')?.amount).toBe('59709.13');
+    expect(Number(result.net) - Number(base.net)).toBeCloseTo(59709.13 + 35602.21 + 330000 + 1000, 2);
+
+    // Пособие 0,00 в действующем документе — разовое пособие всё равно не считается, строки severance нет.
+    const zero = buildPayrollCalc(grinev({
+      oneTimeItems: [{ reason: 'Выходное пособие при увольнении', amount: '330000.00' }],
+      dismissalPay1c: { vacation_compensation: '0.00', severance: '0.00' },
+    }));
+    expect(line(zero, 'severance')).toBeUndefined();
+    expect(line(zero, 'supplement')).toBeUndefined();
+    expect(zero.net).toBe(base.net);
+
+    // Документа нет — как сейчас: разовое пособие в «Доплатах».
+    const none = buildPayrollCalc(grinev({ oneTimeItems: [{ reason: 'Выходное пособие при увольнении', amount: '330000.00' }] }));
+    expect(line(none, 'supplement')?.amount).toBe('330000.00');
+  });
+
   it('строка «Оплачено» есть — берётся она, даже 0; ведомости — нет', () => {
     const paid = buildPayrollCalc(grinev({
       absencePay1c: [{ code: 'vacation', paid: '68631.18', payouts: [vacationPayout] }],

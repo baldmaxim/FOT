@@ -249,6 +249,8 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   // Право подтверждать выгрузку табелей живёт на самом ключе, а не в списке таблиц,
   // поэтому храним отдельно и сохраняем тем же действием, что и доступы.
   const [allowTimesheetAck, setAllowTimesheetAck] = useState(apiKey.allow_timesheet_ack);
+  // Приём увольнений из 1С — тоже право самого ключа (миграция 372), пишет «Оплачено».
+  const [allowDismissals, setAllowDismissals] = useState(apiKey.allow_payroll_dismissal_import === true);
 
   const initialSelection = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -323,6 +325,9 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
       // лишнюю запись в аудите при каждом сохранении доступов.
       if (allowTimesheetAck !== apiKey.allow_timesheet_ack) {
         await dataApiService.updateKey(apiKey.id, { allow_timesheet_ack: allowTimesheetAck });
+      }
+      if (allowDismissals !== (apiKey.allow_payroll_dismissal_import === true)) {
+        await dataApiService.updateKey(apiKey.id, { allow_payroll_dismissal_import: allowDismissals });
       }
     },
     onSuccess: () => {
@@ -426,6 +431,20 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                         Единственный метод публичного API, который пишет данные. Без него 1С
                         не сможет подтвердить приём, и табели будут снова и снова попадать
                         в очередь на выгрузку.
+                      </div>
+                    </span>
+                  </label>
+                  <label className={styles.permissionRow}>
+                    <input
+                      type="checkbox"
+                      checked={allowDismissals}
+                      onChange={e => setAllowDismissals(e.target.checked)}
+                      className={styles.permissionCheck}
+                    />
+                    <span>
+                      Разрешить приём увольнений из 1С (POST /payroll/dismissals)
+                      <div className={styles.muted}>
+                        Приказ, компенсация отпуска и выходное пособие попадают в «Оплачено» и в расчёт ФОТ.
                       </div>
                     </span>
                   </label>
@@ -714,6 +733,7 @@ export const DataApiPage: FC = () => {
                       {key.allow_timesheet_ack
                         ? <span className={styles.tag}>Разрешено</span>
                         : <span className={styles.muted}>—</span>}
+                      {key.allow_payroll_dismissal_import && <span className={styles.tag}>Увольнения</span>}
                     </td>
                     <td>{formatDate(key.created_at)}</td>
                     <td>{key.expires_at ? formatDate(key.expires_at) : <span className={styles.muted}>—</span>}</td>

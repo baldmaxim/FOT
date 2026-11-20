@@ -24,6 +24,7 @@ import type { IPayslipLine } from './payrollPayslip';
 /** Порядок строк — как в листке ЗУП. */
 export const PAYROLL_CALC_LINE_ORDER: readonly PayrollCalcLineCode[] = [
   'contract', 'brigade', 'bonus', 'supplement', 'overtime', 'travel', 'housing', 'vacation', 'sick_leave',
+  'vacation_compensation', 'severance',
 ];
 
 const PAID_LABELS = new Map<PayrollPaidItemCode, string>(
