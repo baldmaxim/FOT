@@ -157,7 +157,7 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           rowTone={tone}
           raisedFilters
           onFilterOpenChange={setFilterOpen}
-          columnOrderKey="housing.apartment-residents"
+          columnWidthsKey="housing.apartment-residents"
           isDismissed={isDismissedStay}
           cellRenderers={{
             ...cardCell,
@@ -194,7 +194,7 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           rowTone={tone}
           raisedFilters
           onFilterOpenChange={setFilterOpen}
-          columnOrderKey="housing.apartment-history"
+          columnWidthsKey="housing.apartment-history"
           isDismissed={isDismissedStay}
           cellRenderers={cardCell}
         />

@@ -1,4 +1,4 @@
-import type { DragEvent, KeyboardEvent, MouseEvent, ReactElement, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactElement, ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from 'lucide-react';
 
 import styles from './TableSortHeader.module.css';
@@ -22,18 +22,13 @@ interface ITableSortHeaderProps<K extends string> {
   /** Под подписью (период сумм). */
   children?: ReactNode;
   /**
-   * Передан — столбец переставляется: заголовок тянется мышью (draggable задаёт вызывающий — только на точном
-   * указателе), Alt+← / Alt+→ на кнопке сортировки — на соседнее место. over — сюда бросят (полоса слева или справа).
+   * Передан — у правого края заголовка ручка ширины, как в Excel: тянуть мышью, двойной клик — по самому длинному
+   * тексту; с клавиатуры — ← / → (шаг) и Enter (по тексту). th должен быть позиционирован (relative или sticky).
    */
-  reorder?: {
-    draggable: boolean;
-    over: 'before' | 'after' | null;
-    onDragStart: (event: DragEvent<HTMLTableCellElement>) => void;
-    onDragOver: (event: DragEvent<HTMLTableCellElement>) => void;
-    onDragLeave: () => void;
-    onDrop: (event: DragEvent<HTMLTableCellElement>) => void;
-    onDragEnd: () => void;
-    onMoveBy: (delta: -1 | 1) => void;
+  resize?: {
+    onPointerDown: (event: PointerEvent<HTMLSpanElement>) => void;
+    onAutoFit: () => void;
+    onStep: (delta: -1 | 1) => void;
   };
 }
 
@@ -43,7 +38,7 @@ interface ITableSortHeaderProps<K extends string> {
  */
 export const TableSortHeader = <K extends string>({
   sortKey, label, activeKey, dir, onSort, onOpenFilter, filterActive, className, title, disabled = false, extra, children,
-  reorder,
+  resize,
 }: ITableSortHeaderProps<K>): ReactElement => {
   const active = sortKey === activeKey;
   const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
@@ -55,41 +50,26 @@ export const TableSortHeader = <K extends string>({
     onOpenFilter(sortKey, event.currentTarget);
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!reorder || !event.altKey || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
-    event.preventDefault();
-    reorder.onMoveBy(event.key === 'ArrowLeft' ? -1 : 1);
+  const handleResizeKey = (event: KeyboardEvent<HTMLSpanElement>) => {
+    if (!resize) return;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      resize.onStep(event.key === 'ArrowLeft' ? -1 : 1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      resize.onAutoFit();
+    }
   };
 
-  const thClass = [
-    className,
-    reorder?.draggable ? styles.draggable : null,
-    reorder?.over === 'before' ? styles.dropBefore : null,
-    reorder?.over === 'after' ? styles.dropAfter : null,
-  ].filter(Boolean).join(' ');
-
   return (
-    <th
-      className={thClass || undefined}
-      aria-sort={ariaSort}
-      title={title}
-      {...(reorder?.draggable ? {
-        draggable: true,
-        onDragStart: reorder.onDragStart,
-        onDragOver: reorder.onDragOver,
-        onDragLeave: reorder.onDragLeave,
-        onDrop: reorder.onDrop,
-        onDragEnd: reorder.onDragEnd,
-      } : {})}
-    >
+    <th className={className} aria-sort={ariaSort} title={title}>
       <span className={styles.inner}>
         <button
           type="button"
           className={`${styles.sortButton}${active ? ` ${styles.sortActive}` : ''}`}
           onClick={() => onSort(sortKey)}
-          onKeyDown={reorder ? handleKeyDown : undefined}
           disabled={disabled}
-          aria-label={`${label}: сортировать ${nextLabel}${reorder ? '; Alt+стрелка — переставить столбец' : ''}`}
+          aria-label={`${label}: сортировать ${nextLabel}`}
         >
           <span className={styles.label}>{label}</span>
           <Icon size={12} aria-hidden="true" className={styles.sortIcon} />
@@ -108,6 +88,20 @@ export const TableSortHeader = <K extends string>({
         {extra}
       </span>
       {children}
+      {resize && (
+        <span
+          className={styles.resizeHandle}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={`Ширина столбца «${label}»: тянуть мышью, двойной клик — по тексту`}
+          title="Ширина столбца: тянуть, двойной клик — по тексту"
+          tabIndex={0}
+          onPointerDown={resize.onPointerDown}
+          onDoubleClick={resize.onAutoFit}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={handleResizeKey}
+        />
+      )}
     </th>
   );
 };

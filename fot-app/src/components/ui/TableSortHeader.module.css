@@ -104,8 +104,33 @@ th:hover .filterButton:disabled:not(.filterActive) { opacity: 0.35; }
   .filterButton { transition: none; }
 }
 
-/* Перестановка столбцов («Проживание»): заголовок тянется мышью, место броска — полоса цвета акцента у края. */
-.draggable { cursor: grab; }
-.draggable:active { cursor: grabbing; }
-.dropBefore { box-shadow: inset 2px 0 0 var(--accent); }
-.dropAfter { box-shadow: inset -2px 0 0 var(--accent); }
+/* Ширина столбца, как в Excel («Проживание»): полоса у правого края заголовка, видна при наведении и фокусе. */
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.resizeHandle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  right: 3px;
+  width: 2px;
+  height: 60%;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 150ms ease-out;
+}
+.resizeHandle:hover::after,
+.resizeHandle:focus-visible::after { background: var(--accent); }
+.resizeHandle:focus-visible { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .resizeHandle::after { transition: none; }
+}

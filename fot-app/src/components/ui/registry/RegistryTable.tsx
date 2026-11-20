@@ -1,5 +1,6 @@
 import {
-  useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactElement, type ReactNode,
+  useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement,
+  type ReactNode,
 } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
@@ -11,6 +12,8 @@ import {
   isColumnFiltered,
   REGISTRY_ACTIONS_WIDTH,
   REGISTRY_ACTIONS_WIDTH_TOUCH,
+  REGISTRY_CELL_EXTRA,
+  REGISTRY_HEADER_EXTRA,
   REGISTRY_NAME_MIN_WIDTH,
   REGISTRY_NUM_WIDTH,
   registryRowGroups,
@@ -20,6 +23,7 @@ import {
   type IRegistryRowGroup,
   type ITableView,
 } from '../../../utils/tableView';
+import { autofitColumnWidth, clampColumnWidth, COLUMN_WIDTH_STEP, type ColumnWidths } from '../../../utils/columnWidths';
 import styles from './RegistryTable.module.css';
 
 /** Подпись заголовка: 12px, 600, ПРОПИСНЫЕ, letter-spacing 0.04em (RegistryTable.module.css). */
@@ -30,17 +34,12 @@ const CELL_FONT = '400 13px';
 /** Запас на расхождение замера canvas и вёрстки. */
 const HEADER_MEASURE_SLACK = 4;
 const TOUCH_QUERY = '(max-width: 768px)';
-/** Перетаскивание столбцов — только мышью: на сенсоре жест прокручивает таблицу. */
+/** Ширина столбца тянется только мышью: на сенсоре жест прокручивает таблицу. */
 const FINE_POINTER_QUERY = '(pointer: fine)';
 /** Ключ столбца сотрудника — у его фильтра галочка «Уволенные». */
 const EMPLOYEE_COLUMN_KEY = 'full_name';
 
-type DropSide = 'before' | 'after';
-
-const dropSideOf = (event: DragEvent<HTMLElement>): DropSide => {
-  const rect = event.currentTarget.getBoundingClientRect();
-  return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-};
+const NO_WIDTHS: ColumnWidths = {};
 
 /** Подсветка строки таблицы-реестра и подсказка при наведении. */
 export interface IRegistryRowTone {
@@ -98,8 +97,13 @@ export interface IRegistryTableProps<Row> {
    * аренды не начисляется, мягкий жёлтый), hint — подсказка при наведении («Уволен 02.11.2026»). null — обычная строка.
    */
   rowTone?: (row: Row) => IRegistryRowTone | null;
-  /** Передан — столбцы переставляются: перетаскиванием заголовка (мышью) и Alt+← / Alt+→ на нём. */
-  onMoveColumn?: (from: string, to: string, side: DropSide) => void;
+  /** Ширины столбцов, заданные пользователем (px по ключу) — важнее подгонки под экран. */
+  columnWidths?: ColumnWidths;
+  /**
+   * Передан — ширина столбца меняется, как в Excel: граница заголовка тянется мышью, двойной клик — по самому длинному
+   * тексту, ← / → и Enter на ручке.
+   */
+  onColumnWidth?: (columnKey: string, width: number) => void;
   /** Передана — галочка «Уволенные» в фильтре столбца «Сотрудник» (снята — воронка подсвечена). */
   employeeToggle?: { label: string; checked: boolean; onApply: (checked: boolean) => void };
 }
@@ -113,43 +117,12 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
-  onRowClick, footer = null, groupRows, cellRenderers, rowTone, onMoveColumn, employeeToggle,
+  onRowClick, footer = null, groupRows, cellRenderers, rowTone, columnWidths = NO_WIDTHS, onColumnWidth, employeeToggle,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const [finePointer] = useState(() => typeof window !== 'undefined' && window.matchMedia(FINE_POINTER_QUERY).matches);
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<{ key: string; side: DropSide } | null>(null);
-
-  const endDrag = () => {
-    setDragKey(null);
-    setDropAt(null);
-  };
-  const reorderOf = (column: IRegistryColumn<Row>, index: number) => (onMoveColumn ? {
-    draggable: finePointer,
-    over: dropAt?.key === column.key ? dropAt.side : null,
-    onDragStart: (event: DragEvent<HTMLTableCellElement>) => {
-      setDragKey(column.key);
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', column.key);
-    },
-    onDragOver: (event: DragEvent<HTMLTableCellElement>) => {
-      if (dragKey === null || dragKey === column.key) return;
-      event.preventDefault();
-      const side = dropSideOf(event);
-      setDropAt(prev => (prev?.key === column.key && prev.side === side ? prev : { key: column.key, side }));
-    },
-    onDragLeave: () => setDropAt(prev => (prev?.key === column.key ? null : prev)),
-    onDrop: (event: DragEvent<HTMLTableCellElement>) => {
-      event.preventDefault();
-      if (dragKey !== null && dragKey !== column.key) onMoveColumn(dragKey, column.key, dropSideOf(event));
-      endDrag();
-    },
-    onDragEnd: endDrag,
-    onMoveBy: (delta: -1 | 1) => {
-      const neighbor = columns[index + delta];
-      if (neighbor) onMoveColumn(column.key, neighbor.key, delta < 0 ? 'before' : 'after');
-    },
-  } : undefined);
+  /** Ширина столбца, пока тянут границу (запишется, когда отпустят). */
+  const [liveWidth, setLiveWidth] = useState<{ key: string; width: number } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
   const filterOptions = useMemo(
     () => (filterFor ? columnFilterOptions(rows, columns, view.filters, filterFor.key) : []),
@@ -158,14 +131,21 @@ export const RegistryTable = <Row,>({
   const withActions = onEdit !== undefined || onDelete !== undefined;
   const columnCount = columns.length + (withActions ? 2 : 1);
 
-  // Минимальная ширина: сумма колонок с шириной + ФИО не уже 170px — уже неё скроллится таблица.
+  // Столбцы с шириной пользователя — фиксированные: их ширина вместо компактной, к ним запас не прибавляется.
+  const fitColumns = useMemo(() => columns.map(column => {
+    const width = columnWidths[column.key];
+    return width === undefined ? column : { ...column, width, nowrap: true };
+  }), [columns, columnWidths]);
+
+  // Минимальная ширина: сумма колонок с шириной + ФИО (если без ширины) не уже 170px — уже неё скроллится таблица.
   const tableStyle = useMemo((): CSSProperties => {
-    const fixed = REGISTRY_NUM_WIDTH + REGISTRY_NAME_MIN_WIDTH + columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
+    const nameMin = fitColumns.some(column => column.width === undefined) ? REGISTRY_NAME_MIN_WIDTH : 0;
+    const fixed = REGISTRY_NUM_WIDTH + nameMin + fitColumns.reduce((sum, column) => sum + (column.width ?? 0), 0);
     return {
       '--registry-min-width': `${fixed + (withActions ? REGISTRY_ACTIONS_WIDTH : 0)}px`,
       '--registry-min-width-touch': `${fixed + (withActions ? REGISTRY_ACTIONS_WIDTH_TOUCH : 0)}px`,
     } as CSSProperties;
-  }, [columns, withActions]);
+  }, [fitColumns, withActions]);
 
   // Широкий экран: столбцы с переносящейся подписью расширяются, пока есть запас, — подпись в одну строку;
   // остаток делится между ФИО, отделом, должностью и другими текстовыми столбцами по их тексту, а не весь у ФИО.
@@ -183,14 +163,14 @@ export const RegistryTable = <Row,>({
       const fontFamily = getComputedStyle(wrap).fontFamily;
       if (!contentWidths) {
         context.font = `${CELL_FONT} ${fontFamily}`;
-        contentWidths = columns.map(column => (column.nowrap ? 0 : sizeRows.reduce(
+        contentWidths = fitColumns.map(column => (column.nowrap ? 0 : sizeRows.reduce(
           (max, row) => Math.max(max, context.measureText(column.text(row)).width),
           0,
         )));
       }
       context.font = `${HEADER_FONT} ${fontFamily}`;
       const next = fitRegistryColumnWidths({
-        columns,
+        columns: fitColumns,
         containerWidth: wrap.clientWidth,
         labelWidth: label => context.measureText(label.toLocaleUpperCase('ru')).width
           + HEADER_LETTER_SPACING * label.length + HEADER_MEASURE_SLACK,
@@ -212,8 +192,61 @@ export const RegistryTable = <Row,>({
       alive = false;
       observer.disconnect();
     };
-  }, [columns, sizeRows, withActions]);
-  const columnWidth = (index: number): number | undefined => (fitted ? fitted[index] : columns[index].width);
+  }, [fitColumns, sizeRows, withActions]);
+  const columnWidth = (index: number): number | undefined => {
+    const { key } = columns[index];
+    if (liveWidth?.key === key) return liveWidth.width;
+    return columnWidths[key] ?? (fitted ? fitted[index] : columns[index].width);
+  };
+
+  /** Ширина «по тексту»: самый длинный текст ячеек одной строкой или подпись с иконками — что шире. */
+  const autofit = (column: IRegistryColumn<Row>) => {
+    const wrap = wrapRef.current;
+    const context = document.createElement('canvas').getContext('2d');
+    if (!wrap || !context || !onColumnWidth) return;
+    const fontFamily = getComputedStyle(wrap).fontFamily;
+    context.font = `${CELL_FONT} ${fontFamily}`;
+    const texts = sizeRows.map(row => context.measureText(column.text(row)).width);
+    context.font = `${HEADER_FONT} ${fontFamily}`;
+    const header = context.measureText(column.label.toLocaleUpperCase('ru')).width
+      + HEADER_LETTER_SPACING * column.label.length + HEADER_MEASURE_SLACK + REGISTRY_HEADER_EXTRA;
+    onColumnWidth(column.key, autofitColumnWidth(texts, REGISTRY_CELL_EXTRA, header));
+  };
+
+  /** Ручка ширины у заголовка (только мышью; без onColumnWidth — нет). */
+  const resizeOf = (column: IRegistryColumn<Row>, index: number) => (onColumnWidth && finePointer ? {
+    onPointerDown: (event: PointerEvent<HTMLSpanElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const handle = event.currentTarget;
+      const startX = event.clientX;
+      const startWidth = handle.parentElement?.getBoundingClientRect().width ?? columnWidth(index) ?? 0;
+      let width = startWidth;
+      handle.setPointerCapture(event.pointerId);
+      const move = (moveEvent: globalThis.PointerEvent) => {
+        width = clampColumnWidth(startWidth + moveEvent.clientX - startX);
+        setLiveWidth({ key: column.key, width });
+      };
+      const finish = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', finish);
+        if (Math.round(width) !== Math.round(startWidth)) onColumnWidth(column.key, width);
+        setLiveWidth(null);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', finish);
+    },
+    onAutoFit: () => autofit(column),
+    onStep: (delta: -1 | 1) => {
+      // Первый заголовок — «№»: столбец index — следующий за ним.
+      const header = wrapRef.current?.querySelectorAll('thead th')[index + 1];
+      const current = header?.getBoundingClientRect().width ?? columnWidth(index) ?? REGISTRY_NAME_MIN_WIDTH;
+      onColumnWidth(column.key, clampColumnWidth(current + delta * COLUMN_WIDTH_STEP));
+    },
+  } : undefined);
 
   const groups = useMemo(() => (groupRows ? registryRowGroups(visibleRows, groupRows.key) : null), [groupRows, visibleRows]);
   const groupColumns = useMemo(() => new Set(groupRows?.columns ?? []), [groupRows]);
@@ -240,7 +273,7 @@ export const RegistryTable = <Row,>({
             {columns.map((column, index) => (
               <TableSortHeader
                 key={column.key}
-                reorder={reorderOf(column, index)}
+                resize={resizeOf(column, index)}
                 sortKey={column.key}
                 label={column.label}
                 title={column.title}

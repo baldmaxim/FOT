@@ -75,19 +75,14 @@ const isDismissedRow = (row: unknown): boolean => (
     && dismissedTone(row as IDormitoryStay, moscowTodayIso()) !== null
 );
 
-/** xlsx таблицы: столбцы — в порядке экрана (ordered, переставленные пользователем), иначе по умолчанию. */
 const exportOf = <Row,>(title: string, columns: ReadonlyArray<IRegistryColumn<Row>>) =>
-  (
-    rows: ReadonlyArray<Row>,
-    _totals?: Readonly<Record<string, string | number | null>>,
-    ordered?: ReadonlyArray<IRegistryColumn<Row>>,
-  ): ITableExportSnapshot => {
+  (rows: ReadonlyArray<Row>): ITableExportSnapshot => {
     const isoDate = moscowTodayIso();
     return buildExportTable({
       title,
       subtitle: `Дата выгрузки: ${isoDate.split('-').reverse().join('.')}`,
       fileName: `${title}_${isoDate}.xlsx`,
-      columns: ordered ?? columns,
+      columns,
       rows,
       isMuted: isDismissedRow,
     });
@@ -317,7 +312,18 @@ export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IReg
   },
 ];
 
-export const DORMITORY_HISTORY_COLUMNS = historyColumns<IDormitoryResident>(true);
+/** История общежития — и комментарий записи: при переселении он остаётся у прежней. */
+export const DORMITORY_HISTORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryResident>> = [
+  ...historyColumns<IDormitoryResident>(true),
+  {
+    key: 'comment',
+    label: 'Комментарий',
+    type: 'text',
+    width: 160,
+    text: resident => resident.comment ?? '',
+    sortValue: resident => resident.comment ?? null,
+  },
+];
 
 export const buildDormitoryResidentsExport = (title: string, withPlace: boolean) => exportOf(title, dormitoryResidentColumns(withPlace));
 export const buildDormitoryHistoryExport = (title: string) => exportOf(`${title} — история`, DORMITORY_HISTORY_COLUMNS);
@@ -436,14 +442,13 @@ export const compensationTotals = (rows: ReadonlyArray<ICompensationMonthRow>) =
 export const buildCompensationExport = (monthLabel: string) => (
   rows: ReadonlyArray<ICompensationMonthRow>,
   totals?: Readonly<Record<string, string | number | null>>,
-  ordered?: ReadonlyArray<IRegistryColumn<ICompensationMonthRow>>,
 ): ITableExportSnapshot => {
   const isoDate = moscowTodayIso();
   return buildExportTable({
     title: 'Компенсация аренды',
     subtitle: `${monthLabel}. Дата выгрузки: ${isoDate.split('-').reverse().join('.')}`,
     fileName: `Компенсация аренды_${monthLabel}_${isoDate}.xlsx`,
-    columns: ordered ?? COMPENSATION_COLUMNS,
+    columns: COMPENSATION_COLUMNS,
     rows,
     isMuted: isDismissedRow,
     ...(totals ? { totals } : {}),

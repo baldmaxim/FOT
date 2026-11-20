@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { ICompensationMonthRow, IDormitoryStay } from '../services/dormitoryService';
 import {
   apartmentTitle,
-  buildCompensationExport,
   COMPENSATION_COLUMNS,
   compensationTone,
   compensationTotals,
   dismissedTone,
+  DORMITORY_HISTORY_COLUMNS,
   formatPassTime,
   formatPeriod,
   housingMonthOptions,
@@ -105,9 +105,9 @@ describe('«Проживание»: месяц и выгрузка (20.11.2026)'
     expect(touchesMonth({ check_in: '2026-09-01', check_out: '2026-11-01' }, '2026-11')).toBe(false);
   });
 
-  it('xlsx — в порядке столбцов экрана', () => {
-    const ordered = [...COMPENSATION_COLUMNS].reverse();
-    const snapshot = buildCompensationExport('Ноябрь 2026')([], undefined, ordered);
-    expect(snapshot.columns.map(column => column.label)).toEqual(['№', ...ordered.map(column => column.label)]);
+  it('история общежития — с комментарием записи', () => {
+    expect(DORMITORY_HISTORY_COLUMNS.map(column => column.label)).toEqual(
+      ['Сотрудник', 'Подразделение', 'Общежитие', 'Дата въезда', 'Дата выезда', 'Комментарий'],
+    );
   });
 });

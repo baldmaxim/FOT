@@ -54,8 +54,9 @@ const sameAddress = (a: string | null, b: string): boolean => (a ?? '').trim().t
  * — все, кто жил в нём хоть день; селект общежития (с числом живших в месяце; «Все общежития» — плюс столбец
  * «Общежитие»), поиск по ФИО — по всем; №, Подразделение организации, Сотрудник (ссылка на карточку), Дата въезда,
  * Дата выезда, Паспорт (полный — с правом «Реквизитов»), Крайний проход (до конца месяца), Крайний проход на объекте,
- * Начальник участка, Комментарий; столбцы переставляются. «История» — все закончившиеся записи, месяц на неё не
- * влияет. С правом правки — «Заселить», ✎ (даты, выезд, комментарий, «Переселить в другое общежитие…»), 🗑 —
+ * Начальник участка, Комментарий; ширина столбцов — как в Excel. «История» — все закончившиеся записи (с
+ * комментарием), месяц на неё не влияет. С правом правки — «Заселить» (с комментарием), ✎ (даты, выезд, комментарий,
+ * «Переселить в другое общежитие…»), 🗑 —
  * ошибочная запись. Уволенные подсвечены, галочка «Уволенные» в фильтре «Сотрудника» их скрывает.
  */
 export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
@@ -151,7 +152,7 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
       <RegistryPanel
         // Другие столбцы — заново: сортировка и фильтры прежних столбцов к ним не относятся.
         key={showHistory ? 'history' : `current-${withPlace ? 'all' : 'one'}`}
-        columnOrderKey={showHistory ? 'housing.dormitory-history' : 'housing.dormitory'}
+        columnWidthsKey={showHistory ? 'housing.dormitory-history' : 'housing.dormitory'}
         isDismissed={isDismissedStay}
         cellRenderers={cardCell}
         label={showHistory ? `${title} — история` : title}
@@ -180,6 +181,7 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
         <DormitoryStayModal
           addresses={place === ALL ? addresses : [place, ...addresses.filter(item => !sameAddress(item, place))]}
           fixedKind="dormitory"
+          withComment
           onClose={() => setEditor(null)}
           onSaved={onChanged}
         />

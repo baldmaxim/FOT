@@ -106,7 +106,7 @@ export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses,
         onDelete={canEdit ? apartment => { void remove(apartment); } : undefined}
         busyKey={busyId}
         onRowClick={apartment => setOpenedId(apartment.id)}
-        columnOrderKey="housing.apartments"
+        columnWidthsKey="housing.apartments"
       />
 
       {editor && (

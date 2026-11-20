@@ -44,6 +44,8 @@
 .colActions    { width: 84px; }
 
 .table thead th {
+  /* Ручка ширины столбца — у правого края (в таблице с закреплённой шапкой ниже — sticky, тоже позиционирован). */
+  position: relative;
   padding: 6px 12px;
   text-align: left;
   vertical-align: middle;
