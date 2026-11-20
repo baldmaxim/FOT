@@ -81,10 +81,13 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
   const current = useMemo(() => all.filter(resident => touchesMonth(resident, month)), [all, month]);
   const history = useMemo(() => all.filter(resident => resident.check_out !== null && resident.check_out <= today), [all, today]);
 
-  /** Общежития с числом живущих — по написанию первой записи, без учёта регистра. */
+  /**
+   * Общежития с числом живших в месяце — по написанию первой записи, без учёта регистра. Каждая запись — один раз:
+   * закончившаяся в выбранном месяце есть и в нём, и в «Истории».
+   */
   const places = useMemo(() => {
     const counts = new Map<string, { label: string; count: number }>();
-    for (const resident of [...current, ...history]) {
+    for (const resident of all) {
       const label = (resident.address ?? '').trim();
       if (!label) continue;
       const key = label.toLowerCase();
@@ -93,7 +96,7 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
       counts.set(key, entry);
     }
     return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
-  }, [current, history, month]);
+  }, [all, month]);
 
   const source = showHistory ? history : current;
   const rows = useMemo(
