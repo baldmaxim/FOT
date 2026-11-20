@@ -102,6 +102,12 @@
   accent-color: var(--primary);
 }
 
+/* Галочка над списком («Уволенные»): тап-цель 44px на телефоне. */
+.toggle { min-height: 44px; margin: 0 -4px; font-weight: 500; }
+@media (min-width: 769px) {
+  .toggle { min-height: 32px; }
+}
+
 .optionLabel {
   flex: 1 1 auto;
   min-width: 0;

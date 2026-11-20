@@ -15,6 +15,8 @@ interface IRegistryTabsProps<Key extends string> {
   panelId: (tab: Key) => string;
   /** aria-label полосы вкладок: «Разделы доплаты». */
   label: string;
+  /** Дополнительный класс полосы — когда рядом своя кнопка («Проживание»: выбор месяца). */
+  className?: string;
 }
 
 /**
@@ -22,7 +24,7 @@ interface IRegistryTabsProps<Key extends string> {
  * по клику). Панели — у вызывающего: className tabPanel из RegistryTabs.module.css, hidden у неактивных.
  */
 export const RegistryTabs = <Key extends string,>({
-  tabs, active, onChange, tabId, panelId, label,
+  tabs, active, onChange, tabId, panelId, label, className,
 }: IRegistryTabsProps<Key>): ReactElement => {
   const tabRefs = useRef<Partial<Record<Key, HTMLButtonElement | null>>>({});
 
@@ -49,7 +51,7 @@ export const RegistryTabs = <Key extends string,>({
   };
 
   return (
-    <div className={styles.tabs} role="tablist" aria-label={label} onKeyDown={handleKeyDown}>
+    <div className={className ? `${styles.tabs} ${className}` : styles.tabs} role="tablist" aria-label={label} onKeyDown={handleKeyDown}>
       {tabs.map(item => {
         const selected = item.key === active;
         return (

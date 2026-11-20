@@ -154,10 +154,12 @@ export const stayMetaSchema = z.object({
 export type IStayMetaInput = z.infer<typeof stayMetaSchema>;
 
 /**
- * POST /stays/:id/move — переселение: дата и ровно одно из двух — адрес общежития или служебная квартира.
+ * POST /stays/:id/move — переселение: дата и ровно одно из двух — адрес общежития или служебная квартира; комментарий
+ * новой записи — по желанию (не прислан или пусто — переносится прежний).
  */
 export const stayMoveSchema = z.object({
   date: dateSchema('Укажите дату переселения'),
+  comment: commentSchema.optional().transform(value => value ?? null),
   address: z.string({ invalid_type_error: 'Неверный адрес' })
     .transform(squeeze)
     .pipe(z.string().max(200, ADDRESS_TOO_LONG))

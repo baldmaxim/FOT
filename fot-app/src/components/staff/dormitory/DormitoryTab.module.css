@@ -16,6 +16,67 @@
   .root { height: calc(100dvh - var(--header-height) - 116px); }
 }
 
+/*
+ * Вкладки и один выбор месяца на все три: на телефоне месяц — строкой под вкладками (у вкладок своя линия), с 769px —
+ * справа от вкладок, линия — у всей строки.
+ */
+.tabsRow {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+.tabsRow .tabsInRow { margin-bottom: 8px; }
+
+.monthSelect {
+  box-sizing: border-box;
+  align-self: flex-start;
+  min-width: 180px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 500;
+}
+.monthSelect:hover:not(:disabled) { background: var(--bg-secondary); }
+.monthSelect:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (min-width: 769px) {
+  .tabsRow {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tabsRow .tabsInRow { flex: 1 1 auto; min-width: 0; margin-bottom: 0; border-bottom: none; }
+  .monthSelect { align-self: center; min-height: 36px; font-size: 14px; }
+}
+
+/* ФИО — ссылкой на карточку: две строки, как текст ячейки; тап-цель — вся ячейка по высоте строки. */
+.employeeLink {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.employeeLink:hover { text-decoration: underline; }
+.employeeLink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
 /* Галочка «Платно» в ячейке: тап-цель 44px на телефоне, по центру столбца. */
 .paidCheck {
   display: inline-flex;

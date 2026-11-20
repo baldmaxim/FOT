@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { ICompensationMonthRow, IDormitoryStay } from '../services/dormitoryService';
 import {
   apartmentTitle,
+  buildCompensationExport,
   COMPENSATION_COLUMNS,
   compensationTone,
   compensationTotals,
   dismissedTone,
   formatPassTime,
   formatPeriod,
+  housingMonthOptions,
   livesOn,
+  touchesMonth,
 } from './housingTables';
 
 const stay = (over: Partial<IDormitoryStay> = {}): IDormitoryStay => ({
@@ -85,5 +88,26 @@ describe('«Компенсация аренды»: пауза и бригада 
     expect(compensationTone(row({ brigade_from: '2026-11-16', employment_status: 'fired', dismissal_date: '2026-11-18' }), '2026-11-20'))
       .toEqual({ tone: 'dismissed', hint: 'Уволен 18.11.2026 · В бригаде с 16.11.2026 — компенсация аренды не начисляется' });
     expect(compensationTone(row(), '2026-11-20')).toBe(null);
+  });
+});
+
+describe('«Проживание»: месяц и выгрузка (20.11.2026)', () => {
+  it('месяцы выбора — с 09.2026 по следующий за текущим', () => {
+    expect(housingMonthOptions('2026-11')).toEqual(['2026-09', '2026-10', '2026-11', '2026-12']);
+    expect(housingMonthOptions('2026-12').slice(-2)).toEqual(['2026-12', '2027-01']);
+  });
+
+  it('жил хоть день в месяце: въезд до следующего месяца, выезд позже 1-го', () => {
+    expect(touchesMonth({ check_in: '2026-09-01', check_out: null }, '2026-11')).toBe(true);
+    expect(touchesMonth({ check_in: '2026-11-30', check_out: null }, '2026-11')).toBe(true);
+    expect(touchesMonth({ check_in: '2026-12-01', check_out: null }, '2026-11')).toBe(false);
+    expect(touchesMonth({ check_in: '2026-09-01', check_out: '2026-11-02' }, '2026-11')).toBe(true);
+    expect(touchesMonth({ check_in: '2026-09-01', check_out: '2026-11-01' }, '2026-11')).toBe(false);
+  });
+
+  it('xlsx — в порядке столбцов экрана', () => {
+    const ordered = [...COMPENSATION_COLUMNS].reverse();
+    const snapshot = buildCompensationExport('Ноябрь 2026')([], undefined, ordered);
+    expect(snapshot.columns.map(column => column.label)).toEqual(['№', ...ordered.map(column => column.label)]);
   });
 });

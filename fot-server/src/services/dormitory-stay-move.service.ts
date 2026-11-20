@@ -6,7 +6,7 @@
  *
  * Деньги не меняются: переселяют только между общежитием и служебной квартирой (оба — вид dormitory, оба одинаково
  * снимают авто-доплату за общежитие), компенсация аренды — отдельно. «Платно» новой записи сбрасывается (другое жильё),
- * комментарий переносится.
+ * комментарий — присланный, иначе переносится прежний.
  *
  * Повтор того же запроса (двойной клик, обрыв связи) — та же пара записей без изменений (repeated): прежняя уже
  * закрыта этой датой, а у сотрудника есть запись с въездом в эту дату в том же месте.
@@ -83,7 +83,12 @@ interface IStayRow {
  * Переселить проживание id с даты date (YYYY-MM-DD) в target. Окно даты (с 1-го числа текущего месяца по сегодня)
  * проверяет контроллер; здесь — правила записи.
  */
-export const moveStay = async (id: number, date: string, target: StayMoveTarget): Promise<StayMoveResult> => {
+export const moveStay = async (
+  id: number,
+  date: string,
+  target: StayMoveTarget,
+  comment: string | null = null,
+): Promise<StayMoveResult> => {
   try {
     const ids = await withTransaction(async (client): Promise<{ closedId: number; openedId: number; repeated: boolean } | StayMoveFailure> => {
       const first = (await client.query<IStayRow>(`${STAY_ROW_SQL} WHERE id = $1`, [id])).rows[0];
@@ -116,7 +121,7 @@ export const moveStay = async (id: number, date: string, target: StayMoveTarget)
       const opened = (await client.query<{ id: number }>(
         `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount, apartment_id, paid, comment)
          VALUES ($1, 'dormitory', $2::date, $3::date, $4, NULL, $5, false, $6) RETURNING id`,
-        [current.employee_id, date, current.check_out, place.address, place.apartment_id, current.comment],
+        [current.employee_id, date, current.check_out, place.address, place.apartment_id, comment ?? current.comment],
       )).rows[0];
       if (place.apartment_id === null) {
         await client.query(`INSERT INTO dormitory_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING`, [place.address]);

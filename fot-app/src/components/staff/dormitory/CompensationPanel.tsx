@@ -1,6 +1,5 @@
 import { useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
@@ -16,15 +15,20 @@ import {
   COMPENSATION_COLUMNS,
   compensationTone,
   compensationTotals,
+  isDismissedStay,
 } from '../../../utils/housingTables';
-import { moscowTodayIso, shiftMonth } from '../../../utils/moscowDate';
+import { moscowTodayIso } from '../../../utils/moscowDate';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { CompensationPauseModal, type CompensationPauseAction } from './CompensationPauseModal';
 import { DormitoryStayModal } from './DormitoryStayModal';
-import styles from './DormitoryTab.module.css';
+import { useEmployeeCardCell } from './useEmployeeCardCell';
 
 interface ICompensationPanelProps {
   canEdit: boolean;
+  /** Выбранный месяц (YYYY-MM) — общий выбор вкладок «Проживания». */
+  month: string;
+  /** Возврат из карточки сотрудника — сюда (вкладка и месяц). */
+  cardBackPath: string;
   onChanged: () => void;
 }
 
@@ -53,16 +57,16 @@ const rowKey = (row: ICompensationMonthRow): number => row.id;
 const rowName = (row: ICompensationMonthRow): string => row.full_name;
 
 /**
- * Вкладка «Компенсация аренды» (миграция 371) — как документ 1С «Список сотрудников для получения возмещения за
- * проживание»: месяц ← → (по умолчанию прошлый — полный), №, Сотрудник, Должность, Подразделение, Начало компенсации,
- * Обновлено, Кол-во выходных, Кол-во дней (табель), Сумма к оплате, Комментарий, Гражданство; «Итого». Дни и сумма —
- * из того же расчёта, что «Зарплата» (630 ₽/день); уволенные месяца — подсвечены. С правом правки — «Добавить
- * сотрудника», ✎ (даты, комментарий), 🗑 — ошибочная запись.
+ * Вкладка «Компенсация аренды» (миграции 371, 374) — как документ 1С «Список сотрудников для получения возмещения за
+ * проживание» за выбранный месяц: №, Сотрудник (ссылка на карточку), Должность, Подразделение (на конец месяца),
+ * Начало компенсации, Приостановлена, Возобновлена, Обновлено, Кол-во выходных, Кол-во дней (табель), Сумма к оплате,
+ * Комментарий, Гражданство; «Итого»; столбцы переставляются. Дни и сумма — из того же расчёта, что «Зарплата»
+ * (630 ₽/день); уволенные подсвечены (галочка «Уволенные» скрывает), в бригаде — жёлтым. С правом правки —
+ * «Добавить сотрудника», ✎ (даты, комментарий, «Приостановить…» / «Возобновить…»), 🗑 — ошибочная запись.
  */
-export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, onChanged }) => {
+export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, month, cardBackPath, onChanged }) => {
   const toast = useToast();
-  const currentMonth = moscowTodayIso().slice(0, 7);
-  const [month, setMonth] = useState(() => shiftMonth(currentMonth, -1));
+  const cardCell = useEmployeeCardCell<ICompensationMonthRow>(cardBackPath);
   const [editor, setEditor] = useState<Editor>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [year, monthNumber] = month.split('-').map(Number);
@@ -89,29 +93,6 @@ export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, onChan
     }
   };
 
-  const aside = () => (
-    <div className={styles.monthNav}>
-      <button
-        type="button"
-        className={styles.monthButton}
-        onClick={() => setMonth(value => shiftMonth(value, -1))}
-        aria-label="Предыдущий месяц"
-      >
-        <ChevronLeft size={16} aria-hidden="true" />
-      </button>
-      <span className={styles.monthLabel}>{monthLabel}</span>
-      <button
-        type="button"
-        className={styles.monthButton}
-        onClick={() => setMonth(value => shiftMonth(value, 1))}
-        disabled={month >= currentMonth}
-        aria-label="Следующий месяц"
-      >
-        <ChevronRight size={16} aria-hidden="true" />
-      </button>
-    </div>
-  );
-
   return (
     <>
       <RegistryPanel
@@ -125,7 +106,9 @@ export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, onChan
         rowLabel={rowName}
         searchText={rowName}
         fioSearch
-        searchAside={aside}
+        columnOrderKey="housing.compensation"
+        isDismissed={isDismissedStay}
+        cellRenderers={cardCell}
         totals={compensationTotals}
         buildExport={buildCompensationExport(monthLabel)}
         sendExport={dormitoryService.exportTable}

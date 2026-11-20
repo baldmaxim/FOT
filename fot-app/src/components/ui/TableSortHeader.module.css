@@ -103,3 +103,9 @@ th:hover .filterButton:disabled:not(.filterActive) { opacity: 0.35; }
   .sortIcon,
   .filterButton { transition: none; }
 }
+
+/* Перестановка столбцов («Проживание»): заголовок тянется мышью, место броска — полоса цвета акцента у края. */
+.draggable { cursor: grab; }
+.draggable:active { cursor: grabbing; }
+.dropBefore { box-shadow: inset 2px 0 0 var(--accent); }
+.dropAfter { box-shadow: inset -2px 0 0 var(--accent); }

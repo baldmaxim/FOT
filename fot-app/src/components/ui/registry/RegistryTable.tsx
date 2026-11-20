@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from 'react';
+import {
+  useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactElement, type ReactNode,
+} from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ColumnValuesFilterPopover';
@@ -28,6 +30,17 @@ const CELL_FONT = '400 13px';
 /** Запас на расхождение замера canvas и вёрстки. */
 const HEADER_MEASURE_SLACK = 4;
 const TOUCH_QUERY = '(max-width: 768px)';
+/** Перетаскивание столбцов — только мышью: на сенсоре жест прокручивает таблицу. */
+const FINE_POINTER_QUERY = '(pointer: fine)';
+/** Ключ столбца сотрудника — у его фильтра галочка «Уволенные». */
+const EMPLOYEE_COLUMN_KEY = 'full_name';
+
+type DropSide = 'before' | 'after';
+
+const dropSideOf = (event: DragEvent<HTMLElement>): DropSide => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+};
 
 /** Подсветка строки таблицы-реестра и подсказка при наведении. */
 export interface IRegistryRowTone {
@@ -85,6 +98,10 @@ export interface IRegistryTableProps<Row> {
    * аренды не начисляется, мягкий жёлтый), hint — подсказка при наведении («Уволен 02.11.2026»). null — обычная строка.
    */
   rowTone?: (row: Row) => IRegistryRowTone | null;
+  /** Передан — столбцы переставляются: перетаскиванием заголовка (мышью) и Alt+← / Alt+→ на нём. */
+  onMoveColumn?: (from: string, to: string, side: DropSide) => void;
+  /** Передана — галочка «Уволенные» в фильтре столбца «Сотрудник» (снята — воронка подсвечена). */
+  employeeToggle?: { label: string; checked: boolean; onApply: (checked: boolean) => void };
 }
 
 /**
@@ -96,9 +113,43 @@ export interface IRegistryTableProps<Row> {
 export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
-  onRowClick, footer = null, groupRows, cellRenderers, rowTone,
+  onRowClick, footer = null, groupRows, cellRenderers, rowTone, onMoveColumn, employeeToggle,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
+  const [finePointer] = useState(() => typeof window !== 'undefined' && window.matchMedia(FINE_POINTER_QUERY).matches);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ key: string; side: DropSide } | null>(null);
+
+  const endDrag = () => {
+    setDragKey(null);
+    setDropAt(null);
+  };
+  const reorderOf = (column: IRegistryColumn<Row>, index: number) => (onMoveColumn ? {
+    draggable: finePointer,
+    over: dropAt?.key === column.key ? dropAt.side : null,
+    onDragStart: (event: DragEvent<HTMLTableCellElement>) => {
+      setDragKey(column.key);
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', column.key);
+    },
+    onDragOver: (event: DragEvent<HTMLTableCellElement>) => {
+      if (dragKey === null || dragKey === column.key) return;
+      event.preventDefault();
+      const side = dropSideOf(event);
+      setDropAt(prev => (prev?.key === column.key && prev.side === side ? prev : { key: column.key, side }));
+    },
+    onDragLeave: () => setDropAt(prev => (prev?.key === column.key ? null : prev)),
+    onDrop: (event: DragEvent<HTMLTableCellElement>) => {
+      event.preventDefault();
+      if (dragKey !== null && dragKey !== column.key) onMoveColumn(dragKey, column.key, dropSideOf(event));
+      endDrag();
+    },
+    onDragEnd: endDrag,
+    onMoveBy: (delta: -1 | 1) => {
+      const neighbor = columns[index + delta];
+      if (neighbor) onMoveColumn(column.key, neighbor.key, delta < 0 ? 'before' : 'after');
+    },
+  } : undefined);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
   const filterOptions = useMemo(
     () => (filterFor ? columnFilterOptions(rows, columns, view.filters, filterFor.key) : []),
@@ -186,9 +237,10 @@ export const RegistryTable = <Row,>({
         <thead>
           <tr>
             <th className={styles.cellNum}>№</th>
-            {columns.map(column => (
+            {columns.map((column, index) => (
               <TableSortHeader
                 key={column.key}
+                reorder={reorderOf(column, index)}
                 sortKey={column.key}
                 label={column.label}
                 title={column.title}
@@ -198,7 +250,8 @@ export const RegistryTable = <Row,>({
                 dir={view.dir}
                 onSort={key => onViewChange(toggleSort(view, key))}
                 onOpenFilter={(key, anchor) => setFilterFor({ key, anchor })}
-                filterActive={isColumnFiltered(view, column.key)}
+                filterActive={isColumnFiltered(view, column.key)
+                  || (column.key === EMPLOYEE_COLUMN_KEY && employeeToggle !== undefined && !employeeToggle.checked)}
               />
             ))}
             {withActions && <th aria-label="Действия" />}
@@ -335,6 +388,7 @@ export const RegistryTable = <Row,>({
           onApply={values => onViewChange(setColumnFilter(view, filterColumn.key, values))}
           onClose={() => setFilterFor(null)}
           raised={raisedFilters}
+          {...(filterColumn.key === EMPLOYEE_COLUMN_KEY && employeeToggle ? { toggle: employeeToggle } : {})}
         />
       )}
     </div>

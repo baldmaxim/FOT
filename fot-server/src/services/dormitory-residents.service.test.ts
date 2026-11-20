@@ -20,17 +20,17 @@ vi.mock('./department-managers.service.js', async importOriginal => ({
 }));
 
 import { compensationChainOf, compensationFromCalc } from './dormitory-compensation.service.js';
-import { loadMaskedPassports, loadSupervisorLabels } from './dormitory-residents.service.js';
+import { loadPassports, loadSupervisorLabels } from './dormitory-residents.service.js';
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('паспорт', () => {
-  it('наружу — только последние 4 знака; полного номера в ответе нет', async () => {
+  it('без права «Реквизитов» — только последние 4 знака; полного номера в ответе нет', async () => {
     db.query.mockResolvedValue([
       { employee_id: 1, passport_number_enc: 'enc:FA3762158' },
       { employee_id: 2, passport_number_enc: 'enc:4622863148' },
     ]);
-    const result = await loadMaskedPassports([1, 2, 2]);
+    const result = await loadPassports([1, 2, 2], { full: false });
     expect(result).toEqual(new Map([[1, '•••••2158'], [2, '••••••3148']]));
     for (const value of result.values()) {
       expect(value).not.toMatch(/FA3762158|4622863148/);
@@ -38,8 +38,16 @@ describe('паспорт', () => {
     expect(db.query.mock.calls[0][1]).toEqual([[1, 2]]);
   });
 
+  it('с правом правки «Реквизитов» — полный номер', async () => {
+    db.query.mockResolvedValue([
+      { employee_id: 1, passport_number_enc: 'enc:FA3762158' },
+      { employee_id: 2, passport_number_enc: 'enc:4622863148' },
+    ]);
+    expect(await loadPassports([1, 2], { full: true })).toEqual(new Map([[1, 'FA3762158'], [2, '4622863148']]));
+  });
+
   it('пустой список — без запроса', async () => {
-    expect(await loadMaskedPassports([])).toEqual(new Map());
+    expect(await loadPassports([], { full: true })).toEqual(new Map());
     expect(db.query).not.toHaveBeenCalled();
   });
 });

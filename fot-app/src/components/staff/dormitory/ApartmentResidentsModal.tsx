@@ -15,6 +15,8 @@ import {
   buildApartmentHistoryExport,
   buildApartmentResidentsExport,
   dismissedTone,
+  isDismissedStay,
+  touchesMonth,
 } from '../../../utils/housingTables';
 import type { ITableView } from '../../../utils/tableView';
 import { PayrollRegistryModal } from '../../salary/registry/PayrollRegistryModal';
@@ -24,6 +26,7 @@ import tabStyles from '../../ui/registry/RegistryTabs.module.css';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import styles from './DormitoryTab.module.css';
 import { StayMoveModal } from './StayMoveModal';
+import { useEmployeeCardCell } from './useEmployeeCardCell';
 
 type ResidentsTab = 'current' | 'history';
 
@@ -38,6 +41,10 @@ interface IApartmentResidentsModalProps {
   /** Все записи квартиры в охвате (сейчас, будущие и история). */
   residents: readonly IApartmentResident[];
   today: string;
+  /** Выбранный месяц (YYYY-MM): «Проживающие» — жившие в нём хоть день. */
+  month: string;
+  /** Возврат из карточки сотрудника — на вкладку «Квартира» и этот месяц. */
+  cardBackPath: string;
   /** Для «Переселить»: другие квартиры и подсказки общежитий. */
   apartments: readonly ICompanyApartment[];
   addresses: readonly string[];
@@ -53,13 +60,15 @@ const BY_CHECK_IN: ITableView = { sort: 'check_in', dir: 'asc', filters: {} };
 const BY_CHECK_OUT: ITableView = { sort: 'check_out', dir: 'desc', filters: {} };
 
 /**
- * Клик по квартире на вкладке «Квартира» (миграция 371): «Проживающие» — как вкладка 1С (сотрудник, въезд, телефоны,
- * «Платно» галочкой, отпуск, должность, объект) и «История» — кто жил и когда. С правом правки: «Заселить», ✎ (даты,
+ * Клик по квартире на вкладке «Квартира» (миграция 371): «Проживающие» за выбранный месяц — как вкладка 1С (сотрудник
+ * — ссылка на карточку, въезд, телефоны, «Платно» галочкой, отпуск, должность, объект; сведения — только у живущих
+ * сегодня) и «История» — кто жил и когда. С правом правки: «Заселить», ✎ (даты,
  * выезд, «Переселить…»), 🗑 — ошибочная запись. Уволенные подсвечены.
  */
 export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
-  apartment, residents, today, apartments, addresses, canEdit, onClose, onChanged,
+  apartment, residents, today, month, cardBackPath, apartments, addresses, canEdit, onClose, onChanged,
 }) => {
+  const cardCell = useEmployeeCardCell<IApartmentResident>(cardBackPath);
   const toast = useToast();
   const baseId = useId();
   const [tab, setTab] = useState<ResidentsTab>('current');
@@ -68,10 +77,7 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
   const [busyId, setBusyId] = useState<number | null>(null);
   const title = `Кв. ${apartmentTitle(apartment)}`;
 
-  const current = useMemo(
-    () => residents.filter(resident => resident.check_out === null || resident.check_out > today),
-    [residents, today],
-  );
+  const current = useMemo(() => residents.filter(resident => touchesMonth(resident, month)), [residents, month]);
   const history = useMemo(
     () => residents.filter(resident => resident.check_out !== null && resident.check_out <= today),
     [residents, today],
@@ -151,7 +157,10 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           rowTone={tone}
           raisedFilters
           onFilterOpenChange={setFilterOpen}
+          columnOrderKey="housing.apartment-residents"
+          isDismissed={isDismissedStay}
           cellRenderers={{
+            ...cardCell,
             paid: resident => (
               <label className={styles.paidCheck} title={canEdit ? 'Платно' : undefined}>
                 <input
@@ -185,6 +194,9 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           rowTone={tone}
           raisedFilters
           onFilterOpenChange={setFilterOpen}
+          columnOrderKey="housing.apartment-history"
+          isDismissed={isDismissedStay}
+          cellRenderers={cardCell}
         />
       </div>
 

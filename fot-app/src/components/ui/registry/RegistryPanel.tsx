@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Download, UserPlus, type LucideIcon } from 'lucide-react';
 
+import { useColumnOrder } from '../../../hooks/useColumnOrder';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { searchRowsByFio } from '../../../utils/fioSearch';
 import {
@@ -38,7 +39,10 @@ export interface IRegistryMonths {
 
 /** Snapshot — тело запроса «Экспорта»; своё у «Свода» (ведомость 1С), у остальных — снимок таблицы. */
 interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
-  extends Omit<IRegistryTableProps<Row>, 'rows' | 'visibleRows' | 'view' | 'onViewChange' | 'loading' | 'footer'> {
+  extends Omit<
+    IRegistryTableProps<Row>,
+    'rows' | 'visibleRows' | 'view' | 'onViewChange' | 'loading' | 'footer' | 'onMoveColumn' | 'employeeToggle'
+  > {
   /** undefined — ещё не загружены. */
   rows: Row[] | undefined;
   isLoading: boolean;
@@ -49,8 +53,12 @@ interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
   /** searchText — ФИО: ё = е, английская раскладка, ничего точного — с одной ошибкой. */
   fioSearch?: boolean;
   searchPlaceholder?: string;
-  /** Снимок xlsx видимых строк (с итогом, если он есть) и его отправка на сервер. */
-  buildExport: (rows: ReadonlyArray<Row>, totals?: IRegistryTotals['export']) => Snapshot;
+  /** Снимок xlsx видимых строк (с итогом, если он есть; столбцы — в порядке экрана) и его отправка на сервер. */
+  buildExport: (
+    rows: ReadonlyArray<Row>,
+    totals?: IRegistryTotals['export'],
+    columns?: ReadonlyArray<IRegistryColumn<Row>>,
+  ) => Snapshot;
   sendExport: (snapshot: Snapshot) => Promise<{ blob: Blob; filename: string }>;
   /** Передан — «Добавить сотрудника» (право «Редактирование»). */
   onAdd?: () => void;
@@ -66,6 +74,13 @@ interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
   toolbarAction?: IRegistryToolbarAction;
   /** Передан — блок справа от поиска: итоги вкладок «Свода» по текущим поиску и фильтрам. */
   searchAside?: (visibleOf: RegistryVisibleOf<Row>) => ReactNode;
+  /**
+   * Передан — столбцы переставляются (заголовок тянется мышью, как в Excel), порядок — в localStorage по этому ключу,
+   * xlsx — в том же порядке («Проживание»). Не передан — порядок как в columns.
+   */
+  columnOrderKey?: string;
+  /** Передан — в фильтре столбца «Сотрудник» галочка «Уволенные» (по умолчанию показаны): уволен ли сотрудник строки. */
+  isDismissed?: (row: Row) => boolean;
 }
 
 /**
@@ -76,16 +91,22 @@ interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
 export const RegistryPanel = <Row, Snapshot = ITableExportSnapshot>({
   rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
   addLabel = 'Добавить сотрудника',
-  initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, ...tableProps
+  initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, columnOrderKey, isDismissed, ...tableProps
 }: IRegistryPanelProps<Row, Snapshot>): ReactElement => {
-  const { columns } = tableProps;
+  const { columns, move: moveColumn } = useColumnOrder(columnOrderKey, tableProps.columns);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<ITableView>(initialView);
-  // Итог считается из тех же строк, что уходят в снимок, — экран и xlsx не расходятся.
-  const buildSnapshot = (exported: ReadonlyArray<Row>) => buildExport(exported, totals?.(exported)?.export);
+  const [showDismissed, setShowDismissed] = useState(true);
+  // Итог считается из тех же строк, что уходят в снимок, — экран и xlsx не расходятся; столбцы — в порядке экрана.
+  const buildSnapshot = (exported: ReadonlyArray<Row>) => buildExport(exported, totals?.(exported)?.export, columns);
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, sendExport);
 
-  const allRows = useMemo(() => rows ?? [], [rows]);
+  // Все строки — для ширин столбцов (не прыгают); без уволенных, если их скрыли, — для поиска, фильтров и итога.
+  const sizeRows = useMemo(() => rows ?? [], [rows]);
+  const allRows = useMemo(
+    () => (isDismissed && !showDismissed ? sizeRows.filter(row => !isDismissed(row)) : sizeRows),
+    [isDismissed, showDismissed, sizeRows],
+  );
   const searchRows = useCallback((list: ReadonlyArray<Row>, listColumns: ReadonlyArray<IRegistryColumn<Row>>) => {
     const finalize = (found: Row[]) => applyTableView(found, listColumns, view);
     if (fioSearch) return searchRowsByFio(list, searchText, search, finalize);
@@ -150,8 +171,13 @@ export const RegistryPanel = <Row, Snapshot = ITableExportSnapshot>({
       ) : (
         <RegistryTable
           {...tableProps}
+          columns={columns}
+          onMoveColumn={moveColumn}
+          employeeToggle={isDismissed
+            ? { label: 'Уволенные', checked: showDismissed, onApply: setShowDismissed }
+            : undefined}
           rows={searchedRows}
-          sizeRows={allRows}
+          sizeRows={sizeRows}
           visibleRows={visibleRows}
           view={view}
           onViewChange={setView}

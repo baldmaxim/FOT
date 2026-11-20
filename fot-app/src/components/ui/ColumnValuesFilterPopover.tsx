@@ -25,6 +25,11 @@ interface IColumnValuesFilterPopoverProps {
   onClose: () => void;
   /** Таблица внутри модального окна: подложка и окно фильтра — над ним. */
   raised?: boolean;
+  /**
+   * Галочка над списком («Уволенные» у столбца «Сотрудник» «Проживания»): применяется вместе с «Применить»,
+   * «Сбросить» её включает.
+   */
+  toggle?: { label: string; checked: boolean; onApply: (checked: boolean) => void };
 }
 
 /**
@@ -32,9 +37,10 @@ interface IColumnValuesFilterPopoverProps {
  * серверу: все строки таблицы уже на клиенте. Применяется только по «Применить».
  */
 export const ColumnValuesFilterPopover: FC<IColumnValuesFilterPopoverProps> = ({
-  label, options, selected: initialSelected, anchor, onApply, onClose, raised = false,
+  label, options, selected: initialSelected, anchor, onApply, onClose, raised = false, toggle,
 }) => {
   const [selected, setSelected] = useState<string[]>(initialSelected);
+  const [toggleChecked, setToggleChecked] = useState(toggle?.checked ?? true);
   const [search, setSearch] = useState('');
   const dismiss = useOverlayDismiss(onClose);
 
@@ -69,10 +75,12 @@ export const ColumnValuesFilterPopover: FC<IColumnValuesFilterPopoverProps> = ({
 
   const apply = () => {
     onApply(selected.length > 0 ? selected : null);
+    toggle?.onApply(toggleChecked);
     onClose();
   };
   const reset = () => {
     onApply(null);
+    toggle?.onApply(true);
     onClose();
   };
 
@@ -87,6 +95,12 @@ export const ColumnValuesFilterPopover: FC<IColumnValuesFilterPopoverProps> = ({
         aria-label={`Фильтр: ${label}`}
       >
         <div className={styles.title}>{label}</div>
+        {toggle && (
+          <label className={`${styles.option} ${styles.toggle}`}>
+            <input type="checkbox" checked={toggleChecked} onChange={event => setToggleChecked(event.target.checked)} />
+            <span className={styles.optionLabel}>{toggle.label}</span>
+          </label>
+        )}
         <input
           className={styles.input}
           type="search"

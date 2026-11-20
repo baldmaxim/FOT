@@ -11,7 +11,7 @@ const svc = vi.hoisted(() => ({
 vi.mock('../services/dormitory-stays.service.js', () => svc);
 
 const residentsSvc = vi.hoisted(() => ({
-  loadMaskedPassports: vi.fn(),
+  loadPassports: vi.fn(),
   loadLastPasses: vi.fn(),
   loadSupervisorLabels: vi.fn(),
 }));
@@ -39,6 +39,10 @@ vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
 const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
 vi.mock('../services/staff-tab-access.service.js', () => grant);
+
+// Полный паспорт — с правом правки «Реквизитов».
+const pageAccess = vi.hoisted(() => ({ resolveEffectivePageAccess: vi.fn() }));
+vi.mock('../services/access-control.service.js', () => pageAccess);
 
 const today = vi.hoisted(() => ({ value: '2026-11-19' }));
 vi.mock('../utils/date.utils.js', () => ({ moscowTodayIso: () => today.value }));
@@ -73,19 +77,21 @@ beforeEach(() => {
   grant.getRequestStaffTabGrant.mockResolvedValue(false);
   scope.resolveStaffRosterEmployeeIds.mockResolvedValue(new Set([42, 43]));
   scope.canWriteEmployeeInScope.mockResolvedValue(true);
-  residentsSvc.loadMaskedPassports.mockResolvedValue(new Map([[42, '•••••6451']]));
+  residentsSvc.loadPassports.mockResolvedValue(new Map([[42, '•••••6451']]));
+  pageAccess.resolveEffectivePageAccess.mockResolvedValue(false);
   residentsSvc.loadLastPasses.mockResolvedValue(new Map([[42, { at: '2026-11-19T06:17:13', access_point: 'Сити Bay (3)' }]]));
   residentsSvc.loadSupervisorLabels.mockResolvedValue(new Map([[42, 'Колбухов Д. Н.']]));
 });
 
 describe('«Общежитие» — жильцы', () => {
-  it('охват списка кадров; сведения — только у живущих, у истории — нет', async () => {
-    const past = { ...STAY, id: 9, employee_id: 44, check_in: '2026-09-01', check_out: '2026-11-03' };
+  it('охват списка кадров; без месяца — текущий: сведения у записей месяца, у прошлых — нет', async () => {
+    const past = { ...STAY, id: 9, employee_id: 44, check_in: '2026-09-01', check_out: '2026-10-20' };
     svc.listStaysOfClass.mockResolvedValue([STAY, past]);
     const res = makeRes();
     await c.residents(makeReq(), res);
     expect(svc.listStaysOfClass).toHaveBeenCalledWith('dormitory', [42, 43]);
-    expect(residentsSvc.loadMaskedPassports).toHaveBeenCalledWith([42]);
+    expect(residentsSvc.loadPassports).toHaveBeenCalledWith([42], { full: false });
+    expect(residentsSvc.loadLastPasses).toHaveBeenCalledWith([42], '2026-11-19');
     expect(residentsSvc.loadSupervisorLabels).toHaveBeenCalledWith([{ employee_id: 42, org_department_id: 'dep-1' }]);
     expect(res.body.data).toEqual({
       today: '2026-11-19',
@@ -94,6 +100,21 @@ describe('«Общежитие» — жильцы', () => {
         { ...past, passport: null, last_pass_at: null, last_access_point: null, supervisor: null },
       ],
     });
+  });
+
+  it('прошлый месяц: сведения у живших в нём, крайний проход — до конца месяца; право «Реквизитов» — полный паспорт', async () => {
+    const past = { ...STAY, id: 9, employee_id: 44, check_in: '2026-09-01', check_out: '2026-10-20' };
+    const later = { ...STAY, id: 11, employee_id: 45, check_in: '2026-11-05' };
+    svc.listStaysOfClass.mockResolvedValue([STAY, past, later]);
+    pageAccess.resolveEffectivePageAccess.mockResolvedValue(true);
+    await c.residents(makeReq({ query: { month: '2026-10' } }), makeRes());
+    expect(pageAccess.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/staff-control/hr-profiles', 'edit');
+    expect(residentsSvc.loadPassports).toHaveBeenCalledWith([42, 44], { full: true });
+    expect(residentsSvc.loadLastPasses).toHaveBeenCalledWith([42, 44], '2026-10-31');
+
+    const bad = makeRes();
+    await c.residents(makeReq({ query: { month: '2026-13' } }), bad);
+    expect(bad.statusCode).toBe(400);
   });
 
   it('галочка «Проживание» — вся организация', async () => {
@@ -159,7 +180,7 @@ describe('«Переселить»', () => {
     const res = makeRes();
     await c.move(makeReq({ params: { id: '7' }, body: { date: '2026-11-19', address: ' Общ.  Свободы 35 ' } }), res);
     expect(res.statusCode).toBe(200);
-    expect(moveSvc.moveStay).toHaveBeenCalledWith(7, '2026-11-19', { address: 'Общ. Свободы 35' });
+    expect(moveSvc.moveStay).toHaveBeenCalledWith(7, '2026-11-19', { address: 'Общ. Свободы 35' }, null);
     expect(audit.logFromRequest).toHaveBeenCalledTimes(2);
     const [first, second] = audit.logFromRequest.mock.calls.map(call => call[3] as { details: { move_id: string } });
     expect(first.details.move_id).toBe(second.details.move_id);
@@ -167,8 +188,8 @@ describe('«Переселить»', () => {
 
     audit.logFromRequest.mockClear();
     moveSvc.moveStay.mockResolvedValue({ closed, opened, repeated: true });
-    await c.move(makeReq({ params: { id: '7' }, body: { date: '2026-11-19', apartment_id: 2 } }), makeRes());
-    expect(moveSvc.moveStay).toHaveBeenLastCalledWith(7, '2026-11-19', { apartmentId: 2 });
+    await c.move(makeReq({ params: { id: '7' }, body: { date: '2026-11-19', apartment_id: 2, comment: ' по просьбе ' } }), makeRes());
+    expect(moveSvc.moveStay).toHaveBeenLastCalledWith(7, '2026-11-19', { apartmentId: 2 }, 'по просьбе');
     expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 

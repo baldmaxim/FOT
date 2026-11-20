@@ -9,7 +9,7 @@ import {
   type IApartmentResident,
   type ICompanyApartment,
 } from '../../../services/dormitoryService';
-import { APARTMENT_COLUMNS, apartmentTitle, buildApartmentsExport } from '../../../utils/housingTables';
+import { APARTMENT_COLUMNS, apartmentTitle, buildApartmentsExport, touchesMonth } from '../../../utils/housingTables';
 import type { ITableView } from '../../../utils/tableView';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { ApartmentFormModal } from './ApartmentFormModal';
@@ -19,6 +19,10 @@ interface IApartmentsPanelProps {
   canEdit: boolean;
   /** Подсказки общежитий — для «Переселить» из квартиры в общежитие. */
   addresses: readonly string[];
+  /** Выбранный месяц (YYYY-MM): жильцы и поиск — за него. */
+  month: string;
+  /** Возврат из карточки сотрудника — сюда (вкладка и месяц). */
+  cardBackPath: string;
   onChanged: () => void;
 }
 
@@ -32,7 +36,7 @@ const BY_ADDRESS: ITableView = { sort: 'address', dir: 'asc', filters: {} };
  * столбцы №, Квартиры, Комнат, Мест, Цена, Оплачено по. Клик по строке — жильцы и история квартиры. Поиск — по адресу
  * и ФИО жильцов. С правом правки — «Добавить квартиру», ✎, 🗑 (только квартира без жильцов и истории).
  */
-export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses, onChanged }) => {
+export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses, month, cardBackPath, onChanged }) => {
   const toast = useToast();
   const [editor, setEditor] = useState<Editor>(null);
   const [openedId, setOpenedId] = useState<number | null>(null);
@@ -56,14 +60,13 @@ export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses,
     return map;
   }, [data]);
 
-  /** Поиск: адрес, пометка и ФИО живущих сейчас — «Гладкая» найдёт Ляпидевского 12-58. */
+  /** Поиск: адрес, пометка и ФИО живших в месяце — «Гладкая» найдёт Ляпидевского 12-58. */
   const searchText = useCallback((apartment: ICompanyApartment): string => {
-    const today = data?.today ?? '';
     const names = (residentsByApartment.get(apartment.id) ?? [])
-      .filter(resident => resident.check_out === null || resident.check_out > today)
+      .filter(resident => touchesMonth(resident, month))
       .map(resident => resident.full_name);
     return [apartmentTitle(apartment), ...names].join(' ');
-  }, [data, residentsByApartment]);
+  }, [month, residentsByApartment]);
 
   const opened = openedId === null ? null : data?.apartments.find(apartment => apartment.id === openedId) ?? null;
 
@@ -103,6 +106,7 @@ export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses,
         onDelete={canEdit ? apartment => { void remove(apartment); } : undefined}
         busyKey={busyId}
         onRowClick={apartment => setOpenedId(apartment.id)}
+        columnOrderKey="housing.apartments"
       />
 
       {editor && (
@@ -118,6 +122,8 @@ export const ApartmentsPanel: FC<IApartmentsPanelProps> = ({ canEdit, addresses,
           apartment={opened}
           residents={residentsByApartment.get(opened.id) ?? []}
           today={data.today}
+          month={month}
+          cardBackPath={cardBackPath}
           apartments={data.apartments}
           addresses={addresses}
           canEdit={canEdit}

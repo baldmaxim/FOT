@@ -3,6 +3,7 @@ import { useId, useState, type FC } from 'react';
 import { ApiError } from '../../../api/client';
 import { dormitoryService, type ICompanyApartment, type IDormitoryStay } from '../../../services/dormitoryService';
 import { DORMITORY_ADDRESS_MAX_LENGTH } from '../../../utils/dormitoryStayForm';
+import { ClearableInput } from '../../ui/ClearableInput';
 import { formatDate } from '../../../utils/formatMoney';
 import { apartmentTitle } from '../../../utils/housingTables';
 import { DateInput } from '../../ui/DateInput';
@@ -17,6 +18,8 @@ interface IStayMoveModalProps {
   /** Подсказки адресов общежитий. */
   addresses: readonly string[];
   apartments: readonly ICompanyApartment[];
+  /** false — только в другое общежитие (вкладка «Общежитие»): выбора «Квартира» нет. */
+  allowFlat?: boolean;
   /** Сегодня по Москве (YYYY-MM-DD): дата по умолчанию и верхняя граница. */
   today: string;
   raised?: boolean;
@@ -26,17 +29,23 @@ interface IStayMoveModalProps {
 
 /** Первое число месяца даты YYYY-MM-DD. */
 const monthStart = (date: string): string => `${date.slice(0, 7)}-01`;
+/** Как CHECK employee_dormitory_stay_comment (миграция 371). */
+const COMMENT_MAX_LENGTH = 500;
 
 /**
  * «Переселить» (миграция 371): с даты сотрудник живёт в другом общежитии или служебной квартире. Прежняя запись
  * закрывается этой датой и остаётся в истории, новая — с неё. Дата — с 1-го числа текущего месяца по сегодня
  * (закрытые месяцы «Зарплаты» не трогаются). Деньги не меняются: доплата за общежитие не идёт ни там, ни там.
+ * Комментарий — новой записи; пусто — переносится прежний.
  */
-export const StayMoveModal: FC<IStayMoveModalProps> = ({ stay, addresses, apartments, today, raised = false, onClose, onSaved }) => {
+export const StayMoveModal: FC<IStayMoveModalProps> = ({
+  stay, addresses, apartments, allowFlat = true, today, raised = false, onClose, onSaved,
+}) => {
   const errorId = useId();
   const addressId = useId();
   const apartmentId = useId();
   const [target, setTarget] = useState<Target>('dormitory');
+  const [comment, setComment] = useState('');
   const [date, setDate] = useState(today);
   const [address, setAddress] = useState('');
   const [flatId, setFlatId] = useState<number | null>(null);
@@ -57,7 +66,12 @@ export const StayMoveModal: FC<IStayMoveModalProps> = ({ stay, addresses, apartm
     setSaving(true);
     setError(null);
     try {
-      await dormitoryService.move(stay.id, date, target === 'flat' ? { apartment_id: flatId! } : { address: trimmed });
+      await dormitoryService.move(
+        stay.id,
+        date,
+        target === 'flat' ? { apartment_id: flatId! } : { address: trimmed },
+        comment.trim() || null,
+      );
       onSaved();
       requestClose();
     } catch (err) {
@@ -96,22 +110,24 @@ export const StayMoveModal: FC<IStayMoveModalProps> = ({ stay, addresses, apartm
         />
       </div>
 
-      <div className={styles.field}>
-        <div className={styles.segmented} role="group" aria-label="Куда">
-          {(['dormitory', 'flat'] as const).map(value => (
-            <button
-              key={value}
-              type="button"
-              className={styles.segment}
-              aria-pressed={target === value}
-              onClick={() => { setTarget(value); setError(null); }}
-              disabled={saving || (value === 'flat' && otherApartments.length === 0)}
-            >
-              {value === 'dormitory' ? 'Общежитие' : 'Квартира'}
-            </button>
-          ))}
+      {allowFlat && (
+        <div className={styles.field}>
+          <div className={styles.segmented} role="group" aria-label="Куда">
+            {(['dormitory', 'flat'] as const).map(value => (
+              <button
+                key={value}
+                type="button"
+                className={styles.segment}
+                aria-pressed={target === value}
+                onClick={() => { setTarget(value); setError(null); }}
+                disabled={saving || (value === 'flat' && otherApartments.length === 0)}
+              >
+                {value === 'dormitory' ? 'Общежитие' : 'Квартира'}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {target === 'dormitory' ? (
         <div className={styles.field}>
@@ -144,6 +160,18 @@ export const StayMoveModal: FC<IStayMoveModalProps> = ({ stay, addresses, apartm
           </select>
         </div>
       )}
+
+      <label className={styles.field}>
+        <span className={styles.label}>Комментарий</span>
+        <ClearableInput
+          value={comment}
+          onValueChange={value => { setComment(value); setError(null); }}
+          maxLength={COMMENT_MAX_LENGTH}
+          autoComplete="off"
+          disabled={saving}
+          clearLabel="Очистить комментарий"
+        />
+      </label>
     </RegistryFormModal>
   );
 };

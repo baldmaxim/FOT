@@ -1,8 +1,8 @@
 /**
  * Сведения о жильцах для вкладок «Проживания» (миграция 371) — пачкой по id сотрудников, только тем, кого вызывающий
  * уже отобрал по охвату кадров:
- * - «Паспорт» — последние 4 знака (как в карточке сотрудника): расшифровка и маска на сервере, полный номер в ответ
- *   не уходит; нет реквизитов — null;
+ * - «Паспорт» — полный номер тому, кто правит «Реквизиты» (и админу, как в карточке), остальным — последние 4 знака:
+ *   расшифровка и маска на сервере, полный номер без права в ответ не уходит; нет реквизитов — null;
  * - «Крайний проход» — последнее событие СКУД (вход/выход) за 60 дней: время МСК и точка прохода как есть
  *   («Дом-56 КПП»), без перевода в объект;
  * - «Начальник участка» — правило столбца «Участок» «Управления кадрами» (staffSiteLabel), иначе руководители
@@ -32,8 +32,11 @@ export interface IResidentVacation {
 
 const uniqueIds = (ids: readonly number[]): number[] => [...new Set(ids.filter(id => Number.isInteger(id) && id > 0))];
 
-/** Паспорт: последние 4 знака (••••••3158); полный номер наружу не уходит. */
-export const loadMaskedPassports = async (employeeIds: readonly number[]): Promise<Map<number, string>> => {
+/** Паспорт: full — полный номер (право правки «Реквизитов»), иначе последние 4 знака (••••••3158). */
+export const loadPassports = async (
+  employeeIds: readonly number[],
+  { full }: { full: boolean },
+): Promise<Map<number, string>> => {
   const ids = uniqueIds(employeeIds);
   const result = new Map<number, string>();
   if (ids.length === 0) return result;
@@ -43,8 +46,9 @@ export const loadMaskedPassports = async (employeeIds: readonly number[]): Promi
     [ids],
   );
   for (const row of rows) {
-    const masked = maskValue(decryptFieldSafe(row.passport_number_enc), 4);
-    if (masked) result.set(Number(row.employee_id), masked);
+    const plain = decryptFieldSafe(row.passport_number_enc);
+    const value = full ? plain?.trim() || null : maskValue(plain, 4);
+    if (value) result.set(Number(row.employee_id), value);
   }
   return result;
 };

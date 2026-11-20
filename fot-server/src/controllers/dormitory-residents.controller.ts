@@ -9,11 +9,13 @@ import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
+import { PAGE_KEY_HR_PROFILES } from '../config/hr-documents.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { auditService } from '../services/audit.service.js';
 import { listCompensationMonth } from '../services/dormitory-compensation.service.js';
 import {
   loadLastPasses,
-  loadMaskedPassports,
+  loadPassports,
   loadSupervisorLabels,
 } from '../services/dormitory-residents.service.js';
 import { moveStay } from '../services/dormitory-stay-move.service.js';
@@ -23,6 +25,7 @@ import {
   updateStayMeta,
   type IDormitoryStay,
 } from '../services/dormitory-stays.service.js';
+import { lastDayOfMonth } from '../services/payroll/payroll-payslip.rules.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { canWriteStay, rosterEmployeeIds } from './dormitory-access.js';
 import {
@@ -37,9 +40,9 @@ import {
 const NOT_FOUND = { success: false, error: 'Запись не найдена' };
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
 
-/** Жилец общежития: проживание + сведения (только у живущих сейчас и заселяемых позже). */
+/** Жилец общежития: проживание + сведения (только у записей, задевающих выбранный месяц). */
 export interface IDormitoryResident extends IDormitoryStay {
-  /** Последние 4 знака (••••••3158); нет реквизитов — null. */
+  /** Полный номер — с правом правки «Реквизитов», иначе последние 4 знака (••••••3158); нет реквизитов — null. */
   passport: string | null;
   /** YYYY-MM-DDTHH:MM:SS по Москве. */
   last_pass_at: string | null;
@@ -63,19 +66,28 @@ const parseId = (req: AuthenticatedRequest): number | null => {
 /** Первое число месяца даты YYYY-MM-DD. */
 const monthStart = (date: string): string => `${date.slice(0, 7)}-01`;
 
+const monthQuerySchema = z.string({ required_error: 'Выберите месяц', invalid_type_error: 'Выберите месяц' })
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Выберите месяц');
+
 /**
- * GET /api/dormitory/residents — общежития (без служебных квартир): все записи охвата с историей; сведения
- * (паспорт, крайний проход, начальник участка) — у тех, чья запись ещё не закончилась (выезд позже сегодня или нет).
+ * GET /api/dormitory/residents[?month=YYYY-MM] — общежития (без служебных квартир): все записи охвата с историей;
+ * сведения (паспорт, крайний проход, начальник участка) — у записей, задевающих месяц (нет — текущий: прежний клиент);
+ * крайний проход — до конца месяца, не позже сегодня. Полный паспорт — с правом правки «Реквизитов».
  */
 const residents = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const today = moscowTodayIso();
+    const month = req.query.month === undefined ? today.slice(0, 7) : monthQuerySchema.parse(req.query.month);
+    const monthStart = `${month}-01`;
+    const monthEnd = lastDayOfMonth(month);
+    const passUntil = monthEnd < today ? monthEnd : today;
     const stays = await listStaysOfClass('dormitory', await rosterEmployeeIds(req));
-    const active = stays.filter(stay => stay.check_out === null || stay.check_out > today);
+    const active = stays.filter(stay => stay.check_in <= monthEnd && (stay.check_out === null || stay.check_out > monthStart));
     const ids = active.map(stay => stay.employee_id);
+    const fullPassport = await resolveEffectivePageAccess(req, PAGE_KEY_HR_PROFILES, 'edit');
     const [passports, passes, supervisors] = await Promise.all([
-      loadMaskedPassports(ids),
-      loadLastPasses(ids, today),
+      loadPassports(ids, { full: fullPassport }),
+      loadLastPasses(ids, passUntil),
       loadSupervisorLabels(active.map(stay => ({ employee_id: stay.employee_id, org_department_id: stay.org_department_id }))),
     ]);
     const activeIds = new Set(active.map(stay => stay.id));
@@ -92,6 +104,7 @@ const residents = async (req: AuthenticatedRequest, res: Response): Promise<void
     });
     res.json({ success: true, data: { today, residents: data } });
   } catch (err) {
+    if (handleZodError(err, res)) return;
     console.error('dormitoryResidents.list error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения жильцов' });
   }
@@ -180,6 +193,7 @@ const move = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       id,
       input.date,
       input.apartment_id !== null ? { apartmentId: input.apartment_id } : { address: input.address as string },
+      input.comment,
     );
     if (typeof result === 'string') {
       const failure = MOVE_ERRORS[result];
@@ -210,9 +224,6 @@ const move = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     res.status(500).json({ success: false, error: 'Ошибка переселения' });
   }
 };
-
-const monthQuerySchema = z.string({ required_error: 'Выберите месяц', invalid_type_error: 'Выберите месяц' })
-  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Выберите месяц');
 
 /**
  * GET /api/dormitory/compensation?month=YYYY-MM — «Компенсация аренды» месяца: компенсации охвата списка кадров

@@ -6,7 +6,6 @@ import { useToast } from '../../../contexts/ToastContext';
 import {
   DORMITORY_RESIDENTS_KEY,
   dormitoryService,
-  type ICompanyApartment,
   type IDormitoryResident,
 } from '../../../services/dormitoryService';
 import { formatDate } from '../../../utils/formatMoney';
@@ -16,18 +15,23 @@ import {
   dismissedTone,
   DORMITORY_HISTORY_COLUMNS,
   dormitoryResidentColumns,
+  isDismissedStay,
+  touchesMonth,
 } from '../../../utils/housingTables';
 import type { ITableView } from '../../../utils/tableView';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import styles from './DormitoryTab.module.css';
 import { StayMoveModal } from './StayMoveModal';
+import { useEmployeeCardCell } from './useEmployeeCardCell';
 
 interface IDormitoryResidentsPanelProps {
   canEdit: boolean;
   addresses: readonly string[];
-  /** Квартиры — для «Переселить» в служебную квартиру. */
-  apartments: readonly ICompanyApartment[];
+  /** Выбранный месяц (YYYY-MM): в таблице — жившие в нём хоть день. */
+  month: string;
+  /** Возврат из карточки сотрудника — сюда (вкладка и месяц). */
+  cardBackPath: string;
   onChanged: () => void;
 }
 
@@ -46,13 +50,17 @@ const BY_CHECK_OUT: ITableView = { sort: 'check_out', dir: 'desc', filters: {} }
 const sameAddress = (a: string | null, b: string): boolean => (a ?? '').trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
- * Вкладка «Общежитие» (миграция 371) — как отчёт 1С «Проживающие в общежитии последний вход (СКД)»: селект общежития
- * (с числом живущих; «Все общежития» — плюс столбец «Общежитие»), поиск по ФИО — по всем; №, Подразделение
- * организации, Сотрудник, Паспорт (4 знака), Крайний проход, Крайний проход на объекте, Начальник участка.
- * «История» — кто жил в выбранном общежитии и когда. С правом правки — «Заселить», ✎ (даты, выезд, «Переселить…»),
- * 🗑 — ошибочная запись. Уволенные подсвечены.
+ * Вкладка «Общежитие» (миграция 371) — как отчёт 1С «Проживающие в общежитии последний вход (СКД)»: за выбранный месяц
+ * — все, кто жил в нём хоть день; селект общежития (с числом живших в месяце; «Все общежития» — плюс столбец
+ * «Общежитие»), поиск по ФИО — по всем; №, Подразделение организации, Сотрудник (ссылка на карточку), Дата въезда,
+ * Дата выезда, Паспорт (полный — с правом «Реквизитов»), Крайний проход (до конца месяца), Крайний проход на объекте,
+ * Начальник участка, Комментарий; столбцы переставляются. «История» — все закончившиеся записи, месяц на неё не
+ * влияет. С правом правки — «Заселить», ✎ (даты, выезд, комментарий, «Переселить в другое общежитие…»), 🗑 —
+ * ошибочная запись. Уволенные подсвечены, галочка «Уволенные» в фильтре «Сотрудника» их скрывает.
  */
-export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ canEdit, addresses, apartments, onChanged }) => {
+export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
+  canEdit, addresses, month, cardBackPath, onChanged,
+}) => {
   const toast = useToast();
   const selectId = useId();
   const [place, setPlace] = useState(ALL);
@@ -61,15 +69,16 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ can
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const query = useQuery({
-    queryKey: DORMITORY_RESIDENTS_KEY,
-    queryFn: ({ signal }) => dormitoryService.listResidents(signal),
+    queryKey: [...DORMITORY_RESIDENTS_KEY, month],
+    queryFn: ({ signal }) => dormitoryService.listResidents(month, signal),
     staleTime: 0,
   });
+  const cardCell = useEmployeeCardCell<IDormitoryResident>(cardBackPath);
   const today = query.data?.today ?? '';
   const all = useMemo(() => query.data?.residents ?? [], [query.data]);
 
-  /** Живут сейчас или заселятся позже (выезд позже сегодня или не указан). */
-  const current = useMemo(() => all.filter(resident => resident.check_out === null || resident.check_out > today), [all, today]);
+  /** Жили в выбранном месяце хоть день. */
+  const current = useMemo(() => all.filter(resident => touchesMonth(resident, month)), [all, month]);
   const history = useMemo(() => all.filter(resident => resident.check_out !== null && resident.check_out <= today), [all, today]);
 
   /** Общежития с числом живущих — по написанию первой записи, без учёта регистра. */
@@ -80,11 +89,11 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ can
       if (!label) continue;
       const key = label.toLowerCase();
       const entry = counts.get(key) ?? { label, count: 0 };
-      if (resident.check_out === null || resident.check_out > today) entry.count += 1;
+      if (touchesMonth(resident, month)) entry.count += 1;
       counts.set(key, entry);
     }
     return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
-  }, [current, history, today]);
+  }, [current, history, month]);
 
   const source = showHistory ? history : current;
   const rows = useMemo(
@@ -139,6 +148,9 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ can
       <RegistryPanel
         // Другие столбцы — заново: сортировка и фильтры прежних столбцов к ним не относятся.
         key={showHistory ? 'history' : `current-${withPlace ? 'all' : 'one'}`}
+        columnOrderKey={showHistory ? 'housing.dormitory-history' : 'housing.dormitory'}
+        isDismissed={isDismissedStay}
+        cellRenderers={cardCell}
         label={showHistory ? `${title} — история` : title}
         columns={columns}
         rows={rows}
@@ -173,7 +185,9 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ can
         <DormitoryStayModal
           stay={editor.stay}
           addresses={addresses}
+          withComment
           onMove={() => setEditor({ mode: 'move', stay: editor.stay })}
+          moveLabel="Переселить в другое общежитие…"
           onClose={() => setEditor(prev => (prev?.mode === 'edit' ? null : prev))}
           onSaved={onChanged}
         />
@@ -182,7 +196,8 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({ can
         <StayMoveModal
           stay={editor.stay}
           addresses={addresses}
-          apartments={apartments}
+          apartments={[]}
+          allowFlat={false}
           today={today}
           onClose={() => setEditor(null)}
           onSaved={onChanged}

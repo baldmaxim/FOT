@@ -7,7 +7,7 @@ import type {
   IDormitoryStay,
 } from '../services/dormitoryService';
 import { formatDate } from './formatMoney';
-import { moscowTodayIso } from './moscowDate';
+import { moscowTodayIso, shiftMonth } from './moscowDate';
 import { formatPayrollMoney } from './payrollFormat';
 import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } from './tableView';
 
@@ -45,6 +45,25 @@ export const dismissedTone = (stay: IDormitoryStay, today: string): { tone: 'dis
   return { tone: 'dismissed', hint: stay.dismissal_date ? `Уволен ${formatDate(stay.dismissal_date)}` : 'Уволен' };
 };
 
+/** Первый месяц данных «Проживания» (общежития и компенсации — с 01.09.2026): начало выбора месяца. */
+export const HOUSING_FIRST_MONTH = '2026-09';
+
+/** Месяцы выбора: с HOUSING_FIRST_MONTH по следующий за текущим (заселение со следующего месяца видно заранее). */
+export const housingMonthOptions = (currentMonth: string): string[] => {
+  const result: string[] = [];
+  const last = shiftMonth(currentMonth, 1);
+  for (let month = HOUSING_FIRST_MONTH; month <= last; month = shiftMonth(month, 1)) result.push(month);
+  return result;
+};
+
+/** Жил хоть день в месяце YYYY-MM: въезд до начала следующего месяца, выезд позже 1-го числа. */
+export const touchesMonth = (stay: Pick<IDormitoryStay, 'check_in' | 'check_out'>, month: string): boolean => (
+  stay.check_in < `${shiftMonth(month, 1)}-01` && (stay.check_out === null || stay.check_out > `${month}-01`)
+);
+
+/** Уволен ли сотрудник записи на сегодня — галочка «Уволенные» в фильтре столбца «Сотрудник». */
+export const isDismissedStay = (stay: IDormitoryStay): boolean => dismissedTone(stay, moscowTodayIso()) !== null;
+
 /** Живёт на дату: [въезд, выезд). */
 export const livesOn = (stay: IDormitoryStay, date: string): boolean => (
   stay.check_in <= date && (stay.check_out === null || stay.check_out > date)
@@ -56,14 +75,19 @@ const isDismissedRow = (row: unknown): boolean => (
     && dismissedTone(row as IDormitoryStay, moscowTodayIso()) !== null
 );
 
+/** xlsx таблицы: столбцы — в порядке экрана (ordered, переставленные пользователем), иначе по умолчанию. */
 const exportOf = <Row,>(title: string, columns: ReadonlyArray<IRegistryColumn<Row>>) =>
-  (rows: ReadonlyArray<Row>): ITableExportSnapshot => {
+  (
+    rows: ReadonlyArray<Row>,
+    _totals?: Readonly<Record<string, string | number | null>>,
+    ordered?: ReadonlyArray<IRegistryColumn<Row>>,
+  ): ITableExportSnapshot => {
     const isoDate = moscowTodayIso();
     return buildExportTable({
       title,
       subtitle: `Дата выгрузки: ${isoDate.split('-').reverse().join('.')}`,
       fileName: `${title}_${isoDate}.xlsx`,
-      columns,
+      columns: ordered ?? columns,
       rows,
       isMuted: isDismissedRow,
     });
@@ -232,7 +256,10 @@ const DORMITORY_PLACE_COLUMN: IRegistryColumn<IDormitoryResident> = {
   sortValue: resident => resident.address,
 };
 
-/** Как отчёт 1С «Проживающие в общежитии последний вход (СКД)»; «Все общежития» — плюс столбец «Общежитие». */
+/**
+ * Как отчёт 1С «Проживающие в общежитии последний вход (СКД)»; «Все общежития» — плюс столбец «Общежитие». Месяц
+ * (20.11.2026) — плюс «Дата въезда», «Дата выезда» и «Комментарий»; паспорт — полный с правом «Реквизитов».
+ */
 export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IRegistryColumn<IDormitoryResident>> => [
   {
     key: 'department',
@@ -244,11 +271,13 @@ export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IReg
   },
   employeeColumn<IDormitoryResident>(),
   ...(withPlace ? [DORMITORY_PLACE_COLUMN] : []),
+  dateColumn<IDormitoryResident>('check_in', 'Дата въезда', resident => resident.check_in),
+  dateColumn<IDormitoryResident>('check_out', 'Дата выезда', resident => resident.check_out),
   {
     key: 'passport',
     label: 'Паспорт',
     type: 'text',
-    width: 128,
+    width: 136,
     nowrap: true,
     text: resident => orDash(resident.passport),
     sortValue: resident => resident.passport,
@@ -277,6 +306,14 @@ export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IReg
     width: 170,
     text: resident => orDash(resident.supervisor),
     sortValue: resident => resident.supervisor,
+  },
+  {
+    key: 'comment',
+    label: 'Комментарий',
+    type: 'text',
+    width: 160,
+    text: resident => resident.comment ?? '',
+    sortValue: resident => resident.comment ?? null,
   },
 ];
 
@@ -311,8 +348,9 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
   // Ширина — под самое длинное слово подписи («КОМПЕНСАЦИИ», «ОБНОВЛЕНО») со стрелкой и воронкой.
   // Начало — первой записи цепочки «пауза → возобновление» (миграция 374).
   dateColumn<ICompensationMonthRow>('check_in', 'Начало компенсации', row => row.compensation_start ?? row.check_in, 160),
-  dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', row => row.paused_from, 160),
-  dateColumn<ICompensationMonthRow>('resumed_from', 'Возобновлена', row => row.resumed_from, 152),
+  // Подпись в одно слово не переносится: ширина — под неё со стрелкой и воронкой.
+  dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', row => row.paused_from, 188),
+  dateColumn<ICompensationMonthRow>('resumed_from', 'Возобновлена', row => row.resumed_from, 172),
   dateColumn<ICompensationMonthRow>('updated_at', 'Обновлено', row => row.updated_at?.slice(0, 10) ?? null, 144),
   {
     key: 'weekend_days',
@@ -398,13 +436,14 @@ export const compensationTotals = (rows: ReadonlyArray<ICompensationMonthRow>) =
 export const buildCompensationExport = (monthLabel: string) => (
   rows: ReadonlyArray<ICompensationMonthRow>,
   totals?: Readonly<Record<string, string | number | null>>,
+  ordered?: ReadonlyArray<IRegistryColumn<ICompensationMonthRow>>,
 ): ITableExportSnapshot => {
   const isoDate = moscowTodayIso();
   return buildExportTable({
     title: 'Компенсация аренды',
     subtitle: `${monthLabel}. Дата выгрузки: ${isoDate.split('-').reverse().join('.')}`,
     fileName: `Компенсация аренды_${monthLabel}_${isoDate}.xlsx`,
-    columns: COMPENSATION_COLUMNS,
+    columns: ordered ?? COMPENSATION_COLUMNS,
     rows,
     isMuted: isDismissedRow,
     ...(totals ? { totals } : {}),

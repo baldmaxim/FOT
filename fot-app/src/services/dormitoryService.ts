@@ -79,9 +79,9 @@ export interface IApartmentsData {
   residents: IApartmentResident[];
 }
 
-/** Жилец общежития: сведения — только у тех, чья запись не закончилась. */
+/** Жилец общежития: сведения — только у записей, задевающих выбранный месяц. */
 export interface IDormitoryResident extends IDormitoryStay {
-  /** Последние 4 знака паспорта. */
+  /** Полный номер — с правом правки «Реквизитов», иначе последние 4 знака. */
   passport: string | null;
   /** YYYY-MM-DDTHH:MM:SS по Москве. */
   last_pass_at: string | null;
@@ -243,9 +243,12 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** Переселить с даты (с 1-го числа текущего месяца по сегодня): прежняя запись закрывается, новая — с этой даты. */
-  move: async (stayId: number, date: string, target: StayMoveTarget): Promise<void> => {
-    await apiClient.post(`/dormitory/stays/${stayId}/move`, { date, ...target });
+  /**
+   * Переселить с даты (с 1-го числа текущего месяца по сегодня): прежняя запись закрывается, новая — с этой даты;
+   * комментарий новой записи — пусто: переносится прежний.
+   */
+  move: async (stayId: number, date: string, target: StayMoveTarget, comment: string | null = null): Promise<void> => {
+    await apiClient.post(`/dormitory/stays/${stayId}/move`, { date, ...target, ...(comment ? { comment } : {}) });
   },
 
   /** Вкладка «Квартира»: квартиры и жильцы (сейчас и история) в охвате списка кадров. */
@@ -270,9 +273,12 @@ export const dormitoryService = {
     await apiClient.delete(`/dormitory/apartments/${id}`);
   },
 
-  /** Вкладка «Общежитие»: все записи общежитий (с историей) со сведениями у живущих. */
-  listResidents: async (signal?: AbortSignal): Promise<IDormitoryResidentsData> => {
-    const res = await apiClient.get<IApiResponse<IDormitoryResidentsData>>('/dormitory/residents', { signal });
+  /** Вкладка «Общежитие»: все записи общежитий (с историей) со сведениями у живших в месяце YYYY-MM. */
+  listResidents: async (month: string, signal?: AbortSignal): Promise<IDormitoryResidentsData> => {
+    const res = await apiClient.get<IApiResponse<IDormitoryResidentsData>>(
+      `/dormitory/residents?month=${encodeURIComponent(month)}`,
+      { signal },
+    );
     return res.data;
   },
 
