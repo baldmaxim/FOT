@@ -9,7 +9,7 @@ import type { Response } from 'express';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
-import { addStay, deleteStay, getStay, updateStay } from '../services/dormitory-stays.service.js';
+import { addStay, CompensationPausedError, deleteStay, getStay, updateStay } from '../services/dormitory-stays.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { listHousingMonthAmounts } from '../services/payroll/payroll-housing-month.service.js';
 import { listHousingAllowances } from '../services/payroll/payroll-housing.service.js';
@@ -41,7 +41,7 @@ const AUDIT_SOURCE = 'housing_registry';
 /** Ошибка проверки или правило «одна доплата из двух» — ответ отправлен. */
 const handleWriteError = (error: unknown, res: Response): boolean => {
   if (handlePayrollZodError(error, res)) return true;
-  if (error instanceof DormitoryAllowanceConflictError) {
+  if (error instanceof DormitoryAllowanceConflictError || error instanceof CompensationPausedError) {
     res.status(409).json({ success: false, error: error.message, code: error.code });
     return true;
   }

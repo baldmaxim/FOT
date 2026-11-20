@@ -29,6 +29,12 @@ const CELL_FONT = '400 13px';
 const HEADER_MEASURE_SLACK = 4;
 const TOUCH_QUERY = '(max-width: 768px)';
 
+/** Подсветка строки таблицы-реестра и подсказка при наведении. */
+export interface IRegistryRowTone {
+  tone: 'dismissed' | 'brigade';
+  hint: string;
+}
+
 export interface IRegistryTableProps<Row> {
   columns: ReadonlyArray<IRegistryColumn<Row>>;
   /** Все строки — из них считаются варианты фильтров. */
@@ -75,10 +81,10 @@ export interface IRegistryTableProps<Row> {
    */
   cellRenderers?: Readonly<Partial<Record<string, (row: Row) => ReactNode | undefined>>>;
   /**
-   * Передан — особая строка: 'dismissed' — уволенный (строка слегка подкрашена), hint — подсказка при наведении
-   * («Уволен 02.11.2026»). null — обычная строка.
+   * Передан — особая строка: 'dismissed' — уволенный (строка слегка подкрашена), 'brigade' — в бригаде (компенсация
+   * аренды не начисляется, мягкий жёлтый), hint — подсказка при наведении («Уволен 02.11.2026»). null — обычная строка.
    */
-  rowTone?: (row: Row) => { tone: 'dismissed'; hint: string } | null;
+  rowTone?: (row: Row) => IRegistryRowTone | null;
 }
 
 /**
@@ -224,6 +230,7 @@ export const RegistryTable = <Row,>({
               group && !group.last ? styles.rowGroupInner : '',
               onRowClick ? styles.rowClickable : '',
               tone?.tone === 'dismissed' ? styles.rowDismissed : '',
+              tone?.tone === 'brigade' ? styles.rowBrigade : '',
             ].filter(Boolean).join(' ');
             return (
               // Чередование — по индексу видимой строки (с группами — по группе): после фильтра полосы не «слипаются».

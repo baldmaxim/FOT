@@ -20,6 +20,9 @@ const dateSchema = (message: string) => z.string({ required_error: message, inva
   .regex(/^\d{4}-\d{2}-\d{2}$/, message)
   .refine(isCalendarDate, message);
 
+/** Дата YYYY-MM-DD из календаря — пауза и возобновление компенсации (миграция 374). */
+export const stayDateSchema = dateSchema;
+
 /** Пробелы внутри схлопываются, по краям — убираются. */
 const squeeze = (value: string): string => value.replace(/\s+/g, ' ').trim();
 const ADDRESS_TOO_LONG = 'Адрес — не больше 200 символов';
@@ -101,6 +104,8 @@ export const dormitoryStayAuditDetails = (stay: IDormitoryStay) => ({
   apartment_id: stay.apartment_id ?? null,
   paid: stay.paid ?? false,
   comment: stay.comment ?? null,
+  suspended: stay.suspended ?? false,
+  resumed_from_id: stay.resumed_from_id ?? null,
 });
 
 /** Изменилось ли что-то в записи — без изменений аудита нет. */
@@ -110,6 +115,7 @@ export const dormitoryStayChanged = (before: IDormitoryStay, after: IDormitorySt
   || (before.apartment_id ?? null) !== (after.apartment_id ?? null)
   || (before.paid ?? false) !== (after.paid ?? false)
   || (before.comment ?? null) !== (after.comment ?? null)
+  || (before.suspended ?? false) !== (after.suspended ?? false)
 );
 
 /**

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { ICompensationMonthRow, IDormitoryStay } from '../services/dormitoryService';
 import {
   apartmentTitle,
+  COMPENSATION_COLUMNS,
+  compensationTone,
   compensationTotals,
   dismissedTone,
   formatPassTime,
@@ -56,5 +58,32 @@ describe('«Проживание»: таблицы вкладок', () => {
     expect(compensationTotals([row('19530.00'), row('17010.00'), row('0.10'), row('0.20'), row(null)])?.export)
       .toEqual({ full_name: 'Итого', month_amount: '36540.30' });
     expect(compensationTotals([])).toBe(null);
+  });
+});
+
+describe('«Компенсация аренды»: пауза и бригада (374)', () => {
+  const row = (over: Partial<ICompensationMonthRow> = {}): ICompensationMonthRow => ({
+    ...stay({ kind: 'apartment', address: null, amount: '630.00', full_name: 'Киличов Самандар Рустамович' }),
+    month: '2026-11', month_amount: '0.00', worked_days: 0, weekend_days: 0, ...over,
+  });
+  const text = (key: string, value: ICompensationMonthRow) => COMPENSATION_COLUMNS.find(column => column.key === key)!.text(value);
+
+  it('начало — первой записи цепочки, прежний бэкенд — въезд; пауза и возобновление — даты или прочерк', () => {
+    const resumed = row({ check_in: '2026-12-01', compensation_start: '2026-09-01', paused_from: '2026-11-16', resumed_from: '2026-12-01' });
+    expect(text('check_in', resumed)).toBe('01.09.2026');
+    expect(text('paused_from', resumed)).toBe('16.11.2026');
+    expect(text('resumed_from', resumed)).toBe('01.12.2026');
+    expect(text('check_in', row())).toBe('01.09.2026');
+    expect(text('paused_from', row())).toBe('—');
+  });
+
+  it('в бригаде — жёлтая строка с датой; уволенный в бригаде — цвет «уволен», подсказки вместе', () => {
+    expect(compensationTone(row({ brigade_from: '2026-11-16', brigade_to: null }), '2026-11-20'))
+      .toEqual({ tone: 'brigade', hint: 'В бригаде с 16.11.2026 — компенсация аренды не начисляется' });
+    expect(compensationTone(row({ brigade_from: '2026-10-01', brigade_to: '2026-11-11' }), '2026-11-20'))
+      .toEqual({ tone: 'brigade', hint: 'В бригаде 01.10–11.11.2026 — в эти дни компенсация аренды не начисляется' });
+    expect(compensationTone(row({ brigade_from: '2026-11-16', employment_status: 'fired', dismissal_date: '2026-11-18' }), '2026-11-20'))
+      .toEqual({ tone: 'dismissed', hint: 'Уволен 18.11.2026 · В бригаде с 16.11.2026 — компенсация аренды не начисляется' });
+    expect(compensationTone(row(), '2026-11-20')).toBe(null);
   });
 });

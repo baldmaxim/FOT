@@ -1,3 +1,4 @@
+import type { IRegistryRowTone } from '../components/ui/registry/RegistryTable';
 import type {
   IApartmentResident,
   ICompanyApartment,
@@ -308,7 +309,10 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
     sortValue: row => row.department,
   },
   // Ширина — под самое длинное слово подписи («КОМПЕНСАЦИИ», «ОБНОВЛЕНО») со стрелкой и воронкой.
-  dateColumn<ICompensationMonthRow>('check_in', 'Начало компенсации', row => row.check_in, 160),
+  // Начало — первой записи цепочки «пауза → возобновление» (миграция 374).
+  dateColumn<ICompensationMonthRow>('check_in', 'Начало компенсации', row => row.compensation_start ?? row.check_in, 160),
+  dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', row => row.paused_from, 160),
+  dateColumn<ICompensationMonthRow>('resumed_from', 'Возобновлена', row => row.resumed_from, 152),
   dateColumn<ICompensationMonthRow>('updated_at', 'Обновлено', row => row.updated_at?.slice(0, 10) ?? null, 144),
   {
     key: 'weekend_days',
@@ -360,6 +364,25 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
     sortValue: row => row.country ?? null,
   },
 ];
+
+/** Период в бригаде строки: «с 16.11.2026» или «01.10–11.11.2026»; нет — null. */
+const brigadeHint = (row: ICompensationMonthRow): string | null => {
+  if (!row.brigade_from) return null;
+  return row.brigade_to
+    ? `В бригаде ${formatPeriod(row.brigade_from, row.brigade_to)} — в эти дни компенсация аренды не начисляется`
+    : `В бригаде с ${formatDate(row.brigade_from)} — компенсация аренды не начисляется`;
+};
+
+/**
+ * Подсветка строки компенсации: уволенный — цвет «уволен» (важнее), подсказки объединяются; только бригада — мягкий
+ * жёлтый с датой перевода.
+ */
+export const compensationTone = (row: ICompensationMonthRow, today: string): IRegistryRowTone | null => {
+  const dismissed = dismissedTone(row, today);
+  const brigade = brigadeHint(row);
+  if (dismissed) return brigade ? { tone: 'dismissed', hint: `${dismissed.hint} · ${brigade}` } : dismissed;
+  return brigade ? { tone: 'brigade', hint: brigade } : null;
+};
 
 /** Итого «Сумма к оплате» видимых строк — в целых копейках. */
 export const compensationTotals = (rows: ReadonlyArray<ICompensationMonthRow>) => {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { companyApartmentsController as apartments } from '../controllers/company-apartments.controller.js';
+import { dormitoryCompensationPauseController as pause } from '../controllers/dormitory-compensation-pause.controller.js';
 import { dormitoryResidentsController as residents } from '../controllers/dormitory-residents.controller.js';
 import { dormitoryStaysController as c } from '../controllers/dormitory-stays.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
@@ -29,6 +30,10 @@ router.delete('/stays/:id', dormitoryEdit, c.remove);
 // Миграция 371: «Платно» и комментарий, «Переселить».
 router.patch('/stays/:id/meta', dormitoryEdit, residents.updateMeta);
 router.post('/stays/:id/move', dormitoryEdit, residents.move);
+// Миграция 374: «Компенсация аренды» — приостановить, возобновить, завершить паузу.
+router.post('/stays/:id/suspend', dormitoryEdit, pause.suspend);
+router.post('/stays/:id/resume', dormitoryEdit, pause.resume);
+router.post('/stays/:id/finish-pause', dormitoryEdit, pause.finish);
 // Вкладки «Общежитие» и «Компенсация аренды».
 router.get('/residents', dormitoryView, residents.residents);
 router.get('/compensation', dormitoryView, residents.compensation);

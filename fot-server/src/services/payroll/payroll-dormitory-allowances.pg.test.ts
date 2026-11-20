@@ -246,8 +246,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     for (const name of [
       '313_payroll_rate_code.sql', '314_employee_dormitory_stays.sql', '315_payroll_dictionary_registries.sql',
       '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql',
-      // Служебные квартиры: сервис проживаний пишет и читает её столбцы.
-      '371_company_apartments.sql',
+      // Служебные квартиры: сервис проживаний пишет и читает её столбцы; пауза компенсации — тоже (374).
+      '371_company_apartments.sql', '374_dormitory_stay_pause.sql',
     ]) {
       await run(migration(name));
     }

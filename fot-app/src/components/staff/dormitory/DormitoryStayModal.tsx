@@ -40,6 +40,8 @@ interface IDormitoryStayModalProps {
   apartment?: { id: number; title: string };
   /** Передано — в правке кнопка «Переселить…» (окно переселения вместо этого). */
   onMove?: () => void;
+  /** Передано — в правке своя ссылка под полями: «Приостановить компенсацию…» (окно поверх этого). */
+  extraAction?: { label: string; onClick: () => void };
   /** Поверх другого окна (жильцы квартиры): оверлей выше. */
   raised?: boolean;
   /** Поле «Комментарий» (вкладка «Компенсация аренды»): сохраняется частичной правкой записи. */
@@ -60,7 +62,7 @@ const COMMENT_MAX_LENGTH = 500;
  * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника».
  */
 export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
-  stay, addresses, payroll, fixedKind, apartment, onMove, raised = false, withComment = false, onClose, onSaved,
+  stay, addresses, payroll, fixedKind, apartment, onMove, extraAction, raised = false, withComment = false, onClose, onSaved,
 }) => {
   const errorId = useId();
   const addressId = useId();
@@ -245,6 +247,11 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
       {isEdit && onMove && (
         <button type="button" className={styles.linkButton} onClick={onMove} disabled={saving}>
           Переселить в другое общежитие или квартиру…
+        </button>
+      )}
+      {isEdit && extraAction && (
+        <button type="button" className={styles.linkButton} onClick={extraAction.onClick} disabled={saving}>
+          {extraAction.label}
         </button>
       )}
     </RegistryFormModal>

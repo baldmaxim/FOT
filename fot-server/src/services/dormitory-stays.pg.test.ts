@@ -56,6 +56,9 @@ import {
   addStay, deleteStay, getEmployeeState, listAddresses, listPayrollDormitoryStays, listStays, searchCandidates, updateStay,
 } from './dormitory-stays.service.js';
 import { currentRateMonth, deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
+import {
+  finishCompensationPause, resumeCompensation, suspendCompensation, type ICompensationPauseResult,
+} from './dormitory-compensation-pause.service.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -244,6 +247,11 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     await run(migration('371_company_apartments.sql'));
     expect((await run(`SELECT apartment_id, paid, comment FROM employee_dormitory_stays`)).rows)
       .toEqual([{ apartment_id: null, paid: false, comment: null }]);
+    // Пауза компенсации (374) — сервис пишет её столбцы при правке дат; повтор безопасен.
+    await run(migration('374_dormitory_stay_pause.sql'));
+    await run(migration('374_dormitory_stay_pause.sql'));
+    expect((await run(`SELECT suspended, resumed_from_id FROM employee_dormitory_stays`)).rows)
+      .toEqual([{ suspended: false, resumed_from_id: null }]);
     expect((await run(`SELECT count(*)::int AS n FROM company_apartments`)).rows).toEqual([{ n: 0 }]);
     await run(`DELETE FROM employee_dormitory_stays`);
   });
@@ -417,5 +425,54 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await names([])).toEqual([]);
     // Запись уволенного в БД и во вкладке кадров остаётся.
     expect((await listStays({ employeeIds: [3] })).map(stay => stay.address)).toEqual(['Общ. Уволенного']);
+  });
+  it('374: пауза и возобновление компенсации — повтор, другая дата, добавление при паузе, параллельно — одна запись', async () => {
+    const comp = await addStay(2, { kind: 'apartment', check_in: '2027-02-01', check_out: null, address: null, amount: 630 });
+    if (comp === 'overlap') throw new Error('компенсация не добавлена');
+    await run(`UPDATE employee_dormitory_stays SET comment = 'Кв. на Рабочей' WHERE id = ${comp.id}`);
+    expect(await suspendCompensation(comp.id, '2027-02-01')).toBe('before_check_in');
+    expect(await suspendCompensation(comp.id, '2027-02-10'))
+      .toMatchObject({ repeated: false, after: { check_out: '2027-02-10', suspended: true } });
+    expect(await suspendCompensation(comp.id, '2027-02-10')).toMatchObject({ repeated: true });
+    expect(await suspendCompensation(comp.id, '2027-02-12')).toBe('already_paused');
+    // При незавершённой паузе новую компенсацию не завести — ни кадрам, ни «Зарплате».
+    await expect(addStay(2, { kind: 'apartment', check_in: '2027-03-01', check_out: null, address: null, amount: 630 }))
+      .rejects.toThrow(/приостановлена с 10\.02\.2027/);
+    expect(await resumeCompensation(comp.id, '2027-02-09')).toBe('before_pause');
+
+    // Два возобновления сразу — одна запись, второе — повтор.
+    const results = await Promise.all([resumeCompensation(comp.id, '2027-02-20'), resumeCompensation(comp.id, '2027-02-20')]);
+    const done = results.filter((result): result is ICompensationPauseResult => typeof result !== 'string');
+    expect(done.map(result => result.repeated).sort()).toEqual([false, true]);
+    const resumed = done[0].after;
+    expect(resumed).toMatchObject({
+      kind: 'apartment', check_in: '2027-02-20', check_out: null, amount: '630.00', comment: 'Кв. на Рабочей',
+      resumed_from_id: comp.id, suspended: false,
+    });
+    expect(await resumeCompensation(comp.id, '2027-02-21')).toBe('already_resumed');
+    expect(await finishCompensationPause(comp.id)).toBe('already_resumed');
+
+    // Вторая пауза: приостановить можно только последнюю; «Завершить» — обычное окончание, повтор — без изменений.
+    expect(await suspendCompensation(resumed.id, '2027-03-15')).toMatchObject({ after: { suspended: true } });
+    expect(await finishCompensationPause(resumed.id))
+      .toMatchObject({ repeated: false, after: { suspended: false, check_out: '2027-03-15' } });
+    expect(await finishCompensationPause(resumed.id)).toMatchObject({ repeated: true });
+    const next = await addStay(2, { kind: 'apartment', check_in: '2027-04-01', check_out: null, address: null, amount: 630 });
+    if (next === 'overlap') throw new Error('компенсация не добавлена');
+    expect(await suspendCompensation(resumed.id, '2027-03-10')).toBe('not_latest');
+
+    // ✎ снял выезд у приостановленной — паузы больше нет.
+    await suspendCompensation(next.id, '2027-04-10');
+    expect(await updateStay(next.id, { check_in: '2027-04-01', check_out: null, address: null, amount: null }))
+      .toMatchObject({ after: { check_out: null, suspended: false } });
+
+    // Общежитие не приостанавливают; CHECK: пауза — только у компенсации с выездом.
+    const dorm = (await listStays({ employeeIds: [6] })).find(stay => stay.kind === 'dormitory')!;
+    expect(await suspendCompensation(dorm.id, '2026-12-05')).toBe('not_compensation');
+    await expect(run(`UPDATE employee_dormitory_stays SET suspended = true WHERE id = ${next.id}`))
+      .rejects.toThrow(/employee_dormitory_stay_suspended/);
+    await expect(run(`UPDATE employee_dormitory_stays SET suspended = true, check_out = '2026-12-05' WHERE id = ${dorm.id}`))
+      .rejects.toThrow(/employee_dormitory_stay_suspended/);
+    await run(`DELETE FROM employee_dormitory_stays WHERE employee_id = 2 AND kind = 'apartment'`);
   });
 });

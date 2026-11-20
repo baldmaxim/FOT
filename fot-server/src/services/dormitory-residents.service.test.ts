@@ -19,7 +19,7 @@ vi.mock('./department-managers.service.js', async importOriginal => ({
   listDepartmentManagers: managers.listDepartmentManagers,
 }));
 
-import { compensationFromCalc } from './dormitory-compensation.service.js';
+import { compensationChainOf, compensationFromCalc } from './dormitory-compensation.service.js';
 import { loadMaskedPassports, loadSupervisorLabels } from './dormitory-residents.service.js';
 
 beforeEach(() => vi.clearAllMocks());
@@ -83,5 +83,37 @@ describe('«Компенсация аренды» — дни и сумма из 
     expect(compensationFromCalc(calc({ amount: '1.00' }, 'not_closed')))
       .toEqual({ month_amount: null, worked_days: null, weekend_days: null });
     expect(compensationFromCalc(undefined)).toEqual({ month_amount: null, worked_days: null, weekend_days: null });
+  });
+});
+
+describe('«Компенсация аренды» — цепочка «пауза → возобновление» (374)', () => {
+  const stay = (id: number, checkIn: string, checkOut: string | null, suspended = false, resumedFrom: number | null = null) => (
+    { id, check_in: checkIn, check_out: checkOut, suspended, resumed_from_id: resumedFrom }
+  );
+  const first = stay(1, '2026-09-01', '2026-11-16', true);
+  const second = stay(2, '2026-12-01', '2027-02-10', true, 1);
+  const third = stay(3, '2027-03-01', null, false, 2);
+  const all = [first, second, third];
+
+  it('начало — первая запись цепочки; у возобновлённой — пауза прежней и своё начало', () => {
+    expect(compensationChainOf(third, all))
+      .toEqual({ compensation_start: '2026-09-01', paused_from: '2027-02-10', resumed_from: '2027-03-01' });
+  });
+
+  it('у приостановленной — её пауза и возобновление, если было; без возобновления — только пауза', () => {
+    expect(compensationChainOf(first, all))
+      .toEqual({ compensation_start: '2026-09-01', paused_from: '2026-11-16', resumed_from: '2026-12-01' });
+    expect(compensationChainOf(first, [first]))
+      .toEqual({ compensation_start: '2026-09-01', paused_from: '2026-11-16', resumed_from: null });
+  });
+
+  it('без пауз — только начало; потерянная ссылка и цикл не зацикливают', () => {
+    expect(compensationChainOf(stay(9, '2026-09-01', null), []))
+      .toEqual({ compensation_start: '2026-09-01', paused_from: null, resumed_from: null });
+    const a = stay(5, '2026-10-01', null, false, 6);
+    const b = stay(6, '2026-09-01', '2026-10-01', true, 5);
+    expect(compensationChainOf(a, [a, b]).compensation_start).toBe('2026-09-01');
+    expect(compensationChainOf(stay(7, '2026-10-01', null, false, 99), []))
+      .toEqual({ compensation_start: '2026-10-01', paused_from: null, resumed_from: null });
   });
 });

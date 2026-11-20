@@ -82,6 +82,8 @@
 /* Уволенный («Проживание»): строка слегка подкрашена тем же оттенком ошибки в обеих темах, наведение — как у всех. */
 .table tbody tr.rowDismissed { --row-overlay: var(--error-muted); }
 .table tbody tr.rowDismissed:hover { --row-overlay: color-mix(in srgb, var(--error-muted) 50%, var(--bg-secondary)); }
+.table tbody tr.rowBrigade { --row-overlay: var(--warning-muted); }
+.table tbody tr.rowBrigade:hover { --row-overlay: color-mix(in srgb, var(--warning-muted) 50%, var(--bg-secondary)); }
 
 .table tbody tr:last-child td { border-bottom: none; }
 

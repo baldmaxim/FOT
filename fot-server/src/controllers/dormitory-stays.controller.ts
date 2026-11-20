@@ -22,6 +22,7 @@ import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dor
 import {
   addStay,
   CompanyApartmentNotFoundError,
+  CompensationPausedError,
   deleteStay,
   getEmployeeState,
   getHousingRateAmount,
@@ -76,6 +77,10 @@ const handleStayError = (error: unknown, res: Response): boolean => {
   }
   if (error instanceof CompanyApartmentNotFoundError) {
     res.status(404).json({ success: false, error: error.message });
+    return true;
+  }
+  if (error instanceof CompensationPausedError) {
+    res.status(409).json({ success: false, error: error.message, code: error.code });
     return true;
   }
   return false;

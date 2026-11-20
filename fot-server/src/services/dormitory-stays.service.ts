@@ -63,6 +63,10 @@ export interface IDormitoryStay {
   org_department_id: string | null;
   /** Гражданство — employees.country (зеркало реквизитов). */
   country: string | null;
+  /** Компенсация закрыта паузой, а не окончанием (миграция 374; до неё — false). */
+  suspended: boolean;
+  /** Компенсация возобновлена из этой приостановленной записи (миграция 374); нет — null. */
+  resumed_from_id: number | null;
 }
 
 /**
@@ -130,7 +134,10 @@ const STAY_SELECT = `
          e.employment_status,
          to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date,
          e.org_department_id::text AS org_department_id,
-         e.country
+         e.country,
+         -- Колонки миграции 374 — через to_jsonb: бэкенд читает записи и до неё.
+         COALESCE((to_jsonb(s) ->> 'suspended')::boolean, false) AS suspended,
+         (to_jsonb(s) ->> 'resumed_from_id')::int AS resumed_from_id
     FROM employee_dormitory_stays s
     JOIN employees e ON e.id = s.employee_id
     LEFT JOIN org_departments d ON d.id = e.org_department_id
@@ -200,7 +207,7 @@ export const getStay = async (id: number): Promise<IDormitoryStay | null> =>
   queryOne<IDormitoryStay>(`${STAY_SELECT} WHERE s.id = $1`, [id]);
 
 /** Строка внутри транзакции; lock — FOR UPDATE: правка и удаление видят одно «было». */
-const readStay = async (client: PoolClient, id: number, lock: boolean): Promise<IDormitoryStay | null> =>
+export const readStay = async (client: PoolClient, id: number, lock: boolean): Promise<IDormitoryStay | null> =>
   (await client.query<IDormitoryStay>(`${STAY_SELECT} WHERE s.id = $1${lock ? ' FOR UPDATE OF s' : ''}`, [id]))
     .rows[0] ?? null;
 
@@ -290,6 +297,37 @@ const afterWrite = async (
   }
 };
 
+/**
+ * Компенсацию аренды сотрудника приостановили и не возобновили и не завершили: новую не заводят (иначе пропала бы
+ * цепочка «пауза → возобновление», миграция 374) — ответ 409.
+ */
+export class CompensationPausedError extends Error {
+  readonly code = 'COMPENSATION_PAUSED';
+
+  constructor(pausedFrom: string) {
+    const [year, month, day] = pausedFrom.split('-');
+    super(`Компенсация приостановлена с ${day}.${month}.${year} — возобновите или завершите её`);
+    this.name = 'CompensationPausedError';
+  }
+}
+
+/** Приостановленная и не возобновлённая компенсация сотрудника: дата паузы; нет — null. Колонки 374 — через to_jsonb. */
+export const openPauseOf = async (client: PoolClient, employeeId: number): Promise<string | null> => (
+  (await client.query<{ paused_from: string }>(
+    `SELECT to_char(s.check_out, 'YYYY-MM-DD') AS paused_from
+       FROM employee_dormitory_stays s
+      WHERE s.employee_id = $1 AND s.kind = 'apartment'
+        AND (to_jsonb(s) ->> 'suspended')::boolean IS TRUE
+        AND NOT EXISTS (
+          SELECT 1 FROM employee_dormitory_stays r
+           WHERE r.employee_id = s.employee_id AND (to_jsonb(r) ->> 'resumed_from_id')::int = s.id
+        )
+      ORDER BY s.check_out DESC
+      LIMIT 1`,
+    [employeeId],
+  )).rows[0]?.paused_from ?? null
+);
+
 /** Служебной квартиры, в которую заселяют, нет (удалили) — ответ 404. */
 export class CompanyApartmentNotFoundError extends Error {
   constructor() {
@@ -302,7 +340,7 @@ export class CompanyApartmentNotFoundError extends Error {
  * Добавить проживание. Жилец служебной квартиры (apartment_id) — адрес «Кв. <адрес>» берётся из квартиры в той же
  * транзакции (FOR SHARE: переименование квартиры дождётся записи); квартиры нет — CompanyApartmentNotFoundError.
  * Пересечение с другим проживанием сотрудника — 'overlap'; квартира в днях доплаты за общежитие —
- * DormitoryAllowanceConflictError (запись откатывается).
+ * DormitoryAllowanceConflictError (запись откатывается); компенсация при незавершённой паузе — CompensationPausedError.
  */
 export const addStay = async (
   employeeId: number,
@@ -311,6 +349,10 @@ export const addStay = async (
   try {
     return await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
+      if (input.kind === 'apartment') {
+        const pausedFrom = await openPauseOf(client, employeeId);
+        if (pausedFrom !== null) throw new CompensationPausedError(pausedFrom);
+      }
       let address = input.address;
       if (input.apartment_id) {
         const apartment = (await client.query<{ address: string }>(
@@ -359,6 +401,8 @@ export const updateStay = async (
             SET check_in = $2::date, check_out = $3::date,
                 address = CASE WHEN apartment_id IS NULL THEN $4 ELSE address END,
                 amount = COALESCE($5, amount),
+                -- Снят выезд — паузы больше нет (CHECK employee_dormitory_stay_suspended, миграция 374).
+                suspended = CASE WHEN $3::date IS NULL THEN false ELSE suspended END,
                 updated_at = now()
           WHERE id = $1`,
         [id, input.check_in, input.check_out, input.address, input.amount],

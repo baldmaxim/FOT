@@ -33,6 +33,10 @@ export interface IDormitoryStay {
   org_department_id?: string | null;
   /** Гражданство (employees.country). */
   country?: string | null;
+  /** Компенсация закрыта паузой, а не окончанием (миграция 374). Прежний бэкенд поле не присылает. */
+  suspended?: boolean;
+  /** Компенсация возобновлена из этой приостановленной записи (миграция 374). */
+  resumed_from_id?: number | null;
 }
 
 /** Служебная квартира компании (миграция 371). */
@@ -96,6 +100,15 @@ export interface ICompensationMonthRow extends IDormitoryStay {
   month_amount: string | null;
   worked_days: number | null;
   weekend_days: number | null;
+  /** Начало первой записи цепочки «пауза → возобновление» (миграция 374); прежний бэкенд — нет, берётся check_in. */
+  compensation_start?: string;
+  /** Приостановлена с (YYYY-MM-DD); нет — null. */
+  paused_from?: string | null;
+  /** Возобновлена с (YYYY-MM-DD); нет — null. */
+  resumed_from?: string | null;
+  /** Период в бригаде, задевающий месяц: дни в бригаде компенсацией не оплачиваются. */
+  brigade_from?: string | null;
+  brigade_to?: string | null;
 }
 
 /** Переселение: в общежитие (адрес) или в служебную квартиру (id) — одно из двух. */
@@ -209,6 +222,24 @@ export const dormitoryService = {
   /** «Платно» и/или комментарий — остальные поля записи не меняются. */
   updateMeta: async (stayId: number, meta: { paid?: boolean; comment?: string | null }): Promise<IDormitoryStay> => {
     const res = await apiClient.patch<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/meta`, meta);
+    return res.data;
+  },
+
+  /** «Компенсация аренды» (миграция 374): приостановить с даты — с неё не начисляется. */
+  suspendCompensation: async (stayId: number, date: string): Promise<IDormitoryStay> => {
+    const res = await apiClient.post<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/suspend`, { date });
+    return res.data;
+  },
+
+  /** Возобновить приостановленную с даты (не раньше паузы): новая запись с той же ставкой и комментарием. */
+  resumeCompensation: async (stayId: number, date: string): Promise<IDormitoryStay> => {
+    const res = await apiClient.post<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/resume`, { date });
+    return res.data;
+  },
+
+  /** Завершить без возобновления: пауза становится окончанием, в следующих месяцах строки нет. */
+  finishCompensationPause: async (stayId: number): Promise<IDormitoryStay> => {
+    const res = await apiClient.post<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/finish-pause`, {});
     return res.data;
   },
 

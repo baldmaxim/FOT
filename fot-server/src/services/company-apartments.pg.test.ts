@@ -130,6 +130,8 @@ describe.skipIf(!PG_URL)('служебные квартиры «Проживан
     await run(migration('371_company_apartments.sql'));
     await run(`UPDATE company_apartments SET rooms = 4 WHERE address = 'Ляпидевского 12-58'`);
     await run(migration('371_company_apartments.sql'));
+    // Пауза компенсации (374): правка дат пишет её столбец.
+    await run(migration('374_dormitory_stay_pause.sql'));
 
     expect(await listApartments()).toEqual([
       { id: expect.any(Number), address: '3-й Митинский пер. 5-201', note: 'РФ \\ ВНЖ', rooms: 2, places: 3,

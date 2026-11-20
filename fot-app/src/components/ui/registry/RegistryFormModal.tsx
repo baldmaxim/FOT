@@ -20,7 +20,10 @@ interface IRegistryFormModalProps {
   submitDisabled?: boolean;
   /** false — Escape не закрывает форму: поверх открыто её окно («Основания доплаты»). */
   closeOnEscape?: boolean;
-  children: ReactNode;
+  /** Подпись кнопки отправки; по умолчанию «Сохранить». */
+  submitLabel?: string;
+  /** Поля; функция — получает requestClose (своя кнопка внутри закрывает окно после записи). */
+  children: ReactNode | ((requestClose: () => void) => ReactNode);
 }
 
 /**
@@ -30,7 +33,7 @@ interface IRegistryFormModalProps {
  */
 export const RegistryFormModal: FC<IRegistryFormModalProps> = ({
   title, onClose, onSubmit, saving, error, errorId, raised = false, submitDisabled = false, closeOnEscape = true,
-  children,
+  submitLabel = 'Сохранить', children,
 }) => {
   const titleId = useId();
 
@@ -59,7 +62,7 @@ export const RegistryFormModal: FC<IRegistryFormModalProps> = ({
           </header>
 
           <div className={styles.body}>
-            {children}
+            {typeof children === 'function' ? children(requestClose) : children}
             {error && <p id={errorId} className={styles.error} role="alert">{error}</p>}
           </div>
 
@@ -68,7 +71,7 @@ export const RegistryFormModal: FC<IRegistryFormModalProps> = ({
               Отмена
             </button>
             <button type="submit" className={styles.primaryButton} disabled={saving || submitDisabled}>
-              {saving ? 'Сохраняем…' : 'Сохранить'}
+              {saving ? 'Сохраняем…' : submitLabel}
             </button>
           </footer>
         </form>
