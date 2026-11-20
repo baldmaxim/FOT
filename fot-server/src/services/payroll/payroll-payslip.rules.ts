@@ -9,14 +9,18 @@
  *   в выходные (несогласованные выгрузка обнуляет), не больше нормы. Норма — дни по графику за весь месяц +
  *   плановые субботы/воскресенья (в августе 2026 у «5+2» с двумя субботами — 23);
  * - проживание — по дням (миграция 339), окно — период сотрудника в месяце, у живого табеля — по asOf:
- *   квартира (решения пользователя 03.11.2026; 1С за сентябрь 2026 совпала у 68 из 80) — ставка за день × (отработанные
- *   дни за время проживания + выходные месяца), всего не больше дней месяца. Отработанные — те же дни, что для оклада и
- *   проезда: явка, согласованные выходы, УУ, РБ, УД; Н, отпуск, больничный и выход без корректировки — нет. Выходные —
- *   числом, без дат: дни месяца − норма дней графика (сентябрь 2026: 30 − 24 = 6), и при заселении или выезде внутри
- *   месяца целиком. За месяц отработано меньше недели (меньше 7 дней) — только отработанные; за время проживания ни
- *   одного — строки нет;
+ *   квартира (компенсация аренды; решения пользователя 03.11.2026 и 20.11.2026) — ставка за день × (отработанные дни
+ *   с компенсацией + выходные месяца), всего не больше дней месяца. Отработанные — те же дни, что для оклада и проезда:
+ *   явка, согласованные выходы, УУ, РБ, УД; Н, отпуск, больничный и выход без корректировки — нет. Дни всех записей
+ *   квартиры месяца складываются (пауза — промежуток между записями). Выходные — числом, без дат: дни месяца − норма
+ *   дней графика (сентябрь 2026: 30 − 24 = 6), и при заселении, выезде, паузе внутри месяца целиком, но только если дней
+ *   с компенсацией не меньше 8 (7 и меньше — только отработанные); ни одного — строки нет. Дни в бригаде (назначение в
+ *   отдел вида «бригада») компенсацией не оплачиваются и для доплаты за общежитие считаются днями без проживания; вход
+ *   в бригаду со 2-го числа месяца, когда накануне шла компенсация, — компенсации за месяц нет, возврат — считается
+ *   с даты;
  *   общежитие — ничего; доплата за общежитие (решения 30.10.2026) — ставка «Доплата за общежитие» × дни, отработанные
- *   в бригаде, кроме дней в общежитии и квартире, с месяца включателя payroll_switches (до него — нет).
+ *   в бригаде, кроме дней в общежитии и квартире (квартира в дни назначения в бригаду не мешает), с месяца включателя
+ *   payroll_switches (до него — нет).
  *   Счёт в целых копейках: ставка × дни, без округления.
  */
 import type { StaffCategory } from './payroll-terms.service.js';
@@ -68,6 +72,12 @@ export interface IPayslipHousingRecord {
   amount: string | null;
 }
 
+/** Период в бригаде — назначение (employee_assignments) в отдел вида «бригада»: YYYY-MM-DD включительно, to null — по сей день. */
+export interface IPayslipBrigadePeriod {
+  from: string;
+  to: string | null;
+}
+
 /** Дни, по которым считается проживание. */
 export interface IPayslipHousingDays {
   /** Окно счёта: период сотрудника в месяце, у живого табеля — по asOf. */
@@ -93,6 +103,8 @@ export interface IPayslipRateFacts {
   /** С какого месяца (YYYY-MM-01) доплата за общежитие считается сама; null — включатель не стоит. */
   dormitoryAllowanceFrom: string | null;
   housing: IPayslipHousingRecord[];
+  /** Периоды в бригаде, задевающие месяц; нет — не был. */
+  brigades?: IPayslipBrigadePeriod[];
   housingDays: IPayslipHousingDays;
 }
 
@@ -150,8 +162,39 @@ const stayOn = (records: readonly IPayslipHousingRecord[], date: string): IPaysl
   records.find(record => record.start <= date && (record.end === null || date < record.end)) ?? null
 );
 
-/** С какого числа отработанных за месяц дней к квартире прибавляются выходные: меньше недели — только отработанные. */
-const HOUSING_WEEKENDS_MIN_WORKED_DAYS = 7;
+/** С какого числа отработанных дней с компенсацией к квартире прибавляются выходные: 7 и меньше — только отработанные. */
+const HOUSING_WEEKENDS_MIN_WORKED_DAYS = 8;
+
+const inBrigade = (brigades: readonly IPayslipBrigadePeriod[], date: string): boolean => (
+  brigades.some(period => period.from <= date && (period.to === null || date <= period.to))
+);
+
+/** Проживание дня для расчёта: квартира в день в бригаде не действует (ни компенсации, ни запрета доплаты за общежитие). */
+const housingOn = (
+  facts: Pick<IPayslipRateFacts, 'housing' | 'brigades'>,
+  date: string,
+): IPayslipHousingRecord | null => {
+  const stay = stayOn(facts.housing, date);
+  return stay?.kind === 'apartment' && inBrigade(facts.brigades ?? [], date) ? null : stay;
+};
+
+/** Компенсация квартиры в день (по ставке больше нуля). */
+const compensatedOn = (facts: Pick<IPayslipRateFacts, 'housing' | 'brigades'>, date: string): boolean => {
+  const stay = housingOn(facts, date);
+  return stay?.kind === 'apartment' && positive(stay.amount);
+};
+
+/**
+ * Вход в бригаду внутри месяца (со 2-го числа по последнее), когда накануне шла компенсация квартиры, — компенсации
+ * за месяц нет. Вход 1-го числа месяц не обнуляет: дни после возврата из бригады в нём считаются.
+ */
+const enteredBrigadeInMonth = (facts: Pick<IPayslipRateFacts, 'housing' | 'brigades'>, month: string): boolean => {
+  const monthStart = `${month}-01`;
+  const monthEnd = lastDayOfMonth(month);
+  return (facts.brigades ?? []).some(period => (
+    period.from > monthStart && period.from <= monthEnd && compensatedOn(facts, previousIsoDay(period.from))
+  ));
+};
 
 /**
  * Выходные между ставками квартиры: пропорционально дням проживания при ставке, остаток — большей дробной части,
@@ -172,17 +215,18 @@ const splitHousingWeekends = (stayDays: ReadonlyMap<string, number>, weekends: n
   return new Map(shares.map(share => [share.rate, share.whole + (extra.has(share.rate) ? 1 : 0)]));
 };
 
-/** Квартира: отработанные дни за время проживания + выходные месяца — правила в шапке файла. */
+/** Квартира: отработанные дни с компенсацией + выходные месяца — правила в шапке файла. */
 const apartmentAllowance = (
-  facts: Pick<IPayslipRateFacts, 'housing' | 'housingDays'>,
+  facts: Pick<IPayslipRateFacts, 'housing' | 'brigades' | 'housingDays'>,
 ): IPayslipRateAllowance | null => {
   const { from, to, workedDates, normDays } = facts.housingDays;
+  if (enteredBrigadeInMonth(facts, from.slice(0, 7))) return null;
   const worked = new Set(workedDates.filter(date => date >= from && date <= to));
-  // Ставка → дни проживания и оплачиваемые из них: у квартиры ставка могла смениться в месяце.
+  // Ставка → дни компенсации и оплачиваемые из них: у квартиры ставка могла смениться в месяце.
   const stayDays = new Map<string, number>();
   const paidDays = new Map<string, number>();
   for (let date = from; date <= to; date = shiftIsoDay(date, 1)) {
-    const stay = stayOn(facts.housing, date);
+    const stay = housingOn(facts, date);
     if (stay?.kind !== 'apartment' || !positive(stay.amount)) continue;
     stayDays.set(stay.amount, (stayDays.get(stay.amount) ?? 0) + 1);
     if (worked.has(date)) paidDays.set(stay.amount, (paidDays.get(stay.amount) ?? 0) + 1);
@@ -191,7 +235,7 @@ const apartmentAllowance = (
   if (workedInStay === 0) return null;
 
   const monthDays = Number(lastDayOfMonth(from.slice(0, 7)).slice(8));
-  const monthWeekends = normDays !== null && normDays > 0 && worked.size >= HOUSING_WEEKENDS_MIN_WORKED_DAYS
+  const monthWeekends = normDays !== null && normDays > 0 && workedInStay >= HOUSING_WEEKENDS_MIN_WORKED_DAYS
     ? Math.max(0, monthDays - normDays)
     : 0;
   const weekends = Math.min(monthWeekends, monthDays - workedInStay);
@@ -212,7 +256,7 @@ const apartmentAllowance = (
 
 /** Квартира и доплата за общежитие по дням — правила в шапке файла. */
 export const housingAllowances = (
-  facts: Pick<IPayslipRateFacts, 'housing' | 'housingDays' | 'dormitoryAllowanceRate' | 'dormitoryAllowanceFrom'>,
+  facts: Pick<IPayslipRateFacts, 'housing' | 'brigades' | 'housingDays' | 'dormitoryAllowanceRate' | 'dormitoryAllowanceFrom'>,
 ): IPayslipRateAllowance[] => {
   const result: IPayslipRateAllowance[] = [];
   const { from, to, brigadeDates } = facts.housingDays;
@@ -223,7 +267,7 @@ export const housingAllowances = (
 
   const rate = facts.dormitoryAllowanceRate;
   if (positive(rate) && facts.dormitoryAllowanceFrom !== null && `${from.slice(0, 7)}-01` >= facts.dormitoryAllowanceFrom) {
-    const days = new Set(brigadeDates.filter(date => date >= from && date <= to && stayOn(facts.housing, date) === null)).size;
+    const days = new Set(brigadeDates.filter(date => date >= from && date <= to && housingOn(facts, date) === null)).size;
     if (days > 0) {
       result.push({ code: 'dormitory_allowance', amount: fromCents(toCents(rate) * days), rate, housing_days: days });
     }

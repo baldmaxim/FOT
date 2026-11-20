@@ -1,12 +1,13 @@
 /**
  * Факты месяца для «По ставкам ФОТ» (payroll-payslip.rules.ts) пачкой сотрудников: ставки «Проезд» и «Доплата
  * за общежитие» за месяц (миграция 324), «Без проезда» в месяце, проживание (квартира, общежитие) в периоде
- * сотрудника с въездом и выездом, включатель авто-доплаты за общежитие (payroll_switches, миграция 339). Ручная
+ * сотрудника с въездом и выездом, периоды в бригаде (назначение в отдел вида «бригада» — компенсация аренды в
+ * эти дни не идёт), включатель авто-доплаты за общежитие (payroll_switches, миграция 339). Ручная
  * «Доплата за общежитие» (payroll_dormitory_allowances) не читается. Одним запросом — и для листка одного сотрудника,
  * и для «К выплате (ФОТ)» всего отдела. Дни счёта (окно, отсутствия, дни бригады) решает расчёт — здесь их нет.
  */
 import { query } from '../../config/postgres.js';
-import type { IPayslipHousingRecord, IPayslipRateFacts } from './payroll-payslip.rules.js';
+import type { IPayslipBrigadePeriod, IPayslipHousingRecord, IPayslipRateFacts } from './payroll-payslip.rules.js';
 import { DORMITORY_ALLOWANCE_RATE_CODE, TRAVEL_RATE_CODE } from './payroll-rates.service.js';
 
 /** Без категории и дней: их решает табель месяца. */
@@ -29,6 +30,7 @@ export const loadRateFacts = async (
     dormitory_allowance_from: string | null;
     travel_stopped: boolean;
     housing: IPayslipHousingRecord[];
+    brigades: IPayslipBrigadePeriod[];
   }>(
     `SELECT p.employee_id,
             payroll_rate_value($4, $2::date)::text AS travel_rate,
@@ -51,7 +53,18 @@ export const loadRateFacts = async (
                      AND s.check_in <= p.period_to
                      AND (s.check_out IS NULL OR s.check_out > p.period_from)
                 ) h
-            ), '[]'::json) AS housing
+            ), '[]'::json) AS housing,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                       'from', to_char(ea.effective_from, 'YYYY-MM-DD'),
+                       'to', to_char(ea.effective_to, 'YYYY-MM-DD')
+                     ) ORDER BY ea.effective_from)
+                FROM employee_assignments ea
+                JOIN org_departments od ON od.id = ea.org_department_id AND od.kind = 'brigade'
+               WHERE ea.employee_id = p.employee_id
+                 AND ea.effective_from <= $3::date
+                 AND (ea.effective_to IS NULL OR ea.effective_to >= $2::date)
+            ), '[]'::json) AS brigades
        FROM unnest($1::int[], $6::date[], $7::date[]) AS p(employee_id, period_from, period_to)`,
     [
       items.map(item => item.employeeId),
@@ -71,6 +84,7 @@ export const loadRateFacts = async (
       dormitoryAllowanceRate: row.dormitory_allowance_rate ?? null,
       dormitoryAllowanceFrom: row.dormitory_allowance_from ?? null,
       housing: row.housing ?? [],
+      brigades: row.brigades ?? [],
     });
   }
   return result;

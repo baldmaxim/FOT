@@ -168,7 +168,7 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
         payroll_one_time_supplements, payroll_paid_amounts, payroll_planned_supplements, payroll_settings,
         payroll_item_types, payroll_rate_values, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, role_page_access, access_pages,
-        test_audit, positions, user_profiles, employees, org_departments CASCADE;
+        test_audit, positions, user_profiles, employee_assignments, employees, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid, kind text);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
@@ -184,6 +184,10 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
         country text
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
+      CREATE TABLE employee_assignments (
+        id serial PRIMARY KEY, employee_id integer NOT NULL, org_department_id uuid,
+        effective_from date NOT NULL, effective_to date
+      );
       CREATE TABLE work_schedules (id serial PRIMARY KEY, name text, is_default boolean NOT NULL DEFAULT false);
       CREATE TABLE employee_schedule_assignments (
         id serial PRIMARY KEY,
@@ -451,5 +455,23 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     expect((await facts())?.dormitoryAllowanceFrom).toBe('2026-09-01');
     await expect(run(`INSERT INTO payroll_switches (key, active_from) VALUES ('other', '2026-09-01')`)).rejects.toThrow();
     await expect(run(`UPDATE payroll_switches SET active_from = '2026-09-15'`)).rejects.toThrow();
+  });
+
+  it('факты ставок: периоды в бригаде — назначения в отдел вида brigade, задевающие месяц (даты включительно)', async () => {
+    const brigade = '00000000-0000-0000-0000-0000000000b1';
+    await run(`INSERT INTO org_departments (id, name, parent_id, kind) VALUES ('${brigade}', 'бр.Артиков Д.М.', NULL, 'brigade')`);
+    await run(`
+      INSERT INTO employee_assignments (employee_id, org_department_id, effective_from, effective_to) VALUES
+        (3, '${D1}', '2026-07-08', '2026-11-15'),
+        (3, '${brigade}', '2026-11-16', NULL),
+        (1, '${brigade}', '2026-08-01', '2026-09-30'),
+        (1, '${D1}', '2026-10-01', NULL)`);
+    const brigades = async (employeeId: number, month: string, monthEnd: string) => (await loadRateFacts(
+      [{ employeeId, period: { from: `${month}-01`, to: monthEnd } }], month, monthEnd,
+    )).get(employeeId)?.brigades;
+    expect(await brigades(3, '2026-10', '2026-10-31')).toEqual([]);
+    expect(await brigades(3, '2026-11', '2026-11-30')).toEqual([{ from: '2026-11-16', to: null }]);
+    expect(await brigades(1, '2026-09', '2026-09-30')).toEqual([{ from: '2026-08-01', to: '2026-09-30' }]);
+    expect(await brigades(1, '2026-10', '2026-10-31')).toEqual([]);
   });
 });
