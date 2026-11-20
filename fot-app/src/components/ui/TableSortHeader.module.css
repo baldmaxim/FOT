@@ -104,7 +104,10 @@ th:hover .filterButton:disabled:not(.filterActive) { opacity: 0.35; }
   .filterButton { transition: none; }
 }
 
-/* Ширина столбца, как в Excel («Проживание»): полоса у правого края заголовка, видна при наведении и фокусе. */
+/*
+ * Ширина столбца, как в Excel («Проживание»): у правого края заголовка всегда видна тонкая линия — за неё тянут или
+ * дважды щёлкают; при наведении и фокусе — цвет акцента.
+ */
 .resizeHandle {
   position: absolute;
   top: 0;
@@ -124,7 +127,7 @@ th:hover .filterButton:disabled:not(.filterActive) { opacity: 0.35; }
   width: 2px;
   height: 60%;
   border-radius: 1px;
-  background: transparent;
+  background: color-mix(in srgb, var(--text-muted) 55%, transparent);
   transition: background-color 150ms ease-out;
 }
 .resizeHandle:hover::after,
