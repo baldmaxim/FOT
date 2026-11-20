@@ -16,6 +16,7 @@ import { startStructureWatch, stopStructureWatch } from './services/sigur-struct
 import { startSigurEventsDailyScheduler, stopSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
 import { startSkudSummaryReconcileScheduler, stopSkudSummaryReconcileScheduler } from './services/skud-summary-reconcile.service.js';
 import { startMainObjectSnapshotScheduler, stopMainObjectSnapshotScheduler } from './services/employee-main-object-snapshot.scheduler.js';
+import { startStaffMonthScheduler, stopStaffMonthScheduler } from './services/staff-month-1c.scheduler.js';
 import { startTimesheetObjectScheduler, stopTimesheetObjectScheduler } from './services/employee-timesheet-object.scheduler.js';
 import { startTimesheetReminderScheduler, stopTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler, stopPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
@@ -163,6 +164,8 @@ httpServer.listen(PORT, HOST, () => {
   // Объект табелирования (миграция 288): ночной пересчёт с 1-го числа, фиксация
   // прошедшего месяца и пересборка объектов его редакций. Включается скриптом активации.
   startTimesheetObjectScheduler();
+  // Статусы выгрузки объектов и часов в ЗУП3 (миграция 373): «Готов к выгрузке» / «Выгружен» в «Расчётах».
+  startStaffMonthScheduler();
   // Прогрев тяжёлых кэшей откладываем: сразу после deploy/restart браузеры
   // массово переподключаются, и холодный полный обход Sigur конкурировал с ними.
   const warmupTimer = setTimeout(() => {
@@ -258,7 +261,7 @@ const gracefulShutdown = (signal: string): void => {
   const stoppers = [
     stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler, stopStructureWatch,
     stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler, stopMainObjectSnapshotScheduler,
-    stopTimesheetObjectScheduler,
+    stopTimesheetObjectScheduler, stopStaffMonthScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopAccessPointZoneReconcileWorker,

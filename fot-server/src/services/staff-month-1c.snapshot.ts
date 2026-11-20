@@ -108,6 +108,8 @@ export interface IStaffMonthSnapshot {
   brigades: IStaffMonthBrigade[];
   objects: IStaffMonthObject[];
   meta: { duplicate_days: number; object_config_errors: number; objects_not_frozen: number };
+  /** Ревизия и хеш каждой строки — после записи состояний (staff-month-1c.export-state.ts). */
+  exportRows?: Map<number, { revision: number; contentHash: string }>;
 }
 
 const rowsOf = async <T>(exec: DbExecutor, sql: string, params: unknown[]): Promise<T[]> => (

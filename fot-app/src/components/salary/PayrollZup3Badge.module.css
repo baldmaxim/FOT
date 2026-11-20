@@ -1,0 +1,19 @@
+/* Статус выгрузки в ЗУП3 — строка под выплатами 1С в «Расчётах». Цвета — только токены (обе темы). */
+.badge {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.prefix {
+  margin-right: 4px;
+  color: var(--text-secondary);
+}
+
+.not_ready { color: var(--text-secondary); }
+.ready { color: var(--accent); }
+.exported { color: var(--success); }
+.changed { color: var(--warning); }

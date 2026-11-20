@@ -6,11 +6,14 @@ import type { Request, Response } from 'express';
  * Расчёт и снимки замоканы — их проверяют staff-month-1c.*.test.ts и scripts/check-staff-month-api.ts.
  */
 
-const { getKeyTables, listEmployees, getSnapshot } = vi.hoisted(() => ({
+const { getKeyTables, listEmployees, getSnapshot, ackStaffMonth } = vi.hoisted(() => ({
   getKeyTables: vi.fn(),
   listEmployees: vi.fn(),
   getSnapshot: vi.fn(),
+  ackStaffMonth: vi.fn(),
 }));
+
+vi.mock('../services/staff-month-1c.export-state.js', () => ({ ackStaffMonth }));
 
 vi.mock('../services/data-api-key.service.js', () => ({ dataApiKeyService: { getKeyTables } }));
 
@@ -35,9 +38,10 @@ const SNAPSHOT = {
   meta: { duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0 },
 };
 
-const makeReq = (query: Record<string, string | string[]>, withKey = true): Request => ({
+const makeReq = (query: Record<string, string | string[]>, withKey = true, body: unknown = undefined, allowAck = false): Request => ({
   query,
-  dataApiKey: withKey ? { id: 'key-1', name: 'api_1C', rate_limit_per_minute: 300, allow_timesheet_ack: false } : undefined,
+  body,
+  dataApiKey: withKey ? { id: 'key-1', name: 'api_1C', rate_limit_per_minute: 300, allow_timesheet_ack: allowAck } : undefined,
 }) as unknown as Request;
 
 const makeRes = () => {
@@ -56,7 +60,10 @@ describe('public-staff-month.controller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getKeyTables.mockResolvedValue([{ table_name: 'employees' }]);
-    listEmployees.mockResolvedValue({ snapshot: SNAPSHOT, rows: [{ employee_id: 1 }], total: 2, nextCursor: 'c1' });
+    listEmployees.mockResolvedValue({
+      snapshot: SNAPSHOT, rows: [{ employee_id: 1 }], total: 2, nextCursor: 'c1',
+      exportCounts: { not_ready: 0, ready: 2, exported: 0, changed: 0 }, monthReady: true,
+    });
     getSnapshot.mockResolvedValue(SNAPSHOT);
   });
 
@@ -99,7 +106,7 @@ describe('public-staff-month.controller', () => {
     expect(res.statusCode).toBe(200);
     expect(listEmployees).toHaveBeenCalledWith({
       month: '2026-10',
-      filters: { object_key: 'office', category: 'worker', employee_id: 42, days: true },
+      filters: { object_key: 'office', category: 'worker', employee_id: 42, days: true, export_state: null },
       limit: 500,
       cursor: null,
       snapshotId: null,
@@ -109,7 +116,10 @@ describe('public-staff-month.controller', () => {
       period: { month: '2026-10', from: '2026-10-01', to: '2026-10-31', as_of: '2026-10-31' },
       snapshot: { id: SNAPSHOT.id, generated_at: SNAPSHOT.generatedAt, preliminary: false },
       data: [{ employee_id: 1 }],
-      meta: { employees_count: 2, duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0 },
+      meta: {
+        employees_count: 2, duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0,
+        export_counts: { not_ready: 0, ready: 2, exported: 0, changed: 0 }, month_ready: true,
+      },
       next_cursor: 'c1',
     });
   });
@@ -145,6 +155,47 @@ describe('public-staff-month.controller', () => {
     expect(res503.statusCode).toBe(503);
     expect(res503.headers['Retry-After']).toBe('15');
     expect(res503.payload).toMatchObject({ code: 'snapshot_building', retryable: true });
+  });
+
+  it('отбор по статусу выгрузки: порядок фиксирован, неизвестный статус — 400', async () => {
+    const res = makeRes();
+    await publicStaffMonthController.employees(makeReq({ month: '2026-10', export_state: 'changed,ready' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(listEmployees.mock.calls[0][0].filters.export_state).toEqual(['ready', 'changed']);
+    const bad = makeRes();
+    await publicStaffMonthController.employees(makeReq({ month: '2026-10', export_state: 'loaded' }), bad);
+    expect(bad.statusCode).toBe(400);
+    expect(bad.payload.code).toBe('invalid_filter');
+  });
+
+  it('ACK: без права подтверждения — 403; кривое тело и повтор — 400; иначе — в сервис', async () => {
+    const body = {
+      month: '2026-10', document_ref: 'ЗУП-15',
+      employees: [{ employee_id: 1544, state_revision: 3, content_hash: 'a'.repeat(64) }],
+    };
+    const forbidden = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, body, false), forbidden);
+    expect(forbidden.statusCode).toBe(403);
+    expect(ackStaffMonth).not.toHaveBeenCalled();
+
+    const bad = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, { month: '2026-10', employees: [{ employee_id: 1, state_revision: 0, content_hash: 'x' }] }, true), bad);
+    expect(bad.statusCode).toBe(400);
+    expect(bad.payload.code).toBe('invalid_body');
+
+    const dup = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, { ...body, employees: [body.employees[0], body.employees[0]] }, true), dup);
+    expect(dup.statusCode).toBe(400);
+
+    ackStaffMonth.mockResolvedValue({ accepted: [{ employee_id: 1544, state_revision: 3, acked_at: '2026-11-20T10:00:00Z' }], rejected: [] });
+    const ok = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, body, true), ok);
+    expect(ok.statusCode).toBe(200);
+    expect(ackStaffMonth).toHaveBeenCalledWith({
+      month: '2026-10', documentRef: 'ЗУП-15', keyId: 'key-1',
+      items: [{ employeeId: 1544, revision: 3, contentHash: 'a'.repeat(64) }],
+    });
+    expect(ok.payload).toMatchObject({ success: true, accepted: [{ employee_id: 1544 }], rejected: [] });
   });
 
   it('бригады и объекты — из того же снимка (snapshot_id)', async () => {

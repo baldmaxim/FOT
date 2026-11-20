@@ -34,5 +34,7 @@ router.post('/timesheets/:approval_id/ack', publicTimesheetsController.ack);
 router.get('/staff-month', publicStaffMonthController.employees);
 router.get('/staff-month/brigades', publicStaffMonthController.brigades);
 router.get('/staff-month/objects', publicStaffMonthController.objects);
+// 1С подтверждает записанные строки (ревизия + хеш) — статус «Выгружен» в «Расчётах».
+router.post('/staff-month/ack', publicStaffMonthController.ack);
 
 export default router;

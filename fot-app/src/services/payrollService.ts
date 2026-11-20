@@ -101,9 +101,24 @@ export interface IPayrollCalcColumns {
 }
 
 /** Ответ calcColumns: столбцы ФОТ по сотрудникам порции. */
+/** Статус выгрузки объектов и часов в ЗУП3 за месяц (сервер, staff-month-1c.export-state). */
+export type Zup3ExportState = 'not_ready' | 'ready' | 'exported' | 'changed';
+
+export interface IZup3ExportCell {
+  /** YYYY-MM. */
+  month: string;
+  state: Zup3ExportState;
+  /** Когда 1С подтвердила приём (ISO), документ 1С. */
+  acked_at: string | null;
+  document_ref: string | null;
+  /** На какой момент собраны данные (ISO). */
+  computed_at: string | null;
+}
+
 export interface IPayrollCalcColumnsResult {
   available: boolean;
-  rows: Array<{ employee_id: number; calc: IPayrollCalcColumns | null }>;
+  /** zup3_export — нет у старого бэкенда. */
+  rows: Array<{ employee_id: number; calc: IPayrollCalcColumns | null; zup3_export?: IZup3ExportCell[] }>;
 }
 
 /** Столбцы ФОТ строки ещё считаются (pending) или расчёт не удался (error); нет поля — готово. Только на фронте. */
@@ -184,6 +199,8 @@ export interface IPayrollTermsRow {
   calc?: IPayrollCalcColumns | null;
   /** «Расчёты»: состояние отдельного расчёта ФОТ строки (calcColumns). */
   calc_status?: PayrollCalcStatus;
+  /** «Расчёты»: статус выгрузки в ЗУП3 по месяцам — из ответа calc-columns. Только на фронте. */
+  zup3_export?: IZup3ExportCell[];
   /**
    * Скоуп правки этого сотрудника (сервер проверит то же при сохранении).
    * Может отсутствовать у старого бэкенда — тогда считаем «можно», решит сервер.

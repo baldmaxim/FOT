@@ -37,6 +37,13 @@ const fakeSnapshot = (month: string) => {
   };
 };
 
+vi.mock('./staff-month-1c.export-state.js', () => ({
+  persistStaffMonthStates: vi.fn(async (_month: string, rows: Array<{ employeeId: number }>) => new Map(rows.map(row => [
+    row.employeeId, { revision: 1, present: true, preliminary: false, contentHash: 'h' },
+  ]))),
+  loadStaffMonthExportInfo: vi.fn(async () => ({ states: new Map(), acks: new Map() })),
+}));
+
 vi.mock('./staff-month-1c.snapshot.js', () => ({
   buildStaffMonthSnapshot: vi.fn(async (_client: unknown, bounds: { month: string }) => (
     state.build ? state.build(bounds.month) : fakeSnapshot(bounds.month)
@@ -50,7 +57,7 @@ import {
   StaffMonthApiError,
 } from './staff-month-1c.service.js';
 
-const FILTERS = { object_key: null, category: null, employee_id: null, days: false };
+const FILTERS = { object_key: null, category: null, employee_id: null, days: false, export_state: null };
 
 const walk = async (month: string, limit: number, filters = FILTERS): Promise<{ ids: number[]; snapshots: Set<string> }> => {
   const ids: number[] = [];

@@ -10,6 +10,7 @@ import type {
   IPayrollCalcColumns,
   IPayrollCalcColumnsResult,
   IPayrollTermsRow,
+  IZup3ExportCell,
   PayrollPaidMonths,
 } from '../services/payrollService';
 
@@ -79,12 +80,16 @@ export const mergeCalcColumns = (
 ): ICalcMerge => {
   const unavailable = states.some(isUnavailable);
   const calcById = new Map<number, IPayrollCalcColumns | null>();
+  const zup3ById = new Map<number, IZup3ExportCell[]>();
   const statusById = new Map<number, 'pending' | 'error'>();
   if (!unavailable) {
     requests.forEach((request, index) => {
       const state = states[index] ?? { status: 'pending' };
       if (state.status === 'success') {
-        for (const item of state.result.rows) calcById.set(item.employee_id, item.calc);
+        for (const item of state.result.rows) {
+          calcById.set(item.employee_id, item.calc);
+          if (item.zup3_export) zup3ById.set(item.employee_id, item.zup3_export);
+        }
         for (const id of request.ids) if (!calcById.has(id)) calcById.set(id, null);
       } else {
         for (const id of request.ids) statusById.set(id, state.status);
@@ -96,7 +101,9 @@ export const mergeCalcColumns = (
       if ('calc' in row || unavailable) return row;
       const status = statusById.get(row.employee_id);
       if (status) return { ...row, calc_status: status };
-      return calcById.has(row.employee_id) ? { ...row, calc: calcById.get(row.employee_id) ?? null } : row;
+      if (!calcById.has(row.employee_id)) return row;
+      const zup3 = zup3ById.get(row.employee_id);
+      return { ...row, calc: calcById.get(row.employee_id) ?? null, ...(zup3 ? { zup3_export: zup3 } : {}) };
     }),
     ready: unavailable || requests.every((_, index) => states[index]?.status === 'success'),
     failed: !unavailable && states.some(state => state.status === 'error'),

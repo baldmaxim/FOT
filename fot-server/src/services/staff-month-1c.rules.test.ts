@@ -29,7 +29,7 @@ const day = (over: Partial<IDayRecord>): IDayRecord => ({
   worked: true, versionId: 1, departmentId: null, frozen: true, preliminary: false, ...over,
 });
 
-const NO_FILTERS: IStaffMonthFilters = { object_key: null, category: null, employee_id: null, days: false };
+const NO_FILTERS: IStaffMonthFilters = { object_key: null, category: null, employee_id: null, days: false, export_state: null };
 
 describe('staff-month-1c.rules', () => {
   it('пара в двух подачах: поздний created_at, затем больший id', () => {
@@ -109,6 +109,7 @@ describe('staff-month-1c.rules', () => {
     expect(decodeStaffMonthCursor(body, 'secret')).toBeNull();
     expect(decodeStaffMonthCursor('мусор', 'secret')).toBeNull();
     expect(sameFilters(cursor.filters, { ...cursor.filters, days: true })).toBe(false);
+    expect(sameFilters(cursor.filters, { ...cursor.filters, export_state: ['ready', 'changed'] })).toBe(false);
   });
 
   it('страницы: обход до конца без дублей и пропусков', () => {

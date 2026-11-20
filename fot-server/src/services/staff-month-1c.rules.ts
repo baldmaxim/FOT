@@ -10,6 +10,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { SUMMARY_OFFICE, SUMMARY_UNKNOWN } from './payroll/payroll-summary.attribution.js';
+import type { StaffMonthExportState } from './staff-month-1c.export-state.rules.js';
 
 export type StaffMonthCategory = 'worker' | 'itr' | 'office';
 
@@ -207,6 +208,8 @@ export interface IStaffMonthFilters {
   category: StaffMonthCategory | null;
   employee_id: number | null;
   days: boolean;
+  /** Статусы выгрузки («что забрать»: ready, changed); null — все. Порядок — как в STAFF_MONTH_EXPORT_STATES. */
+  export_state: StaffMonthExportState[] | null;
 }
 
 export interface IStaffMonthCursor {
@@ -247,6 +250,7 @@ export const decodeStaffMonthCursor = (raw: string, secret: string): IStaffMonth
 export const sameFilters = (left: IStaffMonthFilters, right: IStaffMonthFilters): boolean => (
   left.object_key === right.object_key && left.category === right.category
   && left.employee_id === right.employee_id && left.days === right.days
+  && (left.export_state ?? []).join(',') === (right.export_state ?? []).join(',')
 );
 
 /** Строка подходит под отбор: объект — основной или есть факт на нём; категория — месяца. */
