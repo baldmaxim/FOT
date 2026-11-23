@@ -77,7 +77,7 @@ import {
   setIdleBlockNightlyEnabled,
 } from './contractor-pass-idle-block.service.js';
 import { rollbackContractorPassIdleRun } from './contractor-pass-idle-rollback.service.js';
-import { countIdlePassesByOrg, fetchIdleContractorPasses } from './contractor-pass-idle.service.js';
+import { countIdlePassesByOrg, fetchIdleContractorPasses, IDLE_PASS_DAYS } from './contractor-pass-idle.service.js';
 import { getSigurEmployeeBlockInfo } from './sigur-employee-block.service.js';
 
 const ORG = '00000000-0000-0000-0000-0000000000a1';
@@ -174,8 +174,8 @@ describe.skipIf(!PG_URL)('автоблокировка на PostgreSQL', () => {
     await pg.pool!.query(migration.replaceAll('public.', ''));
     await pg.pool!.query(migration.replaceAll('public.', ''));
     await sql(`INSERT INTO org_departments VALUES ($1, 'АЛЬЯНС ООО')`, [ORG]);
-    // Фон событий: по 100 проходов за каждый из 5 дней у постороннего сотрудника.
-    for (let day = 1; day <= 5; day += 1) {
+    // Фон событий: по 100 проходов за каждый из IDLE_PASS_DAYS дней у постороннего сотрудника.
+    for (let day = 1; day <= IDLE_PASS_DAYS; day += 1) {
       await sql(
         `INSERT INTO skud_events (employee_id, event_at, event_date, direction)
          SELECT 999, ($1::date + time '09:00')::timestamp AT TIME ZONE 'Europe/Moscow', $1::date, 'entry'
@@ -230,7 +230,7 @@ describe.skipIf(!PG_URL)('автоблокировка на PostgreSQL', () => {
     const info = await getSigurEmployeeBlockInfo(pass.sigurId);
     expect(info?.blockedByName).toBeNull();
     expect(info?.reason).toBe(
-      `Автоблокировка: не ходит больше 5 дней (последний проход ${daysAgo(147).split('-').reverse().join('.')})`,
+      `Автоблокировка: не ходит больше 10 дней (последний проход ${daysAgo(147).split('-').reverse().join('.')})`,
     );
     const [row] = await fetchIdleContractorPasses([ORG], TODAY);
     expect(row).toMatchObject({ pass_number: pass.num, idle_blocked_on: TODAY, blocked_manually: false, days_idle: 147 });
@@ -247,7 +247,7 @@ describe.skipIf(!PG_URL)('автоблокировка на PostgreSQL', () => {
     await runContractorPassIdleBlock({ dryRun: false, triggeredBy: 'cli' });
 
     expect((await getSigurEmployeeBlockInfo(pass.sigurId))?.reason).toBe(
-      `Автоблокировка: не ходит больше 5 дней (проходов не было, выдан ${daysAgo(148).split('-').reverse().join('.')})`,
+      `Автоблокировка: не ходит больше 10 дней (проходов не было, выдан ${daysAgo(148).split('-').reverse().join('.')})`,
     );
   });
 
@@ -332,7 +332,7 @@ describe.skipIf(!PG_URL)('автоблокировка на PostgreSQL', () => {
     expect((await passState(pass.id)).is_active).toBe(false);
   });
 
-  it('откат: снимает только свой run_id, новые 5 дней, повтор безопасен', async () => {
+  it('откат: снимает только свой run_id, новые 10 дней, повтор безопасен', async () => {
     const own = await addPass(30);
     const firstRun = await runContractorPassIdleBlock({ dryRun: false, triggeredBy: 'cli' });
     const other = await addPass(40);
@@ -352,7 +352,7 @@ describe.skipIf(!PG_URL)('автоблокировка на PostgreSQL', () => {
       action: 'unblock', source: 'contractor_pass_idle_rollback', run_id: firstRun.runId,
     });
 
-    // Снятый не становится кандидатом: разблокировка в окне 5 дней.
+    // Снятый не становится кандидатом: разблокировка в окне 10 дней.
     expect((await runContractorPassIdleBlock({ dryRun: false, triggeredBy: 'cli' })).totalCandidates).toBe(0);
 
     const again = await rollbackContractorPassIdleRun({ runId: firstRun.runId, dryRun: false });

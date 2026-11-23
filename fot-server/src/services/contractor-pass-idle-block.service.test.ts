@@ -41,7 +41,7 @@ vi.mock('../config/postgres.js', () => ({
   },
 }));
 vi.mock('./contractor-pass-idle.service.js', () => ({
-  IDLE_PASS_DAYS: 5,
+  IDLE_PASS_DAYS: 10,
   fetchIdleBlockCandidates: h.fetchCandidates,
   lockIdleBlockCandidate: h.lockCandidate,
   markContractorPassUnblocked: h.markUnblocked,
@@ -118,7 +118,8 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   h.commitFailures = 0;
-  eventDays = ['2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04']
+  eventDays = ['2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30',
+    '2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04']
     .map(day => ({ day, events: 5000 }));
   walkedAfterMark = [];
   runAuditRows = [];
@@ -152,9 +153,9 @@ describe('parseSigurBlocked', () => {
 describe('buildIdleBlockReason', () => {
   it('с проходом и без', () => {
     expect(buildIdleBlockReason({ last_event_date: '2026-06-11', issued_on: '2026-06-10' }))
-      .toBe('Автоблокировка: не ходит больше 5 дней (последний проход 11.06.2026)');
+      .toBe('Автоблокировка: не ходит больше 10 дней (последний проход 11.06.2026)');
     expect(buildIdleBlockReason({ last_event_date: null, issued_on: '2026-06-10' }))
-      .toBe('Автоблокировка: не ходит больше 5 дней (проходов не было, выдан 10.06.2026)');
+      .toBe('Автоблокировка: не ходит больше 10 дней (проходов не было, выдан 10.06.2026)');
   });
 });
 
@@ -167,7 +168,7 @@ describe('обработка пропуска', () => {
     expect(result).toMatchObject({ status: 'completed', blocked: 1, totalCandidates: 1, selected: 1 });
     expect(auditDetails()[0]).toMatchObject({
       action: 'block',
-      reason: 'Автоблокировка: не ходит больше 5 дней (последний проход 11.06.2026)',
+      reason: 'Автоблокировка: не ходит больше 10 дней (последний проход 11.06.2026)',
       source: 'contractor_pass_idle',
       mode: 'blocked',
       run_id: result.runId,
@@ -337,7 +338,7 @@ describe('предел очереди и проверка событий', () =>
   });
 
   it('день с малым числом проходов: стоп до сверки и очереди, force не снимает', async () => {
-    eventDays[2] = { day: '2026-11-02', events: 99 };
+    eventDays[7] = { day: '2026-11-02', events: 99 };
     h.fetchCandidates.mockResolvedValue(queue(5));
     walkedAfterMark = [{ pass_id: 'p', holder_id: 'h', sigur_employee_id: 1 }];
 
@@ -353,7 +354,7 @@ describe('предел очереди и проверка событий', () =>
   });
 
   it('день без единой строки: запрос считает ожидаемые даты, 0 останавливает', async () => {
-    eventDays[0] = { day: '2026-10-31', events: 0 };
+    eventDays[5] = { day: '2026-10-31', events: 0 };
 
     const result = await runContractorPassIdleBlock({ dryRun: false, triggeredBy: 'scheduler' });
 

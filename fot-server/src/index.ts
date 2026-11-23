@@ -187,7 +187,7 @@ httpServer.listen(PORT, HOST, () => {
   startContractorPassSyncScheduler();
   // «Срок» пропусков подрядчиков в «Мониторинге» — ночью подтягивается из Sigur.
   void startContractorPassExpirySyncScheduler();
-  // Автоблокировка пропусков, которые не ходят больше 5 дней. Сама по себе не работает:
+  // Автоблокировка пропусков, которые не ходят больше 10 дней. Сама по себе не работает:
   // включается настройкой (system_settings.contractor_pass_idle_block_enabled, по умолчанию false).
   void startContractorPassIdleBlockScheduler();
   startBlacklistSigurScheduler();

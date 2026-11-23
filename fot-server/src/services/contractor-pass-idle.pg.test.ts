@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
-// «Не ходят больше 5 дней» на настоящем PostgreSQL: границы по МСК, слот прежнего держателя,
+// «Не ходят больше 10 дней» на настоящем PostgreSQL: границы по МСК, слот прежнего держателя,
 // несколько employees на один Sigur-id и порядок «последнего» прохода живут в SQL — мок драйвера
 // показал бы ровно то, что ему подложили. Запускается только при FOT_TEST_PG_URL — ПУСТАЯ тестовая БД.
 // Таблицы — в своей схеме contractor_pass_idle_pg_test (search_path). В обычном прогоне пропускается.
@@ -39,7 +39,7 @@ import {
   markContractorPassUnblocked,
 } from './contractor-pass-idle.service.js';
 
-/** Сегодня по МСК; порог «больше 5 дней» — проходов нет с 21.10 00:00 МСК. */
+/** Сегодня по МСК; порог «больше 10 дней» — проходов нет с 16.10 00:00 МСК. */
 const TODAY = '2026-10-26';
 const ORG_A = '00000000-0000-0000-0000-0000000000a1';
 const ORG_B = '00000000-0000-0000-0000-0000000000b1';
@@ -116,7 +116,7 @@ const addEvent = async (employeeId: number, at: string, point = 'КПП-1', dire
   );
 };
 
-describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на PostgreSQL', () => {
+describe.skipIf(!PG_URL)('«Не ходят больше 10 дней» на PostgreSQL', () => {
   beforeAll(async () => {
     await sql(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
     await sql(`CREATE SCHEMA ${SCHEMA}`);
@@ -150,31 +150,31 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
       [ORG_A, ORG_B, ORG_C],
     );
 
-    // 101: последний проход 20.10 23:59 — 6 дней, в списке.
+    // 101: последний проход 15.10 23:59 — 11 дней, в списке.
     await addPass({ num: '101', sigur: 1, approvedAt: '2026-09-01 10:00' });
     await addEmployee(1, 1);
     await addEvent(1, '2026-10-01 08:00');
-    await addEvent(1, '2026-10-20 23:59', 'КПП-2', 'exit');
-    // 102: проход ровно в 21.10 00:00 — 5 дней, не в списке.
+    await addEvent(1, '2026-10-15 23:59', 'КПП-2', 'exit');
+    // 102: проход ровно в 16.10 00:00 — 10 дней, не в списке.
     await addPass({ num: '102', sigur: 2, approvedAt: '2026-09-01 10:00' });
     await addEmployee(2, 2);
-    await addEvent(2, '2026-10-21 00:00');
+    await addEvent(2, '2026-10-16 00:00');
     // 103: проходов после выдачи 01.10 не было — 25 дней от выдачи.
     await addPass({ num: '103', sigur: 3, approvedAt: '2026-10-01 12:00' });
     await addEmployee(3, 3);
     // 104: выдан 3 дня назад, проходов нет — рано.
     await addPass({ num: '104', sigur: 4, approvedAt: '2026-10-23 12:00' });
     await addEmployee(4, 4);
-    // 105: выдан 20.10 вечером, проходов нет — 6 дней; 106: выдан 21.10 00:30 — 5 дней, не в списке.
-    await addPass({ num: '105', sigur: 5, approvedAt: '2026-10-20 21:00' });
+    // 105: выдан 15.10 вечером, проходов нет — 11 дней; 106: выдан 16.10 00:30 — 10 дней, не в списке.
+    await addPass({ num: '105', sigur: 5, approvedAt: '2026-10-15 21:00' });
     await addEmployee(5, 5);
-    await addPass({ num: '106', sigur: 6, approvedAt: '2026-10-21 00:30' });
+    await addPass({ num: '106', sigur: 6, approvedAt: '2026-10-16 00:30' });
     await addEmployee(6, 6);
-    // 107: слот выдан 15.10 10:00, проходы 14.10 и 15.10 09:00 — прежнего держателя, не считаются.
-    await addPass({ num: '107', sigur: 7, approvedAt: '2026-10-15 10:00' });
+    // 107: слот выдан 14.10 10:00, проходы 13.10 и 14.10 09:00 — прежнего держателя, не считаются.
+    await addPass({ num: '107', sigur: 7, approvedAt: '2026-10-14 10:00' });
     await addEmployee(7, 7);
-    await addEvent(7, '2026-10-14 12:00');
-    await addEvent(7, '2026-10-15 09:00');
+    await addEvent(7, '2026-10-13 12:00');
+    await addEvent(7, '2026-10-14 09:00');
     // 108: свежее событие с посторонним направлением — не проход; последний вход 01.10.
     await addPass({ num: '108', sigur: 8, approvedAt: '2026-09-01 10:00' });
     await addEmployee(8, 8);
@@ -230,11 +230,11 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
     await addEmployee(303, 303);
     await addEvent(303, '2026-10-01 08:00');
     await addAudit(303, 'unblock', '2026-10-23 12:00');
-    // 304: разблокирован 20.10, шесть дней назад, не ходит с 01.10 — 6 дней, а не 25.
+    // 304: разблокирован 15.10 23:59, не ходит с 01.10 — 11 дней, а не 25.
     await addPass({ org: ORG_C, num: '304', sigur: 304, approvedAt: '2026-09-01 10:00' });
     await addEmployee(304, 304);
     await addEvent(304, '2026-10-01 08:00');
-    await addAudit(304, 'unblock', '2026-10-20 12:00');
+    await addAudit(304, 'unblock', '2026-10-15 23:59');
     await addAudit(304, 'block', '2026-10-22 12:00');
     // 305: не ходит с 05.10 — 21 день.
     passPlain = await addPass({ org: ORG_C, num: '305', sigur: 305, approvedAt: '2026-09-01 10:00' });
@@ -258,6 +258,11 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
     passRecheck = await addPass({ org: ORG_C, num: '309', sigur: 309, approvedAt: '2026-09-01 10:00' });
     await addEmployee(309, 309);
     await addEvent(309, '2026-10-06 08:00');
+    // 311: разблокирован ровно в 16.10 00:00 — 10 дней, вне списка и очереди.
+    await addPass({ org: ORG_C, num: '311', sigur: 311, approvedAt: '2026-09-01 10:00' });
+    await addEmployee(311, 311);
+    await addEvent(311, '2026-10-01 08:00');
+    await addAudit(311, 'unblock', '2026-10-16 00:00');
     // 310: без Sigur-профиля — в очередь не идёт.
     await addPass({ org: ORG_C, num: '310', sigur: null as unknown as number, approvedAt: '2026-09-01 10:00' });
   });
@@ -282,9 +287,9 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
       { pass_number: '109', last_event_date: '2026-10-05', last_access_point: 'КПП-1', days_idle: 21 },
       { pass_number: '114', last_event_date: '2026-10-11', last_access_point: 'КПП-2', days_idle: 15 },
       { pass_number: '113', last_event_date: '2026-10-12', last_access_point: 'Архивный КПП', days_idle: 14 },
-      { pass_number: '107', last_event_date: null, last_access_point: null, days_idle: 11 },
-      { pass_number: '101', last_event_date: '2026-10-20', last_access_point: 'КПП-2', days_idle: 6 },
-      { pass_number: '105', last_event_date: null, last_access_point: null, days_idle: 6 },
+      { pass_number: '107', last_event_date: null, last_access_point: null, days_idle: 12 },
+      { pass_number: '101', last_event_date: '2026-10-15', last_access_point: 'КПП-2', days_idle: 11 },
+      { pass_number: '105', last_event_date: null, last_access_point: null, days_idle: 11 },
     ]);
     expect(rows[0]).toMatchObject({ org_department_id: ORG_A, org_name: 'АЛЬФА ООО', holder_name: 'Держатель 103' });
   });
@@ -319,12 +324,14 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
 
     it('разблокировка в окне убирает из списка и очереди, в том числе без отметок', async () => {
       expect(await row('303')).toBeUndefined();
+      expect(await row('311')).toBeUndefined();
       const queue = await fetchIdleBlockCandidates(TODAY);
       expect(queue.map(r => r.pass_number)).not.toContain('303');
+      expect(queue.map(r => r.pass_number)).not.toContain('311');
     });
 
     it('дни считаются от разблокировки, последний проход показывается настоящий', async () => {
-      expect(await row('304')).toMatchObject({ days_idle: 6, last_event_date: '2026-10-01' });
+      expect(await row('304')).toMatchObject({ days_idle: 11, last_event_date: '2026-10-01' });
     });
 
     it('очередь: без отметок и без Sigur-id, сортировка по дням, упавший — в конце', async () => {
@@ -333,7 +340,7 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
         { num: '307', days: 25 },
         { num: '305', days: 21 },
         { num: '309', days: 20 },
-        { num: '304', days: 6 },
+        { num: '304', days: 11 },
         { num: '306', days: 54 },
       ]);
     });
@@ -341,6 +348,8 @@ describe.skipIf(!PG_URL)('«Не ходят больше 5 дней» на Postg
     it('очередь идёт по всем подрядчикам, сводка совпадает со списком', async () => {
       const queue = await fetchIdleBlockCandidates(TODAY);
       expect(new Set(queue.map(r => r.org_department_id))).toEqual(new Set([ORG_A, ORG_B, ORG_C]));
+      // Порог «больше 10 дней»: самый короткий простой в очереди — 11.
+      expect(Math.min(...queue.map(r => r.days_idle))).toBe(11);
       const counts = await countIdlePassesByOrg([ORG_C], TODAY);
       expect(counts[0].idle_new).toBe((await fetchIdleContractorPasses([ORG_C], TODAY)).length);
     });

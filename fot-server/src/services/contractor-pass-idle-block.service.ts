@@ -1,5 +1,5 @@
 /**
- * Автоблокировка пропусков подрядчиков, которые не ходят больше 5 дней.
+ * Автоблокировка пропусков подрядчиков, которые не ходят больше 10 дней.
  * Вызывают ночной планировщик и CLI scripts/contractor-pass-idle-block.ts.
  *
  * Очередь — те же «Не ходят», что в статистике (contractor-pass-idle.service.ts).
@@ -12,7 +12,7 @@
  *    причины и допишет её без второй блокировки;
  *  - источник блокировки не подменяется: чужая причина остаётся, пропуск получает отдельную отметку;
  *  - каждая автоблокировка хранит run_id, партию снимает contractor-pass-idle-rollback.service.ts;
- *  - не блокируем никого, если за любой из 5 дней почти нет проходов (дыра в событиях, каникулы —
+ *  - не блокируем никого, если за любой из 10 дней почти нет проходов (дыра в событиях, каникулы —
  *    снять нельзя) или за один запуск получилось больше 300 (снимается только force).
  */
 import { randomUUID } from 'crypto';
@@ -157,7 +157,7 @@ const readLiveBlocked = async (sigurEmployeeId: number, connection: ConnectionTy
   return parseSigurBlocked(resolveField(raw, 'isBlocked', 'blocked', 'IsBlocked'));
 };
 
-/** Дни из ожидаемых пяти, где проходов мало. Generate_series: день без единой строки даёт 0. */
+/** Дни из ожидаемых IDLE_PASS_DAYS, где проходов мало. Generate_series: день без единой строки даёт 0. */
 const findEventGaps = async (today: string): Promise<IIdleBlockEventDay[]> => {
   const days = await query<IIdleBlockEventDay>(
     `SELECT to_char(d.day, 'YYYY-MM-DD') AS day, c.events
@@ -212,7 +212,7 @@ const loadWalkedAfterMark = (today: string): Promise<IMarkedPassRow[]> =>
     [today],
   );
 
-/** Журнал и отметки одной транзакцией: запись «unblock» даёт новый отсчёт 5 дней. */
+/** Журнал и отметки одной транзакцией: запись «unblock» даёт новый отсчёт 10 дней. */
 const restoreDirectUnblock = async (row: IMarkedPassRow, runId: string): Promise<void> => {
   await withTransaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`blacklist:sigur:${row.sigur_employee_id}`]);

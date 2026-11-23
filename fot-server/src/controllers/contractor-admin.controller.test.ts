@@ -61,7 +61,7 @@ vi.mock('../config/postgres.js', () => ({
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
 // SQL «не ходящих» проверяет PG-тест сервиса; здесь — только как контроллер им пользуется.
 vi.mock('../services/contractor-pass-idle.service.js', () => ({
-  IDLE_PASS_DAYS: 5,
+  IDLE_PASS_DAYS: 10,
   countIdlePassesByOrg: h.countIdlePassesByOrg,
   fetchIdleContractorPasses: h.fetchIdleContractorPasses,
 }));
@@ -2249,11 +2249,11 @@ describe('contractorAdminController — статистика пропусков 
     await wb.xlsx.load(res.sent as Buffer as never);
     const stat = wb.getWorksheet('Статистика')!;
     expect(stat.getRow(1).values).toEqual([
-      undefined, 'Подрядчик', 'Выдано новых', 'Активные', 'Не ходят > 5 дн.', 'Всего старых', 'Используются старые (14 дн.)',
+      undefined, 'Подрядчик', 'Выдано новых', 'Активные', 'Не ходят > 10 дн.', 'Всего старых', 'Используются старые (14 дн.)',
     ]);
     expect(stat.getRow(2).values).toEqual([undefined, 'АЛЬФА ООО', 0, 2, 3, 0, 0]);
     expect(stat.getRow(3).values).toEqual([]);
-    expect(stat.getRow(4).getCell(1).value).toBe('Не ходят больше 5 дней');
+    expect(stat.getRow(4).getCell(1).value).toBe('Не ходят больше 10 дней');
     expect(stat.getRow(5).values).toEqual([
       undefined, 'Подрядчик', 'ФИО', '№ пропуска ФОТ', 'Последний проход', 'Точка последнего прохода', 'Дней без проходов',
       'Заблокирован',

@@ -317,7 +317,7 @@ export interface IContractorPassDetail {
 }
 
 /** Больше стольких дней без проходов — пропуск в «Не ходят» (зеркален бэкенду contractor-pass-idle.service). */
-export const IDLE_PASS_DAYS = 5;
+export const IDLE_PASS_DAYS = 10;
 
 /** Пропуск без проходов по СКУД больше IDLE_PASS_DAYS дней: активный или уже заблокированный. */
 export interface IContractorIdlePass {
