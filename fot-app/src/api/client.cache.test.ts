@@ -141,3 +141,37 @@ describe('shouldBypassHttpCache — заявки на поиск сотрудн�
     expect(initOf(0).cache).toBeUndefined();
   });
 });
+
+/**
+ * Файлы шаблонов графиков (миграция 376): после прикрепления/удаления файла список файлов и число у 📎
+ * в таблице перечитываются с сервера, а не из HTTP-кэша max-age=30.
+ */
+describe('shouldBypassHttpCache — файлы шаблонов графиков', () => {
+  beforeEach(() => {
+    fetchMock.mockClear();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('список шаблонов (files_count) идёт мимо HTTP-кэша', async () => {
+    await apiClient.get('/schedules');
+    expect(initOf(0).cache).toBe('no-store');
+  });
+
+  it('список файлов графика идёт мимо HTTP-кэша', async () => {
+    await apiClient.get('/schedules/6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5/files');
+    expect(initOf(0).cache).toBe('no-store');
+  });
+
+  it('соседние пути под обход не попадают', async () => {
+    await apiClient.get('/schedules/objects');
+    await apiClient.get('/schedules/resolve/15');
+    await apiClient.get('/schedules/x/files/7/url?disposition=inline');
+    expect(initOf(0).cache).toBeUndefined();
+    expect(initOf(1).cache).toBeUndefined();
+    expect(initOf(2).cache).toBeUndefined();
+  });
+});

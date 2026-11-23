@@ -19,6 +19,9 @@ import { applyTableView, buildExportTable, type ITableView } from '../../utils/t
 import { triggerBlobDownload } from '../../utils/download';
 import { NumberInput } from '../../components/ui/NumberInput';
 import { ScheduleTemplatesTable } from '../../components/admin/ScheduleTemplatesTable';
+import { ScheduleTemplateFiles } from '../../components/admin/ScheduleTemplateFiles';
+import { ScheduleFilesModal } from '../../components/admin/ScheduleFilesModal';
+import { scheduleFilesQueryKey, uploadQueue } from '../../utils/scheduleFileQueue';
 import styles from './SchedulesPage.module.css';
 
 const ProductionCalendarPage = lazy(() => import('./ProductionCalendarPage').then(module => ({
@@ -405,6 +408,13 @@ export const SchedulesPage: FC = () => {
   const [templatesView, setTemplatesView] = useState<ITableView>(INITIAL_TEMPLATES_VIEW);
   const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState<IFormState>(createEmptyForm());
+  // Файлы графика (миграция 376): 📎 в таблице, очередь нового графика, блокировка окна на время загрузки.
+  const [filesFor, setFilesFor] = useState<IWorkSchedule | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [filesBusy, setFilesBusy] = useState(false);
+  const formLocked = saving || filesBusy;
 
   const needsTemplates = tab === 'templates' || tab === 'object-assignments';
   const needsObjectAssignments = tab === 'object-assignments';
@@ -488,12 +498,22 @@ export const SchedulesPage: FC = () => {
 
   const handleStartEdit = (tpl: IWorkSchedule) => {
     setForm(tplToFormState(tpl, today));
+    setPendingFiles([]);
+    setPendingError(null);
     setShowForm(true);
   };
 
   const handleStartCreate = () => {
     setForm(createEmptyForm());
+    setPendingFiles([]);
+    setPendingError(null);
     setShowForm(true);
+  };
+
+  // Пока график сохраняется или файлы грузятся, окно не закрывается.
+  const closeForm = () => {
+    if (formLocked) return;
+    setShowForm(false);
   };
 
   const applyRhythmPreset = (work: number, off: number) => {
@@ -646,7 +666,9 @@ export const SchedulesPage: FC = () => {
 
 
   const handleSave = async () => {
+    if (saving) return;
     setError('');
+    setSaving(true);
     try {
       const fullDayMin = form.full_day_threshold ? parseHMToMinutes(form.full_day_threshold) : null;
       if (form.full_day_threshold && fullDayMin === null) {
@@ -789,16 +811,39 @@ export const SchedulesPage: FC = () => {
         setError('Название обязательно');
         return;
       }
-      if (form.id) {
-        await scheduleService.update(form.id, payload);
+      let scheduleId = form.id;
+      if (scheduleId) {
+        await scheduleService.update(scheduleId, payload);
       } else {
-        await scheduleService.create(payload);
+        const created = await scheduleService.create(payload);
+        scheduleId = created.id;
+        // Сразу — правка созданного графика: повторное «Сохранить» второй график не создаст.
+        setForm(prev => ({ ...prev, id: created.id }));
+      }
+      if (pendingFiles.length > 0) {
+        const id = scheduleId;
+        setPendingError(null);
+        // Загруженный файл сразу уходит из очереди: повтор после сбоя догрузит только оставшиеся.
+        const result = await uploadQueue(
+          pendingFiles,
+          file => scheduleService.uploadFile(id, file),
+          file => setPendingFiles(prev => prev.filter(item => item !== file)),
+        );
+        await queryClient.invalidateQueries({ queryKey: scheduleFilesQueryKey(id) });
+        if (result.error) {
+          setPendingFiles(result.remaining);
+          setPendingError(result.error);
+          await reloadScheduleData();
+          return;
+        }
       }
       setShowForm(false);
       setForm(createEmptyForm());
       await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -918,14 +963,14 @@ export const SchedulesPage: FC = () => {
           {showForm && (
             <div
               className={styles.modalOverlay}
-              onMouseDown={e => { if (e.target === e.currentTarget) setShowForm(false); }}
+              onMouseDown={e => { if (e.target === e.currentTarget) closeForm(); }}
             >
               <div className={styles.modal}>
                 <div className={styles.modalHeader}>
                   <h3 className={styles.modalTitle}>
                     {form.id ? 'Редактирование графика' : 'Новый график'}
                   </h3>
-                  <button type="button" className={styles.modalClose} onClick={() => setShowForm(false)} aria-label="Закрыть">
+                  <button type="button" className={styles.modalClose} onClick={closeForm} disabled={formLocked} aria-label="Закрыть">
                     ✕
                   </button>
                 </div>
@@ -1445,6 +1490,15 @@ export const SchedulesPage: FC = () => {
                 </div>
               </details>
 
+              <ScheduleTemplateFiles
+                scheduleId={form.id}
+                pending={pendingFiles}
+                onPendingChange={setPendingFiles}
+                pendingError={pendingError}
+                disabled={saving}
+                onBusyChange={setFilesBusy}
+              />
+
               {form.loaded_pattern_type && form.loaded_pattern_type !== 'cycle' && (
                 <div className={styles.legacyBanner}>
                   ℹ Шаблон был в legacy-формате <code>{form.loaded_pattern_type}</code>. После сохранения он будет переписан как «{form.work_days_count}/{form.off_days_count}» — все назначенные сотрудники продолжат работать без изменений.
@@ -1453,11 +1507,11 @@ export const SchedulesPage: FC = () => {
                 </div>
 
                 <div className={styles.actions}>
-                  <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => setShowForm(false)}>
+                  <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={closeForm} disabled={formLocked}>
                     Отмена
                   </button>
-                  <button className={styles.btn} onClick={handleSave}>
-                    Сохранить
+                  <button className={styles.btn} onClick={() => { void handleSave(); }} disabled={formLocked}>
+                    {saving ? 'Сохранение…' : 'Сохранить'}
                   </button>
                 </div>
               </div>
@@ -1471,8 +1525,11 @@ export const SchedulesPage: FC = () => {
             onViewChange={setTemplatesView}
             onEdit={handleStartEdit}
             onArchive={template => { void handleArchive(template.id); }}
+            onOpenFiles={setFilesFor}
             loading={loading}
           />
+
+          {filesFor && <ScheduleFilesModal schedule={filesFor} onClose={() => setFilesFor(null)} />}
         </>
       )}
 

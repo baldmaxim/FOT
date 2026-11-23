@@ -3,10 +3,23 @@ import { scheduleController } from '../controllers/schedule.controller.js';
 import { scheduleExportController } from '../controllers/schedule-export.controller.js';
 import { authenticate, requireAnyPageAccess } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
+import { noStore } from '../middleware/noStore.js';
+import { acceptMemoFile } from '../middleware/blacklistMemoUpload.js';
+import { scheduleFilesController } from '../controllers/schedule-files.controller.js';
 
 const router = Router();
 
 router.use(authenticate);
+
+// Файлы шаблона графика (миграция 376) — ДО сброса кэшей табеля ниже: файлы табель не меняют.
+// Права — страницы раздела «Графики работы» (без /staff-control: там файлов нет, а в них бывают ПДн):
+// смотреть — view, прикреплять и удалять — edit. Проверка прав стоит перед приёмом файла: без права
+// 25 МБ не читаются в память.
+const SCHEDULE_FILE_PAGES = ['/admin/schedules', '/admin/schedules/templates'];
+router.get('/:id/files', noStore, requireAnyPageAccess(SCHEDULE_FILE_PAGES, 'view'), scheduleFilesController.list);
+router.get('/:id/files/:fileId/url', noStore, requireAnyPageAccess(SCHEDULE_FILE_PAGES, 'view'), scheduleFilesController.fileUrl);
+router.post('/:id/files', requireAnyPageAccess(SCHEDULE_FILE_PAGES, 'edit'), acceptMemoFile, scheduleFilesController.upload);
+router.delete('/:id/files/:fileId', requireAnyPageAccess(SCHEDULE_FILE_PAGES, 'edit'), scheduleFilesController.remove);
 
 // Write-through invalidation: любой успешный POST/PUT/PATCH/DELETE на /api/schedules/*
 // сбрасывает серверные LRU-кэши табеля. Без этого правка шаблона (например, нового

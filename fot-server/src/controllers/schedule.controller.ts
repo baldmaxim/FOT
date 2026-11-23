@@ -951,11 +951,14 @@ const archiveScheduleTemplate = async (db: Db, id: string, today: string): Promi
 };
 
 export const scheduleController = {
-  /** GET /api/schedules — шаблоны */
+  /** GET /api/schedules — шаблоны; files_count — число файлов графика (📎 в таблице, миграция 376) */
   async list(_req: AuthenticatedRequest, res: Response) {
     try {
       const data = await query<Record<string, unknown>>(
-        'SELECT * FROM work_schedules ORDER BY is_default DESC, name ASC',
+        `SELECT ws.*,
+                (SELECT count(*)::int FROM work_schedule_files f WHERE f.schedule_id = ws.id) AS files_count
+           FROM work_schedules ws
+          ORDER BY ws.is_default DESC, ws.name ASC`,
       );
       res.json({ success: true, data });
     } catch (err) {

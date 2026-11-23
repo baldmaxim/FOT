@@ -1,0 +1,67 @@
+/* Блок «Файлы» в окне графика — секция как «Дополнительные параметры»: линия сверху, заголовок. */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.input { display: none; }
+
+.attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease-out;
+}
+.attach:hover:not(:disabled) { border-color: var(--primary); }
+.attach:disabled { opacity: 0.5; cursor: default; }
+.attach:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--error);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 769px) {
+  .attach { min-height: 36px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attach { transition: none; }
+}

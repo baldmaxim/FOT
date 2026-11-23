@@ -1,0 +1,12 @@
+/* «Файлы графика»: окно — RegistryFormModal (на телефоне во всю ширину, с 769px — 520px). */
+.muted {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--error);
+  overflow-wrap: anywhere;
+}

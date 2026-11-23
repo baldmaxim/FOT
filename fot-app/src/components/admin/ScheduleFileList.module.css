@@ -1,0 +1,83 @@
+/*
+ * Файлы шаблона графика: блок «Файлы» окна графика и окно «Файлы графика» из таблицы.
+ * Mobile-first: строки и кнопки 44px (тап-цели), имя переносится, а не уезжает за край; с 769px — компактнее.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.size {
+  flex: 0 0 auto;
+  margin-right: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.iconButton {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease-out, background-color 0.15s ease-out;
+}
+.iconButton:hover:not(:disabled) { background: var(--surface-hover); color: var(--primary); }
+.iconButtonDanger:hover:not(:disabled) { color: var(--error); }
+.iconButton:disabled { opacity: 0.5; cursor: default; }
+.iconButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Файл ещё не загружен (новый график): только ✕, справа тот же отступ. */
+.itemPending { color: var(--text-secondary); }
+
+.error {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--error);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 769px) {
+  .item { min-height: 36px; }
+  .iconButton { width: 32px; height: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iconButton { transition: none; }
+}

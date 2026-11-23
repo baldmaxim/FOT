@@ -34,7 +34,8 @@
 .colLunch    { width: 96px; }
 .colHolidays { width: 140px; }
 .colType     { width: 96px; }
-.colActions  { width: 84px; }
+/* 📎N (если есть файлы) + ✎ + 🗑; таблица не шире прежнего — на 1280px помещается без прокрутки */
+.colActions  { width: 132px; }
 
 .table thead th {
   padding: 6px 12px;
@@ -169,6 +170,18 @@
   cursor: not-allowed;
 }
 
+/* 📎 с числом файлов графика: ширина по содержимому, высота — как у ✎/🗑 */
+.filesBtn {
+  width: auto;
+  min-width: 28px;
+  gap: 3px;
+  padding: 0 5px;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .table td.empty {
   padding: 40px 0;
   text-align: center;
@@ -178,10 +191,16 @@
 /* Смартфоны и планшеты: тап-цели ≥ 44px */
 @media (max-width: 768px) {
   .table td { height: 52px; }
-  .colActions { width: 116px; }
+  /* Шире столбец действий (тап-цели 44px) — на столько же шире таблица, «Название» не сжимается */
+  .table { min-width: 1104px; }
+  .colActions { width: 180px; }
   .iconBtn {
     width: 44px;
     height: 44px;
+  }
+  .filesBtn {
+    width: auto;
+    min-width: 44px;
   }
 }
 

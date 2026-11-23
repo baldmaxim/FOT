@@ -43,8 +43,19 @@ export interface IWorkSchedule {
   anchor_date: string | null;
   /** Шаблон в архиве: скрыт из таблицы и списков выбора, но резолвится в истории назначений. */
   archived_at: string | null;
+  /** Число прикреплённых файлов (только в списке шаблонов, миграция 376). */
+  files_count?: number;
   created_at: string;
   updated_at: string;
+}
+
+/** Файл шаблона графика (миграция 376). Ссылка на файл — по клику, через getFileUrl. */
+export interface IWorkScheduleFile {
+  id: number;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  created_at: string;
 }
 
 export interface IEmployeeScheduleAssignment {

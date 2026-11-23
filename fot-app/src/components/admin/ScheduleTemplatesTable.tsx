@@ -1,5 +1,5 @@
 import { useMemo, useState, type FC } from 'react';
-import { Archive, Pencil } from 'lucide-react';
+import { Archive, Paperclip, Pencil } from 'lucide-react';
 
 import { ColumnValuesFilterPopover } from '../ui/ColumnValuesFilterPopover';
 import { TableSortHeader } from '../ui/TableSortHeader';
@@ -23,6 +23,8 @@ interface IScheduleTemplatesTableProps {
   onViewChange: (view: ITableView) => void;
   onEdit: (template: IWorkSchedule) => void;
   onArchive: (template: IWorkSchedule) => void;
+  /** 📎 — окно «Файлы графика»: просмотр и скачивание. */
+  onOpenFiles: (template: IWorkSchedule) => void;
   loading: boolean;
 }
 
@@ -33,7 +35,7 @@ const COLUMNS = SCHEDULE_TEMPLATE_COLUMNS;
  * сортировка и фильтр по значениям, действия иконками справа.
  */
 export const ScheduleTemplatesTable: FC<IScheduleTemplatesTableProps> = ({
-  rows, visibleRows, view, onViewChange, onEdit, onArchive, loading,
+  rows, visibleRows, view, onViewChange, onEdit, onArchive, onOpenFiles, loading,
 }) => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const filterColumn = filterFor ? COLUMNS.find(column => column.key === filterFor.key) ?? null : null;
@@ -102,6 +104,18 @@ export const ScheduleTemplatesTable: FC<IScheduleTemplatesTableProps> = ({
               ))}
               <td className={styles.cellActions}>
                 <span className={styles.actions}>
+                  {(template.files_count ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      className={`${styles.iconBtn} ${styles.filesBtn}`}
+                      title="Файлы"
+                      aria-label={`Файлы: ${template.name}, ${template.files_count}`}
+                      onClick={() => onOpenFiles(template)}
+                    >
+                      <Paperclip size={14} aria-hidden="true" />
+                      <span>{template.files_count}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={styles.iconBtn}

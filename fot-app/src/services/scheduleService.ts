@@ -1,6 +1,7 @@
 import { apiClient } from '../api/client';
 import type {
   IWorkSchedule,
+  IWorkScheduleFile,
   IResolvedSchedule,
   IEmployeeScheduleAssignment,
   IObjectScheduleAssignment,
@@ -66,6 +67,39 @@ export const scheduleService = {
   /** Удалить шаблон */
   async remove(id: string): Promise<void> {
     const res = await apiClient.delete<ApiResponse<null>>(`/schedules/${id}`);
+    if (res.error) throw new Error(res.error);
+  },
+
+  /** Файлы шаблона — по порядку прикрепления, без ссылок. */
+  async listFiles(scheduleId: string): Promise<IWorkScheduleFile[]> {
+    const res = await apiClient.get<ApiResponse<IWorkScheduleFile[]>>(`/schedules/${scheduleId}/files`);
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки файлов графика');
+    return res.data;
+  },
+
+  /** Ссылка на файл на 5 минут: inline — просмотр, attachment — скачивание. */
+  async getFileUrl(scheduleId: string, fileId: number, disposition: 'inline' | 'attachment'): Promise<string> {
+    const res = await apiClient.get<ApiResponse<{ url: string }>>(
+      `/schedules/${scheduleId}/files/${fileId}/url?disposition=${disposition}`,
+    );
+    if (!res.data?.url) throw new Error(res.error || 'Не удалось открыть файл');
+    return res.data.url;
+  },
+
+  /** Прикрепить один файл (до 25 МБ). */
+  async uploadFile(scheduleId: string, file: File): Promise<IWorkScheduleFile> {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await apiClient.post<ApiResponse<IWorkScheduleFile>>(`/schedules/${scheduleId}/files`, form, {
+      timeoutMs: 180_000,
+    });
+    if (!res.data) throw new Error(res.error || `Не удалось загрузить файл «${file.name}»`);
+    return res.data;
+  },
+
+  /** Удалить файл шаблона. */
+  async removeFile(scheduleId: string, fileId: number): Promise<void> {
+    const res = await apiClient.delete<ApiResponse<null>>(`/schedules/${scheduleId}/files/${fileId}`);
     if (res.error) throw new Error(res.error);
   },
 
